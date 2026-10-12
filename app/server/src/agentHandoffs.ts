@@ -40,6 +40,10 @@
  *    queues; every other refusal is thrown back to whoever asked, which already
  *    reports it against the card or the session.
  */
+import {
+  automaticTurnsHeld,
+  type HumanResumeToken,
+} from "./automaticTurnHold.ts";
 import { errorText } from "./errors.ts";
 import {
   agentHandoffStore,
@@ -94,6 +98,12 @@ export interface AgentHandoffInput {
    * restart too, which is the whole reason it is a ref and not a closure.
    */
   outcomeRef?: AgentHandoffOutcomeRef;
+  /**
+   * The user's resume authority, for words of their own handed over right now
+   * (`automaticTurnHold.ts`). Spent only by an inline delivery that is
+   * appended as a turn; never stored with a queued row.
+   */
+  resume?: HumanResumeToken;
 }
 
 /**
@@ -235,6 +245,9 @@ export async function deliverAgentHandoff(
         ...(input.visible ? {} : { hidden: true }),
         origin: input.origin,
         ...(input.contextBlock ? { contextBlock: input.contextBlock } : {}),
+        // Only this inline attempt may resume a stopped session, and only once
+        // appended: a queued, steered or refused handoff resumes nothing.
+        ...(input.resume ? { resumeHold: input.resume } : {}),
         // Opportunistic: a turn that ended between the check and the call is
         // prompted ordinarily instead (`steerOnly` is what refuses that, and a
         // handoff wants the turn either way).
@@ -309,6 +322,9 @@ async function drainSessionOnce(sessionId: string): Promise<void> {
   // the failure paths below, which would report it abandoned to a card that has
   // it.
   if (!clearDeliveredRows(sessionId)) return;
+  // A Stop holds the session: what it is owed stays queued, and a session
+  // that is not live is not resumed for it, until the user resumes it.
+  if (automaticTurnsHeld(sessionId)) return;
   const head = agentHandoffStore.next(sessionId);
   if (!head) return;
   const driver = await resolveDriver(sessionId);
@@ -320,7 +336,8 @@ async function drainSessionOnce(sessionId: string): Promise<void> {
     return;
   }
   for (;;) {
-    if (deliveryStopped || driver.isRunning) return;
+    if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
+      return;
     if (!clearDeliveredRows(sessionId)) return;
     const row = agentHandoffStore.next(sessionId);
     if (!row) return;
@@ -379,7 +396,8 @@ async function deliverQueued(
     return true;
   } catch (err) {
     if (appended) return true; // the agent has it; the run failing is its own story
-    if (err instanceof SessionBusyError) return false; // the next idle edge takes it
+    // The next idle edge takes it — or Resume, when a Stop refused it.
+    if (err instanceof SessionBusyError) return false;
     failRow(row, errorText(err));
     return false;
   }

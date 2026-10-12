@@ -119,6 +119,14 @@ export const storyCatalog = {
     theme: "dark",
     textScale: "100",
   },
+  "prompt-queue--stopped": {
+    title: "Composer of a stopped session, nothing queued",
+    frameWidth: 720,
+    canvasWidth: 1024,
+    canvasHeight: 460,
+    theme: "dark",
+    textScale: "100",
+  },
   "prompt-queue--phone": {
     title: "Composer with a queue, phone",
     frameWidth: 390,

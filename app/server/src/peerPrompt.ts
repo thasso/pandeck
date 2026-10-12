@@ -9,6 +9,12 @@
  * the queue/drain/recovery semantics, Task 105 adds the loop guard, and Task 89
  * adds lifecycle projections and the history view.
  */
+import {
+  AutomaticTurnsHeldError,
+  automaticTurnsHeld,
+  captureHumanResume,
+  spendHumanResume,
+} from "./automaticTurnHold.ts";
 import { drainPromptQueue, promptQueueHasPriority } from "./promptQueue.ts";
 import {
   clearExplicitRecipientAuthority,
@@ -353,6 +359,10 @@ export async function sendQueuedPeerPromptNow(
   key: string,
 ): Promise<void> {
   if (deliveryStopped) return;
+  // The user chose this message: like "Send next" in their own queue, that
+  // resumes a stopped session — the Stop that stood as they chose, never one
+  // that lands while this waits for the recipient's authority.
+  const resume = captureHumanResume(recipientId);
   await withRecipientDrainLock(recipientId, async () => {
     if (deliveryStopped) return;
     const row = undeliveredByKey(recipientId, key);
@@ -376,6 +386,11 @@ export async function sendQueuedPeerPromptNow(
       steer ? "steer" : "send-now",
     );
     if (!claimed) return;
+    // Claimed as the next turn: the user's choice is accepted, and its turn's
+    // idle edge brings the rest. A steer aims at the turn running (on a held
+    // session, the one being stopped) and resumes nothing. A newer Stop keeps
+    // the hold either way; the delivery is then refused and the row put back.
+    if (!steer) spendHumanResume(resume);
     publishPeerQueue(recipientId);
     if (steer) await steerPeerPrompt(live, claimed);
     // Hold the recipient authority through the idle delivery so an automatic
@@ -789,6 +804,9 @@ export function drainRecipient(recipientId: string): Promise<void> {
 }
 
 async function drainRecipientOnce(recipientId: string): Promise<void> {
+  // A Stop holds the session: nothing is claimed, and a cold one is not even
+  // resumed. Its rows wait, queued, for the user to resume it.
+  if (automaticTurnsHeld(recipientId)) return;
   const hub = await getHub();
   let live = hub.getLiveById(recipientId);
   // Nothing owed: do not open a harness for it. A drain runs on every session
@@ -842,9 +860,16 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
   const driver = live;
   // Drain FIFO batches until the queue is empty or the target starts running.
   // Each batch is a whole turn, so a send-now can start waiting during one: it
-  // goes next, and its release drains again from the FIFO head.
+  // goes next, and its release drains again from the FIFO head. A Stop can land
+  // during one too, and the loop that awaited the stopped turn must not claim
+  // the next batch: the hold is read again at every claim.
   for (;;) {
-    if (driver.isRunning || explicitSendWaiting(recipientId)) return;
+    if (
+      driver.isRunning ||
+      explicitSendWaiting(recipientId) ||
+      automaticTurnsHeld(recipientId)
+    )
+      return;
     const batch = peerPromptStore.claimBatch(
       recipientId,
       "drainer",
@@ -857,7 +882,8 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
   }
   // Incoming work first: a session that is about to be told an old prompt died
   // should already be holding whatever arrived for it since.
-  if (explicitSendWaiting(recipientId)) return;
+  if (explicitSendWaiting(recipientId) || automaticTurnsHeld(recipientId))
+    return;
   await deliverInterruptionNotice(driver, recipientId);
 }
 
@@ -879,7 +905,8 @@ async function deliverInterruptionNotice(
   driver: RuntimePromptDriver,
   sessionId: string,
 ): Promise<void> {
-  if (deliveryStopped || driver.isRunning) return;
+  if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
+    return;
   const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
   if (owed.length === 0) return;
   try {
@@ -903,6 +930,9 @@ async function deliverInterruptionNotice(
     peerPromptStore.markSenderNotified(owed.map((m) => m.id));
     clearInterruptionNoticeRetry(sessionId);
   } catch (err) {
+    // A Stop landed first: the rows stay owed and Resume comes back for them,
+    // so no retry is spent.
+    if (err instanceof AutomaticTurnsHeldError) return;
     // The rows stay owed. Nothing else will come back for them on its own, so
     // this schedules the only retry that exists.
     console.warn(
@@ -1245,10 +1275,15 @@ async function deliverBatch(
     // (bounded — RETRY_MAX_ATTEMPTS gives up permanently).
     const reason = err instanceof Error ? err.message : String(err);
     const admitted = alreadyAdmitted(driver.sessionId, head.id);
+    // A Stop that landed between the claim and the append refused the turn:
+    // nothing reached the session, and nothing failed. The rows go back to
+    // the queue as they were, spending no attempt, for Resume to deliver.
+    const held = !admitted && err instanceof AutomaticTurnsHeldError;
     for (const m of batch) {
       // The turn reached the recipient's log and then failed on its own terms:
       // a provider refusal or harness exit, not a process that vanished.
       if (admitted) peerPromptStore.markInterrupted(m.id, reason, "failure");
+      else if (held) peerPromptStore.returnHeldToQueue(m.id);
       else retryOrFail(m.id, m.attempts, reason);
     }
     // A sender waiting on a reply is usually idle, so no idle edge of its own

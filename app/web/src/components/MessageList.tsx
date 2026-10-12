@@ -828,6 +828,8 @@ function promptOriginLabel(origin: DisplayMessage["promptOrigin"]): string {
     return origin.agentId === "post-reload-continuation"
       ? "Agent continuation"
       : "Agent prompt";
+  // Delivered through the durable handoff queue since a Stop can hold it.
+  if (origin.source === "post-reload-continuation") return "Agent continuation";
   return origin.source ? `System prompt · ${origin.source}` : "System prompt";
 }
 

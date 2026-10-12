@@ -119,9 +119,17 @@ import {
   promptRuntimeSession,
 } from "./session/runtimePrompt.ts";
 import { deliverAgentHandoff } from "./agentHandoffs.ts";
+import { deliverPostReloadContinuation } from "./postReloadContinuation.ts";
+import {
+  captureHumanResume,
+  deleteAutomaticTurnHold,
+  holdAutomaticTurns,
+  resumeAutomaticTurns,
+} from "./automaticTurnHold.ts";
 import { forgetPlanHintState } from "./session/planHint.ts";
 import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import { getRun as getWorkflowRun } from "./db/workflowStore.ts";
 import { subagentStore } from "./db/subagentStore.ts";
 import {
@@ -758,6 +766,13 @@ export class Connection implements Viewer {
         // runtime (run gate + log + ingest). The adapter (pi and claude-sdk) saves +
         // forwards attachments and the runtime records attachment blocks on the
         // durable user entry. Task/project links are recorded so back-links work.
+        //
+        // The user's authority to resume a stopped session is read NOW, as they
+        // send: a Stop that lands while this send is admitted is newer, and wins
+        // (`automaticTurnHold.ts`).
+        const resumeHold = this.viewing
+          ? captureHumanResume(this.viewing.sessionId)
+          : undefined;
         const driver = await this.ensureViewingDriver();
         if (!driver) return;
         // A session whose worktree is gone would run in the app CWD — the wrong
@@ -772,15 +787,20 @@ export class Connection implements Viewer {
                 "Attachments are not supported in the permanent Assistant queue yet.",
             });
           }
-          enqueuePermanentAssistant({
-            dedupeKey: `web:${msg.clientRequestId ?? crypto.randomUUID()}`,
-            source: "web",
-            sourceMetadata: {
-              sessionId: driver.sessionId,
-              clientRequestId: msg.clientRequestId,
+          enqueuePermanentAssistant(
+            {
+              dedupeKey: `web:${msg.clientRequestId ?? crypto.randomUUID()}`,
+              source: "web",
+              sourceMetadata: {
+                sessionId: driver.sessionId,
+                clientRequestId: msg.clientRequestId,
+              },
+              text: msg.text,
             },
-            text: msg.text,
-          });
+            // A new message resumes a stopped Assistant once its intake row
+            // is stored; a resend of one already stored does not.
+            resumeHold?.sessionId === driver.sessionId ? { resumeHold } : {},
+          );
           return;
         }
         const attachments = msg.attachments ? [...msg.attachments] : [];
@@ -817,6 +837,7 @@ export class Connection implements Viewer {
             : {}),
           attachments,
           ...(driver.isRunning && driver.canSteer ? { steer: true } : {}),
+          ...(resumeHold?.sessionId === driver.sessionId ? { resumeHold } : {}),
         }).catch((err: unknown) => {
           // A steer the turn ended before reading is the user's own words: it
           // goes back to them, held in their queue, rather than being lost.
@@ -859,7 +880,12 @@ export class Connection implements Viewer {
         return this.onAcceptCommitDryRun(msg.entryId);
       case "respondToQuestion":
         return this.onRespondToQuestion(msg.response);
-      case "abort":
+      case "abort": {
+        // Stop stays stopped: automatic turns are held before anything is
+        // awaited, so neither the turn's idle edge nor a delivery that was
+        // already waiting on it can start another (`automaticTurnHold.ts`).
+        const stopped = this.viewing?.sessionId;
+        if (stopped) holdAutomaticTurns(stopped);
         // Aborting needs the harness this view may not have opened yet; a
         // detached session has nothing running, so the upgrade is what makes
         // the abort meaningful at all. A Stop holds the user's queue BEFORE the
@@ -868,6 +894,7 @@ export class Connection implements Viewer {
           if (driver.isRunning) pausePromptQueueForStop(driver.sessionId);
           return view?.abort();
         });
+      }
       case "queuePrompt":
       case "updateQueuedPrompt":
       case "removeQueuedPrompt":
@@ -1617,22 +1644,15 @@ export class Connection implements Viewer {
     // while it reopened is newer and keeps the view; the prompt runs either way.
     const ticket = this.claimViewRequest();
     try {
-      const live = await harnessRegistry.reopenTranscript(
-        continuation.kind,
-        continuation.sessionFile,
-      );
-      this.viewIfCurrent(ticket, live);
-      // Drive through the runtime view so run-state + the durable log are updated.
-      // This is an agent/self continuation, not a human prompt; provenance is
-      // rendered distinctly in the transcript.
-      void promptRuntimeSession(live, continuation.message, {
-        origin: { kind: "agent", agentId: "post-reload-continuation" },
-      }).catch((err) =>
-        this.send({
-          type: "error",
-          message: `Failed to run continuation: ${errorText(err)}`,
-        }),
-      );
+      // Durable before the reopen is awaited: a Stop meanwhile holds it as a
+      // queued handoff rather than failing it (`postReloadContinuation.ts`).
+      await deliverPostReloadContinuation(continuation, async () => {
+        const live = await harnessRegistry.reopenTranscript(
+          continuation.kind,
+          continuation.sessionFile,
+        );
+        this.viewIfCurrent(ticket, live);
+      });
     } catch (err) {
       this.send({
         type: "error",
@@ -2703,6 +2723,12 @@ export class Connection implements Viewer {
     const ticket = this.claimViewRequest(
       target.kind === "existing" ? target.sessionId : undefined,
     );
+    // Words of the user's own resume a stopped session as they hand them off,
+    // unless a newer Stop lands first (`automaticTurnHold.ts`).
+    const resumeHold =
+      target.kind === "existing"
+        ? captureHumanResume(target.sessionId)
+        : undefined;
     try {
       const row = await resolveWorktreeRow(worktreeId);
       if (!row || row.status !== "active" || !existsSync(row.path))
@@ -2774,6 +2800,7 @@ export class Connection implements Viewer {
                     origin: { kind: "human" as const },
                     contextBlock: prompt,
                     visible: true,
+                    ...(resumeHold ? { resume: resumeHold } : {}),
                   }
                 : {
                     origin: {
@@ -3351,6 +3378,12 @@ export class Connection implements Viewer {
       return;
     }
     if (isPermanentAssistantSession(sessionId)) {
+      // It has no draft queue, but a Stop holds it like any session, and
+      // Resume is the one queue command that means something there.
+      if (msg.type === "resumePromptQueue") {
+        resumeAutomaticTurns(sessionId);
+        return;
+      }
       this.send({
         type: "error",
         message: "The Assistant queues messages on its own.",
@@ -4634,6 +4667,9 @@ export class Connection implements Viewer {
     for (const cleanup of [
       clearPendingQuestion,
       deleteSessionPromptQueue,
+      deleteAutomaticTurnHold,
+      (sessionId: string) =>
+        backgroundDeliveryOutboxStore.deleteSession(sessionId),
       deleteToolGroupSessionData,
       (sessionId: string) => projectStore.forgetSessionProject(sessionId),
     ]) {

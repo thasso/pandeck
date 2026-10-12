@@ -109,3 +109,41 @@ describe("PromptQueueLedge peer rows", () => {
     expect(rows[1]).toContain("Two findings");
   });
 });
+
+describe("PromptQueueLedge after a Stop", () => {
+  it("stays for its Resume when a Stop holds the session with nothing queued", () => {
+    const props = render({
+      queue: { items: [], paused: false, automaticTurnsHeld: true },
+      running: false,
+    });
+    expect(container.textContent).toContain("Stopped");
+    expect(container.textContent).toContain(
+      "Agent messages and background updates wait until you resume.",
+    );
+    const resume = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Resume",
+    );
+    act(() => resume!.click());
+    expect(props.onResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks waiting peer prompts as held, with the same Resume", () => {
+    render({
+      queue: { items: [], paused: false, automaticTurnsHeld: true },
+      peers: [peer()],
+      running: false,
+    });
+    expect(container.textContent).toContain("Queue paused · 1");
+    expect(container.textContent).toContain("Two findings on the drain.");
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (b) => b.textContent === "Resume",
+      ),
+    ).toBe(true);
+  });
+
+  it("renders nothing once nothing is queued or held", () => {
+    render({ queue: { items: [], paused: false }, running: false });
+    expect(container.textContent).toBe("");
+  });
+});

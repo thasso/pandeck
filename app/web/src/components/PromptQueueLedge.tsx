@@ -46,8 +46,8 @@ export interface PromptQueueLedgeProps {
  * @component PromptQueueLedge
  * @purpose The messages the user queued behind the running turn, in the order
  * they will be sent, on the composer's shelf nearest the field.
- * @useWhen The session on screen has anything queued; the host renders nothing
- * otherwise, so the strip costs no space.
+ * @useWhen The session on screen has anything queued or a Stop holds it; the
+ * host renders nothing otherwise, so the strip costs no space.
  * @avoidWhen Showing what agents have already delivered — those are transcript
  * cards — or agent handoffs, which steer themselves in when they can.
  * @intent Everything typed while a turn runs lands here first, so the strip is
@@ -56,7 +56,9 @@ export interface PromptQueueLedgeProps {
  * steer it into the turn now (or send it next), or drop it — and shows its
  * send while it is under way. A Stop (or a failed send) holds the queue rather
  * than feeding the next message into a session the user just halted, and the
- * strip says so with the one action that lifts it. Peer prompts other sessions
+ * strip says so with the one action that lifts it. A Stop also holds what
+ * agents and background work queued, so the strip stays for that Resume even
+ * with nothing of the user's queued. Peer prompts other sessions
  * sent wait after the user's rows, marked with their sender: the user can steer
  * one in or withdraw it, never edit what another agent wrote. Same object as
  * the session and background-work strips.
@@ -111,7 +113,10 @@ export function PromptQueueLedge({
   }, [queuing.length]);
 
   const count = queue.items.length + queuing.length + peers.length;
-  if (count === 0) return null;
+  // A Stop holds what agents and background work queued for the session even
+  // when the user has nothing queued: the strip stays for its Resume.
+  const held = queue.paused || Boolean(queue.automaticTurnsHeld);
+  if (count === 0 && !held) return null;
   const steering = running && canSteer;
   const Chevron = open ? ChevronDown : ChevronRight;
   const sendNow = (id: string) => {
@@ -125,13 +130,17 @@ export function PromptQueueLedge({
         size="sm"
         // As the other strips' headers: square, filled under Button's
         // transparent border, muted (warning while the queue is held).
-        className={`w-full justify-start rounded-none bg-clip-border text-sm ${queue.paused ? "text-warning" : "text-muted-foreground"}`}
+        className={`w-full justify-start rounded-none bg-clip-border text-sm ${held ? "text-warning" : "text-muted-foreground"}`}
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
       >
         <ListOrdered aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-left">
-          {queue.paused ? `Queue paused · ${count}` : `${count} queued`}
+          {held
+            ? count > 0
+              ? `Queue paused · ${count}`
+              : "Stopped"
+            : `${count} queued`}
         </span>
         <Chevron aria-hidden="true" />
       </Button>
@@ -176,9 +185,13 @@ export function PromptQueueLedge({
               />
             ))}
           </ul>
-          {queue.paused ? (
+          {held ? (
             <div className="flex h-7 items-center justify-end gap-1.5 pr-1.5 pl-2.5">
-              <span>Nothing is sent until you resume.</span>
+              <span>
+                {count === 0
+                  ? "Agent messages and background updates wait until you resume."
+                  : "Nothing is sent until you resume."}
+              </span>
               <Button variant="secondary" size="xs" onClick={onResume}>
                 Resume
               </Button>

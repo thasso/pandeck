@@ -25,6 +25,8 @@ const { sessionSkills } = await import("../sessionSkills.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { drainRecipient, setHubForTests } = await import("../peerPrompt.ts");
 const { peerPromptStore } = await import("../db/peerPromptStore.ts");
+const { holdAutomaticTurns, resumeAutomaticTurns } =
+  await import("../automaticTurnHold.ts");
 const { claudeBackgroundWorkBackend } =
   await import("./backgroundWorkBackend.ts");
 
@@ -972,6 +974,50 @@ test("a peer turn is not swallowed when a denied provider result never arrives",
     "the peer drain lock releases even when the denied provider result is absent",
   );
   setHubForTests(undefined);
+  session.dispose();
+});
+
+test("a Stop's hold denies the CLI's own background follow-up turn", async () => {
+  const { session, queries } = makeHarness(30, {
+    processCloseTimeoutMs: 1_000,
+  });
+  await sessionSkills(session.id, session.agentType);
+  const adapter = session.createRuntimeAdapter();
+  const first = adapter.prompt("retain for a stopped session");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-stop-hold",
+    },
+    "tool-stop-hold",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit(result("stop-hold-initial"));
+  await first;
+
+  holdAutomaticTurns(session.id);
+  // The retained CLI wakes itself for its background task, after the Stop.
+  query.output.emit({
+    type: "system",
+    subtype: "session_state_changed",
+    state: "running",
+    uuid: "stop-hold-provider-running",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  await until(() => query.interruptCalls === 1);
+  assert.equal(
+    session.isRunning,
+    false,
+    "no turn opened for the stopped session",
+  );
+  resumeAutomaticTurns(session.id);
   session.dispose();
 });
 

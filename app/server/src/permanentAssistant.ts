@@ -8,6 +8,13 @@ import {
   type PermanentAssistantQueueItem,
 } from "./db/permanentAssistantStore.ts";
 import { errorText } from "./errors.ts";
+import {
+  AutomaticTurnsHeldError,
+  automaticTurnsHeld,
+  captureHumanResume,
+  spendHumanResume,
+  type HumanResumeToken,
+} from "./automaticTurnHold.ts";
 import { createSession } from "./harnesses/create.ts";
 import type { HarnessDriver } from "./harness.ts";
 import { hub } from "./hub.ts";
@@ -86,13 +93,25 @@ export function hasPermanentAssistantMessage(dedupeKey: string): boolean {
   return permanentAssistantStore.find(dedupeKey) !== undefined;
 }
 
-export function enqueuePermanentAssistant(input: {
-  dedupeKey: string;
-  source: "web" | "slack";
-  sourceMetadata?: Record<string, unknown>;
-  text: string;
-}): PermanentAssistantQueueItem {
+export function enqueuePermanentAssistant(
+  input: {
+    dedupeKey: string;
+    source: "web" | "slack";
+    sourceMetadata?: Record<string, unknown>;
+    text: string;
+  },
+  options: {
+    /**
+     * The user's authority to resume a stopped Assistant, captured as they
+     * sent this (`automaticTurnHold.ts`). Spent once the row is stored new; a
+     * resend of a row already stored resumes nothing.
+     */
+    resumeHold?: HumanResumeToken;
+  } = {},
+): PermanentAssistantQueueItem {
+  const stored = permanentAssistantStore.find(input.dedupeKey) !== undefined;
   const item = permanentAssistantStore.enqueue(input);
+  if (!stored && options.resumeHold) spendHumanResume(options.resumeHold);
   emit({
     item,
     state:
@@ -112,6 +131,26 @@ export function startPermanentAssistant(): void {
   stopping = false;
   permanentAssistantStore.recover();
   void drainPermanentAssistantQueue();
+}
+
+/**
+ * The user's authority to resume the Assistant, captured as a new message of
+ * theirs arrives — before anything is awaited — and spent by
+ * {@link enqueuePermanentAssistant} once that message is stored new.
+ */
+export function capturePermanentAssistantResume():
+  HumanResumeToken | undefined {
+  const sessionId = permanentAssistantStore.sessionId();
+  return sessionId ? captureHumanResume(sessionId) : undefined;
+}
+
+/**
+ * The user resumed this session: if it is the Assistant, its intake goes on
+ * from where the Stop held it.
+ */
+export function resumePermanentAssistantIntake(sessionId: string): void {
+  if (sessionId === permanentAssistantStore.sessionId())
+    void drainPermanentAssistantQueue();
 }
 
 export function stopPermanentAssistant(): void {
@@ -292,6 +331,10 @@ async function drainPermanentAssistantQueue(): Promise<void> {
     while (!stopping) {
       const item = permanentAssistantStore.next();
       if (!item) break;
+      // A Stop holds the Assistant: what it had not reached waits, in order,
+      // for Resume or a new message (`automaticTurnHold.ts`).
+      const boundId = permanentAssistantStore.sessionId();
+      if (boundId && automaticTurnsHeld(boundId)) break;
       permanentAssistantStore.mark(item.id, "working");
       emit({
         item: { ...item, status: "working", attempts: item.attempts + 1 },
@@ -318,6 +361,13 @@ async function drainPermanentAssistantQueue(): Promise<void> {
           response,
         });
       } catch (error) {
+        // A Stop landed while this item was on its way: nothing reached the
+        // session and nothing failed. It goes back in its place.
+        if (error instanceof AutomaticTurnsHeldError) {
+          permanentAssistantStore.returnToQueue(item.id);
+          emit({ item: { ...item, status: "queued" }, state: "queued" });
+          break;
+        }
         const message = errorText(error);
         permanentAssistantStore.mark(item.id, "failed", message);
         emit({

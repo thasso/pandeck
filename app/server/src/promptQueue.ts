@@ -27,6 +27,10 @@ import {
   WORKTREE_MISSING_BLOCKED_REASON,
   slashCommandApplies,
 } from "@assistant/shared";
+import {
+  automaticTurnsHeld,
+  resumeAutomaticTurns,
+} from "./automaticTurnHold.ts";
 import { errorText } from "./errors.ts";
 import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
 import { promptQueueStore } from "./db/promptQueueStore.ts";
@@ -79,12 +83,18 @@ export function stopPromptQueueDelivery(): void {
   deliveryStopped = true;
 }
 
-/** The session state's queue field; absent when nothing is queued. */
+/**
+ * The session state's queue field; absent when nothing is queued and a Stop
+ * holds nothing, since a held session with an empty queue still needs its
+ * Resume.
+ */
 export function promptQueueField(sessionId: string): {
   promptQueue?: PromptQueueState;
 } {
   const state = queueState(sessionId);
-  return state.items.length > 0 ? { promptQueue: state } : {};
+  return state.items.length > 0 || state.automaticTurnsHeld
+    ? { promptQueue: state }
+    : {};
 }
 
 /** The stored queue, with the rows whose send is under way marked so. */
@@ -95,18 +105,22 @@ function queueState(sessionId: string): PromptQueueState {
       sending.has(item.id) ? { ...item, sending: true as const } : item,
     ),
     paused: isHeld(sessionId),
+    ...(automaticTurnsHeld(sessionId) ? { automaticTurnsHeld: true } : {}),
   };
 }
 
 /**
- * Nothing is sent from a held queue: one the user paused (a Stop), or one whose
- * next row carries a note — a failed send, or a steer Claude may already have
- * read. Such a row waits for the user to send it explicitly; a message of their
- * own lifts a Stop, never the row's note, since that would send it unasked.
+ * Nothing is sent from a held queue: one the user paused (a Stop), one whose
+ * session a Stop holds (`automaticTurnHold.ts` — the runtime would refuse an
+ * older draft anyway), or one whose next row carries a note — a failed send,
+ * or a steer Claude may already have read. Such a row waits for the user to
+ * send it explicitly; a message of their own lifts a Stop, never the row's
+ * note, since that would send it unasked.
  */
 function isHeld(sessionId: string): boolean {
   return (
     promptQueueStore.isPaused(sessionId) ||
+    automaticTurnsHeld(sessionId) ||
     Boolean(promptQueueStore.list(sessionId)[0]?.error)
   );
 }
@@ -118,6 +132,11 @@ export function promptQueueHasPriority(sessionId: string): boolean {
 
 function publish(sessionId: string): void {
   host?.publish(sessionId, queueState(sessionId));
+}
+
+/** Re-send the queue state, for a change made outside it (a Stop's hold). */
+export function publishPromptQueue(sessionId: string): void {
+  publish(sessionId);
 }
 
 /**
@@ -197,7 +216,11 @@ export function clearPromptQueue(sessionId: string): void {
   settleEmptyQueue(sessionId);
 }
 
-/** Lift a pause (and clear the failures that caused one) and send what is owed. */
+/**
+ * Lift a pause (and clear the failures that caused one) and send what is owed.
+ * Resume is one decision: it also lifts a Stop's hold on automatic turns, and
+ * then the whole idle chain runs in its usual order, this queue included.
+ */
 export function resumePromptQueue(sessionId: string): void {
   promptQueueStore.setPaused(sessionId, false);
   // "Send next" vouches for the NEXT row only; a later one with its own note
@@ -205,7 +228,7 @@ export function resumePromptQueue(sessionId: string): void {
   const head = promptQueueStore.list(sessionId)[0];
   if (head?.error) promptQueueStore.clearError(sessionId, head.id);
   publish(sessionId);
-  void drainPromptQueue(sessionId);
+  if (!resumeAutomaticTurns(sessionId)) void drainPromptQueue(sessionId);
 }
 
 /**
