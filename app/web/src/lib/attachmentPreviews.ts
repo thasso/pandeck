@@ -1,53 +1,44 @@
 /**
- * Image previews for attachments THIS browser sent, kept for the page's
+ * Image previews for prompts THIS browser is sending, kept for the page's
  * lifetime.
  *
- * The durable transcript stores a prompt image by reference only — no bytes and
- * no URL (`displayMapping.userBlocks`) — so without this a just-sent image would
- * collapse to a bare chip the moment the server's echo replaces the optimistic
- * one. The sender already holds the bytes; remembering them keeps the picture on
- * screen for this session of the page. Another device, or a reload, still sees
- * the chip. Bounded, page-local, never persisted.
+ * The optimistic echo of a prompt carries its images by reference only (no
+ * bytes), and the durable echo that replaces it is loaded from the session's
+ * attachment store by the server's own attachment id. Between the two, the
+ * sender already holds the bytes, so the echo shows them — keyed by the
+ * optimistic image's OWN identity (`optimisticAttachmentRef`), never by name or
+ * size: a later `screenshot.png`, in this session or another, must never stand
+ * in for an earlier one. Bounded, page-local, never persisted.
  */
-
-interface PreviewSource {
-  name: string;
-  mimeType: string;
-  size: number;
-}
 
 const MAX_PREVIEWS = 40;
 
-/** Exact match first; the echo's size may be recomputed, so name+type next. */
-const byExact = new Map<string, string>();
-const byName = new Map<string, string>();
+const previews = new Map<string, string>();
 
-const exactKey = (a: PreviewSource) => `${a.mimeType}|${a.name}|${a.size}`;
-const nameKey = (a: PreviewSource) => `${a.mimeType}|${a.name}`;
-
-function remember(map: Map<string, string>, key: string, src: string) {
-  map.delete(key);
-  map.set(key, src);
-  while (map.size > MAX_PREVIEWS) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
-  }
+/** The reference an optimistic prompt's `index`-th image is shown under. */
+export function optimisticAttachmentRef(
+  clientRequestId: string,
+  index: number,
+): string {
+  return `${clientRequestId}:image-${index}`;
 }
 
-/** Remember the image attachments of a prompt this browser is sending. */
-export function rememberAttachmentPreviews(
-  attachments: readonly (PreviewSource & { data: string; role?: string })[],
+/** Remember the bytes of an image the optimistic echo shows under `ref`. */
+export function rememberAttachmentPreview(
+  ref: string,
+  mimeType: string,
+  data: string,
 ): void {
-  for (const a of attachments) {
-    if (a.role || !a.mimeType.startsWith("image/") || !a.data) continue;
-    const src = `data:${a.mimeType};base64,${a.data}`;
-    remember(byExact, exactKey(a), src);
-    remember(byName, nameKey(a), src);
+  previews.delete(ref);
+  previews.set(ref, `data:${mimeType};base64,${data}`);
+  while (previews.size > MAX_PREVIEWS) {
+    const oldest = previews.keys().next().value;
+    if (oldest === undefined) break;
+    previews.delete(oldest);
   }
 }
 
-/** The remembered preview for an attachment, when this browser sent it. */
-export function attachmentPreviewSrc(a: PreviewSource): string | undefined {
-  return byExact.get(exactKey(a)) ?? byName.get(nameKey(a));
+/** The remembered preview for exactly this attachment id, if this browser sent it. */
+export function attachmentPreviewSrc(attachmentId: string): string | undefined {
+  return previews.get(attachmentId);
 }

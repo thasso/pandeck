@@ -274,6 +274,42 @@ test("agent calls cannot force secret blockers while slash force remains availab
   assert.equal(forced.forced, true);
 });
 
+test("a Workflow Run's forced commit still refuses a secret the check finds", async () => {
+  setCommitMessageGeneratorForTests(async () => generated);
+  const cwd = repo();
+  writeFileSync(join(cwd, ".env"), "SAFE_TEST_VALUE=yes\n");
+  const result = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    force: true,
+    forceRefusesSecrets: true,
+    expectedBranch: "feature",
+  });
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockers.some((item) => item.kind === "secret"));
+  assert.equal(git(cwd, "diff", "--cached", "--name-only"), "");
+});
+
+test("a Workflow Run's forced commit overrides the check's other problems", async () => {
+  setCommitMessageGeneratorForTests(async () => ({
+    ...generated,
+    status: "block",
+    blockers: [
+      { kind: "unsafe", reason: "a recipient drain may wait forever" },
+    ],
+  }));
+  const cwd = repo();
+  writeFileSync(join(cwd, "file.txt"), "changed\n");
+  const result = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    force: true,
+    forceRefusesSecrets: true,
+    expectedBranch: "feature",
+  });
+  assert.equal(result.status, "committed");
+});
+
 test("staged-only scope commits the index as-is and leaves the rest of the tree alone", async () => {
   const cwd = repo();
   writeFileSync(join(cwd, "mine.txt"), "mine\n");

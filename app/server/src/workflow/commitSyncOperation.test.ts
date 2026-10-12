@@ -164,6 +164,8 @@ function noChangesResult(): CommitWorkflowResult {
 
 interface FakeControl {
   events: string[];
+  /** The `force` the commit must be called with (the step's payload). */
+  expectForce?: boolean;
   commitResults: CommitWorkflowResult[];
   worktree?: WorktreeRow;
   main?: WorktreeRow;
@@ -213,7 +215,10 @@ function fake(patch: Patch<FakeControl> = {}): {
       control.events.push("commit");
       assert.equal(options.source, "tool");
       assert.equal(options.cwd, WORKTREE.path);
-      assert.equal(options.force, false);
+      // Force only ever comes from the step (the user's "Commit anyway"), and
+      // a forced Workflow Run commit still refuses a fresh secret.
+      assert.equal(options.force, control.expectForce ?? false);
+      assert.equal(options.forceRefusesSecrets, true);
       if (control.commitError) throw control.commitError;
       return (
         control.commitResults[
@@ -622,7 +627,75 @@ test("commit safety blockers become blocked and do not start sync", async () => 
     .createCommitSyncOperation(dependencies)
     .execute(context());
   assert.equal(outcome.status, "blocked");
-  assert.match(outcome.summary, /commit phase blocked.*credential-like/i);
+  assert.match(
+    outcome.summary,
+    /the commit check refused this change.*credential-like/i,
+  );
+  assert.deepEqual(outcome.payload, {
+    commitCheck: {
+      blockers: [
+        { kind: "secret", reason: "credential-like value in config.ts" },
+      ],
+      kinds: ["secret"],
+    },
+  });
+  assert.deepEqual(mutationEvents(control.events), ["commit"]);
+});
+
+test("a secret past the displayed problems still reaches the recipe", async () => {
+  const { dependencies } = fake({
+    commitResults: [
+      commitResult("blocked", {
+        blockers: [
+          ...Array.from({ length: 25 }, (_, index) => ({
+            kind: "other" as const,
+            reason: `problem ${index}`,
+          })),
+          { kind: "secret", reason: "credential-like value in config.ts" },
+        ],
+      }),
+    ],
+  });
+  const outcome = await operationModule
+    .createCommitSyncOperation(dependencies)
+    .execute(context());
+  const commitCheck = (
+    outcome.payload as {
+      commitCheck: { blockers: { kind: string }[]; kinds: string[] };
+    }
+  ).commitCheck;
+  assert.equal(commitCheck.blockers.length, 20);
+  // The bound keeps the human-call problem, and the kinds stay complete.
+  assert.equal(commitCheck.blockers[0]!.kind, "secret");
+  assert.deepEqual(commitCheck.kinds.sort(), ["other", "secret"]);
+});
+
+test("Commit anyway forces the commit the step carries", async () => {
+  const { control, dependencies } = fake({
+    expectForce: true,
+    commitResults: [
+      commitResult("blocked", {
+        blockers: [
+          { kind: "secret", reason: "credential-like value found on retry" },
+        ],
+      }),
+    ],
+  });
+  const outcome = await operationModule
+    .createCommitSyncOperation(dependencies)
+    .execute(
+      context({
+        step: {
+          payload: {
+            operation: recipe.COMMIT_SYNC_OPERATION_ID,
+            idempotencyKey: recipe.commitSyncIdempotencyKey(RUN.id, 22),
+            force: true,
+          },
+        },
+      }),
+    );
+  // A secret first found on the forced attempt blocks it all the same.
+  assert.equal(outcome.status, "blocked");
   assert.deepEqual(mutationEvents(control.events), ["commit"]);
 });
 

@@ -289,8 +289,8 @@ const OPTIMISTIC_PROMPT_ID_PREFIX = "creq-";
 
 /**
  * Where an attachment's picture comes from: its inline bytes, a served history
- * URL, the preview this browser remembered when it sent the prompt
- * (`lib/attachmentPreviews.ts`), or — for a saved image prompt whose durable
+ * URL, the preview this browser remembered for the prompt it is still sending
+ * (`lib/attachmentPreviews.ts`, by that image's own id), or — for a saved image prompt whose durable
  * entry keeps the image by attachment id only — the session's attachment store.
  */
 function attachmentImageSrc(
@@ -301,7 +301,7 @@ function attachmentImageSrc(
     return `data:${attachment.mimeType};base64,${attachment.data}`;
   if (attachment.url)
     return withToken(`${serverHttpOrigin()}${attachment.url}`);
-  const remembered = attachmentPreviewSrc(attachment);
+  const remembered = attachmentPreviewSrc(attachment.id);
   if (remembered) return remembered;
   if (!attachment.mimeType.startsWith("image/") || !sessionId) return undefined;
   return withToken(

@@ -62,9 +62,12 @@ export function TitleDescriptionEditor({
     const nextTitle = draftTitle.trim();
     const nextDescription = draftDescription.trimEnd();
     if (!nextTitle) return;
+    // Against the opening baseline only, on a retry too: a save that failed
+    // is retried with exactly the fields this session changed. A field it did
+    // not touch is never sent, so it cannot revert someone else's edit.
     const changes: TitleDescriptionChanges = {};
-    if (submitted || nextTitle !== baseline.title) changes.title = nextTitle;
-    if (submitted || nextDescription !== baseline.description)
+    if (nextTitle !== baseline.title) changes.title = nextTitle;
+    if (nextDescription !== baseline.description)
       changes.description = nextDescription;
     if (changes.title === undefined && changes.description === undefined) {
       onClose();

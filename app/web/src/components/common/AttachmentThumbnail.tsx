@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { FileText, ImageIcon, X } from "lucide-react";
+import { Button } from "../ui/button.tsx";
 import { IconButton } from "./IconButton.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
 import { Spinner } from "./load.tsx";
@@ -73,14 +74,16 @@ export function AttachmentThumbnail({
   return (
     <div className="relative shrink-0" title={label}>
       {isImage && src ? (
-        <button
-          type="button"
-          className={`${frame} cursor-zoom-in outline-none focus-visible:ring-3 focus-visible:ring-ring/50`}
+        <Button
+          variant="ghost"
+          // The tile IS the button: no padding or height of its own, and the
+          // muted frame stays put on hover.
+          className={`${frame} h-auto cursor-zoom-in p-0 hover:bg-muted`}
           aria-label={`Open ${label}`}
           onClick={() => setOpen(true)}
         >
           {tile}
-        </button>
+        </Button>
       ) : (
         <div className={frame} role="img" aria-label={label}>
           {tile}

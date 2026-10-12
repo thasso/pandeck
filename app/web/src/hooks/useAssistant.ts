@@ -174,7 +174,10 @@ import {
   worktreeSilhouetteKey,
 } from "../lib/worktreeRowStatuses.ts";
 import type { CredentialProfileProjection } from "../lib/credentialProfiles.ts";
-import { rememberAttachmentPreviews } from "../lib/attachmentPreviews.ts";
+import {
+  optimisticAttachmentRef,
+  rememberAttachmentPreview,
+} from "../lib/attachmentPreviews.ts";
 import {
   beginLoad,
   dataOf,
@@ -1796,7 +1799,7 @@ type Action =
       clientRequestId: string;
       text: string;
       /** File attachments, by reference: their previews are remembered apart. */
-      images?: { name: string; mimeType: string; size: number }[];
+      images?: { name: string; mimeType: string; size: number; ref: string }[];
       sessionId?: string;
       canMoveSession?: boolean;
     }
@@ -1913,9 +1916,13 @@ function optimisticUserEcho(
   const trimmed = text.trim();
   const images = attachments
     .filter((a) => !a.role)
-    .map(({ name, mimeType, size }) => ({ name, mimeType, size }));
+    .map(({ name, mimeType, size, data }, index) => {
+      const ref = optimisticAttachmentRef(clientRequestId, index);
+      if (mimeType.startsWith("image/") && data)
+        rememberAttachmentPreview(ref, mimeType, data);
+      return { name, mimeType, size, ref };
+    });
   if (!trimmed && images.length === 0) return;
-  rememberAttachmentPreviews(attachments);
   dispatch({
     kind: "optimisticUserMessage",
     clientRequestId,
@@ -4712,6 +4719,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           mimeType: image.mimeType,
           name: image.name,
           size: image.size,
+          ref: image.ref,
         })),
       ],
       ...(action.sessionId ? { optimisticSessionId: action.sessionId } : {}),

@@ -224,6 +224,9 @@ async function executeOperation(
         // Only the user's "Commit anyway" at a refused commit writes this: it
         // is the one way past the commit check, and a human's call.
         force: record(context.step.payload).force === true,
+        // ...and even then never over a secret the check finds THIS time: the
+        // user decided on the problems they were shown, not on new ones.
+        forceRefusesSecrets: true,
         additionalContext: `Workflow Run ${run.id} for Task-${run.taskId}.`,
       });
     } catch (err) {
@@ -243,7 +246,12 @@ async function executeOperation(
         return blockers.length > 0
           ? blocked(
               `the commit check refused this change: ${commitFailureReason(commitResult)}`,
-              { commitCheck: { blockers } },
+              {
+                commitCheck: {
+                  blockers,
+                  kinds: commitCheckKindsOf(commitResult),
+                },
+              },
             )
           : blocked(
               `commit phase blocked: ${commitFailureReason(commitResult)}`,
@@ -660,12 +668,26 @@ async function fullCommitOid(
   return requireFullOid(await dependencies.commitOid(cwd, ref), label);
 }
 
+/**
+ * Every kind the commit check reported, unbounded: whether a refusal is a
+ * human's call (and whether "Commit anyway" may be offered) must not depend on
+ * which problems survived the display bound below.
+ */
+function commitCheckKindsOf(result: CommitWorkflowResult): string[] {
+  return [...new Set(result.blockers.map((item) => item.kind))];
+}
+
 /** The commit check's problems, bounded, in the shape the recipe reads back. */
 function commitCheckBlockersOf(
   result: CommitWorkflowResult,
 ): WorkflowJsonValue[] {
-  return result.blockers
+  // Human-call problems first, so the bounded list shows the ones that decide
+  // the gate when there are more than it keeps.
+  const humanCall = (kind: string) =>
+    kind === "secret" || kind === "unrelated" || kind === "too_broad";
+  return [...result.blockers]
     .filter((item) => item.reason.trim())
+    .sort((a, b) => Number(humanCall(b.kind)) - Number(humanCall(a.kind)))
     .slice(0, 20)
     .map((item) => ({
       kind: item.kind,

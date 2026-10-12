@@ -5210,3 +5210,174 @@ test("a CI observation re-issued after a triage still anchors to its exact range
     "reviewer",
   );
 });
+
+/* ------------------------- when the commit check refuses ------------------------ */
+
+type Blocker = { kind: string; file?: string; reason: string };
+
+/** A commit-only step the commit check refused, as the host records it. */
+function refusedCommit(
+  predecessorId: number,
+  blockers: Blocker[],
+  kinds?: string[],
+): WorkflowStepRow {
+  const refused = step({
+    kind: "host-operation",
+    payload: {
+      operation: COMMIT_ONLY_OPERATION_ID,
+      idempotencyKey: commitOnlyIdempotencyKey(RUN_ID, predecessorId),
+    },
+    status: "blocked",
+    predecessorId,
+  });
+  return {
+    ...refused,
+    result: {
+      status: "blocked",
+      summary: `the commit check refused this change: ${blockers[0]!.reason}`,
+      payload: {
+        commitCheck: {
+          blockers,
+          kinds: kinds ?? [...new Set(blockers.map((item) => item.kind))],
+        },
+      },
+      submittedAt: 2,
+    },
+  };
+}
+
+/** A completed commit-check fix, by the run or at the user's request. */
+function commitCheckFix(
+  refused: WorkflowStepRow,
+  blockers: Blocker[],
+  requestedBy: "run" | "user" = "run",
+): WorkflowStepRow {
+  return step({
+    kind: "agent",
+    payload: {
+      role: "implementer",
+      objective: "address-commit-check",
+      refusedCommit: {
+        stepId: refused.id,
+        operation: COMMIT_ONLY_OPERATION_ID,
+      },
+      blockers,
+      requestedBy,
+      resultContract: IMPLEMENTATION_RESULT_CONTRACT_ID,
+    },
+    contractId: IMPLEMENTATION_RESULT_CONTRACT_ID,
+    resultPayload: { notes: "fixed it" },
+    predecessorId: refused.id,
+  });
+}
+
+const CODE_PROBLEM: Blocker = {
+  kind: "unsafe",
+  file: "app/server/src/peerPrompt.ts",
+  reason: "a recipient drain may wait forever",
+};
+
+test("a commit refused for a code problem goes back to its author", () => {
+  const author = implemented();
+  const refused = refusedCommit(author.id, [CODE_PROBLEM]);
+  const decision = decideNextStep(run(), [author, refused]);
+  const payload = appendedPayload(decision) as Record<
+    string,
+    WorkflowJsonValue
+  >;
+  assert.equal(payload.objective, "address-commit-check");
+  assert.equal(payload.requestedBy, "run");
+  assert.deepEqual(payload.blockers, [CODE_PROBLEM]);
+  assert.equal(
+    (decision as Extract<WorkflowDecision, { kind: "append" }>).step
+      .predecessorId,
+    refused.id,
+  );
+});
+
+test("a secret beyond the displayed problems forbids Commit anyway", () => {
+  const author = implemented();
+  // The bounded display list shows only a code problem; the full kind list
+  // the host recorded says the check also found a secret.
+  const refused = refusedCommit(
+    author.id,
+    [CODE_PROBLEM],
+    ["unsafe", "secret"],
+  );
+  const payload = appendedPayload(
+    decideNextStep(run(), [author, refused]),
+  ) as Record<string, WorkflowJsonValue>;
+  assert.equal(payload.decision, "commit-check");
+  assert.deepEqual(payload.allowedChoices, ["send-to-implementer"]);
+});
+
+test("the fixed change is committed again, keyed to the fix and never forced", () => {
+  const author = implemented();
+  const refused = refusedCommit(author.id, [CODE_PROBLEM]);
+  const fix = commitCheckFix(refused, [CODE_PROBLEM]);
+  const payload = appendedPayload(
+    decideNextStep(run(), [author, refused, fix]),
+  ) as Record<string, WorkflowJsonValue>;
+  assert.equal(payload.operation, COMMIT_ONLY_OPERATION_ID);
+  assert.equal(
+    payload.idempotencyKey,
+    commitOnlyIdempotencyKey(RUN_ID, fix.id),
+  );
+  assert.equal(payload.force, undefined);
+});
+
+test("after two automatic fixes the refused commit asks the user", () => {
+  const author = implemented();
+  const first = refusedCommit(author.id, [CODE_PROBLEM]);
+  const firstFix = commitCheckFix(first, [CODE_PROBLEM]);
+  const second = refusedCommit(firstFix.id, [CODE_PROBLEM]);
+  const secondFix = commitCheckFix(second, [CODE_PROBLEM]);
+  const third = refusedCommit(secondFix.id, [CODE_PROBLEM]);
+  const payload = appendedPayload(
+    decideNextStep(run(), [author, first, firstFix, second, secondFix, third]),
+  ) as Record<string, WorkflowJsonValue>;
+  assert.equal(payload.decision, "commit-check");
+  assert.equal(payload.autoFixSpent, true);
+  assert.deepEqual(payload.allowedChoices, [
+    "send-to-implementer",
+    "commit-anyway",
+  ]);
+});
+
+test("Commit anyway re-issues the refused commit with force", () => {
+  const author = implemented();
+  const refused = refusedCommit(author.id, [
+    { kind: "too_broad", reason: "split this change" },
+  ]);
+  const gate = step({
+    kind: "user-decision",
+    payload: appendedPayload(decideNextStep(run(), [author, refused])),
+    contractId: "user-decision",
+    resultPayload: { choice: "commit-anyway" },
+    predecessorId: refused.id,
+  });
+  const payload = appendedPayload(
+    decideNextStep(run(), [author, refused, gate]),
+  ) as Record<string, WorkflowJsonValue>;
+  assert.equal(payload.operation, COMMIT_ONLY_OPERATION_ID);
+  assert.equal(payload.force, true);
+  assert.equal(
+    payload.idempotencyKey,
+    commitOnlyIdempotencyKey(RUN_ID, gate.id),
+  );
+});
+
+test("a blocked commit without the check's problems keeps the old pause", () => {
+  const author = implemented();
+  const blocked = step({
+    kind: "host-operation",
+    payload: {
+      operation: COMMIT_ONLY_OPERATION_ID,
+      idempotencyKey: commitOnlyIdempotencyKey(RUN_ID, author.id),
+    },
+    status: "blocked",
+    predecessorId: author.id,
+  });
+  const decision = decideNextStep(run(), [author, blocked]);
+  assert.equal(decision.kind, "pause");
+});

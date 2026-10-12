@@ -1125,6 +1125,25 @@ function commitCheckBlockersOf(
   );
 }
 
+/**
+ * Every kind the check reported on a refused commit — the host's unbounded
+ * list, joined with the kinds of the problems kept for display. Whether the
+ * refusal is a human's call, and whether a secret forbids "Commit anyway",
+ * is decided from this, never from the bounded display list alone.
+ */
+function commitCheckKindsOf(step: WorkflowStepRow): Set<string> {
+  const recorded = payloadRecord(
+    payloadRecord(step.result?.payload).commitCheck,
+  ).kinds;
+  const kinds = new Set<string>(
+    Array.isArray(recorded)
+      ? recorded.filter((kind): kind is string => typeof kind === "string")
+      : [],
+  );
+  for (const item of commitCheckBlockersOf(step) ?? []) kinds.add(item.kind);
+  return kinds;
+}
+
 /** An implementer assignment to fix what the commit check found. */
 export type AddressCommitCheckEvidence = {
   refusedStepId: number;
@@ -1344,8 +1363,9 @@ function commitCheckAssignment(
 ): WorkflowDecision | undefined {
   const blockers = commitCheckBlockersOf(last);
   if (!blockers) return undefined;
-  const humanCall = blockers.some((item) =>
-    HUMAN_CALL_COMMIT_CHECK_KINDS.has(item.kind),
+  const kinds = commitCheckKindsOf(last);
+  const humanCall = [...kinds].some((kind) =>
+    HUMAN_CALL_COMMIT_CHECK_KINDS.has(kind),
   );
   const autoFixSpent =
     commitCheckAutoFixes(steps, last) >= COMMIT_CHECK_AUTO_FIX_ROUNDS;
@@ -1355,7 +1375,7 @@ function commitCheckAssignment(
     decision: "commit-check",
     refusedStepId: last.id,
     blockers,
-    allowedChoices: blockers.some((item) => item.kind === "secret")
+    allowedChoices: kinds.has("secret")
       ? ["send-to-implementer"]
       : ["send-to-implementer", "commit-anyway"],
     autoFixSpent,
