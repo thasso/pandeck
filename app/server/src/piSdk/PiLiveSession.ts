@@ -631,10 +631,19 @@ export class PiLiveSession implements LiveSession {
           });
           this.adapterEvents.messageDelta(id, "thinking", ev.delta);
           this.broadcastContextInfo();
+        } else if (
+          ev.type === "toolcall_start" ||
+          ev.type === "toolcall_delta"
+        ) {
+          // A tool call chosen and its arguments being written: output, with
+          // no delta event of its own.
+          this.adapterEvents.providerActivity("output");
+        } else if (ev.type === "start") {
+          this.adapterEvents.providerActivity("response");
         } else if (ev.type !== "error") {
-          // The response starting, a tool call being written, a block ending:
-          // output with no delta of its own, which the run's progress counts.
-          this.adapterEvents.modelActivity();
+          // Block starts and ends, `done`: the provider is alive, but nothing
+          // here is output — an empty response must not read as one.
+          this.adapterEvents.providerActivity("lifecycle");
         }
         break;
       }

@@ -9,7 +9,7 @@
  * case feeds `PiLiveSession` the agent events pi emits.
  */
 import assert from "node:assert/strict";
-import { afterAll, test } from "vitest";
+import { afterAll, test, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -91,26 +91,33 @@ const stream = (event: unknown): ClaudeSdkMessage =>
     session_id: "s1",
   }) as unknown as ClaudeSdkMessage;
 
-/** Yields its script, stopping at each {@link GATE} until `release()`. */
-function gatedSeam(script: Scripted[]) {
+/**
+ * Yields its script — one per `query()` call, in order — stopping at each
+ * {@link GATE} until `release()`.
+ */
+function gatedSeam(...scripts: Scripted[][]) {
+  let queries = 0;
   const gates: (() => void)[] = [];
   let reached: (() => void) | undefined;
   let reachedPromise = new Promise<void>((resolve) => (reached = resolve));
   const seam: ClaudeSdkSeam = {
-    query: (_params: ClaudeQueryParams) => ({
-      async *[Symbol.asyncIterator]() {
-        for (const item of script) {
-          if (item === GATE) {
-            await new Promise<void>((resolve) => {
-              gates.push(resolve);
-              reached?.();
-            });
-            continue;
+    query: (_params: ClaudeQueryParams) => {
+      const script = scripts[queries++] ?? [];
+      return {
+        async *[Symbol.asyncIterator]() {
+          for (const item of script) {
+            if (item === GATE) {
+              await new Promise<void>((resolve) => {
+                gates.push(resolve);
+                reached?.();
+              });
+              continue;
+            }
+            yield item;
           }
-          yield item;
-        }
-      },
-    }),
+        },
+      };
+    },
   };
   return {
     seam,
@@ -343,6 +350,204 @@ test("Claude: progress reaches the wire at every transition, before the turn com
   assert.equal(after.snapshot().progress, undefined, "settled: no progress");
 });
 
+const result = (): ClaudeSdkMessage =>
+  ({
+    type: "result",
+    subtype: "success",
+    session_id: "s1",
+    usage: { input_tokens: 1 },
+    total_cost_usd: 0,
+  }) as unknown as ClaudeSdkMessage;
+
+const assistantText = (id: string, text: string): ClaudeSdkMessage =>
+  ({
+    type: "assistant",
+    uuid: `a-${id}`,
+    session_id: "s1",
+    message: {
+      id,
+      model: "claude-sonnet-4-6",
+      content: text ? [{ type: "text", text }] : [],
+      usage: { input_tokens: 1 },
+    },
+  }) as unknown as ClaudeSdkMessage;
+
+const apiRetry = (attempt: number): ClaudeSdkMessage =>
+  ({
+    type: "system",
+    subtype: "api_retry",
+    attempt,
+    max_retries: 10,
+    retry_delay_ms: 500,
+    error_status: 529,
+    error: "overloaded",
+    uuid: `r${attempt}`,
+    session_id: "s1",
+  }) as unknown as ClaudeSdkMessage;
+
+/** A response that streams no content: only its lifecycle and usage. */
+const emptyResponse = (id: string): ClaudeSdkMessage[] => [
+  stream({ type: "message_start", message: { id, content: [] } }),
+  stream({
+    type: "message_delta",
+    delta: { stop_reason: "end_turn" },
+    usage: { output_tokens: 0 },
+  }),
+  stream({ type: "message_stop" }),
+];
+
+test("Claude: an empty response's metadata is not output, and does not reset real output", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(5_000_000);
+    const gated = gatedSeam([
+      apiRetry(1),
+      GATE, // 1: retrying
+      ...emptyResponse("m1"),
+      GATE, // 2: the provider answered with nothing
+      stream({ type: "message_start", message: { id: "m2" } }),
+      stream({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      }),
+      stream({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "Hi" },
+      }),
+      GATE, // 3: real output
+      stream({ type: "content_block_stop", index: 0 }),
+      stream({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 1 },
+      }),
+      stream({ type: "message_stop" }),
+      GATE, // 4: only metadata since
+      assistantText("m2", "Hi"),
+      result(),
+    ]);
+    const runtime = new SessionRuntime(new SessionLogStore(true));
+    const session = new ClaudeSdkSession("ce", {
+      seam: async () => gated.seam,
+    });
+    runtime.createSession("ce", session.createRuntimeAdapter());
+    const live = viewer(runtime, "ce");
+    const run = runtime.prompt("ce", "go");
+
+    await gated.atGate();
+    assert.equal(runProgressPhase(runtime.runProgress("ce")!), "retrying");
+    vi.setSystemTime(5_010_000);
+    gated.release();
+
+    await gated.atGate();
+    let progress = runtime.runProgress("ce")!;
+    assert.equal(progress.retry, undefined, "the response ended the retry");
+    assert.equal(runProgressPhase(progress), "waiting", "but it said nothing");
+    assert.equal(progress.awaitingModelSince, 5_000_000);
+    assert.equal(progress.lastModelOutputAt, undefined);
+    assert.equal(progress.lastActivityAt, 5_010_000, "the provider is alive");
+    // What a viewer receives says the same.
+    assert.equal(
+      runProgressPhase(live.progress().at(-1)!),
+      "waiting",
+      "the published progress claims no output",
+    );
+    vi.setSystemTime(5_020_000);
+    gated.release();
+
+    await gated.atGate();
+    progress = runtime.runProgress("ce")!;
+    assert.equal(runProgressPhase(progress), "receiving");
+    assert.equal(progress.lastModelOutputAt, 5_020_000);
+    vi.setSystemTime(5_030_000);
+    gated.release();
+
+    await gated.atGate();
+    progress = runtime.runProgress("ce")!;
+    assert.equal(
+      progress.lastModelOutputAt,
+      5_020_000,
+      "stop and usage metadata leave the last output where it was",
+    );
+    assert.equal(progress.lastActivityAt, 5_030_000);
+    gated.release();
+    await run;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("Claude: a closing epoch's late messages credit nothing to the next turn", async () => {
+  const gated = gatedSeam(
+    [
+      stream({ type: "message_start", message: { id: "m1" } }),
+      stream({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "one" },
+      }),
+      assistantText("m1", "one"),
+      result(),
+      GATE, // 1: turn one is over; its process has not exited yet
+      apiRetry(9),
+      stream({ type: "message_start", message: { id: "m-late" } }),
+      stream({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_late", name: "Bash" },
+      }),
+      stream({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"c":1}' },
+      }),
+      ...emptyResponse("m-late"),
+    ],
+    [
+      GATE, // 2: turn two's own query, before it says anything
+      apiRetry(1),
+      stream({ type: "message_start", message: { id: "m2" } }),
+      stream({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "two" },
+      }),
+      GATE, // 3: turn two's own output
+      assistantText("m2", "two"),
+      result(),
+    ],
+  );
+  const runtime = new SessionRuntime(new SessionLogStore(true));
+  const session = new ClaudeSdkSession("cl", { seam: async () => gated.seam });
+  runtime.createSession("cl", session.createRuntimeAdapter());
+  await runtime.prompt("cl", "one");
+  await gated.atGate();
+
+  const second = runtime.prompt("cl", "two");
+  await tick();
+  const fresh = stateOf(runtime, "cl")!;
+  assert.equal(runProgressPhase(runtime.runProgress("cl")!), "waiting");
+  gated.release(); // the old epoch delivers everything it still had
+
+  await gated.atGate();
+  assert.deepEqual(
+    stateOf(runtime, "cl"),
+    fresh,
+    "no retry, output, tool or activity from the old epoch",
+  );
+  gated.release();
+
+  await gated.atGate();
+  const own = runtime.runProgress("cl")!;
+  assert.equal(runProgressPhase(own), "receiving", "turn two's output counts");
+  assert.equal(own.retry, undefined);
+  assert.deepEqual(own.runningTools, []);
+  gated.release();
+  await second;
+});
+
 /* ------------------------- runtime, scripted adapter ---------------------- */
 
 class ScriptedAdapter implements PromptableAdapter {
@@ -392,11 +597,12 @@ test("runtime: progress is ordered after running and before the durable turn", a
   const order: string[] = [];
   runtime.subscribeEvents((_id, event) => order.push(event.type));
   const run = runtime.prompt("r1", "go");
-  adapter.emit({ type: "messageStarted", streamId: "m" });
+  adapter.emit({ type: "messageStarted", streamId: "m", run: 1 });
   adapter.emit({
     type: "messageDelta",
     streamId: "m",
     delta: { kind: "text", text: "hi" },
+    run: 1,
   });
   adapter.emit({
     type: "messageCompleted",
@@ -417,18 +623,252 @@ test("runtime: progress is ordered after running and before the durable turn", a
   assert.equal(runtime.runProgress("r1"), undefined);
 });
 
-test("runtime: events from an ended run never revive or corrupt progress", async () => {
-  const { runtime, adapter } = scriptedRuntime("r2");
-  const published: RunProgress[] = [];
-  runtime.subscribeEvents((_id, event) => {
-    if (event.type === "runProgress") published.push(event.progress);
-  });
-  const first = runtime.prompt("r2", "one");
+/** Every progress-moving event a harness can emit, all claiming `run`. */
+function everyEventOf(run: number | undefined, tag: string): AdapterEvent[] {
+  const r = run === undefined ? {} : { run };
+  return [
+    {
+      type: "messageDelta",
+      streamId: `m-${tag}`,
+      delta: { kind: "text", text: "late" },
+      ...r,
+    },
+    {
+      type: "messageDelta",
+      streamId: `m-${tag}`,
+      delta: { kind: "thinking", text: "late" },
+      ...r,
+    },
+    ...(run === undefined
+      ? []
+      : ([
+          { type: "providerActivity", kind: "output", run },
+          { type: "providerActivity", kind: "response", run },
+          { type: "providerActivity", kind: "lifecycle", run },
+          {
+            type: "providerRetry",
+            attempt: 9,
+            maxAttempts: 10,
+            status: 529,
+            run,
+          },
+        ] as AdapterEvent[])),
+    {
+      type: "toolStarted",
+      streamId: `t-${tag}`,
+      toolCallId: `t-${tag}`,
+      name: "Bash",
+      ...r,
+    },
+    { type: "toolUpdated", streamId: `t-${tag}`, output: "x", ...r },
+    {
+      type: "passthrough",
+      envelope: {
+        type: "toolEnd",
+        sessionId: "s",
+        id: `m-${tag}`,
+        toolId: `t-${tag}`,
+        output: "",
+        isError: true,
+      } as ServerMessage,
+      ...r,
+    },
+    {
+      type: "toolCompleted",
+      streamId: `t-${tag}`,
+      toolCallId: `t-${tag}`,
+      content: [],
+      isError: true,
+      ...r,
+    },
+  ];
+}
+
+/** Progress as a reader sees it, without the publish stamp. */
+function stateOf(runtime: InstanceType<typeof SessionRuntime>, id: string) {
+  const progress = runtime.runProgress(id);
+  if (!progress) return undefined;
+  const { observedAt: _observedAt, ...rest } = progress;
+  return rest;
+}
+
+test("runtime: an earlier run's late events cannot touch the current run, whose own events still count", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(1_000_000);
+    const { runtime, adapter } = scriptedRuntime("r2");
+    const published: RunProgress[] = [];
+    runtime.subscribeEvents((_id, event) => {
+      if (event.type === "runProgress") published.push(event.progress);
+    });
+
+    // Run 1: output, a tool still running, and a coalesced publish pending
+    // when it ends.
+    const first = runtime.prompt("r2", "one");
+    adapter.emit({ type: "messageStarted", streamId: "m-1", run: 1 });
+    adapter.emit({
+      type: "toolStarted",
+      streamId: "t-open",
+      toolCallId: "t-open",
+      name: "Bash",
+      run: 1,
+    });
+    adapter.emit({ type: "providerActivity", kind: "output", run: 1 });
+    vi.advanceTimersByTime(100);
+    adapter.emit({ type: "providerActivity", kind: "output", run: 1 });
+    adapter.emit({ type: "runCompleted", stopReason: "end" });
+    adapter.finish({ stopReason: "end" });
+    await first;
+
+    // Run 2 starts; its provider has not announced itself yet.
+    vi.setSystemTime(2_000_000);
+    const second = runtime.prompt("r2", "two");
+    const fresh = stateOf(runtime, "r2");
+    assert.deepEqual(fresh, {
+      startedAt: 2_000_000,
+      lastActivityAt: 2_000_000,
+      awaitingModelSince: 2_000_000,
+      runningTools: [],
+    });
+    const freshPublishes = published.length;
+    vi.advanceTimersByTime(10_000);
+    assert.equal(
+      published.length,
+      freshPublishes,
+      "run 1's pending publish died with it",
+    );
+
+    // Everything run 1 could still say — and anything carrying no run.
+    vi.setSystemTime(2_005_000);
+    for (const event of [
+      ...everyEventOf(1, "1"),
+      ...everyEventOf(undefined, "x"),
+    ])
+      adapter.emit(event);
+    adapter.emit({
+      type: "passthrough",
+      envelope: {
+        type: "toolEnd",
+        sessionId: "s",
+        id: "m-1",
+        toolId: "t-open",
+        output: "",
+        isError: false,
+      } as ServerMessage,
+      run: 1,
+    });
+    assert.deepEqual(stateOf(runtime, "r2"), fresh, "before run 2 announced");
+
+    // Run 2 announces itself; run 1 still cannot reach it, nor rebind it.
+    adapter.emit({ type: "messageStarted", streamId: "m-2", run: 2 });
+    adapter.emit({ type: "messageStarted", streamId: "m-1b", run: 1 });
+    for (const event of everyEventOf(1, "1b")) adapter.emit(event);
+    assert.deepEqual(stateOf(runtime, "r2"), fresh, "after run 2 announced");
+
+    // Run 2's own events: retry, a response with no content, metadata, empty
+    // deltas — none of them output.
+    vi.setSystemTime(2_010_000);
+    adapter.emit({
+      type: "providerRetry",
+      attempt: 1,
+      maxAttempts: 10,
+      run: 2,
+    });
+    assert.equal(stateOf(runtime, "r2")?.retry?.attempt, 1);
+    vi.setSystemTime(2_011_000);
+    adapter.emit({ type: "providerActivity", kind: "response", run: 2 });
+    adapter.emit({ type: "providerActivity", kind: "lifecycle", run: 2 });
+    adapter.emit({
+      type: "messageDelta",
+      streamId: "m-2",
+      delta: { kind: "text", text: "" },
+      run: 2,
+    });
+    let state = stateOf(runtime, "r2")!;
+    assert.equal(state.retry, undefined, "the provider answered");
+    assert.equal(state.awaitingModelSince, 2_000_000, "still no output");
+    assert.equal(state.lastModelOutputAt, undefined);
+    assert.equal(state.lastActivityAt, 2_011_000);
+
+    // Real output, then parallel tools.
+    vi.setSystemTime(2_012_000);
+    adapter.emit({ type: "providerActivity", kind: "output", run: 2 });
+    for (const id of ["a", "b"])
+      adapter.emit({
+        type: "toolStarted",
+        streamId: id,
+        toolCallId: id,
+        name: id === "a" ? "Bash" : "Read",
+        run: 2,
+      });
+    for (const event of everyEventOf(1, "1c")) adapter.emit(event);
+    adapter.emit({
+      type: "passthrough",
+      envelope: {
+        type: "toolEnd",
+        sessionId: "s",
+        id: "m-2",
+        toolId: "a",
+        output: "",
+        isError: false,
+      } as ServerMessage,
+      run: 2,
+    });
+    state = stateOf(runtime, "r2")!;
+    assert.deepEqual(
+      state.runningTools.map((tool) => tool.toolCallId),
+      ["b"],
+      "b still runs; run 1's Bash never joined",
+    );
+    assert.equal(state.lastModelOutputAt, 2_012_000);
+    adapter.emit({
+      type: "toolCompleted",
+      streamId: "b",
+      toolCallId: "b",
+      content: [],
+      run: 2,
+    });
+    state = stateOf(runtime, "r2")!;
+    assert.deepEqual(state.runningTools, []);
+    assert.equal(state.awaitingModelSince, 2_012_000);
+    assert.deepEqual(state.lastTool, {
+      name: "Read",
+      state: "completed",
+      at: 2_012_000,
+    });
+
+    adapter.emit({ type: "runCompleted", stopReason: "aborted" });
+    adapter.finish({ stopReason: "aborted" });
+    await second;
+    assert.equal(runtime.runProgress("r2"), undefined, "abort clears it");
+    for (const event of everyEventOf(2, "late"))
+      if (event.type !== "toolStarted") adapter.emit(event);
+    assert.equal(runtime.runProgress("r2"), undefined, "nothing revives it");
+    // A tool starting while idle is the runtime's out-of-band turn: it runs
+    // again, with fresh progress that the ended run still cannot reach.
+    vi.setSystemTime(3_000_000);
+    for (const event of everyEventOf(2, "late2")) adapter.emit(event);
+    assert.deepEqual(stateOf(runtime, "r2"), {
+      startedAt: 3_000_000,
+      lastActivityAt: 3_000_000,
+      awaitingModelSince: 3_000_000,
+      runningTools: [],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("runtime: an error ends progress, and the next run starts clean", async () => {
+  const { runtime, adapter } = scriptedRuntime("r4");
+  const first = runtime.prompt("r4", "one");
+  adapter.emit({ type: "messageStarted", streamId: "m", run: 1 });
   adapter.emit({
     type: "toolStarted",
-    streamId: "old",
-    toolCallId: "old",
+    streamId: "t",
+    toolCallId: "t",
     name: "bash",
+    run: 1,
   });
   adapter.emit({
     type: "runCompleted",
@@ -437,42 +877,12 @@ test("runtime: events from an ended run never revive or corrupt progress", async
   });
   adapter.finish({ stopReason: "error", errorMessage: "boom" });
   await assert.rejects(first);
-  assert.equal(runtime.runProgress("r2"), undefined, "error clears it");
-
-  // Late callbacks of that run, while idle: nothing is tracked or published.
-  const before = published.length;
-  adapter.emit({ type: "modelActivity" });
-  adapter.emit({ type: "providerRetry", attempt: 3 });
-  adapter.emit({
-    type: "toolCompleted",
-    streamId: "old",
-    toolCallId: "old",
-    content: [],
-  });
-  assert.equal(published.length, before);
-  assert.equal(runtime.runProgress("r2"), undefined);
-
-  // A new run starts clean, and the old tool's completion cannot touch it.
-  const second = runtime.prompt("r2", "two");
-  const fresh = runtime.runProgress("r2")!;
-  assert.deepEqual(fresh.runningTools, []);
-  assert.equal(fresh.lastTool, undefined);
-  adapter.emit({
-    type: "passthrough",
-    envelope: {
-      type: "toolEnd",
-      sessionId: "r2",
-      id: "a",
-      toolId: "old",
-      output: "",
-      isError: false,
-    } as ServerMessage,
-  });
-  assert.equal(runtime.runProgress("r2")!.lastTool, undefined);
-  adapter.emit({ type: "runCompleted", stopReason: "aborted" });
-  adapter.finish({ stopReason: "aborted" });
+  assert.equal(runtime.runProgress("r4"), undefined, "error clears it");
+  const second = runtime.prompt("r4", "two");
+  assert.deepEqual(runtime.runProgress("r4")!.runningTools, []);
+  adapter.emit({ type: "runCompleted", stopReason: "end" });
+  adapter.finish({ stopReason: "end" });
   await second;
-  assert.equal(runtime.runProgress("r2"), undefined, "abort clears it");
 });
 
 test("runtime: progress observes only — no prompt, no idle wake", async () => {
@@ -482,17 +892,19 @@ test("runtime: progress observes only — no prompt, no idle wake", async () => 
   try {
     const run = runtime.prompt("r3", "go");
     assert.equal(adapter.prompts, 1);
+    adapter.emit({ type: "messageStarted", streamId: "m", run: 1 });
     for (let i = 0; i < 20; i++) {
-      adapter.emit({ type: "modelActivity" });
-      adapter.emit({ type: "providerRetry", attempt: i + 1 });
+      adapter.emit({ type: "providerActivity", kind: "output", run: 1 });
+      adapter.emit({ type: "providerRetry", attempt: i + 1, run: 1 });
     }
     adapter.emit({
       type: "toolStarted",
       streamId: "t",
       toolCallId: "t",
       name: "bash",
+      run: 1,
     });
-    adapter.emit({ type: "toolUpdated", streamId: "t", output: "x" });
+    adapter.emit({ type: "toolUpdated", streamId: "t", output: "x", run: 1 });
     assert.equal(adapter.prompts, 1, "progress never drives the adapter");
     assert.deepEqual(idles, [], "and never reports the session idle");
     adapter.emit({ type: "runCompleted", stopReason: "end" });
@@ -507,10 +919,10 @@ test("runtime: progress observes only — no prompt, no idle wake", async () => 
 
 /* ------------------------------------ pi --------------------------------- */
 
-test("pi: retries and non-text output reach the adapter as progress events", () => {
+function piHarness(sessionId: string) {
   let agentListener: ((event: unknown) => void) | undefined;
   const session = {
-    sessionId: "pi-progress",
+    sessionId,
     sessionName: "Named",
     isStreaming: false,
     sessionManager: { getBranch: () => [] },
@@ -546,38 +958,108 @@ test("pi: retries and non-text output reach the adapter as progress events", () 
   const events: AdapterEvent[] = [];
   live.subscribeAdapterEvents((event) => events.push(event));
   assert.ok(agentListener, "the live session listens to pi");
-  agentListener!({ type: "agent_start" });
-  agentListener!({
-    type: "message_update",
-    assistantMessageEvent: { type: "toolcall_delta", delta: "{" },
-  });
-  agentListener!({
-    type: "message_update",
-    assistantMessageEvent: { type: "error", reason: "error" },
-  });
-  agentListener!({
+  return { live, events, pi: (event: unknown) => agentListener!(event) };
+}
+
+const piUpdate = (type: string, extra: Record<string, unknown> = {}) => ({
+  type: "message_update",
+  assistantMessageEvent: { type, ...extra },
+});
+
+test("pi: activity is classified, and only output counts as output", () => {
+  const { events, pi } = piHarness("pi-progress");
+  pi({ type: "agent_start" });
+  const started = events.find((event) => event.type === "messageStarted");
+  assert.ok(started?.type === "messageStarted" && started.run === 1);
+  pi(piUpdate("start"));
+  pi(piUpdate("text_start"));
+  pi(piUpdate("toolcall_start"));
+  pi(piUpdate("toolcall_delta", { delta: "{" }));
+  pi(piUpdate("toolcall_end"));
+  pi(piUpdate("done"));
+  pi(piUpdate("error", { reason: "error" }));
+  pi({
     type: "auto_retry_start",
     attempt: 2,
     maxAttempts: 5,
     delayMs: 4000,
     errorMessage: "529 Overloaded",
   });
-  const kinds = events.map((event) => event.type);
-  assert.equal(
-    kinds.filter((kind) => kind === "modelActivity").length,
-    1,
-    "a tool call being written counts; an error event does not",
+  const kinds = events.flatMap((event) =>
+    event.type === "providerActivity" ? [event.kind] : [],
   );
+  assert.deepEqual(kinds, [
+    "response",
+    "lifecycle",
+    "output",
+    "output",
+    "lifecycle",
+    "lifecycle",
+  ]);
   const retry = events.find(
     (event): event is Extract<AdapterEvent, { type: "providerRetry" }> =>
       event.type === "providerRetry",
   );
   assert.deepEqual(
-    { attempt: retry?.attempt, max: retry?.maxAttempts, delay: retry?.delayMs },
-    { attempt: 2, max: 5, delay: 4000 },
+    {
+      attempt: retry?.attempt,
+      max: retry?.maxAttempts,
+      delay: retry?.delayMs,
+      run: retry?.run,
+    },
+    { attempt: 2, max: 5, delay: 4000, run: 1 },
   );
+  const types = events.map((event) => event.type);
   assert.ok(
-    kinds.indexOf("providerRetry") < kinds.indexOf("providerNotice"),
+    types.indexOf("providerRetry") < types.indexOf("providerNotice"),
     "the transient retry accompanies the existing durable notice",
   );
+});
+
+test("pi: a retry continues its run; what pi says after a run settles belongs to none", () => {
+  const { events, pi } = piHarness("pi-runs");
+  pi({ type: "agent_start" });
+  pi({ type: "agent_end", willRetry: true });
+  pi({
+    type: "auto_retry_start",
+    attempt: 1,
+    maxAttempts: 3,
+    delayMs: 10,
+    errorMessage: "529 Overloaded",
+  });
+  pi({ type: "agent_start" });
+  pi({ type: "agent_settled" });
+  const runsSoFar = events.flatMap((event) =>
+    "run" in event && event.run !== undefined ? [event.run] : [],
+  );
+  assert.ok(runsSoFar.length > 0);
+  assert.ok(
+    runsSoFar.every((run) => run === 1),
+    "the retry and its second attempt are run 1",
+  );
+
+  // Settled: a late retry report or output belongs to no run at all.
+  const before = events.length;
+  pi({
+    type: "auto_retry_start",
+    attempt: 2,
+    maxAttempts: 3,
+    delayMs: 10,
+    errorMessage: "529 Overloaded",
+  });
+  pi(piUpdate("toolcall_delta", { delta: "{" }));
+  assert.ok(
+    events
+      .slice(before)
+      .every(
+        (event) =>
+          event.type !== "providerRetry" && event.type !== "providerActivity",
+      ),
+  );
+
+  pi({ type: "agent_start" });
+  const next = events
+    .slice(before)
+    .find((event) => event.type === "messageStarted");
+  assert.ok(next?.type === "messageStarted" && next.run === 2);
 });

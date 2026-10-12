@@ -19,20 +19,22 @@ export interface RunProgress {
   /** Server clock when this value was published. */
   observedAt: number;
   /**
-   * The most recent event of any kind the provider or a tool produced in this
-   * run (model output, a tool starting or finishing, a retry report). Equals
-   * `startedAt` until the first one.
+   * The most recent sign of life from the provider or a tool in this run:
+   * output, a response starting, stop and usage metadata, a tool starting,
+   * writing or finishing, a retry report. Equals `startedAt` until the first.
    */
   lastActivityAt: number;
   /**
-   * The most recent model output of any kind: text, thinking, or a tool call
-   * being written. Absent until the model has produced anything in this run.
+   * The most recent model OUTPUT: text, thinking, a tool call chosen or its
+   * arguments being written. A response that starts and ends with nothing but
+   * metadata does not move it. Absent until the model produced anything.
    */
   lastModelOutputAt?: number;
   /**
-   * Input went to the model at this time and nothing has come back since: the
-   * prompt, or the results of the tools it last called. Absent while output
-   * is arriving or a tool runs.
+   * Input went to the model at this time and no output has come back since
+   * (a response carrying only metadata is not output): the prompt, or the
+   * results of the tools it last called. Absent while output is arriving or a
+   * tool runs.
    */
   awaitingModelSince?: number;
   /** Tools running right now, in the order they started. Names only. */
@@ -44,8 +46,8 @@ export interface RunProgress {
     at: number;
   };
   /**
-   * The provider reported a failed request it is retrying, and the model has
-   * produced nothing since. Only what the harness reported: no attempt number
+   * The provider reported a failed request it is retrying, and has not
+   * answered since (a response starting, or output, ends it). Only what the harness reported: no attempt number
    * is ever inferred.
    */
   retry?: RunProgressRetry;

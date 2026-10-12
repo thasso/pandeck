@@ -162,18 +162,28 @@ test("a provider retry is on the row while it holds, and moves the list only whe
     .mockImplementation(() => Promise.resolve());
   try {
     const { id, adapter } = await liveSession();
-    adapter.emit({ type: "messageStarted", streamId: "m1" });
+    adapter.emit({ type: "messageStarted", streamId: "m1", run: 1 });
     await new Promise((resolve) => setTimeout(resolve, 0));
     broadcasts.mockClear();
     assert.equal(sessionProviderRetry(id), undefined);
 
-    adapter.emit({ type: "providerRetry", attempt: 1, maxAttempts: 10 });
+    adapter.emit({
+      type: "providerRetry",
+      attempt: 1,
+      maxAttempts: 10,
+      run: 1,
+    });
     const first = sessionProviderRetry(id);
     assert.deepEqual(
       { attempt: first?.attempt, max: first?.maxAttempts },
       { attempt: 1, max: 10 },
     );
-    adapter.emit({ type: "providerRetry", attempt: 2, maxAttempts: 10 });
+    adapter.emit({
+      type: "providerRetry",
+      attempt: 2,
+      maxAttempts: 10,
+      run: 1,
+    });
     assert.equal(sessionProviderRetry(id)?.attempt, 2);
     assert.equal(
       sessionProviderRetry(id)?.since,
@@ -189,6 +199,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
       streamId: "t",
       toolCallId: "t",
       name: "bash",
+      run: 1,
     });
     assert.equal(sessionProviderRetry(id), undefined, "the model answered");
     for (let i = 0; i < 10; i++) {
@@ -197,6 +208,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
         streamId: `t${i}`,
         toolCallId: `t${i}`,
         name: "bash",
+        run: 1,
       });
       adapter.emit({
         type: "passthrough",
@@ -208,6 +220,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
           output: "",
           isError: false,
         } as import("@assistant/shared").ServerMessage,
+        run: 1,
       });
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -217,7 +230,7 @@ test("a provider retry is on the row while it holds, and moves the list only whe
       "only the retry ending asked for a refresh",
     );
 
-    adapter.emit({ type: "providerRetry", attempt: 1 });
+    adapter.emit({ type: "providerRetry", attempt: 1, run: 1 });
     // The row states it while the run is live, and only then.
     const { listSessions } = await import("./sessions.ts");
     const liveInfo = (isStreaming: boolean) => ({

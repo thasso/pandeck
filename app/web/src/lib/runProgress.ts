@@ -147,6 +147,15 @@ export function runProgressView(
       label = "Waiting for model";
       elapsed = ago(progress.awaitingModelSince!);
       sentences.push(`No model output for ${elapsed} since input was sent.`);
+      // The provider answered — a response started, metadata arrived — but
+      // produced nothing yet. Alive is all that says; it is not output.
+      if (progress.lastActivityAt > progress.awaitingModelSince!) {
+        const alive = ago(progress.lastActivityAt);
+        details.push(`provider active ${alive} ago`);
+        sentences.push(
+          `The provider was last active ${alive} ago, with no output.`,
+        );
+      }
       break;
     }
     case "receiving": {

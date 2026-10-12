@@ -39,6 +39,21 @@ describe("runProgressView", () => {
     expect(view.description).toContain("Run started 1m ago");
   });
 
+  it("says a provider that answered without output is alive, not producing", () => {
+    const view = runProgressView(
+      live({
+        awaitingModelSince: SERVER - 30_000,
+        lastActivityAt: SERVER - 5_000,
+      }),
+      LOCAL,
+      { lastBlock: "text", queues: NONE },
+    );
+    expect(view.label).toBe("Waiting for model");
+    expect(view.elapsed).toBe("30s");
+    expect(view.details).toEqual(["provider active 5s ago"]);
+    expect(view.description).not.toContain("output is arriving");
+  });
+
   it("states a long silence plainly and never alarms on duration alone", () => {
     const view = runProgressView(
       live({ awaitingModelSince: SERVER - 40 * 60_000 }),

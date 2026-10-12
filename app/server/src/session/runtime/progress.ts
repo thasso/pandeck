@@ -104,12 +104,35 @@ export class RunProgressTracker {
     else this.publishSoon();
   }
 
-  /** Something moved without changing what the run is doing (tool output arriving). */
+  /**
+   * The provider is alive but produced nothing: a block or message ending,
+   * usage and stop metadata. Moves activity only, never the output time.
+   */
   activity(): void {
     const state = this.state;
     if (!state) return;
     state.lastActivityAt = this.now();
     this.publishSoon();
+  }
+
+  /**
+   * A response started, with no content yet. The provider answered, so a
+   * reported retry is over; the wait for output is not.
+   */
+  responseStarted(): void {
+    const state = this.state;
+    if (!state) return;
+    state.lastActivityAt = this.now();
+    if (state.retry) {
+      delete state.retry;
+      this.publishNow();
+    } else this.publishSoon();
+  }
+
+  /** Output from a tool this run started and that is still running. */
+  toolActivity(toolCallId: string): void {
+    if (!this.state?.runningTools.has(toolCallId)) return;
+    this.activity();
   }
 
   /** The model called a tool, which starts running now. */

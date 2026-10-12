@@ -139,7 +139,10 @@ import {
   createClaudeSdkAdapter,
   type ClaudeSdkAdapterDriver,
 } from "../session/adapters/claudeSdk.ts";
-import type { PromptableAdapter } from "../session/adapters/contract.ts";
+import type {
+  PromptableAdapter,
+  ProviderActivityKind,
+} from "../session/adapters/contract.ts";
 import {
   appendText,
   estimateTokens,
@@ -1859,7 +1862,12 @@ export class ClaudeSdkSession implements LiveSession {
           const admitted = await this.beginProviderInitiatedTurn(epochKey);
           if (!admitted) continue;
         }
-        this.handleSdkMessage(message);
+        // Only the epoch that owns the open turn speaks for its run: anything
+        // else still reaches the transcript, but credits no live progress.
+        if (this.activeTurnEpochKey === epochKey)
+          this.handleSdkMessage(message);
+        else
+          this.adapterEvents.unattributed(() => this.handleSdkMessage(message));
         if (message.type !== "result") continue;
         await this.refreshToolLoadState(query);
         const ownsTurn =
@@ -3444,13 +3452,13 @@ export class ClaudeSdkSession implements LiveSession {
     const toolId = streamToolBlockId(message);
     if (toolId) this.toolIdsByBlock.set(this.blockKey(message), toolId);
 
-    // Every stream event is the model producing something. Text and thinking
-    // report themselves as deltas; the rest — a response starting, a tool
-    // call's arguments streaming — would otherwise look like silence.
-    let reportedDelta = false;
+    // Text and thinking report themselves as deltas below. Every other stream
+    // event is classified for the run's progress, so a tool call's arguments
+    // count as output while an empty response's usage and stop metadata only
+    // prove the provider is alive.
+    const activity = streamActivityKind(message);
+    if (activity) this.adapterEvents.providerActivity(activity);
     for (const delta of mapStreamEvent(message)) {
-      if (delta.type === "text" || delta.type === "thinking")
-        reportedDelta = true;
       switch (delta.type) {
         case "text":
           appendText(this.liveTurn.blocks, "text", delta.text);
@@ -3504,7 +3512,6 @@ export class ClaudeSdkSession implements LiveSession {
           break;
       }
     }
-    if (!reportedDelta) this.adapterEvents.modelActivity();
   }
 
   private blockKey(
@@ -4006,5 +4013,49 @@ function terminalStateFromProviderStatus(
       return "stopped";
     default:
       return undefined;
+  }
+}
+
+/**
+ * What a Claude stream event says about the run, for live progress only; text
+ * and thinking deltas are reported as deltas and answer undefined here.
+ */
+function streamActivityKind(
+  message: Extract<
+    import("./sdkSeam.ts").ClaudeSdkMessage,
+    { type: "stream_event" }
+  >,
+): ProviderActivityKind | undefined {
+  const event = (
+    message as {
+      event?: {
+        type?: string;
+        delta?: { type?: string; partial_json?: string };
+        content_block?: { type?: string };
+      };
+    }
+  ).event;
+  switch (event?.type) {
+    case "message_start":
+      return "response";
+    case "content_block_start":
+      return event.content_block?.type === "tool_use" ||
+        event.content_block?.type === "server_tool_use"
+        ? "output"
+        : "lifecycle";
+    case "content_block_delta":
+      switch (event.delta?.type) {
+        case "text_delta":
+        case "thinking_delta":
+          return undefined;
+        case "input_json_delta":
+          return event.delta.partial_json ? "output" : "lifecycle";
+        default:
+          return "lifecycle";
+      }
+    default:
+      // message_delta (stop reason, usage), message_stop, content_block_stop,
+      // ping: the provider is alive, and nothing was produced.
+      return "lifecycle";
   }
 }

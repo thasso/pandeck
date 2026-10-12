@@ -53,7 +53,7 @@ test("a running peer reports what it is observed doing, in seconds", () => {
   vi.setSystemTime(1_000_000);
   const adapter = new ScriptedAdapter();
   sessionRuntime.createSession("peer-live", adapter);
-  adapter.emit({ type: "messageStarted", streamId: "m" });
+  adapter.emit({ type: "messageStarted", streamId: "m", run: 1 });
   vi.setSystemTime(1_004_000);
   adapter.emit({
     type: "toolStarted",
@@ -61,6 +61,7 @@ test("a running peer reports what it is observed doing, in seconds", () => {
     toolCallId: "t1",
     name: "Bash",
     input: { command: "secret-ish argument" },
+    run: 1,
   });
   vi.setSystemTime(1_010_000);
 
@@ -90,6 +91,7 @@ test("a running peer reports what it is observed doing, in seconds", () => {
       output: "",
       isError: false,
     },
+    run: 1,
   });
   vi.setSystemTime(1_100_000);
   const quiet = liveActivityFields("peer-live", "running").liveActivity!;
@@ -102,6 +104,7 @@ test("a running peer reports what it is observed doing, in seconds", () => {
     attempt: 4,
     maxAttempts: 10,
     status: 529,
+    run: 1,
   });
   assert.deepEqual(
     liveActivityFields("peer-live", "running").liveActivity!.providerRetry,

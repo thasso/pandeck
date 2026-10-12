@@ -14,25 +14,37 @@ native logs.
 never content:
 
 - `startedAt`: when the runtime marked the run running.
-- `lastActivityAt`: the latest event of any kind from the provider or a tool.
-- `lastModelOutputAt`: the latest model output of any kind. That includes text
-  and thinking, and also a tool call's arguments being written and a response
-  starting, which have no delta of their own. Harnesses report those as the
-  content-free `modelActivity` adapter event: Claude for every `stream_event`
-  that produced no text or thinking delta, pi for every `message_update` other
-  than text, thinking and `error`.
-- `awaitingModelSince`: input went to the model at this time and nothing has
+- `lastActivityAt`: the latest sign of life from the provider or a tool: output,
+  a response starting, stop and usage metadata, a tool starting, writing or
+  finishing, a retry report.
+- `lastModelOutputAt`: the latest model OUTPUT — non-empty text or thinking, a
+  tool call chosen, its arguments being written. Nothing else moves it.
+- `awaitingModelSince`: input went to the model at this time and no output has
   come back. Set when the run starts and when the last running tool finishes.
 - `runningTools`: every tool running now, by call id and name, in start order.
   Several can run at once, and one finishing never hides another.
 - `lastTool`: the latest tool transition (started, completed, failed). A tool
   counts as finished at its live `toolEnd`, not at the durable flush at the end
   of the turn.
-- `retry`: the provider reported a failed request it is retrying, and the model
-  has produced nothing since. It comes only from the harness: Claude's
-  `api_retry` system message, pi's `auto_retry_start`. Both arrive as the
-  transient `providerRetry` adapter event. pi's durable `provider.notice`
-  transcript entry is unchanged, and Claude's transcript gains nothing.
+- `retry`: the provider reported a failed request it is retrying, and has not
+  answered since (a response starting or output ends it). It comes only from the
+  harness: Claude's `api_retry` system message, pi's `auto_retry_start`. Both
+  arrive as the transient `providerRetry` adapter event. pi's durable
+  `provider.notice` transcript entry is unchanged, and Claude's transcript gains
+  nothing.
+
+Events with no delta of their own reach the runtime as the content-free
+`providerActivity` adapter event, classified by the harness:
+
+| Kind        | Claude `stream_event`                                     | pi `message_update`                | Effect                                    |
+| ----------- | --------------------------------------------------------- | ---------------------------------- | ----------------------------------------- |
+| `output`    | `tool_use` block start, non-empty `input_json_delta`      | `toolcall_start`, `toolcall_delta` | output: ends the wait and a retry         |
+| `response`  | `message_start`                                           | `start`                            | ends a retry; the wait for output goes on |
+| `lifecycle` | `message_delta` (stop reason, usage), stops, other deltas | other starts and ends, `done`      | activity only                             |
+
+A response that starts and ends with metadata alone therefore leaves the run
+"Waiting for model", with the provider shown as active, and never resets the age
+of earlier real output.
 
 The phase is derived, never stored: `tool` while any tool runs, else `retrying`,
 else `waiting` while `awaitingModelSince` is set, else `receiving`.
@@ -64,6 +76,27 @@ durable copy of a completion already reported live) changes nothing. A coalesced
 publish still pending when a run ends is dropped, so nothing from an ended run
 reaches the next one.
 
+### Run ownership
+
+Progress credits only the provider run the current running state belongs to, so
+a late callback of an earlier run cannot clear a wait, report a retry or start a
+tool in the current one:
+
+- The harness numbers its runs (`run` on adapter events). The shared event
+  source (`adapters/nativeEvents.ts`) opens a run with a turn's first message
+  and closes it when the turn completes (its final message, `runCompleted`, a
+  host-command result). A retry or a follow-up inside the turn continues it.
+  Because both harnesses emit in their provider's own order, what a harness
+  emits after its turn closed carries no run, whenever it reaches the runtime.
+- Claude also checks where a message came from: one from a query epoch that does
+  not own the open turn (a closing process still delivering) is handled
+  `unattributed` — its transcript events flow, and they carry no run.
+- The runtime binds its running state to the run its first message announces and
+  credits nothing else: an event of another run, or of none, moves no progress.
+  A run an earlier running state was bound to is never rebound, and a new
+  adapter numbers afresh. Tool output and completions also count only for a tool
+  this run started and that still runs.
+
 The tracker only observes. It never prompts, resumes or wakes a session, so a
 Stop's hold (`automaticTurnHold.ts`) is untouched. The idle hook fires only on
 the real end of a run.
@@ -93,10 +126,11 @@ shows.
   and how long it has lasted. It names the oldest running tool, the wait, the
   retry attempt and HTTP status, or thinking versus answering, with the tool
   that just finished and what waits behind the turn. The full account is its
-  tooltip. `MessageList` provides it through context, so a progress frame
-  re-renders that line and no transcript row. The permanent Assistant's side
-  panel uses the same line and now reads run state from `runState` rather than
-  from open streams.
+  tooltip. While waiting, a provider that answered without output reads
+  "provider active 5s ago": alive, not producing. `MessageList` provides it
+  through context, so a progress frame re-renders that line and no transcript
+  row. The permanent Assistant's side panel uses the same line and now reads run
+  state from `runState` rather than from open streams.
 - **The Sessions inbox**: a running card's detail line says "Provider is
   retrying a failed request (attempt N of M)" while
   `SessionListItem. providerRetry` is set, and nothing otherwise. The row moves
