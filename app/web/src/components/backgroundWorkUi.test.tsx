@@ -5,6 +5,8 @@
  * the Settings card.
  *   pnpm --filter @assistant/web test src/components/backgroundWorkUi.test.tsx
  */
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
@@ -118,6 +120,17 @@ function cardMarkup(row: SessionListItem): string {
   );
 }
 
+/** The card's background chip: its spoken sentence and what it shows. */
+function backgroundChip(markup: string) {
+  const doc = new DOMParser().parseFromString(markup, "text/html");
+  const chip = [...doc.querySelectorAll('[role="img"]')].find((node) =>
+    node.getAttribute("aria-label")?.includes("background"),
+  );
+  return chip
+    ? { label: chip.getAttribute("aria-label"), text: chip.textContent }
+    : undefined;
+}
+
 function pageMarkup(
   items: BackgroundWorkItemSummary[],
   sessions: SessionListItem[] = [session({ id: "owner-a", title: "Builder" })],
@@ -141,11 +154,14 @@ describe("the session card's background chip", () => {
     const markup = cardMarkup(
       session({ id: "owner-a", backgroundActivity: activity() }),
     );
-    expect(markup).toContain("Background 2 · 8m");
+    // The count, and how long the oldest has run, spoken in full.
+    expect(backgroundChip(markup)).toEqual({
+      label: "2 background processes running",
+      text: "2 running · 8m",
+    });
     // The provider Working badge (with its spinner) belongs to a turn; this
     // session has none.
     expect(markup).not.toContain("Working");
-    expect(markup).toContain("2 background processes running");
   });
 
   it("keeps a concurrent provider run and background work apart", () => {
@@ -160,10 +176,10 @@ describe("the session card's background chip", () => {
     // Both are visible, and each keeps its own label.
     expect(markup).toContain("Working");
     expect(markup).not.toContain("Working 12s");
-    expect(markup).toContain("Background 2 · 8m");
+    expect(backgroundChip(markup)?.text).toBe("2 running · 8m");
   });
 
-  it("shows a retained host with no items left", () => {
+  it("shows no chip for a retained host with no items left", () => {
     const markup = cardMarkup(
       session({
         id: "owner-a",
@@ -175,7 +191,9 @@ describe("the session card's background chip", () => {
         }),
       }),
     );
-    expect(markup).toContain("Background host");
+    // The host is the runtime's bookkeeping, not work the user waits on.
+    expect(backgroundChip(markup)).toBeUndefined();
+    expect(markup).not.toContain("Background host");
   });
 
   it("lifts an otherwise quiet card into the working tier without a status", () => {
@@ -222,7 +240,8 @@ describe("the registry route", () => {
     expect(markup).toContain("Claude query");
     expect(markup).toContain("Shell");
     expect(markup).toContain("WebSocket monitor");
-    expect(markup).toContain("Retained host: live");
+    // The retained host epoch is not on the rows.
+    expect(markup).not.toContain("Retained host");
   });
 
   it("shows the command under the title only when the title does not say it all", () => {
@@ -348,6 +367,10 @@ describe("the registry route", () => {
 });
 
 describe("the session inspector section", () => {
+  /**
+   * The section as the reader sees it with every row unfolded: each row is one
+   * line whose details (state, kind, deadline, facts, output) open beneath it.
+   */
   function sectionMarkup(
     items: BackgroundWorkItemSummary[],
     over: {
@@ -356,7 +379,27 @@ describe("the session inspector section", () => {
       artifacts?: SessionArtifact[];
     } = {},
   ): string {
-    return renderToStaticMarkup(
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    act(() => root.render(section(items, over)));
+    for (const toggle of host.querySelectorAll<HTMLButtonElement>(
+      'button[title="Show details"]',
+    ))
+      act(() => toggle.click());
+    const markup = host.innerHTML;
+    act(() => root.unmount());
+    return markup;
+  }
+
+  function section(
+    items: BackgroundWorkItemSummary[],
+    over: {
+      activity?: SessionBackgroundActivity;
+      protectedTurnWait?: boolean;
+      artifacts?: SessionArtifact[];
+    },
+  ) {
+    return (
       <BackgroundWorkSection
         sessionId="owner-a"
         items={items}
@@ -367,17 +410,16 @@ describe("the session inspector section", () => {
         onStopAll={() => {}}
         onOpenRegistry={() => {}}
         {...(over.protectedTurnWait ? { protectedTurnWait: true } : {})}
-      />,
+      />
     );
   }
 
-  it("shows active work with kind, backend, age, deadline and Stop", () => {
+  it("shows active work with kind, age, deadline and Stop", () => {
     const markup = sectionMarkup([item({ id: "a" })], {
       activity: activity(),
     });
     expect(markup).toContain("Background work");
     expect(markup).toContain("Shell");
-    expect(markup).toContain("PA process");
     expect(markup).toContain("10m");
     expect(markup).toContain("30m left");
     expect(markup).toContain("Stop pnpm run build");
@@ -414,7 +456,7 @@ describe("the session inspector section", () => {
     });
     expect(markup).toContain("it still has 2 background processes running.");
     expect(markup).toContain("Settling and deleting this session are blocked");
-    expect(markup).toContain("Open the background registry");
+    expect(markup).toContain("Open registry");
   });
 
   it("links retained output through the authenticated artifact API only", () => {
@@ -507,12 +549,12 @@ describe("the session inspector section", () => {
     expect(markup).toContain("Recent");
     expect(markup).toContain("Completed");
     expect(markup).toContain("Stopped");
-    // And it is honest about the present: nothing is running.
-    expect(markup).toContain("Nothing is running right now.");
+    // And it is honest about the present: nothing to stop.
+    expect(markup).not.toContain("Stop all");
   });
 
   it("renders nothing for a session that owns no background work", () => {
-    expect(sectionMarkup([])).toBe("");
+    expect(renderToStaticMarkup(section([], {}))).toBe("");
   });
 });
 
@@ -542,7 +584,7 @@ describe("the composer's background ledge", () => {
     expect(markup).not.toContain("Stop all");
   });
 
-  it("opens into this session's active rows with Stop, Stop-all and a registry link", () => {
+  it("opens into this session's active rows, each with its own Stop", () => {
     const markup = ledgeMarkup(
       [
         item({ id: "mine", command: "pnpm dev", label: "pnpm dev" }),
@@ -554,14 +596,15 @@ describe("the composer's background ledge", () => {
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("Stop pnpm dev");
     expect(markup).not.toContain("not mine");
-    expect(markup).toContain("Open in the background registry");
-    expect(markup).toContain("Stop all background work in this session");
+    // Stop-all and the registry are the inspector section's; the strip keeps
+    // one Stop per row.
+    expect(markup).not.toContain("Stop all");
     // A finished row is history, and history lives elsewhere.
     expect(markup.match(/data-background-item=/g)?.length).toBe(1);
   });
 
   it("says the rows are on their way while the topic has not answered yet", () => {
-    expect(ledgeMarkup([], { open: true })).toContain("Loading the rows");
+    expect(ledgeMarkup([], { open: true })).toContain("Loading…");
   });
 
   it("names a retained host with nothing running", () => {
@@ -570,7 +613,7 @@ describe("the composer's background ledge", () => {
         open: true,
         activity: activity({ activeCount: 0, retainedHost: true }),
       }),
-    ).toContain("retained background host");
+    ).toContain("Nothing is running; this session holds a retained host.");
   });
 });
 

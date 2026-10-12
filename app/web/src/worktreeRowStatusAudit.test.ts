@@ -127,16 +127,19 @@ function receiver(source: string, index: number): string {
 /** One entry per status a component is handed, as `<file>: <Receiver>.<prop>={<expr>}`. */
 const SANCTIONED_SINKS: readonly string[] = [
   // MAY carry the fallback: the two Projects row surfaces, and the Project
-  // page's pass-through from its own prop down to its worktree section.
+  // page's pass-through from its own prop down to its worktree section — the
+  // same Projects tree, rooted at that one project.
   "App.tsx: ProjectDetailPage.worktreeStatuses={projectPageStatusCache.current.value}",
   "components/Sidebar.tsx: ProjectTreePane.worktreeStatuses={projectStatusCache.current.value}",
   "components/ProjectDetailPage.tsx: ProjectDetail.worktreeStatuses={worktreeStatuses}",
-  "components/ProjectDetailPage.tsx: ProjectWorktreeRows.statuses={worktreeStatuses}",
+  "components/ProjectDetailPage.tsx: ProjectTreePane.worktreeStatuses={worktreeStatuses}",
   // LIVE ONLY. The Sessions inbox marks a session's worktree dirty and the
   // Pull Requests page states one checkout's dirt and drift; the worktree page
   // and its overlays commit, push and remove. Every one of them would be
   // claiming something about NOW from a record about the past.
   "App.tsx: Sidebar.worktreeStatuses={state.worktreeStatuses}",
+  // The pull request inspector's checkout row states its dirt and drift too.
+  "App.tsx: PullRequestInspector.worktreeStatuses={state.worktreeStatuses}",
   "App.tsx: PullRequestDetailPage.status={pullRequestWorktreeId ? state.worktreeStatuses[pullRequestWorktreeId] : undefined}",
   "App.tsx: WorktreeInspector.status={state.worktreeStatuses[route.id]}",
   "App.tsx: WorktreeDetailPage.status={state.worktreeStatuses[worktree.id]}",

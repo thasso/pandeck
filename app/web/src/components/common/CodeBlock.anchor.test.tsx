@@ -84,7 +84,7 @@ it("closes the region at the anchor cap, however the reveal window is split", ()
 
   // Revealing past the cap does not extend the mark with the window: the region
   // ends at line 2499 and is closed there, in whichever chunk that lands.
-  press("100 more lines");
+  press("Show 100 more");
   expect(region()).toMatchObject({ start: 2_000, end: 2_109 });
   press("Show all");
   expect(region()).toMatchObject({ start: 2_000, end: 2_499 });

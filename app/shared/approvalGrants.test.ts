@@ -63,9 +63,11 @@ test("tag grants bind the exact checkout, destination, tag and commit", () => {
 });
 
 test("grant labels read as provider: operation", () => {
-  expect(approvalGrantLabel("jira:comment")).toBe("Jira: comment");
-  expect(approvalGrantLabel("github:create")).toBe("GitHub PR: create");
+  expect(approvalGrantLabel("jira:comment")).toBe("Jira: comment on issues");
+  expect(approvalGrantLabel("github:create")).toBe(
+    "GitHub: open pull requests",
+  );
   expect(approvalGrantLabel("managedPullRequestMerge")).toBe(
-    "Merge into default branch",
+    "Merge into the default branch",
   );
 });

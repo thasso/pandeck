@@ -1,8 +1,12 @@
+// @vitest-environment jsdom
 /**
  * Tasks 101/102: memory Settings section + Session inspector "Loaded memory".
- * SSR snapshot rendering (matches the web test convention).
+ * SSR snapshot rendering (matches the web test convention); a note's details
+ * open on a click, so those are read from a mounted render.
  *   pnpm --filter @assistant/web test src/components/memoryUi.test.tsx
  */
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
@@ -244,7 +248,7 @@ describe("LoadedMemorySection", () => {
     ],
   };
 
-  it("renders the effective card text from the audit with the Injected badge", () => {
+  it("renders the effective card text from the audit, its facts one click away", () => {
     const html = renderToStaticMarkup(
       <LoadedMemorySection
         sessionId="s1"
@@ -253,9 +257,31 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub({ loadsBySession: { s1: [injected] } })}
       />,
     );
-    expect(html).toContain("Injected");
     expect(html).toContain("Prefers concise answers");
-    expect(html).toContain("stable preference");
+    // A note at rest is its own words; why it is here waits for a click.
+    expect(html).not.toContain("stable preference");
+
+    const host = document.createElement("div");
+    const root = createRoot(host);
+    act(() =>
+      root.render(
+        <LoadedMemorySection
+          sessionId="s1"
+          hasAcceptedUserTurn
+          defaultOpen
+          memory={memoryStub({ loadsBySession: { s1: [injected] } })}
+        />,
+      ),
+    );
+    act(() =>
+      host
+        .querySelector<HTMLButtonElement>('button[title="Show details"]')!
+        .click(),
+    );
+    expect(host.textContent).toContain("KindPreference");
+    expect(host.textContent).toContain("Scopepersonal-assistant");
+    expect(host.textContent).toContain("Whystable preference");
+    act(() => root.unmount());
   });
 
   it("collapses to a cards-of-budget counter, keeping the card list one click away", () => {
@@ -272,7 +298,7 @@ describe("LoadedMemorySection", () => {
     expect(html).not.toContain("Prefers concise answers");
   });
 
-  it("explains a reused turn instead of showing it empty", () => {
+  it("lists a reused turn's effective set instead of showing it empty", () => {
     const reused: MemoryLoadBatch = {
       ...injected,
       id: 2,
@@ -287,10 +313,10 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub({ loadsBySession: { s1: [reused] } })}
       />,
     );
-    expect(html).toContain("Reused");
-    expect(html).toContain("the same snapshot is already in the model");
-    // Still lists the effective set.
+    // The same snapshot is already in the model: it still applies, so it is
+    // listed and counted like a fresh load.
     expect(html).toContain("Prefers concise answers");
+    expect(html).not.toContain("No memory applies");
   });
 
   it("distinguishes not-yet-loaded (no fetch response yet) from loaded-but-empty", () => {
@@ -302,7 +328,8 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub()}
       />,
     );
-    expect(notYetLoaded).toContain("Not yet loaded");
+    expect(notYetLoaded).toContain('aria-label="Loading memory"');
+    expect(notYetLoaded).not.toContain("No memory applies");
 
     const emptyOnPurpose = renderToStaticMarkup(
       <LoadedMemorySection
@@ -312,7 +339,8 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub({ loadsBySession: { s1: [] } })}
       />,
     );
-    expect(emptyOnPurpose).toContain("No memory has been loaded");
+    expect(emptyOnPurpose).toContain("No memory applies to this conversation.");
+    expect(emptyOnPurpose).not.toContain('aria-label="Loading memory"');
   });
 
   it("shows a disabled state distinct from not-yet-loaded when memory loading is off", () => {
@@ -325,11 +353,12 @@ describe("LoadedMemorySection", () => {
         loadingEnabled={false}
       />,
     );
-    expect(html).toContain("disabled");
-    expect(html).not.toContain("Not yet loaded");
+    expect(html).toContain("Memory loading is off in Memory settings");
+    expect(html).toContain(">Off<");
+    expect(html).not.toContain('aria-label="Loading memory"');
   });
 
-  it("navigates between recent load batches and shows per-row Details/actions", () => {
+  it("lists only the latest turn's memory", () => {
     const older: MemoryLoadBatch = {
       ...injected,
       id: 0,
@@ -344,10 +373,8 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub({ loadsBySession: { s1: [injected, older] } })}
       />,
     );
-    expect(html).toContain("Turn 1 of 2");
-    expect(html).toContain("Older");
-    expect(html).toContain("Newer");
-    expect(html).toContain("Details");
+    expect(html).toContain("Prefers concise answers");
+    expect(html).not.toContain("Older effective text");
   });
 
   it("shows a draft state for a staged/optimistic session id (e.g. pending-pi-session) rather than the not-yet-loaded state", () => {
@@ -363,8 +390,8 @@ describe("LoadedMemorySection", () => {
       />,
     );
     expect(html).toContain("Draft");
-    expect(html).toContain("staged");
-    expect(html).not.toContain("Not yet loaded");
+    expect(html).toContain("Memory loads with the first message.");
+    expect(html).not.toContain('aria-label="Loading memory"');
   });
 
   it("renders the actual staged scope in the draft state (exchange 21), not just the generic draft copy", () => {
@@ -377,8 +404,9 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub()}
       />,
     );
-    expect(withProject).toContain("persona: personal-assistant");
-    expect(withProject).toContain("project: acme");
+    expect(withProject).toContain(
+      "Memory loads with the first message, for personal-assistant and project acme.",
+    );
   });
 
   it("resolves a staged Task's ACTUAL project scope (exchange 23), not just its title", () => {
@@ -396,8 +424,7 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub()}
       />,
     );
-    expect(withResolvedProject).toContain("project: acme");
-    expect(withResolvedProject).toContain("Ship the release");
+    expect(withResolvedProject).toContain("for assistant and project acme.");
 
     // Task resolved but explicitly has no project — must say "global", not claim an unresolved scope.
     const withGlobalTask = renderToStaticMarkup(
@@ -412,10 +439,10 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub()}
       />,
     );
-    expect(withGlobalTask).toContain("global");
-    expect(withGlobalTask).toContain("Unprojected task");
+    expect(withGlobalTask).toContain("for project global.");
 
-    // Task genuinely could not be resolved (not in the known list) — only THIS case says "resolves once sent".
+    // Task genuinely could not be resolved (not in the known list) — only THIS
+    // case defers the project to the Task.
     const withUnresolvedTask = renderToStaticMarkup(
       <LoadedMemorySection
         sessionId="pending-pi-session"
@@ -428,7 +455,6 @@ describe("LoadedMemorySection", () => {
         memory={memoryStub()}
       />,
     );
-    expect(withUnresolvedTask).toContain("resolves once sent");
-    expect(withUnresolvedTask).toContain("Unknown task");
+    expect(withUnresolvedTask).toContain("for project from the attached Task.");
   });
 });

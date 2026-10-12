@@ -85,7 +85,7 @@ it("copies the whole file from a block windowed on a huge line range", async () 
     ),
   );
   // A window, not the range: ten lines from the first addressed one.
-  expect(container.textContent).toContain("lines 2000–2009 of 4000");
+  expect(container.textContent).toContain("Lines 2000–2009 of 4000");
   expect(container.textContent).toContain(
     "only lines 2000–2009 of the requested L2000–L500000 are shown",
   );

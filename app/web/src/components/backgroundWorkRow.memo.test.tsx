@@ -138,10 +138,14 @@ describe("BackgroundWorkRow access", () => {
     );
   });
 
-  it("keeps the tap target at the shared minimum height", () => {
+  it("offers Stop as the card's footer action", () => {
     const { node } = render({ item: item(), now: NOW });
-    // shadcn's default `Button` size is the app's control height; the row must
-    // not shrink it.
-    expect(node().querySelector("button")?.className).toContain("h-8");
+    // The row is an AppCard: its one action sits in the card's footer, beside
+    // nothing that could be mistaken for it.
+    const stop = node().querySelector<HTMLButtonElement>(
+      'button[aria-label="Stop pnpm run build"]',
+    );
+    expect(stop?.closest('[data-slot="card-footer"]')).not.toBeNull();
+    expect(stop?.textContent).toBe("Stop");
   });
 });

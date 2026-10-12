@@ -79,6 +79,7 @@ function markup({
       workflowRuns={workflowRuns}
       workflowCards={{}}
       sessions={[]}
+      accountNames={{}}
       taskMutations={{}}
       actions={actions}
       prefs={prefs}

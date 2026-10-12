@@ -266,6 +266,7 @@ function renderRun(delivery: ClientWorkflowRunDelivery) {
         onDelete={() => undefined}
         onRetry={() => undefined}
         onAnswerCeiling={() => undefined}
+        onAnswerCommitCheck={() => undefined}
         onRebaseAndReview={() => undefined}
         onMerge={() => undefined}
         onCleanUp={() => undefined}
@@ -291,7 +292,9 @@ it("busies a run's delivery control on the click, before the run list echoes it"
   expect(button("Clean up").disabled).toBe(true);
   // R5: what the click does is still spelled out beside it — a delivery is
   // finished from this block, so it may not empty itself while it runs.
-  expect(host.textContent).toContain("settles the run itself");
+  expect(host.textContent).toContain(
+    "Removes the worktree and local branch, and settles the run.",
+  );
 
   // The server's own answer takes the same control over, and says the same
   // thing: one action, one spinner, however many viewers.

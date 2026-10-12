@@ -46,54 +46,41 @@ const project: ProjectRecord = { id: "p1", name: "Assistant", key: "PA" };
 const parentProject: ProjectRecord = { id: "p0", name: "Root", key: "RT" };
 
 describe("taskRelationGroups", () => {
-  const parent = task({ id: "t0", title: "Parent" });
-  const child = task({ id: "t2", title: "Child", parentId: "t1" });
   const subject = task({
     id: "t1",
     title: "Subject",
     parentId: "t0",
     projectId: "p1",
-    sessionRefs: [{ sessionId: "s1", origin: "task-start" }],
+    sessionRefs: [
+      { sessionId: "s1", origin: "task-start" },
+      { sessionId: "s3", origin: "reference" },
+    ],
   });
   const sessions = [
     session({ id: "s1", title: "Working session" }),
     session({ id: "s2", title: "Unrelated" }),
+    session({ id: "s3", title: "Mentioning session" }),
   ];
 
-  it("resolves hierarchy and sessions (project lives in TaskContextSections)", () => {
-    const groups = taskRelationGroups(
-      subject,
-      [parent, subject, child],
-      sessions,
-    );
-    expect(groups.find((g) => g.label === "Project")).toBeUndefined();
-    expect(groups.find((g) => g.label === "Related tasks")?.refs).toEqual([
-      {
-        kind: "task",
-        id: "t0",
-        title: "Parent",
-        subtitle: "Parent task",
-        taskStatus: "todo",
-      },
-      {
-        kind: "task",
-        id: "t2",
-        title: "Child",
-        subtitle: "Subtask",
-        taskStatus: "todo",
-      },
-    ]);
+  it("resolves only sessions (project and hierarchy live on the Task page)", () => {
+    const groups = taskRelationGroups(subject, sessions);
+    expect(groups.map((g) => g.label)).toEqual(["Sessions"]);
     const sessionRefs = groups.find((g) => g.label === "Sessions")?.refs ?? [];
-    expect(sessionRefs.map((r) => r.id)).toEqual(["s1"]);
+    expect(sessionRefs.map((r) => r.id)).toEqual(["s1", "s3"]);
     expect(sessionRefs.find((r) => r.id === "s1")).toMatchObject({
       title: "Working session",
       subtitle: "Started from this task",
+      facts: [{ label: "Link", value: "Started from this task" }],
+    });
+    expect(sessionRefs.find((r) => r.id === "s3")).toMatchObject({
+      title: "Mentioning session",
+      subtitle: "Referenced",
     });
   });
 
   it("returns empty groups for an unconnected task", () => {
     const lonely = task({ id: "t9", title: "Lonely" });
-    const groups = taskRelationGroups(lonely, [lonely], []);
+    const groups = taskRelationGroups(lonely, []);
     expect(groups.every((g) => g.refs.length === 0)).toBe(true);
   });
 });
@@ -125,20 +112,15 @@ describe("sessionRelationGroups", () => {
       { kind: "task", id: "t1", title: "Origin", taskStatus: "doing" },
       { kind: "task", id: "t2", title: "Linked", taskStatus: "todo" },
     ]);
-    expect(groups.find((g) => g.label === "Fork lineage")?.refs).toEqual([
-      {
-        kind: "session",
-        id: "parent",
-        title: "Parent chat",
-        subtitle: "Forked from",
-      },
-      {
-        kind: "session",
-        id: "fork1",
-        title: "Fork one",
-        subtitle: "Fork of this session",
-      },
+    // Two groups rather than one lineage list, so each row needs no note
+    // saying which side of the fork it is on.
+    expect(groups.find((g) => g.label === "Forked from")?.refs).toEqual([
+      { kind: "session", id: "parent", title: "Parent chat" },
     ]);
+    expect(groups.find((g) => g.label === "Forks")).toMatchObject({
+      summary: "1",
+      refs: [{ kind: "session", id: "fork1", title: "Fork one" }],
+    });
   });
 
   it("projects durable spawn parentage in both directions with current state", () => {
@@ -203,7 +185,7 @@ describe("sessionRelationGroups", () => {
           id: "reviewer",
           title: "Reviewer",
           // The takeover marker leads, and the runtime detail survives beside it.
-          subtitle: "Taken over · thinking high",
+          subtitle: "Taken over · High",
         },
         { kind: "session", id: "legacy", title: "Legacy child" },
       ],
@@ -240,7 +222,7 @@ describe("sessionRelationGroups", () => {
     ]);
   });
 
-  it("renders a session worktree as an expanded project tree with branch and change counters", () => {
+  it("leaves where the session runs to its Details, not to a relation group", () => {
     const status: WorktreeGitStatus = {
       worktreeId: "wt1",
       branch: "feature/session-inspector",
@@ -277,23 +259,18 @@ describe("sessionRelationGroups", () => {
       worktree,
       worktreeStatus: status,
     });
-    expect(groups.find((g) => g.label === "Workspace")?.refs).toEqual([
-      {
-        kind: "project",
-        id: "p1",
-        title: "PA · Assistant",
-        children: [
-          {
-            kind: "worktree",
-            id: "wt1",
-            title: "assistant-inspector",
-            subtitle:
-              "branch feature/session-inspector · 2 files · 1 untracked",
-            counters: { additions: 10, deletions: 3 },
-          },
-        ],
-      },
+    // Its project and worktree are the first rows of the inspector's Details
+    // (`SessionDetails`); repeating them as relations would say it twice.
+    expect(groups.map((g) => g.id)).toEqual([
+      "tasks",
+      "spawned-by",
+      "spawned-sessions",
+      "forked-from",
+      "forks",
     ]);
+    expect(
+      groups.flatMap((g) => g.refs).filter((ref) => ref.kind !== "session"),
+    ).toEqual([]);
   });
 
   it("returns empty groups for a fresh unlinked session", () => {
@@ -360,14 +337,14 @@ describe("worktreeRelationGroups", () => {
         kind: "session",
         id: "newer",
         title: "Newer",
-        subtitle: "Running · github-copilot · gpt-5 · thinking high",
+        subtitle: "Running · github-copilot · gpt-5 · High",
         running: true,
       },
       {
         kind: "session",
         id: "older",
         title: "Older",
-        subtitle: "Claude SDK · Claude Sonnet · thinking medium",
+        subtitle: "Claude SDK · Claude Sonnet · Medium",
         running: false,
       },
     ]);
@@ -605,14 +582,22 @@ describe("projectRelationGroups", () => {
       tasks,
       [session({ id: "s1", title: "Chat" })],
     );
+    // Each project row carries its record, for the project's own glyph.
     expect(groups.find((g) => g.label === "Related projects")?.refs).toEqual([
       {
         kind: "project",
         id: "p0",
         title: "RT · Root",
         subtitle: "Parent project",
+        project: parentProject,
       },
-      { kind: "project", id: "p2", title: "SB · Sub", subtitle: "Subproject" },
+      {
+        kind: "project",
+        id: "p2",
+        title: "SB · Sub",
+        subtitle: "Subproject",
+        project: sub,
+      },
     ]);
     expect(groups.find((g) => g.label === "Tasks")).toBeUndefined();
     expect(groups.find((g) => g.label === "Sessions")?.refs).toEqual([
@@ -621,6 +606,8 @@ describe("projectRelationGroups", () => {
         id: "s1",
         title: "Chat",
         subtitle: "Via task: In project",
+        // The Task it came through, as a fact that opens that Task.
+        facts: [{ label: "Via task", value: "In project", taskId: "t1" }],
       },
     ]);
   });

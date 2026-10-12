@@ -116,9 +116,10 @@ test("the card that granted an operation can revoke it", () => {
   );
 
   expect(container!.textContent).toContain(
-    "Approved for this session: GitHub PR: comment",
+    "Approved for this session: GitHub: comment on pull requests",
   );
-  expect(container!.textContent).not.toContain("Jira: edit");
+  // The other grant is another card's to show and revoke.
+  expect(container!.textContent).not.toContain("Jira");
   click("Revoke");
 
   expect(onRevokeGrant).toHaveBeenCalledTimes(1);

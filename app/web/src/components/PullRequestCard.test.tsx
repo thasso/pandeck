@@ -39,20 +39,29 @@ function card(patch: Patch<PullRequestCardData> = {}): PullRequestCardData {
 }
 
 describe("PullRequestCard", () => {
-  it("surfaces a reused PR's non-open state with a non-success tone", () => {
+  it("heads a reused PR with its merged state, and says nothing new was created", () => {
     const html = renderToStaticMarkup(<PullRequestCard pullRequest={card()} />);
-    expect(html).toContain("Pull request reused");
-    expect(html).toContain("Merged");
-    expect(html).not.toContain("bg-success-soft");
+    // The header states where the PR stands; the reuse is the warning's to say.
+    expect(html).toContain(">Merged<");
+    expect(html).not.toContain("Pull request reused");
+    expect(html).toContain("bg-success-soft");
     expect(html).toContain("no new pull request was created");
   });
 
-  it("keeps an open PR success-toned", () => {
-    const html = renderToStaticMarkup(
+  it("heads an open PR in the info tone, naming a reused one", () => {
+    const reused = renderToStaticMarkup(
       <PullRequestCard pullRequest={card({ status: "open", warnings: [] })} />,
     );
-    expect(html).toContain("bg-success-soft");
-    expect(html).toContain(">Open<");
+    expect(reused).toContain("Pull request reused");
+    expect(reused).toContain("bg-primary/10");
+    expect(reused).not.toContain("bg-success-soft");
+    expect(reused).toContain(">Open<");
+    const created = renderToStaticMarkup(
+      <PullRequestCard
+        pullRequest={card({ status: "open", reused: false, warnings: [] })}
+      />,
+    );
+    expect(created).toContain("Pull request open");
   });
 
   it("shows CI and mergeability badges while open", () => {
@@ -436,7 +445,8 @@ describe("PullRequestCard", () => {
         })}
       />,
     );
-    expect(html).toContain("Failed");
+    expect(html).toContain("Pull request failed");
+    expect(html).toContain("bg-destructive/10");
     expect(html).toContain(
       "No git hosting provider is configured for this repository.",
     );

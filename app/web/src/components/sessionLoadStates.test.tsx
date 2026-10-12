@@ -273,15 +273,18 @@ it("marks a cached boot paint as refreshing in one legible region", async () => 
 
 const artifact: SessionArtifact = {
   id: "a1",
+  sessionId: "s-a",
+  kind: "file",
   label: "Run log",
   name: "run.log",
   mimeType: "text/plain",
-  url: "/artifacts/run.log",
+  size: 2048,
+  url: "/api/session-artifacts/s-a/tool-output/run.log",
   createdAt: 1,
-} as SessionArtifact;
+};
 
 async function renderArtifact(): Promise<void> {
-  // Artifacts open collapsed; these tests are about the preview inside it.
+  // Artifacts open collapsed; these tests are about the row inside it.
   window.localStorage.setItem(
     "inspector-section:session:s-a:artifacts",
     "open",
@@ -332,12 +335,16 @@ it("shows a mounted skill as available, not loaded, until the agent invokes it",
     "test-runner: Loaded",
     "commit-helper: Available",
   ]);
-  expect(rows[0]?.textContent).toContain("×2 · Skill tool");
-  expect(rows[1]?.textContent).toContain("Available");
-  expect(
-    container!.querySelectorAll('[title="Body loaded into the model context"]')
-      .length,
-  ).toBe(1);
+  // A loaded skill says how often on its line; how it came in, and the
+  // states themselves, are the tooltip and the accessible name.
+  expect(rows[0]?.textContent).toMatch(/^test-runner×2 · /);
+  expect(rows[0]?.getAttribute("title")).toMatch(
+    /^Body loaded into the model context — 2 times, last via Skill tool at /,
+  );
+  expect(rows[1]?.textContent).toBe("commit-helper");
+  expect(rows[1]?.getAttribute("title")).toBe(
+    "Mounted: only the name and description are in context",
+  );
 });
 
 it("orders loaded, then available, then unmounted skills, alphabetically within each", async () => {
@@ -440,30 +447,22 @@ it("renders the explicit empty coding-session skill state", async () => {
   );
 });
 
-it("says the artifact preview is loading instead of rendering a blank box", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => new Promise<Response>(() => {})),
-  );
+it("lists an artifact as a row whose details are the file's facts, fetching nothing", async () => {
+  // The body is the document viewer's to load, behind Open; the row itself
+  // never fetches it, so it has no loading or failure state of its own.
+  const fetchSpy = vi.fn(() => new Promise<Response>(() => {}));
+  vi.stubGlobal("fetch", fetchSpy);
   await renderArtifact();
 
-  const loading = container!.querySelector('[role="status"]');
-  expect(loading).toBeTruthy();
-  expect(loading!.textContent).toContain("Loading preview…");
-});
-
-it("keeps a failed artifact preview retryable instead of empty", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => {
-      throw new Error("network down");
-    }),
+  const row = container!.querySelector('[data-list-row-id="a1"]')!;
+  expect(row.textContent).toContain("Run log");
+  expect(row.querySelector('button[aria-label="Open Run log"]')).toBeTruthy();
+  await act(async () =>
+    row
+      .querySelector<HTMLButtonElement>('button[title="Show details"]')!
+      .click(),
   );
-  await renderArtifact();
-  await act(async () => {});
-
-  const error = container!.querySelector('[role="alert"]');
-  expect(error).toBeTruthy();
-  expect(error!.textContent).toContain("network down");
-  expect(error!.querySelector("button")?.textContent).toContain("Retry");
+  expect(row.textContent).toContain("Filerun.log");
+  expect(row.textContent).toContain("Typetext/plain");
+  expect(fetchSpy).not.toHaveBeenCalled();
 });

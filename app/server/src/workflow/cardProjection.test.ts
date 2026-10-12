@@ -682,10 +682,12 @@ describe("workflowRunCardOf", () => {
       afterPass: 1,
       rationale: "large diff, one pass is thin",
       focus: ["the migration"],
+      // The account it runs on travels too: the card names it.
       reviewer: {
         provider: "openai-codex",
         modelId: "gpt-test",
         thinkingLevel: "medium",
+        credentialProfileId: "profile-1",
         family: "gpt",
       },
     });
@@ -711,6 +713,7 @@ describe("workflowRunCardOf", () => {
         provider: "openai-codex",
         modelId: "gpt-test",
         thinkingLevel: "medium",
+        credentialProfileId: "profile-1",
         family: "gpt",
       },
     });

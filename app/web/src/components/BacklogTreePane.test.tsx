@@ -369,13 +369,17 @@ function session(patch: Partial<SessionListItem> & { id: string }) {
 describe("BacklogTreePane density", () => {
   it("gives a comfortable row a second line and a tight row one line", () => {
     const tasks = [task({ id: "1", title: "Two-line row" })];
+    const idLine = () =>
+      container!.querySelector<HTMLElement>('[title="Task-1"]')!.parentElement!;
     render(tasks, (ids) => ids, { density: "comfortable" });
-    // Nothing to report, so the line states the facts a Task always has rather
-    // than leaving a strip the eye reads as a missing value.
-    expect(container!.textContent).toContain("To do");
+    expect(idLine().previousElementSibling?.textContent).toBe("Two-line row");
+    // Nothing to report, and the line does not pad itself with the status the
+    // row's own control already shows.
+    expect(container!.textContent).not.toContain("To do");
 
     render(tasks, (ids) => ids, { density: "tight" });
-    expect(container!.textContent).not.toContain("To do");
+    expect(idLine().previousElementSibling).toBeNull();
+    expect(idLine().textContent).toContain("Two-line row");
   });
 
   it("gives a two-line row's first line to the title alone", () => {
@@ -464,8 +468,7 @@ describe("BacklogTreePane density", () => {
 
   it("does not also spend line 2 saying the gutter's session exists", () => {
     // The gutter names it and leads to it. Line 2 clips from the right, so the
-    // duplicate would be paid for by the project chip — and with nothing else to
-    // report the line falls back to status + age rather than going blank.
+    // duplicate would be paid for by the project chip.
     const tasks = [
       task({
         id: "1",
@@ -484,7 +487,6 @@ describe("BacklogTreePane density", () => {
       onStartSession: () => {},
     });
     expect(container!.textContent).not.toContain("Session");
-    expect(container!.textContent).toContain("To do");
   });
 
   it("keeps the worktree glyph when the session chip goes", () => {

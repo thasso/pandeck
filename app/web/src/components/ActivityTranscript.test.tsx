@@ -135,10 +135,13 @@ describe("integrated side activity", () => {
         ],
       },
     ]);
+    // The file is a thumbnail named for assistive technology and the tooltip.
+    const thumbnail = () =>
+      row("attachment").querySelector('[aria-label="report.txt · 42 B"]');
     expect(row("attachment").textContent).toContain("Attachments");
-    expect(row("attachment").textContent).not.toContain("report.txt");
+    expect(thumbnail()).toBeNull();
     act(() => toggle("attachment").click());
-    expect(row("attachment").textContent).toContain("report.txt");
+    expect(thumbnail()).not.toBeNull();
   });
 
   it("uses the same collapsed row for both peer paths even when tools are hidden", () => {

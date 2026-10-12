@@ -80,12 +80,20 @@ describe("splitMarkdownFrontmatter", () => {
 
   it("summarizes nested values instead of dropping them", () => {
     const { frontmatter } = splitMarkdownFrontmatter(
-      "---\nstatus: active\nsource:\n  kind: slack\n---\n",
+      "---\nstatus: active\nowner:\n  team: web\n---\n",
     );
     expect(frontmatter?.fields).toEqual([
-      { key: "status", value: "active" },
-      { key: "source", value: '{"kind":"slack"}' },
+      { key: "status", label: "Status", value: "active" },
+      { key: "owner", label: "Owner", value: '{"team":"web"}' },
     ]);
+  });
+
+  it("reads a known source shape as the source, not as a field", () => {
+    const { frontmatter } = splitMarkdownFrontmatter(
+      "---\nstatus: active\nsource:\n  kind: slack\n---\n",
+    );
+    expect(frontmatter?.source).toEqual({ kind: "slack", refs: [] });
+    expect(frontmatter?.fields.map((field) => field.key)).toEqual(["status"]);
   });
 
   it("clips a long value and keeps the whole of it", () => {

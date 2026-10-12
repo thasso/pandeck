@@ -79,13 +79,13 @@ describe("new-session loading states", () => {
     expect(html).not.toContain("Loading credential profiles");
   });
 
-  it("keeps the hero mounted and reserves all runtime rows during first load", () => {
+  it("keeps the worktree row and reserves all runtime rows during first load", () => {
     const html = render({
       credentialProfilesLoaded: false,
       credentialProfiles: [],
       models: [],
     });
-    expect(html).toContain("Start in a worktree");
+    expect(html).toContain(">Worktree<");
     expect(html).toContain("Provider account");
     expect(html).toContain("Model");
     expect(html).toContain("Thinking");

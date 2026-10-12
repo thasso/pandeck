@@ -98,6 +98,7 @@ function page(options: PageOptions) {
       workflowRuns={[]}
       workflowCards={{}}
       sessions={[]}
+      accountNames={{}}
       taskMutations={options.taskMutations ?? {}}
       actions={
         // Every other action is a no-op; a live mount calls several on open.
@@ -197,9 +198,9 @@ function buttonNamed(container: HTMLElement, name: string) {
 }
 
 /**
- * The editors keep the draft until the correlated `saveTask` succeeds: pending
- * busies Save and refuses a second save, a refusal shows its error with a
- * retry, and only a success closes.
+ * The title and description editor (one, opened by Edit) keeps the draft until
+ * the correlated `saveTask` succeeds: pending busies Save and refuses a second
+ * save, a refusal shows its error with a retry, and only a success closes.
  */
 describe("TaskManagementPage edits", () => {
   async function mount(base: PageOptions) {
@@ -221,38 +222,42 @@ describe("TaskManagementPage edits", () => {
 
   it("keeps a failed rename open with its draft and error, closing on success", async () => {
     const saveTask = vi.fn();
-    const view = await mount({ items: [task()], selectedId: "7", saveTask });
+    const view = await mount({
+      items: [task()],
+      selectedId: "7",
+      taskDetails: { "7": task({ description: "Body" }) },
+      saveTask,
+    });
     try {
-      await act(async () =>
-        buttonNamed(view.container, "Rename task")!.click(),
-      );
+      await act(async () => buttonNamed(view.container, "Edit")!.click());
       const input = view.container.querySelector<HTMLInputElement>(
         'input[aria-label="Task title"]',
       )!;
       expect(document.activeElement).toBe(input);
       await type(input, "Ship it  ");
-      await key(input, { key: "Enter" });
+      await key(input, { key: "Enter", metaKey: true });
       expect(saveTask).toHaveBeenCalledTimes(1);
+      // Only the field this edit changed travels; the status always does.
       expect(saveTask).toHaveBeenLastCalledWith(
         { id: "7", title: "Ship it", status: "todo" },
-        "rename",
+        "edit",
       );
 
-      await view.rerender({ "7:rename": loading() });
+      await view.rerender({ "7:edit": loading() });
       const save = buttonNamed(view.container, "Save")!;
       expect(save.getAttribute("aria-busy")).toBe("true");
-      await key(input, { key: "Enter" });
+      await key(input, { key: "Enter", metaKey: true });
       expect(saveTask).toHaveBeenCalledTimes(1);
 
-      await view.rerender({ "7:rename": failed("Title refused") });
+      await view.rerender({ "7:edit": failed("Title refused") });
       expect(input.isConnected).toBe(true);
       expect(input.value).toBe("Ship it  ");
       expect(view.container.textContent).toContain("Title refused");
       await act(async () => buttonNamed(view.container, "Retry")!.click());
       expect(saveTask).toHaveBeenCalledTimes(2);
 
-      await view.rerender({ "7:rename": loading() });
-      await view.rerender({ "7:rename": ready(true) });
+      await view.rerender({ "7:edit": loading() });
+      await view.rerender({ "7:edit": ready(true) });
       expect(
         view.container.querySelector('input[aria-label="Task title"]'),
       ).toBeNull();
@@ -274,34 +279,35 @@ describe("TaskManagementPage edits", () => {
         'textarea[aria-label="Task description"]',
       );
     try {
-      const edit = buttonNamed(view.container, "Edit description")!;
-      await act(async () => edit.click());
-      expect(document.activeElement).toBe(textarea());
+      // The editor replaces the description and its action row, so Edit is
+      // a new button each time it comes back.
+      const edit = () => buttonNamed(view.container, "Edit")!;
+      await act(async () => edit().click());
       await type(textarea()!, "Discarded");
       await key(textarea()!, { key: "Escape" });
       expect(textarea()).toBeNull();
       expect(saveTask).not.toHaveBeenCalled();
 
-      await act(async () => edit.click());
+      await act(async () => edit().click());
       expect(textarea()!.value).toBe("Body");
       await type(textarea()!, "New body\n\n");
       await key(textarea()!, { key: "Enter", ctrlKey: true });
       expect(saveTask).toHaveBeenLastCalledWith(
         { id: "7", status: "todo", description: "New body" },
-        "description",
+        "edit",
       );
 
-      await view.rerender({ "7:description": loading() });
+      await view.rerender({ "7:edit": loading() });
       expect(textarea()).not.toBeNull();
       expect(buttonNamed(view.container, "Save")!.disabled).toBe(true);
 
-      await view.rerender({ "7:description": failed("Too long") });
+      await view.rerender({ "7:edit": failed("Too long") });
       expect(textarea()!.value).toBe("New body\n\n");
       expect(view.container.textContent).toContain("Too long");
 
       await act(async () => buttonNamed(view.container, "Retry")!.click());
-      await view.rerender({ "7:description": loading() });
-      await view.rerender({ "7:description": ready(true) });
+      await view.rerender({ "7:edit": loading() });
+      await view.rerender({ "7:edit": ready(true) });
       expect(textarea()).toBeNull();
     } finally {
       await view.unmount();

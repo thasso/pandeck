@@ -104,7 +104,6 @@ it("reserves inspector details for an object that has not arrived", async () => 
     root!.render(
       <TaskInspector
         task={undefined}
-        tasks={[]}
         sessions={[]}
         openers={openers}
         onStartSession={() => {}}

@@ -246,24 +246,41 @@ describe("isShelvedSession", () => {
 });
 
 describe("buildSessionInbox", () => {
-  it("splits Needs you from the rest and orders by tier, then activity, then id", () => {
+  it("splits Needs you from the rest and orders newest-created first, then id", () => {
+    // Neither state nor activity moves a card: the list holds still while it
+    // is read, and the state is on the card instead.
     const view = buildSessionInbox([
-      session({ id: "quiet-old", updatedAt: NOW - 500_000 }),
-      session({ id: "running", isStreaming: true, updatedAt: NOW - 900_000 }),
+      session({
+        id: "quiet-old",
+        createdAt: NOW - 4_000_000,
+        updatedAt: NOW - 1_000,
+      }),
+      session({
+        id: "running",
+        isStreaming: true,
+        createdAt: NOW - 1_000_000,
+        updatedAt: NOW - 900_000,
+      }),
       session({ id: "asks", attention: "question", updatedAt: NOW - 900_000 }),
       session({
         id: "failed",
         lastError: { at: NOW - 10_000, message: "provider error" },
+        createdAt: NOW - 2_000_000,
         updatedAt: NOW - 900_000,
       }),
-      session({ id: "quiet-new", updatedAt: NOW - 1_000 }),
+      session({
+        id: "quiet-new",
+        createdAt: NOW - 4_000_000,
+        updatedAt: NOW - 900_000,
+      }),
     ]);
     expect(cards(view.needsYou).map((card) => card.session.id)).toEqual([
       "asks",
     ]);
     expect(cards(view.active).map((card) => card.session.id)).toEqual([
-      "failed",
       "running",
+      "failed",
+      // Created together: the id breaks the tie, however recently either moved.
       "quiet-new",
       "quiet-old",
     ]);
@@ -821,15 +838,20 @@ describe("interrupted turns", () => {
     ).toBe("approval");
   });
 
-  it("counts as activity, so the card sorts by when it was cut", () => {
-    const older = session({ id: "a", updatedAt: NOW - 600_000 });
+  it("does not move the card: the list keeps its order by creation", () => {
+    const newer = session({
+      id: "a",
+      createdAt: NOW - 600_000,
+      updatedAt: NOW - 600_000,
+    });
     const cut = session({
       id: "b",
+      createdAt: NOW - 900_000,
       updatedAt: NOW - 600_000,
       interruptedRun: { at: NOW - 1_000 },
     });
-    const inbox = buildSessionInbox([older, cut]);
-    expect(cards(inbox.active).map((c) => c.session.id)).toEqual(["b", "a"]);
+    const inbox = buildSessionInbox([newer, cut]);
+    expect(cards(inbox.active).map((c) => c.session.id)).toEqual(["a", "b"]);
   });
 });
 
@@ -875,12 +897,14 @@ describe("spawn clusters", () => {
     expect(
       sessionClusterSummary(card.cluster?.counts as SessionClusterCounts),
     ).toBe("5 sessions · 2 running · 1 waiting · 1 failed");
+    // The peer asking the user first; the rest by creation, a failure
+    // included — its state is on its row.
     expect(card.cluster?.children.map((c) => c.session.id)).toEqual([
       "c",
-      "e",
       "a",
       "b",
       "d",
+      "e",
     ]);
     // The coordinator's OWN status is untouched by what it coordinates.
     expect(card.status).toBe("running");
@@ -1006,14 +1030,14 @@ describe("spawn clusters", () => {
       child("helper", "root", { updatedAt: NOW - 20_000 }),
     ]);
     const card = cards(view.active)[0] as SessionInboxCard;
-    // Siblings in inbox order (working — a turn or a background job — first,
-    // then newest), every child right under its spawner however recently it
+    // Siblings in list order (newest created first, then id) — never by
+    // activity — every child right under its spawner however recently it
     // moved.
     expect(card.cluster?.children.map((c) => [c.session.id, c.depth])).toEqual([
       ["helper", 1],
       ["impl", 1],
-      ["rev", 2],
       ["fix", 2],
+      ["rev", 2],
     ]);
     const impl = card.cluster?.children.find((c) => c.session.id === "impl");
     expect(impl?.peers).toMatchObject({ total: 2, running: 1, jobs: 2 });
@@ -2197,15 +2221,23 @@ describe("formal Workflow Runs", () => {
     expect(runItems(view)[0]?.counts.total).toBe(2);
   });
 
-  it("orders runs among the cards by when each last moved", () => {
+  it("orders runs among the cards by when each was created, not when it moved", () => {
     const view = buildSessionInbox(
-      [session({ id: "older", updatedAt: NOW - 600_000 })],
+      [
+        session({
+          id: "newer",
+          createdAt: NOW - 600_000,
+          updatedAt: NOW - 600_000,
+        }),
+      ],
       {
-        workflowRuns: [run({ id: "r1", updatedAt: NOW - 1_000 })],
+        workflowRuns: [
+          run({ id: "r1", createdAt: NOW - 900_000, updatedAt: NOW - 1_000 }),
+        ],
         workflowCards: { r1: runCard({ runId: "r1" }) },
       },
     );
-    expect(view.active.map(inboxItemId)).toEqual(["run:r1", "older"]);
+    expect(view.active.map(inboxItemId)).toEqual(["newer", "run:r1"]);
   });
 
   it("keys a run item on what it renders, and on nothing else", () => {
@@ -2298,26 +2330,32 @@ describe("spawnedSessionsView", () => {
   const view = (sessions: SessionListItem[], includeSettled = false) =>
     spawnedSessionsView({ sessions, coordinatorId: "root", includeSettled });
 
-  it("takes the peers of one session, newest activity first", () => {
+  it("takes the peers of one session, the one asking first, then newest created", () => {
     const shaped = view([
       session({ id: "root" }),
       session({ id: "stranger" }),
-      peer("quiet", "root", { updatedAt: NOW - 30_000 }),
-      peer("working", "root", { isStreaming: true, updatedAt: NOW - 1_000 }),
+      peer("quiet", "root", {
+        createdAt: NOW - 100_000,
+        updatedAt: NOW - 30_000,
+      }),
+      peer("working", "root", {
+        isStreaming: true,
+        createdAt: NOW - 200_000,
+        updatedAt: NOW - 1_000,
+      }),
       peer("asking", "root", {
         attention: "question",
+        createdAt: NOW - 300_000,
         updatedAt: NOW - 60_000,
       }),
       peer("elsewhere", "other"),
     ]);
-    // NOT the inbox's tier order: the strip reads as "what just happened among
-    // my peers", so the one that asked a minute ago sits under the one still
-    // streaming and the one that went quiet since. The tiering is stated on
-    // the collapsed line instead — the counts, and the bubbled peer below.
+    // A peer asking the user leads; the rest hold their creation order however
+    // recently each moved, so the strip does not reshuffle while it is read.
     expect(shaped.rows.map((card) => card.session.id)).toEqual([
-      "working",
-      "quiet",
       "asking",
+      "quiet",
+      "working",
     ]);
     expect(shaped.bubbled?.session.id).toBe("asking");
     expect(shaped.counts).toEqual({
@@ -2344,11 +2382,12 @@ describe("spawnedSessionsView", () => {
       }),
       peer("deep", "mine", { updatedAt: NOW - 30_000 }),
     ]);
+    // Same creation time throughout, so siblings fall back to their ids.
     expect(shaped.rows.map((c) => [c.session.id, c.depth])).toEqual([
-      ["mine", 1],
-      ["deep", 2],
       ["impl", 1],
       ["rev", 2],
+      ["mine", 1],
+      ["deep", 2],
     ]);
     expect(shaped.counts).toMatchObject({ total: 4, running: 1 });
     expect(

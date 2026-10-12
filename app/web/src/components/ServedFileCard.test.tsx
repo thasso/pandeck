@@ -245,8 +245,13 @@ it("cards every file a show_files call showed, with tools hidden", () => {
   const image = container!.querySelector("img")!;
   expect(new URL(image.src).pathname).toBe("/api/files/tmp/example/plot.png");
   expect(image.getAttribute("alt")).toBe("Weekly runs");
-  expect(container!.textContent).toContain("/tmp/example/plot.png · 2.0 KB");
-  expect(container!.textContent).toContain("report.md · 4.0 KB");
+  const [plotCard, reportCard] = fileCards();
+  expect(fileFacts(plotCard!)).toEqual({
+    path: "/tmp/example/plot.png",
+    size: "2.0 KB",
+  });
+  expect(fileFacts(reportCard!).path).toContain("report.md");
+  expect(fileFacts(reportCard!).size).toBe("4.0 KB");
 
   // Each file keeps its own source identity, so each opens in its own viewer.
   const viewers = [...container!.querySelectorAll("a")].map((link) =>
@@ -303,6 +308,21 @@ it("draws no card for an address this app does not serve", () => {
   root = null;
 });
 
+/** Each file's own card, in the order the call listed them. */
+function fileCards(): HTMLElement[] {
+  return [...container!.querySelectorAll<HTMLElement>('[data-slot="card"]')];
+}
+
+/** Where a card says its file sits (the line under the title) and its size (the header). */
+function fileFacts(card: HTMLElement): { path: string; size: string } {
+  const header = card.querySelector('[data-slot="card-header"]');
+  const path = card.querySelector('[data-slot="card-content"] p[title] + p');
+  return {
+    path: path?.textContent ?? "",
+    size: (header?.textContent ?? "").replace(/^File/, ""),
+  };
+}
+
 it("classifies a show_files row by its address, not by what it claims", () => {
   // A crafted row declaring `image/png` for a Markdown document must not force
   // image presentation — the kind comes from the resolved target alone.
@@ -324,7 +344,10 @@ it("classifies a show_files row by its address, not by what it claims", () => {
   expect(container!.querySelector("img")).toBeNull();
   expect(container!.textContent).toContain("Open the viewer to read it");
   // A zero-byte file has a size like any other; it is not a missing one.
-  expect(container!.textContent).toContain("/tmp/example/report.md · 0 B");
+  expect(fileFacts(fileCards()[0]!)).toEqual({
+    path: "/tmp/example/report.md",
+    size: "0 B",
+  });
 });
 
 it("cards a show_files result under either harness's tool name", () => {

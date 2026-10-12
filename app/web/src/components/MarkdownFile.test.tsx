@@ -13,11 +13,15 @@ describe("MarkdownFile", () => {
       />,
     );
     expect(html).toContain('aria-label="Document metadata"');
-    expect(html).toContain("Release notes");
+    // One property list: each key read as a label, beside its value.
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const value = (label: string) =>
+      [...doc.querySelectorAll('[aria-label="Document metadata"] span')].find(
+        (span) => span.textContent === label,
+      )?.nextElementSibling?.textContent;
+    expect(value("Title")).toBe("Release notes");
+    expect(value("Status")).toBe("Draft");
     expect(html).toMatch(/<li><span[^>]*>release<\/span><\/li>/);
-    expect(html).toContain("<dt");
-    expect(html).toContain(">status</dt>");
-    expect(html).toContain(">draft</dd>");
     // The fences no longer render as a rule and a setext heading.
     expect(html).not.toContain("<hr");
     expect(html).toContain("Heading</h1>");

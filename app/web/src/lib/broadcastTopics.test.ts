@@ -19,7 +19,7 @@ describe("topicsForSurface", () => {
         sidebarSection: "knowledge",
         routeName: "session",
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
   });
 
   it("gives the Pull Requests surfaces the lists its joins resolve against", () => {
@@ -42,14 +42,15 @@ describe("topicsForSurface", () => {
         routeName: "pullRequests",
       }).sort(),
     ).toEqual(expected);
-    // …and a selected-but-hidden browser does not, on the general rule.
+    // …and a selected-but-hidden browser adds nothing to the conversation's
+    // own Projects, on the general rule.
     expect(
       topicsForSurface({
         sidebarVisible: false,
         sidebarSection: "pull-requests",
         routeName: "session",
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
   });
 
   it("holds the background registry only for its route and its one section", () => {
@@ -69,14 +70,14 @@ describe("topicsForSurface", () => {
         routeName: "session",
         backgroundInspectorVisible: true,
       }),
-    ).toEqual(["background"]);
+    ).toEqual(["projects", "background"]);
     expect(
       topicsForSurface({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
     // The composer's ledge subscribes only while it is OPEN: its collapsed
     // line reads the session row's own projection.
     expect(
@@ -86,7 +87,7 @@ describe("topicsForSurface", () => {
         routeName: "session",
         backgroundLedgeOpen: true,
       }),
-    ).toEqual(["background"]);
+    ).toEqual(["projects", "background"]);
     // The session LIST never subscribes: its per-session activity rides on the
     // session row, so a visible sidebar costs nothing here.
     expect(
@@ -176,14 +177,14 @@ describe("topicsForSurface", () => {
         sidebarSection: "tasks",
         routeName: "session",
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
     expect(
       topicsForSurface({
         sidebarVisible: false,
         sidebarSection: "knowledge",
         routeName: "session",
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
     expect(
       topicsForSurface({
         sidebarVisible: false,
@@ -294,7 +295,7 @@ describe("topicsForSurface", () => {
         routeName: "session",
         workflowStartOpen: true,
       }),
-    ).toEqual(["worktrees", "usage"]);
+    ).toEqual(["worktrees", "projects", "usage"]);
     expect(
       topicsForSurface({
         sidebarVisible: true,
@@ -311,7 +312,7 @@ describe("topicsForSurface", () => {
         routeName: "session",
         workflowStartOpen: false,
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
   });
 
   it("subscribes to skills only while that settings section renders", () => {
@@ -347,7 +348,7 @@ describe("topicsForSurface", () => {
         routeName: "session",
         settingsSection: "skills",
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
   });
 
   it("subscribes to skills while the session inspector renders them", () => {
@@ -358,7 +359,7 @@ describe("topicsForSurface", () => {
         routeName: "session",
         sessionInspectorVisible: true,
       }),
-    ).toEqual(["skills"]);
+    ).toEqual(["projects", "skills"]);
   });
 
   it("holds Workflow Runs alone for a visible Sessions browser", () => {
@@ -371,16 +372,17 @@ describe("topicsForSurface", () => {
         sidebarSection: "sessions",
         routeName: "session",
       }),
-    ).toEqual(["workflow"]);
+    ).toEqual(["workflow", "projects"]);
   });
 
-  it("subscribes to nothing for a conversation with the browser hidden", () => {
+  it("holds only Projects for a conversation with the browser hidden", () => {
+    // A session's title bar names its project and links to it.
     expect(
       topicsForSurface({
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "session",
       }),
-    ).toEqual([]);
+    ).toEqual(["projects"]);
   });
 });

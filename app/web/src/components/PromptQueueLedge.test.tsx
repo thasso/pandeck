@@ -39,11 +39,8 @@ function render(props: Partial<PromptQueueLedgeProps>) {
     queue: { items: [], paused: false },
     running: true,
     canSteer: true,
-    onEdit: vi.fn(),
     onRemove: vi.fn(),
-    onMove: vi.fn(),
     onSendNow: vi.fn(),
-    onClear: vi.fn(),
     onResume: vi.fn(),
     onSendPeerNow: vi.fn(),
     onWithdrawPeer: vi.fn(),
@@ -62,13 +59,10 @@ describe("PromptQueueLedge peer rows", () => {
     const props = render({ peers: [peer()] });
     expect(container.textContent).toContain("1 queued");
     expect(container.textContent).toContain("Two findings on the drain.");
-    expect(container.textContent).toContain("From Reviewer");
+    expect(container.textContent).toContain("from Reviewer");
     expect(container.textContent).toContain("wants a reply");
-    // Only the user's own queue clears in one go.
-    expect(container.textContent).not.toContain("Clear");
-    // The text is the sender's: nothing offers to edit or reorder it.
-    expect(button("Edit queued message")).toBeNull();
-    expect(button("Move up")).toBeNull();
+    // The sender's message is withdrawn, not removed like the user's own.
+    expect(button("Remove queued message")).toBeNull();
 
     act(() => button("Steer it in now")!.click());
     expect(props.onSendPeerNow).toHaveBeenCalledWith("k1");
@@ -104,7 +98,9 @@ describe("PromptQueueLedge peer rows", () => {
       peers: [peer({ retrying: true })],
     });
     expect(container.textContent).toContain("2 queued");
-    expect(container.textContent).toContain("Clear");
+    // The user's row is removed, the peer's withdrawn.
+    expect(button("Remove queued message")).not.toBeNull();
+    expect(button("Withdraw message")).not.toBeNull();
     expect(container.textContent).toContain("delivery failed, retrying");
     const rows = [...container.querySelectorAll("li")].map(
       (li) => li.textContent ?? "",

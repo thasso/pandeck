@@ -93,8 +93,10 @@ describe("AgentQuestionToolCard", () => {
       <AgentQuestionToolCard block={block} answeredQuestions={[answered]} />,
     );
 
-    expect(html).toContain("Answered");
+    expect(html).toContain("Question answered");
     expect(html).toContain("Yes");
+    // A question the response left out says so rather than vanishing.
+    expect(html).toContain("No answer");
     expect(html).not.toContain("Question 1 of 2");
   });
 });

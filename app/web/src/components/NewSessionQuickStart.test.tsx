@@ -199,37 +199,23 @@ describe("NewSessionQuickStart", () => {
     // The runtime block (Agent/Model/Thinking) sits below the context rows,
     // separated by a ruler.
     expect(html).toContain("<hr");
-    expect(html.indexOf("Worktree")).toBeLessThan(
-      html.indexOf("<hr"),
-    );
+    expect(html.indexOf("Worktree")).toBeLessThan(html.indexOf("<hr"));
     expect(html.indexOf("<hr")).toBeLessThan(html.indexOf(">Agent<"));
     expect(html.indexOf(">Agent<")).toBeLessThan(html.indexOf(">Model<"));
   });
 
-  // Build/Plan is a one-session choice, and the landing page has to STATE it:
-  // when it lived in the composer's pill strip alone, an inherited Plan went
-  // unnoticed. It shares the agent row rather than costing one of its own.
-  it("puts Build/Plan beside the agent row, marking the staged mode", () => {
+  // Build/Plan is the composer's Plan switch, which is on screen beside this
+  // card: a second control for it here would be two places to read one choice.
+  it("leaves Build/Plan to the composer, even with Plan staged", () => {
     const html = render([worktree({})], {
       agentTypes: ["assistant", "developer"],
       agentType: "developer",
       mode: "plan",
     });
     expect(html).toContain(">Agent<");
-    expect(html).toContain(">Mode<");
-    expect(html).toContain("Build");
-    expect(html).toMatch(/aria-selected="true"[^>]*>[\s\S]*?Plan/);
-    // One row: the mode group opens before the accounts row that follows the
-    // agent group.
-    expect(html.indexOf(">Agent<")).toBeLessThan(html.indexOf(">Mode<"));
-    expect(html.indexOf(">Mode<")).toBeLessThan(html.indexOf(">Model<"));
-  });
-
-  it("renders the mode row on its own when only one persona is offered", () => {
-    const html = render([worktree({})], { mode: "build" });
-    expect(html).not.toContain(">Agent<");
-    expect(html).toContain(">Mode<");
-    expect(html).toMatch(/aria-selected="true"[^>]*>[\s\S]*?Build/);
+    expect(html).not.toContain(">Mode<");
+    expect(html).not.toContain("Build");
+    expect(html).not.toContain(">Plan<");
   });
 
   it("leaves the mode out entirely for a persona without the axis", () => {
@@ -391,7 +377,7 @@ describe("NewSessionQuickStart", () => {
     expect(loaded).not.toContain(">Project<");
   });
 
-  it("renders worktree cards with project names and main-checkout labels; More… only when the scope hides some", () => {
+  it("renders worktree cards with project names and main-checkout labels, and no More… picker", () => {
     const html = render([
       worktree({}),
       worktree({ id: "main:proj", isMain: true, branch: "main" }),
@@ -399,7 +385,8 @@ describe("NewSessionQuickStart", () => {
     expect(html).toContain("feature/thing");
     expect(html).toContain("main checkout");
     expect(html).toContain("Demo Project");
-    // Every active worktree is already in the row — nothing more to select.
+    // The row is the whole choice: every active worktree is in it, and a
+    // staged project narrows it rather than hiding the rest behind a picker.
     expect(html).not.toContain("More…");
     const scoped = render(
       [
@@ -408,7 +395,8 @@ describe("NewSessionQuickStart", () => {
       ],
       { projects: [project, otherProject], selectedProjectId: "proj" },
     );
-    expect(scoped).toContain("More…");
+    expect(scoped).not.toContain("other/branch");
+    expect(scoped).not.toContain("More…");
   });
 
   it("marks the staged worktree as selected", () => {
@@ -483,16 +471,19 @@ describe("NewSessionQuickStart", () => {
     expect(html).not.toContain('<div aria-hidden="true" class="my-1');
   });
 
-  it("renders the model row and a stepped thinking slider with a centered value label", () => {
+  it("renders the model row and a stepped thinking slider, its level in the row label", () => {
     const html = render([worktree({})]);
     expect(html).toContain("GPT Test");
     expect(html).toContain("GPT Other");
-    // Discrete slider over the model's supported levels (off/medium/high → max index 2)
-    // with the current value centered below.
+    // Discrete slider over the model's supported levels (off/medium/high → max index 2);
+    // the current level is part of the row's label, not a line under it.
     expect(html).toContain('type="range"');
     expect(html).toContain('max="2"');
     expect(html).toContain('value="1"');
-    expect(html).toContain(">Medium</div>");
+    expect(html).toContain(
+      'Thinking · <span class="text-foreground">Medium</span>',
+    );
+    expect(html).not.toContain(">Medium</div>");
   });
 
   it("hides the model and thinking rows without choices, keeping worktrees", () => {

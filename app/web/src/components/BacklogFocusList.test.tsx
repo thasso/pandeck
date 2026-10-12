@@ -133,7 +133,7 @@ describe("BacklogFocusList rows", () => {
         }),
       ],
       {
-        sessions: [session({ id: "s1", worktreeId: "wt1" })],
+        sessions: [session({ id: "s1", worktreeId: "wt1", isStreaming: true })],
         projects: [{ id: "p1", key: "PA", name: "Pandeck" } as ProjectRecord],
       },
     );
@@ -145,14 +145,25 @@ describe("BacklogFocusList rows", () => {
     // would have opened the Task behind the session it just went to.
     expect(recorded.opened).toEqual([]);
 
-    clickOn(link("/worktrees/wt1"));
     clickOn(link("/projects/p1"));
-    expect(recorded.navigated).toEqual([
-      "/sessions/s1",
-      "/worktrees/wt1",
-      "/projects/p1",
-    ]);
+    expect(recorded.navigated).toEqual(["/sessions/s1", "/projects/p1"]);
     expect(recorded.opened).toEqual([]);
+  });
+
+  it("links a Task's session only while it is working, and never its worktree", () => {
+    // Focus is for picking what to work on: an idle session and the bare
+    // worktree are plumbing there, a run in progress is not.
+    render(
+      [
+        task({
+          id: "1",
+          sessionRefs: [{ sessionId: "s1", origin: "task-start" }],
+        }),
+      ],
+      { sessions: [session({ id: "s1", worktreeId: "wt1" })] },
+    );
+    expect(container!.querySelector('a[href="/sessions/s1"]')).toBeNull();
+    expect(container!.querySelector('a[href="/worktrees/wt1"]')).toBeNull();
   });
 
   it("makes the title the anchor that opens the Task", () => {
