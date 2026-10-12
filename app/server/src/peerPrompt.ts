@@ -50,6 +50,8 @@ import {
   PEER_NOTICE_AGENT_ID,
   recordDeliveryFailureNotice,
   recordRunFailureNotices,
+  journaledFailureBacklog,
+  pruneDelegationNotices,
   replayJournaledFailures,
 } from "./delegationFailureNotice.ts";
 import {
@@ -1583,6 +1585,25 @@ export function sweepExpiredLeases(now = Date.now()): void {
  * queued work, independent of any browser connection. Resumable/idle targets
  * are acquired and delivered; busy ones stay queued for their next idle.
  */
+/**
+ * Work through a journaled-failure backlog boot left for later, one bounded
+ * batch per macrotask so connections and other work run in between. Stops
+ * when nothing is left or a whole batch made no progress (the database still
+ * refuses); the retry sweep carries on from there.
+ */
+export function drainJournaledFailureBacklog(): void {
+  const step = (): void => {
+    if (deliveryStopped) return;
+    const before = journaledFailureBacklog();
+    if (before === 0) return;
+    const written = replayJournaledFailures();
+    if (written.length > 0)
+      wakeForNotice(new Set(written.map((n) => n.coordinatorSessionId)));
+    if (journaledFailureBacklog() < before) setTimeout(step, 0).unref();
+  };
+  setTimeout(step, 0).unref();
+}
+
 export function drainAllQueuedOnBoot(): void {
   // Sessions owed a notice are included because they are typically cold and
   // hold nothing queued — the restart that stranded an interrupted turn is the
@@ -2021,7 +2042,7 @@ export function runPeerPromptRetention(now = Date.now()): {
     .then((hub) => hub.broadcastSessions?.())
     .catch(() => undefined);
   const pruned = peerPromptStore.pruneTerminal(now - PRUNE_TTL_MS);
-  delegationFailureNoticeStore.pruneRetired(now - PRUNE_TTL_MS);
+  pruneDelegationNotices(now - PRUNE_TTL_MS);
   return { expired: expired.length, pruned };
 }
 

@@ -1122,26 +1122,6 @@ function openForRecipient(recipientSessionId: string): PeerPromptRecord[] {
   ).map(map);
 }
 
-/**
- * Rows addressed to a recipient that a provider failure interrupted at or
- * after `sinceMs` — the ones the peer interruption notice tells their sender
- * about. Served by the recipient FIFO index.
- */
-function failedForRecipientSince(
-  recipientSessionId: string,
-  sinceMs: number,
-): PeerPromptRecord[] {
-  return (
-    getDb()
-      .prepare(
-        `SELECT * FROM peer_prompts
-          WHERE recipient_session_id = ? AND status = 'interrupted'
-            AND interruption_kind = 'failure' AND updated_at_ms >= ?`,
-      )
-      .all(recipientSessionId, sinceMs) as unknown as Row[]
-  ).map(map);
-}
-
 /** The newest row exchanged between two sessions, in either direction. */
 function latestBetween(
   aSessionId: string,
@@ -1810,7 +1790,6 @@ export const peerPromptStore = {
   pendingDeliveryRecipientIds,
   interruptedOwingSenderNotice,
   openForRecipient,
-  failedForRecipientSince,
   latestBetween,
   senderIdsOwingNotice,
   listPendingForRecipient,

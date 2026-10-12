@@ -10,22 +10,27 @@
  * it is never read back out of a transcript. Boot and the retry sweep replay
  * what is still pending.
  *
- * Framing: every record is written as `\n{json}\n`, so a torn tail left by a
- * process that died mid-append can only invalidate itself — never the record
- * appended after it. A line that does not parse, or is longer than any record
- * can be, is skipped.
+ * Records, one per line, each written as `\n{json}\n` so a torn tail left by a
+ * process that died mid-append can only invalidate itself:
+ * - `plan` — one part of a failure's routing. A plan of any size is split into
+ *   parts that each fit the record bound; nothing is left out to fit.
+ * - `failed` — the failure's facts and how many plan parts it has, written
+ *   AFTER its parts: it is the commit. A failure whose parts are not all
+ *   present is treated as having no plan at all, never a partial one.
+ * - `done` — the database holds the failure.
  *
- * Bounds: the file is read once per process (at boot, or lazily), in fixed
- * chunks, keeping only the pending facts in memory; replay takes a bounded
- * batch per sweep. Nothing pending is ever dropped to fit a bound. Only
- * identities and the fixed vocabulary are written: never a provider message,
- * prompt, tool output or credential.
+ * Bounds: no record is longer than {@link MAX_RECORD_BYTES} encoded bytes. The
+ * writer refuses a longer one; the reader measures BYTES before decoding or
+ * parsing anything and skips a longer line without keeping it. The file is
+ * read once per process in fixed chunks, keeping only pending facts in memory.
+ * Nothing pending is ever dropped to fit a bound. Only identities and the fixed
+ * vocabulary are written: never a provider message, prompt, tool output or
+ * credential.
  */
 import {
   appendFileSync,
   closeSync,
   existsSync,
-  fstatSync,
   mkdirSync,
   openSync,
   readSync,
@@ -33,7 +38,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { DATA_DIR } from "./config.ts";
 import type {
   DelegationFailureCategory,
@@ -44,11 +48,11 @@ import type {
 interface JournaledRoute {
   coordinatorId: string;
   route: DelegationFailureRoute;
-  /** Peer prompts from that coordinator the failure left unanswered. */
+  /** Every peer prompt from that coordinator the failure left unanswered. */
   requestIds: string[];
 }
 
-/** The routing a failure was owed at the moment it happened. */
+/** The routing a failure was owed at the moment it happened — all of it. */
 export interface FailurePlan {
   routes: JournaledRoute[];
   /** Requested replies that were being answered IN the failed turn. */
@@ -66,12 +70,18 @@ export interface JournaledFailure {
   at: number;
   /** The failed turn was itself a server-generated notice turn. */
   noticeTurn: boolean;
-  /** Absent when the routing could not be read at the failure. */
+  /** Absent when the routing could not be read, or not read back whole. */
   plan?: FailurePlan;
 }
 
+interface PlanPart {
+  routes: JournaledRoute[];
+  inTurnIds: string[];
+}
+
 type Line =
-  | ({ kind: "failed" } & JournaledFailure)
+  | ({ kind: "failed"; planParts?: number } & Omit<JournaledFailure, "plan">)
+  | ({ kind: "plan"; incidentKey: string; part: number } & PlanPart)
   | { kind: "done"; incidentKey: string };
 
 const CATEGORIES: ReadonlySet<string> = new Set<DelegationFailureCategory>([
@@ -87,11 +97,12 @@ const ROUTES: ReadonlySet<string> = new Set<DelegationFailureRoute>([
   "request",
 ]);
 
-/** Most routes and request ids one plan may name; more is not a real plan. */
-export const MAX_PLAN_ROUTES = 32;
-export const MAX_PLAN_IDS = 32;
-/** No record is longer; a longer line is skipped unparsed. */
-const MAX_LINE_BYTES = 64 * 1024;
+/** No record is longer, in encoded bytes (its framing newlines excluded). */
+export const MAX_RECORD_BYTES = 64 * 1024;
+/** A plan part is packed to stay well inside the record bound. */
+const PLAN_PART_BUDGET = 48 * 1024;
+/** No identity in a plan is longer; a longer one is not ours. */
+const MAX_ID_BYTES = 256;
 const READ_CHUNK_BYTES = 64 * 1024;
 /** Retired lines kept before the next write compacts them away. */
 const COMPACT_AFTER_RETIRED = 200;
@@ -104,36 +115,97 @@ function journalPath(): string {
   return join(DATA_DIR, "delegation-failure-journal.jsonl");
 }
 
-function append(line: Line): void {
-  const path = journalPath();
-  mkdirSync(dirname(path), { recursive: true });
-  // The leading newline ends whatever torn line a dead process left behind.
-  appendFileSync(path, `\n${JSON.stringify(line)}\n`, "utf8");
+/** One record as written: refused, not truncated, when over the bound. */
+function encode(line: Line): string {
+  const json = JSON.stringify(line);
+  if (Buffer.byteLength(json, "utf8") > MAX_RECORD_BYTES)
+    throw new Error("journal record exceeds its bound");
+  return `\n${json}\n`;
 }
 
-function stringList(value: unknown, max: number): string[] | undefined {
-  if (!Array.isArray(value) || value.length > max) return undefined;
-  return value.every((v) => typeof v === "string")
+/** Split a plan into parts that each fit the bound; nothing is dropped. */
+function planParts(plan: FailurePlan): PlanPart[] {
+  const parts: PlanPart[] = [];
+  let current: PlanPart = { routes: [], inTurnIds: [] };
+  let size = 0;
+  const flush = () => {
+    if (current.routes.length > 0 || current.inTurnIds.length > 0)
+      parts.push(current);
+    current = { routes: [], inTurnIds: [] };
+    size = 0;
+  };
+  // The cost of one id inside a part: quotes, comma and the id itself.
+  const idCost = (id: string) => Buffer.byteLength(id, "utf8") + 3;
+  for (const route of plan.routes) {
+    const header =
+      Buffer.byteLength(route.coordinatorId, "utf8") + route.route.length + 64;
+    if (size + header > PLAN_PART_BUDGET) flush();
+    let entry: JournaledRoute = { ...route, requestIds: [] };
+    current.routes.push(entry);
+    size += header;
+    for (const id of route.requestIds) {
+      if (size + idCost(id) > PLAN_PART_BUDGET) {
+        flush();
+        entry = { ...route, requestIds: [] };
+        current.routes.push(entry);
+        size = header;
+      }
+      entry.requestIds.push(id);
+      size += idCost(id);
+    }
+  }
+  for (const id of plan.inTurnIds) {
+    if (size + idCost(id) + 32 > PLAN_PART_BUDGET) flush();
+    current.inTurnIds.push(id);
+    size += idCost(id);
+  }
+  flush();
+  return parts;
+}
+
+/** The lines a failure is written as: its plan parts, then its commit. */
+function linesOf(failure: JournaledFailure): string {
+  const { plan, ...facts } = failure;
+  if (!plan) return encode({ kind: "failed", ...facts });
+  const parts = planParts(plan);
+  return (
+    parts
+      .map((part, i) =>
+        encode({
+          kind: "plan",
+          incidentKey: failure.incidentKey,
+          part: i,
+          ...part,
+        }),
+      )
+      .join("") + encode({ kind: "failed", ...facts, planParts: parts.length })
+  );
+}
+
+function append(text: string): void {
+  const path = journalPath();
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, text, "utf8");
+}
+
+function idList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.every(
+    (v) =>
+      typeof v === "string" && Buffer.byteLength(v, "utf8") <= MAX_ID_BYTES,
+  )
     ? (value as string[])
     : undefined;
 }
 
-/** A plan exactly as written, or undefined: never a partial one. */
-function parsePlan(value: unknown): FailurePlan | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const v = value as Record<string, unknown>;
-  const inTurnIds = stringList(v.inTurnIds, MAX_PLAN_IDS);
-  if (
-    !inTurnIds ||
-    !Array.isArray(v.routes) ||
-    v.routes.length > MAX_PLAN_ROUTES
-  )
-    return undefined;
+function parsePart(v: Record<string, unknown>): PlanPart | undefined {
+  const inTurnIds = idList(v.inTurnIds);
+  if (!inTurnIds || !Array.isArray(v.routes)) return undefined;
   const routes: JournaledRoute[] = [];
   for (const raw of v.routes) {
     if (typeof raw !== "object" || raw === null) return undefined;
     const r = raw as Record<string, unknown>;
-    const requestIds = stringList(r.requestIds, MAX_PLAN_IDS);
+    const requestIds = idList(r.requestIds);
     if (
       typeof r.coordinatorId !== "string" ||
       typeof r.route !== "string" ||
@@ -161,6 +233,12 @@ function parse(raw: string): Line | undefined {
   const v = value as Record<string, unknown>;
   if (typeof v.incidentKey !== "string") return undefined;
   if (v.kind === "done") return { kind: "done", incidentKey: v.incidentKey };
+  if (v.kind === "plan") {
+    const part = parsePart(v);
+    if (!part || typeof v.part !== "number" || !Number.isInteger(v.part))
+      return undefined;
+    return { kind: "plan", incidentKey: v.incidentKey, part: v.part, ...part };
+  }
   if (
     v.kind !== "failed" ||
     typeof v.sessionId !== "string" ||
@@ -171,7 +249,6 @@ function parse(raw: string): Line | undefined {
     !Number.isFinite(v.at)
   )
     return undefined;
-  const plan = v.plan === undefined ? undefined : parsePlan(v.plan);
   return {
     kind: "failed",
     incidentKey: v.incidentKey,
@@ -183,60 +260,126 @@ function parse(raw: string): Line | undefined {
       : {}),
     at: v.at,
     noticeTurn: v.noticeTurn === true,
-    ...(plan ? { plan } : {}),
+    ...(typeof v.planParts === "number" &&
+    Number.isInteger(v.planParts) &&
+    v.planParts > 0
+      ? { planParts: v.planParts }
+      : {}),
   };
 }
 
-function apply(map: Map<string, JournaledFailure>, raw: string): void {
-  if (!raw) return;
-  const line = parse(raw);
-  if (!line) return;
-  if (line.kind === "done") map.delete(line.incidentKey);
-  else {
-    const { kind: _kind, ...failure } = line;
-    map.set(line.incidentKey, failure);
+/** Whole plan parts merged in order: routes by coordinator, ids appended. */
+function mergeParts(parts: PlanPart[]): FailurePlan {
+  const routes = new Map<string, JournaledRoute>();
+  const inTurnIds: string[] = [];
+  for (const part of parts) {
+    for (const r of part.routes) {
+      const known = routes.get(r.coordinatorId);
+      if (known) known.requestIds.push(...r.requestIds);
+      else routes.set(r.coordinatorId, { ...r, requestIds: [...r.requestIds] });
+    }
+    inTurnIds.push(...part.inTurnIds);
+  }
+  return { routes: [...routes.values()], inTurnIds };
+}
+
+/** Collects records into the pending failures, plans only when whole. */
+class JournalReader {
+  private readonly failed = new Map<
+    string,
+    Omit<JournaledFailure, "plan"> & { planParts?: number }
+  >();
+  private readonly parts = new Map<string, Map<number, PlanPart>>();
+
+  apply(raw: string): void {
+    const line = parse(raw);
+    if (!line) return;
+    if (line.kind === "done") {
+      this.failed.delete(line.incidentKey);
+      this.parts.delete(line.incidentKey);
+    } else if (line.kind === "plan") {
+      const { kind: _kind, incidentKey, part, ...body } = line;
+      const known = this.parts.get(incidentKey) ?? new Map<number, PlanPart>();
+      known.set(part, body);
+      this.parts.set(incidentKey, known);
+    } else {
+      const { kind: _kind, ...failure } = line;
+      this.failed.set(line.incidentKey, failure);
+    }
+  }
+
+  result(): Map<string, JournaledFailure> {
+    const out = new Map<string, JournaledFailure>();
+    for (const [key, { planParts: count, ...facts }] of this.failed) {
+      const parts = this.parts.get(key);
+      const ordered =
+        count === undefined || parts === undefined
+          ? undefined
+          : Array.from({ length: count }, (_, i) => parts.get(i));
+      out.set(
+        key,
+        ordered && ordered.every((p) => p !== undefined)
+          ? { ...facts, plan: mergeParts(ordered as PlanPart[]) }
+          : facts,
+      );
+    }
+    return out;
   }
 }
 
 /**
- * Read the journal into memory, in fixed chunks. Throws when the file cannot
- * be read — which is never the same as an empty journal.
+ * Read the journal into memory in fixed chunks, measuring every line in BYTES
+ * before it is decoded or parsed. Throws when the file cannot be read — which
+ * is never the same as an empty journal.
  */
 function load(): Map<string, JournaledFailure> {
-  const map = new Map<string, JournaledFailure>();
+  const reader = new JournalReader();
   const path = journalPath();
-  if (!existsSync(path)) return map;
+  if (!existsSync(path)) return reader.result();
   const fd = openSync(path, "r");
   try {
-    const size = fstatSync(fd).size;
     const buffer = Buffer.alloc(READ_CHUNK_BYTES);
-    const decoder = new StringDecoder("utf8");
-    let carry = "";
+    // The bytes of the line still being read, and their total.
+    let held: Buffer[] = [];
+    let heldBytes = 0;
     let skipping = false;
-    for (let offset = 0; offset < size;) {
-      const read = readSync(fd, buffer, 0, READ_CHUNK_BYTES, offset);
-      if (read === 0) break;
-      offset += read;
-      const parts = decoder.write(buffer.subarray(0, read)).split("\n");
-      const last = parts.pop()!;
-      for (const part of parts) {
-        if (!skipping) apply(map, carry + part);
-        carry = "";
-        skipping = false;
-      }
-      if (skipping) continue;
-      carry += last;
-      // Longer than any record: skip the rest of it without keeping it.
-      if (carry.length > MAX_LINE_BYTES) {
-        carry = "";
+    const take = (segment: Buffer, ends: boolean): void => {
+      if (!skipping && heldBytes + segment.length > MAX_RECORD_BYTES) {
         skipping = true;
+        held = [];
+        heldBytes = 0;
+      }
+      if (!skipping && segment.length > 0) {
+        held.push(Buffer.from(segment));
+        heldBytes += segment.length;
+      }
+      if (!ends) return;
+      if (!skipping && heldBytes > 0)
+        reader.apply(Buffer.concat(held, heldBytes).toString("utf8"));
+      held = [];
+      heldBytes = 0;
+      skipping = false;
+    };
+    for (;;) {
+      const read = readSync(fd, buffer, 0, READ_CHUNK_BYTES, null);
+      if (read === 0) break;
+      const chunk = buffer.subarray(0, read);
+      let start = 0;
+      for (;;) {
+        const newline = chunk.indexOf(0x0a, start);
+        if (newline === -1) {
+          take(chunk.subarray(start), false);
+          break;
+        }
+        take(chunk.subarray(start, newline), true);
+        start = newline + 1;
       }
     }
-    if (!skipping) apply(map, carry);
+    take(Buffer.alloc(0), true);
   } finally {
     closeSync(fd);
   }
-  return map;
+  return reader.result();
 }
 
 function loaded(): Map<string, JournaledFailure> {
@@ -244,37 +387,56 @@ function loaded(): Map<string, JournaledFailure> {
   return pending;
 }
 
-/** Write a failure down before anything else records it. Throws if it cannot. */
+/**
+ * Write a failure down — its plan parts, then its commit — before anything
+ * else records it. Throws if it cannot.
+ */
 export function journalFailure(failure: JournaledFailure): void {
-  append({ kind: "failed", ...failure });
+  append(linesOf(failure));
   pending?.set(failure.incidentKey, failure);
 }
 
 /**
- * Retire a failure the database now holds. Best effort: a retirement that is
- * lost only means a later replay finds the incident already recorded.
+ * Retire a failure the database now holds. It stays pending until the
+ * retirement is actually written: one that fails is tried again by the next
+ * replay, which finds the incident recorded and only retires it.
  */
 export function journalDone(incidentKey: string): void {
-  pending?.delete(incidentKey);
   try {
-    append({ kind: "done", incidentKey });
-    retiredSinceCompaction += 1;
-    // Only once the retired lines outnumber what a rewrite keeps, so draining
-    // a large backlog costs a linear amount of writing, not a quadratic one.
-    if (
-      retiredSinceCompaction >=
-      Math.max(COMPACT_AFTER_RETIRED, pending?.size ?? 0)
-    )
-      compactJournal();
+    append(encode({ kind: "done", incidentKey }));
   } catch {
-    // replayed later, and recognized there as already recorded
+    return;
+  }
+  pending?.delete(incidentKey);
+  retiredSinceCompaction += 1;
+  // When nothing is owed any more (the rewrite is empty), or once the retired
+  // lines outnumber what a rewrite keeps — so draining a large backlog costs a
+  // linear amount of writing, not a quadratic one.
+  if (
+    pending?.size === 0 ||
+    retiredSinceCompaction >=
+      Math.max(COMPACT_AFTER_RETIRED, pending?.size ?? 0)
+  ) {
+    try {
+      compactJournal();
+    } catch {
+      // the retired lines stay until the next compaction
+    }
   }
 }
 
+/** Send a failure to the back of the line, so others get their turn first. */
+export function deferJournaledFailure(incidentKey: string): void {
+  const failure = pending?.get(incidentKey);
+  if (!pending || !failure) return;
+  pending.delete(incidentKey);
+  pending.set(incidentKey, failure);
+}
+
 /**
- * The failures written down and not yet retired, oldest first, at most
- * `limit` of them. Reads the file the first time it is asked; throws when it
- * cannot be read.
+ * The failures written down and not yet retired, longest unattempted first,
+ * at most `limit` of them. Reads the file the first time it is asked; throws
+ * when it cannot be read.
  */
 export function pendingJournaledFailures(
   limit = Number.POSITIVE_INFINITY,
@@ -285,6 +447,15 @@ export function pendingJournaledFailures(
     out.push(failure);
   }
   return out;
+}
+
+/** How many failures are pending; 0 for a journal that cannot be read. */
+export function pendingJournalCount(): number {
+  try {
+    return loaded().size;
+  } catch {
+    return 0;
+  }
 }
 
 /** Forget what memory holds and read the file again, as a new process would. */
@@ -303,13 +474,7 @@ export function compactJournal(): void {
   const map = loaded();
   if (!existsSync(path)) return;
   const tmp = `${path}.tmp-${process.pid}`;
-  writeFileSync(
-    tmp,
-    [...map.values()]
-      .map((failure) => `${JSON.stringify({ kind: "failed", ...failure })}\n`)
-      .join(""),
-    "utf8",
-  );
+  writeFileSync(tmp, [...map.values()].map(linesOf).join(""), "utf8");
   renameSync(tmp, path);
   retiredSinceCompaction = 0;
 }

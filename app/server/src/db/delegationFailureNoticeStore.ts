@@ -230,16 +230,32 @@ function dropForSession(sessionId: string, reason: string, now = Date.now()) {
     .run(now, reason, sessionId, sessionId);
 }
 
-/** Forget retired rows older than the cutoff; pending rows are never pruned. */
-function pruneRetired(cutoffMs: number): number {
-  return Number(
-    getDb()
-      .prepare(
-        `DELETE FROM delegation_failure_notices
-          WHERE COALESCE(delivered_at_ms, dropped_at_ms) < ?`,
-      )
-      .run(cutoffMs).changes,
-  );
+/**
+ * Forget retired rows older than the cutoff. Pending rows are never pruned,
+ * and neither is any row of an incident in `keepIncidents` — the failures the
+ * journal still holds, whose rows are what tells a replay they were recorded.
+ */
+function pruneRetired(
+  cutoffMs: number,
+  keepIncidents: ReadonlySet<string>,
+): number {
+  const db = getDb();
+  const candidates = db
+    .prepare(
+      `SELECT id, incident_key FROM delegation_failure_notices
+        WHERE COALESCE(delivered_at_ms, dropped_at_ms) < ?`,
+    )
+    .all(cutoffMs) as { id: string; incident_key: string }[];
+  const doomed = candidates.filter((r) => !keepIncidents.has(r.incident_key));
+  if (doomed.length === 0) return 0;
+  return inDbTransaction(() => {
+    const stmt = db.prepare(
+      "DELETE FROM delegation_failure_notices WHERE id = ?",
+    );
+    let removed = 0;
+    for (const r of doomed) removed += Number(stmt.run(r.id).changes);
+    return removed;
+  });
 }
 
 export const delegationFailureNoticeStore = {

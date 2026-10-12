@@ -72,8 +72,10 @@ const {
   RETRY_MAX_ATTEMPTS,
   cancelQueuedPeerPrompts,
   drainAllQueuedOnBoot,
+  drainJournaledFailureBacklog,
   drainRecipient,
   installDelegationFailureNotices,
+  runPeerPromptRetention,
   sendPeerPrompt,
   setHubForTests,
   setPeerPromptAutoDeliverForTests,
@@ -91,6 +93,7 @@ const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const { holdAutomaticTurns } = await import("./automaticTurnHold.ts");
 const {
   PEER_NOTICE_AGENT_ID,
+  deliverableNotices,
   delegationFailureNoticeLines,
   recordRunFailureNotices,
   recoverJournaledFailuresOnBoot,
@@ -98,7 +101,7 @@ const {
 } = await import("./delegationFailureNotice.ts");
 const journal = await import("./delegationFailureJournal.ts");
 const { DATA_DIR } = await import("./config.ts");
-const { measureCpuMs } = await import("./test/cpuBudget.ts");
+const { measureCpuMs, measureCpuMsAsync } = await import("./test/cpuBudget.ts");
 const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
 const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./tools/sessions/sessionControlTool.ts");
@@ -417,8 +420,12 @@ function noticesIn(sessionId: string): string[] {
     );
 }
 
-async function until(check: () => boolean, what: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
+async function until(
+  check: () => boolean,
+  what: string,
+  withinMs = 1_000,
+): Promise<void> {
+  for (let i = 0; i < withinMs / 5; i++) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
@@ -2291,19 +2298,9 @@ describe("a journaled failure replays only what it was owed when it happened", (
       const t = Date.now();
       const runId = `recorded-${planned}`;
       const incidentKey = `run:${child.sessionId}:${runId}`;
-      if (planned) {
-        recordRunFailureNotices(failureOf(child.sessionId, runId, t));
-        // The `done` line never reached the disk.
-        writeFileSync(
-          journalFile(),
-          readFileSync(journalFile(), "utf8")
-            .split("\n")
-            .filter((line) => !line.includes('"kind":"done"'))
-            .join("\n"),
-        );
-        journal.reloadJournal();
-      } else {
-        // Recorded, but journaled with no plan (it could not be read then).
+      {
+        // The exact durable cut: journaled (with its plan, or with none),
+        // recorded in SQLite, and its `done` line never written.
         journal.journalFailure({
           incidentKey,
           sessionId: child.sessionId,
@@ -2311,6 +2308,16 @@ describe("a journaled failure replays only what it was owed when it happened", (
           category: "auth",
           at: t,
           noticeTurn: false,
+          ...(planned
+            ? {
+                plan: {
+                  routes: [
+                    { coordinatorId: parent, route: "spawn", requestIds: [] },
+                  ],
+                  inTurnIds: [],
+                },
+              }
+            : {}),
         });
         delegationFailureNoticeStore.record([
           {
@@ -2350,10 +2357,8 @@ describe("a journaled failure replays only what it was owed when it happened", (
     } finally {
       restore();
     }
-    const [entry] = readFileSync(journalFile(), "utf8")
-      .split("\n")
-      .filter((line) => line.includes('"kind":"failed"'));
-    assert.ok(entry?.includes(asker), "the plan names both coordinators");
+    const written = readFileSync(journalFile(), "utf8");
+    assert.ok(written.includes(asker), "the plan names both coordinators");
     // Replayed while the asker was archived: only the parent is recorded.
     sessionStore.setArchived(asker, true);
     assert.deepEqual(
@@ -2361,34 +2366,340 @@ describe("a journaled failure replays only what it was owed when it happened", (
       [parent],
     );
     // Its retirement was lost, and the asker is restored since.
-    writeFileSync(journalFile(), `\n${entry}\n`);
+    writeFileSync(journalFile(), written);
     journal.reloadJournal();
     sessionStore.setArchived(asker, false);
     assert.deepEqual(replayJournaledFailures(), []);
     assert.equal(delegationFailureNoticeStore.pendingFor(asker).length, 0);
   });
 
-  it("a plan-less failure is planned from evidence no newer than the failure", () => {
+  it("a plan-less failure routes only along the spawn edge, never to current rows", () => {
+    for (const skew of [0, -60_000]) {
+      freshJournal();
+      const { id: parent } = coordinator("Parent");
+      const { id: later } = coordinator("Later sender");
+      const child = piChild(parent);
+      const t = Date.now();
+      // The routing cannot be read at the failure.
+      const refuse = vi
+        .spyOn(peerPromptStore, "openForRecipient")
+        .mockImplementation(() => {
+          throw new Error("SQLITE_BUSY");
+        });
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        recordRunFailureNotices(
+          failureOf(child.sessionId, `planless-${skew}`, t),
+        );
+      } finally {
+        refuse.mockRestore();
+        quiet.mockRestore();
+      }
+      // New healthy work in the same millisecond, or under a clock rollback.
+      const future = laterRequest(later, child.sessionId, t + skew);
+      assert.deepEqual(replayJournaledFailures(t + 2_000), []);
+      // The failure was recorded at once along the spawn edge alone.
+      assert.equal(delegationFailureNoticeStore.pendingFor(parent).length, 1);
+      assert.equal(delegationFailureNoticeStore.pendingFor(later).length, 0);
+      const row = peerPromptStore.getById(future.id)!;
+      assert.equal(row.status, "acknowledged");
+      assert.equal(row.senderNotifiedAt, undefined);
+    }
+  });
+
+  it("a plan-less failure still recovers its original spawn route after a restart", () => {
     freshJournal();
     const { id: parent } = coordinator("Parent");
     const { id: later } = coordinator("Later sender");
     const child = piChild(parent);
     const t = Date.now();
     journal.journalFailure({
-      incidentKey: `run:${child.sessionId}:planless`,
+      incidentKey: `run:${child.sessionId}:planless-boot`,
       sessionId: child.sessionId,
-      runId: "planless",
+      runId: "planless-boot",
       category: "auth",
       at: t,
       noticeTurn: false,
     });
-    const future = laterRequest(later, child.sessionId, t + 1_000);
-    const written = replayJournaledFailures(t + 2_000);
-    assert.deepEqual(
-      written.map((w) => w.coordinatorSessionId),
-      [parent],
-    );
+    const future = laterRequest(later, child.sessionId, t);
+    closeDb();
+    getDb();
+    assert.equal(recoverJournaledFailuresOnBoot(), 1);
+    assert.equal(delegationFailureNoticeStore.pendingFor(parent).length, 1);
+    assert.equal(delegationFailureNoticeStore.pendingFor(later).length, 0);
     assert.equal(peerPromptStore.getById(future.id)!.status, "acknowledged");
+  });
+
+  it("every owed coordinator and every unanswered request is kept, however many", () => {
+    freshJournal();
+    const child = piChild(undefined, "Asked by many");
+    const askers: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const { id } = coordinator(`Asker ${i}`);
+      askers.push(id);
+      awaitingRow(id, child.sessionId);
+    }
+    const { id: patient } = coordinator("Asked six times");
+    const six: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const before = new Set(
+        peerPromptStore.openForRecipient(child.sessionId).map((m) => m.id),
+      );
+      awaitingRow(patient, child.sessionId);
+      six.push(
+        peerPromptStore
+          .openForRecipient(child.sessionId)
+          .find((m) => !before.has(m.id))!.id,
+      );
+    }
+    const rows = recordRunFailureNotices(
+      failureOf(child.sessionId, "many-owed", Date.now() + 5),
+    );
+    assert.equal(rows.length, 41, "every asker is told");
+    for (const id of askers)
+      assert.equal(delegationFailureNoticeStore.pendingFor(id).length, 1);
+    const notice = delegationFailureNoticeStore.pendingFor(patient)[0]!;
+    assert.deepEqual([...notice.requestIds].sort(), [...six].sort());
+    // The newest five are answered; the oldest is still owed.
+    for (const id of six.slice(1))
+      peerPromptStore.markReplied(id, `reply-${n++}`);
+    const deliverable = deliverableNotices(patient);
+    assert.equal(deliverable.length, 1, "one request still waits");
+    assert.match(
+      delegationFailureNoticeLines(deliverable).join("\n"),
+      /and 1 earlier/,
+    );
+  });
+
+  it("a plan of any size is journaled whole in parts, and one missing a part is no plan at all", () => {
+    freshJournal();
+    const child = piChild(undefined, "Asked very often");
+    const { id: asker } = coordinator("Asker");
+    for (let i = 0; i < 3_000; i++) awaitingRow(asker, child.sessionId);
+    const restore = refusingDatabase();
+    try {
+      recordRunFailureNotices(
+        failureOf(child.sessionId, "huge-plan", Date.now() + 5),
+      );
+    } finally {
+      restore();
+    }
+    const lines = readFileSync(journalFile(), "utf8")
+      .split("\n")
+      .filter(Boolean);
+    const parts = lines.filter((l) => l.includes('"kind":"plan"'));
+    assert.ok(parts.length > 1, `split into ${parts.length} parts`);
+    for (const line of lines)
+      assert.ok(Buffer.byteLength(line) <= journal.MAX_RECORD_BYTES);
+    journal.reloadJournal();
+    const [entry] = journal.pendingJournaledFailures();
+    assert.equal(entry!.plan!.routes[0]!.requestIds.length, 3_000);
+    // A part lost to a crash: the failure stays, its plan does not.
+    writeFileSync(
+      journalFile(),
+      lines.filter((l) => l !== parts[1]).join("\n") + "\n",
+    );
+    journal.reloadJournal();
+    assert.equal(journal.pendingJournaledFailures()[0]!.plan, undefined);
+    // Back to the whole file: replay records all 3,000.
+    writeFileSync(journalFile(), lines.join("\n") + "\n");
+    journal.reloadJournal();
+    const [notice] = replayJournaledFailures();
+    assert.equal(notice!.requestIds.length, 3_000);
+  }, 60_000);
+
+  it("a failure the database keeps refusing goes to the back, so the others still get their turn", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent");
+    const children = Array.from({ length: 51 }, (_, i) =>
+      piChild(parent, `Child ${i}`),
+    );
+    const t = Date.now();
+    for (const [i, child] of children.entries())
+      journal.journalFailure({
+        incidentKey: `run:${child.sessionId}:fair-${i}`,
+        sessionId: child.sessionId,
+        runId: `fair-${i}`,
+        category: "auth",
+        at: t,
+        noticeTurn: false,
+      });
+    const real = delegationFailureNoticeStore.record;
+    let attempts = 0;
+    const refuse = vi
+      .spyOn(delegationFailureNoticeStore, "record")
+      .mockImplementation((inputs, ...rest) => {
+        attempts += 1;
+        if (!inputs[0]!.incidentKey.endsWith("fair-50"))
+          throw new Error("refused for this one");
+        return real(inputs, ...rest);
+      });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      replayJournaledFailures();
+      assert.equal(attempts, 50, "one bounded batch");
+      replayJournaledFailures();
+      assert.equal(attempts, 100);
+      assert.deepEqual(
+        delegationFailureNoticeStore
+          .pendingFor(parent)
+          .map((n) => n.incidentKey),
+        [`run:${children[50]!.sessionId}:fair-50`],
+        "the last one got its turn",
+      );
+      assert.equal(journal.pendingJournaledFailures().length, 50);
+    } finally {
+      refuse.mockRestore();
+      quiet.mockRestore();
+    }
+  });
+
+  it("a retirement that cannot be written leaves the failure pending, to be retired by the next replay", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent");
+    const child = piChild(parent);
+    const incidentKey = `run:${child.sessionId}:unretired`;
+    journal.journalFailure({
+      incidentKey,
+      sessionId: child.sessionId,
+      runId: "unretired",
+      category: "auth",
+      at: Date.now(),
+      noticeTurn: false,
+    });
+    const saved = readFileSync(journalFile(), "utf8");
+    // The retirement line cannot be written (a directory stands there).
+    rmSync(journalFile());
+    mkdirSync(journalFile());
+    journal.journalDone(incidentKey);
+    assert.deepEqual(
+      journal.pendingJournaledFailures().map((f) => f.incidentKey),
+      [incidentKey],
+      "still pending: nothing retired it",
+    );
+    rmSync(journalFile(), { recursive: true });
+    writeFileSync(journalFile(), saved);
+    // The next replay records it once and retires it for good.
+    assert.equal(replayJournaledFailures().length, 1);
+    assert.deepEqual(journal.pendingJournaledFailures(), []);
+    journal.reloadJournal();
+    assert.deepEqual(journal.pendingJournaledFailures(), []);
+  });
+
+  it("a recorded incident is never pruned while the journal still holds it", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent");
+    const { id: asker } = coordinator("Asker");
+    const child = piChild(parent);
+    const t = Date.now();
+    const incidentKey = `run:${child.sessionId}:kept`;
+    // The exact durable cut: journaled with both routes, recorded in SQLite,
+    // and its `done` line never written.
+    journal.journalFailure({
+      incidentKey,
+      sessionId: child.sessionId,
+      runId: "kept",
+      category: "auth",
+      at: t,
+      noticeTurn: false,
+      plan: {
+        routes: [
+          { coordinatorId: parent, route: "spawn", requestIds: [] },
+          { coordinatorId: asker, route: "request", requestIds: [] },
+        ],
+        inTurnIds: [],
+      },
+    });
+    const notices = delegationFailureNoticeStore.record(
+      [parent, asker].map((coordinatorSessionId, i) => ({
+        incidentKey,
+        childSessionId: child.sessionId,
+        coordinatorSessionId,
+        route: i === 0 ? ("spawn" as const) : ("request" as const),
+        category: "auth" as const,
+        requestIds: [],
+        failedAt: t,
+      })),
+    );
+    assert.equal(notices.length, 2, "two original routes");
+    delegationFailureNoticeStore.markDelivered(notices.map((n) => n.id));
+    // Retention, long after: the journal still holds the incident.
+    const later = Date.now() + 100 * 24 * 60 * 60_000;
+    runPeerPromptRetention(later);
+    assert.equal(
+      delegationFailureNoticeStore.hasIncident(notices[0]!.incidentKey),
+      true,
+    );
+    // A fresh boot, and the sweep: nothing is announced again; it retires.
+    closeDb();
+    getDb();
+    assert.equal(recoverJournaledFailuresOnBoot(), 0);
+    assert.deepEqual(replayJournaledFailures(), []);
+    assert.equal(delegationFailureNoticeStore.pendingFor(parent).length, 0);
+    assert.deepEqual(journal.pendingJournaledFailures(), []);
+    // Retired, its rows may go now.
+    runPeerPromptRetention(later);
+    assert.equal(
+      delegationFailureNoticeStore.hasIncident(notices[0]!.incidentKey),
+      false,
+    );
+  });
+
+  it("the record bound is in bytes, checked before any line is parsed, and the writer keeps to it", () => {
+    freshJournal();
+    const max = journal.MAX_RECORD_BYTES;
+    const record = (runId: string, pad: string) =>
+      JSON.stringify({
+        kind: "failed",
+        incidentKey: `run:bound:${runId}`,
+        sessionId: "bound",
+        runId,
+        category: "auth",
+        at: 1,
+        noticeTurn: false,
+        pad,
+      });
+    const sized = (runId: string, bytes: number, unit = "x") => {
+      let pad = "";
+      while (
+        Buffer.byteLength(record(runId, pad)) + Buffer.byteLength(unit) <=
+        bytes
+      )
+        pad += unit;
+      return record(runId, pad);
+    };
+    const exact = sized("exact", max);
+    const over = sized("over", max + 4).slice(0, -2) + 'x"}';
+    // Multi-byte characters placed across the 64 KiB read boundary.
+    const unicode = sized("unicode", max, "é");
+    const parseable80k = record("eighty", "y".repeat(80 * 1024));
+    assert.equal(Buffer.byteLength(exact), max);
+    assert.ok(Buffer.byteLength(over) > max);
+    writeFileSync(
+      journalFile(),
+      [exact, over, parseable80k, unicode, '{"kind":"failed","torn'].join("\n"),
+    );
+    journal.reloadJournal();
+    assert.deepEqual(
+      journal
+        .pendingJournaledFailures()
+        .map((f) => f.runId)
+        .sort(),
+      ["exact", "unicode"],
+    );
+    // The writer refuses a record over the bound rather than truncating it.
+    assert.throws(
+      () =>
+        journal.journalFailure({
+          incidentKey: "run:bound:huge",
+          sessionId: "bound",
+          runId: "z".repeat(max),
+          category: "auth",
+          at: 1,
+          noticeTurn: false,
+        }),
+      /exceeds its bound/,
+    );
   });
 
   it("a torn tail cannot swallow the next record, a torn retirement only replays once, and compaction keeps every pending fact", () => {
@@ -2505,7 +2816,7 @@ describe("a journaled failure replays only what it was owed when it happened", (
     assert.equal(recoverJournaledFailuresOnBoot(), 0);
   });
 
-  it("a large backlog is read in bounded chunks, replayed a bounded batch per sweep, and never holds up the queue", () => {
+  it("a large backlog is read in bounded chunks, replayed a bounded batch per sweep, and never holds up the queue", async () => {
     freshJournal();
     const { id: sender } = coordinator("Retrying sender");
     const child = piChild(sender);
@@ -2569,21 +2880,83 @@ describe("a journaled failure replays only what it was owed when it happened", (
       "retryable_failed",
     );
     assert.equal(journal.pendingJournaledFailures().length, BACKLOG + 1 - 50);
-    // Boot drains the rest, compaction keeping the writing linear.
+    // Boot records a bounded share, never the whole backlog at once.
     const { cpuMs: bootMs } = measureCpuMs(() =>
       recoverJournaledFailuresOnBoot(),
     );
-    assert.deepEqual(journal.pendingJournaledFailures(), []);
+    const afterBoot = journal.pendingJournaledFailures().length;
+    assert.equal(afterBoot, BACKLOG + 1 - 50 - 200);
+    // The rest drains in yielding batches: other work runs in between.
+    let interleaved = 0;
+    const tick = setInterval(() => (interleaved += 1), 0);
+    const drained = await measureCpuMsAsync(async () => {
+      drainJournaledFailureBacklog();
+      await until(
+        () => journal.pendingJournaledFailures().length === 0,
+        "the drained backlog",
+        60_000,
+      );
+    });
+    clearInterval(tick);
+    assert.ok(interleaved > 10, `other timers ran ${interleaved} times`);
     assert.ok(
       statSync(journalFile()).size < 1_000,
       "compacted to nothing owed",
     );
     console.info(
-      `[journal backlog] load ${loadMs.toFixed(0)}ms, sweep ${sweepMs.toFixed(0)}ms, boot ${bootMs.toFixed(0)}ms CPU for ${BACKLOG} entries`,
+      `[journal backlog] load ${loadMs.toFixed(0)}ms, sweep ${sweepMs.toFixed(0)}ms, boot ${bootMs.toFixed(0)}ms, drain ${drained.cpuMs.toFixed(0)}ms CPU for ${BACKLOG} entries; ${interleaved} timer turns during the drain`,
     );
     // Generous ceilings: they catch a quadratic regression, not a busy box.
     assert.ok(loadMs < 5_000, `load ${loadMs}ms`);
     assert.ok(sweepMs < 2_000, `sweep ${sweepMs}ms`);
-    assert.ok(bootMs < 20_000, `boot ${bootMs}ms`);
+    assert.ok(bootMs < 2_000, `boot ${bootMs}ms`);
+  }, 120_000);
+
+  it("a backlog of failures that are really owed writes every notice, without holding boot", async () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent of many");
+    const COUNT = 1_000;
+    const t = Date.now();
+    const children: string[] = [];
+    for (let i = 0; i < COUNT; i++) {
+      const child = piChild(parent, `Failed child ${i}`);
+      children.push(child.sessionId);
+      journal.journalFailure({
+        incidentKey: `run:${child.sessionId}:live-${i}`,
+        sessionId: child.sessionId,
+        runId: `live-${i}`,
+        category: "auth",
+        at: t,
+        noticeTurn: false,
+      });
+    }
+    const boot = measureCpuMs(() => recoverJournaledFailuresOnBoot());
+    assert.equal(boot.value, 200, "boot records its bounded share");
+    let interleaved = 0;
+    const tick = setInterval(() => (interleaved += 1), 0);
+    const drained = await measureCpuMsAsync(async () => {
+      drainJournaledFailureBacklog();
+      await until(
+        () => journal.pendingJournaledFailures().length === 0,
+        "the drained backlog",
+        60_000,
+      );
+    });
+    clearInterval(tick);
+    assert.equal(
+      (
+        getDb()
+          .prepare(
+            "SELECT COUNT(*) AS n FROM delegation_failure_notices WHERE coordinator_session_id = ?",
+          )
+          .get(parent) as { n: number }
+      ).n,
+      COUNT,
+      "every one owed is recorded",
+    );
+    assert.ok(interleaved > 5, `other timers ran ${interleaved} times`);
+    console.info(
+      `[journal live backlog] boot ${boot.cpuMs.toFixed(0)}ms for 200, drain ${drained.cpuMs.toFixed(0)}ms CPU for ${COUNT - 200} real notices; ${interleaved} timer turns during the drain`,
+    );
   }, 120_000);
 });

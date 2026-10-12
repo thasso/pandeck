@@ -194,6 +194,7 @@ import { recoverJournaledFailuresOnBoot } from "./delegationFailureNotice.ts";
 import {
   closeChainsForHumanPrompt,
   drainAllQueuedOnBoot,
+  drainJournaledFailureBacklog,
   drainRecipient,
   installDelegationFailureNotices,
   recoverPeerPromptsOnBoot,
@@ -2037,6 +2038,8 @@ server.listen(PORT, HOST, () => {
   bootStep("agent-handoff recovery", () => recoverAgentHandoffsOnBoot());
   bootStep("prompt-queue drain", () => drainPromptQueuesOnBoot());
   bootStep("peer-prompt drain", () => drainAllQueuedOnBoot());
+  // A failure backlog beyond what boot recorded drains in yielding batches.
+  bootStep("failure-journal backlog", () => drainJournaledFailureBacklog());
   bootStep("settings sign-in cards", () => watchSignInCards());
   bootStep("peer-prompt retention", () => runPeerPromptRetention());
   void sweepMainWorktreeCommentRetention().catch((err) =>
