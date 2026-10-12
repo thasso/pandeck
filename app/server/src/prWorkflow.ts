@@ -243,11 +243,8 @@ function renderTaskContext(
     .map(({ summary, description }) =>
       [
         `Task-${summary.id}: ${summary.title}`,
-        summary.jiraIssueKeys?.length
-          ? `Jira: ${summary.jiraIssueKeys.join(", ")}`
-          : "",
-        summary.githubIssues?.length
-          ? `GitHub: ${summary.githubIssues.join(", ")}`
+        summary.ticket
+          ? `${summary.ticket.source === "jira" ? "Jira" : "GitHub"}: ${summary.ticket.ref}`
           : "",
         description ? `Description:\n${description}` : "",
       ]

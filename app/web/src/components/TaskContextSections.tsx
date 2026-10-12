@@ -16,14 +16,14 @@ import type {
   TaskExternalLink,
   TaskExternalLinkSource,
   TaskSummary,
+  TaskTicket,
 } from "@assistant/shared";
-import {
-  isForgejoInstanceUrl,
-  normalizeGithubIssueRefs,
-  parseGithubIssueRef,
-} from "@assistant/shared";
+import { isForgejoInstanceUrl } from "@assistant/shared";
 import { ProjectSelector } from "./ProjectSelector.tsx";
-import { TaskTicketProperty, type TaskTicket } from "./TaskTicketProperty.tsx";
+import {
+  TaskTicketProperty,
+  ticketFallbackUrl,
+} from "./TaskTicketProperty.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Input } from "./ui/input.tsx";
 import { Button } from "./ui/button.tsx";
@@ -38,16 +38,15 @@ import { PROPERTY_TRIGGER, PropertyLabel } from "./common/PropertyList.tsx";
 /** A partial task save issued from the inspector's context sections. */
 export interface TaskContextPatch extends TaskPlanningPatch {
   projectId?: string | null;
-  jiraIssueKeys?: string[];
-  githubIssues?: string[];
+  ticket?: TaskTicket | null;
   externalLinks?: TaskExternalLink[];
 }
 
 /**
  * @component TaskContextSections
  * @purpose The task inspector's editable context: planning (priority + the two
- * dates), project assignment, linked Jira tickets and GitHub issues, and
- * external links (source + related).
+ * dates), project assignment, its one Jira or GitHub ticket, and external
+ * links (source + related).
  * @useWhen Rendered inside the task Inspector's children slot. The task page
  * itself stays a clean document (title, status, description).
  * @avoidWhen Task list browsing or description editing; those live elsewhere.
@@ -77,13 +76,7 @@ export function TaskContextSections({
   forgejoBaseUrl?: string;
 }) {
   const links = task.externalLinks ?? [];
-  const jiraKeys = normalizeJiraKeys(task.jiraIssueKeys ?? []);
-  const githubRefs = normalizeGithubIssueRefs(task.githubIssues ?? []);
-  const ticket: TaskTicket | null = jiraKeys[0]
-    ? { source: "jira", ref: jiraKeys[0] }
-    : githubRefs[0]
-      ? { source: "github", ref: githubRefs[0] }
-      : null;
+  const ticket = task.ticket ?? null;
   const ticketScope = ticketSearchScope(
     task.projectId ? projectsById.get(task.projectId) : undefined,
   );
@@ -130,26 +123,16 @@ export function TaskContextSections({
               ) : null}
             </div>
             {/* One ticket per Task, picked from a search over Jira and
-                GitHub. A Task still carrying several shows its first; picking
-                replaces them all. */}
+                GitHub; picking replaces it. */}
             <PropertyLabel>Ticket</PropertyLabel>
             <TaskTicketProperty
               ticket={ticket}
               fallbackUrl={
-                ticket?.source === "jira"
-                  ? jiraUrlForKey(ticket.ref, links, jiraHost)
-                  : ticket
-                    ? githubIssueUrl(ticket.ref)
-                    : undefined
+                ticket ? ticketFallbackUrl(ticket, jiraHost) : undefined
               }
               jiraProjects={ticketScope.jiraProjects}
               repos={ticketScope.repos}
-              onChange={(next) =>
-                onPatch({
-                  jiraIssueKeys: next?.source === "jira" ? [next.ref] : [],
-                  githubIssues: next?.source === "github" ? [next.ref] : [],
-                })
-              }
+              onChange={(next) => onPatch({ ticket: next })}
             />
           </>
         }
@@ -175,14 +158,6 @@ function addAction(title: string, adding: boolean, onToggleAdd: () => void) {
       {adding ? <X /> : <Plus />}
     </IconButton>
   );
-}
-
-export function githubIssueUrl(ref: string): string | undefined {
-  const parts = parseGithubIssueRef(ref);
-  // `/issues/<n>` redirects to `/pull/<n>` when the number is a pull request.
-  return parts
-    ? `https://github.com/${parts.owner}/${parts.repo}/issues/${parts.number}`
-    : undefined;
 }
 
 function LinksSection({
@@ -304,41 +279,6 @@ function LinksSection({
       </div>
     </InspectorSection>
   );
-}
-
-export function normalizeJiraKeys(values: Array<string | undefined>): string[] {
-  return [
-    ...new Set(
-      values
-        .map((value) => value?.trim().toUpperCase())
-        .filter((value): value is string =>
-          Boolean(value && /^[A-Z][A-Z0-9]+-\d+$/.test(value)),
-        ),
-    ),
-  ];
-}
-
-export function jiraUrlForKey(
-  key: string,
-  links: TaskExternalLink[],
-  jiraHost?: string,
-): string | undefined {
-  const jiraLink = links.find(
-    (link) => link.source === "jira" && link.url.toUpperCase().includes(key),
-  );
-  const host =
-    jiraHost?.trim() || (jiraLink ? jiraHostFromUrl(jiraLink.url) : undefined);
-  if (!host) return jiraLink?.url;
-  const base = host.match(/^https?:\/\//i) ? host : `https://${host}`;
-  return `${base.replace(/\/$/, "")}/browse/${encodeURIComponent(key)}`;
-}
-
-function jiraHostFromUrl(url: string): string | undefined {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return undefined;
-  }
 }
 
 /**

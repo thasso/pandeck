@@ -1,35 +1,33 @@
 import { describe, expect, it } from "vitest";
-import {
-  detectLinkSource,
-  jiraUrlForKey,
-  normalizeJiraKeys,
-} from "./TaskContextSections.tsx";
+import { detectLinkSource } from "./TaskContextSections.tsx";
+import { ticketFallbackUrl } from "./TaskTicketProperty.tsx";
 
-describe("normalizeJiraKeys", () => {
-  it("uppercases, trims, validates, and dedupes", () => {
+describe("ticketFallbackUrl", () => {
+  it("builds a Jira browse URL from the configured host", () => {
     expect(
-      normalizeJiraKeys([" abc-12 ", "ABC-12", "nope", "", undefined, "X2-9"]),
-    ).toEqual(["ABC-12", "X2-9"]);
-  });
-});
-
-describe("jiraUrlForKey", () => {
-  it("builds a clickable browse URL from the configured Jira host", () => {
-    expect(jiraUrlForKey("ABC-12", [], "acme.atlassian.net")).toBe(
-      "https://acme.atlassian.net/browse/ABC-12",
-    );
-  });
-
-  it("uses the Jira link host when no configured host is available", () => {
+      ticketFallbackUrl(
+        { source: "jira", ref: "ABC-12" },
+        "acme.atlassian.net",
+      ),
+    ).toBe("https://acme.atlassian.net/browse/ABC-12");
     expect(
-      jiraUrlForKey("ABC-12", [
-        {
-          url: "https://jira.example.test/issues/ABC-12",
-          type: "related",
-          source: "jira",
-        },
-      ]),
+      ticketFallbackUrl(
+        { source: "jira", ref: "ABC-12" },
+        "https://jira.example.test/",
+      ),
     ).toBe("https://jira.example.test/browse/ABC-12");
+  });
+
+  it("has no Jira URL without a configured host", () => {
+    expect(
+      ticketFallbackUrl({ source: "jira", ref: "ABC-12" }),
+    ).toBeUndefined();
+  });
+
+  it("links a GitHub ref to its issue page", () => {
+    expect(ticketFallbackUrl({ source: "github", ref: "acme/app#7" })).toBe(
+      "https://github.com/acme/app/issues/7",
+    );
   });
 });
 

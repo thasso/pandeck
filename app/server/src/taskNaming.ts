@@ -1,3 +1,5 @@
+import type { TaskTicket } from "@assistant/shared";
+
 const JIRA_ISSUE_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
 
 function gitSlug(raw: string): string {
@@ -11,7 +13,7 @@ function gitSlug(raw: string): string {
 
 export interface TaskNamingSource {
   id: string;
-  jiraIssueKeys?: readonly string[];
+  ticket?: TaskTicket | undefined;
 }
 
 export type TaskNamingReference =
@@ -19,13 +21,16 @@ export type TaskNamingReference =
   | { kind: "task"; display: string; slug: string };
 
 /**
- * Stable human/Git naming reference for work created from a Task. The first
- * explicitly linked Jira issue is primary; the internal Task id is the fallback.
+ * Stable human/Git naming reference for work created from a Task. A Jira ticket
+ * names it; the internal Task id is the fallback, also for a GitHub ticket.
  */
 export function taskNamingReference(
   task: TaskNamingSource,
 ): TaskNamingReference {
-  const jiraKey = task.jiraIssueKeys?.[0]?.trim().toUpperCase();
+  const jiraKey =
+    task.ticket?.source === "jira"
+      ? task.ticket.ref.trim().toUpperCase()
+      : undefined;
   if (jiraKey && JIRA_ISSUE_KEY_RE.test(jiraKey)) {
     return { kind: "jira", display: jiraKey, slug: jiraKey.toLowerCase() };
   }

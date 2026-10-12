@@ -752,10 +752,7 @@ function renderTasks(tasks: CommitTaskContext[]): string {
     .map((task) => {
       const header = [`- [${task.status}] ${task.title} (${task.id})`];
       if (task.projectId) header.push(`project=${task.projectId}`);
-      if (task.jiraIssueKeys?.length)
-        header.push(`jira=${task.jiraIssueKeys.join(",")}`);
-      if (task.githubIssues?.length)
-        header.push(`github=${task.githubIssues.join(",")}`);
+      if (task.ticket) header.push(`${task.ticket.source}=${task.ticket.ref}`);
       if (task.commitHash) header.push(`alreadyCommitted=${task.commitHash}`);
       const lines = [header.join("; ")];
       if (task.description) {

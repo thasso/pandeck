@@ -5,7 +5,7 @@
  * storage is SQLite via {@link ./db/taskStore.ts} and the generic
  * {@link ./db/links.ts} graph:
  *   - intrinsic fields              → the `tasks` row
- *   - parent/project/session/jira/url → `links` edges
+ *   - parent/project/session/ticket/url → `links` edges
  *
  * The single-Task model has no session/global scope, no reminders, and no
  * task-dependencies. Ids surface as stringified integers ("42").
@@ -27,11 +27,12 @@ import type {
   TaskStatus,
   TaskStatusSuggestion,
   TaskSummary,
+  TaskTicket,
 } from "@assistant/shared";
 import {
   isForgejoInstanceUrl,
   isTaskExternalLinkSource,
-  normalizeGithubIssueRefs,
+  normalizeTaskTicket,
   taskSummaryOf,
 } from "@assistant/shared";
 import { taskStore, type TaskStatusActor } from "./db/taskStore.ts";
@@ -66,8 +67,7 @@ export interface CreateTaskInput {
   description?: string;
   status?: TaskStatus;
   projectId?: string;
-  jiraIssueKeys?: string[];
-  githubIssues?: string[];
+  ticket?: TaskTicket;
   externalLinks?: TaskExternalLink[];
   dueDate?: string;
   scheduledFor?: string;
@@ -89,8 +89,8 @@ export interface UpdateTaskInput {
   description?: string;
   status?: TaskStatus;
   projectId?: string | null;
-  jiraIssueKeys?: string[];
-  githubIssues?: string[];
+  /** Replaces the ticket; null removes it. */
+  ticket?: TaskTicket | null;
   externalLinks?: TaskExternalLink[];
   dueDate?: string | null;
   scheduledFor?: string | null;
@@ -410,6 +410,9 @@ export function findOriginTask(sessionId: string): TaskBackRef | undefined {
 export function createTask(input: CreateTaskInput): TaskItem {
   const dueDateValue = normalizeDateOnly(input.dueDate);
   const scheduledForValue = normalizeDateOnly(input.scheduledFor);
+  // Refused before anything is written.
+  const ticketValue =
+    input.ticket !== undefined ? ticketInput(input.ticket) : undefined;
   const task = taskStore.create({
     title: cleanText(input.title, 200),
     description: stripInjectedRelayHistory(input.description ?? ""),
@@ -439,8 +442,7 @@ export function createTask(input: CreateTaskInput): TaskItem {
     // Only when the caller stated one: an omitted project is inherited from
     // `parentId`, and passing null here would clear it again.
     ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-    jiraIssueKeys: normalizeJiraKeys(input.jiraIssueKeys),
-    githubIssues: normalizeGithubIssueRefs(input.githubIssues),
+    ...(ticketValue ? { ticket: ticketValue } : {}),
     externalLinks: normalizeExternalLinks(input.externalLinks),
     parentId: input.parentId ?? null,
     // A Task is BORN with a place. Leaving it unpositioned used to hand the
@@ -461,6 +463,8 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
   const nid = parseId(id);
   const current = nid !== undefined ? readTask(id) : null;
   if (nid === undefined || !current) throw new Error(`Task not found: ${id}`);
+  const ticketValue =
+    patch.ticket !== undefined ? ticketInput(patch.ticket) : undefined;
 
   const statusWrite = resolveStatusWrite(current, patch);
   const triage = resolveTriage(current, patch);
@@ -531,12 +535,7 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
 
   const cascaded = applyRelations(nid, {
     ...(patch.projectId !== undefined ? { projectId: patch.projectId } : {}),
-    ...(patch.jiraIssueKeys !== undefined
-      ? { jiraIssueKeys: normalizeJiraKeys(patch.jiraIssueKeys) }
-      : {}),
-    ...(patch.githubIssues !== undefined
-      ? { githubIssues: normalizeGithubIssueRefs(patch.githubIssues) }
-      : {}),
+    ...(ticketValue !== undefined ? { ticket: ticketValue } : {}),
     ...(patch.externalLinks !== undefined
       ? { externalLinks: normalizeExternalLinks(patch.externalLinks) }
       : {}),
@@ -773,10 +772,9 @@ function assemble(
   parentEdge: Link | undefined,
 ): TaskItem {
   const t = task!;
-  const jira = out.filter((e) => e.relation === "jira").map((e) => e.toId);
-  const githubIssues = out
-    .filter((e) => e.relation === "github")
-    .map((e) => e.toId);
+  const ticketEdge = out.find(
+    (e) => e.relation === "jira" || e.relation === "github",
+  );
   const externalLinks = out
     .filter((e) => e.relation === "link")
     .map(edgeToExternalLink);
@@ -797,8 +795,14 @@ function assemble(
       ? { descriptionPreview: descriptionPreviewValue }
       : {}),
     ...(projectId ? { projectId } : {}),
-    jiraIssueKeys: jira,
-    ...(githubIssues.length ? { githubIssues } : {}),
+    ...(ticketEdge
+      ? {
+          ticket: {
+            source: ticketEdge.relation as TaskTicket["source"],
+            ref: ticketEdge.toId,
+          },
+        }
+      : {}),
     externalLinks,
     ...(t.dueDate ? { dueDate: t.dueDate } : {}),
     ...(t.scheduledFor ? { scheduledFor: t.scheduledFor } : {}),
@@ -894,8 +898,7 @@ function applyRelations(
   taskId: number,
   rel: {
     projectId?: string | null;
-    jiraIssueKeys?: string[];
-    githubIssues?: string[];
+    ticket?: TaskTicket | null;
     externalLinks?: TaskExternalLink[];
     parentId?: string | null;
     sortOrder?: number | null;
@@ -927,10 +930,7 @@ function applyRelations(
     ))
       cascaded.add(String(id));
   }
-  if (rel.jiraIssueKeys !== undefined)
-    taskStore.setJira(taskId, rel.jiraIssueKeys);
-  if (rel.githubIssues !== undefined)
-    taskStore.setGithubIssues(taskId, rel.githubIssues);
+  if (rel.ticket !== undefined) taskStore.setTicket(taskId, rel.ticket);
   if (rel.externalLinks !== undefined) {
     // Rebuild url edges from the given set.
     for (const e of outgoing(node(taskId), "link"))
@@ -1185,10 +1185,7 @@ function matchesQuery(item: TaskItem, query: string): boolean {
     return true;
   if ((item.description ?? "").toLowerCase().includes(query)) return true;
   if (item.projectId?.toLowerCase().includes(query)) return true;
-  if ((item.jiraIssueKeys ?? []).some((k) => k.toLowerCase().includes(query)))
-    return true;
-  if ((item.githubIssues ?? []).some((r) => r.toLowerCase().includes(query)))
-    return true;
+  if (item.ticket?.ref.toLowerCase().includes(query)) return true;
   if (
     (item.externalLinks ?? []).some((l) =>
       [l.url, l.title, l.source, l.type].some((v) =>
@@ -1218,15 +1215,18 @@ function normalizeDateOnly(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : match[1];
 }
 
-function normalizeJiraKeys(values: unknown): string[] {
-  const candidates = Array.isArray(values) ? values : [];
-  const all = candidates
-    .map((v) => cleanOptional(v)?.toUpperCase())
-    .filter(
-      (v): v is string =>
-        typeof v === "string" && /^[A-Z][A-Z0-9]+-\d+$/.test(v),
+/**
+ * A stated ticket in canonical form; null removes it. A value naming no ticket
+ * is refused rather than read as a removal.
+ */
+function ticketInput(value: unknown): TaskTicket | null {
+  if (value === null) return null;
+  const ticket = normalizeTaskTicket(value);
+  if (!ticket)
+    throw new Error(
+      `Not a ticket: ${JSON.stringify(value)}. Use a Jira key such as 'ABC-123', a GitHub 'owner/repo#123', or the issue's URL.`,
     );
-  return [...new Set(all)];
+  return ticket;
 }
 
 function normalizeExternalLinks(values: unknown): TaskExternalLink[] {

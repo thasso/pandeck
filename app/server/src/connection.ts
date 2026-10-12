@@ -2907,12 +2907,7 @@ export class Connection implements Viewer {
                     request.projectId === "" ? null : request.projectId,
                 }
               : {}),
-            ...(request.jiraIssueKeys !== undefined
-              ? { jiraIssueKeys: request.jiraIssueKeys }
-              : {}),
-            ...(request.githubIssues !== undefined
-              ? { githubIssues: request.githubIssues }
-              : {}),
+            ...(request.ticket !== undefined ? { ticket: request.ticket } : {}),
             ...(request.externalLinks !== undefined
               ? { externalLinks: request.externalLinks }
               : {}),
@@ -2940,12 +2935,7 @@ export class Connection implements Viewer {
             ...(request.projectId != null
               ? { projectId: request.projectId }
               : {}),
-            ...(request.jiraIssueKeys !== undefined
-              ? { jiraIssueKeys: request.jiraIssueKeys }
-              : {}),
-            ...(request.githubIssues !== undefined
-              ? { githubIssues: request.githubIssues }
-              : {}),
+            ...(request.ticket ? { ticket: request.ticket } : {}),
             ...(request.externalLinks !== undefined
               ? { externalLinks: request.externalLinks }
               : {}),

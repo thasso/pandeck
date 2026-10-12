@@ -3256,12 +3256,7 @@ function optimisticTaskFromRequest(
     status,
     descriptionPreview: descriptionPreview(description),
     ...(request.projectId ? { projectId: request.projectId } : {}),
-    ...(request.jiraIssueKeys !== undefined
-      ? { jiraIssueKeys: request.jiraIssueKeys }
-      : {}),
-    ...(request.githubIssues !== undefined
-      ? { githubIssues: request.githubIssues }
-      : {}),
+    ...(request.ticket ? { ticket: request.ticket } : {}),
     ...(request.externalLinks !== undefined
       ? { externalLinks: request.externalLinks }
       : {}),
@@ -3384,8 +3379,8 @@ function applyOptimisticTaskSave(
         request.projectId === null || request.projectId === ""
           ? undefined
           : (request.projectId ?? item.projectId),
-      jiraIssueKeys: request.jiraIssueKeys ?? item.jiraIssueKeys,
-      githubIssues: request.githubIssues ?? item.githubIssues,
+      ticket:
+        request.ticket === null ? undefined : (request.ticket ?? item.ticket),
       externalLinks: request.externalLinks ?? item.externalLinks,
       dueDate:
         request.dueDate === null || request.dueDate === ""

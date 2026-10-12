@@ -456,7 +456,6 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
       status: "todo" as const,
       description: "",
       descriptionPreview: "",
-      jiraIssueKeys: [],
       externalLinks: [],
       sessionRefs: [],
       priority: "normal" as const,

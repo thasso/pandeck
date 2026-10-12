@@ -19,8 +19,8 @@ renders — never in a harness-specific prompt layer.
 A Task is one commitment the user keeps: something they intend to happen, worth
 seeing again tomorrow. It carries a title, a Markdown description that is the
 durable statement of the work, a status, a priority, an optional parent (subtask
-edges form epics), an optional project, Jira keys, GitHub issue links and
-external source links, and two independent dates.
+edges form epics), an optional project, an optional ticket, external source
+links, and two independent dates.
 
 An external link records which provider it points at (`slack`, `jira`, `github`,
 `forgejo`, `unknown`), inferred from the URL when the writer omits it. Only
@@ -31,32 +31,38 @@ Until an instance is configured such a link reads as `unknown`, and that is not
 a permanent verdict: an `unknown` source is re-detected on every read, so links
 stored before the instance was configured become `forgejo` by themselves.
 
-GitHub issue links (`githubIssues`) are the Jira keys' counterpart for GitHub:
-canonical `owner/repo#123` refs (`normalizeGithubIssueRef` in the shared
-package, which also accepts the issue or pull-request URL), stored as `github`
-edges. The inspector shows each ref with its live title and state from
-`GET /api/github/issues`, and commit and pull-request agents see them in the
-Task context. `task_manage` refuses a malformed ref instead of dropping it. They
-play no part in naming.
+A Task has at most ONE ticket (`ticket: { source, ref }`): a Jira issue key
+(`ABC-123`) or a canonical GitHub `owner/repo#123` ref for an issue or pull
+request. `normalizeTaskTicket` in the shared package also accepts a bare key or
+ref, a Jira `/browse/` link and a github.com issue or pull-request URL. It is
+stored as a single `jira` or `github` edge; writing one clears the other, and
+`ticket: null` (`""` in `task_manage`) removes it. `task_manage` and the save
+path refuse a value that names no ticket instead of dropping it. Commit and
+pull-request agents see the ticket in the Task context.
 
-Jira keys are ordered. The first explicitly linked key is the Task's primary
-naming reference. New Task-started session titles use that exact uppercase key,
-and new Task-owned branches and worktree folders use its lowercase form. With no
-Jira key they use `Task-<id>` for a session and `t<id>` for Git. Code adds these
-prefixes after the no-tool naming agents produce the descriptive title or
-suffix, so model failure or noncompliance cannot drop them. The choice is frozen
-when each object is created; changing Task links never renames an existing
-session, branch, or folder.
+A Jira ticket is the Task's naming reference. New Task-started session titles
+use that exact uppercase key, and new Task-owned branches and worktree folders
+use its lowercase form. With no Jira ticket (none, or a GitHub one) they use
+`Task-<id>` for a session and `t<id>` for Git. Code adds these prefixes after
+the no-tool naming agents produce the descriptive title or suffix, so model
+failure or noncompliance cannot drop them. The choice is frozen when each object
+is created; changing the ticket never renames an existing session, branch, or
+folder.
 
-The inspector treats these as ONE ticket per Task: a Details row showing the
-first Jira key (else the first GitHub ref) with its live title, and a search
-popover to set, change or remove it. Picking writes exactly one ref and clears
-the rest; the stored fields stay lists, so a Task an agent gave several still
-reads. The search is `GET /api/tickets/search?q=&jiraProjects=&repos=`
-(`ticketSearch.ts`): Jira and GitHub in parallel, each skipped when not
-configured, scoped to the Task's Project's Jira projects and GitHub repository,
-else to the user's own work. An exact key, ref or pasted link resolves to that
-ticket; an empty query lists recent ones.
+The inspector's Details row shows the ticket with its live title (from
+`GET /api/jira/issues` or `GET /api/github/issues`) and a search popover to set,
+change or remove it. The search is
+`GET /api/tickets/search?q=&jiraProjects=&repos=` (`ticketSearch.ts`): Jira and
+GitHub in parallel, each skipped when not configured, scoped to the Task's
+Project's Jira projects and GitHub repository, else to the user's own work. An
+exact key, ref or pasted link resolves to that ticket; an empty query lists
+recent ones.
+
+Tasks used to hold lists of Jira keys and GitHub refs. Migration
+`0071_task_single_ticket.sql` kept the first (a Jira key before a GitHub ref) as
+the ticket and turned every other ref into a `related` external link; with no
+stored Jira link to take the site's address from, extra Jira keys were appended
+to the description instead.
 
 The two dates are not interchangeable and an agent choosing wrongly is the
 failure mode, so keep them apart:
@@ -111,7 +117,7 @@ drag, which reaches `reorderTasks` without ever passing through
 
 `projectId` stays STORED rather than derived from the root, so list filters,
 `taskSummaryOf` and the wire model are untouched. Nothing else is inherited —
-not Jira keys, not GitHub issues, not external links.
+not the ticket, not external links.
 
 ## Where a piece of work belongs
 

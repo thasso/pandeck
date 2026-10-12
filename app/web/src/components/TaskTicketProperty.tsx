@@ -9,9 +9,11 @@ import {
   X,
 } from "lucide-react";
 import type {
+  TaskTicket,
   TicketSearchResponse,
   TicketSearchResult,
 } from "@assistant/shared";
+import { parseGithubIssueRef } from "@assistant/shared";
 import { fetchGithubLinkedIssues } from "../lib/githubApi.ts";
 import { fetchJiraLinkedIssues } from "../lib/jiraApi.ts";
 import { searchTickets } from "../lib/ticketApi.ts";
@@ -38,10 +40,25 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 import { PROPERTY_TRIGGER } from "./common/PropertyList.tsx";
 
-/** The one ticket a Task is about: a Jira key or a GitHub `owner/repo#123`. */
-export interface TaskTicket {
-  source: "jira" | "github";
-  ref: string;
+/**
+ * Where a ticket lives without asking its tracker: a GitHub issue's page, or a
+ * Jira issue on the configured host.
+ */
+export function ticketFallbackUrl(
+  ticket: TaskTicket,
+  jiraHost?: string,
+): string | undefined {
+  if (ticket.source === "jira") {
+    const host = jiraHost?.trim();
+    if (!host) return undefined;
+    const base = /^https?:\/\//i.test(host) ? host : `https://${host}`;
+    return `${base.replace(/\/$/, "")}/browse/${encodeURIComponent(ticket.ref)}`;
+  }
+  const parts = parseGithubIssueRef(ticket.ref);
+  // `/issues/<n>` redirects to `/pull/<n>` when the number is a pull request.
+  return parts
+    ? `https://github.com/${parts.owner}/${parts.repo}/issues/${parts.number}`
+    : undefined;
 }
 
 /** How long typing pauses before the search goes out. */

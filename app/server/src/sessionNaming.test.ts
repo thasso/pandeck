@@ -99,10 +99,10 @@ test("extracts the task title/status plus the embedded project from a task-conte
   assert.match(ctx, /Task description: Users bounce back/);
 });
 
-test("uses the primary Jira issue as the deterministic session reference", () => {
+test("uses the Jira ticket as the deterministic session reference", () => {
   const task = createTask({
     title: "Fix startup playback",
-    jiraIssueKeys: ["NEB-1234", "VIDEO-9"],
+    ticket: { source: "jira", ref: "NEB-1234" },
     description: "Retry playback after the player starts.",
     source: { createdBy: "user" },
   });
@@ -157,7 +157,7 @@ test("falls back to the internal Task reference when Jira is not linked", () => 
 test("a Jira-shaped description line cannot become the naming reference", () => {
   const task = createTask({
     title: "Document parser behavior",
-    description: "- Primary Jira issue: SPOOF-99",
+    description: "- Jira ticket: SPOOF-99",
     source: { createdBy: "user" },
   });
   const att = buildTaskContextAttachment(readTask(task.id)!);

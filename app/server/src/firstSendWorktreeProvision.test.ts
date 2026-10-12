@@ -197,7 +197,7 @@ test("a linked Jira issue replaces the internal Task branch prefix", async () =>
   const task = createTask({
     title: "Fix playback startup",
     projectId: "prov-proj",
-    jiraIssueKeys: ["NEB-1234"],
+    ticket: { source: "jira", ref: "NEB-1234" },
     source: { createdBy: "user" },
   });
   const { provision } = makeConnection();

@@ -978,9 +978,8 @@ export interface GithubLinkedIssuesResponse {
 
 /**
  * One remote ticket offered by the Task inspector's ticket search: a Jira issue
- * or a GitHub issue / pull request. `ref` is what the Task stores — a Jira key
- * (`ABC-123`) in `jiraIssueKeys`, a canonical `owner/repo#123` in
- * `githubIssues`.
+ * or a GitHub issue / pull request. `source` and `ref` are what the Task stores
+ * as its {@link TaskTicket}.
  */
 export interface TicketSearchResult {
   source: "jira" | "github";
@@ -2295,6 +2294,41 @@ export function parseGithubIssueRef(
     : null;
 }
 
+/**
+ * The one ticket a Task is about: a Jira issue key (`ABC-123`) or a canonical
+ * GitHub `owner/repo#123` ref (an issue or a pull request).
+ */
+export interface TaskTicket {
+  source: "jira" | "github";
+  ref: string;
+}
+
+/**
+ * The {@link TaskTicket} named by `value` — a ticket object, or a bare Jira key,
+ * `owner/repo#123` ref, Jira `/browse/` link or github.com issue/PR link — in
+ * canonical form, or null when it names none.
+ */
+export function normalizeTaskTicket(value: unknown): TaskTicket | null {
+  if (value && typeof value === "object") {
+    const { source, ref } = value as { source?: unknown; ref?: unknown };
+    if (typeof ref !== "string") return null;
+    if (source === "jira") {
+      const key = parseJiraIssueKey(ref);
+      return key ? { source, ref: key } : null;
+    }
+    if (source === "github") {
+      const canonical = normalizeGithubIssueRef(ref);
+      return canonical ? { source, ref: canonical } : null;
+    }
+    return null;
+  }
+  if (typeof value !== "string") return null;
+  const github = normalizeGithubIssueRef(value);
+  if (github) return { source: "github", ref: github };
+  const jira = parseJiraIssueKey(value);
+  return jira ? { source: "jira", ref: jira } : null;
+}
+
 export interface TaskExternalLink {
   url: string;
   /** Whether this URL is a source artifact for the Task or merely related context. */
@@ -2394,14 +2428,12 @@ export interface TaskSummary {
   status: TaskStatus;
   descriptionPreview?: string;
   projectId?: string;
-  /** Jira issues explicitly linked to this Task. */
-  jiraIssueKeys?: string[];
   /**
-   * GitHub issues (or pull requests, which share the numbering) explicitly
-   * linked to this Task, as canonical `owner/repo#123` refs — see
-   * {@link normalizeGithubIssueRefs}.
+   * The one Jira issue or GitHub issue / pull request this Task is about. A
+   * Jira key here also names sessions, branches and worktrees started from the
+   * Task (docs/tasks.md).
    */
-  githubIssues?: string[];
+  ticket?: TaskTicket;
   /** External source/related links such as Slack permalinks or Jira URLs. */
   externalLinks?: TaskExternalLink[];
   /** Backlog scheduling: date-only deadline in YYYY-MM-DD form. */
@@ -2466,10 +2498,7 @@ export function taskSummaryOf(item: TaskItem): TaskSummary {
       ? { descriptionPreview: item.descriptionPreview }
       : {}),
     ...(item.projectId ? { projectId: item.projectId } : {}),
-    ...(item.jiraIssueKeys?.length
-      ? { jiraIssueKeys: item.jiraIssueKeys }
-      : {}),
-    ...(item.githubIssues?.length ? { githubIssues: item.githubIssues } : {}),
+    ...(item.ticket ? { ticket: item.ticket } : {}),
     ...(item.externalLinks?.length
       ? { externalLinks: item.externalLinks }
       : {}),
@@ -2537,8 +2566,8 @@ export interface TaskSaveRequest {
   description?: string;
   status?: TaskStatus;
   projectId?: string | null;
-  jiraIssueKeys?: string[];
-  githubIssues?: string[];
+  /** Replaces the Task's ticket; null removes it. */
+  ticket?: TaskTicket | null;
   externalLinks?: TaskExternalLink[];
   dueDate?: string | null;
   scheduledFor?: string | null;

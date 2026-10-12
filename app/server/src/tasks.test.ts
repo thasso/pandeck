@@ -31,7 +31,7 @@ test("tasks list/save/read use the current task shape without inert compatibilit
     description: "body",
     status: "todo",
     projectId: "proj-1",
-    jiraIssueKeys: ["APP-42"],
+    ticket: { source: "jira", ref: "APP-42" },
     dueDate: "2026-07-10",
     priority: "high",
     source: { createdBy: "user" },
@@ -39,7 +39,7 @@ test("tasks list/save/read use the current task shape without inert compatibilit
 
   try {
     assert.equal(created.title, "Current shape task");
-    assert.deepEqual(created.jiraIssueKeys, ["APP-42"]);
+    assert.deepEqual(created.ticket, { source: "jira", ref: "APP-42" });
     assert.equal(created.projectId, "proj-1");
     assert.equal(created.dueDate, "2026-07-10");
     assert.equal(created.priority, "high");
@@ -59,44 +59,48 @@ test("tasks list/save/read use the current task shape without inert compatibilit
 
     const updated = updateTask(created.id, {
       title: "Updated shape task",
-      jiraIssueKeys: ["APP-43"],
+      ticket: { source: "jira", ref: "app-43" },
     });
     assert.equal(updated.title, "Updated shape task");
-    assert.deepEqual(updated.jiraIssueKeys, ["APP-43"]);
+    assert.deepEqual(updated.ticket, { source: "jira", ref: "APP-43" });
     assert.equal(readTask(created.id)?.title, "Updated shape task");
   } finally {
     deleteTask(created.id);
   }
 });
 
-test("GitHub issue links are stored canonical, replaced on update, and searchable", () => {
+test("a Task's one ticket is stored canonical, replaced on update, and searchable", () => {
   const created = createTask({
-    title: "GitHub linked task",
-    githubIssues: [
-      "https://github.com/acme/app/issues/12",
-      "acme/app#12",
-      "not a ref",
-      "acme/tools#3",
-      "https://github.com/nodejs/.github/issues/1",
-    ],
+    title: "GitHub ticket task",
+    ticket: { source: "github", ref: "https://github.com/acme/tools/issues/3" },
     source: { createdBy: "user" },
   });
 
   try {
-    const refs = ["acme/app#12", "acme/tools#3", "nodejs/.github#1"];
-    assert.deepEqual(created.githubIssues, refs);
-    assert.deepEqual(readTask(created.id)?.githubIssues, refs);
-    assert.deepEqual(taskSummaryOf(created).githubIssues, refs);
+    const ticket = { source: "github", ref: "acme/tools#3" };
+    assert.deepEqual(created.ticket, ticket);
+    assert.deepEqual(readTask(created.id)?.ticket, ticket);
+    assert.deepEqual(taskSummaryOf(created).ticket, ticket);
     assert.equal(
       listTasks({ query: "tools#3" }).some((task) => task.id === created.id),
       true,
     );
-    const updated = updateTask(created.id, {
-      githubIssues: ["https://github.com/acme/app/pull/40"],
+    // A Jira ticket replaces the GitHub one rather than joining it.
+    const replaced = updateTask(created.id, {
+      ticket: { source: "jira", ref: "APP-7" },
     });
-    assert.deepEqual(updated.githubIssues, ["acme/app#40"]);
-    const cleared = updateTask(created.id, { githubIssues: [] });
-    assert.equal(Object.hasOwn(cleared, "githubIssues"), false);
+    assert.deepEqual(replaced.ticket, { source: "jira", ref: "APP-7" });
+    assert.throws(
+      () =>
+        updateTask(created.id, { ticket: { source: "github", ref: "#12" } }),
+      /Not a ticket/,
+    );
+    assert.deepEqual(readTask(created.id)?.ticket, {
+      source: "jira",
+      ref: "APP-7",
+    });
+    const cleared = updateTask(created.id, { ticket: null });
+    assert.equal(Object.hasOwn(cleared, "ticket"), false);
   } finally {
     deleteTask(created.id);
   }
@@ -137,7 +141,7 @@ test("the Task list projection is allowlisted, lean, and server-path free", () =
     title: "Projection census",
     description: "A body rendered only as a preview in list rows.",
     projectId: "project-1",
-    jiraIssueKeys: ["APP-42"],
+    ticket: { source: "jira", ref: "APP-42" },
     externalLinks: [
       {
         url: "https://example.com/source",
@@ -172,7 +176,6 @@ test("the Task list projection is allowlisted, lean, and server-path free", () =
       "dueDate",
       "externalLinks",
       "id",
-      "jiraIssueKeys",
       "projectId",
       "sessionRefs",
       // Every Task is created with a manual position, so the Backlog never has
@@ -180,6 +183,7 @@ test("the Task list projection is allowlisted, lean, and server-path free", () =
       "sortOrder",
       "source",
       "status",
+      "ticket",
       "title",
       "updatedAt",
     ]);
