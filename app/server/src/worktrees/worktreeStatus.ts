@@ -531,7 +531,8 @@ async function compute(
   const workingTree = await readWorkingTree(row);
   captureWorkingTree?.(workingTree);
   const { snapshot, additions, deletions } = workingTree;
-  const branchTip = snapshot.oid ?? row.branch;
+  const branchOid = await recordedBranchOid(row, snapshot);
+  const branchTip = branchOid ?? row.branch;
   const branchUpstreams =
     suppliedBranchUpstreams ??
     (row.path === row.mainRepoRoot
@@ -595,7 +596,7 @@ async function compute(
       // Counts that could not be taken are never a delivery claim.
       merged:
         aheadBehindRes.code === 0
-          ? await isMerged(row, ahead, snapshot.oid)
+          ? await isMerged(row, ahead, branchOid)
           : false,
       updatedAt: Date.now(),
       ...(fetchedAt ? { fetchedAt } : {}),
@@ -750,6 +751,29 @@ function parseStatus(result: GitResult): StatusSnapshot {
     untracked: untrackedPaths.length,
     ...(upstreamName && upstream ? { upstream } : {}),
   };
+}
+
+/**
+ * The commit `ahead`/`behind`/`merged` describe: the RECORDED branch, because
+ * that ref is what merge, retirement and removal's containment guard act on.
+ * HEAD stands in for it only while it is checked out (the common case, read
+ * for free from porcelain). A detached or switched checkout used to be measured
+ * at HEAD instead, so a branch with unmerged commits read as merged and Remove
+ * offered no force for the refusal that followed. The main checkout keeps HEAD:
+ * it is its own base. A recorded branch that no longer exists falls back to
+ * HEAD too, which is all the checkout still holds.
+ */
+async function recordedBranchOid(
+  row: WorktreeRow,
+  snapshot: StatusSnapshot,
+): Promise<string | undefined> {
+  if (snapshot.branch === row.branch || row.path === row.mainRepoRoot)
+    return snapshot.oid;
+  const ref = await gitReadOnlyOptionalExit(
+    ["rev-parse", "--verify", `refs/heads/${row.branch}^{commit}`],
+    row.mainRepoRoot,
+  );
+  return ref.code === 0 ? ref.stdout.trim() : snapshot.oid;
 }
 
 /** The base branch's commit oid, or `""` when the ref resolves to nothing. */

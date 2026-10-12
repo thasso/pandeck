@@ -1793,6 +1793,36 @@ test("removeWorktree keeps an undelivered branch without force when asked to kee
   assert.equal(sh(repoPath, "rev-parse", record.branch), head);
 });
 
+test("a detached checkout reports its branch's containment, as removal checks it", async () => {
+  const record = await createWorktree({
+    projectId: "wt-proj",
+    name: "detached",
+  });
+  const row = getWorktree(record.id)!;
+  await unregisterWorktree(row.id);
+  writeFileSync(join(record.path, "detached.txt"), "work\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "undelivered work");
+  // HEAD now sits on delivered history while the branch ref still holds the
+  // commit. Measuring HEAD read "merged", so Remove offered no force for the
+  // refusal its containment guard then raised.
+  sh(record.path, "checkout", "--detach", "main");
+
+  const status = await computeWorktreeStatus(row, { force: true });
+  assert.equal(status.branch, null);
+  assert.equal(status.ahead, 1);
+  assert.equal(status.merged, false);
+  assert.equal(await hasUnmergedCommits(row), true);
+  await assert.rejects(
+    () => removeWorktree(record.id, { deleteBranch: true }),
+    (err) =>
+      err instanceof WorktreeRemovalBlockedError &&
+      /not merged/i.test(err.message),
+  );
+  await removeWorktree(record.id, { deleteBranch: true, force: true });
+  assert.equal(getWorktree(record.id)?.status, "removed");
+});
+
 test("a base branch that resolves to nothing reports unknown containment, not merged", async () => {
   sh(repoPath, "branch", "vanishing-base");
   const record = await createWorktree({
