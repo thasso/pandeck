@@ -267,6 +267,8 @@ export async function regenerateSessionTitle(
   input: {
     sessionId: string;
     currentTitle?: string;
+    /** The prompt the session opened with, when `transcript` omits it. */
+    opening?: string;
     /** Recent user prompts and agent replies, oldest first. */
     transcript: readonly RetitleTranscriptEntry[];
     /** The user's own hint, which outweighs the transcript. */
@@ -299,13 +301,19 @@ export async function regenerateSessionTitle(
           `Attached session context (background for disambiguation only):\n<<<\n${input.context}\n>>>`,
         ]
       : []),
+    ...(input.opening
+      ? [
+          "",
+          `Opening request (how the session started; it may have moved on):\n<<<\n${input.opening}\n>>>`,
+        ]
+      : []),
     "",
     `Recent conversation, oldest first (tool calls omitted):\n<<<\n${conversation || "(no messages)"}\n>>>`,
     "",
     "Return the session title only.",
   ].join("\n");
 
-  const { text } = await runOneShot({
+  const { text, failure } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
     credentialProfileId: accountForSlot(settings),
@@ -320,6 +328,9 @@ export async function regenerateSessionTitle(
       parentSessionId: input.sessionId,
     },
   });
+  // The user asked for this title, so a run that broke off mid-answer keeps
+  // the old one rather than applying a fragment.
+  if (failure !== undefined) throw new Error(failure);
   const title = sanitizeTitle(text);
   if (!title) throw new Error("The naming agent returned no title.");
   return applyNamingReference(title, input.reference);

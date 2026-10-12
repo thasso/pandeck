@@ -3613,19 +3613,16 @@ function AppContent() {
     (name: string, rawArgs: string): string | null => {
       if (name === "review") return startReviewSessionForSession(rawArgs);
       if (name === "rename") {
-        if (!displayCurrentId || !displayHasUserPrompt)
-          return "Nothing to name yet — this session has no conversation.";
+        // Only "is there a session" is decided here: the loaded transcript is a
+        // window that may open mid-turn with no user row, so whether there is a
+        // conversation to name is the server's call, made from the whole log.
+        if (!displayCurrentId) return "/rename needs an existing session.";
         actions.regenerateSessionTitle(displayCurrentId, rawArgs);
         return null;
       }
       return `/${name} is not available here.`;
     },
-    [
-      actions,
-      displayCurrentId,
-      displayHasUserPrompt,
-      startReviewSessionForSession,
-    ],
+    [actions, displayCurrentId, startReviewSessionForSession],
   );
 
   /**

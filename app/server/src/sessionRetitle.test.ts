@@ -26,7 +26,7 @@ vi.mock("./tasks.ts", async (importOriginal) => ({
 const { NoHelperModelError, runOneShot } =
   await import("./harnesses/oneShot.ts");
 const { findOriginTask, readTask } = await import("./tasks.ts");
-const { recentTranscript, retitleSession } =
+const { namingTranscript, retitleSession } =
   await import("./sessionRetitle.ts");
 const { cancelSessionRetitle, isRetitlingSession } =
   await import("./sessionRetitlePending.ts");
@@ -94,20 +94,46 @@ test("the transcript keeps prompts and replies but no tool traffic", () => {
     user("u2", "now add a /rename command"),
   ]);
 
-  assert.deepEqual(recentTranscript(sessionId), [
-    { role: "user", text: "fix the login redirect" },
-    { role: "assistant", text: "Fixed it." },
-    { role: "user", text: "now add a /rename command" },
-  ]);
+  assert.deepEqual(namingTranscript(sessionId), {
+    recent: [
+      { role: "user", text: "fix the login redirect" },
+      { role: "assistant", text: "Fixed it." },
+      { role: "user", text: "now add a /rename command" },
+    ],
+  });
 });
 
 test("the newest turns win when the conversation exceeds the budget", () => {
   const long = "x".repeat(1_100);
   writeLog(Array.from({ length: 20 }, (_, i) => user(`u${i}`, `${i} ${long}`)));
 
-  const transcript = recentTranscript(sessionId);
-  assert.ok(transcript.length < 20);
-  assert.match(transcript.at(-1)!.text, /^19 /);
+  const { opening, recent } = namingTranscript(sessionId);
+  assert.ok(recent.length < 20);
+  assert.match(recent.at(-1)!.text, /^19 /);
+  // The opening prompt fell out of the recent turns, so it comes separately.
+  assert.match(opening!, /^0 /);
+});
+
+test("a tool-heavy log is read only within its tail bytes", () => {
+  const output = "y".repeat(64 * 1024);
+  writeLog([
+    user("u1", "start the migration"),
+    assistant("a1", [{ type: "text", text: "Starting." }]),
+    // ~2 MiB of tool traffic: past the tail window, nothing visible in it.
+    ...Array.from({ length: 32 }, (_, i) => ({
+      type: "message",
+      id: `t${i}`,
+      role: "toolResult",
+      toolName: "Bash",
+      content: [{ type: "text", text: output }],
+    })),
+    assistant("a2", [{ type: "text", text: "Migration done." }]),
+  ]);
+
+  assert.deepEqual(namingTranscript(sessionId), {
+    opening: "start the migration",
+    recent: [{ role: "assistant", text: "Migration done." }],
+  });
 });
 
 test("guidance, current title and origin Task reach the agent; the reference prefixes the title", async () => {
@@ -195,5 +221,61 @@ test("no usable model is an error the user sees, and the old title stays", async
     /No model is available/,
   );
   assert.deepEqual(renamed, []);
+  assert.equal(isRetitlingSession(sessionId), false);
+});
+
+test("a superseded run reports nothing, even when it fails", async () => {
+  writeLog([user("u1", "hello")]);
+  let fail!: (err: Error) => void;
+  vi.mocked(runOneShot).mockReturnValue(
+    new Promise((_, reject) => {
+      fail = reject;
+    }),
+  );
+
+  const run = retitleSession({
+    sessionId,
+    rename: async () => {},
+    changed: async () => {},
+  });
+  await vi.waitFor(() => assert.ok(fail));
+  cancelSessionRetitle(sessionId);
+  fail(new Error("Session title generation timed out."));
+
+  assert.equal(await run, undefined);
+});
+
+test("a run that broke off mid-answer keeps the old title", async () => {
+  writeLog([user("u1", "hello")]);
+  vi.mocked(runOneShot).mockResolvedValue({
+    text: "Half a ti",
+    usage: {},
+    failure: "aborted",
+  });
+  const renamed: string[] = [];
+
+  await assert.rejects(
+    retitleSession({
+      sessionId,
+      rename: async (next) => {
+        renamed.push(next);
+      },
+      changed: async () => {},
+    }),
+    /aborted/,
+  );
+  assert.deepEqual(renamed, []);
+});
+
+test("a session whose log names nothing is refused without a run", async () => {
+  await assert.rejects(
+    retitleSession({
+      sessionId,
+      rename: async () => {},
+      changed: async () => {},
+    }),
+    /no conversation/,
+  );
+  assert.equal(vi.mocked(runOneShot).mock.calls.length, 0);
   assert.equal(isRetitlingSession(sessionId), false);
 });

@@ -442,6 +442,26 @@ export function readSessionWindow(
   return scanForAnchor(logPath, at, limit, include);
 }
 
+/**
+ * The newest `limit` included records within the log's last `maxBytes`, never
+ * falling back to a fuller scan: a caller that must not stall the server on a
+ * tool-heavy log takes fewer records instead (`/rename`'s naming context).
+ */
+export function readSessionTailWithin(
+  logPath: string,
+  maxBytes: number,
+  limit: number,
+  include: IncludeOptions,
+): SessionRecord[] {
+  const size = statSync(logPath).size;
+  return collectRingBufferFromPosition(
+    logPath,
+    Math.max(0, size - maxBytes),
+    limit,
+    include,
+  ).records;
+}
+
 function scanForward(
   logPath: string,
   limit: number,

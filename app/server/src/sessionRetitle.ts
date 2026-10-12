@@ -21,11 +21,14 @@ import { taskNamingReference } from "./taskNaming.ts";
 import { findOriginTask, readTask } from "./tasks.ts";
 import {
   includeOptions,
+  readSessionTailWithin,
   readSessionWindow,
 } from "./tools/sessions/sessionInspection.ts";
 
 /** Log records read from the end of the session (visible text only). */
 const RETITLE_RECORD_LIMIT = 40;
+/** The furthest back from the log's end the recent turns are looked for. */
+const RETITLE_TAIL_MAX_BYTES = 1024 * 1024;
 /** Ceiling on one prompt or reply; its opening states what it is about. */
 const RETITLE_ENTRY_MAX_CHARS = 1_200;
 /** Ceiling on the whole conversation handed to the naming agent. */
@@ -40,32 +43,54 @@ function clipEntry(text: string): string {
     : trimmed;
 }
 
+function visibleText(text: string): string {
+  return clipEntry(text.replace(/^\s*<memory>\s*[\s\S]*?<\/memory>\s*/i, ""));
+}
+
+/** What the naming agent reads of a session's conversation. */
+export interface NamingTranscript {
+  /** The prompt the session opened with, when the recent turns omit it. */
+  opening?: string;
+  /** The newest visible turns that fit the budget, oldest first. */
+  recent: RetitleTranscriptEntry[];
+}
+
 /**
- * The newest visible turns that fit the budget, oldest first. Model-only
- * `<memory>` context can lead a stored prompt; it is not what the user said.
+ * Bounded twice over: the tail read never scans past the log's last
+ * {@link RETITLE_TAIL_MAX_BYTES}, so a tool-heavy log yields fewer turns rather
+ * than a full parse on the server thread, and the opening prompt comes from a
+ * scan that stops at the first visible record. Model-only `<memory>` context
+ * can lead a stored prompt; it is not what the user said.
  */
-export function recentTranscript(sessionId: string): RetitleTranscriptEntry[] {
+export function namingTranscript(sessionId: string): NamingTranscript {
   const logPath = canonicalSessionLogPath(sessionId);
-  if (!existsSync(logPath)) return [];
-  const { records } = readSessionWindow(
+  if (!existsSync(logPath)) return { recent: [] };
+  const include = includeOptions({});
+  const tail = readSessionTailWithin(
     logPath,
-    "latest",
+    RETITLE_TAIL_MAX_BYTES,
     RETITLE_RECORD_LIMIT,
-    includeOptions({}),
+    include,
   );
-  const out: RetitleTranscriptEntry[] = [];
+  const recent: RetitleTranscriptEntry[] = [];
+  const kept = new Set<string>();
   let budget = RETITLE_TRANSCRIPT_MAX_CHARS;
-  for (const record of [...records].reverse()) {
+  for (const record of [...tail].reverse()) {
     if (record.role === "tool") continue;
-    const text = clipEntry(
-      record.text.replace(/^\s*<memory>\s*[\s\S]*?<\/memory>\s*/i, ""),
-    );
+    const text = visibleText(record.text);
     if (!text) continue;
     if (text.length > budget) break;
     budget -= text.length;
-    out.push({ role: record.role, text });
+    kept.add(record.entryId);
+    recent.push({ role: record.role, text });
   }
-  return out.reverse();
+  recent.reverse();
+  const [first] = readSessionWindow(logPath, "start", 1, include).records;
+  const opening =
+    first?.role === "user" && !kept.has(first.entryId)
+      ? visibleText(first.text)
+      : undefined;
+  return { ...(opening ? { opening } : {}), recent };
 }
 
 /** The session's origin Task, as naming context and the exact title prefix. */
@@ -87,8 +112,9 @@ function originTaskNaming(sessionId: string) {
  * Generate and apply a new title. `rename` persists it through the engine that
  * holds the session; `changed` re-broadcasts the list whenever the pending
  * state or the title moved. Resolves to the applied title, or undefined when a
- * manual rename or a newer `/rename` overtook this run. Failures throw after
- * the pending state is cleared, leaving the old title in place.
+ * manual rename or a newer `/rename` overtook this run — which then reports
+ * nothing, failures included. Otherwise a failure throws after the pending
+ * state is cleared, leaving the old title in place.
  */
 export async function retitleSession(input: {
   sessionId: string;
@@ -100,20 +126,32 @@ export async function retitleSession(input: {
   const token = beginSessionRetitle(sessionId);
   await input.changed();
   try {
-    const guidance = input.guidance
-      ?.trim()
-      .slice(0, RETITLE_GUIDANCE_MAX_CHARS);
-    const currentTitle = sessionStore.get(sessionId)?.title;
-    const title = await regenerateSessionTitle(
-      {
-        sessionId,
-        ...(currentTitle ? { currentTitle } : {}),
-        transcript: recentTranscript(sessionId),
-        ...(guidance ? { guidance } : {}),
-        ...originTaskNaming(sessionId),
-      },
-      getSettings().sessionNaming,
-    );
+    let title: string;
+    try {
+      const transcript = namingTranscript(sessionId);
+      if (!transcript.opening && !transcript.recent.length)
+        throw new Error(
+          "Nothing to name yet — this session has no conversation.",
+        );
+      const guidance = input.guidance
+        ?.trim()
+        .slice(0, RETITLE_GUIDANCE_MAX_CHARS);
+      const currentTitle = sessionStore.get(sessionId)?.title;
+      title = await regenerateSessionTitle(
+        {
+          sessionId,
+          ...(currentTitle ? { currentTitle } : {}),
+          ...(transcript.opening ? { opening: transcript.opening } : {}),
+          transcript: transcript.recent,
+          ...(guidance ? { guidance } : {}),
+          ...originTaskNaming(sessionId),
+        },
+        getSettings().sessionNaming,
+      );
+    } catch (err) {
+      if (!ownsSessionRetitle(sessionId, token)) return undefined;
+      throw err;
+    }
     if (!ownsSessionRetitle(sessionId, token)) return undefined;
     // Spent before renaming, so no broadcast shows the new title as pending.
     endSessionRetitle(sessionId, token);
