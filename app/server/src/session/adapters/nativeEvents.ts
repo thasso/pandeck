@@ -5,9 +5,32 @@ import type {
   AdapterEvent,
   ProviderActivityKind,
   ProviderRunId,
+  RunFailureFacts,
 } from "./contract.ts";
 
 export type AdapterEventListener = (event: AdapterEvent) => void;
+
+/**
+ * Who an event emitted now belongs to: the open run, or — with none open —
+ * nobody (`unowned`), which every consumer ignores.
+ */
+function ownership(
+  run: ProviderRunId | undefined,
+): { run: ProviderRunId } | { unowned: true } {
+  return run !== undefined ? { run } : { unowned: true };
+}
+
+/** A failed run's message and, when the harness classified it, its facts. */
+function runFailureFields(options: {
+  errorMessage?: string;
+  failure?: RunFailureFacts;
+}): { errorMessage?: string; failure?: RunFailureFacts } {
+  if (!options.errorMessage) return {};
+  return {
+    errorMessage: options.errorMessage,
+    ...(options.failure ? { failure: options.failure } : {}),
+  };
+}
 
 /**
  * Small event source used by in-process harnesses to emit the runtime adapter
@@ -192,13 +215,16 @@ export class NativeAdapterEventSource {
   runCompleted(
     stopReason: "end" | "error" | "aborted",
     errorMessage?: string,
+    failure?: RunFailureFacts,
   ): void {
     this.flushToolCompletions();
-    this.closeRun();
+    const run = this.closeRun();
     this.emit({
       type: "runCompleted",
       stopReason,
       ...(errorMessage ? { errorMessage } : {}),
+      ...(errorMessage && failure ? { failure } : {}),
+      ...ownership(run),
     });
     this.resetTurn();
   }
@@ -209,7 +235,11 @@ export class NativeAdapterEventSource {
       model?: string;
       usage?: AgentUsage;
       errorMessage?: string;
+      /** Structured facts about `errorMessage`, when the harness has them. */
+      failure?: RunFailureFacts;
       aborted?: boolean;
+      /** The abort was asked for, not the provider's own (see the contract). */
+      abortRequested?: boolean;
       /** Native id of the message this turn ended on — the fork/resume anchor. */
       providerMessageId?: string;
     } = {},
@@ -220,11 +250,13 @@ export class NativeAdapterEventSource {
         stopReason: "aborted",
       });
       this.flushToolCompletions();
-      this.closeRun();
+      const run = this.closeRun();
       this.emit({
         type: "runCompleted",
         stopReason: options.errorMessage ? "error" : "aborted",
-        ...(options.errorMessage ? { errorMessage: options.errorMessage } : {}),
+        ...runFailureFields(options),
+        ...(options.abortRequested ? { abortRequested: true as const } : {}),
+        ...ownership(run),
       });
       this.resetTurn();
       return;
@@ -244,11 +276,12 @@ export class NativeAdapterEventSource {
       ...(stopReason ? { stopReason } : {}),
     });
     this.flushToolCompletions();
-    this.closeRun();
+    const run = this.closeRun();
     this.emit({
       type: "runCompleted",
       stopReason: options.errorMessage ? "error" : "end",
-      ...(options.errorMessage ? { errorMessage: options.errorMessage } : {}),
+      ...runFailureFields(options),
+      ...ownership(run),
     });
     this.resetTurn();
   }
@@ -259,10 +292,12 @@ export class NativeAdapterEventSource {
       model?: string;
       usage?: AgentUsage;
       errorMessage?: string;
+      failure?: RunFailureFacts;
       stopReason?: "aborted" | "error";
       providerMessageId?: string;
     },
   ): void {
+    const run = this.currentRun();
     this.emit({
       type: "messageCompleted",
       streamId,
@@ -283,12 +318,36 @@ export class NativeAdapterEventSource {
       // durably on the assistant entry and rendered inline in that session's chat
       // (not only as a transient banner that a later broadcast can clear).
       ...(options.errorMessage ? { error: options.errorMessage } : {}),
+      ...(options.errorMessage && options.failure
+        ? { failure: options.failure }
+        : {}),
+      // The run it belongs to, so the runtime can tell a straggler of an
+      // earlier run from the open one before acting on a failure in it.
+      ...ownership(run),
     });
   }
 
-  /** The turn is over: nothing the harness emits from here belongs to its run. */
-  private closeRun(): void {
+  /**
+   * The open run has failed, and the harness is about to tell its viewers:
+   * emitted BEFORE that broadcast so the runtime records the failure first.
+   */
+  runFailing(errorMessage: string, failure?: RunFailureFacts): void {
+    this.emit({
+      type: "runFailing",
+      errorMessage,
+      ...(failure ? { failure } : {}),
+      ...ownership(this.currentRun()),
+    });
+  }
+
+  /**
+   * The turn is over: nothing the harness emits from here belongs to its run.
+   * Returns the run it closed, which the closing event still names.
+   */
+  private closeRun(): ProviderRunId | undefined {
+    const run = this.currentRun();
     this.openRun = undefined;
+    return run;
   }
 
   private flushToolCompletions(): void {

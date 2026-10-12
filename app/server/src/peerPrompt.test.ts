@@ -2044,7 +2044,7 @@ describe("interruption notice to the sender", () => {
     );
   });
 
-  it("wakes the sender with the provider's error when the recipient's turn failed", async () => {
+  it("wakes the sender with the failure's category when the recipient's turn failed", async () => {
     const sender = seed("LimitSender");
     const recipient = seed("LimitRecipient");
     const driver = driverFor(sender);
@@ -2057,12 +2057,16 @@ describe("interruption notice to the sender", () => {
     assert.ok(delivered.includes(recipient));
     assert.ok(delivered.includes("run the suite"));
     assert.ok(
-      delivered.includes("failed with a provider error"),
+      delivered.includes("the recipient's turn failed"),
       "the notice says it was a failure, not a restart",
     );
     assert.ok(
-      delivered.includes("Error: the process died"),
-      "and quotes the failure reason, which decides what to do next",
+      delivered.includes("The provider or harness failed"),
+      "and names its category, which decides what to do next",
+    );
+    assert.ok(
+      !delivered.includes("the process died"),
+      "but never quotes the provider's own wording",
     );
     assert.ok(!delivered.includes("server restarted"));
     assert.equal(driver.promptOptions.length, 1);
@@ -2095,8 +2099,12 @@ describe("interruption notice to the sender", () => {
     assert.equal(peerPromptStore.getById(message.id)?.status, "interrupted");
     const delivered = readFileSync(canonicalSessionLogPath(sender), "utf8");
     assert.ok(
-      delivered.includes("flagged for possible cybersecurity risk"),
-      "the sender learns the provider's reason without anyone draining it",
+      delivered.includes("refused the conversation's content"),
+      "the sender learns the kind of failure without anyone draining it",
+    );
+    assert.ok(
+      !delivered.includes("flagged for possible cybersecurity risk"),
+      "never the provider's wording",
     );
     assert.equal(
       peerPromptStore.getById(message.id)?.senderNotifiedAt !== undefined,
@@ -2143,8 +2151,9 @@ describe("interruption notice to the sender", () => {
     assert.equal(senderDriver.promptOptions.length, 2);
     assert.ok(
       readFileSync(canonicalSessionLogPath(sender), "utf8").includes(
-        `${second} refused`,
+        `session \`${second}\``,
       ),
+      "the second notice names the second failed recipient",
     );
   });
 
@@ -2407,7 +2416,7 @@ describe("interruption notice to the sender", () => {
 
     const log = readFileSync(canonicalSessionLogPath(sender), "utf8");
     assert.ok(
-      log.indexOf("something newer") < log.indexOf("interruption notice"),
+      log.indexOf("something newer") < log.indexOf("Peer notice"),
       "queued delivery comes first, so the notice lands on a session already holding its new work",
     );
   });

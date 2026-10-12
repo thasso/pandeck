@@ -158,6 +158,7 @@ test("a run can complete between attempts without duplicating its last message",
   assert.deepEqual(events.at(-1), {
     type: "runCompleted",
     stopReason: "aborted",
+    run: 1,
   });
 });
 
@@ -180,6 +181,7 @@ test("non-user aborted turns retain their provider error and surface as failures
     type: "runCompleted",
     stopReason: "error",
     errorMessage: "Request was aborted",
+    run: 1,
   });
 });
 

@@ -27,6 +27,7 @@ import type {
   PromptableAdapter,
   PromptOptions,
   ProviderRunId,
+  RunFailureFacts,
 } from "../adapters/contract.ts";
 import { isDetachedAdapter } from "../adapters/detached.ts";
 import { contextInfoFromSnapshot, type StatsOptions } from "./stats.ts";
@@ -110,6 +111,42 @@ export function setSessionIdleHook(
   fn: ((sessionId: string) => void) | undefined,
 ): void {
   idleHook = fn;
+}
+
+/** One turn that ended in failure, as {@link setRunFailureHook} receives it. */
+export interface RunFailureReport {
+  sessionId: string;
+  /**
+   * The failed turn's durable run id (`run.started`) — the identity a consumer
+   * deduplicates on, so a repeated report of one turn is recognizable.
+   */
+  runId: string;
+  origin: PromptOrigin | undefined;
+  /** The harness's wording. In-memory only: a consumer must not persist it. */
+  errorMessage: string | undefined;
+  failure: RunFailureFacts | undefined;
+  /** When the runtime first saw the failure; a retried report keeps it. */
+  at: number;
+}
+
+/**
+ * Notified once per failed turn, synchronously and BEFORE anything else learns
+ * of it: before the turn's error entry is appended or announced, before the
+ * run's closing marker, `runStatus` and {@link subscribeSessionRunCompleted}.
+ * A consumer that persists a consequence here therefore never loses it to a
+ * crash between the failure and a listener. A hook that THROWS stored nothing
+ * anywhere: the runtime keeps the report in memory and retries it at every
+ * turn boundary (a process exit loses it). What the hook decided at the
+ * failure is the hook's to keep across those retries. An aborted turn, or one
+ * an abort was asked of, never reaches
+ * it, and neither does a straggler of an earlier provider run. Kept as a seam
+ * so the runtime layer does not depend on the peer-prompt engine.
+ */
+let runFailureHook: ((report: RunFailureReport) => void) | undefined;
+export function setRunFailureHook(
+  fn: ((report: RunFailureReport) => void) | undefined,
+): void {
+  runFailureHook = fn;
 }
 
 /**
@@ -231,6 +268,20 @@ export class LiveRuntimeSession {
   private turnPromptEntryIds = new Set<string>();
   /** Identity of the open turn's durable run bracket, while one is open. */
   private turnRunId: string | undefined;
+  /** The run whose failure was last recorded, so one turn records once. */
+  private recordedFailureRunId: string | undefined;
+  /**
+   * Failures the hook could not make durable anywhere (it threw), oldest
+   * first. Memory is all that holds them, so they are retried at every turn
+   * boundary until the hook takes them; a process exit loses them.
+   */
+  private unrecordedFailures: RunFailureReport[] = [];
+  /** The provider run the open turn belongs to, once one announced itself. */
+  private turnProviderRun: ProviderRunId | undefined;
+  /** The newest provider run known to be over; nothing at or below it is open. */
+  private lastClosedProviderRun: ProviderRunId = 0;
+  /** An abort was asked of the open turn: how it ends is the abort's doing. */
+  private abortRequested = false;
   /**
    * Why the open turn is running. A visible human steer takes precedence over
    * its earlier trigger: once the user joins a turn, its result is theirs.
@@ -285,6 +336,8 @@ export class LiveRuntimeSession {
     this.adapter = adapter;
     // A new adapter numbers its runs afresh.
     this.lastProgressRun = 0;
+    this.lastClosedProviderRun = 0;
+    this.turnProviderRun = undefined;
     // The turn boundary follows the live log, not the old adapter: whatever the
     // detached view rendered predates anything this harness will run.
     this.turnStartSeq = this.log.seqCursor;
@@ -310,6 +363,10 @@ export class LiveRuntimeSession {
    */
   private beginTurn(origin: PromptOrigin | undefined): void {
     if (this.turnOpen) return;
+    // A failure nothing could store yet gets another attempt.
+    this.retryUnrecordedFailures();
+    this.turnProviderRun = undefined;
+    this.abortRequested = false;
     this.turnStartSeq = this.log.seqCursor;
     this.turnPromptEntryIds = new Set();
     this.turnOrigin = origin;
@@ -331,18 +388,100 @@ export class LiveRuntimeSession {
    * completion that ended the turn, and is reconciled against it. Called from
    * both ends a run can finish at — the observed completion event and the
    * prompt's own settlement — because not every adapter emits both. The
-   * `turnOpen` guard is what keeps the closing marker single when both fire.
+   * `turnOpen` guard is what keeps the closing marker single when both fire;
+   * `only` keeps a settlement from closing a turn other than its own.
    */
-  private endTurn(outcome: "ended" | "aborted" = "ended"): void {
+  private endTurn(outcome: "ended" | "aborted" = "ended", only?: string): void {
     if (!this.turnOpen) return;
+    if (only !== undefined && this.turnRunId !== only) return;
     this.turnOpen = false;
     const runId = this.turnRunId;
     this.turnRunId = undefined;
-    if (runId)
-      this.log.append({
-        type: outcome === "aborted" ? "run.aborted" : "run.ended",
-        runId,
-      });
+    if (!runId) return;
+    this.retryUnrecordedFailures();
+    this.log.append({
+      type: outcome === "aborted" ? "run.aborted" : "run.ended",
+      runId,
+    });
+  }
+
+  /** The open turn's run id, if a turn is open. */
+  private openRunId(): string | undefined {
+    return this.turnOpen ? this.turnRunId : undefined;
+  }
+
+  /**
+   * Whether an event belongs to a run that is already over, or to another run
+   * than the open turn's. Such a straggler must not fail or end the turn open
+   * now. An event its emitter marked `unowned` — a native completion with no
+   * run open — belongs to no turn at all. An event of an adapter that numbers
+   * no runs is the open turn's, as it always was.
+   */
+  private isStaleRun(
+    run: ProviderRunId | undefined,
+    unowned?: boolean,
+  ): boolean {
+    if (unowned) return true;
+    if (run === undefined) return false;
+    if (run <= this.lastClosedProviderRun) return true;
+    return this.turnProviderRun !== undefined && run !== this.turnProviderRun;
+  }
+
+  /**
+   * Report run `runId`'s failure to {@link runFailureHook}, once. `runId` is the
+   * run the CALLER saw fail — the open turn's for a completion event, the
+   * prompt's own for its result — never whichever turn happens to be open by
+   * the time a late answer arrives. A turn an abort was asked of reports
+   * nothing: how it ends is the abort's doing.
+   */
+  private reportRunFailure(
+    runId: string | undefined,
+    errorMessage: string | undefined,
+    failure: RunFailureFacts | undefined,
+  ): void {
+    if (runId === undefined || this.abortRequested) return;
+    if (this.recordedFailureRunId === runId) return;
+    this.unrecordedFailures = this.unrecordedFailures.filter(
+      (r) => r.runId !== runId,
+    );
+    this.recordFailure({
+      sessionId: this.sessionId,
+      runId,
+      origin: this.turnOrigin,
+      errorMessage,
+      failure,
+      at: Date.now(),
+    });
+  }
+
+  /**
+   * Hand one failure to the hook. Only a hook that returned counts as
+   * recorded; one that threw keeps the failure for another attempt and says
+   * so, naming the run but never the provider's words.
+   */
+  private recordFailure(report: RunFailureReport): boolean {
+    try {
+      runFailureHook?.(report);
+    } catch (err) {
+      if (!this.unrecordedFailures.some((r) => r.runId === report.runId))
+        this.unrecordedFailures.push(report);
+      // Never the error itself: its name, message and stack are its thrower's.
+      void err;
+      console.error(
+        `[runtime] could not store the failure of run ${report.runId} in ${this.sessionId}; it is kept in memory and retried`,
+      );
+      return false;
+    }
+    this.recordedFailureRunId = report.runId;
+    this.unrecordedFailures = this.unrecordedFailures.filter(
+      (r) => r.runId !== report.runId,
+    );
+    return true;
+  }
+
+  private retryUnrecordedFailures(): void {
+    for (const report of [...this.unrecordedFailures])
+      this.recordFailure(report);
   }
 
   /* ------------------------------ run state ------------------------------ */
@@ -518,6 +657,9 @@ export class LiveRuntimeSession {
     // model-only memory and structured context are prepended only to provider
     // input so the visible transcript never presents them as user-authored.
     this.beginTurn(turnOrigin);
+    // The run this prompt belongs to. A late result of it must neither fail
+    // nor close a turn that opened after it.
+    const ownRunId = this.turnRunId;
     const entryId = this.appendUserEntry(
       text,
       options,
@@ -549,19 +691,38 @@ export class LiveRuntimeSession {
     this.turnPromptEntryIds.add(entryId);
     this.setRunning(true);
     try {
-      const result = await this.adapter.prompt(modelText, {
-        ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-        ...adapterOpts,
-      });
+      let result: AgentRunResult;
+      try {
+        result = await this.adapter.prompt(modelText, {
+          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+          ...adapterOpts,
+        });
+      } catch (error) {
+        // The prompt is already in the log, so a harness that throws instead
+        // of answering ended this turn as surely as a failed run does.
+        this.reportRunFailure(
+          this.openRunId() === ownRunId ? ownRunId : undefined,
+          error instanceof Error ? error.message : String(error),
+          undefined,
+        );
+        throw error;
+      }
       if (result.stopReason === "error") {
+        // An adapter that resolves without emitting its completion event.
+        this.reportRunFailure(
+          this.openRunId() === ownRunId ? ownRunId : undefined,
+          result.errorMessage,
+          undefined,
+        );
         throw new RunFailedError(
           result.errorMessage ?? "Unknown provider error",
           result.code,
         );
       }
     } finally {
-      this.endTurn();
-      this.setRunning(false);
+      this.endTurn("ended", ownRunId);
+      // A turn that opened after this one ended is not this prompt's to idle.
+      if (!this.turnOpen) this.setRunning(false);
     }
   }
 
@@ -634,6 +795,7 @@ export class LiveRuntimeSession {
   }
 
   abort(): void | Promise<void> {
+    if (this.turnOpen) this.abortRequested = true;
     return this.adapter.abort();
   }
 
@@ -649,6 +811,12 @@ export class LiveRuntimeSession {
         // is observing it (slash-command synthetic turns, defensive direct calls)
         // — including the turn boundary a post-turn scan is reconciled against.
         this.beginTurn(this.pendingAssistantOrigin);
+        if (
+          event.run !== undefined &&
+          this.turnProviderRun === undefined &&
+          event.run > this.lastClosedProviderRun
+        )
+          this.turnProviderRun = event.run;
         this.setRunning(true);
         const stream: StreamingMessageEntry = {
           streamId: event.streamId,
@@ -684,6 +852,13 @@ export class LiveRuntimeSession {
         return;
       }
       case "messageCompleted": {
+        // A failed turn's error entry is the first anyone hears of the failure,
+        // so the failure is recorded before it is appended or announced.
+        if (
+          event.stopReason === "error" &&
+          !this.isStaleRun(event.run, event.unowned)
+        )
+          this.reportRunFailure(this.openRunId(), event.error, event.failure);
         // Remove the transient stream BEFORE broadcasting the durable replacement.
         this.streaming.delete(event.streamId);
         this.emit({ type: "messageCompleted", streamId: event.streamId });
@@ -804,7 +979,32 @@ export class LiveRuntimeSession {
         });
         return;
       }
+      case "runFailing":
+        // The harness is about to tell its viewers; the failure comes first.
+        if (!this.isStaleRun(event.run, event.unowned))
+          this.reportRunFailure(
+            this.openRunId(),
+            event.errorMessage,
+            event.failure,
+          );
+        return;
       case "runCompleted": {
+        // A straggler of a run that is already over neither fails nor ends
+        // the turn open now.
+        if (this.isStaleRun(event.run, event.unowned)) return;
+        if (event.run !== undefined)
+          this.lastClosedProviderRun = Math.max(
+            this.lastClosedProviderRun,
+            event.run,
+          );
+        // Ahead of everything this completion writes or tells anyone. A run
+        // ended on an abort someone asked for keeps an error only as context.
+        if (event.stopReason === "error" && !event.abortRequested)
+          this.reportRunFailure(
+            this.openRunId(),
+            event.errorMessage,
+            event.failure,
+          );
         // Clear any streams the provider left dangling on a failed/aborted run.
         if (event.stopReason !== "end") {
           this.streaming.clear();

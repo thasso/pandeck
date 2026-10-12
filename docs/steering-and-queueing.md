@@ -150,16 +150,17 @@ and survives a harness release, a reload and a restart. Fresh sessions start
 unheld.
 
 - **What it holds.** Every turn the user did not just ask for. That is
-  everything automatic — peer prompts and interruption notices, background-work
-  updates (including the Claude CLI waking itself for its own background task),
-  approval outcomes, question answers and other card handoffs, a post-reload
-  continuation — and the user's own OLDER work scheduled for later: drafts in
-  this queue (shown paused) and the permanent Assistant's intake. Human
-  provenance is not authority: a message typed before the Stop and queued is
-  held like an agent's. Approvals still EXECUTE under their grants; only the
-  turn that would tell the agent waits. Child sessions and background commands
-  keep running, and deadline expiry is unchanged: the work stops at its frozen
-  deadline, and the fact waits here for Resume like any other update.
+  everything automatic — peer prompts, interruption notices and delegation
+  failure notices (`delegation-failure-notices.md`), background-work updates
+  (including the Claude CLI waking itself for its own background task), approval
+  outcomes, question answers and other card handoffs, a post-reload continuation
+  — and the user's own OLDER work scheduled for later: drafts in this queue
+  (shown paused) and the permanent Assistant's intake. Human provenance is not
+  authority: a message typed before the Stop and queued is held like an agent's.
+  Approvals still EXECUTE under their grants; only the turn that would tell the
+  agent waits. Child sessions and background commands keep running, and deadline
+  expiry is unchanged: the work stops at its frozen deadline, and the fact waits
+  here for Resume like any other update.
 - **Where.** `runtimePrompt.ts` refuses any turn on a held session that does not
   carry the user's resume authority for the current hold, at entry and again
   after its last await. Each drain also reads the hold before it claims a batch

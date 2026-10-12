@@ -1,4 +1,5 @@
 import type { ProviderErrorInfo, ProviderErrorKind } from "@assistant/shared";
+import type { RunFailureFacts } from "./session/adapters/contract.ts";
 
 export interface ProviderErrorContext {
   provider?: string;
@@ -58,6 +59,34 @@ export function analyzeProviderError(
     ...codex,
   };
 }
+
+/**
+ * The structured part of a classified failure, for consumers that must not
+ * read the provider's prose (`delegationFailureNotice.ts`). The reset time is
+ * passed on only for a usage or rate limit whose provider stated it as a field
+ * (`resetAt`), never derived from a relative duration or from wording.
+ */
+export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
+  const limited = info.kind === "quota" || info.kind === "rate_limit";
+  const resetAtMs =
+    limited && typeof info.resetAt === "number"
+      ? info.resetAt * 1000
+      : undefined;
+  return {
+    kind: info.kind,
+    // Checked after the conversion: seconds that look fine can still overflow
+    // into a number no `Date` represents.
+    ...(resetAtMs !== undefined &&
+    Number.isFinite(resetAtMs) &&
+    resetAtMs > 0 &&
+    resetAtMs <= MAX_DATE_MS
+      ? { resetAtMs }
+      : {}),
+  };
+}
+
+/** The largest instant a JavaScript `Date` represents. */
+const MAX_DATE_MS = 8.64e15;
 
 const RAW_DISPLAY_LIMIT = 400;
 

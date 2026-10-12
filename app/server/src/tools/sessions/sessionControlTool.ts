@@ -8,6 +8,7 @@
  * takeover revokes that authority.
  */
 import { sessionStore } from "../../db/sessionStore.ts";
+import { noteDelegationStandDown } from "../../delegationFailureNotice.ts";
 import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
 import { cancelQueuedPeerPrompts } from "../../peerPrompt.ts";
 import { sessionRuntime } from "../../session/runtimeInstance.ts";
@@ -111,6 +112,9 @@ function makeSessionControlTool() {
         : [];
       const control = runtime();
       const wasRunning = control.isRunning(targetSessionId);
+      // Whatever the harness reports for the turn this stops, the coordinator
+      // asked for it: no failure notice comes back to it.
+      if (wasRunning) noteDelegationStandDown(targetSessionId);
       if (wasRunning) await control.abort(targetSessionId);
       const queueText = clearQueue
         ? ` Cancelled ${cancelled.length} queued prompt${cancelled.length === 1 ? "" : "s"} first.`

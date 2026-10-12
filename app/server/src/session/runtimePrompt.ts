@@ -72,6 +72,13 @@ export type RuntimePromptFacadeOptions = RuntimePromptOptions & {
    * carries one; queued, scheduled and automatic work never does.
    */
   resumeHold?: HumanResumeToken;
+  /**
+   * A last synchronous check after every await, right before the turn is
+   * appended: throwing refuses the turn and nothing reaches the session. For a
+   * prompt whose CONTENT depends on state that may change while it waits — a
+   * failure notice whose delegation the user may end meanwhile.
+   */
+  admit?: () => void;
 };
 
 /**
@@ -203,8 +210,9 @@ export async function promptRuntimeSessionWithRuntime(
   runtime: SessionRuntime,
   driver: RuntimePromptDriver,
   text: string,
-  options: RuntimePromptFacadeOptions = {},
+  facadeOptions: RuntimePromptFacadeOptions = {},
 ): Promise<void> {
+  const { admit, ...options } = facadeOptions;
   // BEFORE the runtime session is ensured and before any append: a refused turn
   // must leave no trace of itself in the session.
   assertSessionWorktreePresent(driver.sessionId);
@@ -231,6 +239,8 @@ export async function promptRuntimeSessionWithRuntime(
     // the runtime session exists or any user entry can be appended.
     await sessionSkills(driver.sessionId, driver.agentType);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
+    // Nothing below awaits before the append.
+    admit?.();
     return await runPromptWithRuntime(
       runtime,
       driver,

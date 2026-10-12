@@ -18,7 +18,11 @@ import type {
   PromptDelivery,
   SessionConfigModel,
 } from "@assistant/shared/session";
-import type { PromptAttachment, ServerMessage } from "@assistant/shared";
+import type {
+  PromptAttachment,
+  ProviderErrorKind,
+  ServerMessage,
+} from "@assistant/shared";
 import type { ProviderBinding } from "../log/identity.ts";
 import type { HostCommandCard } from "../log/rawEntry.ts";
 import type { MessageDelta } from "@assistant/shared/runtime";
@@ -53,9 +57,14 @@ export type AdapterEvent =
       stopReason?: AgentStopReason;
       /** Human-readable provider error, present when the turn ended in `error`. */
       error?: string;
+      /** Structured facts about `error`, when the harness classified it. */
+      failure?: RunFailureFacts;
       providerMessageId?: string;
       startedAt?: string;
       completedAt?: string;
+      run?: ProviderRunId;
+      /** Emitted with no run open: it belongs to no turn (see `runCompleted`). */
+      unowned?: true;
     }
   | {
       type: "toolStarted";
@@ -176,6 +185,39 @@ export type AdapterEvent =
       type: "runCompleted";
       stopReason: "end" | "error" | "aborted";
       errorMessage?: string;
+      /** What the harness knew about an `error` as structured fields. */
+      failure?: RunFailureFacts;
+      /**
+       * The run ended on an abort someone ASKED for (a Stop, a stand-down). An
+       * `error` beside it is context the run retained — an earlier failed
+       * attempt — not why it stopped. A provider-side abort never sets it.
+       */
+      abortRequested?: true;
+      /**
+       * The provider run this completion closes. A consumer compares it with
+       * the run its open turn belongs to, so a straggler of an earlier run can
+       * neither fail nor end a newer one.
+       */
+      run?: ProviderRunId;
+      /**
+       * The emitter had no run open: a repeat or straggler of a run it already
+       * closed. It belongs to no turn — not even one whose first message has
+       * not arrived yet — and no consumer may act on it.
+       */
+      unowned?: true;
+    }
+  /**
+   * The harness has decided the open run failed and is about to tell its own
+   * viewers. Emitted BEFORE any harness-facing broadcast of that failure, so
+   * the runtime records it first. Never emitted for an abort someone asked
+   * for. The run's completion still follows.
+   */
+  | {
+      type: "runFailing";
+      errorMessage?: string;
+      failure?: RunFailureFacts;
+      run?: ProviderRunId;
+      unowned?: true;
     }
   /** Model/reasoning selection changed (e.g. provider applied a setModel). */
   | {
@@ -183,6 +225,17 @@ export type AdapterEvent =
       model?: SessionConfigModel;
       reasoning?: string;
     };
+
+/**
+ * A failed run's classification as the harness determined it, carried beside
+ * the human-readable message so a consumer never has to re-read that prose.
+ * `resetAtMs` is present only when the provider reported the limit's reset as
+ * a structured field; it is never derived from wording.
+ */
+export interface RunFailureFacts {
+  kind: ProviderErrorKind;
+  resetAtMs?: number;
+}
 
 /**
  * A provider run as its harness numbers it: opened when the harness starts

@@ -49,6 +49,7 @@ import {
 import {
   analyzeProviderError,
   providerErrorDisplayText,
+  runFailureFacts,
   shouldSuppressProviderRetry,
 } from "../providerErrors.ts";
 import {
@@ -741,6 +742,13 @@ export class PiLiveSession implements LiveSession {
           const finalError = this.providerErrorInfo(event.finalError);
           if (this.awaitingRetryContinuation)
             this.retryAttemptError = providerErrorDisplayText(finalError);
+          // Retries are exhausted: the run has failed, and the runtime records
+          // that before the notice below tells anyone.
+          if (!this.explicitAbortRequested)
+            this.adapterEvents.runFailing(
+              providerErrorDisplayText(finalError),
+              runFailureFacts(finalError),
+            );
           this.providerNotice(
             "error",
             `Provider retry failed. ${providerErrorDisplayText(finalError)}`,
@@ -890,6 +898,7 @@ export class PiLiveSession implements LiveSession {
         const errorInfo = this.currentAssistantErrorInfo;
         const aborted =
           this.currentAssistantAborted || this.explicitAbortRequested;
+        const abortRequested = this.explicitAbortRequested;
         this.running = false;
         this.currentAssistantId = undefined;
         this.currentAssistantError = undefined;
@@ -901,6 +910,13 @@ export class PiLiveSession implements LiveSession {
         this.liveTurn = undefined;
         this.updatedAt = Date.now();
         this.syncRegistry();
+        // A failed run is recorded before anyone hears of it — not one whose
+        // abort was asked for, whose error is an earlier attempt's.
+        if (error && !abortRequested && (id || retryEndedBetweenAttempts))
+          this.adapterEvents.runFailing(
+            error,
+            errorInfo ? runFailureFacts(errorInfo) : undefined,
+          );
         if (id) {
           this.broadcast({
             type: "assistantEnd",
@@ -917,7 +933,11 @@ export class PiLiveSession implements LiveSession {
             ...(model ? { model } : {}),
             ...(usage ? { usage } : {}),
             ...(error ? { errorMessage: error } : {}),
+            ...(error && errorInfo
+              ? { failure: runFailureFacts(errorInfo) }
+              : {}),
             ...(aborted ? { aborted: true } : {}),
+            ...(abortRequested ? { abortRequested: true } : {}),
           });
         } else if (retryEndedBetweenAttempts) {
           // A Stop or retry-preparation failure can settle without another
@@ -1279,24 +1299,32 @@ export class PiLiveSession implements LiveSession {
 
   private finishPromptError(err: unknown, wasRunning: boolean): void {
     const message = `Failed to send prompt: ${errorText(err)}`;
-    this.notice("error", message);
 
     // If this was a queued steer/follow-up while the agent is already running,
-    // keep the active turn intact and only surface the banner above.
-    if (wasRunning && this.running && this.currentAssistantId) return;
+    // keep the active turn intact and only surface the banner.
+    if (wasRunning && this.running && this.currentAssistantId) {
+      this.notice("error", message);
+      return;
+    }
 
     this.running = false;
     const sessionId = this.session.sessionId;
     const retryEndedBetweenAttempts =
       !this.currentAssistantId && this.awaitingRetryContinuation;
-    if (retryEndedBetweenAttempts) {
+    const id = retryEndedBetweenAttempts
+      ? undefined
+      : (this.currentAssistantId ?? `a${++this.idCounter}`);
+    if (id && !this.currentAssistantId) {
+      this.broadcast({ type: "assistantStart", sessionId, id });
+      this.adapterEvents.messageStarted(id);
+    }
+    // The run is open now; it is recorded as failed before the banner or the
+    // turn's end tells anyone.
+    this.adapterEvents.runFailing(message);
+    this.notice("error", message);
+    if (!id) {
       this.adapterEvents.runCompleted("error", message);
     } else {
-      const id = this.currentAssistantId ?? `a${++this.idCounter}`;
-      if (!this.currentAssistantId) {
-        this.broadcast({ type: "assistantStart", sessionId, id });
-        this.adapterEvents.messageStarted(id);
-      }
       this.broadcast({ type: "assistantEnd", sessionId, id, error: message });
       this.adapterEvents.messageCompleted(id, { errorMessage: message });
     }

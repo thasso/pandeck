@@ -38,6 +38,28 @@ import type {
 import { peerPromptExcerpt } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import {
+  delegationFailureNoticeStore,
+  type DelegationFailureNotice,
+} from "./db/delegationFailureNoticeStore.ts";
+import {
+  categoryForFailureReason,
+  clearDelegationStandDown,
+  delegationFailureNoticeLines,
+  deliverableNotices,
+  failureSentence,
+  PEER_NOTICE_AGENT_ID,
+  recordDeliveryFailureNotice,
+  recordRunFailureNotices,
+  journaledFailureBacklog,
+  pruneDelegationNotices,
+  replayJournaledFailures,
+} from "./delegationFailureNotice.ts";
+import {
+  setRunFailureHook,
+  subscribeSessionRunStarted,
+  type RunFailureReport,
+} from "./session/runtime/liveSession.ts";
+import {
   peerPromptStore,
   PeerPromptHopLimitError,
   type PeerPromptRecord,
@@ -53,6 +75,7 @@ import {
   SessionBusyError,
   SteerWithdrawnError,
 } from "./session/runtime/index.ts";
+import { RunFailedError } from "./session/runtime/errors.ts";
 import { readTask } from "./tasks.ts";
 import {
   promptRuntimeSession,
@@ -71,8 +94,6 @@ export const ENVELOPE_OVERHEAD_MAX = 300;
 const SENDER_TITLE_MAX = 80;
 /** How much of an interrupted prompt an interruption notice quotes back. */
 const NOTICE_PROMPT_EXCERPT_MAX = 120;
-/** How much of a provider failure reason an interruption notice quotes. */
-const NOTICE_ERROR_MAX = 1_200;
 const LEASE_MS = 60_000;
 /** Unresolved reply expectations expire after 30 days. */
 const RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -816,7 +837,7 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
   if (
     !live &&
     peerPromptStore.listPendingForRecipient(recipientId).length === 0 &&
-    peerPromptStore.interruptedOwingSenderNotice(recipientId).length === 0
+    !owesNotice(recipientId)
   )
     return;
   if (!live) {
@@ -884,65 +905,170 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
   // should already be holding whatever arrived for it since.
   if (explicitSendWaiting(recipientId) || automaticTurnsHeld(recipientId))
     return;
-  await deliverInterruptionNotice(driver, recipientId);
+  await deliverOwedNotices(driver, recipientId);
+}
+
+/** Whether a session is owed a server-generated notice of either kind. */
+function owesNotice(sessionId: string): boolean {
+  return (
+    peerPromptStore.interruptedOwingSenderNotice(sessionId).length > 0 ||
+    delegationFailureNoticeStore.hasPendingFor(sessionId)
+  );
 }
 
 /**
- * Tell a session that a prompt IT sent was cut off mid-turn, by a restart or by
- * a provider failure.
+ * A child of `report.sessionId`'s coordinators failed: record what each is owed
+ * (`delegationFailureNotice.ts`) — synchronously, from the runtime's failure
+ * hook, before the run's closing marker or any listener — and then offer each
+ * coordinator its peer drain, which delivers under the usual hold and busy
+ * rules. The wake is only a nudge: a coordinator it misses gets the notice on
+ * its next idle edge, its Resume or the next boot.
+ */
+function onChildRunFailed(report: RunFailureReport): void {
+  const written = recordRunFailureNotices(report);
+  if (written.length === 0) return;
+  queueMicrotask(() =>
+    wakeForNotice(new Set(written.map((n) => n.coordinatorSessionId))),
+  );
+}
+
+/**
+ * Route every failed turn through {@link onChildRunFailed}. Called once at
+ * boot; the returned uninstall exists for tests.
+ */
+export function installDelegationFailureNotices(): () => void {
+  setRunFailureHook(onChildRunFailed);
+  // A coordinator's stand-down covers the turn it stopped, not the next one.
+  const unsubscribe = subscribeSessionRunStarted(clearDelegationStandDown);
+  return () => {
+    setRunFailureHook(undefined);
+    unsubscribe();
+  };
+}
+
+function wakeForNotice(sessionIds: Iterable<string>): void {
+  for (const id of sessionIds) {
+    if (drainLocks.has(id)) noticeWakesPending.add(id);
+    void drainRecipient(id).catch(() => {});
+  }
+}
+
+/**
+ * Tell a session what it is owed: that a prompt IT sent was cut off mid-turn,
+ * by a restart or by a provider failure, or that work it delegated stopped on a
+ * failure (`delegationFailureNotice.ts`).
  *
  * Without this the sender simply waits: `interrupted` is terminal, the prompt
- * is never re-injected (it is already in the recipient's log), and the only
- * signal is a card state in a browser nobody may be looking at. An agent that
- * set `responseRequested` and then went idle has no way to learn that the reply
- * it is waiting for is never coming — the deadlock this releases.
+ * is never re-injected (it is already in the recipient's log), a failed child
+ * cannot report its own failure, and the only signal is a card state in a
+ * browser nobody may be looking at. An agent that set `responseRequested` and
+ * then went idle has no way to learn that the reply it is waiting for is never
+ * coming — the deadlock this releases.
  *
  * It is a NOTICE, not an instruction: it deliberately does not re-send the
- * prompt or tell the sender to. The sender knows what it asked for and whether
- * it still matters; all it was missing is the fact.
+ * prompt or tell the sender to, and it asks for no reply. The sender knows what
+ * it asked for and whether it still matters; all it was missing is the fact.
  */
-async function deliverInterruptionNotice(
+async function deliverOwedNotices(
   driver: RuntimePromptDriver,
   sessionId: string,
 ): Promise<void> {
-  if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
-    return;
-  const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
-  if (owed.length === 0) return;
-  try {
-    // The notice turn continues the interrupted request's causal chain, so a
-    // sender that re-asks or forwards in response spends the same hop budget.
-    // A failure that persists then ends at the hop limit instead of cycling
-    // failure, notice, re-ask on a fresh chain each time.
-    activeContexts.set(sessionId, noticeContext(owed));
-    // Deliberately NO `clientRequestId`. An ordinary prompt claims that dedup key
-    // BEFORE reaching the provider and keeps it when the provider then fails
-    // (only the steer-only path releases it), so a stable key would answer the
-    // next attempt "already handled" without sending anything — and the mark
-    // below would then record a delivery that never happened, leaving the sender
-    // waiting exactly as it was. Idempotence here is `sender_notified_at_ms`,
-    // which is written only from an accepted turn; concurrent drains for one
-    // session already coalesce on `drainLocks`.
-    await promptRuntimeSession(driver, buildInterruptionNotice(owed), {
-      origin: { kind: "agent", agentId: PEER_ORIGIN_AGENT_ID },
-    });
-    // Only an accepted turn consumes the notice.
-    peerPromptStore.markSenderNotified(owed.map((m) => m.id));
-    clearInterruptionNoticeRetry(sessionId);
-  } catch (err) {
-    // A Stop landed first: the rows stay owed and Resume comes back for them,
-    // so no retry is spent.
-    if (err instanceof AutomaticTurnsHeldError) return;
-    // The rows stay owed. Nothing else will come back for them on its own, so
-    // this schedules the only retry that exists.
-    console.warn(
-      `[peer] interruption notice for ${sessionId} failed:`,
-      err instanceof Error ? err.message : String(err),
-    );
-    scheduleInterruptionNoticeRetry(sessionId);
-  } finally {
-    activeContexts.delete(sessionId);
+  // A notice whose delegation the user ended while the turn was being
+  // admitted is rebuilt without it; this bounds how often that can repeat.
+  for (let attempt = 0; attempt < NOTICE_ADMISSION_ATTEMPTS; attempt += 1) {
+    if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
+      return;
+    const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
+    const delegated = deliverableNotices(sessionId);
+    if (owed.length === 0 && delegated.length === 0) return;
+    const ids = delegated.map((n) => n.id).join();
+    try {
+      // The notice turn continues the causal chain it reports on, so a sender
+      // that re-asks or forwards in response spends the same hop budget. A
+      // failure that persists then ends at the hop limit instead of cycling
+      // failure, notice, re-ask on a fresh chain each time.
+      const context = noticeContext(sessionId, owed, delegated);
+      if (context) activeContexts.set(sessionId, context);
+      // Deliberately NO `clientRequestId`. An ordinary prompt claims that dedup
+      // key BEFORE reaching the provider and keeps it when the provider then
+      // fails (only the steer-only path releases it), so a stable key would
+      // answer the next attempt "already handled" without sending anything —
+      // and the mark below would then record a delivery that never happened,
+      // leaving the sender waiting exactly as it was. Idempotence here is
+      // `sender_notified_at_ms`, which is written only from an accepted turn,
+      // and a delegation notice's `delivered_at_ms`, written as the turn is
+      // appended; concurrent drains for one session coalesce on `drainLocks`.
+      await promptRuntimeSession(driver, buildNotice(owed, delegated), {
+        origin: { kind: "agent", agentId: PEER_NOTICE_AGENT_ID },
+        // Asked once more after the last await: the user may have taken the
+        // child over, settled it or answered for it since the text was built.
+        admit: () => {
+          if (
+            deliverableNotices(sessionId)
+              .map((n) => n.id)
+              .join() !== ids
+          )
+            throw new NoticeSetChangedError();
+        },
+        // A delegation notice is a fact the coordinator now holds: retired as
+        // its turn reaches the log, so a failure of that turn — often the same
+        // limit the child hit — does not deliver it again and again.
+        onUserEntry: () => {
+          try {
+            delegationFailureNoticeStore.markDelivered(
+              delegated.map((n) => n.id),
+            );
+          } catch (err) {
+            console.warn(
+              `[peer] could not retire failure notices for ${sessionId} (${failureLabel(err)})`,
+            );
+          }
+        },
+      });
+      // Only an accepted turn consumes the interruption notice.
+      peerPromptStore.markSenderNotified(owed.map((m) => m.id));
+      clearInterruptionNoticeRetry(sessionId);
+      return;
+    } catch (err) {
+      if (err instanceof NoticeSetChangedError) continue;
+      // A Stop landed first: the rows stay owed and Resume comes back for them,
+      // so no retry is spent.
+      if (err instanceof AutomaticTurnsHeldError) return;
+      // The rows stay owed. Nothing else will come back for them on its own,
+      // so this schedules the only retry that exists. Never the error's text:
+      // a provider failure of the notice turn carries the provider's words.
+      console.warn(
+        `[peer] notice for ${sessionId} was not delivered (${failureLabel(err)}); retrying later`,
+      );
+      if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
+      return;
+    } finally {
+      activeContexts.delete(sessionId);
+    }
   }
+  if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
+}
+
+/** How many times a notice is rebuilt when its delegations change mid-admission. */
+const NOTICE_ADMISSION_ATTEMPTS = 3;
+
+/** The notices a turn was built from changed before it was appended. */
+class NoticeSetChangedError extends Error {
+  constructor() {
+    super("The owed notices changed before the notice turn was appended.");
+    this.name = "NoticeSetChangedError";
+  }
+}
+
+/**
+ * What kind of failure an error is, in fixed words: safe to log where nothing
+ * the error carries is — not its message, stack or even its `name`, which its
+ * thrower sets.
+ */
+function failureLabel(err: unknown): string {
+  if (err instanceof RunFailedError) return "provider or harness failure";
+  if (err instanceof SessionBusyError) return "session busy";
+  return "error";
 }
 
 /**
@@ -951,12 +1077,31 @@ async function deliverInterruptionNotice(
  * a recovery send spends. A send to another recipient in the notice inherits it
  * as a forward.
  */
-function noticeContext(owed: PeerPromptRecord[]): ActiveDeliveryContext {
-  const anchor = owed.reduce((a, b) =>
-    b.hop > a.hop || (b.hop === a.hop && b.createdAt > a.createdAt) ? b : a,
+function noticeContext(
+  sessionId: string,
+  owed: PeerPromptRecord[],
+  delegated: DelegationFailureNotice[],
+): ActiveDeliveryContext | undefined {
+  const anchors = [
+    ...owed.map((m) => ({
+      peerId: m.recipientSessionId,
+      conversationId: m.conversationId,
+      chainId: m.chainId,
+      hop: m.hop,
+      at: m.createdAt,
+    })),
+    ...delegated.flatMap((n) =>
+      n.anchor
+        ? [{ peerId: n.childSessionId, ...n.anchor, at: n.failedAt }]
+        : [],
+    ),
+  ].filter((a) => a.peerId !== sessionId);
+  if (anchors.length === 0) return undefined;
+  const anchor = anchors.reduce((a, b) =>
+    b.hop > a.hop || (b.hop === a.hop && b.at > a.at) ? b : a,
   );
   return {
-    senderSessionId: anchor.recipientSessionId,
+    senderSessionId: anchor.peerId,
     conversationId: anchor.conversationId,
     chainId: anchor.chainId,
   };
@@ -965,14 +1110,18 @@ function noticeContext(owed: PeerPromptRecord[]): ActiveDeliveryContext {
 /**
  * The notice envelope. Names the recipient SESSION ID, not just its title: the
  * one useful action is poking that session directly, and a title needs a
- * `session_lookup` round trip and can be ambiguous. A provider failure quotes
- * the error, because what the sender should do next depends on it.
+ * `session_lookup` round trip and can be ambiguous. A provider failure is named
+ * by its category, never quoted: the provider's wording can carry account
+ * details, URLs or request bodies that have no business in another session.
  */
-function buildInterruptionNotice(owed: PeerPromptRecord[]): string {
+function buildNotice(
+  owed: PeerPromptRecord[],
+  delegated: DelegationFailureNotice[],
+): string {
   const restarts = owed.filter((m) => m.interruptionKind !== "failure");
   const failures = owed.filter((m) => m.interruptionKind === "failure");
   const lines = [
-    "Peer-prompt interruption notice (server-generated; no session sent this).",
+    "Peer notice (server-generated; no session sent this, and it needs no reply).",
   ];
   if (restarts.length > 0) {
     lines.push(
@@ -986,16 +1135,21 @@ function buildInterruptionNotice(owed: PeerPromptRecord[]): string {
   if (failures.length > 0) {
     lines.push(
       "",
-      `${promptCount(failures)} you sent asked for a reply, and the recipient's turn failed with a provider error. No reply is coming on its own:`,
+      `${promptCount(failures)} you sent asked for a reply, and the recipient's turn failed. No reply is coming on its own:`,
       ...failures.flatMap((m) => [
         noticeLine(m),
-        `  Error: ${clip(m.failureReason ?? "unknown provider error", NOTICE_ERROR_MAX)}`,
+        `  ${failureSentence(categoryForFailureReason(m.failureReason))}`,
       ]),
       "",
-      "The prompt is in the recipient's context, but its turn ended without an answer. A usage limit or content refusal applies to the whole conversation, so re-sending to the same session usually fails the same way. Depending on the error: wait and retry, hand the work to a fresh session with a short summary that leaves the flagged material out, switch model, or tell the user.",
+      "The prompt is in the recipient's context, but its turn ended without an answer. A usage limit or content refusal applies to the whole conversation, so re-sending to the same session usually fails the same way.",
     );
   }
-  lines.push("", "Nothing further happens automatically.");
+  if (delegated.length > 0)
+    lines.push("", ...delegationFailureNoticeLines(delegated));
+  lines.push(
+    "",
+    "Nothing was retried, restarted or reassigned, and nothing further happens automatically. Decide the next step under your own instructions; when unsure, tell the user.",
+  );
   return lines.join("\n");
 }
 
@@ -1024,8 +1178,7 @@ function noticeLine(m: PeerPromptRecord): string {
  */
 function noteDrainTargetUnavailable(sessionId: string, err: unknown): void {
   markResumeFailureRetryable(sessionId, err);
-  if (peerPromptStore.interruptedOwingSenderNotice(sessionId).length > 0)
-    scheduleInterruptionNoticeRetry(sessionId);
+  if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
 }
 
 /**
@@ -1086,10 +1239,19 @@ function backoffMsFor(attempts: number): number {
 
 function retryOrFail(id: string, attempts: number, reason: string): void {
   if (attempts >= RETRY_MAX_ATTEMPTS) {
+    // The sender's notice commits with the terminal row, or neither does.
+    let notified: string[] = [];
     peerPromptStore.markFailed(
       id,
       `${reason} (giving up after ${attempts} attempts)`,
+      Date.now(),
+      (failed) => {
+        notified = recordDeliveryFailureNotice(failed).map(
+          (n) => n.coordinatorSessionId,
+        );
+      },
     );
+    if (notified.length > 0) wakeForNotice(notified);
   } else {
     peerPromptStore.markRetryable(id, reason, backoffMsFor(attempts));
   }
@@ -1102,10 +1264,18 @@ function retryOrFail(id: string, attempts: number, reason: string): void {
  * independent interval (see index.ts) and can be invoked directly by tests.
  */
 export function sweepPeerPromptRetries(now = Date.now()): void {
+  // The queue's own retries come first and never wait on the journal.
   const requeued = peerPromptStore.requeueDueRetries(now);
   for (const m of requeued) void broadcastCardUpdateFor(m);
   const recipients = new Set(requeued.map((m) => m.recipientSessionId));
   for (const id of recipients) void drainRecipient(id).catch(() => {});
+  // A failure the database refused when it happened is retried here too, a
+  // bounded batch per sweep, from the journal that kept it
+  // (`delegationFailureJournal.ts`). It reports its own trouble and never
+  // throws, so nothing above or after it is held up.
+  const replayed = replayJournaledFailures(now);
+  if (replayed.length > 0)
+    wakeForNotice(new Set(replayed.map((n) => n.coordinatorSessionId)));
 }
 
 function peerKey(messageId: string): string {
@@ -1415,13 +1585,35 @@ export function sweepExpiredLeases(now = Date.now()): void {
  * queued work, independent of any browser connection. Resumable/idle targets
  * are acquired and delivered; busy ones stay queued for their next idle.
  */
+/**
+ * Work through a journaled-failure backlog boot left for later, one bounded
+ * batch per macrotask so connections and other work run in between. Stops
+ * when nothing is left or a whole batch made no progress (the database still
+ * refuses); the retry sweep carries on from there.
+ */
+export function drainJournaledFailureBacklog(): void {
+  const step = (): void => {
+    if (deliveryStopped) return;
+    const before = journaledFailureBacklog();
+    if (before === 0) return;
+    const written = replayJournaledFailures();
+    if (written.length > 0)
+      wakeForNotice(new Set(written.map((n) => n.coordinatorSessionId)));
+    if (journaledFailureBacklog() < before) setTimeout(step, 0).unref();
+  };
+  setTimeout(step, 0).unref();
+}
+
 export function drainAllQueuedOnBoot(): void {
-  // Senders owing an interruption notice are included because the restart that
-  // stranded them is the same one running this: they are typically cold, hold
-  // nothing queued, and would otherwise never reach an idle hook at all.
+  // Sessions owed a notice are included because they are typically cold and
+  // hold nothing queued — the restart that stranded an interrupted turn is the
+  // one running this, and a coordinator waits idle on a child that failed — so
+  // they would otherwise never reach an idle hook at all. A held one is skipped
+  // by its drain and waits for Resume.
   const sessions = new Set([
     ...peerPromptStore.queuedRecipientIds(),
     ...peerPromptStore.senderIdsOwingNotice(),
+    ...delegationFailureNoticeStore.coordinatorsWithPending(),
   ]);
   for (const sessionId of sessions) {
     void drainRecipient(sessionId).catch(() => {});
@@ -1850,6 +2042,7 @@ export function runPeerPromptRetention(now = Date.now()): {
     .then((hub) => hub.broadcastSessions?.())
     .catch(() => undefined);
   const pruned = peerPromptStore.pruneTerminal(now - PRUNE_TTL_MS);
+  pruneDelegationNotices(now - PRUNE_TTL_MS);
   return { expired: expired.length, pruned };
 }
 

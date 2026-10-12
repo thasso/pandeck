@@ -190,10 +190,13 @@ import {
   sweepBackgroundTaskOutputTemps,
   tombstoneDeletedOwnersOnBoot,
 } from "./backgroundWorkBoot.ts";
+import { recoverJournaledFailuresOnBoot } from "./delegationFailureNotice.ts";
 import {
   closeChainsForHumanPrompt,
   drainAllQueuedOnBoot,
+  drainJournaledFailureBacklog,
   drainRecipient,
+  installDelegationFailureNotices,
   recoverPeerPromptsOnBoot,
   RETRY_SWEEP_INTERVAL_MS,
   runPeerPromptRetention,
@@ -1837,6 +1840,9 @@ server.listen(PORT, HOST, () => {
   // Turns runtime events into the Sessions inbox's run-start / failure /
   // settlement-reactivation facts for every harness at once.
   installSessionActivityTracking();
+  // A delegated child's failed turn becomes a durable notice for the
+  // coordinator waiting on it, recorded before the run's closing marker.
+  installDelegationFailureNotices();
   // Publishes proxy/CA env vars to `childProcessEnv()` (never process.env), so
   // every later-spawned agent, host command and build tool gets them while the
   // server's own traffic stays direct. Best-effort: a failure here must
@@ -1897,6 +1903,16 @@ server.listen(PORT, HOST, () => {
     if (interrupted > 0)
       console.log(
         `[assistant] ${interrupted} session(s) hold a turn cut off by the previous exit`,
+      );
+  });
+  bootStep("delegation-failure recovery", () => {
+    // Before peer recovery reclassifies the rows of runs the restart cut off:
+    // a failure journaled but never recorded still owes its coordinator the
+    // notice (`delegationFailureJournal.ts`).
+    const recovered = recoverJournaledFailuresOnBoot();
+    if (recovered > 0)
+      console.log(
+        `[assistant] recovered ${recovered} delegation failure notice(s) from runs the previous exit cut off`,
       );
   });
   bootStep("peer-prompt recovery", () => {
@@ -2022,6 +2038,8 @@ server.listen(PORT, HOST, () => {
   bootStep("agent-handoff recovery", () => recoverAgentHandoffsOnBoot());
   bootStep("prompt-queue drain", () => drainPromptQueuesOnBoot());
   bootStep("peer-prompt drain", () => drainAllQueuedOnBoot());
+  // A failure backlog beyond what boot recorded drains in yielding batches.
+  bootStep("failure-journal backlog", () => drainJournaledFailureBacklog());
   bootStep("settings sign-in cards", () => watchSignInCards());
   bootStep("peer-prompt retention", () => runPeerPromptRetention());
   void sweepMainWorktreeCommentRetention().catch((err) =>
