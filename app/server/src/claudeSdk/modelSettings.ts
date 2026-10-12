@@ -72,6 +72,10 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
     contextWindow: 200_000,
     sdkModelId: "claude-opus-5-5",
   },
+  // Sonnet 5.5 and Haiku 5.5 are alias repoints like Opus above: existing
+  // sessions move on their next turn and re-read history uncached. Both reject
+  // the API's `{type:"disabled"}` (Sonnet always, Haiku above `high`), but the
+  // bundled CLI translates `--thinking=disabled` per model, so `off` stays.
   {
     provider: CLAUDE_SDK_PROVIDER,
     id: "sonnet",
@@ -79,7 +83,7 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
     reasoning: true,
     supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 200_000,
-    sdkModelId: "claude-sonnet-5",
+    sdkModelId: "claude-sonnet-5-5",
   },
   {
     provider: CLAUDE_SDK_PROVIDER,
@@ -88,7 +92,7 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
     reasoning: true,
     supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 200_000,
-    sdkModelId: "claude-haiku-4-5",
+    sdkModelId: "claude-haiku-5-5",
   },
   // Fable's thinking is ALWAYS on (see reasoningToThinking): the API rejects a
   // disabled/fixed-budget thinking config, so `off` is intentionally omitted
@@ -161,17 +165,6 @@ export function claudeSdkModelOption(
   return contextWindow ? { ...option, contextWindow } : option;
 }
 
-/** Approximate per-level thinking token budget (used for the `enabled` shape). */
-const CLAUDE_THINKING_BUDGETS: Record<Exclude<ThinkingLevel, "off">, number> = {
-  minimal: 1024,
-  low: 4096,
-  medium: 8192,
-  high: 16_384,
-  xhigh: 32_768,
-  // `max` is pi-only in the picker; degrade defensively if received here.
-  max: 32_768,
-};
-
 /**
  * THINKING OPTION SHAPE — per-model, settled against the installed SDK types and
  * each model's actual API constraints (see the adaptive/extended-thinking docs).
@@ -182,32 +175,19 @@ const CLAUDE_THINKING_BUDGETS: Record<Exclude<ThinkingLevel, "off">, number> = {
  * to the CLI as `--thinking` / `--thinking-display` / `--max-thinking-tokens` /
  * `--effort`.
  *
- * Policy:
- *  - Opus 5.5 / Sonnet 5 / Fable 5 use ADAPTIVE thinking with `effort` and
- *    `display:"summarized"` so summaries stream (mirrors the pi harness). These
- *    models REJECT a fixed `budgetTokens` (400), so we never send one. Fable
- *    can't disable thinking (400) — its `off` becomes lowest-effort adaptive;
- *    Opus/Sonnet honor `off` as {type:"disabled"}.
- *  - Haiku 4.5 predates adaptive thinking: it can only think via a manual
- *    `budgetTokens` and REJECTS the `effort` parameter. It stays on manual mode
- *    (still `display:"summarized"`), never adaptive/effort.
+ * Policy: every curated model (Opus 5.5 / Sonnet 5.5 / Haiku 5.5 / Fable 5.1)
+ * uses ADAPTIVE thinking with `effort` and `display:"summarized"` so summaries
+ * stream (mirrors the pi harness). They REJECT a fixed `budgetTokens` (400), so
+ * we never send one. Fable can't disable thinking (400) — its `off` becomes
+ * lowest-effort adaptive; the others send `off` as {type:"disabled"}, which the
+ * CLI maps to each model's lowest thinking setting.
  */
 export function reasoningToThinking(
   level: ThinkingLevel,
   modelId?: string,
 ): Pick<ClaudeSdkOptions, "thinking" | "effort"> {
   const alias = claudeSdkModelAlias(modelId);
-  if (alias === "haiku") {
-    if (level === "off") return { thinking: { type: "disabled" } };
-    return {
-      thinking: {
-        type: "enabled",
-        budgetTokens: CLAUDE_THINKING_BUDGETS[level],
-        display: "summarized",
-      },
-    };
-  }
-  // Opus/Sonnet honor `off` as disabled; Fable's thinking is always on.
+  // Fable's thinking is always on; every other model honors `off` as disabled.
   if (level === "off" && alias !== "fable") {
     return { thinking: { type: "disabled" } };
   }
