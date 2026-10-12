@@ -519,6 +519,9 @@ export async function listSessions(
       // the two durable halves are combined, so no consumer sees a `settledAt`
       // that a newer event has already superseded.
       ...(settledAt !== undefined ? { settledAt } : {}),
+      ...(row.inboxPosition !== undefined
+        ? { inboxPosition: row.inboxPosition }
+        : {}),
       ...(row.outcomeAttention
         ? { outcomeAttention: row.outcomeAttention }
         : {}),

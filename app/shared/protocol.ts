@@ -1662,6 +1662,11 @@ export interface SessionListItem {
    */
   settledAt?: number;
   /**
+   * Where the user dragged this session in the Sessions inbox
+   * ({@link inboxPositionOf}). Absent until the first drag.
+   */
+  inboxPosition?: number;
+  /**
    * Durable attention state for a directly owned session, absent until its
    * first outcome. Carries the revision a Settle from this row must
    * acknowledge, and — while it is unacknowledged — the outcome the card
@@ -1711,6 +1716,28 @@ export interface SessionListItem {
    */
   pullRequest?: SessionPullRequestSummary;
 }
+
+/**
+ * The key the Sessions inbox sorts an item by, highest first: the position the
+ * user dragged it to, else its creation time. Defaulting to `createdAt` is what
+ * keeps a list nobody has dragged in creation order, and puts a NEW item above
+ * every placed one. Shared by sessions and Workflow Runs, which are ordered in
+ * one list.
+ */
+export function inboxPositionOf(item: {
+  createdAt: number;
+  inboxPosition?: number;
+}): number {
+  return item.inboxPosition ?? item.createdAt;
+}
+
+/** One item `setInboxPositions` places: a session, or a Workflow Run. */
+export type InboxPositionEntry =
+  | { kind: "session"; id: string; position: number }
+  | { kind: "run"; runId: string; position: number };
+
+/** The most entries one `setInboxPositions` may carry. */
+export const MAX_INBOX_POSITIONS = 1000;
 
 /**
  * What a session with a dead `in_worktree` edge is blocked on, phrased for the
@@ -6970,6 +6997,17 @@ export type ClientMessage =
       type: "settleWorkflowRun";
       runId: string;
       throughRevision: number;
+      requestId?: string;
+    }
+  /**
+   * Place Sessions inbox items where the user dragged them
+   * ({@link inboxPositionOf}). Usually one entry; the browser sends the whole
+   * list renumbered when two neighbours leave no room between them. An unknown
+   * id or a non-finite position refuses the whole command.
+   */
+  | {
+      type: "setInboxPositions";
+      positions: InboxPositionEntry[];
       requestId?: string;
     }
   | { type: "renameSession"; id: string; title: string; requestId?: string }

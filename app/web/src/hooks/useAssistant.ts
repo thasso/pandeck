@@ -33,6 +33,7 @@ import {
 } from "../lib/peerPromptCardOverrides.ts";
 import type {
   AgentInfo,
+  InboxPositionEntry,
   SettableSpawnOwnership,
   AgentQuestionResponse,
   AppSettings,
@@ -1764,6 +1765,12 @@ type Action =
       sessionIds: string[];
       now: number;
     }
+  /**
+   * Sessions inbox items dragged to a new place: sessions and runs in ONE
+   * dispatch, since a renumbering places both and the list must not show a
+   * half-applied order.
+   */
+  | { kind: "optimisticInboxPositions"; positions: InboxPositionEntry[] }
   | { kind: "optimisticSessionDelete"; sessionId: string }
   /** A human Stop left this browser; the server's answer retires it. */
   | { kind: "backgroundStopSent"; itemId?: string; ownerSessionId?: string }
@@ -4536,6 +4543,36 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       error: null,
     };
   }
+  if (action.kind === "optimisticInboxPositions") {
+    const sessionPositions = new Map<string, number>();
+    const runPositions = new Map<string, number>();
+    for (const entry of action.positions)
+      if (entry.kind === "session")
+        sessionPositions.set(entry.id, entry.position);
+      else runPositions.set(entry.runId, entry.position);
+    return {
+      ...state,
+      sessions:
+        sessionPositions.size > 0
+          ? state.sessions.map((session) => {
+              const inboxPosition = sessionPositions.get(session.id);
+              return inboxPosition === undefined
+                ? session
+                : { ...session, inboxPosition };
+            })
+          : state.sessions,
+      workflowRuns:
+        runPositions.size > 0 && state.workflowRuns
+          ? state.workflowRuns.map((run) => {
+              const inboxPosition = runPositions.get(run.id);
+              return inboxPosition === undefined
+                ? run
+                : { ...run, inboxPosition };
+            })
+          : state.workflowRuns,
+      error: null,
+    };
+  }
   if (action.kind === "optimisticSessionDelete") {
     return {
       ...state,
@@ -6078,6 +6115,12 @@ export interface AssistantActions {
    * server settles the run's role sessions with it.
    */
   settleWorkflowRun: (runId: string, throughRevision: number) => void;
+  /**
+   * Place Sessions inbox items where the user dragged them
+   * (`planInboxDrop`). Optimistic: the cards stay where they were dropped,
+   * and a refusal re-reads the lists.
+   */
+  setInboxPositions: (positions: InboxPositionEntry[]) => void;
   renameSession: (id: string, title: string) => void;
   /**
    * Take a spawned peer over, or hand it back to the coordinator that spawned
@@ -8074,6 +8117,29 @@ export function useAssistant({
           throughRevision: observed,
           requestId,
         });
+      },
+      setInboxPositions: (positions) => {
+        // Both domains, because one renumbering can place sessions and runs;
+        // the server re-broadcasts the run list itself with any refusal.
+        const requestId = trackMutation(
+          {
+            topic: "sessions",
+            objectIds: positions.flatMap((entry) =>
+              entry.kind === "session" ? [entry.id] : [],
+            ),
+            additionalEffects: [
+              {
+                topic: "workflow",
+                objectIds: positions.flatMap((entry) =>
+                  entry.kind === "run" ? [entry.runId] : [],
+                ),
+              },
+            ],
+          },
+          refetchSessions,
+        );
+        dispatch({ kind: "optimisticInboxPositions", positions });
+        send({ type: "setInboxPositions", positions, requestId });
       },
       stopBackgroundWork: (itemId) => {
         dispatch({ kind: "backgroundStopSent", itemId });

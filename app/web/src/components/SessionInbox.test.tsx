@@ -1443,3 +1443,94 @@ describe("SessionInbox Workflow Run items", () => {
     expect(runLabel("r1")).toContain("Waiting for your merge decision.");
   });
 });
+
+/**
+ * The working set drags when the host passes `onSetInboxPositions`. The drag
+ * itself is dnd-kit's and needs layout jsdom does not have (the drop plan is
+ * tested in `lib/sessionInbox.test.ts`); what is asserted here is that the
+ * draggable list is the same list — same items, same order, still openable.
+ */
+describe("SessionInbox drag-to-reorder", () => {
+  const NOW = 1_800_000_000_000;
+  let view: Mounted | null = null;
+
+  afterEach(() => {
+    view = null;
+  });
+
+  function render(
+    sessions: SessionListItem[],
+    onSelect: (id: string) => void = () => {},
+  ) {
+    view ??= mount();
+    act(() => {
+      view!.root.render(
+        <SessionInbox
+          sessions={sessions}
+          archivedSessionCount={0}
+          archivedSessionsLoaded
+          onOpenBackgroundTasks={() => {}}
+          currentId={undefined}
+          readCurrentId={undefined}
+          projects={[]}
+          worktrees={[]}
+          tasks={[]}
+          workflowRuns={[]}
+          workflowCards={{}}
+          worktreeStatuses={{}}
+          animateListChanges={false}
+          density="tight"
+          onSelect={onSelect}
+          onSettle={() => {}}
+          onArchive={() => {}}
+          onDeleteSession={() => {}}
+          onRenameSession={() => {}}
+          onLoadArchivedSessions={() => {}}
+          onOpenProject={() => {}}
+          onOpenTask={() => {}}
+          onOpenWorkflowRun={() => {}}
+          onSettleWorkflowRun={() => {}}
+          onSetInboxPositions={() => {}}
+          onOpenWorktree={() => {}}
+        />,
+      );
+    });
+  }
+
+  const row = (id: string, extra: Partial<SessionListItem> = {}) =>
+    ({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      title: `Session ${id}`,
+      createdAt: NOW - 3_600_000,
+      updatedAt: NOW - 60_000,
+      messageCount: 2,
+      ...extra,
+    }) as SessionListItem;
+
+  it("lists the working set in its dragged order and still opens a card", () => {
+    const opened: string[] = [];
+    render(
+      [
+        row("new", { createdAt: NOW - 1_000 }),
+        row("old", { createdAt: NOW - 9_000 }),
+        row("placed", { createdAt: NOW - 20_000, inboxPosition: NOW }),
+        row("asks", { attention: "question" }),
+      ],
+      (id) => opened.push(id),
+    );
+    const order = [
+      ...view!.container.querySelectorAll<HTMLElement>("[data-inbox-card]"),
+    ].map((element) => element.dataset.inboxCard);
+    expect(order).toEqual(["asks", "placed", "new", "old"]);
+
+    const card = view!.container.querySelector<HTMLElement>(
+      '[data-inbox-card="new"] [data-session-row]',
+    )!;
+    act(() => {
+      card.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(opened).toEqual(["new"]);
+  });
+});

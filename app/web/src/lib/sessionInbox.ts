@@ -14,6 +14,7 @@
  * the list, and the rules stay testable against malformed/partial rows.
  */
 import type {
+  InboxPositionEntry,
   SessionListItem,
   SpawnClusterForest,
   WorkflowRunCard,
@@ -23,6 +24,7 @@ import type {
 import {
   awaitedBackgroundCount,
   backgroundWorkBusy,
+  inboxPositionOf,
   isDormantInSpawnTree,
   isShelvedSession,
   isTerminalWorkflowRunLifecycle,
@@ -1936,21 +1938,76 @@ function workflowRunItem(
 
 /**
  * Ordering across BOTH kinds of item, within one group (the view has already
- * split what needs the user from the rest): newest created first, then a
- * stable id tie-break. Deliberately NOT by tier or activity — a card that
- * jumped whenever it started, finished or was read made the list move under
- * the reader; its state is on the card instead.
+ * split what needs the user from the rest): highest {@link inboxPositionOf}
+ * first — where the user dragged the item, else newest created — then a stable
+ * id tie-break. Deliberately NOT by tier or activity — a card that jumped
+ * whenever it started, finished or was read made the list move under the
+ * reader; its state is on the card instead.
  */
 function compareInboxItems(a: SessionInboxItem, b: SessionInboxItem): number {
-  const created = itemCreatedAt(b) - itemCreatedAt(a);
-  if (created !== 0) return created;
+  const position = itemPosition(b) - itemPosition(a);
+  if (position !== 0) return position;
   const left = inboxItemId(a);
   const right = inboxItemId(b);
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function itemCreatedAt(item: SessionInboxItem): number {
-  return item.kind === "run" ? item.run.createdAt : item.card.session.createdAt;
+function itemPosition(item: SessionInboxItem): number {
+  return inboxPositionOf(item.kind === "run" ? item.run : item.card.session);
+}
+
+/**
+ * How far apart a renumbered list is spread, and how far past its neighbour an
+ * item dropped at either END lands. Small on purpose: an item dragged to the
+ * top must stay below the NEXT session to be created, which arrives at its
+ * creation time.
+ */
+const INBOX_POSITION_STEP = 1_000;
+
+/**
+ * What dropping `activeId` on `overId`'s place writes, in `items` (one group,
+ * already in display order): normally the ONE dragged item, at the midpoint of
+ * its new neighbours, or just past the end it was dropped at. When the two
+ * neighbours leave no number between them — equal creation times, or many
+ * drops into the same gap — the whole list is renumbered in its new order,
+ * from its current top down. `undefined` when the drop moves nothing.
+ */
+export function planInboxDrop(
+  items: readonly SessionInboxItem[],
+  activeId: string,
+  overId: string,
+): InboxPositionEntry[] | undefined {
+  const from = items.findIndex((item) => inboxItemId(item) === activeId);
+  const to = items.findIndex((item) => inboxItemId(item) === overId);
+  if (from < 0 || to < 0 || from === to) return undefined;
+  const moved = [...items];
+  const [item] = moved.splice(from, 1) as [SessionInboxItem];
+  moved.splice(to, 0, item);
+  const above = moved[to - 1];
+  const below = moved[to + 1];
+  const position =
+    above && below
+      ? (itemPosition(above) + itemPosition(below)) / 2
+      : above
+        ? itemPosition(above) - INBOX_POSITION_STEP
+        : itemPosition(below!) + INBOX_POSITION_STEP;
+  const fits =
+    (!above || position < itemPosition(above)) &&
+    (!below || position > itemPosition(below));
+  if (fits) return [inboxPositionEntry(item, position)];
+  const top = Math.max(...items.map(itemPosition));
+  return moved.map((each, index) =>
+    inboxPositionEntry(each, top - index * INBOX_POSITION_STEP),
+  );
+}
+
+function inboxPositionEntry(
+  item: SessionInboxItem,
+  position: number,
+): InboxPositionEntry {
+  return item.kind === "run"
+    ? { kind: "run", runId: item.run.id, position }
+    : { kind: "session", id: item.card.session.id, position };
 }
 
 /** One candidate session while the spawn forest is being folded. */

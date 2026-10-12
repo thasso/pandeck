@@ -45,6 +45,7 @@ import {
   type TaskListRequest,
   type TaskListResponse,
   type TaskProjectAssignmentUpdate,
+  type InboxPositionEntry,
   type TaskReorderPlacement,
   type TaskSaveRequest,
   type TaskSessionRef,
@@ -158,6 +159,8 @@ import {
   workflowRunListMessage,
 } from "./workflowRuns.ts";
 import { settleWorkflowRun } from "./workflow/runSettlement.ts";
+import { parseInboxPlacement } from "./inboxPositions.ts";
+import { setInboxPositions } from "./db/inboxPositionStore.ts";
 import {
   cleanUpWorkflowRunCheckout,
   mergeWorkflowRunPullRequest,
@@ -957,6 +960,8 @@ export class Connection implements Viewer {
         );
       case "settleWorkflowRun":
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
+      case "setInboxPositions":
+        return this.onSetInboxPositions(msg.positions);
       case "renameSession":
         return this.onRenameSession(msg.id, msg.title);
       case "setSpawnOwnership":
@@ -2335,6 +2340,30 @@ export class Connection implements Viewer {
         message: `Failed to settle workflow run: ${errorText(err)}`,
       });
     }
+  }
+
+  /**
+   * Place Sessions inbox items where the user dragged them. Checked whole and
+   * written all-or-nothing. The browser has already moved the cards, so a
+   * refusal re-broadcasts the run list, and its stamped `error` makes the
+   * browser re-read its sessions.
+   */
+  private async onSetInboxPositions(
+    positions: readonly InboxPositionEntry[],
+  ): Promise<void> {
+    const refuse = (reason: string) => {
+      broadcastWorkflowRuns();
+      this.send({
+        type: "error",
+        message: `Failed to reorder the Sessions inbox: ${reason}.`,
+      });
+    };
+    const placement = parseInboxPlacement(positions);
+    if ("error" in placement) return refuse(placement.error);
+    if (!setInboxPositions(placement))
+      return refuse("a session or run no longer exists");
+    if (placement.runs.length > 0) broadcastWorkflowRuns();
+    if (placement.sessions.length > 0) await hub.broadcastSessions();
   }
 
   /**

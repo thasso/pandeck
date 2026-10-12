@@ -32,6 +32,7 @@ import {
   type SessionInboxTier,
   classifySessionStatus,
   planCardReorder,
+  planInboxDrop,
   sameSessionCardProps,
   sessionCardAge,
   sessionCardKey,
@@ -3387,5 +3388,123 @@ describe("the stall chip's content key", () => {
         false,
       );
     expect(ledge(owedByPeer)).not.toBe(ledge(peerWaits));
+  });
+});
+
+describe("the manual inbox order", () => {
+  const run: WorkflowRunSummary = {
+    id: "7",
+    taskId: "676",
+    recipeId: "code-delivery",
+    recipeVersion: 1,
+    lifecycle: "active",
+    limits: { maxIterations: 3, maxReviewPasses: 2 },
+    createdAt: NOW - 2_500_000,
+    updatedAt: NOW - 30_000,
+  };
+  const ids = (items: SessionInboxItem[]) => items.map(inboxItemId);
+  const active = (
+    sessions: SessionListItem[],
+    runs: WorkflowRunSummary[] = [],
+  ) =>
+    buildSessionInbox(sessions, { workflowRuns: runs, workflowCards: {} })
+      .active;
+
+  it("sorts by the dragged position, falling back to creation time", () => {
+    const items = active(
+      [
+        session({ id: "new", createdAt: NOW - 1_000_000 }),
+        session({ id: "old", createdAt: NOW - 4_000_000 }),
+        // Dragged above everything that existed when it was placed.
+        session({
+          id: "placed",
+          createdAt: NOW - 5_000_000,
+          inboxPosition: NOW - 500_000,
+        }),
+      ],
+      [{ ...run, inboxPosition: NOW - 4_500_000 }],
+    );
+    expect(ids(items)).toEqual(["placed", "new", "old", "run:7"]);
+  });
+
+  it("keeps a dragged card's place when it comes back from Needs you", () => {
+    const placed = session({
+      id: "placed",
+      createdAt: NOW - 5_000_000,
+      inboxPosition: NOW - 2_000_000,
+    });
+    const others = [
+      session({ id: "new", createdAt: NOW - 1_000_000 }),
+      session({ id: "old", createdAt: NOW - 4_000_000 }),
+    ];
+    const asking = buildSessionInbox([
+      { ...placed, attention: "question" },
+      ...others,
+    ]);
+    expect(ids(asking.needsYou)).toEqual(["placed"]);
+    expect(ids(active([placed, ...others]))).toEqual(["new", "placed", "old"]);
+  });
+
+  it("places a drop between two neighbours at their midpoint, writing one item", () => {
+    const items = active(
+      [
+        session({ id: "a", createdAt: NOW - 1_000_000 }),
+        session({ id: "b", createdAt: NOW - 2_000_000 }),
+        session({ id: "c", createdAt: NOW - 3_000_000 }),
+      ],
+      [run],
+    );
+    expect(ids(items)).toEqual(["a", "b", "run:7", "c"]);
+    // `a` dropped on `run:7`'s place lands between the run and `c`.
+    expect(planInboxDrop(items, "a", "run:7")).toEqual([
+      { kind: "session", id: "a", position: NOW - 2_750_000 },
+    ]);
+    // The run dropped on `a`'s place goes to the top, just above it.
+    expect(planInboxDrop(items, "run:7", "a")).toEqual([
+      { kind: "run", runId: "7", position: NOW - 1_000_000 + 1_000 },
+    ]);
+    // And `a` dropped on the last place goes just below `c`.
+    expect(planInboxDrop(items, "a", "c")).toEqual([
+      { kind: "session", id: "a", position: NOW - 3_000_000 - 1_000 },
+    ]);
+  });
+
+  it("applies the plan as the order the list then shows", () => {
+    const sessions = [
+      session({ id: "a", createdAt: NOW - 1_000_000 }),
+      session({ id: "b", createdAt: NOW - 2_000_000 }),
+      session({ id: "c", createdAt: NOW - 3_000_000 }),
+    ];
+    const plan = planInboxDrop(active(sessions), "c", "a")!;
+    const placed = sessions.map((row) => {
+      const entry = plan.find(
+        (each) => each.kind === "session" && each.id === row.id,
+      );
+      return entry ? { ...row, inboxPosition: entry.position } : row;
+    });
+    expect(ids(active(placed))).toEqual(["c", "a", "b"]);
+  });
+
+  it("renumbers the whole list when the neighbours leave no room", () => {
+    // Created in the same millisecond: no number lies between `a` and `b`.
+    const items = active([
+      session({ id: "a", createdAt: NOW }),
+      session({ id: "b", createdAt: NOW }),
+      session({ id: "c", createdAt: NOW - 5_000 }),
+    ]);
+    expect(planInboxDrop(items, "c", "b")).toEqual([
+      { kind: "session", id: "a", position: NOW },
+      { kind: "session", id: "c", position: NOW - 1_000 },
+      { kind: "session", id: "b", position: NOW - 2_000 },
+    ]);
+  });
+
+  it("plans nothing for a drop in place or on an unknown item", () => {
+    const items = active([
+      session({ id: "a", createdAt: NOW - 1_000 }),
+      session({ id: "b", createdAt: NOW - 2_000 }),
+    ]);
+    expect(planInboxDrop(items, "a", "a")).toBeUndefined();
+    expect(planInboxDrop(items, "a", "gone")).toBeUndefined();
   });
 });

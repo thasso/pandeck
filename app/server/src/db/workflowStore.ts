@@ -87,6 +87,8 @@ export interface WorkflowRunRow {
    * completion, cancellation) and {@link settleRun}; never on a step.
    */
   attention?: WorkflowRunAttention;
+  /** Where the user dragged this run in the Sessions inbox (0075). */
+  inboxPosition?: number;
 }
 
 export interface WorkflowStepExecutorRef {
@@ -224,6 +226,7 @@ interface RunDbRow {
   attention_settled_revision: number;
   attention_kind: WorkflowRunAttentionKind | null;
   attention_at_ms: number | null;
+  inbox_position: number | null;
   created_at_ms: number;
   updated_at_ms: number;
   ended_at_ms: number | null;
@@ -294,6 +297,9 @@ function toRun(row: RunDbRow): WorkflowRunRow {
             at: row.attention_at_ms ?? row.updated_at_ms,
           },
         }
+      : {}),
+    ...(row.inbox_position !== null
+      ? { inboxPosition: row.inbox_position }
       : {}),
   };
 }

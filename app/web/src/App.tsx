@@ -30,6 +30,7 @@ import {
   claudeSdkModelOption,
   type Harness,
   harnessForAccountProvider,
+  type InboxPositionEntry,
   harnessForModelProvider,
   isClaudeSdkModel,
   isCodingAgentType,
@@ -2495,6 +2496,12 @@ function AppContent() {
   const settleWorkflowRun = useCallback(
     (runId: string, throughRevision: number) =>
       actions.settleWorkflowRun(runId, throughRevision),
+    [actions],
+  );
+
+  /** Place dragged Sessions inbox items; same stability contract. */
+  const setInboxPositions = useCallback(
+    (positions: InboxPositionEntry[]) => actions.setInboxPositions(positions),
     [actions],
   );
 
@@ -6309,6 +6316,7 @@ function AppContent() {
         workflowCards={state.workflowCards}
         onOpenWorkflowRun={openWorkflowRun}
         onSettleWorkflowRun={settleWorkflowRun}
+        onSetInboxPositions={setInboxPositions}
         pullRequestInventory={pullRequestInventory.state}
         onReloadPullRequests={pullRequestInventory.reload}
         selectedPullRequest={pullRequestTarget}

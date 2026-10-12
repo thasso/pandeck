@@ -8,8 +8,24 @@ import {
   type ReactNode,
 } from "react";
 import { Archive, Check, ChevronRight } from "lucide-react";
+import {
+  closestCenter,
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { isShelvedSession } from "@assistant/shared";
 import type {
+  InboxPositionEntry,
   ProjectRecord,
   SessionListItem,
   TaskSummary,
@@ -35,6 +51,11 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { SwipeRow, type SwipeAction } from "./common/SwipeRow.tsx";
+import {
+  MOUSE_DRAG_DISTANCE_PX,
+  TOUCH_LONG_PRESS_DELAY_MS,
+  TOUCH_LONG_PRESS_TOLERANCE_PX,
+} from "./common/dragActivation.ts";
 import { useNow } from "../hooks/useNow.ts";
 import { dismissToastKey, showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
@@ -43,6 +64,7 @@ import {
   classifySessionStatus,
   inboxItemId,
   planCardReorder,
+  planInboxDrop,
   sessionCardKey,
   sessionRelationsKey,
   SETTLED_PAGE_SIZE,
@@ -166,6 +188,12 @@ interface Props {
    * carries; every other control stays on its Task.
    */
   onSettleWorkflowRun: (runId: string, throughRevision: number) => void;
+  /**
+   * Place working-set items where the user dragged them. Absent, the list
+   * does not drag. Only the working set below **Needs you** drags: that block
+   * empties as it is answered, and the shelves are history.
+   */
+  onSetInboxPositions?: ((positions: InboxPositionEntry[]) => void) | undefined;
   onOpenWorktree: (id: string) => void;
 }
 
@@ -212,6 +240,7 @@ export function SessionInbox({
   onOpenTask,
   onOpenWorkflowRun,
   onSettleWorkflowRun,
+  onSetInboxPositions,
   onOpenWorktree,
 }: Props) {
   useShortcuts(SESSION_SHORTCUTS);
@@ -233,6 +262,19 @@ export function SessionInbox({
   // cannot be removed by the list update first.
   const [settling, setSettling] = useState<string[]>([]);
   const settleTimers = useRef(new Map<string, number>());
+  // An item of the working set is being dragged to a new place.
+  const [dragging, setDragging] = useState(false);
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: { distance: MOUSE_DRAG_DISTANCE_PX },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: TOUCH_LONG_PRESS_DELAY_MS,
+        tolerance: TOUCH_LONG_PRESS_TOLERANCE_PX,
+      },
+    }),
+  );
   const reducedMotion = usePrefersReducedMotion();
   const animateSettle = animateListChanges && !reducedMotion;
 
@@ -612,10 +654,12 @@ export function SessionInbox({
   // changed place from where they were (FLIP): one transform per moved card, no
   // layout thrash on the ones that stayed. Skipped entirely while a settle exit
   // is playing — that animation already moves the rows below it, and animating
-  // both would fight.
+  // both would fight — and while an item is dragged: the drag moves the cards
+  // itself, and the drop's commit must not replay the move from where the
+  // dragged card started.
   useCardReorder(
     containerRef,
-    animateSettle && settling.length === 0,
+    animateSettle && settling.length === 0 && !dragging,
     cardLayoutKey,
   );
 
@@ -748,6 +792,7 @@ export function SessionInbox({
     rows: SessionInboxCard[],
     relation: "coordinated" | "workflow" = "coordinated",
     live?: ReadonlySet<string>,
+    dragging = false,
   ) =>
     rows.map((child) => {
       // A settled peer listed as history is already down: it keeps Archive
@@ -763,6 +808,7 @@ export function SessionInbox({
         >
           <SwipeRow
             {...(shelved ? { left: swipe.left } : swipe)}
+            disabled={dragging}
             onExited={() => runSwipeExit(child.session.id)}
           >
             <ClusterChildRow
@@ -783,133 +829,164 @@ export function SessionInbox({
       );
     });
 
-  const renderRunItem = (item: WorkflowRunInboxItem) => {
+  const renderRunItem = (item: WorkflowRunInboxItem, dragging: boolean) => {
     const id = inboxItemId(item);
     // Settle is the ONE verb a run carries here — archive, delete and every
     // run control live on the Workflow card on its Task — so the item has the
     // settle exit and no swipe. Its role rows keep both, because they are
     // still sessions. The whole item leaves through one exit, rows included.
     return (
-      <div key={id} data-inbox-card={id}>
-        <ExitStage leaving={settling.includes(id)}>
-          {/* The separator belongs to the WHOLE fold, not its header. When
+      <ExitStage leaving={settling.includes(id)}>
+        {/* The separator belongs to the WHOLE fold, not its header. When
               roles open, it travels below their rows instead of cutting the
               run away from the sessions it contains. */}
-          <div
-            // An open fold ends with a little air, so its last row reads as
-            // part of it rather than as the start of the next item.
-            className={`border-b border-border/60 ${childRows(item).length > 0 ? "pb-2" : ""}`}
-          >
-            <WorkflowRunInboxCard
-              item={item}
-              now={now}
-              density={density}
-              expanded={expandedClusters.has(id)}
-              onOpen={onOpenWorkflowRun}
-              onOpenSession={onSelect}
-              onSettle={settleRun}
-              onToggleRoles={toggleRunRoles}
-              onFocusSibling={focusSibling}
-              projectKey={runProjectById.get(item.run.projectId ?? "")?.key}
-              projectName={runProjectById.get(item.run.projectId ?? "")?.name}
-              projectColor={runProjectById.get(item.run.projectId ?? "")?.color}
-            />
-            {renderChildRows(childRows(item), "workflow")}
-          </div>
-        </ExitStage>
-      </div>
+        <div
+          // An open fold ends with a little air, so its last row reads as
+          // part of it rather than as the start of the next item.
+          className={`border-b border-border/60 ${childRows(item).length > 0 ? "pb-2" : ""}`}
+        >
+          <WorkflowRunInboxCard
+            item={item}
+            now={now}
+            density={density}
+            expanded={expandedClusters.has(id)}
+            onOpen={onOpenWorkflowRun}
+            onOpenSession={onSelect}
+            onSettle={settleRun}
+            onToggleRoles={toggleRunRoles}
+            onFocusSibling={focusSibling}
+            projectKey={runProjectById.get(item.run.projectId ?? "")?.key}
+            projectName={runProjectById.get(item.run.projectId ?? "")?.name}
+            projectColor={runProjectById.get(item.run.projectId ?? "")?.color}
+          />
+          {renderChildRows(childRows(item), "workflow", undefined, dragging)}
+        </div>
+      </ExitStage>
     );
   };
 
-  const renderCardList = (items: SessionInboxItem[]) =>
-    items.map((item) => {
-      if (item.kind === "run") return renderRunItem(item);
-      const card = item.card;
-      const id = card.session.id;
-      const rows = childRows(item);
-      return (
-        // The whole cluster — the card and any rows it has open — is ONE item
-        // of the list: it leaves through one exit, and the reorder pass measures
-        // it as one block, so an expanded cluster cannot animate itself apart.
-        <div key={id} data-inbox-card={id}>
-          <ExitStage leaving={settling.includes(id)}>
-            {/* The separator wraps the card AND its disclosed peers. It stays
+  const renderSessionItem = (
+    item: SessionInboxItem & { kind: "session" },
+    dragging: boolean,
+  ) => {
+    const card = item.card;
+    const id = card.session.id;
+    const rows = childRows(item);
+    return (
+      <ExitStage leaving={settling.includes(id)}>
+        {/* The separator wraps the card AND its disclosed peers. It stays
                 at the bottom of the cluster as rows open and close, making the
                 expansion part of the card rather than loose rows beneath it. */}
-            <div
-              // An open fold ends with a little air, so its last row reads as
-              // part of it rather than as the start of the next card.
-              className={`border-b border-border/60 ${
-                rows.length > 0 ||
-                (expandedClusters.has(id) &&
-                  (card.cluster?.settledCount ?? 0) > 0)
-                  ? "pb-2"
-                  : ""
-              }`}
-            >
-              {/* The swipe wraps the CARD, inside both exit stages: a card
+        <div
+          // An open fold ends with a little air, so its last row reads as
+          // part of it rather than as the start of the next card.
+          className={`border-b border-border/60 ${
+            rows.length > 0 ||
+            (expandedClusters.has(id) && (card.cluster?.settledCount ?? 0) > 0)
+              ? "pb-2"
+              : ""
+          }`}
+        >
+          {/* The swipe wraps the CARD, inside both exit stages: a card
                   leaving by keyboard is animated by the stages above, and one
                   leaving by thumb is animated by `SwipeRow` — whose height
                   close collapses this box, which is what the grid row above
                   measures. Only one of the two ever runs for a given card. */}
-              <SwipeRow {...cardSwipe(card)} onExited={() => runSwipeExit(id)}>
-                <ActiveSessionCard
-                  card={card}
-                  now={now}
-                  active={id === currentId}
-                  relations={relationsById.get(id) ?? NO_RELATIONS}
-                  worktreeDirty={
-                    card.session.worktreeId
-                      ? worktreeStatuses[card.session.worktreeId]?.dirty
-                      : undefined
-                  }
-                  density={density}
-                  clusterExpanded={expandedClusters.has(id)}
-                  onOpen={onSelect}
-                  onSettle={settleCard}
-                  onOpenProject={onOpenProject}
-                  onOpenTask={onOpenTask}
-                  onOpenWorktree={onOpenWorktree}
-                  onRename={onRenameSession}
-                  onArchive={onArchive}
-                  onDelete={onDeleteSession}
-                  onToggleCluster={toggleCluster}
-                  onFocusSibling={focusSibling}
-                />
-              </SwipeRow>
-              {renderChildRows(
-                rows,
-                "coordinated",
-                card.cluster && settledHistory.includes(id)
-                  ? new Set(card.cluster.children.map((c) => c.session.id))
-                  : undefined,
-              )}
-              {/* The fold's history, on request: the peers already settled,
+          <SwipeRow
+            {...cardSwipe(card)}
+            disabled={dragging}
+            onExited={() => runSwipeExit(id)}
+          >
+            <ActiveSessionCard
+              card={card}
+              now={now}
+              active={id === currentId}
+              relations={relationsById.get(id) ?? NO_RELATIONS}
+              worktreeDirty={
+                card.session.worktreeId
+                  ? worktreeStatuses[card.session.worktreeId]?.dirty
+                  : undefined
+              }
+              density={density}
+              clusterExpanded={expandedClusters.has(id)}
+              onOpen={onSelect}
+              onSettle={settleCard}
+              onOpenProject={onOpenProject}
+              onOpenTask={onOpenTask}
+              onOpenWorktree={onOpenWorktree}
+              onRename={onRenameSession}
+              onArchive={onArchive}
+              onDelete={onDeleteSession}
+              onToggleCluster={toggleCluster}
+              onFocusSibling={focusSibling}
+            />
+          </SwipeRow>
+          {renderChildRows(
+            rows,
+            "coordinated",
+            card.cluster && settledHistory.includes(id)
+              ? new Set(card.cluster.children.map((c) => c.session.id))
+              : undefined,
+            dragging,
+          )}
+          {/* The fold's history, on request: the peers already settled,
                   put back in the tree where they were spawned. Offered only
                   while the fold is open and has any. */}
-              {expandedClusters.has(id) &&
-              (card.cluster?.settledCount ?? 0) > 0 ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-expanded={settledHistory.includes(id)}
-                  onClick={() => toggleSettledHistory(id)}
-                  className="w-full justify-start rounded-none bg-clip-border"
-                >
-                  <ChevronRight
-                    data-icon="inline-start"
-                    className={`transition-transform ${settledHistory.includes(id) ? "rotate-90" : ""}`}
-                  />
-                  {settledHistory.includes(id)
-                    ? "Hide settled"
-                    : `Show ${card.cluster?.settledCount} settled`}
-                </Button>
-              ) : null}
-            </div>
-          </ExitStage>
+          {expandedClusters.has(id) && (card.cluster?.settledCount ?? 0) > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={settledHistory.includes(id)}
+              onClick={() => toggleSettledHistory(id)}
+              className="w-full justify-start rounded-none bg-clip-border"
+            >
+              <ChevronRight
+                data-icon="inline-start"
+                className={`transition-transform ${settledHistory.includes(id) ? "rotate-90" : ""}`}
+              />
+              {settledHistory.includes(id)
+                ? "Hide settled"
+                : `Show ${card.cluster?.settledCount} settled`}
+            </Button>
+          ) : null}
+        </div>
+      </ExitStage>
+    );
+  };
+
+  const renderItem = (item: SessionInboxItem, dragging: boolean) =>
+    item.kind === "run"
+      ? renderRunItem(item, dragging)
+      : renderSessionItem(item, dragging);
+
+  // The whole item — a card and any rows it has open, or a run and its roles —
+  // is ONE block of the list: it leaves through one exit, the reorder pass
+  // measures it as one block, and a drag picks it up whole, so an expanded
+  // cluster cannot animate or be dragged apart.
+  const renderCardList = (items: SessionInboxItem[]) =>
+    items.map((item) => {
+      const id = inboxItemId(item);
+      return (
+        <div key={id} data-inbox-card={id}>
+          {renderItem(item, false)}
         </div>
       );
     });
+
+  const dropItem = useCallback(
+    ({ active, over }: DragEndEvent) => {
+      setDragging(false);
+      if (!over || !onSetInboxPositions) return;
+      const positions = planInboxDrop(
+        view.active,
+        String(active.id),
+        String(over.id),
+      );
+      if (positions) onSetInboxPositions(positions);
+    },
+    [view.active, onSetInboxPositions],
+  );
+  const activeIds = useMemo(() => view.active.map(inboxItemId), [view.active]);
 
   // The cold-start message claims this browser has NOTHING, so a live Workflow
   // Run has to count against it: a run in `starting` owns no session yet, and a
@@ -963,7 +1040,31 @@ export function SessionInbox({
         </section>
       ) : null}
 
-      {renderCardList(view.active)}
+      {onSetInboxPositions ? (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={() => setDragging(true)}
+          onDragEnd={dropItem}
+          onDragCancel={() => setDragging(false)}
+        >
+          <SortableContext
+            items={activeIds}
+            strategy={verticalListSortingStrategy}
+          >
+            {view.active.map((item) => (
+              <DraggableInboxItem
+                key={inboxItemId(item)}
+                id={inboxItemId(item)}
+              >
+                {(lifted) => renderItem(item, lifted)}
+              </DraggableInboxItem>
+            ))}
+          </SortableContext>
+        </DndContext>
+      ) : (
+        renderCardList(view.active)
+      )}
 
       {view.settledTotal > 0 ? (
         <Collapsible
@@ -1060,6 +1161,42 @@ export function SessionInbox({
           </CollapsibleContent>
         </Collapsible>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * One item of the draggable working set, picked up WHOLE: a card with any rows
+ * it has open, or a run with its roles. The whole block is the activator — a
+ * mouse after a few px, touch after a long press — so a click still opens and
+ * a quick horizontal thumb still swipes. Told while it is lifted, so the
+ * swipes inside it hand the finger over (`SwipeRow`'s `disabled`).
+ *
+ * No keyboard drag, deliberately: the cards own ↑/↓, Enter and the settle and
+ * archive keys, and the sortable's Space pickup would need a focus stop of its
+ * own on top of the card's.
+ */
+function DraggableInboxItem({
+  id,
+  children,
+}: {
+  id: string;
+  children: (lifted: boolean) => ReactNode;
+}) {
+  const { setNodeRef, listeners, transform, transition, isDragging } =
+    useSortable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      data-inbox-card={id}
+      {...listeners}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition: transition ?? undefined,
+      }}
+      className={`touch-manipulation ${isDragging ? "relative z-10 bg-muted shadow-lg ring-1 ring-foreground/25" : ""}`}
+    >
+      {children(isDragging)}
     </div>
   );
 }

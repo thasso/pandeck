@@ -72,6 +72,8 @@ export interface SessionMeta {
    * `settledAt`.
    */
   settledAt?: number;
+  /** Where the user dragged this session in the Sessions inbox (0075). */
+  inboxPosition?: number;
   /**
    * Durable attention state, absent until this session's first outcome. Only a
    * directly owned session raises revisions ({@link recordSessionOutcome}).
@@ -160,6 +162,7 @@ interface DbSessionRow {
   mode: string;
   archived_at_ms: number | null;
   settled_at_ms: number | null;
+  inbox_position: number | null;
   attention_revision: number;
   attention_settled_revision: number;
   attention_kind: string | null;
@@ -199,6 +202,9 @@ function fromRow(row: DbSessionRow): SessionMeta {
     mode: sessionModeOrDefault(row.mode),
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
     ...(row.settled_at_ms !== null ? { settledAt: row.settled_at_ms } : {}),
+    ...(row.inbox_position !== null
+      ? { inboxPosition: row.inbox_position }
+      : {}),
     ...(attentionValue !== undefined
       ? { outcomeAttention: attentionValue }
       : {}),
@@ -265,9 +271,10 @@ const insertColumns =
 // A full-row write. We compute the merged values in TS (see `upsert`), so ON
 // CONFLICT can set every column unconditionally without ever nulling a field the
 // caller didn't touch. read_at_ms / archived_at_ms / settled_at_ms /
-// attention_* / last_error_* / deleted_at_ms are managed by their own methods
-// and intentionally excluded here so a metadata refresh never disturbs
-// read/archive/settlement/attention/failure/tombstone state.
+// inbox_position / attention_* / last_error_* / deleted_at_ms are managed by
+// their own methods and intentionally excluded here so a metadata refresh never
+// disturbs read/archive/settlement/inbox order/attention/failure/tombstone
+// state.
 const upsertSql = `
   INSERT INTO session_index (${insertColumns})
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

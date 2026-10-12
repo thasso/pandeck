@@ -31,6 +31,11 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import {
+  MOUSE_DRAG_DISTANCE_PX,
+  TOUCH_LONG_PRESS_DELAY_MS,
+  TOUCH_LONG_PRESS_TOLERANCE_PX,
+} from "./dragActivation.ts";
 import { ChevronRight } from "lucide-react";
 
 import {
@@ -202,9 +207,6 @@ export interface TreeProps<T> {
 }
 
 const measuring = { droppable: { strategy: MeasuringStrategy.Always } };
-const MOUSE_DRAG_DISTANCE_PX = 4;
-const TOUCH_LONG_PRESS_DELAY_MS = 500;
-const TOUCH_LONG_PRESS_TOLERANCE_PX = 8;
 // Keyboard drag uses Space only, leaving Enter free to select a row.
 const keyboardCodes = {
   start: [KeyboardCode.Space],

@@ -9,6 +9,7 @@ import {
 } from "react";
 import { FileDiff } from "lucide-react";
 import type {
+  InboxPositionEntry,
   ProjectRecord,
   PullRequestInventoryItem,
   SessionListItem,
@@ -197,6 +198,8 @@ interface Props {
   onOpenWorkflowRun: (taskId: string, runId: string) => void;
   /** Settle one Workflow Run out of the Sessions inbox working set. */
   onSettleWorkflowRun: (runId: string, throughRevision: number) => void;
+  /** Place Sessions inbox items where the user dragged them. */
+  onSetInboxPositions: (positions: InboxPositionEntry[]) => void;
   /** The app's pull-request inventory (`hooks/usePullRequestInventory.ts`). */
   pullRequestInventory: LoadState<PullRequestInventoryItem[]>;
   /** Retry that read, behind the browser's inline failure. */
@@ -462,6 +465,7 @@ function SidebarImpl({
   workflowCards,
   onOpenWorkflowRun,
   onSettleWorkflowRun,
+  onSetInboxPositions,
   pullRequestInventory,
   onReloadPullRequests,
   selectedPullRequest,
@@ -834,6 +838,7 @@ function SidebarImpl({
             onOpenTask={onOpenTask}
             onOpenWorkflowRun={onOpenWorkflowRun}
             onSettleWorkflowRun={onSettleWorkflowRun}
+            onSetInboxPositions={onSetInboxPositions}
             onOpenWorktree={onOpenWorktree}
           />
         )}

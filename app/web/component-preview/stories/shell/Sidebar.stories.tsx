@@ -83,6 +83,7 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         workflowCards={fixture.workflowCards ?? {}}
         onOpenWorkflowRun={noop}
         onSettleWorkflowRun={noop}
+        onSetInboxPositions={noop}
         pullRequestInventory={ready([])}
         onReloadPullRequests={noop}
         onOpenPullRequest={noop}

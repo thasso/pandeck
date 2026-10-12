@@ -2548,3 +2548,46 @@ describe("session-list freshness across a reconnect", () => {
     expect(state.sessions.map((row) => row.id)).toEqual(["s2"]);
   });
 });
+
+describe("the dragged Sessions inbox order", () => {
+  const row = (id: string): SessionListItem => ({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    title: id,
+    createdAt: 1_000,
+    updatedAt: 2_000,
+    messageCount: 2,
+  });
+
+  it("places sessions and runs in one dispatch, leaving the rest untouched", () => {
+    const untouched = row("b");
+    const state: UIState = {
+      ...createInitialState(),
+      sessions: [row("a"), untouched],
+      workflowRuns: [
+        {
+          id: "7",
+          taskId: "1",
+          recipeId: "code-delivery",
+          recipeVersion: 1,
+          lifecycle: "active",
+          limits: { maxIterations: 3, maxReviewPasses: 1 },
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      ],
+    };
+    const next = reduceAssistantState(state, {
+      kind: "optimisticInboxPositions",
+      positions: [
+        { kind: "session", id: "a", position: 5_000.5 },
+        { kind: "run", runId: "7", position: 4_000 },
+      ],
+    });
+    expect(next.sessions[0]?.inboxPosition).toBe(5_000.5);
+    expect(next.sessions[0]?.updatedAt).toBe(2_000);
+    expect(next.sessions[1]).toBe(untouched);
+    expect(next.workflowRuns?.[0]?.inboxPosition).toBe(4_000);
+  });
+});

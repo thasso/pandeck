@@ -68,6 +68,9 @@ export function workflowRunSummaryOf(row: WorkflowRunRow): WorkflowRunSummary {
     updatedAt: row.updatedAt,
     ...(row.endedAt ? { endedAt: row.endedAt } : {}),
     ...(row.attention ? { attention: row.attention } : {}),
+    ...(row.inboxPosition !== undefined
+      ? { inboxPosition: row.inboxPosition }
+      : {}),
   };
 }
 
