@@ -4519,6 +4519,12 @@ export interface WorktreeRecord {
   sessionIds: string[];
   /** Tasks implemented in this worktree (via `in_worktree` edges). */
   taskIds: string[];
+  /**
+   * The agent session that created this worktree with `worktree_create` (its
+   * `created_worktree` edge). Absent for a worktree a person, a first send or a
+   * Workflow Run created. It may name a session since archived or deleted.
+   */
+  createdBySessionId?: string;
   createdAt: number;
   updatedAt: number;
   removedAt?: number;

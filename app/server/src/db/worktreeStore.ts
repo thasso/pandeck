@@ -5,6 +5,9 @@
  * edges in the generic {@link ./links.ts} graph:
  *   - `session —in_worktree→ worktree`  the session executes in that worktree
  *   - `task —in_worktree→ worktree`     the task is implemented there
+ *   - `session —created_worktree→ worktree`  the agent session that created
+ *     it; unlike `in_worktree` it survives the creator moving elsewhere, so a
+ *     coordinator that creates several worktrees still owns all of them
  *
  * Pure persistence: git operations, naming, and lifecycle rules live in
  * `../worktrees/`. Rows are soft-removed (`status='removed'`) so worktree and
@@ -170,6 +173,31 @@ export function linkSessionToWorktree(
   setOutgoing(sessionNode(sessionId), "in_worktree", [
     { to: worktreeNode(worktreeId) },
   ]);
+}
+
+/**
+ * Record the session that created a worktree. Written once, at creation (and by
+ * the creator backfill for rows that predate it); a worktree already carrying a
+ * creator keeps it.
+ */
+export function recordWorktreeCreator(
+  sessionId: string,
+  worktreeId: string,
+): void {
+  if (creatorSessionIdForWorktree(worktreeId) !== undefined) return;
+  addLink(sessionNode(sessionId), "created_worktree", worktreeNode(worktreeId));
+}
+
+/**
+ * The session that created this worktree, when one did. Session deletion is
+ * soft and keeps edges, so this may name an archived or deleted session.
+ */
+export function creatorSessionIdForWorktree(
+  worktreeId: string,
+): string | undefined {
+  return incoming(worktreeNode(worktreeId), "created_worktree").find(
+    (link) => link.fromType === "session",
+  )?.fromId;
 }
 
 export function linkTaskToWorktree(taskId: string, worktreeId: string): void {

@@ -1384,6 +1384,29 @@ function spawnedParentsByChildIds(
   );
 }
 
+/**
+ * Every session spawned below `rootId`, at any depth, along `spawned` edges —
+ * whatever their ownership, archive or settlement — in one recursive read over
+ * `session_links_parent_idx`. `UNION` (not `UNION ALL`) visits a node once,
+ * so a cycle terminates. The root itself is not included.
+ */
+function spawnedDescendantIds(rootId: string): string[] {
+  const rows = getDb()
+    .prepare(
+      `WITH RECURSIVE tree(id) AS (
+         SELECT child_session_id FROM session_links
+          WHERE parent_session_id = ? AND relation_type = 'spawned'
+         UNION
+         SELECT l.child_session_id FROM session_links l
+           JOIN tree ON l.parent_session_id = tree.id
+          WHERE l.relation_type = 'spawned'
+       )
+       SELECT id FROM tree WHERE id != ?`,
+    )
+    .all(rootId, rootId) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
+}
+
 /* --------------------------------- usage --------------------------------- */
 
 function recordUsageTurn(
@@ -1660,6 +1683,7 @@ export const sessionStore = {
   linkSpawned,
   setSpawnedOwnership,
   spawnedParentsByChildIds,
+  spawnedDescendantIds,
   recordUsageTurn,
   replaceUsage,
   createInternalUsageSession,

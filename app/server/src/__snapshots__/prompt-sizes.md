@@ -145,7 +145,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,839 |
 | `tools:eager:schemas` | tools | yes | 10,224 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 160,842 |
+| `tools:deferred:universe` | tools | no | 161,211 |
 
 ## workshop — claude
 
@@ -165,7 +165,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,345 |
 | `tools:eager:schemas` | tools | yes | 8,687 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 162,012 |
+| `tools:deferred:universe` | tools | no | 162,381 |
 
 ## workflow-coordinator — pi
 
@@ -225,7 +225,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,665 |
 | `tools:eager:schemas` | tools | yes | 9,938 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 159,659 |
+| `tools:deferred:universe` | tools | no | 160,028 |
 
 ## developer — claude
 
@@ -245,4 +245,4 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,171 |
 | `tools:eager:schemas` | tools | yes | 8,401 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 160,820 |
+| `tools:deferred:universe` | tools | no | 161,189 |

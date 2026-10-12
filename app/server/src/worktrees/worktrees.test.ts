@@ -87,6 +87,8 @@ const {
   linkSessionToWorktree,
   sessionIdsForWorktree,
   liveSessionIdsForWorktree,
+  creatorSessionIdForWorktree,
+  recordWorktreeCreator,
 } = await import("../db/worktreeStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { beginPromptRun } = await import("../session/sessionRunLease.ts");
@@ -422,6 +424,141 @@ test("liveSessionIdsForWorktree skips settled, archived and deleted sessions", a
     "live-dev",
     "live-review",
   ]);
+});
+
+// A coordinator that creates a worktree and hands it to a peer — or only `cd`s
+// into it — is linked to it by nothing `in_worktree` can carry: that edge is one
+// per session and replaced on relink. The creator edge is what keeps every such
+// worktree attributable to the spawn tree that made it.
+test("worktree_create records its caller and worktree_status lists the spawn tree's worktrees", async () => {
+  for (const id of ["coord", "peer", "grandpeer", "stranger"])
+    sessionStore.upsert({
+      id: `tree-${id}`,
+      harness: "pi",
+      agentType: "developer",
+    });
+  sessionStore.linkSpawned("tree-coord", "tree-peer");
+  sessionStore.linkSpawned("tree-peer", "tree-grandpeer");
+  const ctxFor = (sessionId: string) => ({
+    toolCallId: `tree-${sessionId}`,
+    session: {
+      sessionId,
+      harness: "pi" as const,
+      agentType: "developer" as const,
+    },
+  });
+  const tool = (name: string) =>
+    worktreeTools.find((candidate) => candidate.name === name)!;
+  type Listed = {
+    sessionTree: { rootSessionId: string; sessionCount: number };
+    worktrees: Array<{
+      id: string;
+      createdBySessionId?: string;
+      owners: Array<{ sessionId: string; role: string }>;
+    }>;
+    truncated?: boolean;
+  };
+  const treeOf = async (sessionId: string, extra: object = {}) =>
+    (
+      await tool("worktree_status").execute(
+        { projectId: "wt-proj", sessionTree: true, ...extra },
+        ctxFor(sessionId),
+      )
+    ).details as Listed;
+
+  // The coordinator creates two worktrees; neither links it IN.
+  const handed = (
+    await tool("worktree_create").execute(
+      { projectId: "wt-proj", name: "tree-handed" },
+      ctxFor("tree-coord"),
+    )
+  ).details as { id: string };
+  const kept = (
+    await tool("worktree_create").execute(
+      { projectId: "wt-proj", name: "tree-kept" },
+      ctxFor("tree-coord"),
+    )
+  ).details as { id: string };
+  assert.equal(worktreeIdForSession("tree-coord"), undefined);
+  assert.equal(creatorSessionIdForWorktree(handed.id), "tree-coord");
+  // A creator is written once: a later claim does not replace it.
+  recordWorktreeCreator("tree-stranger", handed.id);
+  assert.equal(creatorSessionIdForWorktree(handed.id), "tree-coord");
+
+  // The peer runs in the handed worktree; the grandpeer creates its own.
+  linkSessionToWorktree("tree-peer", handed.id);
+  const own = (
+    await tool("worktree_create").execute(
+      { projectId: "wt-proj", name: "tree-grand-own" },
+      ctxFor("tree-grandpeer"),
+    )
+  ).details as { id: string };
+  const foreign = await createWorktree({
+    projectId: "wt-proj",
+    name: "tree-foreign",
+  });
+  linkSessionToWorktree("tree-stranger", foreign.id);
+
+  const record = (await listWorktreeRecords("wt-proj")).find(
+    (candidate) => candidate.id === handed.id,
+  );
+  assert.equal(record?.createdBySessionId, "tree-coord");
+
+  const fromRoot = await treeOf("tree-coord");
+  assert.deepEqual(fromRoot.sessionTree, {
+    rootSessionId: "tree-coord",
+    sessionCount: 3,
+  });
+  const byId = new Map(fromRoot.worktrees.map((w) => [w.id, w.owners]));
+  assert.deepEqual(byId.get(handed.id), [
+    { sessionId: "tree-coord", role: "created" },
+    { sessionId: "tree-peer", role: "runs-in" },
+  ]);
+  assert.deepEqual(byId.get(kept.id), [
+    { sessionId: "tree-coord", role: "created" },
+  ]);
+  assert.deepEqual(byId.get(own.id), [
+    { sessionId: "tree-grandpeer", role: "created" },
+  ]);
+  assert.equal(byId.has(foreign.id), false, "another tree's worktree");
+  assert.equal(
+    fromRoot.worktrees.some((w) => w.id === mainWorktreeId("wt-proj")),
+    false,
+    "the synthetic main checkout is never owned",
+  );
+
+  // A peer sees its own subtree, not its coordinator's.
+  const fromPeer = await treeOf("tree-peer");
+  assert.equal(fromPeer.sessionTree.sessionCount, 2);
+  assert.deepEqual(
+    fromPeer.worktrees.map((w) => w.id).sort(),
+    [handed.id, own.id].sort(),
+  );
+
+  // Relinking the peer elsewhere moves its `in_worktree`, never the creator.
+  linkSessionToWorktree("tree-peer", foreign.id);
+  const relinked = await treeOf("tree-coord");
+  assert.deepEqual(relinked.worktrees.find((w) => w.id === handed.id)?.owners, [
+    { sessionId: "tree-coord", role: "created" },
+  ]);
+  assert.ok(relinked.worktrees.some((w) => w.id === foreign.id));
+
+  const limited = await treeOf("tree-coord", { limit: 1 });
+  assert.equal(limited.worktrees.length, 1);
+  assert.equal(limited.truncated, true);
+  await assert.rejects(
+    () =>
+      tool("worktree_status").execute(
+        { worktreeId: handed.id, sessionTree: true },
+        ctxFor("tree-coord"),
+      ),
+    /either worktreeId or sessionTree/,
+  );
+
+  // Deletion is soft and keeps the edge: who made it stays answerable, and
+  // whether that session still lives is the reader's question.
+  sessionStore.remove("tree-grandpeer");
+  assert.equal(creatorSessionIdForWorktree(own.id), "tree-grandpeer");
 });
 
 test("managed worktree tools create, inspect and force-remove through their execute paths", async () => {

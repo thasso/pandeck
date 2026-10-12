@@ -38,6 +38,7 @@ import {
 import {
   assertWorktreeCommentsDeletable,
   clearWorktreeBranchCleanup,
+  creatorSessionIdForWorktree,
   finalizeWorktreeRemoval,
   getWorktree,
   insertWorktree,
@@ -46,6 +47,7 @@ import {
   listComments as listWorktreeCommentRows,
   listReviewSets,
   listWorktrees,
+  recordWorktreeCreator,
   sessionIdsForWorktree,
   taskIdsForWorktree,
   type WorktreeRow,
@@ -185,7 +187,14 @@ export interface CreateWorktreeInput {
   /** Where the worktree's branch comes from; absent = a new branch, as before. */
   source?: CreateWorktreeSource;
   taskId?: string;
+  /** A session to link INTO the new worktree (`in_worktree`, replacing its old one). */
   sessionId?: string;
+  /**
+   * The agent session creating it (`worktree_create`), recorded as its
+   * `created_worktree` creator. Linking nothing into the worktree, it is what
+   * keeps a worktree a coordinator made for later work attributable to it.
+   */
+  createdBySessionId?: string;
   /**
    * Called when the network-bound submodule checkout starts, and only when the
    * repository actually has submodules. It is the one step here that can take
@@ -297,6 +306,8 @@ export async function createWorktree(
 
     if (input.taskId) linkTaskToWorktree(input.taskId, row.id);
     if (input.sessionId) linkSessionToWorktree(input.sessionId, row.id);
+    if (input.createdBySessionId)
+      recordWorktreeCreator(input.createdBySessionId, row.id);
     await registerWorktree(row).catch(() => undefined);
 
     // Fire-and-forget: computing the list probes every project's main repo, which
@@ -1598,11 +1609,19 @@ function toRecord(row: WorktreeRow, isMain = false): WorktreeRecord {
     status: row.status,
     sessionIds: sessionIdsForWorktree(row.id),
     taskIds: taskIdsForWorktree(row.id),
+    ...creatorProjection(row.id),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.removedAt !== null ? { removedAt: row.removedAt } : {}),
     ...mergeProjection(row),
   };
+}
+
+function creatorProjection(worktreeId: string): {
+  createdBySessionId?: string;
+} {
+  const sessionId = creatorSessionIdForWorktree(worktreeId);
+  return sessionId ? { createdBySessionId: sessionId } : {};
 }
 
 /**
