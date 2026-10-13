@@ -415,6 +415,7 @@ function pushOperations(
         forced: Boolean(options.explicitLease),
       });
     },
+    links: async () => undefined,
     invalidate: () => {
       calls.invalidated += 1;
     },
@@ -500,6 +501,33 @@ describe("worktree_push", () => {
       localHead: LOCAL_HEAD,
       expectedRemoteHead: REMOTE_HEAD,
     });
+  });
+
+  test("hosted links resolved for the push result ride on the agent-facing result", async () => {
+    const hosted = {
+      provider: "github" as const,
+      branchUrl: "https://github.com/acme/repo/tree/feature",
+      pullRequest: {
+        number: 42,
+        url: "https://github.com/acme/repo/pull/42",
+        title: "Feature",
+        state: "open" as const,
+      },
+    };
+    let linked: PushWorkflowResult | undefined;
+    const ops = pushOperations({
+      links: async (result) => {
+        linked = result;
+        return hosted;
+      },
+    });
+    const result = await createWorktreePushTool(ops).execute(
+      { worktreeId: row.id },
+      context(),
+    );
+
+    assert.equal(linked?.status, "pushed");
+    assert.deepEqual((result.details as { hosted?: unknown }).hosted, hosted);
   });
 
   test("refuses synthetic main, unavailable rows, busy writers, detached/mismatched branches, and dirt", async () => {

@@ -3,6 +3,7 @@ import type {
   CommitDisplay,
   PullRequestCard,
   PushDisplay,
+  PushHostedLinks,
   TaskSummary,
 } from "@assistant/shared";
 import {
@@ -30,6 +31,7 @@ import {
   type PushWorkflowResult,
   type ResolvedPushTarget,
 } from "../../pushWorkflow.ts";
+import { resolvePushLinks } from "../../pushLinks.ts";
 import { reserveWorktreeForMutation } from "../../session/sessionRunLease.ts";
 import { invalidateWorktreeStatus } from "../../worktrees/worktreeStatus.ts";
 import { isMainWorktreeId } from "../../worktrees/worktreeResolve.ts";
@@ -125,6 +127,8 @@ export interface WorktreePushOperations {
     signal?: AbortSignal,
   ): Promise<string | undefined>;
   runPush(options: PushWorkflowOptions): Promise<PushWorkflowResult>;
+  /** Best-effort hosted branch/pull-request links for the card. */
+  links(result: PushWorkflowResult): Promise<PushHostedLinks | undefined>;
   invalidate(worktreeId: string): void;
 }
 
@@ -135,6 +139,7 @@ const defaultPushOperations: WorktreePushOperations = {
   target: resolveManagedPushTarget,
   remoteHead: readManagedRemoteHead,
   runPush: runPushWorkflow,
+  links: resolvePushLinks,
   invalidate: invalidateWorktreeStatus,
 };
 
@@ -582,10 +587,12 @@ async function executeWorktreePush(
           : "";
       throw new Error(`${detail}${guidance}`);
     }
+    const hosted = await operations.links(result);
     const display: PushDisplay = {
       ...toPushDisplay(result),
       localHead: local.head,
       ...(expectedRemoteHead ? { expectedRemoteHead } : {}),
+      ...(hosted ? { hosted } : {}),
     };
     return jsonResult(display);
   } finally {

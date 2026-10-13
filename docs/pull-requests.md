@@ -36,6 +36,18 @@ the card watcher/actions, and worktree hosting status; a configured `pushurl`
 therefore moves the whole PR/CI lifecycle to that publication repository rather
 than splitting creation from observation.
 
+Every successful push card (`/push`, the `/pr` push phase, `worktree_push`)
+links the branch's page on its hosting provider and, when the branch already has
+a pull request in any state, that pull request. The links are resolved once when
+the push finishes, through the same push-URL provider resolution; an
+unconfigured provider, a failed lookup, or one slower than five seconds drops
+the link rather than the card. A pull request created later does not update an
+earlier push card. Only a branch the push provably updated is linked: a
+source-only refspec counts when its source resolves to a local branch and no
+`remote.<name>.push` mapping applies, and an explicit `src:dst` only when `dst`
+is a full `refs/heads/` ref. Anything else (a tag, a deletion, an unqualified
+destination git may resolve to a tag) omits the links.
+
 The provider base branch comes from explicit `--base`, then the session worktree
 row's `baseBranch`, then `origin/HEAD`. Coding agents can change a spawned row's
 future target with `worktree_set_base`; that metadata operation does not rebase

@@ -65,6 +65,12 @@ export interface PushWorkflowResult {
   /** Combined git stdout/stderr for display (git push reports progress on stderr). */
   output: string;
   error?: string;
+  /**
+   * The ONE remote branch a successful push updated, when its arguments prove
+   * it. `branch` is the push SOURCE (`HEAD`, a full ref, a refspec), which git
+   * may publish elsewhere.
+   */
+  publishedBranch?: string;
 }
 
 export interface ParsedPushArgs {
@@ -229,6 +235,47 @@ export function buildPushArgs(options: {
   return args;
 }
 
+/**
+ * The remote branch one pushed refspec updates, or undefined when that is not
+ * provable. Git resolves short names by namespace (a tag, `heads/x`, or an
+ * existing remote tag), so only a full `refs/heads/` ref counts: an explicit
+ * `src:dst` must name one, and a source-only refspec counts when its source
+ * resolves to a local branch and no `remote.<name>.push` mapping can move it.
+ */
+async function publishedBranchOf(
+  repoRoot: string,
+  remote: string,
+  refspec: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const spec = refspec.replace(/^\+/, "");
+  const colon = spec.indexOf(":");
+  let destination: string;
+  if (colon >= 0) {
+    // An empty source is a deletion: nothing is left to link.
+    if (colon === 0) return undefined;
+    destination = spec.slice(colon + 1);
+  } else {
+    const [mapping, source] = await Promise.all([
+      gitOptional(
+        ["config", "--get-all", `remote.${remote}.push`],
+        repoRoot,
+        signal,
+      ),
+      gitOptional(
+        ["rev-parse", "--verify", "--quiet", "--symbolic-full-name", spec],
+        repoRoot,
+        signal,
+      ),
+    ]);
+    if (mapping.stdout.trim() || source.code !== 0) return undefined;
+    destination = source.stdout.trim();
+  }
+  if (!destination.startsWith("refs/heads/") || destination.includes("*"))
+    return undefined;
+  return destination.slice("refs/heads/".length) || undefined;
+}
+
 async function localHead(
   repoRoot: string,
   signal?: AbortSignal,
@@ -385,6 +432,12 @@ export async function runPushWorkflow(
       });
     }
     const upToDate = /everything up-to-date/i.test(output);
+    const publishedBranch = await publishedBranchOf(
+      repoRoot,
+      remote,
+      args[args.length - 1]!,
+      options.signal,
+    );
     let setUpstream = pushSetsUpstream;
     let finalOutput = output;
     if (needsUpstream && options.expectedHead) {
@@ -447,6 +500,7 @@ export async function runPushWorkflow(
       branch,
       setUpstream,
       output: finalOutput || "Pushed.",
+      ...(publishedBranch !== undefined ? { publishedBranch } : {}),
     });
   } catch (err) {
     return base({ status: "failed", error: errorText(err) });

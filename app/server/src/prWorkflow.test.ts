@@ -88,7 +88,9 @@ function presenter(events: string[]): PrWorkflowPresenter {
     progress: () => undefined,
     discard: () => events.push("discard"),
     finishCommit: (result) => events.push(`commit:${result.status}`),
-    finishPush: (result) => events.push(`push:${result.status}`),
+    finishPush: (result) => {
+      events.push(`push:${result.status}`);
+    },
     finishPullRequestTool: (_message, isError) =>
       events.push(`pr:${isError ? "failed" : "ok"}`),
   };
@@ -207,6 +209,39 @@ test("skips clean commit and up-to-date push phases", async () => {
   );
   assert.equal(result.status, "created");
   assert.deepEqual(events, ["begin:pull-request", "pr:ok"]);
+});
+
+test("the pull-request phase waits for the push card to finish", async () => {
+  const events: string[] = [];
+  let finishPush!: () => void;
+  const base = presenter(events);
+  const running = runPrWorkflow(
+    {
+      ...baseOptions,
+      presenter: {
+        ...base,
+        finishPush: (result) =>
+          new Promise<void>((resolve) => {
+            events.push(`push:${result.status}`);
+            finishPush = resolve;
+          }),
+      },
+    },
+    operations({
+      needsPush: async () => true,
+      runPush: async () => push("pushed"),
+    }),
+  );
+  await vi.waitFor(() => assert.ok(events.includes("push:pushed")));
+  assert.deepEqual(events, ["begin:push", "push:pushed"]);
+  finishPush();
+  assert.equal((await running).status, "created");
+  assert.deepEqual(events, [
+    "begin:push",
+    "push:pushed",
+    "begin:pull-request",
+    "pr:ok",
+  ]);
 });
 
 test("a commit race that finds no changes discards its transient card", async () => {
