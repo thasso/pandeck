@@ -16,6 +16,7 @@ import { Buffer } from "node:buffer";
 import {
   appendFileSync,
   existsSync,
+  linkSync,
   mkdtempSync,
   rmSync,
   statSync,
@@ -360,6 +361,27 @@ describe("a non-skill library kind", () => {
       assert.equal(statSync(path).ino, inode);
       assert.equal(armed, false, "the growth happened between scan and read");
     }
+
+    // Hard links are the same inode under another name or path: they are the
+    // manifest, and are held to its bound too.
+    await mkdir(join(root, "gear", "nested"));
+    linkSync(path, join(root, "gear", "nested", "WIDGET.md"));
+    linkSync(path, join(root, "gear", "widget.md"));
+    for (const alias of ["nested/WIDGET.md", "widget.md"]) {
+      const aliasReads: Array<() => Promise<unknown>> = [
+        () => readEntryRawFile("gear", alias, growing),
+        () => readEntryFilePreview("gear", alias, growing),
+        () => readEntryTextWindow("gear", alias, {}, growing),
+      ];
+      for (const read of aliasReads) {
+        writeFileSync(path, valid);
+        armed = true;
+        await assert.rejects(read(), EntryFileTooLargeError, alias);
+        assert.equal(armed, false);
+      }
+    }
+    rmSync(join(root, "gear", "nested"), { recursive: true });
+    rmSync(join(root, "gear", "widget.md"));
 
     // A supporting file is not the manifest and is not held to its bound.
     writeFileSync(path, valid);

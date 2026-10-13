@@ -29,6 +29,7 @@ import { manifestSizeIssue } from "./entryManifest.ts";
 import type { LibraryKind } from "./libraryKind.ts";
 import type { LibraryStore } from "./libraryStore.ts";
 import {
+  entryHandleIdentity,
   iterateEntryDirectory,
   sameEntrySource,
   IrregularEntrySourceError,
@@ -354,7 +355,7 @@ export async function readEntryRawFile(
 ): Promise<EntryRawFile | null> {
   const path = normalizeEntryRelativePath(library.kind, pathInput);
   return withResolvedEntry(name, library, async (source) =>
-    withRelativeFile(library.kind, source.folder, path, async (file) => {
+    withRelativeFile(library.kind, source, path, async (file) => {
       if (file.size > MAX_ENTRY_RAW_FILE_BYTES) {
         throw new EntryFileTooLargeError(path, file.size);
       }
@@ -381,7 +382,7 @@ export async function readEntryFilePreview(
 ): Promise<EntryFilePreviewResponse | null> {
   const path = normalizeEntryRelativePath(library.kind, pathInput);
   return withResolvedEntry(name, library, async (source) =>
-    withRelativeFile(library.kind, source.folder, path, async (file) => {
+    withRelativeFile(library.kind, source, path, async (file) => {
       const mimeType = entryFileMimeType(path);
       const previewBytes = Math.min(file.size, MAX_ENTRY_FILE_PREVIEW_BYTES);
       const content = await readBounded(file.handle, previewBytes);
@@ -458,7 +459,7 @@ export async function readEntryTextWindow(
   const offset = boundedOffset(window.offset);
   const limit = boundedLimit(window.limit);
   return withResolvedEntry(name, library, async (source) =>
-    withRelativeFile(library.kind, source.folder, path, async (file) => {
+    withRelativeFile(library.kind, source, path, async (file) => {
       const mimeType = entryFileMimeType(path);
       const readable = Math.min(file.size, MAX_ENTRY_FILE_PREVIEW_BYTES);
       const content = await readBounded(file.handle, readable);
@@ -659,7 +660,7 @@ async function withResolvedEntryFromScan<T>(
 
 async function withRelativeFile<T>(
   kind: LibraryKind,
-  folder: FileHandle,
+  source: EntrySource,
   path: string,
   use: (file: { handle: FileHandle; size: number }) => Promise<T>,
 ): Promise<T> {
@@ -671,10 +672,16 @@ async function withRelativeFile<T>(
         if (child.directory)
           throw new EntryFileNotFoundError("Path is a directory.");
         // The manifest read as a file is still the manifest: its kind's bound
-        // applies to the handle opened HERE, not to the size the scan saw.
+        // applies to the handle opened HERE, not to the size the scan saw. It
+        // is recognised by name AND by inode, so a hard link to it under
+        // another name or path is held to the same bound.
         if (
-          path === kind.manifestFile &&
-          manifestSizeIssue(kind, child.size, path) !== undefined
+          manifestSizeIssue(kind, child.size, path) !== undefined &&
+          (path === kind.manifestFile ||
+            sameInode(
+              await entryHandleIdentity(child.handle),
+              source.identity.file,
+            ))
         ) {
           throw new EntryFileTooLargeError(path, child.size);
         }
@@ -684,7 +691,14 @@ async function withRelativeFile<T>(
         throw new EntryFileNotFoundError("Path is not a directory.");
       return descend(child.handle, at + 1);
     });
-  return descend(folder, 0);
+  return descend(source.folder, 0);
+}
+
+function sameInode(
+  actual: { dev: number; ino: number },
+  expected: { dev: number; ino: number },
+): boolean {
+  return actual.dev === expected.dev && actual.ino === expected.ino;
 }
 
 async function readBounded(handle: FileHandle, bytes: number): Promise<Buffer> {
