@@ -55,19 +55,19 @@ import {
 } from "react";
 import {
   isSkillEnabled,
-  MAX_SKILL_BODY_BYTES,
-  MAX_SKILL_FILE_PREVIEW_BYTES,
-  MAX_SKILL_TREE_DEPTH,
-  MAX_SKILL_TREE_ENTRIES,
-  MAX_SKILL_TREE_METADATA_BYTES,
+  MAX_ENTRY_BODY_BYTES,
+  MAX_ENTRY_FILE_PREVIEW_BYTES,
+  MAX_ENTRY_TREE_DEPTH,
+  MAX_ENTRY_TREE_ENTRIES,
+  MAX_ENTRY_TREE_METADATA_BYTES,
   type AppSettings,
-  type SkillDetail,
-  type SkillDetailResponse,
-  type SkillDiagnostic,
-  type SkillFilePreviewResponse,
-  type SkillFileTreeEntry,
+  type EntryDetail,
+  type EntryDetailResponse,
+  type EntryDiagnostic,
+  type EntryFilePreviewResponse,
+  type EntryFileTreeEntry,
   type SkillLibraryList,
-  type SkillSummary,
+  type EntrySummary,
   type SkillToggles,
 } from "@assistant/shared";
 import { useFetchState } from "../hooks/useFetchState.ts";
@@ -125,7 +125,7 @@ export function SkillsSettingsSection({
   const toggles = settings.skills;
 
   const [selected, setSelected] = useState<string | null>(null);
-  const detail = useFetchState<SkillDetailResponse>(selected, fetchSkillDetail);
+  const detail = useFetchState<EntryDetailResponse>(selected, fetchSkillDetail);
   const { reload } = detail;
 
   // A rescan is authoritative over the open body too. Reloading the SAME key
@@ -281,7 +281,7 @@ function SkillRow({
   open,
   onSelect,
 }: {
-  skill: SkillSummary;
+  skill: EntrySummary;
   on: boolean;
   onToggle: (name: string, on: boolean) => void;
   open: boolean;
@@ -343,7 +343,7 @@ function SkillDetailPane({
   onClose,
 }: {
   name: string;
-  state: LoadState<SkillDetailResponse>;
+  state: LoadState<EntryDetailResponse>;
   onReload: () => void;
   onClose: () => void;
 }) {
@@ -384,7 +384,7 @@ function SkillDetailPane({
           <SkillNote>{detail.error}</SkillNote>
         ) : null}
 
-        {detail?.kind === "skill" ? (
+        {detail?.kind === "entry" ? (
           <>
             <p className="text-sm text-muted-foreground">
               {detail.description}
@@ -402,7 +402,7 @@ function SkillDetailPane({
 }
 
 interface SkillBrowserNode {
-  entry: SkillFileTreeEntry;
+  entry: EntryFileTreeEntry;
 }
 
 function SkillFileBrowser({
@@ -410,7 +410,7 @@ function SkillFileBrowser({
   selectedPath,
   onSelectPath,
 }: {
-  detail: SkillDetail;
+  detail: EntryDetail;
   selectedPath: string;
   onSelectPath: (path: string) => void;
 }) {
@@ -472,7 +472,7 @@ function SkillFileBrowser({
   );
 }
 
-function SkillFileTreeRow({ entry }: { entry: SkillFileTreeEntry }) {
+function SkillFileTreeRow({ entry }: { entry: EntryFileTreeEntry }) {
   const Icon =
     entry.type === "directory"
       ? Folder
@@ -497,8 +497,8 @@ function SkillFileViewer({
   entry,
   path,
 }: {
-  detail: SkillDetail;
-  entry: SkillFileTreeEntry | undefined;
+  detail: EntryDetail;
+  entry: EntryFileTreeEntry | undefined;
   path: string;
 }) {
   if (!entry || entry.type !== "file") {
@@ -565,12 +565,12 @@ function SkillFileViewer({
   );
 }
 
-function SkillMarkdown({ detail }: { detail: SkillDetail }) {
+function SkillMarkdown({ detail }: { detail: EntryDetail }) {
   return (
     <div className="p-3">
       {detail.truncated ? (
         <div className="mb-3 text-sm text-muted-foreground">
-          Showing the first {formatBytes(MAX_SKILL_BODY_BYTES)} of this{" "}
+          Showing the first {formatBytes(MAX_ENTRY_BODY_BYTES)} of this{" "}
           {formatBytes(detail.bytes)} file. Open it raw to read the rest.
         </div>
       ) : null}
@@ -590,10 +590,10 @@ function SkillTextFile({
   entry,
 }: {
   name: string;
-  entry: SkillFileTreeEntry;
+  entry: EntryFileTreeEntry;
 }) {
   const key = `${name}\0${entry.path}`;
-  const { state, reload } = useFetchState<SkillFilePreviewResponse>(
+  const { state, reload } = useFetchState<EntryFilePreviewResponse>(
     key,
     fetchSkillFilePreview,
   );
@@ -635,7 +635,7 @@ function SkillTextFile({
       {error ? <ErrorNote message={error} onRetry={reload} /> : null}
       {preview.truncated ? (
         <div className="text-sm text-muted-foreground">
-          Showing the first {formatBytes(MAX_SKILL_FILE_PREVIEW_BYTES)} of this{" "}
+          Showing the first {formatBytes(MAX_ENTRY_FILE_PREVIEW_BYTES)} of this{" "}
           {formatBytes(preview.bytes)} file.
         </div>
       ) : null}
@@ -661,7 +661,7 @@ function UnsupportedSkillFile({
   entry,
   rawUrl,
 }: {
-  entry: SkillFileTreeEntry;
+  entry: EntryFileTreeEntry;
   rawUrl: string;
 }) {
   return (
@@ -679,7 +679,7 @@ function UnsupportedSkillFile({
 }
 
 function skillTreeNodes(
-  entries: SkillFileTreeEntry[],
+  entries: EntryFileTreeEntry[],
 ): TreeNode<SkillBrowserNode>[] {
   return entries.map((entry) => ({
     id: entry.path,
@@ -689,9 +689,9 @@ function skillTreeNodes(
 }
 
 function findSkillFile(
-  entries: SkillFileTreeEntry[],
+  entries: EntryFileTreeEntry[],
   path: string,
-): SkillFileTreeEntry | undefined {
+): EntryFileTreeEntry | undefined {
   for (const entry of entries) {
     if (entry.path === path) return entry;
     const nested = entry.children && findSkillFile(entry.children, path);
@@ -701,16 +701,16 @@ function findSkillFile(
 }
 
 function skillTreeLimitDiagnostic(
-  limits: SkillDetail["files"]["limits"],
+  limits: EntryDetail["files"]["limits"],
 ): string {
   const labels = limits.map((limit) => {
     switch (limit) {
       case "entries":
-        return `${MAX_SKILL_TREE_ENTRIES.toLocaleString()} entries`;
+        return `${MAX_ENTRY_TREE_ENTRIES.toLocaleString()} entries`;
       case "depth":
-        return `${MAX_SKILL_TREE_DEPTH} levels`;
+        return `${MAX_ENTRY_TREE_DEPTH} levels`;
       case "metadata-bytes":
-        return `${formatBytes(MAX_SKILL_TREE_METADATA_BYTES)} of path metadata`;
+        return `${formatBytes(MAX_ENTRY_TREE_METADATA_BYTES)} of path metadata`;
     }
     return limit;
   });
@@ -731,7 +731,7 @@ function formatBytes(value: number): string {
   return `${value} B`;
 }
 
-function DiagnosticRow({ diagnostic }: { diagnostic: SkillDiagnostic }) {
+function DiagnosticRow({ diagnostic }: { diagnostic: EntryDiagnostic }) {
   return (
     <Item variant="outline" role="listitem" className="items-start">
       <ItemMedia variant="icon">

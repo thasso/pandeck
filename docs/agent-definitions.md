@@ -1,7 +1,8 @@
 # Agent definitions
 
-**Status:** proposed design for [Task-780](pa://task/780). Nothing here is
-implemented yet.
+**Status:** design for [Task-780](pa://task/780). The shared library core is
+implemented ([Task-781](pa://task/781)); the agent library, spawning by name,
+and the UI are not yet.
 
 An agent definition is a user-authored Markdown file that describes a reusable
 agent: which persona it builds on, which model and effort it runs at, which
@@ -73,7 +74,7 @@ You are a test reviewer. ...
 
 | Key           | Required | Meaning                                                                                            |
 | ------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `name`        | yes      | Declared name; same rule as skills (`isSafeSkillName` in `app/shared/skills.ts`).                  |
+| `name`        | yes      | Declared name; same rule as skills (`isSafeEntryName` in `app/shared/library.ts`).                 |
 | `description` | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description. |
 | `persona`     | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                |
 | `model`       | yes      | An alias or an exact model id. See [Model and effort](#model-and-effort).                          |
@@ -86,8 +87,8 @@ The body is the role instructions. It must be non-empty and has a size bound
 never accounted for.
 
 One rule decides validity, and the scanner and the authoring tools ask it from
-both sides, as `skillManifest.ts` does for skills. A hand-written file the rule
-rejects shows up as a scan diagnostic. The tools refuse to write one.
+both sides, as `library/entryManifest.ts` does for skills. A hand-written file
+the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
 
 ## Model and effort
 
@@ -201,39 +202,47 @@ shows frozen skills.
 
 ## Shared library core
 
-Agents are the second Git-backed library, and they must not be a copy of the
-first. Before any agent code lands, the kind-neutral parts of `skills/` move
-into one library core that takes an entry kind as a parameter. Skills stay its
-only user in that change, which has no behavior change and keeps every existing
-skill test green.
+Agents are the second Git-backed library, and they are not a copy of the first.
+The kind-neutral parts of the skills library are one core that takes a
+`LibraryKind` ([Task-781](pa://task/781), implemented):
 
-The entry kind supplies:
+| Module                                            | Owns                                                                          |
+| ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `library/libraryKind.ts`                          | The descriptor: nouns, manifest file, trailer prefix, manifest rule, publish. |
+| `library/libraryStore.ts`                         | Bootstrap, clean-tree refusal, locked commit with provenance, history, diff.  |
+| `library/entrySource.ts`                          | Anchored no-follow access to an entry's files.                                |
+| `library/libraryScanner.ts`                       | Scan and diagnostics, with the manifest rule supplied by the kind.            |
+| `library/entryManifest.ts`                        | The shared `name` + `description` rule, formatting, declared-name rewrite.    |
+| `library/libraryAuthoring.ts`                     | Create, edit, rename, delete, manage files, post-write scan check.            |
+| `library/entryFiles.ts`, `library/entryDetail.ts` | Bounded file tree and reads, one entry by declared name.                      |
+| `tools/library/libraryTools.ts`                   | The tool factory that builds a kind's `<prefix>_*` group.                     |
+| `app/shared/library.ts`                           | Kind-neutral summary, diagnostic, file-tree and detail wire types.            |
 
-- the library directory and the manifest file name (`SKILL.md`, `AGENT.md`),
-- the manifest rule: parse, validate, and deterministic formatting
-  (`skillManifest.ts` today),
-- the limits and the wire names (tool names, topic, HTTP paths).
-
-The core owns everything else:
-
-| Today                              | Becomes                                                                      |
-| ---------------------------------- | ---------------------------------------------------------------------------- |
-| `skillLibraryStore.ts`             | Bootstrap, clean-tree refusal, locked commit with provenance, history, diff. |
-| `skillSource.ts`                   | Anchored no-follow access to an entry's files.                               |
-| `skillLibraryScanner.ts`           | Scan and diagnostics, with the manifest rule supplied by the kind.           |
-| `skillAuthoring.ts`                | Create, edit, rename, delete, manage files, post-write scan check.           |
-| `skillFiles.ts`, `skillDetail.ts`  | Bounded file tree and reads, one entry by declared name.                     |
-| `skillLibrary.ts`, `skillsHttp.ts` | Browser topic and HTTP reads, per kind.                                      |
-| `tools/skills/skillTools.ts`       | A tool factory that builds the `skill_*` and `agent_*` groups.               |
-| `app/shared/skills.ts`             | Kind-neutral summary, diagnostic, and history wire types.                    |
+A kind supplies its descriptor, its manifest rule (built from the shared one),
+how a create renders its manifest, and the consequences its rename and delete
+tools report. Skills are `skills/skillLibrary.ts` (descriptor, store, topic),
+`skills/createSkill.ts` and `tools/skills/skillLibraryTools.ts` (the factory
+spec). The `skill_*` tools the factory builds are byte-identical to the
+hand-written ones they replaced: names, labels, descriptions and parameter
+schemas.
 
 These stay skills-only: the global on/off map, session freezing
 (`sessionSkills.ts`), the runtime materializer, and invocation tracking. Agents
 have their own freeze (above) and no on/off map: a definition the user does not
-want is deleted or renamed.
+want is deleted or renamed. The skills browser topic and HTTP reads are still
+skill-specific; they become per-kind when the Agents page needs them
+([Task-784](pa://task/784)).
 
-The test for "shared enough": adding a third library kind would need a manifest
-rule, a kind descriptor, and nothing else.
+The core's wire and message vocabulary is kind-neutral where a kind name would
+be wrong for another kind: the file-level diagnostic codes are
+`missing-manifest`, `unreadable-manifest` and `symlinked-source`, a detail read
+answers `kind: "entry"`, and a removal moves its tree aside as
+`.pa-removing-<uuid>`. Every message that names the kind (`skill`,
+`skills repository`, `Skill-*` trailers) comes from the descriptor, so skill
+messages are unchanged.
+
+The test for "shared enough": adding a third library kind needs a manifest rule,
+a kind descriptor, a create renderer, and nothing else.
 
 ## UI
 

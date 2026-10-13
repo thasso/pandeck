@@ -578,21 +578,21 @@ vocabulary, display projection, and normalized session model types.
   here names an implementer, reviewer, commit, or pull request — recipe meaning
   lives in payloads and registered result contracts.
 - `skills.ts` owns the user-owned skills library wire model
-  ([Task-531](pa://task/531), `docs/skills.md`): `SkillSummary` (declared name,
-  description, library-relative `SKILL.md` path), `SkillDiagnostic` with its
-  `SkillDiagnosticCode` vocabulary, and the `SkillLibraryList` read model that
+  ([Task-531](pa://task/531), `docs/skills.md`): `EntrySummary` (declared name,
+  description, library-relative `SKILL.md` path), `EntryDiagnostic` with its
+  `EntryDiagnosticCode` vocabulary, and the `SkillLibraryList` read model that
   carries both halves plus the absolute `libraryPath` the user maintains by
   hand. Summaries stay compact because the list view shows all of them at once,
   and diagnostics travel WITH them because a malformed folder is what a
   hand-authored library actually produces — it is listed with its reason rather
   than dropped. A diagnostic identifies its SOURCE FOLDER, which is independent
   of any name that folder declares. The server scanner builds these types
-  directly (`skills/skillLibraryScanner.ts`), so browse and injection cannot
-  read two different shapes. It is re-exported from `protocol.ts`, which adds
-  the `skills` broadcast topic and the single `skillList` message: exactly one
-  of `list`/`error` is set, and a failed scan is an `error` rather than an empty
+  directly (`library/libraryScanner.ts`), so browse and injection cannot read
+  two different shapes. It is re-exported from `protocol.ts`, which adds the
+  `skills` broadcast topic and the single `skillList` message: exactly one of
+  `list`/`error` is set, and a failed scan is an `error` rather than an empty
   library. It also owns the two rules the library and its settings must agree on
-  ([Task-613](pa://task/613)): `isSafeSkillName` (with `MAX_SKILL_NAME_CHARS`),
+  ([Task-613](pa://task/613)): `isSafeEntryName` (with `MAX_ENTRY_NAME_CHARS`),
   the one definition of a declared name, used by the scanner AND by settings
   normalization so a name that can be scanned is a name that can be toggled; and
   `SkillToggles` with `isSkillEnabled`, the read rule for `AppSettings.skills`.
@@ -601,13 +601,13 @@ vocabulary, display projection, and normalized session model types.
   explicit `"on"` enables: absence, `"off"`, an empty section and settings not
   yet fetched all answer off, so no missing read can enable a skill. The
   single-skill read ([Task-614](pa://task/614)) is the same shape one level
-  down: `SkillDetailResponse` is `SkillDetail` (the summary's metadata plus the
+  down: `EntryDetailResponse` is `EntryDetail` (the summary's metadata plus the
   `SKILL.md` body below the frontmatter, the file's `bytes`, and `truncated`
-  against `MAX_SKILL_BODY_BYTES`) or `SkillDetailUnavailable`, an explicit
+  against `MAX_ENTRY_BODY_BYTES`) or `EntryDetailUnavailable`, an explicit
   invalid state carrying the requested name and the reason. A valid detail also
-  carries `SkillFileTree`: recursive `SkillFileTreeEntry` nodes with entry,
+  carries `EntryFileTree`: recursive `EntryFileTreeEntry` nodes with entry,
   depth, and UTF-8 metadata-byte bounds plus reached-limit and race diagnostics.
-  `SkillFilePreviewResponse` is the bounded HTTP text-viewer union: decoded text
+  `EntryFilePreviewResponse` is the bounded HTTP text-viewer union: decoded text
   with full size/truncation, or explicit binary metadata. The same module owns
   the tree/preview/raw byte constants so server and web state the same bounds.
   Both detail kinds echo the requested NAME because an unavailable answer is

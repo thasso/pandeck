@@ -63,6 +63,7 @@ import type {
 export * from "./memory.ts";
 export * from "./memoryValidation.ts";
 export * from "./workflow.ts";
+export * from "./library.ts";
 export * from "./skills.ts";
 export * from "./comments.ts";
 export * from "./thinkingLevels.ts";

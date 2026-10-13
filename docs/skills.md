@@ -3,6 +3,16 @@
 The skills library is user-authored source for reusable agent skills. It is
 separate from project-local skills and from Pandeck's generated runtime layouts.
 
+Its storage, scanning, anchored reads, authoring, history and tools are the
+shared Git-backed library core in `app/server/src/library/` and
+`tools/library/libraryTools.ts`, which agent definitions use too
+(`docs/agent-definitions.md#shared-library-core`). Skills supply one kind
+descriptor (`skills/skillLibrary.ts`: `SKILL.md`, the `name` + `description`
+rule, `Skill-*` trailers), `createSkill` (`skills/createSkill.ts`), and
+everything below that is about sessions: the on/off map, the per-session freeze,
+runtime layouts and injection. Every rule this document states for the library
+holds for any kind built on that core.
+
 ## Storage ownership
 
 `DATA_DIR/skills` is a dedicated Git working tree owned by the user. Personal
@@ -51,7 +61,7 @@ file itself would be.
 skills-specific YAML implementation. `description` must be a string. The
 declared `name` must be 1–64 characters and match `^[a-z0-9]+(?:-[a-z0-9]+)*$`:
 lowercase ASCII letters, digits, and single hyphens, with no leading or trailing
-hyphen. That rule is `isSafeSkillName` in `app/shared/skills.ts`, shared by the
+hyphen. That rule is `isSafeEntryName` in `app/shared/library.ts`, shared by the
 scanner and by settings, so what may be scanned and what may be toggled cannot
 drift apart. `description` must be a non-empty, non-whitespace string of at most
 1024 characters. These agentskills.io-compatible bounds are also safe to
@@ -137,7 +147,7 @@ rest of `/api/`; file bodies are too large for the list topic and are wanted for
 one row at a time.
 
 `name` is the entire address. A caller never supplies a path. The name must
-satisfy `isSafeSkillName` — a name that could never be declared is refused as a
+satisfy `isSafeEntryName` — a name that could never be declared is refused as a
 malformed request before any scan runs — and it is then resolved through a fresh
 working-tree scan to the source folder that scan reported. A request therefore
 cannot select a folder the scanner rejected, cannot address a skill by its
@@ -150,7 +160,7 @@ requested skill:
   path, the body BELOW the frontmatter, the file's size in bytes, whether it was
   truncated, and a recursive tree of the whole selected skill folder. The
   frontmatter's own two fields travel as metadata, so the raw fence is not part
-  of the body. The body is bounded at 256 KiB (`MAX_SKILL_BODY_BYTES`); a bound
+  of the body. The body is bounded at 256 KiB (`MAX_ENTRY_BODY_BYTES`); a bound
   reached mid-character drops that character rather than emitting a replacement
   one. The deterministic tree puts `SKILL.md` first and then sorts each folder
   by byte-stable name. It is bounded to 1,000 entries, 16 levels, and 256 KiB of
@@ -269,8 +279,8 @@ Every mutation needs a concise reason and may carry a related Task id.
 
 ### What a mutation guarantees
 
-`SkillLibraryStore` is the one storage seam for both halves of the domain, so
-there is no second Git path. Under the canonical repository lock
+`LibraryStore` is the one storage seam for both halves of the domain, so there
+is no second Git path. Under the canonical repository lock
 (`withRepoLock(await repoLockKey(root), …)`, never nested) one mutation:
 initializes, verifies the repository is ENTIRELY clean and that Git can take the
 index lock, resolves and validates every target and path, applies the complete
@@ -424,17 +434,17 @@ untracked can already be lying around, a successful commit contains the complete
 created, edited or deleted content it claims.
 
 Validation is the scanner's own rule, not a second "tool-valid" schema:
-`skillManifest.ts` parses and validates frontmatter for the scan and for every
-mutation, and formats the source a tool writes. A mutation must leave its target
-valid and introduce no new diagnostic or duplicate-name collision. Pre-existing
-unrelated diagnostics stay visible and stay uncommitted — a mutation neither
-repairs them nor inherits them.
+`library/entryManifest.ts` parses and validates frontmatter for the scan and for
+every mutation, and formats the source a tool writes. A mutation must leave its
+target valid and introduce no new diagnostic or duplicate-name collision.
+Pre-existing unrelated diagnostics stay visible and stay uncommitted — a
+mutation neither repairs them nor inherits them.
 
-Writes use the same anchored no-follow seam as reads (`skillSource.ts`): a path
-is resolved once below a held descriptor, so a component swapped for a symlink
-is refused rather than followed. Nothing authors a symlink; a manually authored
-supporting symlink remains browseable under the Phase 1 contract, but no tool
-writes through it or deletes it.
+Writes use the same anchored no-follow seam as reads (`library/entrySource.ts`):
+a path is resolved once below a held descriptor, so a component swapped for a
+symlink is refused rather than followed. Nothing authors a symlink; a manually
+authored supporting symlink remains browseable under the Phase 1 contract, but
+no tool writes through it or deletes it.
 
 Anchoring alone is not enough for a repository the user also edits by hand: the
 lock serializes the app against itself, not against a person. So every mutation
@@ -480,9 +490,9 @@ REMOVAL is the mirror image of that, and it has the same problem in reverse:
 `unlink` and `rmdir` take names too, and an `lstat` followed by an `unlink` of
 the same name is a guess — the name can be something else by the time the second
 call runs. So nothing is removed under a public name. A whole tree is renamed to
-a private `.pa-skill-removing-<uuid>` first and only then identified, checked
-against what the mutation put there, and emptied; a single file is moved aside
-the same way before it is examined and unlinked. Putting a rejected tree BACK is
+a private `.pa-removing-<uuid>` first and only then identified, checked against
+what the mutation put there, and emptied; a single file is moved aside the same
+way before it is examined and unlinked. Putting a rejected tree BACK is
 assembly, not a rename: `mkdir` claims the public name or fails, and the files
 are hard-linked across, so a directory a hand edit created at that name in the
 meantime is never replaced by the restore. A delete, a rename's cleanup of the
@@ -563,9 +573,9 @@ and refusing when what arrives is not the size the budgets were spent on, since
 a prefix of somebody's binary file is not what anyone asked to import.
 
 Bounds are the viewer's, not new ones: `SKILL.md` source is bounded at
-`MAX_SKILL_BODY_BYTES` (256 KiB), one supporting text write at
-`MAX_SKILL_FILE_PREVIEW_BYTES` (256 KiB), one attachment import at
-`MAX_SKILL_RAW_FILE_BYTES` (10 MiB), and one batch at 20 operations and 16 MiB.
+`MAX_ENTRY_BODY_BYTES` (256 KiB), one supporting text write at
+`MAX_ENTRY_FILE_PREVIEW_BYTES` (256 KiB), one attachment import at
+`MAX_ENTRY_RAW_FILE_BYTES` (10 MiB), and one batch at 20 operations and 16 MiB.
 A path may not be absolute, traverse, contain a backslash or NUL, or be
 `SKILL.md` itself.
 

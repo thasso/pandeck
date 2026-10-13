@@ -1,54 +1,56 @@
 import { Buffer } from "node:buffer";
 import type { FileHandle } from "node:fs/promises";
 /**
- * The ONE rule for what a `SKILL.md` manifest may say, and the one way the app
- * writes it ([Task-633](pa://task/633), `docs/skills.md`).
+ * The shared half of every library manifest rule, and the one way the app
+ * writes a manifest ([Task-633](pa://task/633), `docs/skills.md`).
  *
  * The scanner reports what a hand-authored folder got wrong; the authoring
  * tools refuse to write anything the scanner would then reject. Those are the
- * same question asked from two sides, so they must not be two schemas: this
- * module parses and validates the frontmatter, and the scanner only decorates
- * the issues it returns with the folder they belong to.
+ * same question asked from two sides, so they must not be two schemas: a kind's
+ * {@link LibraryKind.parseManifest} is the whole rule, built from the pieces
+ * here, and the scanner only decorates the issues it returns with the folder
+ * they belong to.
  *
  * Formatting is deterministic for the same reason. A tool-written manifest is
- * re-read by the scanner immediately afterwards, so `description` is emitted as
- * a JSON-quoted scalar — the shared YAML subset parses that back byte-for-byte,
+ * re-read by the scanner immediately afterwards, so a string is emitted as a
+ * JSON-quoted scalar — the shared YAML subset parses that back byte-for-byte,
  * including text with colons, `#`, or newlines in it, which a plain scalar
  * would silently mangle.
  */
 import {
-  isSafeSkillName,
-  MAX_SKILL_BODY_BYTES,
-  MAX_SKILL_NAME_CHARS,
-  type SkillDiagnosticCode,
+  isSafeEntryName,
+  MAX_ENTRY_BODY_BYTES,
+  MAX_ENTRY_NAME_CHARS,
+  type EntryDiagnosticCode,
 } from "@assistant/shared";
 import {
   parseYamlSubset,
   splitYamlFrontmatter,
 } from "@assistant/shared/frontmatter";
+import type { LibraryKind } from "./libraryKind.ts";
 
 /** Bound on a declared description, shared by scanning and authoring. */
-const MAX_SKILL_DESCRIPTION_CHARS = 1024;
+const MAX_ENTRY_DESCRIPTION_CHARS = 1024;
 
-/** One reason a manifest is not injectable, in the scanner's own vocabulary. */
-interface SkillManifestIssue {
-  code: SkillDiagnosticCode;
+/** One reason a manifest is not usable, in the scanner's own vocabulary. */
+interface ManifestIssue {
+  code: EntryDiagnosticCode;
   error: string;
 }
 
-/** A manifest that satisfies every rule the scanner enforces. */
-export interface SkillManifest {
+/** The fields every library manifest has. */
+export interface EntryManifest {
   name: string;
   description: string;
   /** Markdown below the frontmatter, byte-for-byte as authored. */
   body: string;
 }
 
-export type SkillManifestResult =
-  | { ok: true; manifest: SkillManifest }
+export type ManifestResult<M extends EntryManifest = EntryManifest> =
+  | { ok: true; manifest: M }
   | {
       ok: false;
-      issues: SkillManifestIssue[];
+      issues: ManifestIssue[];
       /**
        * A safe declared name recovered despite other issues. Duplicate-name
        * detection needs it: a folder with a broken description still competes
@@ -58,16 +60,19 @@ export type SkillManifestResult =
     };
 
 /** A manifest or path a mutation refuses to write. Thrown, never encoded. */
-export class SkillValidationError extends Error {}
+export class EntryValidationError extends Error {}
 
 /**
- * Validate complete `SKILL.md` source. `path` only names the file in messages;
- * nothing is read from the filesystem here.
+ * Split complete manifest source into its frontmatter mapping and body, or the
+ * one issue that stops it. `path` only names the file in messages; nothing is
+ * read from the filesystem here.
  */
-export function parseSkillManifest(
+function parseManifestFrontmatter(
   content: string,
   path: string,
-): SkillManifestResult {
+):
+  | { ok: true; fields: Record<string, unknown>; body: string }
+  | { ok: false; issues: ManifestIssue[] } {
   let yaml: string;
   let body: string;
   try {
@@ -99,74 +104,88 @@ export function parseSkillManifest(
       ],
     };
   }
+  return { ok: true, fields: parsed, body };
+}
 
-  const issues: SkillManifestIssue[] = [];
-  const name = validateName(parsed.name, issues);
-  const description = validateDescription(parsed.description, issues);
+/**
+ * The rule every kind shares: a safe `name` and a bounded `description`. A
+ * kind with more fields validates them after this, into the same issue list.
+ */
+export function parseEntryManifest(
+  content: string,
+  path: string,
+): ManifestResult {
+  const split = parseManifestFrontmatter(content, path);
+  if (!split.ok) return split;
+  const issues: ManifestIssue[] = [];
+  const name = validateName(split.fields.name, issues);
+  const description = validateDescription(split.fields.description, issues);
   if (issues.length > 0)
     return { ok: false, issues, ...(name !== undefined ? { name } : {}) };
   return {
     ok: true,
-    manifest: { name: name!, description: description!, body },
+    manifest: { name: name!, description: description!, body: split.body },
   };
 }
 
 /**
- * Validate source a mutation is about to write, or has just written, and throw
- * one actionable message listing every problem at once.
+ * Validate source a mutation is about to write, or has just written, against
+ * the kind's whole rule, and throw one actionable message listing every
+ * problem at once.
  */
-export function assertSkillManifest(
+export function assertManifest(
+  kind: LibraryKind,
   content: string,
   path: string,
-): SkillManifest {
-  const result = parseSkillManifest(content, path);
+): EntryManifest {
+  const result = kind.parseManifest(content, path);
   if (result.ok) return result.manifest;
-  throw new SkillValidationError(
+  throw new EntryValidationError(
     `Invalid ${path}: ${result.issues.map((issue) => issue.error).join(" ")}`,
   );
 }
 
 /** Reject a description before it is ever written into frontmatter. */
-export function assertSkillDescription(description: string): string {
-  const issues: SkillManifestIssue[] = [];
+export function assertEntryDescription(description: string): string {
+  const issues: ManifestIssue[] = [];
   const validated = validateDescription(description, issues);
   if (validated === undefined)
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       issues.map((issue) => issue.error).join(" "),
     );
   return validated;
 }
 
 /** Reject a declared name before it is ever written or used as a folder. */
-export function assertSafeSkillName(name: string, label = "name"): string {
-  if (typeof name !== "string" || !isSafeSkillName(name)) {
-    throw new SkillValidationError(
-      `Invalid skill ${label} "${name}": must be 1-${MAX_SKILL_NAME_CHARS} lowercase letters, digits, or single hyphens, with no leading or trailing hyphen.`,
+export function assertSafeEntryName(
+  kind: LibraryKind,
+  name: string,
+  label = "name",
+): string {
+  if (typeof name !== "string" || !isSafeEntryName(name)) {
+    throw new EntryValidationError(
+      `Invalid ${kind.noun} ${label} "${name}": must be 1-${MAX_ENTRY_NAME_CHARS} lowercase letters, digits, or single hyphens, with no leading or trailing hyphen.`,
     );
   }
   return name;
 }
 
 /**
- * Render complete `SKILL.md` source. The body is normalized to a trailing
- * newline and no leading blank line so repeated tool writes of the same
- * content produce the same bytes and therefore no empty commit.
+ * Render complete manifest source from frontmatter lines already rendered as
+ * YAML (`name: x`, `description: "..."`). The body is normalized to a trailing
+ * newline and no leading blank line so repeated tool writes of the same content
+ * produce the same bytes and therefore no empty commit.
  */
-export function formatSkillManifest(manifest: {
-  name: string;
-  description: string;
-  body: string;
-}): string {
-  const body = manifest.body
+export function formatManifest(frontmatter: string[], body: string): string {
+  const normalized = body
     .replace(/^(?:[^\S\r\n]*(?:\r\n|\n|\r))+/, "")
     .replace(/\s+$/, "");
   return [
     "---",
-    `name: ${manifest.name}`,
-    `description: ${JSON.stringify(manifest.description)}`,
+    ...frontmatter,
     "---",
     "",
-    ...(body ? [body, ""] : []),
+    ...(normalized ? [normalized, ""] : []),
   ].join("\n");
 }
 
@@ -176,17 +195,18 @@ export function formatSkillManifest(manifest: {
  * the user hand-authored.
  */
 export function withDeclaredName(
+  kind: LibraryKind,
   content: string,
   path: string,
   name: string,
 ): string {
-  const manifest = assertSkillManifest(content, path);
+  const manifest = assertManifest(kind, content, path);
   const { yaml } = splitYamlFrontmatter(content, path);
   // Only the root mapping's own `name:` line, which a valid manifest always has
   // at zero indentation — never an indented `name` inside some nested value.
   const replaced = yaml.replace(/^name:[^\n]*$/m, () => `name: ${name}`);
   if (replaced === yaml && manifest.name !== name) {
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       `Cannot rewrite the declared name in ${path}: its frontmatter has no plain "name:" line.`,
     );
   }
@@ -197,7 +217,7 @@ export function withDeclaredName(
 
 function validateName(
   name: unknown,
-  issues: SkillManifestIssue[],
+  issues: ManifestIssue[],
 ): string | undefined {
   if (name === undefined) {
     issues.push({ code: "missing-name", error: "Missing frontmatter name." });
@@ -210,10 +230,10 @@ function validateName(
     });
     return undefined;
   }
-  if (!isSafeSkillName(name)) {
+  if (!isSafeEntryName(name)) {
     issues.push({
       code: "unsafe-name",
-      error: `Frontmatter name must be 1-${MAX_SKILL_NAME_CHARS} lowercase letters, digits, or single hyphens, with no leading or trailing hyphen.`,
+      error: `Frontmatter name must be 1-${MAX_ENTRY_NAME_CHARS} lowercase letters, digits, or single hyphens, with no leading or trailing hyphen.`,
     });
     return undefined;
   }
@@ -222,7 +242,7 @@ function validateName(
 
 function validateDescription(
   description: unknown,
-  issues: SkillManifestIssue[],
+  issues: ManifestIssue[],
 ): string | undefined {
   if (description === undefined) {
     issues.push({
@@ -245,10 +265,10 @@ function validateDescription(
     });
     return undefined;
   }
-  if (description.length > MAX_SKILL_DESCRIPTION_CHARS) {
+  if (description.length > MAX_ENTRY_DESCRIPTION_CHARS) {
     issues.push({
       code: "description-too-long",
-      error: `Frontmatter description must be at most ${MAX_SKILL_DESCRIPTION_CHARS} characters.`,
+      error: `Frontmatter description must be at most ${MAX_ENTRY_DESCRIPTION_CHARS} characters.`,
     });
     return undefined;
   }
@@ -264,7 +284,7 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Read one `SKILL.md` through an open handle, bounded.
+ * Read one manifest through an open handle, bounded.
  *
  * A manifest is frontmatter plus instructions an agent reads, so the bound is
  * also the useful size; `truncated` says the file is past it, which is a
@@ -275,7 +295,7 @@ function errorMessage(error: unknown): string {
 export async function readManifestHandle(
   handle: FileHandle,
   size: number,
-  cap: number = MAX_SKILL_BODY_BYTES,
+  cap: number = MAX_ENTRY_BODY_BYTES,
 ): Promise<{ source: string; bytes: number; truncated: boolean }> {
   const limit = Math.min(size, cap);
   const buffer = Buffer.alloc(limit);

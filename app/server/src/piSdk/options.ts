@@ -25,8 +25,7 @@ import { getSettings } from "../settings.ts";
 import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
 import { piAgentDir } from "../credentialProfiles.ts";
 import { createPiOutputPolicyExtension } from "./outputPolicyExtension.ts";
-import { skillLibraryStore } from "../skills/skillLibraryStore.ts";
-import { scanSkillLibrary } from "../skills/skillLibraryScanner.ts";
+import { scanSkillLibrary, skillLibraryStore } from "../skills/skillLibrary.ts";
 import {
   materializeSkillRuntime,
   skillSetHash,

@@ -7,15 +7,16 @@ import { afterEach, beforeEach, describe, test } from "vitest";
 import type { AgentTool, ToolCallContext } from "../../mcp/tool.ts";
 import { git } from "../../gitExec.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
-import { SkillLibraryStore } from "../../skills/skillLibraryStore.ts";
+import { LibraryStore } from "../../library/libraryStore.ts";
 import { setSkillLibraryBroadcaster } from "../../skills/skillLibraryEvents.ts";
 import {
   skillLibraryTools,
   setSkillToolLibraryForTests,
-} from "./skillTools.ts";
+} from "./skillLibraryTools.ts";
+import { skillKind } from "../../skills/skillLibrary.ts";
 
 let root: string;
-let store: SkillLibraryStore;
+let store: LibraryStore;
 
 const ctx: ToolCallContext = {
   toolCallId: "tool-test",
@@ -56,7 +57,7 @@ async function expectFailure(
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skill-tools-test-"));
-  store = new SkillLibraryStore(root);
+  store = new LibraryStore(skillKind, root);
   await store.ensureInitialized();
   setSkillToolLibraryForTests(() => store);
   setSkillLibraryBroadcaster({ broadcast: () => undefined });

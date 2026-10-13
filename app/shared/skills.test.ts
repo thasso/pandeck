@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
 import {
   BROADCAST_TOPICS,
-  isSafeSkillName,
+  isSafeEntryName,
   isSkillEnabled,
-  MAX_SKILL_NAME_CHARS,
+  MAX_ENTRY_NAME_CHARS,
   type BroadcastTopic,
   type ServerMessage,
-  type SkillDiagnostic,
+  type EntryDiagnostic,
   type SkillLibraryList,
 } from "./protocol.ts";
 
@@ -43,7 +43,7 @@ describe("skills topic contract", () => {
     expect(message).toEqual({ type: "skillList", list });
     // The malformed folder is identified by its SOURCE folder, which is
     // independent of any name it declares.
-    const [diagnostic] = list.diagnostics as [SkillDiagnostic];
+    const [diagnostic] = list.diagnostics as [EntryDiagnostic];
     expect(diagnostic.folder).toBe("notes-copy");
     expect(diagnostic.declaredName).toBe("notes");
   });
@@ -97,7 +97,7 @@ describe("skill toggles", () => {
 describe("declared skill names", () => {
   test("accepts the agentskills.io shape and nothing wider", () => {
     for (const name of ["notes", "release-notes", "pr2", "a"])
-      expect(isSafeSkillName(name)).toBe(true);
+      expect(isSafeEntryName(name)).toBe(true);
     for (const name of [
       "",
       "Release-Notes",
@@ -107,9 +107,9 @@ describe("declared skill names", () => {
       "with space",
       "with/slash",
       "..",
-      "x".repeat(MAX_SKILL_NAME_CHARS + 1),
+      "x".repeat(MAX_ENTRY_NAME_CHARS + 1),
     ])
-      expect(isSafeSkillName(name)).toBe(false);
-    expect(isSafeSkillName("x".repeat(MAX_SKILL_NAME_CHARS))).toBe(true);
+      expect(isSafeEntryName(name)).toBe(false);
+    expect(isSafeEntryName("x".repeat(MAX_ENTRY_NAME_CHARS))).toBe(true);
   });
 });

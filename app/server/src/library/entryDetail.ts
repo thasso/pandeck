@@ -1,55 +1,52 @@
 /**
- * The bounded read of ONE skill ([Task-614](pa://task/614), `docs/skills.md`).
+ * The bounded read of ONE library entry ([Task-614](pa://task/614), `docs/skills.md`).
  *
- * A skill is addressed by its DECLARED name and by nothing else. The caller
- * never supplies a path: the name is checked against `isSafeSkillName`, then
+ * An entry is addressed by its DECLARED name and by nothing else. The caller
+ * never supplies a path: the name is checked against `isSafeEntryName`, then
  * resolved through a fresh working-tree scan, and the file that is read is the
  * one that scan reported.
  */
 import { Buffer } from "node:buffer";
 import type { FileHandle } from "node:fs/promises";
 import {
-  isSafeSkillName,
-  MAX_SKILL_BODY_BYTES,
-  type SkillDetailResponse,
+  isSafeEntryName,
+  MAX_ENTRY_BODY_BYTES,
+  type EntryDetailResponse,
 } from "@assistant/shared";
 import {
   parseYamlSubset,
   splitYamlFrontmatter,
 } from "@assistant/shared/frontmatter";
-import { buildSkillFileTree } from "./skillFiles.ts";
+import { buildEntryFileTree } from "./entryFiles.ts";
 import {
-  scanSkillLibrary,
-  skillSourceIdentity,
-  type SkillLibraryScan,
-} from "./skillLibraryScanner.ts";
+  scanLibrary,
+  entrySourceIdentity,
+  type LibraryScan,
+} from "./libraryScanner.ts";
+import type { LibraryStore } from "./libraryStore.ts";
 import {
-  skillLibraryStore,
-  type SkillLibraryStore,
-} from "./skillLibraryStore.ts";
-import {
-  sameSkillSource,
+  sameEntrySource,
   withLibraryRoot,
-  withSkillSource,
-} from "./skillSource.ts";
+  withEntrySource,
+} from "./entrySource.ts";
 
 const READ_CHUNK_BYTES = 64 * 1024;
 
 /**
- * Read one skill by declared name.
+ * Read one entry by declared name.
  *
  * Returns `null` when the library has nothing to say about the name at all —
  * an unsafe name, or one no folder declares. An invalid state is reserved for
  * a name the library DOES know and cannot serve.
  */
-export async function readSkillDetail(
+export async function readEntryDetail(
   name: string,
-  library: SkillLibraryStore = skillLibraryStore,
-): Promise<SkillDetailResponse | null> {
-  if (!isSafeSkillName(name)) return null;
+  library: LibraryStore,
+): Promise<EntryDetailResponse | null> {
+  if (!isSafeEntryName(name)) return null;
   await library.ensureInitialized();
-  const scan = await scanSkillLibrary(library.root);
-  return resolveSkillDetail(library.root, scan, name);
+  const scan = await scanLibrary(library.kind, library.root);
+  return resolveEntryDetail(library, scan, name);
 }
 
 /**
@@ -61,14 +58,14 @@ export async function readSkillDetail(
  * turns a folder replacement or symlink swap into an invalid answer rather
  * than allowing an unrelated directory to answer for the scanned skill.
  */
-export async function resolveSkillDetail(
-  root: string,
-  scan: SkillLibraryScan,
+export async function resolveEntryDetail(
+  library: LibraryStore,
+  scan: LibraryScan,
   name: string,
-): Promise<SkillDetailResponse | null> {
-  if (!isSafeSkillName(name)) return null;
+): Promise<EntryDetailResponse | null> {
+  if (!isSafeEntryName(name)) return null;
 
-  const summary = scan.skills.find((skill) => skill.name === name);
+  const summary = scan.entries.find((entry) => entry.name === name);
   if (!summary) {
     const diagnostic = scan.diagnostics.find(
       (entry) => entry.declaredName === name,
@@ -83,7 +80,7 @@ export async function resolveSkillDetail(
     };
   }
 
-  const identity = skillSourceIdentity(scan, summary.path);
+  const identity = entrySourceIdentity(scan, summary.path);
   if (!identity) {
     return unavailable(
       summary,
@@ -92,38 +89,43 @@ export async function resolveSkillDetail(
   }
 
   try {
-    return await withLibraryRoot(root, (rootHandle) =>
-      withSkillSource(rootHandle, folderOf(summary.path), async (source) => {
-        if (!sameSkillSource(source.identity, identity)) {
-          return unavailable(
-            summary,
-            `${summary.path} changed since it was scanned.`,
-          );
-        }
+    return await withLibraryRoot(library.root, (rootHandle) =>
+      withEntrySource(
+        rootHandle,
+        folderOf(summary.path),
+        library.kind.manifestFile,
+        async (source) => {
+          if (!sameEntrySource(source.identity, identity)) {
+            return unavailable(
+              summary,
+              `${summary.path} changed since it was scanned.`,
+            );
+          }
 
-        const read = await readBounded(source.file);
-        try {
-          validateRereadFrontmatter(read.frontmatter, summary, summary.path);
-        } catch {
-          return unavailable(
-            summary,
-            `${summary.path} no longer has frontmatter matching the scan; the library changed since it was scanned.`,
-          );
-        }
+          const read = await readBounded(source.file);
+          try {
+            validateRereadFrontmatter(read.frontmatter, summary, summary.path);
+          } catch {
+            return unavailable(
+              summary,
+              `${summary.path} no longer has frontmatter matching the scan; the library changed since it was scanned.`,
+            );
+          }
 
-        const files = await buildSkillFileTree(source.folder);
-        return {
-          kind: "skill",
-          name: summary.name,
-          description: summary.description,
-          folder: folderOf(summary.path),
-          path: summary.path,
-          markdown: read.body.trim(),
-          bytes: read.bytes,
-          truncated: read.truncated,
-          files,
-        };
-      }),
+          const files = await buildEntryFileTree(library.kind, source.folder);
+          return {
+            kind: "entry",
+            name: summary.name,
+            description: summary.description,
+            folder: folderOf(summary.path),
+            path: summary.path,
+            markdown: read.body.trim(),
+            bytes: read.bytes,
+            truncated: read.truncated,
+            files,
+          };
+        },
+      ),
     );
   } catch (error) {
     if (error instanceof InvalidFrontmatterError) {
@@ -151,7 +153,7 @@ export async function resolveSkillDetail(
 function unavailable(
   summary: { name: string; path: string },
   error: string,
-): SkillDetailResponse {
+): EntryDetailResponse {
   return {
     kind: "invalid",
     name: summary.name,
@@ -177,9 +179,9 @@ interface BoundedRead {
 }
 
 /**
- * Read the complete frontmatter and at most {@link MAX_SKILL_BODY_BYTES} of the
+ * Read the complete frontmatter and at most {@link MAX_ENTRY_BODY_BYTES} of the
  * bytes below its closing fence. The handle is already anchored beneath the
- * directory identity checked by {@link resolveSkillDetail}.
+ * directory identity checked by {@link resolveEntryDetail}.
  */
 async function readBounded(handle: FileHandle): Promise<BoundedRead> {
   const { size } = await handle.stat();
@@ -199,7 +201,7 @@ async function readBounded(handle: FileHandle): Promise<BoundedRead> {
   if (bodyStart === undefined) throw new InvalidFrontmatterError();
 
   const bodyBytes = size - bodyStart;
-  const bodyReadLimit = Math.min(MAX_SKILL_BODY_BYTES, bodyBytes);
+  const bodyReadLimit = Math.min(MAX_ENTRY_BODY_BYTES, bodyBytes);
   const targetBytes = bodyStart + bodyReadLimit;
   while (position < targetBytes) {
     const chunk = Buffer.alloc(targetBytes - position);
@@ -220,7 +222,7 @@ async function readBounded(handle: FileHandle): Promise<BoundedRead> {
     frontmatter,
     body,
     bytes: size,
-    truncated: bodyBytes > MAX_SKILL_BODY_BYTES,
+    truncated: bodyBytes > MAX_ENTRY_BODY_BYTES,
   };
 }
 

@@ -19,31 +19,31 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
-import type { ServerMessage, SkillFileTreeEntry } from "@assistant/shared";
+import type { ServerMessage, EntryFileTreeEntry } from "@assistant/shared";
 import { git, gitOptional } from "../gitExec.ts";
+import { createSkill } from "./createSkill.ts";
 import {
-  createSkill,
-  deleteSkill,
-  editSkillSource,
-  manageSkillFiles,
-  MAX_SKILL_IMPORT_BYTES,
-  MAX_SKILL_TEXT_FILE_BYTES,
-  readSkillLibraryOverview,
-  readSkillSource,
-  renameSkill,
-  resolveSkillSource,
-  type SkillFileOperation,
-} from "./skillAuthoring.ts";
+  deleteEntry,
+  editEntrySource,
+  type EntryFileOperation,
+  manageEntryFiles,
+  MAX_ENTRY_IMPORT_BYTES,
+  MAX_ENTRY_TEXT_FILE_BYTES,
+  readEntrySource,
+  readLibraryOverview,
+  renameEntry,
+  resolveEntrySource,
+} from "../library/libraryAuthoring.ts";
+import { scanSkillLibrary, skillKind } from "./skillLibrary.ts";
+import {
+  type LibraryMutationContext,
+  LibraryStore,
+} from "../library/libraryStore.ts";
 import { setSkillLibraryBroadcaster } from "./skillLibraryEvents.ts";
-import { scanSkillLibrary } from "./skillLibraryScanner.ts";
-import {
-  SkillLibraryStore,
-  type SkillMutationContext,
-} from "./skillLibraryStore.ts";
 
 let root: string;
 let outsideRoot: string;
-let library: SkillLibraryStore;
+let library: LibraryStore;
 let broadcasts: ServerMessage[];
 
 const meta = {
@@ -57,7 +57,7 @@ beforeEach(async () => {
   // Symlink targets that must live outside the library get their own unique
   // directory: fixed names beside `root` collide across concurrent runs.
   outsideRoot = mkdtempSync(join(tmpdir(), "skills-authoring-outside-"));
-  library = new SkillLibraryStore(root);
+  library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
   broadcasts = [];
   setSkillLibraryBroadcaster({
@@ -96,7 +96,7 @@ function importing(
   path: string,
   bytes: Uint8Array,
   attachmentId: string,
-): SkillFileOperation {
+): EntryFileOperation {
   return {
     op: "import",
     path,
@@ -118,7 +118,7 @@ async function seedSkill(name = "release-notes"): Promise<void> {
   );
 }
 
-function treePaths(entries: SkillFileTreeEntry[]): string[] {
+function treePaths(entries: EntryFileTreeEntry[]): string[] {
   return entries.flatMap((entry) => [
     entry.path,
     ...treePaths(entry.children ?? []),
@@ -158,8 +158,8 @@ describe("skill authoring: create", () => {
       library,
     );
 
-    assert.equal(outcome.skill?.name, "release-notes");
-    assert.equal(outcome.skill?.path, "release-notes/SKILL.md");
+    assert.equal(outcome.entry?.name, "release-notes");
+    assert.equal(outcome.entry?.path, "release-notes/SKILL.md");
     assert.deepEqual(outcome.commit.changedPaths, ["release-notes/SKILL.md"]);
     assert.equal(outcome.commit.commit.length, 40);
     assert.equal(await commitCount(), 1);
@@ -167,7 +167,7 @@ describe("skill authoring: create", () => {
 
     const scan = await scanSkillLibrary(root);
     assert.deepEqual(scan.diagnostics, []);
-    assert.deepEqual(scan.skills, [
+    assert.deepEqual(scan.entries, [
       {
         name: "release-notes",
         description: "How to write release notes",
@@ -344,7 +344,7 @@ describe("skill authoring: clean-repository requirement", () => {
       );
 
       // Reads stay available while the user's own work is in the tree.
-      const overview = await readSkillLibraryOverview(library);
+      const overview = await readLibraryOverview(library);
       assert.equal(overview.repository.clean, false);
       assert.ok(overview.repository.changeCount >= 1);
       assert.ok((await library.history({ limit: 5 })).entries.length >= 1);
@@ -359,7 +359,7 @@ describe("skill authoring: clean-repository requirement", () => {
 describe("skill authoring: edit", () => {
   test("applies exact replacements and revalidates the whole manifest", async () => {
     await seedSkill();
-    const outcome = await editSkillSource(
+    const outcome = await editEntrySource(
       {
         name: "release-notes",
         edits: [
@@ -373,7 +373,7 @@ describe("skill authoring: edit", () => {
     assert.equal(outcome.replacements, 1);
     assert.equal(await commitCount(), 2);
     assert.deepEqual(outcome.commit.changedPaths, ["release-notes/SKILL.md"]);
-    const read = await readSkillSource("release-notes", library);
+    const read = await readEntrySource("release-notes", library);
     assert.match(read!.source, /Write them clearly\./);
     assert.match(read!.source, /^---\nname: release-notes/);
   });
@@ -383,7 +383,7 @@ describe("skill authoring: edit", () => {
     const before = await snapshot();
 
     const missing = await assertUnchanged(before, () =>
-      editSkillSource(
+      editEntrySource(
         { name: "release-notes", edits: [{ oldText: "absent", newText: "x" }] },
         meta,
         library,
@@ -392,7 +392,7 @@ describe("skill authoring: edit", () => {
     assert.match(missing.message, /oldText not found/);
 
     const ambiguous = await assertUnchanged(before, () =>
-      editSkillSource(
+      editEntrySource(
         { name: "release-notes", edits: [{ oldText: "e", newText: "x" }] },
         meta,
         library,
@@ -401,7 +401,7 @@ describe("skill authoring: edit", () => {
     assert.match(ambiguous.message, /not unique/);
 
     const noop = await assertUnchanged(before, () =>
-      editSkillSource(
+      editEntrySource(
         {
           name: "release-notes",
           edits: [{ oldText: "## Steps", newText: "## Steps" }],
@@ -413,7 +413,7 @@ describe("skill authoring: edit", () => {
     assert.match(noop.message, /unchanged/);
 
     const renamed = await assertUnchanged(before, () =>
-      editSkillSource(
+      editEntrySource(
         {
           name: "release-notes",
           edits: [
@@ -427,7 +427,7 @@ describe("skill authoring: edit", () => {
     assert.match(renamed.message, /may not change the declared name/);
 
     const broken = await assertUnchanged(before, () =>
-      editSkillSource(
+      editEntrySource(
         {
           name: "release-notes",
           edits: [{ oldText: "description:", newText: "desc:" }],
@@ -463,7 +463,7 @@ describe("skill authoring: edit", () => {
     const before = await snapshot();
 
     const error = await assertUnchanged(before, () =>
-      editSkillSource(
+      editEntrySource(
         { name: "release-notes", edits: [{ oldText: "no", newText: "yes" }] },
         meta,
         library,
@@ -476,7 +476,7 @@ describe("skill authoring: edit", () => {
 describe("skill authoring: supporting files", () => {
   test("writes, imports, deletes and mixes operations in one commit", async () => {
     await seedSkill();
-    const write = await manageSkillFiles(
+    const write = await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -498,7 +498,7 @@ describe("skill authoring: supporting files", () => {
       "Be brief.\n",
     );
 
-    const mixed = await manageSkillFiles(
+    const mixed = await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -521,7 +521,7 @@ describe("skill authoring: supporting files", () => {
     ]);
     assert.ok(!existsSync(join(root, "release-notes/assets/logo.bin")));
     const scan = await scanSkillLibrary(root);
-    assert.equal(scan.skills.length, 1);
+    assert.equal(scan.entries.length, 1);
     assert.deepEqual(scan.diagnostics, []);
     assert.equal(await porcelain(), "");
   });
@@ -529,7 +529,7 @@ describe("skill authoring: supporting files", () => {
   test("refuses unsafe paths, SKILL.md, oversized content and missing targets", async () => {
     await seedSkill();
     const before = await snapshot();
-    const unsafe: SkillFileOperation[][] = [
+    const unsafe: EntryFileOperation[][] = [
       [{ op: "write", path: "/etc/passwd", content: "x" }],
       [{ op: "write", path: "../escape.md", content: "x" }],
       [{ op: "write", path: "nested/../../escape.md", content: "x" }],
@@ -548,13 +548,13 @@ describe("skill authoring: supporting files", () => {
         {
           op: "write",
           path: "big.md",
-          content: "x".repeat(MAX_SKILL_TEXT_FILE_BYTES + 1),
+          content: "x".repeat(MAX_ENTRY_TEXT_FILE_BYTES + 1),
         },
       ],
       [
         importing(
           "big.bin",
-          new Uint8Array(MAX_SKILL_IMPORT_BYTES + 1),
+          new Uint8Array(MAX_ENTRY_IMPORT_BYTES + 1),
           "att-big",
         ),
       ],
@@ -563,7 +563,7 @@ describe("skill authoring: supporting files", () => {
 
     for (const operations of unsafe) {
       await assertUnchanged(before, () =>
-        manageSkillFiles({ name: "release-notes", operations }, meta, library),
+        manageEntryFiles({ name: "release-notes", operations }, meta, library),
       );
     }
     assert.equal(await commitCount(), 1);
@@ -592,7 +592,7 @@ describe("skill authoring: supporting files", () => {
     const before = await snapshot();
 
     await assertUnchanged(before, () =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -604,7 +604,7 @@ describe("skill authoring: supporting files", () => {
       ),
     );
     await assertUnchanged(before, () =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [{ op: "delete", path: "references/link.md" }],
@@ -618,7 +618,7 @@ describe("skill authoring: supporting files", () => {
 
   test("rolls a partially applied batch back completely", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -631,7 +631,7 @@ describe("skill authoring: supporting files", () => {
     const before = await snapshot();
 
     await assertUnchanged(before, () =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -654,7 +654,7 @@ describe("skill authoring: editing supporting files", () => {
   /** Seed one skill with `references/tone.md` already committed. */
   async function seedReference(content = "Be brief.\nUse Sea.\n") {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [{ op: "write", path: "references/tone.md", content }],
@@ -667,7 +667,7 @@ describe("skill authoring: editing supporting files", () => {
   test("rewrites an existing file in place and reports its replacements", async () => {
     await seedReference();
 
-    const edited = await manageSkillFiles(
+    const edited = await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -702,7 +702,7 @@ describe("skill authoring: editing supporting files", () => {
   test("shares one commit with the batch's other operations", async () => {
     await seedReference();
 
-    const batch = await manageSkillFiles(
+    const batch = await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -729,7 +729,7 @@ describe("skill authoring: editing supporting files", () => {
     // The default UTF-8 decoder EATS a leading BOM, and the edited string is
     // re-encoded whole: a file would lose three bytes no edit addressed.
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -744,7 +744,7 @@ describe("skill authoring: editing supporting files", () => {
       library,
     );
 
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -775,7 +775,7 @@ describe("skill authoring: editing supporting files", () => {
     const before = await snapshot();
 
     await assertUnchanged(before, () =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -807,7 +807,7 @@ describe("skill authoring: editing supporting files", () => {
     );
     await writeFile(
       join(root, "release-notes/big.md"),
-      "x".repeat(MAX_SKILL_TEXT_FILE_BYTES + 1),
+      "x".repeat(MAX_ENTRY_TEXT_FILE_BYTES + 1),
     );
     const outside = join(outsideRoot, "outside-edit.md");
     await writeFile(outside, "outside\n");
@@ -827,7 +827,7 @@ describe("skill authoring: editing supporting files", () => {
     );
     const before = await snapshot();
 
-    const refused: [SkillFileOperation, RegExp][] = [
+    const refused: [EntryFileOperation, RegExp][] = [
       // An edit addresses content that already exists; it is not a create.
       [
         {
@@ -905,7 +905,7 @@ describe("skill authoring: editing supporting files", () => {
 
     for (const [operation, expected] of refused) {
       const error = await assertUnchanged(before, () =>
-        manageSkillFiles(
+        manageEntryFiles(
           { name: "release-notes", operations: [operation] },
           meta,
           library,
@@ -945,7 +945,7 @@ describe("skill authoring: symlinked sources", () => {
 
     for (const mutate of [
       () =>
-        editSkillSource(
+        editEntrySource(
           {
             name: "release-notes",
             edits: [{ oldText: "Outside", newText: "Inside" }],
@@ -953,9 +953,9 @@ describe("skill authoring: symlinked sources", () => {
           meta,
           library,
         ),
-      () => deleteSkill({ name: "release-notes" }, meta, library),
+      () => deleteEntry({ name: "release-notes" }, meta, library),
       () =>
-        renameSkill(
+        renameEntry(
           { name: "release-notes", newName: "linked-notes" },
           meta,
           library,
@@ -973,7 +973,7 @@ describe("skill authoring: symlinked sources", () => {
 describe("skill authoring: rename and delete", () => {
   test("rename moves the folder and the declared name in one commit", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -984,14 +984,14 @@ describe("skill authoring: rename and delete", () => {
       library,
     );
 
-    const outcome = await renameSkill(
+    const outcome = await renameEntry(
       { name: "release-notes", newName: "changelog-notes" },
       { ...meta, reason: "Rename to changelog-notes" },
       library,
     );
 
     assert.equal(outcome.previousName, "release-notes");
-    assert.equal(outcome.skill?.name, "changelog-notes");
+    assert.equal(outcome.entry?.name, "changelog-notes");
     assert.equal(await commitCount(), 3);
     assert.ok(!existsSync(join(root, "release-notes")));
     assert.equal(
@@ -1012,7 +1012,7 @@ describe("skill authoring: rename and delete", () => {
     const before = await snapshot();
 
     const declared = await assertUnchanged(before, () =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -1037,7 +1037,7 @@ describe("skill authoring: rename and delete", () => {
     );
     const withFolder = await snapshot();
     const folder = await assertUnchanged(withFolder, () =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "occupied" },
         meta,
         library,
@@ -1048,7 +1048,7 @@ describe("skill authoring: rename and delete", () => {
 
   test("delete removes the whole folder and stays visible in history", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1059,20 +1059,20 @@ describe("skill authoring: rename and delete", () => {
       library,
     );
 
-    const outcome = await deleteSkill(
+    const outcome = await deleteEntry(
       { name: "release-notes" },
       { ...meta, reason: "Remove the release-notes skill" },
       library,
     );
 
-    assert.equal(outcome.skill, undefined);
+    assert.equal(outcome.entry, undefined);
     assert.equal(outcome.folder, "release-notes");
     assert.deepEqual(outcome.commit.changedPaths, [
       "release-notes/SKILL.md",
       "release-notes/references/tone.md",
     ]);
     assert.ok(!existsSync(join(root, "release-notes")));
-    assert.deepEqual((await scanSkillLibrary(root)).skills, []);
+    assert.deepEqual((await scanSkillLibrary(root)).entries, []);
 
     const { entries: history } = await library.history({ limit: 10 });
     assert.equal(history.length, 3);
@@ -1114,7 +1114,7 @@ describe("skill authoring: concurrency and diagnostics", () => {
     );
     assert.equal(await commitCount(), 3);
     assert.equal(await porcelain(), "");
-    assert.equal((await scanSkillLibrary(root)).skills.length, 3);
+    assert.equal((await scanSkillLibrary(root)).entries.length, 3);
     assert.equal(broadcasts.length, 3);
   });
 
@@ -1143,7 +1143,7 @@ describe("skill authoring: concurrency and diagnostics", () => {
 
     assert.deepEqual(outcome.commit.changedPaths, ["release-notes/SKILL.md"]);
     const scan = await scanSkillLibrary(root);
-    assert.equal(scan.skills.length, 1);
+    assert.equal(scan.entries.length, 1);
     assert.equal(scan.diagnostics.length, 1);
     assert.equal(scan.diagnostics[0]?.folder, "broken");
   });
@@ -1152,7 +1152,7 @@ describe("skill authoring: concurrency and diagnostics", () => {
 describe("skill authoring: bounded reads", () => {
   test("skill_get-style read returns full source and a bounded tree", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1163,7 +1163,7 @@ describe("skill authoring: bounded reads", () => {
       library,
     );
 
-    const read = await readSkillSource("release-notes", library);
+    const read = await readEntrySource("release-notes", library);
     assert.ok(read);
     assert.match(read.source, /^---\nname: release-notes\n/);
     assert.equal(read.truncated, false);
@@ -1172,8 +1172,8 @@ describe("skill authoring: bounded reads", () => {
       "references",
       "references/tone.md",
     ]);
-    assert.equal(await readSkillSource("../escape", library), null);
-    assert.equal(await readSkillSource("absent-skill", library), null);
+    assert.equal(await readEntrySource("../escape", library), null);
+    assert.equal(await readEntrySource("absent-skill", library), null);
   });
 
   test("refuses a source whose file identity changed after the scan", async () => {
@@ -1187,20 +1187,20 @@ describe("skill authoring: bounded reads", () => {
     );
 
     await assert.rejects(
-      resolveSkillSource(root, scan, "release-notes"),
+      resolveEntrySource(library, scan, "release-notes"),
       /changed (?:identity|frontmatter) since it was scanned/,
     );
   });
 
   test("the overview carries repository cleanliness and HEAD", async () => {
     await seedSkill();
-    const overview = await readSkillLibraryOverview(library);
+    const overview = await readLibraryOverview(library);
 
     assert.equal(overview.libraryPath, root);
     assert.equal(overview.repository.clean, true);
     assert.equal(overview.repository.branch, "main");
     assert.equal(overview.repository.head?.subject, "Add release-notes");
-    assert.equal(overview.skills.length, 1);
+    assert.equal(overview.entries.length, 1);
   });
 });
 
@@ -1211,18 +1211,18 @@ describe("skill authoring: bounded reads", () => {
  * exactly where a hand edit racing an agent lands, and it is otherwise
  * unreachable from outside the repository lock.
  */
-class RacingSkillLibraryStore extends SkillLibraryStore {
+class RacingSkillLibraryStore extends LibraryStore {
   constructor(
     root: string,
     private readonly race: () => void,
   ) {
-    super(root);
+    super(skillKind, root);
   }
 
   override async commitMutation<T>(
-    meta: Parameters<SkillLibraryStore["commitMutation"]>[0],
-    run: (context: SkillMutationContext) => Promise<T>,
-    options: Parameters<SkillLibraryStore["commitMutation"]>[2] = {},
+    meta: Parameters<LibraryStore["commitMutation"]>[0],
+    run: (context: LibraryMutationContext) => Promise<T>,
+    options: Parameters<LibraryStore["commitMutation"]>[2] = {},
   ) {
     let raced = false;
     return super.commitMutation(
@@ -1255,7 +1255,7 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
     };
     const racing = new RacingSkillLibraryStore(root, swap);
 
-    const error = await deleteSkill(
+    const error = await deleteEntry(
       { name: "release-notes" },
       { ...meta, reason: "Remove it" },
       racing,
@@ -1282,8 +1282,8 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
 
   test("a folder replaced after the scan is refused by every other mutation", async () => {
     for (const mutate of [
-      (store: SkillLibraryStore) =>
-        editSkillSource(
+      (store: LibraryStore) =>
+        editEntrySource(
           {
             name: "release-notes",
             edits: [{ oldText: "Write them down.", newText: "Changed." }],
@@ -1291,8 +1291,8 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
           meta,
           store,
         ),
-      (store: SkillLibraryStore) =>
-        manageSkillFiles(
+      (store: LibraryStore) =>
+        manageEntryFiles(
           {
             name: "release-notes",
             operations: [{ op: "write", path: "a.md", content: "a" }],
@@ -1300,15 +1300,15 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
           meta,
           store,
         ),
-      (store: SkillLibraryStore) =>
-        renameSkill(
+      (store: LibraryStore) =>
+        renameEntry(
           { name: "release-notes", newName: "changelog-notes" },
           meta,
           store,
         ),
     ]) {
       rmSync(root, { recursive: true, force: true });
-      library = new SkillLibraryStore(root);
+      library = new LibraryStore(skillKind, root);
       await library.ensureInitialized();
       await seedSkill();
       const racing = new RacingSkillLibraryStore(root, () => {
@@ -1344,7 +1344,7 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
     const before = await snapshot();
 
     const error = await assertUnchanged(before, () =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -1358,7 +1358,7 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
 
   test("removing a supporting file leaves no aside-name debris", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1373,7 +1373,7 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
     // The removal moves the verified inode to a private name before unlinking
     // it, so the only proof that the dance completed is that nothing is left
     // under that name and the repository is clean again.
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1390,7 +1390,7 @@ describe("skill authoring: destruction is bound to the scanned source", () => {
       [],
     );
     assert.equal(await porcelain(), "");
-    assert.equal((await scanSkillLibrary(root)).skills.length, 1);
+    assert.equal((await scanSkillLibrary(root)).entries.length, 1);
   });
 });
 
@@ -1412,7 +1412,7 @@ describe("skill authoring: a failed mutation leaves nothing behind", () => {
     assert.match(error.message, /index lock/);
     assert.ok(!existsSync(join(root, "other-skill")));
     // Reads are unaffected by a lock that only blocks writes.
-    assert.equal((await readSkillLibraryOverview(library)).skills.length, 1);
+    assert.equal((await readLibraryOverview(library)).entries.length, 1);
     await rm(lock);
   });
 
@@ -1426,7 +1426,7 @@ describe("skill authoring: a failed mutation leaves nothing behind", () => {
       writeFileSync(lock, "");
     });
 
-    const error = await editSkillSource(
+    const error = await editEntrySource(
       {
         name: "release-notes",
         edits: [{ oldText: "Write them down.", newText: "Write them now." }],
@@ -1451,7 +1451,7 @@ describe("skill authoring: a failed mutation leaves nothing behind", () => {
     const before = await snapshot();
 
     const error = await assertUnchanged(before, () =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -1477,7 +1477,7 @@ describe("skill authoring: a failed mutation leaves nothing behind", () => {
 
   test("directories that already existed survive a failed batch", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1490,7 +1490,7 @@ describe("skill authoring: a failed mutation leaves nothing behind", () => {
     const before = await snapshot();
 
     await assertUnchanged(before, () =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -1562,7 +1562,7 @@ describe("skill authoring: the publish describes the committed state", () => {
       library,
     );
 
-    assert.equal(outcome.skill?.name, "release-notes");
+    assert.equal(outcome.entry?.name, "release-notes");
     assert.equal(await commitCount(), 1);
     assert.equal(await porcelain(), "");
   });
@@ -1588,7 +1588,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     await rejectCommits();
 
     await assert.rejects(
-      editSkillSource(
+      editEntrySource(
         {
           name: "release-notes",
           edits: [
@@ -1611,7 +1611,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
 
   test("a delete that cannot be committed puts the folder back", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1623,7 +1623,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     );
     await rejectCommits();
 
-    await assert.rejects(deleteSkill({ name: "release-notes" }, meta, library));
+    await assert.rejects(deleteEntry({ name: "release-notes" }, meta, library));
 
     assert.equal(
       await readFile(join(root, "release-notes/references/tone.md"), "utf8"),
@@ -1636,7 +1636,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
 
   test("a rename that cannot be committed puts both names back", async () => {
     await seedSkill();
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1649,7 +1649,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     await rejectCommits();
 
     await assert.rejects(
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -1687,7 +1687,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     await rejectCommitsAfterWriting(join(root, "changelog-notes", "user.txt"));
 
     await assert.rejects(
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -1731,7 +1731,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     );
 
     await assert.rejects(
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -1797,7 +1797,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     await rejectCommitsAfterReplacing(join(root, "changelog-notes"));
 
     await assert.rejects(
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -1883,7 +1883,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     );
 
     await assert.rejects(
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -1909,7 +1909,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     await rejectCommitsAfterWriting(join(root, "changelog-notes", "user.txt"));
 
     await assert.rejects(
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -1943,7 +1943,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     );
 
     await assert.rejects(
-      editSkillSource(
+      editEntrySource(
         {
           name: "release-notes",
           edits: [{ oldText: "Write them down.", newText: "Write them well." }],
@@ -1976,7 +1976,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     );
 
     await assert.rejects(
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -1997,7 +1997,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     // the attachment changed after it was resolved — and committing what did
     // arrive would put a silent prefix of somebody's file in the library.
     await assert.rejects(
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [
@@ -2027,7 +2027,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     // budget has to be spent on the recorded SIZE first.
     let readBytes = 0;
     const huge = 2 * 1024 * 1024;
-    const operations: SkillFileOperation[] = Array.from(
+    const operations: EntryFileOperation[] = Array.from(
       { length: 20 },
       (_, index) => ({
         op: "import",
@@ -2042,7 +2042,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     );
 
     await assert.rejects(
-      manageSkillFiles({ name: "release-notes", operations }, meta, library),
+      manageEntryFiles({ name: "release-notes", operations }, meta, library),
       /at most 16777216 bytes in total/,
     );
 
@@ -2065,7 +2065,7 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     await git(["commit", "-m", "many files"], root);
 
     await assert.rejects(
-      deleteSkill({ name: "release-notes" }, meta, library),
+      deleteEntry({ name: "release-notes" }, meta, library),
       /more than 512 committed files/,
     );
     assert.equal(await porcelain(), "");
@@ -2084,12 +2084,12 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
         meta,
         library,
       );
-      await renameSkill(
+      await renameEntry(
         { name: `note-${round}`, newName: `memo-${round}` },
         meta,
         library,
       );
-      await manageSkillFiles(
+      await manageEntryFiles(
         {
           name: `memo-${round}`,
           operations: [

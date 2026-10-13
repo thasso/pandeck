@@ -40,7 +40,7 @@ import {
   THINKING_LEVELS,
   clampInt,
   clampNumber,
-  isSafeSkillName,
+  isSafeEntryName,
   normalizeBackgroundWorkSettings,
 } from "@assistant/shared";
 import { APP_SETTINGS_PATH, readStoredAppSettings } from "./appSettingsFile.ts";
@@ -464,7 +464,7 @@ function normalizeSkillToggles(value: unknown): SkillToggles {
   if (!isRecordPatch(value)) return {};
   const out: SkillToggles = {};
   for (const [name, state] of Object.entries(value))
-    if (isSafeSkillName(name) && (state === "on" || state === "off"))
+    if (isSafeEntryName(name) && (state === "on" || state === "off"))
       out[name] = state;
   return out;
 }

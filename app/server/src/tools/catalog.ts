@@ -83,7 +83,7 @@ import { assistantDocumentTools } from "./knowledge/documentTools.ts";
 import { assistantSpreadsheetTools } from "./knowledge/spreadsheetTools.ts";
 import { assistantKnowledgeBaseTools } from "./knowledge/knowledgeBaseTools.ts";
 import { memoryTools } from "./knowledge/memoryTools.ts";
-import { skillLibraryTools } from "./skills/skillTools.ts";
+import { skillLibraryTools } from "./skills/skillLibraryTools.ts";
 import { sessionAuditTools } from "./sessions/sessionAuditTool.ts";
 import { sessionControlTools } from "./sessions/sessionControlTool.ts";
 import { sessionLogTools } from "./sessions/sessionLogTools.ts";

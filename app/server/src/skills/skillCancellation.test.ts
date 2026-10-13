@@ -67,13 +67,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const { git } = await import("../gitExec.ts");
-const { createSkill, deleteSkill, renameSkill } =
-  await import("./skillAuthoring.ts");
+const { createSkill } = await import("./createSkill.ts");
+const { deleteEntry, renameEntry } =
+  await import("../library/libraryAuthoring.ts");
 const { setSkillLibraryBroadcaster } = await import("./skillLibraryEvents.ts");
-const { SkillLibraryStore } = await import("./skillLibraryStore.ts");
+const { LibraryStore } = await import("../library/libraryStore.ts");
+const { skillKind } = await import("./skillLibrary.ts");
 
 let root: string;
-let library: InstanceType<typeof SkillLibraryStore>;
+let library: InstanceType<typeof LibraryStore>;
 
 const meta = {
   actor: { id: "pi:workshop:sess-1", name: "Workshop test" },
@@ -101,7 +103,7 @@ beforeEach(async () => {
   stopOnHashChunk = undefined;
   stopOnUnlink = undefined;
   root = mkdtempSync(join(tmpdir(), "skills-cancel-test-"));
-  library = new SkillLibraryStore(root);
+  library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
   setSkillLibraryBroadcaster({ broadcast: () => undefined });
   await createSkill(
@@ -161,7 +163,7 @@ describe("a mutation the caller cancels", () => {
     // restore has to answer for.
     stopOnHashChunk = () => controller.abort();
 
-    const error = await deleteSkill({ name: "release-notes" }, meta, library, {
+    const error = await deleteEntry({ name: "release-notes" }, meta, library, {
       signal: controller.signal,
     }).then(
       () => undefined,
@@ -204,7 +206,7 @@ describe("a mutation the caller cancels", () => {
     // undo halfway and leave the new folder behind.
     stopOnHashChunk = () => controller.abort();
 
-    const error = await renameSkill(
+    const error = await renameEntry(
       { name: "release-notes", newName: "release-notes-v2" },
       meta,
       library,
@@ -243,7 +245,7 @@ describe("a mutation the caller cancels", () => {
     // — so the stop is deliberately not honoured.
     stopOnUnlink = () => controller.abort();
 
-    const outcome = await deleteSkill(
+    const outcome = await deleteEntry(
       { name: "release-notes" },
       meta,
       library,

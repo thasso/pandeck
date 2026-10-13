@@ -1,12 +1,12 @@
 /**
- * Anchored, no-follow access to one skill's source files
+ * Anchored, no-follow access to one library entry's source files
  * ([Task-614](pa://task/614), `docs/skills.md`).
  *
  * This is the ONE way the library's bytes are reached, by the scan and by the
- * single-skill read alike. Both used to resolve a pathname twice — once to
+ * single-entry read alike. Both used to resolve a pathname twice — once to
  * check what was there, once to read it — and a pathname is not a thing but a
  * question the kernel re-answers every time it is asked. Between the two
- * answers a user script, a `git checkout`, or an attacker can replace `SKILL.md`
+ * answers a user script, a `git checkout`, or an attacker can replace a manifest
  * or its folder with a symlink, and the second answer is then a file outside the
  * library. A stress run reproduced exactly that: an outside file's frontmatter
  * appeared in a scan as a valid summary with no diagnostic.
@@ -93,9 +93,6 @@ const O_PATH = 0o010000000;
 /** Pinning an inode reached through a NAME: never through a link. */
 const PIN_FLAGS = O_PATH | fsConstants.O_NOFOLLOW;
 
-/** The one file a skill folder is recognized by. */
-export const SKILL_FILE_NAME = "SKILL.md";
-
 interface FileIdentity {
   dev: number;
   ino: number;
@@ -106,28 +103,28 @@ interface FileIdentity {
  * the open handles rather than from a pathname, so it names the inodes that
  * actually answered.
  */
-export interface SkillSourceIdentity {
+export interface EntrySourceIdentity {
   folder: FileIdentity;
   file: FileIdentity;
 }
 
-/** A source folder or `SKILL.md` that is a symlink; refused, never followed. */
-export class SymlinkedSkillSourceError extends Error {}
+/** A source folder or manifest that is a symlink; refused, never followed. */
+export class SymlinkedEntrySourceError extends Error {}
 
 /**
  * A source entry that exists but is not a directory or regular file. Exported
  * so the supporting-file tree can distinguish an irregular entry from a
  * transient unreadable or deleted entry and report the right diagnostic.
  */
-export class IrregularSkillSourceError extends Error {}
+export class IrregularEntrySourceError extends Error {}
 
-export interface SkillSource {
+export interface EntrySource {
   /** The open source folder, used for anchored supporting-file traversal. */
   folder: FileHandle;
-  /** The open `SKILL.md`: the only place content is ever read from. */
+  /** The open manifest: the only place content is ever read from. */
   file: FileHandle;
   /** The identity of the folder and file these handles are open on. */
-  identity: SkillSourceIdentity;
+  identity: EntrySourceIdentity;
   /** Size of the open file, from the same `fstat` the identity came from. */
   size: number;
 }
@@ -152,18 +149,19 @@ export async function withLibraryRoot<T>(
 }
 
 /**
- * Open `<folder>/SKILL.md` beneath an open library root and hand the caller the
+ * Open `<folder>/<manifestFile>` beneath an open library root and hand the caller the
  * live handle. Both handles are closed when `use` settles, so a caller must
  * finish reading inside it.
  *
- * Throws {@link SymlinkedSkillSourceError} when either component is a symlink,
- * {@link IrregularSkillSourceError} when either exists but is the wrong kind of
+ * Throws {@link SymlinkedEntrySourceError} when either component is a symlink,
+ * {@link IrregularEntrySourceError} when either exists but is the wrong kind of
  * file, and the raw `ENOENT`/`ENOTDIR` node error when a component is gone.
  */
-export async function withSkillSource<T>(
+export async function withEntrySource<T>(
   rootHandle: FileHandle,
   folder: string,
-  use: (source: SkillSource) => Promise<T>,
+  manifestFile: string,
+  use: (source: EntrySource) => Promise<T>,
 ): Promise<T> {
   let folderHandle: FileHandle | undefined;
   let fileHandle: FileHandle | undefined;
@@ -174,17 +172,17 @@ export async function withSkillSource<T>(
     );
     const folderStat = await folderHandle.stat();
     if (!folderStat.isDirectory()) {
-      throw new IrregularSkillSourceError("source folder is not a directory");
+      throw new IrregularEntrySourceError("source folder is not a directory");
     }
 
     fileHandle = await openAnchored(
-      `${PROC_FD}/${folderHandle.fd}/${SKILL_FILE_NAME}`,
+      `${PROC_FD}/${folderHandle.fd}/${manifestFile}`,
       SOURCE_FLAGS,
     );
     const fileStat = await fileHandle.stat();
     if (!fileStat.isFile()) {
-      throw new IrregularSkillSourceError(
-        `${SKILL_FILE_NAME} is not a regular file`,
+      throw new IrregularEntrySourceError(
+        `${manifestFile} is not a regular file`,
       );
     }
 
@@ -208,7 +206,7 @@ export async function withSkillSource<T>(
  * Names are sorted by the caller because directory iteration order is not a
  * filesystem contract.
  */
-export async function readSkillDirectory(directory: FileHandle) {
+export async function readEntryDirectory(directory: FileHandle) {
   return readdir(`${PROC_FD}/${directory.fd}`, { withFileTypes: true });
 }
 
@@ -223,7 +221,7 @@ export async function readSkillDirectory(directory: FileHandle) {
  * stops early has read only what it looked at. The iterator closes the
  * directory when it is left, by exhaustion, `break` or throw alike.
  */
-export function iterateSkillDirectory(
+export function iterateEntryDirectory(
   directory: FileHandle,
 ): AsyncIterable<Dirent> {
   return {
@@ -243,7 +241,7 @@ const DIRECTORY_BUFFER_ENTRIES = 32;
  * Open one already-validated child beneath an open skill directory with
  * no-follow semantics and keep the handle live through `use`.
  */
-export async function withSkillChild<T>(
+export async function withEntryChild<T>(
   directory: FileHandle,
   name: string,
   use: (child: {
@@ -260,8 +258,8 @@ export async function withSkillChild<T>(
   try {
     const stats = await handle.stat();
     if (!stats.isDirectory() && !stats.isFile()) {
-      throw new IrregularSkillSourceError(
-        "skill entry is not a regular file or directory",
+      throw new IrregularEntrySourceError(
+        "library entry is not a regular file or directory",
       );
     }
     return await use({
@@ -287,10 +285,10 @@ export async function withSkillChild<T>(
  * whether THIS call created it, which is how a caller knows the directory is
  * its own to remove if the mutation is rolled back.
  */
-export async function ensureSkillChildDirectory(
+export async function ensureEntryChildDirectory(
   directory: FileHandle,
   name: string,
-): Promise<SkillPin | undefined> {
+): Promise<EntryPin | undefined> {
   assertPathComponent(name);
   try {
     await mkdir(`${PROC_FD}/${directory.fd}/${name}`);
@@ -298,9 +296,9 @@ export async function ensureSkillChildDirectory(
     if (!isNodeError(error) || error.code !== "EEXIST") throw error;
     // An existing child must be a real directory: `mkdir` reports a symlink as
     // EEXIST too, and descending into it would leave the library.
-    await withSkillChild(directory, name, async (child) => {
+    await withEntryChild(directory, name, async (child) => {
       if (!child.directory) {
-        throw new IrregularSkillSourceError(
+        throw new IrregularEntrySourceError(
           `"${name}" already exists and is not a directory`,
         );
       }
@@ -312,15 +310,15 @@ export async function ensureSkillChildDirectory(
   // recorded inode number would fit a directory somebody else recreated here
   // just as well as this one. If pinning itself fails, take the empty creation
   // back now; otherwise no caller can register ownership-aware rollback for it.
-  return pinCreatedSkillChildDirectory(directory, name);
+  return pinCreatedEntryChildDirectory(directory, name);
 }
 
-async function pinCreatedSkillChildDirectory(
+async function pinCreatedEntryChildDirectory(
   directory: FileHandle,
   name: string,
-): Promise<SkillPin> {
+): Promise<EntryPin> {
   try {
-    return await pinSkillChild(directory, name);
+    return await pinEntryChild(directory, name);
   } catch (error) {
     await rmdir(`${PROC_FD}/${directory.fd}/${name}`).catch(() => undefined);
     throw error;
@@ -338,7 +336,7 @@ async function pinCreatedSkillChildDirectory(
  * which is what the pin is for. Creating is therefore attempted with
  * `O_CREAT|O_EXCL` FIRST, so the answer is the kernel's rather than a probe's.
  */
-export async function writeSkillChildFile(
+export async function writeEntryChildFile(
   directory: FileHandle,
   name: string,
   content: Uint8Array,
@@ -349,7 +347,7 @@ export async function writeSkillChildFile(
    * refused, nothing happened here" and "the bytes are already gone".
    */
   onTruncated?: () => void,
-): Promise<SkillPin | undefined> {
+): Promise<EntryPin | undefined> {
   assertPathComponent(name);
   const created = await open(
     `${PROC_FD}/${directory.fd}/${name}`,
@@ -363,7 +361,7 @@ export async function writeSkillChildFile(
     onTruncated?.();
     try {
       await created.writeFile(content);
-      return await pinSkillHandle(created);
+      return await pinEntryHandle(created);
     } catch (error) {
       await unlinkCreatedChild(directory, name, created);
       throw error;
@@ -380,7 +378,7 @@ export async function writeSkillChildFile(
   try {
     const stats = await handle.stat();
     if (!stats.isFile()) {
-      throw new IrregularSkillSourceError(`"${name}" is not a regular file`);
+      throw new IrregularEntrySourceError(`"${name}" is not a regular file`);
     }
     await handle.writeFile(content);
     return undefined;
@@ -392,11 +390,11 @@ export async function writeSkillChildFile(
 /**
  * Remove one regular file beneath an open directory; never a link or folder.
  *
- * Delegates to {@link unlinkSkillChildIfSame}, which is where the actual rule
+ * Delegates to {@link unlinkEntryChildIfSame}, which is where the actual rule
  * lives: what gets destroyed is an inode this call verified, never whatever
  * holds a public name at the moment of the syscall.
  */
-export async function removeSkillChildFile(
+export async function removeEntryChildFile(
   directory: FileHandle,
   name: string,
 ): Promise<void> {
@@ -406,18 +404,18 @@ export async function removeSkillChildFile(
   // (measured on this filesystem), so comparing numbers only means something
   // while the original is pinned — an open descriptor guarantees that whatever
   // takes the name in the meantime is a different number.
-  const removed = await withSkillChild(directory, name, async (child) => {
+  const removed = await withEntryChild(directory, name, async (child) => {
     if (child.directory) {
-      throw new IrregularSkillSourceError(`"${name}" is a directory`);
+      throw new IrregularEntrySourceError(`"${name}" is a directory`);
     }
-    return unlinkSkillChildIfSame(
+    return unlinkEntryChildIfSame(
       directory,
       name,
-      await skillHandleIdentity(child.handle),
+      await entryHandleIdentity(child.handle),
     );
   });
   if (!removed) {
-    throw new IrregularSkillSourceError(
+    throw new IrregularEntrySourceError(
       `"${name}" changed while it was being removed`,
     );
   }
@@ -438,7 +436,7 @@ export async function removeSkillChildFile(
  * hard link — for the comparison to mean anything: an inode number alone is
  * reused the moment its file is deleted, so an unpinned number can be matched
  * by a stranger's file. The rename pins by linking the file to the new name
- * before it drops the old one; {@link removeSkillChildFile} pins by holding it
+ * before it drops the old one; {@link removeEntryChildFile} pins by holding it
  * open.
  *
  * A mismatch is put back: with `link` for anything that is not a directory,
@@ -447,7 +445,7 @@ export async function removeSkillChildFile(
  * linked. What cannot be put back is left under its private name and named in
  * the error, which the mutation's status check then reports.
  */
-export async function unlinkSkillChildIfSame(
+export async function unlinkEntryChildIfSame(
   directory: FileHandle,
   name: string,
   expected: { dev: number; ino: number },
@@ -465,7 +463,7 @@ export async function unlinkSkillChildIfSame(
   holdsExpected?: (handle: FileHandle) => Promise<boolean>,
 ): Promise<boolean> {
   assertPathComponent(name);
-  const aside = `.pa-skill-removing-${randomUUID()}`;
+  const aside = `.pa-removing-${randomUUID()}`;
   try {
     await rename(
       `${PROC_FD}/${directory.fd}/${name}`,
@@ -491,7 +489,7 @@ export async function unlinkSkillChildIfSame(
     // compare-and-unlink, and `unlinkat` takes no "only if unchanged" flag.
     const holds =
       holdsExpected === undefined ||
-      (await withSkillChild(directory, aside, (child) =>
+      (await withEntryChild(directory, aside, (child) =>
         holdsExpected(child.handle),
       ).catch(() => false));
     const still = holds ? await lstatQuietly(asidePath) : undefined;
@@ -526,7 +524,7 @@ async function restoreDetachedChild(
     );
     await unlink(`${PROC_FD}/${directory.fd}/${aside}`);
   } catch (error) {
-    throw new IrregularSkillSourceError(
+    throw new IrregularEntrySourceError(
       `"${name}" changed while it was being removed, and what was moved aside could not be put back (${
         isNodeError(error) ? error.code : String(error)
       }); it is at "${aside}" in the same folder`,
@@ -563,13 +561,13 @@ async function restoreDetachedDirectory(
   // what is left stays under the aside for the caller to name.
   for (let pass = 0; pass < MAX_RESTORE_PASSES; pass += 1) {
     const linked = new Map<string, { dev: number; ino: number }>();
-    await withSkillChild(directory, aside, (moved) =>
-      withSkillChild(directory, name, (restored) =>
-        relinkSkillTree(moved.handle, restored.handle, linked),
+    await withEntryChild(directory, aside, (moved) =>
+      withEntryChild(directory, name, (restored) =>
+        relinkEntryTree(moved.handle, restored.handle, linked),
       ),
     );
     if (linked.size === 0) break;
-    await withSkillChild(directory, aside, (moved) =>
+    await withEntryChild(directory, aside, (moved) =>
       clearLinkedAside(moved.handle, linked),
     );
   }
@@ -593,11 +591,11 @@ async function clearLinkedAside(
   linked: ReadonlyMap<string, { dev: number; ino: number }>,
   prefix = "",
 ): Promise<void> {
-  for (const entry of await readSkillDirectory(directory)) {
+  for (const entry of await readEntryDirectory(directory)) {
     const path = `${PROC_FD}/${directory.fd}/${entry.name}`;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
-      await withSkillChild(directory, entry.name, async (child) => {
+      await withEntryChild(directory, entry.name, async (child) => {
         if (child.directory) {
           await clearLinkedAside(child.handle, linked, relative);
         }
@@ -620,14 +618,14 @@ async function clearLinkedAside(
 }
 
 /** Recreate one tree under another open directory, linking every file across. */
-async function relinkSkillTree(
+async function relinkEntryTree(
   from: FileHandle,
   to: FileHandle,
   /** Records what each pass carried across, so the aside is emptied of that. */
   linked: Map<string, { dev: number; ino: number }>,
   prefix = "",
 ): Promise<void> {
-  for (const entry of await readSkillDirectory(from)) {
+  for (const entry of await readEntryDirectory(from)) {
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
       // `EEXIST` here is this restore's own earlier pass, never somebody else's
@@ -638,9 +636,9 @@ async function relinkSkillTree(
           if (!isNodeError(error) || error.code !== "EEXIST") throw error;
         },
       );
-      await withSkillChild(from, entry.name, (child) =>
-        withSkillChild(to, entry.name, (target) =>
-          relinkSkillTree(child.handle, target.handle, linked, relative),
+      await withEntryChild(from, entry.name, (child) =>
+        withEntryChild(to, entry.name, (target) =>
+          relinkEntryTree(child.handle, target.handle, linked, relative),
         ),
       );
       continue;
@@ -686,7 +684,7 @@ async function lstatQuietly(path: string): Promise<
  * behind the pathname afterwards cannot be descended into, and nothing outside
  * the verified tree is reachable. Symlinks are unlinked, never followed.
  */
-async function clearSkillDirectory(
+async function clearEntryDirectory(
   directory: FileHandle,
   /** Called the first time anything is actually gone, so a failure halfway
    * through can be reported as the partial removal it is. */
@@ -713,17 +711,17 @@ async function clearSkillDirectory(
   if (proved !== undefined) {
     await mustStillHold(prefix, proved, await selfChangedAt(directory));
   }
-  for (const entry of await readSkillDirectory(directory)) {
+  for (const entry of await readEntryDirectory(directory)) {
     const path = `${PROC_FD}/${directory.fd}/${entry.name}`;
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isDirectory()) {
-      await withSkillChild(directory, entry.name, async (child) => {
+      await withEntryChild(directory, entry.name, async (child) => {
         if (!child.directory) {
           // It changed kind between the listing and the open; the unlink below
           // is then the right removal for whatever it now is.
           return;
         }
-        await clearSkillDirectory(child.handle, onRemoved, proved, relative);
+        await clearEntryDirectory(child.handle, onRemoved, proved, relative);
       });
       await rmdir(path);
       onRemoved();
@@ -756,7 +754,7 @@ async function mustStillHold(
 ): Promise<void> {
   const provedAt = proved.get(relative);
   if (provedAt === undefined || changed === undefined || changed !== provedAt) {
-    throw new SkillContentChangedError(relative || ".");
+    throw new EntryContentChangedError(relative || ".");
   }
 }
 
@@ -772,7 +770,7 @@ async function selfChangedAt(
 }
 
 /** One entry changed between the proof of its content and its removal. */
-class SkillContentChangedError extends Error {
+class EntryContentChangedError extends Error {
   constructor(readonly entry: string) {
     super(`"${entry}" changed after its content was checked`);
   }
@@ -798,7 +796,7 @@ class SkillContentChangedError extends Error {
  * comparison meaningful — an inode number alone is reusable the instant a
  * directory is removed.
  */
-export async function withReservedSkillFolder<T>(
+export async function withReservedEntryFolder<T>(
   rootHandle: FileHandle,
   folder: string,
   use: (reserved: {
@@ -822,18 +820,18 @@ export async function withReservedSkillFolder<T>(
   // was put into in the meantime.
   let handedOver = false;
   try {
-    return await withSkillChild(rootHandle, folder, async (child) => {
+    return await withEntryChild(rootHandle, folder, async (child) => {
       if (!child.directory) {
-        throw new IrregularSkillSourceError(
+        throw new IrregularEntrySourceError(
           `"${folder}" is not a directory just after it was created`,
         );
       }
-      if ((await readSkillDirectory(child.handle)).length > 0) {
-        throw new IrregularSkillSourceError(
+      if ((await readEntryDirectory(child.handle)).length > 0) {
+        throw new IrregularEntrySourceError(
           `"${folder}" was replaced by a directory with content just after it was created`,
         );
       }
-      const identity = await skillHandleIdentity(child.handle);
+      const identity = await entryHandleIdentity(child.handle);
       handedOver = true;
       return use({ handle: child.handle, identity });
     });
@@ -866,7 +864,7 @@ export async function withReservedSkillFolder<T>(
  */
 
 /** A name that is already taken. Refused, never replaced. */
-export class SkillNameTakenError extends Error {}
+export class EntryNameTakenError extends Error {}
 
 /**
  * An inode this process has PINNED, and the identity that pin makes meaningful.
@@ -883,13 +881,13 @@ export class SkillNameTakenError extends Error {}
  * settled, because that is when its undo needs the answer. `handle` carries no
  * I/O rights ({@link O_PATH}); it exists only to hold the number.
  */
-export interface SkillPin {
+export interface EntryPin {
   handle: FileHandle;
   identity: { dev: number; ino: number };
 }
 
 /** Pin the inode an open handle already refers to, resolving no name at all. */
-export async function pinSkillHandle(handle: FileHandle): Promise<SkillPin> {
+export async function pinEntryHandle(handle: FileHandle): Promise<EntryPin> {
   // The magic link under `/proc/self/fd` resolves to the inode the descriptor
   // holds, not by walking the path it was opened through, so nothing that
   // happened to its NAME since can redirect this. Deliberately without
@@ -898,17 +896,17 @@ export async function pinSkillHandle(handle: FileHandle): Promise<SkillPin> {
 }
 
 /** Pin the entry at `name` below an open directory, following no link. */
-async function pinSkillChild(
+async function pinEntryChild(
   directory: FileHandle,
   name: string,
-): Promise<SkillPin> {
+): Promise<EntryPin> {
   assertPathComponent(name);
   return pinnedFrom(
     await open(`${PROC_FD}/${directory.fd}/${name}`, PIN_FLAGS),
   );
 }
 
-async function pinnedFrom(handle: FileHandle): Promise<SkillPin> {
+async function pinnedFrom(handle: FileHandle): Promise<EntryPin> {
   try {
     const stats = await handle.stat();
     return { handle, identity: { dev: stats.dev, ino: stats.ino } };
@@ -925,14 +923,14 @@ async function pinnedFrom(handle: FileHandle): Promise<SkillPin> {
  * `mkdir` cannot hand back a descriptor — no syscall creates a directory and
  * opens it in one step — so the pin is taken by re-opening the name, and the
  * directory must be EMPTY when it arrives. That is the same reservation
- * contract {@link withReservedSkillFolder} makes: a directory another actor
+ * contract {@link withReservedEntryFolder} makes: a directory another actor
  * slipped into the gap is harmless while it holds nothing, and from the pin
  * onwards its inode cannot be recycled behind our back.
  */
-export async function createSkillChildDirectory(
+export async function createEntryChildDirectory(
   directory: FileHandle,
   name: string,
-): Promise<SkillPin> {
+): Promise<EntryPin> {
   assertPathComponent(name);
   try {
     await mkdir(`${PROC_FD}/${directory.fd}/${name}`);
@@ -945,10 +943,10 @@ export async function createSkillChildDirectory(
   // taken back here, while this call still knows it just made it. `rmdir`
   // removes only an empty directory, so the worst this can cost is an empty
   // directory another actor put at the name in the same instant.
-  const pin = await pinCreatedSkillChildDirectory(directory, name);
+  const pin = await pinCreatedEntryChildDirectory(directory, name);
   try {
-    if ((await readSkillDirectory(pin.handle)).length > 0) {
-      throw new IrregularSkillSourceError(
+    if ((await readEntryDirectory(pin.handle)).length > 0) {
+      throw new IrregularEntrySourceError(
         `"${name}" was replaced by a directory with content just after it was created`,
       );
     }
@@ -969,11 +967,11 @@ export async function createSkillChildDirectory(
  * The pin comes from the descriptor the file was CREATED through, so it is the
  * inode this call made and not whatever the name resolves to a moment later.
  */
-export async function createSkillChildFile(
+export async function createEntryChildFile(
   directory: FileHandle,
   name: string,
   content: Uint8Array,
-): Promise<SkillPin> {
+): Promise<EntryPin> {
   assertPathComponent(name);
   let handle: FileHandle | undefined;
   try {
@@ -987,7 +985,7 @@ export async function createSkillChildFile(
   }
   try {
     await handle.writeFile(content);
-    return await pinSkillHandle(handle);
+    return await pinEntryHandle(handle);
   } catch (error) {
     // The file exists but this call cannot hand back a pin for it, so it takes
     // it back instead of leaving a name no undo may touch. The creating
@@ -1007,7 +1005,7 @@ async function unlinkCreatedChild(
 ): Promise<void> {
   try {
     const stats = await created.stat();
-    await unlinkSkillChildIfSame(directory, name, {
+    await unlinkEntryChildIfSame(directory, name, {
       dev: stats.dev,
       ino: stats.ino,
     });
@@ -1024,11 +1022,11 @@ async function unlinkCreatedChild(
  * Linux `link` does not dereference — so a supporting link keeps pointing where
  * it pointed.
  */
-export async function linkSkillChild(
+export async function linkEntryChild(
   fromDirectory: FileHandle,
   name: string,
   toDirectory: FileHandle,
-): Promise<SkillPin> {
+): Promise<EntryPin> {
   assertPathComponent(name);
   try {
     await link(
@@ -1043,16 +1041,16 @@ export async function linkSkillChild(
   // against the source is therefore a real check and not a guess. It fails only
   // if something took the destination name over in between, which is a refusal
   // — the pin must never end up on somebody else's entry.
-  const linked = await skillChildIdentity(fromDirectory, name);
-  let pin: SkillPin;
+  const linked = await entryChildIdentity(fromDirectory, name);
+  let pin: EntryPin;
   try {
-    pin = await pinSkillChild(toDirectory, name);
+    pin = await pinEntryChild(toDirectory, name);
   } catch (error) {
     // As everywhere else: a name this call made but cannot pin is taken back
     // rather than left for an undo that could not prove it owns it. The source
     // link still holds the inode, so this unlinks that inode and nothing else.
     if (linked) {
-      await unlinkSkillChildIfSame(toDirectory, name, linked).catch(
+      await unlinkEntryChildIfSame(toDirectory, name, linked).catch(
         () => false,
       );
     }
@@ -1064,7 +1062,7 @@ export async function linkSkillChild(
     linked.ino !== pin.identity.ino
   ) {
     await closeQuietly(pin.handle);
-    throw new IrregularSkillSourceError(
+    throw new IrregularEntrySourceError(
       `"${name}" was replaced while it was being linked into the new folder`,
     );
   }
@@ -1073,7 +1071,7 @@ export async function linkSkillChild(
 
 function asNameTaken(error: unknown, name: string): Error {
   if (isNodeError(error) && error.code === "EEXIST") {
-    return new SkillNameTakenError(`"${name}" already exists`);
+    return new EntryNameTakenError(`"${name}" already exists`);
   }
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -1092,7 +1090,7 @@ export async function directoryChangedAt(
  * a symlink: it cannot be opened, and its target cannot change while its inode
  * does not, so the timestamp is all a removal needs from it.
  */
-export async function skillChildChangedAt(
+export async function entryChildChangedAt(
   directory: FileHandle,
   name: string,
 ): Promise<bigint | undefined> {
@@ -1119,7 +1117,7 @@ export async function skillChildChangedAt(
  * The target comes back as BYTES: it is the content Git stores for a symlink,
  * and a path is not required to be valid UTF-8.
  */
-export async function readSkillChildLink(
+export async function readEntryChildLink(
   directory: FileHandle,
   name: string,
 ): Promise<{ target: Uint8Array; changed: bigint } | undefined> {
@@ -1140,7 +1138,7 @@ export async function readSkillChildLink(
 }
 
 /** No-follow identity of one child, or undefined when nothing is there. */
-export async function skillChildIdentity(
+export async function entryChildIdentity(
   directory: FileHandle,
   name: string,
 ): Promise<{ dev: number; ino: number } | undefined> {
@@ -1159,7 +1157,7 @@ export async function skillChildIdentity(
  * That refusal is the point: an undo may take back a directory this code
  * created, and must leave one that somebody has since written into.
  */
-export async function rmdirSkillChild(
+export async function rmdirEntryChild(
   directory: FileHandle,
   name: string,
 ): Promise<void> {
@@ -1183,7 +1181,7 @@ export async function rmdirSkillChild(
  * `rename` is limited to; leaving a user's folder under an invented name would
  * be the worse of the two.
  */
-export type SkillTreeRemoval =
+export type EntryTreeRemoval =
   | "removed"
   | "absent"
   | "not-ours"
@@ -1204,17 +1202,17 @@ export type SkillTreeRemoval =
  * has no bound — a single large sibling stretches it — so the second one
  * rechecks each of these immediately before the unlink that would destroy it.
  */
-export type SkillTreeContents =
+export type EntryTreeContents =
   { holds: false } | { holds: true; provedAt?: ReadonlyMap<string, bigint> };
 
-export async function removeVerifiedSkillTree(
+export async function removeVerifiedEntryTree(
   parent: FileHandle,
   name: string,
   expected: { dev: number; ino: number },
-  contentsExpected?: (tree: FileHandle) => Promise<SkillTreeContents>,
-): Promise<SkillTreeRemoval> {
+  contentsExpected?: (tree: FileHandle) => Promise<EntryTreeContents>,
+): Promise<EntryTreeRemoval> {
   assertPathComponent(name);
-  const aside = `.pa-skill-removing-${randomUUID()}`;
+  const aside = `.pa-removing-${randomUUID()}`;
   try {
     await rename(
       `${PROC_FD}/${parent.fd}/${name}`,
@@ -1226,17 +1224,17 @@ export async function removeVerifiedSkillTree(
   }
 
   let removedAny = false;
-  const outcome = await withSkillChild(parent, aside, async (child) => {
+  const outcome = await withEntryChild(parent, aside, async (child) => {
     if (!child.directory) return "not-ours" as const;
-    const identity = await skillHandleIdentity(child.handle);
+    const identity = await entryHandleIdentity(child.handle);
     if (identity.dev !== expected.dev || identity.ino !== expected.ino) {
       return "not-ours" as const;
     }
-    const contents: SkillTreeContents = contentsExpected
+    const contents: EntryTreeContents = contentsExpected
       ? await contentsExpected(child.handle)
       : { holds: true };
     if (!contents.holds) return "unexpected-content" as const;
-    await clearSkillDirectory(
+    await clearEntryDirectory(
       child.handle,
       () => {
         removedAny = true;
@@ -1247,7 +1245,7 @@ export async function removeVerifiedSkillTree(
   }).catch((error: unknown) => {
     // An entry that changed after its content was proved is not a broken tree
     // and not somebody else's: it is content this removal may no longer take.
-    if (error instanceof SkillContentChangedError) {
+    if (error instanceof EntryContentChangedError) {
       return removedAny
         ? ("partial" as const)
         : ("unexpected-content" as const);
@@ -1267,14 +1265,14 @@ export async function removeVerifiedSkillTree(
 }
 
 /** Whether the entry at `name` is still the exact one an earlier step created. */
-export async function skillChildStillIs(
+export async function entryChildStillIs(
   directory: FileHandle,
   name: string,
   expected: { dev: number; ino: number },
 ): Promise<boolean> {
   try {
-    return await withSkillChild(directory, name, async (child) => {
-      const identity = await skillHandleIdentity(child.handle);
+    return await withEntryChild(directory, name, async (child) => {
+      const identity = await entryHandleIdentity(child.handle);
       return identity.dev === expected.dev && identity.ino === expected.ino;
     });
   } catch {
@@ -1284,7 +1282,7 @@ export async function skillChildStillIs(
 }
 
 /** The identity of one open directory or file, for comparison against a scan. */
-export async function skillHandleIdentity(
+export async function entryHandleIdentity(
   handle: FileHandle,
 ): Promise<{ dev: number; ino: number }> {
   const stats = await handle.stat();
@@ -1300,7 +1298,7 @@ export async function skillHandleIdentity(
  * name at write time, which need not be the file whose text was matched; one
  * handle removes the question.
  */
-export async function withSkillChildForUpdate<T>(
+export async function withEntryChildForUpdate<T>(
   directory: FileHandle,
   name: string,
   use: (file: {
@@ -1319,7 +1317,7 @@ export async function withSkillChildForUpdate<T>(
   try {
     const stats = await handle.stat();
     if (!stats.isFile()) {
-      throw new IrregularSkillSourceError(`"${name}" is not a regular file`);
+      throw new IrregularEntrySourceError(`"${name}" is not a regular file`);
     }
     return await use({
       handle,
@@ -1345,14 +1343,14 @@ function assertPathComponent(name: string): void {
     name.includes("\\") ||
     name.includes("\0")
   ) {
-    throw new Error("Invalid skill path component.");
+    throw new Error("Invalid library path component.");
   }
 }
 
 /** Whether an identity still names the same inodes a scan recorded. */
-export function sameSkillSource(
-  actual: SkillSourceIdentity,
-  expected: SkillSourceIdentity,
+export function sameEntrySource(
+  actual: EntrySourceIdentity,
+  expected: EntrySourceIdentity,
 ): boolean {
   return (
     actual.folder.dev === expected.folder.dev &&
@@ -1378,7 +1376,7 @@ async function openAnchored(
       isNodeError(error) &&
       (error.code === "ELOOP" || error.code === "EMLINK")
     ) {
-      throw new SymlinkedSkillSourceError("symlinked skill source");
+      throw new SymlinkedEntrySourceError("symlinked library source");
     }
     throw error;
   }

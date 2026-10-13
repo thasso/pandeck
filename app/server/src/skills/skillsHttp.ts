@@ -19,16 +19,17 @@
  * have this skill".
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isSafeSkillName } from "@assistant/shared";
+import { isSafeEntryName } from "@assistant/shared";
 import { errorText } from "../errors.ts";
-import { readSkillDetail } from "./skillDetail.ts";
+import { readEntryDetail } from "../library/entryDetail.ts";
 import {
-  InvalidSkillFilePathError,
-  readSkillFilePreview,
-  readSkillRawFile,
-  SkillFileNotFoundError,
-  SkillFileTooLargeError,
-} from "./skillFiles.ts";
+  InvalidEntryFilePathError,
+  readEntryFilePreview,
+  readEntryRawFile,
+  EntryFileNotFoundError,
+  EntryFileTooLargeError,
+} from "../library/entryFiles.ts";
+import { skillLibraryStore } from "./skillLibrary.ts";
 
 type Headers = Record<string, string>;
 
@@ -54,7 +55,7 @@ export async function handleSkillsApi(
       case "/api/skills/detail": {
         const name = requiredSkillName(url, respond);
         if (!name) return;
-        const detail = await readSkillDetail(name);
+        const detail = await readEntryDetail(name, skillLibraryStore);
         if (!detail) {
           respond(404, { error: `No skill named "${name}" in the library.` });
           return;
@@ -71,7 +72,11 @@ export async function handleSkillsApi(
           return;
         }
         if (url.searchParams.get("preview") === "text") {
-          const preview = await readSkillFilePreview(name, path);
+          const preview = await readEntryFilePreview(
+            name,
+            path,
+            skillLibraryStore,
+          );
           if (!preview) {
             respond(404, { error: `No readable skill named "${name}".` });
             return;
@@ -79,7 +84,7 @@ export async function handleSkillsApi(
           respond(200, preview);
           return;
         }
-        const file = await readSkillRawFile(name, path);
+        const file = await readEntryRawFile(name, path, skillLibraryStore);
         if (!file) {
           respond(404, { error: `No readable skill named "${name}".` });
           return;
@@ -100,15 +105,15 @@ export async function handleSkillsApi(
         respond(404, { error: "Not found" });
     }
   } catch (err) {
-    if (err instanceof InvalidSkillFilePathError) {
+    if (err instanceof InvalidEntryFilePathError) {
       respond(400, { error: err.message });
       return;
     }
-    if (err instanceof SkillFileTooLargeError) {
+    if (err instanceof EntryFileTooLargeError) {
       respond(413, { error: err.message });
       return;
     }
-    if (err instanceof SkillFileNotFoundError) {
+    if (err instanceof EntryFileNotFoundError) {
       respond(404, { error: err.message });
       return;
     }
@@ -125,7 +130,7 @@ function requiredSkillName(
     respond(400, { error: "A skill name is required." });
     return null;
   }
-  if (!isSafeSkillName(name)) {
+  if (!isSafeEntryName(name)) {
     respond(400, { error: "Invalid skill name." });
     return null;
   }

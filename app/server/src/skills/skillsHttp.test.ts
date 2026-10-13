@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import type { SkillDetailResponse } from "@assistant/shared";
+import type { EntryDetailResponse } from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "skills-http-test-"));
 process.env.DATA_DIR = tmp;
@@ -88,9 +88,9 @@ test("serves one skill by declared name", async () => {
   const { status, body } = await call("/api/skills/detail?name=release-notes");
 
   assert.equal(status, 200);
-  const detail = body as unknown as SkillDetailResponse;
-  assert.equal(detail.kind, "skill");
-  if (detail.kind !== "skill") return;
+  const detail = body as unknown as EntryDetailResponse;
+  assert.equal(detail.kind, "entry");
+  if (detail.kind !== "entry") return;
   assert.equal(detail.name, "release-notes");
   assert.equal(detail.path, "notes-folder/SKILL.md");
   assert.equal(detail.markdown, "# Release notes\n\nSteps here.");
@@ -101,7 +101,7 @@ test("answers a known but unusable name with its reason, not an error status", a
   const { status, body } = await call("/api/skills/detail?name=half-written");
 
   assert.equal(status, 200);
-  const detail = body as unknown as SkillDetailResponse;
+  const detail = body as unknown as EntryDetailResponse;
   assert.equal(detail.kind, "invalid");
   if (detail.kind !== "invalid") return;
   assert.equal(detail.name, "half-written");

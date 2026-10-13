@@ -7,13 +7,14 @@ import { afterEach, beforeEach, describe, test } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 import {
   publishSkillLibrary,
+  skillKind,
   skillLibraryListMessage,
 } from "./skillLibrary.ts";
 import {
   setSkillLibraryBroadcaster,
   skillLibraryBroadcaster,
 } from "./skillLibraryEvents.ts";
-import { SkillLibraryStore } from "./skillLibraryStore.ts";
+import { LibraryStore } from "../library/libraryStore.ts";
 
 let tempRoot: string;
 let libraryRoot: string;
@@ -62,7 +63,7 @@ describe("skills library read model", () => {
       "name: release-notes\ndescription: Draft release notes.\n",
     );
     await writeSkill("broken", "description: No name here.\n");
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     const sent = captureBroadcasts();
 
     await publishSkillLibrary(store);
@@ -89,7 +90,7 @@ describe("skills library read model", () => {
 
   test("bootstraps a missing library instead of failing the read", async () => {
     assert.ok(!existsSync(libraryRoot));
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
 
     const list = listOf(await skillLibraryListMessage(store));
 
@@ -105,7 +106,7 @@ describe("skills library read model", () => {
       releaseFirst = resolve;
     });
     let readsStarted = 0;
-    class DelayedFirstStore extends SkillLibraryStore {
+    class DelayedFirstStore extends LibraryStore {
       override async ensureInitialized(): Promise<void> {
         readsStarted += 1;
         if (readsStarted === 1) await firstMayScan;
@@ -124,7 +125,7 @@ describe("skills library read model", () => {
         }
       },
     });
-    const store = new DelayedFirstStore(libraryRoot);
+    const store = new DelayedFirstStore(skillKind, libraryRoot);
 
     // Two windows may subscribe before the first scan finishes. The second
     // authoritative read must not begin until the first result is published.
@@ -144,7 +145,7 @@ describe("skills library read model", () => {
 
   test("rescans the working tree on every publish", async () => {
     await writeSkill("notes", "name: notes\ndescription: First.\n");
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     const sent = captureBroadcasts();
     await publishSkillLibrary(store);
 
@@ -180,7 +181,7 @@ describe("skills library read model", () => {
   test("answers an unreadable library with an error, never an empty list", async () => {
     // A plain file where the library belongs: bootstrap cannot create it.
     await writeFile(libraryRoot, "not a directory\n", "utf8");
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
 
     const message = await skillLibraryListMessage(store);
 
@@ -195,7 +196,7 @@ describe("skills library read model", () => {
     // The default seam swallows the message rather than reaching every
     // connection; nothing in the domain may broadcast app-wide.
     await assert.doesNotReject(
-      publishSkillLibrary(new SkillLibraryStore(libraryRoot)),
+      publishSkillLibrary(new LibraryStore(skillKind, libraryRoot)),
     );
     assert.equal(typeof skillLibraryBroadcaster().broadcast, "function");
   });

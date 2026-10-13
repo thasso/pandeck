@@ -6,7 +6,7 @@ import {
   type AppSettings,
   type MemoryCard,
   type MemoryLoadBatch,
-  type SkillDetailResponse,
+  type EntryDetailResponse,
   type SkillLibraryList,
   type SkillToggles,
 } from "@assistant/shared";
@@ -223,8 +223,8 @@ const library: SkillLibraryList = {
   ],
 };
 
-const releaseNotes: SkillDetailResponse = {
-  kind: "skill",
+const releaseNotes: EntryDetailResponse = {
+  kind: "entry",
   name: "release-notes",
   description: library.skills[0]!.description,
   folder: "release-notes",
@@ -302,7 +302,7 @@ function SkillsPreview({
       if (detail === "error")
         return json({ error: "Failed to read the skill: EACCES" }, 500);
       const name = url.searchParams.get("name") ?? "";
-      const body: SkillDetailResponse =
+      const body: EntryDetailResponse =
         name === releaseNotes.name
           ? releaseNotes
           : {
@@ -473,7 +473,7 @@ export const SkillsRescanFailed: Story = {
   ),
 };
 
-export const SkillDetail: Story = {
+export const EntryDetail: Story = {
   render: () => <SkillsPreview state={ready(library)} />,
   play: openSkill("release-notes"),
 };

@@ -6,7 +6,7 @@
  * comes from the open file description. Swapping the entry afterwards is the
  * defect this seam exists to make impossible, and it is exercised here
  * deterministically, by swapping while the handle is held. Run:
- *   pnpm --filter @assistant/server test src/skills/skillSource.test.ts
+ *   pnpm --filter @assistant/server test src/skills/entrySource.test.ts
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
@@ -26,18 +26,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import {
-  createSkillChildDirectory,
-  createSkillChildFile,
-  linkSkillChild,
-  readSkillDirectory,
-  removeVerifiedSkillTree,
-  skillChildIdentity,
-  SymlinkedSkillSourceError,
-  unlinkSkillChildIfSame,
+  createEntryChildDirectory,
+  createEntryChildFile,
+  linkEntryChild,
+  readEntryDirectory,
+  removeVerifiedEntryTree,
+  entryChildIdentity,
+  SymlinkedEntrySourceError,
+  unlinkEntryChildIfSame,
   withLibraryRoot,
-  withSkillChild,
-  withSkillSource,
-} from "./skillSource.ts";
+  withEntryChild,
+  withEntrySource,
+} from "./entrySource.ts";
 
 let root: string;
 let outside: string;
@@ -58,10 +58,10 @@ afterEach(() => {
   rmSync(outside, { recursive: true, force: true });
 });
 
-describe("withSkillSource", () => {
+describe("withEntrySource", () => {
   test("keeps reading the opened inode after the path is swapped for a link", async () => {
     const read = await withLibraryRoot(root, (rootHandle) =>
-      withSkillSource(rootHandle, "folder", async (source) => {
+      withEntrySource(rootHandle, "folder", "SKILL.md", async (source) => {
         // The pathname now answers with an outside file. The handle does not.
         await rm(join(root, "folder", "SKILL.md"));
         await symlink(
@@ -84,7 +84,12 @@ describe("withSkillSource", () => {
     const fileStat = await stat(join(root, "folder", "SKILL.md"));
 
     const identity = await withLibraryRoot(root, (rootHandle) =>
-      withSkillSource(rootHandle, "folder", async (source) => source.identity),
+      withEntrySource(
+        rootHandle,
+        "folder",
+        "SKILL.md",
+        async (source) => source.identity,
+      ),
     );
 
     assert.deepEqual(identity, {
@@ -99,11 +104,11 @@ describe("withSkillSource", () => {
 
     await assert.rejects(
       withLibraryRoot(root, (rootHandle) =>
-        withSkillSource(rootHandle, "folder", async (source) =>
+        withEntrySource(rootHandle, "folder", "SKILL.md", async (source) =>
           source.file.readFile("utf8"),
         ),
       ),
-      SymlinkedSkillSourceError,
+      SymlinkedEntrySourceError,
     );
   });
 
@@ -112,11 +117,11 @@ describe("withSkillSource", () => {
 
     await assert.rejects(
       withLibraryRoot(root, (rootHandle) =>
-        withSkillSource(rootHandle, "linked", async (source) =>
+        withEntrySource(rootHandle, "linked", "SKILL.md", async (source) =>
           source.file.readFile("utf8"),
         ),
       ),
-      SymlinkedSkillSourceError,
+      SymlinkedEntrySourceError,
     );
   });
 
@@ -129,7 +134,7 @@ describe("withSkillSource", () => {
     // scan and every HTTP read behind it.
     await assert.rejects(
       withLibraryRoot(root, (rootHandle) =>
-        withSkillSource(rootHandle, "folder", async (source) =>
+        withEntrySource(rootHandle, "folder", "SKILL.md", async (source) =>
           source.file.readFile("utf8"),
         ),
       ),
@@ -160,12 +165,12 @@ describe("identity-bound removal", () => {
     await link(join(folder, "tone.md"), join(root, "pinned"));
 
     const removed = await withLibraryRoot(root, (rootHandle) =>
-      withSkillChild(rootHandle, "skill", async (child) => {
-        const pinned = await skillChildIdentity(child.handle, "tone.md");
+      withEntryChild(rootHandle, "skill", async (child) => {
+        const pinned = await entryChildIdentity(child.handle, "tone.md");
         assert.ok(pinned);
         await rm(join(folder, "tone.md"));
         await writeFile(join(folder, "tone.md"), "user bytes\n", "utf8");
-        return unlinkSkillChildIfSame(child.handle, "tone.md", pinned);
+        return unlinkEntryChildIfSame(child.handle, "tone.md", pinned);
       }),
     );
 
@@ -188,10 +193,10 @@ describe("identity-bound removal", () => {
     await writeFile(join(folder, "tone.md"), "agent bytes\n", "utf8");
 
     const removed = await withLibraryRoot(root, (rootHandle) =>
-      withSkillChild(rootHandle, "skill", async (child) => {
-        const identity = await skillChildIdentity(child.handle, "tone.md");
+      withEntryChild(rootHandle, "skill", async (child) => {
+        const identity = await entryChildIdentity(child.handle, "tone.md");
         assert.ok(identity);
-        return unlinkSkillChildIfSame(child.handle, "tone.md", identity);
+        return unlinkEntryChildIfSame(child.handle, "tone.md", identity);
       }),
     );
 
@@ -200,8 +205,8 @@ describe("identity-bound removal", () => {
   });
 });
 
-describe("removeVerifiedSkillTree", () => {
-  async function skillTree(): Promise<{ dev: number; ino: number }> {
+describe("removeVerifiedEntryTree", () => {
+  async function entryTree(): Promise<{ dev: number; ino: number }> {
     await mkdir(join(root, "skill", "references"), { recursive: true });
     await writeFile(join(root, "skill", "SKILL.md"), "manifest\n", "utf8");
     const stats = await stat(join(root, "skill"));
@@ -209,10 +214,10 @@ describe("removeVerifiedSkillTree", () => {
   }
 
   test("removes the tree it was given, leaving nothing behind", async () => {
-    const identity = await skillTree();
+    const identity = await entryTree();
 
     const outcome = await withLibraryRoot(root, (rootHandle) =>
-      removeVerifiedSkillTree(rootHandle, "skill", identity),
+      removeVerifiedEntryTree(rootHandle, "skill", identity),
     );
 
     assert.equal(outcome, "removed");
@@ -224,13 +229,13 @@ describe("removeVerifiedSkillTree", () => {
   });
 
   test("refuses and restores a tree that is not the recorded one", async () => {
-    const identity = await skillTree();
+    const identity = await entryTree();
     await rm(join(root, "skill"), { recursive: true });
     await mkdir(join(root, "skill"));
     await writeFile(join(root, "skill", "mine.txt"), "user data\n", "utf8");
 
     const outcome = await withLibraryRoot(root, (rootHandle) =>
-      removeVerifiedSkillTree(rootHandle, "skill", { ...identity, ino: 1 }),
+      removeVerifiedEntryTree(rootHandle, "skill", { ...identity, ino: 1 }),
     );
 
     assert.equal(outcome, "not-ours");
@@ -247,11 +252,11 @@ describe("removeVerifiedSkillTree", () => {
     // name in that moment. Restoring with `rename` would have replaced it. The
     // restore reassembles instead, so that directory is either still the one
     // the hand author made, or the restore refused and said where the tree is.
-    const identity = await skillTree();
+    const identity = await entryTree();
     let racedInode = 0n;
 
     const outcome = await withLibraryRoot(root, (rootHandle) =>
-      removeVerifiedSkillTree(rootHandle, "skill", identity, async () => {
+      removeVerifiedEntryTree(rootHandle, "skill", identity, async () => {
         await mkdir(join(root, "skill"));
         racedInode = (await stat(join(root, "skill"), { bigint: true })).ino;
         return { holds: false };
@@ -277,12 +282,12 @@ describe("removeVerifiedSkillTree", () => {
   });
 
   test("refuses and restores a tree that gained content", async () => {
-    const identity = await skillTree();
+    const identity = await entryTree();
     await writeFile(join(root, "skill", "mine.txt"), "user data\n", "utf8");
 
     const outcome = await withLibraryRoot(root, (rootHandle) =>
-      removeVerifiedSkillTree(rootHandle, "skill", identity, async (tree) => ({
-        holds: (await readSkillDirectory(tree)).every(
+      removeVerifiedEntryTree(rootHandle, "skill", identity, async (tree) => ({
+        holds: (await readEntryDirectory(tree)).every(
           (entry) => entry.name !== "mine.txt",
         ),
       })),
@@ -313,8 +318,8 @@ describe("a removal racing a writer that already holds the inode open", () => {
     const writer = await open(path, "a");
     try {
       const removed = await withLibraryRoot(root, (rootHandle) =>
-        withSkillChild(rootHandle, "folder", (folder) =>
-          unlinkSkillChildIfSame(
+        withEntryChild(rootHandle, "folder", (folder) =>
+          unlinkEntryChildIfSame(
             folder.handle,
             "tone.md",
             statSync(path),
@@ -352,8 +357,8 @@ describe("pinning", () => {
    */
   test("a pinned file keeps its number away from its replacement", async () => {
     const pin = await withLibraryRoot(root, (rootHandle) =>
-      withSkillChild(rootHandle, "folder", (child) =>
-        createSkillChildFile(
+      withEntryChild(rootHandle, "folder", (child) =>
+        createEntryChildFile(
           child.handle,
           "ours.txt",
           new TextEncoder().encode("ours\n"),
@@ -373,8 +378,8 @@ describe("pinning", () => {
 
   test("a pinned directory keeps its number away from its replacement", async () => {
     const pin = await withLibraryRoot(root, (rootHandle) =>
-      withSkillChild(rootHandle, "folder", (child) =>
-        createSkillChildDirectory(child.handle, "sub"),
+      withEntryChild(rootHandle, "folder", (child) =>
+        createEntryChildDirectory(child.handle, "sub"),
       ),
     );
     try {
@@ -391,10 +396,10 @@ describe("pinning", () => {
   test("a symlink can be pinned, which no ordinary open can do", async () => {
     await symlink("SKILL.md", join(root, "folder", "self.md"));
     const pin = await withLibraryRoot(root, (rootHandle) =>
-      withSkillChild(rootHandle, "folder", async (child) => {
+      withEntryChild(rootHandle, "folder", async (child) => {
         await mkdir(join(root, "destination"));
-        return withSkillChild(rootHandle, "destination", (destination) =>
-          linkSkillChild(child.handle, "self.md", destination.handle),
+        return withEntryChild(rootHandle, "destination", (destination) =>
+          linkEntryChild(child.handle, "self.md", destination.handle),
         );
       }),
     );

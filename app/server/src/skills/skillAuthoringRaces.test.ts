@@ -46,15 +46,16 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 // assertion is about bytes and counts, never about time.
 vi.setConfig({ testTimeout: 120_000 });
 import { git } from "../gitExec.ts";
+import { createSkill } from "./createSkill.ts";
 import {
-  createSkill,
-  deleteSkill,
-  manageSkillFiles,
-  renameSkill,
+  deleteEntry,
+  manageEntryFiles,
+  renameEntry,
   setMaxPlacedEntriesForTests,
-} from "./skillAuthoring.ts";
+} from "../library/libraryAuthoring.ts";
+import { LibraryStore } from "../library/libraryStore.ts";
 import { setSkillLibraryBroadcaster } from "./skillLibraryEvents.ts";
-import { SkillLibraryStore } from "./skillLibraryStore.ts";
+import { skillKind } from "./skillLibrary.ts";
 
 /** How many directory entries the source seam has handed out since the reset. */
 let entriesRead = 0;
@@ -69,25 +70,26 @@ let beforeTreeRemoval: (() => void) | undefined;
 /** Runs once, immediately before the next single-file removal. */
 let beforeChildRemoval: (() => void) | undefined;
 
-vi.mock("./skillSource.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./skillSource.ts")>();
+vi.mock("../library/entrySource.ts", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../library/entrySource.ts")>();
   return {
     ...actual,
-    withReservedSkillFolder: async (
-      ...args: Parameters<typeof actual.withReservedSkillFolder>
+    withReservedEntryFolder: async (
+      ...args: Parameters<typeof actual.withReservedEntryFolder>
     ) => {
       const [rootHandle, folder, use] = args;
-      return actual.withReservedSkillFolder(rootHandle, folder, (reserved) => {
+      return actual.withReservedEntryFolder(rootHandle, folder, (reserved) => {
         const hook = afterReservation;
         afterReservation = undefined;
         hook?.();
         return use(reserved);
       });
     },
-    iterateSkillDirectory: (
-      ...args: Parameters<typeof actual.iterateSkillDirectory>
+    iterateEntryDirectory: (
+      ...args: Parameters<typeof actual.iterateEntryDirectory>
     ) => {
-      const inner = actual.iterateSkillDirectory(...args);
+      const inner = actual.iterateEntryDirectory(...args);
       return {
         async *[Symbol.asyncIterator]() {
           for await (const entry of inner) {
@@ -97,41 +99,41 @@ vi.mock("./skillSource.ts", async (importOriginal) => {
         },
       };
     },
-    withSkillChild: (...args: Parameters<typeof actual.withSkillChild>) => {
+    withEntryChild: (...args: Parameters<typeof actual.withEntryChild>) => {
       const [, name] = args;
       onChildOpen?.(name);
-      return actual.withSkillChild(...args);
+      return actual.withEntryChild(...args);
     },
-    linkSkillChild: async (
-      ...args: Parameters<typeof actual.linkSkillChild>
+    linkEntryChild: async (
+      ...args: Parameters<typeof actual.linkEntryChild>
     ) => {
       const hook = beforeChildLink;
       beforeChildLink = undefined;
       hook?.();
-      return actual.linkSkillChild(...args);
+      return actual.linkEntryChild(...args);
     },
-    removeSkillChildFile: async (
-      ...args: Parameters<typeof actual.removeSkillChildFile>
+    removeEntryChildFile: async (
+      ...args: Parameters<typeof actual.removeEntryChildFile>
     ) => {
       const hook = beforeChildRemoval;
       beforeChildRemoval = undefined;
       hook?.();
-      return actual.removeSkillChildFile(...args);
+      return actual.removeEntryChildFile(...args);
     },
-    removeVerifiedSkillTree: async (
-      ...args: Parameters<typeof actual.removeVerifiedSkillTree>
+    removeVerifiedEntryTree: async (
+      ...args: Parameters<typeof actual.removeVerifiedEntryTree>
     ) => {
       const hook = beforeTreeRemoval;
       beforeTreeRemoval = undefined;
       beforeChildRemoval = undefined;
       hook?.();
-      return actual.removeVerifiedSkillTree(...args);
+      return actual.removeVerifiedEntryTree(...args);
     },
   };
 });
 
 let root: string;
-let library: SkillLibraryStore;
+let library: LibraryStore;
 
 const meta = {
   actor: { id: "pi:workshop:sess-1", name: "Workshop test" },
@@ -141,7 +143,7 @@ const meta = {
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skills-race-test-"));
-  library = new SkillLibraryStore(root);
+  library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
   setSkillLibraryBroadcaster({ broadcast: () => undefined });
   await createSkill(
@@ -185,7 +187,7 @@ async function expectFailure(
 
 /** Give the seeded skill one supporting file, so a placement has real work. */
 async function withSupportingFile(): Promise<void> {
-  await manageSkillFiles(
+  await manageEntryFiles(
     {
       name: "release-notes",
       operations: [
@@ -234,7 +236,7 @@ describe("a hand edit racing a rename", () => {
     afterReservation = () => userFolderAt("changelog-notes", "SKILL.md");
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -256,7 +258,7 @@ describe("a hand edit racing a rename", () => {
     // create-or-fail calls instead, so the directory the user made is still the
     // same inode afterwards and the mutation refuses rather than proceeding
     // into something it does not own.
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -276,7 +278,7 @@ describe("a hand edit racing a rename", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -298,7 +300,7 @@ describe("a hand edit racing a rename", () => {
   });
 
   test("a file appearing inside the destination mid-placement is never overwritten", async () => {
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -321,7 +323,7 @@ describe("a hand edit racing a rename", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -345,7 +347,7 @@ describe("a hand edit racing a rename", () => {
   });
 
   test("a source name taken over mid-rename leaves the user's folder alone", async () => {
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -362,7 +364,7 @@ describe("a hand edit racing a rename", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -389,7 +391,7 @@ describe("a hand edit racing a rename", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -426,7 +428,7 @@ describe("a hand edit racing a rename", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -460,7 +462,7 @@ describe("a hand edit racing a rename", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -488,7 +490,7 @@ describe("a hand edit racing a rename", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -504,7 +506,7 @@ describe("a hand edit racing a rename", () => {
   });
 
   test("an undisturbed rename still commits normally", async () => {
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -515,13 +517,13 @@ describe("a hand edit racing a rename", () => {
       library,
     );
 
-    const outcome = await renameSkill(
+    const outcome = await renameEntry(
       { name: "release-notes", newName: "changelog-notes" },
       meta,
       library,
     );
 
-    assert.equal(outcome.skill?.name, "changelog-notes");
+    assert.equal(outcome.entry?.name, "changelog-notes");
     assert.equal(
       (await git(["status", "--porcelain"], root)).stdout.trim(),
       "",
@@ -554,7 +556,7 @@ describe("a hand edit racing a supporting-file removal", () => {
     };
 
     const error = await expectFailure(() =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [{ op: "delete", path: "references/tone.md" }],
@@ -581,7 +583,7 @@ describe("a hand edit racing a supporting-file removal", () => {
     });
 
     await expectFailure(() =>
-      manageSkillFiles(
+      manageEntryFiles(
         {
           name: "release-notes",
           operations: [{ op: "delete", path: "references/tone.md" }],
@@ -644,7 +646,7 @@ describe("a hand edit racing the Git handoff", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -708,7 +710,7 @@ describe("a hand edit racing the Git handoff", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -768,7 +770,7 @@ describe("a hand edit racing the Git handoff", () => {
       };
 
       const error = await expectFailure(() =>
-        renameSkill(
+        renameEntry(
           { name: "release-notes", newName: "changelog-notes" },
           meta,
           library,
@@ -826,7 +828,7 @@ describe("a hand edit racing the Git handoff", () => {
       };
 
       const error = await expectFailure(() =>
-        renameSkill(
+        renameEntry(
           { name: "release-notes", newName: "changelog-notes" },
           meta,
           library,
@@ -877,7 +879,7 @@ describe("a hand edit racing the Git handoff", () => {
     };
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -917,7 +919,7 @@ describe("what a rename reads", () => {
     entriesRead = 0;
 
     const error = await expectFailure(() =>
-      renameSkill(
+      renameEntry(
         { name: "release-notes", newName: "changelog-notes" },
         meta,
         library,
@@ -950,7 +952,7 @@ describe("a hand edit racing a delete", () => {
     };
 
     const error = await expectFailure(() =>
-      deleteSkill({ name: "release-notes" }, meta, library),
+      deleteEntry({ name: "release-notes" }, meta, library),
     );
 
     assert.match(error.message, /replaced while it was being deleted|undone/);
@@ -980,7 +982,7 @@ describe("a hand edit racing a delete", () => {
     };
 
     const error = await expectFailure(() =>
-      deleteSkill({ name: "release-notes" }, meta, library),
+      deleteEntry({ name: "release-notes" }, meta, library),
     );
 
     assert.equal(
@@ -1003,7 +1005,7 @@ describe("a hand edit racing a delete", () => {
     writeFileSync(join(root, "release-notes", "mine.txt"), "user data\n");
 
     const error = await expectFailure(() =>
-      deleteSkill({ name: "release-notes" }, meta, library),
+      deleteEntry({ name: "release-notes" }, meta, library),
     );
 
     assert.ok(error.message.length > 0);
@@ -1035,7 +1037,7 @@ describe("a hand edit racing a delete", () => {
     };
 
     const error = await expectFailure(() =>
-      deleteSkill({ name: "release-notes" }, meta, library),
+      deleteEntry({ name: "release-notes" }, meta, library),
     );
 
     assert.match(error.message, /being deleted|undone/);
@@ -1061,7 +1063,7 @@ describe("a hand edit racing a delete", () => {
     };
 
     const error = await expectFailure(() =>
-      deleteSkill({ name: "release-notes" }, meta, library),
+      deleteEntry({ name: "release-notes" }, meta, library),
     );
 
     assert.match(error.message, /being deleted|undone/);
@@ -1087,7 +1089,7 @@ describe("a hand edit racing a delete", () => {
     };
 
     const error = await expectFailure(() =>
-      deleteSkill({ name: "release-notes" }, meta, library),
+      deleteEntry({ name: "release-notes" }, meta, library),
     );
 
     assert.match(error.message, /being deleted|undone/);
@@ -1114,7 +1116,7 @@ describe("a hand edit racing a delete", () => {
       chmodSync(join(root, "release-notes", "build.sh"), 0o755);
     };
 
-    await deleteSkill({ name: "release-notes" }, meta, library);
+    await deleteEntry({ name: "release-notes" }, meta, library);
 
     assert.ok(!existsSync(join(root, "release-notes")));
     assert.equal(
@@ -1139,7 +1141,7 @@ describe("a hand edit racing a delete", () => {
       );
     });
 
-    await deleteSkill({ name: "release-notes" }, meta, library);
+    await deleteEntry({ name: "release-notes" }, meta, library);
 
     assert.ok(!existsSync(join(root, "release-notes")));
     assert.deepEqual(untracked(), []);
@@ -1150,7 +1152,7 @@ describe("a hand edit racing a delete", () => {
   });
 
   test("an undisturbed delete removes the folder and leaves no aside name", async () => {
-    await manageSkillFiles(
+    await manageEntryFiles(
       {
         name: "release-notes",
         operations: [
@@ -1161,7 +1163,7 @@ describe("a hand edit racing a delete", () => {
       library,
     );
 
-    await deleteSkill({ name: "release-notes" }, meta, library);
+    await deleteEntry({ name: "release-notes" }, meta, library);
 
     assert.deepEqual(untracked(), []);
     assert.equal(

@@ -1,12 +1,11 @@
 import {
   type AgentType,
   isCodingAgentType,
-  isSafeSkillName,
+  isSafeEntryName,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getSettings } from "./settings.ts";
-import { scanSkillLibrary } from "./skills/skillLibraryScanner.ts";
-import { skillLibraryStore } from "./skills/skillLibraryStore.ts";
+import { scanSkillLibrary, skillLibraryStore } from "./skills/skillLibrary.ts";
 import { resolveSkillNames } from "./skills/skillResolver.ts";
 
 export interface SessionSkillsDeps {
@@ -22,7 +21,7 @@ const REAL_DEPS: SessionSkillsDeps = {
   resolve: async () => {
     await skillLibraryStore.ensureInitialized();
     const scan = await scanSkillLibrary(skillLibraryStore.root);
-    return resolveSkillNames(scan.skills, [getSettings().skills]);
+    return resolveSkillNames(scan.entries, [getSettings().skills]);
   },
 };
 
@@ -74,7 +73,7 @@ export function parseSessionSkills(
   if (!Array.isArray(value)) return [];
   const names: string[] = [];
   for (const item of value) {
-    if (typeof item !== "string" || !isSafeSkillName(item)) return [];
+    if (typeof item !== "string" || !isSafeEntryName(item)) return [];
     names.push(item);
   }
   const normalized = [...new Set(names)].sort(compareText);
@@ -136,7 +135,7 @@ export async function sessionSkills(
 }
 
 function normalizePreset(names: readonly string[]): string[] {
-  if (names.some((name) => !isSafeSkillName(name))) return [];
+  if (names.some((name) => !isSafeEntryName(name))) return [];
   return [...new Set(names)].sort(compareText);
 }
 

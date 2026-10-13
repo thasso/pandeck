@@ -2,18 +2,18 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
 import type {
-  SkillDiagnostic,
-  SkillDiagnosticCode,
-  SkillSummary,
+  EntryDiagnostic,
+  EntryDiagnosticCode,
+  EntrySummary,
 } from "@assistant/shared";
-import { parseSkillManifest, readManifestHandle } from "./skillManifest.ts";
+import { readManifestHandle } from "./entryManifest.ts";
+import type { LibraryKind } from "./libraryKind.ts";
 import {
-  SKILL_FILE_NAME,
-  SymlinkedSkillSourceError,
+  SymlinkedEntrySourceError,
   withLibraryRoot,
-  withSkillSource,
-  type SkillSourceIdentity,
-} from "./skillSource.ts";
+  withEntrySource,
+  type EntrySourceIdentity,
+} from "./entrySource.ts";
 
 /**
  * One scan of the library working tree. The summaries and diagnostics are the
@@ -21,9 +21,9 @@ import {
  * scanner found, so a second server-only shape would only be a chance for the
  * two to disagree.
  */
-export interface SkillLibraryScan {
-  skills: SkillSummary[];
-  diagnostics: SkillDiagnostic[];
+export interface LibraryScan {
+  entries: EntrySummary[];
+  diagnostics: EntryDiagnostic[];
 }
 
 /**
@@ -45,33 +45,34 @@ const SCAN_CONCURRENCY = 8;
 const MAX_SCANNED_MANIFEST_BYTES = 1024 * 1024;
 
 const sourceIdentities = new WeakMap<
-  SkillLibraryScan,
-  Map<string, SkillSourceIdentity>
+  LibraryScan,
+  Map<string, EntrySourceIdentity>
 >();
 
-export function skillSourceIdentity(
-  scan: SkillLibraryScan,
+export function entrySourceIdentity(
+  scan: LibraryScan,
   path: string,
-): SkillSourceIdentity | undefined {
+): EntrySourceIdentity | undefined {
   return sourceIdentities.get(scan)?.get(path);
 }
 
-interface SkillCandidate {
+interface EntryCandidate {
   folder: string;
   path: string;
   declaredName?: string;
   description?: string;
-  diagnostics: SkillDiagnostic[];
-  sourceIdentity?: SkillSourceIdentity;
+  diagnostics: EntryDiagnostic[];
+  sourceIdentity?: EntrySourceIdentity;
 }
 
 /**
- * Scan top-level skill folders from the filesystem on every call.
+ * Scan top-level entry folders from the filesystem on every call.
  *
  * The Git index and HEAD are deliberately not consulted: uncommitted edits,
  * additions, and removals are authoritative library state.
  */
-export async function scanSkillLibrary(
+export async function scanLibrary(
+  kind: LibraryKind,
   root: string,
   options: {
     /**
@@ -82,13 +83,13 @@ export async function scanSkillLibrary(
      */
     checkpoint?: () => void;
   } = {},
-): Promise<SkillLibraryScan> {
-  const folders = (await skillShapedEntries(root)).sort(compareText);
+): Promise<LibraryScan> {
+  const folders = (await entryShapedEntries(root)).sort(compareText);
   // In batches, not all at once. Each folder scan holds two descriptors while
   // it runs, so a directly authored library of thousands of folders would ask
   // the process for thousands of them at the same instant; the answer is the
   // same either way, and the whole scan is still one `await`.
-  const candidates: SkillCandidate[] = [];
+  const candidates: EntryCandidate[] = [];
   await withLibraryRoot(root, async (rootHandle) => {
     for (let at = 0; at < folders.length; at += SCAN_CONCURRENCY) {
       options.checkpoint?.();
@@ -96,17 +97,17 @@ export async function scanSkillLibrary(
         ...(await Promise.all(
           folders
             .slice(at, at + SCAN_CONCURRENCY)
-            .map((folder) => scanSkillFolder(rootHandle, folder)),
+            .map((folder) => scanEntryFolder(kind, rootHandle, folder)),
         )),
       );
     }
   });
 
-  addDuplicateDiagnostics(candidates);
+  addDuplicateDiagnostics(kind, candidates);
 
-  const skills: SkillSummary[] = [];
-  const diagnostics: SkillDiagnostic[] = [];
-  const scanSourceIdentities = new Map<string, SkillSourceIdentity>();
+  const entries: EntrySummary[] = [];
+  const diagnostics: EntryDiagnostic[] = [];
+  const scanSourceIdentities = new Map<string, EntrySourceIdentity>();
   for (const candidate of candidates) {
     diagnostics.push(...candidate.diagnostics);
     if (
@@ -114,7 +115,7 @@ export async function scanSkillLibrary(
       candidate.declaredName !== undefined &&
       candidate.description !== undefined
     ) {
-      skills.push({
+      entries.push({
         name: candidate.declaredName,
         description: candidate.description,
         path: candidate.path,
@@ -125,13 +126,13 @@ export async function scanSkillLibrary(
     }
   }
 
-  skills.sort(
+  entries.sort(
     (a, b) => compareText(a.name, b.name) || compareText(a.path, b.path),
   );
   diagnostics.sort(
     (a, b) => compareText(a.path, b.path) || compareText(a.code, b.code),
   );
-  const scan = { skills, diagnostics };
+  const scan = { entries, diagnostics };
   sourceIdentities.set(scan, scanSourceIdentities);
   return scan;
 }
@@ -147,7 +148,7 @@ export async function scanSkillLibrary(
  * `stat` only decides whether the entry is skill-shaped, and no content is ever
  * read through it.
  */
-async function skillShapedEntries(root: string): Promise<string[]> {
+async function entryShapedEntries(root: string): Promise<string[]> {
   const entries = (await readdir(root, { withFileTypes: true })).filter(
     (entry) => !entry.name.startsWith("."),
   );
@@ -173,21 +174,23 @@ async function linksToDirectory(path: string): Promise<boolean> {
   }
 }
 
-async function scanSkillFolder(
+async function scanEntryFolder(
+  kind: LibraryKind,
   rootHandle: FileHandle,
   folder: string,
-): Promise<SkillCandidate> {
-  const path = `${folder}/${SKILL_FILE_NAME}`;
-  const candidate: SkillCandidate = { folder, path, diagnostics: [] };
-  let identity: SkillSourceIdentity;
+): Promise<EntryCandidate> {
+  const path = `${folder}/${kind.manifestFile}`;
+  const candidate: EntryCandidate = { folder, path, diagnostics: [] };
+  let identity: EntrySourceIdentity;
   let content: string;
   try {
     // One resolution, one inode: the identity recorded here and the bytes below
     // come from the same open handle, so a swap after this point cannot make
     // the scan describe one file and read another.
-    ({ identity, content } = await withSkillSource(
+    ({ identity, content } = await withEntrySource(
       rootHandle,
       folder,
+      kind.manifestFile,
       async (source) => {
         // Bounded, and it can be: the scan needs the FRONTMATTER, which is at
         // the top of the file. Reading a hand-authored file of arbitrary size
@@ -205,17 +208,17 @@ async function scanSkillFolder(
     ));
   } catch (error) {
     const missing = isNodeError(error) && error.code === "ENOENT";
-    const symlinked = error instanceof SymlinkedSkillSourceError;
+    const symlinked = error instanceof SymlinkedEntrySourceError;
     candidate.diagnostics.push({
       code: symlinked
-        ? "symlinked-skill-source"
+        ? "symlinked-source"
         : missing
-          ? "missing-skill-file"
-          : "unreadable-skill-file",
+          ? "missing-manifest"
+          : "unreadable-manifest",
       folder,
       path,
       error: symlinked
-        ? `Refusing symlinked skill source ${path}; source folders and SKILL.md files must be regular filesystem entries.`
+        ? `Refusing symlinked ${kind.noun} source ${path}; source folders and ${kind.manifestFile} files must be regular filesystem entries.`
         : missing
           ? `Missing ${path}.`
           : `Cannot read ${path} as a UTF-8 file.`,
@@ -223,7 +226,7 @@ async function scanSkillFolder(
     return candidate;
   }
 
-  const parsed = parseSkillManifest(content, path);
+  const parsed = kind.parseManifest(content, path);
   if (parsed.ok) {
     candidate.declaredName = parsed.manifest.name;
     candidate.description = parsed.manifest.description;
@@ -239,8 +242,11 @@ async function scanSkillFolder(
   return candidate;
 }
 
-function addDuplicateDiagnostics(candidates: SkillCandidate[]): void {
-  const byName = new Map<string, SkillCandidate[]>();
+function addDuplicateDiagnostics(
+  kind: LibraryKind,
+  candidates: EntryCandidate[],
+): void {
+  const byName = new Map<string, EntryCandidate[]>();
   for (const candidate of candidates) {
     if (candidate.declaredName === undefined) continue;
     const group = byName.get(candidate.declaredName) ?? [];
@@ -259,17 +265,17 @@ function addDuplicateDiagnostics(candidates: SkillCandidate[]): void {
         folder: candidate.folder,
         path: candidate.path,
         declaredName: name,
-        error: `Duplicate declared skill name "${name}" in folders: ${folders.join(", ")}.`,
+        error: `Duplicate declared ${kind.noun} name "${name}" in folders: ${folders.join(", ")}.`,
       });
     }
   }
 }
 
 function diagnostic(
-  candidate: SkillCandidate,
-  code: SkillDiagnosticCode,
+  candidate: EntryCandidate,
+  code: EntryDiagnosticCode,
   error: string,
-): SkillDiagnostic {
+): EntryDiagnostic {
   return {
     code,
     folder: candidate.folder,

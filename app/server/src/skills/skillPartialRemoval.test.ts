@@ -43,13 +43,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const { git } = await import("../gitExec.ts");
-const { deleteSkill, createSkill, manageSkillFiles } =
-  await import("./skillAuthoring.ts");
+const { createSkill } = await import("./createSkill.ts");
+const { deleteEntry, manageEntryFiles } =
+  await import("../library/libraryAuthoring.ts");
 const { setSkillLibraryBroadcaster } = await import("./skillLibraryEvents.ts");
-const { SkillLibraryStore } = await import("./skillLibraryStore.ts");
+const { LibraryStore } = await import("../library/libraryStore.ts");
+const { skillKind } = await import("./skillLibrary.ts");
 
 let root: string;
-let library: InstanceType<typeof SkillLibraryStore>;
+let library: InstanceType<typeof LibraryStore>;
 
 const meta = {
   actor: { id: "pi:workshop:sess-1", name: "Workshop test" },
@@ -60,7 +62,7 @@ const meta = {
 beforeEach(async () => {
   unlinksBeforeFailure = Number.POSITIVE_INFINITY;
   root = mkdtempSync(join(tmpdir(), "skills-partial-test-"));
-  library = new SkillLibraryStore(root);
+  library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
   setSkillLibraryBroadcaster({ broadcast: () => undefined });
   await createSkill(
@@ -72,7 +74,7 @@ beforeEach(async () => {
     { ...meta, reason: "Add release-notes" },
     library,
   );
-  await manageSkillFiles(
+  await manageEntryFiles(
     {
       name: "release-notes",
       operations: [
@@ -97,7 +99,7 @@ describe("a delete that fails once it has already removed something", () => {
     // the caller the folder was untouched while its committed files were gone.
     unlinksBeforeFailure = 1;
 
-    const error = await deleteSkill(
+    const error = await deleteEntry(
       { name: "release-notes" },
       meta,
       library,
@@ -132,6 +134,6 @@ describe("a delete that fails once it has already removed something", () => {
       "",
       "a partial removal must leave the repository clean again",
     );
-    assert.ok(!existsSync(join(root, ".pa-skill-removing")));
+    assert.ok(!existsSync(join(root, ".pa-removing")));
   });
 });

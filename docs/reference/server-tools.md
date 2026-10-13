@@ -638,7 +638,7 @@ persona toolsets.
   `DATA_DIR/tempo-exports/<exportId>/` (`tempoExportStore.ts`), the cached Jira
   metadata/user join (`tempoJiraJoin.ts`), CSV/JSON/manifest outputs, and
   aggregation by dimension over the persisted rows (`tempoReportRows.ts`).
-- `skills/skillTools.ts` owns the ten skills-library tools registered as the
+- `library/libraryTools.ts` owns the ten skills-library tools registered as the
   deferred, ungated, shared `skills` catalog group for `assistant`,
   `personal-assistant`, `developer` and `workshop` ([Task-633](pa://task/633),
   `docs/skills.md`): `skill_list`, `skill_get`, `skill_read_file`,
@@ -655,7 +655,7 @@ persona toolsets.
   committing a silent prefix. `skill_list` bounds both of its lists and reports
   the true `skillCount`/`diagnosticCount` with an explicit `truncated`, so the
   library's size cannot decide the size of a model's context. `skill_read_file`
-  hands `readSkillTextWindow` the caller's line window and reports the file's
+  hands `readEntryTextWindow` the caller's line window and reports the file's
   size beside the window's own bounds, so a reference too large to carry is
   paged rather than refused, and a `skill_manage_files` `edit` operation carries
   its replacements to the authoring layer unchanged — the planner cannot know an
@@ -665,7 +665,7 @@ persona toolsets.
   block is line-structured), passes `ctx.signal` into the streaming history/diff
   reads AND into all five mutations (where the authoring layer honours it at its
   own checkpoints only, so a stop is always "nothing happened"), and bounds
-  every result — while `../../skills/skillAuthoring.ts` owns resolution,
+  every result — while `../../library/libraryAuthoring.ts` owns resolution,
   filesystem work, validation and committing. Failures throw the domain message
   (dirty repository, invalid manifest, unsafe path, ambiguous edit). Has a
   test-only library seam (`setSkillToolLibraryForTests`).

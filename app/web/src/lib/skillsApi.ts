@@ -7,15 +7,15 @@
  * nothing here ever sends a path.
  */
 import type {
-  SkillDetailResponse,
-  SkillFilePreviewResponse,
+  EntryDetailResponse,
+  EntryFilePreviewResponse,
 } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin, withToken } from "./serverOrigin.ts";
 
 export async function fetchSkillDetail(
   name: string,
   signal?: AbortSignal,
-): Promise<SkillDetailResponse> {
+): Promise<EntryDetailResponse> {
   const res = await fetch(
     `${serverHttpOrigin()}/api/skills/detail?name=${encodeURIComponent(name)}`,
     { headers: { ...authHeaders() }, ...(signal ? { signal } : {}) },
@@ -27,7 +27,7 @@ export async function fetchSkillDetail(
       typeof error === "string" ? error : `Request failed (${res.status})`,
     );
   }
-  return json as SkillDetailResponse;
+  return json as EntryDetailResponse;
 }
 
 /** Token-carrying raw/download URL for one skill-relative regular file. */
@@ -40,7 +40,7 @@ export function skillFileUrl(name: string, path: string): string {
 export async function fetchSkillFilePreview(
   key: string,
   signal?: AbortSignal,
-): Promise<SkillFilePreviewResponse> {
+): Promise<EntryFilePreviewResponse> {
   const separator = key.indexOf("\0");
   if (separator <= 0) throw new Error("Invalid skill file preview key.");
   const name = key.slice(0, separator);
@@ -57,5 +57,5 @@ export async function fetchSkillFilePreview(
       typeof error === "string" ? error : `Request failed (${res.status})`,
     );
   }
-  return json as SkillFilePreviewResponse;
+  return json as EntryFilePreviewResponse;
 }

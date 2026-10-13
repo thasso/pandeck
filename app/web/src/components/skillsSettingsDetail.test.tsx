@@ -4,9 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   AppSettings,
-  SkillDetail,
-  SkillDetailResponse,
-  SkillFilePreviewResponse,
+  EntryDetail,
+  EntryDetailResponse,
+  EntryFilePreviewResponse,
   SkillLibraryList,
 } from "@assistant/shared";
 import { ready, type LoadState } from "../lib/loadState.ts";
@@ -29,7 +29,7 @@ import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
 
 interface Pending {
   name: string;
-  resolve: (value: SkillDetailResponse) => void;
+  resolve: (value: EntryDetailResponse) => void;
   reject: (error: unknown) => void;
 }
 
@@ -37,17 +37,17 @@ interface Pending {
 const requests: Pending[] = [];
 const fileRequests: Array<{
   key: string;
-  resolve: (value: SkillFilePreviewResponse) => void;
+  resolve: (value: EntryFilePreviewResponse) => void;
   reject: (error: unknown) => void;
 }> = [];
 
 vi.mock("../lib/skillsApi.ts", () => ({
   fetchSkillDetail: (name: string) =>
-    new Promise<SkillDetailResponse>((resolve, reject) => {
+    new Promise<EntryDetailResponse>((resolve, reject) => {
       requests.push({ name, resolve, reject });
     }),
   fetchSkillFilePreview: (key: string) =>
-    new Promise<SkillFilePreviewResponse>((resolve, reject) => {
+    new Promise<EntryFilePreviewResponse>((resolve, reject) => {
       fileRequests.push({ key, resolve, reject });
     }),
   skillFileUrl: (name: string, path: string) => `skill:${name}/${path}`,
@@ -73,10 +73,10 @@ const LIST: SkillLibraryList = {
 function detail(
   name: string,
   markdown: string,
-  supporting: SkillDetail["files"]["entries"] = [],
-): SkillDetail {
+  supporting: EntryDetail["files"]["entries"] = [],
+): EntryDetail {
   return {
-    kind: "skill",
+    kind: "entry",
     name,
     description: `${name} description`,
     folder: name,
@@ -156,7 +156,7 @@ function clickFile(label: string): void {
   act(() => (row as HTMLElement).click());
 }
 
-async function answer(name: string, value: SkillDetailResponse): Promise<void> {
+async function answer(name: string, value: EntryDetailResponse): Promise<void> {
   const pending = requests.filter((request) => request.name === name).at(-1);
   if (!pending) throw new Error(`No request for ${name}`);
   await act(async () => {
@@ -166,7 +166,7 @@ async function answer(name: string, value: SkillDetailResponse): Promise<void> {
 
 async function answerFile(
   path: string,
-  value: SkillFilePreviewResponse,
+  value: EntryFilePreviewResponse,
 ): Promise<void> {
   const pending = fileRequests
     .filter((request) => request.key.endsWith(`\0${path}`))
