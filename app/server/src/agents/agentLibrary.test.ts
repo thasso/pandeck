@@ -112,6 +112,19 @@ describe("the AGENT.md content rule", () => {
     );
   });
 
+  test("a description or model holding a line separator renders and reads back", () => {
+    const source = formatAgentManifest({
+      name: "spaced",
+      description: "One\u2028two",
+      persona: "assistant",
+      model: "opus",
+      body: "Body.",
+    });
+    const parsed = parseAgentManifest(source, "spaced/AGENT.md");
+    assert.ok(parsed.ok);
+    assert.equal(parsed.manifest.description, "One\u2028two");
+  });
+
   test("the renderer's output is exactly what the rule reads back", () => {
     const input = {
       name: "test-reviewer",

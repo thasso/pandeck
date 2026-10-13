@@ -337,6 +337,29 @@ describe("agent_edit", () => {
     assert.equal(readFileSync(join(root, "other", "AGENT.md"), "utf8"), other);
   });
 
+  test("approval refuses when the model now resolves to another connected model", async () => {
+    await createApproved();
+    await call("agent_edit", {
+      name: "test-reviewer",
+      edits: [{ oldText: "effort: medium", newText: "effort: high" }],
+      reason: "Raise effort",
+    });
+    const pending = latestCard();
+    // The Claude account went away; another provider now offers "sonnet".
+    setAgentRuntimeSourcesForTests({
+      models: async () => [model("anthropic", "sonnet")],
+      skillNames: async () => [],
+      toolNames: async () => ["worktree_push", "worktree_commit"],
+    });
+    const { card } = await resolveApproval(pending.id, "approved");
+    assert.equal(card.status, "failed");
+    assert.match(
+      card.error ?? "",
+      /now resolves to anthropic\/sonnet, not the claude-sdk\/sonnet this card showed/,
+    );
+    assert.match(readFileSync(manifest(), "utf8"), /effort: medium/);
+  });
+
   test("an edit that breaks the runtime check is refused and changes nothing", async () => {
     await createApproved();
     const original = readFileSync(manifest(), "utf8");

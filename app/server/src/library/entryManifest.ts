@@ -227,6 +227,17 @@ export function assertSafeEntryName(
 }
 
 /**
+ * A string as a frontmatter scalar the shared YAML subset parses back
+ * byte-for-byte: JSON-quoted, with U+2028/U+2029 escaped too — JSON leaves
+ * them raw, and a raw line separator ends the subset's `key: value` line.
+ */
+export function yamlString(value: string): string {
+  return JSON.stringify(value).replace(/[\u2028\u2029]/g, (separator) =>
+    separator === "\u2028" ? "\\u2028" : "\\u2029",
+  );
+}
+
+/**
  * Render complete manifest source from frontmatter lines already rendered as
  * YAML (`name: x`, `description: "..."`). The body is normalized to a trailing
  * newline and no leading blank line so repeated tool writes of the same content

@@ -180,6 +180,18 @@ describe("skill authoring: create", () => {
     assert.match(source, /description: "How to write release notes"/);
   });
 
+  test("a description holding a line separator round-trips through the scan", async () => {
+    const description = "First part\u2028second part\u2029third";
+    const outcome = await createSkill(
+      { name: "separators", description, body: "Body." },
+      { ...meta, reason: "Add separators" },
+      library,
+    );
+    assert.equal(outcome.entry?.description, description);
+    const scan = await scanSkillLibrary(root);
+    assert.equal(scan.entries[0]?.description, description);
+  });
+
   test("preserves indentation on the first non-blank body line", async () => {
     await createSkill(
       {

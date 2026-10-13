@@ -20,6 +20,7 @@ import { AGENTS_LIBRARY_DIR } from "../config.ts";
 import {
   formatManifest,
   parseManifestWith,
+  yamlString,
   type ManifestIssue,
 } from "../library/entryManifest.ts";
 import type { LibraryKind } from "../library/libraryKind.ts";
@@ -234,15 +235,15 @@ export interface AgentDefinitionInput {
 /**
  * Render complete `AGENT.md` source, deterministically: the same definition
  * always gives the same bytes, so rewriting it makes no empty commit. Strings
- * that may hold anything are JSON-quoted scalars, which the shared YAML subset
- * parses back byte-for-byte.
+ * that may hold anything are quoted with `yamlString`, which the shared YAML
+ * subset parses back byte-for-byte.
  */
 export function formatAgentManifest(input: AgentDefinitionInput): string {
   const lines = [
     `name: ${input.name}`,
-    `description: ${JSON.stringify(input.description)}`,
+    `description: ${yamlString(input.description)}`,
     `persona: ${input.persona}`,
-    `model: ${JSON.stringify(input.model)}`,
+    `model: ${yamlString(input.model)}`,
   ];
   if (input.effort !== undefined) lines.push(`effort: ${input.effort}`);
   if (input.denyTools?.length)

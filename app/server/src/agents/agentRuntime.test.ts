@@ -105,6 +105,16 @@ describe("resolveAgentModel", () => {
     );
   });
 
+  test("provider/id names one row when two providers offer the same id", () => {
+    const twice = [...models, model("openai", "gpt-6-luna")];
+    assert.throws(
+      () => resolveAgentModel("gpt-6-luna", twice),
+      /matches more than one connected model .*name one of them exactly, as provider\/id/,
+    );
+    const resolved = resolveAgentModel("openai/gpt-6-luna", twice);
+    assert.equal(`${resolved.provider}/${resolved.id}`, "openai/gpt-6-luna");
+  });
+
   test("an unknown model names what is available, and no accounts says so", () => {
     assert.throws(
       () => resolveAgentModel("gemini", models),

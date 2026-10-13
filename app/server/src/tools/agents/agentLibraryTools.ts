@@ -91,15 +91,7 @@ async function propose(
   source: string,
   context: AgentCardContext,
 ): Promise<PendingApproval> {
-  const runtime = await checkAgentRuntime(after);
-  const { model } = runtime!;
-  const pinned = (model as { pinnedId?: string }).pinnedId;
-  // A pin shows the exact version it holds the alias to.
-  const resolvedModel = `${model.provider}/${model.id}${
-    pinned && pinned.toLowerCase() === after.model.toLowerCase()
-      ? ` (${pinned})`
-      : ""
-  }`;
+  const resolvedModel = await resolvedModelOf(after);
   const body: AgentDefinitionApprovalBody = {
     kind: "agentDefinition",
     action,
@@ -142,6 +134,33 @@ async function propose(
       terminate: true,
     },
   };
+}
+
+/**
+ * Run the full runtime check and name the connected model the definition runs
+ * on — `provider/id`, plus the version a pin holds an alias to — as the card
+ * shows it and as approval must still find it.
+ */
+async function resolvedModelOf(definition: AgentManifest): Promise<string> {
+  const { model } = (await checkAgentRuntime(definition))!;
+  const pinned = (model as { pinnedId?: string }).pinnedId;
+  return `${model.provider}/${model.id}${
+    pinned && pinned.toLowerCase() === definition.model.toLowerCase()
+      ? ` (${pinned})`
+      : ""
+  }`;
+}
+
+/** Refuse an approval whose model no longer resolves to what the card showed. */
+async function assertStillResolves(
+  definition: AgentManifest,
+  body: AgentDefinitionApprovalBody,
+): Promise<void> {
+  const now = await resolvedModelOf(definition);
+  if (now !== body.resolvedModel)
+    throw new EntryValidationError(
+      `"${definition.model}" now resolves to ${now}, not the ${body.resolvedModel} this card showed. Nothing was written; propose it again.`,
+    );
 }
 
 function cardSummary(body: AgentDefinitionApprovalBody): string {
@@ -320,7 +339,7 @@ registerApprovalExecutor("agentDefinition", {
     const library = libraryFactory();
     if (body.action === "create") {
       const definition = definitionOf(body.source, body.name);
-      await checkAgentRuntime(definition);
+      await assertStillResolves(definition, body);
       const outcome = await createEntry(
         { name: body.name, source: body.source },
         meta,
@@ -345,7 +364,7 @@ registerApprovalExecutor("agentDefinition", {
             throw new EntryValidationError(
               `${manifestPath(body.name)} changed since this was proposed, so the edit would no longer produce exactly the AGENT.md the card showed. Nothing was written; propose it again.`,
             );
-          await checkAgentRuntime(definitionOf(after, body.name));
+          await assertStillResolves(definitionOf(after, body.name), body);
         },
       },
     );

@@ -8,6 +8,7 @@ import {
   assertEntryDescription,
   assertSafeEntryName,
   formatManifest,
+  yamlString,
 } from "../library/entryManifest.ts";
 import {
   createEntry,
@@ -20,8 +21,8 @@ import type {
 } from "../library/libraryStore.ts";
 
 /**
- * Render complete `SKILL.md` source. `description` is emitted as a JSON-quoted
- * scalar, which the shared YAML subset parses back byte-for-byte.
+ * Render complete `SKILL.md` source. `description` is emitted as a quoted
+ * scalar the shared YAML subset parses back byte-for-byte (`yamlString`).
  */
 function formatSkillManifest(manifest: {
   name: string;
@@ -31,7 +32,7 @@ function formatSkillManifest(manifest: {
   return formatManifest(
     [
       `name: ${manifest.name}`,
-      `description: ${JSON.stringify(manifest.description)}`,
+      `description: ${yamlString(manifest.description)}`,
     ],
     manifest.body,
   );

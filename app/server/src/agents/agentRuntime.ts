@@ -93,7 +93,8 @@ export function setAgentRuntimeSourcesForTests(
  * alias model runs today (`claude-opus-5-5` resolves to `opus` only while
  * `opus` still runs exactly that version, so a pin never silently follows the
  * alias to another one). Otherwise the spec must equal one hyphen-separated
- * token of exactly one id (`sol` → `gpt-6.1-sol`). Never a guess: none, or
+ * token of exactly one id (`sol` → `gpt-6.1-sol`). `provider/id` names one
+ * row when two providers offer the same id. Never a guess: none, or
  * more than one, is a refusal that names the candidates.
  */
 export function resolveAgentModel(
@@ -104,6 +105,8 @@ export function resolveAgentModel(
   const exact = models.filter(
     (model) =>
       model.id.toLowerCase() === wanted ||
+      // `provider/id` names one row even when two providers offer the id.
+      `${model.provider}/${model.id}`.toLowerCase() === wanted ||
       model.pinnedId?.toLowerCase() === wanted,
   );
   if (exact.length === 1) return exact[0]!;
@@ -121,7 +124,7 @@ export function resolveAgentModel(
       .join(", ");
   if (matches.length > 1)
     throw new EntryValidationError(
-      `Model "${spec}" matches more than one connected model (${named(matches)}); use one exact id.`,
+      `Model "${spec}" matches more than one connected model (${named(matches)}); name one of them exactly, as provider/id.`,
     );
   throw new EntryValidationError(
     models.length === 0
