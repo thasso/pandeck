@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { DATA_DIR } from "./config.ts";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
@@ -69,8 +70,10 @@ vi.mock("./hub.ts", () => ({ hub: fakeHub }));
  * A read of one file the test names is refused, as an unreadable log would
  * be; every other filesystem call passes through.
  */
-const { readFault } = vi.hoisted(() => ({
+const { readFault, writeFault } = vi.hoisted(() => ({
   readFault: { path: "", refused: 0 },
+  /** A log line naming `marker` is refused before it is written. */
+  writeFault: { path: "", marker: "", refused: 0 },
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:fs")>();
@@ -83,6 +86,17 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       return real.readFileSync(...args);
     }) as typeof real.readFileSync,
+    appendFileSync: ((...args: Parameters<typeof real.appendFileSync>) => {
+      if (
+        writeFault.path &&
+        String(args[0]) === writeFault.path &&
+        String(args[1]).includes(writeFault.marker)
+      ) {
+        writeFault.refused += 1;
+        throw new Error("write refused");
+      }
+      return real.appendFileSync(...args);
+    }) as typeof real.appendFileSync,
   };
 });
 
@@ -410,6 +424,7 @@ afterAll(() => uninstall());
 afterEach(async () => {
   delete preparation.gate;
   readFault.path = "";
+  writeFault.path = "";
   await quiesce();
   vi.restoreAllMocks();
   cardUpdates.length = 0;
@@ -1536,6 +1551,132 @@ describe("a steer the provider took counts as delivered on its own word", () => 
   });
 });
 
+describe("a reserved steer the provider took is never sent again after a restart", () => {
+  it("its log entry refused before it was written, its receipt refused too, then a new process boots", async () => {
+    const coord = sender();
+    const { claude, own, steered, m } = await claudeSteerQueued(coord);
+    // The provider takes the steer; the app's log refuses the entry BEFORE
+    // writing it, and every attempt to record the receipt is refused.
+    writeFault.path = canonicalSessionLogPath(claude.driver.sessionId);
+    writeFault.marker = "LATE ACCEPTED PEER";
+    writeFault.refused = 0;
+    const recording = vi
+      .spyOn(peerPromptStore, "recordAdmission")
+      .mockImplementation(() => {
+        throw new Error("injected receipt refusal");
+      });
+    claude.accept(claude.inputs[1]!.uuid);
+    await steered;
+    const recordAttempts = recording.mock.calls.length;
+    vi.restoreAllMocks();
+    writeFault.path = "";
+    assert.equal(writeFault.refused, 1, "refused before it was written");
+    assert.ok(recordAttempts > 0, "the receipt store refused");
+    assert.ok(
+      claude.session
+        .timelineEntries()
+        .some((e) => JSON.stringify(e).includes("LATE ACCEPTED PEER")),
+      "the provider's session recorded its acceptance",
+    );
+    assert.equal(row(m).status, "dispatching", "reserved, receipt unrecorded");
+    assert.ok(row(m).reservedAt !== undefined);
+    await removeClaude(claude);
+    await own;
+    assert.equal(admissionsOf(claude.driver.sessionId, m), 0, "no log key");
+    sweepExpiredLeases(Date.now() + 61_000);
+    assert.equal(row(m).status, "dispatching");
+
+    // A NEW OS process over the same database and logs: no receipt in memory.
+    const recovery = bootInNewProcess();
+    assert.deepEqual(recovery, { recovered: 1, interrupted: 1 });
+    assert.equal(row(m).status, "interrupted");
+    assert.equal(row(m).interruptionKind, "restart");
+    assert.equal(row(m).batchHeadId, m, "its batch, as reserved");
+
+    // A fresh Claude binding for the same session is drained: nothing replays.
+    const fresh = steerableClaude(claude.driver.sessionId);
+    await drainRecipient(claude.driver.sessionId);
+    assert.equal(fresh.inputs.length, 0, "never sent again");
+    fresh.session.dispose();
+    // The sender, who asked for a reply, hears it once — as a restart. Boot
+    // offers it its drain (`drainAllQueuedOnBoot`); here the test does.
+    await drainRecipient(coord.sessionId);
+    assert.equal(noticesIn(coord.sessionId), 1);
+    await drainRecipient(coord.sessionId);
+    assert.equal(noticesIn(coord.sessionId), 1, "told once");
+  });
+});
+
+/**
+ * Run boot recovery in a separate OS process over THIS suite's disposable
+ * database and logs, as a restart would. Every path it sees is asserted
+ * disposable before the app is imported; `fetch` fails closed.
+ */
+function bootInNewProcess(): { recovered: number; interrupted: number } {
+  const src = new URL("./", import.meta.url).href;
+  const tsxLoader = fileURLToPath(
+    new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url),
+  );
+  const scratch = mkdtempSync(join(tmpdir(), "pto-boot-"));
+  try {
+    for (const dir of ["home", "tmp"]) mkdirSync(join(scratch, dir));
+    const env = {
+      PATH: process.env.PATH ?? "",
+      NODE_ENV: "test",
+      HOME: join(scratch, "home"),
+      TMPDIR: join(scratch, "tmp"),
+      DATA_DIR,
+      ASSISTANT_CWD: process.env.ASSISTANT_CWD ?? "",
+      ASSISTANT_CONFIG: process.env.ASSISTANT_CONFIG ?? "",
+      ASSISTANT_LEGACY_PI_AGENT_DIR:
+        process.env.ASSISTANT_LEGACY_PI_AGENT_DIR ?? "",
+      PTO_SRC: src,
+    };
+    for (const value of [
+      env.HOME,
+      env.TMPDIR,
+      env.DATA_DIR,
+      env.ASSISTANT_CWD,
+      env.ASSISTANT_CONFIG,
+      env.ASSISTANT_LEGACY_PI_AGENT_DIR,
+    ])
+      assert.ok(value.startsWith(tmpdir()), `disposable: ${value}`);
+    const script = `
+const assert = (await import("node:assert/strict")).default;
+for (const key of ["HOME", "TMPDIR", "DATA_DIR", "ASSISTANT_CWD", "ASSISTANT_CONFIG", "ASSISTANT_LEGACY_PI_AGENT_DIR"])
+  assert.ok(process.env[key]?.startsWith(${JSON.stringify(tmpdir())}), key);
+globalThis.fetch = async () => { throw new Error("external fetch denied"); };
+const src = process.env.PTO_SRC;
+const { DATA_DIR } = await import(src + "config.ts");
+assert.equal(DATA_DIR, process.env.DATA_DIR);
+const peer = await import(src + "peerPrompt.ts");
+peer.setHubForTests({ getLiveById() {}, acquireById: async () => undefined, broadcastPeerPromptCardUpdate() {}, broadcastPeerPromptQueue() {} });
+peer.setPeerPromptAutoDeliverForTests(false);
+console.log(JSON.stringify(peer.recoverPeerPromptsOnBoot()));
+const { closeDb } = await import(src + "db/index.ts");
+closeDb();
+`;
+    const child = spawnSync(
+      process.execPath,
+      ["--import", tsxLoader, "--input-type=module", "-e", script],
+      {
+        cwd: env.ASSISTANT_CWD,
+        env,
+        encoding: "utf8",
+        timeout: 60_000,
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    assert.equal(child.status, 0, child.stderr);
+    return JSON.parse(child.stdout.trim().split("\n").at(-1)!) as {
+      recovered: number;
+      interrupted: number;
+    };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 describe("a log that cannot be read proves nothing", () => {
   it("an entry written before its bookkeeping failed, with the log unreadable: left reserved", async () => {
     const coord = sender();
@@ -1607,6 +1748,32 @@ describe("a log that cannot be read proves nothing", () => {
     readFault.path = "";
     recoverPeerPromptsOnBoot();
     assert.equal(row(m).status, "queued", "readable now, and absent");
+
+    // The same, once it passed its claim gate: it may have reached the
+    // recipient, so absence from the log is no reason to send it again.
+    await drainRecipient(worker.sessionId);
+    assert.equal(row(m).status, "completed");
+    const reserved = await send(coord.sessionId, worker.sessionId, "gated");
+    const [gated] = peerPromptStore.claimBatch(
+      worker.sessionId,
+      "crashed",
+      60_000,
+      5,
+      10_000,
+    );
+    assert.equal(gated?.id, reserved);
+    assert.ok(
+      peerPromptStore.reserveAdmission(
+        [{ id: reserved, attempts: gated!.attempts }],
+        reserved,
+      ),
+    );
+    recoverPeerPromptsOnBoot();
+    assert.equal(row(reserved).status, "interrupted");
+    assert.equal(row(reserved).interruptionKind, "restart");
+    assert.match(row(reserved).failureReason!, /not sent again/);
+    await drainRecipient(worker.sessionId);
+    assert.equal(admissionsOf(worker.sessionId, reserved), 0);
   });
 });
 

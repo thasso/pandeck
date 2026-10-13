@@ -213,6 +213,17 @@ card, which the commands address it by.
     (`LOG_UNREADABLE_REASON` on the bounded retry). Boot likewise leaves a row
     it cannot reconcile `dispatching`.
 
+  Passing the claim gate is recorded durably (`reserved_at_ms`, with the batch
+  it would be delivered as), because a provider can take input before the app's
+  log records it and the receipt of that may itself fail to persist. Boot
+  recovery therefore asks two questions of a `dispatching` row whose key the log
+  lacks: a row that never passed its gate is requeued; a reserved one may have
+  reached the recipient, so it is `interrupted` (`restart`, "not sent again")
+  and its sender, if it asked for a reply, is told once. The store refuses to
+  requeue a reserved row whatever its caller decides. A delivery that KNOWS
+  nothing was sent — a Stop at the door, a stale claim, a busy session, a
+  withdrawal the provider confirmed unread — puts the row back unreserved.
+
   An answer sent before the Stop keeps the request `replied`. Each settlement is
   a compare-and-set from the admitted states, so a duplicate or late callback,
   or a straggler of an older run, never rewrites a newer outcome. Resume drains

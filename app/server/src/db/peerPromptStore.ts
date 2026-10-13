@@ -100,6 +100,13 @@ export interface PeerPromptRecord {
   nextAttemptAt?: number;
   /** The id of this delivery batch's head row (set on every member, including the head itself) once admitted. */
   batchHeadId?: string;
+  /**
+   * When the row passed its claim gate ({@link reserveAdmission}): from then
+   * on its turn may have reached the recipient's provider, whatever the app's
+   * log says, so it is never sent again on a missing log entry. Cleared when
+   * the delivery KNOWS nothing was sent and puts the row back.
+   */
+  reservedAt?: number;
   /** Bounded (most-recent-first-truncated) status transition history. */
   transitions: PeerPromptTransition[];
   createdAt: number;
@@ -151,6 +158,7 @@ interface Row {
   next_attempt_at_ms: number | null;
   transitions_json: string;
   batch_head_id: string | null;
+  reserved_at_ms: number | null;
 }
 
 const MAX_TRANSITIONS = 20;
@@ -223,6 +231,7 @@ function map(r: Row): PeerPromptRecord {
       ? { nextAttemptAt: r.next_attempt_at_ms }
       : {}),
     ...(r.batch_head_id ? { batchHeadId: r.batch_head_id } : {}),
+    ...(r.reserved_at_ms != null ? { reservedAt: r.reserved_at_ms } : {}),
     transitions: parseTransitions(r.transitions_json),
   };
 }
@@ -555,6 +564,8 @@ type TransitionPatch = Partial<{
   /** Give back the attempt a claim took, for a delivery that never failed. */
   refundAttempt: boolean;
   clearBatchHead: boolean;
+  /** The row goes back undelivered: it is no longer reserved. */
+  clearReservation: boolean;
   /**
    * Compare-and-set on the claim as well as the status: `attempts` as the
    * claim left it. Every claim bumps it, so a delivery whose claim was
@@ -632,6 +643,7 @@ function transitionInTxn(
   if (patch.bumpAttempts) sets.push("attempts = attempts + 1");
   if (patch.refundAttempt) sets.push("attempts = MAX(attempts - 1, 0)");
   if (patch.clearBatchHead) sets.push("batch_head_id = NULL");
+  if (patch.clearReservation) sets.push("reserved_at_ms = NULL");
   const placeholders = from.map(() => "?").join(", ");
   const claimed = patch.expectAttempts !== undefined ? " AND attempts = ?" : "";
   const sql = `UPDATE peer_prompts SET ${sets.join(", ")} WHERE id = ? AND status IN (${placeholders})${claimed}`;
@@ -777,6 +789,8 @@ const releaseToQueue = (
       leaseOwner: null,
       leaseExpiresAt: null,
       failureReason: null,
+      clearBatchHead: true,
+      clearReservation: true,
       ...(claim ? { expectAttempts: claim.attempts } : {}),
     },
     now,
@@ -805,6 +819,7 @@ const returnHeldToQueue = (
       failureReason: null,
       refundAttempt: true,
       clearBatchHead: true,
+      clearReservation: true,
       ...(claim ? { expectAttempts: claim.attempts } : {}),
     },
     now,
@@ -843,6 +858,8 @@ const markAcknowledged = (id: string, now = Date.now()) =>
  */
 function reserveAdmission(
   claims: readonly { id: string; attempts: number }[],
+  headId: string,
+  now = Date.now(),
 ): boolean {
   if (claims.length === 0) return false;
   return inDbTransaction(() => {
@@ -852,10 +869,13 @@ function reserveAdmission(
       if (row?.status !== "dispatching" || row.attempts !== claim.attempts)
         return false;
     }
-    const clearLease = db.prepare(
-      "UPDATE peer_prompts SET lease_expires_at_ms = NULL WHERE id = ? AND status = 'dispatching' AND attempts = ?",
+    // Reserved, with the batch it would be delivered as: boot recovery reads
+    // both when the log never got the entry.
+    const reserve = db.prepare(
+      "UPDATE peer_prompts SET lease_expires_at_ms = NULL, reserved_at_ms = ?, batch_head_id = ? WHERE id = ? AND status = 'dispatching' AND attempts = ?",
     );
-    for (const claim of claims) clearLease.run(claim.id, claim.attempts);
+    for (const claim of claims)
+      reserve.run(now, headId, claim.id, claim.attempts);
     return true;
   });
 }
@@ -1011,6 +1031,8 @@ const markRetryable = (
       leaseOwner: null,
       leaseExpiresAt: null,
       nextAttemptAt: now + backoffMs,
+      clearBatchHead: true,
+      clearReservation: true,
       ...(claim ? { expectAttempts: claim.attempts } : {}),
     },
     now,
@@ -1736,6 +1758,10 @@ function applyRecoveryDecisions(
   try {
     const applied: PeerPromptRecord[] = [];
     for (const d of decisions) {
+      // A reserved row may have reached its provider: it is never put back
+      // to be sent again, whatever the caller decided.
+      if (d.toStatus === "queued" && getRow(d.id)?.reserved_at_ms != null)
+        continue;
       if (d.batchHeadId) setBatchHead.run(d.batchHeadId, d.id);
       const patch: TransitionPatch =
         d.toStatus === "interrupted"

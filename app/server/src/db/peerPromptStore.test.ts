@@ -836,7 +836,7 @@ describe("peerPromptStore", () => {
     store.requeueExpiredLeases(Date.now() + 120_000);
     const reclaimed = store.claimOne(second.id, "send-now")!;
     assert.equal(reclaimed.attempts, claimed[1]!.attempts + 1);
-    assert.equal(store.reserveAdmission(claims), false);
+    assert.equal(store.reserveAdmission(claims, head.id), false);
     assert.equal(store.getById(head.id)?.status, "queued", "nothing moved");
     assert.deepEqual(store.recordAdmission(claims, head.id), []);
     // An older claim's failure cannot requeue or fail the newer claim's row.
@@ -856,7 +856,7 @@ describe("peerPromptStore", () => {
     const fresh = enqueue(`r-${seq++}`);
     const [only] = store.claimBatch(fresh.recipientSessionId, "d", 1, 5, 99);
     const claim = [{ id: only!.id, attempts: only!.attempts }];
-    assert.equal(store.reserveAdmission(claim), true);
+    assert.equal(store.reserveAdmission(claim, only!.id), true);
     assert.equal(store.getById(only!.id)?.leaseExpiresAt, undefined);
     assert.deepEqual(
       store
@@ -866,6 +866,18 @@ describe("peerPromptStore", () => {
       "a reserved row is never swept back to the queue",
     );
     assert.equal(store.cancelOne(only!.id, "withdrawn"), undefined);
+    // Reserved, with its batch: boot never puts it back to be sent again.
+    assert.ok(store.getById(only!.id)?.reservedAt !== undefined);
+    assert.equal(store.getById(only!.id)?.batchHeadId, only!.id);
+    assert.deepEqual(
+      store.applyRecoveryDecisions(
+        [{ id: only!.id, toStatus: "queued" }],
+        "boot",
+        "restart",
+      ),
+      [],
+    );
+    assert.equal(store.getById(only!.id)?.status, "dispatching");
     assert.deepEqual(store.recordAdmission(claim, only!.id), [only!.id]);
     const row = store.getById(only!.id)!;
     assert.equal(row.status, "acknowledged");
@@ -931,5 +943,33 @@ describe("peerPromptStore", () => {
     assert.equal(store.markCompleted(plain.id), undefined);
     assert.equal(store.markInterrupted(plain.id, "late", "failure"), undefined);
     assert.equal(store.getById(plain.id)?.interruptionKind, "stopped");
+  });
+
+  it("a row known unsent goes back unreserved; one never reserved is requeued at boot", () => {
+    for (const putBack of ["held", "retry", "release"] as const) {
+      const m = enqueue(`r-${seq++}`);
+      const [claimed] = store.claimBatch(m.recipientSessionId, "d", 1, 5, 99);
+      const claim = { attempts: claimed!.attempts };
+      assert.ok(store.reserveAdmission([{ id: m.id, ...claim }], m.id));
+      if (putBack === "held") store.returnHeldToQueue(m.id, claim);
+      else if (putBack === "retry")
+        store.markRetryable(m.id, "busy", 0, Date.now(), claim);
+      else store.releaseToQueue(m.id, claim);
+      const row = store.getById(m.id)!;
+      assert.equal(row.reservedAt, undefined, putBack);
+      assert.equal(row.batchHeadId, undefined, putBack);
+    }
+    const unreserved = enqueue(`r-${seq++}`);
+    store.claimBatch(unreserved.recipientSessionId, "crashed", 60_000, 5, 99);
+    assert.deepEqual(
+      store
+        .applyRecoveryDecisions(
+          [{ id: unreserved.id, toStatus: "queued" }],
+          "boot",
+          "restart",
+        )
+        .map((r) => r.status),
+      ["queued"],
+    );
   });
 });

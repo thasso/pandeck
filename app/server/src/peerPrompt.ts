@@ -1177,7 +1177,7 @@ function buildNotice(
   if (restarts.length > 0) {
     lines.push(
       "",
-      `${promptCount(restarts)} you sent asked for a reply, and the server restarted while the recipient's turn was still running. That turn may not have completed, and no reply is coming on its own:`,
+      `${promptCount(restarts)} you sent asked for a reply, and the server restarted before it knew how the recipient's turn went. It may not have completed, and no reply is coming on its own:`,
       ...restarts.map(noticeLine),
       "",
       "Whatever the recipient had already done is still in its own context. Decide whether to ask it for a status, re-send, or drop it.",
@@ -1579,7 +1579,8 @@ class ClaimLostError extends Error {
  */
 function admitClaimed(batch: PeerPromptRecord[]): void {
   const claims = batch.map((m) => ({ id: m.id, attempts: m.attempts }));
-  if (!peerPromptStore.reserveAdmission(claims)) throw new ClaimLostError();
+  if (!peerPromptStore.reserveAdmission(claims, batch[0]!.id))
+    throw new ClaimLostError();
 }
 
 /**
@@ -1730,6 +1731,9 @@ function wakeSendersOwingNotice(
 
 const STRANDED_ADMISSION_REASON =
   "Recovered after restart; the delivered turn may not have completed.";
+/** A reserved row the recipient's log never recorded: maybe sent, never resent. */
+const RESERVED_UNCERTAIN_REASON =
+  "Recovered after restart; it may already have reached the recipient, so it was not sent again.";
 
 /**
  * Decide the fate of every currently-`dispatching` row against the recipient
@@ -1740,10 +1744,12 @@ const STRANDED_ADMISSION_REASON =
  * from the log via {@link findAdmittedBatch}) rather than re-injected; others
  * decide `queued` and drain when their recipient next opens.
  */
-function decideDispatchingRecovery(
-  rows: PeerPromptRecord[],
-): PeerPromptRecoveryDecision[] {
+function decideDispatchingRecovery(rows: PeerPromptRecord[]): {
+  decisions: PeerPromptRecoveryDecision[];
+  uncertain: PeerPromptRecoveryDecision[];
+} {
   const decisions: PeerPromptRecoveryDecision[] = [];
+  const uncertain: PeerPromptRecoveryDecision[] = [];
   const decidedIds = new Set<string>();
   for (const m of rows) {
     if (decidedIds.has(m.id)) continue; // already decided as part of an earlier member's batch group
@@ -1761,12 +1767,22 @@ function decideDispatchingRecovery(
         decidedIds.add(id);
         decisions.push({ id, toStatus: "interrupted", batchHeadId: headId });
       }
+    } else if (m.reservedAt !== undefined) {
+      // Past its claim gate, so its provider may have taken it although the
+      // log never got the entry: never sent again. Its batch is the one it
+      // was reserved as.
+      decidedIds.add(m.id);
+      uncertain.push({
+        id: m.id,
+        toStatus: "interrupted",
+        ...(m.batchHeadId ? { batchHeadId: m.batchHeadId } : {}),
+      });
     } else {
       decidedIds.add(m.id);
       decisions.push({ id: m.id, toStatus: "queued" });
     }
   }
-  return decisions;
+  return { decisions, uncertain };
 }
 
 /**
@@ -1794,14 +1810,21 @@ export function recoverPeerPromptsOnBoot(): {
   recovered: number;
   interrupted: number;
 } {
-  const decisions = decideDispatchingRecovery(
+  const { decisions, uncertain } = decideDispatchingRecovery(
     peerPromptStore.listDispatching(),
   );
-  const applied = peerPromptStore.applyRecoveryDecisions(
-    decisions,
-    STRANDED_ADMISSION_REASON,
-    "restart",
-  );
+  const applied = [
+    ...peerPromptStore.applyRecoveryDecisions(
+      decisions,
+      STRANDED_ADMISSION_REASON,
+      "restart",
+    ),
+    ...peerPromptStore.applyRecoveryDecisions(
+      uncertain,
+      RESERVED_UNCERTAIN_REASON,
+      "restart",
+    ),
+  ];
   let interrupted = 0;
   for (const m of applied) {
     if (m.status === "interrupted") interrupted++;
