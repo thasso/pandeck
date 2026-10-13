@@ -43,9 +43,9 @@ import {
 import {
   fetchIssueMetadata,
   resolveTempoFilterIds,
-  resolveUserNames,
   type TempoIssueMeta,
 } from "./tempoJiraJoin.ts";
+import { resolveUserNames } from "../../jiraUsers.ts";
 import {
   aggregateRows,
   exportRowOf,

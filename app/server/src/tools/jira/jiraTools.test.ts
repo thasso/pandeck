@@ -14,7 +14,11 @@ vi.mock("../../jiraSettings.ts", async (importActual) => ({
 
 vi.mock("../../jiraFieldCache.ts", async (importActual) => ({
   ...(await importActual<typeof import("../../jiraFieldCache.ts")>()),
-  getJiraFieldMap: async () => ({ byId: new Map(), fetchedAt: 1_000 }),
+  getJiraFieldMap: async () => ({
+    byId: new Map(),
+    byNameLower: new Map(),
+    fetchedAt: 1_000,
+  }),
 }));
 
 vi.mock("../../jiraIssueLinkTypeCache.ts", async (importActual) => ({
@@ -643,6 +647,125 @@ describe("jira_mutate_issue create & comment", () => {
         update: {},
       },
     );
+  });
+
+  test("shows assignee and user-field changes by display name but writes account ids", async () => {
+    vi.mocked(jiraGet).mockImplementation(async (config, path, query) => {
+      if (path.startsWith("/rest/api/3/user/bulk"))
+        return {
+          values: [
+            { accountId: "acc-1", displayName: "Ada Lovelace" },
+            { accountId: "acc-2", displayName: "Grace Hopper" },
+          ],
+        } as never;
+      return defaultJiraGet(config, path, query) as never;
+    });
+    vi.mocked(jiraPut).mockClear();
+    const sid = `jira-edit-users-${(mutateSession += 1)}`;
+    try {
+      await runMutate(sid, [
+        {
+          issue: "NEB-1",
+          assigneeAccountId: "acc-1",
+          fields: {
+            customfield_10050: [
+              { accountId: "acc-2" },
+              { accountId: "acc-gone" },
+            ],
+          },
+        },
+      ]);
+    } finally {
+      vi.mocked(jiraGet).mockImplementation(defaultJiraGet);
+    }
+    expect(
+      proposalItems(sid)[0]!.fieldChanges.map(({ fieldId, to }) => ({
+        fieldId,
+        to,
+      })),
+    ).toEqual([
+      { fieldId: "assignee", to: "Ada Lovelace" },
+      { fieldId: "customfield_10050", to: "Grace Hopper, acc-gone" },
+    ]);
+
+    const { card } = await resolveApproval(
+      approvalsForSession(sid).at(-1)!.id,
+      "approved",
+    );
+    expect(card.status).toBe("executed");
+    expect(vi.mocked(jiraPut)).toHaveBeenCalledWith(
+      expect.anything(),
+      "/rest/api/3/issue/NEB-1",
+      {
+        fields: {
+          assignee: { accountId: "acc-1" },
+          customfield_10050: [
+            { accountId: "acc-2" },
+            { accountId: "acc-gone" },
+          ],
+        },
+        update: {},
+      },
+    );
+  });
+
+  test("stages an assignee by account id when Jira cannot resolve the name, and unassigns with null", async () => {
+    vi.mocked(jiraGet).mockImplementation(async (config, path, query) => {
+      if (path.startsWith("/rest/api/3/user/bulk"))
+        throw new Error("Browse users denied");
+      return defaultJiraGet(config, path, query) as never;
+    });
+    vi.mocked(jiraPut).mockClear();
+    const sid = `jira-edit-users-${(mutateSession += 1)}`;
+    try {
+      await runMutate(sid, [
+        { clientId: "a", issue: "NEB-1", assigneeAccountId: "acc-1" },
+        { clientId: "b", issue: "NEB-1", assigneeAccountId: null },
+      ]);
+      await expect(
+        runMutate(`jira-edit-users-${(mutateSession += 1)}`, [
+          { issue: "NEB-1", assigneeAccountId: " " },
+        ]),
+      ).rejects.toThrow(/use null to unassign/);
+    } finally {
+      vi.mocked(jiraGet).mockImplementation(defaultJiraGet);
+    }
+    expect(proposalItems(sid).map((item) => item.fieldChanges[0]!.to)).toEqual([
+      "acc-1",
+      "Unassigned",
+    ]);
+
+    await resolveApproval(approvalsForSession(sid).at(-1)!.id, "approved");
+    expect(
+      vi
+        .mocked(jiraPut)
+        .mock.calls.map(
+          (call) => (call[2] as { fields: { assignee: unknown } }).fields,
+        ),
+    ).toEqual([{ assignee: { accountId: "acc-1" } }, { assignee: null }]);
+  });
+
+  test("a call stopped during the user-name lookup creates no approval", async () => {
+    const controller = new AbortController();
+    vi.mocked(jiraGet).mockImplementation(async (config, path, query) => {
+      if (path.startsWith("/rest/api/3/user/bulk")) {
+        controller.abort();
+        throw controller.signal.reason;
+      }
+      return defaultJiraGet(config, path, query) as never;
+    });
+    const sid = `jira-edit-users-${(mutateSession += 1)}`;
+    try {
+      await expect(
+        jiraMutateIssueTool.execute(
+          { items: [{ issue: "NEB-1", assigneeAccountId: "acc-1" }] } as never,
+          { session: { sessionId: sid }, signal: controller.signal } as never,
+        ),
+      ).rejects.toThrow();
+    } finally {
+      vi.mocked(jiraGet).mockImplementation(defaultJiraGet);
+    }
+    expect(approvalsForSession(sid)).toEqual([]);
   });
 
   test("persists executor-mutated per-item diagnostics when an approved edit fails", async () => {

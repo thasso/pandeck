@@ -9,6 +9,7 @@ import { getJiraToolConfig } from "../../jiraSettings.ts";
 import {
   approvalCardReference,
   createApproval,
+  proposalSnapshot,
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
 import {
@@ -36,6 +37,7 @@ import {
   type JiraFieldMeta,
 } from "../../jiraFieldCache.ts";
 import { errorText } from "../../errors.ts";
+import { resolveUserNames } from "../../jiraUsers.ts";
 import { assertIssuePermission } from "./jiraPermissions.ts";
 import {
   buildJiraRankItem,
@@ -1112,6 +1114,7 @@ export const jiraMutateIssueTool = defineAgentTool<JiraMutationParams>({
     const { items, warnings } = await buildJiraMutationItems(
       config,
       params.items ?? [],
+      ctx.signal,
     );
     const title = jiraMutationTitle(items);
     const labels = items.map(jiraMutationItemLabel);
@@ -2220,6 +2223,7 @@ function jiraSearchUrl(jiraHost: string, jql: string): string {
 async function buildJiraMutationItems(
   config: ReturnType<typeof getJiraToolConfig>,
   input: JiraMutationItemInput[],
+  signal?: AbortSignal,
 ): Promise<{ items: JiraIssueMutationItemDisplay[]; warnings: string[] }> {
   if (!Array.isArray(input) || input.length === 0)
     throw new Error("At least one Jira issue mutation item is required.");
@@ -2404,7 +2408,53 @@ async function buildJiraMutationItems(
       ...(linkChanges.length > 0 ? { linkChanges } : {}),
     });
   }
+  await nameUserFieldChanges(config, items, signal);
   return { items, warnings: unique(warnings) };
+}
+
+/** Account ids a user-valued change writes: `{ accountId }` or a list of them. */
+function userAccountIds(value: unknown): string[] | null {
+  const values = Array.isArray(value) ? value : [value];
+  const ids = values.map((entry) =>
+    entry && typeof entry === "object" && "accountId" in entry
+      ? (entry as { accountId?: unknown }).accountId
+      : undefined,
+  );
+  return ids.length > 0 && ids.every((id) => typeof id === "string" && id)
+    ? (ids as string[])
+    : null;
+}
+
+/** Shows user-valued changes by display name; the account ids stay in `value` for the write. */
+async function nameUserFieldChanges(
+  config: ReturnType<typeof getJiraToolConfig>,
+  items: JiraIssueMutationItemDisplay[],
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const changes = items
+    .flatMap((item) => item.fieldChanges)
+    .map((change) => ({ change, ids: userAccountIds(change.value) }))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        change: JiraIssueMutationFieldChangeDisplay;
+        ids: string[];
+      } => entry.ids !== null,
+    );
+  if (changes.length === 0) return;
+  // A name is presentation only: an unresolvable id still stages, shown as itself.
+  const names = await proposalSnapshot(
+    () =>
+      resolveUserNames(
+        config,
+        changes.flatMap((entry) => entry.ids),
+        signal,
+      ),
+    signal,
+  );
+  for (const { change, ids } of changes)
+    change.to = ids.map((id) => names?.get(id) ?? id).join(", ");
 }
 
 async function buildLinkChanges(
@@ -2631,17 +2681,24 @@ function addKnownFieldChange(
   if (
     raw.clearAssignee ||
     Object.prototype.hasOwnProperty.call(raw, "assigneeAccountId")
-  )
+  ) {
+    const accountId =
+      raw.clearAssignee || raw.assigneeAccountId === null
+        ? null
+        : raw.assigneeAccountId?.trim();
+    if (accountId === "" || accountId === undefined)
+      throw new Error(
+        "assigneeAccountId must be a Jira accountId; use null to unassign.",
+      );
     changes.push({
       fieldId: "assignee",
       label: "Assignee",
       from: valueToText(fields.assignee),
-      to:
-        raw.clearAssignee || raw.assigneeAccountId === null
-          ? "Unassigned"
-          : (raw.assigneeAccountId ?? null),
+      to: accountId ?? "Unassigned",
       operation: "set",
+      value: accountId ? { accountId } : null,
     });
+  }
   if (Object.prototype.hasOwnProperty.call(raw, "parentIssue"))
     changes.push({
       fieldId: "parent",
@@ -2825,8 +2882,13 @@ async function buildExecutionFieldPayload(
   for (const change of changes) {
     if (change.fieldId === "status") continue;
     if (change.fieldId === "assignee")
+      // Cards staged before `value` carried the account id in `to`.
       fields.assignee =
-        change.to === "Unassigned" ? null : { accountId: change.to };
+        change.value !== undefined
+          ? change.value
+          : change.to === "Unassigned"
+            ? null
+            : { accountId: change.to };
     else if (change.fieldId === "parent")
       fields.parent = change.to ? { key: change.to } : null;
     else if (change.fieldId === "description")
