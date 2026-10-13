@@ -190,7 +190,18 @@ card, which the commands address it by.
   end included) is ignored, the session takes no new prompt and its idle edge
   offers no queued work. A failure the run reported before the teardown stays a
   failure. Only a process that dies leaves a run for boot recovery, which
-  records it as `restart`.
+  records it as `restart`. A steer acceptance the provider had already queued
+  when its run closed (Claude's `command_lifecycle` arriving after a teardown or
+  after the run ended) appends nothing after the close: the message counts as
+  possibly read — `stopped` when that close was a Stop or teardown, otherwise
+  the uncertain-read notice — and is never sent again.
+
+  The log is the authority on whether an entry was written. Its append persists
+  the entry before its own bookkeeping (the session's stats row), so a delivery
+  that throws without the runtime confirming the append is checked against the
+  canonical log first: an entry found there is delivered, and its turn failed
+  (`interrupted`, `failure`, sender told once). It never becomes a draft to
+  withdraw or send again, and the run it opened is closed.
 
   An answer sent before the Stop keeps the request `replied`. Each settlement is
   a compare-and-set from the admitted states, so a duplicate or late callback,

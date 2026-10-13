@@ -730,8 +730,20 @@ export class LiveRuntimeSession {
       // The run this steer was aimed at, so a withdrawal can say whether that
       // run was stopped on purpose.
       const aimedRun = this.openRunId();
+      // An acceptance the provider had already queued can still arrive after
+      // that run closed — a teardown, or the run ending first. The run it was
+      // aimed at is over, so nothing is appended after its close; the message
+      // may have been read, which the caller is told.
+      let acceptedLate = false;
       const record = (delivery: PromptDelivery): void => {
-        if (recorded) return;
+        if (recorded || acceptedLate) return;
+        if (
+          this.tornDown ||
+          (aimedRun !== undefined && this.openRunId() !== aimedRun)
+        ) {
+          acceptedLate = true;
+          return;
+        }
         recorded = true;
         const entryId = this.appendUserEntry(text, options, delivery);
         if (onUserEntry) onUserEntry(entryId);
@@ -756,7 +768,23 @@ export class LiveRuntimeSession {
         );
       } catch (error) {
         if (!recorded) releaseKey();
+        // Taken after its run closed, then the provider failed: it may still
+        // have been read, which outranks how the provider ended.
+        if (acceptedLate && !recorded)
+          throw new SteerWithdrawnError(
+            this.sessionId,
+            true,
+            this.abortWasRequested(aimedRun),
+          );
         throw error;
+      }
+      if (acceptedLate && !recorded) {
+        releaseKey();
+        throw new SteerWithdrawnError(
+          this.sessionId,
+          true,
+          this.abortWasRequested(aimedRun),
+        );
       }
       if (result.stopReason === "error" && !recorded) {
         releaseKey();
@@ -771,10 +799,10 @@ export class LiveRuntimeSession {
       // lets a handoff fall back to its queue instead of losing the decision.
       if (!recorded) {
         releaseKey();
-        throw result.steerWithdrawn
+        throw result.steerWithdrawn || acceptedLate
           ? new SteerWithdrawnError(
               this.sessionId,
-              result.steerUncertain === true,
+              result.steerUncertain === true || acceptedLate,
               this.abortWasRequested(aimedRun),
             )
           : new SessionBusyError(this.sessionId);
@@ -789,11 +817,26 @@ export class LiveRuntimeSession {
     // The run this prompt belongs to. A late result of it must neither fail
     // nor close a turn that opened after it.
     const ownRunId = this.turnRunId;
-    const entryId = this.appendUserEntry(
-      text,
-      options,
-      steering ? "steer" : undefined,
-    );
+    let entryId: string;
+    try {
+      entryId = this.appendUserEntry(
+        text,
+        options,
+        steering ? "steer" : undefined,
+      );
+    } catch (error) {
+      // The entry may be on disk already — the append persists it before its
+      // own bookkeeping — but the provider never got it: this prompt's run
+      // ends here, failed, rather than stay open for the next prompt to join.
+      if (!steering) {
+        try {
+          this.endTurn("error", ownRunId);
+        } catch {
+          /* the log refusing again leaves the bracket for boot to see */
+        }
+      }
+      throw error;
+    }
     if (onUserEntry) onUserEntry(entryId);
 
     if (steering) {

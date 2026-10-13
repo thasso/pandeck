@@ -1599,3 +1599,51 @@ test("a teardown ends the open run as a deliberate end and lets nothing new star
     setSessionIdleHook(undefined);
   }
 });
+
+/**
+ * An acceptance the provider had queued arrives after the run it was aimed at
+ * closed: nothing is appended after the close, and the caller hears it may
+ * have been read — whether the provider then answers or throws.
+ */
+test("a late deferred acceptance appends nothing and reads as possibly read", async () => {
+  for (const ending of ["answers", "throws"] as const) {
+    const runtime = new SessionRuntime(new SessionLogStore(true));
+    const adapter = new ScriptedAdapter();
+    (adapter.capabilities as { steer?: boolean }).steer = true;
+    (adapter.capabilities as { steerAcceptance?: "deferred" }).steerAcceptance =
+      "deferred";
+    let accept: (() => void) | undefined;
+    let settle: (() => void) | undefined;
+    const original = adapter.prompt.bind(adapter);
+    adapter.prompt = (text, options) => {
+      if (!options?.steer) return original(text, options);
+      return new Promise((resolve, reject) => {
+        accept = () => options.onSteerAccepted?.("steer");
+        settle = () =>
+          ending === "answers"
+            ? resolve({ stopReason: "end", steerDelivery: "steer" })
+            : reject(new Error("provider failed"));
+      });
+    };
+    runtime.createSession("s1", adapter);
+    const appended: string[] = [];
+    const turn = runtime.prompt("s1", "own work");
+    await tick();
+    const steered = runtime
+      .prompt("s1", "steer", {
+        steer: true,
+        onUserEntry: (id) => appended.push(id),
+      })
+      .catch((error: unknown) => error);
+    await runtime.abort("s1");
+    adapter.finishRun({ stopReason: "aborted" });
+    await turn;
+    accept!();
+    settle!();
+    const error = await steered;
+    assert.deepEqual(appended, [], `${ending}: nothing after the close`);
+    assert.ok(error instanceof SteerWithdrawnError, ending);
+    assert.equal(error.uncertain, true, ending);
+    assert.equal(error.stopped, true, ending);
+  }
+});

@@ -1188,6 +1188,171 @@ class ClaudeRecipient {
   }
 }
 
+/** A query's output, fed by the test one provider frame at a time. */
+class ScriptedOutput {
+  private readonly values: ClaudeSdkMessage[] = [];
+  private readonly waiters: Array<
+    (r: IteratorResult<ClaudeSdkMessage>) => void
+  > = [];
+  private closed = false;
+  emit(message: unknown): void {
+    const waiter = this.waiters.shift();
+    if (waiter) waiter({ value: message as ClaudeSdkMessage, done: false });
+    else this.values.push(message as ClaudeSdkMessage);
+  }
+  close(): void {
+    this.closed = true;
+    for (const waiter of this.waiters.splice(0))
+      waiter({ value: undefined, done: true });
+  }
+  [Symbol.asyncIterator](): AsyncIterator<ClaudeSdkMessage> {
+    return {
+      next: () => {
+        const value = this.values.shift();
+        if (value) return Promise.resolve({ value, done: false });
+        if (this.closed)
+          return Promise.resolve({ value: undefined, done: true });
+        return new Promise((resolve) => this.waiters.push(resolve));
+      },
+    };
+  }
+}
+
+/**
+ * A real `ClaudeSdkSession` whose one query is driven frame by frame, and
+ * which records every user input the session writes to it — so a steer is a
+ * real queued input, and its acceptance a real `command_lifecycle` frame.
+ */
+function steerableClaude(id: string) {
+  const output = new ScriptedOutput();
+  const inputs: Array<{ uuid: string }> = [];
+  let queried = false;
+  let inputDone: Promise<void> = Promise.resolve();
+  const session = new ClaudeSdkSession(id, {
+    seam: () =>
+      Promise.resolve({
+        query(params: {
+          prompt: string | AsyncIterable<{ uuid: string }>;
+          options?: { abortController?: AbortController };
+        }) {
+          queried = true;
+          params.options?.abortController?.signal.addEventListener(
+            "abort",
+            () => output.close(),
+          );
+          const prompt = params.prompt;
+          inputDone = (async () => {
+            if (typeof prompt !== "string")
+              for await (const input of prompt) inputs.push(input);
+          })();
+          return {
+            close: () => output.close(),
+            [Symbol.asyncIterator]: () => output[Symbol.asyncIterator](),
+          };
+        },
+        deleteSession: async () => {},
+      } as unknown as ClaudeSdkSeam),
+  });
+  const driver = {
+    id,
+    key: id,
+    sessionId: id,
+    harness: "claude-sdk" as Harness,
+    agentType: "assistant" as AgentType,
+    sessionFile: undefined,
+    get canSteer() {
+      return session.canSteer;
+    },
+    get released() {
+      return session.released;
+    },
+    get isRunning() {
+      return sessionRuntime.isRunning(id);
+    },
+    contextInfo: () => new FakeRuntimeDriver(id).contextInfo(),
+    broadcastState: () => {},
+    createRuntimeAdapter: () => session.createRuntimeAdapter(),
+  };
+  fakeDrivers.set(id, driver);
+  const stream = (event: unknown) => ({
+    type: "stream_event",
+    event,
+    parent_tool_use_id: null,
+    uuid: `evt-${Math.random()}`,
+    session_id: "provider-steer",
+  });
+  return {
+    session,
+    driver,
+    output,
+    inputs,
+    queried: () => queried,
+    inputDone: () => inputDone,
+    /** The provider starts answering the human turn. */
+    startReply(): void {
+      output.emit(stream({ type: "message_start", message: { id: "m" } }));
+      output.emit(
+        stream({
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        }),
+      );
+      output.emit(
+        stream({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "working" },
+        }),
+      );
+    },
+    /** The provider takes the queued input with this uuid into the turn. */
+    accept(uuid: string): void {
+      output.emit({
+        type: "command_lifecycle",
+        command_uuid: uuid,
+        state: "started",
+        uuid: `started-${uuid}`,
+        session_id: "provider-steer",
+      });
+    },
+  };
+}
+
+/** Run the session's own human turn and queue a requested peer steer into it. */
+async function claudeSteerQueued(coord: FakeRuntimeDriver): Promise<{
+  claude: ReturnType<typeof steerableClaude>;
+  own: Promise<unknown>;
+  steered: Promise<void>;
+  m: string;
+}> {
+  const id = seed("Steered Claude", "claude-sdk");
+  const claude = steerableClaude(id);
+  const own = promptRuntimeSession(claude.driver, "human work", {
+    origin: { kind: "human" },
+  }).catch(() => undefined);
+  await until(
+    () => claude.queried() && claude.inputs.length === 1,
+    "the query",
+  );
+  claude.startReply();
+  await until(() => claude.session.canSteer, "a steerable turn");
+  const m = await send(coord.sessionId, id, "LATE ACCEPTED PEER", true);
+  const [item] = peerPromptQueueField(id).queuedPeerPrompts!;
+  const steered = sendQueuedPeerPromptNow(id, item!.id);
+  await until(() => claude.inputs.length === 2, "the queued steer");
+  return { claude, own, steered, m };
+}
+
+/** Delete the session the way `claudeSdkStore.remove` does. */
+async function removeClaude(
+  claude: ReturnType<typeof steerableClaude>,
+): Promise<void> {
+  sessionRuntime.closeForTeardown(claude.driver.sessionId);
+  claude.session.dispose();
+  await sessionRuntime.disposeSession(claude.driver.sessionId);
+}
+
 describe("a real Claude session", () => {
   it("a Stop of the delivered turn interrupts it without a notice", async () => {
     const coord = sender();
@@ -1235,6 +1400,112 @@ describe("a real Claude session", () => {
     assert.equal(row(ask).status, "awaiting_response");
     assert.equal(row(ask).interruptionKind, "stopped");
     assert.equal(noticesIn(coord.sessionId), 0);
+  });
+
+  it("an acceptance the provider had queued when the session was removed appends nothing after the close", async () => {
+    const coord = sender();
+    const { claude, own, steered, m } = await claudeSteerQueued(coord);
+    // The provider takes the steer, but the frame is still buffered for the
+    // reader when the user deletes the session.
+    claude.accept(claude.inputs[1]!.uuid);
+    await removeClaude(claude);
+    await own;
+    await steered;
+    await claude.inputDone();
+    await quiesce();
+
+    const log = logOf(claude.driver.sessionId);
+    const closedAt = log.findIndex((e) => e.type === "run.aborted");
+    const peerAt = log.findIndex((e) =>
+      JSON.stringify(e.content ?? "").includes("LATE ACCEPTED PEER"),
+    );
+    assert.ok(closedAt >= 0, "the run was closed");
+    assert.ok(peerAt === -1 || peerAt < closedAt, "nothing after the close");
+    // Possibly read, and stopped on purpose: still owed, nobody told.
+    assert.equal(row(m).status, "awaiting_response");
+    assert.equal(row(m).interruptionKind, "stopped");
+    assert.equal(noticesIn(coord.sessionId), 0);
+    assert.equal(sessionRuntime.get(claude.driver.sessionId), undefined);
+  });
+
+  it("an acceptance read before the removal joins the run and settles with its close", async () => {
+    const coord = sender();
+    const { claude, own, steered, m } = await claudeSteerQueued(coord);
+    claude.accept(claude.inputs[1]!.uuid);
+    await steered;
+    assert.equal(row(m).status, "acknowledged");
+    await removeClaude(claude);
+    await own;
+    await until(() => row(m).status !== "acknowledged", "the settlement");
+
+    assert.equal(row(m).status, "awaiting_response");
+    assert.equal(row(m).interruptionKind, "stopped");
+    const log = logOf(claude.driver.sessionId);
+    const peerAt = log.findIndex((e) =>
+      JSON.stringify(e.content ?? "").includes("LATE ACCEPTED PEER"),
+    );
+    assert.ok(
+      peerAt >= 0 && peerAt < log.findIndex((e) => e.type === "run.aborted"),
+    );
+    assert.equal(admissionsOf(claude.driver.sessionId, m), 1);
+  });
+});
+
+describe("an entry the log took before its bookkeeping failed is delivered, never a draft", () => {
+  it("a new turn: the stats write refused after the entry was written", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    const m = await send(coord.sessionId, worker.sessionId, "DURABLE FIRST");
+    vi.spyOn(sessionStore, "updateStats").mockImplementationOnce(() => {
+      throw new Error("injected stats refusal after the log write");
+    });
+    await drainRecipient(worker.sessionId);
+    vi.restoreAllMocks();
+
+    assert.equal(admissionsOf(worker.sessionId, m), 1, "the entry is durable");
+    assert.equal(worker.promptOptions.length, 0, "the provider never got it");
+    assert.equal(row(m).status, "interrupted", "delivered, its turn failed");
+    assert.equal(row(m).interruptionKind, "failure");
+    assert.equal(
+      peerPromptQueueField(worker.sessionId).queuedPeerPrompts,
+      undefined,
+      "nothing left to withdraw or send",
+    );
+    // The run it opened is closed, and nothing is ever sent again.
+    assert.ok(logOf(worker.sessionId).some((e) => e.type === "run.ended"));
+    sweepExpiredLeases(Date.now() + 61_000);
+    peerPromptStore.requeueDueRetries(Date.now() + 600_000);
+    await drainRecipient(worker.sessionId);
+    assert.equal(worker.promptOptions.length, 0);
+    assert.equal(admissionsOf(worker.sessionId, m), 1);
+  });
+
+  it("a steer: the stats write refused after the entry was written", async () => {
+    const coord = sender();
+    const worker = piRecipient();
+    const own = promptRuntimeSession(worker, "own work", {
+      origin: { kind: "system", source: "background-work" },
+    }).catch(() => undefined);
+    await until(() => worker.turnLive, "the running turn");
+    const m = await send(coord.sessionId, worker.sessionId, "STEER DURABLE");
+    const [item] = peerPromptQueueField(worker.sessionId).queuedPeerPrompts!;
+    vi.spyOn(sessionStore, "updateStats").mockImplementationOnce(() => {
+      throw new Error("injected stats refusal after the log write");
+    });
+    await sendQueuedPeerPromptNow(worker.sessionId, item!.id);
+    vi.restoreAllMocks();
+
+    assert.equal(admissionsOf(worker.sessionId, m), 1);
+    assert.equal(row(m).status, "interrupted");
+    assert.equal(row(m).interruptionKind, "failure");
+    assert.equal(
+      peerPromptQueueField(worker.sessionId).queuedPeerPrompts,
+      undefined,
+    );
+    worker.end();
+    await own;
+    await drainRecipient(worker.sessionId);
+    assert.equal(admissionsOf(worker.sessionId, m), 1, "never sent twice");
   });
 });
 

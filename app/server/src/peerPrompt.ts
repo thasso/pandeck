@@ -484,6 +484,15 @@ async function steerPeerPrompt(
   } catch (err) {
     thrown = err;
   }
+  if (!admitted && persistedDespite(thrown, driver.sessionId, m.id)) {
+    // Its entry reached the log, then something after the write threw before
+    // the runtime could say so. It is delivered, and its turn failed with it.
+    unsubscribe();
+    settleAdmitted(recordAppended(batch), driver.sessionId, undefined, thrown);
+    await broadcastParticipants(batch);
+    await broadcastBatchCardUpdates([m.id]);
+    return;
+  }
   if (!admitted) {
     unsubscribe();
     if (ownsContext) activeContexts.delete(driver.sessionId);
@@ -1476,6 +1485,10 @@ async function deliverBatch(
   } finally {
     activeContexts.delete(driver.sessionId);
   }
+  // Its entry reached the log, then something after the write threw before
+  // the runtime could say so: delivered, never a draft to send again.
+  if (!appended && persistedDespite(thrown, driver.sessionId, head.id))
+    appended = true;
   if (appended) {
     // Admitted work is never retried or re-queued: it is in the recipient's
     // context, its tool calls may have run. Only its outcome is recorded. A
@@ -1535,6 +1548,29 @@ class ClaimLostError extends Error {
 function admitClaimed(batch: PeerPromptRecord[]): void {
   const claims = batch.map((m) => ({ id: m.id, attempts: m.attempts }));
   if (!peerPromptStore.reserveAdmission(claims)) throw new ClaimLostError();
+}
+
+/**
+ * Whether a delivery that threw had already written its entry to the
+ * recipient's log. The runtime calls `onUserEntry` only once the append
+ * returns, and the append persists the entry BEFORE its own bookkeeping (the
+ * session's stats row), so a throw from that bookkeeping leaves a delivered
+ * entry the caller never heard about. The log is the authority. A refusal
+ * that happens before any append by construction — the claim lost, a Stop at
+ * the door — is not checked.
+ */
+function persistedDespite(
+  thrown: unknown,
+  recipientId: string,
+  headId: string,
+): boolean {
+  if (
+    thrown === undefined ||
+    thrown instanceof ClaimLostError ||
+    thrown instanceof AutomaticTurnsHeldError
+  )
+    return false;
+  return alreadyAdmitted(recipientId, headId);
 }
 
 /**
