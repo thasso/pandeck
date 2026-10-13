@@ -192,8 +192,10 @@ the outcome:
   `interrupted` is terminal, so a coordinator holding `responseRequested` would
   otherwise wait for an answer that no longer exists — a silence
   indistinguishable from a child still working. A turn interrupted by a PROVIDER
-  refusal (usage limit, overload, harness exit) is deliberately silent, because
-  re-asking reproduces the refusal. The notice is exactly-once across restarts,
+  refusal (usage limit, overload, harness exit) is told the same way
+  ([`delegation-failure-notices.md`](delegation-failure-notices.md)). A turn the
+  user or the coordinator STOPPED is told nothing: its requested reply stays
+  owed (`steering-and-queueing.md`). The notice is exactly-once across restarts,
   and it narrows nothing else: an idle child still means nothing, and chasing
   one is still the coordinator's job.
 

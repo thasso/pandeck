@@ -20,11 +20,17 @@ process.env.ASSISTANT_CWD = tmp;
 const { SessionRuntime } = await import("./runtime.ts");
 const {
   subscribeSessionRunCompleted,
+  subscribeSessionRunEnded,
   subscribeSessionRunStarted,
   subscribeSessionToolCompleted,
 } = await import("./liveSession.ts");
-const { SessionBusyError, RunFailedError, InactiveSessionError } =
-  await import("./errors.ts");
+type RunOutcome = import("./liveSession.ts").RunOutcome;
+const {
+  SessionBusyError,
+  RunFailedError,
+  InactiveSessionError,
+  SteerWithdrawnError,
+} = await import("./errors.ts");
 const { SessionLogStore } = await import("../log/store.ts");
 await import("../adapters/contract.ts");
 type AdapterEvent = import("../adapters/contract.ts").AdapterEvent;
@@ -1332,4 +1338,210 @@ test("the run bracket: what a killed turn leaves behind", async () => {
     undefined,
     "and each later turn brackets independently",
   );
+});
+
+/**
+ * The run outcome is the terminal fact a caller reads instead of whether its
+ * prompt resolved: a Stop resolves a prompt like a finished turn, and a Stop
+ * that kept an earlier attempt's error rejects like a failed one.
+ */
+test("the run outcome: how each run ended, and whether its abort was asked for", async () => {
+  const { runtime, adapter } = makeRuntime();
+  const heard: Array<[string, RunOutcome]> = [];
+  const unsubscribe = subscribeSessionRunEnded((sessionId, outcome) =>
+    heard.push([sessionId, outcome]),
+  );
+  const run = async (
+    clientRequestId: string,
+    settle: () => void | Promise<void>,
+  ): Promise<{ outcomes: RunOutcome[]; error?: unknown }> => {
+    const outcomes: RunOutcome[] = [];
+    const prompted = runtime.prompt("s1", "go", {
+      clientRequestId,
+      onRunEnded: (outcome) => outcomes.push(outcome),
+    });
+    await tick();
+    await settle();
+    try {
+      await prompted;
+      return { outcomes };
+    } catch (error) {
+      return { outcomes, error };
+    }
+  };
+  try {
+    // A clean end the adapter only answers (no completion event).
+    const clean = await run("o-1", () =>
+      adapter.finishRun({ stopReason: "end" }),
+    );
+    assert.equal(clean.outcomes.length, 1);
+    assert.equal(clean.outcomes[0]!.stopReason, "end");
+    assert.equal(clean.outcomes[0]!.abortRequested, false);
+
+    // The user's Stop: resolves, but the outcome says it was stopped.
+    const stopped = await run("o-2", async () => {
+      await runtime.abort("s1");
+      adapter.finishRun({ stopReason: "aborted" });
+    });
+    assert.equal(stopped.error, undefined, "a Stop resolves the prompt");
+    assert.deepEqual(
+      stopped.outcomes.map((o) => [o.stopReason, o.abortRequested]),
+      [["aborted", true]],
+    );
+
+    // A Stop whose run kept an earlier attempt's error: the completion event
+    // closes the run first, the prompt then rejects — one outcome, a Stop's.
+    const kept = await run("o-3", async () => {
+      await runtime.abort("s1");
+      adapter.emit({
+        type: "runCompleted",
+        stopReason: "error",
+        errorMessage: "429 earlier attempt",
+      });
+      adapter.finishRun({ stopReason: "error", errorMessage: "429" });
+    });
+    assert.ok(kept.error instanceof RunFailedError);
+    assert.deepEqual(
+      kept.outcomes.map((o) => [o.stopReason, o.abortRequested]),
+      [["error", true]],
+    );
+
+    // A provider-side abort nobody asked for, and one the harness says was.
+    const providerSide = await run("o-4", () => {
+      adapter.emit({ type: "runCompleted", stopReason: "aborted" });
+      adapter.finishRun({ stopReason: "aborted" });
+    });
+    assert.deepEqual(
+      providerSide.outcomes.map((o) => [o.stopReason, o.abortRequested]),
+      [["aborted", false]],
+    );
+    const harnessSaid = await run("o-5", () => {
+      adapter.emit({
+        type: "runCompleted",
+        stopReason: "aborted",
+        abortRequested: true,
+      });
+      adapter.finishRun({ stopReason: "aborted" });
+    });
+    assert.equal(harnessSaid.outcomes[0]!.abortRequested, true);
+
+    // A straggler of a closed run settles nothing; a duplicate prompt opens
+    // no run and hears no outcome.
+    const before = heard.length;
+    adapter.emit({ type: "runCompleted", stopReason: "error", unowned: true });
+    const duplicate = await run("o-1", () => {});
+    assert.deepEqual(duplicate.outcomes, []);
+    assert.equal(heard.length, before);
+
+    // Every listener heard each run exactly once, keyed by its own run id.
+    const ids = heard.map(([, o]) => o.runId);
+    assert.equal(new Set(ids).size, ids.length);
+    assert.ok(heard.every(([sessionId]) => sessionId === "s1"));
+    assert.deepEqual(
+      [clean, stopped, kept, providerSide, harnessSaid].map(
+        (r) => r.outcomes[0]!.runId,
+      ),
+      ids,
+    );
+  } finally {
+    unsubscribe();
+  }
+});
+
+test("a Stop after the run's failure was reported does not relabel it", async () => {
+  const { runtime, adapter } = makeRuntime();
+  const outcomes: RunOutcome[] = [];
+  const prompted = runtime
+    .prompt("s1", "go", { onRunEnded: (o) => outcomes.push(o) })
+    .catch((error: unknown) => error);
+  await tick();
+  adapter.emit({ type: "runFailing", errorMessage: "401" });
+  await runtime.abort("s1");
+  adapter.emit({
+    type: "runCompleted",
+    stopReason: "error",
+    errorMessage: "401",
+    abortRequested: true,
+  });
+  adapter.finishRun({ stopReason: "error", errorMessage: "401" });
+  assert.ok((await prompted) instanceof RunFailedError);
+  assert.deepEqual(
+    outcomes.map((o) => [o.stopReason, o.abortRequested]),
+    [["error", false]],
+  );
+});
+
+/**
+ * The Claude shape: a steer the provider takes later is appended inside the
+ * run it joined, so its run is readable there; one the Stop withdrew says it
+ * was a Stop.
+ */
+test("a deferred steer joins the open run, and a Stop's withdrawal says so", async () => {
+  const runtime = new SessionRuntime(new SessionLogStore(true));
+  const adapter = new ScriptedAdapter();
+  (adapter.capabilities as { steer?: boolean }).steer = true;
+  (adapter.capabilities as { steerAcceptance?: "deferred" }).steerAcceptance =
+    "deferred";
+  let answerSteer:
+    | ((
+        options: import("../adapters/contract.ts").PromptOptions,
+      ) => AgentRunResult)
+    | undefined;
+  const steerAnswered: Array<() => void> = [];
+  const original = adapter.prompt.bind(adapter);
+  adapter.prompt = (text, options) => {
+    if (!options?.steer) return original(text, options);
+    return new Promise((resolve) => {
+      steerAnswered.push(() => resolve(answerSteer!(options)));
+    });
+  };
+  const live = runtime.createSession("s1", adapter);
+  const ended: RunOutcome[] = [];
+  const unsubscribe = subscribeSessionRunEnded((sessionId, outcome) => {
+    if (sessionId === "s1") ended.push(outcome);
+  });
+  try {
+    const turn = runtime.prompt("s1", "own work");
+    await tick();
+    const openRun = live.currentRunId;
+    assert.ok(openRun);
+
+    let joined: string | undefined;
+    answerSteer = (options) => {
+      options.onSteerAccepted?.("steer");
+      return { stopReason: "end", steerDelivery: "steer" };
+    };
+    const steered = runtime.prompt("s1", "steer one", {
+      steer: true,
+      onUserEntry: () => {
+        joined = live.currentRunId;
+      },
+    });
+    steerAnswered.shift()!();
+    await steered;
+    assert.equal(joined, openRun, "the steer joined the run that was open");
+
+    answerSteer = () => ({
+      stopReason: "end",
+      steerWithdrawn: true,
+      steerUncertain: true,
+    });
+    const withdrawn = runtime
+      .prompt("s1", "steer two", { steer: true })
+      .catch((error: unknown) => error);
+    await runtime.abort("s1");
+    adapter.finishRun({ stopReason: "aborted" });
+    await turn;
+    steerAnswered.shift()!();
+    const error = await withdrawn;
+    assert.ok(error instanceof SteerWithdrawnError);
+    assert.equal(error.uncertain, true);
+    assert.equal(error.stopped, true, "the Stop withdrew it");
+    assert.deepEqual(
+      ended.map((o) => [o.runId, o.stopReason, o.abortRequested]),
+      [[openRun, "aborted", true]],
+    );
+  } finally {
+    unsubscribe();
+  }
 });

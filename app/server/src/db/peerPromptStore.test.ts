@@ -19,9 +19,11 @@ function enqueue(
     sender: string;
     responseRequested: boolean;
     expiresAt: number;
+    /** Share one conversation, so a FIFO batch claims the rows together. */
+    conversation: { conversationId: string; chainId: string };
   }> = {},
 ) {
-  const { conversationId, chainId } = conv();
+  const { conversationId, chainId } = over.conversation ?? conv();
   return store.enqueue({
     conversationId,
     chainId,
@@ -588,15 +590,15 @@ describe("peerPromptStore", () => {
     );
   });
 
-  it("allows retryable/interrupted transitions from acknowledged (busy-race / crash)", () => {
+  it("never retries an admitted row, but interrupts one (crash)", () => {
     const m = enqueue(`r-${seq++}`);
     store.claimNext(m.recipientSessionId, "d", 1000);
     store.markAdmitted(m.id);
     store.markAcknowledged(m.id);
-    assert.equal(
-      store.markRetryable(m.id, "provider failed", 5000)?.status,
-      "retryable_failed",
-    );
+    // It reached the recipient's log: whatever its turn did, it is not sent again.
+    assert.equal(store.markRetryable(m.id, "provider failed", 5000), undefined);
+    assert.equal(store.returnHeldToQueue(m.id), undefined);
+    assert.equal(store.getById(m.id)?.status, "acknowledged");
     const m2 = enqueue(`r-${seq++}`);
     store.claimNext(m2.recipientSessionId, "d", 1000);
     store.markAdmitted(m2.id);
@@ -610,13 +612,9 @@ describe("peerPromptStore", () => {
   it("requeues due retries and leaves not-yet-due rows alone", () => {
     const m1 = enqueue(`r-${seq++}`);
     store.claimNext(m1.recipientSessionId, "d", 1000);
-    store.markAdmitted(m1.id);
-    store.markAcknowledged(m1.id);
     store.markRetryable(m1.id, "boom", -1); // already due (backoff in the past)
     const m2 = enqueue(`r-${seq++}`);
     store.claimNext(m2.recipientSessionId, "d", 1000);
-    store.markAdmitted(m2.id);
-    store.markAcknowledged(m2.id);
     store.markRetryable(m2.id, "boom", 60_000); // not due yet
 
     // The store is shared across this file: a retry an earlier test scheduled
@@ -819,5 +817,108 @@ describe("peerPromptStore", () => {
 
     const members = store.listByBatchHead(recipient, m1.id);
     assert.deepEqual(members.map((m) => m.id).sort(), [m1.id, m2.id].sort());
+  });
+
+  it("admits a claimed batch at the append only while that claim holds it", () => {
+    const recipient = `r-${seq++}`;
+    const conversation = conv();
+    const head = enqueue(recipient, { conversation });
+    const second = enqueue(recipient, { conversation });
+    const claimed = store.claimBatch(recipient, "d", 60_000, 5, 10_000);
+    assert.deepEqual(
+      claimed.map((m) => m.id),
+      [head.id, second.id],
+    );
+    // The sweep put the second back after its lease ran out, and a newer
+    // claim took it: that claim's row is no longer this delivery's.
+    store.requeueExpiredLeases(Date.now() + 120_000);
+    const reclaimed = store.claimOne(second.id, "send-now")!;
+    assert.equal(reclaimed.attempts, claimed[1]!.attempts + 1);
+
+    const admitted = store.recordAdmission(
+      claimed.map((m) => ({ id: m.id, attempts: m.attempts })),
+      head.id,
+    );
+
+    // The head, requeued by the sweep but never claimed again, is still ours.
+    assert.deepEqual(admitted, [head.id]);
+    const row = store.getById(head.id)!;
+    assert.equal(row.status, "acknowledged");
+    assert.equal(row.batchHeadId, head.id);
+    assert.ok(row.acceptedAt !== undefined && row.acknowledgedAt !== undefined);
+    assert.equal(store.getById(second.id)?.status, "dispatching");
+    assert.equal(store.getById(second.id)?.batchHeadId, undefined);
+    // An older claim's failure cannot requeue or fail the newer claim's row.
+    assert.equal(
+      store.markRetryable(second.id, "late", 0, Date.now(), {
+        attempts: claimed[1]!.attempts,
+      }),
+      undefined,
+    );
+    assert.equal(
+      store.returnHeldToQueue(second.id, { attempts: claimed[1]!.attempts }),
+      undefined,
+    );
+    assert.equal(store.getById(second.id)?.status, "dispatching");
+  });
+
+  it("records a stopped turn without completing it, and keeps a requested reply owed", () => {
+    const recipient = `r-${seq++}`;
+    const sender = `s-${seq++}`;
+    const conversation = conv();
+    const plain = enqueue(recipient, { sender, conversation });
+    const asked = enqueue(recipient, {
+      sender,
+      conversation,
+      responseRequested: true,
+      expiresAt: Date.now() + 60_000,
+    });
+    const answered = enqueue(recipient, {
+      sender,
+      conversation,
+      responseRequested: true,
+    });
+    const claimed = store.claimBatch(recipient, "d", 60_000, 5, 10_000);
+    store.recordAdmission(
+      claimed.map((m) => ({ id: m.id, attempts: m.attempts })),
+      plain.id,
+    );
+    // An answer sent before the Stop is kept.
+    store.markReplied(answered.id, "reply-1");
+
+    const deadline = store.getById(asked.id)!.expiresAt;
+    for (const id of [plain.id, asked.id, answered.id]) store.markStopped(id);
+
+    const plainRow = store.getById(plain.id)!;
+    assert.equal(plainRow.status, "interrupted");
+    assert.equal(plainRow.interruptionKind, "stopped");
+    assert.equal(plainRow.completedAt, undefined);
+    const askedRow = store.getById(asked.id)!;
+    assert.equal(askedRow.status, "awaiting_response");
+    assert.equal(askedRow.interruptionKind, "stopped");
+    assert.equal(askedRow.failureReason, undefined, "nothing failed");
+    assert.equal(askedRow.completedAt, undefined);
+    assert.equal(askedRow.expiresAt, deadline, "the Stop renews no deadline");
+    assert.equal(store.getById(answered.id)?.status, "replied");
+    assert.equal(store.getById(answered.id)?.interruptionKind, undefined);
+
+    // Owed, not announced: no notice, and a later answer still correlates.
+    const owing = store.interruptedOwingSenderNotice(sender).map((m) => m.id);
+    assert.deepEqual(owing, []);
+    assert.ok(!store.senderIdsOwingNotice().includes(sender));
+    assert.deepEqual(
+      store.unrepliedRequestsBetween(sender, recipient).map((m) => m.id),
+      [asked.id],
+    );
+    assert.equal(store.outstandingResponseRequestCount(sender), 1);
+    // The answer settles it: no longer owed, the Stop kept only as history.
+    const replied = store.markReplied(asked.id, "reply-2")!;
+    assert.equal(replied.status, "replied");
+    assert.equal(replied.interruptionKind, "stopped");
+    assert.equal(store.outstandingResponseRequestCount(sender), 0);
+    // A second, late outcome for the same turn changes nothing.
+    assert.equal(store.markCompleted(plain.id), undefined);
+    assert.equal(store.markInterrupted(plain.id, "late", "failure"), undefined);
+    assert.equal(store.getById(plain.id)?.interruptionKind, "stopped");
   });
 });

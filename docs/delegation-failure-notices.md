@@ -63,6 +63,10 @@ aborted turn. Also silent:
   covers the turn being stopped, cleared when the child's next turn starts;
 - a delivery that was cancelled or withdrawn.
 
+The peer rows such a turn delivered are settled the same way: an asked-for abort
+records them `stopped` and owes their senders nothing
+([`steering-and-queueing.md`](steering-and-queueing.md#peer-prompts-in-the-queue)).
+
 ## Who is told
 
 Only sessions with durable evidence that they wait on this child:

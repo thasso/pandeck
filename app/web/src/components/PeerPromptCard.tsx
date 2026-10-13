@@ -6,6 +6,7 @@ import {
   CheckCheck,
   CircleCheck,
   CircleSlash,
+  CircleStop,
   CircleX,
   Clock3,
   ClockAlert,
@@ -65,6 +66,18 @@ const STATE_MARK: Record<
   failed: { label: "Failed", icon: CircleX, attention: true },
 };
 
+/**
+ * A turn the user or the coordinator stopped on purpose: no failure, so it
+ * reads as what happened rather than as "Interrupted". A stopped request still
+ * owed keeps its "Awaiting response" mark and says why below it.
+ */
+const STOPPED_MARK = {
+  label: "Stopped",
+  icon: CircleStop,
+  attention: true,
+  tone: "muted",
+} as const;
+
 /** Both halves of a peer exchange, collapsed until the reader opens the message. */
 export function PeerPromptCardView({
   card,
@@ -87,9 +100,12 @@ export function PeerPromptCardView({
       ? card.peerSessionId
       : undefined;
   const message = typeof card.message === "string" ? card.message : "";
-  const status = isPeerPromptState(card.state)
-    ? STATE_MARK[card.state]
-    : undefined;
+  const stopped = card.interruption === "stopped";
+  const status = !isPeerPromptState(card.state)
+    ? undefined
+    : stopped && card.state === "interrupted"
+      ? STOPPED_MARK
+      : STATE_MARK[card.state];
   return (
     <ChatActivityRow
       icon={sent ? ArrowUpRight : ArrowDownLeft}
@@ -108,6 +124,13 @@ export function PeerPromptCardView({
       <Markdown text={message} onOpenSession={onOpenSession} />
       {typeof card.failureReason === "string" && card.failureReason ? (
         <ErrorNote className="mt-1" message={card.failureReason} />
+      ) : null}
+      {stopped ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {card.state === "awaiting_response"
+            ? "Its turn was stopped before it finished; the reply is still owed."
+            : "Its turn was stopped before it finished."}
+        </p>
       ) : null}
       <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
         {typeof card.taskTitle === "string" && card.taskTitle ? (

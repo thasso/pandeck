@@ -129,15 +129,53 @@ card, which the commands address it by.
   no lease, since a deferred steer can wait a whole tool step and a lease sweep
   would requeue it to be sent twice; boot recovery reconciles a stranded one. A
   steer withdrawn unread goes back to waiting; one the CLI may already have read
-  is marked `interrupted`, which tells a sender waiting on a reply. An idle
-  session gets it as its next turn, ahead of the user's own queue, because the
-  user chose it. A running turn that cannot steer offers no send-now: the row is
-  delivered when the turn ends. Send-now holds the recipient's delivery
-  authority: one arriving during an automatic delivery waits out that turn and
-  goes before the drain claims its next batch, which resumes from the FIFO head
-  once the send is done. A peer drain held up by a send-now settles only after
-  that resumed drain (the user's queued message sent, or the peer FIFO drained),
-  so a background completion waiting on it never takes their turn.
+  is marked `interrupted`, which tells a sender waiting on a reply — unless a
+  Stop ended that turn, which records it as stopped (below). Either way it is
+  never sent again on its own: whether the turn read it is unknown, and the
+  sender (or the user) decides. An idle session gets it as its next turn, ahead
+  of the user's own queue, because the user chose it. A running turn that cannot
+  steer offers no send-now: the row is delivered when the turn ends. Send-now
+  holds the recipient's delivery authority: one arriving during an automatic
+  delivery waits out that turn and goes before the drain claims its next batch,
+  which resumes from the FIFO head once the send is done. A peer drain held up
+  by a send-now settles only after that resumed drain (the user's queued message
+  sent, or the peer FIFO drained), so a background completion waiting on it
+  never takes their turn.
+- **How a delivered batch settles.** A batch is admitted when the runtime
+  appends its turn (`onUserEntry`), in one transaction guarded by the claim
+  (`attempts`), never earlier. A refusal before that append — a Stop between
+  claim and append, a busy session, a released harness — leaves the rows
+  `dispatching`, so they go back to the queue (a Stop spends no attempt) or
+  under the bounded retry. Admitted rows are never retried or re-queued: the
+  prompt is in the recipient's context and its tools may have run. They settle
+  from the `RunOutcome` the runtime records as the run's bracket closes (the run
+  the batch opened; for a steer, the run it joined), never from whether the
+  prompt resolved, since a Stop resolves it like a finished turn:
+  - a clean end is `completed`, or `awaiting_response` when a reply was asked
+    for — the turn finishing does not answer the request;
+  - an abort someone ASKED for (the user's Stop, a coordinator's stand-down),
+    including one that kept an earlier attempt's error, is `stopped` — unless
+    the run's failure was reported before the abort, which leaves it a failure.
+    A row without a requested reply is `interrupted`; a requested reply stays
+    owed as `awaiting_response` with `interruptionKind: "stopped"`, so a later
+    answer still correlates and clears it, the session list still counts it, it
+    expires on its original deadline, and a later real failure of the recipient
+    still reports it. No failure notice is sent and no `failureReason` is
+    written: nothing failed. Cards, history and the peer summary carry
+    `interruption: "stopped"` (`PeerPromptInterruption`) while it explains the
+    state — "Stopped", or "Awaiting response" with a note that the turn was
+    stopped — and drop it once the request is answered;
+  - any other end — a provider failure, an abort nobody asked for, an end
+    nothing reported — is `interrupted` (`failure`), which tells a sender
+    waiting on a reply once (the delegation failure notice covers rows it
+    records).
+
+  An answer sent before the Stop keeps the request `replied`. Each settlement is
+  a compare-and-set from the admitted states, so a duplicate or late callback,
+  or a straggler of an older run, never rewrites a newer outcome. Resume drains
+  only rows that were never admitted. Rows completed before this distinction
+  existed are not relabeled.
+
 - Agent handoffs are not listed: they steer themselves into a turn that takes
   one and queue only behind a turn that cannot.
 

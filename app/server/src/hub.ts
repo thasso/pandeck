@@ -991,6 +991,7 @@ class SessionHub {
       messageKey: string;
       state: import("@assistant/shared").PeerPromptState;
       failureReason?: string;
+      interruption?: import("@assistant/shared").PeerPromptInterruption;
     },
   ): void {
     const msg: import("@assistant/shared").ServerMessage = {

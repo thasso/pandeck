@@ -1472,6 +1472,18 @@ const PEER_PROMPT_STATE_LABEL: Record<PeerPromptState, string> = {
 };
 
 /**
+ * A turn someone stopped on purpose is no failure: it reads "Stopped", and a
+ * request it left owed says its turn was stopped.
+ */
+function lastStateLabel(peer: PeerPromptPeerSummary): string {
+  const label = PEER_PROMPT_STATE_LABEL[peer.lastState];
+  if (peer.lastInterruption !== "stopped") return label;
+  return peer.lastState === "interrupted"
+    ? "Stopped"
+    : `${label} (turn stopped)`;
+}
+
+/**
  * One peer's summary as its session row's details: how many each way, where
  * the latest one stands, and the latest failure's reason (in red). The
  * messages themselves are cards in the transcripts.
@@ -1489,7 +1501,7 @@ function peerPromptFacts(peer: PeerPromptPeerSummary): ObjectRefFact[] {
     },
     {
       label: "Last",
-      value: `${PEER_PROMPT_STATE_LABEL[peer.lastState]} · ${relativeTime(peer.lastAt)}`,
+      value: `${lastStateLabel(peer)} · ${relativeTime(peer.lastAt)}`,
     },
     ...(peer.lastFailureReason
       ? [

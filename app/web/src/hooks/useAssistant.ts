@@ -5940,6 +5940,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             ...(msg.failureReason !== undefined
               ? { failureReason: msg.failureReason }
               : {}),
+            ...(msg.interruption !== undefined
+              ? { interruption: msg.interruption }
+              : {}),
           },
         },
       };

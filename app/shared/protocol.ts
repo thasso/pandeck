@@ -2814,6 +2814,16 @@ export type PeerPromptState =
   | "failed";
 
 /**
+ * Why a delivered peer prompt's turn never finished. `stopped` is a Stop the
+ * user or the coordinator asked for — no failure, and a requested reply stays
+ * `awaiting_response`; `restart` is the server going down under the turn;
+ * `failure` is the provider or harness ending it. Present while it still
+ * explains the state (an `interrupted` row, or a stopped request still owed),
+ * never once the request is answered.
+ */
+export type PeerPromptInterruption = "restart" | "failure" | "stopped";
+
+/**
  * A sanitized, in-chat peer-prompt card. Rendered both as the sender's tool
  * result (`direction: "sent"`) and as the recipient's transcript block
  * (`direction: "received"`). Carries no file/task/thread/relay ids, file paths,
@@ -2848,6 +2858,8 @@ export interface PeerPromptCard {
   taskTitle?: string;
   /** Human-readable reason for a failed/interrupted/retrying/cancelled outcome. */
   failureReason?: string;
+  /** Why its turn never finished, while that still explains the state. */
+  interruption?: PeerPromptInterruption;
   state: PeerPromptState;
 }
 
@@ -2863,6 +2875,8 @@ export interface PeerPromptPeerSummary {
   sent: number;
   received: number;
   lastState: PeerPromptState;
+  /** Why the latest one's turn never finished, while that explains its state. */
+  lastInterruption?: PeerPromptInterruption;
   lastAt: number;
   /** The most recent failure's reason, if any message failed. */
   lastFailureReason?: string;
@@ -2893,6 +2907,8 @@ export interface PeerPromptThreadMessage {
   taskTitle?: string;
   /** Human-readable reason for a failed/interrupted/retrying/cancelled outcome. */
   failureReason?: string;
+  /** Why its turn never finished, while that still explains the state. */
+  interruption?: PeerPromptInterruption;
   createdAt: number;
 }
 
@@ -8360,6 +8376,7 @@ export type ServerMessage =
       messageKey: string;
       state: PeerPromptState;
       failureReason?: string;
+      interruption?: PeerPromptInterruption;
     }
   /**
    * Response to `resolveTimelineAnchor`. `anchor` is absent when the target no

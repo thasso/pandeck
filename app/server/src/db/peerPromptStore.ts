@@ -43,8 +43,14 @@ export type PeerPromptStatus =
  * route around it (a fresh session, another model, the user). Both kinds wake
  * a sender that asked for a reply; the notice says which one happened and
  * carries `failureReason`.
+ *
+ * `stopped` — someone ASKED for the abort: the user's Stop or a coordinator's
+ * stand-down. Nothing failed and nobody is woken: the one who stopped it knows.
+ * A row that wanted a reply still owes one — it stays `awaiting_response`
+ * with this kind, since a stopped turn is not an answered request — and every
+ * other stopped row is `interrupted`.
  */
-type PeerPromptInterruptionKind = "restart" | "failure";
+type PeerPromptInterruptionKind = "restart" | "failure" | "stopped";
 
 /** Terminal states that hold no further obligation and may eventually be pruned. */
 const TERMINAL_STATUSES: PeerPromptStatus[] = [
@@ -78,7 +84,12 @@ export interface PeerPromptRecord {
   leaseOwner?: string;
   leaseExpiresAt?: number;
   failureReason?: string;
-  /** Why an `interrupted` row was interrupted; absent on every other status. */
+  /**
+   * Why the delivered turn never finished: on every `interrupted` row, and on
+   * an `awaiting_response` (or later `replied`/`expired`) row whose turn was
+   * `stopped`. Absent on every other row. The peer projections
+   * (`peerPrompt.ts`) show it only while it still matters.
+   */
   interruptionKind?: PeerPromptInterruptionKind;
   /** When the sender was told this turn never finished; absent while it still owes one. */
   senderNotifiedAt?: number;
@@ -544,6 +555,12 @@ type TransitionPatch = Partial<{
   /** Give back the attempt a claim took, for a delivery that never failed. */
   refundAttempt: boolean;
   clearBatchHead: boolean;
+  /**
+   * Compare-and-set on the claim as well as the status: `attempts` as the
+   * claim left it. Every claim bumps it, so a delivery whose claim was
+   * requeued and taken again can no longer move the new claim's row.
+   */
+  expectAttempts: number;
 }>;
 
 /** Compare-and-set transition logic, assuming the caller already holds a transaction. */
@@ -557,6 +574,11 @@ function transitionInTxn(
 ): boolean {
   const current = getRow(id);
   if (!current || !from.includes(current.status)) return false;
+  if (
+    patch.expectAttempts !== undefined &&
+    current.attempts !== patch.expectAttempts
+  )
+    return false;
   const sets: string[] = [
     "status = ?",
     "updated_at_ms = ?",
@@ -611,10 +633,16 @@ function transitionInTxn(
   if (patch.refundAttempt) sets.push("attempts = MAX(attempts - 1, 0)");
   if (patch.clearBatchHead) sets.push("batch_head_id = NULL");
   const placeholders = from.map(() => "?").join(", ");
-  const sql = `UPDATE peer_prompts SET ${sets.join(", ")} WHERE id = ? AND status IN (${placeholders})`;
+  const claimed = patch.expectAttempts !== undefined ? " AND attempts = ?" : "";
+  const sql = `UPDATE peer_prompts SET ${sets.join(", ")} WHERE id = ? AND status IN (${placeholders})${claimed}`;
   const result = db
     .prepare(sql)
-    .run(...(params as never[]), id, ...(from as never[]));
+    .run(
+      ...(params as never[]),
+      id,
+      ...(from as never[]),
+      ...(patch.expectAttempts !== undefined ? [patch.expectAttempts] : []),
+    );
   return result.changes > 0;
 }
 
@@ -735,34 +763,48 @@ function claimBatch(
   }
 }
 
-const releaseToQueue = (id: string, reason?: string, now = Date.now()) =>
+/** Put back a claimed row nothing was appended for. */
+const releaseToQueue = (
+  id: string,
+  claim?: { attempts: number },
+  now = Date.now(),
+) =>
   transition(
     id,
     ["dispatching"],
-    "queued",
-    { leaseOwner: null, leaseExpiresAt: null, failureReason: reason ?? null },
-    now,
-  );
-/**
- * Put back a row a Stop refused at the run door (`automaticTurnHold.ts`). The
- * drain marks a batch admitted before the runtime appends it, so the refusal
- * can find it `admitted` or `acknowledged` although nothing reached the
- * session. It returns to the queue as it was: no lease, no acceptance, no
- * batch, and the claim's attempt refunded, since nothing failed.
- */
-const returnHeldToQueue = (id: string, now = Date.now()) =>
-  transition(
-    id,
-    ["dispatching", "admitted", "acknowledged"],
     "queued",
     {
       leaseOwner: null,
       leaseExpiresAt: null,
       failureReason: null,
-      acceptedAt: null,
-      acknowledgedAt: null,
+      ...(claim ? { expectAttempts: claim.attempts } : {}),
+    },
+    now,
+  );
+/**
+ * Put back a row a Stop refused at the run door (`automaticTurnHold.ts`).
+ * Admission is recorded only as the runtime appends the turn
+ * ({@link recordAdmission}), so a refused row is still `dispatching`: an
+ * admitted one reached the session and is never put back. It returns to the
+ * queue as it was — no lease, no batch, and the claim's attempt refunded,
+ * since nothing failed.
+ */
+const returnHeldToQueue = (
+  id: string,
+  claim?: { attempts: number },
+  now = Date.now(),
+) =>
+  transition(
+    id,
+    ["dispatching"],
+    "queued",
+    {
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      failureReason: null,
       refundAttempt: true,
       clearBatchHead: true,
+      ...(claim ? { expectAttempts: claim.attempts } : {}),
     },
     now,
   );
@@ -787,6 +829,63 @@ const markAdmitted = (id: string, now = Date.now()) =>
   );
 const markAcknowledged = (id: string, now = Date.now()) =>
   transition(id, ["admitted"], "acknowledged", { acknowledgedAt: now }, now);
+
+/**
+ * The runtime appended this claimed batch as ONE turn: record the batch, the
+ * admission and the turn start for every row still held by THIS claim, in one
+ * transaction. Called from inside that append (`onUserEntry`), so admission
+ * is never recorded for a turn that was refused before it reached the log.
+ *
+ * A row whose lease expired before the append and that the sweep put back
+ * (`queued`, same claim) is still this delivery's and is admitted; one a newer
+ * claim took (`attempts` moved on) is not this delivery's to touch. Returns
+ * the ids admitted.
+ */
+function recordAdmission(
+  claims: readonly { id: string; attempts: number }[],
+  headId: string,
+  now = Date.now(),
+): string[] {
+  if (claims.length === 0) return [];
+  return inDbTransaction(() => {
+    const db = getDb();
+    const setBatchHead = db.prepare(
+      "UPDATE peer_prompts SET batch_head_id = ? WHERE id = ?",
+    );
+    const admitted: string[] = [];
+    for (const claim of claims) {
+      if (
+        !transitionInTxn(
+          db,
+          claim.id,
+          ["dispatching", "queued"],
+          "admitted",
+          {
+            acceptedAt: now,
+            leaseOwner: null,
+            leaseExpiresAt: null,
+            failureReason: null,
+            nextAttemptAt: null,
+            expectAttempts: claim.attempts,
+          },
+          now,
+        )
+      )
+        continue;
+      setBatchHead.run(headId, claim.id);
+      transitionInTxn(
+        db,
+        claim.id,
+        ["admitted"],
+        "acknowledged",
+        { acknowledgedAt: now },
+        now,
+      );
+      admitted.push(claim.id);
+    }
+    return admitted;
+  });
+}
 
 /**
  * Record which batch (by its head row's id) each of these rows was durably
@@ -864,22 +963,28 @@ function interruptAsTold(
         told.run(now, id);
   });
 }
-/** Mark retryable with a scheduled due time; `sweepDueRetries` requeues it once due. */
+/**
+ * Mark retryable with a scheduled due time; `sweepDueRetries` requeues it once
+ * due. Only work that never reached the session: an admitted row is never
+ * retried, whatever became of its turn.
+ */
 const markRetryable = (
   id: string,
   reason: string,
   backoffMs: number,
   now = Date.now(),
+  claim?: { attempts: number },
 ) =>
   transition(
     id,
-    ["dispatching", "queued", "admitted", "acknowledged"],
+    ["dispatching", "queued"],
     "retryable_failed",
     {
       failureReason: reason,
       leaseOwner: null,
       leaseExpiresAt: null,
       nextAttemptAt: now + backoffMs,
+      ...(claim ? { expectAttempts: claim.attempts } : {}),
     },
     now,
   );
@@ -893,6 +998,7 @@ function markFailed(
   reason: string,
   now = Date.now(),
   onFailed?: (failed: PeerPromptRecord) => void,
+  claim?: { attempts: number },
 ): PeerPromptRecord | undefined {
   const db = getDb();
   db.exec("BEGIN IMMEDIATE");
@@ -902,7 +1008,12 @@ function markFailed(
       id,
       ["queued", "dispatching", "retryable_failed"],
       "failed",
-      { failureReason: reason, leaseOwner: null, leaseExpiresAt: null },
+      {
+        failureReason: reason,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        ...(claim ? { expectAttempts: claim.attempts } : {}),
+      },
       now,
     );
     const failed = ok ? map(getRow(id)!) : undefined;
@@ -1028,7 +1139,51 @@ function markCompleted(
   );
 }
 
-/** Mark the original request replied and record the reply message id. */
+/**
+ * The admitted turn was STOPPED on purpose — the user's Stop, a coordinator's
+ * stand-down — before it finished. Not a completion, and not a failure: a row
+ * that wanted a reply still owes one (`awaiting_response`, so a later answer
+ * still correlates, an unanswered one still expires on its own deadline, and a
+ * later real failure still routes to it), every other row is `interrupted`.
+ * Both carry `interruptionKind: "stopped"`, which owes the sender no notice,
+ * and no `failureReason`: nothing failed. A row already past its turn
+ * (`replied` by an answer sent before the Stop) is left as it is.
+ */
+function markStopped(
+  id: string,
+  /**
+   * A row never recorded as admitted that the stopped turn may still have
+   * read (a steer the provider could not confirm it dropped): it moves from
+   * `dispatching`, and only while this claim still holds it.
+   */
+  unconfirmedClaim?: { attempts: number },
+  now = Date.now(),
+): PeerPromptRecord | undefined {
+  const row = getRow(id);
+  if (!row) return undefined;
+  const to: PeerPromptStatus =
+    row.response_requested === 1 ? "awaiting_response" : "interrupted";
+  return transition(
+    id,
+    unconfirmedClaim ? ["dispatching"] : ["admitted", "acknowledged"],
+    to,
+    {
+      interruptionKind: "stopped",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      ...(unconfirmedClaim
+        ? { expectAttempts: unconfirmedClaim.attempts }
+        : {}),
+    },
+    now,
+  );
+}
+
+/**
+ * Mark the original request replied and record the reply message id. A
+ * stopped turn's `interruptionKind` stays as history; projections show it
+ * only while the reply is still owed.
+ */
 function markReplied(
   originalId: string,
   replyMessageId: string,
@@ -1078,7 +1233,7 @@ function pendingDeliveryRecipientIds(): string[] {
 }
 
 const OWING_NOTICE_WHERE =
-  "status = 'interrupted' AND interruption_kind IS NOT NULL" +
+  "status = 'interrupted' AND interruption_kind IN ('restart', 'failure')" +
   " AND response_requested = 1 AND sender_notified_at_ms IS NULL";
 
 /**
@@ -1775,6 +1930,8 @@ export const peerPromptStore = {
   markAcknowledged,
   markDeliveryBatch,
   markCompleted,
+  markStopped,
+  recordAdmission,
   markReplied,
   markInterrupted,
   interruptAsTold,

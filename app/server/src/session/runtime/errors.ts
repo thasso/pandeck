@@ -20,10 +20,13 @@ export class SteerWithdrawnError extends SessionBusyError {
   /**
    * @param uncertain The provider never confirmed the message was dropped
    * unread: it may have been read, so handing it back must say so.
+   * @param stopped The turn ended on an abort someone asked for (a Stop, a
+   * stand-down), not on a failure.
    */
   constructor(
     sessionId: string,
     readonly uncertain = false,
+    readonly stopped = false,
   ) {
     super(sessionId);
     this.name = "SteerWithdrawnError";

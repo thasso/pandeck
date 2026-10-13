@@ -76,6 +76,48 @@ describe("PeerPromptCardView", () => {
     expect(container.textContent).not.toContain("Copy message");
   });
 
+  it("reads a deliberate Stop as stopped, not as a failure", () => {
+    const base: PeerPromptCardType = {
+      direction: "sent",
+      messageKey: "stop",
+      senderTitle: "Impl",
+      recipientTitle: "Worker",
+      message: "build it",
+      responseRequested: false,
+      state: "interrupted",
+      interruption: "stopped",
+    };
+    const plain = renderToStaticMarkup(<PeerPromptCardView card={base} />);
+    expect(plain).toContain("Stopped");
+    expect(plain).not.toContain("Interrupted");
+    renderCard(base);
+    expandCard();
+    expect(container.textContent).toContain(
+      "Its turn was stopped before it finished.",
+    );
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+
+    const owed = renderToStaticMarkup(
+      <PeerPromptCardView
+        card={{ ...base, responseRequested: true, state: "awaiting_response" }}
+      />,
+    );
+    expect(owed).toContain("Awaiting response");
+    renderCard({
+      ...base,
+      responseRequested: true,
+      state: "awaiting_response",
+    });
+    // Same card, re-rendered: it stays open.
+    expect(container.textContent).toContain("the reply is still owed");
+
+    // A failure interruption keeps its own mark.
+    const failed = renderToStaticMarkup(
+      <PeerPromptCardView card={{ ...base, interruption: "failure" }} />,
+    );
+    expect(failed).toContain("Interrupted");
+  });
+
   it("renders a received card with sender and no ids", () => {
     const card: PeerPromptCardType = {
       direction: "received",
