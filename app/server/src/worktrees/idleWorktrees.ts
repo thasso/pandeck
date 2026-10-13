@@ -80,7 +80,11 @@ export function idleWorktreeKind(
       changedFiles: status.filesChanged + status.untracked,
     };
   if (status.baseUnresolved) return { kind: "unknown" };
-  if (status.merged || status.ahead === 0) return { kind: "delivered" };
+  // `merged` is the status read's own proof — a successful count of zero sets
+  // it too. Zero ahead WITHOUT it is a count that failed (a missing object, a
+  // timeout), whose default zero says nothing about the branch.
+  if (status.merged) return { kind: "delivered" };
+  if (status.ahead === 0) return { kind: "unknown" };
   return {
     kind: "unmerged",
     ahead: status.ahead,

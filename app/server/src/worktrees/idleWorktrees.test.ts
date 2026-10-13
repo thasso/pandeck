@@ -76,7 +76,11 @@ test("idleWorktreeKind says what retiring would lose, and never calls unknown cl
   assert.deepEqual(idleWorktreeKind(status({ baseUnresolved: true })), {
     kind: "unknown",
   });
-  assert.deepEqual(idleWorktreeKind(status()), { kind: "delivered" });
+  assert.deepEqual(idleWorktreeKind(status({ merged: true })), {
+    kind: "delivered",
+  });
+  // Zero ahead without the read's merged proof is a count that failed.
+  assert.deepEqual(idleWorktreeKind(status()), { kind: "unknown" });
   // Git never read it: not clean, whatever else the status says.
   assert.deepEqual(idleWorktreeKind(status({ head: null, merged: true })), {
     kind: "unknown",
@@ -314,6 +318,55 @@ test("a checkout git cannot read is unknown, through the real status read", asyn
   const idle = await computeIdleWorktrees();
   assert.equal(
     idle.find((item) => item.worktree.id === "broken")?.kind,
+    "unknown",
+  );
+});
+
+test("a branch whose ahead count fails is unknown, through the real status read", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+  const main = join(tmp, "partial-main");
+  mkdirSync(main, { recursive: true });
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      { cwd, encoding: "utf8" },
+    ).trim();
+  git(main, "init", "-b", "main");
+  writeFileSync(join(main, "base.txt"), "base\n");
+  git(main, "add", "-A");
+  git(main, "commit", "-m", "base");
+  const path = join(tmp, "partial-checkout");
+  git(main, "worktree", "add", "-b", "partial", path);
+  writeFileSync(join(path, "one.txt"), "1\n");
+  git(path, "add", "-A");
+  git(path, "commit", "-m", "one");
+  const middle = git(path, "rev-parse", "HEAD");
+  writeFileSync(join(path, "two.txt"), "2\n");
+  git(path, "add", "-A");
+  git(path, "commit", "-m", "two");
+  // The middle commit's object goes missing: `git status` still reads the tip,
+  // while counting main...tip fails on the broken history.
+  rmSync(join(main, ".git", "objects", middle.slice(0, 2), middle.slice(2)));
+  insertWorktree({
+    id: "partial",
+    projectId: "proj",
+    mainRepoRoot: main,
+    path,
+    branch: "partial",
+    baseBranch: "main",
+    baseCommit: git(main, "rev-parse", "main"),
+    status: "active",
+    mergeStateJson: null,
+    branchCleanupOid: null,
+    createdAt: 100,
+    updatedAt: 100,
+    removedAt: null,
+  });
+  const idle = await computeIdleWorktrees();
+  assert.equal(
+    idle.find((item) => item.worktree.id === "partial")?.kind,
     "unknown",
   );
 });

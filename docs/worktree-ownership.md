@@ -119,10 +119,11 @@ never taken in bulk; retiring it one at a time refreshes the base and verifies),
 `unmerged` (commits the base does not contain, and whether they are pushed),
 `uncommitted` (a dirty tree), `missing` (the folder is gone) and `unknown` (git
 could not answer — a status with no HEAD is a read that failed, whatever its
-zero counts say — or the base resolves to nothing — never read as delivered).
-The read runs git status for the candidates only, four at a time, and only while
-the Pull Requests section is on screen (`hooks/useIdleWorktrees.ts`, beside the
-inventory's poll).
+zero counts say — or the base resolves to nothing, or counting the branch
+against it failed: only the status read's own `merged` proof is delivered —
+never read as delivered). The read runs git status for the candidates only, four
+at a time, and only while the Pull Requests section is on screen
+(`hooks/useIdleWorktrees.ts`, beside the inventory's poll).
 
 The read is single-flight and cached for 30 seconds, so every open tab shares
 one computation; any retirement drops the cache and the computation in flight,
