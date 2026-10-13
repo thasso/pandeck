@@ -112,6 +112,25 @@ describe("the AGENT.md content rule", () => {
     );
   });
 
+  test("names the YAML subset would read as numbers or booleans render as strings", () => {
+    const source = formatAgentManifest({
+      name: "123",
+      description: "Numbers.",
+      persona: "developer",
+      model: "opus",
+      denyTools: ["true", "null"],
+      skills: ["true", "123", "castlabs-ui"],
+      body: "Body.",
+    });
+    const parsed = parseAgentManifest(source, "123/AGENT.md");
+    assert.ok(parsed.ok, parsed.ok ? "" : JSON.stringify(parsed.issues));
+    assert.equal(parsed.manifest.name, "123");
+    assert.deepEqual(parsed.manifest.denyTools, ["true", "null"]);
+    assert.deepEqual(parsed.manifest.skills, ["true", "123", "castlabs-ui"]);
+    // Ordinary names stay plain, so ordinary files do not change.
+    assert.match(source, /castlabs-ui\]/);
+  });
+
   test("a description or model holding a line separator renders and reads back", () => {
     const source = formatAgentManifest({
       name: "spaced",

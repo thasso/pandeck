@@ -192,6 +192,29 @@ describe("skill authoring: create", () => {
     assert.equal(scan.entries[0]?.description, description);
   });
 
+  test("a safe name the YAML subset would read as a number or boolean stays a name", async () => {
+    await createSkill(
+      { name: "123", description: "Numbers.", body: "Body." },
+      { ...meta, reason: "Add 123" },
+      library,
+    );
+    assert.match(
+      await readFile(join(root, "123", "SKILL.md"), "utf8"),
+      /^---\nname: "123"\n/,
+    );
+    await renameEntry(
+      { name: "123", newName: "true" },
+      { ...meta, reason: "Rename 123" },
+      library,
+    );
+    const scan = await scanSkillLibrary(root);
+    assert.deepEqual(
+      scan.entries.map((entry) => entry.name),
+      ["true"],
+    );
+    assert.deepEqual(scan.diagnostics, []);
+  });
+
   test("preserves indentation on the first non-blank body line", async () => {
     await createSkill(
       {

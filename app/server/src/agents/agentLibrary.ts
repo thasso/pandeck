@@ -20,6 +20,8 @@ import { AGENTS_LIBRARY_DIR } from "../config.ts";
 import {
   formatManifest,
   parseManifestWith,
+  yamlList,
+  yamlScalar,
   yamlString,
   type ManifestIssue,
 } from "../library/entryManifest.ts";
@@ -240,14 +242,14 @@ export interface AgentDefinitionInput {
  */
 export function formatAgentManifest(input: AgentDefinitionInput): string {
   const lines = [
-    `name: ${input.name}`,
+    `name: ${yamlScalar(input.name)}`,
     `description: ${yamlString(input.description)}`,
     `persona: ${input.persona}`,
     `model: ${yamlString(input.model)}`,
   ];
   if (input.effort !== undefined) lines.push(`effort: ${input.effort}`);
   if (input.denyTools?.length)
-    lines.push("tools:", `  deny: [${input.denyTools.join(", ")}]`);
-  if (input.skills?.length) lines.push(`skills: [${input.skills.join(", ")}]`);
+    lines.push("tools:", `  deny: ${yamlList(input.denyTools)}`);
+  if (input.skills?.length) lines.push(`skills: ${yamlList(input.skills)}`);
   return formatManifest(lines, input.body);
 }

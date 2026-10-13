@@ -238,6 +238,44 @@ export function yamlString(value: string): string {
 }
 
 /**
+ * A string as a frontmatter value: plain when the shared YAML subset reads the
+ * plain form back as exactly this string, quoted (`yamlString`) otherwise. A
+ * safe name such as `123` or `true` would otherwise come back as a number or
+ * a boolean.
+ */
+export function yamlScalar(value: string): string {
+  return readsBackAs(`v: ${value}`, value, (v) => v)
+    ? value
+    : yamlString(value);
+}
+
+/** A list of strings as a frontmatter inline list, each item as `yamlScalar`. */
+export function yamlList(values: readonly string[]): string {
+  return `[${values
+    .map((value) =>
+      readsBackAs(`v: [${value}]`, value, (v) =>
+        Array.isArray(v) ? v[0] : undefined,
+      )
+        ? value
+        : yamlString(value),
+    )
+    .join(", ")}]`;
+}
+
+function readsBackAs(
+  yaml: string,
+  value: string,
+  pick: (parsed: unknown) => unknown,
+): boolean {
+  try {
+    const parsed = parseYamlSubset(yaml, "frontmatter value");
+    return isRecord(parsed) && pick(parsed.v) === value;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Render complete manifest source from frontmatter lines already rendered as
  * YAML (`name: x`, `description: "..."`). The body is normalized to a trailing
  * newline and no leading blank line so repeated tool writes of the same content
@@ -271,7 +309,10 @@ export function withDeclaredName(
   const { yaml } = splitYamlFrontmatter(content, path);
   // Only the root mapping's own `name:` line, which a valid manifest always has
   // at zero indentation — never an indented `name` inside some nested value.
-  const replaced = yaml.replace(/^name:[^\n]*$/m, () => `name: ${name}`);
+  const replaced = yaml.replace(
+    /^name:[^\n]*$/m,
+    () => `name: ${yamlScalar(name)}`,
+  );
   if (replaced === yaml && manifest.name !== name) {
     throw new EntryValidationError(
       `Cannot rewrite the declared name in ${path}: its frontmatter has no plain "name:" line.`,

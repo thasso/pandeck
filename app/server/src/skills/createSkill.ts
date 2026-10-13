@@ -8,6 +8,7 @@ import {
   assertEntryDescription,
   assertSafeEntryName,
   formatManifest,
+  yamlScalar,
   yamlString,
 } from "../library/entryManifest.ts";
 import {
@@ -31,7 +32,7 @@ function formatSkillManifest(manifest: {
 }): string {
   return formatManifest(
     [
-      `name: ${manifest.name}`,
+      `name: ${yamlScalar(manifest.name)}`,
       `description: ${yamlString(manifest.description)}`,
     ],
     manifest.body,
