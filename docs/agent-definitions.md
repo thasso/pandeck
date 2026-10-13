@@ -97,7 +97,8 @@ the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
 
 1. An exact model id from a connected account (`gpt-6-luna`). This pins a
    version. When two providers offer the same id, `provider/id`
-   (`openai-codex/gpt-6-luna`) names one of them.
+   (`openai-codex/gpt-6-luna`, or a pin such as `claude-sdk/claude-opus-5-5`)
+   names one of them.
 2. A Claude family alias: `opus`, `sonnet`, `haiku`, `fable`. With the Claude
    integration enabled these are the Claude SDK's own model ids, so `opus`
    follows the latest Opus; without it, an alias is matched like any short name

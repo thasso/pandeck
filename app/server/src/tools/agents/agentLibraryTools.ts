@@ -148,7 +148,10 @@ async function resolvedModelOf(definition: AgentManifest): Promise<string> {
   const { model } = (await checkAgentRuntime(definition))!;
   const pinned = (model as { pinnedId?: string }).pinnedId;
   return `${model.provider}/${model.id}${
-    pinned && pinned.toLowerCase() === definition.model.toLowerCase()
+    pinned &&
+    [pinned, `${model.provider}/${pinned}`].some(
+      (form) => form.toLowerCase() === definition.model.toLowerCase(),
+    )
       ? ` (${pinned})`
       : ""
   }`;

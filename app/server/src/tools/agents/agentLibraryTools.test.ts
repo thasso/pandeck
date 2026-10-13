@@ -465,6 +465,16 @@ describe("agent tool races and pins", () => {
       skillNames: async () => [],
       toolNames: async () => ["worktree_push"],
     });
+    await call("agent_create", {
+      ...definition,
+      name: "qualified",
+      model: "claude-sdk/claude-opus-5-5",
+    });
+    assert.equal(
+      latestCard().body.kind === "agentDefinition" &&
+        (latestCard().body as { resolvedModel: string }).resolvedModel,
+      "claude-sdk/opus (claude-opus-5-5)",
+    );
     await call("agent_create", { ...definition, model: "claude-opus-5-5" });
     const card = latestCard();
     assert.equal(

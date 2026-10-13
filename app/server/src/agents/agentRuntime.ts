@@ -94,7 +94,8 @@ export function setAgentRuntimeSourcesForTests(
  * `opus` still runs exactly that version, so a pin never silently follows the
  * alias to another one). Otherwise the spec must equal one hyphen-separated
  * token of exactly one id (`sol` → `gpt-6.1-sol`). `provider/id` names one
- * row when two providers offer the same id. Never a guess: none, or
+ * row when two providers offer the same id, pins included
+ * (`claude-sdk/claude-opus-5-5`). Never a guess: none, or
  * more than one, is a refusal that names the candidates.
  */
 export function resolveAgentModel(
@@ -107,7 +108,9 @@ export function resolveAgentModel(
       model.id.toLowerCase() === wanted ||
       // `provider/id` names one row even when two providers offer the id.
       `${model.provider}/${model.id}`.toLowerCase() === wanted ||
-      model.pinnedId?.toLowerCase() === wanted,
+      (model.pinnedId !== undefined &&
+        (model.pinnedId.toLowerCase() === wanted ||
+          `${model.provider}/${model.pinnedId}`.toLowerCase() === wanted)),
   );
   if (exact.length === 1) return exact[0]!;
   const matches =

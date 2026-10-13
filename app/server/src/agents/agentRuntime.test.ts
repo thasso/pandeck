@@ -115,6 +115,38 @@ describe("resolveAgentModel", () => {
     assert.equal(`${resolved.provider}/${resolved.id}`, "openai/gpt-6-luna");
   });
 
+  test("provider/id also names a pin when two providers offer the concrete id", () => {
+    const rows = [
+      { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+      model("anthropic", "claude-opus-5-5"),
+    ];
+    assert.throws(
+      () => resolveAgentModel("claude-opus-5-5", rows),
+      /matches more than one connected model/,
+    );
+    assert.equal(
+      resolveAgentModel("claude-sdk/claude-opus-5-5", rows).provider,
+      "claude-sdk",
+    );
+    assert.equal(
+      resolveAgentModel("anthropic/claude-opus-5-5", rows).provider,
+      "anthropic",
+    );
+    // A row without a pin is never matched as "provider/undefined".
+    assert.throws(
+      () => resolveAgentModel("anthropic/undefined", rows),
+      /No enabled account offers/,
+    );
+    // Once the alias runs another version, the qualified pin is refused too.
+    const moved = [
+      { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-6-0" },
+    ];
+    assert.throws(
+      () => resolveAgentModel("claude-sdk/claude-opus-5-5", moved),
+      /No enabled account offers a model "claude-sdk\/claude-opus-5-5"/,
+    );
+  });
+
   test("an unknown model names what is available, and no accounts says so", () => {
     assert.throws(
       () => resolveAgentModel("gemini", models),
