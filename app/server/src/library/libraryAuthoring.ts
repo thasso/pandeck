@@ -747,6 +747,7 @@ export async function renameEntry(
                     kind,
                     Buffer.byteLength(rewritten, "utf8"),
                     `${newName}/${kind.manifestFile}`,
+                    true,
                   );
 
                   // Everything except the manifest is hard-linked across: the
@@ -2505,7 +2506,7 @@ function assertSourceSize(
   path: string,
 ): void {
   const bytes = Buffer.byteLength(source, "utf8");
-  assertManifestSize(kind, bytes, path);
+  assertManifestSize(kind, bytes, path, true);
   if (bytes > MAX_ENTRY_SOURCE_BYTES) {
     throw new EntryValidationError(
       `${path} would be ${bytes} bytes, above the ${MAX_ENTRY_SOURCE_BYTES}-byte limit for ${withArticle(kind.noun)} manifest. Move detail into supporting files.`,

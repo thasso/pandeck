@@ -12,6 +12,7 @@
  *   pnpm --filter @assistant/server test src/library/libraryKind.test.ts
  */
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import {
   appendFileSync,
   existsSync,
@@ -286,6 +287,45 @@ describe("a non-skill library kind", () => {
       ),
       /above the 512-byte limit for a widget manifest/,
     );
+  });
+
+  test("an edit or a rename that would carry the manifest past the bound is refused", async () => {
+    await createEntry(
+      { name: "gear", source: widgetSource("gear") },
+      meta,
+      library,
+    );
+    await assert.rejects(
+      editEntrySource(
+        {
+          name: "gear",
+          edits: [
+            { oldText: "Widget instructions.", newText: "x".repeat(600) },
+          ],
+        },
+        { ...meta, reason: "Grow gear" },
+        library,
+      ),
+      /would be \d+ bytes, above the 512-byte limit for a widget manifest/,
+    );
+
+    // Just inside the bound with a one-letter name; a long new name tips it.
+    const base = widgetSource("a");
+    const padded = base.replace(
+      "Widget instructions.",
+      "z".repeat(505 - Buffer.byteLength(base, "utf8") + 20),
+    );
+    assert.equal(Buffer.byteLength(padded, "utf8"), 505);
+    await createEntry({ name: "a", source: padded }, meta, library);
+    await assert.rejects(
+      renameEntry(
+        { name: "a", newName: "a-much-longer-widget-name-than-before" },
+        { ...meta, reason: "Rename a" },
+        library,
+      ),
+      /would be \d+ bytes, above the 512-byte limit for a widget manifest/,
+    );
+    assert.ok(existsSync(join(root, "a", "WIDGET.md")));
   });
 
   test("reading the manifest as a file applies the bound to the handle it opens", async () => {

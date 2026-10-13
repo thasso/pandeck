@@ -174,12 +174,14 @@ export function manifestSizeIssue(
   kind: LibraryKind,
   bytes: number,
   path: string,
+  /** The size of source about to be written, rather than of a file on disk. */
+  prospective = false,
 ): ManifestIssue | undefined {
   const limit = kind.maxManifestBytes;
   if (limit === undefined || bytes <= limit) return undefined;
   return {
     code: "manifest-too-large",
-    error: `${path} is ${bytes} bytes, above the ${limit}-byte limit for ${withArticle(kind.noun)} manifest.`,
+    error: `${path} ${prospective ? "would be" : "is"} ${bytes} bytes, above the ${limit}-byte limit for ${withArticle(kind.noun)} manifest.`,
   };
 }
 
@@ -188,8 +190,9 @@ export function assertManifestSize(
   kind: LibraryKind,
   bytes: number,
   path: string,
+  prospective = false,
 ): void {
-  const issue = manifestSizeIssue(kind, bytes, path);
+  const issue = manifestSizeIssue(kind, bytes, path, prospective);
   if (issue) throw new EntryValidationError(issue.error);
 }
 

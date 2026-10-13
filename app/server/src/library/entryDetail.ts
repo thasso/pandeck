@@ -100,6 +100,16 @@ export async function resolveEntryDetail(
             );
           }
 
+          // Refuse an oversized rewrite before reading any of it.
+          if (
+            manifestSizeIssue(library.kind, source.size, summary.path) !==
+            undefined
+          ) {
+            return unavailable(
+              summary,
+              `${summary.path} no longer matches the scan or its ${library.kind.noun} rule; the library changed since it was scanned.`,
+            );
+          }
           const read = await readBounded(source.file);
           try {
             validateReread(library.kind, read, summary, summary.path);
