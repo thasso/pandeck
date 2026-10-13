@@ -15,7 +15,7 @@ import {
   type ThinkingLevel,
 } from "@assistant/shared";
 import { listCredentialProfiles } from "../credentialProfiles.ts";
-import { modelsForAccount } from "../harnesses/models.ts";
+import { modelsForAccount, pinnedModelIdsFor } from "../harnesses/models.ts";
 import { EntryValidationError } from "../library/entryManifest.ts";
 import { scanSkillLibrary, skillLibraryStore } from "../skills/skillLibrary.ts";
 import {
@@ -33,22 +33,32 @@ export interface AgentRuntime {
 
 /** The outside state a runtime check reads; injectable for tests. */
 export interface AgentRuntimeSources {
-  models(): Promise<readonly ModelOption[]>;
+  models(): Promise<readonly AgentModelOption[]>;
   skillNames(): Promise<readonly string[]>;
   toolNames(persona: AgentPersona): Promise<readonly string[]>;
 }
+
+/**
+ * A model as a definition may name it: its id, and for an alias model the
+ * concrete version that alias runs today (`opus` → `claude-opus-5-5`).
+ */
+export type AgentModelOption = ModelOption & { pinnedId?: string };
 
 /** How many candidate ids a resolution failure names. */
 const MAX_LISTED_MODELS = 12;
 
 /** Every model the ENABLED accounts can run now, one row per provider + id. */
-async function connectedModels(): Promise<ModelOption[]> {
-  const byKey = new Map<string, ModelOption>();
+async function connectedModels(): Promise<AgentModelOption[]> {
+  const byKey = new Map<string, AgentModelOption>();
   for (const profile of listCredentialProfiles()) {
     if (!profile.enabled) continue;
     const models = await modelsForAccount(profile).catch(() => []);
-    for (const model of models)
-      byKey.set(`${model.provider}:${model.id}`, model);
+    const pins = pinnedModelIdsFor(profile);
+    for (const model of models) {
+      const key = `${model.provider}:${model.id}`;
+      const pinnedId = pins.get(key);
+      byKey.set(key, pinnedId ? { ...model, pinnedId } : model);
+    }
   }
   return [...byKey.values()];
 }
@@ -79,16 +89,23 @@ export function setAgentRuntimeSourcesForTests(
 
 /**
  * Resolve a definition's `model` to exactly one model a connected account
- * offers. An exact id wins; otherwise the spec must equal one hyphen-separated
+ * offers. An exact id wins — a model's own id, or the concrete version an
+ * alias model runs today (`claude-opus-5-5` resolves to `opus` only while
+ * `opus` still runs exactly that version, so a pin never silently follows the
+ * alias to another one). Otherwise the spec must equal one hyphen-separated
  * token of exactly one id (`sol` → `gpt-6.1-sol`). Never a guess: none, or
  * more than one, is a refusal that names the candidates.
  */
 export function resolveAgentModel(
   spec: string,
-  models: readonly ModelOption[],
+  models: readonly AgentModelOption[],
 ): ModelOption {
   const wanted = spec.toLowerCase();
-  const exact = models.filter((model) => model.id.toLowerCase() === wanted);
+  const exact = models.filter(
+    (model) =>
+      model.id.toLowerCase() === wanted ||
+      model.pinnedId?.toLowerCase() === wanted,
+  );
   if (exact.length === 1) return exact[0]!;
   const matches =
     exact.length > 1
@@ -97,7 +114,7 @@ export function resolveAgentModel(
           model.id.toLowerCase().split("-").includes(wanted),
         );
   if (matches.length === 1) return matches[0]!;
-  const named = (list: readonly ModelOption[]) =>
+  const named = (list: readonly AgentModelOption[]) =>
     list
       .slice(0, MAX_LISTED_MODELS)
       .map((model) => `${model.provider}/${model.id}`)

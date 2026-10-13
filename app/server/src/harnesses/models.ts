@@ -38,6 +38,26 @@ export function pickerModels(
 }
 
 /**
+ * The concrete version each alias model runs TODAY, for the models one account
+ * offers: the Claude SDK's `opus` runs `claude-opus-5-5`. An alias follows new
+ * versions; a concrete id names exactly one, so a caller that honours a pinned
+ * id may accept it only while it is still what its alias runs.
+ */
+export function pinnedModelIdsFor(
+  account: { provider: CredentialProfileProvider },
+  settings: AppSettings = getSettings(),
+): Map<string, string> {
+  if (account.provider !== "claude" || !settings.claudeSdk.enabled)
+    return new Map();
+  return new Map(
+    CLAUDE_SDK_MODELS.map((model) => [
+      `${model.provider}:${model.id}`,
+      model.sdkModelId,
+    ]),
+  );
+}
+
+/**
  * Every model one account can run right now. Rejects when the account's pi
  * registry cannot be read; callers that list for display catch that.
  */

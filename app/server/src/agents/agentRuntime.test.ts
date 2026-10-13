@@ -7,8 +7,9 @@
  *   pnpm --filter @assistant/server test src/agents/agentRuntime.test.ts
  */
 import assert from "node:assert/strict";
-import type { ModelOption } from "@assistant/shared";
+import type { AppSettings, ModelOption } from "@assistant/shared";
 import { describe, test } from "vitest";
+import { pinnedModelIdsFor } from "../harnesses/models.ts";
 import type { AgentManifest } from "./agentLibrary.ts";
 import {
   checkAgentRuntime,
@@ -82,6 +83,25 @@ describe("resolveAgentModel", () => {
     assert.throws(
       () => resolveAgentModel("opus", [...models, model("anthropic", "opus")]),
       /matches more than one connected model/,
+    );
+  });
+
+  test("a concrete Claude id resolves to its alias only while the alias runs exactly it", () => {
+    // The real pin data the models port reports for an enabled Claude account.
+    const pins = pinnedModelIdsFor({ provider: "claude" }, {
+      claudeSdk: { enabled: true },
+    } as AppSettings);
+    assert.ok(pins.size > 0);
+    const live = [...pins].map(([key, pinnedId]) => ({
+      ...model("claude-sdk", key.slice(key.indexOf(":") + 1)),
+      pinnedId,
+    }));
+    for (const row of live)
+      assert.equal(resolveAgentModel(row.pinnedId, live).id, row.id);
+    // A version the alias no longer runs is refused, never moved to the alias.
+    assert.throws(
+      () => resolveAgentModel("claude-opus-1-0", live),
+      /No enabled account offers a model "claude-opus-1-0"/,
     );
   });
 

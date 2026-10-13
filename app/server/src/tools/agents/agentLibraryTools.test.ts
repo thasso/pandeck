@@ -268,9 +268,73 @@ describe("agent_edit", () => {
     assert.equal(card.status, "failed");
     assert.match(
       card.error ?? "",
-      /no longer set exactly the approved model and effort/,
+      /no longer produce exactly the AGENT\.md the card showed/,
     );
     assert.match(readFileSync(manifest(), "utf8"), /effort: medium/);
+  });
+
+  test("approval applies only the exact AGENT.md the card showed", async () => {
+    await createApproved();
+    await call("agent_edit", {
+      name: "test-reviewer",
+      edits: [{ oldText: 'model: "sonnet"', newText: 'model: "opus"' }],
+      reason: "Run on Opus",
+    });
+    const pending = latestCard();
+    // A hand edit to the instructions only: model and effort still match.
+    await writeFile(
+      manifest(),
+      readFileSync(manifest(), "utf8").replace(
+        "You are a test reviewer.",
+        "You are a test reviewer. Be brief.",
+      ),
+    );
+    await git(
+      [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--quiet",
+        "-am",
+        "Hand edit",
+      ],
+      root,
+    );
+    const { card } = await resolveApproval(pending.id, "approved");
+    assert.equal(card.status, "failed");
+    assert.match(card.error ?? "", /the AGENT\.md the card showed/);
+    assert.match(readFileSync(manifest(), "utf8"), /model: "sonnet"/);
+  });
+
+  test("an edit may not change the declared name, so a card cannot address another entry", async () => {
+    await createApproved();
+    await call("agent_create", {
+      ...definition,
+      name: "other",
+      body: "Unrelated.\nname: test-reviewer\n",
+      reason: "Add other",
+    });
+    await resolveApproval(latestCard().id, "approved");
+    const other = readFileSync(join(root, "other", "AGENT.md"), "utf8");
+    const cards = approvalsForSession(sessionId).length;
+    await assert.rejects(
+      tool("agent_edit").execute(
+        {
+          name: "test-reviewer",
+          edits: [
+            { oldText: "name: test-reviewer", newText: "name: other" },
+            { oldText: 'model: "sonnet"', newText: 'model: "opus"' },
+          ],
+          reason: "Retarget",
+        },
+        ctx(),
+      ),
+      /may not change the declared name \("test-reviewer" → "other"\)/,
+    );
+    assert.equal(approvalsForSession(sessionId).length, cards);
+    assert.equal(readFileSync(join(root, "other", "AGENT.md"), "utf8"), other);
   });
 
   test("an edit that breaks the runtime check is refused and changes nothing", async () => {

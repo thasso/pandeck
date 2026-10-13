@@ -92,7 +92,14 @@ async function propose(
   context: AgentCardContext,
 ): Promise<PendingApproval> {
   const runtime = await checkAgentRuntime(after);
-  const resolvedModel = `${runtime!.model.provider}/${runtime!.model.id}`;
+  const { model } = runtime!;
+  const pinned = (model as { pinnedId?: string }).pinnedId;
+  // A pin shows the exact version it holds the alias to.
+  const resolvedModel = `${model.provider}/${model.id}${
+    pinned && pinned.toLowerCase() === after.model.toLowerCase()
+      ? ` (${pinned})`
+      : ""
+  }`;
   const body: AgentDefinitionApprovalBody = {
     kind: "agentDefinition",
     action,
@@ -259,6 +266,12 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         current.path,
       );
       const after = definitionOf(source, input.name);
+      // The name is the entry's identity, and the card names its target by it:
+      // an edit that changed it would make the card address another entry.
+      if (after.name !== before.name)
+        throw new EntryValidationError(
+          `An edit may not change the declared name ("${before.name}" → "${after.name}"). Use agent_rename, which also moves the source folder.`,
+        );
       if (runsOn(before) !== runsOn(after))
         return propose(ctx, "edit", before, after, source, {
           meta,
@@ -305,7 +318,6 @@ registerApprovalExecutor("agentDefinition", {
     const body = card.body;
     const { meta, edits } = context as unknown as AgentCardContext;
     const library = libraryFactory();
-    const approved = { model: body.model.after, effort: body.effort.after };
     if (body.action === "create") {
       const definition = definitionOf(body.source, body.name);
       await checkAgentRuntime(definition);
@@ -325,13 +337,15 @@ registerApprovalExecutor("agentDefinition", {
       meta,
       library,
       {
+        // Approval means exactly what the card showed: the locked result must
+        // be byte-for-byte that AGENT.md, so a hand edit made while the card
+        // waited refuses rather than being carried along.
         check: async (_before, after) => {
-          const now = definitionOf(after, body.name);
-          if (runsOn(now) !== runsOn(approved))
+          if (after !== body.source)
             throw new EntryValidationError(
-              `${manifestPath(body.name)} changed since this was proposed, so the edit would no longer set exactly the approved model and effort. Nothing was written; propose it again.`,
+              `${manifestPath(body.name)} changed since this was proposed, so the edit would no longer produce exactly the AGENT.md the card showed. Nothing was written; propose it again.`,
             );
-          await checkAgentRuntime(now);
+          await checkAgentRuntime(definitionOf(after, body.name));
         },
       },
     );

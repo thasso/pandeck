@@ -95,11 +95,14 @@ the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
 
 `model` takes:
 
-1. An exact model id from a connected account (`claude-opus-5-5`, `gpt-6-luna`).
-   This pins a version.
-2. A Claude family alias: `opus`, `sonnet`, `haiku`, `fable`. These are what
-   `claudeModelAlias` already resolves to and what the Claude SDK accepts, so
-   `opus` follows the latest Opus.
+1. An exact model id from a connected account (`gpt-6-luna`). This pins a
+   version.
+2. A Claude family alias: `opus`, `sonnet`, `haiku`, `fable`. These are the
+   Claude SDK's model ids, so `opus` follows the latest Opus. A concrete Claude
+   id (`claude-opus-5-5`) pins a version: it resolves to its alias only while
+   that alias runs exactly that version (`pinnedModelIdsFor` in
+   `harnesses/models.ts`), and is refused once the alias has moved on, never
+   carried along to a newer one.
 3. A short OpenAI name (`luna`) that matches exactly one model id from the
    connected OpenAI accounts on a whole hyphen-separated token. More than one
    match, or none, is a validation error, never a guess.
@@ -173,13 +176,14 @@ approval card (`docs/approvals.md`):
   executor checks the runtime again and creates the entry.
 - **Edit** is previewed first (`previewEntryEdit`). When the result changes
   `model` or `effort`, it is a card showing before and after, and the executor
-  applies the same edits only if the locked result still carries exactly the
-  approved model and effort, so a hand edit made while the card waited refuses
-  rather than slips through. Any other edit commits directly; inside the locked
-  write it is judged again (`editEntrySource`'s `check`): model and effort must
-  still be unchanged, and the denied tools and skills must still exist. Such an
-  edit does not re-resolve the model, so a definition whose account went away
-  can still have its instructions fixed.
+  applies the same edits only if the locked result is byte-for-byte the
+  `AGENT.md` the card showed, so a hand edit made while the card waited refuses
+  rather than being carried along. An edit may never change the declared name:
+  the card names its target by it. Any other edit commits directly; inside the
+  locked write it is judged again (`editEntrySource`'s `check`): model and
+  effort must still be unchanged, and the denied tools and skills must still
+  exist. Such an edit does not re-resolve the model, so a definition whose
+  account went away can still have its instructions fixed.
 - Rename, delete and supporting files never change what a definition runs on and
   commit directly; `AGENT.md` itself is refused by `agent_manage_files`.
 
