@@ -100,17 +100,19 @@ export async function resolveEntryDetail(
             );
           }
 
-          // Refuse an oversized rewrite before reading any of it.
+          // Refuse an oversized rewrite before reading any of it: one fresh
+          // size, checked here and then read to exactly, so growth after the
+          // open is seen and nothing past the bound is ever read.
+          const { size } = await source.file.stat();
           if (
-            manifestSizeIssue(library.kind, source.size, summary.path) !==
-            undefined
+            manifestSizeIssue(library.kind, size, summary.path) !== undefined
           ) {
             return unavailable(
               summary,
               `${summary.path} no longer matches the scan or its ${library.kind.noun} rule; the library changed since it was scanned.`,
             );
           }
-          const read = await readBounded(source.file);
+          const read = await readBounded(source.file, size);
           try {
             validateReread(library.kind, read, summary, summary.path);
           } catch {
@@ -191,8 +193,10 @@ interface BoundedRead {
  * bytes below its closing fence. The handle is already anchored beneath the
  * directory identity checked by {@link resolveEntryDetail}.
  */
-async function readBounded(handle: FileHandle): Promise<BoundedRead> {
-  const { size } = await handle.stat();
+async function readBounded(
+  handle: FileHandle,
+  size: number,
+): Promise<BoundedRead> {
   let data = Buffer.alloc(0);
   let position = 0;
   let bodyStart: number | undefined;

@@ -391,4 +391,37 @@ describe("a non-skill library kind", () => {
       2000,
     );
   });
+
+  test("delete refuses a manifest that grew past the bound between its scan and its pin", async () => {
+    await createEntry(
+      { name: "gear", source: widgetSource("gear") },
+      meta,
+      library,
+    );
+    const path = join(root, "gear", "WIDGET.md");
+    let armed = false;
+    const growingKind: LibraryKind<WidgetManifest> = {
+      ...widgetKind,
+      parseManifest: (content, at) => {
+        const parsed = widgetKind.parseManifest(content, at);
+        if (armed && at === "gear/WIDGET.md") {
+          armed = false;
+          appendFileSync(path, "x".repeat(600));
+        }
+        return parsed;
+      },
+    };
+    const growing = new LibraryStore(growingKind, root);
+    armed = true;
+    await assert.rejects(
+      deleteEntry(
+        { name: "gear" },
+        { ...meta, reason: "Remove gear" },
+        growing,
+      ),
+      /above the 512-byte limit for a widget manifest/,
+    );
+    assert.equal(armed, false, "the growth happened between scan and pin");
+    assert.ok(existsSync(path), "nothing was deleted");
+  });
 });
