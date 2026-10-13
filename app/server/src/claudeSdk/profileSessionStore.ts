@@ -21,15 +21,15 @@
  * and writes these files whenever the session next runs.
  */
 import {
+  constants,
   existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { open, readdir } from "node:fs/promises";
+import { open, readdir, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { createInterface } from "node:readline";
 import {
   claudeConfigDir,
   DEFAULT_CLAUDE_PROFILE_ID,
@@ -118,13 +118,23 @@ export function claudeProfileSessionStore(profileId: string | undefined) {
   };
 }
 
+/** How far back from a transcript's end a saved `cost-state` is looked for. */
+const COST_STATE_SCAN_MAX_BYTES = 64 * 1024 * 1024;
+const COST_STATE_SCAN_CHUNK_BYTES = 256 * 1024;
+
 /**
- * The last `cost-state` entry `providerSessionId`'s transcript saved, if any.
- * A resumed or forked CLI continues its running totals from it, so the first
- * `result` of that query already carries what the entry holds. The entry is
- * the CLI's own record and its shape is not part of the SDK's types; callers
- * treat it as a hint to verify, never as billing truth. The project key is
- * found by looking, not by re-deriving the CLI's path sanitizing.
+ * The last valid `cost-state` entry `providerSessionId`'s transcript saved, if
+ * any. A resumed or forked CLI continues its running totals from it, so the
+ * first `result` of that query already carries what the entry holds. The
+ * entry is the CLI's own record and its shape is not part of the SDK's types;
+ * callers treat it as a hint to verify, never as billing truth. The project
+ * key is found by looking, not by re-deriving the CLI's path sanitizing.
+ *
+ * Read like the CLI reads it: backwards from the end, where it is appended at
+ * each exit, in bounded chunks and at most {@link COST_STATE_SCAN_MAX_BYTES}.
+ * Only a regular file is read — opened non-blocking and without following a
+ * link, so a FIFO or a link planted under the name can neither hang nor
+ * redirect the turn that is starting.
  */
 export async function lastSavedCostState(
   profileId: string | undefined,
@@ -142,27 +152,82 @@ export async function lastSavedCostState(
   }
   const name = `${providerSessionId}.jsonl`;
   for (const projectKey of keys) {
-    const path = join(projects, projectKey, name);
-    let lines: AsyncIterable<string>;
+    let handle: FileHandle;
     try {
-      lines = createInterface({
-        input: (await open(path)).createReadStream({ encoding: "utf8" }),
-        crlfDelay: Infinity,
-      });
+      handle = await open(
+        join(projects, projectKey, name),
+        constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+      );
     } catch {
       continue;
     }
-    let last: StoreEntry | undefined;
-    for await (const line of lines) {
-      if (!line.includes('"cost-state"')) continue;
-      try {
-        const entry = JSON.parse(line) as StoreEntry;
-        if (entry.type === "cost-state") last = entry;
-      } catch {
-        continue;
-      }
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile()) return undefined;
+      return await scanBackForCostState(handle, stat.size, providerSessionId);
+    } finally {
+      await handle.close();
     }
-    return last;
   }
   return undefined;
+}
+
+async function scanBackForCostState(
+  handle: FileHandle,
+  size: number,
+  providerSessionId: string,
+): Promise<StoreEntry | undefined> {
+  // Lines are cut on newline BYTES and decoded whole, so a chunk boundary
+  // inside a multi-byte character never corrupts the line holding it.
+  let end = size;
+  let partial = Buffer.alloc(0);
+  while (end > 0 && size - end < COST_STATE_SCAN_MAX_BYTES) {
+    const start = Math.max(0, end - COST_STATE_SCAN_CHUNK_BYTES);
+    const chunk = Buffer.alloc(end - start);
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, start);
+    const block = Buffer.concat([chunk.subarray(0, bytesRead), partial]);
+    end = start;
+    let lineEnd = block.length;
+    for (let index = block.length - 1; index >= 0; index -= 1) {
+      if (block[index] !== 0x0a) continue;
+      const entry = costStateLine(
+        block.subarray(index + 1, lineEnd),
+        providerSessionId,
+      );
+      if (entry) return entry;
+      lineEnd = index;
+    }
+    partial = block.subarray(0, lineEnd);
+  }
+  return end === 0 ? costStateLine(partial, providerSessionId) : undefined;
+}
+
+/** A transcript line that is this session's well-formed `cost-state`, if so. */
+function costStateLine(
+  line: Buffer,
+  providerSessionId: string,
+): StoreEntry | undefined {
+  if (!line.includes('"cost-state"')) return undefined;
+  let entry: StoreEntry;
+  try {
+    entry = JSON.parse(line.toString("utf8")) as StoreEntry;
+  } catch {
+    // A torn final line: the CLI may be mid-append.
+    return undefined;
+  }
+  if (entry.type !== "cost-state") return undefined;
+  if (entry.sessionId !== providerSessionId) return undefined;
+  if (!isCount(entry.totalCostUSD)) return undefined;
+  const models = entry.modelUsage;
+  if (!models || typeof models !== "object") return undefined;
+  for (const usage of Object.values(models as Record<string, unknown>)) {
+    if (!usage || typeof usage !== "object") return undefined;
+    for (const value of Object.values(usage as Record<string, unknown>))
+      if (typeof value === "number" && !isCount(value)) return undefined;
+  }
+  return entry;
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }

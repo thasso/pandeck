@@ -651,6 +651,12 @@ export class ClaudeSdkSession implements LiveSession {
    * still waiting, that result is not this turn's.
    */
   private turnPromptWaiting: string | undefined;
+  /**
+   * The epoch whose CLI advertised `msg_lifecycle_v1` on its `init`: it reports
+   * every command it dequeues, so a result before the waiting prompt's start is
+   * provably not that prompt's.
+   */
+  private lifecycleFramesEpochKey: string | undefined;
   /** A Stop's interrupt (or kill) still waiting on the CLI's drop answers. */
   private stopInterrupt: Promise<void> | undefined;
   /** The ordinary epoch a Stop is killing once those answers are in. */
@@ -1477,6 +1483,7 @@ export class ClaudeSdkSession implements LiveSession {
       await this.sendPromptToProcess(
         { ...sdkUserMessage(promptWithFiles, images), uuid },
         frozenSkillNames,
+        () => this.turnCompletion === completion,
       );
       await completion.promise;
     } catch (error) {
@@ -1707,21 +1714,33 @@ export class ClaudeSdkSession implements LiveSession {
     this.onChange();
   }
 
+  /**
+   * Hand the turn's prompt to the CLI. `ownsTurn` answers whether the turn
+   * that sent it is still the open one: a Stop ends the turn at once, and a
+   * new prompt may open the next, while this is still awaiting setup. Checked
+   * after every await, it keeps a stopped prompt from starting a query and a
+   * stale send from taking over the next turn's query and epoch.
+   */
   private async sendPromptToProcess(
     message: ClaudeSdkUserMessage,
     frozenSkillNames: readonly string[],
+    ownsTurn: () => boolean,
   ): Promise<void> {
+    if (!ownsTurn()) return;
     this.cancelQuietClose();
     await this.stopInterruptSent();
+    if (!ownsTurn()) return;
     if (this.activeQuery && this.processClosing && this.queryLoop) {
       const closingLoop = this.queryLoop;
       if (!(await settlesWithin(closingLoop, this.processCloseTimeoutMs))) {
+        if (!ownsTurn()) return;
         this.abortController?.abort();
         if (!(await settlesWithin(closingLoop, this.processCloseTimeoutMs)))
           throw new Error(
             `Claude process did not exit after ${this.processCloseReason ?? "it was closed"}.`,
           );
       }
+      if (!ownsTurn()) return;
     }
     if (this.activeQuery && this.inputQueue) {
       const epochKey = this.queryEpochKey;
@@ -1733,7 +1752,12 @@ export class ClaudeSdkSession implements LiveSession {
     }
 
     const seam = await this.seamFactory();
+    if (!ownsTurn()) return;
     const carried = await this.savedProviderTotals();
+    if (!ownsTurn()) return;
+    // A query opened meanwhile takes the prompt the way it would have above.
+    if (this.activeQuery)
+      return this.sendPromptToProcess(message, frozenSkillNames, ownsTurn);
     if (!this.toolServer) this.toolServer = createClaudeSessionToolServer(this);
     const epochKey = `claude-${randomUUID()}`;
     const queue = new CloseableInputQueue();
@@ -1836,6 +1860,8 @@ export class ClaudeSdkSession implements LiveSession {
     try {
       for await (const message of query) {
         if (this.stoppingEpochKey === epochKey) continue;
+        if (reportsCommandLifecycle(message))
+          this.lifecycleFramesEpochKey = epochKey;
         const lifecycle = commandLifecycle(message);
         if (lifecycle) {
           if (
@@ -1905,7 +1931,7 @@ export class ClaudeSdkSession implements LiveSession {
         // Its running total is billed above; only the turn stays open.
         if (
           this.activeTurnEpochKey === epochKey &&
-          this.answersBeforePrompt(message)
+          this.answersBeforePrompt(message, epochKey)
         )
           continue;
         await this.refreshToolLoadState(query);
@@ -2008,28 +2034,31 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   /**
-   * A clean, model-less `result` that arrived while the open turn's prompt was
-   * still queued: the CLI answering startup notices before it reached the
-   * prompt. Settling the turn on it ends the turn empty and closes the process
-   * before the prompt ever runs. Every condition must hold: a result that
-   * called the model or consumed any message still ends the turn, and a
-   * failure still fails it.
+   * A clean `result` that arrived while the open turn's prompt was still
+   * queued: the CLI answering startup notices (orphaned background tasks of
+   * the previous process) before it reached the prompt. Settling the turn on
+   * it ends the turn and closes the process before the prompt ever runs. A
+   * CLI that reports its dequeues proves the prompt has not started; without
+   * those frames only a result that called no model and consumed nothing is
+   * set aside. A failure still fails the turn.
    */
   private answersBeforePrompt(
     message: Extract<
       import("./sdkSeam.ts").ClaudeSdkMessage,
       { type: "result" }
     >,
+    epochKey: string,
   ): boolean {
     const waiting = this.turnPromptWaiting;
     if (!waiting || !this.running || this.syntheticTurn) return false;
-    const consumed = (message as { user_message_uuids?: unknown })
-      .user_message_uuids;
-    if (Array.isArray(consumed) && consumed.length > 0) {
-      if (consumed.includes(waiting)) this.turnPromptWaiting = undefined;
+    const consumed = consumedMessageUuids(message);
+    if (consumed.includes(waiting)) {
+      this.turnPromptWaiting = undefined;
       return false;
     }
-    return message.num_turns === 0 && !resultProviderError(message);
+    if (resultProviderError(message)) return false;
+    if (this.lifecycleFramesEpochKey === epochKey) return true;
+    return consumed.length === 0 && message.num_turns === 0;
   }
 
   private isProviderTurnContent(
@@ -4014,6 +4043,37 @@ async function* promptIterable(
   text: string,
 ): AsyncIterable<ClaudeSdkUserMessage> {
   yield sdkUserMessage(text, []);
+}
+
+/** Whether a CLI `init` advertises `command_lifecycle` frames. */
+function reportsCommandLifecycle(message: ClaudeSdkMessage): boolean {
+  const init = message as {
+    type?: unknown;
+    subtype?: unknown;
+    capabilities?: unknown;
+  };
+  return (
+    init.type === "system" &&
+    init.subtype === "init" &&
+    Array.isArray(init.capabilities) &&
+    init.capabilities.includes("msg_lifecycle_v1")
+  );
+}
+
+/**
+ * The input messages a `result` reports consumed: the list, or the single
+ * uuid older producers and error results carry instead.
+ */
+function consumedMessageUuids(message: ClaudeSdkMessage): string[] {
+  const m = message as {
+    user_message_uuids?: unknown;
+    user_message_uuid?: unknown;
+  };
+  if (Array.isArray(m.user_message_uuids))
+    return m.user_message_uuids.filter(
+      (uuid): uuid is string => typeof uuid === "string",
+    );
+  return typeof m.user_message_uuid === "string" ? [m.user_message_uuid] : [];
 }
 
 /**

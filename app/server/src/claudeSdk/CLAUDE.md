@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4096 reason="Sixteen bullets, each a distinct silent-failure mode. The newest is the kept canUseTool: org-managed settings silently downgrade bypass to default, and without the callback every pa tool call is denied with no prompt. The append-only timeline: editing a committed entry in place diverges from disk without any error. The steer rule: a queued message the turn did not fold in still runs as the next CLI turn." task=restore-claude-can-use-tool date=2026-10-12 -->
+<!-- instruction-budget: bytes=4096 reason="Sixteen bullets, each a distinct silent-failure mode. The newest: a resumed CLI's startup result ended the turn before its prompt ran, and every resume re-billed the restored cost-state. canUseTool: org-managed settings downgrade bypass and every pa tool call is denied with no prompt. Append-only timeline; steer follow-ups." task=peer-message-trigger date=2026-10-13 -->
 
 # Claude SDK harness
 
@@ -29,8 +29,8 @@
   first report covers it. Summing is always wrong, magnitude never decides,
   zeroed crash reports are ignored. Never `result.usage` (one request);
   `usage.input` excludes `cacheRead` + `cacheWrite`.
-- A clean model-less `result` before the turn's uuid-stamped prompt is dequeued
-  (resume notices) never settles the turn.
+- A clean `result` before the turn's uuid-stamped prompt starts (resume notices)
+  never settles it; without `msg_lifecycle_v1` only a model-less one.
 - A `result` is not proof of success: `is_error`, `api_error_status` or an
   `error*` subtype fails the turn and must reach the reader as its error.
 - A restored session must rehydrate `updatedAt` from the record, or every

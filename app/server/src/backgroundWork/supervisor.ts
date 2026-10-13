@@ -4,6 +4,7 @@ import type {
 } from "@assistant/shared";
 import {
   backgroundWorkStore,
+  BackgroundWorkValidationError,
   type BackgroundWorkItem,
   type BackgroundWorkStopOrigin,
 } from "../db/backgroundWorkStore.ts";
@@ -545,20 +546,28 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         }
       }
     }
+    // The Stops took time: reserve only on the same epoch, and only while it
+    // is still live — one lost or replaced meanwhile has nothing left to close.
     if (
       host &&
       ownerRequested &&
+      backgroundWorkStore.hostForOwner(request.ownerSessionId)?.id ===
+        host.id &&
       results.some(
         (result) =>
           result.state === "stop-unconfirmed" ||
           result.state === "awaiting-binding",
       )
     )
-      backgroundWorkStore.requestHostStopAll({
-        hostId: host.id,
-        reason: request.reason,
-        now: this.clock.now(),
-      });
+      try {
+        backgroundWorkStore.requestHostStopAll({
+          hostId: host.id,
+          reason: request.reason,
+          now: this.clock.now(),
+        });
+      } catch (error) {
+        if (!(error instanceof BackgroundWorkValidationError)) throw error;
+      }
     if (
       host &&
       !ownerRequested &&

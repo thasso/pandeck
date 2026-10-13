@@ -1044,6 +1044,46 @@ test("an owner Stop-all reserves the host close for a Stop it could not confirm"
   });
 });
 
+test("an owner Stop-all whose host was lost meanwhile still answers", async () => {
+  // The Stops take time; a host that died meanwhile is no longer live and has
+  // nothing left to close, so the reservation is skipped, not thrown.
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const ownerSessionId = owner("claude-sdk");
+  const supervisor = supervisorFor(clock, port, {
+    ordinaryTurnActive: () => true,
+  });
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "claude-query",
+    kind: "shell",
+    label: "unbound provider task",
+    sourceRequestId: "owner-lost-host-admit",
+    hostEpochKey: "owner-lost-host-epoch",
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) return;
+  await supervisor.launch(admission);
+  port.stopAllImpl = () => {
+    supervisor.hostLost(ownerSessionId, "owner-lost-host-epoch", "it died");
+    return Promise.resolve({ acknowledgedItemIds: [], unconfirmedItemIds: [] });
+  };
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "owner-lost-host-request",
+    reason: "superseded runs",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["awaiting-binding"],
+  );
+  assert.equal(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+  );
+});
+
 test("completion is durable before delivery is offered", async () => {
   const clock = new FakeClock();
   const port = new FakePort();

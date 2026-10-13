@@ -657,6 +657,8 @@ test("prompt acceptance persists and announces a Claude session before its first
 async function scriptedTurns(
   id: string,
   scales: readonly number[],
+  /** Per run: a resumed CLI's model-less startup result reporting this scale. */
+  startupScales: readonly (number | undefined)[] = [],
 ): Promise<{
   usages: Array<import("@assistant/shared/session").AgentUsage | undefined>;
   session: ClaudeSdkSession;
@@ -688,6 +690,11 @@ async function scriptedTurns(
     query(_params: ClaudeQueryParams) {
       return {
         async *[Symbol.asyncIterator]() {
+          const startup = startupScales[run];
+          if (startup !== undefined)
+            for (const m of scaled(startup))
+              if (m.type === "result")
+                yield { ...m, num_turns: 0, result: "" } as ClaudeSdkMessage;
           for (const m of scaled(scales[run++] ?? 1)) yield m;
         },
       };
@@ -808,6 +815,17 @@ test("a resumed epoch that restored its saved totals bills only the new run", as
     Math.abs(ctx.cost - 0.0246) < 1e-9,
     `the session cost counts each run once (${ctx.cost})`,
   );
+});
+
+test("a startup result carrying the restored totals bills nothing of its own", async () => {
+  // The resumed CLI first answers the orphaned-task notice with the restored
+  // totals alone, then runs the prompt: the turn bills only that run.
+  const { usages, session } = await withSavedCostState(1, () =>
+    scriptedTurns("usage-startup-result", [1, 2], [undefined, 1]),
+  );
+  assert.equal(usages.length, 2, "the startup result ended no turn");
+  assert.equal(usages[1]?.inputTokens, 100, "turn 2 bills only its own run");
+  assert.equal(session.contextInfo().tokenUsage.input, 200);
 });
 
 test("saved totals a resumed report does not cover were not restored", async () => {
