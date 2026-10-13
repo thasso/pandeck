@@ -246,3 +246,14 @@ test("only a regular file under the transcript's name is read, never a link", as
   symlinkSync(target, join(dirname(notAFile), `${linkedSession}.jsonl`));
   assert.equal(await lastSavedCostState(PROFILE, linkedSession), undefined);
 });
+
+test("a cost-state line split across two read chunks is read whole", async () => {
+  const session = randomUUID();
+  // The scan reads 256 KiB chunks from the end: a filler line just under one
+  // chunk puts the chunk boundary inside the cost-state line before it.
+  writeTranscript("-repo", session, [
+    costState(session, 4),
+    JSON.stringify({ type: "user", message: { content: "y".repeat(262_000) } }),
+  ]);
+  assert.equal((await lastSavedCostState(PROFILE, session))?.totalCostUSD, 4);
+});

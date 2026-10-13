@@ -1474,20 +1474,24 @@ export class ClaudeSdkSession implements LiveSession {
     this.abortingTurn = false;
     const completion = deferred<void>();
     this.turnCompletion = completion;
+    // A Stop ends this turn at once and a new prompt may open the next while
+    // setup below still awaits: from then on this one touches no turn state.
+    const ownsTurn = () => this.turnCompletion === completion;
     try {
       const frozenSkillNames = this.frozenSkillNames();
       if (frozenSkillNames.length > 0)
         await this.prepareSkillRuntime(frozenSkillNames);
+      if (!ownsTurn()) return;
       const uuid = randomUUID();
       this.turnPromptWaiting = uuid;
       await this.sendPromptToProcess(
         { ...sdkUserMessage(promptWithFiles, images), uuid },
         frozenSkillNames,
-        () => this.turnCompletion === completion,
+        ownsTurn,
       );
       await completion.promise;
     } catch (error) {
-      if (this.running)
+      if (this.running && ownsTurn())
         this.finishTurn({
           stopReason: this.abortingTurn ? "aborted" : "error",
           ...(this.abortingTurn
@@ -2117,6 +2121,8 @@ export class ClaudeSdkSession implements LiveSession {
   private openProviderTurn(epochKey: string): void {
     this.running = true;
     this.activeTurnEpochKey = epochKey;
+    // No prompt of ours opened this turn, so none can be waiting to start.
+    this.turnPromptWaiting = undefined;
     this.providerTurnInterrupted = false;
     this.turnCounter += 1;
     this.liveTurnId = `csbg-${this.turnCounter}`;

@@ -673,3 +673,100 @@ test("a prompt stopped while its saved totals are read never starts its process"
     internals.savedProviderTotals = original;
   }
 });
+
+test("a prompt stopped while its skills are prepared leaves the next turn's prompt alone", async () => {
+  // The stopped setup must not stamp its own prompt uuid over the next
+  // turn's, or the next turn's own result would no longer count as its end.
+  serial += 1;
+  const id = `claude-steer-${serial}`;
+  sessionStore.upsert({
+    id,
+    scope: "user",
+    harness: "claude-sdk",
+    agentType: "assistant",
+  });
+  const queries: FakeQuery[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      const query = new FakeQuery(params);
+      queries.push(query);
+      return query;
+    },
+  };
+  let preparations = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const session = new ClaudeSdkSession(id, {
+    seam: async () => seam,
+    agentType: "assistant",
+    prepareSkillRuntime: async () => {
+      preparations += 1;
+      if (preparations === 1) await gate;
+    },
+  });
+  (
+    session as unknown as { frozenSkillNames: () => string[] }
+  ).frozenSkillNames = () => ["frozen-skill"];
+  const adapter = session.createRuntimeAdapter();
+
+  const stopped = adapter.prompt("stopped while skills are prepared");
+  await until(() => preparations === 1);
+  session.abort();
+  const next = adapter.prompt("the next prompt");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  const uuid = (query.inputs[0] as { uuid: string }).uuid;
+  query.output.emit({
+    type: "system",
+    subtype: "init",
+    capabilities: ["msg_lifecycle_v1"],
+    uuid: "init-skills",
+    session_id: "provider-steer",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit(started(uuid));
+  release();
+  await stopped;
+  await new Promise((r) => setTimeout(r, 10));
+
+  query.output.emit(result("r1", [uuid]));
+  assert.equal((await next).stopReason, "end");
+  assert.equal(queries.length, 1, "the stopped prompt started no process");
+  assert.equal(query.inputs.length, 1, "only the next prompt reached the CLI");
+  session.dispose();
+});
+
+test("a prompt stopped while its skills are prepared leaves no prompt waiting", async () => {
+  // A uuid left waiting would set aside the result of the next turn that no
+  // prompt of ours opened, such as a background-origin one.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let preparations = 0;
+  serial += 1;
+  const id = `claude-steer-${serial}`;
+  sessionStore.upsert({
+    id,
+    scope: "user",
+    harness: "claude-sdk",
+    agentType: "assistant",
+  });
+  const session = new ClaudeSdkSession(id, {
+    seam: async () => ({ query: (params) => new FakeQuery(params) }),
+    agentType: "assistant",
+    prepareSkillRuntime: async () => {
+      preparations += 1;
+      await gate;
+    },
+  });
+  const internals = session as unknown as {
+    frozenSkillNames: () => string[];
+    turnPromptWaiting: string | undefined;
+  };
+  internals.frozenSkillNames = () => ["frozen-skill"];
+  const stopped = session.createRuntimeAdapter().prompt("stopped");
+  await until(() => preparations === 1);
+  session.abort();
+  release();
+  await stopped;
+  assert.equal(internals.turnPromptWaiting, undefined);
+  session.dispose();
+});

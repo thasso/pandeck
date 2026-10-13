@@ -121,6 +121,8 @@ export function claudeProfileSessionStore(profileId: string | undefined) {
 /** How far back from a transcript's end a saved `cost-state` is looked for. */
 const COST_STATE_SCAN_MAX_BYTES = 64 * 1024 * 1024;
 const COST_STATE_SCAN_CHUNK_BYTES = 256 * 1024;
+/** Far beyond one `cost-state` entry (a few hundred bytes per model). */
+const COST_STATE_LINE_MAX_BYTES = 256 * 1024;
 
 /**
  * The last valid `cost-state` entry `providerSessionId`'s transcript saved, if
@@ -178,28 +180,53 @@ async function scanBackForCostState(
   providerSessionId: string,
 ): Promise<StoreEntry | undefined> {
   // Lines are cut on newline BYTES and decoded whole, so a chunk boundary
-  // inside a multi-byte character never corrupts the line holding it.
+  // inside a multi-byte character never corrupts the line holding it. Each
+  // chunk is searched natively and only once; the line still open to its
+  // left is carried as pieces, and dropped once it outgrows any `cost-state`
+  // entry, so a multi-megabyte tool result costs one pass, not one per chunk.
   let end = size;
-  let partial = Buffer.alloc(0);
+  let open: Buffer[] = [];
+  let openBytes = 0;
+  const carry = (piece: Buffer): void => {
+    if (openBytes > COST_STATE_LINE_MAX_BYTES) return;
+    open.unshift(piece);
+    openBytes += piece.length;
+  };
+  const closeOpenLine = (head: Buffer): StoreEntry | undefined => {
+    const entry =
+      openBytes + head.length > COST_STATE_LINE_MAX_BYTES
+        ? undefined
+        : costStateLine(Buffer.concat([head, ...open]), providerSessionId);
+    open = [];
+    openBytes = 0;
+    return entry;
+  };
   while (end > 0 && size - end < COST_STATE_SCAN_MAX_BYTES) {
     const start = Math.max(0, end - COST_STATE_SCAN_CHUNK_BYTES);
     const chunk = Buffer.alloc(end - start);
     const { bytesRead } = await handle.read(chunk, 0, chunk.length, start);
-    const block = Buffer.concat([chunk.subarray(0, bytesRead), partial]);
+    const block = chunk.subarray(0, bytesRead);
     end = start;
     let lineEnd = block.length;
-    for (let index = block.length - 1; index >= 0; index -= 1) {
-      if (block[index] !== 0x0a) continue;
-      const entry = costStateLine(
-        block.subarray(index + 1, lineEnd),
-        providerSessionId,
-      );
+    let newline = lineEnd > 0 ? block.lastIndexOf(0x0a, lineEnd - 1) : -1;
+    if (newline !== -1) {
+      const entry = closeOpenLine(block.subarray(newline + 1, lineEnd));
       if (entry) return entry;
-      lineEnd = index;
+      lineEnd = newline;
+      newline = lineEnd > 0 ? block.lastIndexOf(0x0a, lineEnd - 1) : -1;
     }
-    partial = block.subarray(0, lineEnd);
+    while (newline !== -1) {
+      const line = block.subarray(newline + 1, lineEnd);
+      if (line.length <= COST_STATE_LINE_MAX_BYTES) {
+        const entry = costStateLine(line, providerSessionId);
+        if (entry) return entry;
+      }
+      lineEnd = newline;
+      newline = lineEnd > 0 ? block.lastIndexOf(0x0a, lineEnd - 1) : -1;
+    }
+    carry(block.subarray(0, lineEnd));
   }
-  return end === 0 ? costStateLine(partial, providerSessionId) : undefined;
+  return end === 0 ? closeOpenLine(Buffer.alloc(0)) : undefined;
 }
 
 /** A transcript line that is this session's well-formed `cost-state`, if so. */
