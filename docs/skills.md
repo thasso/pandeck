@@ -266,7 +266,10 @@ five reads are classified `sideEffects: "none"` and the five mutations
   never creates one, and refuses a file that is not valid UTF-8 rather than
   committing the replacement characters a lossy decode would invent. A leading
   byte-order mark survives: the edited text is re-encoded whole, so a decoder
-  that ate the BOM would change bytes no replacement matched.
+  that ate the BOM would change bytes no replacement matched. A write or edit
+  whose existing target is a hard link to `SKILL.md` is refused before a byte
+  changes: it is the manifest under another name, and rewriting it in place
+  would bypass the manifest rule and survive a rollback of the named path.
 - `skill_rename` — the folder move and the frontmatter name change in one
   commit.
 - `skill_delete` — the whole folder, resolved from the current declared name.

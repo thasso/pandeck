@@ -18,6 +18,7 @@ import {
   existsSync,
   linkSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -43,6 +44,7 @@ import {
   createEntry,
   deleteEntry,
   editEntrySource,
+  manageEntryFiles,
   renameEntry,
   resolveEntrySource,
 } from "./libraryAuthoring.ts";
@@ -423,5 +425,68 @@ describe("a non-skill library kind", () => {
     );
     assert.equal(armed, false, "the growth happened between scan and pin");
     assert.ok(existsSync(path), "nothing was deleted");
+  });
+
+  test("a supporting-file write or edit refuses a hard link to the manifest and leaves it untouched", async () => {
+    await createEntry(
+      { name: "gear", source: widgetSource("gear") },
+      meta,
+      library,
+    );
+    const manifest = join(root, "gear", "WIDGET.md");
+    linkSync(manifest, join(root, "gear", "alias.md"));
+    await git(["add", "gear/alias.md"], root);
+    await git(
+      [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "Link alias",
+      ],
+      root,
+    );
+    const before = readFileSync(manifest, "utf8");
+
+    const operations = [
+      {
+        op: "edit" as const,
+        path: "alias.md",
+        edits: [{ oldText: "Widget instructions.", newText: "x".repeat(600) }],
+      },
+      { op: "write" as const, path: "alias.md", content: "replaced\n" },
+    ];
+    for (const operation of operations) {
+      await assert.rejects(
+        manageEntryFiles(
+          { name: "gear", operations: [operation] },
+          { ...meta, reason: `Change alias (${operation.op})` },
+          library,
+        ),
+        /"alias\.md" is a hard link to WIDGET\.md/,
+      );
+      assert.equal(readFileSync(manifest, "utf8"), before);
+      assert.equal(
+        (await git(["status", "--porcelain"], root)).stdout.trim(),
+        "",
+      );
+    }
+
+    // An ordinary supporting file is still written and edited as before.
+    await manageEntryFiles(
+      {
+        name: "gear",
+        operations: [{ op: "write", path: "notes.md", content: "Notes.\n" }],
+      },
+      { ...meta, reason: "Add notes" },
+      library,
+    );
+    assert.equal(
+      readFileSync(join(root, "gear", "notes.md"), "utf8"),
+      "Notes.\n",
+    );
   });
 });

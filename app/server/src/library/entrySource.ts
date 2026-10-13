@@ -73,12 +73,12 @@ const EXCLUSIVE_FLAGS =
   fsConstants.O_EXCL |
   fsConstants.O_NOFOLLOW |
   fsConstants.O_NONBLOCK;
-const WRITE_FLAGS =
-  fsConstants.O_WRONLY |
-  fsConstants.O_CREAT |
-  fsConstants.O_TRUNC |
-  fsConstants.O_NOFOLLOW |
-  fsConstants.O_NONBLOCK;
+/**
+ * Replacing an EXISTING file: opened without `O_TRUNC`, so the caller can still
+ * look at which inode it got before a single byte of it is gone.
+ */
+const REPLACE_FLAGS =
+  fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
 /**
  * `O_PATH`: a descriptor that refers to an inode WITHOUT opening it for I/O.
  *
@@ -347,6 +347,12 @@ export async function writeEntryChildFile(
    * refused, nothing happened here" and "the bytes are already gone".
    */
   onTruncated?: () => void,
+  /**
+   * Inspect an EXISTING file's identity before it is truncated, and throw to
+   * leave it untouched — the one point where "which inode is this?" can still
+   * stop a replacement.
+   */
+  refuseExisting?: (identity: { dev: number; ino: number }) => void,
 ): Promise<EntryPin | undefined> {
   assertPathComponent(name);
   const created = await open(
@@ -371,15 +377,16 @@ export async function writeEntryChildFile(
   }
   const handle = await openAnchored(
     `${PROC_FD}/${directory.fd}/${name}`,
-    WRITE_FLAGS,
-    0o644,
+    REPLACE_FLAGS,
   );
-  onTruncated?.();
   try {
     const stats = await handle.stat();
     if (!stats.isFile()) {
       throw new IrregularEntrySourceError(`"${name}" is not a regular file`);
     }
+    refuseExisting?.({ dev: stats.dev, ino: stats.ino });
+    onTruncated?.();
+    await handle.truncate(0);
     await handle.writeFile(content);
     return undefined;
   } finally {
