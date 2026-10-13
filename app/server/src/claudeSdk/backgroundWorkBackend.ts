@@ -19,6 +19,8 @@ interface ClaudeBackgroundHostController {
   stopProviderTask(providerTaskId: string): Promise<void>;
   interruptBackgroundTurn(reason: string): Promise<void>;
   close(reason: string): Promise<void>;
+  /** A Stop-all reserved this epoch's close; close now if no turn runs. */
+  stopAllReserved(): void;
 }
 
 interface ItemBinding {
@@ -327,6 +329,15 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
       }),
     );
     return { acknowledgedItemIds, unconfirmedItemIds };
+  }
+
+  hostStopAllReserved(request: {
+    ownerSessionId: string;
+    hostEpochKey: string;
+  }): void {
+    this.hosts
+      .get(key(request.ownerSessionId, request.hostEpochKey))
+      ?.controller.stopAllReserved();
   }
 
   async closeHost(

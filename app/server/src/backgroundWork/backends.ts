@@ -194,6 +194,15 @@ export interface BackgroundWorkBackendPort {
   closeHost?(
     request: BackgroundWorkHostCloseRequest,
   ): Promise<BackgroundWorkHostCloseAck>;
+  /**
+   * An owner's own Stop-all reserved this host epoch's close only after its
+   * Stops ran out of time. The owner's turn may have ended meanwhile, leaving
+   * no turn boundary to close at: the backend closes now if no turn runs.
+   */
+  hostStopAllReserved?(request: {
+    ownerSessionId: string;
+    hostEpochKey: string;
+  }): void;
 }
 
 /**

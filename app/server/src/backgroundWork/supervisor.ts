@@ -565,6 +565,10 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
           reason: request.reason,
           now: this.clock.now(),
         });
+        this.ports.get(host.backend)?.hostStopAllReserved?.({
+          ownerSessionId: request.ownerSessionId,
+          hostEpochKey: host.epochKey,
+        });
       } catch (error) {
         if (!(error instanceof BackgroundWorkValidationError)) throw error;
       }

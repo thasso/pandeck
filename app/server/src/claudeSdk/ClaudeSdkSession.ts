@@ -1797,6 +1797,17 @@ export class ClaudeSdkSession implements LiveSession {
         }
       },
       close: async (reason) => this.closeProcess(reason),
+      stopAllReserved: () => {
+        // A turn still running closes the host at its end (`finishTurn`);
+        // one already over — a Stop while this Stop-all waited on a silent
+        // Stop — left no boundary, so the close happens now.
+        if (!this.running && this.retainedEpochKey === epochKey)
+          void backgroundWorkSupervisor.closeStopAllHost(
+            this.id,
+            epochKey,
+            "background Stop-all reached the provider turn boundary",
+          );
+      },
     });
     let query: ClaudeQuery;
     try {
@@ -2674,9 +2685,14 @@ export class ClaudeSdkSession implements LiveSession {
       const query = this.activeQuery;
       const interrupted = Promise.all([
         withdrawn,
-        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : undefined,
+        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : false,
       ])
-        .then(() => query.interrupt?.())
+        .then(([, dropped]) => {
+          // The CLI never ran this turn's prompt, so it owes no result for
+          // it: armed regardless, the discard would take the next turn's.
+          if (dropped) this.consumeForeignProviderResult();
+          return query.interrupt?.();
+        })
         .then(
           () => undefined,
           () => undefined,
