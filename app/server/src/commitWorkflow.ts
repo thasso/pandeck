@@ -96,6 +96,8 @@ export interface CommitWorkflowOptions {
    * untracked paths stay in the working tree and never enter the review.
    */
   stagedOnly?: boolean;
+  /** One-shot user approval binds both the reviewed changes and the message. */
+  approvedChange?: { fingerprint: string; message: string };
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
 }
@@ -587,6 +589,12 @@ function suspiciousPath(path: string): string | undefined {
   return undefined;
 }
 
+function gitOperationInProgress(gitDir: string): boolean {
+  return ["MERGE_HEAD", "rebase-merge", "rebase-apply"].some((path) =>
+    existsSync(join(gitDir, path)),
+  );
+}
+
 function collectDeterministicFindings(args: {
   status: StatusEntry[];
   diff: string;
@@ -609,10 +617,7 @@ function collectDeterministicFindings(args: {
     });
   }
 
-  const mergePaths = ["MERGE_HEAD", "rebase-merge", "rebase-apply"].map((p) =>
-    join(args.gitDir, p),
-  );
-  if (mergePaths.some((p) => existsSync(p))) {
+  if (gitOperationInProgress(args.gitDir)) {
     blockers.push({
       kind: "unsafe",
       reason: "A merge or rebase appears to be in progress.",
@@ -1303,6 +1308,25 @@ export async function runCommitWorkflow(
       diffStat: diffContext.diffStat,
       fullDiffHash: diffContext.fullDiffHash,
     });
+    if (
+      options.approvedChange &&
+      options.approvedChange.fingerprint !== changeFingerprint
+    ) {
+      const result = baseResult({
+        status: "blocked",
+        repoRoot,
+        headBefore,
+        blockers: [
+          {
+            kind: "unsafe",
+            reason:
+              "The changes no longer match the approved commit. Request a new approval for the current changes.",
+          },
+        ],
+      });
+      appendCustomResult(sessionManager, result);
+      return result;
+    }
     const hasChanges = diffContext.status.trim().length > 0;
     if (!hasChanges) {
       const result = baseResult({
@@ -1345,7 +1369,8 @@ export async function runCommitWorkflow(
     const agent = commitMessageGeneratorForTests
       ? await commitMessageGeneratorForTests(agentPrompt)
       : await generateCommitMessageJson(agentPrompt, getSettings().commitAgent);
-    const commitMessage = formatCommitMessage(agent);
+    const commitMessage =
+      options.approvedChange?.message ?? formatCommitMessage(agent);
     const blockers = [...diffContext.blockers, ...agent.blockers];
     if (agent.status === "block" && agent.blockers.length === 0) {
       blockers.push({
@@ -1359,7 +1384,13 @@ export async function runCommitWorkflow(
       forced &&
       options.forceRefusesSecrets === true &&
       blockers.some((item) => item.kind === "secret");
-    const overridden = forced && !secretVeto;
+    // A review override cannot authorize an unresolved Git operation, including
+    // one that started while the approval was pending. These are deterministic
+    // unsafe findings, unlike the agent's judgement about the code.
+    const gitOperationVeto =
+      Boolean(options.approvedChange) &&
+      diffContext.blockers.some((item) => item.kind === "unsafe");
+    const overridden = forced && !secretVeto && !gitOperationVeto;
 
     if (dryRun) {
       const result = baseResult({
@@ -1431,6 +1462,21 @@ export async function runCommitWorkflow(
           };
         }
 
+        if (options.approvedChange) {
+          const gitDir = await git(
+            ["rev-parse", "--absolute-git-dir"],
+            repoRoot,
+            options.signal,
+          );
+          if (gitOperationInProgress(gitDir.stdout.trim())) {
+            return {
+              blocked: {
+                kind: "unsafe" as const,
+                reason: "A merge or rebase appears to be in progress.",
+              },
+            };
+          }
+        }
         if (!stagedOnly) {
           options.onProgress?.("Staging all changes…");
           await git(["add", "-A"], repoRoot, options.signal);

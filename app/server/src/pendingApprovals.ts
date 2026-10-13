@@ -539,12 +539,15 @@ async function resolveApprovalExclusive(
 
     // Granted once the decision is settled, before execution: the grant is
     // permission for the operation, not a verdict on how this run turns out.
-    if (options.forSession) grantOperations(getRecord(approvalId)!.card);
+    const forSession =
+      options.forSession === true &&
+      approvalGrantKeys(getRecord(approvalId)!.card.body).length > 0;
+    if (forSession) grantOperations(getRecord(approvalId)!.card);
     const executing = patchCard(approvalId, {
       status: "executing",
       decision: "approved",
       error: undefined,
-      ...(options.forSession ? { grantedForSession: true } : {}),
+      ...(forSession ? { grantedForSession: true } : {}),
     });
     emitChange(sessionId); // no longer pending → clears the attention indicator
     if (executing) await broadcast(sessionId, executing.card);

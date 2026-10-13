@@ -51,7 +51,8 @@ const op = (
  * Every operation an approval card in production can ask for that a session
  * grant may cover, in the inspector's order. Tag publishing is absent on
  * purpose: its key names one tag and commit, so it is only ever granted from
- * its card; settings input is never grantable at all.
+ * its card; settings input and commit review overrides are never grantable at
+ * all.
  */
 export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   op(
@@ -230,6 +231,10 @@ export function approvalGrantKeys(body: ApprovalBody): string[] {
     case "settingsInput":
       // Never granted: only the user can type the secret or connect the
       // account, so no earlier decision may answer a later card.
+      break;
+    case "managedCommitOverride":
+      // Never granted: overriding a blocked commit review answers those exact
+      // findings, so no earlier override may answer a later one.
       break;
     default:
       keys.add(body.kind);

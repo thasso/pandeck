@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "vitest";
+import { afterEach, describe, test } from "vitest";
 import type { PullRequestCard } from "@assistant/shared";
 import type { CommitWorkflowResult } from "../../commitWorkflow.ts";
 import type { GitHostingProvider } from "../../gitHosting.ts";
@@ -14,12 +14,20 @@ import {
   assertMatchingManagedPullRequestTitleIntent,
   createWorktreeCommitTool,
   defaultPullRequestOperations,
+  managedCommitOverrideApprovalExecutor,
+  setCommitOverrideApprovalOperationsForTests,
   createWorktreePullRequestTool,
   createWorktreePushTool,
   type WorktreeCommitOperations,
   type WorktreePullRequestOperations,
   type WorktreePushOperations,
 } from "./worktreeDeliveryTools.ts";
+import {
+  createApproval,
+  approvalForId,
+  approvalGrantsForSession,
+  resolveApproval,
+} from "../../pendingApprovals.ts";
 import {
   createPullRequestCard,
   pullRequestCardById,
@@ -106,12 +114,17 @@ function operations(
       options.onProgress?.("Generating commit message…");
       return commitResult();
     },
+    approve: createApproval,
     invalidate: () => {
       calls.invalidated += 1;
     },
     ...overrides,
   };
 }
+
+afterEach(() => {
+  setCommitOverrideApprovalOperationsForTests();
+});
 
 describe("worktree_commit", () => {
   test("projects a rich CommitDisplay and caller context without force", async () => {
@@ -332,7 +345,242 @@ describe("worktree_commit", () => {
     );
   });
 
-  test("schema offers no path, ref, message, subset, or force escape", () => {
+  test("force reviews without committing, proposes one-shot evidence and supersedes old cards", async () => {
+    const opts: unknown[] = [];
+    const ops = operations({
+      runCommit: async (options) => {
+        opts.push(options);
+        return commitResult({
+          status: "blocked",
+          dryRun: true,
+          changeFingerprint: "fingerprint",
+          blockers: [{ kind: "unsafe", reason: "Potential issue in code" }],
+        });
+      },
+    });
+    const tool = createWorktreeCommitTool(ops);
+    const params = {
+      worktreeId: row.id,
+      force: true,
+      reason: "Covered by the regression test",
+      stagedOnly: true,
+    };
+    const first = await tool.execute(params, context());
+    const firstId = (first.details as { approvalId: string }).approvalId;
+    assert.equal(first.terminate, true);
+    assert.equal((opts[0] as { force: boolean }).force, false);
+    assert.equal((opts[0] as { dryRun: boolean }).dryRun, true);
+    const card = approvalForId(firstId)!;
+    assert.equal(card.sourceToolCallId, "call-1");
+    assert.equal(card.autoApproved, undefined);
+    assert.equal(card.body.kind, "managedCommitOverride");
+    if (card.body.kind !== "managedCommitOverride")
+      throw new Error("wrong kind");
+    assert.equal(card.body.reason, params.reason);
+    assert.equal(card.body.stagedOnly, true);
+    assert.deepEqual(card.body.commit.blockers, [
+      { kind: "unsafe", reason: "Potential issue in code" },
+    ]);
+    const second = await tool.execute(params, context());
+    const secondId = (second.details as { approvalId: string }).approvalId;
+    assert.equal(approvalForId(firstId)?.status, "superseded");
+    assert.equal(approvalForId(firstId)?.supersededBy, secondId);
+    assert.equal(opts.length, 2);
+    assert.equal(ops.calls.released, 2);
+  });
+
+  test("force requires a reason and refuses clean, secret and unresolved Git findings", async () => {
+    const invalid = operations();
+    await assert.rejects(
+      createWorktreeCommitTool(invalid).execute(
+        { worktreeId: row.id, force: true },
+        context(),
+      ),
+      /requires a reason/,
+    );
+    await assert.rejects(
+      createWorktreeCommitTool(invalid).execute(
+        { worktreeId: row.id, reason: "why" },
+        context(),
+      ),
+      /only used with force/,
+    );
+    for (const result of [
+      commitResult({ status: "dry-run" }),
+      commitResult({ status: "blocked", files: [] }),
+      commitResult({
+        status: "blocked",
+        changeFingerprint: "fp",
+        blockers: [{ kind: "secret", reason: "credential" }],
+      }),
+      commitResult({
+        status: "blocked",
+        changeFingerprint: "fp",
+        blockers: [
+          {
+            kind: "unsafe",
+            reason: "A merge or rebase appears to be in progress.",
+          },
+        ],
+      }),
+      commitResult({
+        status: "blocked",
+        changeFingerprint: "fp",
+        blockers: [
+          {
+            kind: "unsafe",
+            reason: "Unresolved merge conflict in status line: UU file",
+          },
+        ],
+      }),
+    ]) {
+      let created = false;
+      const ops = operations({
+        runCommit: async () => result,
+        approve: () => {
+          created = true;
+          throw new Error("unexpected approval");
+        },
+      });
+      await assert.rejects(
+        createWorktreeCommitTool(ops).execute(
+          { worktreeId: row.id, force: true, reason: "why" },
+          context(),
+        ),
+      );
+      assert.equal(created, false);
+      assert.equal(ops.calls.released, 1);
+    }
+  });
+
+  test("approval commits only the bound proposal and returns its outcome; rejection never commits", async () => {
+    const propose = operations({
+      runCommit: async () =>
+        commitResult({
+          status: "blocked",
+          dryRun: true,
+          changeFingerprint: "fp",
+          blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+        }),
+    });
+    const ctx = context();
+    ctx.session = { ...ctx.session, sessionId: `override-${Date.now()}` };
+    const request = () =>
+      createWorktreeCommitTool(propose).execute(
+        { worktreeId: row.id, force: true, reason: "Tested", stagedOnly: true },
+        ctx,
+      );
+    const created = await request();
+    const id = (created.details as { approvalId: string }).approvalId;
+    const exec = operations();
+    setCommitOverrideApprovalOperationsForTests(exec);
+    const resolved = await resolveApproval(id, "approved", undefined, {
+      forSession: true,
+    });
+    assert.equal(resolved.card.status, "executed");
+    assert.deepEqual(approvalGrantsForSession(ctx.session.sessionId), []);
+    assert.deepEqual(
+      (exec.calls.options as { approvedChange: unknown }).approvedChange,
+      { fingerprint: "fp", message: "Add checked commit tool" },
+    );
+    assert.equal(
+      (exec.calls.options as { stagedOnly: boolean }).stagedOnly,
+      true,
+    );
+    assert.equal((exec.calls.options as { force: boolean }).force, true);
+    assert.equal(
+      (exec.calls.options as { forceRefusesSecrets: boolean })
+        .forceRefusesSecrets,
+      true,
+    );
+    assert.equal(exec.calls.released, 1);
+    assert.match(resolved.outcomePrompt, /Committed/);
+    assert.equal(resolved.card.grantedForSession, undefined);
+    const rejection = await request();
+    const rejected = await resolveApproval(
+      (rejection.details as { approvalId: string }).approvalId,
+      "rejected",
+    );
+    assert.equal(rejected.card.status, "rejected");
+    assert.equal(
+      exec.calls.released,
+      1,
+      "rejection never invokes the commit executor",
+    );
+    assert.match(rejected.outcomePrompt, /REJECTED/);
+  });
+
+  test("approval refuses busy, removed, moved and branch-mismatched worktrees and workflow blocks", async () => {
+    const proposed = await createWorktreeCommitTool(
+      operations({
+        runCommit: async () =>
+          commitResult({
+            status: "blocked",
+            changeFingerprint: "fp",
+            blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+          }),
+      }),
+    ).execute({ worktreeId: row.id, force: true, reason: "Tested" }, context());
+    const card = approvalForId(
+      (proposed.details as { approvalId: string }).approvalId,
+    )!;
+    for (const overrides of [
+      { reserve: () => undefined },
+      { resolve: async () => undefined },
+      { resolve: async () => ({ ...row, path: "/different/path" }) },
+      { resolve: async () => ({ ...row, branch: "other" }) },
+      { resolve: async () => ({ ...row, status: "removed" as const }) },
+      { checkedOutBranch: async () => "other" },
+      {
+        runCommit: async () =>
+          commitResult({
+            status: "blocked",
+            blockers: [{ kind: "secret", reason: "fresh credential" }],
+          }),
+      },
+      {
+        runCommit: async () => {
+          throw new Error("failed");
+        },
+      },
+    ]) {
+      const ops = operations(overrides);
+      setCommitOverrideApprovalOperationsForTests(ops);
+      await assert.rejects(
+        managedCommitOverrideApprovalExecutor.execute(card, {
+          path: row.path,
+          fingerprint: "fp",
+        }),
+      );
+      assert.equal(ops.calls.released, overrides.reserve ? 0 : 1);
+    }
+  });
+
+  test("cancelled force requests create no approval", async () => {
+    let created = false;
+    const ops = operations({
+      runCommit: async () =>
+        commitResult({
+          status: "blocked",
+          changeFingerprint: "fp",
+          blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+        }),
+      approve: () => {
+        created = true;
+        throw new Error("unexpected approval");
+      },
+    });
+    await assert.rejects(
+      createWorktreeCommitTool(ops).execute(
+        { worktreeId: row.id, force: true, reason: "Tested" },
+        { ...context(), signal: AbortSignal.abort() },
+      ),
+    );
+    assert.equal(created, false);
+    assert.equal(ops.calls.released, 1);
+  });
+
+  test("schema offers approval requests but no path, ref, message or subset escape", () => {
     const properties = (
       createWorktreeCommitTool().parameters as {
         properties: Record<string, unknown>;
@@ -342,6 +590,8 @@ describe("worktree_commit", () => {
       "worktreeId",
       "context",
       "stagedOnly",
+      "force",
+      "reason",
     ]);
     assert.equal(
       (

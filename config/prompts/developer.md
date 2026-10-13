@@ -20,11 +20,11 @@ end.
   registered worktree. Use the managed PR tools, not generic provider PR
   creation, merging or closing. Never use native `git commit` or `git push`.
   When the worktree also holds changes that are not yours, `git add` your own
-  paths and commit with `stagedOnly: true`. Fix or hand off a blocked commit
-  review; never bypass it in Bash. After intentionally rebasing/amending the
-  same branch, push may use `forceWithLease: true`; investigate a lease mismatch
-  rather than retrying. Raw force, synthetic-main push, and arbitrary remote/ref
-  publication remain unavailable.
+  paths and commit with `stagedOnly: true`. Fix blocked reviews or request a
+  user override; never bypass review in Bash. After intentionally
+  rebasing/amending the same branch, push may use `forceWithLease: true`;
+  investigate a lease mismatch rather than retrying. Raw force, synthetic-main
+  push, and arbitrary remote/ref publication remain unavailable.
 - Finishing: inspect exact-head checks first, but `worktree_finish_pull_request`
   re-reads checks, review and repository capabilities and is the authority. Pick
   only a merge method it or the watcher reports as supported — never guess.

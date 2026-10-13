@@ -48,6 +48,52 @@ function fileIcon(file: CommitFileChange) {
   return <FileText className="size-3.5 text-muted-foreground" />;
 }
 
+/**
+ * A commit's files under a "Files" toggle, shared with the approval card that
+ * overrides a blocked commit review.
+ */
+export function CommitFiles({ files }: { files: readonly CommitFileChange[] }) {
+  // A long file list starts folded so the message stays the card's lead.
+  const [open, setOpen] = useState(files.length <= 8);
+  if (files.length === 0) return null;
+  return (
+    <div>
+      {/* Reads as the section label it replaces ("Commit message"
+            above): flush with the content edge, no pill, no open fill. */}
+      <Button
+        variant="ghost"
+        size="xs"
+        className="mb-1 h-auto gap-1 p-0 text-xs font-medium text-muted-foreground hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:text-foreground dark:hover:bg-transparent"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <ChevronDown className={open ? "" : "-rotate-90"} />
+        Files
+      </Button>
+      {open && (
+        <ul className="divide-y rounded-lg border">
+          {files.map((file) => (
+            <li
+              key={file.path}
+              className="flex items-center gap-2 px-2 py-1.5 text-sm"
+            >
+              {fileIcon(file)}
+              <span className="min-w-0 flex-1 truncate font-mono">
+                {file.path}
+              </span>
+              {file.sessionTouched && (
+                <Badge variant="secondary">session</Badge>
+              )}
+              <span className="text-success">+{file.additions ?? 0}</span>
+              <span className="text-destructive">-{file.deletions ?? 0}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function CommitCard({
   commit,
   onAccept,
@@ -58,8 +104,6 @@ export function CommitCard({
   /** Open one of the Tasks this commit addressed. */
   onOpenTask?: ((taskId: string) => void) | undefined;
 }) {
-  // A long file list starts folded so the message stays the card's lead.
-  const [filesOpen, setFilesOpen] = useState(commit.files.length <= 8);
   return (
     <AppCard
       tone={statusTone(commit)}
@@ -129,44 +173,7 @@ export function CommitCard({
         </div>
       )}
 
-      {commit.files.length > 0 && (
-        <div>
-          {/* Reads as the section label it replaces ("Commit message"
-                above): flush with the content edge, no pill, no open fill. */}
-          <Button
-            variant="ghost"
-            size="xs"
-            className="mb-1 h-auto gap-1 p-0 text-xs font-medium text-muted-foreground hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:text-foreground dark:hover:bg-transparent"
-            aria-expanded={filesOpen}
-            onClick={() => setFilesOpen((open) => !open)}
-          >
-            <ChevronDown className={filesOpen ? "" : "-rotate-90"} />
-            Files
-          </Button>
-          {filesOpen && (
-            <ul className="divide-y rounded-lg border">
-              {commit.files.map((file) => (
-                <li
-                  key={file.path}
-                  className="flex items-center gap-2 px-2 py-1.5 text-sm"
-                >
-                  {fileIcon(file)}
-                  <span className="min-w-0 flex-1 truncate font-mono">
-                    {file.path}
-                  </span>
-                  {file.sessionTouched && (
-                    <Badge variant="secondary">session</Badge>
-                  )}
-                  <span className="text-success">+{file.additions ?? 0}</span>
-                  <span className="text-destructive">
-                    -{file.deletions ?? 0}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      <CommitFiles files={commit.files} />
 
       <NoticeList
         variant="destructive"
