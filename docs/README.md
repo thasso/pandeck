@@ -23,6 +23,12 @@ only binding rules; everything else lives here.
   deferred generalizations.
 - `knowledge-base.md` — the Knowledge Base folder: layout, path links, the Git
   rules for tool writes, browser surfaces and the `kb_*` tools.
+- `agent-definitions.md` — proposed: user-authored agents as `AGENT.md` files in
+  a Git-backed library sharing the skills library's core, their frontmatter
+  (persona, model alias, effort, tool deny list, skills), the `agent_*` tools
+  and the approval card for model/effort changes, spawning by name through
+  `session_spawn`, the per-session freeze, and what stays out of scope (account
+  routing).
 - `skills.md` — the user-owned Git-backed skills library, its dual
   hand-authoring/validated-agent-authoring contract (clean-tree refusal, one
   commit per mutation with provenance, rename/delete consequences, limits, and
