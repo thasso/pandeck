@@ -596,4 +596,50 @@ describe("agent tool races and pins", () => {
     assert.equal(armed, false);
     assert.match(readFileSync(manifest(), "utf8"), /model: "sonnet-fans"/);
   });
+
+  test("a hand edit made while the locked check awaits is refused, not overwritten", async () => {
+    await createApproved();
+    let armed = true;
+    setAgentRuntimeSourcesForTests({
+      models: async () => [
+        model("claude-sdk", "opus"),
+        model("claude-sdk", "sonnet"),
+      ],
+      skillNames: async () => [],
+      // Called inside the locked check (the definition denies a tool).
+      toolNames: async () => {
+        if (armed) {
+          armed = false;
+          await writeFile(
+            manifest(),
+            readFileSync(manifest(), "utf8").replace(
+              'model: "sonnet"',
+              'model: "opus"',
+            ),
+          );
+        }
+        return ["worktree_push", "worktree_commit"];
+      },
+    });
+    await assert.rejects(
+      tool("agent_edit").execute(
+        {
+          name: "test-reviewer",
+          edits: [
+            {
+              oldText: "You are a test reviewer.",
+              newText: "You are a careful test reviewer.",
+            },
+          ],
+          reason: "Careful",
+        },
+        ctx(),
+      ),
+      /changed while the edit was being checked/,
+    );
+    assert.equal(armed, false, "the hand edit landed inside the check");
+    const now = readFileSync(manifest(), "utf8");
+    assert.match(now, /model: "opus"/, "the hand edit is kept");
+    assert.doesNotMatch(now, /careful test reviewer/);
+  });
 });

@@ -492,7 +492,21 @@ export async function editEntrySource(
                 );
               }
               assertSourceSize(kind, applied.content, target.path);
-              await options.check?.(current.source, applied.content);
+              if (options.check) {
+                await options.check(current.source, applied.content);
+                // The check awaits; a hand author is not held by the lock, so
+                // what is about to be replaced must still be what was judged.
+                // Nothing has been written yet, so refusing leaves their edit.
+                const { size } = await file.handle.stat();
+                const now = await readManifestHandle(file.handle, size);
+                if (now.truncated || now.source !== current.source) {
+                  throw changedSinceScan(
+                    kind,
+                    target.path,
+                    "changed while the edit was being checked",
+                  );
+                }
+              }
               // From here the manifest's committed bytes are gone, so a later
               // staging or commit failure must be able to restore this path.
               const written = encode(applied.content);
