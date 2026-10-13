@@ -10,6 +10,7 @@ import { basename, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   boundMergeMessage,
+  type SessionPullRequestSummary,
   type WorktreeMergePhase,
   type WorktreeRecord,
 } from "@assistant/shared";
@@ -22,6 +23,8 @@ import {
   type GitResult,
 } from "../gitExec.ts";
 import { errorText } from "../errors.ts";
+import { sessionStore } from "../db/sessionStore.ts";
+import { pullRequestSummaryForWorktree } from "../pullRequestCards.ts";
 import {
   removeManagedTree,
   restoreOwnerAccess,
@@ -38,6 +41,7 @@ import {
 import {
   assertWorktreeCommentsDeletable,
   clearWorktreeBranchCleanup,
+  creatorSessionIdByWorktree,
   finalizeWorktreeRemoval,
   getWorktree,
   insertWorktree,
@@ -46,6 +50,7 @@ import {
   listComments as listWorktreeCommentRows,
   listReviewSets,
   listWorktrees,
+  recordWorktreeCreator,
   sessionIdsForWorktree,
   taskIdsForWorktree,
   type WorktreeRow,
@@ -185,7 +190,14 @@ export interface CreateWorktreeInput {
   /** Where the worktree's branch comes from; absent = a new branch, as before. */
   source?: CreateWorktreeSource;
   taskId?: string;
+  /** A session to link INTO the new worktree (`in_worktree`, replacing its old one). */
   sessionId?: string;
+  /**
+   * The agent session creating it (`worktree_create`), recorded as its
+   * `created_worktree` creator. Linking nothing into the worktree, it is what
+   * keeps a worktree a coordinator made for later work attributable to it.
+   */
+  createdBySessionId?: string;
   /**
    * Called when the network-bound submodule checkout starts, and only when the
    * repository actually has submodules. It is the one step here that can take
@@ -297,6 +309,8 @@ export async function createWorktree(
 
     if (input.taskId) linkTaskToWorktree(input.taskId, row.id);
     if (input.sessionId) linkSessionToWorktree(input.sessionId, row.id);
+    if (input.createdBySessionId)
+      recordWorktreeCreator(input.createdBySessionId, row.id);
     await registerWorktree(row).catch(() => undefined);
 
     // Fire-and-forget: computing the list probes every project's main repo, which
@@ -1505,9 +1519,11 @@ export async function hasUnmergedCommits(
 export async function listWorktreeRecords(
   projectId?: string,
 ): Promise<WorktreeRecord[]> {
+  // One read of the spawn edges for the whole build, not one per row.
+  const parents = sessionStore.spawnedParentByChild();
   const spawned = listWorktrees({
     ...(projectId !== undefined ? { projectId } : {}),
-  }).map((row) => toRecord(row));
+  }).map((row) => toRecord(row, false, parents));
   const projectIds = projectId
     ? [projectId]
     : listProjects().map((project) => project.id);
@@ -1585,7 +1601,18 @@ export async function broadcastWorktreeList(): Promise<void> {
   }
 }
 
-function toRecord(row: WorktreeRow, isMain = false): WorktreeRecord {
+/** One row's record, as a list build would state it. */
+export function worktreeRecordOf(row: WorktreeRow): WorktreeRecord {
+  return toRecord(row);
+}
+
+function toRecord(
+  row: WorktreeRow,
+  isMain = false,
+  parents?: ReadonlyMap<string, string>,
+): WorktreeRecord {
+  const sessionIds = sessionIdsForWorktree(row.id);
+  const creator = isMain ? undefined : creatorSessionIdByWorktree().get(row.id);
   return {
     id: row.id,
     projectId: row.projectId,
@@ -1596,13 +1623,49 @@ function toRecord(row: WorktreeRow, isMain = false): WorktreeRecord {
     baseBranch: row.baseBranch,
     baseCommit: row.baseCommit,
     status: row.status,
-    sessionIds: sessionIdsForWorktree(row.id),
+    sessionIds,
     taskIds: taskIdsForWorktree(row.id),
+    ...(creator ? { createdBySessionId: creator } : {}),
+    ...(isMain
+      ? {}
+      : {
+          treeSessionIds: withCoordinators(
+            [...(creator ? [creator] : []), ...sessionIds],
+            parents ?? sessionStore.spawnedParentByChild(),
+          ),
+        }),
+    ...pullRequestProjection(row.id),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.removedAt !== null ? { removedAt: row.removedAt } : {}),
     ...mergeProjection(row),
   };
+}
+
+/**
+ * The holders and every coordinator above each, walked up the spawn edges; a
+ * cycle (no real spawn makes one) stops. Holders first, in their order.
+ */
+function withCoordinators(
+  holders: readonly string[],
+  parents: ReadonlyMap<string, string>,
+): string[] {
+  const tree = new Set(holders);
+  for (const holder of holders)
+    for (
+      let parent = parents.get(holder);
+      parent !== undefined && !tree.has(parent);
+      parent = parents.get(parent)
+    )
+      tree.add(parent);
+  return [...tree];
+}
+
+function pullRequestProjection(worktreeId: string): {
+  pullRequest?: SessionPullRequestSummary;
+} {
+  const summary = pullRequestSummaryForWorktree(worktreeId);
+  return summary ? { pullRequest: summary } : {};
 }
 
 /**

@@ -9,9 +9,11 @@ import {
   Search,
 } from "lucide-react";
 import type {
+  IdleWorktree,
   ProjectRecord,
   PullRequestInventoryItem,
 } from "@assistant/shared";
+import { IdleWorktreesSection } from "./IdleWorktreesSection.tsx";
 import {
   EmptyBox,
   ErrorNote,
@@ -221,6 +223,22 @@ interface Props {
   selected?: PullRequestTarget | null | undefined;
   onOpen: (target: PullRequestTarget) => void;
   density: RowDensity;
+  /**
+   * The cleanup queue's worktree half (`hooks/useIdleWorktrees.ts`), drawn
+   * under the pull-request groups. Absent on a host that does not offer it.
+   */
+  idle?: IdleWorktreesProps | undefined;
+}
+
+/** What the browser needs to draw and act on idle worktrees. */
+export interface IdleWorktreesProps {
+  state: LoadState<IdleWorktree[]>;
+  /** When the server built that answer; "idle N" and the bulk set count from it. */
+  fetchedAt: number | undefined;
+  onReload: () => void;
+  onOpenWorktree: (id: string) => void;
+  /** A retirement landed: refetch both halves of the queue. */
+  onRetired: () => void;
 }
 
 /**
@@ -247,6 +265,7 @@ export function PullRequestBrowser({
   selected,
   density,
   onOpen,
+  idle,
 }: Props) {
   useShortcuts(PULL_REQUEST_SHORTCUTS);
   const [query, setQuery] = useState("");
@@ -270,10 +289,10 @@ export function PullRequestBrowser({
   );
 
   const items = dataOf(inventory);
-  // The `?? []` is NOT a fallback anyone renders: hooks run above the
-  // `items === undefined` return below, so this view is computed and thrown
-  // away on exactly the frames where an empty list would be a lie. `view.empty`
-  // is only ever read after that guard.
+  // The `?? []` is NOT a fallback anyone renders: this view is computed on
+  // every frame, and on exactly the frames where an empty list would be a lie
+  // (`items === undefined`) only `InventoryPlaceholder` renders, so `view.empty`
+  // is read only by `InventoryRows`, after the inventory answered.
   const view = useMemo(
     () => buildPullRequestInbox(items ?? [], { query, projectLabels }),
     [items, query, projectLabels],
@@ -289,30 +308,110 @@ export function PullRequestBrowser({
     if (next) next.focus({ preventScroll: false });
   }, []);
 
-  // R1/R4: the first load reserves the rows' height rather than claiming there
-  // is nothing here. `items === undefined` is the only state that may do so —
-  // once an answer landed, even a failed refresh keeps rendering it.
-  if (items === undefined) {
-    const error = errorOf(inventory);
-    if (error)
-      return <ErrorNote message={error} onRetry={onReload} className="m-1" />;
-    return (
-      <div
-        role="status"
-        aria-label="Loading pull requests"
-        className="flex flex-col gap-px"
-      >
-        {[0, 1, 2].map((row) => (
-          <Skeleton key={row} className="h-11" />
-        ))}
-      </div>
-    );
-  }
+  // The idle half of the cleanup queue is its own read: an inventory that has
+  // not answered — or failed — must not hide checkouts the idle read found.
+  // Before the inventory answers it covers nothing, so nothing is deduplicated.
+  const idleSection = idle ? (
+    <IdleWorktreesSection
+      idle={idle.state}
+      fetchedAt={idle.fetchedAt}
+      pullRequests={items}
+      projects={projectsById}
+      query={query}
+      density={density}
+      onReload={idle.onReload}
+      onOpenWorktree={idle.onOpenWorktree}
+      onRetired={idle.onRetired}
+    />
+  ) : null;
 
+  // ONE tree whatever the inventory says, with the idle section in a fixed
+  // place after it: an element that moved between two shapes would remount,
+  // and the idle section owns a bulk retirement's dialog — including its
+  // outcome — for as long as the user has not dismissed it.
+  return (
+    <div className="flex flex-col gap-px">
+      <div className="flex flex-col gap-px">
+        {items === undefined ? (
+          <InventoryPlaceholder
+            error={errorOf(inventory)}
+            onReload={onReload}
+          />
+        ) : (
+          <InventoryRows
+            inventory={inventory}
+            view={view}
+            query={query}
+            onQuery={setQuery}
+            onReload={onReload}
+            projectsById={projectsById}
+            selected={selected}
+            density={density}
+            onOpen={onOpen}
+            onFocusSibling={handleFocusSibling}
+          />
+        )}
+      </div>
+      {idleSection}
+    </div>
+  );
+}
+
+/**
+ * The inventory before it answered (R1/R4): reserved rows rather than a claim
+ * that there is nothing here, or the failure. Only `items === undefined` draws
+ * this — once an answer landed, even a failed refresh keeps rendering it.
+ */
+function InventoryPlaceholder({
+  error,
+  onReload,
+}: {
+  error: string | undefined;
+  onReload: () => void;
+}) {
+  if (error)
+    return <ErrorNote message={error} onRetry={onReload} className="m-1" />;
+  return (
+    <div
+      role="status"
+      aria-label="Loading pull requests"
+      className="flex flex-col gap-px"
+    >
+      {[0, 1, 2].map((row) => (
+        <Skeleton key={row} className="h-11" />
+      ))}
+    </div>
+  );
+}
+
+/** The answered inventory: the search box, its state, and the three groups. */
+function InventoryRows({
+  inventory,
+  view,
+  query,
+  onQuery,
+  onReload,
+  projectsById,
+  selected,
+  density,
+  onOpen,
+  onFocusSibling,
+}: {
+  inventory: LoadState<PullRequestInventoryItem[]>;
+  view: ReturnType<typeof buildPullRequestInbox>;
+  query: string;
+  onQuery: (query: string) => void;
+  onReload: () => void;
+  projectsById: ReadonlyMap<string, RowProject>;
+  selected: PullRequestTarget | null | undefined;
+  density: RowDensity;
+  onOpen: (target: PullRequestTarget) => void;
+  onFocusSibling: (delta: 1 | -1) => void;
+}) {
   const needle = query.trim();
   const error = errorOf(inventory);
   return (
-    <div className="flex flex-col gap-px">
+    <>
       <div className="mb-1 flex items-center gap-1 px-0.5">
         <InputGroup className="flex-1">
           <InputGroupAddon>
@@ -321,7 +420,7 @@ export function PullRequestBrowser({
           <InputGroupInput
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => onQuery(event.target.value)}
             placeholder="Search pull requests…"
             aria-label="Search pull requests"
           />
@@ -371,11 +470,11 @@ export function PullRequestBrowser({
               active={isPullRequestTarget(item, selected)}
               density={density}
               onOpen={onOpen}
-              onFocusSibling={handleFocusSibling}
+              onFocusSibling={onFocusSibling}
             />
           ))}
         </section>
       ))}
-    </div>
+    </>
   );
 }

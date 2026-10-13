@@ -607,6 +607,11 @@ list (that is the Project page), in three groups in this order:
    head branch. The checkout is what is left to deal with, and it is what keeps
    a finished pull request visible until it is gone.
 
+Under them, **Idle worktrees** lists the checkouts nobody is working in that no
+pull-request row covers, each saying what retiring it would lose
+(`docs/worktree-ownership.md`). A row opens the worktree; the group's one bulk
+act retires only the ones with nothing unmerged, behind a confirmation.
+
 Within a group the most recently updated is first, an unknown `updatedAt` sorts
 LAST rather than first, and the tie-break is the row's identity — project,
 provider, repository and number — which makes the order total, so a poll that
@@ -808,8 +813,15 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    **Take over** — the ONE way ownership moves, since messaging a peer is a poke
    that leaves its coordinator in charge — and, once taken, **Hand back**,
    naming the coordinator it returns to. The inspector LISTS this relation; the
-   Sessions inbox is what folds it into one card (above). A group may bound its
-   first page (a session's Tasks shows five) and reveal the rest on demand.
+   Sessions inbox is what folds it into one card (above). Beside it, **Worktrees
+   from this session** lists every worktree the session's spawn tree owns by the
+   server's answer (`treeSessionIds`, `docs/worktree-ownership.md`) — created by
+   it or a peer below it, or run in by one of them, archived peers included — as
+   worktree rows, each with its pull request's mark; a tree that owns nothing
+   but the worktree the session runs in, which Details names, draws no group.
+   The panel holds the Worktrees topic whenever it shows a session. A group may
+   bound its first page (a session's Tasks shows five) and reveal the rest on
+   demand.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

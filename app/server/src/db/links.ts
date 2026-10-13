@@ -43,6 +43,9 @@ export type NodeType =
  *  - `link`       task → url (source/related distinction in metadata)
  *  - `in_worktree` session → worktree (the session executes in that worktree),
  *                  and task → worktree (the task is implemented there)
+ *  - `created_worktree` session → worktree (the agent session that created
+ *                  it with `worktree_create`; at most one per worktree, many
+ *                  per session, and never replaced by later relinking)
  */
 export type Relation =
   | "subtask"
@@ -52,7 +55,8 @@ export type Relation =
   | "jira"
   | "github"
   | "link"
-  | "in_worktree";
+  | "in_worktree"
+  | "created_worktree";
 
 const RELATIONS: ReadonlySet<Relation> = new Set([
   "subtask",
@@ -63,6 +67,7 @@ const RELATIONS: ReadonlySet<Relation> = new Set([
   "github",
   "link",
   "in_worktree",
+  "created_worktree",
 ]);
 
 export interface NodeRef {

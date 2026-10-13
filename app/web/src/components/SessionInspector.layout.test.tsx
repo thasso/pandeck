@@ -9,7 +9,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import type { TaskSummary } from "@assistant/shared";
+import type {
+  SessionListItem,
+  TaskSummary,
+  WorktreeRecord,
+} from "@assistant/shared";
 import {
   SessionInspector,
   sessionInspectorActions,
@@ -287,5 +291,87 @@ describe("SessionInspector layout", () => {
       onSetSpawnOwnership: () => {},
     }).map((action) => action.label);
     expect(labels).toEqual([]);
+  });
+});
+
+describe("SessionInspector spawn-tree worktrees", () => {
+  const peer: SessionListItem = {
+    id: "peer",
+    title: "Peer",
+    harness: "pi",
+    agentType: "developer",
+    createdAt: 0,
+    updatedAt: 0,
+    messageCount: 1,
+    spawnedBySessionId: "s1",
+    spawnOwnership: "coordinator",
+  };
+  const handed: WorktreeRecord = {
+    id: "wt-handed",
+    projectId: "p1",
+    mainRepoRoot: "/repo",
+    path: "/repo-handed",
+    branch: "handed-branch",
+    baseBranch: "main",
+    baseCommit: "abc",
+    status: "active",
+    sessionIds: ["peer"],
+    taskIds: [],
+    treeSessionIds: ["peer", "s1"],
+    createdAt: 0,
+    updatedAt: 0,
+  };
+
+  it("reserves the group while the list is unanswered, for a session with a peer", () => {
+    const html = render({ ...base, sessions: [peer], worktrees: null });
+    expect(html).toContain("Worktrees from this session");
+    expect(html).toContain('aria-label="Loading worktrees"');
+    // Without evidence of a tree, nothing is reserved.
+    expect(render({ ...base, worktrees: null })).not.toContain(
+      "Worktrees from this session",
+    );
+  });
+
+  it("states a failed first read with its retry instead of a skeleton", () => {
+    const html = render({
+      ...base,
+      sessions: [peer],
+      worktrees: null,
+      worktreesError: "socket closed",
+      onReloadWorktrees: () => {},
+    });
+    expect(html).toContain("socket closed");
+    expect(html).not.toContain('aria-label="Loading worktrees"');
+  });
+
+  it("marks a refresh over retained rows", () => {
+    const html = render({
+      ...base,
+      sessions: [peer],
+      worktrees: [handed],
+      worktreesFresh: false,
+    });
+    expect(html).toContain("handed-branch");
+    expect(html).toContain("Refreshing worktrees");
+    expect(
+      render({
+        ...base,
+        sessions: [peer],
+        worktrees: [handed],
+        worktreesFresh: true,
+      }),
+    ).not.toContain("Refreshing worktrees");
+  });
+
+  it("keeps retained rows and states a failed refresh beside them", () => {
+    const html = render({
+      ...base,
+      sessions: [peer],
+      worktrees: [handed],
+      worktreesError: "socket closed",
+      onReloadWorktrees: () => {},
+    });
+    expect(html).toContain("handed-branch");
+    expect(html).toContain("socket closed");
   });
 });

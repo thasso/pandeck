@@ -4,6 +4,8 @@ import {
   jsonResult,
   type ToolSession,
 } from "../../mcp/tool.ts";
+import { sessionTreeWorktrees } from "@assistant/shared/sessionTreeWorktrees";
+import { sessionStore } from "../../db/sessionStore.ts";
 import { worktreeIdForSession } from "../../db/worktreeStore.ts";
 import { getSettings } from "../../settings.ts";
 import { readTask } from "../../tasks.ts";
@@ -111,7 +113,7 @@ const worktreeCreate = defineAgentTool<{
   name: "worktree_create",
   label: "Create managed worktree",
   description:
-    "Create and register a managed git worktree, visible in the app and usable as a commit target. The returned path is where to cd; this does not relink the calling session.",
+    "Create and register a managed git worktree, visible in the app and usable as a commit target. The returned path is where to cd; this does not relink the calling session, but records it as the creator, so worktree_status sessionTree keeps listing it.",
   parameters: createSchema as unknown as Record<string, unknown>,
   async execute(params, ctx) {
     const projectId = params.projectId ?? (await callingProjectId(ctx.session));
@@ -135,6 +137,7 @@ const worktreeCreate = defineAgentTool<{
         ? { baseBranch: params.baseBranch }
         : {}),
       ...(params.taskId !== undefined ? { taskId: params.taskId } : {}),
+      createdBySessionId: ctx.session.sessionId,
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
       onSubmodules: () =>
         ctx.progress?.(
@@ -160,6 +163,11 @@ const statusSchema = {
   additionalProperties: false,
   properties: {
     worktreeId: { type: "string", description: "Worktree id for live detail." },
+    sessionTree: {
+      type: "boolean",
+      description:
+        "List only the worktrees your spawn tree owns — this session and every peer it spawned, at any depth — because one of those sessions created the worktree or runs in it, each with its owners and their role and the state of its newest pull-request card. Combines with projectId and limit.",
+    },
     projectId: {
       type: "string",
       description: "Filter a list to one project; omitted lists every project.",
@@ -175,6 +183,7 @@ const statusSchema = {
 
 const worktreeStatus = defineAgentTool<{
   worktreeId?: string;
+  sessionTree?: boolean;
   projectId?: string;
   limit?: number;
 }>({
@@ -183,7 +192,9 @@ const worktreeStatus = defineAgentTool<{
   description:
     "List managed worktrees across projects (without expensive live git scans), or provide worktreeId for detail including live dirty, ahead/behind, merged and upstream status.",
   parameters: statusSchema as unknown as Record<string, unknown>,
-  async execute(params) {
+  async execute(params, ctx) {
+    if (params.worktreeId && params.sessionTree)
+      throw new Error("Use either worktreeId or sessionTree, not both.");
     if (params.worktreeId) {
       const row = await resolveWorktreeRow(params.worktreeId);
       if (!row || row.status !== "active") throw new Error("Unknown worktree.");
@@ -196,6 +207,21 @@ const worktreeStatus = defineAgentTool<{
     }
     const limit = Math.min(Math.max(params.limit ?? 50, 1), 100);
     const records = await listWorktreeRecords(params.projectId);
+    if (params.sessionTree) {
+      const callerId = ctx.session.sessionId;
+      const treeIds = new Set([
+        callerId,
+        ...sessionStore.spawnedDescendantIds(callerId),
+      ]);
+      const owned = sessionTreeWorktrees(treeIds, records);
+      return jsonResult({
+        sessionTree: { rootSessionId: callerId, sessionCount: treeIds.size },
+        worktrees: owned
+          .slice(0, limit)
+          .map(({ worktree, owners }) => ({ ...worktree, owners })),
+        ...(owned.length > limit ? { truncated: true } : {}),
+      });
+    }
     return jsonResult({
       worktrees: records.slice(0, limit),
       ...(records.length > limit ? { truncated: true } : {}),

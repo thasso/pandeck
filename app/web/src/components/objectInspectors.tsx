@@ -49,6 +49,7 @@ import {
   type WorktreeRecord,
   type WorktreeReviewSet,
 } from "@assistant/shared";
+import { ownedBySessionTree } from "@assistant/shared/sessionTreeWorktrees";
 import { useCommentActuation } from "./review/CommentActuation.tsx";
 import type { Task } from "../lib/backlogTree.ts";
 import {
@@ -69,7 +70,13 @@ import {
   PropertyList,
   PropertyText,
 } from "./common/PropertyList.tsx";
-import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+  Spinner,
+} from "./common/load.tsx";
 import {
   dataOf,
   errorOf,
@@ -622,6 +629,87 @@ export function projectRelationGroups(
   ];
 }
 
+/**
+ * The worktrees this session's spawn tree owns (`docs/worktree-ownership.md`),
+ * by the server's membership on each record (`treeSessionIds`) — never by a
+ * walk of this browser's session list, which leaves out the archived peers
+ * retention puts away. A checkout the session shares with its peers is listed
+ * like any other; only when the one worktree the session runs in is ALL its
+ * tree owns is there nothing to add to Details, which already names it.
+ */
+export function sessionTreeWorktreeRecords(
+  sessionId: string | undefined,
+  worktrees: readonly WorktreeRecord[] | null | undefined,
+): WorktreeRecord[] {
+  if (!sessionId || !worktrees) return [];
+  const owned = worktrees.filter((worktree) =>
+    ownedBySessionTree(worktree, sessionId),
+  );
+  const onlyItsOwn =
+    owned.length === 1 && owned[0]!.sessionIds.includes(sessionId);
+  return onlyItsOwn ? [] : owned;
+}
+
+const TREE_WORKTREES_LABEL = "Worktrees from this session";
+
+/**
+ * The tree group's load states (`docs/loading-states.md`). The group is drawn
+ * from the worktree list, so until that list answers it cannot say what the
+ * tree owns: for a session with a peer — a tree there is evidence of — it
+ * RESERVES the group (R1/R4) or states the failure with its retry, instead of
+ * appearing late. A session with no such evidence reserves nothing, so the
+ * ordinary conversation's panel does not flash a placeholder. A refresh, or a
+ * failed one, keeps the retained rows and says so beside them (R2).
+ */
+function withTreeWorktreesLoadState(
+  groups: InspectorRelationGroup[],
+  state: {
+    awaited: boolean;
+    answered: boolean;
+    refreshing: boolean;
+    error: string | null;
+    onRetry?: () => void;
+  },
+): InspectorRelationGroup[] {
+  const note = state.error ? (
+    <ErrorNote message={state.error} onRetry={state.onRetry} />
+  ) : state.refreshing ? (
+    <RefreshIndicator label="Refreshing worktrees" />
+  ) : null;
+  if (!state.answered) {
+    if (!state.awaited) return groups;
+    return [
+      ...groups,
+      {
+        id: "tree-worktrees",
+        label: TREE_WORKTREES_LABEL,
+        icon: <GitBranch size={13} />,
+        items: [],
+        alwaysShown: true,
+        content: note ?? (
+          <div role="status" aria-label="Loading worktrees">
+            <Skeleton className="h-10" />
+          </div>
+        ),
+      },
+    ];
+  }
+  if (!note) return groups;
+  return groups.map((group) =>
+    group.id === "tree-worktrees"
+      ? {
+          ...group,
+          content: (
+            <>
+              {group.content}
+              {note}
+            </>
+          ),
+        }
+      : group,
+  );
+}
+
 /** Task rows the session inspector shows before its "Show more". */
 const SESSION_TASKS_PREVIEW = 5;
 
@@ -644,6 +732,14 @@ export function sessionRelationGroups(args: {
   projects?: ProjectRecord[];
   /** Live git status for the session worktree, when subscribed. */
   worktreeStatus?: WorktreeGitStatus;
+  /**
+   * Every worktree record this browser holds, for the worktrees the session's
+   * spawn tree owns; `null` while the list has not answered, which draws no
+   * group rather than claiming the tree owns none.
+   */
+  worktrees?: readonly WorktreeRecord[] | null;
+  /** Live git status by worktree id, for those rows. */
+  worktreeStatuses?: Record<string, WorktreeGitStatus>;
 }): ObjectRefGroup[] {
   const {
     sessionId,
@@ -653,6 +749,16 @@ export function sessionRelationGroups(args: {
     forkOrigin,
     sessions,
   } = args;
+  const treeWorktrees = sessionTreeWorktreeRecords(
+    sessionId,
+    args.worktrees,
+  ).map((worktree) =>
+    worktreeObjectRef(
+      worktree,
+      args.projects ?? [],
+      args.worktreeStatuses?.[worktree.id],
+    ),
+  );
   const current = sessionId
     ? sessions.find((session) => session.id === sessionId)
     : undefined;
@@ -714,6 +820,15 @@ export function sessionRelationGroups(args: {
           session.spawnOwnership === "taken-over" ? "Taken over" : undefined,
         ),
       ),
+    },
+    {
+      id: "tree-worktrees",
+      label: TREE_WORKTREES_LABEL,
+      icon: <GitBranch size={13} />,
+      ...(treeWorktrees.length > 0
+        ? { summary: `${treeWorktrees.length}` }
+        : {}),
+      refs: treeWorktrees,
     },
     // Two groups, not one "lineage": a group of sessions is drawn with the
     // session rows, which carry no per-row "forked from" / "fork of" note.
@@ -1190,6 +1305,11 @@ export function SessionInspector({
   projects,
   worktree,
   worktreeStatus,
+  worktrees,
+  worktreeStatuses,
+  worktreesError,
+  worktreesFresh,
+  onReloadWorktrees,
   peerPromptPeers,
   stagedRefs = [],
   openers,
@@ -1216,6 +1336,19 @@ export function SessionInspector({
   worktree?: WorktreeRelationSource | undefined;
   /** Live git status for the session worktree, when subscribed. */
   worktreeStatus?: WorktreeGitStatus | undefined;
+  /** Every worktree record held, for the spawn tree's worktrees; `null` = not answered. */
+  worktrees?: readonly WorktreeRecord[] | null | undefined;
+  /** Live git status of the tree's worktrees, which the app watches while shown. */
+  worktreeStatuses?: Record<string, WorktreeGitStatus> | undefined;
+  /** The worktree list's last read failed (`worktreeListError`). */
+  worktreesError?: string | null | undefined;
+  /**
+   * The held list answered in THIS socket episode (`worktreesFresh`); a held
+   * list that has not is being re-read, which the group states (R2).
+   */
+  worktreesFresh?: boolean | undefined;
+  /** Retry that read, from the group's inline failure. */
+  onReloadWorktrees?: (() => void) | undefined;
   /**
    * The peer prompts this session sent and received, summed up per peer over
    * the whole history: facts on that peer's session row (`peerPromptFacts`).
@@ -1252,6 +1385,8 @@ export function SessionInspector({
       projects,
       ...(worktree !== undefined ? { worktree } : {}),
       ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
+      ...(worktrees !== undefined ? { worktrees } : {}),
+      ...(worktreeStatuses !== undefined ? { worktreeStatuses } : {}),
     }),
   ];
   const groups = withPeerPrompts(relationGroups, peerPromptPeers, sessions);
@@ -1284,7 +1419,20 @@ export function SessionInspector({
             />
           ),
         },
-        ...toInspectorGroups(groups, openers, sessions),
+        ...withTreeWorktreesLoadState(
+          toInspectorGroups(groups, openers, sessions),
+          {
+            awaited:
+              sessionId !== undefined &&
+              sessions.some(
+                (session) => session.spawnedBySessionId === sessionId,
+              ),
+            answered: worktrees != null,
+            refreshing: worktrees != null && worktreesFresh === false,
+            error: worktreesError ?? null,
+            ...(onReloadWorktrees ? { onRetry: onReloadWorktrees } : {}),
+          },
+        ),
       ]}
       // The session header's ⋯ holds the session's actions on every layout
       // (`sessionInspectorActions`, published by the header itself), so this

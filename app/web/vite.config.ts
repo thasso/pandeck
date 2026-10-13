@@ -176,6 +176,9 @@ export default defineConfig(({ command }) => {
         "@assistant/shared/zonedTime": fileURLToPath(
           new URL("../shared/zonedTime.ts", import.meta.url),
         ),
+        "@assistant/shared/sessionTreeWorktrees": fileURLToPath(
+          new URL("../shared/sessionTreeWorktrees.ts", import.meta.url),
+        ),
         "@assistant/shared": fileURLToPath(
           new URL("../shared/protocol.ts", import.meta.url),
         ),

@@ -5,6 +5,9 @@
  * edges in the generic {@link ./links.ts} graph:
  *   - `session —in_worktree→ worktree`  the session executes in that worktree
  *   - `task —in_worktree→ worktree`     the task is implemented there
+ *   - `session —created_worktree→ worktree`  the agent session that created
+ *     it; unlike `in_worktree` it survives the creator moving elsewhere, so a
+ *     coordinator that creates several worktrees still owns all of them
  *
  * Pure persistence: git operations, naming, and lifecycle rules live in
  * `../worktrees/`. Rows are soft-removed (`status='removed'`) so worktree and
@@ -171,6 +174,85 @@ export function linkSessionToWorktree(
     { to: worktreeNode(worktreeId) },
   ]);
 }
+
+/**
+ * Record the session that created a worktree. Written once, at creation (and by
+ * the creator backfill for rows that predate it); a worktree already carrying a
+ * creator keeps it.
+ */
+export function recordWorktreeCreator(
+  sessionId: string,
+  worktreeId: string,
+  /** Provenance, e.g. `{ source: "backfill" }`; absent for a live creation. */
+  metadata?: Record<string, unknown>,
+): void {
+  if (creatorSessionIdForWorktree(worktreeId) !== undefined) return;
+  addLink(
+    sessionNode(sessionId),
+    "created_worktree",
+    worktreeNode(worktreeId),
+    metadata ? { metadata } : {},
+  );
+}
+
+/**
+ * The session that created this worktree, when one did. Session deletion is
+ * soft and keeps edges, so this may name an archived or deleted session.
+ */
+export function creatorSessionIdForWorktree(
+  worktreeId: string,
+): string | undefined {
+  return incoming(worktreeNode(worktreeId), "created_worktree").find(
+    (link) => link.fromType === "session",
+  )?.fromId;
+}
+
+/** Whether the one-time creator backfill has completed in this data directory. */
+export function worktreeCreatorBackfillDone(): boolean {
+  return (
+    getDb()
+      .prepare("SELECT 1 FROM worktree_creator_backfill WHERE id = 1")
+      .get() !== undefined
+  );
+}
+
+/** Mark the creator backfill complete, keeping what it found. */
+export function recordWorktreeCreatorBackfill(
+  summary: unknown,
+  at = Date.now(),
+): void {
+  getDb()
+    .prepare(
+      "INSERT OR REPLACE INTO worktree_creator_backfill (id, completed_at_ms, summary_json) VALUES (1, ?, ?)",
+    )
+    .run(at, JSON.stringify(summary));
+}
+
+/**
+ * Every worktree's creator in one indexed scan, for a list build — the per-row
+ * lookup is the session list's old mistake (`outgoingByType`). Rebuilt only
+ * after a session edge changes ({@link memoizedOnLinks}); the earliest edge
+ * wins, as in {@link creatorSessionIdForWorktree}.
+ */
+export const creatorSessionIdByWorktree: () => ReadonlyMap<string, string> =
+  memoizedOnLinks("session", () => {
+    const earliest = new Map<string, { sessionId: string; at: number }>();
+    for (const [sessionId, links] of outgoingByType(
+      "session",
+      "created_worktree",
+    ))
+      for (const link of links) {
+        const current = earliest.get(link.toId);
+        if (!current || link.createdAt < current.at)
+          earliest.set(link.toId, { sessionId, at: link.createdAt });
+      }
+    return new Map(
+      [...earliest].map(([worktreeId, { sessionId }]) => [
+        worktreeId,
+        sessionId,
+      ]),
+    );
+  });
 
 export function linkTaskToWorktree(taskId: string, worktreeId: string): void {
   addLink(taskNode(taskId), "in_worktree", worktreeNode(worktreeId));

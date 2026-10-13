@@ -4519,6 +4519,28 @@ export interface WorktreeRecord {
   sessionIds: string[];
   /** Tasks implemented in this worktree (via `in_worktree` edges). */
   taskIds: string[];
+  /**
+   * The agent session that created this worktree with `worktree_create` (its
+   * `created_worktree` edge). Absent for a worktree a person, a first send or a
+   * Workflow Run created. It may name a session since archived or deleted.
+   */
+  createdBySessionId?: string;
+  /**
+   * Every session whose spawn TREE owns this worktree: its creator, the
+   * sessions running in it, and every coordinator above any of them along
+   * `spawned` edges — archived, settled and deleted ones included. A session's
+   * tree owns the worktree exactly when it is listed here, so the server is the
+   * one authority on tree membership (`docs/worktree-ownership.md`). Absent on
+   * the synthetic main record.
+   */
+  treeSessionIds?: string[];
+  /**
+   * The live `/pr` card that speaks for this worktree, by the session row's
+   * rule: the newest card still moving, else the newest terminal one, from
+   * whichever session created it. Absent when no card names this worktree —
+   * which says nothing about pull requests opened some other way.
+   */
+  pullRequest?: SessionPullRequestSummary;
   createdAt: number;
   updatedAt: number;
   removedAt?: number;
@@ -4683,6 +4705,12 @@ export interface WorktreeRetireRequest {
   deleteBranch?: boolean;
   /** Discard git work after an explicit lost-work confirmation. */
   force?: boolean;
+  /**
+   * Refuse unless the worktree is still idle — no live holder, no moving pull
+   * request, no merge, no open Workflow Run — re-checked under the removal
+   * hold. The cleanup queue's bulk act sends it: its rows are a snapshot.
+   */
+  requireIdle?: boolean;
 }
 
 /** The direct result of the confirmed retire flow. */
@@ -5373,6 +5401,47 @@ export interface PullRequestViewCheckoutResponse {
 export interface WorktreeHostingListResponse {
   statuses: WorktreeHostingStatusResponse[];
   /** When this projection was built, for staleness display. */
+  fetchedAt: number;
+}
+
+/**
+ * What is left in an idle worktree, by its live git state
+ * (`docs/worktree-ownership.md`):
+ * - `delivered` — clean, and every commit is in the LOCAL base branch (or there
+ *   are none): no COMMIT is lost by retiring it, which the retire path still
+ *   verifies against the refreshed base. Files git ignores (`.env`, local
+ *   databases, caches) are removed with the checkout all the same. A merged
+ *   pull request alone never makes a branch delivered.
+ * - `unmerged` — clean, with commits the base branch does not contain.
+ * - `uncommitted` — the working tree has changes nobody committed.
+ * - `missing` — the checkout's folder is gone.
+ * - `unknown` — git could not answer, or the base branch resolves to nothing;
+ *   never read as delivered.
+ */
+export type IdleWorktreeKind =
+  "delivered" | "unmerged" | "uncommitted" | "missing" | "unknown";
+
+/**
+ * A spawned worktree nobody is working in: no session that holds it — its
+ * creator, the sessions running in it, and every coordinator above them — is
+ * live, no pull-request card for it is still moving, and no merge is in flight.
+ */
+export interface IdleWorktree {
+  worktree: WorktreeRecord;
+  kind: IdleWorktreeKind;
+  /** The latest activity of the worktree row or any session holding it. */
+  lastActivityAt: number;
+  /** Commits not in the base branch (`unmerged`). */
+  ahead?: number;
+  /** Whether those commits are on the branch's upstream (`unmerged`). */
+  pushed?: boolean;
+  /** Changed plus untracked files (`uncommitted`). */
+  changedFiles?: number;
+}
+
+/** GET /api/worktrees/idle — the worktree half of the cleanup queue. */
+export interface IdleWorktreesResponse {
+  worktrees: IdleWorktree[];
   fetchedAt: number;
 }
 

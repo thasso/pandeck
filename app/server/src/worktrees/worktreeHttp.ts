@@ -10,6 +10,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import type {
+  IdleWorktreesResponse,
   WorktreeAutoCommitRequest,
   WorktreeCommitRequest,
   WorktreeCreatePrRequest,
@@ -22,6 +23,7 @@ import type {
 import { errorText } from "../errors.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import { listWorktreeRows } from "./worktrees.ts";
+import { idleWorktrees } from "./idleWorktrees.ts";
 import { resolveReadableWorktreeRow } from "./knowledgeCheckout.ts";
 import { computeWorktreeStatus } from "./worktreeStatus.ts";
 import {
@@ -137,6 +139,24 @@ export async function handleWorktreeApi(
     return;
   }
 
+  // The worktree half of the cleanup queue: checkouts nobody is working in,
+  // with what retiring each would lose. Read-only; retiring stays per id.
+  if (url.pathname === "/api/worktrees/idle") {
+    if (req.method !== "GET") {
+      respond(405, { error: "Method not allowed" });
+      return;
+    }
+    try {
+      respond(200, {
+        worktrees: await idleWorktrees(),
+        fetchedAt: Date.now(),
+      } satisfies IdleWorktreesResponse);
+    } catch (err) {
+      respond(500, { error: errorText(err) });
+    }
+    return;
+  }
+
   // The id may be a spawned worktree uuid or a synthetic `main:<projectId>`
   // (percent-encoded by the client); decode then resolve through the seam.
   const match = url.pathname.match(
@@ -227,7 +247,9 @@ export async function handleWorktreeApi(
       if (
         (body.deleteBranch !== undefined &&
           typeof body.deleteBranch !== "boolean") ||
-        (body.force !== undefined && typeof body.force !== "boolean")
+        (body.force !== undefined && typeof body.force !== "boolean") ||
+        (body.requireIdle !== undefined &&
+          typeof body.requireIdle !== "boolean")
       ) {
         respond(400, {
           error: "Invalid retire options: expected boolean values.",
@@ -239,6 +261,7 @@ export async function handleWorktreeApi(
         await retireWorktree(row.id, {
           deleteBranch: body.deleteBranch !== false,
           force: body.force === true,
+          requireIdle: body.requireIdle === true,
         }),
       );
       return;

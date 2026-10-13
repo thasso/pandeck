@@ -2119,6 +2119,18 @@ server.listen(PORT, HOST, () => {
         errorText(err),
       ),
     );
+  // One-time: name the creating session of worktrees made before
+  // `worktree_create` recorded it. Reads session logs, so it stays off the
+  // boot path; a failure is retried on the next start.
+  void import("./worktrees/worktreeCreatorBackfill.ts")
+    .then((m) => m.backfillWorktreeCreators())
+    .then((summary) => {
+      if (summary)
+        console.log(`[worktrees] creator backfill: ${JSON.stringify(summary)}`);
+    })
+    .catch((err) =>
+      console.warn("[worktrees] creator backfill failed:", errorText(err)),
+    );
   // Restore any merge that was mid-conflict when the server restarted.
   void import("./worktrees/worktreeMerge.ts")
     .then((m) => m.reconcileWorktreeMergesOnBoot())

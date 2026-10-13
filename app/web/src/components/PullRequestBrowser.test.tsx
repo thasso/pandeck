@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ProjectRecord,
   PullRequestInventoryItem,
 } from "@assistant/shared";
-import { PullRequestBrowser } from "./PullRequestBrowser.tsx";
+const hoisted = vi.hoisted(() => ({ retire: vi.fn() }));
+vi.mock("../lib/worktrees.ts", () => ({ retireWorktree: hoisted.retire }));
+const { PullRequestBrowser } = await import("./PullRequestBrowser.tsx");
 import type { PullRequestTarget } from "../lib/pullRequestInbox.ts";
 import { failed, loading, ready, refreshing } from "../lib/loadState.ts";
 
@@ -336,5 +338,122 @@ describe("PullRequestBrowser", () => {
         ),
       ).toEqual([null, "true"]);
     });
+  });
+});
+
+describe("PullRequestBrowser idle worktrees", () => {
+  it("shows the idle queue even when the pull-request inventory failed", () => {
+    const el = render(
+      <PullRequestBrowser
+        inventory={failed("inventory read failed")}
+        onReload={NOOP}
+        projects={PROJECTS}
+        onOpen={NOOP}
+        density="tight"
+        idle={{
+          state: ready([
+            {
+              worktree: {
+                id: "wt-idle",
+                projectId: "pa",
+                mainRepoRoot: "/repo",
+                path: "/repo-idle",
+                branch: "idle-branch",
+                baseBranch: "main",
+                baseCommit: "abc",
+                status: "active",
+                sessionIds: [],
+                taskIds: [],
+                createdAt: 0,
+                updatedAt: 0,
+              },
+              kind: "uncommitted",
+              changedFiles: 2,
+              lastActivityAt: 0,
+            },
+          ]),
+          fetchedAt: 86_400_000,
+          onReload: NOOP,
+          onOpenWorktree: NOOP,
+          onRetired: NOOP,
+        }}
+      />,
+    );
+    expect(el.textContent).toContain("inventory read failed");
+    expect(el.textContent).toContain("Idle worktrees (1)");
+    expect(el.textContent).toContain("idle-branch");
+  });
+});
+
+describe("PullRequestBrowser keeps a bulk retirement across the inventory answering", () => {
+  it("does not lose the dialog or its refusal when the inventory arrives mid-run", async () => {
+    let settle: (value: unknown) => void = () => {};
+    hoisted.retire.mockImplementationOnce(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const idleProps = {
+      state: ready([
+        {
+          worktree: {
+            id: "wt-done",
+            projectId: "pa",
+            mainRepoRoot: "/repo",
+            path: "/repo-done",
+            branch: "done-branch",
+            baseBranch: "main",
+            baseCommit: "abc",
+            status: "active" as const,
+            sessionIds: [],
+            taskIds: [],
+            treeSessionIds: ["s"],
+            createdAt: 0,
+            updatedAt: 0,
+          },
+          kind: "delivered" as const,
+          lastActivityAt: 0,
+        },
+      ]),
+      fetchedAt: 10 * 86_400_000,
+      onReload: NOOP,
+      onOpenWorktree: NOOP,
+      onRetired: NOOP,
+    };
+    const browser = (
+      inventory: Parameters<typeof PullRequestBrowser>[0]["inventory"],
+    ) => (
+      <PullRequestBrowser
+        inventory={inventory}
+        onReload={NOOP}
+        projects={PROJECTS}
+        onOpen={NOOP}
+        density="tight"
+        idle={idleProps}
+      />
+    );
+    const el = render(browser(loading()));
+    act(() =>
+      [...el.querySelectorAll("button")]
+        .find((button) => button.textContent?.includes("Retire 1…"))!
+        .click(),
+    );
+    act(() =>
+      [...document.querySelectorAll("button")]
+        .find((button) => button.textContent === "Retire 1")!
+        .click(),
+    );
+    // The inventory answers while the retirement is in flight.
+    render(browser(ready([])));
+    expect(document.body.textContent).toContain("Retire 1 worktree");
+    await act(async () => {
+      settle({
+        worktreeId: "wt-done",
+        status: "refused",
+        refusal: "a session is live there",
+        refusalKind: "sessions",
+      });
+    });
+    expect(document.body.textContent).toContain(
+      "0 retired; 1 refused — done-branch: a session is live there",
+    );
   });
 });

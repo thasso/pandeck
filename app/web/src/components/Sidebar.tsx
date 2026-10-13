@@ -19,7 +19,10 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { KNOWLEDGE_WORKTREE_ID, isShelvedSession } from "@assistant/shared";
-import { PullRequestBrowser } from "./PullRequestBrowser.tsx";
+import {
+  PullRequestBrowser,
+  type IdleWorktreesProps,
+} from "./PullRequestBrowser.tsx";
 import { Badge } from "@/components/ui/badge";
 import {
   Item,
@@ -204,6 +207,8 @@ interface Props {
   pullRequestInventory: LoadState<PullRequestInventoryItem[]>;
   /** Retry that read, behind the browser's inline failure. */
   onReloadPullRequests: () => void;
+  /** The cleanup queue's worktree half, under the pull requests. */
+  idleWorktrees?: IdleWorktreesProps | undefined;
   /** The pull request open in the detail route, for highlighting. */
   selectedPullRequest?: PullRequestTarget | null;
   /** Open one pull request's detail route. */
@@ -468,6 +473,7 @@ function SidebarImpl({
   onSetInboxPositions,
   pullRequestInventory,
   onReloadPullRequests,
+  idleWorktrees,
   selectedPullRequest,
   onOpenPullRequest,
   selectedWorktreeId,
@@ -795,6 +801,7 @@ function SidebarImpl({
             // The host's call, as everywhere else: a phone screen gets
             // thumb-sized rows, the rail keeps its tight ones.
             density={mobile ? "comfortable" : "tight"}
+            idle={idleWorktrees}
           />
         ) : section === "knowledge" && !knowledgeEnabled ? (
           <p className="px-2.5 py-2 text-sm text-muted-foreground">

@@ -20,7 +20,8 @@
     "./toolCards": "./toolCards.ts",
     "./portForwarding": "./portForwarding.ts",
     "./settingsRegistry": "./settingsRegistry.ts",
-    "./zonedTime": "./zonedTime.ts"
+    "./zonedTime": "./zonedTime.ts",
+    "./sessionTreeWorktrees": "./sessionTreeWorktrees.ts"
   },
   "types": "./protocol.ts",
   "scripts": {

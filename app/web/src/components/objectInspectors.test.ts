@@ -265,12 +265,74 @@ describe("sessionRelationGroups", () => {
       "tasks",
       "spawned-by",
       "spawned-sessions",
+      "tree-worktrees",
       "forked-from",
       "forks",
     ]);
     expect(
       groups.flatMap((g) => g.refs).filter((ref) => ref.kind !== "session"),
     ).toEqual([]);
+  });
+
+  it("lists every worktree the server says the session's tree owns, shared checkouts included", () => {
+    const record = (
+      id: string,
+      sessionIds: string[],
+      treeSessionIds: string[],
+    ): WorktreeRecord => ({
+      id,
+      projectId: "p1",
+      mainRepoRoot: "/repo",
+      path: `/repo/${id}`,
+      branch: id,
+      baseBranch: "main",
+      baseCommit: "abc",
+      status: "active",
+      sessionIds,
+      taskIds: [],
+      treeSessionIds,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    // Only the coordinator is in this browser's list: retention archived its
+    // peer, and the server's membership still counts the peer's worktrees.
+    const sessions = [session({ id: "coord", title: "Coordinator" })];
+    const worktrees = [
+      record("own", ["coord", "peer"], ["coord", "peer"]),
+      record("handed", ["peer"], ["peer", "coord"]),
+      record("peer-made", [], ["peer", "coord"]),
+      record("foreign", ["other"], ["other"]),
+    ];
+    const treeGroup = (sessionId: string, list: WorktreeRecord[] | null) =>
+      sessionRelationGroups({
+        sessionId,
+        relatedTasks: [],
+        sessions,
+        worktrees: list,
+      }).find((group) => group.id === "tree-worktrees");
+
+    // The checkout the coordinator shares with its peer is the tree's too.
+    const coordinator = treeGroup("coord", worktrees);
+    expect(coordinator?.summary).toBe("3");
+    expect(coordinator?.refs.map((ref) => ref.id)).toEqual([
+      "own",
+      "handed",
+      "peer-made",
+    ]);
+    expect(coordinator?.refs[1]?.worktree?.record.id).toBe("handed");
+    expect(treeGroup("peer", worktrees)?.refs.map((ref) => ref.id)).toEqual([
+      "own",
+      "handed",
+      "peer-made",
+    ]);
+    // A session whose tree owns only the checkout it runs in adds nothing to
+    // Details, which names it.
+    expect(
+      treeGroup("solo", [record("alone", ["solo"], ["solo"])])?.refs,
+    ).toEqual([]);
+    expect(treeGroup("stranger", worktrees)?.refs).toEqual([]);
+    // An unanswered list draws nothing rather than "none".
+    expect(treeGroup("coord", null)?.refs).toEqual([]);
   });
 
   it("returns empty groups for a fresh unlinked session", () => {

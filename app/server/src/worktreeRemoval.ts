@@ -79,6 +79,10 @@ import {
   resolveWorktreeRow,
 } from "./worktrees/worktreeResolve.ts";
 import { branchContainedInBase } from "./worktrees/worktreeStatus.ts";
+import {
+  invalidateIdleWorktrees,
+  worktreeIdleRefusal,
+} from "./worktrees/idleWorktrees.ts";
 import { baseBranchTarget } from "./worktrees/worktreeSync.ts";
 import { invalidatePullRequestInventorySnapshot } from "./pullRequestInventorySync.ts";
 
@@ -287,6 +291,11 @@ async function guardedRemoveWorktree(
   }
 }
 
+export interface RetireWorktreeOptions extends RemoveWorktreeOptions {
+  /** Refuse unless the worktree is still idle (`worktrees/idleWorktrees.ts`). */
+  requireIdle?: boolean;
+}
+
 /**
  * Refresh the exact base target, verify delivery, then remove the worktree and
  * settle its sessions. Session, containment and typed git refusals are data so
@@ -295,9 +304,22 @@ async function guardedRemoveWorktree(
  */
 export async function retireWorktree(
   worktreeId: string,
-  options: RemoveWorktreeOptions = {},
-  operations: WorktreeRetireOperations = defaultRetireOperations,
+  retireOptions: RetireWorktreeOptions = {},
+  retireOperations: WorktreeRetireOperations = defaultRetireOperations,
 ): Promise<WorktreeRetireResponse> {
+  const { requireIdle, ...options } = retireOptions;
+  // A bulk cleanup acts on a snapshot that may be minutes old: with
+  // `requireIdle`, the idle rule is asked again wherever the session blockers
+  // are — before the base refresh AND under the removal hold — so a session
+  // that started working there since refuses the removal instead of being
+  // settled by it.
+  const operations: WorktreeRetireOperations = requireIdle
+    ? {
+        ...retireOperations,
+        blockedReason: async (id) =>
+          (await retireOperations.blockedReason(id)) ?? worktreeIdleRefusal(id),
+      }
+    : retireOperations;
   const row = await operations.resolveWorktree(worktreeId);
   if (!row) throw new Error("That worktree is no longer available.");
   if (isMainWorktreeId(row.id))
@@ -324,6 +346,7 @@ export async function retireWorktree(
     if (cleanup.status === "refused")
       return refused(cleanup.refusal, cleanup.kind);
     operations.inventoryChanged?.();
+    invalidateIdleWorktrees();
     return {
       worktreeId: row.id,
       status: "retired",
@@ -400,6 +423,7 @@ export async function retireWorktree(
   if (removal.status === "refused")
     return refused(removal.refusal, removal.kind);
   operations.inventoryChanged?.();
+  invalidateIdleWorktrees();
   return {
     worktreeId: row.id,
     status: "retired",
