@@ -24,8 +24,11 @@ export interface LibraryKind<M extends EntryManifest = EntryManifest> {
   /**
    * The kind's whole CONTENT rule, shared by scanning and authoring; built
    * with `parseManifestWith` when the kind has fields beyond the shared ones.
-   * It may be handed a body the core clipped to its own read bounds, so it
-   * must not judge size: a size rule is {@link maxManifestBytes}.
+   * It may be handed a body the core clipped to its own read bounds (the
+   * smallest is `MAX_ENTRY_BODY_BYTES`, 256 KiB), so it must not judge size —
+   * a size rule is {@link maxManifestBytes} — and it may look at the body only
+   * when `maxManifestBytes` is within that bound, which guarantees every path
+   * hands it the whole file. Otherwise it depends on the frontmatter alone.
    */
   parseManifest(content: string, path: string): ManifestResult<M>;
   /**

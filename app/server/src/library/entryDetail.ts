@@ -106,7 +106,7 @@ export async function resolveEntryDetail(
           } catch {
             return unavailable(
               summary,
-              `${summary.path} no longer has frontmatter matching the scan; the library changed since it was scanned.`,
+              `${summary.path} no longer matches the scan or its ${library.kind.noun} rule; the library changed since it was scanned.`,
             );
           }
 

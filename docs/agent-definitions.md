@@ -256,7 +256,9 @@ directly. `library/libraryKind.test.ts` proves the core with a fixture kind
 own read bounds. A kind that bounds its manifest's size sets `maxManifestBytes`,
 and the core enforces that from the file's real size at every scan, detail read,
 source read, edit, rename and create, reporting `manifest-too-large`. Skills set
-none and keep their large bodies.
+none and keep their large bodies. A rule may read the body only when
+`maxManifestBytes` is within the core's smallest read bound (256 KiB), so every
+path hands it the whole file; otherwise it depends on the frontmatter alone.
 
 The test for "shared enough": adding a third library kind needs a manifest rule,
 a kind descriptor, a create renderer, and nothing else.
