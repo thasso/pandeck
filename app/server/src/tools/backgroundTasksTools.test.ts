@@ -23,6 +23,8 @@ const { backgroundWorkSupervisor } =
 const { getSettings, updateSettings } = await import("../settings.ts");
 
 const stopAllRequests: BackgroundWorkStopAllRequest[] = [];
+/** Whether the fake backend confirms the Stops a Stop-all sends. */
+let stopAllConfirms = true;
 const testPort: BackgroundWorkBackendPort = {
   backend: "host-process",
   launch: async (_request: BackgroundWorkLaunchRequest) => ({
@@ -40,7 +42,9 @@ const testPort: BackgroundWorkBackendPort = {
         limit: 200,
       })
       .map((item) => item.id);
-    return { acknowledgedItemIds: itemIds, unconfirmedItemIds: [] };
+    return stopAllConfirms
+      ? { acknowledgedItemIds: itemIds, unconfirmedItemIds: [] }
+      : { acknowledgedItemIds: [], unconfirmedItemIds: itemIds };
   },
 };
 backgroundWorkSupervisor.registerBackend(testPort);
@@ -249,7 +253,7 @@ describe("background_tasks", () => {
         context(owner, "pi", "running-stop-all"),
       ),
     );
-    expect(result.result).toBe("accepted; finish your turn");
+    expect(result.result).toBe("stopped");
     expect(stopAllRequests).toHaveLength(1);
     expect(stopAllRequests[0]?.callerSessionId).toBe(owner);
     expect(stopAllRequests[0]?.protectOrdinaryTurn).toBe(true);
@@ -280,7 +284,30 @@ describe("background_tasks", () => {
         context(owner, "pi", "stop-all-request"),
       ),
     );
-    expect(all.result).toBe("accepted; finish your turn");
+    expect(all.result).toBe("stopped");
     expect(backgroundWorkStore.getItem(rest)?.state).toBe("not-started");
+  });
+
+  test("an unconfirmed Stop-all tells the owner to finish its turn", async () => {
+    const owner = makeSession();
+    const taskId = reserve(owner);
+    backgroundWorkStore.markRunning({ itemId: taskId });
+    stopAllConfirms = false;
+    try {
+      const result = details(
+        await backgroundTasksTool.execute(
+          { operation: "stop_all", reason: "stop the current work" },
+          context(owner, "pi", "unconfirmed-stop-all"),
+        ),
+      );
+      expect(result.result).toBe("accepted; finish your turn");
+    } finally {
+      stopAllConfirms = true;
+      backgroundWorkStore.terminalize({
+        itemId: taskId,
+        state: "stopped",
+        reason: "test cleanup",
+      });
+    }
   });
 });

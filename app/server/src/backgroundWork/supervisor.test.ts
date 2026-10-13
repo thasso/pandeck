@@ -966,6 +966,84 @@ test("an owner Stop-all protects the provider/tool turn even when no ordinary tu
   });
 });
 
+/** Admit and launch one owner task on a Claude host, for owner Stop-all. */
+async function ownerHostTask(id: string) {
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const ownerSessionId = owner("claude-sdk");
+  const supervisor = supervisorFor(clock, port, {
+    ordinaryTurnActive: () => true,
+  });
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "claude-query",
+    kind: "shell",
+    label: "provider task",
+    sourceRequestId: `${id}-admit`,
+    hostEpochKey: `${id}-epoch`,
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) throw new Error("not admitted");
+  await supervisor.launch(admission);
+  supervisor.providerBound({
+    itemId: admission.item.id,
+    providerTaskId: `${id}-task`,
+  });
+  return { port, supervisor, ownerSessionId, itemId: admission.item.id };
+}
+
+test("an owner Stop-all whose Stops all landed reserves no host close", async () => {
+  // Reserved anyway, the close would fire at the end of the owner's turn and
+  // kill the work it started after the Stop-all.
+  const { port, supervisor, ownerSessionId, itemId } = await ownerHostTask(
+    "owner-settled-stop-all",
+  );
+  port.stopAllImpl = () =>
+    Promise.resolve({ acknowledgedItemIds: [itemId], unconfirmedItemIds: [] });
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "owner-settled-stop-all-request",
+    reason: "superseded runs",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["stopped"],
+  );
+  assert.equal(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+  );
+  assert.deepEqual(port.closeHosts, []);
+});
+
+test("an owner Stop-all reserves the host close for a Stop it could not confirm", async () => {
+  const { port, supervisor, ownerSessionId, itemId } = await ownerHostTask(
+    "owner-unsettled-stop-all",
+  );
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "owner-unsettled-stop-all-request",
+    reason: "superseded runs",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["stop-unconfirmed"],
+  );
+  assert.notEqual(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+    "the turn boundary closes the host as the backstop",
+  );
+  assert.deepEqual(port.closeHosts, [], "not before the owner's turn ends");
+  backgroundWorkStore.terminalize({
+    itemId,
+    state: "stopped",
+    reason: "test cleanup",
+  });
+});
+
 test("completion is durable before delivery is offered", async () => {
   const clock = new FakeClock();
   const port = new FakePort();

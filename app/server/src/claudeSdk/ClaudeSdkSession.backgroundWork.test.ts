@@ -1185,6 +1185,71 @@ test("Stop-all protects an ordinary retained turn", async () => {
   session.dispose();
 });
 
+test("an owner Stop-all spares the work the owner starts after it", async () => {
+  // The owner stops its superseded run, starts the next one in the same turn
+  // and ends the turn. The settled Stop-all must not close the host at that
+  // boundary, or the new run dies seconds after it started.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const turn = session.createRuntimeAdapter().prompt("restart the test run");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  const startBackground = async (toolUseId: string, taskId: string) => {
+    await preToolHook(query)(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "provider-background",
+        transcript_path: "/tmp/transcript",
+        cwd: dataDir,
+        tool_name: "Bash",
+        tool_input: { command: "sleep 10", run_in_background: true },
+        tool_use_id: toolUseId,
+      },
+      toolUseId,
+      { signal: new AbortController().signal },
+    );
+    query.output.emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      description: "sleep",
+      task_type: "shell",
+      uuid: `started-${taskId}`,
+      session_id: "provider-background",
+    } as unknown as ClaudeSdkMessage);
+    await until(() =>
+      backgroundWorkStore
+        .listItems({ ownerSessionId: session.id })
+        .some((item) => item.providerTaskId === taskId),
+    );
+  };
+
+  await startBackground("tool-superseded", "vendor-superseded");
+  const results = await backgroundWorkSupervisor.stopAllOwner({
+    ownerSessionId: session.id,
+    callerSessionId: session.id,
+    sourceRequestId: "owner-stop-all-superseded",
+    reason: "superseded run",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["stopped"],
+  );
+  assert.deepEqual(query.stopped, ["vendor-superseded"]);
+
+  await startBackground("tool-next", "vendor-next");
+  query.output.emit(result("restarted"));
+  await turn;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(query.closeCalls, 0, "the host stays up for the new run");
+  const next = backgroundWorkStore
+    .listItems({ ownerSessionId: session.id })
+    .find((item) => item.providerTaskId === "vendor-next");
+  assert.equal(next?.state, "running");
+  session.dispose();
+});
+
 test("abort interrupts but does not close a retained epoch", async () => {
   const { session, queries } = makeHarness();
   await sessionSkills(session.id, session.agentType);

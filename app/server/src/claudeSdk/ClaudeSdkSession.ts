@@ -207,6 +207,7 @@ import {
   assistantProviderError,
   assistantUsage,
   captureSessionId,
+  type ClaudeResultMessage,
   type ClaudeUsage,
   type CompactBoundary,
   compactBoundaryMetadata,
@@ -219,6 +220,7 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import { buildClaudeSdkQueryOptions } from "./options.ts";
+import { lastSavedCostState } from "./profileSessionStore.ts";
 import { prepareClaudeSkillRuntime } from "./skillInjection.ts";
 import {
   claudeSdkModelAlias,
@@ -593,6 +595,12 @@ export class ClaudeSdkSession implements LiveSession {
    */
   private epochUsageBase: CumulativeUsageTotals | undefined;
   /**
+   * The running totals a resumed or forked CLI said it would continue from
+   * (its transcript's saved `cost-state`), until the epoch's first real report
+   * confirms or refutes it.
+   */
+  private epochCarriedTotals: CumulativeUsageTotals | undefined;
+  /**
    * `cumulative` sampled when the current turn opened, so the completed turn's
    * durable entry usage is THIS run's delta (`result` accumulates into
    * `cumulative` before `finishTurn` runs).
@@ -635,6 +643,14 @@ export class ClaudeSdkSession implements LiveSession {
    * the run continues until every one of them is accounted for.
    */
   private readonly followUpsOwed = new Set<string>();
+  /**
+   * The uuid stamped on the open turn's prompt, until the CLI reports it
+   * dequeued (`command_lifecycle` start or a result consuming it). A resumed
+   * CLI may answer queued startup notices first — orphaned background tasks
+   * of the previous process — with a model-less `result`; while the prompt is
+   * still waiting, that result is not this turn's.
+   */
+  private turnPromptWaiting: string | undefined;
   /** A Stop's interrupt (or kill) still waiting on the CLI's drop answers. */
   private stopInterrupt: Promise<void> | undefined;
   /** The ordinary epoch a Stop is killing once those answers are in. */
@@ -1456,8 +1472,10 @@ export class ClaudeSdkSession implements LiveSession {
       const frozenSkillNames = this.frozenSkillNames();
       if (frozenSkillNames.length > 0)
         await this.prepareSkillRuntime(frozenSkillNames);
+      const uuid = randomUUID();
+      this.turnPromptWaiting = uuid;
       await this.sendPromptToProcess(
-        sdkUserMessage(promptWithFiles, images),
+        { ...sdkUserMessage(promptWithFiles, images), uuid },
         frozenSkillNames,
       );
       await completion.promise;
@@ -1715,6 +1733,7 @@ export class ClaudeSdkSession implements LiveSession {
     }
 
     const seam = await this.seamFactory();
+    const carried = await this.savedProviderTotals();
     if (!this.toolServer) this.toolServer = createClaudeSessionToolServer(this);
     const epochKey = `claude-${randomUUID()}`;
     const queue = new CloseableInputQueue();
@@ -1728,7 +1747,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.inputQueue = queue;
     this.queryEpochKey = epochKey;
     this.activeTurnEpochKey = epochKey;
-    this.beginUsageEpoch();
+    this.beginUsageEpoch(carried);
     this.processClosing = false;
     const taskOutputTemp = createClaudeTaskOutputTemp();
     this.epochTaskOutputTemp = taskOutputTemp;
@@ -1819,6 +1838,13 @@ export class ClaudeSdkSession implements LiveSession {
         if (this.stoppingEpochKey === epochKey) continue;
         const lifecycle = commandLifecycle(message);
         if (lifecycle) {
+          if (
+            lifecycle.started !== undefined &&
+            lifecycle.started === this.turnPromptWaiting
+          ) {
+            this.turnPromptWaiting = undefined;
+            continue;
+          }
           // The CLI dequeued a command. While a prompted turn of this epoch is
           // still open, a steer dequeued now is folded into it at this step.
           if (
@@ -1876,6 +1902,12 @@ export class ClaudeSdkSession implements LiveSession {
         else if (!(this.running && isTurnTranscriptMessage(message)))
           this.adapterEvents.unattributed(() => this.handleSdkMessage(message));
         if (message.type !== "result") continue;
+        // Its running total is billed above; only the turn stays open.
+        if (
+          this.activeTurnEpochKey === epochKey &&
+          this.answersBeforePrompt(message)
+        )
+          continue;
         await this.refreshToolLoadState(query);
         const ownsTurn =
           this.running &&
@@ -1973,6 +2005,31 @@ export class ClaudeSdkSession implements LiveSession {
         this.resetProviderResultTracking();
       }
     }
+  }
+
+  /**
+   * A clean, model-less `result` that arrived while the open turn's prompt was
+   * still queued: the CLI answering startup notices before it reached the
+   * prompt. Settling the turn on it ends the turn empty and closes the process
+   * before the prompt ever runs. Every condition must hold: a result that
+   * called the model or consumed any message still ends the turn, and a
+   * failure still fails it.
+   */
+  private answersBeforePrompt(
+    message: Extract<
+      import("./sdkSeam.ts").ClaudeSdkMessage,
+      { type: "result" }
+    >,
+  ): boolean {
+    const waiting = this.turnPromptWaiting;
+    if (!waiting || !this.running || this.syntheticTurn) return false;
+    const consumed = (message as { user_message_uuids?: unknown })
+      .user_message_uuids;
+    if (Array.isArray(consumed) && consumed.length > 0) {
+      if (consumed.includes(waiting)) this.turnPromptWaiting = undefined;
+      return false;
+    }
+    return message.num_turns === 0 && !resultProviderError(message);
   }
 
   private isProviderTurnContent(
@@ -2687,6 +2744,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.liveTurn = undefined;
     this.liveTurnId = undefined;
     this.activeTurnEpochKey = undefined;
+    this.turnPromptWaiting = undefined;
     this.abortingTurn = false;
     const usage = perTurnUsage(this.turnStartTotals, this.cumulative, {
       ...(this.contextTokens !== undefined
@@ -2883,7 +2941,7 @@ export class ClaudeSdkSession implements LiveSession {
       const seam = await this.seamFactory();
       // A standalone compaction is its own query epoch, so its usage rebases onto
       // the session rather than onto whatever the previous epoch had reported.
-      this.beginUsageEpoch();
+      this.beginUsageEpoch(await this.savedProviderTotals());
       const query = seam.query({
         prompt: promptIterable(
           `/compact${customInstructions ? ` ${customInstructions}` : ""}`,
@@ -3137,8 +3195,47 @@ export class ClaudeSdkSession implements LiveSession {
    * epoch base is what the session had billed BEFORE this process reported
    * anything, and a missing one silently attributes the epoch's work to nobody.
    */
-  private beginUsageEpoch(): void {
+  private beginUsageEpoch(carried?: CumulativeUsageTotals): void {
     this.epochUsageBase = { ...this.cumulative };
+    this.epochCarriedTotals = carried;
+  }
+
+  /**
+   * What a query resuming this session will report before it does any work:
+   * the totals the CLI saved in the transcript and restores on resume (the
+   * SDK: "a resumed or forked session continues from the totals its transcript
+   * saved"). Read BEFORE the query starts, when the last entry is the one the
+   * CLI is about to load. Unreadable means "nothing carried", the old reading.
+   */
+  private async savedProviderTotals(): Promise<
+    CumulativeUsageTotals | undefined
+  > {
+    if (!this.providerSessionId) return undefined;
+    let entry: Record<string, unknown> | undefined;
+    try {
+      entry = await lastSavedCostState(
+        this.credentialProfileId,
+        this.providerSessionId,
+      );
+    } catch {
+      return undefined;
+    }
+    if (!entry) return undefined;
+    const totals = mapResultEpochUsage({
+      modelUsage: entry.modelUsage,
+    } as unknown as ClaudeResultMessage);
+    const cost =
+      typeof entry.totalCostUSD === "number" &&
+      Number.isFinite(entry.totalCostUSD)
+        ? entry.totalCostUSD
+        : 0;
+    return {
+      input: totals.inputTokens ?? 0,
+      output: totals.outputTokens ?? 0,
+      cacheRead: totals.cacheReadTokens ?? 0,
+      cacheWrite: totals.cacheWriteTokens ?? 0,
+      cost,
+    };
   }
 
   /**
@@ -3147,8 +3244,9 @@ export class ClaudeSdkSession implements LiveSession {
    * Per the SDK: `modelUsage`/`total_cost_usd` are "cumulative across turns in
    * streaming-input sessions — each result carries the running total so far, so
    * read the latest result rather than summing across results", and a resumed
-   * session starts fresh. So a result is the running total for its `query()`
-   * epoch, and the session's is that epoch's base plus it. PA used to ADD each
+   * session "continues from the totals its transcript saved". So a result is
+   * the running total for its `query()` epoch, and the session's is that
+   * epoch's base plus it, less what the epoch carried over. PA used to ADD each
    * result, which on a retained process (background work keeps one query serving
    * many turns) re-billed every earlier turn of the epoch on every turn: one real
    * session reported 2.45B cache-read tokens where the CLI's own per-request
@@ -3180,7 +3278,23 @@ export class ClaudeSdkSession implements LiveSession {
       return;
     // A query that reported before its epoch was opened would otherwise be billed
     // from zero and wipe the session's history.
-    const base = (this.epochUsageBase ??= { ...this.cumulative });
+    let base = (this.epochUsageBase ??= { ...this.cumulative });
+    // A resumed CLI restored its saved totals, so its running total starts
+    // there, not at zero: billed as is, every resume re-bills the session's
+    // history. Only a first report that covers the saved totals proves they
+    // were restored; one that does not means the CLI started from zero.
+    const carried = this.epochCarriedTotals;
+    if (carried) {
+      this.epochCarriedTotals = undefined;
+      if (coversTotals(reported, carried))
+        base = this.epochUsageBase = {
+          input: base.input - carried.input,
+          output: base.output - carried.output,
+          cacheRead: base.cacheRead - carried.cacheRead,
+          cacheWrite: base.cacheWrite - carried.cacheWrite,
+          cost: base.cost - carried.cost,
+        };
+    }
     this.cumulative = {
       input: base.input + reported.input,
       output: base.output + reported.output,
@@ -3953,6 +4067,20 @@ async function dropQueuedMessage(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** Whether a running total has reached every field of an earlier one. */
+function coversTotals(
+  total: CumulativeUsageTotals,
+  earlier: CumulativeUsageTotals,
+): boolean {
+  return (
+    total.input >= earlier.input &&
+    total.output >= earlier.output &&
+    total.cacheRead >= earlier.cacheRead &&
+    total.cacheWrite >= earlier.cacheWrite &&
+    total.cost >= earlier.cost - 1e-9
+  );
 }
 
 function isClaudeTurnStart(message: ClaudeSdkMessage): boolean {

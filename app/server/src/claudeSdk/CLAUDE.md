@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4096 reason="Fifteen bullets, each a distinct silent-failure mode. The newest is the kept canUseTool: org-managed settings silently downgrade bypass to default, and without the callback every pa tool call is denied with no prompt. The append-only timeline: editing a committed entry in place diverges from disk without any error. The steer rule: a queued message the turn did not fold in still runs as the next CLI turn." task=restore-claude-can-use-tool date=2026-10-12 -->
+<!-- instruction-budget: bytes=4096 reason="Sixteen bullets, each a distinct silent-failure mode. The newest is the kept canUseTool: org-managed settings silently downgrade bypass to default, and without the callback every pa tool call is denied with no prompt. The append-only timeline: editing a committed entry in place diverges from disk without any error. The steer rule: a queued message the turn did not fold in still runs as the next CLI turn." task=restore-claude-can-use-tool date=2026-10-12 -->
 
 # Claude SDK harness
 
@@ -23,13 +23,14 @@
 - Model reconciliation accepts only recognized curated Claude model ids; a
   synthetic sentinel must never reach the configuration fallback or mutate the
   persisted selection.
-- A `result`'s `modelUsage` is the RUNNING TOTAL for its `query()` epoch, not
-  one run, so session totals REBASE onto the latest report over a base
-  snapshotted where that query starts — every `seam.query` site opens an epoch,
-  summing is always wrong, magnitude never decides it, and zeroed crash reports
-  are ignored. Never the top-level `result.usage` (the final request's
-  snapshot); `usage.input` is the uncached remainder, so an input total adds
-  `cacheRead` + `cacheWrite`.
+- A `result`'s `modelUsage` is the RUNNING TOTAL for its `query()` epoch: totals
+  REBASE onto the latest report over a base snapshotted at every `seam.query`
+  site, less the transcript's saved `cost-state` a resume restores once the
+  first report covers it. Summing is always wrong, magnitude never decides,
+  zeroed crash reports are ignored. Never `result.usage` (one request);
+  `usage.input` excludes `cacheRead` + `cacheWrite`.
+- A clean model-less `result` before the turn's uuid-stamped prompt is dequeued
+  (resume notices) never settles the turn.
 - A `result` is not proof of success: `is_error`, `api_error_status` or an
   `error*` subtype fails the turn and must reach the reader as its error.
 - A restored session must rehydrate `updatedAt` from the record, or every

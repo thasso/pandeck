@@ -12,6 +12,9 @@
  *     with the right text and no duplicated/empty text.
  */
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "vitest";
 import { UNLABELED_SESSION_TITLE, type ServerMessage } from "@assistant/shared";
 import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
@@ -647,8 +650,8 @@ test("prompt acceptance persists and announces a Claude session before its first
 /**
  * Drive `scales.length` turns on separate `query()` epochs (an ordinary turn
  * closes its process), where each epoch's `result` reports `0.0123 * scale` and
- * matching tokens. A resumed epoch "starts fresh", so each report is that run
- * alone. The retained multi-turn epoch lives in the background-work suite, which
+ * matching tokens. With no saved `cost-state` to restore, a resumed epoch
+ * starts from zero, so each report is that run alone. The retained multi-turn epoch lives in the background-work suite, which
  * is where a real retained host exists.
  */
 async function scriptedTurns(
@@ -706,7 +709,7 @@ async function scriptedTurns(
 }
 
 test("a resumed epoch bills only its own run, however large", async () => {
-  // "Resumed sessions start fresh": each new query()'s result is that run alone.
+  // Nothing saved to restore: each new query()'s result is that run alone.
   // Turn 2 costing twice turn 1 must ADD, not replace — magnitude says nothing
   // about which reading applies.
   const { usages, session } = await scriptedTurns("usage-fresh-epochs", [1, 2]);
@@ -747,6 +750,74 @@ test("durable per-turn usage is the run's delta, not the session cumulative", as
     Math.abs(ctx.cost - 0.0246) < 1e-9,
     `cumulative cost spans both turns (${ctx.cost})`,
   );
+});
+
+/**
+ * Run `body` with a default-profile Claude root (`~/.claude`) whose transcript
+ * for the scripted provider session `sess-1` saved `scale` turns' totals.
+ */
+async function withSavedCostState<T>(
+  scale: number,
+  body: () => Promise<T>,
+): Promise<T> {
+  const home = mkdtempSync(join(tmpdir(), "claude-cost-state-"));
+  const project = join(home, ".claude", "projects", "-work-repo");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(
+    join(project, "sess-1.jsonl"),
+    [
+      { type: "user", message: { role: "user", content: "hi" } },
+      {
+        type: "cost-state",
+        sessionId: "sess-1",
+        totalCostUSD: 0.0123 * scale,
+        modelUsage: {
+          "claude-sonnet-4-6": {
+            inputTokens: 100 * scale,
+            outputTokens: 5 * scale,
+            cacheReadInputTokens: 900 * scale,
+            cacheCreationInputTokens: 200 * scale,
+            costUSD: 0.0123 * scale,
+          },
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
+  );
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    return await body();
+  } finally {
+    process.env.HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test("a resumed epoch that restored its saved totals bills only the new run", async () => {
+  // "A resumed or forked session continues from the totals its transcript
+  // saved": turn 2's report of 2 runs carries turn 1's saved run.
+  const { usages, session } = await withSavedCostState(1, () =>
+    scriptedTurns("usage-restored-epoch", [1, 2]),
+  );
+  assert.equal(usages[1]?.inputTokens, 100, "turn 2 bills only its own run");
+  const ctx = session.contextInfo();
+  assert.equal(ctx.tokenUsage.input, 200, "history is not billed twice");
+  assert.ok(
+    Math.abs(ctx.cost - 0.0246) < 1e-9,
+    `the session cost counts each run once (${ctx.cost})`,
+  );
+});
+
+test("saved totals a resumed report does not cover were not restored", async () => {
+  // The first report is below what the transcript saved, so the CLI started
+  // from zero: the report is the run alone, as without any saved totals.
+  const { usages, session } = await withSavedCostState(5, () =>
+    scriptedTurns("usage-unrestored-epoch", [1, 2]),
+  );
+  assert.equal(usages[1]?.inputTokens, 200, "turn 2 bills its whole report");
+  assert.equal(session.contextInfo().tokenUsage.input, 300);
 });
 
 test("a zeroed result neither bills nor erases the epoch", async () => {

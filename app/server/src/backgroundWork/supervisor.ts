@@ -448,12 +448,18 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     }
 
     const host = backgroundWorkStore.hostForOwner(request.ownerSessionId);
+    // The owner's own Stop-all runs inside its turn, so the host can close only
+    // at that turn's end. Reserved up front, the close would also kill the work
+    // the owner starts after it; it is reserved below only for what the Stops
+    // themselves could not settle.
+    const ownerRequested = request.callerSessionId === request.ownerSessionId;
     if (host) {
-      backgroundWorkStore.requestHostStopAll({
-        hostId: host.id,
-        reason: request.reason,
-        now: this.clock.now(),
-      });
+      if (!ownerRequested)
+        backgroundWorkStore.requestHostStopAll({
+          hostId: host.id,
+          reason: request.reason,
+          now: this.clock.now(),
+        });
       if (!byBackend.has(host.backend)) byBackend.set(host.backend, []);
     }
 
@@ -541,7 +547,21 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     }
     if (
       host &&
-      request.callerSessionId !== request.ownerSessionId &&
+      ownerRequested &&
+      results.some(
+        (result) =>
+          result.state === "stop-unconfirmed" ||
+          result.state === "awaiting-binding",
+      )
+    )
+      backgroundWorkStore.requestHostStopAll({
+        hostId: host.id,
+        reason: request.reason,
+        now: this.clock.now(),
+      });
+    if (
+      host &&
+      !ownerRequested &&
       !this.ordinaryTurnActive(request.ownerSessionId)
     )
       await this.closeStopAllHost(

@@ -27,7 +27,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { open, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import {
   claudeConfigDir,
   DEFAULT_CLAUDE_PROFILE_ID,
@@ -114,4 +116,53 @@ export function claudeProfileSessionStore(profileId: string | undefined) {
       });
     },
   };
+}
+
+/**
+ * The last `cost-state` entry `providerSessionId`'s transcript saved, if any.
+ * A resumed or forked CLI continues its running totals from it, so the first
+ * `result` of that query already carries what the entry holds. The entry is
+ * the CLI's own record and its shape is not part of the SDK's types; callers
+ * treat it as a hint to verify, never as billing truth. The project key is
+ * found by looking, not by re-deriving the CLI's path sanitizing.
+ */
+export async function lastSavedCostState(
+  profileId: string | undefined,
+  providerSessionId: string,
+): Promise<StoreEntry | undefined> {
+  const projects = join(
+    claudeConfigDir(profileId ?? DEFAULT_CLAUDE_PROFILE_ID),
+    "projects",
+  );
+  let keys: string[];
+  try {
+    keys = await readdir(projects);
+  } catch {
+    return undefined;
+  }
+  const name = `${providerSessionId}.jsonl`;
+  for (const projectKey of keys) {
+    const path = join(projects, projectKey, name);
+    let lines: AsyncIterable<string>;
+    try {
+      lines = createInterface({
+        input: (await open(path)).createReadStream({ encoding: "utf8" }),
+        crlfDelay: Infinity,
+      });
+    } catch {
+      continue;
+    }
+    let last: StoreEntry | undefined;
+    for await (const line of lines) {
+      if (!line.includes('"cost-state"')) continue;
+      try {
+        const entry = JSON.parse(line) as StoreEntry;
+        if (entry.type === "cost-state") last = entry;
+      } catch {
+        continue;
+      }
+    }
+    return last;
+  }
+  return undefined;
 }

@@ -284,21 +284,30 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
     );
     const acknowledgedItemIds: string[] = [];
     const unconfirmedItemIds: string[] = [];
+    const ownerRequested = request.callerSessionId === request.ownerSessionId;
     await Promise.all(
       hosts.map(async (host) => {
-        host.stopAllRequested = true;
+        // The latch closes the host at the owner's next turn boundary. The
+        // owner's own Stop-all latches only what its Stops left unsettled:
+        // latched outright, it would also kill the work the owner starts
+        // after it in the same turn.
+        if (!ownerRequested) host.stopAllRequested = true;
         // A caller-owned Stop-all is inside the very provider/tool turn that
         // must survive. Human Stop-all keeps its special ability to interrupt
         // a background-origin turn; the controller self-checks whether the
         // current turn is provider-origin, as it did before this caller guard.
-        if (request.callerSessionId !== request.ownerSessionId)
+        if (!ownerRequested)
           await host.controller
             .interruptBackgroundTurn(request.reason)
             .catch(() => undefined);
+        const unsettled = (itemId: string) => {
+          unconfirmedItemIds.push(itemId);
+          host.stopAllRequested = true;
+        };
         await Promise.all(
           [...host.items.values()].map(async (binding) => {
             if (!binding.providerTaskId) {
-              unconfirmedItemIds.push(binding.itemId);
+              unsettled(binding.itemId);
               return;
             }
             try {
@@ -306,7 +315,7 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
               this.removeBinding(host, binding);
               acknowledgedItemIds.push(binding.itemId);
             } catch {
-              unconfirmedItemIds.push(binding.itemId);
+              unsettled(binding.itemId);
             }
           }),
         );

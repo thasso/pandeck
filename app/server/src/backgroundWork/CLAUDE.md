@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3800 reason="nine contracts, each prohibiting a silent failure review or production already hit: transcript membership inferred from backend plus turn-running, a deferred fact committed the provider never took, a steer refusal counted as delivered, a muted monitor read as a quiet one, a background shell streamed like a monitor — 31 turns in one session to say a dev server was still running — and a frozen-deadline Stop deferred as if requested, leaving parked owners idle for hours." task=background-deadline-wake date=2026-10-12 -->
+<!-- instruction-budget: bytes=4000 reason="ten contracts, each prohibiting a silent failure review or production already hit: transcript membership inferred from backend plus turn-running, a deferred fact committed the provider never took, a steer refusal counted as delivered, a muted monitor read as a quiet one, a background shell streamed like a monitor — 31 turns in one session to say a dev server was still running — and a frozen-deadline Stop deferred as if requested, leaving parked owners idle for hours, and an owner's own Stop-all killing the run it started next." task=peer-message-trigger date=2026-10-13 -->
 
 # Background work service
 
@@ -20,6 +20,8 @@
   and revalidate ownership before each targeted or owner-wide port effect. An
   unanswered target stays nonterminal `stop-unconfirmed`; never infer a process,
   kill siblings, or close a host because it failed.
+- An owner's OWN Stop-all closes the host at its turn end only if a Stop it sent
+  stayed unsettled; closing anyway kills the work started after it.
 - Persist terminal facts BEFORE delivery. Activity and completion share one
   bounded lossy queue; raw output never enters the row or prompt. Completion
   uses its stable PA artifact, activity a turn-scoped file. Put structured

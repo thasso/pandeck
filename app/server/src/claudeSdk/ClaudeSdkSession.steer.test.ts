@@ -485,3 +485,62 @@ test("a steer with no running turn is refused", async () => {
   assert.equal(h.queries.length, 0, "no process was started for it");
   h.session.dispose();
 });
+
+/**
+ * A resumed CLI whose previous process left background tasks running first
+ * reports them as stopped and answers that notice with a model-less `result`,
+ * before it dequeues the prompt that started the process.
+ */
+function startupResult(uuid: string): ClaudeSdkMessage {
+  return { ...result(uuid), result: "", num_turns: 0 } as ClaudeSdkMessage;
+}
+
+test("a model-less result before the prompt is dequeued does not end the turn", async () => {
+  const h = makeHarness();
+  const turn = h.adapter.prompt("first");
+  await until(() => h.queries[0]?.inputs.length === 1);
+  const query = h.queries[0]!;
+  const uuid = (query.inputs[0] as { uuid?: string }).uuid;
+  assert.ok(uuid, "the prompt carries the uuid the CLI reports back");
+  let turnSettled = false;
+  void turn.then(() => (turnSettled = true));
+
+  query.output.emit(startupResult("startup"));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(turnSettled, false, "the prompt has not run yet");
+  assert.equal(query.closeCalls, 0, "the process that runs it stays open");
+
+  query.output.emit(started(uuid));
+  query.output.emit(result("r1", [uuid]));
+  await turn;
+  assert.equal(query.closeCalls, 1);
+  assert.equal(h.events.filter((t) => t === "runCompleted").length, 1);
+  h.session.dispose();
+});
+
+test("a model-less result after the prompt was dequeued ends the turn", async () => {
+  const h = makeHarness();
+  const turn = h.adapter.prompt("first");
+  await until(() => h.queries[0]?.inputs.length === 1);
+  const query = h.queries[0]!;
+  query.output.emit(started((query.inputs[0] as { uuid: string }).uuid));
+  query.output.emit(startupResult("r1"));
+  await turn;
+  assert.equal(query.closeCalls, 1);
+  h.session.dispose();
+});
+
+test("a failed result before the prompt is dequeued still fails the turn", async () => {
+  const h = makeHarness();
+  const turn = h.adapter.prompt("first");
+  await until(() => h.queries[0]?.inputs.length === 1);
+  h.queries[0]!.output.emit({
+    ...startupResult("startup"),
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["the CLI could not start"],
+  } as unknown as ClaudeSdkMessage);
+  const outcome = await turn;
+  assert.equal(outcome.stopReason, "error");
+  h.session.dispose();
+});
