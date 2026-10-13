@@ -8,6 +8,8 @@
  * runtime check, judged inside the locked write.
  */
 import { Buffer } from "node:buffer";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
   THINKING_LEVELS,
   type AgentDefinitionApprovalBody,
@@ -35,6 +37,7 @@ import {
   MAX_ENTRY_SOURCE_BYTES,
   previewEntryEdit,
   readEntrySource,
+  readLibraryOverview,
 } from "../../library/libraryAuthoring.ts";
 import type {
   LibraryCommitMeta,
@@ -179,6 +182,25 @@ function cardSummary(body: AgentDefinitionApprovalBody): string {
   return `a change to agent "${body.name}": ${changes.join(", ")}`;
 }
 
+/** Refuse a create whose name a folder or a declared agent already holds. */
+async function assertNameIsFree(
+  library: LibraryStore,
+  name: string,
+): Promise<void> {
+  const overview = await readLibraryOverview(library);
+  const taken =
+    overview.entries.some((entry) => entry.name === name) ||
+    overview.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.declaredName === name || diagnostic.folder === name,
+    ) ||
+    existsSync(join(library.root, name));
+  if (taken)
+    throw new EntryValidationError(
+      `The agents library already has an entry or folder named "${name}". Choose another name, or edit that definition instead.`,
+    );
+}
+
 /**
  * Parse a definition the tool is about to propose or write, size included:
  * the content rule never judges size, and a card for a definition the write
@@ -247,7 +269,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
       },
     },
     required: ["name", "description", "persona", "model", "body"],
-    async run(params, meta, _library, _options, ctx) {
+    async run(params, meta, library, _options, ctx) {
       const input: AgentDefinitionInput = {
         name: params.name as string,
         description: params.description as string,
@@ -266,6 +288,8 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
       };
       const source = formatAgentManifest(input);
       const after = definitionOf(source, input.name);
+      // A card for a name approval would refuse is a wasted decision.
+      await assertNameIsFree(library, after.name);
       return propose(ctx, "create", undefined, after, source, { meta });
     },
   },

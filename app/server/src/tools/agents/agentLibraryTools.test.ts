@@ -403,3 +403,124 @@ describe("the agent tool group", () => {
     assert.match(tool("agent_edit").description, /approval card/);
   });
 });
+
+describe("agent tool races and pins", () => {
+  const handCommit = async (message: string) =>
+    git(
+      [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--quiet",
+        "-am",
+        message,
+      ],
+      root,
+    );
+
+  test("a re-proposed create supersedes the waiting card, and a taken name is refused before any card", async () => {
+    await call("agent_create", definition);
+    const first = latestCard();
+    await call("agent_create", { ...definition, reason: "Add again" });
+    const second = latestCard();
+    assert.notEqual(first.id, second.id);
+    assert.equal(
+      approvalsForSession(sessionId).find((card) => card.id === first.id)
+        ?.status,
+      "superseded",
+    );
+    await assert.rejects(
+      resolveApproval(first.id, "approved"),
+      /already superseded/,
+    );
+    const { card } = await resolveApproval(second.id, "approved");
+    assert.equal(card.status, "executed", card.error);
+    const cards = approvalsForSession(sessionId).length;
+    await assert.rejects(
+      tool("agent_create").execute(definition, ctx()),
+      /already has an entry or folder named "test-reviewer"/,
+    );
+    assert.equal(approvalsForSession(sessionId).length, cards);
+  });
+
+  test("a card created in another session refuses on approval once the name is taken", async () => {
+    await call("agent_create", definition);
+    const waiting = latestCard();
+    const otherSession = sessionId;
+    sessionId = `${sessionId}-other`;
+    await createApproved();
+    sessionId = otherSession;
+    const { card } = await resolveApproval(waiting.id, "approved");
+    assert.equal(card.status, "failed");
+    assert.match(card.error ?? "", /already declares the name "test-reviewer"/);
+  });
+
+  test("a pinned Claude id shows the version it holds the alias to", async () => {
+    setAgentRuntimeSourcesForTests({
+      models: async () => [
+        { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+      ],
+      skillNames: async () => [],
+      toolNames: async () => ["worktree_push"],
+    });
+    await call("agent_create", { ...definition, model: "claude-opus-5-5" });
+    const card = latestCard();
+    assert.equal(
+      card.body.kind === "agentDefinition" && card.body.resolvedModel,
+      "claude-sdk/opus (claude-opus-5-5)",
+    );
+    const { card: done } = await resolveApproval(card.id, "approved");
+    assert.equal(done.status, "executed", done.error);
+    assert.match(readFileSync(manifest(), "utf8"), /model: "claude-opus-5-5"/);
+  });
+
+  test("a direct edit refuses when the locked file would now change the model", async () => {
+    await createApproved();
+    // Preview: the edit only touches the body.
+    await writeFile(
+      manifest(),
+      readFileSync(manifest(), "utf8").replace(
+        "You are a test reviewer.",
+        "You are a test reviewer for sonnet-fans.",
+      ),
+    );
+    await handCommit("Body mentions sonnet-fans");
+    let armed = true;
+    class RacingStore extends LibraryStore {
+      override async commitMutation<T>(
+        ...args: Parameters<LibraryStore["commitMutation"]>
+      ): Promise<{ value: T; commit: never; status: never }> {
+        if (armed) {
+          armed = false;
+          // Between the preview and the locked write, the target text moves
+          // into the model line.
+          await writeFile(
+            manifest(),
+            readFileSync(manifest(), "utf8")
+              .replace('model: "sonnet"', 'model: "sonnet-fans"')
+              .replace(" for sonnet-fans.", "."),
+          );
+          await handCommit("Model is now sonnet-fans");
+        }
+        return super.commitMutation(...(args as [never, never])) as never;
+      }
+    }
+    const racing = new RacingStore(agentKind, root);
+    setAgentToolLibraryForTests(() => racing);
+    await assert.rejects(
+      tool("agent_edit").execute(
+        {
+          name: "test-reviewer",
+          edits: [{ oldText: "sonnet-fans", newText: "opus-fans" }],
+          reason: "Retarget fans",
+        },
+        ctx(),
+      ),
+      /changed since this edit was checked, and the edit would now change its model or effort/,
+    );
+    assert.equal(armed, false);
+    assert.match(readFileSync(manifest(), "utf8"), /model: "sonnet-fans"/);
+  });
+});

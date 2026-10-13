@@ -1395,7 +1395,6 @@ export function normalizeLibraryPath(input: string): string {
   return components.join("/");
 }
 
-/** Exact, unique, non-overlapping replacements against source already read. */
 /**
  * What an edit would make of `content`, without touching anything: the same
  * exact, unique, non-overlapping replacements the edit itself applies. For a
@@ -1410,6 +1409,7 @@ export function previewEntryEdit(
   return applyExactReplacements(kind, content, edits, path).content;
 }
 
+/** Exact, unique, non-overlapping replacements against source already read. */
 function applyExactReplacements(
   kind: LibraryKind,
   content: string,

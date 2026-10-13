@@ -3514,7 +3514,7 @@ export interface AgentDefinitionApprovalBody {
   /** Declared name, also the library folder. */
   name: string;
   description: string;
-  persona: string;
+  persona: "developer" | "assistant";
   /** The model as written, before (edit only) and after. */
   model: { before?: string; after: string };
   /** The connected model `after` resolved to when proposed: `provider/id`. */
