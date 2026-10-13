@@ -163,6 +163,7 @@ export async function mergePullRequestFromView(
       repoPath: repository.repoPath,
       providerKind: request.provider,
       number: request.number,
+      repoUrl: repository.provider.repoWebUrl,
     },
     "a merge & clean up",
     () => mergeAndCleanUp(request, repository, rows, operations),
@@ -195,6 +196,7 @@ export async function checkPullRequestFromView(
       repoPath: repository.repoPath,
       providerKind: request.provider,
       number: request.number,
+      repoUrl: repository.provider.repoWebUrl,
     },
     "a state check",
     async () => {

@@ -124,7 +124,14 @@ it("merges with the chosen method and deletes the remote branch by default", () 
   pickMethod("Merge commit");
   click(find("button", "Merge"));
   expect(clicks).toEqual([
-    { action: "merge", options: { mergeMethod: "merge", deleteBranch: true } },
+    {
+      action: "merge",
+      options: {
+        mergeMethod: "merge",
+        deleteBranch: true,
+        expectedBaseBranch: "main",
+      },
+    },
   ]);
 });
 
@@ -147,7 +154,11 @@ it("carries the opt-out into the merge click and says so first", () => {
   expect(clicks).toEqual([
     {
       action: "merge",
-      options: { mergeMethod: "squash", deleteBranch: false },
+      options: {
+        mergeMethod: "squash",
+        deleteBranch: false,
+        expectedBaseBranch: "main",
+      },
     },
   ]);
 });
@@ -203,7 +214,14 @@ it("invalidates a selected method the repository no longer allows", () => {
   });
   click(find("button", "Merge"));
   expect(clicks).toEqual([
-    { action: "merge", options: { mergeMethod: "squash", deleteBranch: true } },
+    {
+      action: "merge",
+      options: {
+        mergeMethod: "squash",
+        deleteBranch: true,
+        expectedBaseBranch: "main",
+      },
+    },
   ]);
 });
 

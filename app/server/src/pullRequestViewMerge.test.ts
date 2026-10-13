@@ -521,7 +521,7 @@ async function holdPullRequest(
     registered = resolve;
   });
   const done = withPullRequestMutation(
-    { repoPath: path, providerKind: "forgejo", number: 7 },
+    { repoPath: path, providerKind: "forgejo", number: 7, repoUrl: undefined },
     what,
     async () => {
       registered();

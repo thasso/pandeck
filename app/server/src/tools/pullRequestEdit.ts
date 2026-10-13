@@ -1,8 +1,9 @@
 /**
  * The edit proposal shared by `github_edit_pull_request` and
  * `forgejo_edit_pull_request`: a replacement description, a new base, or both.
- * Both providers accept the same two fields on their pull-request PATCH.
  */
+import type { GitHostingProvider } from "../gitHosting.ts";
+import { withHostedPullRequestMutation } from "../pullRequestMerge.ts";
 
 interface PullRequestEditInput {
   body?: string;
@@ -39,23 +40,50 @@ export function pullRequestEdit(params: PullRequestEditInput): {
   };
 }
 
-/** The provider PATCH body: only the fields the approved proposal changes. */
-export function pullRequestEditPayload(
-  b: PullRequestEditFields,
-): Record<string, string> {
+/**
+ * Execute an approved edit. The base goes through the provider seam under the
+ * pull request's hosted mutation lock — the one every managed merge, close and
+ * retarget of the same pull request also holds — so an approved retarget
+ * cannot land between a merge's identity read and the merge itself. A
+ * description is not a merge decision and keeps its plain PATCH
+ * (`patchDescription`). A description that fails after the base landed names
+ * the retarget rather than reading as "nothing happened".
+ */
+export async function applyPullRequestEdit(
+  provider: GitHostingProvider,
+  b: PullRequestEditFields & { pullNumber: number },
+  patchDescription: (body: string) => Promise<string | undefined>,
+): Promise<{ resultSummary: string; resultUrl?: string }> {
+  const applied: string[] = [];
+  if (b.base) {
+    const base = b.base;
+    await withHostedPullRequestMutation(
+      {
+        providerKind: provider.kind,
+        repoUrl: provider.repoWebUrl,
+        number: b.pullNumber,
+      },
+      "an approved base edit",
+      () => provider.retargetPullRequest(b.pullNumber, base),
+    );
+    applied.push(`Retargeted #${b.pullNumber} onto ${base}`);
+  }
+  let resultUrl: string | undefined;
+  if (typeof b.prBody === "string") {
+    try {
+      resultUrl = await patchDescription(b.prBody);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        applied.length
+          ? `${message} — already applied: ${applied.join("; ")}`
+          : message,
+      );
+    }
+    applied.push(`Updated description on #${b.pullNumber}`);
+  }
   return {
-    ...(typeof b.prBody === "string" ? { body: b.prBody } : {}),
-    ...(b.base ? { base: b.base } : {}),
+    resultSummary: applied.join("; "),
+    ...(resultUrl !== undefined ? { resultUrl } : {}),
   };
-}
-
-export function pullRequestEditSummary(
-  b: PullRequestEditFields & { pullNumber?: number },
-): string {
-  return [
-    ...(b.base ? [`Retargeted #${b.pullNumber} onto ${b.base}`] : []),
-    ...(typeof b.prBody === "string"
-      ? [`Updated description on #${b.pullNumber}`]
-      : []),
-  ].join("; ");
 }

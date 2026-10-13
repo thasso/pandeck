@@ -51,7 +51,7 @@ import {
   pullRequestCardRecord,
 } from "./pullRequestCards.ts";
 import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
-import { pullRequestIdentity } from "./pullRequestIdentity.ts";
+import { pullRequestIdentity, pullRequestKey } from "./pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "./pullRequestInventory.ts";
 import { readTask, taskSummaryOf, updateTask } from "./tasks.ts";
 import {
@@ -159,9 +159,55 @@ export interface PullRequestIdentity {
   repoPath: string;
   providerKind: GitHostingProviderKind;
   number: number;
+  /**
+   * Any repository or pull-request URL the provider reported. It names the
+   * same lock as {@link withHostedPullRequestMutation}, which the generic
+   * provider tools take with no checkout at all.
+   */
+  repoUrl: string | undefined;
+}
+
+/** A pull request named by its provider alone, with no local checkout. */
+export interface HostedPullRequestIdentity {
+  providerKind: GitHostingProviderKind;
+  repoUrl: string;
+  number: number;
 }
 
 const mutating = new Map<string, string>();
+
+/**
+ * Every key a mutation holds: the checkout's (what every managed surface has
+ * always shared) and, when the URL proves a repository, the hosted one.
+ */
+async function mutationKeys(identity: PullRequestIdentity): Promise<string[]> {
+  const hosted =
+    identity.repoUrl &&
+    pullRequestKey(identity.providerKind, identity.repoUrl, identity.number);
+  return [
+    `${await repoLockKey(identity.repoPath)}#${identity.providerKind}#${identity.number}`,
+    ...(hosted ? [`hosted#${hosted}`] : []),
+  ];
+}
+
+async function holdingMutation<T>(
+  keys: string[],
+  number: number,
+  what: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const holder = keys.map((key) => mutating.get(key)).find(Boolean);
+  if (holder)
+    throw new Error(
+      `Pull request #${number} is busy: ${holder} is running. Nothing was done — try again once it finishes.`,
+    );
+  for (const key of keys) mutating.set(key, what);
+  try {
+    return await run();
+  } finally {
+    for (const key of keys) mutating.delete(key);
+  }
+}
 
 /**
  * Serialize every mutation of ONE pull request, across surfaces and across
@@ -180,18 +226,35 @@ export async function withPullRequestMutation<T>(
   what: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  const key = `${await repoLockKey(identity.repoPath)}#${identity.providerKind}#${identity.number}`;
-  const holder = mutating.get(key);
-  if (holder)
+  return holdingMutation(
+    await mutationKeys(identity),
+    identity.number,
+    what,
+    run,
+  );
+}
+
+/**
+ * The same lock for a caller that names the pull request only through its
+ * provider (the approval-gated generic edit tools). It collides with every
+ * managed mutation of the same pull request through the hosted key, so an
+ * approved retarget cannot land between a merge's identity read and the merge.
+ */
+export async function withHostedPullRequestMutation<T>(
+  identity: HostedPullRequestIdentity,
+  what: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const hosted = pullRequestKey(
+    identity.providerKind,
+    identity.repoUrl,
+    identity.number,
+  );
+  if (!hosted)
     throw new Error(
-      `Pull request #${identity.number} is busy: ${holder} is running. Nothing was done — try again once it finishes.`,
+      `${identity.repoUrl} names no repository; pull request #${identity.number} was not changed.`,
     );
-  mutating.set(key, what);
-  try {
-    return await run();
-  } finally {
-    mutating.delete(key);
-  }
+  return holdingMutation([`hosted#${hosted}`], identity.number, what, run);
 }
 
 /** Whether a head-changing action currently owns this exact pull request. */
@@ -199,8 +262,7 @@ export async function pullRequestMutationInProgress(
   identity: PullRequestIdentity,
 ): Promise<boolean> {
   if (mutating.size === 0) return false;
-  const key = `${await repoLockKey(identity.repoPath)}#${identity.providerKind}#${identity.number}`;
-  return mutating.has(key);
+  return (await mutationKeys(identity)).some((key) => mutating.has(key));
 }
 
 /** Test seam: forget every in-flight mutation. */
@@ -210,7 +272,7 @@ export function resetPullRequestMutationsForTests(): void {
 
 /** Invalidate every older provider poll before an action changes the PR head. */
 export async function reservePullRequestObservationGenerations(
-  identity: PullRequestIdentity,
+  identity: Omit<PullRequestIdentity, "repoUrl">,
 ): Promise<void> {
   const candidates = openPullRequestCards().filter(
     (card) =>
@@ -265,6 +327,7 @@ export async function mergePullRequestAndProject(
       repoPath: input.repoPath,
       providerKind: input.provider.kind,
       number: input.number,
+      repoUrl: input.provider.repoWebUrl,
     },
     "a merge",
     () => mergeAndProject(input, operations),
@@ -760,7 +823,7 @@ async function projectFreshPullRequestSnapshot(
  * same set of cards, or one of the two would leave a duplicate card open.
  */
 export async function openCardsForPullRequest(
-  identity: PullRequestIdentity,
+  identity: Omit<PullRequestIdentity, "repoUrl">,
 ): Promise<PullRequestCard[]> {
   const candidates = openPullRequestCards().filter(
     (card) =>

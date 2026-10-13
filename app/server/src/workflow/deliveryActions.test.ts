@@ -182,6 +182,7 @@ test("refuses a merge the run's current state no longer offers", async () => {
           calls += 1;
           throw new Error("must not reach the card seam");
         },
+        runBase: () => "main",
         async settleRun() {
           throw new Error("must not settle");
         },
@@ -214,6 +215,7 @@ test("a merge at the seam carries the click's method and branch choice", async (
           actionToken: "token",
         };
       },
+      runBase: () => "main",
       async settleRun() {
         throw new Error("a merge settles nothing");
       },
@@ -223,7 +225,11 @@ test("a merge at the seam carries the click's method and branch choice", async (
   assert.deepEqual(observed, {
     cardId: card.id,
     action: "merge",
-    options: { mergeMethod: "rebase", deleteBranch: false },
+    options: {
+      mergeMethod: "rebase",
+      expectedBaseBranch: "main",
+      deleteBranch: false,
+    },
     actor: USER,
     sessionId: "coordinator-1",
   });
@@ -269,6 +275,7 @@ test("cleanup retires the checkout and then settles the run", async () => {
         actionToken: "token",
       };
     },
+    runBase: () => "main",
     async settleRun(runId) {
       order.push("settle");
       assert.equal(runId, run.id);
@@ -297,6 +304,7 @@ test("a refused settlement still reports the cleanup that landed", async () => {
         actionToken: "token",
       };
     },
+    runBase: () => "main",
     async settleRun() {
       throw new Error("a role session is still running");
     },
@@ -394,6 +402,7 @@ test("a role session's own cleanup never tries to settle the run it belongs to",
           actionToken: "token",
         };
       },
+      runBase: () => "main",
       async settleRun() {
         settleCalls += 1;
         throw new Error("must not be attempted from a role session's turn");
@@ -431,6 +440,7 @@ test("an unsettled run after cleanup is a live condition that retires itself", a
         actionToken: "token",
       };
     },
+    runBase: () => "main",
     async settleRun() {
       throw new Error("a role session is still running.");
     },
@@ -460,6 +470,7 @@ test("a cleanup that settled the run asks for nothing further", async () => {
         actionToken: "token",
       };
     },
+    runBase: () => "main",
     async settleRun(runId) {
       const row = store.getRun(runId)!;
       return store.settleRun(runId, row.attention?.revision ?? 0) ?? row;
@@ -483,6 +494,7 @@ test("a stale gate is refused as a run refusal, before the card is touched", asy
         calls += 1;
         throw new Error("must not reach the card seam");
       },
+      runBase: () => "main",
       async settleRun() {
         throw new Error("must not settle");
       },

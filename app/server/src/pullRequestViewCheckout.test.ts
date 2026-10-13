@@ -700,7 +700,7 @@ test("is refused while another mutation holds this pull request", async () => {
   const recorded = recorder();
 
   await withPullRequestMutation(
-    { repoPath: main, providerKind: "forgejo", number: 7 },
+    { repoPath: main, providerKind: "forgejo", number: 7, repoUrl: undefined },
     "a merge & clean up",
     async () => {
       await assert.rejects(
@@ -727,7 +727,7 @@ test("is not blocked by a mutation on another pull request", async () => {
   const main = repo();
 
   await withPullRequestMutation(
-    { repoPath: main, providerKind: "forgejo", number: 8 },
+    { repoPath: main, providerKind: "forgejo", number: 8, repoUrl: undefined },
     "a merge & clean up",
     async () => {
       const result = await checkoutPullRequestFromView(

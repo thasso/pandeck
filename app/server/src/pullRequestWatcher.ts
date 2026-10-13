@@ -109,8 +109,11 @@ let sweeper: ReturnType<typeof setInterval> | undefined;
 /** Next-due schedule, in-memory only — rebuilt by `reconcilePullRequestCardsOnBoot` on restart. */
 const nextPollAt = new Map<string, number>();
 const inFlight = new Set<string>();
-/** Consecutive `mergeable: false` reads per card, with the head they concern. */
-const unmergeableReads = new Map<string, { headSha: string; reads: number }>();
+/** Consecutive `mergeable: false` reads per card, with the head and base they concern. */
+const unmergeableReads = new Map<
+  string,
+  { headSha: string; baseBranch: string; reads: number }
+>();
 
 function ciConcluded(card: PullRequestCard): boolean {
   return Boolean(card.ci) && card.ci!.state !== "pending";
@@ -140,25 +143,41 @@ function intervalFor(card: PullRequestCard): number {
  * is queued (and for a draft, which the provider seam already maps to `null`),
  * and reading that as terminal paused a workflow run on a phantom conflict
  * (Task 535). A second consecutive read of the same head is the confirmation.
+ *
+ * "The same" means head AND base: a retarget keeps the head, and Forgejo's
+ * queued `false` right after it would otherwise pair with a `false` about the
+ * OLD base and confirm a conflict nothing has checked.
  */
 function conflictConfirmed(
   card: PullRequestCard,
   observedHeadSha: string | undefined,
-  detail: { mergeable: boolean | null; headSha: string },
+  detail: { mergeable: boolean | null; headSha: string; baseBranch: string },
 ): boolean {
   if (detail.mergeable !== false) {
     unmergeableReads.delete(card.id);
     return false;
   }
   const previous = unmergeableReads.get(card.id);
-  const reads = previous?.headSha === detail.headSha ? previous.reads + 1 : 1;
-  unmergeableReads.set(card.id, { headSha: detail.headSha, reads });
+  const reads =
+    previous?.headSha === detail.headSha &&
+    previous.baseBranch === detail.baseBranch
+      ? previous.reads + 1
+      : 1;
+  unmergeableReads.set(card.id, {
+    headSha: detail.headSha,
+    baseBranch: detail.baseBranch,
+    reads,
+  });
   // A conflict the card already states IS the earlier read: after a restart
   // the in-memory count is gone, and un-saying a confirmed conflict only to
   // repeat it one poll later would flicker the card for no new information.
+  // Only while it describes this base, though: one stated against the base
+  // the pull request has since left says nothing about the new one.
   return (
     reads >= CONFLICT_CONFIRMING_READS ||
-    (card.conflicts === true && observedHeadSha === detail.headSha)
+    (card.conflicts === true &&
+      observedHeadSha === detail.headSha &&
+      card.baseBranch === detail.baseBranch)
   );
 }
 
@@ -219,6 +238,7 @@ async function pollCard(cardId: string): Promise<void> {
       repoPath: repoRoot,
       providerKind: provider.kind,
       number,
+      repoUrl: provider.repoWebUrl,
     })
   ) {
     nextPollAt.set(cardId, Date.now() + FAST_POLL_MS);

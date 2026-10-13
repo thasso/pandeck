@@ -26,11 +26,7 @@ import { forgejoRequest } from "../../forgejoClient.ts";
 import { forgejoProvider } from "../../gitHosting.ts";
 import { invalidateForgejoPullRequestWrite } from "../../pullRequestInventorySync.ts";
 import { resolveForgejoRepo } from "./forgejoTools.ts";
-import {
-  pullRequestEdit,
-  pullRequestEditPayload,
-  pullRequestEditSummary,
-} from "../pullRequestEdit.ts";
+import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
 import {
   approvalCardReference,
   createApproval,
@@ -552,17 +548,26 @@ registerApprovalExecutor("forgejoPullRequest", {
         throw new Error(
           "Edit proposal is missing its pull-request number or its changes.",
         );
-      const res = await forgejoRequest<{ html_url?: string }>(
+      const provider = forgejoProvider(
+        { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
         config,
-        "PATCH",
-        `${base}/pulls/${b.pullNumber}`,
-        { body: pullRequestEditPayload(b) },
+      );
+      const edited = await applyPullRequestEdit(
+        provider,
+        { ...b, pullNumber: b.pullNumber },
+        async (description) =>
+          (
+            await forgejoRequest<{ html_url?: string }>(
+              config,
+              "PATCH",
+              `${base}/pulls/${b.pullNumber}`,
+              { body: { body: description } },
+            )
+          ).data.html_url,
       );
       return {
-        resultSummary: pullRequestEditSummary(b),
-        ...(res.data.html_url !== undefined
-          ? { resultUrl: res.data.html_url }
-          : {}),
+        resultUrl: `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
+        ...edited,
       };
     }
 

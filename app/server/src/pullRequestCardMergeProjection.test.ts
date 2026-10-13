@@ -165,7 +165,7 @@ test("a card whose projection write failed is still landed by its own action", a
   const { card: updated } = await runPullRequestCardAction(
     subject.id,
     "merge",
-    { mergeMethod: "squash" },
+    { mergeMethod: "squash", expectedBaseBranch: "main" },
     operations,
   );
 

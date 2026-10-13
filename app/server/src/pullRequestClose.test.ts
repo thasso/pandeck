@@ -260,7 +260,7 @@ test("a pull request that is no longer open refuses the close", async () => {
 test("a close is refused while another mutation owns the pull request", async () => {
   const path = repo();
   await withPullRequestMutation(
-    { repoPath: path, providerKind: "github", number: 42 },
+    { repoPath: path, providerKind: "github", number: 42, repoUrl: undefined },
     "a merge",
     async () => {
       await assert.rejects(

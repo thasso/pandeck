@@ -21,11 +21,7 @@ import {
 import { invalidateGithubPullRequestWrite } from "../../pullRequestInventorySync.ts";
 import { githubProvider } from "../../gitHosting.ts";
 import { resolveRepo } from "./githubTools.ts";
-import {
-  pullRequestEdit,
-  pullRequestEditPayload,
-  pullRequestEditSummary,
-} from "../pullRequestEdit.ts";
+import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
 import type {
   ApprovalCard,
   GithubPrInlineCommentDisplay,
@@ -711,17 +707,26 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
       throw new Error(
         "Edit proposal is missing its pull-request number or its changes.",
       );
-    const res = await githubRequest<{ html_url?: string }>(
+    const provider = githubProvider(
+      { host: "github.com", owner: owner!, repo: repoName! },
       config,
-      "PATCH",
-      `${base}/pulls/${b.pullNumber}`,
-      { body: pullRequestEditPayload(b) },
+    );
+    const edited = await applyPullRequestEdit(
+      provider,
+      { ...b, pullNumber: b.pullNumber },
+      async (description) =>
+        (
+          await githubRequest<{ html_url?: string }>(
+            config,
+            "PATCH",
+            `${base}/pulls/${b.pullNumber}`,
+            { body: { body: description } },
+          )
+        ).data.html_url,
     );
     return {
-      resultSummary: pullRequestEditSummary(b),
-      ...(res.data.html_url !== undefined
-        ? { resultUrl: res.data.html_url }
-        : {}),
+      resultUrl: `${provider.repoWebUrl}/pull/${b.pullNumber}`,
+      ...edited,
     };
   }
 

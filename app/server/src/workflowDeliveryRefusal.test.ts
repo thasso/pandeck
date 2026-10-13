@@ -26,6 +26,7 @@ const store = await import("./db/workflowStore.ts");
 const recipe = await import("./workflow/codeDeliveryRecipe.ts");
 const contracts = await import("./workflow/resultContracts.ts");
 const { closeDb } = await import("./db/index.ts");
+const { insertWorktree } = await import("./db/worktreeStore.ts");
 
 const SYSTEM = { kind: "system" } as const;
 let nextTask = 8800;
@@ -214,6 +215,26 @@ test("repeats itself rather than going quiet when the old failure reads the same
 test("leaves a failure the card just persisted to the card alone", async () => {
   const card = pullRequestCard();
   const run = publishedRun(card.id);
+  // The run delivers into its worktree's base, which the merge carries.
+  insertWorktree({
+    id: "wt-refusal",
+    projectId: "acme",
+    mainRepoRoot: join(tmp, "repo"),
+    path: join(tmp, "repo-wt"),
+    branch: "feature",
+    baseBranch: card.baseBranch,
+    baseCommit: "sha-0",
+    status: "active",
+    mergeStateJson: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    removedAt: null,
+  });
+  store.attachRunWorktree(
+    run.id,
+    { worktreeId: "wt-refusal", branch: "feature" },
+    SYSTEM,
+  );
   const step = store.appendStep({
     runId: run.id,
     kind: "user-decision",

@@ -24,6 +24,7 @@ import type {
   ApprovalCard,
   ManagedPullRequestMergeApprovalBody,
   PullRequestCard,
+  PullRequestDetail,
   PullRequestMergeMethod,
   PullRequestRepositoryCapabilities,
   TaskSummary,
@@ -327,6 +328,7 @@ export function createWorktreeReadyPullRequestTool(
               repoPath: target.row.path,
               providerKind: target.hosted.provider.kind,
               number: target.number,
+              repoUrl: target.hosted.provider.repoWebUrl,
             },
             "a ready-for-review transition",
             async () => {
@@ -451,6 +453,7 @@ export function createWorktreeRetargetPullRequestTool(
               repoPath: target.row.path,
               providerKind: target.hosted.provider.kind,
               number: target.number,
+              repoUrl: target.hosted.provider.repoWebUrl,
             },
             "a base retarget",
             async () => {
@@ -469,25 +472,56 @@ export function createWorktreeRetargetPullRequestTool(
                   `Pull request #${target.number} changed while preparing to retarget it; nothing was changed.`,
                 );
               let inventoryWarning: string | undefined;
+              let writeError: unknown;
               try {
                 await provider.retargetPullRequest(target.number, base);
               } catch (error) {
-                throw new Error(
-                  `${provider.kind} refused to retarget pull request #${target.number} onto ${base}: ${errorText(error)} If ${base} is not on the remote yet, push it first.`,
-                );
+                // A rejected request is not proof nothing landed: a response
+                // lost after the PATCH applied looks the same. The read-back
+                // below decides which it was.
+                writeError = error ?? new Error("unknown error");
               } finally {
                 inventoryWarning = recordInventoryChange(operations, target);
               }
               // The edit has no precondition, so its outcome is what the
               // provider reports afterwards, not what was asked for.
-              let confirmWarning: string | undefined;
+              let after: PullRequestDetail | null = null;
+              let readError: unknown;
               try {
-                const after = await provider.pullRequestDetail(target.number);
-                if (after?.baseBranch !== base)
-                  confirmWarning = `The retarget was sent, but pull request #${target.number} still reports base ${after?.baseBranch || "(unreported)"}.`;
+                after = await provider.pullRequestDetail(target.number);
               } catch (error) {
-                confirmWarning = `The retarget was sent, but its result could not be read back: ${errorText(error)}.`;
+                readError = error ?? new Error("unknown error");
               }
+              if (writeError !== undefined) {
+                for (const card of target.cards) scheduleImmediatePoll(card.id);
+                if (after?.baseBranch === target.baseBranch)
+                  throw new Error(
+                    `${provider.kind} refused to retarget pull request #${target.number} onto ${base}: ${errorText(writeError)} If ${base} is not on the remote yet, push it first.`,
+                  );
+                if (after?.baseBranch !== base)
+                  throw new Error(
+                    `Retargeting pull request #${target.number} onto ${base} failed (${errorText(writeError)}), and whether it landed is unknown: ${after ? `the pull request now reports base ${after.baseBranch || "(unreported)"}` : `it could not be read back (${errorText(readError)})`}. Read the pull request before retrying.`,
+                  );
+              }
+              let confirmWarning: string | undefined;
+              if (!after)
+                confirmWarning = `The retarget was sent, but its result could not be read back: ${errorText(readError ?? "the pull request was not found")}.`;
+              else if (after.baseBranch !== base)
+                confirmWarning = `The retarget was sent, but pull request #${target.number} still reports base ${after.baseBranch || "(unreported)"}.`;
+              else if (
+                after.number !== target.number ||
+                after.state !== "open" ||
+                after.merged ||
+                after.headBranch !== target.headBranch ||
+                after.headSha.toLowerCase() !== target.headSha.toLowerCase()
+              )
+                // The base landed, but on a pull request that moved under
+                // the unconditioned write; its cards are the watcher's.
+                confirmWarning = `Pull request #${target.number} now targets ${base}, but it also changed during the retarget (${after.merged ? "merged" : after.state}, head ${after.headBranch}@${after.headSha || "(unreported)"}); its cards are left to the watcher.`;
+              const writeWarning =
+                writeError !== undefined
+                  ? `The provider reported an error (${errorText(writeError)}), but the pull request now targets ${base}.`
+                  : undefined;
               let projectionWarning: string | undefined;
               if (confirmWarning) {
                 for (const card of target.cards) scheduleImmediatePoll(card.id);
@@ -502,6 +536,7 @@ export function createWorktreeRetargetPullRequestTool(
               }
               const warnings = [
                 confirmWarning,
+                writeWarning,
                 inventoryWarning,
                 projectionWarning,
               ].filter((warning): warning is string => Boolean(warning));
@@ -511,7 +546,9 @@ export function createWorktreeRetargetPullRequestTool(
                 ...summary,
                 ...(warnings.length > 0 ? { warnings } : {}),
                 message: [
-                  `Pull request #${target.number} now targets ${base} instead of ${target.baseBranch}. Re-check checks, review and mergeability before merging.`,
+                  after?.baseBranch === base
+                    ? `Pull request #${target.number} now targets ${base} instead of ${target.baseBranch}. Re-check checks, review and mergeability before merging.`
+                    : `Sent a retarget of pull request #${target.number} onto ${base}; it is not confirmed.`,
                   ...warnings,
                 ].join(" "),
               });

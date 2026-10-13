@@ -8696,6 +8696,9 @@ export function useAssistant({
           // Only the opt-out is sent: deleting the remote branch is the default
           // and stays unstated on the wire.
           ...(options?.deleteBranch === false ? { deleteBranch: false } : {}),
+          ...(options?.expectedBaseBranch
+            ? { baseBranch: options.expectedBaseBranch }
+            : {}),
           requestId,
         });
       },
