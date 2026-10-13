@@ -21,6 +21,7 @@ hidden prompt through `agentHandoffs.ts`.
 | `gmailArchive`            | `google_gmail_archive`                                    | `gmailArchive`                                                         |
 | `sessionSpawn`            | `session_spawn` with `operation: "propose"`               | `sessionSpawn`                                                         |
 | `managedPullRequestMerge` | `worktree_finish_pull_request` into the default branch    | `managedPullRequestMerge`                                              |
+| `managedCommitOverride`   | `worktree_commit` with `force: true`                      | none: never granted                                                    |
 | `projectCreate`           | `project_create`                                          | `projectCreate`                                                        |
 | `settingsInput`           | `settings_request_input`, `accounts_sign_in`              | none: never granted                                                    |
 
@@ -38,6 +39,14 @@ until its Claude or OpenAI account is enabled and signed in, and is approved
 when the account change is announced. A connection card refuses approval until
 the account is connected and is approved by the server when the OAuth callback
 announces the grant.
+
+A `managedCommitOverride` card asks the user to commit past a commit review that
+blocked a managed worktree commit. It shows that approving overrides the review,
+every blocker, the agent's reason, the branch, the scope (all or staged
+changes), and the proposed message and files. It has no grant key for the same
+reason as `settingsInput`: each override answers its own findings, so the card
+offers only Approve and Reject and is never auto-approved. The tool and executor
+contract is in [pull-requests.md](pull-requests.md#commit-review-override).
 
 `github_rerun_actions_run` writes without a card: a re-run loses nothing and is
 what an agent watching CI needs inside its loop. A branch-delete card binds the
@@ -85,7 +94,8 @@ card; the new card's outcome answers both.
 
 `managedPullRequestMerge` supersedes an earlier card for the same provider,
 repository and pull request number, so re-staging a merge after new commits
-leaves one card to approve.
+leaves one card to approve. `managedCommitOverride` supersedes the session's
+earlier override for the same worktree.
 
 ## Finding a card
 
@@ -106,7 +116,9 @@ both described in `messaging.md` ("The agent is blocked on the user"):
 it performs as a grant for that session. A grant is an operation, never a
 target: `jira:comment` covers a comment on any issue. Keys and labels come from
 `approvalGrantKeys`/`approvalGrantLabel` in `app/shared/approvalGrants.ts`.
-Every card kind offers the button.
+Every card kind with a grant key offers the button; `settingsInput` and
+`managedCommitOverride` have none, so their cards never do, and the server
+ignores a for-session decision on such a card.
 
 - **Coverage.** A new card runs on its own only when EVERY key it performs is
   granted. A mixed Jira or Confluence batch with one ungranted operation waits

@@ -46,6 +46,7 @@ import type {
   GithubIssueApprovalBody,
   GithubPullRequestApprovalBody,
   GmailArchiveApprovalBody,
+  ManagedCommitOverrideApprovalBody,
   ManagedPullRequestMergeApprovalBody,
   ProjectCreateApprovalBody,
   SessionSpawnApprovalBody,
@@ -56,6 +57,7 @@ import { approvalGrantKeys, approvalGrantLabel } from "@assistant/shared";
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
+import { CommitFiles } from "./CommitCard.tsx";
 import { ConfluencePageApprovalBody } from "./ConfluencePageApprovalBody.tsx";
 import { JiraIssueApprovalBody } from "./JiraIssueApprovalBody.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -68,6 +70,7 @@ import {
   type ProposalDecide,
 } from "./ProposalText.tsx";
 import { SettingsInputApprovalBody } from "./SettingsInputApprovalBody.tsx";
+import { NoticeList } from "./tools/NoticeList.tsx";
 import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -150,6 +153,7 @@ const KIND_ICON: Partial<Record<ApprovalCardData["body"]["kind"], LucideIcon>> =
     githubBranchDelete: Trash2,
     commit: GitCommitHorizontal,
     managedPullRequestMerge: GitMerge,
+    managedCommitOverride: GitCommitHorizontal,
     sessionSpawn: Sparkles,
     forgejoRelease: Tag,
     gitTag: Tag,
@@ -614,6 +618,73 @@ function ManagedMergeBody({
   );
 }
 
+/**
+ * An agent asking to commit past the commit review that blocked it. The card
+ * says plainly that approving overrides the review, then shows everything the
+ * user is overriding: every blocker, the agent's reason, the branch and scope,
+ * and the exact message and files. Approving re-runs the review server-side and
+ * still refuses secrets and conflicts, so the card states what was found rather
+ * than promising the commit will land.
+ */
+function ManagedCommitOverrideBody({
+  body,
+}: {
+  body: ManagedCommitOverrideApprovalBody;
+}) {
+  const { commit } = body;
+  const files = commit.totals.files;
+  return (
+    <div className="flex flex-col gap-3">
+      <Alert variant="warning" role="note">
+        <AlertTriangle />
+        <AlertDescription>
+          The commit review blocked this commit. Approving overrides the review
+          once and commits exactly the message and files below. A fresh secret
+          or conflict still stops it.
+        </AlertDescription>
+      </Alert>
+      <NoticeList
+        variant="destructive"
+        title="Review blockers"
+        items={commit.blockers.map((blocker) => (
+          <>
+            {blocker.file && (
+              <span className="font-mono">{blocker.file}: </span>
+            )}
+            {blocker.reason}
+          </>
+        ))}
+      />
+      <div>
+        <Fact label="Agent's reason">
+          <span className="whitespace-pre-wrap">{body.reason}</span>
+        </Fact>
+        <Fact label="Branch">
+          <span className="font-mono">{body.branch}</span>
+        </Fact>
+        <Fact label="Scope">
+          {body.stagedOnly ? "staged changes only" : "all changes"} · {files}{" "}
+          file{files === 1 ? "" : "s"} ·{" "}
+          <span className="text-success">+{commit.totals.additions}</span>{" "}
+          <span className="text-destructive">-{commit.totals.deletions}</span>
+        </Fact>
+      </div>
+      {commit.commitMessage ? (
+        <div>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">
+            Commit message
+          </p>
+          <pre className="rounded-lg border bg-muted p-2 font-mono text-sm wrap-anywhere whitespace-pre-wrap text-foreground">
+            {commit.commitMessage}
+          </pre>
+        </div>
+      ) : null}
+      <CommitFiles files={commit.files} />
+      <NoticeList title="Warnings" items={commit.warnings} />
+    </div>
+  );
+}
+
 /** One row's pending changes; absent fields keep what the agent proposed. */
 interface SpawnRowEdit {
   skip?: boolean;
@@ -1041,6 +1112,8 @@ function Body({
   if (b.kind === "projectCreate") return <ProjectCreateBody body={b} />;
   if (b.kind === "managedPullRequestMerge")
     return <ManagedMergeBody body={b} />;
+  if (b.kind === "managedCommitOverride")
+    return <ManagedCommitOverrideBody body={b} />;
   if (b.kind === "settingsInput")
     return <SettingsInputApprovalBody body={b} {...settingsInput} />;
   // commit
@@ -1131,6 +1204,9 @@ export function ApprovalCard({
   const awaitingUser = approval.status === "pending" && !approval.autoApproved;
   const header = approvalHeader(approval);
   const showDecision = awaitingUser && approval.body.kind !== "settingsInput";
+  // A card with no grantable operation (a commit review override) is decided
+  // one card at a time: there is nothing a session grant could cover.
+  const grantable = operations.length > 0;
   return (
     <AppCard
       tone={header.tone}
@@ -1183,16 +1259,18 @@ export function ApprovalCard({
               >
                 Reject
               </Button>
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => decide("approvedForSession")}
-                disabled={busy !== null}
-                busy={busy === "approvedForSession"}
-                title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
-              >
-                Approve for session
-              </Button>
+              {grantable ? (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => decide("approvedForSession")}
+                  disabled={busy !== null}
+                  busy={busy === "approvedForSession"}
+                  title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
+                >
+                  Approve for session
+                </Button>
+              ) : null}
               <Button
                 size="xs"
                 onClick={() => decide("approved")}

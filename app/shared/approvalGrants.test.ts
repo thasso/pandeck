@@ -71,3 +71,25 @@ test("grant labels read as provider: operation", () => {
     "Merge into the default branch",
   );
 });
+
+test("a commit review override is never grantable", () => {
+  expect(
+    approvalGrantKeys({
+      kind: "managedCommitOverride",
+      worktreeId: "wt-1",
+      branch: "t742-retry-backoff",
+      reason: "The generated snapshot is one atomic change.",
+      stagedOnly: false,
+      commit: {
+        status: "blocked",
+        dryRun: true,
+        forced: false,
+        commitMessage: "Regenerate the API snapshot",
+        blockers: [{ kind: "too_broad", reason: "Diff is very large." }],
+        warnings: [],
+        files: [{ path: "api.snap", status: "modified", additions: 900 }],
+        totals: { files: 1, additions: 900, deletions: 0 },
+      },
+    }),
+  ).toEqual([]);
+});

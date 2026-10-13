@@ -1,5 +1,6 @@
 /** Checked delivery mutations for registered spawned worktrees. */
 import type {
+  ApprovalCard,
   CommitDisplay,
   PullRequestCard,
   PushDisplay,
@@ -17,7 +18,15 @@ import {
   type AgentTool,
   type ToolCallContext,
 } from "../../mcp/tool.ts";
+import { isAgentType } from "@assistant/shared";
 import { gitOptional } from "../../gitExec.ts";
+import {
+  approvalCardReference,
+  createApproval,
+  registerApprovalExecutor,
+  type ApprovalExecutor,
+  type CreateApprovalInput,
+} from "../../pendingApprovals.ts";
 import {
   runCommitWorkflow,
   toCommitDisplay,
@@ -90,6 +99,7 @@ export interface WorktreeCommitOperations {
   ): (() => void) | undefined;
   checkedOutBranch(row: WorktreeRow, signal?: AbortSignal): Promise<string>;
   runCommit(options: CommitWorkflowOptions): Promise<CommitWorkflowResult>;
+  approve(input: CreateApprovalInput): ApprovalCard;
   invalidate(worktreeId: string): void;
 }
 
@@ -107,6 +117,7 @@ const defaultOperations: WorktreeCommitOperations = {
     return result.code === 0 ? result.stdout.trim() : "";
   },
   runCommit: runCommitWorkflow,
+  approve: createApproval,
   invalidate: invalidateWorktreeStatus,
 };
 
@@ -329,6 +340,19 @@ const commitSchema = {
       description:
         "Commit only what is already in the index. Stage your own paths with `git add` first; unstaged and untracked changes stay in the working tree, are not reviewed, and are not committed. Default false stages the complete change set.",
     },
+    force: {
+      type: "boolean",
+      default: false,
+      description:
+        "Request a one-shot user approval to override a blocked review. Runs an unforced dry review and commits nothing in this call. Requires reason. Secrets and unresolved Git operations cannot be overridden. End your turn after the card is created and wait for its outcome.",
+    },
+    reason: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_CONTEXT_CHARS,
+      description:
+        "Required with force: why proceeding despite the review findings is appropriate. Shown to the user with the latest findings, exact changes and proposed message.",
+    },
   },
 } as const;
 
@@ -398,7 +422,7 @@ export function createWorktreeCommitTool(
     name: "worktree_commit",
     label: "Commit managed worktree",
     description:
-      "Create a normal checked commit in an active registered spawned worktree: the complete change set by default, or with stagedOnly only the index you staged yourself. Uses the same safety review and generated message as /commit, never forces blockers, and refuses a worktree another session may still be changing.",
+      "Create a normal checked commit in an active registered spawned worktree: the complete change set by default, or with stagedOnly only the index you staged yourself. Uses the same safety review and generated message as /commit and refuses a worktree another session may still be changing. If review blocks and you have a reason to proceed, force with reason requests a user approval card, never a silent bypass. It commits nothing until that exact proposal is approved; end your turn and wait for the outcome. Fix secrets or unresolved Git operations instead.",
     parameters: commitSchema as unknown as Record<string, unknown>,
     async execute(params, ctx) {
       return executeWorktreeCommit(params, ctx, operations);
@@ -410,6 +434,8 @@ type WorktreeCommitParams = {
   worktreeId: string;
   context?: string;
   stagedOnly?: boolean;
+  force?: boolean;
+  reason?: string;
 };
 
 async function executeWorktreeCommit(
@@ -424,6 +450,13 @@ async function executeWorktreeCommit(
   const context = params.context?.trim();
   if (context && context.length > MAX_CONTEXT_CHARS)
     throw new Error(`context exceeds ${MAX_CONTEXT_CHARS} characters.`);
+  const reason = params.reason?.trim();
+  if (params.force === true && !reason)
+    throw new Error("force requires a reason for overriding the review.");
+  if (reason && reason.length > MAX_CONTEXT_CHARS)
+    throw new Error(`reason exceeds ${MAX_CONTEXT_CHARS} characters.`);
+  if (reason && params.force !== true)
+    throw new Error("reason is only used with force.");
 
   const initial = await operations.resolve(worktreeId);
   if (!initial || initial.status !== "active")
@@ -457,6 +490,7 @@ async function executeWorktreeCommit(
     const result = await operations.runCommit({
       source: "tool",
       force: false,
+      ...(params.force === true ? { dryRun: true } : {}),
       cwd: row.path,
       expectedBranch: row.branch,
       ...(ctx.session.sessionManager !== undefined
@@ -473,12 +507,160 @@ async function executeWorktreeCommit(
     if (result.status === "failed")
       throw new Error(result.error ?? "The checked commit failed.");
     const display: CommitDisplay = toCommitDisplay(result);
+    if (params.force === true) {
+      if (result.status !== "blocked")
+        throw new Error(
+          "Review passed. Retry worktree_commit without force; no approval is needed and nothing was committed.",
+        );
+      if (
+        !result.files.length ||
+        !result.commitMessage ||
+        !result.changeFingerprint
+      )
+        throw new Error("There is no reviewed change set to override.");
+      if (result.blockers.some((blocker) => blocker.kind === "secret"))
+        throw new Error(
+          "Secret findings cannot be overridden. Remove the suspected credentials before requesting a commit.",
+        );
+      if (
+        result.blockers.some(
+          (blocker) =>
+            blocker.reason.startsWith(
+              "Unresolved merge conflict in status line:",
+            ) ||
+            blocker.reason === "A merge or rebase appears to be in progress.",
+        )
+      )
+        throw new Error(
+          "Resolve the merge or rebase before requesting a commit override.",
+        );
+      ctx.signal?.throwIfAborted();
+      const card = operations.approve({
+        sessionId: ctx.session.sessionId,
+        kind: "managedCommitOverride",
+        title: `Override commit review on ${row.branch}`,
+        summary: "Commit the reviewed changes despite the findings, once only.",
+        sourceToolCallId: ctx.toolCallId,
+        body: {
+          kind: "managedCommitOverride",
+          worktreeId: row.id,
+          branch: row.branch,
+          reason: reason!,
+          stagedOnly: params.stagedOnly === true,
+          commit: display,
+        },
+        context: {
+          path: row.path,
+          fingerprint: result.changeFingerprint,
+          sessionKind: ctx.session.agentType,
+          ...(context ? { additionalContext: context } : {}),
+        },
+        supersedes: (earlier) =>
+          earlier.body.kind === "managedCommitOverride" &&
+          earlier.body.worktreeId === row.id,
+      });
+      return {
+        ...jsonResult({
+          status: "approval-required",
+          approvalId: card.id,
+          message: `Nothing was committed. End your turn and wait for the approval outcome. ${approvalCardReference(card)}`,
+        }),
+        terminate: true,
+      };
+    }
     return jsonResult(display);
   } finally {
     release();
     operations.invalidate(initial.id);
   }
 }
+
+let commitApprovalOperations = defaultOperations;
+
+/** Test seam for the server-side one-shot approval execution. */
+export function setCommitOverrideApprovalOperationsForTests(
+  operations?: WorktreeCommitOperations,
+): void {
+  commitApprovalOperations = operations ?? defaultOperations;
+}
+
+export const managedCommitOverrideApprovalExecutor: ApprovalExecutor = {
+  async execute(card, context) {
+    const body = card.body;
+    if (body.kind !== "managedCommitOverride")
+      throw new Error("Mismatched managed commit override body.");
+    if (
+      isMainWorktreeId(body.worktreeId) ||
+      typeof context.path !== "string" ||
+      typeof context.fingerprint !== "string" ||
+      !context.fingerprint ||
+      !body.commit.commitMessage
+    )
+      throw new Error("The approved managed commit target is incomplete.");
+    const operations = commitApprovalOperations;
+    const release = operations.reserve(
+      body.worktreeId,
+      `approval:${card.id}`,
+      "An approved commit review override is executing in this worktree.",
+    );
+    if (!release) throw new Error(BUSY_COMMIT_REFUSAL);
+    try {
+      const row = await operations.resolve(body.worktreeId);
+      if (
+        !row ||
+        row.status !== "active" ||
+        row.id !== body.worktreeId ||
+        row.path !== context.path ||
+        row.branch !== body.branch
+      )
+        throw new Error(
+          "The approved managed worktree changed or was removed. Request a new approval.",
+        );
+      const actualBranch = await operations.checkedOutBranch(row);
+      if (actualBranch !== body.branch)
+        throw new Error(
+          "The checked-out branch no longer matches the approved commit.",
+        );
+      const result = await operations.runCommit({
+        source: "tool",
+        cwd: row.path,
+        expectedBranch: body.branch,
+        force: true,
+        forceRefusesSecrets: true,
+        stagedOnly: body.stagedOnly,
+        sessionId: card.sessionId,
+        ...(typeof context.sessionKind === "string" &&
+        isAgentType(context.sessionKind)
+          ? { sessionKind: context.sessionKind }
+          : {}),
+        ...(typeof context.additionalContext === "string"
+          ? { additionalContext: context.additionalContext }
+          : {}),
+        approvedChange: {
+          fingerprint: context.fingerprint,
+          message: body.commit.commitMessage,
+        },
+      });
+      if (result.status !== "committed")
+        throw new Error(
+          result.error ??
+            (result.blockers.map((blocker) => blocker.reason).join("; ") ||
+              "The approved commit did not land."),
+        );
+      return {
+        resultSummary: `Committed ${result.commitHash} with the user-approved review override.`,
+      };
+    } finally {
+      release();
+      operations.invalidate(body.worktreeId);
+    }
+  },
+};
+
+registerApprovalExecutor(
+  "managedCommitOverride",
+  managedCommitOverrideApprovalExecutor,
+);
 
 /** Build the checked publication tool around injectable authorization seams. */
 export function createWorktreePushTool(

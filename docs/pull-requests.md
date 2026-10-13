@@ -88,6 +88,27 @@ review context, never committed, so a credential pasted there (temporary AWS
 keys, tokens) is masked before the commit-message agent sees it and is not a
 blocker.
 
+### Commit review override
+
+When the review blocks and the agent has a reason to proceed, `worktree_commit`
+with `force: true` and a required `reason` asks the user instead of committing.
+The call runs the ordinary unforced review as a dry run and commits nothing. A
+passing review, an empty change set, a secret finding, or an unresolved merge
+conflict or merge/rebase in progress refuses with an error and creates no card;
+those cannot be overridden. Any other blocker creates a one-shot
+`managedCommitOverride` card ([approvals.md](approvals.md#the-cards)) bound to
+the worktree, its path and branch, the change fingerprint, `stagedOnly`, and the
+proposed message, and the tool ends the agent's turn. A newer override from the
+same session for the same worktree supersedes a pending one.
+
+On approval the server reserves the worktree (refusing while it is busy),
+re-checks that the managed row is still active at the same path and branch and
+that the branch is checked out, then re-runs the review with force. A fresh
+secret or conflict still refuses, the change fingerprint must still match, and
+only the approved message is committed. Rejecting changes nothing. Either
+outcome reaches the agent through `agentHandoffs.ts`. The card is never covered
+by a session grant.
+
 ## Checked tag publication
 
 `git_publish_tag` is a deferred coding-persona tool for ordinary repositories

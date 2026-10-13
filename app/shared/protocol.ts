@@ -3240,6 +3240,7 @@ export type ApprovalKind =
   | "commit"
   | "sessionSpawn"
   | "managedPullRequestMerge"
+  | "managedCommitOverride"
   | "projectCreate"
   | "settingsInput";
 /**
@@ -3693,6 +3694,26 @@ export interface ManagedPullRequestMergeApprovalBody {
   resultBranchDeleted?: boolean;
 }
 
+/**
+ * An agent asking the user to override the commit review that blocked a
+ * managed worktree commit (`worktree_commit` with `force: true`). One-shot:
+ * never covered by a session grant, so every override is its own decision.
+ * `commit` is the frozen dry-run review — the proposed message, files, totals,
+ * blockers and warnings the user is answering. Approving re-checks the
+ * worktree, branch and change fingerprint, re-runs the review (a fresh secret
+ * or conflict still refuses) and commits exactly `commit.commitMessage`.
+ */
+export interface ManagedCommitOverrideApprovalBody {
+  kind: "managedCommitOverride";
+  worktreeId: string;
+  branch: string;
+  /** The agent's stated reason the blockers do not apply. */
+  reason: string;
+  /** Only the pre-staged index is committed; otherwise every change. */
+  stagedOnly: boolean;
+  commit: CommitDisplay;
+}
+
 export interface CommitApprovalBody {
   kind: "commit";
   message: string;
@@ -3767,6 +3788,7 @@ export type ApprovalBody =
   | CommitApprovalBody
   | SessionSpawnApprovalBody
   | ManagedPullRequestMergeApprovalBody
+  | ManagedCommitOverrideApprovalBody
   | ProjectCreateApprovalBody
   | SettingsInputApprovalBody;
 

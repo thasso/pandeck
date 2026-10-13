@@ -364,6 +364,142 @@ test("a Workflow Run's forced commit overrides the check's other problems", asyn
   assert.equal(result.status, "committed");
 });
 
+test("approved overrides bind changes and message while retaining a fresh secret veto", async () => {
+  const cwd = repo();
+  writeFileSync(join(cwd, "file.txt"), "changed\n");
+  setCommitMessageGeneratorForTests(async () => ({
+    ...generated,
+    status: "block",
+    blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+  }));
+  const proposal = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    dryRun: true,
+  });
+  assert.equal(proposal.status, "blocked");
+  const approvedChange = {
+    fingerprint: proposal.changeFingerprint!,
+    message: proposal.commitMessage!,
+  };
+  const head = git(cwd, "rev-parse", "HEAD");
+  writeFileSync(join(cwd, "file.txt"), "another\n");
+  const stale = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    force: true,
+    forceRefusesSecrets: true,
+    approvedChange,
+  });
+  assert.equal(stale.status, "blocked");
+  assert.match(stale.blockers[0]!.reason, /no longer match the approved/);
+  assert.equal(git(cwd, "rev-parse", "HEAD"), head);
+  assert.equal(git(cwd, "diff", "--cached", "--name-only"), "");
+  writeFileSync(join(cwd, "file.txt"), "changed\n");
+  setCommitMessageGeneratorForTests(async () => ({
+    ...generated,
+    status: "block",
+    blockers: [{ kind: "secret", reason: "Fresh secret finding" }],
+  }));
+  const secret = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    force: true,
+    forceRefusesSecrets: true,
+    approvedChange,
+  });
+  assert.equal(secret.status, "blocked");
+  assert.equal(git(cwd, "diff", "--cached", "--name-only"), "");
+  setCommitMessageGeneratorForTests(async () => ({
+    ...generated,
+    subject: "A different regenerated message",
+    status: "block",
+    blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+  }));
+  const committed = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    force: true,
+    forceRefusesSecrets: true,
+    approvedChange,
+  });
+  assert.equal(committed.status, "committed");
+  assert.equal(git(cwd, "log", "-1", "--format=%B"), approvedChange.message);
+});
+
+test("approved overrides reject changes during fresh review and Git operations under the lock", async () => {
+  for (const mutate of [
+    (cwd: string) => writeFileSync(join(cwd, "file.txt"), "moved\n"),
+    (cwd: string) =>
+      writeFileSync(
+        join(cwd, ".git", "MERGE_HEAD"),
+        git(cwd, "rev-parse", "HEAD") + "\n",
+      ),
+  ]) {
+    const cwd = repo();
+    writeFileSync(join(cwd, "file.txt"), "changed\n");
+    setCommitMessageGeneratorForTests(async () => ({
+      ...generated,
+      status: "block",
+      blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+    }));
+    const proposal = await runCommitWorkflow({
+      source: "tool",
+      cwd,
+      dryRun: true,
+    });
+    lockHooks.beforeLock = () => mutate(cwd);
+    const result = await runCommitWorkflow({
+      source: "tool",
+      cwd,
+      force: true,
+      forceRefusesSecrets: true,
+      approvedChange: {
+        fingerprint: proposal.changeFingerprint!,
+        message: proposal.commitMessage!,
+      },
+    });
+    assert.equal(result.status, "blocked");
+    assert.equal(git(cwd, "diff", "--cached", "--name-only"), "");
+    assert.equal(git(cwd, "log", "--oneline").split("\n").length, 1);
+    lockHooks.beforeLock = undefined;
+  }
+});
+
+test("staged-only approved override leaves other edits out of the commit", async () => {
+  const cwd = repo();
+  writeFileSync(join(cwd, "file.txt"), "staged\n");
+  git(cwd, "add", "file.txt");
+  setCommitMessageGeneratorForTests(async () => ({
+    ...generated,
+    status: "block",
+    blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+  }));
+  const proposal = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    dryRun: true,
+    stagedOnly: true,
+  });
+  writeFileSync(join(cwd, "file.txt"), "unstaged\n");
+  writeFileSync(join(cwd, ".env"), "SAFE_TEST_VALUE=yes\n");
+  const result = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    stagedOnly: true,
+    force: true,
+    forceRefusesSecrets: true,
+    approvedChange: {
+      fingerprint: proposal.changeFingerprint!,
+      message: proposal.commitMessage!,
+    },
+  });
+  assert.equal(result.status, "committed");
+  assert.equal(git(cwd, "show", "HEAD:file.txt"), "staged");
+  assert.match(git(cwd, "diff"), /unstaged/);
+  assert.ok(git(cwd, "status", "--porcelain").includes(".env"));
+});
+
 test("staged-only scope commits the index as-is and leaves the rest of the tree alone", async () => {
   const cwd = repo();
   writeFileSync(join(cwd, "mine.txt"), "mine\n");
