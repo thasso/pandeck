@@ -79,7 +79,7 @@ You are a test reviewer. ...
 | `description` | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description. |
 | `persona`     | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                |
 | `model`       | yes      | An alias or an exact model id. See [Model and effort](#model-and-effort).                          |
-| `effort`      | no       | A `ThinkingLevel`. Lowered to what the model supports. Defaults to the model's default.            |
+| `effort`      | no       | A `ThinkingLevel`. Fitted to the levels the model supports. Defaults to the model's default.       |
 | `tools.deny`  | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).          |
 | `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.      |
 

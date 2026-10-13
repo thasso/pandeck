@@ -144,6 +144,28 @@ describe("agent_create", () => {
     assert.equal(card.body.effort.effective, "high");
   });
 
+  test("approval refuses when the model would now run at another effort than the card showed", async () => {
+    await call("agent_create", { ...definition, effort: "max" });
+    const createCard = latestCard();
+    // The model's supported levels change while the card waits.
+    const widened: ModelOption = {
+      ...model("claude-sdk", "sonnet"),
+      supportedThinkingLevels: ["off", "low", "medium", "high", "max"],
+    };
+    setAgentRuntimeSourcesForTests({
+      models: async () => [model("claude-sdk", "opus"), widened],
+      skillNames: async () => [],
+      toolNames: async () => ["worktree_push", "worktree_commit"],
+    });
+    const { card } = await resolveApproval(createCard.id, "approved");
+    assert.equal(card.status, "failed");
+    assert.match(
+      card.error ?? "",
+      /would now run "test-reviewer" at effort max, not the high this card showed/,
+    );
+    assert.equal(existsSync(manifest()), false);
+  });
+
   test("approval writes exactly the proposed definition as one commit", async () => {
     await call("agent_create", definition);
     const proposed = latestCard();
@@ -365,6 +387,38 @@ describe("agent_edit", () => {
     assert.match(
       card.error ?? "",
       /now resolves to anthropic\/sonnet, not the claude-sdk\/sonnet this card showed/,
+    );
+    assert.match(readFileSync(manifest(), "utf8"), /effort: medium/);
+  });
+
+  test("an edit card refuses when the effective effort drifted while it waited", async () => {
+    await createApproved();
+    await call("agent_edit", {
+      name: "test-reviewer",
+      edits: [{ oldText: "effort: medium", newText: "effort: max" }],
+      reason: "Max effort",
+    });
+    const pending = latestCard();
+    assert.equal(
+      pending.body.kind === "agentDefinition" && pending.body.effort.effective,
+      "high",
+    );
+    setAgentRuntimeSourcesForTests({
+      models: async () => [
+        model("claude-sdk", "opus"),
+        {
+          ...model("claude-sdk", "sonnet"),
+          supportedThinkingLevels: ["off", "low", "medium", "high", "max"],
+        },
+      ],
+      skillNames: async () => [],
+      toolNames: async () => ["worktree_push", "worktree_commit"],
+    });
+    const { card } = await resolveApproval(pending.id, "approved");
+    assert.equal(card.status, "failed");
+    assert.match(
+      card.error ?? "",
+      /at effort max, not the high this card showed/,
     );
     assert.match(readFileSync(manifest(), "utf8"), /effort: medium/);
   });

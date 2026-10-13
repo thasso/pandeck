@@ -27,7 +27,7 @@ import {
 /** What a definition runs as, once resolved. */
 export interface AgentRuntime {
   model: ModelOption;
-  /** The definition's effort, lowered to what the model supports. */
+  /** The definition's effort, fitted to the levels the model supports. */
   thinkingLevel?: ThinkingLevel;
 }
 

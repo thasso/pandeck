@@ -110,7 +110,8 @@ async function propose(
     effort: {
       ...(before?.effort ? { before: before.effort } : {}),
       ...(after.effort ? { after: after.effort } : {}),
-      // What the model will actually use, when it lowers the requested level.
+      // What the model will actually use, when it fits the requested level
+      // to the ones it supports.
       ...(resolved.thinkingLevel && resolved.thinkingLevel !== after.effort
         ? { effective: resolved.thinkingLevel }
         : {}),
@@ -170,10 +171,18 @@ async function assertStillResolves(
   definition: AgentManifest,
   body: AgentDefinitionApprovalBody,
 ): Promise<void> {
-  const now = (await resolvedModelOf(definition)).label;
-  if (now !== body.resolvedModel)
+  const now = await resolvedModelOf(definition);
+  if (now.label !== body.resolvedModel)
     throw new EntryValidationError(
-      `"${definition.model}" now resolves to ${now}, not the ${body.resolvedModel} this card showed. Nothing was written; propose it again.`,
+      `"${definition.model}" now resolves to ${now.label}, not the ${body.resolvedModel} this card showed. Nothing was written; propose it again.`,
+    );
+  // The effort the card said the model runs at is part of what was approved:
+  // a model whose supported levels changed while the card waited would run
+  // the definition at another one.
+  const shown = body.effort.effective ?? body.effort.after;
+  if (now.thinkingLevel !== shown)
+    throw new EntryValidationError(
+      `${now.label} would now run "${definition.name}" at effort ${now.thinkingLevel ?? "default"}, not the ${shown ?? "default"} this card showed. Nothing was written; propose it again.`,
     );
 }
 
@@ -227,7 +236,7 @@ const effortProperty = {
   type: "string",
   enum: THINKING_LEVELS,
   description:
-    "Optional effort (thinking level), lowered to what the model supports. Omit for the model's default.",
+    "Optional effort (thinking level), fitted to the levels the model supports. Omit for the model's default.",
 } as const;
 
 /** The one deferred group registered in `tools/catalog.ts`. */

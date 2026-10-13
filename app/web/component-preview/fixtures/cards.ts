@@ -548,9 +548,9 @@ export const approvalBodies: ApprovalCard[] = [
       persona: "developer",
       model: { before: "sonnet", after: "opus" },
       resolvedModel: "claude-sdk/opus",
-      effort: { before: "medium", after: "high" },
+      effort: { before: "medium", after: "max", effective: "high" },
       source:
-        '---\nname: test-reviewer\ndescription: "Verifies that the tests a branch adds fail without its code changes."\npersona: developer\nmodel: "opus"\neffort: high\ntools:\n  deny: [worktree_commit, worktree_push]\n---\n\nYou are a test reviewer. Revert the code changes, keep the new tests, and report which ones still pass.\n',
+        '---\nname: test-reviewer\ndescription: "Verifies that the tests a branch adds fail without its code changes."\npersona: developer\nmodel: "opus"\neffort: max\ntools:\n  deny: [worktree_commit, worktree_push]\n---\n\nYou are a test reviewer. Revert the code changes, keep the new tests, and report which ones still pass.\n',
       reason: "Run test-reviewer on Opus",
     },
   }),

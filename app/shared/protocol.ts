@@ -3522,7 +3522,7 @@ export interface AgentDefinitionApprovalBody {
   /**
    * Effort before (edit only) and after; absent means the model's default.
    * `effective` is the level the model will actually run at, present when it
-   * lowers `after` to what it supports.
+   * fits `after` to the levels it supports.
    */
   effort: {
     before?: ThinkingLevel;
