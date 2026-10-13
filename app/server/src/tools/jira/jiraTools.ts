@@ -42,6 +42,14 @@ import {
   executeJiraRankItem,
   type JiraRankItemInput,
 } from "./jiraRank.ts";
+import {
+  buildJiraSprintItem,
+  executeJiraSprintItem,
+  jiraSprintItemLabel,
+  jiraSprintResultText,
+  lookupSprints,
+  type JiraSprintItemInput,
+} from "./jiraSprint.ts";
 import { markdownToAdf } from "../../atlassian/adfFromMarkdown.ts";
 import { adfToText } from "../../atlassian/adfToMarkdown.ts";
 
@@ -69,7 +77,8 @@ type SearchIssuesParams = {
   includeDescription?: boolean;
 };
 
-type LookupKind = "fields" | "projects" | "users" | "issueLinkTypes";
+type LookupKind =
+  "fields" | "projects" | "users" | "issueLinkTypes" | "sprints";
 
 /** Unified discovery params for jira_lookup; each field applies to specific kinds. */
 type LookupParams = {
@@ -83,9 +92,13 @@ type LookupParams = {
   searchable?: boolean;
   // kind=projects
   orderBy?: string;
-  // kind=users
+  // kind=users | sprints
   projectKey?: string;
+  // kind=users
   assignableOnly?: boolean;
+  // kind=sprints
+  boardId?: number;
+  sprintStates?: string[];
   // kind=projects | users
   fields?: string[];
   render?: boolean;
@@ -96,31 +109,32 @@ type JiraMutationParams = {
   items?: JiraMutationItemInput[];
 };
 
-type JiraMutationItemInput = JiraRankItemInput & {
-  clientId?: string;
-  /** edit (default) = mutate an existing issue; create = new issue; comment = add a comment; rank = reorder a backlog. */
-  operation?: "edit" | "create" | "comment" | "rank";
-  issue?: string;
-  // create:
-  projectKey?: string;
-  issueType?: string;
-  summary?: string;
-  description?: string | null;
-  // comment:
-  commentBody?: string;
-  transitionId?: string;
-  transitionName?: string;
-  targetStatus?: string;
-  resolutionName?: string;
-  assigneeAccountId?: string | null;
-  clearAssignee?: boolean;
-  parentIssue?: string | null;
-  epicIssue?: string | null;
-  labels?: { set?: string[]; add?: string[]; remove?: string[] };
-  components?: { set?: string[]; add?: string[]; remove?: string[] };
-  fields?: Record<string, unknown>;
-  linkChanges?: JiraLinkChangeInput[];
-};
+type JiraMutationItemInput = JiraRankItemInput &
+  JiraSprintItemInput & {
+    clientId?: string;
+    /** edit (default) = mutate an existing issue; create = new issue; comment = add a comment; rank = reorder a backlog; sprint = edit a sprint. */
+    operation?: "edit" | "create" | "comment" | "rank" | "sprint";
+    issue?: string;
+    // create:
+    projectKey?: string;
+    issueType?: string;
+    summary?: string;
+    description?: string | null;
+    // comment:
+    commentBody?: string;
+    transitionId?: string;
+    transitionName?: string;
+    targetStatus?: string;
+    resolutionName?: string;
+    assigneeAccountId?: string | null;
+    clearAssignee?: boolean;
+    parentIssue?: string | null;
+    epicIssue?: string | null;
+    labels?: { set?: string[]; add?: string[]; remove?: string[] };
+    components?: { set?: string[]; add?: string[]; remove?: string[] };
+    fields?: Record<string, unknown>;
+    linkChanges?: JiraLinkChangeInput[];
+  };
 
 type JiraLinkChangeInput = {
   op: "add" | "remove";
@@ -426,19 +440,19 @@ const lookupParamsSchema = {
   properties: {
     kind: {
       type: "string",
-      enum: ["fields", "projects", "users", "issueLinkTypes"],
+      enum: ["fields", "projects", "users", "issueLinkTypes", "sprints"],
       description:
-        "What to look up: Jira fields (incl. custom fields/JQL clause names), projects, users/accountIds, or issueLinkTypes (site-global issue link relationship types).",
+        "What to look up: Jira fields (incl. custom fields/JQL clause names), projects, users/accountIds, issueLinkTypes (site-global issue link relationship types), or sprints (a board's sprints with ids, state and dates).",
     },
     query: {
       type: "string",
       description:
-        "fields: substring over field id/key/name/clauseNames. projects: project key/name. users: user name/email. issueLinkTypes: substring over type name/inward/outward phrases.",
+        "fields: substring over field id/key/name/clauseNames. projects: project key/name. users: user name/email. issueLinkTypes: substring over type name/inward/outward phrases. sprints: substring of the sprint name.",
     },
     maxResults: {
       type: "number",
       description:
-        "Total results desired; the tool paginates internally. Defaults to 50 (max: fields 500, projects 1000, users 10000).",
+        "Total results desired; the tool paginates internally. Defaults to 50 (max: fields 500, projects 1000, users 10000, sprints 200).",
     },
     startAt: {
       type: "number",
@@ -466,12 +480,23 @@ const lookupParamsSchema = {
     projectKey: {
       type: "string",
       description:
-        "users: project key; with assignableOnly limits to users assignable in it.",
+        "users: project key; with assignableOnly limits to users assignable in it. sprints: list the sprints of the project's boards (or give boardId).",
     },
     assignableOnly: {
       type: "boolean",
       description:
         "users: use Jira's assignable-user search for projectKey. Requires projectKey. Defaults to false.",
+    },
+    boardId: {
+      type: "integer",
+      description:
+        "sprints: Jira Agile board id whose sprints to list. A board is read to 500 sprints and projectKey alone to 10 boards; a capped read sets exhausted=false and a note.",
+    },
+    sprintStates: {
+      type: "array",
+      items: { type: "string", enum: ["future", "active", "closed"] },
+      description:
+        "sprints: states to include. Defaults to active and future; closed sprints list newest first.",
     },
     fields: {
       type: "array",
@@ -505,9 +530,9 @@ const mutateIssueParamsSchema = {
           clientId: { type: "string" },
           operation: {
             type: "string",
-            enum: ["edit", "create", "comment", "rank"],
+            enum: ["edit", "create", "comment", "rank", "sprint"],
             description:
-              "edit (default): transition/field/link an existing issue. create: create a new issue. comment: add a comment to an issue. rank: reorder issues in a backlog using Jira's Agile ranking API.",
+              "edit (default): transition/field/link an existing issue. create: create a new issue. comment: add a comment to an issue. rank: reorder issues in a backlog using Jira's Agile ranking API. sprint: change a sprint's name, start/end dates or goal (never its state).",
           },
           issue: {
             type: "string",
@@ -627,6 +652,29 @@ const mutateIssueParamsSchema = {
             type: "string",
             description:
               "rank: parent issue key whose children bound top/bottom. Every ranked issue must already be a child of it.",
+          },
+          sprintId: {
+            type: "integer",
+            description:
+              "sprint: Jira sprint id, from jira_lookup kind=sprints or an issue's sprint field.",
+          },
+          sprintName: {
+            type: "string",
+            description: "sprint: new sprint name.",
+          },
+          sprintStartDate: {
+            type: "string",
+            description:
+              "sprint: new start as an ISO 8601 date-time with offset, e.g. 2026-10-13T09:00:00+02:00.",
+          },
+          sprintEndDate: {
+            type: "string",
+            description:
+              "sprint: new end as an ISO 8601 date-time with offset; must be after the start.",
+          },
+          sprintGoal: {
+            type: "string",
+            description: "sprint: new sprint goal; an empty string clears it.",
           },
           linkChanges: {
             type: "array",
@@ -1021,7 +1069,7 @@ export const jiraLookupTool = defineAgentTool<LookupParams>({
   name: "jira_lookup",
   label: "Jira: Lookup",
   description:
-    "Read-only Jira discovery in one tool: kind=fields (system/custom fields + JQL clause names), kind=projects (visible projects), kind=users (users/accountIds), or kind=issueLinkTypes (site-global issue link relationship types).",
+    "Read-only Jira discovery in one tool: kind=fields (system/custom fields + JQL clause names), kind=projects (visible projects), kind=users (users/accountIds), kind=issueLinkTypes (site-global issue link relationship types), or kind=sprints (sprints of a board or a project's boards, with ids and dates).",
   parameters: lookupParamsSchema,
   async execute(params) {
     const config = getJiraToolConfig();
@@ -1032,7 +1080,13 @@ export const jiraLookupTool = defineAgentTool<LookupParams>({
           ? await lookupUsers(config, params)
           : params.kind === "issueLinkTypes"
             ? await lookupIssueLinkTypes(config, params)
-            : await lookupFields(config, params);
+            : params.kind === "sprints"
+              ? await lookupSprints(
+                  config,
+                  params,
+                  clampDesiredResults(params.maxResults, 50, 200),
+                )
+              : await lookupFields(config, params);
     return {
       content: [{ type: "text", text: JSON.stringify(payload) }],
       details: payload,
@@ -1051,7 +1105,7 @@ export const jiraMutateIssueTool = defineAgentTool<JiraMutationParams>({
   name: "jira_mutate_issue",
   label: "Jira: Prepare Issue Changes",
   description:
-    "Prepare Jira proposals — create tickets/sub-tasks, edit fields and Markdown-formatted content, add Markdown comments, and add/remove native issue links. CommonMark/GFM is converted to Atlassian Document Format. This tool never writes immediately: it validates and persists a pending approval record with an approval button. Set item.operation to edit (default), create, comment, or rank; rank reorders a backlog through Jira's Agile ranking API (before/after another issue, or top/bottom of a board backlog or a parent's children) instead of writing the opaque rank field. Use it only when the user explicitly asks to change, transition, assign, label, link, create, comment on, or reorder an issue, and ask rather than prepare a proposal when the target issue or value is ambiguous. On create, prefer a project that aligns with our own work — consult the Project Registry when unsure and confirm project and issue type with the user; never set the Cost Center, which Jira automation derives from the ticket.",
+    "Prepare Jira proposals — create tickets/sub-tasks, edit fields and Markdown-formatted content, add Markdown comments, and add/remove native issue links. CommonMark/GFM is converted to Atlassian Document Format. This tool never writes immediately: it validates and persists a pending approval record with an approval button. Set item.operation to edit (default), create, comment, rank, or sprint; rank reorders a backlog through Jira's Agile ranking API (before/after another issue, or top/bottom of a board backlog or a parent's children) instead of writing the opaque rank field; sprint edits a sprint's name, dates or goal, which no issue field reaches. Use it only when the user explicitly asks to change, transition, assign, label, link, create, comment on, or reorder an issue, or to edit a sprint, and ask rather than prepare a proposal when the target issue or value is ambiguous. On create, prefer a project that aligns with our own work — consult the Project Registry when unsure and confirm project and issue type with the user; never set the Cost Center, which Jira automation derives from the ticket.",
   parameters: mutateIssueParamsSchema,
   async execute(params, ctx) {
     const config = getJiraToolConfig();
@@ -1090,6 +1144,7 @@ function jiraMutationItemLabel(item: JiraIssueMutationItemDisplay): string {
   if (item.operation === "comment") return `comment ${item.issueKey}`;
   if (item.operation === "rank")
     return `rank ${(item.rankIssueKeys ?? []).join(", ")} ${item.rankPosition ?? ""}`.trim();
+  if (item.operation === "sprint") return jiraSprintItemLabel(item);
   return item.issueKey;
 }
 
@@ -1108,6 +1163,8 @@ function jiraMutationTitle(items: JiraIssueMutationItemDisplay[]): string {
         ? `Rank ${item.rankIssueKeys?.[0]} ${item.rankPosition ?? ""}`.trim()
         : `Rank ${count} Jira issues`;
     }
+    if (item.operation === "sprint")
+      return `Edit sprint ${item.sprint?.name ?? ""}`.trim();
     return `Edit ${item.issueKey}`;
   }
   const kinds = new Set(items.map((item) => item.operation ?? "edit"));
@@ -1116,6 +1173,7 @@ function jiraMutationTitle(items: JiraIssueMutationItemDisplay[]): string {
     if (only === "create") return `Create ${items.length} Jira issues`;
     if (only === "comment") return `Comment on ${items.length} Jira issues`;
     if (only === "rank") return `Rank ${items.length} Jira backlogs`;
+    if (only === "sprint") return `Edit ${items.length} Jira sprints`;
   }
   return `${items.length} Jira changes`;
 }
@@ -1162,10 +1220,13 @@ registerApprovalExecutor("jiraIssue", {
         (item) => item.operation === "rank" && item.rankResultOrder?.length,
       )
       .map((item) => `order now ${item.rankResultOrder!.join(" → ")}`);
+    // Sprint dates are the point of a sprint edit, so report what Jira holds now.
+    const sprints = items.map(jiraSprintResultText).filter(Boolean);
     const diagnostics = [
       failed ? `${failed} failed` : "",
       warned ? `${warned} warning(s)` : "",
       ...orderings,
+      ...sprints,
     ].filter(Boolean);
     const resultIssueUrl = items.find(
       (item) => item.resultIssueUrl,
@@ -2228,6 +2289,11 @@ async function buildJiraMutationItems(
       continue;
     }
 
+    if (operation === "sprint") {
+      items.push(await buildJiraSprintItem(config, clientId, raw));
+      continue;
+    }
+
     if (operation === "comment") {
       if (!raw.issue?.trim())
         throw new Error(`comment item ${clientId} requires issue.`);
@@ -2702,6 +2768,11 @@ async function executeJiraMutationItem(
 
   if (item.operation === "rank") {
     await executeJiraRankItem(config, item);
+    return;
+  }
+
+  if (item.operation === "sprint") {
+    await executeJiraSprintItem(config, item);
     return;
   }
 
