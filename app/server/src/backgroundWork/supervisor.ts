@@ -546,8 +546,21 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         }
       }
     }
-    // The Stops took time: reserve only on the same epoch, and only while it
-    // is still live — one lost or replaced meanwhile has nothing left to close.
+    // The Stops took time, and an item they left unsettled may have settled
+    // since (bound and Stopped, or confirmed late): judge each by its row now,
+    // not by the answer recorded when it was first tried.
+    for (const [index, result] of results.entries()) {
+      if (
+        result.state !== "stop-unconfirmed" &&
+        result.state !== "awaiting-binding"
+      )
+        continue;
+      const current = backgroundWorkStore.getItem(result.item.id);
+      if (current && TERMINAL_STATES.has(current.state))
+        results[index] = { state: "already-terminal", item: current };
+    }
+    // Reserve only on the same epoch, and only while it is still live — one
+    // lost or replaced meanwhile has nothing left to close.
     if (
       host &&
       ownerRequested &&

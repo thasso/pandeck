@@ -1510,6 +1510,67 @@ test("Stop withdraws a retained prompt the CLI has not started yet", async () =>
   session.dispose();
 });
 
+test("the interrupted run a withdrawn prompt queued behind cannot fail the next turn", async () => {
+  // The prompt waited behind a run the CLI started itself (an orphaned-task
+  // notice). Stop drops the prompt and interrupts that run, whose error
+  // result arrives only after the next prompt opened: it is owed, not the
+  // next turn's.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const adapter = session.createRuntimeAdapter();
+  const first = adapter.prompt("retain the host");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-retain-for-notice",
+    },
+    "tool-retain-for-notice",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit(result("retain-first"));
+  await first;
+
+  const queued = adapter.prompt("queued behind a notice");
+  await until(() => query.inputs.length === 2);
+  const uuid = (query.inputs[1] as { uuid: string }).uuid;
+  session.abort();
+  await queued;
+  await until(() => query.interruptCalls === 1);
+  assert.deepEqual(query.cancelled, [uuid]);
+
+  // The dropped prompt never ran, so no result of it is owed: the next
+  // prompt's own result ends the next turn, with no optional running hint.
+  const next = adapter.prompt("after the withdrawn prompt");
+  await until(() => query.inputs.length === 3);
+  const nextUuid = (query.inputs[2] as { uuid: string }).uuid;
+  query.output.emit({
+    ...(result("interrupted-notice") as unknown as Record<string, unknown>),
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["interrupted"],
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    type: "command_lifecycle",
+    command_uuid: nextUuid,
+    state: "started",
+    uuid: "lifecycle-after-notice",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    ...(result("after-notice") as unknown as Record<string, unknown>),
+    user_message_uuids: [nextUuid],
+  } as unknown as ClaudeSdkMessage);
+  assert.equal((await next).stopReason, "end");
+  session.dispose();
+});
+
 test("abort interrupts but does not close a retained epoch", async () => {
   const { session, queries } = makeHarness();
   await sessionSkills(session.id, session.agentType);

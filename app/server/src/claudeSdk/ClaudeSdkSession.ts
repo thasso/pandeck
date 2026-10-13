@@ -1884,6 +1884,11 @@ export class ClaudeSdkSession implements LiveSession {
             lifecycle.started === this.turnPromptWaiting
           ) {
             this.turnPromptWaiting = undefined;
+            // The CLI runs one command at a time: a stopped or denied run's
+            // result precedes the next command's start, so none still owed
+            // can arrive now. A Stop that withdrew its prompt from an idle
+            // CLI leaves one armed that would otherwise eat this turn.
+            this.resetProviderResultTracking();
             continue;
           }
           // The CLI dequeued a command. While a prompted turn of this epoch is
@@ -1901,8 +1906,15 @@ export class ClaudeSdkSession implements LiveSession {
           message.type === "result" &&
           this.foreignProviderResultsToDiscard > 0
         ) {
-          this.consumeForeignProviderResult();
-          continue;
+          // One that consumed the open turn's own prompt is that turn's, not
+          // the owed one (a CLI without lifecycle frames reports no start).
+          const waiting = this.turnPromptWaiting;
+          if (waiting && consumedMessageUuids(message).includes(waiting))
+            this.resetProviderResultTracking();
+          else {
+            this.consumeForeignProviderResult();
+            continue;
+          }
         }
         if (this.foreignProviderResultsToDiscard > 0) {
           if (this.running && isClaudeTurnStart(message)) {
@@ -2685,14 +2697,9 @@ export class ClaudeSdkSession implements LiveSession {
       const query = this.activeQuery;
       const interrupted = Promise.all([
         withdrawn,
-        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : false,
+        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : undefined,
       ])
-        .then(([, dropped]) => {
-          // The CLI never ran this turn's prompt, so it owes no result for
-          // it: armed regardless, the discard would take the next turn's.
-          if (dropped) this.consumeForeignProviderResult();
-          return query.interrupt?.();
-        })
+        .then(() => query.interrupt?.())
         .then(
           () => undefined,
           () => undefined,

@@ -1076,8 +1076,61 @@ test("an owner Stop-all whose host was lost meanwhile still answers", async () =
   });
   assert.deepEqual(
     results.map((result) => result.state),
-    ["awaiting-binding"],
+    ["already-terminal"],
+    "the lost host ended the item it was still waiting to bind",
   );
+  assert.equal(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+  );
+});
+
+test("an owner Stop-all reserves no close for an item that settled while it waited", async () => {
+  // A had no provider task yet when Stop-all reached it; it bound and was
+  // Stopped while Stop-all still waited on B. Every original item is stopped,
+  // so a reservation would only kill the work the owner starts next.
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const ownerSessionId = owner("claude-sdk");
+  const supervisor = supervisorFor(clock, port, {
+    ordinaryTurnActive: () => true,
+  });
+  const admit = async (label: string) => {
+    const admission = supervisor.admit({
+      ownerSessionId,
+      backend: "claude-query",
+      kind: "shell",
+      label,
+      sourceRequestId: `settled-meanwhile-${label}`,
+      hostEpochKey: "settled-meanwhile-epoch",
+    });
+    assert.equal(admission.admitted, true);
+    if (!admission.admitted) throw new Error("not admitted");
+    await supervisor.launch(admission);
+    return admission.item.id;
+  };
+  const unbound = await admit("unbound");
+  const bound = await admit("bound");
+  supervisor.providerBound({ itemId: bound, providerTaskId: "task-bound" });
+  port.stopAllImpl = async () => {
+    supervisor.providerBound({
+      itemId: unbound,
+      providerTaskId: "task-unbound",
+    });
+    await flush();
+    return { acknowledgedItemIds: [bound], unconfirmedItemIds: [] };
+  };
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "settled-meanwhile-request",
+    reason: "superseded runs",
+  });
+  assert.equal(backgroundWorkStore.getItem(unbound)?.state, "stopped");
+  assert.deepEqual(results.map((result) => result.state).sort(), [
+    "already-terminal",
+    "stopped",
+  ]);
   assert.equal(
     backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
     undefined,
