@@ -1387,6 +1387,76 @@ test("an owner Stop-all whose Stop never answers closes the host even after a St
   session.dispose();
 });
 
+test("a Stop-all reserved while a slash command runs closes the host when it finishes", async () => {
+  // As above, but a slash command is running when the late reservation
+  // lands: its end is the boundary the close waits for.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const turn = session.createRuntimeAdapter().prompt("stop the hung run");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  query.stopTask = () => new Promise<void>(() => undefined);
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-hung-slash",
+    },
+    "tool-hung-slash",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: "vendor-hung-slash",
+    tool_use_id: "tool-hung-slash",
+    description: "sleep",
+    task_type: "shell",
+    uuid: "started-vendor-hung-slash",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  await until(() =>
+    backgroundWorkStore
+      .listItems({ ownerSessionId: session.id })
+      .some((item) => item.providerTaskId === "vendor-hung-slash"),
+  );
+  query.output.emit(result("hung-slash-retained"));
+  await turn;
+
+  const again = session.createRuntimeAdapter().prompt("stop it all");
+  await until(() => query.inputs.length === 2);
+  let synthetic!: { toolId: string };
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const stopping = backgroundWorkSupervisor.stopAllOwner({
+      ownerSessionId: session.id,
+      callerSessionId: session.id,
+      sourceRequestId: "owner-stop-all-hung-slash",
+      reason: "hung run",
+    });
+    session.abort();
+    await again;
+    synthetic = session.beginSyntheticTool("/commit", {
+      command: "/commit",
+      rawArgs: "",
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stopping;
+  } finally {
+    vi.useRealTimers();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(query.closeCalls, 0, "not while the slash command runs");
+  session.finishSyntheticTool(synthetic.toolId, "committed");
+  await until(() => query.closeCalls === 1);
+  session.dispose();
+});
+
 test("Stop withdraws a retained prompt the CLI has not started yet", async () => {
   // A plain interrupt keeps queued commands: left queued, the stopped prompt
   // would run next as a turn nobody asked for.

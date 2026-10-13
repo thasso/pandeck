@@ -2845,20 +2845,29 @@ export class ClaudeSdkSession implements LiveSession {
     this.providerTurnRelease = undefined;
     this.providerTurnEpochKey = undefined;
     this.residency.arm();
-    if (this.retainedEpochKey) {
-      if (
-        claudeBackgroundWorkBackend.stopAllWasRequested(
-          this.id,
-          this.retainedEpochKey,
-        )
+    this.reachTurnBoundary();
+  }
+
+  /**
+   * A turn of any kind ended on a retained host: a Stop-all reserved for it
+   * closes the host now, otherwise it closes once it holds no work. Every turn
+   * end passes here — a reservation written while a synthetic turn ran has
+   * no other boundary to wait for.
+   */
+  private reachTurnBoundary(): void {
+    if (!this.retainedEpochKey) return;
+    if (
+      claudeBackgroundWorkBackend.stopAllWasRequested(
+        this.id,
+        this.retainedEpochKey,
       )
-        void backgroundWorkSupervisor.closeStopAllHost(
-          this.id,
-          this.retainedEpochKey,
-          "background Stop-all reached the provider turn boundary",
-        );
-      else this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
-    }
+    )
+      void backgroundWorkSupervisor.closeStopAllHost(
+        this.id,
+        this.retainedEpochKey,
+        "background Stop-all reached the provider turn boundary",
+      );
+    else this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
   }
 
   /* ----------------------------- slash commands ---------------------------- */
@@ -3203,8 +3212,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.onPersist();
     this.onChange();
     this.residency.arm();
-    if (this.retainedEpochKey)
-      this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
+    this.reachTurnBoundary();
   }
 
   /**
@@ -3230,8 +3238,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.onPersist();
     this.onChange();
     this.residency.arm();
-    if (this.retainedEpochKey)
-      this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
+    this.reachTurnBoundary();
   }
 
   /* ------------------------------ SDK messages ----------------------------- */
