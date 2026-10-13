@@ -12,7 +12,7 @@
  * middle of the walk from outside.
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,6 +134,9 @@ describe("a delete that fails once it has already removed something", () => {
       "",
       "a partial removal must leave the repository clean again",
     );
-    assert.ok(!existsSync(join(root, ".pa-removing")));
+    assert.ok(
+      !readdirSync(root).some((entry) => entry.startsWith(".pa-removing-")),
+      "no private aside name may be left behind",
+    );
   });
 });

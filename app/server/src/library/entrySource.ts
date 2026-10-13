@@ -22,7 +22,7 @@
  *
  * `O_NONBLOCK` is part of that safety, not a performance choice: opening a FIFO
  * for reading blocks until a writer arrives, so without it a named pipe left
- * where `SKILL.md` belongs would hang a scan or an HTTP read indefinitely. The
+ * where the manifest belongs would hang a scan or an HTTP read indefinitely. The
  * handle is checked for being a regular file before anything is read from it.
  *
  * The `/proc/self/fd` anchor makes this Linux-only by construction, which is
@@ -52,7 +52,7 @@ const ROOT_DIRECTORY_FLAGS = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY;
  * Deliberately WITHOUT `O_DIRECTORY`: Linux answers `O_DIRECTORY|O_NOFOLLOW` on
  * a symlink with `ENOTDIR`, which would report a linked folder as an ordinary
  * unreadable entry and lose the one diagnostic that tells the user why their
- * link is not a skill. Opened plainly, a symlink is `ELOOP` and anything that is
+ * link is not an entry. Opened plainly, a symlink is `ELOOP` and anything that is
  * not a directory is caught by the `fstat` below instead.
  */
 const SOURCE_FLAGS =
@@ -202,7 +202,7 @@ export async function withEntrySource<T>(
 }
 
 /**
- * Read one open skill directory without re-resolving the library pathname.
+ * Read one open entry directory without re-resolving the library pathname.
  * Names are sorted by the caller because directory iteration order is not a
  * filesystem contract.
  */
@@ -211,7 +211,7 @@ export async function readEntryDirectory(directory: FileHandle) {
 }
 
 /**
- * Iterate one open skill directory LAZILY, holding only a small buffer of
+ * Iterate one open entry directory LAZILY, holding only a small buffer of
  * entries at a time.
  *
  * `readdir` materializes every name before the caller can look at one, so a
@@ -238,7 +238,7 @@ export function iterateEntryDirectory(
 const DIRECTORY_BUFFER_ENTRIES = 32;
 
 /**
- * Open one already-validated child beneath an open skill directory with
+ * Open one already-validated child beneath an open entry directory with
  * no-follow semantics and keep the handle live through `use`.
  */
 export async function withEntryChild<T>(
@@ -786,7 +786,7 @@ class EntryContentChangedError extends Error {
  * function would then be holding THEIRS.
  *
  * Two things bound that. The directory must be EMPTY when it is opened, so an
- * adopted directory can never be one with content in it — writing a skill into
+ * adopted directory can never be one with content in it — writing an entry into
  * a user's populated folder, silently replacing same-named files, is the one
  * outcome that must be impossible. And the handle is the ONLY way anything is
  * written here: callers never re-open the name, so what they write goes into
@@ -1293,7 +1293,7 @@ export async function entryHandleIdentity(
  * Open one child for READ-THEN-WRITE and keep the single handle live through
  * `use`, so a caller reads and rewrites the SAME inode.
  *
- * `SKILL.md` is edited by replacing text that was read a moment earlier. Doing
+ * The manifest is edited by replacing text that was read a moment earlier. Doing
  * that as read-by-name then create-by-name would truncate whatever holds the
  * name at write time, which need not be the file whose text was matched; one
  * handle removes the question.

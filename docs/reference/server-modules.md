@@ -1302,8 +1302,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   A create writes through the held descriptor and then proves the name still
   resolves to it, DISOWNING the path (`ctx.disown`) when it does not, so neither
   staging nor rollback touches a folder that turned out to be the user's. A
-  delete moves the verified folder to a private `.pa-skill-deleting-<uuid>` name
-  and empties it there, so no unlink resolves a name another actor addresses.
+  delete moves the verified folder to a private `.pa-removing-<uuid>` name and
+  empties it there, so no unlink resolves a name another actor addresses.
   Destinations are registered with the rollback only AFTER they exist, and each
   mutation undoes itself without overwriting, against PINNED identities only. A
   DESTRUCTIVE step is pinned too: `pinSkillSource` opens the scanned folder,

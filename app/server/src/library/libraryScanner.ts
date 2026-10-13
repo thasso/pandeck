@@ -34,10 +34,10 @@ export interface LibraryScan {
 const SCAN_CONCURRENCY = 8;
 
 /**
- * How much of one `SKILL.md` a scan reads.
+ * How much of one manifest a scan reads.
  *
  * Generous on purpose: the scan needs the frontmatter, and the served-body
- * bound deliberately does NOT apply to it, so a skill with a large metadata
+ * bound deliberately does NOT apply to it, so an entry with a large metadata
  * block stays valid. What this rules out is the other extreme — a hand-authored
  * file of arbitrary size read in full, for every folder, on every list and
  * every mutation.
@@ -138,14 +138,14 @@ export async function scanLibrary(
 }
 
 /**
- * Which top-level entries stand where a skill folder would.
+ * Which top-level entries stand where an entry folder would.
  *
  * A directory does. A symlink does NOT — the library refuses to read through
  * one — but a link standing where a folder belongs is still reported, because a
- * user who linked a skill in has to be told why it is not listed rather than
+ * user who linked an entry in has to be told why it is not listed rather than
  * watch it silently vanish. A link to anything else is an ordinary top-level
  * file by another name, and top-level files are not library entries: this
- * `stat` only decides whether the entry is skill-shaped, and no content is ever
+ * `stat` only decides whether the entry is entry-shaped, and no content is ever
  * read through it.
  */
 async function entryShapedEntries(root: string): Promise<string[]> {

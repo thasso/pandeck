@@ -56,7 +56,7 @@ export async function readEntryDetail(
  * opens each path component with no-follow semantics through a directory file
  * descriptor, then compares those identities before serving anything. This
  * turns a folder replacement or symlink swap into an invalid answer rather
- * than allowing an unrelated directory to answer for the scanned skill.
+ * than allowing an unrelated directory to answer for the scanned entry.
  */
 export async function resolveEntryDetail(
   library: LibraryStore,

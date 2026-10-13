@@ -237,9 +237,18 @@ The core's wire and message vocabulary is kind-neutral where a kind name would
 be wrong for another kind: the file-level diagnostic codes are
 `missing-manifest`, `unreadable-manifest` and `symlinked-source`, a detail read
 answers `kind: "entry"`, and a removal moves its tree aside as
-`.pa-removing-<uuid>`. Every message that names the kind (`skill`,
-`skills repository`, `Skill-*` trailers) comes from the descriptor, so skill
-messages are unchanged.
+`.pa-removing-<uuid>`. Every message the core builds that names the kind
+(`skill`, `skills repository`, `Skill-*` trailers) comes from the descriptor, so
+those are unchanged for skills. The low-level filesystem errors in
+`entrySource.ts` have no kind and say `library` instead
+(`symlinked library source`); they reach an agent only embedded in a write or
+edit refusal.
+
+A kind with fields beyond `name` and `description` builds its rule with
+`parseManifestWith`, which runs the shared checks and hands the kind the same
+frontmatter mapping and issue list; `LibraryKind<M>` carries the typed manifest
+to callers. `library/libraryKind.test.ts` proves the core with a fixture kind
+(`WIDGET.md`, `Widget-*` trailers) that is not a skill.
 
 The test for "shared enough": adding a third library kind needs a manifest rule,
 a kind descriptor, a create renderer, and nothing else.

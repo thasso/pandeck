@@ -6,7 +6,7 @@
  * comes from the open file description. Swapping the entry afterwards is the
  * defect this seam exists to make impossible, and it is exercised here
  * deterministically, by swapping while the handle is held. Run:
- *   pnpm --filter @assistant/server test src/skills/entrySource.test.ts
+ *   pnpm --filter @assistant/server test src/library/entrySource.test.ts
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
@@ -223,7 +223,7 @@ describe("removeVerifiedEntryTree", () => {
     assert.equal(outcome, "removed");
     assert.ok(!(await readdir(root)).includes("skill"));
     assert.ok(
-      !(await readdir(root)).some((entry) => entry.startsWith(".pa-skill-")),
+      !(await readdir(root)).some((entry) => entry.startsWith(".pa-removing-")),
       "no private aside name may be left behind",
     );
   });

@@ -448,7 +448,7 @@ export class LibraryStore {
 
   /**
    * Current repository state: cleanliness (including UNTRACKED files, which is
-   * what makes a committed skill complete), the branch, and HEAD.
+   * what makes a committed entry complete), the branch, and HEAD.
    */
   async status(): Promise<LibraryRepoStatus> {
     await this.ensureInitialized();
@@ -590,7 +590,7 @@ export class LibraryStore {
           this.modeStillCommitted(committed, current),
         // Hashing a hand-authored file is the one unbounded stretch of work a
         // mutation does — the library is the user's, and nothing caps what they
-        // put beside a skill — so the checkpoint goes INSIDE the read loop
+        // put beside an entry — so the checkpoint goes INSIDE the read loop
         // rather than only around it. Past `beyondCancellation` it is inert,
         // which is what lets the same call be used by a removal's own checks.
         blobId: (content) => this.blobId(content, checkpoint),
@@ -1313,7 +1313,7 @@ export class LibraryStore {
     while (position < size) {
       // Between chunks and not inside one: the file is only being READ, so the
       // hash can be abandoned wherever it has got to without leaving anything
-      // behind — and a multi-gigabyte file a hand author put beside a skill
+      // behind — and a multi-gigabyte file a hand author put beside an entry
       // does not have to be hashed to the end before a stop is noticed.
       checkpoint?.();
       const { bytesRead } = await content.read(

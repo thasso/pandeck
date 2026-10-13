@@ -44,6 +44,7 @@ import {
   readEntryTextWindow,
 } from "../../library/entryFiles.ts";
 import { EntryValidationError } from "../../library/entryManifest.ts";
+import { capitalize, withArticle } from "../../library/libraryKind.ts";
 import { scanLibrary } from "../../library/libraryScanner.ts";
 import {
   MAX_COMMIT_REASON_CHARS,
@@ -192,15 +193,6 @@ const taskIdProperty = {
   maxLength: MAX_COMMIT_TASK_ID_CHARS,
   description: `Optional related Task id recorded as commit provenance. One line, at most ${MAX_COMMIT_TASK_ID_CHARS} characters.`,
 } as const;
-
-/** `skill` → `a skill`; `agent` → `an agent`. */
-function withArticle(word: string): string {
-  return `${/^[aeiou]/i.test(word) ? "an" : "a"} ${word}`;
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
 
 /** Build one kind's whole deferred tool group. */
 export function libraryTools(spec: LibraryToolSpec): AgentTool[] {

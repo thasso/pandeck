@@ -41,7 +41,7 @@ import {
   entrySourceIdentity,
   type LibraryScan,
 } from "./libraryScanner.ts";
-import type { LibraryKind } from "./libraryKind.ts";
+import { capitalize, withArticle, type LibraryKind } from "./libraryKind.ts";
 import {
   LibraryMutationCancelledError,
   type LibraryCommitMeta,
@@ -93,7 +93,7 @@ export const MAX_ENTRY_FILE_OPERATIONS = 20;
 const MAX_ENTRY_BATCH_BYTES = 16 * 1024 * 1024;
 const MAX_ENTRY_RELATIVE_PATH_BYTES = 4 * 1024;
 
-/** One skill the scanner currently reports as valid. */
+/** One entry the scanner currently reports as valid. */
 interface ResolvedEntry {
   name: string;
   description: string;
@@ -107,7 +107,7 @@ interface ResolvedEntry {
  *
  * `signal` is the tool call's cancellation. A mutation honours it only at its
  * own checkpoints — before it writes, and inside the read-only proofs that can
- * hash whatever a hand author left beside a skill — never once it is committed
+ * hash whatever a hand author left beside an entry — never once it is committed
  * to finishing. Stopping a mutation is therefore always "nothing happened",
  * never "half of it happened".
  */
@@ -196,9 +196,9 @@ export async function readLibraryOverview(
 }
 
 /**
- * Read one valid skill's complete source and supporting-file tree. Returns
+ * Read one valid entry's complete source and supporting-file tree. Returns
  * `null` for a name the library does not currently declare as valid — a name
- * with a diagnostic is not editable, and `skill_list` already explains why.
+ * with a diagnostic is not editable, and `<prefix>_list` already explains why.
  */
 export async function readEntrySource(
   name: string,
@@ -551,7 +551,7 @@ export async function manageEntryFiles(
                 // An edit never creates anything: the file it rewrites was
                 // committed before this mutation started (the tree was clean),
                 // so the generic restore owns undoing it, exactly as it does
-                // for a SKILL.md edit.
+                // for a manifest edit.
                 const written = await editRelativeFile(
                   kind,
                   folder,
@@ -678,7 +678,7 @@ export async function renameEntry(
       await withLibraryRoot(ctx.root, async (rootHandle) => {
         // The destination is CLAIMED, never taken. `mkdir` fails on any entry
         // that already holds the name, and every step below is the same kind of
-        // create-or-fail call — `mkdir`, `link`, `O_CREAT|O_EXCL` — so the skill
+        // create-or-fail call — `mkdir`, `link`, `O_CREAT|O_EXCL` — so the entry
         // is assembled at the new name without a single operation that could
         // replace something. A `rename` of the folder would have been simpler,
         // but POSIX `rename` REPLACES an empty destination directory, and no
@@ -949,7 +949,7 @@ export async function renameEntry(
   return { ...outcome, previousName: outcome.extra.previousName };
 }
 
-/** Delete one whole skill folder resolved from its current declared name. */
+/** Delete one whole entry folder resolved from its current declared name. */
 export async function deleteEntry(
   input: { name: string },
   meta: LibraryCommitMeta,
@@ -980,7 +980,7 @@ export async function deleteEntry(
         //
         // What it identifies the folder AS is pinned, not remembered: the scan's
         // numbers would also fit a folder a hand author removed and recreated
-        // here, and deleting that would destroy a skill this tool never read.
+        // here, and deleting that would destroy an entry this tool never read.
         const source = await withVerifiedEntryFolder(
           kind,
           rootHandle,
@@ -1006,7 +1006,7 @@ export async function deleteEntry(
         // The tree that goes must still hold the very manifest that was read,
         // which no recreated folder can — and every other file in it must be one
         // the repository has COMMITTED, with the content it committed. A delete
-        // is a request to remove a skill, not licence to remove whatever else has
+        // is a request to remove an entry, not licence to remove whatever else has
         // appeared in its folder since.
         const proof = cancellableExpectation(async (tree) => {
           if (
@@ -1302,9 +1302,9 @@ async function planFileOperations(
 }
 
 /**
- * The one strict skill-relative path rule for authoring: no absolute or drive
+ * The one strict entry-relative path rule for authoring: no absolute or drive
  * path, no traversal or empty component, no backslash or NUL, bounded length —
- * and never `SKILL.md`, which has its own create/edit tools and its own
+ * and never the manifest, which has its own create/edit tools and its own
  * validation.
  */
 function normalizeSupportingFilePath(kind: LibraryKind, input: string): string {
@@ -1507,9 +1507,9 @@ function pinKeeper(
 }
 
 /**
- * Copy one skill folder's children to another open directory using only
+ * Copy one entry folder's children to another open directory using only
  * create-or-fail calls: `mkdir` for a directory, `link` for everything else.
- * `SKILL.md` is deliberately skipped — a rename rewrites it.
+ * The manifest is deliberately skipped — a rename rewrites it.
  */
 async function placeEntryChildren(
   kind: LibraryKind,
@@ -1722,7 +1722,7 @@ async function removeAssembledEntry(
  *
  * A removal detaches the folder to a private name before it proves anything, so
  * the proof — the one part of a delete or a rename that can hash gigabytes of
- * somebody's supporting files — runs while the skill is reachable under no
+ * somebody's supporting files — runs while the entry is reachable under no
  * public name at all. Throwing out of it would skip the reassembly that puts the
  * folder back. So a cancellation is turned into the answer the removal already
  * knows how to handle ("this tree does not hold what you expected"), which
@@ -1737,7 +1737,7 @@ async function removeAssembledEntry(
  * mutation may not remove. A stop is not that. Reported as an unmet expectation
  * it would surface as a phantom conflict — "the folder gained content" — over a
  * folder nobody touched, and worse, it would be reported to the caller as the
- * reason their skill was not deleted. So it passes straight through.
+ * reason their entry was not deleted. So it passes straight through.
  */
 function notCancelled<T>(fallback: T): (error: unknown) => T {
   return (error: unknown) => {
@@ -1777,7 +1777,7 @@ function cancellableExpectation(
  *
  * The expectation a delete removes against. It has no placement to compare with
  * (nothing was moved anywhere), so the repository's own record is the only
- * account of what belonged to the skill, and the clean-tree precondition is
+ * account of what belonged to the entry, and the clean-tree precondition is
  * what makes it the account of what is on disk. Anything else present — a file
  * a hand author added, or one whose bytes they changed — is not this delete's
  * to take, and refuses it.
@@ -1851,7 +1851,7 @@ const SYMLINK_MODE = "120000";
  * proved.
  *
  * A delete has no placement to compare against, so the committed entry is the
- * entire account of what belonged to the skill, and an entry is a mode and an
+ * entire account of what belonged to the entry, and an entry is a mode and an
  * object. Checking only the object accepts three different changes as if they
  * were none: a symlink put where a file was committed (an object id says
  * nothing about what KIND of thing holds it), a committed symlink repointed at
@@ -2091,18 +2091,18 @@ interface PinnedEntrySource {
 
 /**
  * PIN the source a destructive step is about to act on, and prove through those
- * pins that it is still the skill the caller named.
+ * pins that it is still the entry the caller named.
  *
  * A scan's `dev`/`ino` is a number written down and let go of. By the time a
  * delete or a rename removes the folder, an inode number the scan recorded fits
  * a folder somebody removed and recreated exactly as well as the one that was
  * scanned — the kernel hands a freed number straight back. So the destruction
  * is bound to descriptors this call holds instead: the folder it opened, and
- * the `SKILL.md` inside it, whose bytes it also READ through that same handle
- * and which must still declare the skill the caller asked for. A folder that
+ * the manifest inside it, whose bytes it also READ through that same handle
+ * and which must still declare the entry the caller asked for. A folder that
  * was swapped for something else therefore fails the manifest check whatever
  * the numbers say, and the one case that passes — a folder recreated as the
- * same skill — is the skill the caller named.
+ * same entry — is the entry the caller named.
  */
 async function pinEntrySource(
   kind: LibraryKind,
@@ -2141,7 +2141,7 @@ async function pinEntrySource(
 /**
  * Remove one entry a batch created, and only while it is still the one it made.
  *
- * Reached through the verified skill folder, so it cannot descend into a folder
+ * Reached through the verified entry folder, so it cannot descend into a folder
  * that replaced the scanned one, and `rmdir` refuses anything with content —
  * which is the whole guarantee: an undo may take back the scaffolding this
  * mutation put up, never something somebody else put inside it.
@@ -2208,7 +2208,7 @@ async function removeCreatedEntry(
   ).catch(() => undefined);
 }
 
-/** Open one skill folder below the library root, refusing links and non-folders. */
+/** Open one entry folder below the library root, refusing links and non-folders. */
 async function withEntryFolderHandle<T>(
   kind: LibraryKind,
   rootHandle: FileHandle,
@@ -2218,14 +2218,14 @@ async function withEntryFolderHandle<T>(
   return withEntryChild(rootHandle, folder, async (child) => {
     if (!child.directory)
       throw new EntryValidationError(
-        `"${folder}" is not a ${kind.noun} source folder.`,
+        `"${folder}" is not ${withArticle(kind.noun)} source folder.`,
       );
     return use(child.handle);
   });
 }
 
 /**
- * Open the skill folder the SCAN selected, by inode, and hold it for the whole
+ * Open the entry folder the SCAN selected, by inode, and hold it for the whole
  * operation.
  *
  * Every write, unlink and recursive removal a mutation performs goes through
@@ -2260,7 +2260,7 @@ async function withVerifiedEntryFolder<T>(
   );
 }
 
-/** The identity a scan recorded for a resolvable skill; never absent for one. */
+/** The identity a scan recorded for a resolvable entry; never absent for one. */
 function scannedIdentity(
   kind: LibraryKind,
   scan: LibraryScan,
@@ -2353,7 +2353,7 @@ async function writeRelativeFile(
 /**
  * Rewrite one EXISTING supporting file through exact text replacements.
  *
- * Read and rewrite share one open description, as a `SKILL.md` edit does: the
+ * Read and rewrite share one open description, as a manifest edit does: the
  * text a replacement matched and the bytes it overwrites then belong to the
  * same inode, not merely to the same name. Nothing here creates a file or a
  * directory — an edit addresses content that is already committed.
@@ -2497,7 +2497,7 @@ function assertSourceSize(
   const bytes = Buffer.byteLength(source, "utf8");
   if (bytes > MAX_ENTRY_SOURCE_BYTES) {
     throw new EntryValidationError(
-      `${path} would be ${bytes} bytes, above the ${MAX_ENTRY_SOURCE_BYTES}-byte limit for a ${kind.noun} manifest. Move detail into supporting files.`,
+      `${path} would be ${bytes} bytes, above the ${MAX_ENTRY_SOURCE_BYTES}-byte limit for ${withArticle(kind.noun)} manifest. Move detail into supporting files.`,
     );
   }
 }
@@ -2508,9 +2508,4 @@ function encode(text: string): Uint8Array {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** `skill` → `Skill`, for a message that starts with the kind's noun. */
-function capitalize(word: string): string {
-  return word.charAt(0).toUpperCase() + word.slice(1);
 }

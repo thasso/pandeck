@@ -49,6 +49,7 @@ export type EntryDiagnosticCode =
   | "non-string-description"
   | "empty-description"
   | "description-too-long"
+  | "invalid-field"
   | "duplicate-name";
 
 /** One valid entry discovered in the library working tree. */

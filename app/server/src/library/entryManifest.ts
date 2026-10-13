@@ -33,7 +33,7 @@ import type { LibraryKind } from "./libraryKind.ts";
 const MAX_ENTRY_DESCRIPTION_CHARS = 1024;
 
 /** One reason a manifest is not usable, in the scanner's own vocabulary. */
-interface ManifestIssue {
+export interface ManifestIssue {
   code: EntryDiagnosticCode;
   error: string;
 }
@@ -108,23 +108,44 @@ function parseManifestFrontmatter(
 }
 
 /**
- * The rule every kind shares: a safe `name` and a bounded `description`. A
- * kind with more fields validates them after this, into the same issue list.
+ * The rule every kind shares: a safe `name` and a bounded `description`.
+ * Skills use it as their whole rule.
  */
 export function parseEntryManifest(
   content: string,
   path: string,
 ): ManifestResult {
+  return parseManifestWith(content, path, () => ({}));
+}
+
+/**
+ * A kind's whole rule: the shared `name` + `description` checks, then the
+ * kind's own fields validated by `extend` from the same frontmatter mapping
+ * into the same issue list. `extend` returns the extra manifest fields; they
+ * are used only when no issue was recorded by either half, and the recovered
+ * name still reaches duplicate detection when the extra fields are wrong.
+ */
+export function parseManifestWith<E extends object>(
+  content: string,
+  path: string,
+  extend: (fields: Record<string, unknown>, issues: ManifestIssue[]) => E,
+): ManifestResult<EntryManifest & E> {
   const split = parseManifestFrontmatter(content, path);
   if (!split.ok) return split;
   const issues: ManifestIssue[] = [];
   const name = validateName(split.fields.name, issues);
   const description = validateDescription(split.fields.description, issues);
+  const extra = extend(split.fields, issues);
   if (issues.length > 0)
     return { ok: false, issues, ...(name !== undefined ? { name } : {}) };
   return {
     ok: true,
-    manifest: { name: name!, description: description!, body: split.body },
+    manifest: {
+      ...extra,
+      name: name!,
+      description: description!,
+      body: split.body,
+    },
   };
 }
 
@@ -133,11 +154,11 @@ export function parseEntryManifest(
  * the kind's whole rule, and throw one actionable message listing every
  * problem at once.
  */
-export function assertManifest(
-  kind: LibraryKind,
+export function assertManifest<M extends EntryManifest>(
+  kind: LibraryKind<M>,
   content: string,
   path: string,
-): EntryManifest {
+): M {
   const result = kind.parseManifest(content, path);
   if (result.ok) return result.manifest;
   throw new EntryValidationError(

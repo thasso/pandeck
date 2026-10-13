@@ -9,9 +9,9 @@
  * Adding a kind should need a descriptor and a manifest rule and nothing else.
  */
 import type { LibraryStore } from "./libraryStore.ts";
-import type { ManifestResult } from "./entryManifest.ts";
+import type { EntryManifest, ManifestResult } from "./entryManifest.ts";
 
-export interface LibraryKind {
+export interface LibraryKind<M extends EntryManifest = EntryManifest> {
   /** Singular noun in messages: `skill`. */
   noun: string;
   /** Plural noun in messages, lock keys and the commit e-mail domain: `skills`. */
@@ -20,12 +20,25 @@ export interface LibraryKind {
   manifestFile: string;
   /** Commit trailer prefix: `Skill` gives `Skill-Actor`, `Skill-Names`, … */
   trailerPrefix: string;
-  /** The kind's whole manifest rule, shared by scanning and authoring. */
-  parseManifest(content: string, path: string): ManifestResult;
+  /**
+   * The kind's whole manifest rule, shared by scanning and authoring; built
+   * with `parseManifestWith` when the kind has fields beyond the shared ones.
+   */
+  parseManifest(content: string, path: string): ManifestResult<M>;
   /**
    * Push a fresh read to the kind's browser topic after a committed mutation.
    * Runs while the repository lock is still held, and its failure never
    * unmakes the commit.
    */
   publish(library: LibraryStore): Promise<void>;
+}
+
+/** `skill` → `a skill`, `agent` → `an agent`, for messages naming a kind. */
+export function withArticle(word: string): string {
+  return `${/^[aeiou]/i.test(word) ? "an" : "a"} ${word}`;
+}
+
+/** `skill` → `Skill`, for a message that starts with a kind's noun. */
+export function capitalize(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
