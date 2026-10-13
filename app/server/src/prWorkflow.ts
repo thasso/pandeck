@@ -55,7 +55,7 @@ export interface PrWorkflowPresenter {
   progress(message: string): void;
   discard(): void;
   finishCommit(result: CommitWorkflowResult): void;
-  finishPush(result: PushWorkflowResult): void;
+  finishPush(result: PushWorkflowResult): void | Promise<void>;
   /**
    * Finish the pull-request phase's synthetic tool turn with plain text. The
    * rich, live card is store-driven (`pullRequestCards.ts`) and injected like an
@@ -797,7 +797,7 @@ export async function runPrWorkflow(
       onProgress: (message) => options.presenter.progress(message),
     });
     if (push.status === "up-to-date") options.presenter.discard();
-    else options.presenter.finishPush(push);
+    else await options.presenter.finishPush(push);
     if (push.status === "failed") return { status: "failed", phase: "push" };
   }
 

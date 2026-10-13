@@ -88,7 +88,9 @@ function presenter(events: string[]): PrWorkflowPresenter {
     progress: () => undefined,
     discard: () => events.push("discard"),
     finishCommit: (result) => events.push(`commit:${result.status}`),
-    finishPush: (result) => events.push(`push:${result.status}`),
+    finishPush: (result) => {
+      events.push(`push:${result.status}`);
+    },
     finishPullRequestTool: (_message, isError) =>
       events.push(`pr:${isError ? "failed" : "ok"}`),
   };

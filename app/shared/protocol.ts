@@ -3892,6 +3892,20 @@ export interface PushDisplay {
   /** Combined git stdout/stderr for display. */
   output?: string;
   error?: string;
+  /**
+   * Where the pushed branch lives on a CONFIGURED hosting provider. Absent when
+   * the push failed or no provider is configured for the remote's push URL.
+   */
+  hosted?: PushHostedLinks;
+}
+
+/** Web links for one successful push, resolved once when the push finishes. */
+export interface PushHostedLinks {
+  provider: GitHostingProviderKind;
+  /** The branch's page on the provider. */
+  branchUrl: string;
+  /** The branch's pull request in whatever state it was, if one existed. */
+  pullRequest?: WorktreePullRequestInfo;
 }
 
 /**

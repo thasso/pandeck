@@ -10,11 +10,8 @@ import {
   runCommitWorkflow,
   toCommitDisplay,
 } from "./commitWorkflow.ts";
-import {
-  parsePushArgs,
-  runPushWorkflow,
-  toPushDisplay,
-} from "./pushWorkflow.ts";
+import { parsePushArgs, runPushWorkflow } from "./pushWorkflow.ts";
+import { toLinkedPushDisplay } from "./pushLinks.ts";
 import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { runPrWorkflow, type PrWorkflowPhase } from "./prWorkflow.ts";
@@ -214,7 +211,10 @@ export async function runPushForHost(
       ...(args.branch !== undefined ? { branch: args.branch } : {}),
       onProgress: (message) => host.updateSyntheticTool(message),
     });
-    host.finishSyntheticCard({ kind: "push", push: toPushDisplay(result) });
+    host.finishSyntheticCard({
+      kind: "push",
+      push: await toLinkedPushDisplay(result),
+    });
   } catch (err) {
     host.finishSyntheticTool(
       toolId,
@@ -269,10 +269,10 @@ export async function runPrForHost(
           });
           activeToolId = undefined;
         },
-        finishPush(result) {
+        async finishPush(result) {
           host.finishSyntheticCard({
             kind: "push",
-            push: toPushDisplay(result),
+            push: await toLinkedPushDisplay(result),
           });
           activeToolId = undefined;
         },

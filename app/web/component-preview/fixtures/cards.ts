@@ -149,6 +149,16 @@ export const pushes: PushDisplay[] = [
     localHead: "4be1c2d9aa01f3c2",
     output:
       "To github.com:acme/pandeck.git\n * [new branch]      t742-retry-backoff -> t742-retry-backoff",
+    hosted: {
+      provider: "github",
+      branchUrl: "https://github.com/acme/pandeck/tree/t742-retry-backoff",
+      pullRequest: {
+        number: 42,
+        url: "https://github.com/acme/pandeck/pull/42",
+        title: "Back off between provider retries",
+        state: "open",
+      },
+    },
   },
   {
     status: "up-to-date",
@@ -156,6 +166,10 @@ export const pushes: PushDisplay[] = [
     branch: "main",
     forced: false,
     setUpstream: false,
+    hosted: {
+      provider: "forgejo",
+      branchUrl: "https://git.example.com/acme/pandeck/src/branch/main",
+    },
   },
   {
     status: "failed",

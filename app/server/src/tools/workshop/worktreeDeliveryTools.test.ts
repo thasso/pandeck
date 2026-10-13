@@ -415,6 +415,7 @@ function pushOperations(
         forced: Boolean(options.explicitLease),
       });
     },
+    links: async () => undefined,
     invalidate: () => {
       calls.invalidated += 1;
     },
