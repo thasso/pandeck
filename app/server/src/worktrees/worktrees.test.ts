@@ -504,8 +504,10 @@ test("worktree_create records its caller and worktree_status lists the spawn tre
   );
   assert.equal(record?.createdBySessionId, "tree-coord");
   // The server's membership: holders, then every coordinator above them —
-  // an archived one too, which a browser's session list no longer holds.
+  // archived ones too, which a browser's session list no longer holds. An
+  // archived MIDDLE peer still bridges its active child to the coordinator.
   sessionStore.setArchived("tree-coord", true);
+  sessionStore.setArchived("tree-peer", true);
   const grand = (await listWorktreeRecords("wt-proj")).find(
     (candidate) => candidate.id === own.id,
   );
@@ -520,6 +522,7 @@ test("worktree_create records its caller and worktree_status lists the spawn tre
     undefined,
   );
   sessionStore.setArchived("tree-coord", false);
+  sessionStore.setArchived("tree-peer", false);
 
   // The peer's pull request rides on the record the tree read returns.
   createPullRequestCard(

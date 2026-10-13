@@ -1601,6 +1601,11 @@ export async function broadcastWorktreeList(): Promise<void> {
   }
 }
 
+/** One row's record, as a list build would state it. */
+export function worktreeRecordOf(row: WorktreeRow): WorktreeRecord {
+  return toRecord(row);
+}
+
 function toRecord(
   row: WorktreeRow,
   isMain = false,

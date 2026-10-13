@@ -70,7 +70,7 @@ import {
   PropertyList,
   PropertyText,
 } from "./common/PropertyList.tsx";
-import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
+import { EmptyBox, ErrorNote, Skeleton, Spinner } from "./common/load.tsx";
 import {
   dataOf,
   errorOf,
@@ -644,6 +644,63 @@ export function sessionTreeWorktreeRecords(
   return onlyItsOwn ? [] : owned;
 }
 
+const TREE_WORKTREES_LABEL = "Worktrees from this session";
+
+/**
+ * The tree group's load states (`docs/loading-states.md`). The group is drawn
+ * from the worktree list, so until that list answers it cannot say what the
+ * tree owns: for a session with a peer — a tree there is evidence of — it
+ * RESERVES the group (R1/R4) or states the failure with its retry, instead of
+ * appearing late. A session with no such evidence reserves nothing, so the
+ * ordinary conversation's panel does not flash a placeholder. A failed refresh
+ * keeps the retained rows and states the failure beside them (R2).
+ */
+function withTreeWorktreesLoadState(
+  groups: InspectorRelationGroup[],
+  state: {
+    awaited: boolean;
+    answered: boolean;
+    error: string | null;
+    onRetry?: () => void;
+  },
+): InspectorRelationGroup[] {
+  const note = state.error ? (
+    <ErrorNote message={state.error} onRetry={state.onRetry} />
+  ) : null;
+  if (!state.answered) {
+    if (!state.awaited) return groups;
+    return [
+      ...groups,
+      {
+        id: "tree-worktrees",
+        label: TREE_WORKTREES_LABEL,
+        icon: <GitBranch size={13} />,
+        items: [],
+        alwaysShown: true,
+        content: note ?? (
+          <div role="status" aria-label="Loading worktrees">
+            <Skeleton className="h-10" />
+          </div>
+        ),
+      },
+    ];
+  }
+  if (!note) return groups;
+  return groups.map((group) =>
+    group.id === "tree-worktrees"
+      ? {
+          ...group,
+          content: (
+            <>
+              {group.content}
+              {note}
+            </>
+          ),
+        }
+      : group,
+  );
+}
+
 /** Task rows the session inspector shows before its "Show more". */
 const SESSION_TASKS_PREVIEW = 5;
 
@@ -672,6 +729,8 @@ export function sessionRelationGroups(args: {
    * group rather than claiming the tree owns none.
    */
   worktrees?: readonly WorktreeRecord[] | null;
+  /** Live git status by worktree id, for those rows. */
+  worktreeStatuses?: Record<string, WorktreeGitStatus>;
 }): ObjectRefGroup[] {
   const {
     sessionId,
@@ -684,7 +743,13 @@ export function sessionRelationGroups(args: {
   const treeWorktrees = sessionTreeWorktreeRecords(
     sessionId,
     args.worktrees,
-  ).map((worktree) => worktreeObjectRef(worktree, args.projects ?? []));
+  ).map((worktree) =>
+    worktreeObjectRef(
+      worktree,
+      args.projects ?? [],
+      args.worktreeStatuses?.[worktree.id],
+    ),
+  );
   const current = sessionId
     ? sessions.find((session) => session.id === sessionId)
     : undefined;
@@ -749,7 +814,7 @@ export function sessionRelationGroups(args: {
     },
     {
       id: "tree-worktrees",
-      label: "Worktrees from this session",
+      label: TREE_WORKTREES_LABEL,
       icon: <GitBranch size={13} />,
       ...(treeWorktrees.length > 0
         ? { summary: `${treeWorktrees.length}` }
@@ -1232,6 +1297,9 @@ export function SessionInspector({
   worktree,
   worktreeStatus,
   worktrees,
+  worktreeStatuses,
+  worktreesError,
+  onReloadWorktrees,
   peerPromptPeers,
   stagedRefs = [],
   openers,
@@ -1260,6 +1328,12 @@ export function SessionInspector({
   worktreeStatus?: WorktreeGitStatus | undefined;
   /** Every worktree record held, for the spawn tree's worktrees; `null` = not answered. */
   worktrees?: readonly WorktreeRecord[] | null | undefined;
+  /** Live git status of the tree's worktrees, which the app watches while shown. */
+  worktreeStatuses?: Record<string, WorktreeGitStatus> | undefined;
+  /** The worktree list's last read failed (`worktreeListError`). */
+  worktreesError?: string | null | undefined;
+  /** Retry that read, from the group's inline failure. */
+  onReloadWorktrees?: (() => void) | undefined;
   /**
    * The peer prompts this session sent and received, summed up per peer over
    * the whole history: facts on that peer's session row (`peerPromptFacts`).
@@ -1297,6 +1371,7 @@ export function SessionInspector({
       ...(worktree !== undefined ? { worktree } : {}),
       ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
       ...(worktrees !== undefined ? { worktrees } : {}),
+      ...(worktreeStatuses !== undefined ? { worktreeStatuses } : {}),
     }),
   ];
   const groups = withPeerPrompts(relationGroups, peerPromptPeers, sessions);
@@ -1329,7 +1404,19 @@ export function SessionInspector({
             />
           ),
         },
-        ...toInspectorGroups(groups, openers, sessions),
+        ...withTreeWorktreesLoadState(
+          toInspectorGroups(groups, openers, sessions),
+          {
+            awaited:
+              sessionId !== undefined &&
+              sessions.some(
+                (session) => session.spawnedBySessionId === sessionId,
+              ),
+            answered: worktrees != null,
+            error: worktreesError ?? null,
+            ...(onReloadWorktrees ? { onRetry: onReloadWorktrees } : {}),
+          },
+        ),
       ]}
       // The session header's ⋯ holds the session's actions on every layout
       // (`sessionInspectorActions`, published by the header itself), so this

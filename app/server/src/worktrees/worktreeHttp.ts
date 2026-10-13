@@ -247,7 +247,9 @@ export async function handleWorktreeApi(
       if (
         (body.deleteBranch !== undefined &&
           typeof body.deleteBranch !== "boolean") ||
-        (body.force !== undefined && typeof body.force !== "boolean")
+        (body.force !== undefined && typeof body.force !== "boolean") ||
+        (body.requireIdle !== undefined &&
+          typeof body.requireIdle !== "boolean")
       ) {
         respond(400, {
           error: "Invalid retire options: expected boolean values.",
@@ -259,6 +261,7 @@ export async function handleWorktreeApi(
         await retireWorktree(row.id, {
           deleteBranch: body.deleteBranch !== false,
           force: body.force === true,
+          requireIdle: body.requireIdle === true,
         }),
       );
       return;

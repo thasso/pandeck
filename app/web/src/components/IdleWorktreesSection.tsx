@@ -10,6 +10,7 @@ import { dataOf, errorOf, type LoadState } from "../lib/loadState.ts";
 import {
   idleForLabel,
   idleWorktreeLabel,
+  idleWorktreeMatches,
   idleWorktreeRows,
   retirableIdleWorktrees,
 } from "../lib/idleWorktrees.ts";
@@ -127,14 +128,23 @@ const CLOSED: BulkState = { open: false, busy: false };
  */
 export function IdleWorktreesSection({
   idle,
+  fetchedAt,
   pullRequests,
   projects,
+  query = "",
   density,
   onReload,
   onOpenWorktree,
   onRetired,
 }: {
   idle: LoadState<IdleWorktree[]>;
+  /**
+   * When the server built that answer — the rows' clock, so "idle N" advances
+   * with each poll and the bulk set's age rule reads one consistent instant.
+   */
+  fetchedAt: number | undefined;
+  /** The browser's search box; it filters these rows too. */
+  query?: string;
   /** The inventory rows on screen: a checkout one of them covers is theirs. */
   pullRequests: readonly PullRequestInventoryItem[] | undefined;
   projects: ReadonlyMap<string, IdleRowProject>;
@@ -145,13 +155,24 @@ export function IdleWorktreesSection({
   onRetired: () => void;
 }) {
   const data = dataOf(idle);
+  const now = fetchedAt ?? 0;
   const rows = useMemo(
-    () => idleWorktreeRows(data ?? [], pullRequests),
-    [data, pullRequests],
+    () =>
+      idleWorktreeRows(data ?? [], pullRequests).filter((item) => {
+        const project = projects.get(item.worktree.projectId);
+        return idleWorktreeMatches(
+          item,
+          query,
+          project ? `${project.key} ${project.name}` : undefined,
+        );
+      }),
+    [data, pullRequests, projects, query],
   );
-  const retirable = useMemo(() => retirableIdleWorktrees(rows), [rows]);
+  const retirable = useMemo(
+    () => retirableIdleWorktrees(rows, now),
+    [rows, now],
+  );
   const [bulk, setBulk] = useState<BulkState>(CLOSED);
-  const [now] = useState(() => Date.now());
 
   const retireAll = useCallback(async () => {
     setBulk({ open: true, busy: true });
@@ -161,8 +182,11 @@ export function IdleWorktreesSection({
     // them against one repository would only queue behind each other.
     for (const item of retirable) {
       try {
+        // `requireIdle`: these rows are a snapshot, so the server asks the
+        // idle rule again under its removal hold before it settles anyone.
         const result = await retireWorktree(item.worktree.id, {
           deleteBranch: true,
+          requireIdle: true,
         });
         if (result.status === "refused")
           refused.push(`${item.worktree.branch}: ${result.refusal}`);
@@ -247,8 +271,12 @@ export function IdleWorktreesSection({
             <>
               <p>
                 Each checkout and its local branch is removed after its base
-                branch is refreshed and verified to contain the branch. One that
-                turns out to hold unmerged work is refused and stays.
+                branch is refreshed and verified to contain the branch, and
+                after the server confirms nobody started working there since
+                this list was read. One that fails either check is refused and
+                stays. No commit is lost, but files git ignores — a{" "}
+                <code>.env</code>, local databases, caches — go with the
+                checkout. Only worktrees untouched for a day are included.
               </p>
               <ul className="mt-1 list-disc pl-4 font-mono text-xs">
                 {named.map((item) => (

@@ -233,6 +233,8 @@ interface Props {
 /** What the browser needs to draw and act on idle worktrees. */
 export interface IdleWorktreesProps {
   state: LoadState<IdleWorktree[]>;
+  /** When the server built that answer; "idle N" and the bulk set count from it. */
+  fetchedAt: number | undefined;
   onReload: () => void;
   onOpenWorktree: (id: string) => void;
   /** A retirement landed: refetch both halves of the queue. */
@@ -397,8 +399,10 @@ export function PullRequestBrowser({
       {idle ? (
         <IdleWorktreesSection
           idle={idle.state}
+          fetchedAt={idle.fetchedAt}
           pullRequests={items}
           projects={projectsById}
+          query={query}
           density={density}
           onReload={idle.onReload}
           onOpenWorktree={idle.onOpenWorktree}

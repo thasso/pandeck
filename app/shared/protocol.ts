@@ -4705,6 +4705,12 @@ export interface WorktreeRetireRequest {
   deleteBranch?: boolean;
   /** Discard git work after an explicit lost-work confirmation. */
   force?: boolean;
+  /**
+   * Refuse unless the worktree is still idle — no live holder, no moving pull
+   * request, no merge, no open Workflow Run — re-checked under the removal
+   * hold. The cleanup queue's bulk act sends it: its rows are a snapshot.
+   */
+  requireIdle?: boolean;
 }
 
 /** The direct result of the confirmed retire flow. */
@@ -5402,8 +5408,10 @@ export interface WorktreeHostingListResponse {
  * What is left in an idle worktree, by its live git state
  * (`docs/worktree-ownership.md`):
  * - `delivered` — clean, and every commit is in the base branch (or there are
- *   none), or its pull request merged: retiring it loses nothing, which the
- *   retire path still verifies against the refreshed base.
+ *   none), or its pull request merged with nothing unpushed after it: no
+ *   COMMIT is lost by retiring it, which the retire path still verifies
+ *   against the refreshed base. Files git ignores (`.env`, local databases,
+ *   caches) are removed with the checkout all the same.
  * - `unmerged` — clean, with commits the base branch does not contain.
  * - `uncommitted` — the working tree has changes nobody committed.
  * - `missing` — the checkout's folder is gone.

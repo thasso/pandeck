@@ -5,13 +5,17 @@
  * A worktree is IDLE when no session that holds it is live — its creator, the
  * sessions running in it, and every coordinator above any of them along the
  * spawn edges, since a coordinator may still act on what its peer left — no
- * pull-request card for it is still moving, and no merge is in flight. Live is
- * the removal guard's own sense (`liveSessionIdsForWorktree`): neither settled,
- * archived nor deleted.
+ * pull-request card for it is still moving, no merge is in flight, and no open
+ * Workflow Run owns it (a run's roles may all be settled between steps). Live
+ * is the removal guard's own sense (`liveSessionIdsForWorktree`): neither
+ * settled, archived nor deleted.
  *
  * Nothing here removes anything. It answers which checkouts are left and what
  * retiring each would lose; retiring is the user's act, through the ordinary
- * retire path and its containment checks.
+ * retire path and its containment checks — and a retire that asks
+ * `requireIdle` has this same rule re-checked under its removal hold
+ * ({@link worktreeIdleRefusal}), so a snapshot that went stale cannot settle a
+ * session that started working there since.
  */
 import { existsSync } from "node:fs";
 import type {
@@ -21,10 +25,22 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { sessionStore } from "../db/sessionStore.ts";
-import { listWorktrees, type WorktreeRow } from "../db/worktreeStore.ts";
+import { listOpenRuns } from "../db/workflowStore.ts";
+import {
+  getWorktree,
+  listWorktrees,
+  type WorktreeRow,
+} from "../db/worktreeStore.ts";
 import { errorText } from "../errors.ts";
 import { computeWorktreeStatus } from "./worktreeStatus.ts";
-import { listWorktreeRecords, mapLimit } from "./worktrees.ts";
+import {
+  listWorktreeRecords,
+  mapLimit,
+  worktreeRecordOf,
+} from "./worktrees.ts";
+
+/** How long one answer serves every tab polling it; a retire drops it. */
+const CACHE_MS = 30_000;
 
 /** Git status reads at once: each is a few git processes. */
 const STATUS_CONCURRENCY = 4;
@@ -45,8 +61,8 @@ const defaultOperations: IdleWorktreeOperations = {
 /**
  * Classify what retiring would lose. Status failures are `unknown`, never
  * clean. A clean tree whose pull request MERGED is `delivered` even when the
- * local base has not caught up: a squash merge lands upstream, and this read
- * never fetches. Retire refreshes the base and verifies containment before it
+ * local base has not caught up — a squash merge lands upstream, and this read
+ * never fetches — unless its upstream holds commits it has not pushed. Retire refreshes the base and verifies containment before it
  * removes anything, so a wrong guess here is refused there, not lost.
  */
 export function idleWorktreeKind(
@@ -58,7 +74,10 @@ export function idleWorktreeKind(
       kind: "uncommitted",
       changedFiles: status.filesChanged + status.untracked,
     };
-  if (pullRequestMerged) return { kind: "delivered" };
+  // Unless the upstream shows commits made after it: those are work the
+  // shortcut would hide.
+  if (pullRequestMerged && !(status.upstream && status.upstream.ahead > 0))
+    return { kind: "delivered" };
   if (status.baseUnresolved) return { kind: "unknown" };
   if (status.merged || status.ahead === 0) return { kind: "delivered" };
   return {
@@ -68,14 +87,97 @@ export function idleWorktreeKind(
   };
 }
 
-/** The idle worktrees, most idle first. */
-export async function idleWorktrees(
+/** Why a worktree is not idle, or `undefined` when it is. */
+function notIdleReason(
+  record: WorktreeRecord,
+  row: WorktreeRow,
+  runWorktreeIds: ReadonlySet<string>,
+): { reason?: string; lastActivityAt: number } {
+  let lastActivityAt = row.updatedAt;
+  if (row.mergeStateJson)
+    return { reason: "A merge is in flight there.", lastActivityAt };
+  if (record.pullRequest && MOVING_CARD.has(record.pullRequest.status))
+    return { reason: "Its pull request is still open.", lastActivityAt };
+  if (runWorktreeIds.has(record.id))
+    return { reason: "An open Workflow Run works there.", lastActivityAt };
+  let live: string | undefined;
+  // The holders and every coordinator above them, from the server's record.
+  for (const sessionId of record.treeSessionIds ?? []) {
+    const meta = sessionStore.get(sessionId);
+    if (!meta) continue;
+    lastActivityAt = Math.max(lastActivityAt, meta.updatedAt);
+    if (!live && !meta.archivedAt && !sessionStore.isSettled(sessionId))
+      live = `A session holding it is still live (${meta.title}).`;
+  }
+  return live ? { reason: live, lastActivityAt } : { lastActivityAt };
+}
+
+function openRunWorktreeIds(): Set<string> {
+  return new Set(
+    listOpenRuns().flatMap((run) => (run.worktreeId ? [run.worktreeId] : [])),
+  );
+}
+
+/**
+ * The idle rule re-asked for ONE worktree at retire time: a refusal sentence,
+ * or `undefined` when it is still idle. The retire path calls it before and
+ * again under its removal hold.
+ */
+export function worktreeIdleRefusal(worktreeId: string): string | undefined {
+  const row = getWorktree(worktreeId);
+  if (!row || row.status !== "active")
+    return "That worktree is no longer available.";
+  const { reason } = notIdleReason(
+    worktreeRecordOf(row),
+    row,
+    openRunWorktreeIds(),
+  );
+  return reason
+    ? `It is no longer idle: ${reason} Nothing was removed.`
+    : undefined;
+}
+
+let cached: { at: number; value: IdleWorktree[] } | undefined;
+let inflight: Promise<IdleWorktree[]> | undefined;
+let generation = 0;
+
+/** Drop the cached answer: something was retired, or changed under it. */
+export function invalidateIdleWorktrees(): void {
+  generation += 1;
+  cached = undefined;
+}
+
+/**
+ * The idle worktrees, most idle first: ONE computation shared by every tab
+ * polling it (single-flight), served for {@link CACHE_MS}. Each runs git
+ * status for every candidate, so a tab per minute each was seconds of git work.
+ */
+export function idleWorktrees(): Promise<IdleWorktree[]> {
+  if (cached && Date.now() - cached.at < CACHE_MS)
+    return Promise.resolve(cached.value);
+  if (inflight) return inflight;
+  const started = generation;
+  const run = computeIdleWorktrees()
+    .then((value) => {
+      if (generation === started) cached = { at: Date.now(), value };
+      return value;
+    })
+    .finally(() => {
+      if (inflight === run) inflight = undefined;
+    });
+  inflight = run;
+  return run;
+}
+
+/** The idle worktrees, most idle first, computed now. */
+export async function computeIdleWorktrees(
   operations: IdleWorktreeOperations = defaultOperations,
 ): Promise<IdleWorktree[]> {
   const rows = new Map(listWorktrees().map((row) => [row.id, row]));
   const records = (await listWorktreeRecords()).filter(
     (record) => !record.isMain && rows.has(record.id),
   );
+  const runWorktrees = openRunWorktreeIds();
 
   const candidates: Array<{
     record: WorktreeRecord;
@@ -84,21 +186,9 @@ export async function idleWorktrees(
   }> = [];
   for (const record of records) {
     const row = rows.get(record.id)!;
-    if (row.mergeStateJson) continue;
-    if (record.pullRequest && MOVING_CARD.has(record.pullRequest.status))
-      continue;
-    let lastActivityAt = row.updatedAt;
-    let live = false;
-    // The holders and every coordinator above them, from the server's record.
-    for (const sessionId of record.treeSessionIds ?? []) {
-      const meta = sessionStore.get(sessionId);
-      if (!meta) continue;
-      lastActivityAt = Math.max(lastActivityAt, meta.updatedAt);
-      if (!meta.archivedAt && !sessionStore.isSettled(sessionId)) live = true;
-    }
-    if (!live) candidates.push({ record, row, lastActivityAt });
+    const { reason, lastActivityAt } = notIdleReason(record, row, runWorktrees);
+    if (!reason) candidates.push({ record, row, lastActivityAt });
   }
-
   const idle = await mapLimit(
     candidates,
     STATUS_CONCURRENCY,

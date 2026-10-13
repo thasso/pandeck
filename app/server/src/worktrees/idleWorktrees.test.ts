@@ -13,7 +13,9 @@ const tmp = mkdtempSync(join(tmpdir(), "idle-worktrees-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.ASSISTANT_BACKGROUND_FETCH = "0";
 
-const { idleWorktrees, idleWorktreeKind } = await import("./idleWorktrees.ts");
+const { computeIdleWorktrees, idleWorktreeKind, worktreeIdleRefusal } =
+  await import("./idleWorktrees.ts");
+const workflowStore = await import("../db/workflowStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { insertWorktree, linkSessionToWorktree, recordWorktreeCreator } =
   await import("../db/worktreeStore.ts");
@@ -79,6 +81,14 @@ test("idleWorktreeKind says what retiring would lose, and never calls unknown cl
   assert.deepEqual(idleWorktreeKind(status({ ahead: 4 }), true), {
     kind: "delivered",
   });
+  // Commits made after the merge and not pushed are not hidden by it.
+  assert.deepEqual(
+    idleWorktreeKind(
+      status({ ahead: 2, upstream: { ahead: 1, behind: 0 } }),
+      true,
+    ),
+    { kind: "unmerged", ahead: 2, pushed: false },
+  );
   // A dirty tree is uncommitted whatever its pull request did.
   assert.equal(
     idleWorktreeKind(status({ dirty: true, filesChanged: 1 }), true).kind,
@@ -150,7 +160,7 @@ test("a worktree is idle only when nobody up its ownership chain is live", async
     finished: status({ ahead: 1, merged: true }),
     orphan: status({ dirty: true, filesChanged: 4 }),
   };
-  const idle = await idleWorktrees({
+  const idle = await computeIdleWorktrees({
     exists: (path) => !path.endsWith("vanished"),
     status: async (worktree) => {
       const answer = statuses[worktree.id];
@@ -171,7 +181,7 @@ test("a worktree is idle only when nobody up its ownership chain is live", async
   // The coordinator settles: now the handed worktree is idle too, and git
   // failing for it reads as unknown.
   sessionStore.setSettled("coord", true);
-  const after = await idleWorktrees({
+  const after = await computeIdleWorktrees({
     exists: () => true,
     status: async () => {
       throw new Error("git failed");
@@ -181,4 +191,93 @@ test("a worktree is idle only when nobody up its ownership chain is live", async
     after.find((item) => item.worktree.id === "handed")?.kind,
     "unknown",
   );
+});
+
+test("an open Workflow Run's worktree is not idle, and retire re-asks the rule", async () => {
+  session("run-role", 1_000);
+  sessionStore.setSettled("run-role", true);
+  row("run-owned", 100);
+  linkSessionToWorktree("run-role", "run-owned");
+  const run = workflowStore.createRun({
+    taskId: 9_001,
+    recipeId: "code-delivery",
+    recipeVersion: 1,
+    maxIterations: 1,
+    maxReviewPasses: 1,
+    actor: { kind: "user" },
+  });
+  workflowStore.attachRunWorktree(
+    run.id,
+    { worktreeId: "run-owned", branch: "run-owned" },
+    { kind: "user" },
+  );
+  const listed = async () =>
+    (
+      await computeIdleWorktrees({
+        exists: () => true,
+        status: async () => status(),
+      })
+    ).map((item) => item.worktree.id);
+  assert.equal((await listed()).includes("run-owned"), false);
+  assert.match(worktreeIdleRefusal("run-owned") ?? "", /Workflow Run/);
+
+  // An idle one passes; a session waking up there since the snapshot refuses.
+  row("quiet", 100);
+  session("quiet-holder", 1_000);
+  sessionStore.setSettled("quiet-holder", true);
+  linkSessionToWorktree("quiet-holder", "quiet");
+  assert.equal(worktreeIdleRefusal("quiet"), undefined);
+  sessionStore.setSettled("quiet-holder", false);
+  assert.match(worktreeIdleRefusal("quiet") ?? "", /still live/);
+  assert.match(worktreeIdleRefusal("gone-row") ?? "", /no longer available/);
+});
+
+test("a requireIdle retire refuses under its hold when a holder woke since the snapshot", async () => {
+  const { retireWorktree } = await import("../worktreeRemoval.ts");
+  const { getWorktree } = await import("../db/worktreeStore.ts");
+  row("woken", 100);
+  session("woken-holder", 1_000);
+  sessionStore.setSettled("woken-holder", true);
+  linkSessionToWorktree("woken-holder", "woken");
+  let removed = false;
+  let held = 0;
+  const operations = {
+    resolveWorktree: async (id: string) => getWorktree(id),
+    refreshBase: async () => "base-oid",
+    branchContained: async () => true,
+    blockedReason: async () => undefined,
+    // The holder wakes up after the first check, while the hold is taken.
+    reserveForRemoval: () => {
+      held += 1;
+      sessionStore.setSettled("woken-holder", false);
+      return () => {};
+    },
+    sessionsToSettle: () => [],
+    removeWorktree: async () => {
+      removed = true;
+    },
+    settleSessions: async () => {},
+  };
+  const result = await retireWorktree(
+    "woken",
+    { deleteBranch: true, requireIdle: true },
+    operations,
+  );
+  assert.equal(held, 1);
+  assert.equal(removed, false);
+  assert.equal(result.status, "refused");
+  assert.match(
+    result.status === "refused" ? result.refusal : "",
+    /no longer idle/,
+  );
+
+  // Without the option the same retire is not this rule's business.
+  sessionStore.setSettled("woken-holder", true);
+  const plain = await retireWorktree(
+    "woken",
+    { deleteBranch: true },
+    { ...operations, reserveForRemoval: () => () => {} },
+  );
+  assert.equal(plain.status, "retired");
+  assert.equal(removed, true);
 });

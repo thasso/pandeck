@@ -41,11 +41,40 @@ export function idleWorktreeRows(
     );
 }
 
-/** The ones retiring loses nothing from — the only ones a bulk act may take. */
+/** How long a checkout must have been quiet before the bulk act may take it. */
+const BULK_RETIRE_QUIET_MS = 24 * 3_600_000;
+
+/**
+ * The only ones a bulk act may take: nothing to commit or merge, SOMEBODY ever
+ * held it, and nobody touched it for a day. A checkout nobody held yet — a
+ * person's fresh worktree for upcoming work, a first send before its session
+ * links — is still listed, and still retirable one at a time from its own
+ * page, but "nothing unmerged" is no reason to assume it is finished.
+ */
 export function retirableIdleWorktrees(
   rows: readonly IdleWorktree[],
+  now: number,
 ): IdleWorktree[] {
-  return rows.filter((row) => row.kind === "delivered");
+  return rows.filter(
+    (row) =>
+      row.kind === "delivered" &&
+      (row.worktree.treeSessionIds?.length ?? 0) > 0 &&
+      now - row.lastActivityAt >= BULK_RETIRE_QUIET_MS,
+  );
+}
+
+/** Whether an idle row matches the browser's search, over what the row states. */
+export function idleWorktreeMatches(
+  item: IdleWorktree,
+  needle: string,
+  projectLabel: string | undefined,
+): boolean {
+  const query = needle.trim().toLowerCase();
+  if (!query) return true;
+  return [item.worktree.branch, projectLabel ?? "", idleWorktreeLabel(item)]
+    .join(" ")
+    .toLowerCase()
+    .includes(query);
 }
 
 /** What is left in it, in words; `unknown` never reads as clean. */

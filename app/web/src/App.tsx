@@ -1298,6 +1298,15 @@ function AppContent() {
     state.backgroundStopAllPending,
     state.backgroundWorkItems,
   ]);
+  // The session inspector is on screen for the routed session — the gate for
+  // what its spawn-tree group reads (the worktree topic, the git watches).
+  const routedSessionInspectorShown =
+    inspectorOpen &&
+    (mobileLayout
+      ? !composerVisible && !commentActuation?.composerOpen
+      : inspectorTabVisible) &&
+    route.name === "session" &&
+    state.session?.sessionId === route.id;
   const activeTopics = useMemo(
     () =>
       topicsForSurface({
@@ -1325,12 +1334,7 @@ function AppContent() {
         // whose peers retention archived). Every other conversation stays
         // off the full worktree broadcasts.
         sessionTreeWorktreesVisible:
-          inspectorOpen &&
-          (mobileLayout
-            ? !composerVisible && !commentActuation?.composerOpen
-            : inspectorTabVisible) &&
-          route.name === "session" &&
-          state.session?.sessionId === route.id &&
+          routedSessionInspectorShown &&
           (state.sessions.some(
             (item) => item.spawnedBySessionId === route.id,
           ) ||
@@ -1379,6 +1383,7 @@ function AppContent() {
       state.session,
       state.sessions,
       state.worktrees,
+      routedSessionInspectorShown,
       backgroundLedgeOpen,
     ],
   );
@@ -1413,6 +1418,22 @@ function AppContent() {
   );
   useWorktreeWatches({
     ids: projectPageWorktreeIds,
+    connected: state.connected,
+    actions,
+  });
+  // The inspector's spawn-tree rows state each checkout's dirt and drift, so
+  // the app watches exactly the ones it shows, while it shows them.
+  const sessionTreeWorktreeIds = useMemo(
+    () =>
+      routedSessionInspectorShown && route.name === "session"
+        ? sessionTreeWorktreeRecords(route.id, state.worktrees)
+            .map((worktree) => worktree.id)
+            .sort()
+        : NO_WORKTREE_IDS,
+    [routedSessionInspectorShown, route, state.worktrees],
+  );
+  useWorktreeWatches({
+    ids: sessionTreeWorktreeIds,
     connected: state.connected,
     actions,
   });
@@ -3341,6 +3362,7 @@ function AppContent() {
   const idleWorktreesProps = useMemo(
     () => ({
       state: idleWorktreeQueue.state,
+      fetchedAt: idleWorktreeQueue.fetchedAt,
       onReload: reloadIdleWorktrees,
       onOpenWorktree: openWorktree,
       onRetired: () => {
@@ -3350,6 +3372,7 @@ function AppContent() {
     }),
     [
       idleWorktreeQueue.state,
+      idleWorktreeQueue.fetchedAt,
       reloadIdleWorktrees,
       reloadPullRequestInventory,
       openWorktree,
@@ -6740,6 +6763,9 @@ function AppContent() {
         })()}
         worktreeStatus={displayWorktreeStatus}
         worktrees={state.worktrees}
+        worktreeStatuses={state.worktreeStatuses}
+        worktreesError={state.worktreeListError}
+        onReloadWorktrees={actions.listWorktrees}
         peerPromptPeers={displaySession?.peerPromptPeers}
         stagedRefs={stagedContextRefs}
         openers={inspectorOpeners}

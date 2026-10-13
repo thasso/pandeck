@@ -77,9 +77,11 @@ of the tree see delivery without a provider call of their own:
   group — as worktree rows with that mark (`app/web/docs/ui-shell.md`). The
   panel holds the Worktrees topic only for a session that has a tree to show: a
   spawned peer in the session list, or worktrees the list it already holds says
-  the tree owns (an old coordinator whose peers were archived). Rows state what
-  the record says; live dirt arrives only for worktrees another surface is
-  watching.
+  the tree owns (an old coordinator whose peers were archived). While it shows
+  them the app holds a git watch on exactly those worktrees, so each row states
+  live dirt and drift. Until the list answers, a session with a peer reserves
+  the group, or states a failed read with its retry; a failed refresh keeps the
+  rows and states the failure beside them.
 
 Nothing here removes a worktree. A merged pull request leaves its checkout where
 it is; whether to keep working in it or retire it stays the user's call.
@@ -99,25 +101,39 @@ A spawned worktree is IDLE when:
   own sense: neither settled, archived nor deleted;
 - no pull-request card for it is still moving (`choosing-task`, `creating`,
   `open`) — that one is in the pull-request flow;
-- no merge is in flight on it.
+- no merge is in flight on it;
+- no open Workflow Run owns it — a run's role sessions may all be settled
+  between steps, and the run still needs its workspace.
 
 Each is classified by its live git status into what retiring it would lose:
 `delivered` (clean, and nothing outside the base branch — or its pull request
-merged, since a squash merge lands upstream and this read never fetches; the
-retire path verifies against the refreshed base), `unmerged` (commits the base
-does not contain, and whether they are pushed), `uncommitted` (a dirty tree),
-`missing` (the folder is gone) and `unknown` (git could not answer, or the base
-resolves to nothing — never read as delivered). The read runs git status for the
-candidates only, four at a time, and only while the Pull Requests section is on
-screen (`hooks/useIdleWorktrees.ts`, beside the inventory's poll).
+merged with nothing unpushed after it, since a squash merge lands upstream and
+this read never fetches; the retire path verifies against the refreshed base),
+`unmerged` (commits the base does not contain, and whether they are pushed),
+`uncommitted` (a dirty tree), `missing` (the folder is gone) and `unknown` (git
+could not answer, or the base resolves to nothing — never read as delivered).
+The read runs git status for the candidates only, four at a time, and only while
+the Pull Requests section is on screen (`hooks/useIdleWorktrees.ts`, beside the
+inventory's poll).
 
-The browser drops a worktree a pull-request row already covers, orders the rest
-safest first and most idle first (`lib/idleWorktrees.ts`), and draws each with
-its pull request's mark. A row opens the worktree, whose own Retire carries the
-consent ladder. The one bulk act — **Retire N…** — takes only `delivered`
-worktrees, runs the ordinary retire path one at a time without force (refresh
-the base, verify containment, remove, settle), and keeps any refusal in its
-dialog. Nothing is ever removed automatically.
+The read is single-flight and cached for 30 seconds, so every open tab shares
+one computation; any retirement drops the cache.
+
+The browser drops a worktree a pull-request row already covers, filters the rest
+by the browser's search, orders them safest first and most idle first
+(`lib/idleWorktrees.ts`), and draws each with its pull request's mark. A row
+opens the worktree, whose own Retire carries the consent ladder. The one bulk
+act — **Retire N…** — takes only `delivered` worktrees that SOMEBODY ever held
+and nobody touched for a day: a fresh checkout a person made for upcoming work,
+or one a first send has not linked yet, is listed but never taken in bulk. It
+runs the ordinary retire path one at a time without force (refresh the base,
+verify containment, remove, settle) and sends `requireIdle`, so the server
+re-asks this whole idle rule for that worktree before AND under its removal hold
+(`worktreeIdleRefusal`): the rows are a snapshot, and a session that started
+working there since refuses the removal instead of being settled by it. Its
+dialog says what "nothing unmerged" does not cover: files git ignores (`.env`,
+local databases, caches) go with the checkout. Any refusal stays in the dialog.
+Nothing is ever removed automatically.
 
 ## The creator backfill
 

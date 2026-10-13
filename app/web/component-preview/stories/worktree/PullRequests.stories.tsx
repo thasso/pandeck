@@ -37,6 +37,7 @@ function idleWorktrees(): IdleWorktree[] {
     branch,
     path: `/work/${branch}`,
     sessionIds: [],
+    treeSessionIds: ["pd-coordinator"],
   });
   return [
     {
@@ -165,6 +166,7 @@ export function PullRequestStory({
               browserState === "populated"
                 ? {
                     state: ready(idleWorktrees()),
+                    fetchedAt: NOW,
                     onReload: () => {},
                     onOpenWorktree: () => {},
                     onRetired: () => {},

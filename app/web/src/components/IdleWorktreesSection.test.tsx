@@ -49,8 +49,13 @@ function worktree(id: string): WorktreeRecord {
   };
 }
 
+/** Held once, quiet since the epoch: what the bulk act may take. */
 function item(id: string, kind: IdleWorktree["kind"]): IdleWorktree {
-  return { worktree: worktree(id), kind, lastActivityAt: 0 };
+  return {
+    worktree: { ...worktree(id), treeSessionIds: ["s"] },
+    kind,
+    lastActivityAt: 0,
+  };
 }
 
 const PROJECTS = new Map([
@@ -66,6 +71,7 @@ function render(
     root!.render(
       <IdleWorktreesSection
         idle={state}
+        fetchedAt={10 * 86_400_000}
         pullRequests={[]}
         projects={PROJECTS}
         density="tight"
@@ -125,8 +131,8 @@ describe("IdleWorktreesSection", () => {
       confirm.click();
     });
     expect(hoisted.retire.mock.calls).toEqual([
-      ["a", { deleteBranch: true }],
-      ["c", { deleteBranch: true }],
+      ["a", { deleteBranch: true, requireIdle: true }],
+      ["c", { deleteBranch: true, requireIdle: true }],
     ]);
     expect(onRetired).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).toContain(

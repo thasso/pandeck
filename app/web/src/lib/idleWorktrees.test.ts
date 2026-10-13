@@ -7,6 +7,7 @@ import type {
 import {
   idleForLabel,
   idleWorktreeLabel,
+  idleWorktreeMatches,
   idleWorktreeRows,
   retirableIdleWorktrees,
 } from "./idleWorktrees.ts";
@@ -59,16 +60,52 @@ describe("idleWorktreeRows", () => {
       "dirty",
       "unsure",
     ]);
-    expect(retirableIdleWorktrees(rows).map((row) => row.worktree.id)).toEqual([
-      "old-done",
-      "new-done",
-    ]);
+    // Nobody ever held these fixtures: listed, but never taken in bulk.
+    expect(retirableIdleWorktrees(rows, 10 * 86_400_000)).toEqual([]);
   });
 
   it("covers nothing while the inventory has not answered", () => {
     expect(idleWorktreeRows([idle("a", "delivered")], undefined)).toHaveLength(
       1,
     );
+  });
+});
+
+describe("retirableIdleWorktrees", () => {
+  const day = 86_400_000;
+  const held = (
+    id: string,
+    kind: IdleWorktree["kind"],
+    lastActivityAt: number,
+    treeSessionIds: string[] = ["s"],
+  ): IdleWorktree => ({
+    worktree: { ...worktree(id), treeSessionIds },
+    kind,
+    lastActivityAt,
+  });
+
+  it("takes only delivered, once-held checkouts quiet for a day", () => {
+    const now = 10 * day;
+    const rows = [
+      held("done", "delivered", now - 2 * day),
+      held("fresh", "delivered", now - 3_600_000),
+      held("never-held", "delivered", now - 5 * day, []),
+      held("work", "unmerged", now - 5 * day),
+    ];
+    expect(
+      retirableIdleWorktrees(rows, now).map((row) => row.worktree.id),
+    ).toEqual(["done"]);
+  });
+});
+
+describe("idleWorktreeMatches", () => {
+  it("searches the branch, the project and what the row says", () => {
+    const item = idle("pd-cache-spike", "unmerged", 0, { ahead: 2 });
+    expect(idleWorktreeMatches(item, "", undefined)).toBe(true);
+    expect(idleWorktreeMatches(item, "CACHE", undefined)).toBe(true);
+    expect(idleWorktreeMatches(item, "pandeck", "PD Pandeck")).toBe(true);
+    expect(idleWorktreeMatches(item, "unmerged", undefined)).toBe(true);
+    expect(idleWorktreeMatches(item, "nothing", undefined)).toBe(false);
   });
 });
 

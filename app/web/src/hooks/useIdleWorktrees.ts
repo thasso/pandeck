@@ -14,6 +14,8 @@ const IDLE_KEY = "idle-worktrees";
 
 export interface IdleWorktrees {
   state: LoadState<IdleWorktree[]>;
+  /** When the server built the answer on screen: the rows' clock. */
+  fetchedAt: number | undefined;
   /** Refetch now, keeping what is on screen (R2): a retry, or after a retire. */
   reload: () => void;
 }
@@ -38,5 +40,9 @@ export function useIdleWorktrees(active: boolean): IdleWorktrees {
     () => mapData(state, (response) => response.worktrees),
     [state],
   );
-  return { state: worktrees, reload };
+  const fetchedAt =
+    state.status === "ready" || state.status === "refreshing"
+      ? state.data.fetchedAt
+      : undefined;
+  return { state: worktrees, fetchedAt, reload };
 }
