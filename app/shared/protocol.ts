@@ -3243,6 +3243,7 @@ export type ApprovalKind =
   | "managedPullRequestMerge"
   | "managedCommitOverride"
   | "projectCreate"
+  | "agentDefinition"
   | "settingsInput";
 /**
  * pending → executing → executed | failed (approved path); rejected (declined);
@@ -3499,6 +3500,32 @@ export interface SettingsInputApprovalBody {
   reason?: string;
   /** Whether a value was already set when the card was raised. */
   wasConfigured: boolean;
+}
+
+/**
+ * An agent asking to create an agent definition, or to change one's `model` or
+ * `effort` (`docs/agent-definitions.md`): what spawned sessions of it RUN on is
+ * the user's call. Nothing is written until approval; `resultCommit` records
+ * the commit execution made.
+ */
+export interface AgentDefinitionApprovalBody {
+  kind: "agentDefinition";
+  action: "create" | "edit";
+  /** Declared name, also the library folder. */
+  name: string;
+  description: string;
+  persona: string;
+  /** The model as written, before (edit only) and after. */
+  model: { before?: string; after: string };
+  /** The connected model `after` resolved to when proposed: `provider/id`. */
+  resolvedModel: string;
+  /** Effort before (edit only) and after; absent means the model's default. */
+  effort: { before?: ThinkingLevel; after?: ThinkingLevel };
+  /** The complete `AGENT.md` the approval would write. */
+  source: string;
+  /** The commit subject. */
+  reason: string;
+  resultCommit?: string;
 }
 
 /**
@@ -3791,6 +3818,7 @@ export type ApprovalBody =
   | ManagedPullRequestMergeApprovalBody
   | ManagedCommitOverrideApprovalBody
   | ProjectCreateApprovalBody
+  | AgentDefinitionApprovalBody
   | SettingsInputApprovalBody;
 
 /**

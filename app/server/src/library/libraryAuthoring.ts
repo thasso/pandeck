@@ -422,7 +422,15 @@ export async function editEntrySource(
   input: { name: string; edits: { oldText: string; newText: string }[] },
   meta: LibraryCommitMeta,
   library: LibraryStore,
-  options: LibraryMutationOptions = {},
+  options: LibraryMutationOptions & {
+    /**
+     * The kind's own judgement of the change, made INSIDE the locked write on
+     * the exact source being replaced and its exact replacement, after the
+     * manifest rule and before a byte changes. Throw to refuse: a check made
+     * outside the lock would judge a file somebody can change before the write.
+     */
+    check?: (before: string, after: string) => void | Promise<void>;
+  } = {},
 ): Promise<LibraryMutationOutcome & { replacements: number }> {
   const { kind } = library;
   const name = assertSafeEntryName(kind, input.name);
@@ -484,6 +492,7 @@ export async function editEntrySource(
                 );
               }
               assertSourceSize(kind, applied.content, target.path);
+              await options.check?.(current.source, applied.content);
               // From here the manifest's committed bytes are gone, so a later
               // staging or commit failure must be able to restore this path.
               const written = encode(applied.content);
@@ -1387,6 +1396,20 @@ export function normalizeLibraryPath(input: string): string {
 }
 
 /** Exact, unique, non-overlapping replacements against source already read. */
+/**
+ * What an edit would make of `content`, without touching anything: the same
+ * exact, unique, non-overlapping replacements the edit itself applies. For a
+ * caller that has to judge the result before deciding how to proceed.
+ */
+export function previewEntryEdit(
+  kind: LibraryKind,
+  content: string,
+  edits: { oldText: string; newText: string }[],
+  path: string,
+): string {
+  return applyExactReplacements(kind, content, edits, path).content;
+}
+
 function applyExactReplacements(
   kind: LibraryKind,
   content: string,

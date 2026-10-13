@@ -83,6 +83,7 @@ import { assistantDocumentTools } from "./knowledge/documentTools.ts";
 import { assistantSpreadsheetTools } from "./knowledge/spreadsheetTools.ts";
 import { assistantKnowledgeBaseTools } from "./knowledge/knowledgeBaseTools.ts";
 import { memoryTools } from "./knowledge/memoryTools.ts";
+import { agentLibraryTools } from "./agents/agentLibraryTools.ts";
 import { skillLibraryTools } from "./skills/skillLibraryTools.ts";
 import { sessionAuditTools } from "./sessions/sessionAuditTool.ts";
 import { sessionControlTools } from "./sessions/sessionControlTool.ts";
@@ -176,6 +177,16 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   skill_manage_files: "local",
   skill_rename: "local",
   skill_delete: "local",
+  agent_list: "none",
+  agent_get: "none",
+  agent_read_file: "none",
+  agent_history: "none",
+  agent_diff: "none",
+  agent_create: "local",
+  agent_edit: "local",
+  agent_manage_files: "local",
+  agent_rename: "local",
+  agent_delete: "local",
   convert_pdf: "local",
   convert_xlsx: "local",
   workshop_draft_handoff: "local",
@@ -423,6 +434,19 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       loading: "deferred",
       family: "shared",
       tools: skillLibraryTools,
+    },
+    {
+      id: "agents",
+      label: "Agent definitions",
+      description:
+        "The user's agent definitions (AGENT.md): reusable roles with a persona, model and effort that a coordinator spawns by name. Propose new ones and runtime changes on an approval card, edit their role instructions, rename or delete one, and review the definitions' Git history.",
+      searchHint:
+        "AGENT.md definition definitions role reviewer persona model effort deny reusable spawnable",
+      // Deferred like skills: defining an agent is rare, and the same four
+      // personas reach the group in one search round trip.
+      loading: "deferred",
+      family: "shared",
+      tools: agentLibraryTools,
     },
     {
       id: "show-files",

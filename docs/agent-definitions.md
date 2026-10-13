@@ -1,8 +1,9 @@
 # Agent definitions
 
-**Status:** design for [Task-780](pa://task/780). The shared library core is
-implemented ([Task-781](pa://task/781)); the agent library, spawning by name,
-and the UI are not yet.
+**Status:** design for [Task-780](pa://task/780). The shared library core
+([Task-781](pa://task/781)) and the agent library with its `agent_*` tools
+([Task-782](pa://task/782)) are implemented; spawning by name and the UI are not
+yet.
 
 An agent definition is a user-authored Markdown file that describes a reusable
 agent: which persona it builds on, which model and effort it runs at, which
@@ -141,24 +142,46 @@ session exactly as they apply to any session of that persona.
 
 ## Authoring tools
 
-The `agent_*` tools mirror the `skill_*` tools (`docs/skills.md`) and come from
-the same code: `agent_list`, `agent_get`, `agent_read_file`, `agent_create`,
-`agent_edit`, `agent_manage_files`, `agent_rename`, `agent_delete`,
-`agent_history`, `agent_diff`. They are one deferred catalog group for the
-`assistant`, `personal-assistant`, `developer`, and `workshop` personas. Reads
-are `sideEffects: "none"` and mutations `"local"`, so Plan mode exposes only the
-reads. Every mutation needs a reason, may name a Task, and is one commit with
-the session's provenance.
+The `agent_*` tools are the shared library tool factory
+(`tools/library/libraryTools.ts`) with the agent kind's spec
+(`tools/agents/agentLibraryTools.ts`): `agent_list`, `agent_get`,
+`agent_read_file`, `agent_create`, `agent_edit`, `agent_manage_files`,
+`agent_rename`, `agent_delete`, `agent_history`, `agent_diff`. They are one
+deferred catalog group (`agents`) for the `assistant`, `personal-assistant`,
+`developer`, and `workshop` personas. Reads are `sideEffects: "none"` and
+mutations `"local"`, so Plan mode exposes only the reads. Every mutation needs a
+reason, may name a Task, and is one commit with `Agent-*` provenance trailers.
+
+`agent_create` takes the definition as fields (`persona`, `model`, `effort`,
+`denyTools`, `skills`, `body`) and renders `AGENT.md` deterministically
+(`formatAgentManifest`). Before anything reaches the user, the definition must
+satisfy the content rule and the runtime check (`agents/agentRuntime.ts`): the
+model resolves against the enabled accounts, the denied tools are the persona's
+own or native, the skills are valid library skills.
 
 ### Model and effort changes need approval
 
 The Settings roster of approved peer runtimes exists so the user controls what
 spawned sessions cost. A definition that names its own model moves that control
 into the file. A hand edit is the user's own choice. An agent-tool mutation that
-sets `model` or `effort` on create, or changes either on edit, therefore goes
-through an approval card (`docs/approvals.md`) showing the old and new values.
-Nothing is written or committed until the user approves. Mutations that leave
-both keys alone commit directly, like skill mutations.
+sets what a definition runs on therefore goes through an `agentDefinition`
+approval card (`docs/approvals.md`):
+
+- **Create** always sets a model, so every `agent_create` is a card. It shows
+  the persona, the model as written and the connected model it resolved to, the
+  effort, and the complete `AGENT.md`. Nothing is written until approval; the
+  executor checks the runtime again and creates the entry.
+- **Edit** is previewed first (`previewEntryEdit`). When the result changes
+  `model` or `effort`, it is a card showing before and after, and the executor
+  applies the same edits only if the locked result still carries exactly the
+  approved model and effort, so a hand edit made while the card waited refuses
+  rather than slips through. Any other edit commits directly; inside the locked
+  write it is judged again (`editEntrySource`'s `check`): model and effort must
+  still be unchanged, and the denied tools and skills must still exist. Such an
+  edit does not re-resolve the model, so a definition whose account went away
+  can still have its instructions fixed.
+- Rename, delete and supporting files never change what a definition runs on and
+  commit directly; `AGENT.md` itself is refused by `agent_manage_files`.
 
 ## Spawning by name
 

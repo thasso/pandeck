@@ -15,6 +15,7 @@ import { createElement, useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Archive,
+  Bot,
   CheckCheck,
   CircleDot,
   ExternalLink,
@@ -35,6 +36,7 @@ import {
 } from "lucide-react";
 import type {
   AccountModelOption,
+  AgentDefinitionApprovalBody,
   ApprovalCard as ApprovalCardData,
   ApprovalDecision,
   ApprovalGrant,
@@ -160,6 +162,7 @@ const KIND_ICON: Partial<Record<ApprovalCardData["body"]["kind"], LucideIcon>> =
     confluencePage: FileText,
     gmailArchive: Archive,
     projectCreate: FolderPlus,
+    agentDefinition: Bot,
     settingsInput: KeyRound,
   };
 
@@ -933,6 +936,59 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** A before → after pair, or just the value when nothing was there before. */
+function Change({
+  before,
+  after,
+}: {
+  before?: string | undefined;
+  after: string;
+}) {
+  return before !== undefined && before !== after ? (
+    <>
+      <span className="text-muted-foreground line-through">{before}</span> →{" "}
+      {after}
+    </>
+  ) : (
+    <>{after}</>
+  );
+}
+
+function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
+  const effort = (level: ThinkingLevel | undefined) => level ?? "model default";
+  return (
+    <>
+      <Row label="Agent">
+        <span className="font-mono">{body.name}</span>{" "}
+        <span className="text-muted-foreground">· {body.persona}</span>
+      </Row>
+      <Row label="Model">
+        <Change before={body.model.before} after={body.model.after} />{" "}
+        <span className="font-mono text-muted-foreground">
+          ({body.resolvedModel})
+        </span>
+      </Row>
+      <Row label="Effort">
+        <Change
+          {...(body.action === "edit"
+            ? { before: effort(body.effort.before) }
+            : {})}
+          after={effort(body.effort.after)}
+        />
+      </Row>
+      <Row label="Purpose">{body.description}</Row>
+      {body.resultCommit ? (
+        <Row label="Commit">
+          <span className="font-mono">{body.resultCommit}</span>
+        </Row>
+      ) : null}
+      <pre className="max-h-80 overflow-auto rounded-md bg-background p-1.5 text-xs text-foreground">
+        <code>{body.source}</code>
+      </pre>
+    </>
+  );
+}
+
 function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
   return (
     <div
@@ -1110,6 +1166,7 @@ function Body({
   }
   if (b.kind === "gmailArchive") return <GmailArchiveBody body={b} />;
   if (b.kind === "projectCreate") return <ProjectCreateBody body={b} />;
+  if (b.kind === "agentDefinition") return <AgentDefinitionBody body={b} />;
   if (b.kind === "managedPullRequestMerge")
     return <ManagedMergeBody body={b} />;
   if (b.kind === "managedCommitOverride")

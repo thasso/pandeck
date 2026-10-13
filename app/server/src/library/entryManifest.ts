@@ -121,21 +121,26 @@ export function parseEntryManifest(
 /**
  * A kind's whole rule: the shared `name` + `description` checks, then the
  * kind's own fields validated by `extend` from the same frontmatter mapping
- * into the same issue list. `extend` returns the extra manifest fields; they
+ * (and the body, for a kind whose size bound lets it read one) into the same
+ * issue list. `extend` returns the extra manifest fields; they
  * are used only when no issue was recorded by either half, and the recovered
  * name still reaches duplicate detection when the extra fields are wrong.
  */
 export function parseManifestWith<E extends object>(
   content: string,
   path: string,
-  extend: (fields: Record<string, unknown>, issues: ManifestIssue[]) => E,
+  extend: (
+    fields: Record<string, unknown>,
+    issues: ManifestIssue[],
+    body: string,
+  ) => E,
 ): ManifestResult<EntryManifest & E> {
   const split = parseManifestFrontmatter(content, path);
   if (!split.ok) return split;
   const issues: ManifestIssue[] = [];
   const name = validateName(split.fields.name, issues);
   const description = validateDescription(split.fields.description, issues);
-  const extra = extend(split.fields, issues);
+  const extra = extend(split.fields, issues, split.body);
   if (issues.length > 0)
     return { ok: false, issues, ...(name !== undefined ? { name } : {}) };
   return {

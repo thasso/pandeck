@@ -23,8 +23,8 @@ sizes only.
 | workshop | claude | 6,892 | 11,342 | 18,234 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
 | workflow-coordinator | claude | 3,366 | 1,475 | 4,841 |
-| developer | pi | 13,590 | 19,373 | 32,963 |
-| developer | claude | 7,337 | 10,846 | 18,183 |
+| developer | pi | 13,579 | 19,373 | 32,952 |
+| developer | claude | 7,326 | 10,846 | 18,172 |
 
 ## assistant — pi
 
@@ -51,7 +51,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,038 |
 | `tools:eager:schemas` | tools | yes | 7,932 |
 | `tools:eager:harness-builtin` | tools | yes | 0 |
-| `tools:deferred:universe` | tools | no | 132,302 |
+| `tools:deferred:universe` | tools | no | 144,785 |
 
 ## assistant — claude
 
@@ -73,7 +73,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,666 |
 | `tools:eager:schemas` | tools | yes | 7,539 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 133,112 |
+| `tools:deferred:universe` | tools | no | 145,685 |
 
 ## personal-assistant — pi
 
@@ -99,7 +99,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,038 |
 | `tools:eager:schemas` | tools | yes | 7,932 |
 | `tools:eager:harness-builtin` | tools | yes | 0 |
-| `tools:deferred:universe` | tools | no | 136,684 |
+| `tools:deferred:universe` | tools | no | 149,167 |
 
 ## personal-assistant — claude
 
@@ -120,7 +120,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,666 |
 | `tools:eager:schemas` | tools | yes | 7,539 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 137,548 |
+| `tools:deferred:universe` | tools | no | 150,121 |
 
 ## workshop — pi
 
@@ -145,7 +145,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,839 |
 | `tools:eager:schemas` | tools | yes | 10,224 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 165,024 |
+| `tools:deferred:universe` | tools | no | 176,699 |
 
 ## workshop — claude
 
@@ -165,7 +165,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,345 |
 | `tools:eager:schemas` | tools | yes | 8,687 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 166,203 |
+| `tools:deferred:universe` | tools | no | 177,968 |
 
 ## workflow-coordinator — pi
 
@@ -212,7 +212,7 @@ sizes only.
 | `pi-tool-list:app-eager` | prompt | yes | 0 |
 | `pi-guidelines:builtin` | prompt | yes | 609 |
 | `pi-guidelines:app-eager` | prompt | yes | 0 |
-| `persona:developer` | prompt | yes | 3,849 |
+| `persona:developer` | prompt | yes | 3,838 |
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
@@ -225,14 +225,14 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,665 |
 | `tools:eager:schemas` | tools | yes | 9,938 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 163,841 |
+| `tools:deferred:universe` | tools | no | 175,516 |
 
 ## developer — claude
 
 | Layer | Section | Counted | Chars |
 | --- | --- | --- | ---: |
 | `harness-base` | prompt | no | 0 |
-| `persona:developer` | prompt | yes | 3,849 |
+| `persona:developer` | prompt | yes | 3,838 |
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
@@ -245,4 +245,4 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,171 |
 | `tools:eager:schemas` | tools | yes | 8,401 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 165,011 |
+| `tools:deferred:universe` | tools | no | 176,776 |

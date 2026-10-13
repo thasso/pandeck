@@ -65,6 +65,14 @@ const MAX_TREE_ROWS = 200;
 const MAX_LISTED_ENTRIES = 200;
 const MAX_LISTED_DIAGNOSTICS = 50;
 
+/**
+ * A mutation the kind sent to the user instead of committing: the tool answers
+ * with this result (an approval card reference) and nothing is written.
+ */
+export interface PendingApproval {
+  pending: ToolResult;
+}
+
 /** What one kind contributes to its tool group. */
 export interface LibraryToolSpec {
   /** Tool-name prefix: `skill` gives `skill_list`, `skill_get`, … */
@@ -86,7 +94,22 @@ export interface LibraryToolSpec {
       meta: LibraryCommitMeta,
       library: LibraryStore,
       options: LibraryMutationOptions,
-    ): Promise<LibraryMutationOutcome>;
+      ctx: ToolCallContext,
+    ): Promise<LibraryMutationOutcome | PendingApproval>;
+  };
+  /** `<prefix>_edit` for a kind that judges an edit before committing it. */
+  edit?: {
+    /** Appended to the shared edit description. */
+    note: string;
+    run(
+      input: { name: string; edits: { oldText: string; newText: string }[] },
+      meta: LibraryCommitMeta,
+      library: LibraryStore,
+      options: LibraryMutationOptions,
+      ctx: ToolCallContext,
+    ): Promise<
+      (LibraryMutationOutcome & { replacements: number }) | PendingApproval
+    >;
   };
   rename: {
     description: string;
@@ -374,7 +397,9 @@ export function libraryTools(spec: LibraryToolSpec): AgentTool[] {
         commitMeta(ctx, params),
         library(),
         ctx.signal ? { signal: ctx.signal } : {},
+        ctx,
       );
+      if ("pending" in outcome) return outcome.pending;
       return compactJsonResult({
         capability: tool("create"),
         ...mutationPayload("create", outcome),
@@ -390,7 +415,7 @@ export function libraryTools(spec: LibraryToolSpec): AgentTool[] {
   }>({
     name: tool("edit"),
     label: label("Edit"),
-    description: `Edit one ${noun}'s ${manifestFile} with exact, unique text replacements and commit the result. Read the ${noun} with ${tool("get")} first and copy text from the source it returned, frontmatter included; a fragment that is missing, ambiguous, or leaves the file unchanged is refused before anything is written. The complete result is validated as ${anEntry}, and an edit may NOT change the declared name — use ${tool("rename")}, which also moves the source folder. Requires a completely clean library repository. Never write secrets or credentials into ${anEntry}.`,
+    description: `Edit one ${noun}'s ${manifestFile} with exact, unique text replacements and commit the result. Read the ${noun} with ${tool("get")} first and copy text from the source it returned, frontmatter included; a fragment that is missing, ambiguous, or leaves the file unchanged is refused before anything is written. The complete result is validated as ${anEntry}, and an edit may NOT change the declared name — use ${tool("rename")}, which also moves the source folder. Requires a completely clean library repository. Never write secrets or credentials into ${anEntry}.${spec.edit ? ` ${spec.edit.note}` : ""}`,
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -418,12 +443,13 @@ export function libraryTools(spec: LibraryToolSpec): AgentTool[] {
       },
     },
     async execute(params, ctx) {
-      const outcome = await editEntrySource(
-        { name: params.name, edits: params.edits },
-        commitMeta(ctx, params),
-        library(),
-        ctx.signal ? { signal: ctx.signal } : {},
-      );
+      const input = { name: params.name, edits: params.edits };
+      const meta = commitMeta(ctx, params);
+      const options = ctx.signal ? { signal: ctx.signal } : {};
+      const outcome = spec.edit
+        ? await spec.edit.run(input, meta, library(), options, ctx)
+        : await editEntrySource(input, meta, library(), options);
+      if ("pending" in outcome) return outcome.pending;
       return compactJsonResult({
         capability: tool("edit"),
         ...mutationPayload("edit", outcome),

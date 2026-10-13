@@ -23,6 +23,7 @@ hidden prompt through `agentHandoffs.ts`.
 | `managedPullRequestMerge` | `worktree_finish_pull_request` into the default branch    | `managedPullRequestMerge`                                              |
 | `managedCommitOverride`   | `worktree_commit` with `force: true`                      | none: never granted                                                    |
 | `projectCreate`           | `project_create`                                          | `projectCreate`                                                        |
+| `agentDefinition`         | `agent_create`, `agent_edit` changing `model` or `effort` | `agentDefinition`                                                      |
 | `settingsInput`           | `settings_request_input`, `accounts_sign_in`              | none: never granted                                                    |
 
 The `commit` kind remains readable for stored cards; nothing creates it today.

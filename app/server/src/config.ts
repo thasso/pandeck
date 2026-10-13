@@ -266,6 +266,9 @@ export const SKILLS_LIBRARY_DIR = join(DATA_DIR, "skills");
 /** Generated per-skill-set runtime layouts; never a source of truth. */
 export const SKILLS_RUNTIME_DIR = join(DATA_DIR, "skills-runtime");
 
+/** User-owned, Git-backed library of agent definitions (`AGENT.md`). */
+export const AGENTS_LIBRARY_DIR = join(DATA_DIR, "agents");
+
 /**
  * The APNs auth key that lets this server push to the iOS app.
  *
