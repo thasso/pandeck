@@ -124,11 +124,11 @@ is the same act as one on the card. The dialog is not a document-viewer route:
 until Jira accepts it the ticket exists only on the card.
 
 Every card names people, not account ids: an assignee or any user-valued field
-(`{ accountId }` or a list of them) is shown by Jira display name, resolved in
-one `GET /rest/api/3/user/bulk` while staging (`app/server/src/jiraUsers.ts`).
-The account ids stay in the change's server-side `value` and are what Jira
-receives. A name that cannot be resolved does not block staging; the card shows
-that account id instead.
+(`{ accountId }` or a list of them) is shown by Jira display name, resolved
+while staging through `GET /rest/api/3/user/bulk` in batches of 100
+(`app/server/src/jiraUsers.ts`). The account ids stay in the change's
+server-side `value` and are what Jira receives. A name that cannot be resolved
+does not block staging; the card shows that account id instead.
 
 ### Issue links
 
