@@ -3063,8 +3063,40 @@ export interface JiraIssueLinkChangeDisplay {
   error?: string;
 }
 
-/** edit (default) = transition/field/link an existing issue; create = new issue; comment = add a comment; rank = reorder issues in a backlog. */
-export type JiraIssueMutationOperation = "edit" | "create" | "comment" | "rank";
+/** edit (default) = transition/field/link an existing issue; create = new issue; comment = add a comment; rank = reorder issues in a backlog; sprint = edit a sprint's name, dates or goal. */
+export type JiraIssueMutationOperation =
+  "edit" | "create" | "comment" | "rank" | "sprint";
+
+/** The sprint properties a `sprint` item can change. */
+export type JiraSprintField = "name" | "startDate" | "endDate" | "goal";
+
+/** One sprint property's change; dates are ISO 8601 instants, null means unset. */
+export interface JiraSprintChangeDisplay {
+  field: JiraSprintField;
+  from: string | null;
+  to: string | null;
+}
+
+/**
+ * A partial update of one Jira Agile sprint. A sprint is not an issue: its
+ * name, dates and goal live on the board's sprint object, so only this item
+ * reaches them. `name`, `state` and `boardId` describe the sprint as it was
+ * when the proposal was staged.
+ */
+export interface JiraSprintUpdateDisplay {
+  sprintId: number;
+  name: string;
+  /** Jira's sprint state: future, active or closed. */
+  state: string;
+  boardId?: number | null;
+  changes: JiraSprintChangeDisplay[];
+  /** The sprint as Jira returned it after execution. */
+  result?: {
+    name: string;
+    startDate: string | null;
+    endDate: string | null;
+  };
+}
 
 /** Where a rank item places its issues: next to a named issue, or at an end of a bounded scope. */
 export type JiraIssueRankPosition = "before" | "after" | "top" | "bottom";
@@ -3134,6 +3166,8 @@ export interface JiraIssueMutationItemDisplay {
   rankSteps?: JiraIssueRankStepDisplay[];
   /** Ordering observed in the scope after execution. */
   rankResultOrder?: string[];
+  /** sprint: the sprint and the properties the item changes. */
+  sprint?: JiraSprintUpdateDisplay;
   /** create result: the created issue key. */
   resultIssueKey?: string | null;
   resultIssueUrl?: string | null;

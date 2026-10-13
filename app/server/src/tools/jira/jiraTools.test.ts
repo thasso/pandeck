@@ -1192,3 +1192,402 @@ describe("jira_mutate_issue rank", () => {
     expect(item.rankSteps?.[0]?.resultOk).toBe(false);
   });
 });
+
+type StubSprint = {
+  id: number;
+  name: string;
+  state: string;
+  startDate?: string;
+  endDate?: string;
+  goal?: string;
+  originBoardId?: number;
+};
+
+function sprintStub(
+  sprints: StubSprint[],
+  options: {
+    boards?: Array<{ id: number; type: string }>;
+    /** Jira lists more boards than the page returned. */
+    moreBoards?: boolean;
+    /** Rows Jira serves per page, whatever maxResults asked for. */
+    pageSize?: number;
+    /** The sprint closes before the approved write lands: dates are ignored. */
+    closeOnUpdate?: boolean;
+  } = {},
+) {
+  const byId = new Map(sprints.map((sprint) => [sprint.id, { ...sprint }]));
+  const boards = options.boards ?? [{ id: 42, type: "scrum" }];
+  vi.mocked(jiraGet).mockImplementation(async (config, path, query) => {
+    const sprintMatch = /^\/rest\/agile\/1\.0\/sprint\/(\d+)$/.exec(path);
+    if (sprintMatch) {
+      const sprint = byId.get(Number(sprintMatch[1]));
+      if (!sprint)
+        throw new Error(
+          `Jira API returned HTTP 404 for GET ${path}: {"errorMessages":["Sprint does not exist"]}`,
+        );
+      return sprint as never;
+    }
+    if (path === "/rest/agile/1.0/board")
+      return { values: boards, isLast: !options.moreBoards } as never;
+    const boardMatch = /^\/rest\/agile\/1\.0\/board\/(\d+)\/sprint$/.exec(path);
+    if (boardMatch) {
+      const boardId = Number(boardMatch[1]);
+      if (boards.find((board) => board.id === boardId)?.type === "kanban")
+        throw new Error(
+          `Jira API returned HTTP 400 for GET ${path}: {"errorMessages":["The board does not support sprints"]}`,
+        );
+      const page = (query ?? {}) as {
+        state?: string;
+        startAt?: number;
+        maxResults?: number;
+      };
+      const states = String(page.state ?? "").split(",");
+      const all = [...byId.values()].filter(
+        (sprint) =>
+          sprint.originBoardId === boardId && states.includes(sprint.state),
+      );
+      const startAt = page.startAt ?? 0;
+      const size = Math.min(
+        page.maxResults ?? 50,
+        options.pageSize ?? Number.POSITIVE_INFINITY,
+      );
+      const values = all.slice(startAt, startAt + size);
+      return {
+        isLast: startAt + values.length >= all.length,
+        values,
+      } as never;
+    }
+    return defaultJiraGet(config, path, query) as never;
+  });
+  vi.mocked(jiraPost).mockImplementation(
+    async (config, path, body, query, callOptions) => {
+      const sprintMatch = /^\/rest\/agile\/1\.0\/sprint\/(\d+)$/.exec(path);
+      if (!sprintMatch)
+        return defaultJiraPost(config, path, body, query, callOptions) as never;
+      const sprint = byId.get(Number(sprintMatch[1]))!;
+      const update = { ...(body as Record<string, string>) };
+      if (options.closeOnUpdate) {
+        sprint.state = "closed";
+        delete update.startDate;
+        delete update.endDate;
+      }
+      Object.assign(sprint, update);
+      return sprint as never;
+    },
+  );
+  return { byId };
+}
+
+const SPRINT_25: StubSprint = {
+  id: 5149,
+  name: "STAR Sprint 25",
+  state: "future",
+  startDate: "2026-09-15T07:00:00.000Z",
+  endDate: "2026-09-22T07:00:00.000Z",
+  originBoardId: 42,
+};
+
+describe("jira_lookup sprints", () => {
+  afterEach(() => restoreJiraMocks());
+
+  test("lists a board's active and future sprints with ids and dates", async () => {
+    sprintStub([
+      SPRINT_25,
+      {
+        id: 5148,
+        name: "STAR Sprint 24",
+        state: "active",
+        startDate: "2026-09-29T07:00:00.000Z",
+        endDate: "2026-10-06T07:00:00.000Z",
+        originBoardId: 42,
+      },
+      { id: 5100, name: "STAR Sprint 1", state: "closed", originBoardId: 42 },
+    ]);
+    const payload = parseText(
+      await runLookup({ kind: "sprints", boardId: 42 }),
+    );
+    expect(payload.kind).toBe("sprints");
+    expect(payload.states).toEqual(["active", "future"]);
+    expect(payload.sprints).toEqual([
+      expect.objectContaining({ id: 5148, state: "active" }),
+      expect.objectContaining({
+        id: 5149,
+        name: "STAR Sprint 25",
+        startDate: "2026-09-15T07:00:00.000Z",
+        endDate: "2026-09-22T07:00:00.000Z",
+        boardId: 42,
+      }),
+    ]);
+  });
+
+  test("resolves a project's boards and skips boards without sprints", async () => {
+    sprintStub([SPRINT_25], {
+      boards: [
+        { id: 7, type: "kanban" },
+        { id: 42, type: "scrum" },
+      ],
+    });
+    const payload = parseText(
+      await runLookup({ kind: "sprints", projectKey: "star", query: "25" }),
+    );
+    expect(payload.projectKey).toBe("STAR");
+    expect(payload.boardsWithoutSprints).toEqual([7]);
+    expect(payload.sprints).toEqual([expect.objectContaining({ id: 5149 })]);
+  });
+
+  test("pages by the rows Jira returned, not the rows it was asked for", async () => {
+    sprintStub(
+      Array.from({ length: 75 }, (_, i) => ({
+        id: i + 1,
+        name: `S${i + 1}`,
+        state: "future",
+        originBoardId: 42,
+      })),
+      { pageSize: 25 },
+    );
+    const payload = parseText(
+      await runLookup({ kind: "sprints", boardId: 42, maxResults: 200 }),
+    );
+    expect(payload.totalMatched).toBe(75);
+    expect(payload.exhausted).toBe(true);
+    expect(
+      (payload.sprints as Array<{ id: number }>).map((sprint) => sprint.id),
+    ).toEqual(Array.from({ length: 75 }, (_, i) => i + 1));
+  });
+
+  test("never reports a capped read as exhaustive", async () => {
+    sprintStub(
+      Array.from({ length: 520 }, (_, i) => ({
+        id: i + 1,
+        name: i === 510 ? "Needle" : `S${i + 1}`,
+        state: "closed",
+        originBoardId: 42,
+      })),
+      { moreBoards: true },
+    );
+    const payload = parseText(
+      await runLookup({
+        kind: "sprints",
+        projectKey: "STAR",
+        query: "needle",
+        sprintStates: ["closed"],
+      }),
+    );
+    // The only match sits past the 500-sprint window.
+    expect(payload.totalMatched).toBe(0);
+    expect(payload.exhausted).toBe(false);
+    expect(payload.boardsTruncated).toBe(true);
+    expect(payload.sprintReadCappedOnBoards).toEqual([42]);
+    expect(payload.note).toMatch(/Pass boardId/);
+    expect(payload.note).toMatch(/Narrow sprintStates/);
+  });
+
+  test("orders closed sprints by end instant, not by the offset-bearing text", async () => {
+    sprintStub([
+      {
+        id: 1,
+        name: "Earlier",
+        state: "closed",
+        endDate: "2026-10-10T10:00:00.000+12:00",
+        originBoardId: 42,
+      },
+      {
+        id: 2,
+        name: "Later",
+        state: "closed",
+        endDate: "2026-10-10T09:00:00.000-12:00",
+        originBoardId: 42,
+      },
+      { id: 3, name: "Undated", state: "closed", originBoardId: 42 },
+    ]);
+    const payload = parseText(
+      await runLookup({
+        kind: "sprints",
+        boardId: 42,
+        sprintStates: ["closed"],
+      }),
+    );
+    expect(
+      (payload.sprints as Array<{ id: number }>).map((sprint) => sprint.id),
+    ).toEqual([2, 1, 3]);
+  });
+
+  test("requires a board or a project", async () => {
+    await expect(runLookup({ kind: "sprints" })).rejects.toThrow(
+      /requires boardId or projectKey/,
+    );
+  });
+});
+
+describe("jira_mutate_issue sprint", () => {
+  afterEach(() => restoreJiraMocks());
+
+  test("stages only the changed dates and applies them as a partial update", async () => {
+    const stub = sprintStub([SPRINT_25]);
+    const sid = `jira-sprint-${(mutateSession += 1)}`;
+    await runMutate(sid, [
+      {
+        operation: "sprint",
+        sprintId: 5149,
+        sprintName: "STAR Sprint 25",
+        sprintStartDate: "2026-10-13T09:00:00+02:00",
+        sprintEndDate: "2026-10-20T09:00:00+02:00",
+      },
+    ]);
+    const card = approvalsForSession(sid).at(-1)!;
+    expect(card.title).toBe("Edit sprint STAR Sprint 25");
+    const staged = proposalItems(sid)[0]!;
+    expect(staged.sprint).toEqual({
+      sprintId: 5149,
+      name: "STAR Sprint 25",
+      state: "future",
+      boardId: 42,
+      // The unchanged name is not part of the write.
+      changes: [
+        {
+          field: "startDate",
+          from: "2026-09-15T07:00:00.000Z",
+          to: "2026-10-13T07:00:00.000Z",
+        },
+        {
+          field: "endDate",
+          from: "2026-09-22T07:00:00.000Z",
+          to: "2026-10-20T07:00:00.000Z",
+        },
+      ],
+    });
+    expect(vi.mocked(jiraPost)).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "/rest/agile/1.0/sprint/5149",
+      expect.anything(),
+    );
+
+    const { card: resolved } = await resolveApproval(card.id, "approved");
+    expect(vi.mocked(jiraPost)).toHaveBeenCalledWith(
+      expect.anything(),
+      "/rest/agile/1.0/sprint/5149",
+      {
+        startDate: "2026-10-13T07:00:00.000Z",
+        endDate: "2026-10-20T07:00:00.000Z",
+      },
+    );
+    expect(resolved.status).toBe("executed");
+    expect(stub.byId.get(5149)?.startDate).toBe("2026-10-13T07:00:00.000Z");
+    expect(resolved.resultSummary).toContain(
+      "STAR Sprint 25 now 2026-10-13T07:00:00.000Z – 2026-10-20T07:00:00.000Z",
+    );
+    if (resolved.body.kind !== "jiraIssue") throw new Error("unexpected kind");
+    expect(resolved.body.items[0]!.resultIssueUrl).toContain(
+      "jql=sprint%20%3D%205149",
+    );
+  });
+
+  test("rejects requests that cannot be applied before staging", async () => {
+    sprintStub([
+      SPRINT_25,
+      { id: 5000, name: "Old", state: "closed", originBoardId: 42 },
+    ]);
+    const sid = `jira-sprint-${(mutateSession += 1)}`;
+    await expect(runMutate(sid, [{ operation: "sprint" }])).rejects.toThrow(
+      /requires sprintId/,
+    );
+    await expect(
+      runMutate(sid, [{ operation: "sprint", sprintId: 5149 }]),
+    ).rejects.toThrow(/at least one of/);
+    await expect(
+      runMutate(sid, [
+        { operation: "sprint", sprintId: 5149, sprintStartDate: "2026-10-13" },
+      ]),
+    ).rejects.toThrow(/ISO 8601 date-time with an offset/);
+    for (const impossible of [
+      "2026-02-29T09:00:00Z",
+      "2026-04-31T09:00:00Z",
+      "2026-10-13T24:00:00Z",
+    ])
+      await expect(
+        runMutate(sid, [
+          { operation: "sprint", sprintId: 5149, sprintEndDate: impossible },
+        ]),
+      ).rejects.toThrow(/real ISO 8601 date-time/);
+    await expect(
+      runMutate(sid, [
+        {
+          operation: "sprint",
+          sprintId: 5149,
+          sprintEndDate: "2026-09-01T09:00:00Z",
+        },
+      ]),
+    ).rejects.toThrow(/before it starts/);
+    await expect(
+      runMutate(sid, [
+        {
+          operation: "sprint",
+          sprintId: 5149,
+          sprintStartDate: "2026-09-15T09:00:00+02:00",
+        },
+      ]),
+    ).rejects.toThrow(/already has the requested values/);
+    await expect(
+      runMutate(sid, [
+        {
+          operation: "sprint",
+          sprintId: 5000,
+          sprintEndDate: "2026-10-20T09:00:00Z",
+        },
+      ]),
+    ).rejects.toThrow(/closed/);
+    await expect(
+      runMutate(sid, [{ operation: "sprint", sprintId: 1, sprintGoal: "x" }]),
+    ).rejects.toThrow(/could not be read/);
+    expect(approvalsForSession(sid)).toHaveLength(0);
+  });
+
+  test("fails a date edit Jira ignored because the sprint closed before approval", async () => {
+    sprintStub([{ ...SPRINT_25, state: "active" }], { closeOnUpdate: true });
+    const sid = `jira-sprint-${(mutateSession += 1)}`;
+    await runMutate(sid, [
+      {
+        operation: "sprint",
+        sprintId: 5149,
+        sprintEndDate: "2026-10-20T09:00:00Z",
+      },
+    ]);
+    const { card } = await resolveApproval(
+      approvalsForSession(sid).at(-1)!.id,
+      "approved",
+    );
+    expect(card.status).toBe("failed");
+    if (card.body.kind !== "jiraIssue") throw new Error("unexpected kind");
+    const item = card.body.items[0]!;
+    expect(item.error).toMatch(
+      /kept the sprint's end unchanged; the sprint is closed/,
+    );
+    expect(item.resultIssueUrl).toBeUndefined();
+    // What Jira holds is still recorded, so the card shows the real dates.
+    expect(item.sprint?.result?.endDate).toBe("2026-09-22T07:00:00.000Z");
+  });
+
+  test("warns when only part of a sprint edit landed", async () => {
+    sprintStub([{ ...SPRINT_25, state: "active" }], { closeOnUpdate: true });
+    const sid = `jira-sprint-${(mutateSession += 1)}`;
+    await runMutate(sid, [
+      {
+        operation: "sprint",
+        sprintId: 5149,
+        sprintName: "STAR Sprint 25b",
+        sprintEndDate: "2026-10-20T09:00:00Z",
+      },
+    ]);
+    const { card } = await resolveApproval(
+      approvalsForSession(sid).at(-1)!.id,
+      "approved",
+    );
+    expect(card.status).toBe("executed");
+    if (card.body.kind !== "jiraIssue") throw new Error("unexpected kind");
+    const item = card.body.items[0]!;
+    expect(item.error).toBeUndefined();
+    expect(item.warning).toMatch(/kept the sprint's end unchanged/);
+    expect(item.sprint?.result?.name).toBe("STAR Sprint 25b");
+    expect(card.resultSummary).toContain("1 warning(s)");
+  });
+});

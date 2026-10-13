@@ -7,14 +7,14 @@ integrations" epic; it is the source of truth the implementing slices reference.
 
 ## Two integrations at a glance
 
-|                          | Jira                                                                                                                                                                                                         | Tempo                                                                                             |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| Auth model               | Token / Basic (`atlassianEmail:atlassianToken`)                                                                                                                                                              | OAuth 2.0 (connect / reauthorize / disconnect)                                                    |
-| Runtime settings file    | `DATA_DIR/settings/jira.json`                                                                                                                                                                                | `DATA_DIR/settings/tempo.json`                                                                    |
-| Static deployment config | `jiraHost` (`config.ts`)                                                                                                                                                                                     | OAuth client id/secret (`config.ts`)                                                              |
-| Tool gate                | `jira`                                                                                                                                                                                                       | `tempo`                                                                                           |
-| Owning module            | `app/server/src/jiraSettings.ts`                                                                                                                                                                             | `app/server/src/tempoSettings.ts`                                                                 |
-| Agent tools              | 4: `jira_get_issue`, `jira_search_issues`, `jira_lookup` (kind=fields\|projects\|users\|issueLinkTypes), `jira_mutate_issue` (create/edit/comment, Markdown→ADF, transitions/fields + issue-link add/remove) | 4: `tempo_list_worklogs`, `tempo_export_worklogs`, `tempo_export_report`, `tempo_mutate_worklogs` |
+|                          | Jira                                                                                                                                                                                                                                              | Tempo                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Auth model               | Token / Basic (`atlassianEmail:atlassianToken`)                                                                                                                                                                                                   | OAuth 2.0 (connect / reauthorize / disconnect)                                                    |
+| Runtime settings file    | `DATA_DIR/settings/jira.json`                                                                                                                                                                                                                     | `DATA_DIR/settings/tempo.json`                                                                    |
+| Static deployment config | `jiraHost` (`config.ts`)                                                                                                                                                                                                                          | OAuth client id/secret (`config.ts`)                                                              |
+| Tool gate                | `jira`                                                                                                                                                                                                                                            | `tempo`                                                                                           |
+| Owning module            | `app/server/src/jiraSettings.ts`                                                                                                                                                                                                                  | `app/server/src/tempoSettings.ts`                                                                 |
+| Agent tools              | 4: `jira_get_issue`, `jira_search_issues`, `jira_lookup` (kind=fields\|projects\|users\|issueLinkTypes\|sprints), `jira_mutate_issue` (create/edit/comment, Markdown→ADF, transitions/fields + issue-link add/remove, backlog rank, sprint edits) | 4: `tempo_list_worklogs`, `tempo_export_worklogs`, `tempo_export_report`, `tempo_mutate_worklogs` |
 
 The two integrations enable, configure, test, and gate their tools
 independently.
@@ -89,12 +89,12 @@ borrows the same email and token for the same Atlassian site. Its contract is
 
 ### Ticket content and creation
 
-`jira_mutate_issue` prepares approval-gated creates, edits, comments, and
-backlog ranks. Descriptions and comments accept CommonMark/GFM and are converted
-by `app/server/src/tools/jira/jiraMarkdown.ts` to Atlassian Document Format.
-Native ADF is used for headings, emphasis/strike, links, lists and task markers,
-blockquotes, code, rules, and tables. Since Jira descriptions cannot embed
-arbitrary Markdown HTML or remote Markdown images directly, raw HTML is
+`jira_mutate_issue` prepares approval-gated creates, edits, comments, backlog
+ranks, and sprint edits. Descriptions and comments accept CommonMark/GFM and are
+converted by `app/server/src/tools/jira/jiraMarkdown.ts` to Atlassian Document
+Format. Native ADF is used for headings, emphasis/strike, links, lists and task
+markers, blockquotes, code, rules, and tables. Since Jira descriptions cannot
+embed arbitrary Markdown HTML or remote Markdown images directly, raw HTML is
 preserved visibly as an HTML code block and images become linked alt text rather
 than being dropped.
 
@@ -180,6 +180,45 @@ opaque and is never written as a field. `jira_mutate_issue` carries it as
 - **Result:** after execution the item carries `rankResultOrder`, the ordering
   Jira reports for the scope (or for the issues involved, when the position was
   relative), and the approval summary repeats it.
+
+### Sprints
+
+A sprint is not an issue: its name, dates and goal live on the board's sprint
+object, so no issue edit reaches them. Moving an issue INTO a sprint stays an
+ordinary issue edit of the sprint field.
+
+- **Discover:** `jira_lookup kind=sprints` lists the sprints of `boardId`, or of
+  every board showing `projectKey` (a board without sprints, such as kanban, is
+  skipped and named in `boardsWithoutSprints`). Each sprint carries `id`,
+  `name`, `state`, `startDate`, `endDate`, and its `goal` and origin `boardId`
+  when set. `sprintStates` defaults to active and future; closed sprints list
+  newest first by end instant. Pages advance by the rows Jira actually returned.
+- **Capped reads are never exhaustive.** A project reads at most 10 boards and
+  each board at most 500 sprints (Jira serves them oldest first). A read cut by
+  either cap sets `boardsTruncated` or `sprintReadCappedOnBoards`, forces
+  `exhausted: false`, and adds a `note` saying how to narrow the request, so a
+  sprint beyond the window never looks absent.
+- **Request:** `operation: "sprint"` with `sprintId` and any of `sprintName`,
+  `sprintStartDate`, `sprintEndDate`, `sprintGoal` (empty clears it). Dates are
+  ISO 8601 date-times WITH an offset, so the instant never depends on the
+  server's zone; a bare day or an impossible calendar date (Feb 30) is rejected
+  rather than rolled over.
+- **Validated before staging:** the sprint is read
+  (`GET /rest/agile/1.0/sprint/{id}`); only properties that differ from it are
+  kept, and a request that changes nothing is an error. A closed sprint's dates
+  are refused, and the resulting end must follow the resulting start.
+- **Execution:** one partial update (`POST /rest/agile/1.0/sprint/{id}`)
+  carrying only the changed properties. A 2xx is not proof: Jira silently
+  ignores date changes on a closed sprint, and a sprint can close between
+  staging and approval. Every change is compared with the sprint Jira returns;
+  none landing fails the item, some landing leaves a warning naming the rest.
+  The sprint's state is never written: starting or completing a sprint moves its
+  issues and stays a board action. Jira's own refusal, for example a missing
+  Manage Sprints permission, lands on the item.
+- **Result:** the item records the sprint Jira returned (`sprint.result`), the
+  approval summary states its dates, and the result link opens the sprint's
+  issues (`sprint = {id}`). The card shows each change from → to, dates in the
+  viewer's local time.
 
 ## Tempo (OAuth 2.0)
 

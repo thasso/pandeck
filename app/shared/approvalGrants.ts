@@ -129,6 +129,11 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   op("jira:edit", "Jira: edit issues", "Change fields of existing issues."),
   op("jira:comment", "Jira: comment on issues", "Post comments on issues."),
   op("jira:rank", "Jira: reorder issues", "Change where issues rank."),
+  op(
+    "jira:sprint",
+    "Jira: edit sprints",
+    "Change a sprint's name, dates or goal.",
+  ),
   op("confluence:create", "Confluence: create pages", "Create new pages."),
   op("confluence:edit", "Confluence: edit pages", "Change existing pages."),
   op(

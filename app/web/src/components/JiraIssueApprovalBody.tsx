@@ -4,7 +4,8 @@
  *   `jira_mutate_issue` proposal carries. Markdown bodies render as Jira will
  *   show them (the server converts the same source to ADF on execution), the
  *   card clips a long description to a preview, and "Read full ticket" opens the
- *   whole proposal in a modal with the same Approve/Reject as the card.
+ *   whole proposal in a modal with the same Approve/Reject as the card. A
+ *   sprint edit shows each changed property, dates in the viewer's local time.
  * @payload `JiraIssueApprovalBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "jiraIssue"`.
  */
@@ -13,6 +14,7 @@ import { ExternalLink } from "lucide-react";
 import type {
   JiraIssueApprovalBody as JiraIssueApprovalBodyData,
   JiraIssueMutationItemDisplay,
+  JiraSprintChangeDisplay,
 } from "@assistant/shared";
 import { Markdown } from "./Markdown.tsx";
 import {
@@ -23,6 +25,7 @@ import {
   type ProposalDecide,
 } from "./ProposalText.tsx";
 import { Badge } from "@/components/ui/badge";
+import { formatPropertyDate, parsePropertyDate } from "../lib/propertyDates.ts";
 
 type JiraItem = JiraIssueMutationItemDisplay;
 
@@ -43,6 +46,8 @@ export function JiraIssueApprovalBody({
             <CommentItem item={item} onDecide={onDecide} />
           ) : item.operation === "rank" ? (
             <RankItem item={item} />
+          ) : item.operation === "sprint" ? (
+            <SprintItem item={item} />
           ) : (
             <EditItem item={item} />
           )}
@@ -58,6 +63,7 @@ function outcomeLabel(item: JiraItem): string {
     return `created${item.resultIssueKey ? ` ${item.resultIssueKey}` : ""}`;
   if (item.operation === "comment") return "commented";
   if (item.operation === "rank") return "reordered";
+  if (item.operation === "sprint") return "sprint updated";
   return "updated";
 }
 
@@ -387,6 +393,71 @@ function RankItem({ item }: { item: JiraItem }) {
           Order now:{" "}
           <span className="font-mono text-foreground">
             {item.rankResultOrder.join(" → ")}
+          </span>
+        </div>
+      ) : null}
+      <Outcome item={item} />
+    </div>
+  );
+}
+
+const SPRINT_FIELD_LABELS: Record<JiraSprintChangeDisplay["field"], string> = {
+  name: "Name",
+  startDate: "Start",
+  endDate: "End",
+  goal: "Goal",
+};
+
+/** A sprint value as the user reads it: dates in local time, text as is. */
+function sprintValueText(
+  field: JiraSprintChangeDisplay["field"],
+  value: string | null,
+): string {
+  if (!value) return EMPTY_VALUE;
+  if (field !== "startDate" && field !== "endDate") return value;
+  const date = parsePropertyDate(value);
+  return date ? formatPropertyDate(date, Date.now()).label : value;
+}
+
+/**
+ * A sprint edit as the change it makes: the sprint, each changed property
+ * from → to, and — once approved — the dates Jira reports it holds now.
+ */
+function SprintItem({ item }: { item: JiraItem }) {
+  const sprint = item.sprint;
+  if (!sprint) return null;
+  const result = sprint.result;
+  return (
+    <div className="space-y-1">
+      <div>
+        <span className="text-muted-foreground">sprint </span>
+        <span className="text-foreground">{sprint.name}</span>
+        <span className="text-muted-foreground"> · {sprint.state}</span>
+      </div>
+      <dl className="space-y-0.5">
+        {sprint.changes.map((change) => (
+          <div key={change.field} className="flex flex-wrap gap-1.5">
+            <dt className="text-muted-foreground">
+              {SPRINT_FIELD_LABELS[change.field]}
+            </dt>
+            <dd className="min-w-0 break-words">
+              <span className="text-muted-foreground line-through">
+                {sprintValueText(change.field, change.from)}
+              </span>{" "}
+              →{" "}
+              <span className="text-foreground">
+                {sprintValueText(change.field, change.to)}
+              </span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {result ? (
+        <div className="text-sm text-muted-foreground">
+          Now:{" "}
+          <span className="text-foreground">
+            {sprintValueText("startDate", result.startDate)} –{" "}
+            {sprintValueText("endDate", result.endDate)}
           </span>
         </div>
       ) : null}

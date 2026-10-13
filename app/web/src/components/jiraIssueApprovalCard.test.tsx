@@ -308,6 +308,74 @@ test("a partially applied rank names the step that failed and the ones left alon
   expect(html).toContain("PA-12 → PA-9 → PA-10");
 });
 
+const sprintItem: JiraIssueApprovalBody["items"][number] = {
+  clientId: "s1",
+  issueKey: "",
+  operation: "sprint",
+  fieldChanges: [],
+  sprint: {
+    sprintId: 5149,
+    name: "STAR Sprint 25",
+    state: "future",
+    boardId: 42,
+    changes: [
+      {
+        field: "startDate",
+        from: "2026-09-15T07:00:00.000Z",
+        to: "2026-10-13T07:00:00.000Z",
+      },
+      { field: "goal", from: null, to: "Ship SRS" },
+    ],
+  },
+};
+
+test("a pending sprint edit shows each changed property from → to", () => {
+  const html = renderToStaticMarkup(
+    <ApprovalCard
+      approval={card({ body: { kind: "jiraIssue", items: [sprintItem] } })}
+    />,
+  );
+  expect(html).toContain("STAR Sprint 25");
+  expect(html).toContain("future");
+  expect(html).toContain("Start");
+  expect(html).toContain("Goal");
+  expect(html).toContain("Ship SRS");
+  // Dates render as local labels, never the raw ISO instant.
+  expect(html).not.toContain("2026-10-13T07:00:00.000Z");
+  expect(html).not.toContain("sprint updated");
+});
+
+test("an executed sprint edit states the dates Jira now holds", () => {
+  const html = renderToStaticMarkup(
+    <ApprovalCard
+      approval={card({
+        status: "executed",
+        body: {
+          kind: "jiraIssue",
+          items: [
+            {
+              ...sprintItem,
+              sprint: {
+                ...sprintItem.sprint!,
+                result: {
+                  name: "STAR Sprint 25",
+                  startDate: "2026-10-13T07:00:00.000Z",
+                  endDate: "2026-10-20T07:00:00.000Z",
+                },
+              },
+              resultIssueUrl:
+                "https://example.atlassian.net/issues/?jql=sprint%20%3D%205149",
+            },
+          ],
+        },
+      })}
+    />,
+  );
+  expect(html).toContain("Now:");
+  expect(html).toContain("sprint updated");
+  expect(html).toContain("jql=sprint%20%3D%205149");
+});
+
 function withoutParent(item: JiraIssueApprovalBody["items"][number]) {
   const { createParentIssue: _parent, ...rest } = item;
   return rest;

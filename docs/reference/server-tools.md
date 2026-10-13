@@ -193,7 +193,7 @@ persona toolsets.
 - `jira/jiraTools.ts` owns the Jira family (token/Basic auth via
   `jiraSettings.getJiraToolConfig`, gate `jira`): `jira_get_issue`,
   `jira_search_issues`, the consolidated read-only `jira_lookup`
-  (kind=fields|projects|users|issueLinkTypes; replaced the former
+  (kind=fields|projects|users|issueLinkTypes|sprints; replaced the former
   `jira_list_fields`/`jira_list_projects`/`jira_search_users`), and
   `jira_mutate_issue` — which stages a PENDING `ApprovalCard` via the shared
   `../../pendingApprovals.ts` subsystem (kind `jiraIssue`) and registers the
@@ -225,7 +225,10 @@ persona toolsets.
   per-host in `../jiraIssueLinkTypeCache.ts`, mirroring `../jiraFieldCache.ts`;
   link types are NOT per-project); and each `jira_mutate_issue` create/edit item
   accepts `linkChanges` (add/remove, executed via
-  `POST`/`DELETE /rest/api/3/issueLink`).
+  `POST`/`DELETE /rest/api/3/issueLink`). `jira/jiraSprint.ts` backs
+  `jira_lookup kind=sprints` and the `sprint` operation, a partial
+  `POST /rest/agile/1.0/sprint/{id}` of name, dates and goal that never changes
+  the sprint's state.
 - `github/githubTools.ts` owns the GitHub family (classic-PAT Bearer auth via
   `githubSettings.getGithubToolConfig`, gate `github`), read-only and split into
   four intent-based catalog groups that all share the `github` gate so a
