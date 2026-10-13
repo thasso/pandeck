@@ -196,6 +196,30 @@ export async function resolveAuthenticatedLogin(
   }
 }
 
+/** How long {@link readIssueText} may take: it only enriches a card. */
+const ISSUE_TEXT_TIMEOUT_MS = 8_000;
+
+/**
+ * An issue's current title and description, for an edit card to show what it
+ * replaces. Bounded, and honoring the caller's cancellation; a THROW means it
+ * could not be read.
+ */
+export async function readIssueText(
+  config: GithubApiConfig,
+  repo: { owner: string; repo: string },
+  number: number,
+  signal?: AbortSignal,
+): Promise<{ title: string; body: string }> {
+  const timeout = AbortSignal.timeout(ISSUE_TEXT_TIMEOUT_MS);
+  const res = await githubRequest<{ title?: string; body?: string | null }>(
+    config,
+    "GET",
+    `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/issues/${number}`,
+    { signal: signal ? AbortSignal.any([signal, timeout]) : timeout },
+  );
+  return { title: res.data?.title ?? "", body: res.data?.body ?? "" };
+}
+
 /**
  * One GraphQL query. Its cost is drawn from the SEPARATE GraphQL budget (points,
  * usually 1 per query) rather than the REST one, which is why the background

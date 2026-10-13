@@ -53,6 +53,27 @@ checks each response: an ignored edit step fails the card and names the steps
 that landed, and a create that lost labels or assignees stays executed with a
 warning, because the issue exists.
 
+## Proposed text
+
+A card that proposes prose (a pull-request or issue description, a comment, a
+review summary, release notes, a Jira ticket, a Confluence body) renders it as
+Markdown the way the target will show it, clipped to a preview, with a "Read
+full …" dialog that carries the card's own Approve and Reject
+(`ProposalText.tsx`). A review's dialog holds the summary and every inline
+comment, since approving submits all of them; the card lists only the first
+eight.
+
+An edit that replaces a whole text also records the text it replaces when the
+agent proposes it: `previousPrBody` on the GitHub and Forgejo description edits,
+`previousTitle` and `previousIssueBody` on a `githubIssue` edit. The card then
+offers "Show changes", a diff of the Markdown source with the whole document as
+context. The record is a snapshot: a description changed on the provider after
+the proposal is still overwritten by the approved write. The pull-request read
+goes through `gitHosting.ts`, and every such read is bounded like any provider
+request (`proposalSnapshot` in `pendingApprovals.ts`). A failed or timed-out
+read proposes the card without the record rather than refusing it. A cancelled
+tool call creates no card.
+
 ## Superseded cards
 
 A proposing tool can pass `supersedes` to `createApproval`. In the same store

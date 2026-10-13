@@ -8,36 +8,30 @@
  * @payload `JiraIssueApprovalBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "jiraIssue"`.
  */
-import { useLayoutEffect, useRef, useState } from "react";
-import { CheckCircle2, ExternalLink, Maximize2, XCircle } from "lucide-react";
+import { useState } from "react";
+import { ExternalLink } from "lucide-react";
 import type {
-  ApprovalDecision,
   JiraIssueApprovalBody as JiraIssueApprovalBodyData,
   JiraIssueMutationItemDisplay,
 } from "@assistant/shared";
 import { Markdown } from "./Markdown.tsx";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ClippedMarkdown,
+  DialogSection,
+  ProposalDialog,
+  ReadFullButton,
+  type ProposalDecide,
+} from "./ProposalText.tsx";
+import { Badge } from "@/components/ui/badge";
 
 type JiraItem = JiraIssueMutationItemDisplay;
-
-/** Decision buttons offered while the card is pending; absent once it is not. */
-export type JiraDecide = ((decision: ApprovalDecision) => void) | undefined;
 
 export function JiraIssueApprovalBody({
   body,
   onDecide,
 }: {
   body: JiraIssueApprovalBodyData;
-  onDecide: JiraDecide;
+  onDecide: ProposalDecide;
 }) {
   return (
     <ul className="flex flex-col gap-2">
@@ -181,65 +175,12 @@ function LinkRows({ item }: { item: JiraItem }) {
   );
 }
 
-/**
- * Markdown clipped to a card-sized window. The fade only paints when there IS
- * more below the fold — a three-line description does not need to look cut.
- * Height is observed rather than measured once: a late image or lazily
- * highlighted code block grows the content after mount.
- */
-export function ClippedMarkdown({ text }: { text: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [clipped, setClipped] = useState(false);
-  useLayoutEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    const measure = () => setClipped(node.scrollHeight > node.clientHeight + 1);
-    measure();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", measure);
-      return () => window.removeEventListener("resize", measure);
-    }
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    for (const child of node.children) observer.observe(child);
-    return () => observer.disconnect();
-  }, [text]);
-  return (
-    <div className="relative">
-      <div
-        ref={ref}
-        className="max-h-48 min-w-0 overflow-hidden text-foreground"
-      >
-        <Markdown text={text} density="compact" />
-      </div>
-      {clipped ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-card to-transparent" />
-      ) : null}
-    </div>
-  );
-}
-
-function ReadFullButton({
-  label,
-  onClick,
-}: {
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <Button variant="outline" size="sm" onClick={onClick}>
-      <Maximize2 />
-      {label}
-    </Button>
-  );
-}
-
 function CreateItem({
   item,
   onDecide,
 }: {
   item: JiraItem;
-  onDecide: JiraDecide;
+  onDecide: ProposalDecide;
 }) {
   const [open, setOpen] = useState(false);
   const fields = createFields(item);
@@ -260,7 +201,7 @@ function CreateItem({
       <LinkRows item={item} />
       <ReadFullButton label="Read full ticket" onClick={() => setOpen(true)} />
       <Outcome item={item} />
-      <JiraProposalDialog
+      <ProposalDialog
         open={open}
         title={`New ${item.createIssueType ?? "issue"} in ${item.createProjectKey ?? "Jira"}`}
         onOpenChange={setOpen}
@@ -286,7 +227,7 @@ function CreateItem({
             <LinkRows item={item} />
           </DialogSection>
         ) : null}
-      </JiraProposalDialog>
+      </ProposalDialog>
     </div>
   );
 }
@@ -296,7 +237,7 @@ function CommentItem({
   onDecide,
 }: {
   item: JiraItem;
-  onDecide: JiraDecide;
+  onDecide: ProposalDecide;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -308,7 +249,7 @@ function CommentItem({
       {item.commentBody ? <ClippedMarkdown text={item.commentBody} /> : null}
       <ReadFullButton label="Read full comment" onClick={() => setOpen(true)} />
       <Outcome item={item} />
-      <JiraProposalDialog
+      <ProposalDialog
         open={open}
         title={`Comment on ${item.issueKey}`}
         onOpenChange={setOpen}
@@ -321,7 +262,7 @@ function CommentItem({
         <DialogSection title="Comment">
           {item.commentBody ? <Markdown text={item.commentBody} /> : null}
         </DialogSection>
-      </JiraProposalDialog>
+      </ProposalDialog>
     </div>
   );
 }
@@ -451,80 +392,5 @@ function RankItem({ item }: { item: JiraItem }) {
       ) : null}
       <Outcome item={item} />
     </div>
-  );
-}
-
-function DialogSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="mt-4">
-      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-/**
- * The full proposal at reading size. A dialog rather than the document viewer:
- * the ticket is not a file anywhere yet, it exists only on this card until
- * Jira accepts it. The decision buttons are the card's, so approving from here
- * is the same act as approving on the card.
- */
-function JiraProposalDialog({
-  title,
-  open,
-  onOpenChange,
-  onDecide,
-  children,
-}: {
-  title: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onDecide: JiraDecide;
-  children: React.ReactNode;
-}) {
-  const decide = (decision: ApprovalDecision) => {
-    onDecide?.(decision);
-    onOpenChange(false);
-  };
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        aria-label={title}
-        className="flex max-h-11/12 flex-col sm:max-w-3xl"
-      >
-        <DialogHeader>
-          <DialogTitle className="truncate pr-8">{title}</DialogTitle>
-        </DialogHeader>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {children}
-        </div>
-        <DialogFooter>
-          {onDecide ? (
-            <>
-              <Button variant="outline" onClick={() => decide("rejected")}>
-                <XCircle />
-                Reject
-              </Button>
-              <Button onClick={() => decide("approved")}>
-                <CheckCircle2 />
-                Approve
-              </Button>
-            </>
-          ) : (
-            <DialogClose render={<Button variant="outline" />}>
-              Close
-            </DialogClose>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
