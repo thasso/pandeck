@@ -34,8 +34,9 @@ export interface LibraryKind<M extends EntryManifest = EntryManifest> {
   /**
    * The kind's own bound on the whole manifest file, in bytes. The core
    * enforces it from the file's real size wherever it reads or writes one —
-   * scan, detail, source read, edit, rename, create — so a clipped read can
-   * never pass a file that is too large. Absent: only the core's own bounds.
+   * scan, detail, source read, edit, rename, create, and the manifest read as
+   * a file (raw, preview, text window) — so a clipped read can never pass a
+   * file that is too large. Absent: only the core's own bounds.
    */
   maxManifestBytes?: number;
   /**

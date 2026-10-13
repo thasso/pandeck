@@ -12,13 +12,26 @@
  *   pnpm --filter @assistant/server test src/library/libraryKind.test.ts
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import { git } from "../gitExec.ts";
 import { resolveEntryDetail } from "./entryDetail.ts";
+import {
+  EntryFileTooLargeError,
+  readEntryFilePreview,
+  readEntryRawFile,
+  readEntryTextWindow,
+} from "./entryFiles.ts";
 import {
   assertManifest,
   formatManifest,
@@ -272,6 +285,48 @@ describe("a non-skill library kind", () => {
         library,
       ),
       /above the 512-byte limit for a widget manifest/,
+    );
+  });
+
+  test("reading the manifest as a file applies the bound to the handle it opens", async () => {
+    await mkdir(join(root, "gear"));
+    const path = join(root, "gear", "WIDGET.md");
+    const valid = widgetSource("gear");
+    // Grows the manifest in place right after the scan has parsed it: the
+    // scan saw a valid, small file, and only the reread can see the growth.
+    let armed = false;
+    const growingKind: LibraryKind<WidgetManifest> = {
+      ...widgetKind,
+      parseManifest: (content, at) => {
+        const parsed = widgetKind.parseManifest(content, at);
+        if (armed) {
+          armed = false;
+          appendFileSync(path, "x".repeat(600));
+        }
+        return parsed;
+      },
+    };
+    const growing = new LibraryStore(growingKind, root);
+    const reads: Array<() => Promise<unknown>> = [
+      () => readEntryRawFile("gear", "WIDGET.md", growing),
+      () => readEntryFilePreview("gear", "WIDGET.md", growing),
+      () => readEntryTextWindow("gear", "WIDGET.md", {}, growing),
+    ];
+    for (const read of reads) {
+      writeFileSync(path, valid);
+      const inode = statSync(path).ino;
+      armed = true;
+      await assert.rejects(read(), EntryFileTooLargeError);
+      assert.equal(statSync(path).ino, inode);
+      assert.equal(armed, false, "the growth happened between scan and read");
+    }
+
+    // A supporting file is not the manifest and is not held to its bound.
+    writeFileSync(path, valid);
+    await writeFile(join(root, "gear", "notes.md"), "y".repeat(2000));
+    assert.equal(
+      (await readEntryRawFile("gear", "notes.md", library))?.bytes,
+      2000,
     );
   });
 });
