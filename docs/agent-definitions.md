@@ -82,9 +82,9 @@ You are a test reviewer. ...
 | `tools.deny`  | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).          |
 | `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.      |
 
-The body is the role instructions. It must be non-empty and has a size bound
-(proposed: 16 KiB) so a definition cannot carry a prompt the persona budgets
-never accounted for.
+The body is the role instructions. It must be non-empty, and the whole
+`AGENT.md` has a size bound (`maxManifestBytes`, proposed: 16 KiB) so a
+definition cannot carry a prompt the persona budgets never accounted for.
 
 One rule decides validity, and the scanner and the authoring tools ask it from
 both sides, as `library/entryManifest.ts` does for skills. A hand-written file
@@ -251,6 +251,12 @@ code holding the concrete kind; the store and the core see only the base
 `LibraryKind`, so kind-specific code (agent spawning) uses its own kind
 directly. `library/libraryKind.test.ts` proves the core with a fixture kind
 (`WIDGET.md`, `Widget-*` trailers) that is not a skill.
+
+`parseManifest` judges content only: the core may hand it a body clipped to its
+own read bounds. A kind that bounds its manifest's size sets `maxManifestBytes`,
+and the core enforces that from the file's real size at every scan, detail read,
+source read, edit, rename and create, reporting `manifest-too-large`. Skills set
+none and keep their large bodies.
 
 The test for "shared enough": adding a third library kind needs a manifest rule,
 a kind descriptor, a create renderer, and nothing else.

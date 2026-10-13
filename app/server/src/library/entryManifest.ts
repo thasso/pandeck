@@ -27,7 +27,7 @@ import {
   parseYamlSubset,
   splitYamlFrontmatter,
 } from "@assistant/shared/frontmatter";
-import type { LibraryKind } from "./libraryKind.ts";
+import { withArticle, type LibraryKind } from "./libraryKind.ts";
 
 /** Bound on a declared description, shared by scanning and authoring. */
 const MAX_ENTRY_DESCRIPTION_CHARS = 1024;
@@ -164,6 +164,33 @@ export function assertManifest<M extends EntryManifest>(
   throw new EntryValidationError(
     `Invalid ${path}: ${result.issues.map((issue) => issue.error).join(" ")}`,
   );
+}
+
+/**
+ * Why a manifest of `bytes` (its real size on disk, or the size about to be
+ * written) is past its kind's own bound, or nothing when it is within it.
+ */
+export function manifestSizeIssue(
+  kind: LibraryKind,
+  bytes: number,
+  path: string,
+): ManifestIssue | undefined {
+  const limit = kind.maxManifestBytes;
+  if (limit === undefined || bytes <= limit) return undefined;
+  return {
+    code: "manifest-too-large",
+    error: `${path} is ${bytes} bytes, above the ${limit}-byte limit for ${withArticle(kind.noun)} manifest.`,
+  };
+}
+
+/** Throw {@link manifestSizeIssue} as a refusal. */
+export function assertManifestSize(
+  kind: LibraryKind,
+  bytes: number,
+  path: string,
+): void {
+  const issue = manifestSizeIssue(kind, bytes, path);
+  if (issue) throw new EntryValidationError(issue.error);
 }
 
 /** Reject a description before it is ever written into frontmatter. */

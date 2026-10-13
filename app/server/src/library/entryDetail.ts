@@ -14,6 +14,7 @@ import {
   type EntryDetailResponse,
 } from "@assistant/shared";
 import { buildEntryFileTree } from "./entryFiles.ts";
+import { manifestSizeIssue } from "./entryManifest.ts";
 import {
   scanLibrary,
   entrySourceIdentity,
@@ -269,8 +270,10 @@ function validateReread(
   summary: { name: string; description: string },
   path: string,
 ): void {
+  // Size from the real file, not from the clipped body the rule is handed.
   const parsed = kind.parseManifest(read.frontmatter + read.body, path);
   if (
+    manifestSizeIssue(kind, read.bytes, path) !== undefined ||
     !parsed.ok ||
     parsed.manifest.name !== summary.name ||
     parsed.manifest.description !== summary.description

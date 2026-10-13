@@ -6,7 +6,7 @@ import type {
   EntryDiagnosticCode,
   EntrySummary,
 } from "@assistant/shared";
-import { readManifestHandle } from "./entryManifest.ts";
+import { manifestSizeIssue, readManifestHandle } from "./entryManifest.ts";
 import type { LibraryKind } from "./libraryKind.ts";
 import {
   SymlinkedEntrySourceError,
@@ -183,11 +183,12 @@ async function scanEntryFolder(
   const candidate: EntryCandidate = { folder, path, diagnostics: [] };
   let identity: EntrySourceIdentity;
   let content: string;
+  let size: number;
   try {
     // One resolution, one inode: the identity recorded here and the bytes below
     // come from the same open handle, so a swap after this point cannot make
     // the scan describe one file and read another.
-    ({ identity, content } = await withEntrySource(
+    ({ identity, content, size } = await withEntrySource(
       rootHandle,
       folder,
       kind.manifestFile,
@@ -203,7 +204,11 @@ async function scanEntryFolder(
           source.size,
           MAX_SCANNED_MANIFEST_BYTES,
         );
-        return { identity: source.identity, content: read.source };
+        return {
+          identity: source.identity,
+          content: read.source,
+          size: source.size,
+        };
       },
     ));
   } catch (error) {
@@ -226,8 +231,12 @@ async function scanEntryFolder(
     return candidate;
   }
 
+  // The kind's size bound is judged from the real file size: the content may
+  // have been clipped to the scan's own read bound, which no content rule can
+  // see past.
+  const tooLarge = manifestSizeIssue(kind, size, path);
   const parsed = kind.parseManifest(content, path);
-  if (parsed.ok) {
+  if (parsed.ok && !tooLarge) {
     candidate.declaredName = parsed.manifest.name;
     candidate.description = parsed.manifest.description;
     candidate.sourceIdentity = identity;
@@ -235,8 +244,10 @@ async function scanEntryFolder(
   }
   // A recovered name still competes for duplicate detection below, even though
   // this folder already has an issue of its own.
-  if (parsed.name !== undefined) candidate.declaredName = parsed.name;
-  for (const issue of parsed.issues) {
+  const recovered = parsed.ok ? parsed.manifest.name : parsed.name;
+  if (recovered !== undefined) candidate.declaredName = recovered;
+  const issues = parsed.ok ? [] : parsed.issues;
+  for (const issue of tooLarge ? [tooLarge, ...issues] : issues) {
     candidate.diagnostics.push(diagnostic(candidate, issue.code, issue.error));
   }
   return candidate;

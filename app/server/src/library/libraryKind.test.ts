@@ -29,6 +29,7 @@ import {
   deleteEntry,
   editEntrySource,
   renameEntry,
+  resolveEntrySource,
 } from "./libraryAuthoring.ts";
 import type { LibraryKind } from "./libraryKind.ts";
 import { scanLibrary } from "./libraryScanner.ts";
@@ -56,6 +57,8 @@ const widgetKind: LibraryKind<WidgetManifest> = {
       });
       return { color: "" };
     }),
+  // Far below the core's own read bounds, so the kind's bound is what refuses.
+  maxManifestBytes: 512,
   publish: async () => undefined,
 };
 
@@ -187,9 +190,12 @@ describe("a non-skill library kind", () => {
       false,
     );
     assert.match(added.author, /^Widget test$/);
-    // The one place `plural` reaches commit identity.
-    const email = await git(["log", "-1", "--format=%ae", "HEAD"], root);
-    assert.match(email.stdout.trim(), /@widgets\.local$/);
+    // The one place `plural` reaches commit identity: author AND committer.
+    const emails = await git(["log", "-1", "--format=%ae %ce", "HEAD"], root);
+    assert.match(
+      emails.stdout.trim(),
+      /^\S+@widgets\.local \S+@widgets\.local$/,
+    );
   });
 
   test("a detail read refuses a same-inode rewrite that breaks the kind's own field", async () => {
@@ -213,5 +219,59 @@ describe("a non-skill library kind", () => {
 
     const detail = await resolveEntryDetail(library, scan, "gear");
     assert.equal(detail?.kind, "invalid");
+  });
+
+  test("the kind's size bound is judged from the real file size everywhere", async () => {
+    const big = "x".repeat(600);
+    await mkdir(join(root, "huge"));
+    await writeFile(
+      join(root, "huge", "WIDGET.md"),
+      widgetSource("huge").replace("Widget instructions.", big),
+    );
+    await mkdir(join(root, "gear"));
+    const path = join(root, "gear", "WIDGET.md");
+    await writeFile(path, widgetSource("gear"));
+
+    const scan = await scanLibrary(widgetKind, root);
+    assert.deepEqual(
+      scan.entries.map((entry) => entry.name),
+      ["gear"],
+    );
+    assert.deepEqual(
+      scan.diagnostics.map(({ code, declaredName }) => ({
+        code,
+        declaredName,
+      })),
+      [{ code: "manifest-too-large", declaredName: "huge" }],
+    );
+
+    // Valid content, same inode, but now past the bound: the content rule
+    // alone would accept it, so only the real size can refuse it.
+    const inode = statSync(path).ino;
+    await writeFile(
+      path,
+      widgetSource("gear").replace("Widget instructions.", big),
+    );
+    assert.equal(statSync(path).ino, inode);
+    assert.equal(
+      (await resolveEntryDetail(library, scan, "gear"))?.kind,
+      "invalid",
+    );
+    await assert.rejects(
+      resolveEntrySource(library, scan, "gear"),
+      /above the 512-byte limit for a widget manifest/,
+    );
+
+    await assert.rejects(
+      createEntry(
+        {
+          name: "large",
+          source: widgetSource("large").replace("Widget instructions.", big),
+        },
+        meta,
+        library,
+      ),
+      /above the 512-byte limit for a widget manifest/,
+    );
   });
 });

@@ -33,6 +33,7 @@ import {
   assertSafeEntryName,
   readManifestHandle,
   assertManifest,
+  assertManifestSize,
   EntryValidationError,
   withDeclaredName,
 } from "./entryManifest.ts";
@@ -235,6 +236,7 @@ export async function resolveEntrySource(
           if (!sameEntrySource(source.identity, identity)) {
             throw changedSinceScan(kind, target.path, "changed identity");
           }
+          assertManifestSize(kind, source.size, target.path);
           const read = await readManifestHandle(source.file, source.size);
           const manifest = assertManifest(kind, read.source, target.path);
           if (
@@ -458,6 +460,7 @@ export async function editEntrySource(
               if (!sameFileIdentity(file.identity, identity.file)) {
                 throw changedSinceScan(kind, target.path, "changed identity");
               }
+              assertManifestSize(kind, file.size, target.path);
               const current = await readManifestHandle(file.handle, file.size);
               if (current.truncated) {
                 throw new EntryValidationError(
@@ -737,6 +740,12 @@ export async function renameEntry(
                   assertManifest(
                     kind,
                     rewritten,
+                    `${newName}/${kind.manifestFile}`,
+                  );
+                  // A longer name can carry a manifest past its kind's bound.
+                  assertManifestSize(
+                    kind,
+                    Buffer.byteLength(rewritten, "utf8"),
                     `${newName}/${kind.manifestFile}`,
                   );
 
@@ -2115,6 +2124,7 @@ async function pinEntrySource(
     if (child.directory) {
       throw new EntryValidationError(`${target.path} is not a regular file.`);
     }
+    assertManifestSize(kind, child.size, target.path);
     const read = await readManifestHandle(child.handle, child.size);
     if (read.truncated) {
       throw new EntryValidationError(
@@ -2495,6 +2505,7 @@ function assertSourceSize(
   path: string,
 ): void {
   const bytes = Buffer.byteLength(source, "utf8");
+  assertManifestSize(kind, bytes, path);
   if (bytes > MAX_ENTRY_SOURCE_BYTES) {
     throw new EntryValidationError(
       `${path} would be ${bytes} bytes, above the ${MAX_ENTRY_SOURCE_BYTES}-byte limit for ${withArticle(kind.noun)} manifest. Move detail into supporting files.`,

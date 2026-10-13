@@ -22,10 +22,19 @@ export interface LibraryKind<M extends EntryManifest = EntryManifest> {
   /** Commit trailer prefix: `Skill` gives `Skill-Actor`, `Skill-Names`, … */
   trailerPrefix: string;
   /**
-   * The kind's whole manifest rule, shared by scanning and authoring; built
+   * The kind's whole CONTENT rule, shared by scanning and authoring; built
    * with `parseManifestWith` when the kind has fields beyond the shared ones.
+   * It may be handed a body the core clipped to its own read bounds, so it
+   * must not judge size: a size rule is {@link maxManifestBytes}.
    */
   parseManifest(content: string, path: string): ManifestResult<M>;
+  /**
+   * The kind's own bound on the whole manifest file, in bytes. The core
+   * enforces it from the file's real size wherever it reads or writes one —
+   * scan, detail, source read, edit, rename, create — so a clipped read can
+   * never pass a file that is too large. Absent: only the core's own bounds.
+   */
+  maxManifestBytes?: number;
   /**
    * Push a fresh read to the kind's browser topic after a committed mutation.
    * Runs while the repository lock is still held, and its failure never

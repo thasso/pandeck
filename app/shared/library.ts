@@ -50,6 +50,7 @@ export type EntryDiagnosticCode =
   | "empty-description"
   | "description-too-long"
   | "invalid-field"
+  | "manifest-too-large"
   | "duplicate-name";
 
 /** One valid entry discovered in the library working tree. */
