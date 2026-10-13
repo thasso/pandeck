@@ -220,10 +220,18 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
     return host?.items.keys().next().value ?? host?.lastCompletedItemId;
   }
 
+  /**
+   * Whether a Stop-all latched this host: a non-owner's latch here, or the
+   * supervisor's durable reservation, the only one an owner's own Stop-all
+   * makes — including for a Stop that never answered and so never settled
+   * here.
+   */
   stopAllWasRequested(ownerSessionId: string, hostEpochKey: string): boolean {
+    const host = this.hosts.get(key(ownerSessionId, hostEpochKey));
+    if (!host) return true;
     return (
-      this.hosts.get(key(ownerSessionId, hostEpochKey))?.stopAllRequested ??
-      true
+      host.stopAllRequested ||
+      backgroundWorkSupervisor.stopAllReserved(ownerSessionId, hostEpochKey)
     );
   }
 
@@ -288,9 +296,10 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
     await Promise.all(
       hosts.map(async (host) => {
         // The latch closes the host at the owner's next turn boundary. The
-        // owner's own Stop-all latches only what its Stops left unsettled:
-        // latched outright, it would also kill the work the owner starts
-        // after it in the same turn.
+        // owner's own Stop-all never sets it: latched up front it would also
+        // kill the work the owner starts after it in the same turn, and what
+        // its Stops leave unsettled the supervisor reserves durably, which
+        // `stopAllWasRequested` honours.
         if (!ownerRequested) host.stopAllRequested = true;
         // A caller-owned Stop-all is inside the very provider/tool turn that
         // must survive. Human Stop-all keeps its special ability to interrupt
@@ -300,14 +309,10 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
           await host.controller
             .interruptBackgroundTurn(request.reason)
             .catch(() => undefined);
-        const unsettled = (itemId: string) => {
-          unconfirmedItemIds.push(itemId);
-          host.stopAllRequested = true;
-        };
         await Promise.all(
           [...host.items.values()].map(async (binding) => {
             if (!binding.providerTaskId) {
-              unsettled(binding.itemId);
+              unconfirmedItemIds.push(binding.itemId);
               return;
             }
             try {
@@ -315,7 +320,7 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
               this.removeBinding(host, binding);
               acknowledgedItemIds.push(binding.itemId);
             } catch {
-              unsettled(binding.itemId);
+              unconfirmedItemIds.push(binding.itemId);
             }
           }),
         );

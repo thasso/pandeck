@@ -2658,6 +2658,9 @@ export class ClaudeSdkSession implements LiveSession {
     // An ordinary process waits for the same answers before it is killed:
     // killing first would leave a steer it had just taken unknown.
     const hadSteers = this.pendingSteers.size > 0;
+    // A prompt the CLI has not started yet waits in the same queue: a plain
+    // interrupt keeps it, and it would then run as a turn nobody asked for.
+    const waitingPrompt = this.turnPromptWaiting;
     const withdrawn = this.withdrawPendingSteers();
     if (
       this.retainedEpochKey &&
@@ -2669,7 +2672,10 @@ export class ClaudeSdkSession implements LiveSession {
       // the same query epoch in the meantime.
       this.markProviderResultForDiscard(this.turnCounter);
       const query = this.activeQuery;
-      const interrupted = withdrawn
+      const interrupted = Promise.all([
+        withdrawn,
+        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : undefined,
+      ])
         .then(() => query.interrupt?.())
         .then(
           () => undefined,

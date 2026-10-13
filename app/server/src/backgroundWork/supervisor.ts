@@ -626,6 +626,14 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     return true;
   }
 
+  /** Whether a Stop-all reserved this exact host epoch's close. */
+  stopAllReserved(ownerSessionId: string, hostEpochKey: string): boolean {
+    const host = backgroundWorkStore.hostForOwner(ownerSessionId);
+    return (
+      host?.epochKey === hostEpochKey && host.stopAllRequestedAt !== undefined
+    );
+  }
+
   /** Close a host whose durable Stop-all reservation reached a safe boundary. */
   async closeStopAllHost(
     ownerSessionId: string,

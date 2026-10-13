@@ -322,6 +322,9 @@ test("Stop withdraws a queued steer before it interrupts", async () => {
 test("a retained process interrupts only after the CLI confirmed the drop", async () => {
   const h = makeHarness();
   const { turn, steer, uuid, query } = await steerIntoTurn(h);
+  // The turn's own prompt is running; only the steer is still queued.
+  query.output.emit(started((query.inputs[0] as { uuid: string }).uuid));
+  await new Promise((r) => setTimeout(r, 5));
   let releaseCancel!: () => void;
   query.cancelGate = new Promise<void>((resolve) => (releaseCancel = resolve));
   // The retained (background-work) epoch is the one Stop interrupts rather
