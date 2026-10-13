@@ -1,9 +1,10 @@
 /**
  * Jira-side lookups the Tempo tools need: bulk issue metadata (key, summary,
- * type, labels, project, any custom field), project key → id, issue key → id,
- * and account id → display name. Everything is batched and retried on 429
- * (`jiraClient` → `fetchWithRetry`); the callers persist results so a Jira
- * hiccup never forces a Tempo re-extraction.
+ * type, labels, project, any custom field), project key → id, and issue key →
+ * id; account id → display name is `resolveUserNames` in `jiraUsers.ts`.
+ * Everything is batched and retried on 429 (`jiraClient` → `fetchWithRetry`);
+ * the callers persist results so a Jira hiccup never forces a Tempo
+ * re-extraction.
  */
 import {
   jiraCachePath,
@@ -14,8 +15,6 @@ import { jiraGet, jiraPost, type JiraApiConfig } from "../../jiraClient.ts";
 
 /** Jira's `POST /rest/api/3/issue/bulkfetch` ceiling. */
 const BULK_FETCH_SIZE = 100;
-/** `GET /rest/api/3/user/bulk` ceiling. */
-const USER_BULK_SIZE = 100;
 const PROJECT_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const BASE_FIELDS = ["summary", "issuetype", "status", "project", "labels"];
 
@@ -198,35 +197,6 @@ export async function resolveTempoFilterIds(
       `None of the requested ${kind} keys exist in Jira: ${symbolic.join(", ")}.`,
     );
   return [...new Set([...numeric, ...resolved.ids])];
-}
-
-type UserBulkResponse = {
-  values?: Array<{ accountId?: string; displayName?: string }>;
-};
-
-/** Display names for Atlassian account ids (`GET /rest/api/3/user/bulk`). */
-export async function resolveUserNames(
-  jira: JiraApiConfig,
-  accountIds: string[],
-  signal?: AbortSignal,
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  const wanted = [...new Set(accountIds.filter(Boolean))];
-  for (let index = 0; index < wanted.length; index += USER_BULK_SIZE) {
-    const batch = wanted.slice(index, index + USER_BULK_SIZE);
-    const query = batch.map((id) => `accountId=${encodeURIComponent(id)}`);
-    const page = await jiraGet<UserBulkResponse>(
-      jira,
-      `/rest/api/3/user/bulk?maxResults=${USER_BULK_SIZE}&${query.join("&")}`,
-      undefined,
-      signal ? { signal } : {},
-    );
-    for (const user of page.values ?? []) {
-      if (user.accountId && user.displayName)
-        out.set(user.accountId, user.displayName);
-    }
-  }
-  return out;
 }
 
 /** Any Jira field value as one display string (option → value, user → name, arrays joined). */
