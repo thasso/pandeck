@@ -196,12 +196,22 @@ card, which the commands address it by.
   possibly read — `stopped` when that close was a Stop or teardown, otherwise
   the uncertain-read notice — and is never sent again.
 
-  The log is the authority on whether an entry was written. Its append persists
-  the entry before its own bookkeeping (the session's stats row), so a delivery
-  that throws without the runtime confirming the append is checked against the
-  canonical log first: an entry found there is delivered, and its turn failed
-  (`interrupted`, `failure`, sender told once). It never becomes a draft to
-  withdraw or send again, and the run it opened is closed.
+  A delivery the runtime never confirmed (no `onUserEntry`), whether its prompt
+  threw or resolved, is reconciled before anything is retried or refunded,
+  because the log's append persists the entry before its own bookkeeping (the
+  session's stats row) and a producer may swallow that bookkeeping's failure:
+  - a batch refused before its claim gate never reached anything: unsent;
+  - a steer the provider took whose entry write then failed is delivered on the
+    provider's word (`SteerEntryFailedError`), log or no log;
+  - otherwise the canonical log decides, with three answers. The key found means
+    delivered: its turn failed (`interrupted`, `failure`, sender told once),
+    never a draft, and a new turn's run is closed — a steer leaves the run it
+    joined alone. The log read without the key (or not there at all) means
+    unsent, under the usual retry. A log that cannot be read proves nothing: the
+    rows stay reserved, unrefunded and unwithdrawable, for a boot that can read
+    it, and nothing is sent to that recipient until its log reads
+    (`LOG_UNREADABLE_REASON` on the bounded retry). Boot likewise leaves a row
+    it cannot reconcile `dispatching`.
 
   An answer sent before the Stop keeps the request `replied`. Each settlement is
   a compare-and-set from the admitted states, so a duplicate or late callback,

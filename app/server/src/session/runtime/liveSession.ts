@@ -51,6 +51,7 @@ import {
   InactiveSessionError,
   RunFailedError,
   SessionBusyError,
+  SteerEntryFailedError,
   SteerNotTakenError,
   SteerWithdrawnError,
 } from "./errors.ts";
@@ -735,6 +736,9 @@ export class LiveRuntimeSession {
       // aimed at is over, so nothing is appended after its close; the message
       // may have been read, which the caller is told.
       let acceptedLate = false;
+      // The provider took it and its entry write threw: delivered, whatever
+      // the producer does with the exception inside its own callback.
+      let entryFailed = false;
       const record = (delivery: PromptDelivery): void => {
         if (recorded || acceptedLate) return;
         if (
@@ -745,7 +749,13 @@ export class LiveRuntimeSession {
           return;
         }
         recorded = true;
-        const entryId = this.appendUserEntry(text, options, delivery);
+        let entryId: string;
+        try {
+          entryId = this.appendUserEntry(text, options, delivery);
+        } catch (error) {
+          entryFailed = true;
+          throw error;
+        }
         if (onUserEntry) onUserEntry(entryId);
         if (this.turnOpen) this.turnPromptEntryIds.add(entryId);
       };
@@ -767,6 +777,7 @@ export class LiveRuntimeSession {
           },
         );
       } catch (error) {
+        if (entryFailed) throw new SteerEntryFailedError(this.sessionId);
         if (!recorded) releaseKey();
         // Taken after its run closed, then the provider failed: it may still
         // have been read, which outranks how the provider ended.
@@ -778,6 +789,7 @@ export class LiveRuntimeSession {
           );
         throw error;
       }
+      if (entryFailed) throw new SteerEntryFailedError(this.sessionId);
       if (acceptedLate && !recorded) {
         releaseKey();
         throw new SteerWithdrawnError(

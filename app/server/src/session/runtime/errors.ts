@@ -35,6 +35,22 @@ export class SteerWithdrawnError extends SessionBusyError {
 }
 
 /**
+ * The provider TOOK a steer, and recording its entry failed partway: the
+ * entry may already be on disk (the log persists before its bookkeeping).
+ * Raised once the steer call returns, however its producer handled the
+ * failure inside its acceptance callback — the message was delivered, so it
+ * must never read as unsent.
+ */
+export class SteerEntryFailedError extends Error {
+  constructor(sessionId: string) {
+    super(
+      `Session ${sessionId} took the steer, but recording its entry failed.`,
+    );
+    this.name = "SteerEntryFailedError";
+  }
+}
+
+/**
  * A `steerOnly` prompt found no running turn to join, so nothing was sent and
  * nothing was appended. The opposite of {@link SessionBusyError}: the session was
  * not busy enough. Callers are expected to fall back to an ordinary delivery.

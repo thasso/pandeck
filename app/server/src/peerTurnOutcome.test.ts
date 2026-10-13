@@ -66,6 +66,27 @@ const { fakeDrivers, cardUpdates, fakeHub } = vi.hoisted(() => {
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
 
 /**
+ * A read of one file the test names is refused, as an unreadable log would
+ * be; every other filesystem call passes through.
+ */
+const { readFault } = vi.hoisted(() => ({
+  readFault: { path: "", refused: 0 },
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...real,
+    readFileSync: ((...args: Parameters<typeof real.readFileSync>) => {
+      if (readFault.path && String(args[0]) === readFault.path) {
+        readFault.refused += 1;
+        throw Object.assign(new Error("read refused"), { code: "EACCES" });
+      }
+      return real.readFileSync(...args);
+    }) as typeof real.readFileSync,
+  };
+});
+
+/**
  * The facade's last await before an append is the session's skill freeze. A
  * test that must change the world exactly there sets `preparation.gate`.
  */
@@ -388,6 +409,7 @@ afterAll(() => uninstall());
 
 afterEach(async () => {
   delete preparation.gate;
+  readFault.path = "";
   await quiesce();
   vi.restoreAllMocks();
   cardUpdates.length = 0;
@@ -1448,6 +1470,143 @@ describe("a real Claude session", () => {
       peerAt >= 0 && peerAt < log.findIndex((e) => e.type === "run.aborted"),
     );
     assert.equal(admissionsOf(claude.driver.sessionId, m), 1);
+  });
+});
+
+describe("a steer the provider took is delivered, whatever its entry write did", () => {
+  it("a real Claude acceptance whose entry bookkeeping failed inside the callback", async () => {
+    const coord = sender();
+    const { claude, own, steered, m } = await claudeSteerQueued(coord);
+    // The provider takes the steer; recording it writes the entry, then its
+    // stats write is refused — inside the session's acceptance callback,
+    // which logs the failure and resolves the steer as accepted.
+    vi.spyOn(sessionStore, "updateStats").mockImplementationOnce(() => {
+      throw new Error("injected stats refusal in the acceptance callback");
+    });
+    claude.accept(claude.inputs[1]!.uuid);
+    await steered;
+    vi.restoreAllMocks();
+
+    assert.equal(admissionsOf(claude.driver.sessionId, m), 1);
+    assert.ok(
+      claude.session
+        .timelineEntries()
+        .some((e) => JSON.stringify(e).includes("LATE ACCEPTED PEER")),
+      "the session recorded the acceptance itself",
+    );
+    assert.equal(row(m).status, "interrupted", "delivered, never a draft");
+    assert.equal(row(m).interruptionKind, "failure");
+    assert.equal(
+      peerPromptQueueField(claude.driver.sessionId).queuedPeerPrompts,
+      undefined,
+    );
+    // The human turn it joined is not this failure's to end.
+    assert.equal(claude.driver.isRunning, true);
+    await until(() => noticesIn(coord.sessionId) === 1, "the sender's notice");
+    await drainRecipient(coord.sessionId);
+    assert.equal(noticesIn(coord.sessionId), 1, "told once");
+
+    await removeClaude(claude);
+    await own;
+    assert.equal(row(m).status, "interrupted", "the close changes nothing");
+    assert.equal(claude.inputs.length, 2, "never sent again");
+  });
+});
+
+describe("a steer the provider took counts as delivered on its own word", () => {
+  it("the same acceptance, with the log unreadable: the acceptance is the receipt", async () => {
+    const coord = sender();
+    const { claude, own, steered, m } = await claudeSteerQueued(coord);
+    vi.spyOn(sessionStore, "updateStats").mockImplementationOnce(() => {
+      readFault.path = canonicalSessionLogPath(claude.driver.sessionId);
+      throw new Error("injected stats refusal in the acceptance callback");
+    });
+    claude.accept(claude.inputs[1]!.uuid);
+    await steered;
+    vi.restoreAllMocks();
+    const refused = readFault.refused;
+    readFault.path = "";
+
+    assert.equal(row(m).status, "interrupted", "delivered, never reserved");
+    assert.equal(row(m).interruptionKind, "failure");
+    assert.equal(refused, 0, "no log read was needed to know");
+    await removeClaude(claude);
+    await own;
+    assert.equal(claude.inputs.length, 2);
+  });
+});
+
+describe("a log that cannot be read proves nothing", () => {
+  it("an entry written before its bookkeeping failed, with the log unreadable: left reserved", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    const m = await send(coord.sessionId, worker.sessionId, "WRITTEN, UNREAD");
+    vi.spyOn(sessionStore, "updateStats").mockImplementationOnce(() => {
+      readFault.path = canonicalSessionLogPath(worker.sessionId);
+      throw new Error("injected stats refusal after the log write");
+    });
+    await drainRecipient(worker.sessionId);
+    vi.restoreAllMocks();
+    const refused = readFault.refused;
+    readFault.path = "";
+
+    assert.ok(refused > 0, "the reconciliation read was refused");
+    assert.equal(admissionsOf(worker.sessionId, m), 1, "really on disk");
+    assert.equal(worker.promptOptions.length, 0);
+    const r = row(m);
+    assert.equal(r.status, "dispatching", "neither absent nor delivered");
+    assert.equal(r.leaseExpiresAt, undefined);
+    assert.equal(r.attempts, 1, "nothing refunded");
+    const [item] = peerPromptQueueField(worker.sessionId).queuedPeerPrompts!;
+    assert.throws(() => withdrawQueuedPeerPrompt(worker.sessionId, item!.id));
+    sweepExpiredLeases(Date.now() + 61_000);
+    await drainRecipient(worker.sessionId);
+    assert.equal(row(m).status, "dispatching");
+    assert.equal(worker.promptOptions.length, 0, "never sent");
+
+    // Boot reads the log, and finds it.
+    recoverPeerPromptsOnBoot();
+    assert.equal(row(m).status, "interrupted");
+    assert.equal(row(m).interruptionKind, "restart");
+  });
+
+  it("an unreadable log before a delivery sends nothing, under the bounded retry", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    const first = await send(coord.sessionId, worker.sessionId, "first");
+    await drainRecipient(worker.sessionId);
+    assert.equal(row(first).status, "completed");
+    const m = await send(coord.sessionId, worker.sessionId, "second");
+    readFault.path = canonicalSessionLogPath(worker.sessionId);
+    await drainRecipient(worker.sessionId);
+    readFault.path = "";
+
+    assert.equal(worker.promptOptions.length, 1, "only the first");
+    assert.equal(admissionsOf(worker.sessionId, m), 0);
+    assert.equal(row(m).status, "retryable_failed");
+    assert.match(row(m).failureReason!, /could not be read/);
+  });
+
+  it("boot leaves a row it cannot reconcile for a boot that can", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    await send(coord.sessionId, worker.sessionId, "first");
+    await drainRecipient(worker.sessionId);
+    const m = await send(coord.sessionId, worker.sessionId, "stranded");
+    const [claimed] = peerPromptStore.claimBatch(
+      worker.sessionId,
+      "crashed",
+      60_000,
+      5,
+      10_000,
+    );
+    assert.equal(claimed?.id, m);
+    readFault.path = canonicalSessionLogPath(worker.sessionId);
+    recoverPeerPromptsOnBoot();
+    assert.equal(row(m).status, "dispatching");
+    readFault.path = "";
+    recoverPeerPromptsOnBoot();
+    assert.equal(row(m).status, "queued", "readable now, and absent");
   });
 });
 

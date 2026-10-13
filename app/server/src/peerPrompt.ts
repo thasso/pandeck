@@ -78,7 +78,10 @@ import {
   SessionBusyError,
   SteerWithdrawnError,
 } from "./session/runtime/index.ts";
-import { RunFailedError } from "./session/runtime/errors.ts";
+import {
+  RunFailedError,
+  SteerEntryFailedError,
+} from "./session/runtime/errors.ts";
 import { readTask } from "./tasks.ts";
 import {
   promptRuntimeSession,
@@ -303,6 +306,8 @@ const STEERED_RUN_FAILED_REASON = "The turn it was steered into failed.";
 const CUT_OFF_REASON = "Its turn was cut off before it finished.";
 const OUTCOME_UNKNOWN_REASON = "Its turn ended without reporting how.";
 const NOT_TAKEN_REASON = "The recipient session did not take the prompt.";
+const LOG_UNREADABLE_REASON =
+  "The recipient's log could not be read to check for an earlier delivery.";
 
 /**
  * What still waits for a recipient, as its composer queue shows it: queued,
@@ -441,6 +446,7 @@ async function steerPeerPrompt(
   const batch = [m];
   const { envelope, receivedCard, context } = deliveryParts(batch);
   let admitted = false;
+  let reserved = false;
   let ownsContext = false;
   // What the append admitted (undefined while its write has not succeeded)
   // and the run it joined, read inside that append. A steer does not open its
@@ -467,7 +473,10 @@ async function steerPeerPrompt(
       peerPrompt: receivedCard,
       steer: true,
       // After the last await, before the provider sees anything.
-      admit: () => admitClaimed(batch),
+      admit: () => {
+        admitClaimed(batch);
+        reserved = true;
+      },
       // Runs inside the runtime's append; nothing here may throw.
       onUserEntry: () => {
         admitted = true;
@@ -484,20 +493,25 @@ async function steerPeerPrompt(
   } catch (err) {
     thrown = err;
   }
-  if (!admitted && persistedDespite(thrown, driver.sessionId, m.id)) {
-    // Its entry reached the log, then something after the write threw before
-    // the runtime could say so. It is delivered, and its turn failed with it.
-    unsubscribe();
-    settleAdmitted(recordAppended(batch), driver.sessionId, undefined, thrown);
-    await broadcastParticipants(batch);
-    await broadcastBatchCardUpdates([m.id]);
-    return;
-  }
   if (!admitted) {
     unsubscribe();
     if (ownsContext) activeContexts.delete(driver.sessionId);
     const claim = { attempts: m.attempts };
-    if (thrown instanceof ClaimLostError) {
+    const reached = deliveryReached(thrown, reserved, driver.sessionId, m.id);
+    if (reached === "delivered") {
+      // In the session without the runtime saying so: its turn failed with it.
+      settleAdmitted(
+        recordAppended(batch),
+        driver.sessionId,
+        undefined,
+        thrown,
+      );
+    } else if (reached === "unknown") {
+      leaveReserved(batch, thrown);
+    } else if (thrown === undefined) {
+      // Resolved with nothing appended, and the log confirms it.
+      retryOrFail(m.id, m.attempts, NOT_TAKEN_REASON);
+    } else if (thrown instanceof ClaimLostError) {
       // Another delivery or the user took it before anything was sent.
     } else if (thrown instanceof AutomaticTurnsHeldError) {
       // A Stop refused it at the run door: back as it was, no attempt spent.
@@ -1243,7 +1257,7 @@ function markResumeFailureRetryable(recipientId: string, err: unknown): void {
   );
   if (batch.length === 0) return;
   const head = batch[0]!;
-  if (alreadyAdmitted(recipientId, head.id)) {
+  if (canonicalAdmission(recipientId, head.id) === "present") {
     const admittedBatch = findAdmittedBatch(recipientId, head.id);
     const memberIds = admittedBatch?.memberIds ?? batch.map((m) => m.id);
     const headId = admittedBatch?.headId ?? head.id;
@@ -1330,17 +1344,25 @@ function peerKey(messageId: string): string {
  * Durable idempotency: whether the recipient canonical log already contains the
  * admission entry for this batch key. Survives restart because the log persists
  * `clientRequestId`. Prevents injecting a second visible prompt after admission.
+ *
+ * Three answers, because a log that cannot be read proves nothing: `absent`
+ * only when the log was read without the key, or does not exist at all.
  */
-function alreadyAdmitted(recipientId: string, messageId: string): boolean {
-  const path = canonicalSessionLogPath(recipientId);
-  if (!existsSync(path)) return false;
+function canonicalAdmission(
+  recipientId: string,
+  messageId: string,
+): "present" | "absent" | "unknown" {
+  let text: string;
   try {
-    return readFileSync(path, "utf8").includes(
-      JSON.stringify(peerKey(messageId)),
-    );
-  } catch {
-    return false;
+    text = readFileSync(canonicalSessionLogPath(recipientId), "utf8");
+  } catch (err) {
+    return (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+      ? "absent"
+      : "unknown";
   }
+  return text.includes(JSON.stringify(peerKey(messageId)))
+    ? "present"
+    : "absent";
 }
 
 /**
@@ -1427,9 +1449,14 @@ async function deliverBatch(
   const head = batch[0]!;
   // Exactly-once admission: if a crash left this key already in the recipient
   // log, never re-inject the prompt. Mark it interrupted so it is explicit that
-  // the delivered turn's completion is unknown.
-  if (alreadyAdmitted(driver.sessionId, head.id)) {
-    interruptStrandedBatch(batch, driver.sessionId);
+  // the delivered turn's completion is unknown. A log that cannot be read
+  // proves nothing either way, so nothing is sent until it can.
+  const prior = canonicalAdmission(driver.sessionId, head.id);
+  if (prior !== "absent") {
+    if (prior === "present") interruptStrandedBatch(batch);
+    else
+      for (const m of batch)
+        retryOrFail(m.id, m.attempts, LOG_UNREADABLE_REASON);
     await broadcastParticipants(batch);
     await broadcastBatchCardUpdates(batch.map((m) => m.id));
     return;
@@ -1441,6 +1468,7 @@ async function deliverBatch(
   // that append opened ended. Neither is inferred from whether the prompt
   // resolved: a Stop resolves it like a finished turn.
   let appended = false;
+  let reserved = false;
   let admittedIds: string[] | undefined;
   let outcome: RunOutcome | undefined;
   let thrown: unknown;
@@ -1466,7 +1494,10 @@ async function deliverBatch(
       peerPrompt: receivedCard,
       // After the last await, before the provider sees anything: every
       // member must still be this claim's, or nothing is sent.
-      admit: () => admitClaimed(batch),
+      admit: () => {
+        admitClaimed(batch);
+        reserved = true;
+      },
       // Runs inside the runtime's append; nothing here may throw. Admitted
       // (in the recipient log) and acknowledged (its run started) together,
       // with the batch grouping history projection reconstructs.
@@ -1485,11 +1516,11 @@ async function deliverBatch(
   } finally {
     activeContexts.delete(driver.sessionId);
   }
-  // Its entry reached the log, then something after the write threw before
-  // the runtime could say so: delivered, never a draft to send again.
-  if (!appended && persistedDespite(thrown, driver.sessionId, head.id))
-    appended = true;
-  if (appended) {
+  // Without the runtime's word, the log decides what reached the session.
+  const reached = appended
+    ? "delivered"
+    : deliveryReached(thrown, reserved, driver.sessionId, head.id);
+  if (reached === "delivered") {
     // Admitted work is never retried or re-queued: it is in the recipient's
     // context, its tool calls may have run. Only its outcome is recorded. A
     // throw after a clean end is the facade's own bookkeeping, not the turn.
@@ -1499,10 +1530,11 @@ async function deliverBatch(
       outcome,
       outcome?.stopReason === "end" ? undefined : thrown,
     );
+  } else if (reached === "unknown") {
+    leaveReserved(batch, thrown);
   } else if (thrown === undefined) {
-    // Resolved with nothing appended: the runtime already handled this key,
-    // so the prompt reached the session earlier and its outcome is unknown.
-    interruptStrandedBatch(batch, driver.sessionId);
+    // Resolved with nothing appended, and the log confirms it.
+    for (const m of batch) retryOrFail(m.id, m.attempts, NOT_TAKEN_REASON);
   } else {
     // Refused before the append: nothing reached the session. A Stop that
     // landed between the claim and the append, or a claim that went stale
@@ -1551,26 +1583,45 @@ function admitClaimed(batch: PeerPromptRecord[]): void {
 }
 
 /**
- * Whether a delivery that threw had already written its entry to the
- * recipient's log. The runtime calls `onUserEntry` only once the append
- * returns, and the append persists the entry BEFORE its own bookkeeping (the
- * session's stats row), so a throw from that bookkeeping leaves a delivered
- * entry the caller never heard about. The log is the authority. A refusal
- * that happens before any append by construction — the claim lost, a Stop at
- * the door — is not checked.
+ * What reached the recipient when the runtime never confirmed an append
+ * (`onUserEntry`): the prompt resolved or threw without it.
+ *
+ * - `delivered`: the provider took a steer whose entry write then failed
+ *   (`SteerEntryFailedError` — its acceptance is the receipt), or the
+ *   recipient's log holds the key: the append persists the entry before its
+ *   own bookkeeping, and a throw from that bookkeeping — even one its
+ *   producer swallowed — leaves a delivered entry nobody was told about.
+ * - `unsent`: the batch never passed its claim gate ({@link admitClaimed}),
+ *   so nothing could have been appended, or the log was read and lacks the
+ *   key.
+ * - `unknown`: the log could not be read. That proves nothing, so the
+ *   reserved rows are left as they are ({@link leaveReserved}).
  */
-function persistedDespite(
+function deliveryReached(
   thrown: unknown,
+  reserved: boolean,
   recipientId: string,
   headId: string,
-): boolean {
-  if (
-    thrown === undefined ||
-    thrown instanceof ClaimLostError ||
-    thrown instanceof AutomaticTurnsHeldError
-  )
-    return false;
-  return alreadyAdmitted(recipientId, headId);
+): "delivered" | "unsent" | "unknown" {
+  if (thrown instanceof SteerEntryFailedError) return "delivered";
+  if (!reserved) return "unsent";
+  const presence = canonicalAdmission(recipientId, headId);
+  return presence === "present"
+    ? "delivered"
+    : presence === "absent"
+      ? "unsent"
+      : "unknown";
+}
+
+/**
+ * A reserved batch whose delivery is unknown — its log could not be read. It
+ * stays reserved (`dispatching`, no lease): never refunded, retried, swept or
+ * withdrawn, and never diagnosed as anything; boot recovery reads the log.
+ */
+function leaveReserved(batch: PeerPromptRecord[], thrown: unknown): void {
+  console.warn(
+    `[peer-prompt] ${batch.length} peer prompt(s) for ${batch[0]!.recipientSessionId} left reserved: their delivery is unknown (${failureLabel(thrown)})`,
+  );
 }
 
 /**
@@ -1651,15 +1702,7 @@ function settleAdmitted(
 }
 
 /** A claimed batch the recipient's log already holds: delivered, outcome unknown. */
-function interruptStrandedBatch(
-  batch: PeerPromptRecord[],
-  recipientId: string,
-): void {
-  if (!alreadyAdmitted(recipientId, batch[0]!.id)) {
-    // Nothing in the log after all: an ordinary bounded delivery failure.
-    for (const m of batch) retryOrFail(m.id, m.attempts, NOT_TAKEN_REASON);
-    return;
-  }
+function interruptStrandedBatch(batch: PeerPromptRecord[]): void {
   peerPromptStore.markDeliveryBatch(
     batch.map((m) => m.id),
     batch[0]!.id,
@@ -1704,7 +1747,13 @@ function decideDispatchingRecovery(
   const decidedIds = new Set<string>();
   for (const m of rows) {
     if (decidedIds.has(m.id)) continue; // already decided as part of an earlier member's batch group
-    if (alreadyAdmitted(m.recipientSessionId, m.id)) {
+    const presence = canonicalAdmission(m.recipientSessionId, m.id);
+    if (presence === "unknown") {
+      // Unreadable: left `dispatching` for a boot that can read it.
+      decidedIds.add(m.id);
+      continue;
+    }
+    if (presence === "present") {
       const admittedBatch = findAdmittedBatch(m.recipientSessionId, m.id);
       const memberIds = admittedBatch?.memberIds ?? [m.id];
       const headId = admittedBatch?.headId ?? m.id;
