@@ -247,6 +247,43 @@ describe("github PR write approvals (unified subsystem)", () => {
     );
   });
 
+  test("a base-only edit retargets without touching the description", async () => {
+    const sessionId = "appr-edit-base";
+    await expect(
+      githubEditPullRequestTool.execute(
+        { repo: "acme/app", number: 42 } as never,
+        ctxFor(sessionId) as never,
+      ),
+    ).rejects.toThrow(/body, a base, or both/);
+    await expect(
+      githubEditPullRequestTool.execute(
+        { repo: "acme/app", number: 42, base: "  " } as never,
+        ctxFor(sessionId) as never,
+      ),
+    ).rejects.toThrow(/base must name a branch/);
+    expect(approvalsForSession(sessionId)).toHaveLength(0);
+    globalThis.fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        expect(String(input)).toContain("/pulls/42");
+        expect(init?.method).toBe("PATCH");
+        expect(JSON.parse(String(init?.body))).toEqual({ base: "main" });
+        return new Response("{}", { status: 200 });
+      },
+    ) as unknown as typeof fetch;
+    await githubEditPullRequestTool.execute(
+      { repo: "acme/app", number: 42, base: " main " } as never,
+      ctxFor(sessionId) as never,
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(latest(sessionId).title).toBe("Edit pull request base");
+    expect(latest(sessionId).body).toEqual(
+      expect.not.objectContaining({ prBody: expect.anything() }),
+    );
+    const { card } = await resolveApproval(latest(sessionId).id, "approved");
+    expect(card.status).toBe("executed");
+    expect(card.resultSummary).toBe("Retargeted #42 onto main");
+  });
+
   test("an empty description clears the PR; invalid numbers stage nothing", async () => {
     const sessionId = "appr-edit-clear";
     await expect(

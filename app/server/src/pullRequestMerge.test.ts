@@ -56,6 +56,7 @@ function fakeProvider(
       throw new Error("not used");
     },
     markPullRequestReady: async () => ({}),
+    retargetPullRequest: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),

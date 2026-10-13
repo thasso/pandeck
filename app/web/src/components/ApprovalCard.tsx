@@ -205,10 +205,19 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
   if (body.operation === "edit") {
     return (
       <>
-        <p>Replace description on #{body.pullNumber} with:</p>
-        <p className={CLAMPED}>
-          {body.prBody === "" ? "(empty description)" : body.prBody}
-        </p>
+        {body.base && (
+          <Fact label={`Retarget #${body.pullNumber} onto`}>
+            <span className="font-mono">{body.base}</span>
+          </Fact>
+        )}
+        {body.prBody !== undefined && (
+          <>
+            <p>Replace description on #{body.pullNumber} with:</p>
+            <p className={CLAMPED}>
+              {body.prBody === "" ? "(empty description)" : body.prBody}
+            </p>
+          </>
+        )}
       </>
     );
   }

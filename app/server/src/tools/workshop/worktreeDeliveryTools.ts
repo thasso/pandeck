@@ -48,6 +48,7 @@ import {
 import {
   createWorktreeFinishPullRequestTool,
   createWorktreeReadyPullRequestTool,
+  createWorktreeRetargetPullRequestTool,
 } from "./worktreeFinishPullRequest.ts";
 import {
   beginPullRequestCard,
@@ -875,5 +876,6 @@ export const worktreeDeliveryTools = [
   createWorktreePushTool(),
   createWorktreePullRequestTool(),
   createWorktreeReadyPullRequestTool(),
+  createWorktreeRetargetPullRequestTool(),
   createWorktreeFinishPullRequestTool(),
 ];

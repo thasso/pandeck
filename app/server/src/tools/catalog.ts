@@ -262,6 +262,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   git_publish_tag: "external",
   worktree_create_pull_request: "external",
   worktree_ready_pull_request: "external",
+  worktree_retarget_pull_request: "external",
   worktree_finish_pull_request: "external",
   workshop_defer_after_reload: "local",
   workflow_status: "none",

@@ -284,12 +284,21 @@ async function pollCard(cardId: string): Promise<void> {
       context.rebaseHandoffHeadSha !== detail.headSha
         ? { rebaseHandedOff: undefined }
         : {}),
+      // A pull request retargeted outside a managed tool (the provider UI, a
+      // generic edit) is followed: the card states the base it now merges
+      // into, which is what every later merge decision is checked against.
+      ...(detail.baseBranch && detail.baseBranch !== card.baseBranch
+        ? { baseBranch: detail.baseBranch }
+        : {}),
       ...(ci ? { ci } : {}),
       ...(review ? { review } : {}),
       ...(repositoryCapabilities ? { repositoryCapabilities } : {}),
     },
     {
       observedHeadSha: detail.headSha,
+      ...(detail.baseBranch && detail.baseBranch !== context.baseBranch
+        ? { baseBranch: detail.baseBranch }
+        : {}),
       ...(shouldNotify ? { notifiedHeadSha: detail.headSha } : {}),
     },
   );

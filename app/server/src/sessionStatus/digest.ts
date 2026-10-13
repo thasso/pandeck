@@ -58,6 +58,7 @@ const KEY_TOOLS = new Set([
   "worktree_push",
   "worktree_create_pull_request",
   "worktree_ready_pull_request",
+  "worktree_retarget_pull_request",
   "worktree_finish_pull_request",
   "worktree_set_base",
   "worktree_remove",

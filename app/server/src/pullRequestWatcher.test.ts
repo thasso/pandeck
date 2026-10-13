@@ -72,6 +72,7 @@ function fakeProvider(
       throw new Error("not used");
     },
     markPullRequestReady: async () => ({}),
+    retargetPullRequest: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -148,6 +149,20 @@ test("a watcher observation clears a draft when the provider reports ready", asy
   await sweepPullRequestWatcherForTests();
 
   assert.equal(pullRequestCardById(card.id)?.draft, undefined);
+});
+
+test("a watcher observation follows a base retargeted on the provider", async () => {
+  const card = openCard();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () => detail({ baseBranch: "release-2" }),
+    }),
+  );
+
+  await sweepPullRequestWatcherForTests();
+
+  assert.equal(pullRequestCardById(card.id)?.baseBranch, "release-2");
+  assert.equal(pullRequestCardRecord(card.id)?.context.baseBranch, "release-2");
 });
 
 test("a ready projection invalidates an in-flight draft observation", () => {

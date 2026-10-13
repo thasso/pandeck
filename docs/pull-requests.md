@@ -52,7 +52,8 @@ The provider base branch comes from explicit `--base`, then the session worktree
 row's `baseBranch`, then `origin/HEAD`. Coding agents can change a spawned row's
 future target with `worktree_set_base`; that metadata operation does not rebase
 the branch or retarget an existing provider pull request, and its result warns
-when an open managed card still carries the previous provider base. Workflow
+when an open managed card still targets another base and names
+`worktree_retarget_pull_request` (below) as the step that moves it. Workflow
 publication calls the same card creation/adoption seam with its Task and base
 made explicit, so it cannot stop on the multi-Task chooser. Its card omits
 `sourceToolCallId` because no slash command turn exists; it still belongs to the
@@ -172,16 +173,17 @@ immediately. This pre-authorization ends at creation: it never permits merge.
 The generic `github_create_pull_request` and `forgejo_create_pull_request` tools
 remain approval-gated because they accept arbitrary repositories, refs, and
 authored content. `github_edit_pull_request` and `forgejo_edit_pull_request`
-replace the complete description of an existing PR (an empty body clears it).
-They also require approval; they accept a repository and PR number, not a
-managed-worktree identity. Approved edits use PATCH on the provider's pull
-request endpoint. `github_ready_pull_request` and `forgejo_ready_pull_request`
-are approval-gated draft-to-ready transitions by repository and PR number. The
-approved executor re-reads the PR and refuses a closed or already-ready PR.
-GitHub uses its GraphQL ready-for-review mutation; Forgejo removes the `WIP: `
-or `[WIP] ` title marker through the provider seam. Neither tool merges or
-promises green checks. `/pr` remains the human all-in-one commit/push/create
-command and keeps its session-derived Task chooser behavior.
+replace the complete description of an existing PR (an empty body clears it),
+retarget it onto another `base` branch, or both; at least one is required. They
+also require approval; they accept a repository and PR number, not a
+managed-worktree identity. Approved edits send only the proposed fields in one
+PATCH on the provider's pull request endpoint. `github_ready_pull_request` and
+`forgejo_ready_pull_request` are approval-gated draft-to-ready transitions by
+repository and PR number. The approved executor re-reads the PR and refuses a
+closed or already-ready PR. GitHub uses its GraphQL ready-for-review mutation;
+Forgejo removes the `WIP: ` or `[WIP] ` title marker through the provider seam.
+Neither tool merges or promises green checks. `/pr` remains the human all-in-one
+commit/push/create command and keeps its session-derived Task chooser behavior.
 
 ## Repository pull-request capabilities
 
@@ -280,6 +282,27 @@ provider UI or through the generic tools. A ready transition does not establish
 merge readiness: the agent must inspect the exact-head check watch before
 calling `worktree_finish_pull_request`. This tool uses the same GitHub and
 Forgejo provider methods as the app's publication flow.
+
+## Agent-facing managed base retarget
+
+`worktree_retarget_pull_request` moves a worktree's canonical open pull request
+onto the row's recorded base — typically after a stacked parent merged and
+`worktree_set_base` named the new target. It accepts only an active spawned
+worktree id and is pre-authorized like the ready transition; the base always
+comes from the row, never from the caller. It resolves the same unique open PR
+and live cards as finishing, except that the PR's and the cards' base may differ
+from the row's (that difference is what it settles); head branch and card
+ownership must still match. Under the per-PR mutation lock it re-reads the PR,
+refuses a moved head or base, and calls the provider's `retargetPullRequest`.
+Neither provider has a precondition on that PATCH, so the result is read back: a
+base the provider does not report is a `retargeted-partial` with no card
+projection, left to the watcher. A confirmed retarget sets the cards' base (card
+and context), clears mergeability and conflicts, rotates the observation token
+and schedules an immediate poll. A PR already on the row's base writes nothing
+and only repairs cards that still name another base. A base missing on the
+remote is the provider's refusal, reported with a hint to push it. The new base
+re-decides checks, review and mergeability, and the retarget does not rebase, so
+the agent re-watches checks before `worktree_finish_pull_request`.
 
 ## Agent-facing managed merge and close
 
@@ -545,6 +568,12 @@ Forgejo is local and keeps the adaptive one. It runs independently of any viewer
 is reconciled on boot (`reconcilePullRequestCardsOnBoot`, mirroring
 `reconcileWorktreeMergesOnBoot`) so a conclusion missed during a restart is
 still caught.
+
+The poll also follows the pull request's base: a PR retargeted outside the
+managed tool (provider UI, a generic edit) writes the reported base onto the
+card and its context. The card is the record every later merge decision and
+`worktree_finish_pull_request`'s card check are compared against, so a card left
+on the old base would refuse a merge the provider would accept.
 
 A card OUTLIVES its checkout. Its `repoRoot` is the spawned worktree the pull
 request was published from, and retiring that worktree is the ordinary end of a
