@@ -111,7 +111,8 @@ the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
    a validation error, never a guess.
 
 The resolved model decides the provider and therefore the harness. `effort` is
-clamped with `supportedThinkingLevelsForModel`, as spawn already does for
+fitted to the levels the model supports (`clampThinkingLevelForModel`, which
+tries the next level up before the next one down), as spawn already does for
 thinking hints.
 
 Validation at write time checks that the model resolves against the accounts
@@ -180,14 +181,15 @@ approval card (`docs/approvals.md`):
 - **Edit** is previewed first (`previewEntryEdit`). When the result changes
   `model` or `effort`, it is a card showing before and after, and the executor
   applies the same edits only if the model still resolves to what the card
-  showed and the locked result is byte-for-byte the `AGENT.md` the card showed,
-  so a hand edit made while the card waited refuses rather than being carried
-  along. An edit may never change the declared name: the card names its target
-  by it. Any other edit commits directly; inside the locked write it is judged
-  again (`editEntrySource`'s `check`): model and effort must still be unchanged,
-  and the denied tools and skills must still exist. Such an edit does not
-  re-resolve the model, so a definition whose account went away can still have
-  its instructions fixed.
+  showed, at the effort the card showed, and the locked result is byte-for-byte
+  the `AGENT.md` the card showed, so a hand edit made while the card waited
+  refuses rather than being carried along. An edit may never change the declared
+  name: the card names its target by it. Any other edit commits directly; inside
+  the locked write it is judged again (`editEntrySource`'s `check`), and the
+  file must still hold the bytes that were judged when the write starts: model
+  and effort must still be unchanged, and the denied tools and skills must still
+  exist. Such an edit does not re-resolve the model, so a definition whose
+  account went away can still have its instructions fixed.
 - Rename, delete and supporting files never change what a definition runs on and
   commit directly; `AGENT.md` itself is refused by `agent_manage_files`.
 
