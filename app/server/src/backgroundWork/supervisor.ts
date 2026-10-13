@@ -160,6 +160,8 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
   private readonly reportError: (message: string) => void;
   private readonly deadlineTimers = new Map<string, BackgroundWorkTimer>();
   private readonly pendingStopSources = new Map<string, string>();
+  /** Stops sent once a parked item bound, until each one answers. */
+  private readonly boundStops = new Map<string, Promise<unknown>>();
   private draining = false;
 
   constructor(options: BackgroundWorkSupervisorOptions = {}) {
@@ -549,6 +551,15 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     // The Stops took time, and an item they left unsettled may have settled
     // since (bound and Stopped, or confirmed late): judge each by its row now,
     // not by the answer recorded when it was first tried.
+    // An item that bound meanwhile has its own Stop in flight: wait for its
+    // answer (bounded by that Stop's deadlines) rather than judge it pending.
+    if (ownerRequested)
+      await Promise.all(
+        results.flatMap((result) => {
+          const stop = this.boundStops.get(result.item?.id ?? "");
+          return stop ? [stop] : [];
+        }),
+      );
     for (const [index, result] of results.entries()) {
       if (
         result.state !== "stop-unconfirmed" &&
@@ -817,7 +828,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     if (item.stopState !== "requested") return;
     const sourceRequestId = this.pendingStopSources.get(item.id);
     if (!sourceRequestId) return;
-    void this.runTargetedStop(
+    const stop = this.runTargetedStop(
       {
         itemId: item.id,
         ownerSessionId: item.ownerSessionId,
@@ -831,6 +842,11 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         `bound Stop failed for ${item.id}: ${boundedError(error)}`,
       ),
     );
+    this.boundStops.set(item.id, stop);
+    void stop.finally(() => {
+      if (this.boundStops.get(item.id) === stop)
+        this.boundStops.delete(item.id);
+    });
   }
 
   private async runTargetedStop(

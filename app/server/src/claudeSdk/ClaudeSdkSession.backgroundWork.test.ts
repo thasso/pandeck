@@ -1510,6 +1510,86 @@ test("Stop withdraws a retained prompt the CLI has not started yet", async () =>
   session.dispose();
 });
 
+test("without command starts, a withdrawn idle prompt leaves the next turn its response", async () => {
+  // A CLI that reports no command starts cannot retire the discard at the
+  // next prompt's start: armed, it would drop that turn's whole stream.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const adapter = session.createRuntimeAdapter();
+  const first = adapter.prompt("retain the host");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-retain-no-starts",
+    },
+    "tool-retain-no-starts",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit(result("retain-first"));
+  await first;
+
+  const queued = adapter.prompt("queued behind a notice");
+  await until(() => query.inputs.length === 2);
+  const uuid = (query.inputs[1] as { uuid: string }).uuid;
+  session.abort();
+  await queued;
+  await until(() => query.interruptCalls === 1);
+  assert.deepEqual(query.cancelled, [uuid]);
+
+  // The dropped prompt never ran, so no result of it is owed: the next
+  // prompt's own result ends the next turn, with no optional running hint.
+  const next = adapter.prompt("after the withdrawn prompt");
+  await until(() => query.inputs.length === 3);
+  const nextUuid = (query.inputs[2] as { uuid: string }).uuid;
+  query.output.emit({
+    type: "stream_event",
+    event: {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: "The next turn's answer." },
+    },
+    parent_tool_use_id: null,
+    uuid: "no-starts-stream",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    type: "assistant",
+    uuid: "no-starts-assistant",
+    session_id: "provider-background",
+    parent_tool_use_id: null,
+    message: {
+      id: "no-starts-message",
+      model: "claude-sonnet-5",
+      content: [{ type: "text", text: "The next turn's answer." }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    ...(result("after-no-starts") as unknown as Record<string, unknown>),
+    user_message_uuids: [nextUuid],
+  } as unknown as ClaudeSdkMessage);
+  assert.equal((await next).stopReason, "end");
+  assert.ok(
+    session
+      .snapshot()
+      .some((message) =>
+        message.blocks.some(
+          (block) =>
+            block.kind === "text" && block.text === "The next turn's answer.",
+        ),
+      ),
+    "the next turn kept its response",
+  );
+  session.dispose();
+});
+
 test("the interrupted run a withdrawn prompt queued behind cannot fail the next turn", async () => {
   // The prompt waited behind a run the CLI started itself (an orphaned-task
   // notice). Stop drops the prompt and interrupts that run, whose error
@@ -1536,6 +1616,14 @@ test("the interrupted run a withdrawn prompt queued behind cannot fail the next 
   );
   query.output.emit(result("retain-first"));
   await first;
+  // This CLI reports command starts, which is what retires the discard.
+  query.output.emit({
+    type: "system",
+    subtype: "init",
+    capabilities: ["msg_lifecycle_v1"],
+    uuid: "init-notice",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
 
   const queued = adapter.prompt("queued behind a notice");
   await until(() => query.inputs.length === 2);

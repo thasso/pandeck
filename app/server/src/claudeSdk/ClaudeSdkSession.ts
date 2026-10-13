@@ -2695,11 +2695,21 @@ export class ClaudeSdkSession implements LiveSession {
       // the same query epoch in the meantime.
       this.markProviderResultForDiscard(this.turnCounter);
       const query = this.activeQuery;
+      const reportsStarts =
+        this.lifecycleFramesEpochKey !== undefined &&
+        this.lifecycleFramesEpochKey === this.queryEpochKey;
       const interrupted = Promise.all([
         withdrawn,
-        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : undefined,
+        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : false,
       ])
-        .then(() => query.interrupt?.())
+        .then(([, dropped]) => {
+          // A CLI that reports command starts retires the discard at the next
+          // prompt's start, so an interrupted run it was busy with is still
+          // discarded. One that does not would leave the next turn's whole
+          // stream discarded instead; there the confirmed drop disarms it.
+          if (dropped && !reportsStarts) this.consumeForeignProviderResult();
+          return query.interrupt?.();
+        })
         .then(
           () => undefined,
           () => undefined,
