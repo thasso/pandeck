@@ -246,8 +246,10 @@ edit refusal.
 
 A kind with fields beyond `name` and `description` builds its rule with
 `parseManifestWith`, which runs the shared checks and hands the kind the same
-frontmatter mapping and issue list; `LibraryKind<M>` carries the typed manifest
-to callers. `library/libraryKind.test.ts` proves the core with a fixture kind
+frontmatter mapping and issue list. `LibraryKind<M>` types that manifest for
+code holding the concrete kind; the store and the core see only the base
+`LibraryKind`, so kind-specific code (agent spawning) uses its own kind
+directly. `library/libraryKind.test.ts` proves the core with a fixture kind
 (`WIDGET.md`, `Widget-*` trailers) that is not a skill.
 
 The test for "shared enough": adding a third library kind needs a manifest rule,

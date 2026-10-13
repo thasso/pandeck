@@ -13,16 +13,13 @@ import {
   MAX_ENTRY_BODY_BYTES,
   type EntryDetailResponse,
 } from "@assistant/shared";
-import {
-  parseYamlSubset,
-  splitYamlFrontmatter,
-} from "@assistant/shared/frontmatter";
 import { buildEntryFileTree } from "./entryFiles.ts";
 import {
   scanLibrary,
   entrySourceIdentity,
   type LibraryScan,
 } from "./libraryScanner.ts";
+import type { LibraryKind } from "./libraryKind.ts";
 import type { LibraryStore } from "./libraryStore.ts";
 import {
   sameEntrySource,
@@ -104,7 +101,7 @@ export async function resolveEntryDetail(
 
           const read = await readBounded(source.file);
           try {
-            validateRereadFrontmatter(read.frontmatter, summary, summary.path);
+            validateReread(library.kind, read, summary, summary.path);
           } catch {
             return unavailable(
               summary,
@@ -260,26 +257,26 @@ function findBodyStart(data: Buffer, atEof: boolean): number | undefined {
   return undefined;
 }
 
-function validateRereadFrontmatter(
-  frontmatter: string,
+/**
+ * The reread must still satisfy the kind's WHOLE rule and still declare what
+ * the scan reported: a same-inode rewrite that breaks a kind-specific field
+ * leaves `name` and `description` alone, and serving it would show as valid an
+ * entry the library would now report as broken.
+ */
+function validateReread(
+  kind: LibraryKind,
+  read: BoundedRead,
   summary: { name: string; description: string },
   path: string,
 ): void {
-  const { yaml } = splitYamlFrontmatter(frontmatter, path);
-  const parsed = parseYamlSubset(yaml, `${path} frontmatter`);
+  const parsed = kind.parseManifest(read.frontmatter + read.body, path);
   if (
-    !isRecord(parsed) ||
-    typeof parsed.name !== "string" ||
-    typeof parsed.description !== "string" ||
-    parsed.name !== summary.name ||
-    parsed.description !== summary.description
+    !parsed.ok ||
+    parsed.manifest.name !== summary.name ||
+    parsed.manifest.description !== summary.description
   ) {
     throw new Error("frontmatter metadata changed");
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

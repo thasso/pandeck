@@ -12,11 +12,13 @@
  *   pnpm --filter @assistant/server test src/library/libraryKind.test.ts
  */
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
+import { git } from "../gitExec.ts";
+import { resolveEntryDetail } from "./entryDetail.ts";
 import {
   assertManifest,
   formatManifest,
@@ -185,5 +187,31 @@ describe("a non-skill library kind", () => {
       false,
     );
     assert.match(added.author, /^Widget test$/);
+    // The one place `plural` reaches commit identity.
+    const email = await git(["log", "-1", "--format=%ae", "HEAD"], root);
+    assert.match(email.stdout.trim(), /@widgets\.local$/);
+  });
+
+  test("a detail read refuses a same-inode rewrite that breaks the kind's own field", async () => {
+    await mkdir(join(root, "gear"));
+    const path = join(root, "gear", "WIDGET.md");
+    await writeFile(path, widgetSource("gear"));
+    const scan = await scanLibrary(widgetKind, root);
+    assert.deepEqual(
+      scan.entries.map((entry) => entry.name),
+      ["gear"],
+    );
+
+    // Same inode, same name and description: only the kind-specific field
+    // goes, which the scan would now report as `invalid-field`.
+    const inode = statSync(path).ino;
+    await writeFile(
+      path,
+      '---\nname: gear\ndescription: "The gear widget."\n---\n\nWidget instructions.\n',
+    );
+    assert.equal(statSync(path).ino, inode);
+
+    const detail = await resolveEntryDetail(library, scan, "gear");
+    assert.equal(detail?.kind, "invalid");
   });
 });

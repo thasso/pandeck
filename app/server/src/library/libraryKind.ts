@@ -6,7 +6,8 @@
  * is the same code for every kind; a kind supplies only the file a source
  * folder is recognized by, the rule its manifest must satisfy, the words its
  * messages and commit trailers use, and how its browser topic is refreshed.
- * Adding a kind should need a descriptor and a manifest rule and nothing else.
+ * Adding a kind should need a descriptor, a manifest rule and a create renderer
+ * and nothing else.
  */
 import type { LibraryStore } from "./libraryStore.ts";
 import type { EntryManifest, ManifestResult } from "./entryManifest.ts";
