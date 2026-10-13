@@ -97,7 +97,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
         {target && hosted ? (
           <HostedLink
             href={hosted.branchUrl}
-            title={`Open ${push.branch ?? target} on ${hosted.provider}`}
+            title={`Open the pushed branch on ${hosted.provider}`}
             className="font-mono text-foreground"
           >
             <span className="min-w-0 truncate">{target}</span>

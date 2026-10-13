@@ -89,6 +89,37 @@ test("first push sets upstream, then reports up-to-date", async () => {
   assert.equal(display.setUpstream, false);
 });
 
+test("records the branch a push published, not its source argument", async () => {
+  const { work } = makeRepoPair("publishedrepo");
+  sh(work, "checkout", "-b", "feature");
+  const cases: Array<[string | undefined, string | undefined]> = [
+    [undefined, "feature"],
+    ["HEAD", "feature"],
+    ["refs/heads/feature", "feature"],
+    ["feature:refs/heads/renamed", "renamed"],
+    ["feature:refs/tags/v1", undefined],
+  ];
+  for (const [branch, published] of cases) {
+    const result = await runPushWorkflow({
+      cwd: work,
+      remote: "origin",
+      ...(branch !== undefined ? { branch } : {}),
+    });
+    assert.notEqual(result.status, "failed", result.error ?? result.output);
+    assert.equal(result.publishedBranch, published, `push ${branch}`);
+  }
+
+  // A configured push mapping may send a source-only refspec elsewhere.
+  sh(work, "config", "remote.origin.push", "refs/heads/feature:refs/heads/out");
+  const mapped = await runPushWorkflow({
+    cwd: work,
+    remote: "origin",
+    branch: "feature",
+  });
+  assert.equal(mapped.status, "pushed", mapped.error ?? mapped.output);
+  assert.equal(mapped.publishedBranch, undefined);
+});
+
 test("first push with an explicit remote still sets upstream", async () => {
   const { work } = makeRepoPair("explicitremote");
   const first = await runPushWorkflow({ cwd: work, remote: "origin" });
@@ -187,6 +218,7 @@ test("managed first push of an upstream-less worktree branch sets tracking expli
   });
   assert.equal(first.status, "pushed", first.error ?? first.output);
   assert.equal(first.setUpstream, true);
+  assert.equal(first.publishedBranch, "feature");
   assert.equal(
     sh(feature, "config", "--get", "branch.feature.remote").trim(),
     "origin",

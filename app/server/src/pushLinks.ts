@@ -67,10 +67,9 @@ export async function resolvePushLinks(
     timeoutMs?: number;
   } = {},
 ): Promise<PushHostedLinks | undefined> {
-  const { repoRoot, remote, branch } = result;
-  // A refspec (`src:dst`) names no single branch to link to.
+  // Only a branch the push provably updated is linked; its source may differ.
+  const { repoRoot, remote, publishedBranch: branch } = result;
   if (result.status === "failed" || !repoRoot || !remote || !branch) return;
-  if (branch.includes(":")) return;
   try {
     const provider = await (options.provider ?? hostingProviderForRepo)(
       repoRoot,

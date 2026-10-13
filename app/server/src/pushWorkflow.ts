@@ -65,6 +65,12 @@ export interface PushWorkflowResult {
   /** Combined git stdout/stderr for display (git push reports progress on stderr). */
   output: string;
   error?: string;
+  /**
+   * The ONE remote branch a successful push updated, when its arguments prove
+   * it. `branch` is the push SOURCE (`HEAD`, a full ref, a refspec), which git
+   * may publish elsewhere.
+   */
+  publishedBranch?: string;
 }
 
 export interface ParsedPushArgs {
@@ -229,6 +235,44 @@ export function buildPushArgs(options: {
   return args;
 }
 
+/**
+ * The remote branch one pushed refspec updates, or undefined when that is not
+ * provable: a source-only refspec is remapped by a configured
+ * `remote.<name>.push`, and a deletion, wildcard, or non-branch destination
+ * names no single branch.
+ */
+async function publishedBranchOf(
+  repoRoot: string,
+  remote: string,
+  refspec: string,
+  currentBranch: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const spec = refspec.replace(/^\+/, "");
+  const colon = spec.indexOf(":");
+  if (colon < 0) {
+    const mapping = await gitOptional(
+      ["config", "--get-all", `remote.${remote}.push`],
+      repoRoot,
+      signal,
+    );
+    if (mapping.stdout.trim()) return undefined;
+  }
+  const source = colon < 0 ? spec : spec.slice(0, colon);
+  if (!source) return undefined;
+  const destination =
+    colon < 0
+      ? spec === "HEAD"
+        ? currentBranch
+        : spec
+      : spec.slice(colon + 1);
+  if (!destination || destination === "HEAD" || destination.includes("*"))
+    return undefined;
+  if (destination.startsWith("refs/heads/"))
+    return destination.slice("refs/heads/".length) || undefined;
+  return destination.startsWith("refs/") ? undefined : destination;
+}
+
 async function localHead(
   repoRoot: string,
   signal?: AbortSignal,
@@ -385,6 +429,13 @@ export async function runPushWorkflow(
       });
     }
     const upToDate = /everything up-to-date/i.test(output);
+    const publishedBranch = await publishedBranchOf(
+      repoRoot,
+      remote,
+      args[args.length - 1]!,
+      actualBranch,
+      options.signal,
+    );
     let setUpstream = pushSetsUpstream;
     let finalOutput = output;
     if (needsUpstream && options.expectedHead) {
@@ -447,6 +498,7 @@ export async function runPushWorkflow(
       branch,
       setUpstream,
       output: finalOutput || "Pushed.",
+      ...(publishedBranch !== undefined ? { publishedBranch } : {}),
     });
   } catch (err) {
     return base({ status: "failed", error: errorText(err) });

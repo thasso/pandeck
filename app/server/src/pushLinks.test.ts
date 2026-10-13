@@ -22,7 +22,8 @@ const pushed: PushWorkflowResult = {
   status: "pushed",
   repoRoot: "/repo",
   remote: "origin",
-  branch: "feature/retry",
+  branch: "HEAD",
+  publishedBranch: "feature/retry",
   forced: false,
   setUpstream: false,
   output: "",
@@ -99,7 +100,7 @@ describe("resolvePushLinks", () => {
     assert.equal(slow?.pullRequest, undefined);
   });
 
-  test("no provider, a failed push, or a refspec yields no links", async () => {
+  test("no provider, a failed push, or no proven branch yields no links", async () => {
     assert.equal(
       await resolvePushLinks(pushed, { provider: async () => null }),
       undefined,
@@ -122,11 +123,9 @@ describe("resolvePushLinks", () => {
       ),
       undefined,
     );
+    const { publishedBranch: _unproven, ...unpublished } = pushed;
     assert.equal(
-      await resolvePushLinks(
-        { ...pushed, branch: "HEAD:refs/heads/x" },
-        { provider: unreachable },
-      ),
+      await resolvePushLinks(unpublished, { provider: unreachable }),
       undefined,
     );
   });
