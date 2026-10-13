@@ -266,10 +266,13 @@ five reads are classified `sideEffects: "none"` and the five mutations
   never creates one, and refuses a file that is not valid UTF-8 rather than
   committing the replacement characters a lossy decode would invent. A leading
   byte-order mark survives: the edited text is re-encoded whole, so a decoder
-  that ate the BOM would change bytes no replacement matched. A write or edit
-  whose existing target is a hard link to `SKILL.md` is refused before a byte
-  changes: it is the manifest under another name, and rewriting it in place
-  would bypass the manifest rule and survive a rollback of the named path.
+  that ate the BOM would change bytes no replacement matched. No tool rewrites
+  an existing file in place through a hard link — a supporting file, or
+  `SKILL.md` itself — and the refusal comes before a byte changes: another name
+  (this skill's manifest, another skill's, any file outside the mutation) shares
+  the inode, so its bytes would change without its rule and survive a rollback
+  of the named path. Git never creates hard links, so this only refuses files
+  somebody linked by hand.
 - `skill_rename` — the folder move and the frontmatter name change in one
   commit.
 - `skill_delete` — the whole folder, resolved from the current declared name.

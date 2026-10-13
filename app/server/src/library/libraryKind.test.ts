@@ -427,15 +427,23 @@ describe("a non-skill library kind", () => {
     assert.ok(existsSync(path), "nothing was deleted");
   });
 
-  test("a supporting-file write or edit refuses a hard link to the manifest and leaves it untouched", async () => {
+  test("nothing is rewritten in place through a hard link, so no linked manifest changes", async () => {
     await createEntry(
       { name: "gear", source: widgetSource("gear") },
       meta,
       library,
     );
-    const manifest = join(root, "gear", "WIDGET.md");
-    linkSync(manifest, join(root, "gear", "alias.md"));
-    await git(["add", "gear/alias.md"], root);
+    await createEntry(
+      { name: "cog", source: widgetSource("cog") },
+      meta,
+      library,
+    );
+    const gear = join(root, "gear", "WIDGET.md");
+    const cog = join(root, "cog", "WIDGET.md");
+    // Its own manifest under another name, and ANOTHER entry's manifest.
+    linkSync(gear, join(root, "gear", "alias.md"));
+    linkSync(cog, join(root, "gear", "other.md"));
+    await git(["add", "gear"], root);
     await git(
       [
         "-c",
@@ -445,37 +453,61 @@ describe("a non-skill library kind", () => {
         "commit",
         "--quiet",
         "-m",
-        "Link alias",
+        "Link aliases",
       ],
       root,
     );
-    const before = readFileSync(manifest, "utf8");
-
-    const operations = [
-      {
-        op: "edit" as const,
-        path: "alias.md",
-        edits: [{ oldText: "Widget instructions.", newText: "x".repeat(600) }],
-      },
-      { op: "write" as const, path: "alias.md", content: "replaced\n" },
-    ];
-    for (const operation of operations) {
-      await assert.rejects(
-        manageEntryFiles(
-          { name: "gear", operations: [operation] },
-          { ...meta, reason: `Change alias (${operation.op})` },
-          library,
-        ),
-        /"alias\.md" is a hard link to WIDGET\.md/,
-      );
-      assert.equal(readFileSync(manifest, "utf8"), before);
+    const before = {
+      gear: readFileSync(gear, "utf8"),
+      cog: readFileSync(cog, "utf8"),
+    };
+    const clean = async () =>
       assert.equal(
         (await git(["status", "--porcelain"], root)).stdout.trim(),
         "",
       );
+
+    for (const path of ["alias.md", "other.md"]) {
+      for (const operation of [
+        {
+          op: "edit" as const,
+          path,
+          edits: [{ oldText: "Widget instructions.", newText: "Hijacked." }],
+        },
+        { op: "write" as const, path, content: widgetSource("cog") },
+      ]) {
+        await assert.rejects(
+          manageEntryFiles(
+            { name: "gear", operations: [operation] },
+            { ...meta, reason: `Change ${path} (${operation.op})` },
+            library,
+          ),
+          /has 2 hard links/,
+        );
+        assert.deepEqual(
+          { gear: readFileSync(gear, "utf8"), cog: readFileSync(cog, "utf8") },
+          before,
+        );
+        await clean();
+      }
     }
 
-    // An ordinary supporting file is still written and edited as before.
+    // The manifest itself is linked, so the manifest edit refuses too.
+    await assert.rejects(
+      editEntrySource(
+        {
+          name: "gear",
+          edits: [{ oldText: "Widget instructions.", newText: "Changed." }],
+        },
+        { ...meta, reason: "Edit linked gear" },
+        library,
+      ),
+      /has 2 hard links/,
+    );
+    assert.equal(readFileSync(gear, "utf8"), before.gear);
+    await clean();
+
+    // An ordinary supporting file is still written as before.
     await manageEntryFiles(
       {
         name: "gear",

@@ -118,6 +118,9 @@ export class SymlinkedEntrySourceError extends Error {}
  */
 export class IrregularEntrySourceError extends Error {}
 
+/** An existing file with more than one name; never rewritten in place. */
+class SharedInodeError extends Error {}
+
 export interface EntrySource {
   /** The open source folder, used for anchored supporting-file traversal. */
   folder: FileHandle;
@@ -347,12 +350,6 @@ export async function writeEntryChildFile(
    * refused, nothing happened here" and "the bytes are already gone".
    */
   onTruncated?: () => void,
-  /**
-   * Inspect an EXISTING file's identity before it is truncated, and throw to
-   * leave it untouched — the one point where "which inode is this?" can still
-   * stop a replacement.
-   */
-  refuseExisting?: (identity: { dev: number; ino: number }) => void,
 ): Promise<EntryPin | undefined> {
   assertPathComponent(name);
   const created = await open(
@@ -384,7 +381,7 @@ export async function writeEntryChildFile(
     if (!stats.isFile()) {
       throw new IrregularEntrySourceError(`"${name}" is not a regular file`);
     }
-    refuseExisting?.({ dev: stats.dev, ino: stats.ino });
+    assertSingleLink(name, stats.nlink);
     onTruncated?.();
     await handle.truncate(0);
     await handle.writeFile(content);
@@ -1326,6 +1323,7 @@ export async function withEntryChildForUpdate<T>(
     if (!stats.isFile()) {
       throw new IrregularEntrySourceError(`"${name}" is not a regular file`);
     }
+    assertSingleLink(name, stats.nlink);
     return await use({
       handle,
       size: stats.size,
@@ -1339,6 +1337,21 @@ export async function withEntryChildForUpdate<T>(
   } finally {
     await closeQuietly(handle);
   }
+}
+
+/**
+ * Nothing here rewrites a file IN PLACE through a hard link, for the same
+ * reason nothing writes through a symlink: another name — another entry's
+ * manifest, a file outside the mutation — shares the inode, so the bytes would
+ * change under a path this mutation never claimed and no rollback of its own
+ * paths could restore. Git never creates hard links, so a library file has one
+ * name unless somebody linked it by hand.
+ */
+function assertSingleLink(name: string, links: number): void {
+  if (links <= 1) return;
+  throw new SharedInodeError(
+    `"${name}" has ${links} hard links, so rewriting it in place would change every other name for the same bytes; remove the extra links by hand first`,
+  );
 }
 
 function assertPathComponent(name: string): void {

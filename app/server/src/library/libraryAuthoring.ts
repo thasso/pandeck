@@ -557,7 +557,6 @@ export async function manageEntryFiles(
                 // for a manifest edit.
                 const written = await editRelativeFile(
                   kind,
-                  identity.file,
                   folder,
                   operation.path,
                   operation.edits,
@@ -570,7 +569,6 @@ export async function manageEntryFiles(
               } else {
                 await writeRelativeFile(
                   kind,
-                  identity.file,
                   folder,
                   operation.path,
                   operation.bytes,
@@ -2308,7 +2306,6 @@ function changedSinceScan(
 
 async function writeRelativeFile(
   kind: LibraryKind,
-  manifest: { dev: number; ino: number },
   folder: FileHandle,
   path: string,
   content: Uint8Array,
@@ -2337,7 +2334,6 @@ async function writeRelativeFile(
         name,
         content,
         onTruncated,
-        (identity) => refuseManifestAlias(kind, identity, manifest, childPath),
       );
       if (created) onCreated(childPath, "file", created);
       return;
@@ -2375,7 +2371,6 @@ async function writeRelativeFile(
  */
 async function editRelativeFile(
   kind: LibraryKind,
-  manifest: { dev: number; ino: number },
   folder: FileHandle,
   path: string,
   edits: { oldText: string; newText: string }[],
@@ -2397,7 +2392,6 @@ async function editRelativeFile(
       });
     }
     return withEntryChildForUpdate(directory, name, async (file) => {
-      refuseManifestAlias(kind, file.identity, manifest, path);
       if (file.size > MAX_ENTRY_TEXT_FILE_BYTES) {
         throw new EntryValidationError(
           `"${fullPath}" is ${file.size} bytes, above the ${MAX_ENTRY_TEXT_FILE_BYTES}-byte limit for an edit through this tool; rewrite it with a write operation or edit it by hand in the library.`,
@@ -2431,24 +2425,6 @@ async function editRelativeFile(
       `Cannot edit "${fullPath}": it is not a plain existing file beneath the ${kind.noun} folder that this tool may rewrite (${errorText(error)}).`,
     );
   }
-}
-
-/**
- * A supporting-file write or edit must not reach the manifest through another
- * name: a hard link to it IS the manifest, and rewriting it in place would
- * change the manifest without the kind's rule or bound and beyond what a
- * rollback of the named path can restore.
- */
-function refuseManifestAlias(
-  kind: LibraryKind,
-  identity: { dev: number; ino: number },
-  manifest: { dev: number; ino: number },
-  path: string,
-): void {
-  if (identity.dev !== manifest.dev || identity.ino !== manifest.ino) return;
-  throw new EntryValidationError(
-    `"${path}" is a hard link to ${kind.manifestFile}, so it is the ${kind.noun} manifest under another name; change the manifest with the ${kind.noun} edit tool instead.`,
-  );
 }
 
 /** Exactly `size` bytes of an open file, or as many as it still holds. */
