@@ -168,13 +168,15 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
     });
   });
 
-  test("description edit waits for approval and PATCHes only the body", async () => {
+  test("description edit records the current one, waits for approval and PATCHes only the body", async () => {
     const sessionId = "fj-edit";
     globalThis.fetch = vi.fn(
       async (input: string | URL | Request, init?: RequestInit) => {
         expect(String(input)).toBe(
           "https://git.example.com/api/v1/repos/acme/app/pulls/42",
         );
+        if (init?.method === "GET")
+          return new Response(JSON.stringify({ body: null }), { status: 200 });
         expect(init?.method).toBe("PATCH");
         expect(JSON.parse(String(init?.body))).toEqual({
           body: "Revised **description**",
@@ -197,11 +199,12 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
       ctxFor(sessionId) as never,
     );
     expect(result.terminate).toBe(true);
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(latest(sessionId).body).toMatchObject({
       operation: "edit",
       pullNumber: 42,
       prBody: "Revised **description**",
+      previousPrBody: "",
     });
     const { card } = await resolveApproval(latest(sessionId).id, "approved");
     expect(card.status).toBe("executed");
@@ -256,6 +259,8 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
     expect(approvalsForSession(sessionId)).toHaveLength(0);
     globalThis.fetch = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) => {
+        // The current description is unreadable: the card goes without it.
+        if (init?.method === "GET") return new Response("{}", { status: 500 });
         expect(JSON.parse(String(init?.body))).toEqual({ body: "" });
         return new Response("{}", { status: 200 });
       },
@@ -264,8 +269,26 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
       { repo: "acme/app", number: 42, body: "" } as never,
       ctxFor(sessionId) as never,
     );
+    expect(latest(sessionId).body).not.toHaveProperty("previousPrBody");
     await resolveApproval(latest(sessionId).id, "approved");
     expect(latest(sessionId).status).toBe("executed");
+  });
+
+  test("a description edit stopped while reading the current one proposes nothing", async () => {
+    const sessionId = "fj-edit-aborted";
+    globalThis.fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        init?.signal?.throwIfAborted();
+        return new Response("{}", { status: 200 });
+      },
+    ) as unknown as typeof fetch;
+    await expect(
+      forgejoEditPullRequestTool.execute(
+        { repo: "acme/app", number: 42, body: "x" } as never,
+        { ...ctxFor(sessionId), signal: AbortSignal.abort() } as never,
+      ),
+    ).rejects.toThrow();
+    expect(approvalsForSession(sessionId)).toHaveLength(0);
   });
 
   test("a draft becomes the WIP title prefix, since Forgejo has no draft field", async () => {

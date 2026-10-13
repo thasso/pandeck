@@ -1388,6 +1388,42 @@ async function githubOpenPullRequests(
   }));
 }
 
+/**
+ * A pull request's current description, `""` when it has none, for an edit
+ * card to show what it replaces. Bounded like every provider read; a THROW
+ * means it could not be read, an abort included.
+ */
+export async function githubPullRequestDescription(
+  ref: Pick<RemoteRepoRef, "owner" | "repo">,
+  config: GithubApiConfig,
+  prNumber: number,
+  parentSignal?: AbortSignal,
+): Promise<string> {
+  const res = await githubRequest<{ body?: string | null }>(
+    config,
+    "GET",
+    `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/pulls/${prNumber}`,
+    { signal: requestSignal(parentSignal) },
+  );
+  return res.data?.body ?? "";
+}
+
+/** The Forgejo twin of {@link githubPullRequestDescription}. */
+export async function forgejoPullRequestDescription(
+  ref: Pick<RemoteRepoRef, "owner" | "repo">,
+  config: ForgejoApiConfig,
+  prNumber: number,
+  parentSignal?: AbortSignal,
+): Promise<string> {
+  const res = await forgejoRequest<{ body?: string | null }>(
+    config,
+    "GET",
+    `/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/pulls/${prNumber}`,
+    { signal: requestSignal(parentSignal) },
+  );
+  return res.data?.body ?? "";
+}
+
 /** Exported for tests: build the GitHub provider without resolving a remote. */
 export function githubProvider(
   ref: RemoteRepoRef,

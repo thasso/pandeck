@@ -58,6 +58,15 @@ import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { ConfluencePageApprovalBody } from "./ConfluencePageApprovalBody.tsx";
 import { JiraIssueApprovalBody } from "./JiraIssueApprovalBody.tsx";
+import { Markdown } from "./Markdown.tsx";
+import {
+  ClippedMarkdown,
+  DialogSection,
+  ProposalDialog,
+  ProposedMarkdown,
+  ReadFullButton,
+  type ProposalDecide,
+} from "./ProposalText.tsx";
 import { SettingsInputApprovalBody } from "./SettingsInputApprovalBody.tsx";
 import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -178,7 +187,25 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 
 const CLAMPED = "line-clamp-6 whitespace-pre-wrap";
 
-function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
+/** A replaced value beside its replacement, the way Jira field edits read. */
+function Replaced({ from, to }: { from: string | undefined; to: string }) {
+  if (from === undefined || from === to) return <>{to}</>;
+  return (
+    <>
+      <span className="text-muted-foreground line-through">{from || "—"}</span>{" "}
+      → {to}
+    </>
+  );
+}
+
+function PullRequestBody({
+  body,
+  onDecide,
+}: {
+  body: PullRequestApprovalBody;
+  onDecide: ProposalDecide;
+}) {
+  const target = `${body.repo}#${body.pullNumber}`;
   if (body.operation === "create") {
     return (
       <>
@@ -188,9 +215,13 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
           <span className="font-mono">{body.base}</span>
           {body.draft ? " · draft" : ""}
         </Fact>
-        {body.prBody && (
-          <p className="line-clamp-4 whitespace-pre-wrap">{body.prBody}</p>
-        )}
+        <ProposedMarkdown
+          text={body.prBody ?? ""}
+          title={body.title ?? `New pull request in ${body.repo}`}
+          readLabel="Read full description"
+          empty="No description."
+          onDecide={onDecide}
+        />
       </>
     );
   }
@@ -211,48 +242,20 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
           </Fact>
         )}
         {body.prBody !== undefined && (
-          <>
-            <p>Replace description on #{body.pullNumber} with:</p>
-            <p className={CLAMPED}>
-              {body.prBody === "" ? "(empty description)" : body.prBody}
-            </p>
-          </>
+          <ProposedMarkdown
+            text={body.prBody}
+            previous={body.previousPrBody}
+            title={`New description for ${target}`}
+            readLabel="Read full description"
+            empty="Clears the description."
+            onDecide={onDecide}
+          />
         )}
       </>
     );
   }
-  if (body.operation === "review") {
-    return (
-      <>
-        {body.reviewSummary && <p className={CLAMPED}>{body.reviewSummary}</p>}
-        {body.inlineComments && body.inlineComments.length > 0 && (
-          <>
-            <p>
-              {body.inlineComments.length} inline comment
-              {body.inlineComments.length === 1 ? "" : "s"}:
-            </p>
-            <ItemGroup className="gap-1">
-              {body.inlineComments.slice(0, 8).map((c, i) => (
-                <Item key={i} variant="muted" size="xs">
-                  <ItemContent>
-                    <ItemDescription className="font-mono">
-                      {c.path}:{c.line}
-                    </ItemDescription>
-                    <p className="text-foreground">{c.body}</p>
-                    {c.suggestion && (
-                      <pre className="overflow-x-auto rounded-md bg-background p-1.5 text-xs text-foreground">
-                        <code>{c.suggestion}</code>
-                      </pre>
-                    )}
-                  </ItemContent>
-                </Item>
-              ))}
-            </ItemGroup>
-          </>
-        )}
-      </>
-    );
-  }
+  if (body.operation === "review")
+    return <ReviewBody body={body} target={target} onDecide={onDecide} />;
   if (body.operation === "assign") {
     const teams = (slugs?: string[]) => (slugs ?? []).map((s) => `team:${s}`);
     const rows: { label: string; people: string[] }[] = [
@@ -281,13 +284,119 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
     );
   }
   return body.commentBody ? (
-    <p className={CLAMPED}>{body.commentBody}</p>
+    <ProposedMarkdown
+      text={body.commentBody}
+      title={`Comment on ${target}`}
+      readLabel="Read full comment"
+      onDecide={onDecide}
+    />
   ) : null;
 }
 
-function GithubIssueBody({ body }: { body: GithubIssueApprovalBody }) {
-  const rows: { label: string; value: string }[] = [
-    { label: "Title", value: body.title ?? "" },
+/** How many inline comments the card lists; its dialog has all of them. */
+const CARD_INLINE_COMMENTS = 8;
+
+function InlineComments({
+  comments,
+}: {
+  comments: NonNullable<PullRequestApprovalBody["inlineComments"]>;
+}) {
+  return (
+    <ItemGroup className="gap-1">
+      {comments.map((c, i) => (
+        <Item key={i} variant="muted" size="xs">
+          <ItemContent>
+            <ItemDescription className="font-mono">
+              {c.path}:{c.line}
+            </ItemDescription>
+            <div className="min-w-0 text-foreground">
+              <Markdown text={c.body} density="compact" />
+            </div>
+            {c.suggestion && (
+              <pre className="overflow-x-auto rounded-md bg-background p-1.5 text-xs text-foreground">
+                <code>{c.suggestion}</code>
+              </pre>
+            )}
+          </ItemContent>
+        </Item>
+      ))}
+    </ItemGroup>
+  );
+}
+
+/**
+ * A review is approved whole, summary and every inline comment, so "Read full
+ * review" opens all of it — the card lists only the first few comments.
+ */
+function ReviewBody({
+  body,
+  target,
+  onDecide,
+}: {
+  body: PullRequestApprovalBody;
+  target: string;
+  onDecide: ProposalDecide;
+}) {
+  const [open, setOpen] = useState(false);
+  const comments = body.inlineComments ?? [];
+  const hidden = comments.length - CARD_INLINE_COMMENTS;
+  const commentsLabel = `${comments.length} inline comment${comments.length === 1 ? "" : "s"}`;
+  return (
+    <div className="flex flex-col items-start gap-2">
+      {body.reviewSummary ? (
+        <ClippedMarkdown text={body.reviewSummary} />
+      ) : null}
+      {comments.length > 0 ? (
+        <div className="flex w-full flex-col gap-1">
+          <p>{commentsLabel}:</p>
+          <InlineComments comments={comments.slice(0, CARD_INLINE_COMMENTS)} />
+          {hidden > 0 ? <p>and {hidden} more</p> : null}
+        </div>
+      ) : null}
+      {body.reviewSummary || comments.length > 0 ? (
+        <ReadFullButton
+          label="Read full review"
+          onClick={() => setOpen(true)}
+        />
+      ) : null}
+      <ProposalDialog
+        open={open}
+        title={`Review of ${target}`}
+        onOpenChange={setOpen}
+        onDecide={onDecide}
+      >
+        {body.reviewSummary ? (
+          <DialogSection title="Summary">
+            <Markdown text={body.reviewSummary} />
+          </DialogSection>
+        ) : null}
+        {comments.length > 0 ? (
+          <DialogSection title={commentsLabel}>
+            <InlineComments comments={comments} />
+          </DialogSection>
+        ) : null}
+      </ProposalDialog>
+    </div>
+  );
+}
+
+function GithubIssueBody({
+  body,
+  onDecide,
+}: {
+  body: GithubIssueApprovalBody;
+  onDecide: ProposalDecide;
+}) {
+  const target = `${body.repo}#${body.number}`;
+  const rows: { label: string; value: ReactNode }[] = [
+    {
+      label: "Title",
+      value: body.title ? (
+        <Replaced from={body.previousTitle} to={body.title} />
+      ) : (
+        ""
+      ),
+    },
     {
       label: "State",
       value:
@@ -304,12 +413,6 @@ function GithubIssueBody({ body }: { body: GithubIssueApprovalBody }) {
     { label: "Assign", value: (body.addAssignees ?? []).join(", ") },
     { label: "Unassign", value: (body.removeAssignees ?? []).join(", ") },
   ].filter((row) => row.value);
-  const text =
-    body.operation === "comment"
-      ? body.commentBody
-      : body.issueBody === ""
-        ? "(empty description)"
-        : body.issueBody;
   return (
     <>
       {rows.map((row) => (
@@ -317,12 +420,31 @@ function GithubIssueBody({ body }: { body: GithubIssueApprovalBody }) {
           {row.value}
         </Fact>
       ))}
-      {text !== undefined && (
-        <>
-          {body.operation === "edit" && <p>Replace description with:</p>}
-          <p className={CLAMPED}>{text}</p>
-        </>
-      )}
+      {body.operation === "comment" && body.commentBody !== undefined ? (
+        <ProposedMarkdown
+          text={body.commentBody}
+          title={`Comment on ${target}`}
+          readLabel="Read full comment"
+          onDecide={onDecide}
+        />
+      ) : body.issueBody !== undefined ? (
+        <ProposedMarkdown
+          text={body.issueBody}
+          previous={body.previousIssueBody}
+          title={
+            body.operation === "create"
+              ? (body.title ?? `New issue in ${body.repo}`)
+              : `New description for ${target}`
+          }
+          readLabel="Read full description"
+          empty={
+            body.operation === "create"
+              ? "No description."
+              : "Clears the description."
+          }
+          onDecide={onDecide}
+        />
+      ) : null}
       {body.newLabels?.length ? (
         <Alert variant="warning" role="note">
           <AlertTriangle />
@@ -405,7 +527,13 @@ function GitTagBody({ body }: { body: GitTagApprovalBody }) {
   );
 }
 
-function ReleaseBody({ body }: { body: ForgejoReleaseApprovalBody }) {
+function ReleaseBody({
+  body,
+  onDecide,
+}: {
+  body: ForgejoReleaseApprovalBody;
+  onDecide: ProposalDecide;
+}) {
   return (
     <>
       <Fact label="Tag">
@@ -420,7 +548,14 @@ function ReleaseBody({ body }: { body: ForgejoReleaseApprovalBody }) {
         ) : null}
       </Fact>
       {body.targetSubject ? <p>{body.targetSubject}</p> : null}
-      {body.notes && <p className={CLAMPED}>{body.notes}</p>}
+      {body.notes && (
+        <ProposedMarkdown
+          text={body.notes}
+          title={`Release notes for ${body.name || body.tag}`}
+          readLabel="Read full notes"
+          onDecide={onDecide}
+        />
+      )}
     </>
   );
 }
@@ -859,11 +994,13 @@ function Body({
 }) {
   const b = approval.body;
   if (b.kind === "githubPullRequest" || b.kind === "forgejoPullRequest")
-    return <PullRequestBody body={b} />;
-  if (b.kind === "githubIssue") return <GithubIssueBody body={b} />;
+    return <PullRequestBody body={b} onDecide={onDecide} />;
+  if (b.kind === "githubIssue")
+    return <GithubIssueBody body={b} onDecide={onDecide} />;
   if (b.kind === "githubBranchDelete")
     return <GithubBranchDeleteBody body={b} />;
-  if (b.kind === "forgejoRelease") return <ReleaseBody body={b} />;
+  if (b.kind === "forgejoRelease")
+    return <ReleaseBody body={b} onDecide={onDecide} />;
   if (b.kind === "gitTag") return <GitTagBody body={b} />;
   if (b.kind === "sessionSpawn")
     return (
@@ -879,7 +1016,7 @@ function Body({
   if (b.kind === "jiraIssue")
     return <JiraIssueApprovalBody body={b} onDecide={onDecide} />;
   if (b.kind === "confluencePage")
-    return <ConfluencePageApprovalBody body={b} />;
+    return <ConfluencePageApprovalBody body={b} onDecide={onDecide} />;
   if (b.kind === "tempoWorklog") {
     return (
       <ul className="flex flex-col gap-1">

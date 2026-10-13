@@ -11,12 +11,14 @@ import { getGithubToolConfig } from "../../githubSettings.ts";
 import {
   githubPaginate,
   githubRequest,
+  readIssueText,
   resolveAuthenticatedLogin,
   type GithubApiConfig,
 } from "../../githubClient.ts";
 import {
   approvalCardReference,
   createApproval,
+  proposalSnapshot,
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
 import { invalidateGithubPullRequestWrite } from "../../pullRequestInventorySync.ts";
@@ -290,6 +292,16 @@ export const githubMutateIssueTool = defineAgentTool<MutateIssueParams>({
         const removeAssignees = cleanLogins(rawPeople.removeAssignees);
         if (addAssignees.length) body.addAssignees = addAssignees;
         if (removeAssignees.length) body.removeAssignees = removeAssignees;
+        if (body.title !== undefined || body.issueBody !== undefined) {
+          const current = await proposalSnapshot(
+            () => readIssueText(config, { owner, repo }, number!, ctx.signal),
+            ctx.signal,
+          );
+          if (current && body.title !== undefined)
+            body.previousTitle = current.title;
+          if (current && body.issueBody !== undefined)
+            body.previousIssueBody = current.body;
+        }
       }
     }
     if (addLabels.length) {

@@ -4,7 +4,8 @@
  *   `confluence_mutate_page` proposal creates, edits, comments on or deletes,
  *   and the attachments it uploads or deletes.
  *   The Markdown body renders as Confluence will show it (the server converts
- *   the same source to ADF on execution), and a `replace` that would destroy
+ *   the same source to ADF on execution), with a "Read full" dialog carrying
+ *   the card's Approve/Reject, and a `replace` that would destroy
  *   macros, layouts or images says so before the user approves it.
  * @payload `ConfluencePageApprovalBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "confluencePage"`.
@@ -15,7 +16,8 @@ import type {
   ConfluencePageMutationItemDisplay,
 } from "@assistant/shared";
 import { formatFileSize } from "../lib/servedFiles.ts";
-import { ClippedMarkdown, MutationOutcome } from "./JiraIssueApprovalBody.tsx";
+import { MutationOutcome } from "./JiraIssueApprovalBody.tsx";
+import { ProposedMarkdown, type ProposalDecide } from "./ProposalText.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 
@@ -23,8 +25,10 @@ type Item = ConfluencePageMutationItemDisplay;
 
 export function ConfluencePageApprovalBody({
   body,
+  onDecide,
 }: {
   body: ConfluencePageApprovalBodyData;
+  onDecide: ProposalDecide;
 }) {
   return (
     <ul className="flex flex-col gap-3">
@@ -33,13 +37,34 @@ export function ConfluencePageApprovalBody({
           <Header item={item} />
           <LossWarning item={item} />
           <Attachment item={item} />
-          {item.body ? <ClippedMarkdown text={item.body} /> : null}
+          {item.body ? (
+            <ProposedMarkdown
+              text={item.body}
+              title={item.newTitle || item.title || "Confluence page"}
+              readLabel={readLabel(item)}
+              context={
+                <>
+                  <Header item={item} />
+                  <LossWarning item={item} />
+                </>
+              }
+              onDecide={onDecide}
+            />
+          ) : null}
           <Labels item={item} />
           <Outcome item={item} />
         </li>
       ))}
     </ul>
   );
+}
+
+/** What the dialog opens: a whole page only where the body becomes one. */
+function readLabel(item: Item): string {
+  if (item.operation === "comment") return "Read full comment";
+  if (item.operation === "create" || item.placement === "replace")
+    return "Read full page";
+  return "Read full text";
 }
 
 /** What the write does, named the way the page will read afterwards. */

@@ -26,10 +26,11 @@ function render(node: ReactNode): HTMLDivElement {
   return container;
 }
 
+/** The card's own buttons; the body's "Read full …" opens a reading view. */
 function buttonLabels(): string[] {
-  return [...container!.querySelectorAll("button")].map((element) =>
-    (element.textContent ?? "").trim(),
-  );
+  return [...container!.querySelectorAll("button")]
+    .map((element) => (element.textContent ?? "").trim())
+    .filter((label) => !label.startsWith("Read full"));
 }
 
 function click(label: string): void {

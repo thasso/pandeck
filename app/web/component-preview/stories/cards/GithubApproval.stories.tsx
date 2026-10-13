@@ -19,6 +19,39 @@ const card = (
 
 /** Every GitHub issue and branch card shape, pending and resolved. */
 const cards: ApprovalCardData[] = [
+  card("appr_pr_edit", {
+    kind: "githubPullRequest",
+    status: "pending",
+    title: "Edit pull request description",
+    summary: "acme/player#362",
+    body: {
+      kind: "githubPullRequest",
+      operation: "edit",
+      repo: "acme/player",
+      pullNumber: 362,
+      previousPrBody:
+        "Jira: PLAY-1485\n\nExtract 2.1.5 bump.\n\n## What changes\n\n- Bumps the extractor.",
+      prBody:
+        "Jira: [PLAY-1485](https://acme.atlassian.net/browse/PLAY-1485)\n\nExtract 2.1.6 adds four opt-in extraction modes and fixes which aligned input the **RM1** output describes. Without the new options, the only output change is that fix.\n\n## What changes\n\n- Bumps the extractor to `2.1.6`.\n- Adds the four modes behind flags.\n\n## Testing\n\n1. Run the RM1 fixtures.\n2. Compare against the 2.1.5 baseline.",
+    },
+  }),
+  card("appr_issue_edit_body", {
+    kind: "githubIssue",
+    status: "pending",
+    title: "Edit acme/player#418",
+    summary: "retitle · description",
+    body: {
+      kind: "githubIssue",
+      operation: "edit",
+      repo: "acme/player",
+      number: 418,
+      previousTitle: "Seek bar jumps",
+      title: "Seek bar jumps back after a DRM license renewal",
+      previousIssueBody: "Seek bar jumps sometimes.",
+      issueBody:
+        "After the license renews mid-playback the seek bar snaps to the segment start.\n\n**Steps**\n1. Play a Widevine stream with a 60s license\n2. Seek after renewal",
+    },
+  }),
   card("appr_issue_create", {
     kind: "githubIssue",
     status: "pending",

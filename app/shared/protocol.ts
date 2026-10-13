@@ -3224,6 +3224,12 @@ export interface GithubPullRequestApprovalBody {
   head?: string;
   base?: string;
   prBody?: string;
+  /**
+   * edit: the description `prBody` replaces, read when the card was proposed
+   * so the card can show the change. Absent when that read failed; `""` when
+   * the pull request had no description.
+   */
+  previousPrBody?: string;
   draft?: boolean;
   pullNumber?: number;
   reviewEvent?: GithubPrReviewEvent;
@@ -3267,6 +3273,13 @@ export interface GithubIssueApprovalBody {
   title?: string;
   /** create: the description; edit: the complete replacement description. */
   issueBody?: string;
+  /**
+   * edit: what `title` and `issueBody` replace, read when the card was
+   * proposed so the card can show the change. Each is set only beside the
+   * field it precedes, and absent when that read failed.
+   */
+  previousTitle?: string;
+  previousIssueBody?: string;
   state?: "open" | "closed";
   stateReason?: "completed" | "not_planned";
   /** create only. */
@@ -3328,6 +3341,8 @@ export interface ForgejoPullRequestApprovalBody {
   head?: string;
   base?: string;
   prBody?: string;
+  /** edit: as {@link GithubPullRequestApprovalBody.previousPrBody}. */
+  previousPrBody?: string;
   /**
    * Forgejo's create option has no `draft` field — a draft is the `WIP: ` title
    * prefix, applied when the proposal executes.

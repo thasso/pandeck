@@ -209,6 +209,53 @@ describe("github_mutate_issue", () => {
     });
   });
 
+  test("an edit records the title and description it replaces, and only those", async () => {
+    const sessionId = "issue-edit-previous";
+    mockGithub({
+      "GET /repos/acme/app/issues/8": () =>
+        json({ title: "Old title", body: null }),
+    });
+    await githubMutateIssueTool.execute(
+      {
+        repo: "acme/app",
+        operation: "edit",
+        number: 8,
+        body: "New **description**",
+      },
+      ctxFor(sessionId) as never,
+    );
+    expect(bodyOf(sessionId)).toMatchObject({
+      issueBody: "New **description**",
+      previousIssueBody: "",
+    });
+    expect(bodyOf(sessionId)).not.toHaveProperty("previousTitle");
+
+    // Unreadable: the card is still proposed, without the comparison.
+    mockGithub({
+      "GET /repos/acme/app/issues/8": () => json({ message: "boom" }, 502),
+    });
+    await githubMutateIssueTool.execute(
+      { repo: "acme/app", operation: "edit", number: 8, title: "Renamed" },
+      ctxFor(sessionId) as never,
+    );
+    expect(bodyOf(sessionId).title).toBe("Renamed");
+    expect(bodyOf(sessionId)).not.toHaveProperty("previousTitle");
+  });
+
+  test("an edit stopped while reading the current text proposes nothing", async () => {
+    const sessionId = "issue-edit-aborted";
+    mockGithub({
+      "GET /repos/acme/app/issues/8": () => json({ title: "Old", body: "" }),
+    });
+    await expect(
+      githubMutateIssueTool.execute(
+        { repo: "acme/app", operation: "edit", number: 8, title: "New" },
+        { ...ctxFor(sessionId), signal: AbortSignal.abort() } as never,
+      ),
+    ).rejects.toThrow();
+    expect(approvalsForSession(sessionId)).toHaveLength(0);
+  });
+
   test("a 2xx that silently ignored an assignment fails the card and names what landed", async () => {
     const sessionId = "issue-ignored-assign";
     mockGithub({

@@ -23,13 +23,17 @@
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { getForgejoToolConfig } from "../../forgejoSettings.ts";
 import { forgejoRequest } from "../../forgejoClient.ts";
-import { forgejoProvider } from "../../gitHosting.ts";
+import {
+  forgejoProvider,
+  forgejoPullRequestDescription,
+} from "../../gitHosting.ts";
 import { invalidateForgejoPullRequestWrite } from "../../pullRequestInventorySync.ts";
 import { resolveForgejoRepo } from "./forgejoTools.ts";
 import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
 import {
   approvalCardReference,
   createApproval,
+  proposalSnapshot,
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
 import type {
@@ -176,17 +180,32 @@ export const forgejoEditPullRequestTool =
       },
     },
     async execute(params, ctx) {
-      getForgejoToolConfig();
+      const config = getForgejoToolConfig();
       const { owner, repo } = resolveForgejoRepo(params.repo);
       if (!Number.isInteger(params.number) || params.number < 1)
         throw new Error("number must be a valid pull-request number.");
       const edit = pullRequestEdit(params);
+      // A base-only retarget replaces no text, so there is nothing to compare.
+      const previousPrBody =
+        edit.fields.prBody === undefined
+          ? undefined
+          : await proposalSnapshot(
+              () =>
+                forgejoPullRequestDescription(
+                  { owner, repo },
+                  config,
+                  params.number,
+                  ctx.signal,
+                ),
+              ctx.signal,
+            );
       const body: ForgejoPullRequestApprovalBody = {
         kind: "forgejoPullRequest",
         operation: "edit",
         repo: `${owner}/${repo}`,
         pullNumber: params.number,
         ...edit.fields,
+        ...(previousPrBody !== undefined ? { previousPrBody } : {}),
       };
       const card = createApproval({
         sessionId: ctx.session.sessionId,

@@ -16,10 +16,14 @@ import {
 import {
   approvalCardReference,
   createApproval,
+  proposalSnapshot,
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
 import { invalidateGithubPullRequestWrite } from "../../pullRequestInventorySync.ts";
-import { githubProvider } from "../../gitHosting.ts";
+import {
+  githubProvider,
+  githubPullRequestDescription,
+} from "../../gitHosting.ts";
 import { resolveRepo } from "./githubTools.ts";
 import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
 import type {
@@ -169,17 +173,32 @@ export const githubEditPullRequestTool = defineAgentTool<EditPullRequestParams>(
       },
     },
     async execute(params, ctx) {
-      getGithubToolConfig();
+      const config = getGithubToolConfig();
       const { owner, repo } = resolveRepo(params.repo);
       if (!Number.isInteger(params.number) || params.number < 1)
         throw new Error("number must be a valid pull-request number.");
       const edit = pullRequestEdit(params);
+      // A base-only retarget replaces no text, so there is nothing to compare.
+      const previousPrBody =
+        edit.fields.prBody === undefined
+          ? undefined
+          : await proposalSnapshot(
+              () =>
+                githubPullRequestDescription(
+                  { owner, repo },
+                  config,
+                  params.number,
+                  ctx.signal,
+                ),
+              ctx.signal,
+            );
       const body: GithubPullRequestApprovalBody = {
         kind: "githubPullRequest",
         operation: "edit",
         repo: `${owner}/${repo}`,
         pullNumber: params.number,
         ...edit.fields,
+        ...(previousPrBody !== undefined ? { previousPrBody } : {}),
       };
       const card = createApproval({
         sessionId: ctx.session.sessionId,

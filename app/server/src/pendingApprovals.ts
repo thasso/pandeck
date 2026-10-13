@@ -325,6 +325,26 @@ export function approvalCardReference(card: ApprovalCard): string {
 }
 
 /**
+ * A read that only enriches what a proposal SHOWS (the text an edit replaces):
+ * any failure leaves it out, since the approved write reports for itself
+ * whether its target exists. Cancellation is not a failure: it throws, so a
+ * stopped tool call never goes on to create a card.
+ */
+export async function proposalSnapshot<T>(
+  read: () => Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T | undefined> {
+  let value: T | undefined;
+  try {
+    value = await read();
+  } catch {
+    value = undefined;
+  }
+  signal?.throwIfAborted();
+  return value;
+}
+
+/**
  * Persist a PENDING approval and return its card. Broadcasts the new card +
  * attention — unless the session's grants already cover every operation it
  * performs: that card blocks nobody and is approved on the session's next idle

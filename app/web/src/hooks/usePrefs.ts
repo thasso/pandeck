@@ -233,7 +233,12 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
   };
 }
 
-function load(): Prefs {
+/**
+ * The stored prefs as of now, for a surface outside the tree `usePrefs` feeds
+ * (a dialog reading the diff settings once). Every change is written back
+ * immediately, so this is current; it does not follow later changes.
+ */
+export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaults;
@@ -251,7 +256,7 @@ function applyTextScale(scale: TextScale) {
 }
 
 export function usePrefs() {
-  const [prefs, setPrefs] = useState<Prefs>(load);
+  const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
 
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(prefs));
