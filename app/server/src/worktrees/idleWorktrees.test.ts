@@ -81,25 +81,12 @@ test("idleWorktreeKind says what retiring would lose, and never calls unknown cl
   assert.deepEqual(idleWorktreeKind(status({ head: null, merged: true })), {
     kind: "unknown",
   });
-  assert.deepEqual(idleWorktreeKind(status({ head: null }), true), {
-    kind: "unknown",
-  });
-  // Merged upstream by squash, local base not fetched yet: still delivered.
-  assert.deepEqual(idleWorktreeKind(status({ ahead: 4 }), true), {
-    kind: "delivered",
-  });
-  // Commits made after the merge and not pushed are not hidden by it.
+  // A merged pull request is no evidence about local commits: a squash merge
+  // the local base has not caught up with, and commits pushed AFTER the merge,
+  // look the same. Only local containment says delivered.
   assert.deepEqual(
-    idleWorktreeKind(
-      status({ ahead: 2, upstream: { ahead: 1, behind: 0 } }),
-      true,
-    ),
-    { kind: "unmerged", ahead: 2, pushed: false },
-  );
-  // A dirty tree is uncommitted whatever its pull request did.
-  assert.equal(
-    idleWorktreeKind(status({ dirty: true, filesChanged: 1 }), true).kind,
-    "uncommitted",
+    idleWorktreeKind(status({ ahead: 2, upstream: { ahead: 0, behind: 0 } })),
+    { kind: "unmerged", ahead: 2, pushed: true },
   );
   assert.deepEqual(idleWorktreeKind(status({ ahead: 3, merged: true })), {
     kind: "delivered",

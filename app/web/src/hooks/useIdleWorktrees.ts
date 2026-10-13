@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import type { IdleWorktree, IdleWorktreesResponse } from "@assistant/shared";
 import { useFetchState } from "./useFetchState.ts";
 import { fetchIdleWorktrees } from "../lib/worktrees.ts";
-import { mapData, type LoadState } from "../lib/loadState.ts";
+import { dataOf, mapData, type LoadState } from "../lib/loadState.ts";
 
 /**
  * While the Pull Requests section is on screen, as its inventory polls. Each
@@ -40,9 +40,16 @@ export function useIdleWorktrees(active: boolean): IdleWorktrees {
     () => mapData(state, (response) => response.worktrees),
     [state],
   );
-  const fetchedAt =
-    state.status === "ready" || state.status === "refreshing"
-      ? state.data.fetchedAt
-      : undefined;
-  return { state: worktrees, fetchedAt, reload };
+  return { state: worktrees, fetchedAt: idleClock(state), reload };
+}
+
+/**
+ * When the answer on screen was built — kept through a failed refresh, which
+ * keeps its rows too: dropping the clock there would relabel every retained
+ * row "idle 0 min" and empty the bulk set's age rule.
+ */
+export function idleClock(
+  state: LoadState<IdleWorktreesResponse>,
+): number | undefined {
+  return dataOf(state)?.fetchedAt;
 }

@@ -6755,6 +6755,7 @@ function AppContent() {
         worktrees={state.worktrees}
         worktreeStatuses={state.worktreeStatuses}
         worktreesError={state.worktreeListError}
+        worktreesFresh={state.worktreesFresh}
         onReloadWorktrees={actions.listWorktrees}
         peerPromptPeers={displaySession?.peerPromptPeers}
         stagedRefs={stagedContextRefs}

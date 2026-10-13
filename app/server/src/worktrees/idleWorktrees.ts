@@ -60,14 +60,15 @@ const defaultOperations: IdleWorktreeOperations = {
 
 /**
  * Classify what retiring would lose. Status failures are `unknown`, never
- * clean. A clean tree whose pull request MERGED is `delivered` even when the
- * local base has not caught up — a squash merge lands upstream, and this read
- * never fetches — unless its upstream holds commits it has not pushed. Retire refreshes the base and verifies containment before it
- * removes anything, so a wrong guess here is refused there, not lost.
+ * clean. Only LOCAL containment calls a branch delivered: a merged pull request
+ * does not, because a squash merge the local base has not caught up with and
+ * commits made (and even pushed) after the merge look the same from here. Such
+ * a branch reads `unmerged`, which the row words as the merged pull request it
+ * is, and it is never taken in bulk; retiring it one at a time refreshes the
+ * base and verifies containment first.
  */
 export function idleWorktreeKind(
   status: WorktreeGitStatus,
-  pullRequestMerged = false,
 ): Pick<IdleWorktree, "kind" | "ahead" | "pushed" | "changedFiles"> {
   // No HEAD means git never read this checkout — the status seam absorbs a
   // failed `git status` into zeros — so its clean, level counts are not an
@@ -78,10 +79,6 @@ export function idleWorktreeKind(
       kind: "uncommitted",
       changedFiles: status.filesChanged + status.untracked,
     };
-  // Unless the upstream shows commits made after it: those are work the
-  // shortcut would hide.
-  if (pullRequestMerged && !(status.upstream && status.upstream.ahead > 0))
-    return { kind: "delivered" };
   if (status.baseUnresolved) return { kind: "unknown" };
   if (status.merged || status.ahead === 0) return { kind: "delivered" };
   return {
@@ -149,6 +146,9 @@ let generation = 0;
 export function invalidateIdleWorktrees(): void {
   generation += 1;
   cached = undefined;
+  // A computation that started before the change must not answer the reload
+  // that follows it; the generation guard already keeps it out of the cache.
+  inflight = undefined;
 }
 
 /**
@@ -201,13 +201,7 @@ export async function computeIdleWorktrees(
       if (!operations.exists(row.path))
         return { ...base, kind: "missing" as IdleWorktreeKind };
       try {
-        return {
-          ...base,
-          ...idleWorktreeKind(
-            await operations.status(row),
-            record.pullRequest?.status === "merged",
-          ),
-        };
+        return { ...base, ...idleWorktreeKind(await operations.status(row)) };
       } catch (err) {
         console.warn(
           `[worktrees] idle status for ${row.id} failed:`,

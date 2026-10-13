@@ -111,9 +111,11 @@ A spawned worktree is IDLE when:
   between steps, and the run still needs its workspace.
 
 Each is classified by its live git status into what retiring it would lose:
-`delivered` (clean, and nothing outside the base branch — or its pull request
-merged with nothing unpushed after it, since a squash merge lands upstream and
-this read never fetches; the retire path verifies against the refreshed base),
+`delivered` (clean, and nothing outside the LOCAL base branch — a merged pull
+request alone is no evidence: a squash merge the local base has not caught up
+with and commits pushed after the merge look the same, so such a branch reads
+`unmerged`, worded "Pull request merged · N commits not in local base", and is
+never taken in bulk; retiring it one at a time refreshes the base and verifies),
 `unmerged` (commits the base does not contain, and whether they are pushed),
 `uncommitted` (a dirty tree), `missing` (the folder is gone) and `unknown` (git
 could not answer — a status with no HEAD is a read that failed, whatever its
@@ -123,7 +125,8 @@ the Pull Requests section is on screen (`hooks/useIdleWorktrees.ts`, beside the
 inventory's poll).
 
 The read is single-flight and cached for 30 seconds, so every open tab shares
-one computation; any retirement drops the cache.
+one computation; any retirement drops the cache and the computation in flight,
+so the reload after a retirement never answers from before it.
 
 The browser drops a worktree a pull-request row already covers, filters the rest
 by the browser's search, orders them safest first and most idle first

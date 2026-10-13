@@ -112,9 +112,11 @@ describe("idleWorktreeMatches", () => {
 describe("idleWorktreeLabel", () => {
   it("states what retiring would lose, and never calls unknown clean", () => {
     expect(idleWorktreeLabel(idle("a", "delivered"))).toBe("Nothing unmerged");
-    const merged = idle("m", "delivered");
+    const merged = idle("m", "unmerged", 0, { ahead: 2, pushed: true });
     merged.worktree.pullRequest = { status: "merged", number: 7 };
-    expect(idleWorktreeLabel(merged)).toBe("Pull request merged");
+    expect(idleWorktreeLabel(merged)).toBe(
+      "Pull request merged · 2 commits not in local base",
+    );
     expect(idleWorktreeLabel(idle("a", "unknown"))).toBe("State unknown");
     expect(idleWorktreeLabel(idle("a", "missing"))).toBe("Checkout missing");
     expect(

@@ -344,6 +344,25 @@ describe("SessionInspector spawn-tree worktrees", () => {
     expect(html).not.toContain('aria-label="Loading worktrees"');
   });
 
+  it("marks a refresh over retained rows", () => {
+    const html = render({
+      ...base,
+      sessions: [peer],
+      worktrees: [handed],
+      worktreesFresh: false,
+    });
+    expect(html).toContain("handed-branch");
+    expect(html).toContain("Refreshing worktrees");
+    expect(
+      render({
+        ...base,
+        sessions: [peer],
+        worktrees: [handed],
+        worktreesFresh: true,
+      }),
+    ).not.toContain("Refreshing worktrees");
+  });
+
   it("keeps retained rows and states a failed refresh beside them", () => {
     const html = render({
       ...base,

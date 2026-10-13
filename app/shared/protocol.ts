@@ -5407,11 +5407,11 @@ export interface WorktreeHostingListResponse {
 /**
  * What is left in an idle worktree, by its live git state
  * (`docs/worktree-ownership.md`):
- * - `delivered` — clean, and every commit is in the base branch (or there are
- *   none), or its pull request merged with nothing unpushed after it: no
- *   COMMIT is lost by retiring it, which the retire path still verifies
- *   against the refreshed base. Files git ignores (`.env`, local databases,
- *   caches) are removed with the checkout all the same.
+ * - `delivered` — clean, and every commit is in the LOCAL base branch (or there
+ *   are none): no COMMIT is lost by retiring it, which the retire path still
+ *   verifies against the refreshed base. Files git ignores (`.env`, local
+ *   databases, caches) are removed with the checkout all the same. A merged
+ *   pull request alone never makes a branch delivered.
  * - `unmerged` — clean, with commits the base branch does not contain.
  * - `uncommitted` — the working tree has changes nobody committed.
  * - `missing` — the checkout's folder is gone.

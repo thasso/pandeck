@@ -81,13 +81,16 @@ export function idleWorktreeMatches(
 export function idleWorktreeLabel(item: IdleWorktree): string {
   switch (item.kind) {
     case "delivered":
-      return item.worktree.pullRequest?.status === "merged"
-        ? "Pull request merged"
-        : "Nothing unmerged";
+      return "Nothing unmerged";
     case "missing":
       return "Checkout missing";
     case "unmerged": {
       const count = item.ahead ?? 0;
+      // Merged upstream, yet not in the LOCAL base: a squash merge it has not
+      // caught up with, or commits made after the merge — retiring it one at
+      // a time refreshes the base and tells the two apart.
+      if (item.worktree.pullRequest?.status === "merged")
+        return `Pull request merged · ${count} commit${count === 1 ? "" : "s"} not in local base`;
       const commits = `${count} unmerged commit${count === 1 ? "" : "s"}`;
       return item.pushed ? `${commits} · pushed` : `${commits} · not pushed`;
     }

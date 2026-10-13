@@ -70,7 +70,13 @@ import {
   PropertyList,
   PropertyText,
 } from "./common/PropertyList.tsx";
-import { EmptyBox, ErrorNote, Skeleton, Spinner } from "./common/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+  Spinner,
+} from "./common/load.tsx";
 import {
   dataOf,
   errorOf,
@@ -652,20 +658,23 @@ const TREE_WORKTREES_LABEL = "Worktrees from this session";
  * tree owns: for a session with a peer — a tree there is evidence of — it
  * RESERVES the group (R1/R4) or states the failure with its retry, instead of
  * appearing late. A session with no such evidence reserves nothing, so the
- * ordinary conversation's panel does not flash a placeholder. A failed refresh
- * keeps the retained rows and states the failure beside them (R2).
+ * ordinary conversation's panel does not flash a placeholder. A refresh, or a
+ * failed one, keeps the retained rows and says so beside them (R2).
  */
 function withTreeWorktreesLoadState(
   groups: InspectorRelationGroup[],
   state: {
     awaited: boolean;
     answered: boolean;
+    refreshing: boolean;
     error: string | null;
     onRetry?: () => void;
   },
 ): InspectorRelationGroup[] {
   const note = state.error ? (
     <ErrorNote message={state.error} onRetry={state.onRetry} />
+  ) : state.refreshing ? (
+    <RefreshIndicator label="Refreshing worktrees" />
   ) : null;
   if (!state.answered) {
     if (!state.awaited) return groups;
@@ -1299,6 +1308,7 @@ export function SessionInspector({
   worktrees,
   worktreeStatuses,
   worktreesError,
+  worktreesFresh,
   onReloadWorktrees,
   peerPromptPeers,
   stagedRefs = [],
@@ -1332,6 +1342,11 @@ export function SessionInspector({
   worktreeStatuses?: Record<string, WorktreeGitStatus> | undefined;
   /** The worktree list's last read failed (`worktreeListError`). */
   worktreesError?: string | null | undefined;
+  /**
+   * The held list answered in THIS socket episode (`worktreesFresh`); a held
+   * list that has not is being re-read, which the group states (R2).
+   */
+  worktreesFresh?: boolean | undefined;
   /** Retry that read, from the group's inline failure. */
   onReloadWorktrees?: (() => void) | undefined;
   /**
@@ -1413,6 +1428,7 @@ export function SessionInspector({
                 (session) => session.spawnedBySessionId === sessionId,
               ),
             answered: worktrees != null,
+            refreshing: worktrees != null && worktreesFresh === false,
             error: worktreesError ?? null,
             ...(onReloadWorktrees ? { onRetry: onReloadWorktrees } : {}),
           },
