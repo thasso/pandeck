@@ -48,6 +48,7 @@ import type {
   TimelineRangeResult,
 } from "../log/store.ts";
 import {
+  InactiveSessionError,
   RunFailedError,
   SessionBusyError,
   SteerNotTakenError,
@@ -305,6 +306,14 @@ export class LiveRuntimeSession {
   private config: SessionConfig = {};
   private availableModels: SessionConfigModel[] | undefined;
   private disposed = false;
+  /**
+   * The session is being torn down (deleted, or its harness released): no
+   * new prompt is taken, the idle edge offers nothing, and a prompt still
+   * waiting on the provider stops waiting — its source is going away.
+   */
+  private tornDown = false;
+  /** Provider waits a teardown ends, each removed as its own wait settles. */
+  private readonly teardownWaiters = new Set<() => void>();
   /**
    * The log cursor when the CURRENT (or most recent) turn began — the boundary a
    * post-turn provider scan is reconciled against, so only that turn is bound and
@@ -605,7 +614,7 @@ export class LiveRuntimeSession {
     if (running) this.progress.start();
     // A running→idle transition is the browser-independent trigger to drain any
     // peer prompts queued behind this turn, whatever drove it.
-    if (next === "idle") {
+    if (next === "idle" && !this.tornDown) {
       try {
         idleHook?.(this.sessionId);
       } catch {
@@ -640,6 +649,7 @@ export class LiveRuntimeSession {
       peerMessageIds: _peerMessageIds,
       ...adapterOpts
     } = options;
+    if (this.tornDown) throw new InactiveSessionError(this.sessionId);
     if (clientRequestId && this.handledRequestIds.has(clientRequestId)) return; // dup (precedes busy gate)
     const steering =
       this.runState === "running" &&
@@ -729,12 +739,21 @@ export class LiveRuntimeSession {
       };
       let result: AgentRunResult;
       try {
-        result = await this.adapter.prompt(modelText, {
-          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-          ...adapterOpts,
-          steer: true,
-          onSteerAccepted: record,
-        });
+        // A teardown ends the wait: whatever became of the message is no
+        // longer known, so it reads as possibly read and is never re-sent.
+        result = await this.untilTeardown(
+          this.adapter.prompt(modelText, {
+            ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+            ...adapterOpts,
+            steer: true,
+            onSteerAccepted: record,
+          }),
+          {
+            stopReason: "end",
+            steerWithdrawn: true,
+            steerUncertain: true,
+          },
+        );
       } catch (error) {
         if (!recorded) releaseKey();
         throw error;
@@ -782,11 +801,15 @@ export class LiveRuntimeSession {
       // this call rejects (or reports an error) when it did not, and the durable
       // entry then stays out of the turn's prompt set so no post-turn scan can
       // pair it with a native prompt that belongs to an earlier turn.
-      const result = await this.adapter.prompt(modelText, {
-        ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-        ...adapterOpts,
-        steer: true,
-      });
+      // Already in the log; a teardown closed its run, which says how it went.
+      const result = await this.untilTeardown(
+        this.adapter.prompt(modelText, {
+          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+          ...adapterOpts,
+          steer: true,
+        }),
+        { stopReason: "end" },
+      );
       if (result.stopReason === "error")
         throw new RunFailedError(
           result.errorMessage ?? "Unknown provider error",
@@ -807,10 +830,16 @@ export class LiveRuntimeSession {
     try {
       let result: AgentRunResult;
       try {
-        result = await this.adapter.prompt(modelText, {
-          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-          ...adapterOpts,
-        });
+        // A teardown ends the wait: the run is closed (`endForTeardown`) and
+        // whatever the provider answers afterwards — a default clean end
+        // included — is no evidence of how it went.
+        result = await this.untilTeardown(
+          this.adapter.prompt(modelText, {
+            ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+            ...adapterOpts,
+          }),
+          { stopReason: "aborted" },
+        );
       } catch (error) {
         // The prompt is already in the log, so a harness that throws instead
         // of answering ended this turn as surely as a failed run does.
@@ -1392,8 +1421,48 @@ export class LiveRuntimeSession {
 
   /* ----------------------------- lifecycle ------------------------------- */
 
+  /**
+   * The session is going away — deleted, or its harness released — while its
+   * provider may still be mid-turn. Called BEFORE anything stops observing it
+   * (the harness store's own dispose, the runtime's unsubscribe), because
+   * after that no completion can arrive to say how the run ended.
+   *
+   * An open run closes here as an end someone ASKED for: its opener and every
+   * {@link subscribeSessionRunEnded} listener hear it once, and a failure the
+   * run already reported keeps it a failure. A prompt still waiting on the
+   * provider stops waiting, no new prompt is taken, and the idle edge offers
+   * no queued work to a session that is leaving. Idempotent.
+   */
+  endForTeardown(): void {
+    if (this.tornDown) return;
+    this.tornDown = true;
+    if (this.turnOpen) {
+      this.streaming.clear();
+      this.endTurn(this.turnFailed ? "error" : "aborted", undefined, true);
+    }
+    this.setRunning(false);
+    for (const wake of [...this.teardownWaiters]) wake();
+    this.teardownWaiters.clear();
+  }
+
+  /** `work`'s answer, or `onTeardown` if the session is torn down first. */
+  private untilTeardown(
+    work: Promise<AgentRunResult>,
+    onTeardown: AgentRunResult,
+  ): Promise<AgentRunResult> {
+    let wake: () => void = () => {};
+    const torn = new Promise<AgentRunResult>((resolve) => {
+      wake = () => resolve(onTeardown);
+    });
+    this.teardownWaiters.add(wake);
+    return Promise.race([work, torn]).finally(() =>
+      this.teardownWaiters.delete(wake),
+    );
+  }
+
   dispose(): void | Promise<void> {
     if (this.disposed) return;
+    this.endForTeardown();
     this.disposed = true;
     this.progress.dispose();
     this.unsubscribeAdapter();

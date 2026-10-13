@@ -19,6 +19,7 @@ process.env.ASSISTANT_CWD = tmp;
 
 const { SessionRuntime } = await import("./runtime.ts");
 const {
+  setSessionIdleHook,
   subscribeSessionRunCompleted,
   subscribeSessionRunEnded,
   subscribeSessionRunStarted,
@@ -1543,5 +1544,58 @@ test("a deferred steer joins the open run, and a Stop's withdrawal says so", asy
     );
   } finally {
     unsubscribe();
+  }
+});
+
+/**
+ * A session torn down mid-turn (deleted, or its harness released) ends its
+ * run while the outcome can still be told — before its events stop — and the
+ * provider's later answer, a default clean end included, is no evidence.
+ */
+test("a teardown ends the open run as a deliberate end and lets nothing new start", async () => {
+  const { runtime, adapter } = makeRuntime();
+  const outcomes: RunOutcome[] = [];
+  const idled: string[] = [];
+  setSessionIdleHook((sessionId) => idled.push(sessionId));
+  try {
+    const prompted = runtime.prompt("s1", "long", {
+      onRunEnded: (o) => outcomes.push(o),
+    });
+    await tick();
+    runtime.closeForTeardown("s1");
+    // The waiting prompt is released without the provider's answer.
+    await prompted;
+    assert.deepEqual(
+      outcomes.map((o) => [o.stopReason, o.abortRequested]),
+      [["aborted", true]],
+    );
+    assert.equal(runtime.isRunning("s1"), false);
+    assert.deepEqual(
+      idled,
+      [],
+      "the idle edge offers nothing to a leaving session",
+    );
+    // The late answer changes nothing, and no new prompt is taken.
+    adapter.finishRun({ stopReason: "end" });
+    await tick();
+    assert.equal(outcomes.length, 1);
+    await assert.rejects(runtime.prompt("s1", "again"), InactiveSessionError);
+    assert.equal(adapter.promptCount, 1);
+
+    // A run whose failure was already reported stays a failure.
+    const second = makeRuntime();
+    const failed: RunOutcome[] = [];
+    void second.runtime
+      .prompt("s1", "go", { onRunEnded: (o) => failed.push(o) })
+      .catch(() => undefined);
+    await tick();
+    second.adapter.emit({ type: "runFailing", errorMessage: "429" });
+    await second.runtime.disposeSession("s1");
+    assert.deepEqual(
+      failed.map((o) => [o.stopReason, o.abortRequested]),
+      [["error", false]],
+    );
+  } finally {
+    setSessionIdleHook(undefined);
   }
 });

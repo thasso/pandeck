@@ -782,12 +782,13 @@ const releaseToQueue = (
     now,
   );
 /**
- * Put back a row a Stop refused at the run door (`automaticTurnHold.ts`).
- * Admission is recorded only as the runtime appends the turn
- * ({@link recordAdmission}), so a refused row is still `dispatching`: an
- * admitted one reached the session and is never put back. It returns to the
- * queue as it was — no lease, no batch, and the claim's attempt refunded,
- * since nothing failed.
+ * Put back a claimed row nothing was sent for and nothing failed: a Stop
+ * refused its turn at the run door (`automaticTurnHold.ts`), or the claim went
+ * stale while the turn was prepared ({@link reserveAdmission}). Admission is
+ * recorded only as the runtime appends the turn ({@link recordAdmission}), so
+ * such a row is still `dispatching`: an admitted one reached the session and
+ * is never put back. It returns to the queue as it was — no lease, no batch,
+ * and the claim's attempt refunded.
  */
 const returnHeldToQueue = (
   id: string,
@@ -831,15 +832,41 @@ const markAcknowledged = (id: string, now = Date.now()) =>
   transition(id, ["admitted"], "acknowledged", { acknowledgedAt: now }, now);
 
 /**
+ * The gate a claimed batch passes right before its turn is appended — after
+ * the last await, so nothing can change between this and the append. Every
+ * member must still be held by THIS claim (`dispatching`, the claim's
+ * `attempts`): a row the lease sweep put back, the user withdrew, or a newer
+ * claim took fails the WHOLE batch, and nothing is sent. Passing clears the
+ * lease, so no sweep can put a row back while its turn may be reading it; such
+ * a row leaves `dispatching` only through its own delivery or boot recovery,
+ * which reads the recipient's log. All or nothing, in one transaction.
+ */
+function reserveAdmission(
+  claims: readonly { id: string; attempts: number }[],
+): boolean {
+  if (claims.length === 0) return false;
+  return inDbTransaction(() => {
+    const db = getDb();
+    for (const claim of claims) {
+      const row = getRow(claim.id);
+      if (row?.status !== "dispatching" || row.attempts !== claim.attempts)
+        return false;
+    }
+    const clearLease = db.prepare(
+      "UPDATE peer_prompts SET lease_expires_at_ms = NULL WHERE id = ? AND status = 'dispatching' AND attempts = ?",
+    );
+    for (const claim of claims) clearLease.run(claim.id, claim.attempts);
+    return true;
+  });
+}
+
+/**
  * The runtime appended this claimed batch as ONE turn: record the batch, the
  * admission and the turn start for every row still held by THIS claim, in one
  * transaction. Called from inside that append (`onUserEntry`), so admission
  * is never recorded for a turn that was refused before it reached the log.
- *
- * A row whose lease expired before the append and that the sweep put back
- * (`queued`, same claim) is still this delivery's and is admitted; one a newer
- * claim took (`attempts` moved on) is not this delivery's to touch. Returns
- * the ids admitted.
+ * The batch passed {@link reserveAdmission} just before, so every row is
+ * still this claim's; one that is not is left alone. Returns the ids admitted.
  */
 function recordAdmission(
   claims: readonly { id: string; attempts: number }[],
@@ -858,7 +885,7 @@ function recordAdmission(
         !transitionInTxn(
           db,
           claim.id,
-          ["dispatching", "queued"],
+          ["dispatching"],
           "admitted",
           {
             acceptedAt: now,
@@ -1931,6 +1958,7 @@ export const peerPromptStore = {
   markDeliveryBatch,
   markCompleted,
   markStopped,
+  reserveAdmission,
   recordAdmission,
   markReplied,
   markInterrupted,

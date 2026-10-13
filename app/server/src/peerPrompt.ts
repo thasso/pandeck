@@ -442,11 +442,11 @@ async function steerPeerPrompt(
   const { envelope, receivedCard, context } = deliveryParts(batch);
   let admitted = false;
   let ownsContext = false;
-  // What the append admitted (empty if a newer claim took the row) and the
-  // run it joined, read inside that append. A steer does not open its run, so
-  // it hears the end from the runtime's run-ended feed, subscribed before the
-  // prompt so no end is missed.
-  let admittedIds: string[] = [];
+  // What the append admitted (undefined while its write has not succeeded)
+  // and the run it joined, read inside that append. A steer does not open its
+  // run, so it hears the end from the runtime's run-ended feed, subscribed
+  // before the prompt so no end is missed.
+  let admittedIds: string[] | undefined;
   let joinedRun: string | undefined;
   let runEnded: (outcome: RunOutcome) => void = () => {};
   const ended = new Promise<RunOutcome>((resolve) => {
@@ -466,26 +466,19 @@ async function steerPeerPrompt(
       peerMessageIds: [peerKey(m.id)],
       peerPrompt: receivedCard,
       steer: true,
+      // After the last await, before the provider sees anything.
+      admit: () => admitClaimed(batch),
       // Runs inside the runtime's append; nothing here may throw.
       onUserEntry: () => {
         admitted = true;
-        try {
-          joinedRun = sessionRuntime.get(driver.sessionId)?.currentRunId;
-          admittedIds = peerPromptStore.recordAdmission(
-            [{ id: m.id, attempts: m.attempts }],
-            m.id,
-          );
-          // sendQueuedPeerPromptNow refuses steering into an existing peer
-          // delivery context, so this run has one unambiguous reply owner.
-          activeContexts.set(driver.sessionId, context);
-          ownsContext = true;
-          void broadcastParticipants(batch);
-          void broadcastBatchCardUpdates([m.id]);
-        } catch (err) {
-          console.warn(
-            `[peer-prompt] could not record a steer (${failureLabel(err)})`,
-          );
-        }
+        joinedRun = sessionRuntime.get(driver.sessionId)?.currentRunId;
+        // sendQueuedPeerPromptNow refuses steering into an existing peer
+        // delivery context, so this run has one unambiguous reply owner.
+        activeContexts.set(driver.sessionId, context);
+        ownsContext = true;
+        admittedIds = recordAppended(batch);
+        void broadcastParticipants(batch);
+        void broadcastBatchCardUpdates([m.id]);
       },
     });
   } catch (err) {
@@ -495,7 +488,12 @@ async function steerPeerPrompt(
     unsubscribe();
     if (ownsContext) activeContexts.delete(driver.sessionId);
     const claim = { attempts: m.attempts };
-    if (thrown instanceof SteerWithdrawnError && thrown.uncertain) {
+    if (thrown instanceof ClaimLostError) {
+      // Another delivery or the user took it before anything was sent.
+    } else if (thrown instanceof AutomaticTurnsHeldError) {
+      // A Stop refused it at the run door: back as it was, no attempt spent.
+      peerPromptStore.returnHeldToQueue(m.id, claim);
+    } else if (thrown instanceof SteerWithdrawnError && thrown.uncertain) {
       // Never put back what the turn may have read: the sender decides —
       // unless the turn was stopped on purpose, which tells nobody.
       if (thrown.stopped) peerPromptStore.markStopped(m.id, claim);
@@ -524,7 +522,12 @@ async function steerPeerPrompt(
     unsubscribe();
     if (ownsContext && activeContexts.get(driver.sessionId) === context)
       activeContexts.delete(driver.sessionId);
-    settleAdmitted(admittedIds, driver.sessionId, outcome, thrown);
+    settleAdmitted(
+      admittedIds ?? recordAppended(batch),
+      driver.sessionId,
+      outcome,
+      thrown,
+    );
     await broadcastParticipants(batch);
     await broadcastBatchCardUpdates([m.id]);
   });
@@ -905,6 +908,8 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
   for (;;) {
     if (
       driver.isRunning ||
+      // Torn down (deleted, released): nothing more is sent to it.
+      driver.released ||
       explicitSendWaiting(recipientId) ||
       automaticTurnsHeld(recipientId)
     )
@@ -994,7 +999,12 @@ async function deliverOwedNotices(
   // A notice whose delegation the user ended while the turn was being
   // admitted is rebuilt without it; this bounds how often that can repeat.
   for (let attempt = 0; attempt < NOTICE_ADMISSION_ATTEMPTS; attempt += 1) {
-    if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
+    if (
+      deliveryStopped ||
+      driver.isRunning ||
+      driver.released ||
+      automaticTurnsHeld(sessionId)
+    )
       return;
     const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
     const delegated = deliverableNotices(sessionId);
@@ -1421,6 +1431,7 @@ async function deliverBatch(
   // the session — to the rows this claim admitted, and then to how the run
   // that append opened ended. Neither is inferred from whether the prompt
   // resolved: a Stop resolves it like a finished turn.
+  let appended = false;
   let admittedIds: string[] | undefined;
   let outcome: RunOutcome | undefined;
   let thrown: unknown;
@@ -1444,23 +1455,15 @@ async function deliverBatch(
       // durable Peer prompts section and the live card-update broadcast are the
       // reconciling lifecycle surfaces.
       peerPrompt: receivedCard,
+      // After the last await, before the provider sees anything: every
+      // member must still be this claim's, or nothing is sent.
+      admit: () => admitClaimed(batch),
       // Runs inside the runtime's append; nothing here may throw. Admitted
       // (in the recipient log) and acknowledged (its run started) together,
-      // with the batch grouping history projection reconstructs. A failed
-      // write leaves the rows `dispatching`; the next claim finds the key in
-      // the log and interrupts them, never re-sends.
+      // with the batch grouping history projection reconstructs.
       onUserEntry: () => {
-        admittedIds = [];
-        try {
-          admittedIds = peerPromptStore.recordAdmission(
-            batch.map((m) => ({ id: m.id, attempts: m.attempts })),
-            head.id,
-          );
-        } catch (err) {
-          console.warn(
-            `[peer-prompt] could not record an admission (${failureLabel(err)})`,
-          );
-        }
+        appended = true;
+        admittedIds = recordAppended(batch);
         void broadcastParticipants(batch);
         void broadcastBatchCardUpdates(ids);
       },
@@ -1473,12 +1476,12 @@ async function deliverBatch(
   } finally {
     activeContexts.delete(driver.sessionId);
   }
-  if (admittedIds) {
+  if (appended) {
     // Admitted work is never retried or re-queued: it is in the recipient's
     // context, its tool calls may have run. Only its outcome is recorded. A
     // throw after a clean end is the facade's own bookkeeping, not the turn.
     settleAdmitted(
-      admittedIds,
+      admittedIds ?? recordAppended(batch),
       driver.sessionId,
       outcome,
       outcome?.stopReason === "end" ? undefined : thrown,
@@ -1489,11 +1492,16 @@ async function deliverBatch(
     interruptStrandedBatch(batch, driver.sessionId);
   } else {
     // Refused before the append: nothing reached the session. A Stop that
-    // landed between the claim and the append put the rows back as they were,
-    // spending no attempt, for Resume to deliver; anything else is a
-    // delivery failure under the bounded retry policy.
+    // landed between the claim and the append, or a claim that went stale
+    // while the turn was prepared (a row withdrawn or put back meanwhile),
+    // puts the rows still this claim's back as they were, spending no
+    // attempt; the drain claims afresh. Anything else is a delivery failure
+    // under the bounded retry policy.
     for (const m of batch) {
-      if (thrown instanceof AutomaticTurnsHeldError)
+      if (
+        thrown instanceof AutomaticTurnsHeldError ||
+        thrown instanceof ClaimLostError
+      )
         peerPromptStore.returnHeldToQueue(m.id, { attempts: m.attempts });
       else
         retryOrFail(
@@ -1508,6 +1516,45 @@ async function deliverBatch(
   // snapshot from claimBatch, so broadcasting it directly would always report
   // the stale "dispatching" state instead of the actual final outcome.
   await broadcastBatchCardUpdates(ids);
+}
+
+/** A claimed batch whose rows are no longer all this claim's: nothing is sent. */
+class ClaimLostError extends Error {
+  constructor() {
+    super("The peer prompt was withdrawn or reclaimed before it was sent.");
+    this.name = "ClaimLostError";
+  }
+}
+
+/**
+ * The facade's last check before the provider sees the batch
+ * (`RuntimePromptFacadeOptions.admit`): every member must still be held by
+ * this claim, and passing reserves them against the lease sweep. A refusal,
+ * or a database that cannot say, throws — and nothing is sent.
+ */
+function admitClaimed(batch: PeerPromptRecord[]): void {
+  const claims = batch.map((m) => ({ id: m.id, attempts: m.attempts }));
+  if (!peerPromptStore.reserveAdmission(claims)) throw new ClaimLostError();
+}
+
+/**
+ * Record a batch the runtime just appended, or `undefined` when the write
+ * failed. Its rows stay reserved (`dispatching`, no lease): never swept back,
+ * never withdrawable, never sent again. The settlement tries once more; if
+ * that fails too, boot recovery reads the key in the log.
+ */
+function recordAppended(batch: PeerPromptRecord[]): string[] | undefined {
+  try {
+    return peerPromptStore.recordAdmission(
+      batch.map((m) => ({ id: m.id, attempts: m.attempts })),
+      batch[0]!.id,
+    );
+  } catch (err) {
+    console.warn(
+      `[peer-prompt] could not record an admission (${failureLabel(err)})`,
+    );
+    return undefined;
+  }
 }
 
 /**
@@ -1529,11 +1576,13 @@ async function deliverBatch(
  *   provider refused never reached the model, however its run then ended.
  */
 function settleAdmitted(
-  ids: readonly string[],
+  ids: readonly string[] | undefined,
   recipientId: string,
   outcome: RunOutcome | undefined,
   thrown: unknown,
 ): void {
+  // Its admission could not be recorded: left reserved for boot recovery.
+  if (!ids) return;
   const rows = ids
     .map((id) => peerPromptStore.getById(id))
     .filter((r): r is PeerPromptRecord => r !== undefined);

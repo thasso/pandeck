@@ -65,14 +65,35 @@ const { fakeDrivers, cardUpdates, fakeHub } = vi.hoisted(() => {
 
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
 
+/**
+ * The facade's last await before an append is the session's skill freeze. A
+ * test that must change the world exactly there sets `preparation.gate`.
+ */
+const { preparation } = vi.hoisted(() => ({
+  preparation: {} as { gate?: () => Promise<void> },
+}));
+vi.mock("./sessionSkills.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./sessionSkills.ts")>();
+  return {
+    ...real,
+    sessionSkills: async (...args: Parameters<typeof real.sessionSkills>) => {
+      await preparation.gate?.();
+      return real.sessionSkills(...args);
+    },
+  };
+});
+
 const {
   drainRecipient,
   installDelegationFailureNotices,
   peerPromptQueueField,
+  recoverPeerPromptsOnBoot,
   sendPeerPrompt,
   sendQueuedPeerPromptNow,
   setHubForTests,
   setPeerPromptAutoDeliverForTests,
+  sweepExpiredLeases,
+  withdrawQueuedPeerPrompt,
 } = await import("./peerPrompt.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
@@ -112,6 +133,8 @@ class PiRecipient {
   readonly agentType: AgentType = "assistant";
   readonly sessionFile = undefined;
   readonly canSteer = true;
+  /** Set once its store tore it down, as `HarnessDriver.released` is. */
+  released = false;
   readonly events = new NativeAdapterEventSource();
   /** Every prompt the harness received, steers included. */
   prompts = 0;
@@ -364,6 +387,7 @@ beforeAll(() => {
 afterAll(() => uninstall());
 
 afterEach(async () => {
+  delete preparation.gate;
   await quiesce();
   vi.restoreAllMocks();
   cardUpdates.length = 0;
@@ -730,14 +754,25 @@ describe("a Stop before the batch reached the session leaves it queued", () => {
   it("a harness that refuses before the append keeps the retry policy", async () => {
     const coord = sender();
     const id = seed("Released worker");
-    const released = new FakeRuntimeDriver(id);
-    Object.defineProperty(released, "released", { value: true });
-    fakeDrivers.set(id, released);
+    const driver = new FakeRuntimeDriver(id);
+    let released = false;
+    Object.defineProperty(driver, "released", { get: () => released });
+    fakeDrivers.set(id, driver);
     const m = await send(coord.sessionId, id, "go");
+    // Its store releases it while the turn is being prepared.
+    preparation.gate = async () => {
+      delete preparation.gate;
+      released = true;
+    };
     await drainRecipient(id);
     assert.equal(row(m).status, "retryable_failed");
     assert.equal(row(m).attempts, 1);
     assert.equal(admissionsOf(id, m), 0);
+    // And a released instance is sent nothing more, retry or not.
+    peerPromptStore.requeueDueRetries(Date.now() + 60_000);
+    await drainRecipient(id);
+    assert.equal(row(m).status, "queued");
+    assert.equal(driver.promptOptions.length, 0);
   });
 });
 
@@ -803,6 +838,285 @@ describe("a delivery the user chose settles the same way", () => {
     worker.end();
     await next;
     await until(() => row(done).status === "completed", "the clean steer");
+  });
+});
+
+/** An always-idle recipient whose turns finish at once unless held. */
+function plainWorker(): FakeRuntimeDriver {
+  const id = seed("Plain worker");
+  const driver = new FakeRuntimeDriver(id);
+  fakeDrivers.set(id, driver);
+  return driver;
+}
+
+/** The text of every user entry a session's log holds. */
+function userTexts(sessionId: string): string {
+  return logOf(sessionId)
+    .filter((e) => e.role === "user")
+    .map((e) => JSON.stringify(e.content))
+    .join("\n");
+}
+
+describe("a batch is checked against its claim right before it is sent", () => {
+  it("a row withdrawn while the turn was prepared is never sent", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    const [keep, gone] = enqueueBatch(coord.sessionId, worker.sessionId, [
+      { prompt: "keep this" },
+      { prompt: "WITHDRAWN WHILE PREPARING" },
+    ]) as [string, string];
+    // Pause the last await before the append, once.
+    let entered: () => void = () => {};
+    const atGate = new Promise<void>((resolve) => (entered = resolve));
+    let open: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    preparation.gate = () => {
+      delete preparation.gate;
+      entered();
+      return gate;
+    };
+    const drained = drainRecipient(worker.sessionId);
+    await atGate;
+    assert.equal(row(gone).status, "dispatching");
+    // The lease runs out meanwhile, and the user withdraws one of the two.
+    sweepExpiredLeases(Date.now() + 61_000);
+    const key = peerPromptQueueField(worker.sessionId).queuedPeerPrompts!.find(
+      (r) => r.message.includes("WITHDRAWN"),
+    )!.id;
+    withdrawQueuedPeerPrompt(worker.sessionId, key);
+    assert.equal(row(gone).status, "cancelled");
+    open();
+    await drained;
+    await quiesce();
+
+    assert.doesNotMatch(userTexts(worker.sessionId), /WITHDRAWN/);
+    assert.equal(admissionsOf(worker.sessionId, gone), 0);
+    assert.equal(worker.promptOptions.length, 1, "the kept row, alone");
+    assert.equal(admissionsOf(worker.sessionId, keep), 1);
+    assert.equal(row(keep).status, "completed");
+    assert.equal(row(gone).status, "cancelled");
+  });
+
+  it("an admission the database refused after the append is never swept back, withdrawn or re-sent", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    const release = worker.holdTurns();
+    const m = await send(coord.sessionId, worker.sessionId, "ALREADY READ");
+    const admission = vi
+      .spyOn(peerPromptStore, "recordAdmission")
+      .mockImplementationOnce(() => {
+        throw new Error("injected database refusal");
+      });
+    const drained = drainRecipient(worker.sessionId);
+    await until(() => worker.isRunning, "the delivered turn");
+    assert.match(userTexts(worker.sessionId), /ALREADY READ/);
+    assert.equal(row(m).status, "dispatching");
+
+    sweepExpiredLeases(Date.now() + 61_000);
+    assert.equal(row(m).status, "dispatching", "not swept back to the queue");
+    const [item] = peerPromptQueueField(worker.sessionId).queuedPeerPrompts!;
+    assert.equal(item?.sending, true, "shown as being sent, not as a draft");
+    assert.throws(() => withdrawQueuedPeerPrompt(worker.sessionId, item!.id));
+    release();
+    await drained;
+    await drainRecipient(worker.sessionId);
+
+    assert.equal(admission.mock.calls.length, 2, "recorded on the retry");
+    assert.equal(row(m).status, "completed");
+    assert.equal(worker.promptOptions.length, 1);
+  });
+
+  it("an admission the database never recorded is left for boot, which reads the log", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    const m = await send(coord.sessionId, worker.sessionId, "read, unrecorded");
+    vi.spyOn(peerPromptStore, "recordAdmission").mockImplementation(() => {
+      throw new Error("injected database refusal");
+    });
+    await drainRecipient(worker.sessionId);
+    vi.restoreAllMocks();
+    assert.equal(row(m).status, "dispatching");
+    sweepExpiredLeases(Date.now() + 61_000);
+    await drainRecipient(worker.sessionId);
+    assert.equal(worker.promptOptions.length, 1, "never re-sent");
+
+    recoverPeerPromptsOnBoot();
+    assert.equal(row(m).status, "interrupted");
+    assert.equal(row(m).interruptionKind, "restart");
+    await drainRecipient(worker.sessionId);
+    assert.equal(worker.promptOptions.length, 1);
+  });
+
+  it("a database that cannot check the claim sends nothing", async () => {
+    const coord = sender();
+    const worker = plainWorker();
+    const m = await send(coord.sessionId, worker.sessionId, "unchecked");
+    vi.spyOn(peerPromptStore, "reserveAdmission").mockImplementationOnce(() => {
+      throw new Error("injected database refusal");
+    });
+    await drainRecipient(worker.sessionId);
+
+    assert.equal(worker.promptOptions.length, 0);
+    assert.equal(admissionsOf(worker.sessionId, m), 0);
+    assert.equal(row(m).status, "retryable_failed", "the bounded retry");
+    assert.equal(row(m).attempts, 1);
+  });
+});
+
+/**
+ * A pi recipient whose harness backs every turn with a completion promise, as
+ * the supported pi driver does — the source a default clean end would come
+ * from once nothing observes the session.
+ */
+function backedPiWorker(spawnedBy?: string) {
+  const id = seed("Backed pi worker");
+  if (spawnedBy) sessionStore.linkSpawned(spawnedBy, id);
+  const driver = new FakeRuntimeDriver(id);
+  let released = false;
+  Object.defineProperty(driver, "released", { get: () => released });
+  const events = new NativeAdapterEventSource();
+  let complete: () => void = () => {};
+  const done = new Promise<void>((resolve) => (complete = resolve));
+  let prompts = 0;
+  driver.createRuntimeAdapter = () =>
+    createPiAdapter(id, {
+      sessionFile: undefined,
+      subscribeAdapterEvents: (listener) => events.subscribe(listener),
+      prompt: () => {
+        prompts += 1;
+        events.messageStarted(`m${prompts}`);
+        return { outcome: "started" as const, completed: done };
+      },
+      abort: () => {},
+      setModel: () => {},
+      setThinkingLevel: () => {},
+    });
+  fakeDrivers.set(id, driver);
+  return {
+    id,
+    driver,
+    events,
+    complete,
+    prompts: () => prompts,
+    release: () => {
+      released = true;
+    },
+  };
+}
+
+describe("a session torn down mid-turn ends its run as a deliberate end", () => {
+  it("in its store's order: stopped, never completed, and nothing more is sent to it", async () => {
+    const coord = sender();
+    const worker = backedPiWorker();
+    const [note, ask] = enqueueBatch(coord.sessionId, worker.id, [
+      { prompt: "context" },
+      { prompt: "answer?", responseRequested: true },
+    ]) as [string, string];
+    const drained = drainRecipient(worker.id);
+    await until(() => row(note).status === "acknowledged", "the admission");
+    const later = await send(coord.sessionId, worker.id, "queued behind it");
+
+    // `piStore.evict`: close the run, dispose the harness (its events stop
+    // first), then the runtime session. The harness's backing promise only
+    // settles afterwards, as a clean end nobody saw.
+    sessionRuntime.closeForTeardown(worker.id);
+    worker.release();
+    worker.events.clear();
+    await sessionRuntime.disposeSession(worker.id);
+    worker.complete();
+    await drained;
+    await quiesce();
+
+    assert.equal(row(note).status, "interrupted");
+    assert.equal(row(note).interruptionKind, "stopped");
+    assert.equal(row(ask).status, "awaiting_response");
+    assert.equal(row(ask).interruptionKind, "stopped");
+    assert.ok(logOf(worker.id).some((e) => e.type === "run.aborted"));
+    assert.equal(worker.prompts(), 1, "nothing re-sent, nothing new started");
+    assert.equal(row(later).status, "queued");
+    assert.equal(noticesIn(coord.sessionId), 0);
+  });
+
+  it("when only the runtime session is disposed, after its events already stopped", async () => {
+    const coord = sender();
+    const worker = backedPiWorker();
+    const m = await send(coord.sessionId, worker.id, "go");
+    const drained = drainRecipient(worker.id);
+    await until(() => row(m).status === "acknowledged", "the admission");
+    worker.release();
+    worker.events.clear();
+    await sessionRuntime.disposeSession(worker.id);
+    await drained;
+    worker.complete();
+    await quiesce();
+
+    assert.equal(row(m).status, "interrupted");
+    assert.equal(row(m).interruptionKind, "stopped");
+  });
+
+  it("a failure seen before the teardown stays a failure, told once", async () => {
+    const coord = sender();
+    const worker = backedPiWorker(coord.sessionId);
+    const m = await send(coord.sessionId, worker.id, "go", true);
+    const drained = drainRecipient(worker.id);
+    await until(() => row(m).status === "acknowledged", "the admission");
+    worker.events.runFailing("429 quota", { kind: "quota" });
+    sessionRuntime.closeForTeardown(worker.id);
+    worker.release();
+    worker.events.clear();
+    await sessionRuntime.disposeSession(worker.id);
+    await drained;
+    worker.complete();
+    await until(() => noticesIn(coord.sessionId) === 1, "the failure notice");
+    await quiesce();
+
+    assert.equal(row(m).status, "interrupted");
+    assert.equal(row(m).interruptionKind, "failure");
+    assert.equal(noticesIn(coord.sessionId), 1);
+  });
+
+  it("an admitted steer into a turn the harness started settles at the teardown", async () => {
+    const coord = sender();
+    const worker = piRecipient();
+    // A turn the harness started on its own: no prompt of ours opened it.
+    sessionRuntime.createSession(
+      worker.sessionId,
+      worker.createRuntimeAdapter(),
+    );
+    worker.events.messageStarted("own");
+    await until(() => worker.isRunning, "the observed turn");
+    const m = await send(coord.sessionId, worker.sessionId, "also", true);
+    const [item] = peerPromptQueueField(worker.sessionId).queuedPeerPrompts!;
+    await sendQueuedPeerPromptNow(worker.sessionId, item!.id);
+    assert.equal(row(m).status, "acknowledged");
+
+    await sessionRuntime.disposeSession(worker.sessionId);
+    await until(() => row(m).status !== "acknowledged", "the settlement");
+    assert.equal(row(m).status, "awaiting_response");
+    assert.equal(row(m).interruptionKind, "stopped");
+  });
+});
+
+describe("a Stop refuses a steer before it is sent, without spending its budget", () => {
+  it("send-now into a held, still-running turn leaves the row exactly as it was", async () => {
+    const coord = sender();
+    const worker = piRecipient();
+    const own = promptRuntimeSession(worker, "human work", {
+      origin: { kind: "human" },
+    }).catch(() => undefined);
+    await until(() => worker.turnLive, "the human turn");
+    const m = await send(coord.sessionId, worker.sessionId, "steer me");
+    holdAutomaticTurns(worker.sessionId);
+    for (let i = 0; i < 3; i++) {
+      const [item] = peerPromptQueueField(worker.sessionId).queuedPeerPrompts!;
+      await sendQueuedPeerPromptNow(worker.sessionId, item!.id);
+      assert.equal(row(m).status, "queued");
+      assert.equal(row(m).attempts, 0, "no attempt spent");
+    }
+    assert.equal(admissionsOf(worker.sessionId, m), 0);
+    assert.equal(worker.prompts, 1, "only the human turn reached the harness");
+    worker.end({ kind: "aborted", abortRequested: true });
+    await own;
   });
 });
 
@@ -899,6 +1213,28 @@ describe("a real Claude session", () => {
       0,
     );
     worker.session.dispose();
+  });
+
+  it("removed mid-turn in its store's order: stopped, never completed", async () => {
+    const coord = sender();
+    const id = seed("Claude worker", "claude-sdk");
+    const worker = new ClaudeRecipient(id);
+    fakeDrivers.set(id, worker);
+    const ask = await send(coord.sessionId, id, "long work", true);
+    const drained = drainRecipient(id);
+    await until(() => worker.isRunning, "the Claude turn");
+    await until(() => row(ask).status === "acknowledged", "the admission");
+    // `claudeSdkStore.remove`: close the run, dispose the session, then the
+    // runtime session.
+    sessionRuntime.closeForTeardown(id);
+    worker.session.dispose();
+    await sessionRuntime.disposeSession(id);
+    await drained;
+    await quiesce();
+
+    assert.equal(row(ask).status, "awaiting_response");
+    assert.equal(row(ask).interruptionKind, "stopped");
+    assert.equal(noticesIn(coord.sessionId), 0);
   });
 });
 

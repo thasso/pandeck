@@ -141,16 +141,28 @@ card, which the commands address it by.
   by a send-now settles only after that resumed drain (the user's queued message
   sent, or the peer FIFO drained), so a background completion waiting on it
   never takes their turn.
-- **How a delivered batch settles.** A batch is admitted when the runtime
-  appends its turn (`onUserEntry`), in one transaction guarded by the claim
-  (`attempts`), never earlier. A refusal before that append — a Stop between
-  claim and append, a busy session, a released harness — leaves the rows
+- **How a delivered batch settles.** Right before its turn is appended — after
+  the facade's last await, so nothing changes in between — the batch passes its
+  claim (`admit` → `reserveAdmission`): every member must still be `dispatching`
+  under this claim's `attempts`, or NOTHING is sent. A row the lease sweep put
+  back, the user withdrew, or a newer claim took fails the whole batch; the
+  members still held go back to the queue with no attempt spent, and the drain
+  claims afresh. Passing clears the lease, so from then on a row leaves
+  `dispatching` only through its own delivery or boot recovery, which reads the
+  recipient's log: never swept back, never withdrawable, never sent twice. A
+  database that cannot check fails closed: nothing is sent, under the bounded
+  retry. The batch is recorded admitted as the runtime appends it
+  (`onUserEntry`), in one transaction; a write refused there is tried once more
+  at settlement, and if that fails too the rows stay reserved for boot. Any
+  other refusal before the append — a Stop at the run door (also of a steer), a
+  busy session, a harness released meanwhile — likewise leaves the rows
   `dispatching`, so they go back to the queue (a Stop spends no attempt) or
-  under the bounded retry. Admitted rows are never retried or re-queued: the
-  prompt is in the recipient's context and its tools may have run. They settle
-  from the `RunOutcome` the runtime records as the run's bracket closes (the run
-  the batch opened; for a steer, the run it joined), never from whether the
-  prompt resolved, since a Stop resolves it like a finished turn:
+  under the bounded retry; a released instance is sent nothing more. Admitted
+  rows are never retried or re-queued: the prompt is in the recipient's context
+  and its tools may have run. They settle from the `RunOutcome` the runtime
+  records as the run's bracket closes (the run the batch opened; for a steer,
+  the run it joined), never from whether the prompt resolved, since a Stop
+  resolves it like a finished turn:
   - a clean end is `completed`, or `awaiting_response` when a reply was asked
     for — the turn finishing does not answer the request;
   - an abort someone ASKED for (the user's Stop, a coordinator's stand-down),
@@ -169,6 +181,16 @@ card, which the commands address it by.
     nothing reported — is `interrupted` (`failure`), which tells a sender
     waiting on a reply once (the delegation failure notice covers rows it
     records).
+
+  A session torn down mid-turn — deleted, or its harness released — ends its
+  open run the same way, as an end someone asked for, before anything stops
+  observing it: its store calls `SessionRuntime.closeForTeardown` ahead of the
+  harness's own dispose, and `disposeSession` does it first. Waiting prompts and
+  steers are released, whatever the provider answers afterwards (a default clean
+  end included) is ignored, the session takes no new prompt and its idle edge
+  offers no queued work. A failure the run reported before the teardown stays a
+  failure. Only a process that dies leaves a run for boot recovery, which
+  records it as `restart`.
 
   An answer sent before the Stop keeps the request `replied`. Each settlement is
   a compare-and-set from the admitted states, so a duplicate or late callback,

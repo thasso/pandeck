@@ -819,7 +819,7 @@ describe("peerPromptStore", () => {
     assert.deepEqual(members.map((m) => m.id).sort(), [m1.id, m2.id].sort());
   });
 
-  it("admits a claimed batch at the append only while that claim holds it", () => {
+  it("reserves a claimed batch before its append only while the claim holds every row", () => {
     const recipient = `r-${seq++}`;
     const conversation = conv();
     const head = enqueue(recipient, { conversation });
@@ -829,25 +829,16 @@ describe("peerPromptStore", () => {
       claimed.map((m) => m.id),
       [head.id, second.id],
     );
-    // The sweep put the second back after its lease ran out, and a newer
-    // claim took it: that claim's row is no longer this delivery's.
+    const claims = claimed.map((m) => ({ id: m.id, attempts: m.attempts }));
+
+    // The sweep put both back after the lease ran out, and a newer claim took
+    // the second: the batch is no longer this delivery's — none of it.
     store.requeueExpiredLeases(Date.now() + 120_000);
     const reclaimed = store.claimOne(second.id, "send-now")!;
     assert.equal(reclaimed.attempts, claimed[1]!.attempts + 1);
-
-    const admitted = store.recordAdmission(
-      claimed.map((m) => ({ id: m.id, attempts: m.attempts })),
-      head.id,
-    );
-
-    // The head, requeued by the sweep but never claimed again, is still ours.
-    assert.deepEqual(admitted, [head.id]);
-    const row = store.getById(head.id)!;
-    assert.equal(row.status, "acknowledged");
-    assert.equal(row.batchHeadId, head.id);
-    assert.ok(row.acceptedAt !== undefined && row.acknowledgedAt !== undefined);
-    assert.equal(store.getById(second.id)?.status, "dispatching");
-    assert.equal(store.getById(second.id)?.batchHeadId, undefined);
+    assert.equal(store.reserveAdmission(claims), false);
+    assert.equal(store.getById(head.id)?.status, "queued", "nothing moved");
+    assert.deepEqual(store.recordAdmission(claims, head.id), []);
     // An older claim's failure cannot requeue or fail the newer claim's row.
     assert.equal(
       store.markRetryable(second.id, "late", 0, Date.now(), {
@@ -860,6 +851,26 @@ describe("peerPromptStore", () => {
       undefined,
     );
     assert.equal(store.getById(second.id)?.status, "dispatching");
+
+    // A batch whose claim holds: reserved against the sweep, then admitted.
+    const fresh = enqueue(`r-${seq++}`);
+    const [only] = store.claimBatch(fresh.recipientSessionId, "d", 1, 5, 99);
+    const claim = [{ id: only!.id, attempts: only!.attempts }];
+    assert.equal(store.reserveAdmission(claim), true);
+    assert.equal(store.getById(only!.id)?.leaseExpiresAt, undefined);
+    assert.deepEqual(
+      store
+        .requeueExpiredLeases(Date.now() + 120_000)
+        .filter((m) => m.id === only!.id),
+      [],
+      "a reserved row is never swept back to the queue",
+    );
+    assert.equal(store.cancelOne(only!.id, "withdrawn"), undefined);
+    assert.deepEqual(store.recordAdmission(claim, only!.id), [only!.id]);
+    const row = store.getById(only!.id)!;
+    assert.equal(row.status, "acknowledged");
+    assert.equal(row.batchHeadId, only!.id);
+    assert.ok(row.acceptedAt !== undefined && row.acknowledgedAt !== undefined);
   });
 
   it("records a stopped turn without completing it, and keeps a requested reply owed", () => {
