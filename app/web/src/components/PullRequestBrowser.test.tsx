@@ -338,3 +338,47 @@ describe("PullRequestBrowser", () => {
     });
   });
 });
+
+describe("PullRequestBrowser idle worktrees", () => {
+  it("shows the idle queue even when the pull-request inventory failed", () => {
+    const el = render(
+      <PullRequestBrowser
+        inventory={failed("inventory read failed")}
+        onReload={NOOP}
+        projects={PROJECTS}
+        onOpen={NOOP}
+        density="tight"
+        idle={{
+          state: ready([
+            {
+              worktree: {
+                id: "wt-idle",
+                projectId: "pa",
+                mainRepoRoot: "/repo",
+                path: "/repo-idle",
+                branch: "idle-branch",
+                baseBranch: "main",
+                baseCommit: "abc",
+                status: "active",
+                sessionIds: [],
+                taskIds: [],
+                createdAt: 0,
+                updatedAt: 0,
+              },
+              kind: "uncommitted",
+              changedFiles: 2,
+              lastActivityAt: 0,
+            },
+          ]),
+          fetchedAt: 86_400_000,
+          onReload: NOOP,
+          onOpenWorktree: NOOP,
+          onRetired: NOOP,
+        }}
+      />,
+    );
+    expect(el.textContent).toContain("inventory read failed");
+    expect(el.textContent).toContain("Idle worktrees (1)");
+    expect(el.textContent).toContain("idle-branch");
+  });
+});

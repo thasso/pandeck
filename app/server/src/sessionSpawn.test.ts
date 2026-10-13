@@ -595,6 +595,42 @@ test("coding peers are linked and freeze skills on both harness creation paths",
   expect(vi.mocked(piStore.acquireNew).mock.calls[0]?.[3]?.cwd).toBe(path);
 });
 
+// A coordinator already watching the worktree list must learn the peer's
+// checkout is in ITS tree: the edge is written after creation broadcast it.
+test("the worktree list is said again once the spawn edge exists", async () => {
+  activeWorktree("wt-tree");
+  const lists: string[][] = [];
+  const { setWorktreeBroadcaster } =
+    await import("./worktrees/worktreeEvents.ts");
+  setWorktreeBroadcaster({
+    broadcast: (msg) => {
+      if (msg.type !== "worktreeList") return;
+      const record = msg.worktrees.find((w) => w.id === "wt-tree");
+      if (record) lists.push(record.treeSessionIds ?? []);
+    },
+    broadcastWorktree: () => {},
+  });
+  try {
+    const { card } = await propose([
+      row({
+        title: "Tree peer",
+        agentType: "developer",
+        worktreeId: "wt-tree",
+      }),
+    ]);
+    await resolveApproval(card.id, "approved");
+    await vi.waitFor(() =>
+      expect(lists.some((ids) => ids.includes(SENDER))).toBe(true),
+    );
+    expect(lists.at(-1)).toContain(SENDER);
+  } finally {
+    setWorktreeBroadcaster({
+      broadcast: () => {},
+      broadcastWorktree: () => {},
+    });
+  }
+});
+
 test("a skipped row creates nothing while the rest of the batch runs", async () => {
   const { card } = await propose([
     row({ title: "Reviewer" }),

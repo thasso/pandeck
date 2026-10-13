@@ -1,12 +1,17 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { GitBranch } from "lucide-react";
 import type { IdleWorktree, PullRequestInventoryItem } from "@assistant/shared";
-import { ErrorNote, Skeleton } from "./common/load.tsx";
+import { ErrorNote, RefreshIndicator, Skeleton } from "./common/load.tsx";
 import { ConfirmDialog } from "./common/dialogs.tsx";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { Button } from "./ui/button.tsx";
 import { Item, ItemContent, ItemDescription, ItemTitle } from "./ui/item.tsx";
-import { dataOf, errorOf, type LoadState } from "../lib/loadState.ts";
+import {
+  dataOf,
+  errorOf,
+  isPending,
+  type LoadState,
+} from "../lib/loadState.ts";
 import {
   idleForLabel,
   idleWorktreeLabel,
@@ -107,13 +112,18 @@ const IdleWorktreeRow = memo(function IdleWorktreeRow({
 });
 
 /** What one bulk retirement left behind, for the dialog that asked for it. */
+/**
+ * One bulk retirement, from the click that opened its dialog to the click that
+ * dismissed it. It owns the TARGETS it was opened on: the consent was given for
+ * those checkouts, and a poll — or the refusal itself, which can move a
+ * checkout out of the queue — must neither change what runs nor close the
+ * dialog that holds the outcome.
+ */
 interface BulkState {
-  open: boolean;
+  targets: IdleWorktree[];
   busy: boolean;
   error?: string;
 }
-
-const CLOSED: BulkState = { open: false, busy: false };
 
 /**
  * @component IdleWorktreesSection
@@ -172,62 +182,90 @@ export function IdleWorktreesSection({
     () => retirableIdleWorktrees(rows, now),
     [rows, now],
   );
-  const [bulk, setBulk] = useState<BulkState>(CLOSED);
+  const [bulk, setBulk] = useState<BulkState | null>(null);
 
-  const retireAll = useCallback(async () => {
-    setBulk({ open: true, busy: true });
-    const refused: string[] = [];
-    let retired = 0;
-    // One at a time: each retirement takes its repository's lock, and a run of
-    // them against one repository would only queue behind each other.
-    for (const item of retirable) {
-      try {
-        // `requireIdle`: these rows are a snapshot, so the server asks the
-        // idle rule again under its removal hold before it settles anyone.
-        const result = await retireWorktree(item.worktree.id, {
-          deleteBranch: true,
-          requireIdle: true,
-        });
-        if (result.status === "refused")
-          refused.push(`${item.worktree.branch}: ${result.refusal}`);
-        else retired += 1;
-      } catch (err) {
-        refused.push(
-          `${item.worktree.branch}: ${err instanceof Error ? err.message : String(err)}`,
-        );
+  const retireAll = useCallback(
+    async (targets: IdleWorktree[]) => {
+      setBulk({ targets, busy: true });
+      const refused: string[] = [];
+      let retired = 0;
+      // One at a time: each retirement takes its repository's lock, and a run of
+      // them against one repository would only queue behind each other.
+      for (const item of targets) {
+        try {
+          // `requireIdle`: these rows are a snapshot, so the server asks the
+          // idle rule again under its removal hold before it settles anyone.
+          const result = await retireWorktree(item.worktree.id, {
+            deleteBranch: true,
+            requireIdle: true,
+          });
+          if (result.status === "refused")
+            refused.push(`${item.worktree.branch}: ${result.refusal}`);
+          else retired += 1;
+        } catch (err) {
+          refused.push(
+            `${item.worktree.branch}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
-    }
-    onRetired();
-    if (refused.length > 0) {
-      // Stays in the dialog that asked: the refused ones are still listed.
-      setBulk({
-        open: true,
-        busy: false,
-        error: `${retired} retired; ${refused.length} refused — ${refused.join("; ")}`,
+      onRetired();
+      if (refused.length > 0) {
+        // Stays in the dialog that asked, until it is dismissed.
+        setBulk({
+          targets,
+          busy: false,
+          error: `${retired} retired; ${refused.length} refused — ${refused.join("; ")}`,
+        });
+        return;
+      }
+      setBulk(null);
+      // The rows leave the surface with their checkouts, so the outcome is named.
+      showToast(`Retired ${retired} worktree${retired === 1 ? "" : "s"}.`, {
+        tone: "success",
       });
-      return;
-    }
-    setBulk(CLOSED);
-    // The rows leave the surface with their checkouts, so the outcome is named.
-    showToast(`Retired ${retired} worktree${retired === 1 ? "" : "s"}.`, {
-      tone: "success",
-    });
-  }, [retirable, onRetired]);
+    },
+    [onRetired],
+  );
 
+  // Rendered whatever the list now says (see `BulkState`).
+  const dialog = bulk ? (
+    <BulkRetireDialog
+      bulk={bulk}
+      onConfirm={() => void retireAll(bulk.targets)}
+      onCancel={() => setBulk(null)}
+    />
+  ) : null;
+
+  const error = errorOf(idle);
   if (data === undefined) {
-    const error = errorOf(idle);
     if (error)
-      return <ErrorNote message={error} onRetry={onReload} className="m-1" />;
-    if (idle.status === "idle") return null;
+      return (
+        <>
+          <ErrorNote message={error} onRetry={onReload} className="m-1" />
+          {dialog}
+        </>
+      );
+    if (idle.status === "idle") return dialog;
     return (
-      <div role="status" aria-label="Loading idle worktrees">
-        <Skeleton className="h-11" />
-      </div>
+      <>
+        <div role="status" aria-label="Loading idle worktrees">
+          <Skeleton className="h-11" />
+        </div>
+        {dialog}
+      </>
     );
   }
-  if (rows.length === 0) return null;
-  const error = errorOf(idle);
-  const named = retirable.slice(0, NAMED_IN_DIALOG);
+  // An answered empty queue draws nothing — but a failed refresh still says
+  // so (R2), even over an empty retained answer.
+  if (rows.length === 0)
+    return (
+      <>
+        {error ? (
+          <ErrorNote message={error} onRetry={onReload} className="m-1" />
+        ) : null}
+        {dialog}
+      </>
+    );
   return (
     <section
       aria-labelledby="pull-requests-idle-worktrees"
@@ -240,12 +278,16 @@ export function IdleWorktreesSection({
         >
           Idle worktrees ({rows.length})
         </h2>
+        {/* R2: a poll keeps the rows and says so here. */}
+        {isPending(idle) ? (
+          <RefreshIndicator label="Refreshing idle worktrees" />
+        ) : null}
         {retirable.length > 0 ? (
           <Button
             size="xs"
             variant="ghost"
-            busy={bulk.busy}
-            onClick={() => setBulk({ open: true, busy: false })}
+            busy={bulk?.busy ?? false}
+            onClick={() => setBulk({ targets: retirable, busy: false })}
           >
             Retire {retirable.length}…
           </Button>
@@ -264,39 +306,56 @@ export function IdleWorktreesSection({
           onOpen={onOpenWorktree}
         />
       ))}
-      {bulk.open ? (
-        <ConfirmDialog
-          title={`Retire ${retirable.length} worktree${retirable.length === 1 ? "" : "s"} with nothing unmerged?`}
-          body={
-            <>
-              <p>
-                Each checkout and its local branch is removed after its base
-                branch is refreshed and verified to contain the branch, and
-                after the server confirms nobody started working there since
-                this list was read. One that fails either check is refused and
-                stays. No commit is lost, but files git ignores — a{" "}
-                <code>.env</code>, local databases, caches — go with the
-                checkout. Only worktrees untouched for a day are included.
-              </p>
-              <ul className="mt-1 list-disc pl-4 font-mono text-xs">
-                {named.map((item) => (
-                  <li key={item.worktree.id}>{item.worktree.branch}</li>
-                ))}
-                {retirable.length > named.length ? (
-                  <li>and {retirable.length - named.length} more</li>
-                ) : null}
-              </ul>
-            </>
-          }
-          confirmLabel={`Retire ${retirable.length}`}
-          danger
-          busy={bulk.busy}
-          error={bulk.error ?? null}
-          confirmDisabled={retirable.length === 0}
-          onConfirm={() => void retireAll()}
-          onCancel={() => setBulk(CLOSED)}
-        />
-      ) : null}
+      {dialog}
     </section>
+  );
+}
+
+/** The bulk act's confirmation, over the targets it was opened on. */
+function BulkRetireDialog({
+  bulk,
+  onConfirm,
+  onCancel,
+}: {
+  bulk: BulkState;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const count = bulk.targets.length;
+  const named = bulk.targets.slice(0, NAMED_IN_DIALOG);
+  return (
+    <ConfirmDialog
+      title={`Retire ${count} worktree${count === 1 ? "" : "s"} with nothing unmerged?`}
+      body={
+        <>
+          <p>
+            Each checkout and its local branch is removed after its base branch
+            is refreshed and verified to contain the branch, and after the
+            server confirms nobody started working there since this list was
+            read. One that fails either check is refused and stays. No commit is
+            lost, but files git ignores — a <code>.env</code>, local databases,
+            caches — go with the checkout. Only worktrees untouched for a day
+            are included.
+          </p>
+          <ul className="mt-1 list-disc pl-4 font-mono text-xs">
+            {named.map((item) => (
+              <li key={item.worktree.id}>{item.worktree.branch}</li>
+            ))}
+            {count > named.length ? (
+              <li>and {count - named.length} more</li>
+            ) : null}
+          </ul>
+        </>
+      }
+      confirmLabel={`Retire ${count}`}
+      danger
+      busy={bulk.busy}
+      error={bulk.error ?? null}
+      // A finished run that refused some is answered: it is dismissed, not
+      // re-run over targets the outcome already describes.
+      confirmDisabled={count === 0 || bulk.error !== undefined}
+      onConfirm={onConfirm}
+      onCancel={onCancel}
+    />
   );
 }

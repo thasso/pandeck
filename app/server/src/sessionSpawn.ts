@@ -69,6 +69,8 @@ import {
   mainCheckoutPathForProject,
   resolveWorktreeRow,
 } from "./worktrees/worktreeResolve.ts";
+import { worktreeIdForSession } from "./db/worktreeStore.ts";
+import { broadcastWorktreeList } from "./worktrees/worktrees.ts";
 
 /** How many sessions one proposal may carry: a card nobody can read is not a gate. */
 export const MAX_SPAWN_ROWS = 8;
@@ -779,6 +781,12 @@ async function spawnOne(
       `Session ${sessionId} was created but its metadata could not be persisted.`,
     );
   sessionStore.linkSpawned(senderSessionId, sessionId);
+  // A worktree record names its holders' coordinators (`treeSessionIds`), and
+  // creation broadcast the child's checkout BEFORE this edge existed: say the
+  // list again now, or a coordinator already watching it would hold the peer's
+  // worktree without itself in its tree until some unrelated change.
+  if (worktreeIdForSession(sessionId) !== undefined)
+    void broadcastWorktreeList().catch(() => undefined);
   // The attachments this returns are rebuilt from these same links when peer
   // delivery reaches the session, so they are not carried through the envelope
   // — and `pinProject` is what keeps that rebuild honest across the gap.

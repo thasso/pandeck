@@ -69,6 +69,10 @@ export function idleWorktreeKind(
   status: WorktreeGitStatus,
   pullRequestMerged = false,
 ): Pick<IdleWorktree, "kind" | "ahead" | "pushed" | "changedFiles"> {
+  // No HEAD means git never read this checkout — the status seam absorbs a
+  // failed `git status` into zeros — so its clean, level counts are not an
+  // answer about it. Nothing below may call that delivered.
+  if (status.head === null) return { kind: "unknown" };
   if (status.dirty)
     return {
       kind: "uncommitted",

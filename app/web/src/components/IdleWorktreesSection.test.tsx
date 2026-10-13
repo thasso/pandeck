@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IdleWorktree, WorktreeRecord } from "@assistant/shared";
-import { failed, idle, loading, ready } from "../lib/loadState.ts";
+import { failed, idle, loading, ready, refreshing } from "../lib/loadState.ts";
 
 const hoisted = vi.hoisted(() => ({ retire: vi.fn() }));
 vi.mock("../lib/worktrees.ts", () => ({ retireWorktree: hoisted.retire }));
@@ -138,5 +138,71 @@ describe("IdleWorktreesSection", () => {
     expect(document.body.textContent).toContain(
       "1 retired; 1 refused — branch-c: branch has unmerged commits",
     );
+  });
+});
+
+describe("IdleWorktreesSection bulk dialog", () => {
+  const open = (el: HTMLElement, label: string) =>
+    act(() =>
+      [...el.querySelectorAll("button")]
+        .find((button) => button.textContent?.includes(label))!
+        .click(),
+    );
+  const confirm = (label: string) =>
+    [...document.querySelectorAll("button")].find(
+      (button) => button.textContent === label,
+    )!;
+
+  it("keeps its refusal when the refused checkout leaves the queue", async () => {
+    hoisted.retire.mockResolvedValueOnce({
+      worktreeId: "a",
+      status: "refused",
+      refusal: "a session is live there",
+      refusalKind: "sessions",
+    });
+    // The refusal is what moves the checkout out: the refetch answers empty.
+    const onRetired = vi.fn(() => render(ready([])));
+    const el = render(ready([item("a", "delivered")]), onRetired);
+    open(el, "Retire 1…");
+    await act(async () => {
+      confirm("Retire 1").click();
+    });
+    expect(onRetired).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain(
+      "0 retired; 1 refused — branch-a: a session is live there",
+    );
+    // Answered: dismissed, not re-run.
+    expect(confirm("Retire 1").disabled).toBe(true);
+  });
+
+  it("runs the targets it was opened on while a poll empties the rows", async () => {
+    let settle: (value: unknown) => void = () => {};
+    hoisted.retire.mockImplementationOnce(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const el = render(ready([item("a", "delivered")]));
+    open(el, "Retire 1…");
+    act(() => confirm("Retire 1").click());
+    // A poll lands mid-run with an empty answer.
+    render(ready([]));
+    expect(document.body.textContent).toContain("Retire 1 worktree");
+    await act(async () => {
+      settle({ worktreeId: "a", status: "retired" });
+    });
+    expect(hoisted.retire).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("IdleWorktreesSection retained states", () => {
+  it("states a failed refresh over an empty retained answer", () => {
+    expect(render(failed("idle read failed", [])).textContent).toContain(
+      "idle read failed",
+    );
+  });
+
+  it("marks a refresh over retained rows", () => {
+    const el = render(refreshing([item("a", "uncommitted")]));
+    expect(el.textContent).toContain("Refreshing idle worktrees");
+    expect(el.querySelectorAll("[data-idle-worktree-row]")).toHaveLength(1);
   });
 });

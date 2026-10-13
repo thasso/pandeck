@@ -75,13 +75,18 @@ of the tree see delivery without a provider call of their own:
   worktrees — a checkout shared with its peers included; only a tree that owns
   nothing but the worktree the session runs in, which Details names, draws no
   group — as worktree rows with that mark (`app/web/docs/ui-shell.md`). The
-  panel holds the Worktrees topic only for a session that has a tree to show: a
-  spawned peer in the session list, or worktrees the list it already holds says
-  the tree owns (an old coordinator whose peers were archived). While it shows
-  them the app holds a git watch on exactly those worktrees, so each row states
-  live dirt and drift. Until the list answers, a session with a peer reserves
-  the group, or states a failed read with its retry; a failed refresh keeps the
-  rows and states the failure beside them.
+  panel holds the Worktrees topic whenever it shows a session — gating it on the
+  held list would gate the subscription on the collection it keeps fresh, and a
+  session's first worktree would never arrive. While it shows them the app holds
+  a git watch on exactly those worktrees, so each row states live dirt and
+  drift. Until the list answers, a session with a peer reserves the group, or
+  states a failed read with its retry; a failed refresh keeps the rows and
+  states the failure beside them.
+
+`session_spawn` writes a peer's `spawned` edge after the peer's checkout was
+created and broadcast, so it broadcasts the worktree list once more after that
+edge exists: a coordinator already watching sees its new peer's worktree in its
+tree at once.
 
 Nothing here removes a worktree. A merged pull request leaves its checkout where
 it is; whether to keep working in it or retire it stays the user's call.
@@ -111,7 +116,8 @@ merged with nothing unpushed after it, since a squash merge lands upstream and
 this read never fetches; the retire path verifies against the refreshed base),
 `unmerged` (commits the base does not contain, and whether they are pushed),
 `uncommitted` (a dirty tree), `missing` (the folder is gone) and `unknown` (git
-could not answer, or the base resolves to nothing — never read as delivered).
+could not answer — a status with no HEAD is a read that failed, whatever its
+zero counts say — or the base resolves to nothing — never read as delivered).
 The read runs git status for the candidates only, four at a time, and only while
 the Pull Requests section is on screen (`hooks/useIdleWorktrees.ts`, beside the
 inventory's poll).
@@ -132,8 +138,11 @@ re-asks this whole idle rule for that worktree before AND under its removal hold
 (`worktreeIdleRefusal`): the rows are a snapshot, and a session that started
 working there since refuses the removal instead of being settled by it. Its
 dialog says what "nothing unmerged" does not cover: files git ignores (`.env`,
-local databases, caches) go with the checkout. Any refusal stays in the dialog.
-Nothing is ever removed automatically.
+local databases, caches) go with the checkout. The dialog owns the targets it
+was opened on: a poll, or a refusal that moves a checkout out of the queue,
+neither changes what runs nor closes it, and any refusal stays in it until
+dismissed. The section is its own read, so it shows even while the pull- request
+inventory is loading or has failed. Nothing is ever removed automatically.
 
 ## The creator backfill
 

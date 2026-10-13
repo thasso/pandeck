@@ -77,6 +77,13 @@ test("idleWorktreeKind says what retiring would lose, and never calls unknown cl
     kind: "unknown",
   });
   assert.deepEqual(idleWorktreeKind(status()), { kind: "delivered" });
+  // Git never read it: not clean, whatever else the status says.
+  assert.deepEqual(idleWorktreeKind(status({ head: null, merged: true })), {
+    kind: "unknown",
+  });
+  assert.deepEqual(idleWorktreeKind(status({ head: null }), true), {
+    kind: "unknown",
+  });
   // Merged upstream by squash, local base not fetched yet: still delivered.
   assert.deepEqual(idleWorktreeKind(status({ ahead: 4 }), true), {
     kind: "delivered",
@@ -280,4 +287,46 @@ test("a requireIdle retire refuses under its hold when a holder woke since the s
   );
   assert.equal(plain.status, "retired");
   assert.equal(removed, true);
+});
+
+test("a checkout git cannot read is unknown, through the real status read", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const main = join(tmp, "real-main");
+  mkdirSync(main, { recursive: true });
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      { cwd: main },
+    );
+  git("init", "-b", "main");
+  writeFileSync(join(main, "readme.md"), "x\n");
+  git("add", "-A");
+  git("commit", "-m", "init");
+  git("branch", "broken");
+  // The row names a real branch of a real repository, but its folder is a
+  // plain directory: `git status` there cannot answer.
+  const path = join(tmp, "broken-checkout");
+  mkdirSync(path, { recursive: true });
+  insertWorktree({
+    id: "broken",
+    projectId: "proj",
+    mainRepoRoot: main,
+    path,
+    branch: "broken",
+    baseBranch: "main",
+    baseCommit: git("rev-parse", "main").toString().trim(),
+    status: "active",
+    mergeStateJson: null,
+    branchCleanupOid: null,
+    createdAt: 100,
+    updatedAt: 100,
+    removedAt: null,
+  });
+  const idle = await computeIdleWorktrees();
+  assert.equal(
+    idle.find((item) => item.worktree.id === "broken")?.kind,
+    "unknown",
+  );
 });

@@ -819,9 +819,9 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    it or a peer below it, or run in by one of them, archived peers included — as
    worktree rows, each with its pull request's mark; a tree that owns nothing
    but the worktree the session runs in, which Details names, draws no group.
-   The panel holds the Worktrees topic for it only while the session has a tree
-   to show. A group may bound its first page (a session's Tasks shows five) and
-   reveal the rest on demand.
+   The panel holds the Worktrees topic whenever it shows a session. A group may
+   bound its first page (a session's Tasks shows five) and reveal the rest on
+   demand.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

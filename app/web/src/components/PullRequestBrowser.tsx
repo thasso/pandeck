@@ -311,19 +311,41 @@ export function PullRequestBrowser({
   // R1/R4: the first load reserves the rows' height rather than claiming there
   // is nothing here. `items === undefined` is the only state that may do so —
   // once an answer landed, even a failed refresh keeps rendering it.
+  // The idle half of the cleanup queue is its own read: an inventory that has
+  // not answered — or failed — must not hide checkouts the idle read found.
+  // Before the inventory answers it covers nothing, so nothing is deduplicated.
+  const idleSection = idle ? (
+    <IdleWorktreesSection
+      idle={idle.state}
+      fetchedAt={idle.fetchedAt}
+      pullRequests={items}
+      projects={projectsById}
+      query={query}
+      density={density}
+      onReload={idle.onReload}
+      onOpenWorktree={idle.onOpenWorktree}
+      onRetired={idle.onRetired}
+    />
+  ) : null;
+
   if (items === undefined) {
     const error = errorOf(inventory);
-    if (error)
-      return <ErrorNote message={error} onRetry={onReload} className="m-1" />;
     return (
-      <div
-        role="status"
-        aria-label="Loading pull requests"
-        className="flex flex-col gap-px"
-      >
-        {[0, 1, 2].map((row) => (
-          <Skeleton key={row} className="h-11" />
-        ))}
+      <div className="flex flex-col gap-px">
+        {error ? (
+          <ErrorNote message={error} onRetry={onReload} className="m-1" />
+        ) : (
+          <div
+            role="status"
+            aria-label="Loading pull requests"
+            className="flex flex-col gap-px"
+          >
+            {[0, 1, 2].map((row) => (
+              <Skeleton key={row} className="h-11" />
+            ))}
+          </div>
+        )}
+        {idleSection}
       </div>
     );
   }
@@ -396,19 +418,7 @@ export function PullRequestBrowser({
         </section>
       ))}
 
-      {idle ? (
-        <IdleWorktreesSection
-          idle={idle.state}
-          fetchedAt={idle.fetchedAt}
-          pullRequests={items}
-          projects={projectsById}
-          query={query}
-          density={density}
-          onReload={idle.onReload}
-          onOpenWorktree={idle.onOpenWorktree}
-          onRetired={idle.onRetired}
-        />
-      ) : null}
+      {idleSection}
     </div>
   );
 }

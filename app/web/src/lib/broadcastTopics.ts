@@ -21,8 +21,9 @@ export interface TopicSurface {
   /** The session inspector is on screen for a persisted session. */
   backgroundInspectorVisible?: boolean;
   /**
-   * The session inspector is on screen for the routed session, listing the
-   * worktrees its spawn tree owns.
+   * The session inspector is on screen for the routed session, where it lists
+   * the worktrees that session's spawn tree owns — whatever the held list says
+   * today, since the subscription is what tells it about tomorrow's.
    */
   sessionTreeWorktreesVisible?: boolean;
   /** The composer's background ledge is expanded and listing rows. */
