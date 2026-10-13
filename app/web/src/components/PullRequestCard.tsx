@@ -465,6 +465,9 @@ function usePullRequestCardActions({
                 onAction(card.id, "merge", {
                   mergeMethod: selectedMethod,
                   deleteBranch,
+                  // The base this user is looking at: if the card has moved
+                  // on since, the server refuses rather than merging there.
+                  expectedBaseBranch: card.baseBranch,
                 })
               }
             />

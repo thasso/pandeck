@@ -24,6 +24,7 @@ import type { PullRequestReadiness } from "../pullRequestCheckWatch.ts";
 import {
   createWorktreeFinishPullRequestTool,
   createWorktreeReadyPullRequestTool,
+  createWorktreeRetargetPullRequestTool,
   managedPullRequestMergeApprovalExecutor,
   setManagedMergeApprovalOperationsForTests,
   type WorktreeFinishPullRequestOperations,
@@ -263,6 +264,7 @@ function operations(
     },
     ...overrides,
     projectReady: overrides.projectReady ?? (() => {}),
+    projectRetarget: overrides.projectRetarget ?? (() => {}),
     inventoryChanged: overrides.inventoryChanged ?? (() => {}),
   };
 }
@@ -418,6 +420,302 @@ describe("managed draft to ready", () => {
     );
     assert.equal(wrote, false);
     assert.equal(ops.calls.released, 1);
+  });
+});
+
+describe("managed base retarget", () => {
+  const OLD_BASE = "stack-parent";
+
+  /** A provider whose pull request moves to `row.baseBranch` once retargeted. */
+  function retargetable(patch: Partial<GitHostingProvider> = {}) {
+    const writes: Array<{ number: number; base: string }> = [];
+    let base = OLD_BASE;
+    const hosted = provider({
+      pullRequestDetail: async () => ({
+        number: 91,
+        state: "open",
+        merged: false,
+        mergeable: true,
+        draft: false,
+        headSha: HEAD,
+        headBranch: row.branch,
+        baseBranch: base,
+      }),
+      retargetPullRequest: async (number, next) => {
+        writes.push({ number, base: next });
+        base = next;
+      },
+      ...patch,
+    });
+    return { hosted, writes };
+  }
+
+  function retargetOperations(
+    hosted: GitHostingProvider,
+    overrides: Partial<WorktreeFinishPullRequestOperations> = {},
+  ) {
+    return operations({
+      hosting: async () => ({
+        provider: hosted,
+        repository: hosted.repository!,
+      }),
+      cards: async () => [managedCard({ baseBranch: OLD_BASE })],
+      ...overrides,
+    });
+  }
+
+  test("moves the pull request onto the worktree's base and updates its cards", async () => {
+    const { hosted, writes } = retargetable();
+    const projected: string[] = [];
+    const invalidated: number[] = [];
+    const ops = retargetOperations(hosted, {
+      projectRetarget: (cards, base) =>
+        projected.push(`${cards.map((card) => card.id).join(",")}:${base}`),
+      inventoryChanged: (_provider, number) => invalidated.push(number),
+    });
+    const tool = createWorktreeRetargetPullRequestTool(ops);
+    assert.deepEqual(
+      Object.keys(
+        (tool.parameters as { properties: Record<string, unknown> }).properties,
+      ),
+      ["worktreeId"],
+    );
+    const result = await tool.execute({ worktreeId: row.id }, context());
+    assert.equal(details(result).status, "retargeted");
+    assert.equal(details(result).previousBaseBranch, OLD_BASE);
+    assert.equal(details(result).baseBranch, row.baseBranch);
+    assert.deepEqual(writes, [{ number: 91, base: row.baseBranch }]);
+    assert.deepEqual(projected, [`card-managed:${row.baseBranch}`]);
+    assert.deepEqual(invalidated, [91]);
+    assert.equal(ops.calls.released, 1);
+  });
+
+  test("a pull request already on the base only repairs stale cards", async () => {
+    const { hosted, writes } = retargetable();
+    await hosted.retargetPullRequest(91, row.baseBranch);
+    writes.length = 0;
+    const projected: string[] = [];
+    const ops = retargetOperations(hosted, {
+      cards: async () => [
+        managedCard({ id: "card-stale", baseBranch: OLD_BASE }),
+        managedCard({ id: "card-current" }),
+      ],
+      projectRetarget: (cards, base) =>
+        projected.push(`${cards.map((card) => card.id).join(",")}:${base}`),
+    });
+    const result = await createWorktreeRetargetPullRequestTool(ops).execute(
+      { worktreeId: row.id },
+      context(),
+    );
+    assert.equal(details(result).status, "unchanged");
+    assert.deepEqual(writes, []);
+    assert.deepEqual(projected, [`card-stale:${row.baseBranch}`]);
+  });
+
+  test("refuses a moved head before the provider write", async () => {
+    let reads = 0;
+    const { hosted, writes } = retargetable({
+      pullRequestDetail: async () => ({
+        number: 91,
+        state: "open",
+        merged: false,
+        mergeable: true,
+        draft: false,
+        headSha: ++reads === 1 ? HEAD : "d".repeat(40),
+        headBranch: row.branch,
+        baseBranch: OLD_BASE,
+      }),
+    });
+    await assert.rejects(
+      createWorktreeRetargetPullRequestTool(retargetOperations(hosted)).execute(
+        { worktreeId: row.id },
+        context(),
+      ),
+      /changed while preparing to retarget/,
+    );
+    assert.deepEqual(writes, []);
+  });
+
+  test("a provider refusal names the base and leaves the cards alone", async () => {
+    const { hosted } = retargetable({
+      retargetPullRequest: async () => {
+        throw new Error("Validation Failed: base does not exist");
+      },
+    });
+    const projected: string[] = [];
+    const ops = retargetOperations(hosted, {
+      projectRetarget: () => projected.push("projected"),
+    });
+    await assert.rejects(
+      createWorktreeRetargetPullRequestTool(ops).execute(
+        { worktreeId: row.id },
+        context(),
+      ),
+      /refused to retarget pull request #91 onto release-2: Validation Failed.*push it first/,
+    );
+    assert.deepEqual(projected, []);
+    assert.equal(ops.calls.released, 1);
+  });
+
+  test("a retarget the provider does not reflect is partial and not projected", async () => {
+    const { hosted } = retargetable({ retargetPullRequest: async () => {} });
+    const projected: string[] = [];
+    const result = await createWorktreeRetargetPullRequestTool(
+      retargetOperations(hosted, {
+        projectRetarget: () => projected.push("projected"),
+      }),
+    ).execute({ worktreeId: row.id }, context());
+    assert.equal(details(result).status, "retargeted-partial");
+    assert.match(
+      String((details(result).warnings as string[])[0]),
+      /still reports base stack-parent/,
+    );
+    assert.deepEqual(projected, []);
+  });
+
+  test("a write whose response was lost but which landed is reported, not refused", async () => {
+    let base = OLD_BASE;
+    const { hosted } = retargetable({
+      pullRequestDetail: async () => ({
+        number: 91,
+        state: "open",
+        merged: false,
+        mergeable: true,
+        draft: false,
+        headSha: HEAD,
+        headBranch: row.branch,
+        baseBranch: base,
+      }),
+      retargetPullRequest: async (_number, next) => {
+        base = next;
+        throw new Error("socket hang up");
+      },
+    });
+    const projected: string[] = [];
+    const result = await createWorktreeRetargetPullRequestTool(
+      retargetOperations(hosted, {
+        projectRetarget: (_cards, next) => projected.push(next),
+      }),
+    ).execute({ worktreeId: row.id }, context());
+    assert.equal(details(result).status, "retargeted-partial");
+    assert.match(
+      String((details(result).warnings as string[]).join(" ")),
+      /reported an error \(socket hang up\), but the pull request now targets release-2/,
+    );
+    assert.deepEqual(projected, [row.baseBranch]);
+  });
+
+  test("a failed write whose outcome cannot be read back is unknown, not refused", async () => {
+    let reads = 0;
+    const { hosted } = retargetable({
+      pullRequestDetail: async () => {
+        if (++reads > 2) throw new Error("read timed out");
+        return {
+          number: 91,
+          state: "open",
+          merged: false,
+          mergeable: true,
+          draft: false,
+          headSha: HEAD,
+          headBranch: row.branch,
+          baseBranch: OLD_BASE,
+        };
+      },
+      retargetPullRequest: async () => {
+        throw new Error("socket hang up");
+      },
+    });
+    await assert.rejects(
+      createWorktreeRetargetPullRequestTool(retargetOperations(hosted)).execute(
+        { worktreeId: row.id },
+        context(),
+      ),
+      (error: Error) =>
+        /whether it landed is unknown: it could not be read back \(read timed out\)/.test(
+          error.message,
+        ) && !/refused/.test(error.message),
+    );
+  });
+
+  test("a pull request that moved during the write is partial and left to the watcher", async () => {
+    let base = OLD_BASE;
+    let moved = false;
+    const { hosted } = retargetable({
+      pullRequestDetail: async () => ({
+        number: 91,
+        state: "open",
+        merged: false,
+        mergeable: true,
+        draft: false,
+        headSha: moved ? "e".repeat(40) : HEAD,
+        headBranch: row.branch,
+        baseBranch: base,
+      }),
+      retargetPullRequest: async (_number, next) => {
+        base = next;
+        moved = true;
+      },
+    });
+    const projected: string[] = [];
+    const result = await createWorktreeRetargetPullRequestTool(
+      retargetOperations(hosted, {
+        projectRetarget: () => projected.push("projected"),
+      }),
+    ).execute({ worktreeId: row.id }, context());
+    assert.equal(details(result).status, "retargeted-partial");
+    assert.match(
+      String((details(result).warnings as string[])[0]),
+      /also changed during the retarget .*eeee/,
+    );
+    assert.deepEqual(projected, []);
+  });
+
+  test("a pull request merged during the write is partial and left to the watcher", async () => {
+    let base = OLD_BASE;
+    let merged = false;
+    const { hosted } = retargetable({
+      pullRequestDetail: async () => ({
+        number: 91,
+        state: merged ? "merged" : "open",
+        merged,
+        mergeable: true,
+        draft: false,
+        headSha: HEAD,
+        headBranch: row.branch,
+        baseBranch: base,
+      }),
+      retargetPullRequest: async (_number, next) => {
+        base = next;
+        merged = true;
+      },
+    });
+    const projected: string[] = [];
+    const result = await createWorktreeRetargetPullRequestTool(
+      retargetOperations(hosted, {
+        projectRetarget: () => projected.push("projected"),
+      }),
+    ).execute({ worktreeId: row.id }, context());
+    assert.equal(details(result).status, "retargeted-partial");
+    assert.match(
+      String((details(result).warnings as string[])[0]),
+      /also changed during the retarget \(merged/,
+    );
+    assert.deepEqual(projected, []);
+  });
+
+  test("a card owned by another worktree still refuses", async () => {
+    const { hosted, writes } = retargetable();
+    await assert.rejects(
+      createWorktreeRetargetPullRequestTool(
+        retargetOperations(hosted, {
+          cards: async () => [
+            managedCard({ baseBranch: OLD_BASE, worktreeId: "wt-other" }),
+          ],
+        }),
+      ).execute({ worktreeId: row.id }, context()),
+      /owned by worktree wt-other/,
+    );
+    assert.deepEqual(writes, []);
   });
 });
 
@@ -724,7 +1022,7 @@ describe("target resolution", () => {
         { worktreeId: row.id, action: "merge", method: "squash" },
         context(),
       ),
-      /this worktree is registered for/,
+      /this worktree is registered for .*Run worktree_retarget_pull_request/,
     );
   });
 

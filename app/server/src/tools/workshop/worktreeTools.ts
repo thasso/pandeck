@@ -257,7 +257,7 @@ const worktreeSetBase = defineAgentTool<{
   name: "worktree_set_base",
   label: "Set managed worktree base",
   description:
-    "Change an active registered spawned worktree's recorded merge-back and future pull-request base to an existing local branch. The server records its common ancestor with the managed branch for whole-branch diffs. This changes PA metadata only: it does not rebase commits, push, or retarget an existing provider pull request. The result warns about open managed pull requests that still use their old base. It refuses synthetic main, a branch targeting itself, unrelated history, an in-progress merge, and a worktree another session may still be changing.",
+    "Change an active registered spawned worktree's recorded merge-back and future pull-request base to an existing local branch. The server records its common ancestor with the managed branch for whole-branch diffs. This changes PA metadata only: it does not rebase commits, push, or retarget an existing provider pull request; follow with worktree_retarget_pull_request for that. The result warns about open managed pull requests whose base differs. It refuses synthetic main, a branch targeting itself, unrelated history, an in-progress merge, and a worktree another session may still be changing.",
   parameters: setBaseSchema as unknown as Record<string, unknown>,
   async execute(params, ctx) {
     const worktreeId = params.worktreeId?.trim();
@@ -283,7 +283,10 @@ const worktreeSetBase = defineAgentTool<{
       // Read warnings before the metadata mutation. A card-store read failure
       // must not turn a successful retarget into a thrown tool call.
       const openPullRequests = openPullRequestCards()
-        .filter((card) => card.worktreeId === initial.id)
+        .filter(
+          (card) =>
+            card.worktreeId === initial.id && card.baseBranch !== baseBranch,
+        )
         .map((card) => ({
           provider: card.provider,
           number: card.number,
@@ -304,7 +307,7 @@ const worktreeSetBase = defineAgentTool<{
                 ? { openPullRequestsTruncated: true }
                 : {}),
               warnings: [
-                `${openPullRequests.length} open managed pull request${openPullRequests.length === 1 ? "" : "s"} still use${openPullRequests.length === 1 ? "s" : ""} the provider base recorded on the existing card${openPullRequests.length === 1 ? "" : "s"}. This metadata change did not retarget them; do not create another pull request until you inspect and settle the existing one${openPullRequests.length === 1 ? "" : "s"}.`,
+                `${openPullRequests.length} open managed pull request${openPullRequests.length === 1 ? "" : "s"} still target${openPullRequests.length === 1 ? "s" : ""} another base. This metadata change did not retarget ${openPullRequests.length === 1 ? "it" : "them"}; call worktree_retarget_pull_request to move the pull request onto ${baseBranch}, and do not create another pull request for this branch.`,
               ],
             }
           : {}),

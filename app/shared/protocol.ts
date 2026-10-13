@@ -3969,6 +3969,14 @@ export type PullRequestCardAction = (typeof PULL_REQUEST_CARD_ACTIONS)[number];
 export interface PullRequestCardActionOptions {
   mergeMethod?: PullRequestMergeMethod;
   /**
+   * The base the merge was decided for — what the clicking user saw on the
+   * card, or a Workflow Run's worktree base. Required for `merge`: the card
+   * follows a pull request retargeted elsewhere, so the stored base can move
+   * between seeing the card and the click landing, and a merge must not follow
+   * it silently.
+   */
+  expectedBaseBranch?: string;
+  /**
    * Default true: the remote head branch is deleted as part of the merge call.
    * `false` KEEPS it — the explicit opt-out, per merge.
    */
@@ -7023,7 +7031,8 @@ export type ClientMessage =
    * for `merge` and ignored otherwise — the method is a per-merge decision, so
    * it travels with the click rather than with the card, and so does
    * `deleteBranch` (omitted or true = delete the remote branch, false = keep
-   * it).
+   * it). `baseBranch` is required for `merge` too: the base the user saw, which
+   * the server refuses to merge past if the card has since been retargeted.
    */
   | {
       type: "pullRequestCardAction";
@@ -7031,6 +7040,7 @@ export type ClientMessage =
       action: PullRequestCardAction;
       mergeMethod?: PullRequestMergeMethod;
       deleteBranch?: boolean;
+      baseBranch?: string;
       /** Correlates this modelled mutation with its settle/error outcome. */
       requestId?: string;
     }

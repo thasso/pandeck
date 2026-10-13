@@ -1097,9 +1097,13 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
         )
       )
         return `mergeMethod must be one of ${PULL_REQUEST_MERGE_METHODS.join(", ")} for a merge`;
+      if (!isString(msg.baseBranch) || !msg.baseBranch)
+        return "baseBranch is required for a merge";
     } else if (hasOwn(msg, "mergeMethod") && !isString(msg.mergeMethod)) {
       return "mergeMethod must be a string";
     }
+    if (hasOwn(msg, "baseBranch") && !isString(msg.baseBranch))
+      return "baseBranch must be a string";
     // Keeping the remote branch is an explicit opt-out, so only a real boolean
     // is accepted: a truthy string must never read as "delete it".
     if (hasOwn(msg, "deleteBranch") && typeof msg.deleteBranch !== "boolean")

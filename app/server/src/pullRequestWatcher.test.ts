@@ -72,6 +72,7 @@ function fakeProvider(
       throw new Error("not used");
     },
     markPullRequestReady: async () => ({}),
+    retargetPullRequest: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -148,6 +149,20 @@ test("a watcher observation clears a draft when the provider reports ready", asy
   await sweepPullRequestWatcherForTests();
 
   assert.equal(pullRequestCardById(card.id)?.draft, undefined);
+});
+
+test("a watcher observation follows a base retargeted on the provider", async () => {
+  const card = openCard();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () => detail({ baseBranch: "release-2" }),
+    }),
+  );
+
+  await sweepPullRequestWatcherForTests();
+
+  assert.equal(pullRequestCardById(card.id)?.baseBranch, "release-2");
+  assert.equal(pullRequestCardRecord(card.id)?.context.baseBranch, "release-2");
 });
 
 test("a ready projection invalidates an in-flight draft observation", () => {
@@ -317,6 +332,59 @@ test("a confirmed conflict survives the count being forgotten", async () => {
   );
   await sweepPullRequestWatcherForTests();
   assert.equal(pullRequestCardById(card.id)?.conflicts, true);
+});
+
+// A retarget keeps the head, so a count keyed on the head alone would pair a
+// `false` about the old base with Forgejo's queued `false` about the new one.
+test("a conflicting read about the old base does not confirm one on the new base", async () => {
+  const card = openCard();
+  let base = "main";
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () =>
+        detail({ mergeable: false, baseBranch: base }),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(card.id)?.conflicts, false);
+
+  base = "release-2";
+  scheduleImmediatePoll(card.id);
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(card.id)?.baseBranch, "release-2");
+  assert.equal(
+    pullRequestCardById(card.id)?.conflicts,
+    false,
+    "the first read about the new base is a question, not a verdict",
+  );
+
+  scheduleImmediatePoll(card.id);
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(card.id)?.conflicts, true);
+});
+
+test("a conflict the card stated about the old base does not carry to the new one", async () => {
+  const card = openCard();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () => detail({ mergeable: false }),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  scheduleImmediatePoll(card.id);
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(card.id)?.conflicts, true);
+
+  // A restart forgets the count; the card's own statement is about `main`.
+  resetPullRequestWatcherForTests();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () =>
+        detail({ mergeable: false, baseBranch: "release-2" }),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(card.id)?.conflicts, false);
 });
 
 // The card claims the agent holds the branch only until the branch MOVES: the

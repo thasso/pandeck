@@ -1169,6 +1169,7 @@ export class Connection implements Viewer {
         return this.onPullRequestCardAction(msg.cardId, msg.action, {
           ...(msg.mergeMethod ? { mergeMethod: msg.mergeMethod } : {}),
           ...(msg.deleteBranch === false ? { deleteBranch: false } : {}),
+          ...(msg.baseBranch ? { expectedBaseBranch: msg.baseBranch } : {}),
         });
       case "listWorktrees":
         return this.onListWorktrees(msg.projectId);

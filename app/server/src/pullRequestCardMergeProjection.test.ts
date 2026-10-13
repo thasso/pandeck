@@ -91,6 +91,7 @@ function provider(onMerge: () => void = () => undefined): GitHostingProvider {
       throw new Error("not used");
     },
     markPullRequestReady: async () => ({}),
+    retargetPullRequest: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -164,7 +165,7 @@ test("a card whose projection write failed is still landed by its own action", a
   const { card: updated } = await runPullRequestCardAction(
     subject.id,
     "merge",
-    { mergeMethod: "squash" },
+    { mergeMethod: "squash", expectedBaseBranch: "main" },
     operations,
   );
 

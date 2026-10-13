@@ -24,6 +24,7 @@ import type {
   ApprovalCard,
   ManagedPullRequestMergeApprovalBody,
   PullRequestCard,
+  PullRequestDetail,
   PullRequestMergeMethod,
   PullRequestRepositoryCapabilities,
   TaskSummary,
@@ -143,6 +144,7 @@ export interface WorktreeFinishPullRequestOperations {
   task(taskId: string): TaskSummary | undefined;
   invalidate(worktreeId: string): void;
   projectReady(cards: PullRequestCard[], headSha: string, title?: string): void;
+  projectRetarget(cards: PullRequestCard[], baseBranch: string): void;
   inventoryChanged(provider: GitHostingProvider, number: number): void;
 }
 
@@ -198,6 +200,18 @@ const defaultFinishPullRequestOperations: WorktreeFinishPullRequestOperations =
             ...(title ? { title } : {}),
           },
           { observationToken: randomUUID(), observedHeadSha: headSha },
+        );
+        scheduleImmediatePoll(card.id);
+      }
+    },
+    projectRetarget(cards, baseBranch) {
+      for (const card of cards) {
+        // A new base answers mergeability and conflicts afresh; drop the old
+        // base's answers and any in-flight poll that read them.
+        patchPullRequestCard(
+          card.id,
+          { baseBranch, mergeable: undefined, conflicts: undefined },
+          { baseBranch, observationToken: randomUUID() },
         );
         scheduleImmediatePoll(card.id);
       }
@@ -298,122 +312,321 @@ export function createWorktreeReadyPullRequestTool(
       },
     },
     async execute(params, ctx) {
-      const worktreeId = params.worktreeId?.trim();
-      if (!worktreeId || isMainWorktreeId(worktreeId))
-        throw new Error("An active spawned worktree id is required.");
-      const initial = await operations.resolve(worktreeId);
-      if (!initial || initial.status !== "active")
-        throw new Error("That active managed worktree is not available.");
-      const release = operations.reserve(
-        initial.id,
-        ctx.session.sessionId,
+      return withReservedManagedTarget(
+        params.worktreeId,
+        ctx,
+        operations,
         "A checked agent pull-request ready transition is in progress in this worktree.",
-      );
-      if (!release) throw new Error(BUSY_REFUSAL);
-      try {
-        const row = await operations.resolve(worktreeId);
-        if (
-          !row ||
-          row.status !== "active" ||
-          row.id !== initial.id ||
-          row.path !== initial.path ||
-          row.branch !== initial.branch ||
-          row.baseBranch !== initial.baseBranch ||
-          row.projectId !== initial.projectId
-        )
-          throw new Error(
-            "The managed worktree target changed or was removed.",
-          );
-        const target = await resolveManagedTarget(row, operations, ctx.signal);
-        if (!target.draft)
-          throw new Error(
-            `Pull request #${target.number} is already ready for review; nothing was changed.`,
-          );
-        return await withPullRequestMutation(
-          {
-            repoPath: row.path,
-            providerKind: target.hosted.provider.kind,
-            number: target.number,
-          },
-          "a ready-for-review transition",
-          async () => {
-            const detail = await target.hosted.provider.pullRequestDetail(
-              target.number,
+        {},
+        async (target) => {
+          if (!target.draft)
+            throw new Error(
+              `Pull request #${target.number} is already ready for review; nothing was changed.`,
             );
-            if (
-              !detail ||
-              detail.number !== target.number ||
-              detail.state !== "open" ||
-              detail.merged ||
-              !detail.draft ||
-              detail.headSha.toLowerCase() !== target.headSha.toLowerCase() ||
-              detail.headBranch !== target.headBranch ||
-              detail.baseBranch !== target.baseBranch
-            )
-              throw new Error(
-                `Pull request #${target.number} changed while preparing to mark it ready; nothing was changed.`,
-              );
-            let ready: { title?: string };
-            let inventoryWarning: string | undefined;
-            try {
-              ready = await target.hosted.provider.markPullRequestReady(
+          return withPullRequestMutation(
+            {
+              repoPath: target.row.path,
+              providerKind: target.hosted.provider.kind,
+              number: target.number,
+              repoUrl: target.hosted.provider.repoWebUrl,
+            },
+            "a ready-for-review transition",
+            async () => {
+              const detail = await target.hosted.provider.pullRequestDetail(
                 target.number,
               );
-            } finally {
-              // The write may have landed even if the provider's response was
-              // lost. An invalidation failure must not turn a successful write
-              // into a reported provider failure either.
+              if (
+                !detail ||
+                detail.number !== target.number ||
+                detail.state !== "open" ||
+                detail.merged ||
+                !detail.draft ||
+                detail.headSha.toLowerCase() !== target.headSha.toLowerCase() ||
+                detail.headBranch !== target.headBranch ||
+                detail.baseBranch !== target.baseBranch
+              )
+                throw new Error(
+                  `Pull request #${target.number} changed while preparing to mark it ready; nothing was changed.`,
+                );
+              let ready: { title?: string };
+              let inventoryWarning: string | undefined;
               try {
-                operations.inventoryChanged(
-                  target.hosted.provider,
+                ready = await target.hosted.provider.markPullRequestReady(
                   target.number,
                 );
-              } catch (error) {
-                inventoryWarning = `The PR inventory could not be refreshed: ${error instanceof Error ? error.message : String(error)}.`;
+              } finally {
+                inventoryWarning = recordInventoryChange(operations, target);
               }
-            }
-            let projectionWarning: string | undefined;
-            try {
-              operations.projectReady(
-                target.cards,
-                target.headSha,
-                ready.title,
-              );
-            } catch (error) {
-              projectionWarning = `The pull request was marked ready, but its card could not be updated: ${error instanceof Error ? error.message : String(error)}. The watcher will reconcile it.`;
-              for (const card of target.cards) scheduleImmediatePoll(card.id);
-            }
-            return jsonResult({
-              status:
-                projectionWarning || inventoryWarning
-                  ? "ready-partial"
-                  : "ready",
-              provider: target.hosted.provider.kind,
-              number: target.number,
-              url: target.url,
-              headSha: target.headSha,
-              cardIds: target.cards.map((card) => card.id),
-              ...(projectionWarning ? { projectionWarning } : {}),
-              ...(inventoryWarning ? { inventoryWarning } : {}),
-              message: [
-                "Pull request marked ready for review. Re-check checks, review and mergeability before merging.",
-                inventoryWarning,
-                projectionWarning,
-              ]
-                .filter(Boolean)
-                .join(" "),
-            });
-          },
-        );
-      } finally {
-        try {
-          operations.invalidate(initial.id);
-        } finally {
-          release();
-        }
-      }
+              let projectionWarning: string | undefined;
+              try {
+                operations.projectReady(
+                  target.cards,
+                  target.headSha,
+                  ready.title,
+                );
+              } catch (error) {
+                projectionWarning = `The pull request was marked ready, but its card could not be updated: ${errorText(error)}. The watcher will reconcile it.`;
+                for (const card of target.cards) scheduleImmediatePoll(card.id);
+              }
+              return jsonResult({
+                status:
+                  projectionWarning || inventoryWarning
+                    ? "ready-partial"
+                    : "ready",
+                provider: target.hosted.provider.kind,
+                number: target.number,
+                url: target.url,
+                headSha: target.headSha,
+                cardIds: target.cards.map((card) => card.id),
+                ...(projectionWarning ? { projectionWarning } : {}),
+                ...(inventoryWarning ? { inventoryWarning } : {}),
+                message: [
+                  "Pull request marked ready for review. Re-check checks, review and mergeability before merging.",
+                  inventoryWarning,
+                  projectionWarning,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              });
+            },
+          );
+        },
+      );
     },
   });
+}
+
+export function createWorktreeRetargetPullRequestTool(
+  operations: WorktreeFinishPullRequestOperations = defaultFinishPullRequestOperations,
+): AgentTool<{ worktreeId: string }> & AgentTool {
+  return defineAgentTool<{ worktreeId: string }>({
+    name: "worktree_retarget_pull_request",
+    label: "Retarget managed pull request",
+    description:
+      "Move the canonical open pull request of an active registered spawned worktree onto the worktree's recorded base on GitHub or Forgejo, e.g. after worktree_set_base when a stacked parent has merged. The base always comes from the worktree (change it with worktree_set_base first) and must already exist on the remote. Re-reads the PR under the mutation lock, refuses a moved head or ambiguous PRs, and updates the live cards. Pre-authorized for a managed worktree; it neither rebases nor merges. The new base re-decides checks, review and mergeability, so watch checks again before worktree_finish_pull_request.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["worktreeId"],
+      properties: {
+        worktreeId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "Active registered spawned worktree id; no repository, PR number, ref or base is accepted.",
+        },
+      },
+    },
+    async execute(params, ctx) {
+      return withReservedManagedTarget(
+        params.worktreeId,
+        ctx,
+        operations,
+        "A checked agent pull-request retarget is in progress in this worktree.",
+        { baseMayDiffer: true },
+        async (target) => {
+          const base = target.row.baseBranch;
+          const summary = {
+            provider: target.hosted.provider.kind,
+            number: target.number,
+            url: target.url,
+            headSha: target.headSha,
+            previousBaseBranch: target.baseBranch,
+            baseBranch: base,
+            cardIds: target.cards.map((card) => card.id),
+          };
+          if (target.baseBranch === base) {
+            // Nothing to write; a card that missed an earlier retarget (one
+            // made in the provider UI) is brought in line with the provider.
+            const stale = target.cards.filter(
+              (card) => card.baseBranch !== base,
+            );
+            if (stale.length > 0) operations.projectRetarget(stale, base);
+            return jsonResult({
+              status: "unchanged",
+              ...summary,
+              message: `Pull request #${target.number} already targets ${base}; nothing was changed on ${target.hosted.provider.kind}.`,
+            });
+          }
+          return withPullRequestMutation(
+            {
+              repoPath: target.row.path,
+              providerKind: target.hosted.provider.kind,
+              number: target.number,
+              repoUrl: target.hosted.provider.repoWebUrl,
+            },
+            "a base retarget",
+            async () => {
+              const provider = target.hosted.provider;
+              const detail = await provider.pullRequestDetail(target.number);
+              if (
+                !detail ||
+                detail.number !== target.number ||
+                detail.state !== "open" ||
+                detail.merged ||
+                detail.headSha.toLowerCase() !== target.headSha.toLowerCase() ||
+                detail.headBranch !== target.headBranch ||
+                detail.baseBranch !== target.baseBranch
+              )
+                throw new Error(
+                  `Pull request #${target.number} changed while preparing to retarget it; nothing was changed.`,
+                );
+              let inventoryWarning: string | undefined;
+              let writeError: unknown;
+              try {
+                await provider.retargetPullRequest(target.number, base);
+              } catch (error) {
+                // A rejected request is not proof nothing landed: a response
+                // lost after the PATCH applied looks the same. The read-back
+                // below decides which it was.
+                writeError = error ?? new Error("unknown error");
+              } finally {
+                inventoryWarning = recordInventoryChange(operations, target);
+              }
+              // The edit has no precondition, so its outcome is what the
+              // provider reports afterwards, not what was asked for.
+              let after: PullRequestDetail | null = null;
+              let readError: unknown;
+              try {
+                after = await provider.pullRequestDetail(target.number);
+              } catch (error) {
+                readError = error ?? new Error("unknown error");
+              }
+              if (writeError !== undefined) {
+                for (const card of target.cards) scheduleImmediatePoll(card.id);
+                if (after?.baseBranch === target.baseBranch)
+                  throw new Error(
+                    `${provider.kind} refused to retarget pull request #${target.number} onto ${base}: ${errorText(writeError)} If ${base} is not on the remote yet, push it first.`,
+                  );
+                if (after?.baseBranch !== base)
+                  throw new Error(
+                    `Retargeting pull request #${target.number} onto ${base} failed (${errorText(writeError)}), and whether it landed is unknown: ${after ? `the pull request now reports base ${after.baseBranch || "(unreported)"}` : `it could not be read back (${errorText(readError)})`}. Read the pull request before retrying.`,
+                  );
+              }
+              let confirmWarning: string | undefined;
+              if (!after)
+                confirmWarning = `The retarget was sent, but its result could not be read back: ${errorText(readError ?? "the pull request was not found")}.`;
+              else if (after.baseBranch !== base)
+                confirmWarning = `The retarget was sent, but pull request #${target.number} still reports base ${after.baseBranch || "(unreported)"}.`;
+              else if (
+                after.number !== target.number ||
+                after.state !== "open" ||
+                after.merged ||
+                after.headBranch !== target.headBranch ||
+                after.headSha.toLowerCase() !== target.headSha.toLowerCase()
+              )
+                // The base landed, but on a pull request that moved under
+                // the unconditioned write; its cards are the watcher's.
+                confirmWarning = `Pull request #${target.number} now targets ${base}, but it also changed during the retarget (${after.merged ? "merged" : after.state}, head ${after.headBranch}@${after.headSha || "(unreported)"}); its cards are left to the watcher.`;
+              const writeWarning =
+                writeError !== undefined
+                  ? `The provider reported an error (${errorText(writeError)}), but the pull request now targets ${base}.`
+                  : undefined;
+              let projectionWarning: string | undefined;
+              if (confirmWarning) {
+                for (const card of target.cards) scheduleImmediatePoll(card.id);
+              } else {
+                try {
+                  operations.projectRetarget(target.cards, base);
+                } catch (error) {
+                  projectionWarning = `The pull request was retargeted, but its card could not be updated: ${errorText(error)}. The watcher will reconcile it.`;
+                  for (const card of target.cards)
+                    scheduleImmediatePoll(card.id);
+                }
+              }
+              const warnings = [
+                confirmWarning,
+                writeWarning,
+                inventoryWarning,
+                projectionWarning,
+              ].filter((warning): warning is string => Boolean(warning));
+              return jsonResult({
+                status:
+                  warnings.length > 0 ? "retargeted-partial" : "retargeted",
+                ...summary,
+                ...(warnings.length > 0 ? { warnings } : {}),
+                message: [
+                  after?.baseBranch === base
+                    ? `Pull request #${target.number} now targets ${base} instead of ${target.baseBranch}. Re-check checks, review and mergeability before merging.`
+                    : `Sent a retarget of pull request #${target.number} onto ${base}; it is not confirmed.`,
+                  ...warnings,
+                ].join(" "),
+              });
+            },
+          );
+        },
+      );
+    },
+  });
+}
+
+/**
+ * Reserve an active spawned worktree, re-resolve it unchanged under the
+ * reservation, derive its canonical pull request and run `act` on it.
+ */
+async function withReservedManagedTarget<T>(
+  worktreeIdParam: string | undefined,
+  ctx: ToolCallContext,
+  operations: WorktreeFinishPullRequestOperations,
+  reservationReason: string,
+  options: ResolveManagedTargetOptions,
+  act: (target: ManagedPullRequestTarget) => Promise<T>,
+): Promise<T> {
+  const worktreeId = worktreeIdParam?.trim();
+  if (!worktreeId || isMainWorktreeId(worktreeId))
+    throw new Error("An active spawned worktree id is required.");
+  const initial = await operations.resolve(worktreeId);
+  if (!initial || initial.status !== "active")
+    throw new Error("That active managed worktree is not available.");
+  const release = operations.reserve(
+    initial.id,
+    ctx.session.sessionId,
+    reservationReason,
+  );
+  if (!release) throw new Error(BUSY_REFUSAL);
+  try {
+    const row = await operations.resolve(worktreeId);
+    if (
+      !row ||
+      row.status !== "active" ||
+      row.id !== initial.id ||
+      row.path !== initial.path ||
+      row.branch !== initial.branch ||
+      row.baseBranch !== initial.baseBranch ||
+      row.projectId !== initial.projectId
+    )
+      throw new Error("The managed worktree target changed or was removed.");
+    return await act(
+      await resolveManagedTarget(row, operations, ctx.signal, options),
+    );
+  } finally {
+    try {
+      operations.invalidate(initial.id);
+    } finally {
+      release();
+    }
+  }
+}
+
+/**
+ * Drop inventory reads after a provider write that may have landed even if its
+ * response was lost. A failure here must not turn that write into a reported
+ * provider failure, so it comes back as a warning.
+ */
+function recordInventoryChange(
+  operations: WorktreeFinishPullRequestOperations,
+  target: ManagedPullRequestTarget,
+): string | undefined {
+  try {
+    operations.inventoryChanged(target.hosted.provider, target.number);
+    return undefined;
+  } catch (error) {
+    return `The PR inventory could not be refreshed: ${errorText(error)}.`;
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /* ----------------------------- input validation ---------------------------- */
@@ -490,10 +703,20 @@ interface ManagedPullRequestTarget {
   cards: PullRequestCard[];
 }
 
+interface ResolveManagedTargetOptions {
+  /**
+   * Accept a pull request (and live cards) whose base is not the worktree's
+   * recorded one — the retarget tool exists to settle exactly that. Head
+   * branch and card ownership are still required to match.
+   */
+  baseMayDiffer?: boolean;
+}
+
 async function resolveManagedTarget(
   row: WorktreeRow,
   operations: WorktreeFinishPullRequestOperations,
   signal: AbortSignal | undefined,
+  options: ResolveManagedTargetOptions = {},
 ): Promise<ManagedPullRequestTarget> {
   const target = await operations.target(row, signal);
   const hosted = await operations.hosting(target, signal);
@@ -542,9 +765,12 @@ async function resolveManagedTarget(
     throw new Error(
       `Pull request #${pr.number} reports no head commit; nothing was done.`,
     );
-  if (detail.headBranch !== row.branch || detail.baseBranch !== row.baseBranch)
+  if (
+    detail.headBranch !== row.branch ||
+    (!options.baseMayDiffer && detail.baseBranch !== row.baseBranch)
+  )
     throw new Error(
-      `Pull request #${pr.number} is ${detail.headBranch} → ${detail.baseBranch}, but this worktree is registered for ${row.branch} → ${row.baseBranch}; nothing was done.`,
+      `Pull request #${pr.number} is ${detail.headBranch} → ${detail.baseBranch}, but this worktree is registered for ${row.branch} → ${row.baseBranch}; nothing was done.${detail.headBranch === row.branch ? ` Run worktree_retarget_pull_request to move it onto ${row.baseBranch}, or worktree_set_base if ${detail.baseBranch} is the right target.` : ""}`,
     );
 
   const cards = await operations.cards({
@@ -566,10 +792,10 @@ async function resolveManagedTarget(
       );
     if (
       card.headBranch !== detail.headBranch ||
-      card.baseBranch !== detail.baseBranch
+      (!options.baseMayDiffer && card.baseBranch !== detail.baseBranch)
     )
       throw new Error(
-        `Pull request #${pr.number} has a live card for ${card.headBranch} → ${card.baseBranch}, which no longer matches the pull request; nothing was done.`,
+        `Pull request #${pr.number} has a live card for ${card.headBranch} → ${card.baseBranch}, which no longer matches the pull request; nothing was done.${card.headBranch === detail.headBranch ? " Run worktree_retarget_pull_request to bring the card in line with the pull request." : ""}`,
       );
   }
   if (!cards.some((card) => card.worktreeId === row.id))

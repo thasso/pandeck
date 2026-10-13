@@ -35,8 +35,9 @@ persona toolsets.
   in a cycle with this module. Coding personas receive the ungated deferred
   `worktrees` lifecycle group, including local `worktree_set_base`, and the
   ungated deferred `managed-delivery` group: checked local `worktree_commit`,
-  external `worktree_push`, external `worktree_create_pull_request`, and
-  external `worktree_finish_pull_request`; Plan excludes all four, since the
+  external `worktree_push`, external `worktree_create_pull_request`, external
+  `worktree_ready_pull_request`, external `worktree_retarget_pull_request`, and
+  external `worktree_finish_pull_request`; Plan excludes all of them, since the
   none/local policy allows only what its classifications permit (in practice
   none of the mutating delivery sequence). Coding personas also receive the
   ungated, shared, deferred `workflow` group containing `session_submit_result`;

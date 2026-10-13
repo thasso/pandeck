@@ -193,36 +193,38 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   key via `guardKind` (pi) or `isOrdinarilyCreatableAgentType` (claude-sdk).
   `tools/workshop/worktreeDeliveryTools.ts` exposes deferred Build-only
   `worktree_commit`, `worktree_push`, `worktree_create_pull_request`, and (from
-  `worktreeFinishPullRequest.ts`) `worktree_ready_pull_request` and
-  `worktree_finish_pull_request` tools for active registered spawned worktrees;
-  the derivations they share — local state, push target, remote head, hosted
-  repository identity — live in `managedDeliveryTargets.ts`, because a second
-  derivation of "the remote head" or "the provider repository" is a second
-  chance to target something the caller never asked for. All derive their
-  targets from the row and take a caller-aware mutation reservation. Commit runs
-  the shared checked workflow without force; the calling session's prompts,
-  touched paths and Tasks remain context and its result is the ordinary rich
-  `CommitDisplay`. Push requires a clean complete HEAD and calls
-  `pushWorkflow.ts` with server-derived branch/HEAD/remote preconditions.
-  Intentional rewritten history uses an authoritative remote oid and explicit
-  `--force-with-lease=<derived-ref>:<oid>`, never raw or bare force. Managed PR
-  creation then requires that exact HEAD on a same-named upstream, binds hosting
-  to the derived remote's push repository, resolves Task context from the target
-  worktree, and calls the canonical `prWorkflow.ts` card service with the caller
-  timeline plus trusted target worktree. Existing PR adoption is exact on
-  head/base/SHA; create/read movement lands as a visible stale-head warning and
-  partial success rather than a hidden external side effect.
-  `worktree_ready_pull_request` publishes a matching open managed draft after a
-  fresh identity read under the per-PR mutation lock, updates its cards, and
-  schedules the watcher. `worktree_finish_pull_request` closes that loop: it
-  resolves the row's ONE open pull request, re-reads provider detail and
-  repository capabilities, and either closes it directly with a required bounded
-  `reason` (through `pullRequestClose.ts`, keeping branch, worktree and Task) or
-  merges it. A merge additionally proves clean local state, a same-named
-  upstream and remote head equal to both local HEAD and the PR head, re-runs the
-  shared readiness read from `tools/pullRequestCheckWatch.ts`, requires a
-  currently supported method, and classifies the base by exact equality with the
-  provider-reported default branch: a non-default base merges directly through
+  `worktreeFinishPullRequest.ts`) `worktree_ready_pull_request`,
+  `worktree_retarget_pull_request` and `worktree_finish_pull_request` tools for
+  active registered spawned worktrees; the derivations they share — local state,
+  push target, remote head, hosted repository identity — live in
+  `managedDeliveryTargets.ts`, because a second derivation of "the remote head"
+  or "the provider repository" is a second chance to target something the caller
+  never asked for. All derive their targets from the row and take a caller-aware
+  mutation reservation. Commit runs the shared checked workflow without force;
+  the calling session's prompts, touched paths and Tasks remain context and its
+  result is the ordinary rich `CommitDisplay`. Push requires a clean complete
+  HEAD and calls `pushWorkflow.ts` with server-derived branch/HEAD/remote
+  preconditions. Intentional rewritten history uses an authoritative remote oid
+  and explicit `--force-with-lease=<derived-ref>:<oid>`, never raw or bare
+  force. Managed PR creation then requires that exact HEAD on a same-named
+  upstream, binds hosting to the derived remote's push repository, resolves Task
+  context from the target worktree, and calls the canonical `prWorkflow.ts` card
+  service with the caller timeline plus trusted target worktree. Existing PR
+  adoption is exact on head/base/SHA; create/read movement lands as a visible
+  stale-head warning and partial success rather than a hidden external side
+  effect. `worktree_ready_pull_request` publishes a matching open managed draft
+  after a fresh identity read under the per-PR mutation lock, updates its cards,
+  and schedules the watcher. `worktree_retarget_pull_request` moves that PR onto
+  the row's recorded base the same way and reads the result back.
+  `worktree_finish_pull_request` closes that loop: it resolves the row's ONE
+  open pull request, re-reads provider detail and repository capabilities, and
+  either closes it directly with a required bounded `reason` (through
+  `pullRequestClose.ts`, keeping branch, worktree and Task) or merges it. A
+  merge additionally proves clean local state, a same-named upstream and remote
+  head equal to both local HEAD and the PR head, re-runs the shared readiness
+  read from `tools/pullRequestCheckWatch.ts`, requires a currently supported
+  method, and classifies the base by exact equality with the provider-reported
+  default branch: a non-default base merges directly through
   `mergePullRequestAndProject`, while the default branch stages one
   `managedPullRequestMerge` approval and ends the turn without any provider
   merge. That approval's executor re-derives the complete state under a fresh

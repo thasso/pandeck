@@ -410,6 +410,15 @@ async function mergeCard(
     );
   if (card.number === undefined)
     throw new Error("This card has no pull request to merge yet.");
+  // The watcher follows a pull request retargeted elsewhere, so the stored
+  // base is not necessarily the one the merge was decided for. The shared seam
+  // then binds the provider to THIS base under the lock.
+  if (!options.expectedBaseBranch)
+    throw new Error("A merge must state the base it was decided for.");
+  if (options.expectedBaseBranch !== card.baseBranch)
+    throw new Error(
+      `This pull request now targets ${card.baseBranch}, not ${options.expectedBaseBranch}. Nothing was merged; look at it again and decide.`,
+    );
   // Through the main checkout when the card's worktree has been removed: the
   // pull request is the provider's, and a retired checkout must not be what
   // stops the one action that can still answer a Workflow Run's merge gate
@@ -482,7 +491,12 @@ async function updateWithMain(
   // something else already owns the pull request.
   if (card.number !== undefined && card.provider)
     return withPullRequestMutation(
-      { repoPath: row.path, providerKind: card.provider, number: card.number },
+      {
+        repoPath: row.path,
+        providerKind: card.provider,
+        number: card.number,
+        repoUrl: card.url,
+      },
       "an update with main",
       () => updateWithMainLocked(card, row, operations),
     );

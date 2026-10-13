@@ -31,6 +31,7 @@ import type {
   WorkflowRunDelivery,
 } from "@assistant/shared";
 import { getRun, listSteps, type WorkflowRunRow } from "../db/workflowStore.ts";
+import { getWorktree } from "../db/worktreeStore.ts";
 import { runPullRequestCardActionWithActor } from "../pullRequestActions.ts";
 import { workflowRunCardFor, workflowRunDeliveryOf } from "../workflowRuns.ts";
 import { mergeDecisionPayloadOf } from "./codeDeliveryRecipe.ts";
@@ -61,11 +62,15 @@ export interface WorkflowMergeOptions {
 interface Dependencies {
   runPullRequestAction: typeof runPullRequestCardActionWithActor;
   settleRun: typeof settleWorkflowRun;
+  /** The base the run delivers into: its worktree's recorded base. */
+  runBase(run: WorkflowRunRow): string | undefined;
 }
 
 const defaultDependencies: Dependencies = {
   runPullRequestAction: runPullRequestCardActionWithActor,
   settleRun: settleWorkflowRun,
+  runBase: (run) =>
+    run.worktreeId ? getWorktree(run.worktreeId)?.baseBranch : undefined,
 };
 
 /* -------------------------------- actions --------------------------------- */
@@ -87,11 +92,19 @@ export async function mergeWorkflowRunPullRequest(
   const { run, card, delivery } = requireDelivery(runId, "merge");
   if (!delivery.canMerge) refuse("merge", run, card);
   const cardId = requirePullRequestCardId(run, card, "merge");
+  // A run delivers into its worktree's base; a card retargeted elsewhere
+  // since is refused by the card seam rather than merged there.
+  const baseBranch = dependencies.runBase(run);
+  if (!baseBranch)
+    throw new WorkflowDeliveryRefusal(
+      `cannot merge: workflow run ${runId} has no worktree base to merge into`,
+    );
   const result = await dependencies.runPullRequestAction(
     cardId,
     "merge",
     {
       mergeMethod: options.mergeMethod,
+      expectedBaseBranch: baseBranch,
       ...(options.deleteBranch === false ? { deleteBranch: false } : {}),
     },
     actor,

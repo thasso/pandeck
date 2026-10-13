@@ -171,6 +171,14 @@ export interface GitHostingProvider {
   /** Move an existing draft/WIP pull request into ordinary reviewable state. */
   markPullRequestReady(prNumber: number): Promise<{ title?: string }>;
   /**
+   * Point one open pull request at another base branch. Neither backend offers
+   * a precondition on this edit, so the caller proves the pull request's
+   * identity immediately before and reads the result back after. A refusal (a
+   * base missing on the remote, no permission, a closed pull request) THROWS
+   * with the provider's own message.
+   */
+  retargetPullRequest(prNumber: number, base: string): Promise<void>;
+  /**
    * Merge one pull request and, when asked, delete its remote head branch — as
    * ONE call. Deleting the branch is part of merging, not a second step a
    * caller orchestrates: every surface that merges wants the branch gone, and
@@ -1543,6 +1551,12 @@ export function githubProvider(
         );
       return { title: readyPull.title ?? pull.title };
     },
+    async retargetPullRequest(prNumber, base) {
+      await githubRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
+        body: { base },
+        signal: signal(),
+      });
+    },
     async pullRequestDetail(prNumber) {
       const res = await githubRequest<GithubPull>(
         config,
@@ -1829,6 +1843,7 @@ export function githubProvider(
       write(...args).finally(() => forgetOpenPullAnnotations(ref));
   provider.createPullRequest = forgetting(provider.createPullRequest);
   provider.markPullRequestReady = forgetting(provider.markPullRequestReady);
+  provider.retargetPullRequest = forgetting(provider.retargetPullRequest);
   provider.mergePullRequest = forgetting(provider.mergePullRequest);
   provider.closePullRequest = forgetting(provider.closePullRequest);
   return provider;
@@ -2102,6 +2117,16 @@ export function forgejoProvider(
           signal: signal(),
         });
       return { title };
+    },
+    async retargetPullRequest(prNumber, base) {
+      if (!config.token)
+        throw new Error(
+          "A Forgejo access token is not configured. Add one in Settings → Forgejo.",
+        );
+      await forgejoRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
+        body: { base },
+        signal: signal(),
+      });
     },
     async pullRequestDetail(prNumber) {
       const res = await forgejoRequest<ForgejoPull>(

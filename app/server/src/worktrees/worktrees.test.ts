@@ -771,7 +771,7 @@ test("managed worktree tools create, inspect and force-remove through their exec
         },
       ],
       warnings: [
-        "1 open managed pull request still uses the provider base recorded on the existing card. This metadata change did not retarget them; do not create another pull request until you inspect and settle the existing one.",
+        "1 open managed pull request still targets another base. This metadata change did not retarget it; call worktree_retarget_pull_request to move the pull request onto tool-new-base, and do not create another pull request for this branch.",
       ],
     });
     patchPullRequestCard(openCard.id, { status: "closed" });

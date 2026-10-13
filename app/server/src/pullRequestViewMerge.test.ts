@@ -104,6 +104,7 @@ function fakeProvider(options: ProviderOptions = {}): GitHostingProvider {
       throw new Error("not used");
     },
     markPullRequestReady: async () => ({}),
+    retargetPullRequest: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -520,7 +521,7 @@ async function holdPullRequest(
     registered = resolve;
   });
   const done = withPullRequestMutation(
-    { repoPath: path, providerKind: "forgejo", number: 7 },
+    { repoPath: path, providerKind: "forgejo", number: 7, repoUrl: undefined },
     what,
     async () => {
       registered();

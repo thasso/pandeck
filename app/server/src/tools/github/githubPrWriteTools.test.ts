@@ -27,6 +27,8 @@ const {
 } = await import("./githubPrWriteTools.ts");
 const { resolveApproval, approvalsForSession, setApprovalBroadcastForTests } =
   await import("../../pendingApprovals.ts");
+const { withHostedPullRequestMutation } =
+  await import("../../pullRequestMerge.ts");
 
 const config: GithubApiConfig = {
   token: "ghp_test",
@@ -245,6 +247,73 @@ describe("github PR write approvals (unified subsystem)", () => {
       "app",
       42,
     );
+  });
+
+  test("a base-only edit retargets without touching the description", async () => {
+    const sessionId = "appr-edit-base";
+    await expect(
+      githubEditPullRequestTool.execute(
+        { repo: "acme/app", number: 42 } as never,
+        ctxFor(sessionId) as never,
+      ),
+    ).rejects.toThrow(/body, a base, or both/);
+    await expect(
+      githubEditPullRequestTool.execute(
+        { repo: "acme/app", number: 42, base: "  " } as never,
+        ctxFor(sessionId) as never,
+      ),
+    ).rejects.toThrow(/base must name a branch/);
+    expect(approvalsForSession(sessionId)).toHaveLength(0);
+    globalThis.fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        expect(String(input)).toContain("/pulls/42");
+        expect(init?.method).toBe("PATCH");
+        expect(JSON.parse(String(init?.body))).toEqual({ base: "main" });
+        return new Response("{}", { status: 200 });
+      },
+    ) as unknown as typeof fetch;
+    await githubEditPullRequestTool.execute(
+      { repo: "acme/app", number: 42, base: " main " } as never,
+      ctxFor(sessionId) as never,
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(latest(sessionId).title).toBe("Edit pull request base");
+    expect(latest(sessionId).body).toEqual(
+      expect.not.objectContaining({ prBody: expect.anything() }),
+    );
+    const { card } = await resolveApproval(latest(sessionId).id, "approved");
+    expect(card.status).toBe("executed");
+    expect(card.resultSummary).toBe("Retargeted #42 onto main");
+  });
+
+  // An approved retarget is a merge-relevant write: it must not land while a
+  // managed merge of the same pull request sits between its identity read and
+  // the merge, so it takes that pull request's lock and is refused when held.
+  test("an approved base edit is refused while another mutation owns the PR", async () => {
+    const sessionId = "appr-edit-base-busy";
+    globalThis.fetch = vi.fn(
+      async () => new Response("{}", { status: 200 }),
+    ) as unknown as typeof fetch;
+    await githubEditPullRequestTool.execute(
+      { repo: "acme/app", number: 42, base: "main", body: "x" } as never,
+      ctxFor(sessionId) as never,
+    );
+    await withHostedPullRequestMutation(
+      {
+        providerKind: "github",
+        repoUrl: "https://github.com/acme/app",
+        number: 42,
+      },
+      "a merge",
+      async () => {
+        const { card } = await resolveApproval(
+          latest(sessionId).id,
+          "approved",
+        );
+        expect(card.status).toBe("failed");
+      },
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   test("an empty description clears the PR; invalid numbers stage nothing", async () => {

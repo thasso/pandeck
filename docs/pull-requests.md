@@ -52,7 +52,8 @@ The provider base branch comes from explicit `--base`, then the session worktree
 row's `baseBranch`, then `origin/HEAD`. Coding agents can change a spawned row's
 future target with `worktree_set_base`; that metadata operation does not rebase
 the branch or retarget an existing provider pull request, and its result warns
-when an open managed card still carries the previous provider base. Workflow
+when an open managed card still targets another base and names
+`worktree_retarget_pull_request` (below) as the step that moves it. Workflow
 publication calls the same card creation/adoption seam with its Task and base
 made explicit, so it cannot stop on the multi-Task chooser. Its card omits
 `sourceToolCallId` because no slash command turn exists; it still belongs to the
@@ -172,16 +173,19 @@ immediately. This pre-authorization ends at creation: it never permits merge.
 The generic `github_create_pull_request` and `forgejo_create_pull_request` tools
 remain approval-gated because they accept arbitrary repositories, refs, and
 authored content. `github_edit_pull_request` and `forgejo_edit_pull_request`
-replace the complete description of an existing PR (an empty body clears it).
-They also require approval; they accept a repository and PR number, not a
-managed-worktree identity. Approved edits use PATCH on the provider's pull
-request endpoint. `github_ready_pull_request` and `forgejo_ready_pull_request`
-are approval-gated draft-to-ready transitions by repository and PR number. The
-approved executor re-reads the PR and refuses a closed or already-ready PR.
-GitHub uses its GraphQL ready-for-review mutation; Forgejo removes the `WIP: `
-or `[WIP] ` title marker through the provider seam. Neither tool merges or
-promises green checks. `/pr` remains the human all-in-one commit/push/create
-command and keeps its session-derived Task chooser behavior.
+replace the complete description of an existing PR (an empty body clears it),
+retarget it onto another `base` branch, or both; at least one is required. They
+also require approval; they accept a repository and PR number, not a
+managed-worktree identity. An approved base goes through the provider's
+`retargetPullRequest` under the pull request's hosted mutation lock (see "Card
+actions"); a description keeps its plain PATCH, and one that fails after the
+base landed names the retarget as already applied. `github_ready_pull_request`
+and `forgejo_ready_pull_request` are approval-gated draft-to-ready transitions
+by repository and PR number. The approved executor re-reads the PR and refuses a
+closed or already-ready PR. GitHub uses its GraphQL ready-for-review mutation;
+Forgejo removes the `WIP: ` or `[WIP] ` title marker through the provider seam.
+Neither tool merges or promises green checks. `/pr` remains the human all-in-one
+commit/push/create command and keeps its session-derived Task chooser behavior.
 
 ## Repository pull-request capabilities
 
@@ -280,6 +284,33 @@ provider UI or through the generic tools. A ready transition does not establish
 merge readiness: the agent must inspect the exact-head check watch before
 calling `worktree_finish_pull_request`. This tool uses the same GitHub and
 Forgejo provider methods as the app's publication flow.
+
+## Agent-facing managed base retarget
+
+`worktree_retarget_pull_request` moves a worktree's canonical open pull request
+onto the row's recorded base — typically after a stacked parent merged and
+`worktree_set_base` named the new target. It accepts only an active spawned
+worktree id and is pre-authorized like the ready transition; the base always
+comes from the row, never from the caller. It resolves the same unique open PR
+and live cards as finishing, except that the PR's and the cards' base may differ
+from the row's (that difference is what it settles); head branch and card
+ownership must still match. Under the per-PR mutation lock it re-reads the PR,
+refuses a moved head or base, and calls the provider's `retargetPullRequest`.
+Neither provider has a precondition on that PATCH, so the result is read back
+whether or not the write reported an error: a lost response may hide a write
+that landed. A failed write whose read-back still shows the old base is the
+provider's refusal; one that shows the new base is success with a warning; any
+other answer, or no read-back at all, is an "outcome unknown" error that tells
+the agent to read the pull request before retrying. A successful write whose
+read-back reports another base, a moved head, or a closed or merged pull request
+is a `retargeted-partial` with no card projection, left to the watcher. A
+confirmed retarget sets the cards' base (card and context), clears mergeability
+and conflicts, rotates the observation token and schedules an immediate poll. A
+PR already on the row's base writes nothing and only repairs cards that still
+name another base. A base missing on the remote is the provider's refusal,
+reported with a hint to push it. The new base re-decides checks, review and
+mergeability, and the retarget does not rebase, so the agent re-watches checks
+before `worktree_finish_pull_request`.
 
 ## Agent-facing managed merge and close
 
@@ -546,6 +577,19 @@ is reconciled on boot (`reconcilePullRequestCardsOnBoot`, mirroring
 `reconcileWorktreeMergesOnBoot`) so a conclusion missed during a restart is
 still caught.
 
+The poll also follows the pull request's base: a PR retargeted outside the
+managed tool (provider UI, a generic edit) writes the reported base onto the
+card and its context. The card is the record `worktree_finish_pull_request`'s
+card check is compared against, so a card left on the old base would refuse a
+merge the provider would accept. Because the stored base can move, a card merge
+click carries the base the user SAW (`pullRequestCardAction.baseBranch`,
+required for `merge`; a Workflow Run's merge carries its worktree's base), and
+`mergeCard` refuses when the card no longer names it. The conflict confirmation
+below counts consecutive reads of the same head AND base, and a conflict the
+card stated about another base is not carried over: a retarget keeps the head,
+and Forgejo's queued `false` on the new base would otherwise confirm a conflict
+nothing checked.
+
 A card OUTLIVES its checkout. Its `repoRoot` is the spawned worktree the pull
 request was published from, and retiring that worktree is the ordinary end of a
 delivery — after which the deleted path resolves no provider and is its own
@@ -739,13 +783,19 @@ and rebasing onto (or verifying containment against) the worktree's base while
 reporting the card's would be a claim about a branch nobody touched.
 
 Every mutation of one pull request is serialized across BOTH surfaces by
-`withPullRequestMutation`, keyed on repository identity + provider + number.
-`busyAction` locks a single card, which is not the same thing: the worktree page
-has no card at all, and a second card can exist for the same pull request. The
-loser is refused before any provider or git side effect, never queued — waiting
-would run it against a repository the winner has since changed. That is what
-stops a card's `update-with-main` from force-pushing a rebase onto a branch
-another surface just merged and deleted.
+`withPullRequestMutation`, keyed on repository identity + provider + number. It
+holds two keys: the checkout's lock key and, when the provider's URL proves a
+repository, the hosted `<provider>#<owner>/<repo>#<number>` key
+(`pullRequestIdentity.ts`). The approval-gated generic edit tools have no
+checkout and take only the hosted key (`withHostedPullRequestMutation`), so an
+approved retarget is refused while a managed merge, close or retarget of the
+same pull request runs, and cannot land between that merge's identity read and
+the merge. `busyAction` locks a single card, which is not the same thing: the
+worktree page has no card at all, and a second card can exist for the same pull
+request. The loser is refused before any provider or git side effect, never
+queued — waiting would run it against a repository the winner has since changed.
+That is what stops a card's `update-with-main` from force-pushing a rebase onto
+a branch another surface just merged and deleted.
 
 - **Merge** (`open` only) — the method (squash / merge / rebase) is chosen on
   the card, per merge, and so is the fate of the remote head branch: a **Delete

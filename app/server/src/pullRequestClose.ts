@@ -90,6 +90,7 @@ export async function closePullRequestAndProject(
       repoPath: input.repoPath,
       providerKind: input.provider.kind,
       number: input.number,
+      repoUrl: input.provider.repoWebUrl,
     },
     "a close",
     () => closeAndProject(input, operations),

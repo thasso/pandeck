@@ -121,6 +121,7 @@ function recorder(
       throw new Error("not used");
     },
     markPullRequestReady: async () => ({}),
+    retargetPullRequest: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -201,7 +202,7 @@ test("merging uses the chosen method, deletes the remote branch, and lands the c
   const { card: updated } = await runPullRequestCardAction(
     subject.id,
     "merge",
-    { mergeMethod: "squash" },
+    { mergeMethod: "squash", expectedBaseBranch: "main" },
     rec.operations,
   );
 
@@ -219,6 +220,40 @@ test("merging uses the chosen method, deletes the remote branch, and lands the c
   assert.equal(updated.status, "merged");
   assert.equal(updated.busyAction, undefined);
   assert.match(updated.actionMessage ?? "", /Merged #42 into main \(squash\)/);
+});
+
+// The watcher follows a pull request retargeted elsewhere, so the card the user
+// clicked may already name another base on the server. That click decided for
+// the base it SHOWED, and is refused rather than merged somewhere else.
+test("a merge decided for a base the card has since left is refused", async () => {
+  const subject = card();
+  patchPullRequestCard(subject.id, { baseBranch: "release-2" });
+  const rec = recorder();
+
+  await assert.rejects(
+    runPullRequestCardAction(
+      subject.id,
+      "merge",
+      { mergeMethod: "squash", expectedBaseBranch: "main" },
+      rec.operations,
+    ),
+    /now targets release-2, not main\. Nothing was merged/,
+  );
+  assert.deepEqual(rec.merges, []);
+  const after = pullRequestCardById(subject.id);
+  assert.equal(after?.status, "open");
+  assert.equal(after?.busyAction, undefined);
+
+  await assert.rejects(
+    runPullRequestCardAction(
+      subject.id,
+      "merge",
+      { mergeMethod: "squash" },
+      rec.operations,
+    ),
+    /state the base it was decided for/,
+  );
+  assert.deepEqual(rec.merges, []);
 });
 
 // The opt-out reaches the PROVIDER call, and the card says the branch survived:
@@ -239,7 +274,7 @@ test("a merge that keeps the remote branch asks the provider to keep it", async 
   const { card: updated } = await runPullRequestCardAction(
     subject.id,
     "merge",
-    { mergeMethod: "merge", deleteBranch: false },
+    { mergeMethod: "merge", expectedBaseBranch: "main", deleteBranch: false },
     rec.operations,
   );
 
@@ -285,7 +320,7 @@ test("a card whose worktree was removed still merges, through the main checkout"
   const { card: updated } = await runPullRequestCardAction(
     subject.id,
     "merge",
-    { mergeMethod: "squash" },
+    { mergeMethod: "squash", expectedBaseBranch: "main" },
     rec.operations,
   );
 
@@ -333,7 +368,7 @@ test("a refused merge leaves the card open and says why", async () => {
     runPullRequestCardAction(
       subject.id,
       "merge",
-      { mergeMethod: "merge" },
+      { mergeMethod: "merge", expectedBaseBranch: "main" },
       rec.operations,
     ),
     /approving review/,
@@ -356,7 +391,7 @@ test("a merged pull request suggests its linked Task done rather than writing it
     await runPullRequestCardAction(
       subject.id,
       "merge",
-      { mergeMethod: "squash" },
+      { mergeMethod: "squash", expectedBaseBranch: "main" },
       rec.operations,
     );
 
@@ -998,7 +1033,7 @@ test("a late handoff outcome cannot overwrite a newer action on the card", async
   await runPullRequestCardAction(
     subject.id,
     "merge",
-    { mergeMethod: "squash" },
+    { mergeMethod: "squash", expectedBaseBranch: "main" },
     recorder().operations,
   );
   const merged = pullRequestCardById(subject.id)!;
@@ -1160,12 +1195,28 @@ test("the card-action message is validated down to its action and method", () =>
   );
   assert.equal(ok({ cardId: "pr_1", action: "cleanup", requestId: 1 }), false);
   assert.equal(
-    ok({ cardId: "pr_1", action: "merge", mergeMethod: "squash" }),
+    ok({
+      cardId: "pr_1",
+      action: "merge",
+      mergeMethod: "squash",
+      baseBranch: "main",
+    }),
     true,
+  );
+  // The base the user saw is part of the decision, so a merge without it is
+  // refused at the door.
+  assert.equal(
+    ok({ cardId: "pr_1", action: "merge", mergeMethod: "squash" }),
+    false,
   );
   assert.equal(ok({ cardId: "pr_1", action: "merge" }), false);
   assert.equal(
-    ok({ cardId: "pr_1", action: "merge", mergeMethod: "octopus" }),
+    ok({
+      cardId: "pr_1",
+      action: "merge",
+      mergeMethod: "octopus",
+      baseBranch: "main",
+    }),
     false,
   );
   assert.equal(ok({ cardId: "pr_1", action: "delete-everything" }), false);
@@ -1178,6 +1229,7 @@ test("the card-action message is validated down to its action and method", () =>
       cardId: "pr_1",
       action: "merge",
       mergeMethod: "squash",
+      baseBranch: "main",
       deleteBranch: false,
     }),
     true,
@@ -1187,6 +1239,7 @@ test("the card-action message is validated down to its action and method", () =>
       cardId: "pr_1",
       action: "merge",
       mergeMethod: "squash",
+      baseBranch: "main",
       deleteBranch: "false",
     }),
     false,

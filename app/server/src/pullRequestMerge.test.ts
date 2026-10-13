@@ -29,6 +29,7 @@ import {
   mergePullRequestAndProject,
   resetPullRequestMutationsForTests,
   suggestLinkedTaskDone,
+  withHostedPullRequestMutation,
   withPullRequestMutation,
 } from "./pullRequestMerge.ts";
 import { createTask, deleteTask, readTask, taskSummaryOf } from "./tasks.ts";
@@ -56,6 +57,7 @@ function fakeProvider(
       throw new Error("not used");
     },
     markPullRequestReady: async () => ({}),
+    retargetPullRequest: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -799,7 +801,7 @@ test("a merge is refused while the same pull request is being updated", async ()
 
   let refused: unknown;
   await withPullRequestMutation(
-    { repoPath: path, providerKind: "github", number: 42 },
+    { repoPath: path, providerKind: "github", number: 42, repoUrl: undefined },
     "an update with main",
     async () => {
       refused = await mergePullRequestAndProject({
@@ -820,22 +822,87 @@ test("a merge is refused while the same pull request is being updated", async ()
 
 // The identity is the pull request, not the checkout path or the card: another
 // repository's #42 is a different pull request and must not be blocked.
+// The approval-gated generic tools name a pull request through its provider
+// only. They share the managed lock through the hosted key, so an approved
+// retarget cannot land between a managed merge's identity read and its merge.
+test("a hosted-only mutation collides with a managed one on the same pull request", async () => {
+  const mine = repo();
+  const url = "https://github.com/acme/repo";
+  await withPullRequestMutation(
+    { repoPath: mine, providerKind: "github", number: 42, repoUrl: url },
+    "a merge",
+    async () => {
+      await assert.rejects(
+        withHostedPullRequestMutation(
+          {
+            providerKind: "github",
+            repoUrl: "https://github.com/ACME/repo/pull/42",
+            number: 42,
+          },
+          "an approved base edit",
+          async () => undefined,
+        ),
+        /#42 is busy: a merge is running/,
+      );
+      // Another number, or another repository's #42, is not this one.
+      await withHostedPullRequestMutation(
+        { providerKind: "github", repoUrl: url, number: 43 },
+        "an approved base edit",
+        async () => undefined,
+      );
+      await withHostedPullRequestMutation(
+        {
+          providerKind: "github",
+          repoUrl: "https://github.com/acme/other",
+          number: 42,
+        },
+        "an approved base edit",
+        async () => undefined,
+      );
+    },
+  );
+  await withHostedPullRequestMutation(
+    { providerKind: "github", repoUrl: url, number: 42 },
+    "an approved base edit",
+    async () => {
+      await assert.rejects(
+        withPullRequestMutation(
+          { repoPath: mine, providerKind: "github", number: 42, repoUrl: url },
+          "a merge",
+          async () => undefined,
+        ),
+        /is busy: an approved base edit is running/,
+      );
+    },
+  );
+});
+
 test("the hold is per pull request, and released again afterwards", async () => {
   const mine = repo();
   const theirs = repo();
   await withPullRequestMutation(
-    { repoPath: mine, providerKind: "github", number: 42 },
+    { repoPath: mine, providerKind: "github", number: 42, repoUrl: undefined },
     "a merge",
     async () => {
       // Same number, other repository: untouched.
       await withPullRequestMutation(
-        { repoPath: theirs, providerKind: "github", number: 42 },
+        {
+          repoPath: theirs,
+          providerKind: "github",
+          number: 42,
+          repoUrl: undefined,
+        },
         "a merge",
         async () => undefined,
       );
       await assert.rejects(
         withPullRequestMutation(
-          { repoPath: mine, providerKind: "github", number: 42 },
+          {
+            repoPath: mine,
+            providerKind: "github",
+            number: 42,
+            repoUrl: undefined,
+          },
           "a merge",
           async () => undefined,
         ),
@@ -846,7 +913,7 @@ test("the hold is per pull request, and released again afterwards", async () => 
 
   // Released: the same identity can be taken again.
   await withPullRequestMutation(
-    { repoPath: mine, providerKind: "github", number: 42 },
+    { repoPath: mine, providerKind: "github", number: 42, repoUrl: undefined },
     "a merge",
     async () => undefined,
   );

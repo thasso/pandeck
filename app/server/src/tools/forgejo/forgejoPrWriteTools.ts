@@ -26,6 +26,7 @@ import { forgejoRequest } from "../../forgejoClient.ts";
 import { forgejoProvider } from "../../gitHosting.ts";
 import { invalidateForgejoPullRequestWrite } from "../../pullRequestInventorySync.ts";
 import { resolveForgejoRepo } from "./forgejoTools.ts";
+import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
 import {
   approvalCardReference,
   createApproval,
@@ -49,7 +50,8 @@ type CreatePullRequestParams = {
 type EditPullRequestParams = {
   repo: string;
   number: number;
-  body: string;
+  body?: string;
+  base?: string;
 };
 type ReadyPullRequestParams = { repo: string; number: number };
 type ReviewPullRequestParams = {
@@ -151,20 +153,25 @@ export const forgejoCreatePullRequestTool =
 export const forgejoEditPullRequestTool =
   defineAgentTool<EditPullRequestParams>({
     name: "forgejo_edit_pull_request",
-    label: "Forgejo: Edit Pull Request Description",
+    label: "Forgejo: Edit Pull Request",
     description:
-      "Prepare a replacement description for an existing Forgejo pull request. An empty body clears the description. Never writes until the user approves the proposal.",
+      "Prepare an edit of an existing Forgejo pull request: a replacement description, a new base branch (retarget), or both. An empty body clears the description. Never writes until the user approves the proposal. For managed worktrees, retarget with worktree_set_base and worktree_retarget_pull_request instead.",
     parameters: {
       type: "object",
       additionalProperties: false,
-      required: ["repo", "number", "body"],
+      required: ["repo", "number"],
       properties: {
         repo: { type: "string", description: "Repository as 'owner/repo'." },
         number: { type: "number", description: "Pull-request index/number." },
         body: {
           type: "string",
           description:
-            "Complete replacement description (Markdown); use an empty string to clear it.",
+            "Complete replacement description (Markdown); use an empty string to clear it. Omit to keep the description.",
+        },
+        base: {
+          type: "string",
+          description:
+            "Branch to retarget the pull request onto; it must exist on the remote. Omit to keep the base.",
         },
       },
     },
@@ -173,18 +180,19 @@ export const forgejoEditPullRequestTool =
       const { owner, repo } = resolveForgejoRepo(params.repo);
       if (!Number.isInteger(params.number) || params.number < 1)
         throw new Error("number must be a valid pull-request number.");
+      const edit = pullRequestEdit(params);
       const body: ForgejoPullRequestApprovalBody = {
         kind: "forgejoPullRequest",
         operation: "edit",
         repo: `${owner}/${repo}`,
         pullNumber: params.number,
-        prBody: params.body,
+        ...edit.fields,
       };
       const card = createApproval({
         sessionId: ctx.session.sessionId,
         kind: "forgejoPullRequest",
-        title: "Edit pull request description",
-        summary: `${owner}/${repo}#${params.number}`,
+        title: edit.title,
+        summary: `${owner}/${repo}#${params.number}${edit.fields.base ? ` → ${edit.fields.base}` : ""}`,
         sourceToolCallId: ctx.toolCallId,
         body,
       });
@@ -192,7 +200,7 @@ export const forgejoEditPullRequestTool =
         content: [
           {
             type: "text",
-            text: `Prepared a description edit for ${owner}/${repo}#${params.number} pending your approval. ${PENDING_NOTE} ${approvalCardReference(card)}`,
+            text: `Prepared ${edit.what} for ${owner}/${repo}#${params.number} pending your approval. ${PENDING_NOTE} ${approvalCardReference(card)}`,
           },
         ],
         terminate: true,
@@ -533,21 +541,33 @@ registerApprovalExecutor("forgejoPullRequest", {
     }
 
     if (b.operation === "edit") {
-      if (typeof b.pullNumber !== "number" || typeof b.prBody !== "string")
+      if (
+        typeof b.pullNumber !== "number" ||
+        (typeof b.prBody !== "string" && !b.base)
+      )
         throw new Error(
-          "Edit proposal is missing its pull-request number or description.",
+          "Edit proposal is missing its pull-request number or its changes.",
         );
-      const res = await forgejoRequest<{ html_url?: string }>(
+      const provider = forgejoProvider(
+        { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
         config,
-        "PATCH",
-        `${base}/pulls/${b.pullNumber}`,
-        { body: { body: b.prBody } },
+      );
+      const edited = await applyPullRequestEdit(
+        provider,
+        { ...b, pullNumber: b.pullNumber },
+        async (description) =>
+          (
+            await forgejoRequest<{ html_url?: string }>(
+              config,
+              "PATCH",
+              `${base}/pulls/${b.pullNumber}`,
+              { body: { body: description } },
+            )
+          ).data.html_url,
       );
       return {
-        resultSummary: `Updated description on #${b.pullNumber}`,
-        ...(res.data.html_url !== undefined
-          ? { resultUrl: res.data.html_url }
-          : {}),
+        resultUrl: `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
+        ...edited,
       };
     }
 

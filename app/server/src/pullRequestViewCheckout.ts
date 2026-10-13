@@ -329,6 +329,7 @@ export async function checkoutPullRequestFromView(
       repoPath: main.path,
       providerKind: request.provider,
       number: request.number,
+      repoUrl: provider.repoWebUrl,
     },
     "a review checkout",
     () => checkout(request, provider, main, rows, operations),
