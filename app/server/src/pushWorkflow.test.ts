@@ -92,12 +92,18 @@ test("first push sets upstream, then reports up-to-date", async () => {
 test("records the branch a push published, not its source argument", async () => {
   const { work } = makeRepoPair("publishedrepo");
   sh(work, "checkout", "-b", "feature");
+  sh(work, "tag", "short-tag");
   const cases: Array<[string | undefined, string | undefined]> = [
     [undefined, "feature"],
     ["HEAD", "feature"],
     ["refs/heads/feature", "feature"],
+    ["heads/feature", "feature"],
     ["feature:refs/heads/renamed", "renamed"],
+    // Git resolves an unqualified destination by namespace, so it proves nothing.
+    ["feature:unqualified", undefined],
     ["feature:refs/tags/v1", undefined],
+    ["short-tag", undefined],
+    ["refs/tags/short-tag:new-tag", undefined],
   ];
   for (const [branch, published] of cases) {
     const result = await runPushWorkflow({

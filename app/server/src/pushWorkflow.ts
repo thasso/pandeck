@@ -237,40 +237,43 @@ export function buildPushArgs(options: {
 
 /**
  * The remote branch one pushed refspec updates, or undefined when that is not
- * provable: a source-only refspec is remapped by a configured
- * `remote.<name>.push`, and a deletion, wildcard, or non-branch destination
- * names no single branch.
+ * provable. Git resolves short names by namespace (a tag, `heads/x`, or an
+ * existing remote tag), so only a full `refs/heads/` ref counts: an explicit
+ * `src:dst` must name one, and a source-only refspec counts when its source
+ * resolves to a local branch and no `remote.<name>.push` mapping can move it.
  */
 async function publishedBranchOf(
   repoRoot: string,
   remote: string,
   refspec: string,
-  currentBranch: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   const spec = refspec.replace(/^\+/, "");
   const colon = spec.indexOf(":");
-  if (colon < 0) {
-    const mapping = await gitOptional(
-      ["config", "--get-all", `remote.${remote}.push`],
-      repoRoot,
-      signal,
-    );
-    if (mapping.stdout.trim()) return undefined;
+  let destination: string;
+  if (colon >= 0) {
+    // An empty source is a deletion: nothing is left to link.
+    if (colon === 0) return undefined;
+    destination = spec.slice(colon + 1);
+  } else {
+    const [mapping, source] = await Promise.all([
+      gitOptional(
+        ["config", "--get-all", `remote.${remote}.push`],
+        repoRoot,
+        signal,
+      ),
+      gitOptional(
+        ["rev-parse", "--verify", "--quiet", "--symbolic-full-name", spec],
+        repoRoot,
+        signal,
+      ),
+    ]);
+    if (mapping.stdout.trim() || source.code !== 0) return undefined;
+    destination = source.stdout.trim();
   }
-  const source = colon < 0 ? spec : spec.slice(0, colon);
-  if (!source) return undefined;
-  const destination =
-    colon < 0
-      ? spec === "HEAD"
-        ? currentBranch
-        : spec
-      : spec.slice(colon + 1);
-  if (!destination || destination === "HEAD" || destination.includes("*"))
+  if (!destination.startsWith("refs/heads/") || destination.includes("*"))
     return undefined;
-  if (destination.startsWith("refs/heads/"))
-    return destination.slice("refs/heads/".length) || undefined;
-  return destination.startsWith("refs/") ? undefined : destination;
+  return destination.slice("refs/heads/".length) || undefined;
 }
 
 async function localHead(
@@ -433,7 +436,6 @@ export async function runPushWorkflow(
       repoRoot,
       remote,
       args[args.length - 1]!,
-      actualBranch,
       options.signal,
     );
     let setUpstream = pushSetsUpstream;

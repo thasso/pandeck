@@ -42,10 +42,11 @@ a pull request in any state, that pull request. The links are resolved once when
 the push finishes, through the same push-URL provider resolution; an
 unconfigured provider, a failed lookup, or one slower than five seconds drops
 the link rather than the card. A pull request created later does not update an
-earlier push card. Only a branch the push provably updated is linked: `HEAD` and
-`refs/heads/` sources resolve to their branch, while a configured
-`remote.<name>.push` mapping, a deletion, or a non-branch destination omits the
-links.
+earlier push card. Only a branch the push provably updated is linked: a
+source-only refspec counts when its source resolves to a local branch and no
+`remote.<name>.push` mapping applies, and an explicit `src:dst` only when `dst`
+is a full `refs/heads/` ref. Anything else (a tag, a deletion, an unqualified
+destination git may resolve to a tag) omits the links.
 
 The provider base branch comes from explicit `--base`, then the session worktree
 row's `baseBranch`, then `origin/HEAD`. Coding agents can change a spawned row's
