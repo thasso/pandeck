@@ -135,6 +135,15 @@ describe("agent_create", () => {
     assert.match(card.body.source, /^---\nname: test-reviewer\n/);
   });
 
+  test("the card shows the effort the model will actually run at", async () => {
+    await call("agent_create", { ...definition, effort: "max" });
+    const card = latestCard();
+    assert.equal(card.body.kind, "agentDefinition");
+    if (card.body.kind !== "agentDefinition") return;
+    assert.equal(card.body.effort.after, "max");
+    assert.equal(card.body.effort.effective, "high");
+  });
+
   test("approval writes exactly the proposed definition as one commit", async () => {
     await call("agent_create", definition);
     const proposed = latestCard();

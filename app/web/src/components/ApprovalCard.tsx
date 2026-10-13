@@ -975,6 +975,12 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
             : {})}
           after={effort(body.effort.after)}
         />
+        {body.effort.effective ? (
+          <span className="text-muted-foreground">
+            {" "}
+            (runs as {body.effort.effective})
+          </span>
+        ) : null}
       </Row>
       <Row label="Purpose">{body.description}</Row>
       {body.resultCommit ? (

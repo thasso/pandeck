@@ -3519,8 +3519,16 @@ export interface AgentDefinitionApprovalBody {
   model: { before?: string; after: string };
   /** The connected model `after` resolved to when proposed: `provider/id`. */
   resolvedModel: string;
-  /** Effort before (edit only) and after; absent means the model's default. */
-  effort: { before?: ThinkingLevel; after?: ThinkingLevel };
+  /**
+   * Effort before (edit only) and after; absent means the model's default.
+   * `effective` is the level the model will actually run at, present when it
+   * lowers `after` to what it supports.
+   */
+  effort: {
+    before?: ThinkingLevel;
+    after?: ThinkingLevel;
+    effective?: ThinkingLevel;
+  };
   /** The complete `AGENT.md` the approval would write. */
   source: string;
   /** The commit subject. */

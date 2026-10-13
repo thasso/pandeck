@@ -94,7 +94,8 @@ async function propose(
   source: string,
   context: AgentCardContext,
 ): Promise<PendingApproval> {
-  const resolvedModel = await resolvedModelOf(after);
+  const resolved = await resolvedModelOf(after);
+  const resolvedModel = resolved.label;
   const body: AgentDefinitionApprovalBody = {
     kind: "agentDefinition",
     action,
@@ -109,6 +110,10 @@ async function propose(
     effort: {
       ...(before?.effort ? { before: before.effort } : {}),
       ...(after.effort ? { after: after.effort } : {}),
+      // What the model will actually use, when it lowers the requested level.
+      ...(resolved.thinkingLevel && resolved.thinkingLevel !== after.effort
+        ? { effective: resolved.thinkingLevel }
+        : {}),
     },
     source,
     reason: context.meta.reason,
@@ -144,10 +149,12 @@ async function propose(
  * on — `provider/id`, plus the version a pin holds an alias to — as the card
  * shows it and as approval must still find it.
  */
-async function resolvedModelOf(definition: AgentManifest): Promise<string> {
-  const { model } = (await checkAgentRuntime(definition))!;
+async function resolvedModelOf(
+  definition: AgentManifest,
+): Promise<{ label: string; thinkingLevel?: ThinkingLevel }> {
+  const { model, thinkingLevel } = (await checkAgentRuntime(definition))!;
   const pinned = (model as { pinnedId?: string }).pinnedId;
-  return `${model.provider}/${model.id}${
+  const label = `${model.provider}/${model.id}${
     pinned &&
     [pinned, `${model.provider}/${pinned}`].some(
       (form) => form.toLowerCase() === definition.model.toLowerCase(),
@@ -155,6 +162,7 @@ async function resolvedModelOf(definition: AgentManifest): Promise<string> {
       ? ` (${pinned})`
       : ""
   }`;
+  return { label, ...(thinkingLevel ? { thinkingLevel } : {}) };
 }
 
 /** Refuse an approval whose model no longer resolves to what the card showed. */
@@ -162,7 +170,7 @@ async function assertStillResolves(
   definition: AgentManifest,
   body: AgentDefinitionApprovalBody,
 ): Promise<void> {
-  const now = await resolvedModelOf(definition);
+  const now = (await resolvedModelOf(definition)).label;
   if (now !== body.resolvedModel)
     throw new EntryValidationError(
       `"${definition.model}" now resolves to ${now}, not the ${body.resolvedModel} this card showed. Nothing was written; propose it again.`,
