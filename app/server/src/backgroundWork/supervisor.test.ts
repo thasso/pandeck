@@ -966,6 +966,232 @@ test("an owner Stop-all protects the provider/tool turn even when no ordinary tu
   });
 });
 
+/** Admit and launch one owner task on a Claude host, for owner Stop-all. */
+async function ownerHostTask(id: string) {
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const ownerSessionId = owner("claude-sdk");
+  const supervisor = supervisorFor(clock, port, {
+    ordinaryTurnActive: () => true,
+  });
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "claude-query",
+    kind: "shell",
+    label: "provider task",
+    sourceRequestId: `${id}-admit`,
+    hostEpochKey: `${id}-epoch`,
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) throw new Error("not admitted");
+  await supervisor.launch(admission);
+  supervisor.providerBound({
+    itemId: admission.item.id,
+    providerTaskId: `${id}-task`,
+  });
+  return { port, supervisor, ownerSessionId, itemId: admission.item.id };
+}
+
+test("an owner Stop-all whose Stops all landed reserves no host close", async () => {
+  // Reserved anyway, the close would fire at the end of the owner's turn and
+  // kill the work it started after the Stop-all.
+  const { port, supervisor, ownerSessionId, itemId } = await ownerHostTask(
+    "owner-settled-stop-all",
+  );
+  port.stopAllImpl = () =>
+    Promise.resolve({ acknowledgedItemIds: [itemId], unconfirmedItemIds: [] });
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "owner-settled-stop-all-request",
+    reason: "superseded runs",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["stopped"],
+  );
+  assert.equal(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+  );
+  assert.deepEqual(port.closeHosts, []);
+});
+
+test("an owner Stop-all reserves the host close for a Stop it could not confirm", async () => {
+  const { port, supervisor, ownerSessionId, itemId } = await ownerHostTask(
+    "owner-unsettled-stop-all",
+  );
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "owner-unsettled-stop-all-request",
+    reason: "superseded runs",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["stop-unconfirmed"],
+  );
+  assert.notEqual(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+    "the turn boundary closes the host as the backstop",
+  );
+  assert.deepEqual(port.closeHosts, [], "not before the owner's turn ends");
+  backgroundWorkStore.terminalize({
+    itemId,
+    state: "stopped",
+    reason: "test cleanup",
+  });
+});
+
+test("an owner Stop-all whose host was lost meanwhile still answers", async () => {
+  // The Stops take time; a host that died meanwhile is no longer live and has
+  // nothing left to close, so the reservation is skipped, not thrown.
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const ownerSessionId = owner("claude-sdk");
+  const supervisor = supervisorFor(clock, port, {
+    ordinaryTurnActive: () => true,
+  });
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "claude-query",
+    kind: "shell",
+    label: "unbound provider task",
+    sourceRequestId: "owner-lost-host-admit",
+    hostEpochKey: "owner-lost-host-epoch",
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) return;
+  await supervisor.launch(admission);
+  port.stopAllImpl = () => {
+    supervisor.hostLost(ownerSessionId, "owner-lost-host-epoch", "it died");
+    return Promise.resolve({ acknowledgedItemIds: [], unconfirmedItemIds: [] });
+  };
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "owner-lost-host-request",
+    reason: "superseded runs",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["already-terminal"],
+    "the lost host ended the item it was still waiting to bind",
+  );
+  assert.equal(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+  );
+});
+
+test("an owner Stop-all reserves no close for an item that settled while it waited", async () => {
+  // A had no provider task yet when Stop-all reached it; it bound and was
+  // Stopped while Stop-all still waited on B. Every original item is stopped,
+  // so a reservation would only kill the work the owner starts next.
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const ownerSessionId = owner("claude-sdk");
+  const supervisor = supervisorFor(clock, port, {
+    ordinaryTurnActive: () => true,
+  });
+  const admit = async (label: string) => {
+    const admission = supervisor.admit({
+      ownerSessionId,
+      backend: "claude-query",
+      kind: "shell",
+      label,
+      sourceRequestId: `settled-meanwhile-${label}`,
+      hostEpochKey: "settled-meanwhile-epoch",
+    });
+    assert.equal(admission.admitted, true);
+    if (!admission.admitted) throw new Error("not admitted");
+    await supervisor.launch(admission);
+    return admission.item.id;
+  };
+  const unbound = await admit("unbound");
+  const bound = await admit("bound");
+  supervisor.providerBound({ itemId: bound, providerTaskId: "task-bound" });
+  port.stopAllImpl = async () => {
+    supervisor.providerBound({
+      itemId: unbound,
+      providerTaskId: "task-unbound",
+    });
+    await flush();
+    return { acknowledgedItemIds: [bound], unconfirmedItemIds: [] };
+  };
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "settled-meanwhile-request",
+    reason: "superseded runs",
+  });
+  assert.equal(backgroundWorkStore.getItem(unbound)?.state, "stopped");
+  assert.deepEqual(results.map((result) => result.state).sort(), [
+    "already-terminal",
+    "stopped",
+  ]);
+  assert.equal(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+  );
+});
+
+test("an owner Stop-all waits for the Stop of an item that bound meanwhile", async () => {
+  // B binds while Stop-all waits on A, and B's own Stop answers only after
+  // Stop-all's acknowledgement: judged at that moment B would still look
+  // pending, and the reserved close would kill the owner's later work.
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const ownerSessionId = owner("claude-sdk");
+  const supervisor = supervisorFor(clock, port, {
+    ordinaryTurnActive: () => true,
+  });
+  const admit = async (label: string) => {
+    const admission = supervisor.admit({
+      ownerSessionId,
+      backend: "claude-query",
+      kind: "shell",
+      label,
+      sourceRequestId: `bound-meanwhile-${label}`,
+      hostEpochKey: "bound-meanwhile-epoch",
+    });
+    assert.equal(admission.admitted, true);
+    if (!admission.admitted) throw new Error("not admitted");
+    await supervisor.launch(admission);
+    return admission.item.id;
+  };
+  const bound = await admit("bound");
+  const late = await admit("late");
+  supervisor.providerBound({ itemId: bound, providerTaskId: "task-bound" });
+  let answerLateStop!: () => void;
+  port.stopImpl = () =>
+    new Promise((resolve) => {
+      answerLateStop = () => resolve({ acknowledged: true });
+    });
+  port.stopAllImpl = async () => {
+    supervisor.providerBound({ itemId: late, providerTaskId: "task-late" });
+    await flush();
+    setTimeout(() => answerLateStop(), 10);
+    return { acknowledgedItemIds: [bound], unconfirmedItemIds: [] };
+  };
+  const results = await supervisor.stopAllOwner({
+    ownerSessionId,
+    callerSessionId: ownerSessionId,
+    sourceRequestId: "bound-meanwhile-request",
+    reason: "superseded runs",
+  });
+  assert.equal(backgroundWorkStore.getItem(late)?.state, "stopped");
+  assert.deepEqual(results.map((result) => result.state).sort(), [
+    "already-terminal",
+    "stopped",
+  ]);
+  assert.equal(
+    backgroundWorkStore.hostForOwner(ownerSessionId)?.stopAllRequestedAt,
+    undefined,
+  );
+});
+
 test("completion is durable before delivery is offered", async () => {
   const clock = new FakeClock();
   const port = new FakePort();

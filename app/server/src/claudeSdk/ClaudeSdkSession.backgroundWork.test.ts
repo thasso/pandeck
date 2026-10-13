@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import type {
   ClaudeQuery,
   ClaudeQueryParams,
@@ -94,6 +94,14 @@ class FakeRetainedQuery implements ClaudeQuery {
 
   async interrupt(): Promise<void> {
     this.interruptCalls += 1;
+  }
+
+  /** Queued messages the session asked the CLI to drop, in order. */
+  readonly cancelled: string[] = [];
+
+  async cancelAsyncMessage(uuid: string): Promise<boolean> {
+    this.cancelled.push(uuid);
+    return true;
   }
 
   async stopTask(taskId: string): Promise<void> {
@@ -1185,6 +1193,472 @@ test("Stop-all protects an ordinary retained turn", async () => {
   session.dispose();
 });
 
+test("an owner Stop-all spares the work the owner starts after it", async () => {
+  // The owner stops its superseded run, starts the next one in the same turn
+  // and ends the turn. The settled Stop-all must not close the host at that
+  // boundary, or the new run dies seconds after it started.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const turn = session.createRuntimeAdapter().prompt("restart the test run");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  const startBackground = async (toolUseId: string, taskId: string) => {
+    await preToolHook(query)(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "provider-background",
+        transcript_path: "/tmp/transcript",
+        cwd: dataDir,
+        tool_name: "Bash",
+        tool_input: { command: "sleep 10", run_in_background: true },
+        tool_use_id: toolUseId,
+      },
+      toolUseId,
+      { signal: new AbortController().signal },
+    );
+    query.output.emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: taskId,
+      tool_use_id: toolUseId,
+      description: "sleep",
+      task_type: "shell",
+      uuid: `started-${taskId}`,
+      session_id: "provider-background",
+    } as unknown as ClaudeSdkMessage);
+    await until(() =>
+      backgroundWorkStore
+        .listItems({ ownerSessionId: session.id })
+        .some((item) => item.providerTaskId === taskId),
+    );
+  };
+
+  await startBackground("tool-superseded", "vendor-superseded");
+  const results = await backgroundWorkSupervisor.stopAllOwner({
+    ownerSessionId: session.id,
+    callerSessionId: session.id,
+    sourceRequestId: "owner-stop-all-superseded",
+    reason: "superseded run",
+  });
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["stopped"],
+  );
+  assert.deepEqual(query.stopped, ["vendor-superseded"]);
+
+  await startBackground("tool-next", "vendor-next");
+  query.output.emit(result("restarted"));
+  await turn;
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(query.closeCalls, 0, "the host stays up for the new run");
+  const next = backgroundWorkStore
+    .listItems({ ownerSessionId: session.id })
+    .find((item) => item.providerTaskId === "vendor-next");
+  assert.equal(next?.state, "running");
+  session.dispose();
+});
+
+test("an owner Stop-all whose Stop never answers closes the host when the turn ends", async () => {
+  // The supervisor gives up on the silent Stop at its deadlines and reserves
+  // the host close; the turn boundary must honour that reservation even
+  // though no Stop ever settled in the backend.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const turn = session.createRuntimeAdapter().prompt("stop the hung run");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  query.stopTask = () => new Promise<void>(() => undefined);
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-hung",
+    },
+    "tool-hung",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: "vendor-hung",
+    tool_use_id: "tool-hung",
+    description: "sleep",
+    task_type: "shell",
+    uuid: "started-vendor-hung",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  await until(() =>
+    backgroundWorkStore
+      .listItems({ ownerSessionId: session.id })
+      .some((item) => item.providerTaskId === "vendor-hung"),
+  );
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  let results;
+  try {
+    const stopping = backgroundWorkSupervisor.stopAllOwner({
+      ownerSessionId: session.id,
+      callerSessionId: session.id,
+      sourceRequestId: "owner-stop-all-hung",
+      reason: "hung run",
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    results = await stopping;
+  } finally {
+    vi.useRealTimers();
+  }
+  assert.deepEqual(
+    results.map((result) => result.state),
+    ["stop-unconfirmed"],
+  );
+  assert.equal(query.closeCalls, 0, "not before the owner's turn ends");
+
+  query.output.emit(result("hung-turn-end"));
+  await turn;
+  await until(() => query.closeCalls === 1);
+  session.dispose();
+});
+
+test("an owner Stop-all whose Stop never answers closes the host even after a Stop ended its turn", async () => {
+  // The user stops the turn while its Stop-all still waits on the silent
+  // Stop: the turn boundary passes before the close is reserved, so the
+  // reservation itself must close the idle host.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const turn = session.createRuntimeAdapter().prompt("stop the hung run");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  query.stopTask = () => new Promise<void>(() => undefined);
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-hung-stopped",
+    },
+    "tool-hung-stopped",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: "vendor-hung-stopped",
+    tool_use_id: "tool-hung-stopped",
+    description: "sleep",
+    task_type: "shell",
+    uuid: "started-vendor-hung-stopped",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  await until(() =>
+    backgroundWorkStore
+      .listItems({ ownerSessionId: session.id })
+      .some((item) => item.providerTaskId === "vendor-hung-stopped"),
+  );
+  query.output.emit(result("hung-stopped-retained"));
+  await turn;
+
+  const again = session.createRuntimeAdapter().prompt("stop it all");
+  await until(() => query.inputs.length === 2);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const stopping = backgroundWorkSupervisor.stopAllOwner({
+      ownerSessionId: session.id,
+      callerSessionId: session.id,
+      sourceRequestId: "owner-stop-all-hung-stopped",
+      reason: "hung run",
+    });
+    session.abort();
+    await again;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stopping;
+  } finally {
+    vi.useRealTimers();
+  }
+  await until(() => query.closeCalls === 1);
+  session.dispose();
+});
+
+test("a Stop-all reserved while a slash command runs closes the host when it finishes", async () => {
+  // As above, but a slash command is running when the late reservation
+  // lands: its end is the boundary the close waits for.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const turn = session.createRuntimeAdapter().prompt("stop the hung run");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  query.stopTask = () => new Promise<void>(() => undefined);
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-hung-slash",
+    },
+    "tool-hung-slash",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: "vendor-hung-slash",
+    tool_use_id: "tool-hung-slash",
+    description: "sleep",
+    task_type: "shell",
+    uuid: "started-vendor-hung-slash",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  await until(() =>
+    backgroundWorkStore
+      .listItems({ ownerSessionId: session.id })
+      .some((item) => item.providerTaskId === "vendor-hung-slash"),
+  );
+  query.output.emit(result("hung-slash-retained"));
+  await turn;
+
+  const again = session.createRuntimeAdapter().prompt("stop it all");
+  await until(() => query.inputs.length === 2);
+  let synthetic!: { toolId: string };
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const stopping = backgroundWorkSupervisor.stopAllOwner({
+      ownerSessionId: session.id,
+      callerSessionId: session.id,
+      sourceRequestId: "owner-stop-all-hung-slash",
+      reason: "hung run",
+    });
+    session.abort();
+    await again;
+    synthetic = session.beginSyntheticTool("/commit", {
+      command: "/commit",
+      rawArgs: "",
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await stopping;
+  } finally {
+    vi.useRealTimers();
+  }
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(query.closeCalls, 0, "not while the slash command runs");
+  session.finishSyntheticTool(synthetic.toolId, "committed");
+  await until(() => query.closeCalls === 1);
+  session.dispose();
+});
+
+test("Stop withdraws a retained prompt the CLI has not started yet", async () => {
+  // A plain interrupt keeps queued commands: left queued, the stopped prompt
+  // would run next as a turn nobody asked for.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const adapter = session.createRuntimeAdapter();
+  const first = adapter.prompt("retain the host");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-retain-for-stop",
+    },
+    "tool-retain-for-stop",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit(result("retain-first"));
+  await first;
+
+  const queued = adapter.prompt("queued behind a notice");
+  await until(() => query.inputs.length === 2);
+  const uuid = (query.inputs[1] as { uuid: string }).uuid;
+  session.abort();
+  await queued;
+  await until(() => query.interruptCalls === 1);
+  assert.deepEqual(query.cancelled, [uuid]);
+
+  // The dropped prompt never ran, so no result of it is owed: the next
+  // prompt's own result ends the next turn, with no optional running hint.
+  const next = adapter.prompt("after the withdrawn prompt");
+  await until(() => query.inputs.length === 3);
+  const nextUuid = (query.inputs[2] as { uuid: string }).uuid;
+  query.output.emit({
+    type: "command_lifecycle",
+    command_uuid: nextUuid,
+    state: "started",
+    uuid: "lifecycle-after-withdrawn",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    ...(result("after-withdrawn") as unknown as Record<string, unknown>),
+    user_message_uuids: [nextUuid],
+  } as unknown as ClaudeSdkMessage);
+  assert.equal((await next).stopReason, "end");
+  session.dispose();
+});
+
+test("without command starts, a withdrawn idle prompt leaves the next turn its response", async () => {
+  // A CLI that reports no command starts cannot retire the discard at the
+  // next prompt's start: armed, it would drop that turn's whole stream.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const adapter = session.createRuntimeAdapter();
+  const first = adapter.prompt("retain the host");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-retain-no-starts",
+    },
+    "tool-retain-no-starts",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit(result("retain-first"));
+  await first;
+
+  const queued = adapter.prompt("queued behind a notice");
+  await until(() => query.inputs.length === 2);
+  const uuid = (query.inputs[1] as { uuid: string }).uuid;
+  session.abort();
+  await queued;
+  await until(() => query.interruptCalls === 1);
+  assert.deepEqual(query.cancelled, [uuid]);
+
+  // The dropped prompt never ran, so no result of it is owed: the next
+  // prompt's own result ends the next turn, with no optional running hint.
+  const next = adapter.prompt("after the withdrawn prompt");
+  await until(() => query.inputs.length === 3);
+  const nextUuid = (query.inputs[2] as { uuid: string }).uuid;
+  query.output.emit({
+    type: "stream_event",
+    event: {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: "The next turn's answer." },
+    },
+    parent_tool_use_id: null,
+    uuid: "no-starts-stream",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    type: "assistant",
+    uuid: "no-starts-assistant",
+    session_id: "provider-background",
+    parent_tool_use_id: null,
+    message: {
+      id: "no-starts-message",
+      model: "claude-sonnet-5",
+      content: [{ type: "text", text: "The next turn's answer." }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    ...(result("after-no-starts") as unknown as Record<string, unknown>),
+    user_message_uuids: [nextUuid],
+  } as unknown as ClaudeSdkMessage);
+  assert.equal((await next).stopReason, "end");
+  assert.ok(
+    session
+      .snapshot()
+      .some((message) =>
+        message.blocks.some(
+          (block) =>
+            block.kind === "text" && block.text === "The next turn's answer.",
+        ),
+      ),
+    "the next turn kept its response",
+  );
+  session.dispose();
+});
+
+test("the interrupted run a withdrawn prompt queued behind cannot fail the next turn", async () => {
+  // The prompt waited behind a run the CLI started itself (an orphaned-task
+  // notice). Stop drops the prompt and interrupts that run, whose error
+  // result arrives only after the next prompt opened: it is owed, not the
+  // next turn's.
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  const adapter = session.createRuntimeAdapter();
+  const first = adapter.prompt("retain the host");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  await preToolHook(query)(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-background",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 10", run_in_background: true },
+      tool_use_id: "tool-retain-for-notice",
+    },
+    "tool-retain-for-notice",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit(result("retain-first"));
+  await first;
+  // This CLI reports command starts, which is what retires the discard.
+  query.output.emit({
+    type: "system",
+    subtype: "init",
+    capabilities: ["msg_lifecycle_v1"],
+    uuid: "init-notice",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+
+  const queued = adapter.prompt("queued behind a notice");
+  await until(() => query.inputs.length === 2);
+  const uuid = (query.inputs[1] as { uuid: string }).uuid;
+  session.abort();
+  await queued;
+  await until(() => query.interruptCalls === 1);
+  assert.deepEqual(query.cancelled, [uuid]);
+
+  // The dropped prompt never ran, so no result of it is owed: the next
+  // prompt's own result ends the next turn, with no optional running hint.
+  const next = adapter.prompt("after the withdrawn prompt");
+  await until(() => query.inputs.length === 3);
+  const nextUuid = (query.inputs[2] as { uuid: string }).uuid;
+  query.output.emit({
+    ...(result("interrupted-notice") as unknown as Record<string, unknown>),
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["interrupted"],
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    type: "command_lifecycle",
+    command_uuid: nextUuid,
+    state: "started",
+    uuid: "lifecycle-after-notice",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit({
+    ...(result("after-notice") as unknown as Record<string, unknown>),
+    user_message_uuids: [nextUuid],
+  } as unknown as ClaudeSdkMessage);
+  assert.equal((await next).stopReason, "end");
+  session.dispose();
+});
+
 test("abort interrupts but does not close a retained epoch", async () => {
   const { session, queries } = makeHarness();
   await sessionSkills(session.id, session.agentType);
@@ -1210,6 +1684,15 @@ test("abort interrupts but does not close a retained epoch", async () => {
 
   const aborted = adapter.prompt("abort this retained turn");
   await until(() => query.inputs.length === 2);
+  // The CLI is already running this prompt, so Stop has nothing to withdraw.
+  query.output.emit({
+    type: "command_lifecycle",
+    command_uuid: (query.inputs[1] as { uuid: string }).uuid,
+    state: "started",
+    uuid: "lifecycle-abort-retained",
+    session_id: "provider-background",
+  } as unknown as ClaudeSdkMessage);
+  await new Promise<void>((resolve) => setImmediate(resolve));
   session.abort();
   await aborted;
   assert.equal(query.interruptCalls, 1);

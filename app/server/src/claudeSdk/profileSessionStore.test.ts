@@ -21,6 +21,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -31,7 +32,8 @@ const tmp = mkdtempSync(join(tmpdir(), "claude-profile-store-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
-const { claudeProfileSessionStore } = await import("./profileSessionStore.ts");
+const { claudeProfileSessionStore, lastSavedCostState } =
+  await import("./profileSessionStore.ts");
 const sdk = await import("@anthropic-ai/claude-agent-sdk");
 
 const PROFILE = "cp_testprofile";
@@ -162,4 +164,96 @@ test("the default profile keeps using the user's own ~/.claude root", async () =
 
 afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
+});
+
+/** A transcript for `sessionId` under `projectKey` in PROFILE's root. */
+function writeTranscript(
+  projectKey: string,
+  sessionId: string,
+  lines: string[],
+): string {
+  const path = join(
+    claudeProfileSessionStore(PROFILE).root,
+    "projects",
+    projectKey,
+    `${sessionId}.jsonl`,
+  );
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, lines.join("\n"));
+  return path;
+}
+
+function costState(sessionId: string, cost: number): string {
+  return JSON.stringify({
+    type: "cost-state",
+    sessionId,
+    totalCostUSD: cost,
+    modelUsage: {
+      "claude-opus-5-5": { inputTokens: 10, outputTokens: 2, costUSD: cost },
+    },
+  });
+}
+
+test("the last valid cost-state of the session's own transcript is the one restored", async () => {
+  const session = randomUUID();
+  // Another project dir holds an unrelated session; the right one is found.
+  writeTranscript("-elsewhere", randomUUID(), [costState("x", 9)]);
+  writeTranscript("-repo", session, [
+    costState(session, 1),
+    JSON.stringify({ type: "user", message: { content: "x".repeat(600_000) } }),
+    costState(session, 2),
+    costState("another-session", 7),
+    JSON.stringify({ type: "cost-state", totalCostUSD: 8, modelUsage: {} }),
+    JSON.stringify({
+      type: "cost-state",
+      sessionId: session,
+      totalCostUSD: -1,
+    }),
+    JSON.stringify({ type: "last-prompt", lastPrompt: "hi" }),
+    `{"type":"cost-state","sessionId":"${session}","totalCo`,
+  ]);
+  const entry = await lastSavedCostState(PROFILE, session);
+  assert.equal(entry?.totalCostUSD, 2);
+});
+
+test("a saved cost-state before a line larger than one read chunk is still found", async () => {
+  const session = randomUUID();
+  writeTranscript("-repo", session, [
+    costState(session, 3),
+    JSON.stringify({ type: "user", message: { content: "é".repeat(400_000) } }),
+  ]);
+  assert.equal((await lastSavedCostState(PROFILE, session))?.totalCostUSD, 3);
+});
+
+test("no transcript, no saved totals", async () => {
+  assert.equal(await lastSavedCostState(PROFILE, randomUUID()), undefined);
+});
+
+test("only a regular file under the transcript's name is read, never a link", async () => {
+  const dirSession = randomUUID();
+  const notAFile = join(
+    claudeProfileSessionStore(PROFILE).root,
+    "projects",
+    "-repo",
+    `${dirSession}.jsonl`,
+  );
+  mkdirSync(notAFile, { recursive: true });
+  assert.equal(await lastSavedCostState(PROFILE, dirSession), undefined);
+
+  const linkedSession = randomUUID();
+  const target = join(tmp, "outside.jsonl");
+  writeFileSync(target, costState(linkedSession, 5));
+  symlinkSync(target, join(dirname(notAFile), `${linkedSession}.jsonl`));
+  assert.equal(await lastSavedCostState(PROFILE, linkedSession), undefined);
+});
+
+test("a cost-state line split across two read chunks is read whole", async () => {
+  const session = randomUUID();
+  // The scan reads 256 KiB chunks from the end: a filler line just under one
+  // chunk puts the chunk boundary inside the cost-state line before it.
+  writeTranscript("-repo", session, [
+    costState(session, 4),
+    JSON.stringify({ type: "user", message: { content: "y".repeat(262_000) } }),
+  ]);
+  assert.equal((await lastSavedCostState(PROFILE, session))?.totalCostUSD, 4);
 });

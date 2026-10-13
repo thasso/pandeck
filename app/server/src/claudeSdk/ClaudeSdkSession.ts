@@ -207,6 +207,7 @@ import {
   assistantProviderError,
   assistantUsage,
   captureSessionId,
+  type ClaudeResultMessage,
   type ClaudeUsage,
   type CompactBoundary,
   compactBoundaryMetadata,
@@ -219,6 +220,7 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import { buildClaudeSdkQueryOptions } from "./options.ts";
+import { lastSavedCostState } from "./profileSessionStore.ts";
 import { prepareClaudeSkillRuntime } from "./skillInjection.ts";
 import {
   claudeSdkModelAlias,
@@ -593,6 +595,12 @@ export class ClaudeSdkSession implements LiveSession {
    */
   private epochUsageBase: CumulativeUsageTotals | undefined;
   /**
+   * The running totals a resumed or forked CLI said it would continue from
+   * (its transcript's saved `cost-state`), until the epoch's first real report
+   * confirms or refutes it.
+   */
+  private epochCarriedTotals: CumulativeUsageTotals | undefined;
+  /**
    * `cumulative` sampled when the current turn opened, so the completed turn's
    * durable entry usage is THIS run's delta (`result` accumulates into
    * `cumulative` before `finishTurn` runs).
@@ -635,6 +643,20 @@ export class ClaudeSdkSession implements LiveSession {
    * the run continues until every one of them is accounted for.
    */
   private readonly followUpsOwed = new Set<string>();
+  /**
+   * The uuid stamped on the open turn's prompt, until the CLI reports it
+   * dequeued (`command_lifecycle` start or a result consuming it). A resumed
+   * CLI may answer queued startup notices first — orphaned background tasks
+   * of the previous process — with a model-less `result`; while the prompt is
+   * still waiting, that result is not this turn's.
+   */
+  private turnPromptWaiting: string | undefined;
+  /**
+   * The epoch whose CLI advertised `msg_lifecycle_v1` on its `init`: it reports
+   * every command it dequeues, so a result before the waiting prompt's start is
+   * provably not that prompt's.
+   */
+  private lifecycleFramesEpochKey: string | undefined;
   /** A Stop's interrupt (or kill) still waiting on the CLI's drop answers. */
   private stopInterrupt: Promise<void> | undefined;
   /** The ordinary epoch a Stop is killing once those answers are in. */
@@ -1452,17 +1474,24 @@ export class ClaudeSdkSession implements LiveSession {
     this.abortingTurn = false;
     const completion = deferred<void>();
     this.turnCompletion = completion;
+    // A Stop ends this turn at once and a new prompt may open the next while
+    // setup below still awaits: from then on this one touches no turn state.
+    const ownsTurn = () => this.turnCompletion === completion;
     try {
       const frozenSkillNames = this.frozenSkillNames();
       if (frozenSkillNames.length > 0)
         await this.prepareSkillRuntime(frozenSkillNames);
+      if (!ownsTurn()) return;
+      const uuid = randomUUID();
+      this.turnPromptWaiting = uuid;
       await this.sendPromptToProcess(
-        sdkUserMessage(promptWithFiles, images),
+        { ...sdkUserMessage(promptWithFiles, images), uuid },
         frozenSkillNames,
+        ownsTurn,
       );
       await completion.promise;
     } catch (error) {
-      if (this.running)
+      if (this.running && ownsTurn())
         this.finishTurn({
           stopReason: this.abortingTurn ? "aborted" : "error",
           ...(this.abortingTurn
@@ -1689,21 +1718,33 @@ export class ClaudeSdkSession implements LiveSession {
     this.onChange();
   }
 
+  /**
+   * Hand the turn's prompt to the CLI. `ownsTurn` answers whether the turn
+   * that sent it is still the open one: a Stop ends the turn at once, and a
+   * new prompt may open the next, while this is still awaiting setup. Checked
+   * after every await, it keeps a stopped prompt from starting a query and a
+   * stale send from taking over the next turn's query and epoch.
+   */
   private async sendPromptToProcess(
     message: ClaudeSdkUserMessage,
     frozenSkillNames: readonly string[],
+    ownsTurn: () => boolean,
   ): Promise<void> {
+    if (!ownsTurn()) return;
     this.cancelQuietClose();
     await this.stopInterruptSent();
+    if (!ownsTurn()) return;
     if (this.activeQuery && this.processClosing && this.queryLoop) {
       const closingLoop = this.queryLoop;
       if (!(await settlesWithin(closingLoop, this.processCloseTimeoutMs))) {
+        if (!ownsTurn()) return;
         this.abortController?.abort();
         if (!(await settlesWithin(closingLoop, this.processCloseTimeoutMs)))
           throw new Error(
             `Claude process did not exit after ${this.processCloseReason ?? "it was closed"}.`,
           );
       }
+      if (!ownsTurn()) return;
     }
     if (this.activeQuery && this.inputQueue) {
       const epochKey = this.queryEpochKey;
@@ -1715,6 +1756,12 @@ export class ClaudeSdkSession implements LiveSession {
     }
 
     const seam = await this.seamFactory();
+    if (!ownsTurn()) return;
+    const carried = await this.savedProviderTotals();
+    if (!ownsTurn()) return;
+    // A query opened meanwhile takes the prompt the way it would have above.
+    if (this.activeQuery)
+      return this.sendPromptToProcess(message, frozenSkillNames, ownsTurn);
     if (!this.toolServer) this.toolServer = createClaudeSessionToolServer(this);
     const epochKey = `claude-${randomUUID()}`;
     const queue = new CloseableInputQueue();
@@ -1728,7 +1775,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.inputQueue = queue;
     this.queryEpochKey = epochKey;
     this.activeTurnEpochKey = epochKey;
-    this.beginUsageEpoch();
+    this.beginUsageEpoch(carried);
     this.processClosing = false;
     const taskOutputTemp = createClaudeTaskOutputTemp();
     this.epochTaskOutputTemp = taskOutputTemp;
@@ -1750,6 +1797,17 @@ export class ClaudeSdkSession implements LiveSession {
         }
       },
       close: async (reason) => this.closeProcess(reason),
+      stopAllReserved: () => {
+        // A turn still running closes the host at its end (`finishTurn`);
+        // one already over — a Stop while this Stop-all waited on a silent
+        // Stop — left no boundary, so the close happens now.
+        if (!this.running && this.retainedEpochKey === epochKey)
+          void backgroundWorkSupervisor.closeStopAllHost(
+            this.id,
+            epochKey,
+            "background Stop-all reached the provider turn boundary",
+          );
+      },
     });
     let query: ClaudeQuery;
     try {
@@ -1817,8 +1875,22 @@ export class ClaudeSdkSession implements LiveSession {
     try {
       for await (const message of query) {
         if (this.stoppingEpochKey === epochKey) continue;
+        if (reportsCommandLifecycle(message))
+          this.lifecycleFramesEpochKey = epochKey;
         const lifecycle = commandLifecycle(message);
         if (lifecycle) {
+          if (
+            lifecycle.started !== undefined &&
+            lifecycle.started === this.turnPromptWaiting
+          ) {
+            this.turnPromptWaiting = undefined;
+            // The CLI runs one command at a time: a stopped or denied run's
+            // result precedes the next command's start, so none still owed
+            // can arrive now. A Stop that withdrew its prompt from an idle
+            // CLI leaves one armed that would otherwise eat this turn.
+            this.resetProviderResultTracking();
+            continue;
+          }
           // The CLI dequeued a command. While a prompted turn of this epoch is
           // still open, a steer dequeued now is folded into it at this step.
           if (
@@ -1834,8 +1906,15 @@ export class ClaudeSdkSession implements LiveSession {
           message.type === "result" &&
           this.foreignProviderResultsToDiscard > 0
         ) {
-          this.consumeForeignProviderResult();
-          continue;
+          // One that consumed the open turn's own prompt is that turn's, not
+          // the owed one (a CLI without lifecycle frames reports no start).
+          const waiting = this.turnPromptWaiting;
+          if (waiting && consumedMessageUuids(message).includes(waiting))
+            this.resetProviderResultTracking();
+          else {
+            this.consumeForeignProviderResult();
+            continue;
+          }
         }
         if (this.foreignProviderResultsToDiscard > 0) {
           if (this.running && isClaudeTurnStart(message)) {
@@ -1876,6 +1955,12 @@ export class ClaudeSdkSession implements LiveSession {
         else if (!(this.running && isTurnTranscriptMessage(message)))
           this.adapterEvents.unattributed(() => this.handleSdkMessage(message));
         if (message.type !== "result") continue;
+        // Its running total is billed above; only the turn stays open.
+        if (
+          this.activeTurnEpochKey === epochKey &&
+          this.answersBeforePrompt(message, epochKey)
+        )
+          continue;
         await this.refreshToolLoadState(query);
         const ownsTurn =
           this.running &&
@@ -1975,6 +2060,34 @@ export class ClaudeSdkSession implements LiveSession {
     }
   }
 
+  /**
+   * A clean `result` that arrived while the open turn's prompt was still
+   * queued: the CLI answering startup notices (orphaned background tasks of
+   * the previous process) before it reached the prompt. Settling the turn on
+   * it ends the turn and closes the process before the prompt ever runs. A
+   * CLI that reports its dequeues proves the prompt has not started; without
+   * those frames only a result that called no model and consumed nothing is
+   * set aside. A failure still fails the turn.
+   */
+  private answersBeforePrompt(
+    message: Extract<
+      import("./sdkSeam.ts").ClaudeSdkMessage,
+      { type: "result" }
+    >,
+    epochKey: string,
+  ): boolean {
+    const waiting = this.turnPromptWaiting;
+    if (!waiting || !this.running || this.syntheticTurn) return false;
+    const consumed = consumedMessageUuids(message);
+    if (consumed.includes(waiting)) {
+      this.turnPromptWaiting = undefined;
+      return false;
+    }
+    if (resultProviderError(message)) return false;
+    if (this.lifecycleFramesEpochKey === epochKey) return true;
+    return consumed.length === 0 && message.num_turns === 0;
+  }
+
   private isProviderTurnContent(
     message: import("./sdkSeam.ts").ClaudeSdkMessage,
   ): boolean {
@@ -2031,6 +2144,8 @@ export class ClaudeSdkSession implements LiveSession {
   private openProviderTurn(epochKey: string): void {
     this.running = true;
     this.activeTurnEpochKey = epochKey;
+    // No prompt of ours opened this turn, so none can be waiting to start.
+    this.turnPromptWaiting = undefined;
     this.providerTurnInterrupted = false;
     this.turnCounter += 1;
     this.liveTurnId = `csbg-${this.turnCounter}`;
@@ -2566,6 +2681,9 @@ export class ClaudeSdkSession implements LiveSession {
     // An ordinary process waits for the same answers before it is killed:
     // killing first would leave a steer it had just taken unknown.
     const hadSteers = this.pendingSteers.size > 0;
+    // A prompt the CLI has not started yet waits in the same queue: a plain
+    // interrupt keeps it, and it would then run as a turn nobody asked for.
+    const waitingPrompt = this.turnPromptWaiting;
     const withdrawn = this.withdrawPendingSteers();
     if (
       this.retainedEpochKey &&
@@ -2577,8 +2695,21 @@ export class ClaudeSdkSession implements LiveSession {
       // the same query epoch in the meantime.
       this.markProviderResultForDiscard(this.turnCounter);
       const query = this.activeQuery;
-      const interrupted = withdrawn
-        .then(() => query.interrupt?.())
+      const reportsStarts =
+        this.lifecycleFramesEpochKey !== undefined &&
+        this.lifecycleFramesEpochKey === this.queryEpochKey;
+      const interrupted = Promise.all([
+        withdrawn,
+        waitingPrompt ? dropQueuedMessage(query, waitingPrompt) : false,
+      ])
+        .then(([, dropped]) => {
+          // A CLI that reports command starts retires the discard at the next
+          // prompt's start, so an interrupted run it was busy with is still
+          // discarded. One that does not would leave the next turn's whole
+          // stream discarded instead; there the confirmed drop disarms it.
+          if (dropped && !reportsStarts) this.consumeForeignProviderResult();
+          return query.interrupt?.();
+        })
         .then(
           () => undefined,
           () => undefined,
@@ -2687,6 +2818,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.liveTurn = undefined;
     this.liveTurnId = undefined;
     this.activeTurnEpochKey = undefined;
+    this.turnPromptWaiting = undefined;
     this.abortingTurn = false;
     const usage = perTurnUsage(this.turnStartTotals, this.cumulative, {
       ...(this.contextTokens !== undefined
@@ -2730,20 +2862,29 @@ export class ClaudeSdkSession implements LiveSession {
     this.providerTurnRelease = undefined;
     this.providerTurnEpochKey = undefined;
     this.residency.arm();
-    if (this.retainedEpochKey) {
-      if (
-        claudeBackgroundWorkBackend.stopAllWasRequested(
-          this.id,
-          this.retainedEpochKey,
-        )
+    this.reachTurnBoundary();
+  }
+
+  /**
+   * A turn of any kind ended on a retained host: a Stop-all reserved for it
+   * closes the host now, otherwise it closes once it holds no work. Every turn
+   * end passes here — a reservation written while a synthetic turn ran has
+   * no other boundary to wait for.
+   */
+  private reachTurnBoundary(): void {
+    if (!this.retainedEpochKey) return;
+    if (
+      claudeBackgroundWorkBackend.stopAllWasRequested(
+        this.id,
+        this.retainedEpochKey,
       )
-        void backgroundWorkSupervisor.closeStopAllHost(
-          this.id,
-          this.retainedEpochKey,
-          "background Stop-all reached the provider turn boundary",
-        );
-      else this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
-    }
+    )
+      void backgroundWorkSupervisor.closeStopAllHost(
+        this.id,
+        this.retainedEpochKey,
+        "background Stop-all reached the provider turn boundary",
+      );
+    else this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
   }
 
   /* ----------------------------- slash commands ---------------------------- */
@@ -2883,7 +3024,7 @@ export class ClaudeSdkSession implements LiveSession {
       const seam = await this.seamFactory();
       // A standalone compaction is its own query epoch, so its usage rebases onto
       // the session rather than onto whatever the previous epoch had reported.
-      this.beginUsageEpoch();
+      this.beginUsageEpoch(await this.savedProviderTotals());
       const query = seam.query({
         prompt: promptIterable(
           `/compact${customInstructions ? ` ${customInstructions}` : ""}`,
@@ -3088,8 +3229,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.onPersist();
     this.onChange();
     this.residency.arm();
-    if (this.retainedEpochKey)
-      this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
+    this.reachTurnBoundary();
   }
 
   /**
@@ -3115,8 +3255,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.onPersist();
     this.onChange();
     this.residency.arm();
-    if (this.retainedEpochKey)
-      this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
+    this.reachTurnBoundary();
   }
 
   /* ------------------------------ SDK messages ----------------------------- */
@@ -3137,8 +3276,47 @@ export class ClaudeSdkSession implements LiveSession {
    * epoch base is what the session had billed BEFORE this process reported
    * anything, and a missing one silently attributes the epoch's work to nobody.
    */
-  private beginUsageEpoch(): void {
+  private beginUsageEpoch(carried?: CumulativeUsageTotals): void {
     this.epochUsageBase = { ...this.cumulative };
+    this.epochCarriedTotals = carried;
+  }
+
+  /**
+   * What a query resuming this session will report before it does any work:
+   * the totals the CLI saved in the transcript and restores on resume (the
+   * SDK: "a resumed or forked session continues from the totals its transcript
+   * saved"). Read BEFORE the query starts, when the last entry is the one the
+   * CLI is about to load. Unreadable means "nothing carried", the old reading.
+   */
+  private async savedProviderTotals(): Promise<
+    CumulativeUsageTotals | undefined
+  > {
+    if (!this.providerSessionId) return undefined;
+    let entry: Record<string, unknown> | undefined;
+    try {
+      entry = await lastSavedCostState(
+        this.credentialProfileId,
+        this.providerSessionId,
+      );
+    } catch {
+      return undefined;
+    }
+    if (!entry) return undefined;
+    const totals = mapResultEpochUsage({
+      modelUsage: entry.modelUsage,
+    } as unknown as ClaudeResultMessage);
+    const cost =
+      typeof entry.totalCostUSD === "number" &&
+      Number.isFinite(entry.totalCostUSD)
+        ? entry.totalCostUSD
+        : 0;
+    return {
+      input: totals.inputTokens ?? 0,
+      output: totals.outputTokens ?? 0,
+      cacheRead: totals.cacheReadTokens ?? 0,
+      cacheWrite: totals.cacheWriteTokens ?? 0,
+      cost,
+    };
   }
 
   /**
@@ -3147,8 +3325,9 @@ export class ClaudeSdkSession implements LiveSession {
    * Per the SDK: `modelUsage`/`total_cost_usd` are "cumulative across turns in
    * streaming-input sessions — each result carries the running total so far, so
    * read the latest result rather than summing across results", and a resumed
-   * session starts fresh. So a result is the running total for its `query()`
-   * epoch, and the session's is that epoch's base plus it. PA used to ADD each
+   * session "continues from the totals its transcript saved". So a result is
+   * the running total for its `query()` epoch, and the session's is that
+   * epoch's base plus it, less what the epoch carried over. PA used to ADD each
    * result, which on a retained process (background work keeps one query serving
    * many turns) re-billed every earlier turn of the epoch on every turn: one real
    * session reported 2.45B cache-read tokens where the CLI's own per-request
@@ -3180,7 +3359,23 @@ export class ClaudeSdkSession implements LiveSession {
       return;
     // A query that reported before its epoch was opened would otherwise be billed
     // from zero and wipe the session's history.
-    const base = (this.epochUsageBase ??= { ...this.cumulative });
+    let base = (this.epochUsageBase ??= { ...this.cumulative });
+    // A resumed CLI restored its saved totals, so its running total starts
+    // there, not at zero: billed as is, every resume re-bills the session's
+    // history. Only a first report that covers the saved totals proves they
+    // were restored; one that does not means the CLI started from zero.
+    const carried = this.epochCarriedTotals;
+    if (carried) {
+      this.epochCarriedTotals = undefined;
+      if (coversTotals(reported, carried))
+        base = this.epochUsageBase = {
+          input: base.input - carried.input,
+          output: base.output - carried.output,
+          cacheRead: base.cacheRead - carried.cacheRead,
+          cacheWrite: base.cacheWrite - carried.cacheWrite,
+          cost: base.cost - carried.cost,
+        };
+    }
     this.cumulative = {
       input: base.input + reported.input,
       output: base.output + reported.output,
@@ -3902,6 +4097,37 @@ async function* promptIterable(
   yield sdkUserMessage(text, []);
 }
 
+/** Whether a CLI `init` advertises `command_lifecycle` frames. */
+function reportsCommandLifecycle(message: ClaudeSdkMessage): boolean {
+  const init = message as {
+    type?: unknown;
+    subtype?: unknown;
+    capabilities?: unknown;
+  };
+  return (
+    init.type === "system" &&
+    init.subtype === "init" &&
+    Array.isArray(init.capabilities) &&
+    init.capabilities.includes("msg_lifecycle_v1")
+  );
+}
+
+/**
+ * The input messages a `result` reports consumed: the list, or the single
+ * uuid older producers and error results carry instead.
+ */
+function consumedMessageUuids(message: ClaudeSdkMessage): string[] {
+  const m = message as {
+    user_message_uuids?: unknown;
+    user_message_uuid?: unknown;
+  };
+  if (Array.isArray(m.user_message_uuids))
+    return m.user_message_uuids.filter(
+      (uuid): uuid is string => typeof uuid === "string",
+    );
+  return typeof m.user_message_uuid === "string" ? [m.user_message_uuid] : [];
+}
+
 /**
  * A `command_lifecycle` frame, with the uuid of the command it reports the CLI
  * just dequeued. These frames come with the CLI's `msg_lifecycle_v1` capability
@@ -3953,6 +4179,20 @@ async function dropQueuedMessage(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/** Whether a running total has reached every field of an earlier one. */
+function coversTotals(
+  total: CumulativeUsageTotals,
+  earlier: CumulativeUsageTotals,
+): boolean {
+  return (
+    total.input >= earlier.input &&
+    total.output >= earlier.output &&
+    total.cacheRead >= earlier.cacheRead &&
+    total.cacheWrite >= earlier.cacheWrite &&
+    total.cost >= earlier.cost - 1e-9
+  );
 }
 
 function isClaudeTurnStart(message: ClaudeSdkMessage): boolean {

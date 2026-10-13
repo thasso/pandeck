@@ -4,6 +4,7 @@ import type {
 } from "@assistant/shared";
 import {
   backgroundWorkStore,
+  BackgroundWorkValidationError,
   type BackgroundWorkItem,
   type BackgroundWorkStopOrigin,
 } from "../db/backgroundWorkStore.ts";
@@ -159,6 +160,8 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
   private readonly reportError: (message: string) => void;
   private readonly deadlineTimers = new Map<string, BackgroundWorkTimer>();
   private readonly pendingStopSources = new Map<string, string>();
+  /** Stops sent once a parked item bound, until each one answers. */
+  private readonly boundStops = new Map<string, Promise<unknown>>();
   private draining = false;
 
   constructor(options: BackgroundWorkSupervisorOptions = {}) {
@@ -448,12 +451,18 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     }
 
     const host = backgroundWorkStore.hostForOwner(request.ownerSessionId);
+    // The owner's own Stop-all runs inside its turn, so the host can close only
+    // at that turn's end. Reserved up front, the close would also kill the work
+    // the owner starts after it; it is reserved below only for what the Stops
+    // themselves could not settle.
+    const ownerRequested = request.callerSessionId === request.ownerSessionId;
     if (host) {
-      backgroundWorkStore.requestHostStopAll({
-        hostId: host.id,
-        reason: request.reason,
-        now: this.clock.now(),
-      });
+      if (!ownerRequested)
+        backgroundWorkStore.requestHostStopAll({
+          hostId: host.id,
+          reason: request.reason,
+          now: this.clock.now(),
+        });
       if (!byBackend.has(host.backend)) byBackend.set(host.backend, []);
     }
 
@@ -539,9 +548,57 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         }
       }
     }
+    // The Stops took time, and an item they left unsettled may have settled
+    // since (bound and Stopped, or confirmed late): judge each by its row now,
+    // not by the answer recorded when it was first tried.
+    // An item that bound meanwhile has its own Stop in flight: wait for its
+    // answer (bounded by that Stop's deadlines) rather than judge it pending.
+    if (ownerRequested)
+      await Promise.all(
+        results.flatMap((result) => {
+          const stop = this.boundStops.get(result.item?.id ?? "");
+          return stop ? [stop] : [];
+        }),
+      );
+    for (const [index, result] of results.entries()) {
+      if (
+        result.state !== "stop-unconfirmed" &&
+        result.state !== "awaiting-binding"
+      )
+        continue;
+      const current = backgroundWorkStore.getItem(result.item.id);
+      if (current && TERMINAL_STATES.has(current.state))
+        results[index] = { state: "already-terminal", item: current };
+    }
+    // Reserve only on the same epoch, and only while it is still live — one
+    // lost or replaced meanwhile has nothing left to close.
     if (
       host &&
-      request.callerSessionId !== request.ownerSessionId &&
+      ownerRequested &&
+      backgroundWorkStore.hostForOwner(request.ownerSessionId)?.id ===
+        host.id &&
+      results.some(
+        (result) =>
+          result.state === "stop-unconfirmed" ||
+          result.state === "awaiting-binding",
+      )
+    )
+      try {
+        backgroundWorkStore.requestHostStopAll({
+          hostId: host.id,
+          reason: request.reason,
+          now: this.clock.now(),
+        });
+        this.ports.get(host.backend)?.hostStopAllReserved?.({
+          ownerSessionId: request.ownerSessionId,
+          hostEpochKey: host.epochKey,
+        });
+      } catch (error) {
+        if (!(error instanceof BackgroundWorkValidationError)) throw error;
+      }
+    if (
+      host &&
+      !ownerRequested &&
       !this.ordinaryTurnActive(request.ownerSessionId)
     )
       await this.closeStopAllHost(
@@ -595,6 +652,14 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
       now: this.clock.now(),
     });
     return true;
+  }
+
+  /** Whether a Stop-all reserved this exact host epoch's close. */
+  stopAllReserved(ownerSessionId: string, hostEpochKey: string): boolean {
+    const host = backgroundWorkStore.hostForOwner(ownerSessionId);
+    return (
+      host?.epochKey === hostEpochKey && host.stopAllRequestedAt !== undefined
+    );
   }
 
   /** Close a host whose durable Stop-all reservation reached a safe boundary. */
@@ -763,7 +828,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     if (item.stopState !== "requested") return;
     const sourceRequestId = this.pendingStopSources.get(item.id);
     if (!sourceRequestId) return;
-    void this.runTargetedStop(
+    const stop = this.runTargetedStop(
       {
         itemId: item.id,
         ownerSessionId: item.ownerSessionId,
@@ -777,6 +842,11 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         `bound Stop failed for ${item.id}: ${boundedError(error)}`,
       ),
     );
+    this.boundStops.set(item.id, stop);
+    void stop.finally(() => {
+      if (this.boundStops.get(item.id) === stop)
+        this.boundStops.delete(item.id);
+    });
   }
 
   private async runTargetedStop(

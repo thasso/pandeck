@@ -1710,7 +1710,11 @@ function setHostState(input: {
   });
 }
 
-/** Owner Stop-all: reserved on the epoch before any of its work is signalled. */
+/**
+ * Stop-all's host close, reserved on the epoch: before any of its work is
+ * signalled, or — for the owner's own Stop-all — after, for what its Stops
+ * left unsettled.
+ */
 function requestHostStopAll(input: {
   hostId: string;
   reason: string;

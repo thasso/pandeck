@@ -335,9 +335,15 @@ const backgroundTasksTool = defineAgentTool<BackgroundTasksParams>({
         sourceRequestId: ctx.toolCallId,
         reason,
       });
+      // Anything a Stop could not settle closes the host when this turn ends,
+      // taking work started after it along; otherwise later work is safe.
+      const settled = results.every(
+        (result) =>
+          result.state === "stopped" || result.state === "already-terminal",
+      );
       return jsonResult({
         operation,
-        result: "accepted; finish your turn",
+        result: settled ? "stopped" : "accepted; finish your turn",
         items: results.flatMap((result) =>
           result.item
             ? [

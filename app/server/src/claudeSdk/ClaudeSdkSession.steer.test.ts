@@ -322,6 +322,9 @@ test("Stop withdraws a queued steer before it interrupts", async () => {
 test("a retained process interrupts only after the CLI confirmed the drop", async () => {
   const h = makeHarness();
   const { turn, steer, uuid, query } = await steerIntoTurn(h);
+  // The turn's own prompt is running; only the steer is still queued.
+  query.output.emit(started((query.inputs[0] as { uuid: string }).uuid));
+  await new Promise((r) => setTimeout(r, 5));
   let releaseCancel!: () => void;
   query.cancelGate = new Promise<void>((resolve) => (releaseCancel = resolve));
   // The retained (background-work) epoch is the one Stop interrupts rather
@@ -484,4 +487,289 @@ test("a steer with no running turn is refused", async () => {
   assert.deepEqual(answer, { stopReason: "end" });
   assert.equal(h.queries.length, 0, "no process was started for it");
   h.session.dispose();
+});
+
+/**
+ * A resumed CLI whose previous process left background tasks running first
+ * reports them as stopped and answers that notice with a model-less `result`,
+ * before it dequeues the prompt that started the process.
+ */
+function startupResult(uuid: string): ClaudeSdkMessage {
+  return { ...result(uuid), result: "", num_turns: 0 } as ClaudeSdkMessage;
+}
+
+test("a model-less result before the prompt is dequeued does not end the turn", async () => {
+  const h = makeHarness();
+  const turn = h.adapter.prompt("first");
+  await until(() => h.queries[0]?.inputs.length === 1);
+  const query = h.queries[0]!;
+  const uuid = (query.inputs[0] as { uuid?: string }).uuid;
+  assert.ok(uuid, "the prompt carries the uuid the CLI reports back");
+  let turnSettled = false;
+  void turn.then(() => (turnSettled = true));
+
+  query.output.emit(startupResult("startup"));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(turnSettled, false, "the prompt has not run yet");
+  assert.equal(query.closeCalls, 0, "the process that runs it stays open");
+
+  query.output.emit(started(uuid));
+  query.output.emit(result("r1", [uuid]));
+  await turn;
+  assert.equal(query.closeCalls, 1);
+  assert.equal(h.events.filter((t) => t === "runCompleted").length, 1);
+  h.session.dispose();
+});
+
+test("a model-less result after the prompt was dequeued ends the turn", async () => {
+  const h = makeHarness();
+  const turn = h.adapter.prompt("first");
+  await until(() => h.queries[0]?.inputs.length === 1);
+  const query = h.queries[0]!;
+  query.output.emit(started((query.inputs[0] as { uuid: string }).uuid));
+  query.output.emit(startupResult("r1"));
+  await turn;
+  assert.equal(query.closeCalls, 1);
+  h.session.dispose();
+});
+
+test("a failed result before the prompt is dequeued still fails the turn", async () => {
+  const h = makeHarness();
+  const turn = h.adapter.prompt("first");
+  await until(() => h.queries[0]?.inputs.length === 1);
+  h.queries[0]!.output.emit({
+    ...startupResult("startup"),
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: ["the CLI could not start"],
+  } as unknown as ClaudeSdkMessage);
+  const outcome = await turn;
+  assert.equal(outcome.stopReason, "error");
+  h.session.dispose();
+});
+
+test("a prompt stopped while its process is still being set up never starts it", async () => {
+  serial += 1;
+  const id = `claude-steer-${serial}`;
+  sessionStore.upsert({
+    id,
+    scope: "user",
+    harness: "claude-sdk",
+    agentType: "assistant",
+  });
+  const queries: FakeQuery[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      const query = new FakeQuery(params);
+      queries.push(query);
+      return query;
+    },
+  };
+  let factoryCalls = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const session = new ClaudeSdkSession(id, {
+    seam: async () => {
+      factoryCalls += 1;
+      if (factoryCalls === 1) await gate;
+      return seam;
+    },
+    agentType: "assistant",
+  });
+  const adapter = session.createRuntimeAdapter();
+
+  const stopped = adapter.prompt("stopped during setup");
+  await until(() => factoryCalls === 1);
+  session.abort();
+  assert.equal(session.isRunning, false, "Stop ended the turn at once");
+
+  const next = adapter.prompt("the next prompt");
+  await new Promise((r) => setTimeout(r, 5));
+  release();
+  await stopped;
+  await until(() => queries.length === 1);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(queries.length, 1, "the stopped prompt started no process");
+  const query = queries[0]!;
+  assert.equal(query.inputs.length, 1, "only the next prompt reached the CLI");
+  const uuid = (query.inputs[0] as { uuid: string }).uuid;
+  query.output.emit(started(uuid));
+  query.output.emit(result("r1", [uuid]));
+  assert.equal((await next).stopReason, "end");
+  session.dispose();
+});
+
+test("a model-less result that consumed the prompt ends the turn without a lifecycle frame", async () => {
+  for (const consumed of ["list", "single"] as const) {
+    const h = makeHarness();
+    const turn = h.adapter.prompt("/cost");
+    await until(() => h.queries[0]?.inputs.length === 1);
+    const query = h.queries[0]!;
+    const uuid = (query.inputs[0] as { uuid: string }).uuid;
+    query.output.emit({
+      ...startupResult("r1"),
+      ...(consumed === "list"
+        ? { user_message_uuids: [uuid] }
+        : { user_message_uuid: uuid }),
+    } as unknown as ClaudeSdkMessage);
+    await turn;
+    assert.equal(query.closeCalls, 1, `${consumed}: the turn ended`);
+    h.session.dispose();
+  }
+});
+
+test("with lifecycle frames, a reply the CLI ran before the prompt does not end the turn", async () => {
+  // The model may answer the orphaned-task notice itself; that run still
+  // precedes the prompt's start, which the CLI reports.
+  const h = makeHarness();
+  const turn = h.adapter.prompt("first");
+  await until(() => h.queries[0]?.inputs.length === 1);
+  const query = h.queries[0]!;
+  const uuid = (query.inputs[0] as { uuid: string }).uuid;
+  let turnSettled = false;
+  void turn.then(() => (turnSettled = true));
+
+  query.output.emit({
+    type: "system",
+    subtype: "init",
+    capabilities: ["msg_lifecycle_v1"],
+    uuid: "init-1",
+    session_id: "provider-steer",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit(result("notice-reply"));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(turnSettled, false, "the prompt has not run yet");
+  assert.equal(query.closeCalls, 0);
+
+  query.output.emit(started(uuid));
+  query.output.emit(result("r1", [uuid]));
+  await turn;
+  assert.equal(query.closeCalls, 1);
+  h.session.dispose();
+});
+
+test("a prompt stopped while its saved totals are read never starts its process", async () => {
+  // The transcript read is the longest await before the query starts.
+  const internals = ClaudeSdkSession.prototype as unknown as {
+    savedProviderTotals: () => Promise<undefined>;
+  };
+  const original = internals.savedProviderTotals;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let reads = 0;
+  internals.savedProviderTotals = async function () {
+    reads += 1;
+    if (reads === 1) await gate;
+    return undefined;
+  };
+  try {
+    const h = makeHarness();
+    const stopped = h.adapter.prompt("stopped during the read");
+    await until(() => reads === 1);
+    h.session.abort();
+    release();
+    await stopped;
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(h.queries.length, 0, "the stopped prompt started no process");
+    h.session.dispose();
+  } finally {
+    internals.savedProviderTotals = original;
+  }
+});
+
+test("a prompt stopped while its skills are prepared leaves the next turn's prompt alone", async () => {
+  // The stopped setup must not stamp its own prompt uuid over the next
+  // turn's, or the next turn's own result would no longer count as its end.
+  serial += 1;
+  const id = `claude-steer-${serial}`;
+  sessionStore.upsert({
+    id,
+    scope: "user",
+    harness: "claude-sdk",
+    agentType: "assistant",
+  });
+  const queries: FakeQuery[] = [];
+  const seam: ClaudeSdkSeam = {
+    query(params) {
+      const query = new FakeQuery(params);
+      queries.push(query);
+      return query;
+    },
+  };
+  let preparations = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const session = new ClaudeSdkSession(id, {
+    seam: async () => seam,
+    agentType: "assistant",
+    prepareSkillRuntime: async () => {
+      preparations += 1;
+      if (preparations === 1) await gate;
+    },
+  });
+  (
+    session as unknown as { frozenSkillNames: () => string[] }
+  ).frozenSkillNames = () => ["frozen-skill"];
+  const adapter = session.createRuntimeAdapter();
+
+  const stopped = adapter.prompt("stopped while skills are prepared");
+  await until(() => preparations === 1);
+  session.abort();
+  const next = adapter.prompt("the next prompt");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  const uuid = (query.inputs[0] as { uuid: string }).uuid;
+  query.output.emit({
+    type: "system",
+    subtype: "init",
+    capabilities: ["msg_lifecycle_v1"],
+    uuid: "init-skills",
+    session_id: "provider-steer",
+  } as unknown as ClaudeSdkMessage);
+  query.output.emit(started(uuid));
+  release();
+  await stopped;
+  await new Promise((r) => setTimeout(r, 10));
+
+  query.output.emit(result("r1", [uuid]));
+  assert.equal((await next).stopReason, "end");
+  assert.equal(queries.length, 1, "the stopped prompt started no process");
+  assert.equal(query.inputs.length, 1, "only the next prompt reached the CLI");
+  session.dispose();
+});
+
+test("a prompt stopped while its skills are prepared leaves no prompt waiting", async () => {
+  // A uuid left waiting would set aside the result of the next turn that no
+  // prompt of ours opened, such as a background-origin one.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let preparations = 0;
+  serial += 1;
+  const id = `claude-steer-${serial}`;
+  sessionStore.upsert({
+    id,
+    scope: "user",
+    harness: "claude-sdk",
+    agentType: "assistant",
+  });
+  const session = new ClaudeSdkSession(id, {
+    seam: async () => ({ query: (params) => new FakeQuery(params) }),
+    agentType: "assistant",
+    prepareSkillRuntime: async () => {
+      preparations += 1;
+      await gate;
+    },
+  });
+  const internals = session as unknown as {
+    frozenSkillNames: () => string[];
+    turnPromptWaiting: string | undefined;
+  };
+  internals.frozenSkillNames = () => ["frozen-skill"];
+  const stopped = session.createRuntimeAdapter().prompt("stopped");
+  await until(() => preparations === 1);
+  session.abort();
+  release();
+  await stopped;
+  assert.equal(internals.turnPromptWaiting, undefined);
+  session.dispose();
 });
