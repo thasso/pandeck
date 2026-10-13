@@ -642,4 +642,43 @@ describe("agent tool races and pins", () => {
     assert.match(now, /model: "opus"/, "the hand edit is kept");
     assert.doesNotMatch(now, /careful test reviewer/);
   });
+
+  test("a hand edit made while an approved card's locked check awaits is refused, not overwritten", async () => {
+    await createApproved();
+    await call("agent_edit", {
+      name: "test-reviewer",
+      edits: [{ oldText: "effort: medium", newText: "effort: high" }],
+      reason: "Raise effort",
+    });
+    const pending = latestCard();
+    let armed = true;
+    setAgentRuntimeSourcesForTests({
+      models: async () => [
+        model("claude-sdk", "opus"),
+        model("claude-sdk", "sonnet"),
+      ],
+      skillNames: async () => [],
+      // Called by the executor's runtime check inside the locked write.
+      toolNames: async () => {
+        if (armed) {
+          armed = false;
+          await writeFile(
+            manifest(),
+            readFileSync(manifest(), "utf8").replace(
+              "You are a test reviewer.",
+              "You are a test reviewer. Hand-edited.",
+            ),
+          );
+        }
+        return ["worktree_push", "worktree_commit"];
+      },
+    });
+    const { card } = await resolveApproval(pending.id, "approved");
+    assert.equal(card.status, "failed");
+    assert.match(card.error ?? "", /changed while the edit was being checked/);
+    assert.equal(armed, false);
+    const now = readFileSync(manifest(), "utf8");
+    assert.match(now, /Hand-edited\./, "the hand edit is kept");
+    assert.match(now, /effort: medium/);
+  });
 });

@@ -188,7 +188,9 @@ approval card (`docs/approvals.md`):
   the locked write it is judged again (`editEntrySource`'s `check`), and the
   file must still hold the bytes that were judged when the write starts: model
   and effort must still be unchanged, and the denied tools and skills must still
-  exist. Such an edit does not re-resolve the model, so a definition whose
+  exist. Every locked agent edit, approved or direct, also re-reads the file
+  after its check and refuses if a hand edit landed meanwhile, leaving that edit
+  in place. A direct edit does not re-resolve the model, so a definition whose
   account went away can still have its instructions fixed.
 - Rename, delete and supporting files never change what a definition runs on and
   commit directly; `AGENT.md` itself is refused by `agent_manage_files`.
