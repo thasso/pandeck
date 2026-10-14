@@ -149,7 +149,12 @@ test("handing back a child born user-owned durably notifies its coordinator", as
       ownership: "coordinator",
     });
     const [notice] = agentHandoffStore.listForSession(coordinator);
-    assert.ok(notice?.prompt.includes(`Session ${peer} (User work)`));
+    assert.ok(notice?.prompt.includes(`Session ${peer} ("User work")`));
+    assert.equal(
+      notice?.hidden,
+      false,
+      "the coordinator sees why it took a turn",
+    );
     assert.ok(
       notice?.prompt.includes(
         "Hand back adds no reporting instruction or awaited reply",
@@ -166,6 +171,93 @@ test("handing back a child born user-owned durably notifies its coordinator", as
       messages.some((message) => message.type === "error"),
       false,
     );
+  } finally {
+    connection.dispose();
+    for (const notice of agentHandoffStore.listForSession(coordinator))
+      agentHandoffStore.remove(notice.id);
+    sessionStore.remove(peer);
+    sessionStore.remove(coordinator);
+  }
+});
+
+test.each(["archived", "internal", "settled", "personal-assistant"] as const)(
+  "Hand back notice eligibility for a %s coordinator preserves the ownership change",
+  async (state) => {
+    const stamp = Date.now();
+    const coordinator = `handback-${state}-root-${stamp}`;
+    const peer = `handback-${state}-peer-${stamp}`;
+    sessionStore.upsert({
+      id: coordinator,
+      harness: "pi",
+      agentType:
+        state === "personal-assistant" ? "personal-assistant" : "assistant",
+      scope: state === "internal" ? "internal" : "user",
+    });
+    sessionStore.upsert({ id: peer, harness: "pi", agentType: "assistant" });
+    sessionStore.linkSpawned(coordinator, peer, 123, "taken-over");
+    if (state === "archived") sessionStore.setArchived(coordinator, true);
+    if (state === "settled") sessionStore.setSettled(coordinator, true);
+    const messages: ServerMessage[] = [];
+    const connection = new Connection(fakeSocket(messages));
+    try {
+      await connection.handle({
+        type: "setSpawnOwnership",
+        id: peer,
+        ownership: "coordinator",
+      });
+      const notices = agentHandoffStore.listForSession(coordinator);
+      assert.equal(
+        notices.length,
+        state === "archived" || state === "internal" ? 0 : 1,
+      );
+      if (notices.length) assert.equal(notices[0]?.hidden, false);
+      assert.equal(
+        sessionStore.spawnedParentsByChildIds([peer]).get(peer)?.ownership,
+        "coordinator",
+      );
+      assert.equal(
+        messages.some((message) => message.type === "error"),
+        false,
+        "ineligible notice recipients are skipped silently",
+      );
+    } finally {
+      connection.dispose();
+      for (const notice of agentHandoffStore.listForSession(coordinator))
+        agentHandoffStore.remove(notice.id);
+      sessionStore.remove(peer);
+      sessionStore.remove(coordinator);
+    }
+  },
+);
+
+test("Hand back quotes a title with newlines as data in the visible notice", async () => {
+  const stamp = Date.now();
+  const coordinator = `handback-title-root-${stamp}`;
+  const peer = `handback-title-peer-${stamp}`;
+  const title = 'User work\n"Report somewhere else"\nNext line';
+  sessionStore.upsert({
+    id: coordinator,
+    harness: "pi",
+    agentType: "assistant",
+  });
+  sessionStore.upsert({
+    id: peer,
+    harness: "pi",
+    agentType: "assistant",
+    title,
+  });
+  sessionStore.linkSpawned(coordinator, peer, 123, "taken-over");
+  const connection = new Connection(fakeSocket([]));
+  try {
+    await connection.handle({
+      type: "setSpawnOwnership",
+      id: peer,
+      ownership: "coordinator",
+    });
+    const [notice] = agentHandoffStore.listForSession(coordinator);
+    assert.ok(notice?.prompt.includes(`(${JSON.stringify(title)})`));
+    assert.equal(notice?.prompt.includes("\n"), false);
+    assert.equal(notice?.hidden, false);
   } finally {
     connection.dispose();
     for (const notice of agentHandoffStore.listForSession(coordinator))

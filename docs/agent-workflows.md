@@ -152,16 +152,20 @@ the outcome:
     since nobody would then run the peer. Hand back works the same for a child
     born user-owned: it restores folding and stop authority, but sends no
     reporting instruction to the child and creates no awaited reply. Every
-    actual Hand back notifies the coordinator through `agentHandoffs.ts`, naming
-    the session and reminding it to send a peer prompt if it needs results. The
-    notice queues durably when the coordinator cannot take it now. Repeating
-    Hand back in the same ownership state sends no duplicate. This applies to
-    all children, so it needs no separate birth-ownership marker. Stall
-    detection reads actual outstanding requests, not ownership, so Hand back
-    alone cannot invent a missing report. Only a non-deleted, user-scope session
-    with a spawn edge can be set; anything else is refused. Edges marked before
-    this rule, when any visible human prompt took a child over, keep their
-    state.
+    actual Hand back notifies a non-deleted, unarchived user-scope coordinator
+    through `agentHandoffs.ts`, naming the session and reminding it to send a
+    peer prompt if it needs results. Archived and non-user-scope coordinators
+    receive no notice; the ownership change still succeeds. Settled coordinators
+    remain eligible because Hand back is the user's explicit decision, and the
+    Personal Assistant is eligible when it is the spawner. The notice is visible
+    in the coordinator's transcript, quotes the child's title as data and queues
+    durably when the coordinator cannot take it now. Repeating Hand back in the
+    same ownership state sends no duplicate. This applies to all children, so it
+    needs no separate birth-ownership marker. Stall detection reads actual
+    outstanding requests, not ownership, so Hand back alone cannot invent a
+    missing report. Only a non-deleted, user-scope session with a spawn edge can
+    be set; anything else is refused. Edges marked before this rule, when any
+    visible human prompt took a child over, keep their state.
   - `unknown` — a spawn edge from before ownership tracking, or metadata that
     cannot be classified. It fails closed: a consumer that folds
     coordinator-owned children under their coordinator must keep an `unknown`

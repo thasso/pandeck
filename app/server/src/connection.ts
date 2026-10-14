@@ -130,6 +130,7 @@ import {
 import { forgetPlanHintState } from "./session/planHint.ts";
 import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { liveUserSession } from "./delegationFailureNotice.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import { delegationFailureNoticeStore } from "./db/delegationFailureNoticeStore.ts";
 import { getRun as getWorkflowRun } from "./db/workflowStore.ts";
@@ -4286,12 +4287,15 @@ export class Connection implements Viewer {
     if (ownership === "coordinator") {
       try {
         const spawn = sessionStore.spawnedParentsByChildIds([id]).get(id)!;
-        const title = sessionStore.get(id)?.title ?? id;
-        await deliverAgentHandoff({
-          sessionId: spawn.parentSessionId,
-          text: `Session ${id} (${title}) was handed back to you by the user. You now own it. Hand back adds no reporting instruction or awaited reply; send it a peer prompt if you need its results.`,
-          origin: { kind: "system", source: "spawn-hand-back" },
-        });
+        if (liveUserSession(spawn.parentSessionId)) {
+          const title = JSON.stringify(sessionStore.get(id)?.title ?? id);
+          await deliverAgentHandoff({
+            sessionId: spawn.parentSessionId,
+            text: `Session ${id} (${title}) was handed back to you by the user. You now own it. Hand back adds no reporting instruction or awaited reply; send it a peer prompt if you need its results.`,
+            origin: { kind: "system", source: "spawn-hand-back" },
+            visible: true,
+          });
+        }
       } catch (err) {
         console.warn(
           `[spawn] failed to notify coordinator for ${id}:`,
