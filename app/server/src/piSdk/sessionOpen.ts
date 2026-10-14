@@ -1,4 +1,10 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readSync,
+  readdirSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentType } from "@assistant/shared";
@@ -21,7 +27,15 @@ function readSessionHeader(
   file: string,
 ): { id: string; cwd?: string } | undefined {
   try {
-    const content = readFileSync(file, "utf8");
+    // The header is tiny. Never parse a whole provider transcript to probe cwd.
+    const fd = openSync(file, "r");
+    const buffer = Buffer.alloc(16 * 1024);
+    let content: string;
+    try {
+      content = buffer.subarray(0, readSync(fd, buffer)).toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
     for (const line of content.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -52,6 +66,11 @@ function readSessionHeader(
 /** The header `id` of a session file, if the header is valid. */
 export function readSessionHeaderId(file: string): string | undefined {
   return readSessionHeader(file)?.id;
+}
+
+/** The persisted cwd, without opening a session manager or parsing its timeline. */
+export function readSessionHeaderCwd(file: string): string | undefined {
+  return readSessionHeader(file)?.cwd;
 }
 
 /**

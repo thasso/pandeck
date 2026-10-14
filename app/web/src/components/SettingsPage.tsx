@@ -1386,8 +1386,8 @@ function PermanentAssistantSection({
           />
           <FieldDescription>
             An existing absolute directory for shell commands and files. Leave
-            empty to use {profile.defaultWorkingDirectory}. Only you can change
-            this setting.
+            empty to use {profile.defaultWorkingDirectory}. Change this in
+            Settings, not through agent settings tools.
           </FieldDescription>
         </Field>
         <Field label="Additional instructions">

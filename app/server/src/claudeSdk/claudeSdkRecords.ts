@@ -260,6 +260,15 @@ export function claudeSdkEntryFigures(
   };
 }
 
+/** Execution directory from metadata alone, without inspecting the timeline log. */
+export function readClaudeSdkRecordCwd(
+  dir: string,
+  id: string,
+): string | undefined {
+  const parsed = readMetaFile(dir, id);
+  return parsed?.kind === "legacy" ? parsed.record.cwd : parsed?.meta.cwd;
+}
+
 /**
  * A record's metadata and timeline figures. The log itself is read only when
  * it is SHORTER than the metadata's extent — a backup copied while the server

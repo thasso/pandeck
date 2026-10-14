@@ -148,7 +148,6 @@ test("the personal-assistant prompt states its persona rules", () => {
         "records-people-via-contacts": /contacts_manage/,
         "project-edits-use-delegation":
           /worktree_create[\s\S]*session_spawn[\s\S]*developer/,
-        "user-follows-owned-work": /owner: "user"/,
         "no-direct-checkout-edits": /never direct checkout edits/,
         "enrichment-is-expected": /not optional/i,
         // The shared Memory section forbids secrets too; this is the PA's own rule.

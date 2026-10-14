@@ -30,7 +30,7 @@ test("default cwd is dedicated and created on demand", () => {
 test("a configured directory is used unchanged", () => {
   const cwd = join(tmp, "configured");
   mkdirSync(cwd);
-  validateAssistantWorkingDirectory(cwd);
+  assert.equal(validateAssistantWorkingDirectory(`${cwd}/../configured/`), cwd);
   assert.deepEqual(resolveAssistantWorkingDirectory(cwd), { cwd });
 });
 

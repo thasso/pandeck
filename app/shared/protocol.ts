@@ -539,7 +539,7 @@ export interface CredentialProfilePin {
 
 /** Configurable identity/model profile for the singleton Personal Assistant session. */
 export interface PermanentAssistantSettings extends CredentialProfilePin {
-  /** Empty uses the dedicated directory under DATA_DIR. UI-writable only. */
+  /** Empty uses the dedicated directory under DATA_DIR. Refused by agent settings tools. */
   workingDirectory: string;
   /** Server-derived default directory; never persisted or agent-writable. */
   defaultWorkingDirectory: string;

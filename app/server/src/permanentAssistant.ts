@@ -16,6 +16,7 @@ import {
   type HumanResumeToken,
 } from "./automaticTurnHold.ts";
 import { createSession } from "./harnesses/create.ts";
+import { harnessRegistry } from "./harnesses/registry.ts";
 import type { HarnessDriver } from "./harness.ts";
 import { hub } from "./hub.ts";
 import { piModelForSlot } from "./harnesses/models.ts";
@@ -237,9 +238,12 @@ export function permanentAssistantViewableId(): string | undefined {
   if (rotation) return undefined;
   const id = permanentAssistantStore.sessionId();
   if (!id) return undefined;
-  return sessionStore.get(id)?.agentType === "personal-assistant"
-    ? id
-    : undefined;
+  if (sessionStore.get(id)?.agentType !== "personal-assistant")
+    return undefined;
+  const { cwd } = resolveAssistantWorkingDirectory(
+    getSettings().permanentAssistant.workingDirectory,
+  );
+  return harnessRegistry.cwdForSession(id) === cwd ? id : undefined;
 }
 
 type PermanentAssistantDriver = HarnessDriver & RuntimePromptDriver;
@@ -285,8 +289,17 @@ async function acquireOrCreatePermanentAssistant(
   // current generation's acquisition answers instead, and an unbound session
   // created here stays behind as empty history.
   const rotated = () => mine !== generation;
+  const profile = getSettings().permanentAssistant;
+  const { cwd, notice } = resolveAssistantWorkingDirectory(
+    profile.workingDirectory,
+  );
   const existingId = permanentAssistantStore.sessionId();
-  if (existingId) {
+  // Probe before acquiring: reopening a dead cwd can itself fail, and an old
+  // pre-native PA must never gain file/shell access in the app checkout.
+  if (existingId && harnessRegistry.cwdForSession(existingId) !== cwd) {
+    await abandonPermanentAssistant();
+    if (rotated()) return acquirePermanentAssistant();
+  } else if (existingId) {
     const existing = await hub.acquireById(existingId);
     if (rotated()) return acquirePermanentAssistant();
     // Reuse the bound singleton only when it is a real `personal-assistant`
@@ -301,11 +314,7 @@ async function acquireOrCreatePermanentAssistant(
     }
   }
 
-  const profile = getSettings().permanentAssistant;
   const profileInstructions = permanentAssistantProfileInstructions(profile);
-  const { cwd, notice } = resolveAssistantWorkingDirectory(
-    profile.workingDirectory,
-  );
   const credentialProfileId = accountForSlot(profile);
   let driver: PermanentAssistantDriver;
   if (
@@ -338,8 +347,22 @@ async function acquireOrCreatePermanentAssistant(
   }
   if (rotated()) return acquirePermanentAssistant();
   if (notice) {
-    const { toolId } = driver.beginSyntheticTool("working_directory", {});
-    driver.finishSyntheticTool(toolId, notice);
+    try {
+      const { toolId } = driver.beginSyntheticTool("working_directory", {});
+      driver.finishSyntheticTool(
+        toolId,
+        JSON.stringify({
+          renderKind: "workingDirectoryNotice",
+          message: notice,
+        }),
+      );
+    } catch (error) {
+      // A busy/reloading harness may refuse a synthetic turn. Opening still wins.
+      console.warn(
+        "[permanent-assistant] working-directory notice failed:",
+        errorText(error),
+      );
+    }
   }
   permanentAssistantStore.setSessionId(driver.id);
   void hub.broadcastSessions();

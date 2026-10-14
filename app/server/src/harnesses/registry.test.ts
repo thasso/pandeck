@@ -88,6 +88,84 @@ function holdResident(
   );
 }
 
+test("cwd probes use resident context or persisted metadata without acquiring a harness", async () => {
+  const { CLAUDE_SDK_STORE_DIR } = await import("../sessionStorage.ts");
+  const { writeClaudeSdkRecord } =
+    await import("../claudeSdk/claudeSdkRecords.ts");
+  const piId = "cwd-pi";
+  const file = canonicalPiSessionPath(piId);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    JSON.stringify({
+      type: "session",
+      id: piId,
+      cwd: "/pi-working-directory",
+    }) +
+      "\n" +
+      "timeline".repeat(100000),
+  );
+  sessionStore.upsert({
+    id: piId,
+    harness: "pi",
+    agentType: "personal-assistant",
+  });
+  const openPi = vi.spyOn(piStore, "acquireByRecordId");
+  const openClaude = vi.spyOn(claudeSdkStore, "acquire");
+  writeClaudeSdkRecord(
+    CLAUDE_SDK_STORE_DIR,
+    {
+      id: "cwd-claude",
+      title: "PA",
+      createdAt: 1,
+      updatedAt: 1,
+      cwd: "/claude-working-directory",
+      agentType: "personal-assistant",
+    },
+    [],
+    undefined,
+  );
+  sessionStore.upsert({
+    id: "cwd-claude",
+    harness: "claude-sdk",
+    agentType: "personal-assistant",
+  });
+  assert.equal(harnessRegistry.cwdForSession(piId), "/pi-working-directory");
+  assert.equal(
+    harnessRegistry.cwdForSession("cwd-claude"),
+    "/claude-working-directory",
+  );
+  assert.equal(harnessRegistry.cwdForSession("missing-cwd"), undefined);
+  writeFileSync(
+    join(CLAUDE_SDK_STORE_DIR, "large-legacy.json"),
+    "unread timeline".repeat(10000),
+  );
+  sessionStore.upsert({
+    id: "large-legacy",
+    harness: "claude-sdk",
+    agentType: "personal-assistant",
+  });
+  assert.equal(
+    harnessRegistry.cwdForSession("large-legacy"),
+    undefined,
+    "oversized legacy records remain unparsed on the view probe",
+  );
+  holdResident(
+    [
+      resident("cwd-resident", {
+        commitWorkflowContext: () => ({ cwd: "/resident-working-directory" }),
+      }),
+    ],
+    [],
+  );
+  assert.equal(
+    harnessRegistry.cwdForSession("cwd-resident"),
+    "/resident-working-directory",
+  );
+  assert.equal(openPi.mock.calls.length, 0);
+  assert.equal(openClaude.mock.calls.length, 0);
+});
+
 test("a resident session is found in whichever store holds it, from memory alone", () => {
   const claude = resident("claude-a");
   const pi = resident("pi-a");

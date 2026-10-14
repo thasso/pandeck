@@ -1,5 +1,5 @@
 import { mkdirSync, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { DATA_DIR } from "./config.ts";
 
 /** Dedicated scratch directory, created only when a new PA session needs it. */
@@ -9,14 +9,15 @@ export const DEFAULT_ASSISTANT_WORKING_DIRECTORY = join(
 );
 
 /** A configured cwd is never created implicitly or resolved relative to the app. */
-export function validateAssistantWorkingDirectory(path: string): void {
-  if (path === "") return;
+export function validateAssistantWorkingDirectory(path: string): string {
+  if (path === "") return "";
   if (typeof path !== "string" || !isAbsolute(path))
     throw new Error(
       "Personal Assistant working directory must be an absolute path to an existing directory, or empty for the default.",
     );
+  const normalized = resolve(path);
   try {
-    if (statSync(path).isDirectory()) return;
+    if (statSync(normalized).isDirectory()) return normalized;
   } catch {
     // Missing and unreadable paths are both unusable as a session cwd.
   }
@@ -32,9 +33,9 @@ export function resolveAssistantWorkingDirectory(configured: string): {
 } {
   if (configured) {
     try {
-      validateAssistantWorkingDirectory(configured);
-      return { cwd: configured };
+      return { cwd: validateAssistantWorkingDirectory(configured) };
     } catch {
+      // Failure to create the default prevents opening: the app needs DATA_DIR.
       mkdirSync(DEFAULT_ASSISTANT_WORKING_DIRECTORY, { recursive: true });
       return {
         cwd: DEFAULT_ASSISTANT_WORKING_DIRECTORY,
@@ -42,6 +43,7 @@ export function resolveAssistantWorkingDirectory(configured: string): {
       };
     }
   }
+  // Failure here is fatal too; DATA_DIR must be writable for the app to work.
   mkdirSync(DEFAULT_ASSISTANT_WORKING_DIRECTORY, { recursive: true });
   return { cwd: DEFAULT_ASSISTANT_WORKING_DIRECTORY };
 }

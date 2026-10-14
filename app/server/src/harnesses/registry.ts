@@ -4,7 +4,8 @@
  * both stores to the hub's behaviour (`docs/agent-harnesses.md`). App code asks
  * here instead of dispatching on a harness id itself.
  */
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
@@ -12,8 +13,14 @@ import { defaultClaudeProfileId } from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
-import { canonicalPiSessionPath } from "../sessionStorage.ts";
+import {
+  canonicalPiSessionPath,
+  CLAUDE_SDK_STORE_DIR,
+} from "../sessionStorage.ts";
 import { sessionRefFile } from "./storage.ts";
+import { CWD } from "../config.ts";
+import { readClaudeSdkRecordCwd } from "../claudeSdk/claudeSdkRecords.ts";
+import { readSessionHeaderCwd } from "../piSdk/sessionOpen.ts";
 
 /** A stored session as a lifecycle change names it. */
 interface SessionRef {
@@ -49,6 +56,8 @@ interface HarnessSessions {
   setHeldElsewhere(check: (id: string) => boolean): void;
   /** Open the session from disk as the persona its row names. */
   open(id: string, agentType: AgentType): Promise<LiveSession | undefined>;
+  /** Stored execution directory, without acquiring an engine. */
+  cwd(id: string): string | undefined;
   /** Persist a new title, which also marks auto-naming done. */
   rename(ref: SessionRef, title: string): Promise<void>;
   /** The persona a session found on disk without a row is opened as. */
@@ -82,6 +91,7 @@ const sessions: Record<Harness, HarnessSessions> = {
         if (err instanceof PiSessionDeletedError) return undefined;
         throw err;
       }),
+    cwd: (id) => readSessionHeaderCwd(canonicalPiSessionPath(id)) ?? CWD,
     // Transcripts that predate a valid row are developer coding sessions.
     rowlessAgentType: "developer",
     unopenable: () => undefined,
@@ -104,6 +114,15 @@ const sessions: Record<Harness, HarnessSessions> = {
       claudeSdkStore.acquire(id, {
         credentialProfileId: defaultClaudeProfileId(),
       }),
+    cwd: (id) => {
+      const stat = statSync(join(CLAUDE_SDK_STORE_DIR, `${id}.json`), {
+        throwIfNoEntry: false,
+      });
+      // A large legacy record includes its provider timeline. Unknown is safer
+      // than parsing that on a view path or giving a PA natives in an old cwd.
+      if (!stat || stat.size > 64 * 1024) return undefined;
+      return readClaudeSdkRecordCwd(CLAUDE_SDK_STORE_DIR, id) ?? CWD;
+    },
     // Records that predate the id registry or lost their metadata.
     rowlessAgentType: "workshop",
     unopenable: (id) =>
@@ -222,6 +241,17 @@ export const harnessRegistry = {
    */
   residentById(id: string): LiveSession | undefined {
     return residentInMemory(id);
+  },
+
+  /** Probe cwd before opening, so a singleton can retire an unusable session. */
+  cwdForSession(id: string): string | undefined {
+    const resident = residentInMemory(id);
+    if (resident) return resident.commitWorkflowContext().cwd ?? CWD;
+    const row = sessionStore.get(id);
+    const holder =
+      row?.harness ??
+      ROWLESS_ORDER.find((harness) => sessions[harness].storedWithoutRow(id));
+    return holder ? sessions[holder].cwd(id) : undefined;
   },
 
   /**

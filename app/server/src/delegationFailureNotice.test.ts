@@ -190,6 +190,9 @@ class PiChild {
   outOfBand(step: Step): void {
     this.play(step);
   }
+  get isHeld(): boolean {
+    return this.releaseHeld !== undefined;
+  }
   release(): void {
     this.releaseHeld?.();
   }
@@ -741,7 +744,8 @@ describe("what is not a failure, or not this coordinator's", () => {
     await turn(child, "start");
     child.steps.push({ kind: "hold", then: { kind: "error", message: QUOTA } });
     const running = turn(child, "long");
-    await until(() => child.isRunning, "the child turn");
+    // Runtime running precedes the scripted provider's setTimeout(0) hold.
+    await until(() => child.isHeld, "the held provider turn");
     holdAutomaticTurns(child.sessionId);
     child.release();
     await running;
@@ -755,7 +759,8 @@ describe("what is not a failure, or not this coordinator's", () => {
     await turn(child, "start");
     child.steps.push({ kind: "hold", then: { kind: "error", message: QUOTA } });
     const running = turn(child, "long");
-    await until(() => child.isRunning, "the child turn");
+    // Wait until release() can actually finish the scripted provider turn.
+    await until(() => child.isHeld, "the held provider turn");
     setSessionControlRuntimeForTests({
       isRunning: () => true,
       abort: () => child.release(),

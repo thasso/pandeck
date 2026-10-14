@@ -100,7 +100,7 @@ export interface SettingDescriptor {
   clearWith?: string;
   /** `oauth`: the server route that starts the browser flow. */
   connectPath?: string;
-  /** Writable only by the Settings UI, never by settings_update. */
+  /** Refused by agent settings tools; the Settings UI may write it. Not a shell boundary. */
   uiOnly?: boolean;
   /** Units, or what an empty value means. */
   hint?: string;
@@ -344,7 +344,7 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     STRING,
     {
       uiOnly: true,
-      hint: "Empty uses the default directory. Change only in Settings.",
+      hint: "Empty uses the default directory. Agent settings tools refuse changes; use Settings.",
     },
   ),
   readonly(

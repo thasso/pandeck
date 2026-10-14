@@ -19,6 +19,7 @@ const { permanentAssistantStore } =
   await import("./db/permanentAssistantStore.ts");
 const { getDb } = await import("./db/index.ts");
 const { hub } = await import("./hub.ts");
+const { harnessRegistry } = await import("./harnesses/registry.ts");
 const { permanentAssistantUnread } =
   await import("./permanentAssistantUnread.ts");
 let counter = 0;
@@ -26,6 +27,10 @@ let off: (() => void) | undefined;
 let id: string;
 
 function setup(extraPrompt = false) {
+  // This stand-in PA has already started in the dedicated default directory.
+  vi.spyOn(harnessRegistry, "cwdForSession").mockReturnValue(
+    join(tmp, "data", "personal-assistant"),
+  );
   id = `pa-drain-${counter++}`;
   sessionStore.upsert({
     id,

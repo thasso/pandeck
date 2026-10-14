@@ -38,6 +38,7 @@ const { permanentAssistantStore } =
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { getDb } = await import("./db/index.ts");
 const { hub } = await import("./hub.ts");
+const { harnessRegistry } = await import("./harnesses/registry.ts");
 const hold = await import("./automaticTurnHold.ts");
 const { updateSettings, getSettings } = await import("./settings.ts");
 const { handleSlackAssistantEnvelope } =
@@ -47,6 +48,10 @@ updateSettings({ memory: { ...getSettings().memory, learningMode: "off" } });
 
 /** The bound Assistant; its first turn stays open until `finishFirst`. */
 function boundAssistant(id: string, options: { holdFirst?: boolean } = {}) {
+  // This fake represents a PA already started in its dedicated directory.
+  vi.spyOn(harnessRegistry, "cwdForSession").mockReturnValue(
+    getSettings().permanentAssistant.defaultWorkingDirectory,
+  );
   sessionStore.upsert({
     id,
     scope: "user",

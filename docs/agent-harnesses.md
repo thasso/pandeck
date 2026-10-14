@@ -38,6 +38,12 @@ Grep/Glob. The PA has only deferred `worktree_create` and `worktree_status` from
 the coding groups, not commit, push, PR, review, removal or base-setting tools.
 Without a session worktree, `worktree_create` requires an explicit `projectId`.
 The configured cwd and fallback contract live in [settings.md](settings.md).
+Before acquiring a bound PA, `harnessRegistry.cwdForSession` probes resident
+context or persisted cwd without opening an engine. Pi reads only a 16 KB header
+prefix; Claude reads metadata without its timeline log, capped at 64 KB. A
+larger record has unknown cwd and is conservatively retired, with history kept,
+rather than parsing a provider timeline on a view path or granting natives in an
+unverified directory.
 
 ## Target
 

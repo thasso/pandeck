@@ -246,6 +246,14 @@ test("working directory changes validate before persistence and rotate the PA", 
       permanentAssistant: getSettings().permanentAssistant,
     });
     assert.equal(rotate.mock.calls.length, 1);
+    await saveSettings({
+      permanentAssistant: {
+        ...getSettings().permanentAssistant,
+        workingDirectory: `${cwd}/../pa-settings-cwd/`,
+      },
+    });
+    assert.equal(getSettings().permanentAssistant.workingDirectory, cwd);
+    assert.equal(rotate.mock.calls.length, 1, "cosmetic paths do not rotate");
     assert.throws(
       () =>
         settingsPatchForWrites([
@@ -261,6 +269,57 @@ test("working directory changes validate before persistence and rotate the PA", 
   } finally {
     rotate.mockRestore();
     rmdirSync(cwd);
+  }
+});
+
+test("a vanished cwd does not block UI profile edits, agent edits or account-delete unpinning", async () => {
+  const pa = await import("./permanentAssistant.ts");
+  const rotate = vi
+    .spyOn(pa, "rotatePermanentAssistantSession")
+    .mockResolvedValue();
+  const { createCredentialProfile, deleteCredentialProfile } =
+    await import("./credentialProfiles.ts");
+  const { clearProfilePins } = await import("./credentialProfileUsage.ts");
+  const before = getSettings().permanentAssistant;
+  const account = createCredentialProfile({
+    provider: "claude",
+    name: "Vanished cwd account",
+  });
+  const cwd = join(DATA_DIR, "pa-vanished-cwd");
+  mkdirSync(cwd, { recursive: true });
+  try {
+    await saveSettings({
+      permanentAssistant: {
+        ...before,
+        credentialProfileId: account.id,
+        workingDirectory: cwd,
+      },
+    });
+    rmdirSync(cwd);
+    await saveSettings({
+      permanentAssistant: {
+        ...getSettings().permanentAssistant,
+        name: "Updated by UI",
+      },
+    });
+    await saveSettings(
+      settingsPatchForWrites([
+        {
+          path: "permanentAssistant.additionalInstructions",
+          value: "Updated by agent",
+        },
+      ]),
+    );
+    assert.equal(getSettings().permanentAssistant.workingDirectory, cwd);
+    deleteCredentialProfile(account.id);
+    await clearProfilePins(account.id);
+    assert.equal(
+      getSettings().permanentAssistant.credentialProfileId,
+      undefined,
+    );
+  } finally {
+    await saveSettings({ permanentAssistant: before });
+    rotate.mockRestore();
   }
 });
 

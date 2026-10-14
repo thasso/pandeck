@@ -573,16 +573,21 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
  */
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   const stored = readStoredAppSettings();
-  if (patch.permanentAssistant)
-    validateAssistantWorkingDirectory(
-      patch.permanentAssistant.workingDirectory ?? "",
-    );
   const assistant = patch.permanentAssistant
     ? { ...DEFAULT_PERMANENT_ASSISTANT_SETTINGS, ...patch.permanentAssistant }
     : undefined;
-  if (assistant)
+  if (assistant) {
+    // A vanished cwd must not block unrelated profile edits or account unpinning.
+    if (
+      assistant.workingDirectory !==
+      (stored.permanentAssistant?.workingDirectory ?? "")
+    )
+      assistant.workingDirectory = validateAssistantWorkingDirectory(
+        assistant.workingDirectory,
+      );
     delete (assistant as Partial<PermanentAssistantSettings>)
       .defaultWorkingDirectory;
+  }
   // Only these sections are persisted to the app-settings file. Secret-backed
   // integration sections have dedicated update functions and private storage.
   const persisted = {
