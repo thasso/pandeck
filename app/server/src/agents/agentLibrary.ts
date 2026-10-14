@@ -11,6 +11,7 @@
  * separately, at write and at spawn (`agentRuntime.ts`).
  */
 import {
+  isCodingAgentType,
   isSafeEntryName,
   isThinkingLevel,
   THINKING_LEVELS,
@@ -117,7 +118,8 @@ export function parseAgentManifest(content: string, path: string) {
         bad(`Frontmatter effort must be one of ${THINKING_LEVELS.join(", ")}.`);
       const denyTools = parseDenyList(fields.tools, issues);
       const skills = parseNameList(fields.skills, "skills", issues);
-      if (skills.length > 0 && persona !== "developer")
+      // Skills mount only where a session has a workspace to mount them in.
+      if (skills.length > 0 && !isCodingAgentType(persona as AgentPersona))
         bad("Frontmatter skills may be set only for persona developer.");
       if (body.trim() === "")
         bad("The body must hold the agent's role instructions; it is empty.");

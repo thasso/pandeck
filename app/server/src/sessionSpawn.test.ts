@@ -78,7 +78,7 @@ const {
   createApproval,
   setApprovalBroadcastForTests,
 } = await import("./pendingApprovals.ts");
-const { sessionSpawnTools } =
+const { sessionSpawnTools, spawnableAgentsText } =
   await import("./tools/sessions/sessionSpawnTool.ts");
 const { shouldAutoNamePiSession } = await import("./piSdk/titleState.ts");
 const { getSettings, updateSettings } = await import("./settings.ts");
@@ -1692,6 +1692,20 @@ test("a definition edited during the spawn runs as the CURRENT one", async () =>
     effort: "high",
     body: "Edited.",
   });
+});
+
+test('operation "agents" is bounded like agent_list, with the true total', () => {
+  const agents = Array.from({ length: 260 }, (_, at) => ({
+    name: `agent-${at}`,
+    problem: `${"x".repeat(1000)} reason ${at}`,
+  }));
+  const text = spawnableAgentsText(agents);
+  expect(text).toMatch(/^Agent definitions \(260, the first 200 listed\)/);
+  expect(text).toContain("- agent-199: CANNOT SPAWN");
+  expect(text).not.toContain("agent-200:");
+  expect(text).toContain("60 more not listed");
+  expect(text).not.toContain("reason 0");
+  expect(text.length).toBeLessThan(200 * 400);
 });
 
 test('operation "agents" lists definitions and stays available in Plan', async () => {

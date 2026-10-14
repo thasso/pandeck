@@ -62,7 +62,7 @@ const MAX_DIFF_CHARS = 120_000;
 const MAX_TREE_ROWS = 200;
 
 /** How many entries and diagnostics one `<prefix>_list` result carries. */
-const MAX_LISTED_ENTRIES = 200;
+export const MAX_LISTED_ENTRIES = 200;
 const MAX_LISTED_DIAGNOSTICS = 50;
 
 /**

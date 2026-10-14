@@ -21,7 +21,11 @@
  * What either path creates is an ordinary session the user can read, re-prompt
  * and take over — never a subagent, and nothing here reaches that registry.
  */
-import { listSpawnableAgents } from "../../agents/agentSpawn.ts";
+import {
+  listSpawnableAgents,
+  type SpawnableAgent,
+} from "../../agents/agentSpawn.ts";
+import { MAX_LISTED_ENTRIES } from "../library/libraryTools.ts";
 import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
 import { sessionStore } from "../../db/sessionStore.ts";
 import {
@@ -217,15 +221,28 @@ async function rosterText(): Promise<string> {
 
 /** The definitions as the coordinator reads them, with why any cannot run. */
 async function agentsText(): Promise<string> {
-  const agents = await listSpawnableAgents();
+  return spawnableAgentsText(await listSpawnableAgents());
+}
+
+/** A description longer than this is cut; `agent_get` reads it whole. */
+const MAX_LISTED_DESCRIPTION_CHARS = 300;
+
+/**
+ * The listing, bounded like `agent_list`: a hand-authored library has no
+ * entry ceiling, and this answer lands in the caller's context whole. The
+ * header states the true total, and any definition can still be spawned by
+ * name or read with `agent_get`.
+ */
+export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
   if (agents.length === 0)
     return "No agent definitions exist. The user, or agent_create with their approval, can add one.";
-  const lines = agents.map((agent) => {
+  const shown = agents.slice(0, MAX_LISTED_ENTRIES);
+  const lines = shown.map((agent) => {
     if ("problem" in agent)
-      return `- ${agent.name}: CANNOT SPAWN — ${agent.problem}`;
+      return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem)}`;
     const { runtime } = agent;
     return [
-      `- ${agent.name}: ${agent.description}`,
+      `- ${agent.name}: ${clip(agent.description)}`,
       `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
         runtime.agent.pinnedModel
           ? ` (pinned ${runtime.agent.pinnedModel})`
@@ -235,10 +252,22 @@ async function agentsText(): Promise<string> {
       }${runtime.agent.persona === "developer" ? "; needs a worktreeId" : ""}`,
     ].join("\n");
   });
+  const omitted = agents.length - shown.length;
   return [
-    `Agent definitions (${agents.length}). Spawn one with a row naming it as agent (no profileId, no agentType); the prompt still states the target and the task.`,
+    `Agent definitions (${agents.length}${omitted > 0 ? `, the first ${shown.length} listed` : ""}). Spawn one with a row naming it as agent (no profileId, no agentType); the prompt still states the target and the task.`,
     ...lines,
+    ...(omitted > 0
+      ? [
+          `${omitted} more not listed; any definition can still be spawned by its name.`,
+        ]
+      : []),
   ].join("\n");
+}
+
+function clip(text: string): string {
+  return text.length > MAX_LISTED_DESCRIPTION_CHARS
+    ? `${text.slice(0, MAX_LISTED_DESCRIPTION_CHARS)}… (agent_get reads it whole)`
+    : text;
 }
 
 /* ------------------------------ direct spawn ------------------------------ */

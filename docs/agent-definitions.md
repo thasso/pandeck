@@ -216,7 +216,9 @@ approval card (`docs/approvals.md`):
 - `operation: "agents"`, read-only and available in Plan: every definition with
   its description, persona, and the model, effort and account it would run on
   now. A definition that cannot be spawned is listed with the reason, so a
-  caller knows why one it was told about cannot be used.
+  caller knows why one it was told about cannot be used. Like `agent_list` the
+  answer is bounded (200 rows, descriptions cut at 300 characters) and states
+  the true total; a definition left out can still be spawned by name.
 - An `agent` field on a `spawn` row, naming a definition. The row then takes no
   `profileId` and no `agentType`; stating either is refused. Model, effort, and
   persona come from the definition and the account from the account function.

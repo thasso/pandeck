@@ -11,6 +11,7 @@
  */
 import {
   clampThinkingLevelForModel,
+  isCodingAgentType,
   type ModelOption,
   type ThinkingLevel,
 } from "@assistant/shared";
@@ -186,14 +187,15 @@ export async function checkAgentRuntime(
   }
   if (manifest.denyTools.length > 0) {
     // Only the coding persona has native tools to deny.
+    const coding = isCodingAgentType(manifest.persona);
     const known = new Set<string>([
-      ...(manifest.persona === "developer" ? AGENT_NATIVE_TOOLS : []),
+      ...(coding ? AGENT_NATIVE_TOOLS : []),
       ...(await sources.toolNames(manifest.persona)),
     ]);
     const unknown = manifest.denyTools.filter((name) => !known.has(name));
     if (unknown.length > 0)
       problems.push(
-        `tools.deny names ${unknown.join(", ")}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push)${manifest.persona === "developer" ? ` or ${AGENT_NATIVE_TOOLS.join(", ")}` : ""}.`,
+        `tools.deny names ${unknown.join(", ")}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push)${coding ? ` or ${AGENT_NATIVE_TOOLS.join(", ")}` : ""}.`,
       );
   }
   if (manifest.skills.length > 0) {
