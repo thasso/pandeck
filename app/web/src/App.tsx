@@ -3763,11 +3763,22 @@ function AppContent() {
         navigate(sessionPath(target.sessionId));
         return null;
       }
-      navigate(SESSIONS_CREATE_PATH);
+      // A tray beside the new-session page lands on the SAME route, so no
+      // route change retires a first send held there: a failed draft is not
+      // the session these comments start, so they start a fresh one.
+      if (stagedSend) startNewChat();
+      else navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
       return null;
     },
-    [mobileLayout, navigate, revealNewSessionSurface, setInspectorOpen],
+    [
+      mobileLayout,
+      navigate,
+      revealNewSessionSurface,
+      setInspectorOpen,
+      stagedSend,
+      startNewChat,
+    ],
   );
 
   /**

@@ -51,6 +51,14 @@ describe("App new-session drafts", () => {
     expect(callbackBody(name)).toContain("beginFreshDraft();");
   });
 
+  test("a comment tray sent to a new session does not continue a failed draft", () => {
+    // Beside the new-session page the tray navigates to the route it is on,
+    // which retires nothing by itself.
+    expect(callbackBody("sendDocumentComments")).toContain(
+      "if (stagedSend) startNewChat();",
+    );
+  });
+
   test("both re-issue paths run what the pickers show now", () => {
     expect(
       APP_SOURCE.match(/reissuedFirstSend\(/g)?.length,
