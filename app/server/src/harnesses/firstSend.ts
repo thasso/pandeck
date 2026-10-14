@@ -15,6 +15,7 @@ import {
   type TaskSessionRef,
 } from "@assistant/shared";
 import { publishAgentLibrary } from "../agents/agentLibraryList.ts";
+import type { SessionAgent } from "../agents/sessionAgent.ts";
 import {
   AgentSpawnRefusedError,
   resolveAgentSpawn,
@@ -111,6 +112,39 @@ async function firstSendAgent(
   return resolved;
 }
 
+/**
+ * The definition read AGAIN right before the session is created, which is
+ * what it freezes — as a spawn does. A worktree provisioned after `prepare`
+ * can take seconds, and a hand edit landing then (a tool denied, the body
+ * rewritten, the folder deleted) must not be lost to the earlier read. A
+ * runtime that moved since `prepare` refuses, like `prepare` does.
+ */
+async function agentAtCreation(
+  req: FirstSendRequest,
+  profileId: string,
+  prepared: AgentSpawnRuntime | undefined,
+): Promise<{ refusal: FirstSendRefusal } | { agent?: SessionAgent }> {
+  if (!prepared) return {};
+  // The same checks as `prepare`: a persona or engine that no longer matches
+  // the send refuses here, so only the runtime is left to compare below.
+  const again = await firstSendAgent(req, profileId);
+  if ("refusal" in again) return again;
+  const now = again.agent!;
+  if (
+    now.provider !== prepared.provider ||
+    now.modelId !== prepared.modelId ||
+    now.thinkingLevel !== prepared.thinkingLevel
+  ) {
+    void publishAgentLibrary().catch(() => undefined);
+    return {
+      refusal: {
+        message: `Agent "${now.agent.name}" changed while the session was being set up: it now runs on ${now.provider}/${now.modelId} at ${now.thinkingLevel} effort. The pickers now show its current runtime; send again to start it.`,
+      },
+    };
+  }
+  return { agent: now.agent };
+}
+
 async function resolveFirstSendAgent(
   req: FirstSendRequest,
   profileId: string,
@@ -199,12 +233,14 @@ const engines: Record<Harness, FirstSendEngine> = {
           };
       }
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
+        const frozen = await agentAtCreation(req, profileId, agent);
+        if ("refusal" in frozen) return frozen;
         const live = await createSession({
           harness: "pi",
           agentType: req.agentType,
           model,
           thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
-          ...(agent ? { agent: agent.agent } : {}),
+          ...(frozen.agent ? { agent: frozen.agent } : {}),
           mode: req.mode,
           ...(worktree ? { worktree } : {}),
           credentialProfileId: profileId,
@@ -249,6 +285,8 @@ const engines: Record<Harness, FirstSendEngine> = {
       if ("refusal" in started) return started;
       const { agent } = started;
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
+        const frozen = await agentAtCreation(req, profileId, agent);
+        if ("refusal" in frozen) return frozen;
         let live: LiveSession;
         try {
           live = await createSession({
@@ -259,7 +297,7 @@ const engines: Record<Harness, FirstSendEngine> = {
             agentType: req.agentType,
             modelId: agent?.modelId ?? req.modelId,
             thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
-            ...(agent ? { agent: agent.agent } : {}),
+            ...(frozen.agent ? { agent: frozen.agent } : {}),
             mode: req.mode,
             ...(worktree ? { worktree } : {}),
             credentialProfileId: profileId,

@@ -399,7 +399,9 @@ composer's model checks, since its model may be one Settings → Models hides fr
 the pickers; the server checks it against the account. The first send carries
 `agent`, and the server resolves the definition again on the picked account
 (`harnesses/firstSend.ts`): the session runs on the definition's model and
-effort and freezes it exactly as a spawn does. A persona, engine, model or
+effort and freezes it exactly as a spawn does, read again right before the
+session is created (a worktree provisioned first can take seconds). A runtime
+that moved between the two reads refuses the send. A persona, engine, model or
 effort that no longer matches the definition refuses the send rather than run
 something other than what the pickers showed. The refusal says what the
 definition runs on now and republishes the agents list, so the draft follows it:

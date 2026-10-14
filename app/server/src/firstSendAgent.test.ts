@@ -70,20 +70,31 @@ writeFileSync(
     body: "Draft briefly.",
   }),
 );
+const researcherFile = join(AGENTS_LIBRARY_DIR, "researcher", "AGENT.md");
+/** Writes the researcher definition, by hand as a user would. */
+function writeResearcher(
+  patch: {
+    effort?: "low" | "high";
+    body?: string;
+    persona?: "assistant" | "developer";
+  } = {},
+): void {
+  writeFileSync(
+    researcherFile,
+    formatAgentManifest({
+      name: "researcher",
+      description: "Researches a question.",
+      persona: patch.persona ?? "assistant",
+      model: "opus",
+      effort: patch.effort ?? "high",
+      denyTools: [],
+      skills: [],
+      body: patch.body ?? "Research carefully.",
+    }),
+  );
+}
 mkdirSync(join(AGENTS_LIBRARY_DIR, "researcher"), { recursive: true });
-writeFileSync(
-  join(AGENTS_LIBRARY_DIR, "researcher", "AGENT.md"),
-  formatAgentManifest({
-    name: "researcher",
-    description: "Researches a question.",
-    persona: "assistant",
-    model: "opus",
-    effort: "high",
-    denyTools: [],
-    skills: [],
-    body: "Research carefully.",
-  }),
-);
+writeResearcher();
 
 let acquired: Array<{ id: string; opts: Record<string, unknown> }>;
 let piAcquired: unknown[][];
@@ -190,8 +201,9 @@ test("a first send naming an agent runs as that definition and freezes it", asyn
   assert.equal(acquired[0]?.opts.modelId, "opus");
   assert.equal(acquired[0]?.opts.thinkingLevel, "high");
   assert.equal(acquired[0]?.opts.credentialProfileId, claudeProfile.id);
-  // Resolved on the account the user picked, not the automatic one.
-  assert.deepEqual(offeredOn, [claudeProfile.id]);
+  // Resolved on the account the user picked, not the automatic one: once to
+  // prepare, once more right before the session exists.
+  assert.deepEqual(offeredOn, [claudeProfile.id, claudeProfile.id]);
   assert.deepEqual(
     JSON.parse(sessionStore.getAgent("agent-first-send") ?? "null"),
     {
@@ -316,5 +328,94 @@ test("a definition whose runtime changed since it was picked is refused, not run
           message.type === "libraryList" && message.library === "agents",
       ),
     ),
+  );
+});
+
+/** A hand edit that lands after the send was prepared, before creation. */
+function editAfterPrepare(patch: Parameters<typeof writeResearcher>[0]) {
+  let calls = 0;
+  setAgentSpawnSourcesForTests({
+    offers: async () => {
+      if (++calls === 1) writeResearcher(patch);
+      return true;
+    },
+  });
+}
+
+test("a hand edit made while the session is set up is what it freezes", async () => {
+  const { conn } = makeConnection();
+  editAfterPrepare({ body: "Research twice." });
+  try {
+    await conn.handleFirstSend({
+      harness: "claude-sdk",
+      id: "agent-late-edit",
+      agentType: "assistant",
+      text: "Go.",
+      agent: "researcher",
+      credentialProfileId: claudeProfile.id,
+    });
+  } finally {
+    writeResearcher();
+  }
+
+  assert.equal(acquired.length, 1);
+  const frozen = JSON.parse(sessionStore.getAgent("agent-late-edit") ?? "null");
+  assert.equal(frozen.body, "Research twice.");
+});
+
+test("a runtime that changes while the session is set up is refused, not run", async () => {
+  const { conn, sent } = makeConnection();
+  published.length = 0;
+  editAfterPrepare({ effort: "low" });
+  try {
+    await conn.handleFirstSend({
+      harness: "claude-sdk",
+      id: "agent-late-runtime",
+      agentType: "assistant",
+      text: "Go.",
+      agent: "researcher",
+      credentialProfileId: claudeProfile.id,
+    });
+  } finally {
+    writeResearcher();
+  }
+
+  assert.equal(acquired.length, 0);
+  assert.equal(sessionStore.getAgent("agent-late-runtime"), undefined);
+  assert.match(
+    JSON.stringify(sent),
+    /changed while the session was being set up: it now runs on claude-sdk\/opus at low effort/,
+  );
+  await vi.waitFor(() =>
+    assert.ok(
+      published.some(
+        (message) =>
+          message.type === "libraryList" && message.library === "agents",
+      ),
+    ),
+  );
+});
+
+test("a persona that changes while the session is set up is refused, not run", async () => {
+  const { conn, sent } = makeConnection();
+  editAfterPrepare({ persona: "developer" });
+  try {
+    await conn.handleFirstSend({
+      harness: "claude-sdk",
+      id: "agent-late-persona",
+      agentType: "assistant",
+      text: "Go.",
+      agent: "researcher",
+      credentialProfileId: claudeProfile.id,
+    });
+  } finally {
+    writeResearcher();
+  }
+
+  assert.equal(acquired.length, 0);
+  assert.equal(sessionStore.getAgent("agent-late-persona"), undefined);
+  assert.match(
+    JSON.stringify(sent),
+    /runs as the developer persona, not assistant/,
   );
 });
