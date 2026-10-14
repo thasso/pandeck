@@ -7,6 +7,12 @@ runtime row, which offers the same account cards. They read one server-owned
 cache; none queries a provider on render. This document is the contract for that
 cache — ownership, delivery, refresh policy, and what each state means.
 
+Automatic account selection also reads this cache (`account-routing.md`). It
+never synchronously fetches usage when a session or background run starts. The
+host picks after the model, effort and workflow plan are fixed; account usage
+never enters coordinator context or changes the plan. Explicit workflow role
+accounts and approved peer runtimes remain pinned.
+
 ## Sources
 
 | Provider       | Source                                              | Windows                                                                   | "No data" case                                        | Fetch cost                 |
@@ -48,11 +54,15 @@ tokens.
 
 `usage` is a `BroadcastTopic`. Subscribing is the authoritative read, so page
 open = subscribe = instant cached snapshot, and every later refresh pushes to
-all subscribers with no polling and no extra HTTP round trip. Only the metering
-surfaces subscribe (`lib/broadcastTopics.ts`): the two ROUTES by name, and the
-workflow start sheet as a metering OVERLAY (`meteringOverlayOpen`), which adds
-`usage` on top of whatever route it was opened over and drops it again when the
-sheet closes.
+all subscribers with no polling and no extra HTTP round trip. Metering surfaces
+and Settings sections with agent model slots subscribe
+(`lib/broadcastTopics.ts`). Desktop `/sessions` also holds `usage` for its
+quick-start cards and Automatic preview; the mobile Sessions inbox does not.
+Navigating away releases that hold. The workflow start sheet adds `usage` to the
+route's topics while open and drops it when closed. Settings slots use snapshot
+arrivals to re-resolve Automatic account previews, keyed by each indicator's
+profile id and `fetchedAt`. The Settings index and sections without model slots
+do not subscribe.
 
 The wire payload is `UsageIndicator` (`app/shared/usage.ts`): profile id,
 provider, `short`/`long` window `{usedPct, resetsAt}`, `limitsAvailable`,
@@ -96,16 +106,19 @@ it safe.
 1. **Page open** — the primary path. Render from cache, kick a background
    refresh when not fresh.
 2. **Turn end** — `subscribeSessionRunCompleted` fires once per provider run:
-   the run's credential profile is marked dirty and refreshed after a 30 s
-   debounce, still respecting the min interval — but **only while a client is
-   connected**. With no client attached nothing is fetched for any provider; the
+   the run's bound credential profile is marked dirty and refreshed after a 30 s
+   debounce, still respecting the min interval, but **only while a client is
+   connected**. Legacy unbound sessions dirty the protected default their engine
+   reopens them on: `claude-default` for Claude or `default` for pi. This
+   fallback is for usage only; account health still requires an explicit
+   binding. With no client attached nothing is fetched for any provider; the
    account stays dirty and the next page open pays for the refresh. The cache
    itself therefore never does headless work (the auto-redeem sweep below is the
    bounded, OpenAI-only exception), which is also why persisting it matters.
 3. **Session end** needs no trigger: a session's last turn is already a run
    completion. `setSessionIdleHook` is deliberately **not** used — it is a
    superset (host commands included) and would double-fetch.
-4. **Visible heartbeat** — while a metering page is mounted and
+4. **Visible heartbeat** — while a usage-subscribing surface is mounted and
    `document.visibilityState === "visible"`, the client nudges the server once a
    minute. It is only a hint: the cache no-ops while fresh. Hidden tabs stop.
 5. **Manual** — the Usage page's refresh button (`?refresh=1`) bypasses

@@ -240,6 +240,15 @@ export const memoryObservationStore = {
       );
   },
 
+  /** Exclude a session from automatic capture without materializing retained text. */
+  discardForSession(sessionId: string, atMs: number): void {
+    getDb()
+      .prepare(
+        "UPDATE memory_observations SET state = 'discarded', human_text = '', assistant_text = NULL, processed_at_ms = ? WHERE session_id = ? AND state IN ('pending', 'processing')",
+      )
+      .run(atMs, sessionId);
+  },
+
   /** Return a claimed observation to pending (recoverable failure / bounded retry). */
   release(id: number): void {
     getDb()

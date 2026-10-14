@@ -41,6 +41,7 @@ import { searchMemory } from "./memorySelector.ts";
 import { accountOffersModel } from "../harnesses/models.ts";
 import { OneShotError, runOneShot } from "../harnesses/oneShot.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
+import { sessionStore } from "../db/sessionStore.ts";
 
 /* -------------------------------- bounds --------------------------------- */
 
@@ -59,8 +60,8 @@ const OBSERVATION_TEXT_CAP = 800;
 interface MemoryProcessorRunInput {
   provider: string;
   modelId: string;
-  /** Provider account the processor authenticates as (resolved from its settings pin). */
-  credentialProfileId: string;
+  /** Optional account pin; the one-shot resolves Automatic on each run. */
+  credentialProfileId?: string | undefined;
   thinkingLevel: import("@assistant/shared").ThinkingLevel;
   systemPrompt: string;
   prompt: string;
@@ -186,7 +187,7 @@ export async function processorConfigStatus(): Promise<ProcessorConfigStatus> {
   // Availability is per account, so this checks the account the slot resolves to.
   if (
     !(await accountOffersModel(
-      accountForSlot(processor),
+      await accountForSlot(processor),
       processor.provider,
       processor.modelId,
     ))
@@ -726,6 +727,14 @@ export async function runMemoryProcessor(
   observations: MemoryObservation[],
   opts: RunProcessorOptions,
 ): Promise<ProcessorOutcome> {
+  // Automatic capture excludes enterprise sessions. Defensive queued-input
+  // filtering happens before reading their text into a processor prompt.
+  observations = observations.filter((observation) => {
+    const source = sessionStore.getIncludingDeleted(observation.sessionId);
+    if (source && !source.requiresEnterprise) return true;
+    memoryObservationStore.discardForSession(observation.sessionId, clock());
+    return false;
+  });
   if (observations.length === 0)
     return {
       ran: false,
@@ -768,7 +777,7 @@ export async function runMemoryProcessor(
     output = await runner.run({
       provider: settings.processor.provider,
       modelId: settings.processor.modelId,
-      credentialProfileId: accountForSlot(settings.processor),
+      credentialProfileId: settings.processor.credentialProfileId,
       thinkingLevel: settings.processor.thinkingLevel,
       systemPrompt: SYSTEM_PROMPT,
       prompt,
@@ -947,7 +956,7 @@ export async function runConsolidation(): Promise<ProcessorOutcome> {
     output = await runner.run({
       provider: settings.processor.provider,
       modelId: settings.processor.modelId,
-      credentialProfileId: accountForSlot(settings.processor),
+      credentialProfileId: settings.processor.credentialProfileId,
       thinkingLevel: settings.processor.thinkingLevel,
       systemPrompt: CONSOLIDATION_SYSTEM_PROMPT,
       prompt: buildConsolidationPrompt(cards),

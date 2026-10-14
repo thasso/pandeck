@@ -521,9 +521,11 @@ function projectOpenAi(snapshot: OpenAiUsageSnapshot): ProviderProjection {
  * The wire projection carries FACTS (when it was fetched, what the windows
  * said); how old is too old is derived by every reader from `fetchedAt` with
  * the shared thresholds, so a card degrades on its own clock even when nothing
- * pushes.
+ * pushes. Cached facts only: never revalidates or starts a provider request.
  */
-function indicatorFor(profile: CredentialProfileSummary): UsageIndicator {
+export function cachedUsageIndicator(
+  profile: Pick<CredentialProfileSummary, "id" | "provider">,
+): UsageIndicator {
   const entry = entryFor(profile.id, profile.provider);
   const projection = entry.snapshot
     ? entry.provider === "claude"
@@ -544,7 +546,7 @@ function indicatorFor(profile: CredentialProfileSummary): UsageIndicator {
 
 /** The `usage` topic's whole snapshot: one indicator per ENABLED account. */
 export function usageIndicators(): UsageIndicator[] {
-  return enabledProfiles().map((profile) => indicatorFor(profile));
+  return enabledProfiles().map((profile) => cachedUsageIndicator(profile));
 }
 
 /** Test seam: swap the fetchers/clock/registry. */

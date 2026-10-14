@@ -15,6 +15,7 @@ import { toLinkedPushDisplay } from "./pushLinks.ts";
 import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { runPrWorkflow, type PrWorkflowPhase } from "./prWorkflow.ts";
+import { assertSessionEnterpriseAccount } from "./session/runtimePrompt.ts";
 
 /**
  * What a harness reports back from a manual compaction. `skipped` is a normal,
@@ -352,6 +353,7 @@ export async function runCompactForHost(
     rawArgs,
   });
   try {
+    assertSessionEnterpriseAccount(host);
     host.updateSyntheticTool("Compacting session context…");
     // Flush pending observations BEFORE compaction so they are learned from the
     // real conversation rather than the summary; single-flight, so a redundant

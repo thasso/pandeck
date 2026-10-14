@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { rm } from "node:fs/promises";
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
-import { defaultClaudeProfileId } from "../credentialProfiles.ts";
+import { DEFAULT_CLAUDE_PROFILE_ID } from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
@@ -112,7 +112,7 @@ const sessions: Record<Harness, HarnessSessions> = {
     // Rehydrated on the account its record names, else the default one.
     open: async (id) =>
       claudeSdkStore.acquire(id, {
-        credentialProfileId: defaultClaudeProfileId(),
+        credentialProfileId: DEFAULT_CLAUDE_PROFILE_ID,
       }),
     cwd: (id) => {
       const stat = statSync(join(CLAUDE_SDK_STORE_DIR, `${id}.json`), {

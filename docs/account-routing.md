@@ -1,8 +1,8 @@
 # Account routing
 
 Credential profiles are accounts. Claude and OpenAI accounts never mix. This
-contract currently ships health and login alerts. Selection, benching and live
-switching follow in later parts.
+contract ships health, login alerts and account selection at session/run start.
+Benching and live switching follow in later parts.
 
 ## Health and login evidence
 
@@ -146,8 +146,142 @@ object-only messaging rule, documented in `messaging.md`.
 
 ## Account picker
 
-Pending. New sessions and background agents will rank eligible accounts within
-the model's provider and enterprise requirement.
+`app/server/src/accountRouter.ts` owns automatic selection. Gathering reads
+account summaries, the official per-account model snapshots through the harness
+models port, and `usageCache.ts`'s cached indicators. It never fetches usage or
+changes the model, effort, workflow plan or provider. The ranking function is
+pure; limit benching can supply its candidate fact later without adding bench
+state here.
+
+Accounts carry `enterprise: boolean`, default false in the registry and wire
+summary. Settings changes it with `PATCH /api/credential-profiles/:id`
+`{ enterprise }`; this is metadata only and does not alter login provisioning. A
+PATCH may include `name`, `enabled` and `enterprise` together. The server
+validates every supplied field before one metadata write and publication. A
+session's `requiresEnterprise` is durable, defaults to false and survives
+restore and forks. Regular sessions may choose enterprise or personal accounts.
+The enterprise requirement constrains the account executing the session and
+automatically derived work. Neither normal ranking nor degradation may select a
+personal account. An explicit personal pick is refused when the requirement is
+set. This is an account constraint, not end-to-end data confinement.
+
+Every session turn passes the shared `session/runtimePrompt.ts` admission check,
+including restored sessions, first prompts and spawned peers on both engines. An
+enterprise-required session whose bound account is missing or no longer
+enterprise is refused before any append. Disabled bound accounts still run if
+they satisfy the enterprise requirement. Enterprise flag changes apply to runs
+and one-shots admitted after the change; an already admitted run may finish.
+Policy is not rechecked inside provider engines. Manual compaction on both
+engines checks the same enterprise assertion at the shared host-command entry,
+before flushing memory or making its model call.
+
+Enterprise scope follows work the session starts automatically. Spawned peers
+inherit `requiresEnterprise: true`, including approval-delayed creation. An
+explicit approved runtime naming a personal account is refused with a clear
+reason, not replaced. Unpinned spawn proposals and named agent-definition spawns
+use the picker at their fixed model and effort, within enterprise accounts of
+the model's provider when the source requires it, without preferring the
+proposer's account. Named definitions capture scope before library awaits,
+re-resolve immediately before creation, and propagate it to the child. Approved
+peer runtime definitions always name an explicit account and never route.
+Tombstoned source rows retain their requirement; a missing source row fails
+closed. Automatic helpers reading its transcript, including naming, retitling,
+status, refinement and commit/PR context, also require enterprise accounts.
+Commit review override approvals retain the captured requirement in their
+server-side context; execution captures it again before worktree/git awaits and
+forwards it to the repeated review. A helper reading several sessions requires
+enterprise if any input session does. If no eligible enterprise account is
+available, skip that helper and keep its existing fallback, such as leaving the
+title unchanged. Source requirements cannot be cleared by omitting a child flag
+or passing false. Enterprise transcript helpers do not use degraded or
+disabled-default fallbacks; usage exhaustion remains a ranking preference, not a
+new hard eligibility rule.
+
+Enterprise-required sessions are excluded from memory capture entirely. Their
+transcripts produce no memory observations and never enter memory processing.
+There are no enterprise markers on memory cards or general data-taint tracking.
+
+Human workflow launches are standalone, source-free user authorization. They do
+not inherit requirements from the session on show. The web start sheet always
+names each role's account, including enterprise accounts, so the user compares
+usage meters and picks explicitly; it offers no Automatic choice. The server
+still routes unpinned roles, such as those from saved configs, at their fixed
+model and effort. No production caller starts a workflow from an agent session,
+so workflow config carries no latent source requirement.
+
+Deliberately outside this boundary are messages to pre-existing sessions, KB
+writes, Tasks, files and other content a user or agent explicitly sends
+elsewhere. The app neither restricts those actions nor tracks the content
+through them. Unrelated sessions and source-free background work do not inherit
+a requirement from a global setting. An unbound document-comment draft has no
+session requirement until a source or enterprise intent is declared; the
+existence of another enterprise session does not constrain its refinement.
+
+Automatic candidates must be enabled, belong to the model's account provider,
+not need login, offer the exact model and requested effort, and not be benched.
+Claude shares its curated model list; pi availability comes from each account's
+isolated SDK runtime. Ranking is:
+
+1. Fresh usage with room in both plan windows.
+2. Missing, partial, unavailable or stale usage.
+3. Fresh usage at or beyond either threshold, even if the other window is
+   unknown.
+
+Within a tier, prefer the earliest known future weekly reset, then the lowest
+known 5-hour usage, then the stable account id. Unknown values sort last; stale
+values do not claim a reset or headroom. Shared `USAGE_STALE_MS` determines age,
+and `usageWindowPct` invalidates a cycle after its reset. Thresholds are
+consumed percentages in `AppSettings.accountRouting`: `fiveHourUsedThreshold`
+defaults to 90 and `weeklyUsedThreshold` to 95. Room means strictly below both.
+Settings exposes these under Models; storage normalizes each to 0–100.
+
+If health/model/effort/bench filters leave none, prefer remaining enabled
+accounts without `needs-login`, then accounts offering the fixed model and
+effort, before comparing usage. Provider and enterprise scope still apply. Mark
+the result `no-eligible-account`. Needs-login accounts are the last resort even
+when their cached usage looks better or every model snapshot failed. Background
+automation alone may finally use that provider's protected default, even
+disabled, marked `disabled-default`. Exclusions and enterprise constraints still
+apply to that fallback. Interactive creation with no enabled account fails
+clearly, including the no-enterprise-account case. The pick result carries the
+degradation; it never silently crosses provider or enterprise boundaries.
+
+New-session and settings-slot selectors default to Automatic. At creation,
+Automatic applies only when no account is already bound or explicitly selected.
+The server picks once when the session or background run starts; the resolved
+account is then pinned for the session's lifetime. Bound drafts and forks keep
+the parent's account, even if it is disabled or unhealthy, when it belongs to
+the child's provider; otherwise Automatic picks one within the same enterprise
+requirement. An enterprise-required child still refuses if that bound account is
+no longer tagged enterprise. Restoring an existing session keeps its native
+account affinity, not today's Automatic choice. Explicit session picks, approved
+peer runtimes and workflow role accounts remain explicit. Settings slots keep
+pins saved before Automatic existed until the user changes them in Settings.
+Slots with no pin resolve afresh on every run; an unusable pin degrades under
+the existing background-automation policy: missing, disabled or
+provider-mismatched pins. An enabled, provider-matching pin remains explicit
+despite login health or model/effort availability; failures alert on that
+account, not a different one. `automaticProfileIdFor` remains only a
+first-enabled hint for non-routing login/usage UI, not a routing function. When
+the saved model has no Automatic option, a Settings slot offers **Use
+Automatic** to clear its pin without changing the model or effort.
+
+`POST /api/account-router/pick` accepts `AccountPickPreviewRequest` and returns
+`AccountPickPreviewResult`, so a selector can show Automatic's current account
+without duplicating ranking in the browser. It uses cached usage and model
+snapshots, not a usage fetch. A preview is informational: the actual start
+resolves again and the account may have changed meanwhile. Browsers cannot
+affect retry exclusions through this API. Its optional `scope: "background"`
+previews the protected-disabled-default policy for settings slots; it never
+authorizes interactive creation on a disabled account.
+
+An automatically chosen background one-shot that reports `quota`, `rate_limit`
+or a structured `loginDeath` retries once on another picked account, excluding
+the failed account. Plain auth classification is not sufficient. A slot that
+names an explicit pin never retries across accounts, even if that pin had to
+degrade. Both attempts' reported consumption is recorded. If no replacement can
+be picked, the original outcome is preserved. This does not remember a bench and
+does not switch interactive sessions; those remain later parts.
 
 ## Limit benching
 

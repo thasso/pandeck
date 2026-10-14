@@ -3,7 +3,7 @@ import type {
   PromptRefinementSettings,
 } from "@assistant/shared";
 import { runOneShot } from "./harnesses/oneShot.ts";
-import { accountForSlot } from "./settingsModelSlots.ts";
+import { sourceRequiresEnterprise } from "./sessionEnterprise.ts";
 
 const REFINEMENT_SYSTEM_PROMPT = `You refine dictated or rough user prompts before they are sent to an assistant.
 
@@ -64,11 +64,19 @@ export async function refinePromptText({
   text,
   context,
   settings,
+  sourceSessionId,
+  requiresEnterprise: requestedEnterprise,
 }: {
   text: string;
   context?: string;
   settings: PromptRefinementSettings;
+  sourceSessionId?: string;
+  requiresEnterprise?: boolean;
 }): Promise<string> {
+  const requiresEnterprise = sourceRequiresEnterprise(
+    sourceSessionId ? [sourceSessionId] : [],
+    requestedEnterprise,
+  );
   const draft = text.trim();
   if (!draft) throw new Error("Prompt text cannot be empty.");
   if (draft.length > MAX_DRAFT_CHARS) {
@@ -94,7 +102,9 @@ export async function refinePromptText({
   const { text: refined, failure } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
-    credentialProfileId: accountForSlot(settings),
+    credentialProfileId: settings.credentialProfileId,
+    requiresEnterprise,
+    ...(sourceSessionId ? { sourceSessionIds: [sourceSessionId] } : {}),
     noModelMessage: "No model is available for prompt refinement.",
     systemPrompt: REFINEMENT_SYSTEM_PROMPT,
     prompt,

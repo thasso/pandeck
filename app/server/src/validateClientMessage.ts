@@ -588,6 +588,7 @@ const validateHarnessSend: Validator = (msg) => {
     createWorktreeInProjectId: STRING,
     agent: STRING,
     clientRequestId: STRING,
+    requiresEnterprise: BOOLEAN,
   });
 };
 
@@ -862,6 +863,7 @@ const validateAttachComments: Validator = (msg) => {
       thinkingLevel: STRING,
       mode: STRING,
       credentialProfileId: STRING,
+      requiresEnterprise: BOOLEAN,
       additionalPrompt: STRING,
     });
     if (optional) return optional;

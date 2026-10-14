@@ -4,6 +4,11 @@
  * reports its own snapshot shape, so the port keeps one entry per kind rather
  * than flattening them.
  */
+import type { Harness } from "@assistant/shared";
+import {
+  DEFAULT_CLAUDE_PROFILE_ID,
+  DEFAULT_OPENAI_PROFILE_ID,
+} from "../credentialProfiles.ts";
 import type {
   ClaudeUsageSnapshot,
   OpenAiResetRedeemResult,
@@ -15,6 +20,19 @@ import {
   redeemOpenAiResetCreditForProfile,
   type RedeemResetOptions,
 } from "../piSdk/openaiUsageQuery.ts";
+
+/** Usage-only attribution mirrors the account used to reopen legacy sessions. */
+export function usageProfileForSession(
+  session: { harness: Harness; credentialProfileId?: string } | undefined,
+): string | null {
+  if (!session) return null;
+  return (
+    session.credentialProfileId ??
+    (session.harness === "claude-sdk"
+      ? DEFAULT_CLAUDE_PROFILE_ID
+      : DEFAULT_OPENAI_PROFILE_ID)
+  );
+}
 
 /** Plan usage of a Claude account. */
 export function fetchClaudeAccountUsage(

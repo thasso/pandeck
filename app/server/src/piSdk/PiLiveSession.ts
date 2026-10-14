@@ -1644,6 +1644,9 @@ export class PiLiveSession implements LiveSession {
     );
     const agentValue = sessionAgentSummary(this.session.sessionId);
     const worktreeIdValue = this.safeWorktreeId();
+    const requiresEnterprise = sessionStore.getIncludingDeleted(
+      this.session.sessionId,
+    )?.requiresEnterprise;
     return {
       sessionId: this.session.sessionId,
       harness: this.harness,
@@ -1652,6 +1655,7 @@ export class PiLiveSession implements LiveSession {
       ...(model ? { model: toModelOption(model) as ModelOption } : {}),
       thinkingLevel: this.session.thinkingLevel as ThinkingLevel,
       mode: this.mode,
+      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       canSteer: this.canSteer,
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
       ...(pendingQuestionValue !== undefined

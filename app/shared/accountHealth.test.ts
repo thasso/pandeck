@@ -30,6 +30,7 @@ it("projects only enabled dead logins in stable id order without setup or reason
     name: id,
     provider: "claude",
     enabled,
+    enterprise: false,
     createdAt: 1,
     updatedAt: 1,
     status: "ready",

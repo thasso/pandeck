@@ -305,6 +305,25 @@ export interface AccountModelOption extends ModelOption {
   accountDisabled?: boolean;
 }
 
+/** Request body for POST /api/account-router/pick; never changes account state. */
+export interface AccountPickPreviewRequest {
+  model: { provider: string; modelId: string };
+  thinkingLevel?: ThinkingLevel;
+  requiresEnterprise?: boolean;
+  /** Preview background fallback policy; this never authorizes session creation. */
+  scope?: "interactive" | "background";
+}
+
+/** Non-binding account-routing preview for an Automatic model choice. */
+export interface AccountPickPreviewResult {
+  profileId: string | null;
+  degraded?:
+    | "no-eligible-account"
+    | "disabled-default"
+    | "no-enabled-account"
+    | "no-enterprise-account";
+}
+
 export function clampThinkingLevelForModel(
   model: ModelOption | undefined,
   level: ThinkingLevel,
@@ -347,6 +366,7 @@ export interface CredentialProfileSummary {
   provider: CredentialProfileProvider;
   /** Disabled profiles remain available to already-bound sessions but are omitted from new-session and Usage account choices. */
   enabled: boolean;
+  enterprise: boolean;
   createdAt: number;
   updatedAt: number;
   status: CredentialProfileStatus;
@@ -382,10 +402,6 @@ export interface CredentialProfileUsage {
   pinnedSlots: CredentialProfileSlotUsage[];
   /** Sessions durably bound to this account. */
   boundSessionCount: number;
-  /** Set when this account is the current automatic pick for its provider. */
-  automaticForProvider?: CredentialProfileProvider;
-  /** The account automatic work would move to if this one were disabled. */
-  automaticFallback?: { id: string; name: string };
 }
 
 /** Browser terminal projection for one official Claude CLI login process. */
@@ -1003,6 +1019,8 @@ export interface ClaudeSdkSettings {
 export interface PromptRefineRequest {
   text: string;
   sessionId?: string;
+  /** Staged drafts can require enterprise before a session row exists. */
+  requiresEnterprise?: boolean;
   /** Which persona/toolset the refinement should tailor itself to. */
   agentType?: AgentType;
   includeContext?: boolean;
@@ -1495,6 +1513,11 @@ export interface AppSettings {
   /** Who the app works for: display name and the timezone local days resolve in. */
   profile: ProfileSettings;
   knowledgeBase: KnowledgeBaseSettings;
+  /** Usage thresholds below which an account remains eligible for automatic routing. */
+  accountRouting: {
+    fiveHourUsedThreshold: number;
+    weeklyUsedThreshold: number;
+  };
 }
 
 /** Slash commands offered by the server. */
@@ -1782,6 +1805,8 @@ export interface SessionListItem {
   thinkingLevel?: ThinkingLevel;
   /** Immutable credential profile selected before this session's first prompt. */
   credentialProfileId?: string;
+  /** Only enterprise accounts may run this session; absent means no restriction. */
+  requiresEnterprise?: boolean;
   /** True when the user archived the session; hidden from the default sidebar list. */
   archived?: boolean;
   /** The primary Project context this session was started with, if linked. */
@@ -3859,6 +3884,8 @@ export interface SessionSpawnApprovalItem {
  */
 export interface SessionSpawnApprovalBody {
   kind: "sessionSpawn";
+  /** Server-derived source-session requirement, sealed with the pending card. */
+  requiresEnterprise?: boolean;
   items: SessionSpawnApprovalItem[];
 }
 
@@ -4484,6 +4511,8 @@ export interface SessionState {
    * per-turn tool policy the user may flip at any time.
    */
   mode?: SessionMode;
+  /** Only enterprise accounts may run this session; absent means no restriction. */
+  requiresEnterprise?: boolean;
   /** True when this provider can accept a user steering prompt during a running turn. */
   canSteer?: boolean;
   /**
@@ -7644,6 +7673,8 @@ export type ClientMessage =
       /** Start the session in this mode (default `build`). */
       mode?: SessionMode;
       credentialProfileId?: string;
+      /** Restrict account routing for this session to enterprise profiles. */
+      requiresEnterprise?: boolean;
       attachTaskId?: string;
       projectId?: string;
       /** A document staged as context, as its canonical viewer route. */
@@ -7846,6 +7877,7 @@ export type ClientMessage =
              */
             mode?: SessionMode;
             credentialProfileId?: string;
+            requiresEnterprise?: boolean;
             additionalPrompt?: string;
             attachments?: PromptAttachment[];
           };

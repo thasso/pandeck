@@ -1605,7 +1605,6 @@ export class LiveRuntimeSession {
     if (this.disposed) return;
     this.endForTeardown();
     this.disposed = true;
-    if (this.turnRunId) emitTurnClosed(this.sessionId, this.turnRunId);
     this.progress.dispose();
     this.unsubscribeAdapter();
     this.subscribers.clear();

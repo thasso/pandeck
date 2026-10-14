@@ -1,6 +1,9 @@
 import type { CommitAgentSettings } from "@assistant/shared";
 import { runOneShot } from "./harnesses/oneShot.ts";
-import { accountForSlot } from "./settingsModelSlots.ts";
+import {
+  sourceRequiresEnterprise,
+  type HelperSourceContext,
+} from "./sessionEnterprise.ts";
 
 const COMMIT_SYSTEM_PROMPT = `You are a dedicated commit-message generator and safety reviewer.
 
@@ -186,11 +189,21 @@ export function formatCommitMessage(
 export async function generateCommitMessageJson(
   prompt: string,
   settings: CommitAgentSettings,
+  source: HelperSourceContext = {},
 ): Promise<CommitAgentResult> {
+  const sourceSessionIds = source.sourceSessionId
+    ? [source.sourceSessionId]
+    : [];
+  const requiresEnterprise = sourceRequiresEnterprise(
+    sourceSessionIds,
+    source.requiresEnterprise,
+  );
   const { text } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
-    credentialProfileId: accountForSlot(settings),
+    credentialProfileId: settings.credentialProfileId,
+    requiresEnterprise,
+    sourceSessionIds,
     noModelMessage: "No model is available for the commit-message agent.",
     systemPrompt: COMMIT_SYSTEM_PROMPT,
     prompt,

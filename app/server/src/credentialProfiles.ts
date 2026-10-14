@@ -36,6 +36,7 @@ export interface CredentialProfile {
   name: string;
   provider: CredentialProfileProvider;
   enabled: boolean;
+  enterprise: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -54,7 +55,7 @@ export interface CredentialProfileSummary extends CredentialProfile {
   error?: string;
 }
 
-const DEFAULT_OPENAI_PROFILE_ID = "default";
+export const DEFAULT_OPENAI_PROFILE_ID = "default";
 export const DEFAULT_CLAUDE_PROFILE_ID = "claude-default";
 const ROOT = join(DATA_DIR, "credential-profiles");
 const REGISTRY = join(ROOT, "profiles.json");
@@ -155,6 +156,7 @@ function readRegistry(): CredentialProfile[] {
           name: p.name.slice(0, 80),
           provider: p.provider,
           enabled: p.enabled !== false,
+          enterprise: p.enterprise === true,
           createdAt: createdAt as number,
           updatedAt: updatedAt as number,
         },
@@ -380,6 +382,7 @@ export function ensureDefaultPiProfile(): CredentialProfile {
       name: "Default OpenAI",
       provider: "openai-codex",
       enabled: true,
+      enterprise: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -392,6 +395,7 @@ export function ensureDefaultPiProfile(): CredentialProfile {
       name: "Default Claude",
       provider: "claude",
       enabled: true,
+      enterprise: false,
       createdAt: now,
       updatedAt: now,
     });
@@ -412,14 +416,11 @@ function ensureDefaultProfilesOnce(): void {
 }
 
 /**
- * The account automatic (unpinned) work runs on: the first enabled profile of
- * that provider in registry order, else the protected default. `excludeId`
- * answers "where would this move if that account were disabled?".
+ * First-enabled information for non-routing UI (login/usage defaults and
+ * account-management hints), else the protected default. New sessions and
+ * background work use accountRouter instead.
  */
-export function automaticProfileIdFor(
-  provider: CredentialProfileProvider,
-  excludeId?: string,
-): string {
+function automaticProfileIdFor(provider: CredentialProfileProvider): string {
   ensureDefaultProfilesOnce();
   const protectedId =
     provider === "claude"
@@ -427,20 +428,17 @@ export function automaticProfileIdFor(
       : DEFAULT_OPENAI_PROFILE_ID;
   return (
     readRegistry().find(
-      (profile) =>
-        profile.provider === provider &&
-        profile.enabled &&
-        profile.id !== excludeId,
+      (profile) => profile.provider === provider && profile.enabled,
     )?.id ?? protectedId
   );
 }
 
-/** Enabled OpenAI profile used by non-browser session creation paths. */
+/** Default OpenAI account for non-routing login/usage UI. */
 export function defaultOpenAiProfileId(): string {
   return automaticProfileIdFor("openai-codex");
 }
 
-/** Enabled Claude profile used by non-browser session creation paths. */
+/** Default Claude account for non-routing login/usage UI. */
 export function defaultClaudeProfileId(): string {
   return automaticProfileIdFor("claude");
 }
@@ -471,6 +469,7 @@ export function createCredentialProfile(input: {
     name,
     provider: input.provider,
     enabled: true,
+    enterprise: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -482,36 +481,59 @@ export function createCredentialProfile(input: {
   return summary(profile);
 }
 
-export function setCredentialProfileEnabled(
+/** Validate the whole HTTP metadata patch before one write/publication. */
+export function patchCredentialProfile(
   id: string,
-  enabled: boolean,
+  input: { name?: unknown; enabled?: unknown; enterprise?: unknown },
 ): CredentialProfileSummary {
+  const changes: Partial<
+    Pick<CredentialProfile, "name" | "enabled" | "enterprise">
+  > = {};
+  if (input.name !== undefined) {
+    if (typeof input.name !== "string")
+      throw new Error("A profile name must be a string.");
+    if (isProtectedProfile(id))
+      throw new Error("A default profile cannot be renamed.");
+    const name = input.name.trim().replace(/\s+/g, " ").slice(0, 80);
+    if (!name) throw new Error("A profile name is required.");
+    changes.name = name;
+  }
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== "boolean")
+      throw new Error("Enabled must be a boolean.");
+    changes.enabled = input.enabled;
+  }
+  if (input.enterprise !== undefined) {
+    if (typeof input.enterprise !== "boolean")
+      throw new Error("Enterprise must be a boolean.");
+    changes.enterprise = input.enterprise;
+  }
+  if (!Object.keys(changes).length)
+    throw new Error(
+      "A profile name, enabled state or enterprise flag is required.",
+    );
   const profiles = readRegistry();
   const index = profiles.findIndex((profile) => profile.id === id);
   if (index < 0) throw new Error("Credential profile not found.");
-  const profile = { ...profiles[index]!, enabled, updatedAt: Date.now() };
+  const profile = { ...profiles[index]!, ...changes, updatedAt: Date.now() };
   profiles[index] = profile;
   writeRegistry(profiles);
   credentialProfileChanged(id);
   return summary(profile);
 }
 
+export function setCredentialProfileEnabled(
+  id: string,
+  enabled: boolean,
+): CredentialProfileSummary {
+  return patchCredentialProfile(id, { enabled });
+}
+
 export function renameCredentialProfile(
   id: string,
   rawName: string,
 ): CredentialProfileSummary {
-  if (isProtectedProfile(id))
-    throw new Error("A default profile cannot be renamed.");
-  const name = rawName.trim().replace(/\s+/g, " ").slice(0, 80);
-  if (!name) throw new Error("A profile name is required.");
-  const profiles = readRegistry();
-  const index = profiles.findIndex((profile) => profile.id === id);
-  if (index < 0) throw new Error("Credential profile not found.");
-  const profile = { ...profiles[index]!, name, updatedAt: Date.now() };
-  profiles[index] = profile;
-  writeRegistry(profiles);
-  credentialProfileChanged(id);
-  return summary(profile);
+  return patchCredentialProfile(id, { name: rawName });
 }
 
 export function deleteCredentialProfile(id: string): void {

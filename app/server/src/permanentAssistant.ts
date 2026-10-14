@@ -315,7 +315,7 @@ async function acquireOrCreatePermanentAssistant(
   }
 
   const profileInstructions = permanentAssistantProfileInstructions(profile);
-  const credentialProfileId = accountForSlot(profile);
+  const credentialProfileId = await accountForSlot(profile);
   let driver: PermanentAssistantDriver;
   if (
     profile.provider === CLAUDE_SDK_PROVIDER &&

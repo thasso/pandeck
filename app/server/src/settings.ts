@@ -71,6 +71,20 @@ import {
 } from "./userProfile.ts";
 
 const DEFAULT_MODEL_SETTINGS: ModelSettings = { hidden: [], order: [] };
+
+function normalizeAccountRoutingSettings(
+  value: Partial<AppSettings["accountRouting"]> | undefined,
+): AppSettings["accountRouting"] {
+  return {
+    fiveHourUsedThreshold: clampNumber(
+      value?.fiveHourUsedThreshold,
+      0,
+      100,
+      90,
+    ),
+    weeklyUsedThreshold: clampNumber(value?.weeklyUsedThreshold, 0, 100, 95),
+  };
+}
 const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   separatorBeforeFinalResponse: true,
   separatorAtTurnEnd: true,
@@ -499,6 +513,7 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
   const stored = readStoredAppSettings();
   return {
     models: { ...DEFAULT_MODEL_SETTINGS, ...(stored.models ?? {}) },
+    accountRouting: normalizeAccountRoutingSettings(stored.accountRouting),
     permanentAssistant: {
       ...DEFAULT_PERMANENT_ASSISTANT_SETTINGS,
       ...(stored.permanentAssistant ?? {}),
@@ -593,6 +608,11 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   const persisted = {
     ...stored,
     ...(patch.models ? { models: patch.models } : {}),
+    ...(patch.accountRouting
+      ? {
+          accountRouting: normalizeAccountRoutingSettings(patch.accountRouting),
+        }
+      : {}),
     ...(patch.permanentAssistant
       ? {
           permanentAssistant: assistant,

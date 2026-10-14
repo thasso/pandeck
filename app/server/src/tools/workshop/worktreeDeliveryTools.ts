@@ -20,6 +20,7 @@ import {
 } from "../../mcp/tool.ts";
 import { isAgentType } from "@assistant/shared";
 import { gitOptional } from "../../gitExec.ts";
+import { sourceRequiresEnterprise } from "../../sessionEnterprise.ts";
 import {
   approvalCardReference,
   createApproval,
@@ -158,6 +159,7 @@ const defaultPushOperations: WorktreePushOperations = {
 interface ManagedPullRequestRecoveryInput {
   row: WorktreeRow;
   callerSessionId: string;
+  requiresEnterprise?: boolean;
   remote: string;
   acceptedHeadSha: string;
   provider: GitHostingProvider;
@@ -247,6 +249,7 @@ export const defaultPullRequestOperations: WorktreePullRequestOperations = {
       const finalized = await finalizePullRequestCard(card.id, input.taskId, {
         ...(input.onProgress ? { onProgress: input.onProgress } : {}),
         provider: input.provider,
+        requiresEnterprise: input.requiresEnterprise === true,
       });
       return {
         status:
@@ -443,6 +446,7 @@ async function executeWorktreeCommit(
   ctx: ToolCallContext,
   operations: WorktreeCommitOperations,
 ) {
+  const requiresEnterprise = sourceRequiresEnterprise([ctx.session.sessionId]);
   const worktreeId = params.worktreeId?.trim();
   if (!worktreeId) throw new Error("worktreeId is required.");
   if (isMainWorktreeId(worktreeId))
@@ -498,6 +502,7 @@ async function executeWorktreeCommit(
         : {}),
       sessionKind: ctx.session.agentType,
       sessionId: ctx.session.sessionId,
+      requiresEnterprise,
       stagedOnly: params.stagedOnly === true,
       ...(context ? { additionalContext: context } : {}),
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
@@ -553,6 +558,7 @@ async function executeWorktreeCommit(
           path: row.path,
           fingerprint: result.changeFingerprint,
           sessionKind: ctx.session.agentType,
+          requiresEnterprise,
           ...(context ? { additionalContext: context } : {}),
         },
         supersedes: (earlier) =>
@@ -586,6 +592,10 @@ export function setCommitOverrideApprovalOperationsForTests(
 
 export const managedCommitOverrideApprovalExecutor: ApprovalExecutor = {
   async execute(card, context) {
+    const requiresEnterprise = sourceRequiresEnterprise(
+      [card.sessionId],
+      context.requiresEnterprise === true,
+    );
     const body = card.body;
     if (body.kind !== "managedCommitOverride")
       throw new Error("Mismatched managed commit override body.");
@@ -629,6 +639,7 @@ export const managedCommitOverrideApprovalExecutor: ApprovalExecutor = {
         forceRefusesSecrets: true,
         stagedOnly: body.stagedOnly,
         sessionId: card.sessionId,
+        requiresEnterprise,
         ...(typeof context.sessionKind === "string" &&
         isAgentType(context.sessionKind)
           ? { sessionKind: context.sessionKind }
@@ -879,6 +890,7 @@ async function executeWorktreePullRequest(
   ctx: ToolCallContext,
   operations: WorktreePullRequestOperations,
 ) {
+  const requiresEnterprise = sourceRequiresEnterprise([ctx.session.sessionId]);
   const worktreeId = params.worktreeId?.trim();
   if (!worktreeId) throw new Error("worktreeId is required.");
   if (isMainWorktreeId(worktreeId))
@@ -973,6 +985,7 @@ async function executeWorktreePullRequest(
     const recovered = await operations.recover({
       row,
       callerSessionId: ctx.session.sessionId,
+      requiresEnterprise,
       remote: target.remote,
       acceptedHeadSha: local.head,
       provider: hosted.provider,
@@ -986,6 +999,7 @@ async function executeWorktreePullRequest(
         repoRoot: row.path,
         sessionKind: ctx.session.agentType,
         sessionId: ctx.session.sessionId,
+        requiresEnterprise,
         sourceToolCallId: ctx.toolCallId,
         args: {
           draft: params.draft === true,

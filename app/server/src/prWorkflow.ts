@@ -21,6 +21,7 @@ import {
   runPushWorkflow,
 } from "./pushWorkflow.ts";
 import { generatePullRequestJson } from "./prAgent.ts";
+import { sourceRequiresEnterprise } from "./sessionEnterprise.ts";
 import { invalidatePullRequestInventorySnapshot } from "./pullRequestInventorySync.ts";
 import { invalidateProjectPullRequests } from "./worktrees/worktreeHosting.ts";
 import { normalizeExplicitPullRequestTitle } from "./pullRequestTitle.ts";
@@ -69,6 +70,7 @@ export interface PrWorkflowOptions {
   sessionManager: unknown;
   sessionKind: AgentType;
   sessionId: string;
+  requiresEnterprise?: boolean;
   args: PrWorkflowArgs;
   commandText: string;
   presenter: PrWorkflowPresenter;
@@ -89,6 +91,8 @@ export interface BeginPullRequestCardInput {
   repoRoot: string;
   sessionKind: AgentType;
   sessionId: string;
+  /** Trusted originating-session requirement captured before caller-side awaits. */
+  requiresEnterprise?: boolean;
   args: PrWorkflowArgs;
   /** Anchors a slash-command or managed-tool card at its owning tool call. */
   sourceToolCallId?: string;
@@ -338,11 +342,19 @@ export async function finalizePullRequestCard(
     onProgress?: (message: string) => void;
     /** Reuse the exact provider already resolved for a checked managed target. */
     provider?: GitHostingProvider;
+    requiresEnterprise?: boolean;
   } = {},
 ): Promise<PullRequestCard> {
   const record = pullRequestCardRecord(cardId);
   if (!record) throw new Error("Pull request card not found.");
   const context = record.context;
+  const helperSource = {
+    sourceSessionId: context.sessionId,
+    requiresEnterprise: sourceRequiresEnterprise(
+      [context.sessionId],
+      context.requiresEnterprise || options.requiresEnterprise,
+    ),
+  };
   patchPullRequestCard(cardId, {
     status: "creating",
     taskCandidates: undefined,
@@ -457,7 +469,11 @@ export async function finalizePullRequestCard(
     ].join("\n");
 
     options.onProgress?.("Drafting pull request…");
-    const agent = await generatePullRequestJson(prompt, getSettings().prAgent);
+    const agent = await generatePullRequestJson(
+      prompt,
+      getSettings().prAgent,
+      helperSource,
+    );
     const title = context.explicitTitle ?? agent.title;
     const body = agent.body.map((part) => part.trim()).filter(Boolean);
 
@@ -554,6 +570,10 @@ export function pullRequestOutcomePrompt(card: PullRequestCard): string {
 export async function beginPullRequestCard(
   input: BeginPullRequestCardInput,
 ): Promise<BeginPullRequestCardResult> {
+  const requiresEnterprise = sourceRequiresEnterprise(
+    [input.sessionId],
+    input.requiresEnterprise,
+  );
   const explicitTitle =
     input.title === undefined
       ? undefined
@@ -586,6 +606,7 @@ export async function beginPullRequestCard(
     repoRoot,
     sessionKind: input.sessionKind,
     sessionId: input.sessionId,
+    requiresEnterprise,
     headBranch,
     baseBranch,
     draft: Boolean(input.args.draft),
@@ -757,6 +778,10 @@ export async function runPrWorkflow(
   options: PrWorkflowOptions,
   operations: PrWorkflowOperations = defaultOperations,
 ): Promise<PrWorkflowResult> {
+  const requiresEnterprise = sourceRequiresEnterprise(
+    [options.sessionId],
+    options.requiresEnterprise,
+  );
   const repoRoot = await resolveRepoRoot(options.cwd ?? CWD);
 
   if (await operations.hasChanges(repoRoot)) {
@@ -770,6 +795,7 @@ export async function runPrWorkflow(
       session: { sessionManager: options.sessionManager } as never,
       sessionKind: options.sessionKind,
       sessionId: options.sessionId,
+      requiresEnterprise,
       cwd: repoRoot,
       force: options.args.forceCommit,
       additionalContext: options.args.additionalContext,
@@ -810,6 +836,7 @@ export async function runPrWorkflow(
     repoRoot,
     sessionKind: options.sessionKind,
     sessionId: options.sessionId,
+    requiresEnterprise,
     args: options.args,
     sourceToolCallId,
     onProgress: (message) => options.presenter.progress(message),

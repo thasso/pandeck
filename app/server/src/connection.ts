@@ -6,6 +6,7 @@ import {
   slashCommandApplies,
   isOrdinarilyCreatableAgentType,
   isClaudeSdkModel,
+  HARNESSES,
   SESSION_MODES,
   projectSummaryOf,
   type AgentType,
@@ -101,7 +102,6 @@ import { harnessRegistry } from "./harnesses/registry.ts";
 import { sessionRefFile } from "./harnesses/storage.ts";
 import {
   pickerModels,
-  piModel,
   piModelForAccount,
   refreshPiModels,
 } from "./harnesses/models.ts";
@@ -154,7 +154,8 @@ import {
   subagentThreadRevisionDigest,
   subagentThreadStateItems,
 } from "./subagentRegistry.ts";
-import { defaultOpenAiProfileId } from "./credentialProfiles.ts";
+import { resolveSessionAccount } from "./sessionAccount.ts";
+import { credentialProfileById } from "./credentialProfiles.ts";
 import { revalidateUsage, usageIndicators } from "./usageCache.ts";
 import {
   broadcastWorkflowRuns,
@@ -1535,17 +1536,18 @@ export class Connection implements Viewer {
       return;
     }
     if (!this.guardFirstSendPersona(msg.agentType, engine.personaGate)) return;
-    const admitted = engine.account(msg);
-    if ("refusal" in admitted) {
-      this.refuseFirstSend(msg, admitted.refusal);
-      return;
-    }
+    const pendingAccount = engine.account(msg);
     // The client is already on this session's surface: the send commits this
     // connection to viewing it, in arrival order — claimed before the FIRST
     // await (the model lookup included), never after one.
     const ticket = this.claimViewRequest(
       engine.takesClientId ? msg.id : undefined,
     );
+    const admitted = await pendingAccount;
+    if ("refusal" in admitted) {
+      this.refuseFirstSend(msg, admitted.refusal);
+      return;
+    }
     const prepared = await engine.prepare(msg, admitted.profileId);
     if ("refusal" in prepared) {
       this.refuseFirstSend(msg, prepared.refusal);
@@ -2704,6 +2706,7 @@ export class Connection implements Viewer {
           thinkingLevel?: ThinkingLevel;
           mode?: SessionMode;
           credentialProfileId?: string;
+          requiresEnterprise?: boolean;
           additionalPrompt?: string;
           attachments?: PromptAttachment[];
         },
@@ -2767,6 +2770,7 @@ export class Connection implements Viewer {
           thinkingLevel?: ThinkingLevel;
           mode?: SessionMode;
           credentialProfileId?: string;
+          requiresEnterprise?: boolean;
           additionalPrompt: string;
           attachments?: PromptAttachment[];
         },
@@ -4146,16 +4150,41 @@ export class Connection implements Viewer {
     // catches up.
     const carried = this.viewedModelSelection();
     let thinkingLevel = carried.thinkingLevel;
-    const credentialProfileId =
-      sessionStore.get(this.viewing?.sessionId ?? "")?.credentialProfileId ??
-      defaultOpenAiProfileId();
+    const parent = sessionStore.getIncludingDeleted(
+      this.viewing?.sessionId ?? "",
+    );
+    const requiresEnterprise = parent?.requiresEnterprise;
+    const selection = selectedModel
+      ? {
+          model: selectedModel,
+          ...(selectedThinkingLevel !== undefined
+            ? { thinkingLevel: selectedThinkingLevel }
+            : {}),
+        }
+      : carried;
     // Committed to viewing the new session: intent order is this arrival,
     // claimed before the FIRST await (the model lookup and the worktree
     // resolution included), never after one.
     const ticket = this.claimViewRequest();
+    const credentialProfileId = await resolveSessionAccount(
+      "openai-codex",
+      {
+        modelProvider: selection.model?.provider,
+        modelId: selection.model?.id,
+        thinkingLevel: selection.thinkingLevel,
+        requiresEnterprise,
+        credentialProfileId:
+          parent?.credentialProfileId &&
+          credentialProfileById(parent.credentialProfileId)?.provider ===
+            "openai-codex"
+            ? parent.credentialProfileId
+            : undefined,
+      },
+      { allowDisabledPin: true },
+    );
     let model = selectedModel
       ? undefined
-      : await this.resolveViewedModel(carried);
+      : await this.resolveViewedModel(carried, credentialProfileId);
     if (selectedModel) {
       const found = await piModelForAccount(
         credentialProfileId,
@@ -4187,6 +4216,7 @@ export class Connection implements Viewer {
         ? { worktree: { id: worktree.id, path: worktree.path } }
         : {}),
       credentialProfileId,
+      requiresEnterprise,
     });
     if (worktree)
       projectStore.setSessionProject(live.sessionId, worktree.projectId);
@@ -4383,6 +4413,7 @@ export class Connection implements Viewer {
     text: string;
     attachTaskId?: string;
     clientRequestId?: string;
+    requiresEnterprise?: boolean;
   }): Promise<
     | {
         worktree: { id: string; path: string; projectId: string };
@@ -4393,6 +4424,7 @@ export class Connection implements Viewer {
   > {
     const projectId = msg.createWorktreeInProjectId?.trim();
     if (!projectId) return null;
+    const requiresEnterprise = msg.requiresEnterprise === true;
     const taskId = msg.attachTaskId?.trim() || undefined;
     const report = (provision: WorktreeProvisionDisplay) => {
       if (msg.clientRequestId)
@@ -4420,6 +4452,7 @@ export class Connection implements Viewer {
       const proposed = await generateWorktreeSuffix(
         this.worktreeNamingContext(taskId, msg.text),
         getSettings().worktrees.namingAgent,
+        { ...(requiresEnterprise ? { requiresEnterprise: true } : {}) },
       );
       const task = taskId ? readTask(taskId) : undefined;
       const name = taskId
@@ -4620,17 +4653,34 @@ export class Connection implements Viewer {
     try {
       const carried = this.viewedModelSelection();
       const thinkingLevel = carried.thinkingLevel;
-      const credentialProfileId = this.viewing
-        ? (sessionStore.get(this.viewing.sessionId)?.credentialProfileId ??
-          defaultOpenAiProfileId())
-        : defaultOpenAiProfileId();
-      const model = await this.resolveViewedModel(carried);
+      const parent = sessionStore.getIncludingDeleted(
+        this.viewing?.sessionId ?? "",
+      );
+      const requiresEnterprise = parent?.requiresEnterprise;
+      const credentialProfileId = await resolveSessionAccount(
+        "openai-codex",
+        {
+          modelProvider: carried.model?.provider,
+          modelId: carried.model?.id,
+          thinkingLevel: carried.thinkingLevel,
+          requiresEnterprise,
+          credentialProfileId:
+            parent?.credentialProfileId &&
+            credentialProfileById(parent.credentialProfileId)?.provider ===
+              "openai-codex"
+              ? parent.credentialProfileId
+              : undefined,
+        },
+        { allowDisabledPin: true },
+      );
+      const model = await this.resolveViewedModel(carried, credentialProfileId);
       const live = await createSession({
         harness: "pi",
         agentType: kind,
         model,
         thinkingLevel,
         credentialProfileId,
+        requiresEnterprise,
         purpose: "draft",
       });
       // Listed before attaching: snapshot and route message leave together
@@ -5534,10 +5584,9 @@ export class Connection implements Viewer {
   private viewedModelSelection(): ViewedModelSelection {
     if (isLiveSession(this.viewing)) {
       const { model, thinkingLevel } = this.viewing.modelSelection();
-      const account = this.viewing.credentialProfileId;
       return {
         ...(model && !isClaudeSdkModel(model)
-          ? { model: { ...model, ...(account ? { account } : {}) } }
+          ? { model: { provider: model.provider, id: model.id } }
           : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       };
@@ -5545,10 +5594,15 @@ export class Connection implements Viewer {
     const meta = this.viewing
       ? sessionStore.get(this.viewing.sessionId)
       : undefined;
+    const provider = meta
+      ? (HARNESSES[meta.harness].modelProvider ?? meta.provider)
+      : undefined;
     return {
-      ...(meta?.provider && meta.model
+      ...(provider &&
+      meta?.model &&
+      !isClaudeSdkModel({ provider, id: meta.model })
         ? {
-            model: { provider: meta.provider, id: meta.model },
+            model: { provider, id: meta.model },
           }
         : {}),
       ...(meta?.thinkingLevel
@@ -5558,19 +5612,18 @@ export class Connection implements Viewer {
   }
 
   /**
-   * The model handle a carried selection names. A resident session's model
-   * resolves on the account that session runs on, the registry its own handle
-   * came from; a model that account no longer offers falls back to the
-   * default, like a stored row's. A stored row's resolves as it always has.
+   * Resolve the carried model on the account chosen for the new session,
+   * never on the source account's or global registry. Missing models retain
+   * the engine's ordinary default-model behavior.
    */
   private async resolveViewedModel(
     selection: ViewedModelSelection,
-  ): Promise<ReturnType<typeof piModel>> {
+    credentialProfileId: string,
+  ): ReturnType<typeof piModelForAccount> {
     const model = selection.model;
-    if (!model) return undefined;
-    return model.account
-      ? piModelForAccount(model.account, model.provider, model.id)
-      : piModel(model.provider, model.id);
+    return model
+      ? piModelForAccount(credentialProfileId, model.provider, model.id)
+      : undefined;
   }
 
   /* --------------------------------- viewer -------------------------------- */
@@ -5623,8 +5676,7 @@ export class Connection implements Viewer {
 
 /** The model a new session should carry from the viewed one, before it resolves. */
 interface ViewedModelSelection {
-  /** `account`: the resident session's account, where its model resolves. */
-  model?: { provider: string; id: string; account?: string };
+  model?: { provider: string; id: string };
   thinkingLevel?: ThinkingLevel;
 }
 

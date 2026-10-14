@@ -1,7 +1,6 @@
 import type { TaskIntakeAgentSettings } from "@assistant/shared";
 import { assistantIntegrationTools } from "./tools/catalog.ts";
 import { runOneShot } from "./harnesses/oneShot.ts";
-import { accountForSlot } from "./settingsModelSlots.ts";
 import type { AgentTool } from "./mcp/tool.ts";
 import { assistantProjectRegistryTools } from "./tools/core/projectRegistryTools.ts";
 import { taskToolsForKind } from "./tools/tasks/taskTools.ts";
@@ -103,7 +102,7 @@ export async function curateTaskIntake(
   const { text } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
-    credentialProfileId: accountForSlot(settings),
+    credentialProfileId: settings.credentialProfileId,
     noModelMessage: "No model is available for Task intake curation.",
     systemPrompt,
     prompt,

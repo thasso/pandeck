@@ -34,12 +34,15 @@ import { memoryScheduler } from "../memory/memoryScheduler.ts";
 import { beginPromptRun } from "./sessionRunLease.ts";
 import { planTurnHintFor } from "./planHint.ts";
 import { sessionSkills } from "../sessionSkills.ts";
+import { sessionStore } from "../db/sessionStore.ts";
+import { credentialProfileById } from "../credentialProfiles.ts";
 
 export interface RuntimePromptDriver {
   readonly id: string;
   readonly key: string;
   readonly sessionId: string;
   readonly harness: Harness;
+  readonly credentialProfileId?: string | undefined;
   readonly agentType: AgentType;
   readonly sessionFile: string | undefined;
   readonly isRunning: boolean;
@@ -162,6 +165,20 @@ function assertSessionWorktreePresent(sessionId: string): void {
   if (missing) throw new Error(WORKTREE_MISSING_BLOCKED_REASON);
 }
 
+/** Current account metadata is checked at admission, never inside an admitted run. */
+export function assertSessionEnterpriseAccount(
+  driver: Pick<RuntimePromptDriver, "sessionId" | "credentialProfileId">,
+): void {
+  const source = sessionStore.getIncludingDeleted(driver.sessionId);
+  if (!source?.requiresEnterprise) return;
+  const profileId = driver.credentialProfileId ?? source.credentialProfileId;
+  const profile = profileId ? credentialProfileById(profileId) : undefined;
+  if (!profile?.enterprise)
+    throw new Error(
+      "This session requires an enterprise account, but its bound account is missing or no longer marked as enterprise.",
+    );
+}
+
 export async function promptRuntimeSession(
   driver: RuntimePromptDriver,
   text: string,
@@ -187,6 +204,7 @@ export async function beginRuntimeProviderTurn(
   try {
     await sessionSkills(driver.sessionId, driver.agentType);
     assertTurnAllowed(driver.sessionId, undefined);
+    assertSessionEnterpriseAccount(driver);
     const live = ensureRuntimeSessionWithRuntime(sessionRuntime, driver);
     // The provider supplied no user message. Stamp its provenance on the next
     // durable assistant entry instead of fabricating a user row.
@@ -213,6 +231,9 @@ export async function promptRuntimeSessionWithRuntime(
   facadeOptions: RuntimePromptFacadeOptions = {},
 ): Promise<void> {
   const { admit, ...options } = facadeOptions;
+  const memorySource = sessionStore.getIncludingDeleted(driver.sessionId);
+  const excludedFromMemoryCapture =
+    !memorySource || memorySource.requiresEnterprise === true;
   // BEFORE the runtime session is ensured and before any append: a refused turn
   // must leave no trace of itself in the session.
   assertSessionWorktreePresent(driver.sessionId);
@@ -239,13 +260,17 @@ export async function promptRuntimeSessionWithRuntime(
     // the runtime session exists or any user entry can be appended.
     await sessionSkills(driver.sessionId, driver.agentType);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
-    // Nothing below awaits before the append.
+    // Nothing below awaits before the append. The enterprise check runs before
+    // `admit`, which must stay the last check: a peer admission reserves its
+    // delivery, and a refusal after that reservation could strand the prompt.
+    assertSessionEnterpriseAccount(driver);
     admit?.();
     return await runPromptWithRuntime(
       runtime,
       driver,
       text,
       withHumanResume(options),
+      excludedFromMemoryCapture,
     );
   } finally {
     releaseAdmission();
@@ -374,6 +399,7 @@ async function runPromptWithRuntime(
   driver: RuntimePromptDriver,
   text: string,
   rawOptions: RuntimePromptFacadeOptions,
+  excludedFromMemoryCapture: boolean,
 ): Promise<void> {
   ensureRuntimeSessionWithRuntime(runtime, driver);
 
@@ -449,6 +475,18 @@ async function runPromptWithRuntime(
     // Selection itself threw: record an explicit failure batch for this turn.
     recordMemoryDeliveryFailure(driver, capturedTurnId);
   }
+
+  // Enterprise sessions do not enter automatic memory capture. Check before
+  // acquiring their transcript, including a source tombstoned during the run.
+  const currentMemorySource = sessionStore.getIncludingDeleted(
+    driver.sessionId,
+  );
+  if (
+    excludedFromMemoryCapture ||
+    !currentMemorySource ||
+    currentMemorySource.requiresEnterprise
+  )
+    return;
 
   // Capture the completed clean assistant response (text blocks only — tool
   // call/result bodies are separate entries and excluded) for observation context.

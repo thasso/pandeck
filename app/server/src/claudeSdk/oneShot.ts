@@ -16,7 +16,7 @@ import { CWD } from "../config.ts";
 import { packagedClaudeSdkOptions } from "../runtimeAssets.ts";
 import {
   claudeProfileEnvironment,
-  defaultClaudeProfileId,
+  DEFAULT_CLAUDE_PROFILE_ID,
 } from "../credentialProfiles.ts";
 import { MCP_SERVER_NAME } from "../mcp/names.ts";
 import {
@@ -119,7 +119,7 @@ function buildOneShotOptions(
     abortController,
     ...packagedClaudeSdkOptions(),
     env: claudeProfileEnvironment(
-      input.credentialProfileId ?? defaultClaudeProfileId(),
+      input.credentialProfileId ?? DEFAULT_CLAUDE_PROFILE_ID,
     ),
     model: claudeSdkModelId(input.modelId),
     systemPrompt: input.systemPrompt,

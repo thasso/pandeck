@@ -43,10 +43,8 @@ import {
   type TaskItem,
   type WorkflowRunStartPhase,
 } from "@assistant/shared";
-import {
-  automaticProfileIdFor,
-  enabledCredentialProfileById,
-} from "../credentialProfiles.ts";
+import { enabledCredentialProfileById } from "../credentialProfiles.ts";
+import { pickAccount } from "../accountRouter.ts";
 import {
   attachRunWorktree,
   createRun,
@@ -396,8 +394,18 @@ async function resolveRoleConfig(
     );
 
   const family = accountProviderForModelProvider(provider);
-  const requestedProfileId = config.credentialProfileId?.trim();
-  const profileId = requestedProfileId ?? automaticProfileIdFor(family);
+  let profileId = config.credentialProfileId?.trim();
+  if (!profileId) {
+    const picked = await pickAccount({
+      model: { provider, modelId },
+      thinkingLevel: config.thinkingLevel,
+    });
+    profileId = picked.profileId ?? undefined;
+    if (!profileId)
+      throw new Error(
+        `The ${role} role needs an enabled account that offers ${provider}:${modelId}.`,
+      );
+  }
   const profile = enabledCredentialProfileById(profileId);
   if (!profile)
     throw new Error(

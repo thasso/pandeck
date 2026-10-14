@@ -459,6 +459,7 @@ function accountEntry(profile: CredentialProfileSummary) {
     name: profile.name,
     provider: profile.provider,
     enabled: profile.enabled,
+    enterprise: profile.enterprise,
     status: profile.status,
     // The raw login error is the provider's text and may quote a device code,
     // a verification link or a token; it stays on the Settings page.
@@ -471,9 +472,6 @@ function accountEntry(profile: CredentialProfileSummary) {
       ? {
           pinnedBy: usage.pinnedSlots.map((slot) => slot.key),
           boundSessions: usage.boundSessionCount,
-          ...(usage.automaticForProvider
-            ? { automaticFor: usage.automaticForProvider }
-            : {}),
         }
       : {}),
   };

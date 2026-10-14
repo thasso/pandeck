@@ -298,6 +298,24 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     kind: "json",
     shape: 'array of model keys ("provider:modelId"); unlisted models follow',
   }),
+  setting(
+    "accountRouting.fiveHourUsedThreshold",
+    "models",
+    "Automatic account 5-hour usage threshold",
+    { kind: "number", min: 0, max: 100 },
+    {
+      hint: "Prefer accounts using less than this percentage of the 5-hour cap.",
+    },
+  ),
+  setting(
+    "accountRouting.weeklyUsedThreshold",
+    "models",
+    "Automatic account weekly usage threshold",
+    { kind: "number", min: 0, max: 100 },
+    {
+      hint: "Prefer accounts using less than this percentage of the weekly cap.",
+    },
+  ),
   setting("claudeSdk.enabled", "claude-sdk", "Claude SDK harness", BOOLEAN),
   setting(
     "openAiCompatible.enabled",

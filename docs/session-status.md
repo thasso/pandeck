@@ -74,6 +74,13 @@ the model repeats something the patterns missed. The log is read as untyped JSON
 lines, the way `session_read` reads it, and other sessions' latest replies come
 from the tail of their logs only.
 
+The digest returns its prompt together with the ids of every session transcript
+it read, including Task-worker outcomes and spawn, fork and peer-session tails.
+The status run passes all these ids to `runOneShot`. Any enterprise-required
+source constrains the whole helper to enterprise accounts, even when the root
+session is ordinary. Retained tombstones preserve this requirement; missing
+source metadata fails closed. See [Account routing](account-routing.md).
+
 ## Refreshing
 
 - `GET /api/session-status?sessionId=…` answers the last card and whether a

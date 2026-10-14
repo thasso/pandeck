@@ -6,7 +6,10 @@
  */
 import type { WorktreeNamingSettings } from "@assistant/shared";
 import { runOneShot } from "../harnesses/oneShot.ts";
-import { accountForSlot } from "../settingsModelSlots.ts";
+import {
+  sourceRequiresEnterprise,
+  type HelperSourceContext,
+} from "../sessionEnterprise.ts";
 import { taskNamingReference, type TaskNamingSource } from "../taskNaming.ts";
 
 const NAMING_SYSTEM_PROMPT = `You name git branches for isolated work checkouts (git worktrees).
@@ -74,7 +77,15 @@ export function fallbackWorktreeSuffix(): string {
 export async function generateWorktreeSuffix(
   context: string,
   settings: WorktreeNamingSettings,
+  source: HelperSourceContext = {},
 ): Promise<string> {
+  const sourceSessionIds = source.sourceSessionId
+    ? [source.sourceSessionId]
+    : [];
+  const requiresEnterprise = sourceRequiresEnterprise(
+    sourceSessionIds,
+    source.requiresEnterprise,
+  );
   const userPrompt = context.trim()
     ? `Context for the work this checkout is for:\n<<<\n${context.trim().slice(0, 4000)}\n>>>\n\nReturn the identifier only.`
     : "No context available. Invent one short memorable word. Return the identifier only.";
@@ -83,7 +94,9 @@ export async function generateWorktreeSuffix(
     const { text } = await runOneShot({
       model: settings,
       thinkingLevel: settings.thinkingLevel,
-      credentialProfileId: accountForSlot(settings),
+      credentialProfileId: settings.credentialProfileId,
+      requiresEnterprise,
+      sourceSessionIds,
       noModelMessage: "No model is available for worktree naming.",
       systemPrompt: NAMING_SYSTEM_PROMPT,
       prompt: userPrompt,

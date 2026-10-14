@@ -10,8 +10,8 @@ only binding rules; everything else lives here.
 
 ## Contracts
 
-- `account-routing.md` — per-account health, login evidence, persistence and
-  app-wide login alerts; upcoming picker, benching and live-switch contracts.
+- `account-routing.md` — account health, login alerts, enterprise constraints,
+  automatic selection and one-shot retry; upcoming benching and live switching.
 - `tasks.md` — what a Task is and the boundary between the user's durable Task
   and agent execution state: where a piece of work belongs (Task, description,
   comment, Workflow Run, or nowhere), who owns status, why a subtask's project

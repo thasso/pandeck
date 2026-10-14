@@ -165,6 +165,7 @@ import type {
   ClaudeSdkRecordMeta,
   ClaudeSdkUsageRecord,
 } from "./claudeSdkRecords.ts";
+import { sessionStore } from "../db/sessionStore.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
 import {
@@ -1017,6 +1018,9 @@ export class ClaudeSdkSession implements LiveSession {
     const activeSkillsValue = activeSkillsForSession(this.id, this.agentType);
     const agentValue = sessionAgentSummary(this.id);
     const worktreeIdValue = this.safeWorktreeId();
+    const requiresEnterprise = sessionStore.getIncludingDeleted(
+      this.id,
+    )?.requiresEnterprise;
     return {
       sessionId: this.id,
       ...(this.sessionFile !== undefined
@@ -1027,6 +1031,7 @@ export class ClaudeSdkSession implements LiveSession {
       model: this.modelOption(),
       thinkingLevel: this.thinkingLevel,
       mode: this.mode,
+      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       canSteer: this.canSteer,
       ...(this.forkOrigin ? { forkOrigin: this.forkOrigin } : {}),
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),

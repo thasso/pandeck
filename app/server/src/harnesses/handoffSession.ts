@@ -10,11 +10,7 @@ import type {
   SessionMode,
   ThinkingLevel,
 } from "@assistant/shared";
-import {
-  defaultClaudeProfileId,
-  defaultOpenAiProfileId,
-  enabledCredentialProfileById,
-} from "../credentialProfiles.ts";
+import { resolveSessionAccount } from "../sessionAccount.ts";
 import type { LiveSession } from "../harness.ts";
 import { getSettings } from "../settings.ts";
 import { createSession, type PiModel } from "./create.ts";
@@ -24,6 +20,7 @@ import { piModelForAccount } from "./models.ts";
 interface HandoffTarget {
   agentType: AgentType;
   credentialProfileId?: string | undefined;
+  requiresEnterprise?: boolean | undefined;
   modelProvider?: string | undefined;
   modelId?: string | undefined;
   thinkingLevel?: ThinkingLevel | undefined;
@@ -53,9 +50,7 @@ const engines: Record<Harness, HandoffEngine> = {
     async create(target, worktree) {
       if (!getSettings().claudeSdk.enabled)
         throw new Error("Claude SDK sessions are disabled.");
-      const profileId = target.credentialProfileId ?? defaultClaudeProfileId();
-      if (enabledCredentialProfileById(profileId)?.provider !== "claude")
-        throw new Error("Select an enabled Claude credential profile.");
+      const profileId = await resolveSessionAccount("claude", target);
       return createSession({
         harness: "claude-sdk",
         agentType: target.agentType,
@@ -64,15 +59,16 @@ const engines: Record<Harness, HandoffEngine> = {
         mode: target.mode,
         worktree,
         credentialProfileId: profileId,
+        ...(target.requiresEnterprise !== undefined
+          ? { requiresEnterprise: target.requiresEnterprise }
+          : {}),
       });
     },
   },
   pi: {
     guardsPersona: true,
     async create(target, worktree) {
-      const profileId = target.credentialProfileId ?? defaultOpenAiProfileId();
-      if (enabledCredentialProfileById(profileId)?.provider !== "openai-codex")
-        throw new Error("Select an enabled OpenAI credential profile.");
+      const profileId = await resolveSessionAccount("openai-codex", target);
       let model: PiModel | undefined;
       if (target.modelProvider && target.modelId) {
         model =
@@ -94,6 +90,9 @@ const engines: Record<Harness, HandoffEngine> = {
         mode: target.mode,
         worktree,
         credentialProfileId: profileId,
+        ...(target.requiresEnterprise !== undefined
+          ? { requiresEnterprise: target.requiresEnterprise }
+          : {}),
       });
     },
   },

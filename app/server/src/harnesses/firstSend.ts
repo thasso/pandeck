@@ -11,6 +11,7 @@
 import {
   harnessForModelProvider,
   type ClientMessage,
+  type CredentialProfileProvider,
   type Harness,
   type TaskSessionRef,
 } from "@assistant/shared";
@@ -21,10 +22,7 @@ import {
   resolveAgentSpawn,
   type AgentSpawnRuntime,
 } from "../agents/agentSpawn.ts";
-import {
-  defaultOpenAiProfileId,
-  enabledCredentialProfileById,
-} from "../credentialProfiles.ts";
+import { resolveSessionAccount } from "../sessionAccount.ts";
 import type { LiveSession } from "../harness.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
 import type { SessionPromptEvidence } from "../promptConditions.ts";
@@ -83,9 +81,7 @@ interface FirstSendEngine {
   /** Whether the send's id may be the session's; asked before the persona. */
   admitId(req: FirstSendRequest): FirstSendRefusal | undefined;
   /** The account the session runs on, or why the send names none it may use. */
-  account(
-    req: FirstSendRequest,
-  ): { refusal: FirstSendRefusal } | { profileId: string };
+  account(req: FirstSendRequest): Promise<AccountAdmission>;
   /** What has to be resolved before a worktree can be provisioned for it. */
   prepare(
     req: FirstSendRequest,
@@ -153,7 +149,10 @@ async function resolveFirstSendAgent(
   if (req.agent === undefined) return {};
   let agent: AgentSpawnRuntime;
   try {
-    agent = await resolveAgentSpawn(req.agent, undefined, { profileId });
+    agent = await resolveAgentSpawn(req.agent, undefined, {
+      profileId,
+      requiresEnterprise: req.requiresEnterprise === true,
+    });
   } catch (error) {
     if (error instanceof AgentSpawnRefusedError)
       return { refusal: { message: error.message } };
@@ -167,12 +166,8 @@ async function resolveFirstSendAgent(
         message: `Agent "${agent.agent.name}" runs as the ${agent.agent.persona} persona, not ${req.agentType}. It is no longer picked: send again for a plain ${req.agentType} session, or pick it on a new session.`,
       },
     };
-  if (harnessForModelProvider(agent.provider) !== req.harness)
-    return {
-      refusal: {
-        message: `Agent "${agent.agent.name}" runs on ${agent.provider}/${agent.modelId}, which this engine does not run.`,
-      },
-    };
+  const harnessRefusal = agentHarnessRefusal(req.harness, agent);
+  if (harnessRefusal) return { refusal: harnessRefusal };
   // The pickers showed the definition's runtime when it was picked. If the
   // definition changed since, running its new one would differ from what the
   // user saw; say so instead of running it silently.
@@ -185,6 +180,61 @@ async function resolveFirstSendAgent(
       },
     };
   return { agent };
+}
+
+function agentHarnessRefusal(
+  harness: Harness,
+  agent: AgentSpawnRuntime,
+): FirstSendRefusal | undefined {
+  return harnessForModelProvider(agent.provider) === harness
+    ? undefined
+    : {
+        message: `Agent "${agent.agent.name}" runs on ${agent.provider}/${agent.modelId}, which this engine does not run.`,
+      };
+}
+
+type AccountAdmission = { refusal: FirstSendRefusal } | { profileId: string };
+
+async function firstSendAccount(
+  req: FirstSendRequest,
+  provider: CredentialProfileProvider,
+): Promise<AccountAdmission> {
+  try {
+    // A named definition fixes the model and effort before Automatic chooses
+    // an account, even when a client omits those optional preview fields.
+    const agent =
+      req.agent !== undefined && req.credentialProfileId === undefined
+        ? await resolveAgentSpawn(req.agent, undefined, {
+            requiresEnterprise: req.requiresEnterprise === true,
+          })
+        : undefined;
+    const harnessRefusal = agent
+      ? agentHarnessRefusal(req.harness, agent)
+      : undefined;
+    if (harnessRefusal) return { refusal: harnessRefusal };
+    return {
+      profileId: await resolveSessionAccount(
+        provider,
+        agent
+          ? {
+              ...req,
+              credentialProfileId: agent.credentialProfileId,
+              modelProvider: agent.provider,
+              modelId: agent.modelId,
+              thinkingLevel: agent.thinkingLevel,
+            }
+          : req,
+      ),
+    };
+  } catch (error) {
+    if (req.agent !== undefined)
+      void publishAgentLibrary().catch(() => undefined);
+    return {
+      refusal: {
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
 }
 
 /** A Claude send names its id, so one another engine holds is refused. */
@@ -205,16 +255,7 @@ const engines: Record<Harness, FirstSendEngine> = {
     personaGate: "available",
     disabled: () => false,
     admitId: () => undefined,
-    account(req) {
-      const profileId = req.credentialProfileId ?? defaultOpenAiProfileId();
-      if (enabledCredentialProfileById(profileId)?.provider !== "openai-codex")
-        return {
-          refusal: {
-            message: "Select an OpenAI credential profile for this pi session.",
-          },
-        };
-      return { profileId };
-    },
+    account: (req) => firstSendAccount(req, "openai-codex"),
     async prepare(req, profileId) {
       const started = await firstSendAgent(req, profileId);
       if ("refusal" in started) return started;
@@ -245,6 +286,7 @@ const engines: Record<Harness, FirstSendEngine> = {
           mode: req.mode,
           ...(worktree ? { worktree } : {}),
           credentialProfileId: profileId,
+          requiresEnterprise: req.requiresEnterprise,
           promptEvidence: evidence,
         });
         return {
@@ -268,19 +310,7 @@ const engines: Record<Harness, FirstSendEngine> = {
     disabled: () => !getSettings().claudeSdk.enabled,
     // Before anything is written for the client-supplied id.
     admitId: (req) => claudeOwnershipRefusal(req.id),
-    account(req) {
-      const profileId = req.credentialProfileId?.trim();
-      if (
-        !profileId ||
-        enabledCredentialProfileById(profileId)?.provider !== "claude"
-      )
-        return {
-          refusal: {
-            message: "Select a Claude credential profile for this session.",
-          },
-        };
-      return { profileId };
-    },
+    account: (req) => firstSendAccount(req, "claude"),
     async prepare(req, profileId) {
       const started = await firstSendAgent(req, profileId);
       if ("refusal" in started) return started;
@@ -302,6 +332,7 @@ const engines: Record<Harness, FirstSendEngine> = {
             mode: req.mode,
             ...(worktree ? { worktree } : {}),
             credentialProfileId: profileId,
+            requiresEnterprise: req.requiresEnterprise,
             promptEvidence: evidence,
           });
         } catch (err) {

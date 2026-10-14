@@ -78,5 +78,6 @@
   "0077_delegation_failure_notices.sql": "35464f33efa043b72e63e8e41a1d6fc0d91c5a99fd1780fea1aafeef321c247a",
   "0078_worktree_creator_backfill.sql": "c0b0d7aa3ecf74f75759df7415cbbc3431c834fe3932eb1c8537ec8fbdbab0b4",
   "0079_session_agent.sql": "76bef4a316c06a80c022c73ab3bf0c919235a903a071e5b06a61efcbe791e666",
-  "0080_peer_prompt_reservation.sql": "f8427abaf418abc41587d3505c385abf2544a59b81a12e1e92b0fb535a055f9b"
+  "0080_peer_prompt_reservation.sql": "f8427abaf418abc41587d3505c385abf2544a59b81a12e1e92b0fb535a055f9b",
+  "0081_session_requires_enterprise.sql": "217dd734db872bdda312faa00b7839057a0d7bd037382fa13ec5c25a6522b5b3"
 }

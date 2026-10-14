@@ -18,6 +18,7 @@ import {
 } from "../agents/sessionAgent.ts";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { credentialProfileById } from "../credentialProfiles.ts";
 import { linkSessionToWorktree } from "../db/worktreeStore.ts";
 import type { LiveSession } from "../harness.ts";
 import { piStore } from "../piSdk/piStore.ts";
@@ -117,6 +118,8 @@ type SessionStart = SessionPlace & {
   thinkingLevel?: ThinkingLevel | undefined;
   mode?: SessionMode | undefined;
   credentialProfileId: string;
+  /** Only enterprise accounts may run this session; omitted means unrestricted. */
+  requiresEnterprise?: boolean | undefined;
   /** Session-start evidence its prompt conditions freeze (Task 287). */
   promptEvidence?: SessionPromptEvidence | undefined;
   /** The title it starts with; a titled session is never auto-named. */
@@ -163,6 +166,7 @@ export type NewSession =
  * frozen before its first query.
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
+  assertEnterpriseProfile(spec);
   // Resolved here for both engines alike: Claude's store would read a
   // pathless worktree from its edge, but pi's `acquireNew` never looks.
   const cwd = spec.worktree
@@ -179,6 +183,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       undefined,
       spec.agent?.skills,
     );
+    assertEnterpriseProfile(spec);
     const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
       onDisk: spec.id !== undefined,
     });
@@ -204,6 +209,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     const session = claudeSdkStore.acquire(id, {
       agentType: spec.agentType,
       credentialProfileId: spec.credentialProfileId,
+      ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
       ...(spec.modelId !== undefined ? { modelId: spec.modelId } : {}),
       ...(spec.thinkingLevel !== undefined
         ? { thinkingLevel: spec.thinkingLevel }
@@ -212,6 +218,14 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       ...(spec.additionalSystemPrompt !== undefined
         ? { additionalSystemPrompt: spec.additionalSystemPrompt }
         : {}),
+      ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
+    });
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: spec.agentType,
+      credentialProfileId: spec.credentialProfileId,
+      ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
       ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
     });
     // Before the first prompt: `setTitle` also marks auto-naming done.
@@ -227,6 +241,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     {
       ...(cwd !== undefined ? { cwd } : {}),
       credentialProfileId: spec.credentialProfileId,
+      ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
       // pi builds the system prompt inside creation, so the session-start
       // evidence arrives with it.
       ...(spec.promptEvidence !== undefined
@@ -242,6 +257,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     harness: "pi",
     agentType: spec.agentType,
     credentialProfileId: spec.credentialProfileId,
+    ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
     mode: live.sessionMode,
     ...(spec.purpose !== undefined ? { purpose: spec.purpose } : {}),
   });
@@ -251,6 +267,17 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
   // A stored title keeps the first prompt from auto-naming it.
   if (spec.title !== undefined) live.rename(spec.title);
   return live;
+}
+
+function assertEnterpriseProfile(spec: NewSession): void {
+  if (
+    spec.requiresEnterprise &&
+    !credentialProfileById(spec.credentialProfileId)?.enterprise
+  ) {
+    throw new Error(
+      "This session requires an enterprise account. Select an account marked as enterprise.",
+    );
+  }
 }
 
 function linkWorktree(sessionId: string, worktreeId: string | undefined): void {

@@ -202,9 +202,10 @@ function day(value: string | undefined): string | undefined {
 
 /* ---------------------------------- log ---------------------------------- */
 
-function readLogRows(sessionId: string): Json[] {
+function readLogRows(sessionId: string, sourceSessionIds: Set<string>): Json[] {
   const path = canonicalSessionLogPath(sessionId);
   if (!existsSync(path)) return [];
+  sourceSessionIds.add(sessionId);
   const rows: Json[] = [];
   forEachJsonlLine(path, 0, (line) => {
     try {
@@ -219,9 +220,14 @@ function readLogRows(sessionId: string): Json[] {
 }
 
 /** The newest assistant replies of another session, read from its log tail. */
-function latestReplies(sessionId: string, count: number): string[] {
+function latestReplies(
+  sessionId: string,
+  count: number,
+  sourceSessionIds: Set<string>,
+): string[] {
   const path = canonicalSessionLogPath(sessionId);
   if (!existsSync(path)) return [];
+  sourceSessionIds.add(sessionId);
   const records = readSessionTailWithin(
     path,
     TAIL_BYTES,
@@ -572,7 +578,10 @@ function taskSessions(taskId: number, exclude: string): SessionMeta[] {
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 
-function createdTaskLines(sessionId: string): string[] {
+function createdTaskLines(
+  sessionId: string,
+  sourceSessionIds: Set<string>,
+): string[] {
   const ids = sessionStatusSources.tasksCreatedBy(sessionId);
   if (ids.length === 0) return [];
   const out = [
@@ -594,7 +603,9 @@ function createdTaskLines(sessionId: string): string[] {
       (best, meta) => (!best || meta.updatedAt > best.updatedAt ? meta : best),
       undefined,
     );
-    const latest = newest ? latestReplies(newest.id, 1)[0] : undefined;
+    const latest = newest
+      ? latestReplies(newest.id, 1, sourceSessionIds)[0]
+      : undefined;
     if (newest && latest)
       out.push(
         `  - Latest outcome, from “${newest.title}”: ${oneLine(latest, 500)}`,
@@ -639,7 +650,11 @@ interface Related {
  * (`peerPromptStore.outstandingRepliesBySender`), the one the session list
  * shows, so a helper whose report arrived another way is not flagged.
  */
-function relatedSessionLines(meta: SessionMeta, now: number): string[] {
+function relatedSessionLines(
+  meta: SessionMeta,
+  now: number,
+  sourceSessionIds: Set<string>,
+): string[] {
   const related = new Map<string, Related>();
   const entry = (id: string): Related => {
     let value = related.get(id);
@@ -683,7 +698,7 @@ function relatedSessionLines(meta: SessionMeta, now: number): string[] {
     // A session still moving after this one went quiet is where the current
     // state lives: show more of it.
     const active = other.updatedAt > meta.updatedAt || owes.length > 0;
-    const replies = latestReplies(other.id, active ? 2 : 1);
+    const replies = latestReplies(other.id, active ? 2 : 1, sourceSessionIds);
     for (const reply of replies)
       out.push(
         `  - ${active ? "Recent reply" : "Its last reply"}: ${oneLine(reply, active ? 500 : 140)}`,
@@ -697,6 +712,7 @@ function headerLines(
   rows: Json[],
   runs: Run[],
   now: number,
+  sourceSessionIds: Set<string>,
 ): string[] {
   const out = [
     `# Session digest: ${meta.title}`,
@@ -726,9 +742,9 @@ function headerLines(
       ),
     );
   out.push(
-    ...createdTaskLines(meta.id),
+    ...createdTaskLines(meta.id, sourceSessionIds),
     ...relatedPrLines(meta.id),
-    ...relatedSessionLines(meta, now),
+    ...relatedSessionLines(meta, now, sourceSessionIds),
   );
   return out;
 }
@@ -737,19 +753,24 @@ function headerLines(
 
 /**
  * The digest for one session. `meta` must be a live user session; the caller
- * resolves it.
+ * resolves it. Provenance records every transcript read, including header tails,
+ * so the account requirement covers the whole prompt rather than only its root.
  */
 export function buildSessionDigest(
   meta: SessionMeta,
   now = Date.now(),
-): string {
-  const rows = readLogRows(meta.id);
+): { prompt: string; sourceSessionIds: string[] } {
+  const sourceSessionIds = new Set<string>();
+  const rows = readLogRows(meta.id, sourceSessionIds);
   const runs = buildRuns(rows);
   const header = redactCredentials(
-    headerLines(meta, rows, runs, now).join("\n"),
+    headerLines(meta, rows, runs, now, sourceSessionIds).join("\n"),
   );
   const timeline = redactCredentials(
     fittedTimeline(runs, TIMELINE_BUDGET_CHARS),
   );
-  return `${header}\n${timeline}\n\n${DIGEST_END_MARKER}\n`;
+  return {
+    prompt: `${header}\n${timeline}\n\n${DIGEST_END_MARKER}\n`,
+    sourceSessionIds: [...sourceSessionIds],
+  };
 }
