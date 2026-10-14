@@ -5,7 +5,6 @@
  * run as. Nothing here falls back: a definition whose model no longer
  * resolves, or whose account does not offer it, refuses the spawn.
  */
-import { Buffer } from "node:buffer";
 import {
   HARNESSES,
   harnessForModelProvider,
@@ -156,7 +155,9 @@ export async function resolveAgentSpawn(
     );
   const { thinkingLevel } = runtime;
   const accountName = sources.accountName(credentialProfileId);
-  const blob = await library.gitBlobIdOf(Buffer.from(read.source, "utf8"));
+  // The bytes on disk, not the decoded text: decoding drops a BOM and bad
+  // UTF-8, and the id has to name the repository's own blob.
+  const blob = await library.gitBlobIdOf(read.raw);
   return {
     agent: {
       name: manifest.name,

@@ -703,6 +703,25 @@ describe("agent tool races and pins", () => {
     assert.doesNotMatch(now, /careful test reviewer/);
   });
 
+  test("the manifest is refused under any case, as a case-insensitive filesystem opens it", async () => {
+    await createApproved();
+    const before = readFileSync(manifest(), "utf8");
+    for (const path of ["agent.md", "Agent.MD"]) {
+      await assert.rejects(
+        tool("agent_manage_files").execute(
+          {
+            name: "test-reviewer",
+            operations: [{ op: "write", path, content: "model: opus\n" }],
+            reason: "Sneak a model change",
+          },
+          ctx(),
+        ),
+        /is the agent manifest/,
+      );
+    }
+    assert.equal(readFileSync(manifest(), "utf8"), before);
+  });
+
   test("a hard link made while the locked check awaits is refused before anything is rewritten", async () => {
     await createApproved();
     const before = readFileSync(manifest(), "utf8");

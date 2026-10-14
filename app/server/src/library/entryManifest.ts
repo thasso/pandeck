@@ -404,7 +404,13 @@ export async function readManifestHandle(
   handle: FileHandle,
   size: number,
   cap: number = MAX_ENTRY_BODY_BYTES,
-): Promise<{ source: string; bytes: number; truncated: boolean }> {
+): Promise<{
+  source: string;
+  /** The bytes read, exactly as on disk: decoding drops a BOM and bad UTF-8. */
+  raw: Uint8Array;
+  bytes: number;
+  truncated: boolean;
+}> {
   const limit = Math.min(size, cap);
   const buffer = Buffer.alloc(limit);
   let position = 0;
@@ -418,10 +424,10 @@ export async function readManifestHandle(
     if (bytesRead === 0) break;
     position += bytesRead;
   }
+  const raw = buffer.subarray(0, position);
   return {
-    source: new TextDecoder("utf-8").decode(buffer.subarray(0, position), {
-      stream: true,
-    }),
+    source: new TextDecoder("utf-8").decode(raw, { stream: true }),
+    raw,
     bytes: size,
     truncated: size > cap,
   };

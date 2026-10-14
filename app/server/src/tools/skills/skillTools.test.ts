@@ -373,8 +373,12 @@ describe("skill tools: mutations", () => {
     });
     assert.equal(renamed.previousName, "release-notes");
     assert.equal(renamed.skill.name, "changelog-notes");
-    assert.equal(renamed.consequences.length, 2);
+    assert.equal(renamed.consequences.length, 3);
     assert.match(renamed.consequences.join(" "), /defaults to off/);
+    assert.match(
+      renamed.consequences.join(" "),
+      /Agent definitions whose skills list "release-notes" cannot be spawned/,
+    );
 
     const deleted = await call("skill_delete", {
       name: "changelog-notes",
@@ -382,6 +386,10 @@ describe("skill tools: mutations", () => {
     });
     assert.equal(deleted.deletedName, "changelog-notes");
     assert.match(deleted.consequences.join(" "), /Git history/);
+    assert.match(
+      deleted.consequences.join(" "),
+      /Agent definitions whose skills/,
+    );
     assert.deepEqual((await call("skill_list")).skills, []);
   });
 

@@ -207,3 +207,27 @@ test("the frozen blob id is the library repository's own, SHA-256 included", asy
   assert.equal(agent.blob.length, 64);
   assert.equal(agent.blob, hashObject("test-reviewer"));
 });
+
+test("the frozen blob id names the bytes on disk, a BOM or invalid UTF-8 included", async () => {
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const invalid = Buffer.from([0xff, 0xfe, 0x0a]);
+  const files = {
+    "with-bom": Buffer.concat([
+      bom,
+      Buffer.from(reviewer({ name: "with-bom" })),
+    ]),
+    "bad-utf8": Buffer.concat([
+      Buffer.from(reviewer({ name: "bad-utf8" })),
+      invalid,
+    ]),
+  };
+  for (const [name, bytes] of Object.entries(files)) {
+    mkdirSync(join(root, name), { recursive: true });
+    writeFileSync(join(root, name, "AGENT.md"), bytes);
+  }
+  // Both still parse; only the decoded text differs from the file.
+  for (const name of Object.keys(files)) {
+    const { agent } = await resolveAgentSpawn(name);
+    assert.equal(agent.blob, hashObject(name), name);
+  }
+});

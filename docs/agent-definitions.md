@@ -205,7 +205,9 @@ approval card (`docs/approvals.md`):
   in place. A direct edit does not re-resolve the model, so a definition whose
   account went away can still have its instructions fixed.
 - Rename, delete and supporting files never change what a definition runs on and
-  commit directly; `AGENT.md` itself is refused by `agent_manage_files`.
+  commit directly; `AGENT.md` itself is refused by `agent_manage_files` under
+  any case, since a case-insensitive filesystem opens `agent.md` as the
+  manifest.
 
 ## Spawning by name
 
@@ -237,15 +239,15 @@ changed fails it too, since the row was checked for the old persona.
 ### What a spawn freezes
 
 The second read is frozen in the insert-only `session_agent` table (migration
-`0079_session_agent.sql`): name, the `AGENT.md` git blob id (in the library
-repository's own object format, SHA-1 or SHA-256), persona, provider, model, the
-concrete version a definition pinned (`claude-opus-5-5` rather than `opus`),
-effective effort, deny list, the definition's own skills, and the body text.
-Like `session_skills`, the first insert wins for the session's life, a fork
-copies the parent's row, and resumes read the row rather than the library.
-Editing or deleting a definition affects new spawns only. A row that does not
-parse fails closed: the session refuses to run rather than run without its role
-and its denied tools.
+`0079_session_agent.sql`): name, the `AGENT.md` git blob id (of the bytes on
+disk, in the library repository's own object format, SHA-1 or SHA-256), persona,
+provider, model, the concrete version a definition pinned (`claude-opus-5-5`
+rather than `opus`), effective effort, deny list, the definition's own skills,
+and the body text. Like `session_skills`, the first insert wins for the
+session's life, a fork copies the parent's row, and resumes read the row rather
+than the library. Editing or deleting a definition affects new spawns only. A
+row that does not parse fails closed: the session refuses to run rather than run
+without its role and its denied tools.
 
 The session runs the model it was spawned on, never one a harness picks:
 

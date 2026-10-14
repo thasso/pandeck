@@ -64,6 +64,7 @@ export const skillLibraryTools: AgentTool[] = libraryTools({
     consequences: (previousName, newName) => [
       `Sessions that froze "${previousName}" keep that name and can no longer materialize it.`,
       `The stored on/off entry for "${previousName}" is kept as the user's decision; "${newName}" defaults to off until the user enables it.`,
+      `Agent definitions whose skills list "${previousName}" cannot be spawned until they are edited to name "${newName}".`,
     ],
   },
   delete: {
@@ -72,6 +73,7 @@ export const skillLibraryTools: AgentTool[] = libraryTools({
     consequences: (name) => [
       "The folder is recoverable only from the library's Git history.",
       `Frozen sessions and the stored on/off entry for "${name}" are not rewritten.`,
+      `Agent definitions whose skills list "${name}" cannot be spawned until it is removed from them.`,
     ],
   },
 });

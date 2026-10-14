@@ -175,6 +175,8 @@ export interface EntrySourceRead {
   path: string;
   /** Complete manifest source INCLUDING frontmatter, bounded. */
   source: string;
+  /** The bytes `source` was decoded from, exactly as on disk. */
+  raw: Uint8Array;
   bytes: number;
   truncated: boolean;
   files: EntryFileTree;
@@ -251,6 +253,7 @@ export async function resolveEntrySource(
             folder: target.folder,
             path: target.path,
             source: read.source,
+            raw: read.raw,
             bytes: read.bytes,
             truncated: read.truncated,
             files: await buildEntryFileTree(kind, source.folder),
@@ -1370,7 +1373,10 @@ function normalizeSupportingFilePath(kind: LibraryKind, input: string): string {
     );
   }
   const path = components.join("/");
-  if (path === kind.manifestFile) {
+  // Case-blind: on a case-insensitive filesystem (macOS) `agent.md` IS the
+  // manifest, one inode with one link, and writing it would skip the checks
+  // and approval a manifest change goes through.
+  if (path.toLowerCase() === kind.manifestFile.toLowerCase()) {
     throw new EntryValidationError(
       `${kind.manifestFile} is the ${kind.noun} manifest; create or edit it with the ${kind.noun} create/edit tools instead.`,
     );
