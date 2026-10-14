@@ -1705,6 +1705,9 @@ test('operation "agents" is bounded like agent_list, with the true total', () =>
   expect(text).not.toContain("agent-200:");
   expect(text).toContain("60 more not listed");
   expect(text).not.toContain("reason 0");
+  // A cut reason points where the whole one is; agent_get has none.
+  expect(text).toContain("spawning it refuses with the whole reason");
+  expect(text).not.toContain("agent_get");
   expect(text.length).toBeLessThan(200 * 400);
 });
 

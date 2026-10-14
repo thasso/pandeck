@@ -19,7 +19,7 @@
  * `name` is the whole address. A caller cannot pass a path, and a name that
  * could never be declared is refused before any scan: the request is malformed
  * rather than unlucky, and saying so keeps 404 meaning "the library does not
- * have this skill".
+ * have this entry".
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname } from "node:path";

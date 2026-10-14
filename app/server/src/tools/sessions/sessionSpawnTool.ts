@@ -239,10 +239,10 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
   const shown = agents.slice(0, MAX_LISTED_ENTRIES);
   const lines = shown.map((agent) => {
     if ("problem" in agent)
-      return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem)}`;
+      return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem, "spawning it refuses with the whole reason")}`;
     const { runtime } = agent;
     return [
-      `- ${agent.name}: ${clip(agent.description)}`,
+      `- ${agent.name}: ${clip(agent.description, "agent_get reads it whole")}`,
       `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
         runtime.agent.pinnedModel
           ? ` (pinned ${runtime.agent.pinnedModel})`
@@ -264,9 +264,10 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
   ].join("\n");
 }
 
-function clip(text: string): string {
+/** `text`, cut with a pointer to where the rest is. */
+function clip(text: string, whereWhole: string): string {
   return text.length > MAX_LISTED_DESCRIPTION_CHARS
-    ? `${text.slice(0, MAX_LISTED_DESCRIPTION_CHARS)}… (agent_get reads it whole)`
+    ? `${text.slice(0, MAX_LISTED_DESCRIPTION_CHARS)}… (${whereWhole})`
     : text;
 }
 

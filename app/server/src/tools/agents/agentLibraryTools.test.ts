@@ -137,6 +137,22 @@ describe("agent_create", () => {
     assert.match(card.body.source, /^---\nname: test-reviewer\n/);
   });
 
+  test("a list stated as anything but a list of names is refused, not dropped", async () => {
+    const cards = approvalsForSession(sessionId).length;
+    for (const [field, value] of [
+      ["denyTools", "worktree_push"],
+      ["skills", "missing-skill"],
+      ["denyTools", [42]],
+    ] as const) {
+      await assert.rejects(
+        tool("agent_create").execute({ ...definition, [field]: value }, ctx()),
+        new RegExp(`${field} must be a list of names`),
+      );
+    }
+    assert.equal(approvalsForSession(sessionId).length, cards);
+    assert.equal(existsSync(manifest()), false);
+  });
+
   test("the card shows the effort the model will actually run at", async () => {
     await call("agent_create", { ...definition, effort: "max" });
     const card = latestCard();
