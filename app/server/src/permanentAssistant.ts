@@ -40,7 +40,7 @@ export interface PermanentAssistantDelivery {
   response?: string;
   error?: string;
   /** Acknowledge only after the Slack response actually reached Slack. */
-  acknowledgeSlackDelivery?: () => void;
+  acknowledgeSlackDelivery?: () => void | Promise<void>;
 }
 
 type DeliveryListener = (
@@ -49,6 +49,9 @@ type DeliveryListener = (
 const listeners = new Set<DeliveryListener>();
 let draining = false;
 let stopping = false;
+// HTTP delivery and intake stay concurrent. Only read acknowledgements wait
+// for earlier deliveries, so out-of-order Slack responses keep older guards.
+let lastDelivery: { sessionId: string; done: Promise<void> } | undefined;
 
 export function permanentAssistantIsBusy(): boolean {
   return draining;
@@ -375,7 +378,9 @@ async function drainPermanentAssistantQueue(): Promise<void> {
             (message) => message.role === "user" && !beforeIds.has(message.id),
           ).length === 1;
         permanentAssistantStore.mark(item.id, "completed");
-        await emit({
+        const previousDelivery =
+          lastDelivery?.sessionId === driver.id ? lastDelivery.done : undefined;
+        const done = emit({
           item: { ...item, status: "completed" },
           state: "completed",
           response,
@@ -383,7 +388,8 @@ async function drainPermanentAssistantQueue(): Promise<void> {
           onlySlackPrompt &&
           completedAt !== undefined
             ? {
-                acknowledgeSlackDelivery: () => {
+                acknowledgeSlackDelivery: async () => {
+                  await previousDelivery;
                   if (
                     acknowledgeSlackAssistantTurn(
                       driver.id,
@@ -396,6 +402,7 @@ async function drainPermanentAssistantQueue(): Promise<void> {
               }
             : {}),
         });
+        lastDelivery = { sessionId: driver.id, done };
       } catch (error) {
         // A Stop landed while this item was on its way: nothing reached the
         // session and nothing failed. It goes back in its place.

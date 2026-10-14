@@ -197,6 +197,49 @@ const resumeButton = () =>
   );
 
 describe("the permanent Assistant after a Stop", () => {
+  it("releases its PA reader when App leaves /assistant and reopens it on return", async () => {
+    const socket = await openAssistant(false);
+    await act(async () => {
+      window.history.pushState(null, "", "/settings");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(
+      socket.sent.filter(
+        (message) => message.type === "releasePermanentAssistant",
+      ),
+    ).toEqual([{ type: "releasePermanentAssistant", sessionId: ASSISTANT }]);
+    const previousOpens = socket.sent.filter(
+      (message) => message.type === "openPermanentAssistant",
+    ).length;
+    await act(async () => {
+      window.history.pushState(null, "", "/assistant");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    const opens = socket.sent.filter(
+      (message) => message.type === "openPermanentAssistant",
+    );
+    expect(opens).toHaveLength(previousOpens + 1);
+    expect(opens.at(-1)).toMatchObject({
+      timelineCache: {
+        startIndex: 0,
+        entryCount: 1,
+        lastEntryId: "u-assistant",
+      },
+    });
+  });
+  it("keeps an explicitly deep-linked PA session attached while its transcript is visible", async () => {
+    const socket = await openAssistant(false);
+    await act(async () => {
+      window.history.pushState(null, "", `/sessions/${ASSISTANT}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(
+      socket.sent.filter(
+        (message) => message.type === "releasePermanentAssistant",
+      ),
+    ).toEqual([]);
+  });
+
   it("offers Resume with nothing queued, and sends it for the Assistant's session", async () => {
     const socket = await openAssistant(true);
     expect(

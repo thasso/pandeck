@@ -7179,7 +7179,7 @@ export type ClientMessage =
     }
   /** Load (view) a session addressed by OUR session id; the server resolves it via `hub.acquireById(id)`. */
   | { type: "loadSession"; id: string; timelineCache?: TimelineCacheDescriptor }
-  | { type: "openPermanentAssistant" }
+  | { type: "openPermanentAssistant"; timelineCache?: TimelineCacheDescriptor }
   /** Release a PA view when its route is no longer visible. */
   | { type: "releasePermanentAssistant"; sessionId: string }
   /** Load archived session rows on demand, when the archived sidebar section is expanded. */

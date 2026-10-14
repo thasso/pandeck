@@ -9,9 +9,16 @@ import { PRIMARY_NAV_SLOTS } from "../primaryNavSections.tsx";
 import { UnreadIcon } from "../UnreadDot.tsx";
 import { useSessionRouting } from "../../hooks/useSessionRouting.ts";
 
-const lifecycle = vi.hoisted(() => ({ opens: 0, closes: 0 }));
+const lifecycle = vi.hoisted(() => ({
+  opens: 0,
+  closes: 0,
+  visible: [] as boolean[],
+}));
 vi.mock("./PersonalAssistantPanel.tsx", () => ({
-  PersonalAssistantPanel: () => {
+  PersonalAssistantPanel: ({ visible }: { visible: boolean }) => {
+    useEffect(() => {
+      lifecycle.visible.push(visible);
+    }, [visible]);
     useEffect(() => {
       lifecycle.opens++;
       return () => {
@@ -30,6 +37,7 @@ beforeEach(() => {
   window.sessionStorage.clear();
   lifecycle.opens = 0;
   lifecycle.closes = 0;
+  lifecycle.visible = [];
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -85,6 +93,8 @@ it("shows a width-neutral dot in the assistant nav slot and overflow list", asyn
   const slot = container.querySelector("button")!;
   const dot = slot.querySelector('[title="Unread"]')!;
   expect(dot.classList.contains("absolute")).toBe(true);
+  expect(dot.classList.contains("-right-0.5")).toBe(true);
+  expect(dot.classList.contains("-top-0.5")).toBe(true);
   expect(dot.parentElement?.classList.contains("relative")).toBe(true);
   await act(async () =>
     root.render(
@@ -99,7 +109,7 @@ it("shows a width-neutral dot in the assistant nav slot and overflow list", asyn
   expect(container.querySelector('[title="Unread"]')).not.toBeNull();
 });
 
-it("hides the PA tab dot while visible and releases the reading connection while hidden", async () => {
+it("hides the PA tab dot while visible and keeps its body mounted while hidden", async () => {
   window.sessionStorage.setItem(
     "assistant.right-panel-tabs.v1",
     JSON.stringify({
@@ -124,7 +134,8 @@ it("hides the PA tab dot while visible and releases the reading connection while
   expect(container.querySelector('[title="Unread"]')).toBeNull();
   expect(lifecycle.opens).toBe(1);
   await act(async () => render(false));
-  expect(lifecycle.closes).toBe(1);
+  expect(lifecycle.closes).toBe(0);
+  expect(lifecycle.visible.at(-1)).toBe(false);
   expect(container.querySelector('[title="Unread"]')).not.toBeNull();
   await act(async () => render(true));
   const inspectorTab =
@@ -135,6 +146,8 @@ it("hides the PA tab dot while visible and releases the reading connection while
       (element) => element.textContent === "Inspector",
     );
   await act(async () => inspectorTab!.click());
-  expect(lifecycle.closes).toBe(2);
+  expect(lifecycle.opens).toBe(1);
+  expect(lifecycle.closes).toBe(0);
+  expect(lifecycle.visible.at(-1)).toBe(false);
   expect(container.querySelector('[title="Unread"]')).not.toBeNull();
 });

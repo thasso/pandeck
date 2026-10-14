@@ -303,14 +303,15 @@ export function RightPanelTabs({
     });
   };
   const showTabs = openTabs.length > 0;
-  // PA owns a reading connection. Unlike the retained inspector data, that
-  // connection must leave while hidden or it would mark unseen replies read.
+  // PA retains its connection and transcript, but releases its server view
+  // while hidden so unseen replies are not marked read.
   const panelBodies: Record<PanelId, ReactNode> = {
     inspector,
-    "personal-assistant":
-      visible && activeTab === "personal-assistant" ? (
-        <PersonalAssistantPanel />
-      ) : null,
+    "personal-assistant": (
+      <PersonalAssistantPanel
+        visible={visible && activeTab === "personal-assistant"}
+      />
+    ),
     knowledge,
     worktree,
     status,

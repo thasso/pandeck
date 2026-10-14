@@ -33,8 +33,8 @@ export function acknowledgeSlackAssistantTurn(
   const current = sessionStore.get(sessionId);
   if (!current || permanentAssistantStore.sessionId() !== sessionId)
     return false;
-  // Preserve older unread content and anything arriving during Slack delivery.
+  // Preserve older unread content. The monotone read marker stops at this
+  // turn's boundary even if later content arrived during Slack delivery.
   if (baseline.unread && current.readAt < baseline.updatedAt) return false;
-  if (current.updatedAt !== completedAt) return false;
   return sessionStore.markRead(sessionId, completedAt);
 }

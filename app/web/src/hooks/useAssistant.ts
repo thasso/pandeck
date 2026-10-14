@@ -8075,7 +8075,29 @@ export function useAssistant({
           });
         });
       },
-      openPermanentAssistant: () => send({ type: "openPermanentAssistant" }),
+      openPermanentAssistant: () => {
+        const current = stateRef.current;
+        const sessionId =
+          current.session?.agentType === "personal-assistant"
+            ? current.session.sessionId
+            : undefined;
+        // Reopening a retained panel asks for the delta after its whole loaded
+        // range, not a fresh tail that would discard older history.
+        if (sessionId && current.historySessionId === sessionId) {
+          const descriptor = describeTimelineCache(
+            current.timeline,
+            current.timelineStart,
+          );
+          timelineCacheRef.current.set(sessionId, {
+            version: 2,
+            sessionId,
+            timeline: current.timeline,
+            descriptor,
+            savedAt: Date.now(),
+          });
+          send({ type: "openPermanentAssistant", timelineCache: descriptor });
+        } else send({ type: "openPermanentAssistant" });
+      },
       releasePermanentAssistant: (sessionId) =>
         send({ type: "releasePermanentAssistant", sessionId }),
       loadArchivedSessions: () => send({ type: "loadArchivedSessions" }),

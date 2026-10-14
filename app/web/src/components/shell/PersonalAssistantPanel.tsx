@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { Composer } from "../Composer.tsx";
 import { MessageList } from "../MessageList.tsx";
 import type { TranscriptViewPrefs } from "../transcriptView.ts";
@@ -20,15 +20,24 @@ const PANEL_TRANSCRIPT_VIEW: TranscriptViewPrefs = {
  * @useWhen Mounted by the desktop right-panel tab host.
  * @avoidWhen Rendering `/assistant`; that route keeps the full main-column chat.
  */
-export function PersonalAssistantPanel() {
+export function PersonalAssistantPanel({
+  visible = true,
+}: {
+  visible?: boolean;
+}) {
   const { state, actions } = useAssistant({ isolated: true });
-  const openedRef = useRef(false);
+  const sessionId = state.session?.sessionId;
 
   useEffect(() => {
-    if (openedRef.current) return;
-    openedRef.current = true;
-    actions.openPermanentAssistant();
-  }, [actions]);
+    if (visible && state.connected) actions.openPermanentAssistant();
+  }, [visible, state.connected, actions]);
+
+  useEffect(() => {
+    // A pending open can finish after the panel was hidden. Release it as
+    // soon as its id arrives, without discarding the retained transcript.
+    if (!visible && state.connected && sessionId)
+      actions.releasePermanentAssistant(sessionId);
+  }, [visible, state.connected, sessionId, actions]);
 
   if (!state.session)
     return <PaneLoading label="Opening Personal Assistant…" />;

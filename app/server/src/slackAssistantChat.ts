@@ -130,7 +130,7 @@ async function handleDelivery(
       ? `I couldn’t complete that request. Please try again.\n\n_${slackMrkdwn(delivery.error ?? "Unknown error", 500)}_`
       : slackMrkdwn(delivery.response ?? "Done.", 39_000);
   await updatePlaceholderWithRetry(channel, ts, text);
-  delivery.acknowledgeSlackDelivery?.();
+  await delivery.acknowledgeSlackDelivery?.();
 }
 
 async function botApi(
@@ -142,6 +142,7 @@ async function botApi(
     throw new Error("Slack bot account is not connected");
   const response = await fetch(`https://slack.com/api/${method}`, {
     method: "POST",
+    signal: AbortSignal.timeout(10_000),
     headers: {
       Authorization: `Bearer ${config.token}`,
       "Content-Type": "application/x-www-form-urlencoded",

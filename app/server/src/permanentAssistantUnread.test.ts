@@ -105,6 +105,33 @@ test("a first Slack turn does not inherit unread from metadata-only creation", a
   expect(await permanentAssistantUnread()).toBe(false);
 });
 
+test("release cancels a retained panel's pending reopen even before it attaches", async () => {
+  const id = seed();
+  const connection = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: () => {},
+  } as unknown as ConstructorParameters<typeof Connection>[0]);
+  let resolve!: (rows: []) => void;
+  vi.spyOn(hub, "listSessions").mockReturnValue(
+    new Promise<[]>((done) => {
+      resolve = done;
+    }),
+  );
+  try {
+    const reopening = connection.handle({ type: "openPermanentAssistant" });
+    await connection.handle({
+      type: "releasePermanentAssistant",
+      sessionId: id,
+    });
+    resolve([]);
+    await reopening;
+    expect(connection.viewingSessionId()).toBeUndefined();
+  } finally {
+    connection.dispose();
+  }
+});
+
 test("opening PA uses read dwell and publishes only its scalar unread state", async () => {
   const id = seed(Date.now() - 100);
   const sent: ServerMessage[] = [];
@@ -122,11 +149,17 @@ test("opening PA uses read dwell and publishes only its scalar unread state", as
     const sink = { send: (message: ServerMessage) => sent.push(message) };
     hub.register(sink as unknown as InstanceType<typeof Connection>);
     try {
+      await hub.sendPermanentAssistantUnreadTo(
+        sink as unknown as InstanceType<typeof Connection>,
+      );
       await hub.broadcastSessionUpdated(id);
       expect(sent.at(-1)).toEqual({
         type: "permanentAssistantUnread",
         unread: false,
       });
+      const sentCount = sent.length;
+      await hub.broadcastSessionUpdated(id);
+      expect(sent.length).toBe(sentCount);
       update(id, Date.now() + 100);
       await hub.broadcastSessionUpdated(id);
       expect(sent.at(-1)).toEqual({
@@ -146,11 +179,19 @@ test("opening PA uses read dwell and publishes only its scalar unread state", as
             ),
         ),
     ).toBe(true);
+    const held = (connection as unknown as { heldSubagentThreads: Set<string> })
+      .heldSubagentThreads;
+    held.add("pa-child-thread");
+    const release = vi
+      .spyOn(hub, "releaseSubagentRunTopic")
+      .mockImplementation(() => {});
     await connection.handle({
       type: "releasePermanentAssistant",
       sessionId: id,
     });
     expect(connection.viewingSessionId()).toBeUndefined();
+    expect(held.size).toBe(0);
+    expect(release).toHaveBeenCalledWith("pa-child-thread");
   } finally {
     connection.dispose();
   }

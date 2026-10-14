@@ -1286,10 +1286,13 @@ function AppContent() {
     state.session?.agentType === "personal-assistant"
       ? state.session.sessionId
       : undefined;
+  const routedAssistantVisible =
+    route.name === "permanentAssistant" ||
+    (route.name === "session" && route.id === permanentAssistantSessionId);
   useEffect(() => {
-    if (route.name !== "permanentAssistant" && permanentAssistantSessionId)
+    if (!routedAssistantVisible && permanentAssistantSessionId)
       actions.releasePermanentAssistant(permanentAssistantSessionId);
-  }, [route.name, permanentAssistantSessionId, actions]);
+  }, [routedAssistantVisible, permanentAssistantSessionId, actions]);
   const sidebarPanelOpen = mobileLayout ? browserScreen : sidebarOpen;
 
   // Which domain lists this browser is SHOWING (`lib/broadcastTopics.ts`): the

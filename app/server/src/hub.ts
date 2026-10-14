@@ -54,6 +54,7 @@ import {
 } from "./comments/commentChanges.ts";
 import { errorText } from "./errors.ts";
 import { permanentAssistantStore } from "./db/permanentAssistantStore.ts";
+import { permanentAssistantUnread } from "./permanentAssistantUnread.ts";
 import { setSubagentStateChangeNotifier } from "./db/subagentStore.ts";
 import { setBackgroundWorkStateChangeNotifier } from "./db/backgroundWorkStore.ts";
 import {
@@ -202,6 +203,7 @@ class SessionHub {
     Awaited<ReturnType<typeof listSessions>> | undefined;
   /** Archived count last sent; it only travels on a full list (see `flushSessionsBroadcast`). */
   private lastBroadcastArchivedCount: number | undefined;
+  private lastPermanentAssistantUnread: boolean | undefined;
   /** Coalesces a burst of Task mutations into one event batch + fan-out. */
   private tasksBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
   /**
@@ -378,6 +380,26 @@ class SessionHub {
     return mergedSessionList(opts);
   }
 
+  /** Connect and live delivery share one cache; a late read cannot regress it. */
+  async sendPermanentAssistantUnreadTo(viewer: Viewer): Promise<void> {
+    if (this.lastPermanentAssistantUnread === undefined) {
+      const unread = await permanentAssistantUnread();
+      if (this.lastPermanentAssistantUnread === undefined)
+        this.lastPermanentAssistantUnread = unread;
+    }
+    viewer.send({
+      type: "permanentAssistantUnread",
+      unread: this.lastPermanentAssistantUnread ?? false,
+    });
+  }
+
+  private publishPermanentAssistantUnread(unread: boolean): void {
+    if (unread === this.lastPermanentAssistantUnread) return;
+    this.lastPermanentAssistantUnread = unread;
+    for (const viewer of this.connections)
+      viewer.send({ type: "permanentAssistantUnread", unread });
+  }
+
   /**
    * Recompute one session-list row and push it to connected tabs. Built with
    * `onlyIds`: every row is computed from its own inputs, so the one row is the
@@ -390,11 +412,7 @@ class SessionHub {
     });
     if (!session) return;
     if (sessionId === permanentAssistantStore.sessionId()) {
-      for (const c of this.connections)
-        c.send({
-          type: "permanentAssistantUnread",
-          unread: Boolean(session.unread),
-        });
+      this.publishPermanentAssistantUnread(Boolean(session.unread));
       return;
     }
     for (const c of this.connections) {
@@ -459,8 +477,8 @@ class SessionHub {
         this.lastBroadcastSessions = sessions;
         let sessionsWithArchived: typeof sessions | undefined;
         let archivedDelta: typeof sessions | null | undefined;
+        this.publishPermanentAssistantUnread(assistantUnread);
         for (const c of this.connections) {
-          c.send({ type: "permanentAssistantUnread", unread: assistantUnread });
           if (c.wantsArchivedSessions?.()) {
             if (sessionsWithArchived === undefined) {
               sessionsWithArchived = await this.mergedSessions({
