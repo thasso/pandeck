@@ -113,7 +113,9 @@ export async function resolveAgentSpawn(
     read = await resolveEntrySource(library, scan, name);
   } catch (error) {
     throw new AgentSpawnRefusedError(
-      `Agent definition "${name}" changed while it was being read: ${(error as Error).message}`,
+      // A size refusal or a source that changed since the scan: the message
+      // says which.
+      `Agent definition "${name}" cannot be read: ${(error as Error).message}`,
     );
   }
   if (!read)

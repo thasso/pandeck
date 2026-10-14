@@ -132,7 +132,14 @@ test("pi: the body is the last prompt layer and denied tools are excluded", asyn
     developer.resourceLoader.getAppendSystemPrompt().at(-1),
     agentPromptLayer(reviewer),
   );
-  assert.deepEqual(developer.excludeTools, ["ask_question", "bash", "write"]);
+  assert.deepEqual(developer.excludeTools, [
+    "ask_question",
+    "worktree_push",
+    "bash",
+    "powershell",
+    "monitor",
+    "write",
+  ]);
   const names = developer.agentTools.map((tool) => tool.name);
   assert.ok(!names.includes("worktree_push"));
   assert.ok(names.includes("worktree_commit"));

@@ -140,13 +140,15 @@ persona's normal toolset and can never add to it. Entries are:
   (`withoutDeniedTools` in `agents/sessionAgent.ts`): Claude's session tool
   server neither lists nor serves them (`claudeSdk/toolServer.ts`), and pi never
   registers them (`piSdk/options.ts`), nor can its `find_tools` find or load
-  them.
+  them. pi also excludes the name itself, so a pi built-in or extension tool of
+  the same name (`ls`) stays off whatever the repository's pi settings enable.
 - **Native capabilities** by harness-neutral names: `bash`, `edit`, `write`, for
   the `developer` persona (an `assistant` has none). Claude drops them from
   `tools:` and therefore lists them in `disallowedTools` (`bash` → `Bash` and
   `Monitor`, which runs commands too; `edit` → `Edit`, `MultiEdit`,
   `NotebookEdit`; `write` → `Write`). pi excludes its built-ins of the same
-  names, and `bash` also drops pi's background `bash` and `monitor` tools.
+  names. `bash` stands for command execution as a whole, so in pi it also
+  excludes `powershell` and drops the background `bash` and `monitor` tools.
   Reading stays available to every agent.
 
 An entry naming a tool the persona does not have, or no tool at all, is a

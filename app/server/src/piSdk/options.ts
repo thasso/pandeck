@@ -18,10 +18,12 @@ import {
   WORKSHOP_SESSION_DIR,
 } from "../config.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
-import { AGENT_NATIVE_TOOLS } from "../agents/agentLibrary.ts";
+import {
+  AGENT_NATIVE_TOOLS,
+  type AgentNativeTool,
+} from "../agents/agentLibrary.ts";
 import {
   agentPromptLayer,
-  deniesNative,
   withoutDeniedTools,
   type SessionAgent,
 } from "../agents/sessionAgent.ts";
@@ -128,6 +130,19 @@ export const PI_SEARCH_BUILTIN_TOOLS = ["grep", "find"] as const;
 export const PI_PLAN_RESTRICTED_BUILTIN_TOOLS = ["edit", "write"] as const;
 
 /**
+ * pi's tools behind each harness-neutral name an agent definition may deny.
+ * `bash` is command execution as a whole: pi's own shells and the background
+ * `monitor` runner too.
+ */
+const PI_TOOLS_FOR_AGENT_DENY: Readonly<
+  Record<AgentNativeTool, readonly string[]>
+> = {
+  bash: ["bash", "powershell", "monitor"],
+  edit: ["edit"],
+  write: ["write"],
+};
+
+/**
  * Build the resource loader + tool policy for an {@link AgentType}. Async because
  * the loader must `reload()` before a session can use it. Delegates to the
  * harness-independent {@link AGENT_TYPES} registry (the single source of truth)
@@ -175,9 +190,18 @@ async function buildPiOptions(
   // system-prompt layer after the persona's (`docs/agent-definitions.md`).
   const agentTools = withoutDeniedTools(AGENT_TYPES[agentType].tools(), agent);
   const agentLayer = agent ? [agentPromptLayer(agent)] : [];
-  const deniedNative = AGENT_NATIVE_TOOLS.filter((name) =>
-    deniesNative(agent, name),
-  );
+  // EVERY denied name is excluded, not just the natives: pi has built-ins and
+  // extension tools of its own under app-tool names (`ls`), which repository
+  // settings could otherwise switch back on.
+  const deniedTools = [
+    ...new Set(
+      (agent?.denyTools ?? []).flatMap((name) =>
+        (AGENT_NATIVE_TOOLS as readonly string[]).includes(name)
+          ? PI_TOOLS_FOR_AGENT_DENY[name as AgentNativeTool]
+          : [name],
+      ),
+    ),
+  ];
   switch (agentType) {
     case "assistant":
     case "personal-assistant":
@@ -219,7 +243,7 @@ async function buildPiOptions(
         deferToolLoading: agentType !== "workflow-coordinator",
         // No builtins at all here — not even the search ones.
         extraBuiltinToolNames: [],
-        excludeTools: ["ask_question"],
+        excludeTools: ["ask_question", ...deniedTools],
       };
     }
     case "workshop":
@@ -255,7 +279,7 @@ async function buildPiOptions(
         deferToolLoading: true,
         extraBuiltinToolNames: [...PI_SEARCH_BUILTIN_TOOLS],
         // pi's own built-ins carry the harness-neutral native names.
-        excludeTools: ["ask_question", ...deniedNative],
+        excludeTools: ["ask_question", ...deniedTools],
       };
     }
   }

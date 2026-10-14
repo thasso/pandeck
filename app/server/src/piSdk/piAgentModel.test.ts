@@ -140,29 +140,45 @@ test("an agent session whose model cannot be restored refuses to resume", async 
   );
 });
 
-test("a bash-denying agent has no shell runner at all: no bash, no monitor", async () => {
+test("denied tools stay gone even when repository settings turn pi's own on", async () => {
   const chosen = await findModelForProfile(
     "default",
     "openai-compatible",
     "chosen",
   );
   assert.ok(chosen);
-  const names = async (denyTools: string[]) => {
+  // A repository may switch pi built-ins on, including ones that share an app
+  // tool's name (ls) and a second shell (powershell).
+  const repo = join(tmp, "repo-with-pi-settings");
+  mkdirSync(join(repo, ".pi"), { recursive: true });
+  writeFileSync(
+    join(repo, ".pi", "settings.json"),
+    JSON.stringify({ defaultTools: ["+ls", "+powershell"] }),
+  );
+  const tools = async (denyTools: string[]) => {
     const live = await piStore.acquireNew("developer", chosen, "off", {
+      cwd: repo,
       agent: { ...agent, denyTools },
     });
     try {
-      return live.session.getAllTools().map((tool) => tool.name);
+      return {
+        all: live.session.getAllTools().map((tool) => tool.name),
+        active: live.session.getActiveToolNames(),
+      };
     } finally {
       live.dispose();
     }
   };
-  const allowed = await names([]);
-  assert.ok(allowed.includes("bash") && allowed.includes("monitor"));
-  const denied = await names(["bash", "edit"]);
-  for (const name of ["bash", "monitor", "edit"])
-    assert.ok(!denied.includes(name), `${name} is not registered`);
-  assert.ok(denied.includes("write") && denied.includes("read"));
+  const allowed = await tools([]);
+  for (const name of ["bash", "monitor", "powershell", "ls"])
+    assert.ok(allowed.active.includes(name), `${name} is on without a denial`);
+  const denied = await tools(["bash", "edit", "ls"]);
+  // bash is command execution as a whole: every shell runner goes with it.
+  for (const name of ["bash", "monitor", "powershell", "edit", "ls"]) {
+    assert.ok(!denied.all.includes(name), `${name} is not registered`);
+    assert.ok(!denied.active.includes(name), `${name} is not active`);
+  }
+  assert.ok(denied.all.includes("write") && denied.all.includes("read"));
 });
 
 afterAll(() => {
