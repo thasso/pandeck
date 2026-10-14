@@ -26,6 +26,10 @@
  *   events (which lack a tool id) are attributed to the right tool block.
  */
 import { randomUUID } from "node:crypto";
+import {
+  assertAccountRecoveryAdmission,
+  AccountSwitchBlockedError,
+} from "../session/runtime/accountRecoveryAdmission.ts";
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -166,6 +170,7 @@ import type {
   ClaudeSdkUsageRecord,
 } from "./claudeSdkRecords.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { assertSessionAccountSwitch } from "../sessionAccount.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
 import {
@@ -227,7 +232,10 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import { buildClaudeSdkQueryOptions, claudeQueryModel } from "./options.ts";
-import { lastSavedCostState } from "./profileSessionStore.ts";
+import {
+  copyClaudeSessionForAccount,
+  lastSavedCostState,
+} from "./profileSessionStore.ts";
 import { prepareClaudeSkillRuntime } from "./skillInjection.ts";
 import {
   claudeSdkModelAlias,
@@ -626,7 +634,11 @@ export class ClaudeSdkSession implements LiveSession {
   private lastContextBroadcastAt = 0;
   private autoNameTried = false;
 
-  readonly credentialProfileId: string | undefined;
+  private profileId: string | undefined;
+
+  get credentialProfileId(): string | undefined {
+    return this.profileId;
+  }
   private readonly seamFactory: () => Promise<ClaudeSdkSeam>;
   private readonly prepareSkillRuntime: (
     frozenSkillNames: readonly string[],
@@ -765,7 +777,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.additionalSystemPrompt =
       deps.additionalSystemPrompt?.trim() || undefined;
     this.cwd = deps.cwd ?? CWD;
-    this.credentialProfileId = deps.credentialProfileId;
+    this.profileId = deps.credentialProfileId;
     this.kind = this.agentType;
     this.key = id;
     this.seamFactory = deps.seam;
@@ -1371,6 +1383,78 @@ export class ClaudeSdkSession implements LiveSession {
     this.onChange();
   }
 
+  /** End the old epoch before migrating any native history or changing credentials. */
+  async switchAccount(profileId: string, admit: () => void): Promise<void> {
+    this.assertNotDisposed();
+    const previous = this.profileId;
+    if (!previous || this.running)
+      throw new Error("Cannot switch an unbound or running Claude session.");
+    const providerSessionId = this.providerSessionId;
+    if (!providerSessionId)
+      throw new Error(
+        "Cannot preserve Claude history without a native session id.",
+      );
+    const check = () => {
+      this.assertNotDisposed();
+      admit();
+      if (this.running || this.profileId !== previous)
+        throw new Error(
+          "The Claude session changed during its account switch.",
+        );
+      assertSessionAccountSwitch(this.id, previous, profileId, "claude");
+    };
+    check();
+    const closing = this.queryLoop;
+    const retained = this.retainedEpochKey;
+    if (retained) {
+      const closed = await backgroundWorkSupervisor.closeIdleHost(
+        this.id,
+        retained,
+        "switching the session's account",
+      );
+      if (!closed)
+        throw new AccountSwitchBlockedError(
+          "Background work still holds this session's Claude host. Stop it before switching accounts.",
+        );
+      check();
+    }
+    await this.closeProcess("switching the session's account");
+    if (
+      closing &&
+      !(await settlesWithin(closing, this.processCloseTimeoutMs))
+    ) {
+      this.abortController?.abort();
+      if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
+        throw new Error(
+          "The old Claude process did not exit before the account switch.",
+        );
+    }
+    check();
+    const transfer = await copyClaudeSessionForAccount(
+      previous,
+      profileId,
+      providerSessionId,
+    );
+    let committed = false;
+    try {
+      check();
+      sessionStore.switchCredentialProfile(this.id, previous, profileId);
+      committed = true;
+      this.profileId = profileId;
+      this.onPersist();
+      this.broadcastState();
+      this.onChange();
+    } finally {
+      // The row is the commit point. Cleanup cannot roll back an admitted move,
+      // but neither success nor an abandoned copy should leave an extra history.
+      await (committed ? transfer.commit() : transfer.rollback()).catch(() => {
+        console.warn(
+          `[claude] Account-switch ${committed ? "source cleanup" : "destination rollback"} failed; session deletion will retry.`,
+        );
+      });
+    }
+  }
+
   /* --------------------------------- prompt -------------------------------- */
 
   createRuntimeAdapter(): PromptableAdapter {
@@ -1394,6 +1478,7 @@ export class ClaudeSdkSession implements LiveSession {
   async #promptRaw(
     text: string,
     options: {
+      continuation?: boolean;
       clientRequestId?: string;
       hidden?: boolean;
       attachments?: PromptAttachment[];
@@ -1431,17 +1516,20 @@ export class ClaudeSdkSession implements LiveSession {
     // Claim the stable unnamed state before the acceptance broadcast. The list
     // must never expose a provider default or prompt-derived guess while the
     // dedicated naming agent is still working.
-    const namingSettings = options.hidden
-      ? undefined
-      : this.beginAutoName(modelPromptText, attachments);
+    const namingSettings =
+      options.hidden || options.continuation
+        ? undefined
+        : this.beginAutoName(modelPromptText, attachments);
 
     // User message. Hidden resume prompts (for example answers submitted from
     // the question panel) are sent to Claude but represented by their UI card,
     // so they must not add a visible user bubble to the transcript.
-    const userEntry = this.appendUserEntry(trimmed, {
-      ...(options.hidden !== undefined ? { hidden: options.hidden } : {}),
-      attachments,
-    });
+    const userEntry = options.continuation
+      ? undefined
+      : this.appendUserEntry(trimmed, {
+          ...(options.hidden !== undefined ? { hidden: options.hidden } : {}),
+          attachments,
+        });
     // Persist + announce at ACCEPTANCE, not only after naming or turn end. A
     // first turn can run for minutes, and zero-message sessions are deliberately
     // absent from the list; without this edge a newly prompted Claude session
@@ -1449,7 +1537,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.updatedAt = Date.now();
     this.onPersist();
     this.onChange();
-    if (!options.hidden) {
+    if (!options.hidden && userEntry) {
       const userMessage = entriesToDisplayMessages([userEntry])[0];
       if (userMessage)
         this.broadcast({
@@ -2931,6 +3019,7 @@ export class ClaudeSdkSession implements LiveSession {
     name: string,
     args: unknown,
   ): { assistantId: string; toolId: string } {
+    assertAccountRecoveryAdmission(this.sessionId);
     this.assertNotDisposed();
     if (this.running)
       throw new SessionBusyError(

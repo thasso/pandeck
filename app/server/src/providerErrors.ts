@@ -168,6 +168,12 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
   const limitModel = limited ? namedLimitModel(info) : undefined;
   return {
     kind: info.kind,
+    ...(isSubscriptionAccountModel("openai-codex", info.provider) &&
+    /invalid[_ -]encrypted[_ -]content|encrypted.{0,160}(?:cannot|could not|unable to|failed to).{0,20}(?:decrypt|verif|validat)|(?:cannot|could not|unable to|failed to).{0,20}(?:decrypt|verif|validat).{0,160}encrypted|reasoning.{0,30}signature.{0,30}invalid/i.test(
+      info.rawMessage,
+    )
+      ? { encryptedReasoningRejected: true as const }
+      : {}),
     ...(limitModel ? { limitModel } : {}),
     ...(info.kind === "auth" && isLoginDeath(info.rawMessage, info)
       ? { loginDeath: true }

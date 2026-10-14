@@ -33,6 +33,7 @@ export interface ClaudeSdkAdapterDriver {
   prompt(
     text: string,
     options?: {
+      continuation?: boolean;
       clientRequestId?: string;
       hidden?: boolean;
       attachments?: PromptAttachment[];
@@ -166,6 +167,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     this.lastFailure = undefined;
     this.lastStopReason = undefined;
     await this.driver.prompt(text, {
+      ...(options.continuation ? { continuation: true } : {}),
       ...(options.clientRequestId
         ? { clientRequestId: options.clientRequestId }
         : {}),

@@ -81,8 +81,8 @@ export function projectProviderNoticeForClient(
 ): SessionEntry {
   const info = entry.providerError;
   const details = [
-    `Provider diagnostic: ${info.kind} — ${info.rawMessage}`,
-    info.provider || info.model
+    info ? `Provider diagnostic: ${info.kind} — ${info.rawMessage}` : undefined,
+    info?.provider || info?.model
       ? `Model: ${[info.provider, info.model].filter(Boolean).join("/")}`
       : undefined,
     entry.attempt !== undefined
@@ -94,7 +94,9 @@ export function projectProviderNoticeForClient(
       ? `Request bytes: ${entry.requestBytes}`
       : undefined,
   ].filter((detail): detail is string => Boolean(detail));
-  const message = `${entry.message}\n\n${details.join("\n")}`;
+  const message = details.length
+    ? `${entry.message}\n\n${details.join("\n")}`
+    : entry.message;
   return {
     id: entry.id,
     seq: entry.seq,

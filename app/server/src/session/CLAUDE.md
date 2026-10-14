@@ -6,12 +6,10 @@
   runtime consumes adapters and writes logs, transport reads runtime and sends
   wire envelopes, and `log/` imports none of the other three.
 - Subscribe before taking snapshots wherever event ordering matters.
-- A DETACHED runtime session belongs to its views: attach `retainView`s it and
-  detach releases it after a grace. One with a harness bound belongs to that
-  harness's store, whose idle eviction calls `releaseHarness`; `disposeSession`
-  is for deletes and would kill a reader's detached view. A store tearing a
-  session down calls `closeForTeardown` BEFORE its harness's own dispose: once
-  its events stop, a mid-turn run's default clean end would read as success.
+- Detached runtimes belong to views: attach `retainView`s, detach releases after
+  grace. Bound runtimes belong to their harness store: idle eviction uses
+  `releaseHarness`; `disposeSession` is for deletes. Stores call
+  `closeForTeardown` BEFORE harness disposal to preserve in-flight outcomes.
 - Assistant entry `usage` is ONE run's own delta, never a cumulative: harnesses
   convert their cumulative totals through `adapters/nativeEvents.ts`'s
   `perTurnUsage`, and consumers sum entries.
@@ -25,13 +23,15 @@
 - Model-only prompt enrichment rides `RuntimePromptOptions` so the durable log
   keeps the clean human text; never wrap a prompt to inject hidden context. The
   Plan-mode hint is per-TURN enrichment, never a persisted system-prompt suffix.
-- Mid-turn steering is explicit (`steer: true`) and only when the driver reports
-  `canSteer`. Under `steerOnly` the DRIVER decides and never falls back to
-  starting a turn; a refusal appends nothing, frees the dedup key and throws
-  `SteerNotTakenError`. Under `steerAcceptance: "deferred"` the runtime appends
-  only in `onSteerAccepted`, which the adapter calls synchronously inside the
-  run (a late one as `followUp`, after the reply); none appends nothing and is
-  `SessionBusyError`. Never report a started turn as a steer.
+  Continuations append no user row, deferred background facts, memory or Plan
+  hint. Recovery reserves typed-busy admission before idle; waiters/notices
+  await its final outcome. Native audit and health stay per-run.
+- Steer only with `steer: true` and `canSteer`. Under `steerOnly` the DRIVER
+  either steers or appends nothing, frees dedup and throws `SteerNotTakenError`;
+  it never starts a turn. `steerAcceptance: "deferred"` appends only in
+  synchronous `onSteerAccepted` inside that run, or a late `followUp` after the
+  reply; no acceptance appends nothing and is `SessionBusyError`. Never label a
+  new turn as a steer.
 - `runtimePrompt.ts` is the ONE door every run passes, so session-wide safety
   invariants belong there, ahead of the runtime session and any append — never
   only at a client entry point. A gone worktree and a Stop-held turn lacking

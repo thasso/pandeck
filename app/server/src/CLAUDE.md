@@ -20,11 +20,11 @@
   (`docs/agent-harnesses.md`). Existing-session decisions (cards, questions,
   handoffs) use `agentHandoffs.ts` for mid-turn queueing.
 - Automatic: `accountRouter.ts`; enterprise propagates, never relaxes; host-side
-  usage; explicit peer/workflow pins. Health/benches: explicit own-subscription
-  runs (`docs/account-routing.md`).
-- Harness and persona are separate axes: branch on the shared capability
-  predicates, never on a persona key, and keep persona creation guards in the
-  `connection.ts` creation paths, not at call sites.
+  usage; explicit peer/workflow pins. Health/benches/switches require explicit
+  own-subscription runs. Switch after native termination, never for Stop or a
+  degraded pick; markers are display-only (`docs/account-routing.md`).
+- Separate harness/persona axes: branch on shared capabilities, not persona
+  keys. Persona creation guards belong in `connection.ts` creation paths.
 - Conditional prompt sections/eager tools and library skill names are frozen at
   session START (`promptConditions.ts`/`sessionSkills.ts`), never per turn.
 - ALL app tools are harness-neutral `AgentTool`s from `tools/catalog.ts`; never
@@ -32,10 +32,8 @@
   `tools/list_changed`, never by restart or tool-array patching.
 - Background work enters only through `admitBackgroundWork`; provider hooks and
   tools never write its rows directly.
-- The server never forks itself for per-request work: child processes on
-  request, watch and list paths start through `spawnBroker.ts` (`gitExec.ts`
-  does). Each fork copies this process's page tables and stalls every
-  connection.
+- Request/watch/list children start via `spawnBroker.ts` (`gitExec.ts` uses it),
+  never by forking this server: its page tables stall every connection.
 - Git mutations to a WORKING TREE, INDEX, or LOCAL ref use
   `withRepoLock(await repoLockKey(cwd), …)` from `gitExec.ts`, never a checkout
   key or nested lock. Only network-bound work is lock-free: fetch/push, creation

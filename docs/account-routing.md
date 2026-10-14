@@ -1,8 +1,8 @@
 # Account routing
 
 Credential profiles are accounts. Claude and OpenAI accounts never mix. This
-contract ships health, login alerts, temporary limit benches and account
-selection at session/run start. Live switching remains separate.
+contract covers health, login alerts, temporary limit benches, account selection
+at session/run start and live-session failover.
 
 ## Health and login evidence
 
@@ -252,23 +252,24 @@ enterprise boundaries.
 
 New-session and settings-slot selectors default to Automatic. At creation,
 Automatic applies only when no account is already bound or explicitly selected.
-The server picks once when the session or background run starts; the resolved
-account is then pinned for the session's lifetime. Bound drafts and forks keep
-the parent's account, even if it is disabled or unhealthy, when it belongs to
-the child's provider; otherwise Automatic picks one within the same enterprise
-requirement. An enterprise-required child still refuses if that bound account is
-no longer tagged enterprise. Restoring an existing session keeps its native
-account affinity, not today's Automatic choice. Explicit session picks, approved
-peer runtimes and workflow role accounts remain explicit. Settings slots keep
-pins saved before Automatic existed until the user changes them in Settings.
-Slots with no pin resolve afresh on every run; an unusable pin degrades under
-the existing background-automation policy: missing, disabled or
-provider-mismatched pins. An enabled, provider-matching pin remains explicit
-despite login health or model/effort availability; failures alert on that
-account, not a different one. `automaticProfileIdFor` remains only a
-first-enabled hint for non-routing login/usage UI, not a routing function. When
-the saved model has no Automatic option, a Settings slot offers **Use
-Automatic** to clear its pin without changing the model or effort.
+The server picks when the session or background run starts. A session keeps that
+binding until an own-subscription limit or dead login triggers live failover
+below. Bound drafts and forks keep the parent's current account, even if it is
+disabled or unhealthy, when it belongs to the child's provider; otherwise
+Automatic picks one within the same enterprise requirement. An
+enterprise-required child still refuses if that bound account is no longer
+tagged enterprise. Restoring an existing session keeps its native account
+affinity, not today's Automatic choice. Explicit session picks, approved peer
+runtimes and workflow role accounts remain explicit. Settings slots keep pins
+saved before Automatic existed until the user changes them in Settings. Slots
+with no pin resolve afresh on every run; an unusable pin degrades under the
+existing background-automation policy: missing, disabled or provider-mismatched
+pins. An enabled, provider-matching pin remains explicit despite login health or
+model/effort availability; failures alert on that account, not a different one.
+`automaticProfileIdFor` remains only a first-enabled hint for non-routing
+login/usage UI, not a routing function. When the saved model has no Automatic
+option, a Settings slot offers **Use Automatic** to clear its pin without
+changing the model or effort.
 
 `POST /api/account-router/pick` accepts `AccountPickPreviewRequest` and returns
 `AccountPickPreviewResult`, so a selector can show Automatic's current account
@@ -285,8 +286,8 @@ the failed account. Plain auth classification is not sufficient. A slot that
 names an explicit pin never retries across accounts, even if that pin had to
 degrade. Both attempts' reported consumption is recorded. If no replacement can
 be picked, the original outcome is preserved. Each attributed limit failure also
-benches its failed account, including pinned runs. Interactive sessions do not
-switch accounts.
+benches its failed account, including pinned runs. Existing sessions use the
+separate live-failover policy below; one-shot explicit pins remain exact.
 
 ## Limit benching
 
@@ -376,6 +377,87 @@ or push notification projection.
 
 ## Live account switching
 
-Pending. A failed session will move to another eligible account without losing
-its transcript. Switch markers belong only in the user's display, not model
-context.
+An explicitly bound session can move after its own subscription provider reports
+`quota`, `rate_limit` or structured `loginDeath`. Plain auth errors, unrelated
+providers/errors and Stop or abort never trigger a move. This applies to
+interactive, background and provider-initiated runs, including explicitly
+selected session accounts. Existing Settings one-shot pins keep their policy
+above.
+
+`sessionAccountSwitch.ts` observes the normalized native run lifecycle. Health
+and bench reporting happens first. At failed-run closure it reserves admission
+before run waiters and idle queues can start another prompt. The engine must
+finish unwinding before it changes accounts. Stop generations, automatic-turn
+holds, worktree admission, model/effort and the session's enterprise requirement
+are rechecked across asynchronous work and immediately before continuation.
+
+The picker receives the current provider, model and effort, the persisted
+enterprise requirement, and all accounts attempted during this turn. A degraded
+result is never a replacement. Each account is selected once for failover; an
+exhausted turn keeps its last failure and binding with a display note saying no
+other eligible account is available. A new genuine turn resets the attempt set.
+
+A successful move updates the live binding, session row and engine record before
+broadcasting state. Forks, drafts, health and usage attribution therefore follow
+the current account. Ordinary metadata upserts cannot change this binding;
+`sessionStore.switchCredentialProfile` is a compare-and-set against the prior
+account on a nondeleted row.
+
+Claude closes and awaits its old query epoch, copies the native JSONL and entire
+subagent directory between profile roots, then resumes the same provider session
+id. After the binding CAS commits, the source JSONL/subagent tree is removed
+best-effort; an aborted move instead removes its destination copy. Cleanup
+failures warn without transcript content or paths. Session DELETE sweeps that
+native id's JSONL and subagent directory across every Claude profile and project
+key, including disabled profiles and `.account-switch-*` staging directories
+left by a crash, to remove leftovers. Missing native identity, missing history
+or unsafe history refuses the move. See
+[Claude session records](claude-session-records.md#account-failover). Pi
+prepares a new account runtime and model registry on the same account-neutral
+session file, preserving its id, cwd, persona, skills, mode and live wrapper.
+Tool activation and its exposure/prune registrations swap only when the
+replacement is admitted, then reapply the live mode so a Build/Plan change
+during staging takes effect. An abandoned staged runtime leaves the old
+registrations intact. Pi refuses the move if the native leaf changes during
+reopen, including a late naming write, or the replacement loaded a different
+leaf.
+
+The retry needs no user message. `RuntimePromptOptions.continuation` suppresses
+app-owned and Claude-record user entries. Claude receives a minimal model-only
+continuation instruction. Pi uses a hidden SDK custom-message turn rather than
+bare `Agent.continue`, which bypasses SDK settlement, retries, compaction and
+queues. The original user input is not appended again. The failed assistant
+response stays in pi's physical file; an append-only SDK context edit omits it
+from the replay request. A completed pi continuation binds its trailing native
+custom-message prompt without inventing an app user row. The completed-turn
+boundary and scanned prompt must both explicitly flag the continuation; ordinary
+turn structure and call-id checks still apply all-or-nothing. Its recovered
+reply is forkable at its terminal native id, and a fork before the next user
+message keeps that reply. Ordinary steering joins the open continuation without
+changing its continuation boundary, including tool work completed before the
+steer.
+
+If a replacement OpenAI account explicitly rejects encrypted reasoning, one
+same-account retry removes only opaque OpenAI thinking blocks from model context
+through append-only edits. It retains the physical transcript, text and tool
+calls/results. The fallback filters current projected message content,
+preserving prior context-edit omissions and replacements rather than reviving
+raw entries. No reasoning is removed preemptively, and unrelated errors cannot
+activate this fallback.
+
+Switch and refusal notices persist as app-owned `provider.notice` rows without
+provider diagnostics. Reset times use the user's configured time zone. They are
+display-only, never native history, model context or another user turn. Native
+attempts retain their own audit/health facts, but caller waiters and failure
+notices remain pending while recovery decides. Each successful move marks its
+source account's usage dirty; the deferred final completion marks the current
+account, so every account that ran is refreshed. Without a continuation they
+receive the original failure; after switching they receive the continuation's
+outcome, not a premature interruption. Continuations open new native runs
+through the same admission door. Recovery is a typed busy state to queues,
+peers, handoffs and host commands. It stays reserved through continuation
+settlement, then release re-offers the idle edge. An unrelated idle turn cannot
+replace the original caller's outcome. Claude retained hosts close only through
+the background supervisor; active work refuses the switch. Pi background
+processes are supervisor-owned and keep running independently of its SDK
+runtime. No switch interrupts admitted work or changes running credentials.

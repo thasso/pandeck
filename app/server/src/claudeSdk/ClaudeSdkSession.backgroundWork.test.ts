@@ -202,6 +202,7 @@ function makeHarness(
   options: {
     hangFirstQueryOnClose?: boolean;
     processCloseTimeoutMs?: number;
+    credentialProfileId?: string;
   } = {},
 ): {
   session: InstanceType<typeof ClaudeSdkSession>;
@@ -215,6 +216,13 @@ function makeHarness(
     harness: "claude-sdk",
     agentType: "developer",
   });
+  if (options.credentialProfileId)
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "developer",
+      credentialProfileId: options.credentialProfileId,
+    });
   updateSettings({
     backgroundWork: {
       enabled: true,
@@ -238,6 +246,9 @@ function makeHarness(
     session: new ClaudeSdkSession(id, {
       seam: async () => seam,
       agentType: "developer",
+      ...(options.credentialProfileId
+        ? { credentialProfileId: options.credentialProfileId }
+        : {}),
       ...(options.processCloseTimeoutMs !== undefined
         ? { processCloseTimeoutMs: options.processCloseTimeoutMs }
         : {}),
@@ -245,6 +256,79 @@ function makeHarness(
     queries,
   };
 }
+
+test("account switching refuses a retained host with active background work without killing it", async () => {
+  const profiles = await import("../credentialProfiles.ts");
+  const a = profiles.createCredentialProfile({
+    name: "Retained A",
+    provider: "claude",
+  }).id;
+  const b = profiles.createCredentialProfile({
+    name: "Retained B",
+    provider: "claude",
+  }).id;
+  const { session, queries } = makeHarness(30, { credentialProfileId: a });
+  try {
+    const turn = session
+      .createRuntimeAdapter()
+      .prompt("launch background work then fail");
+    await until(() => queries.length === 1);
+    const query = queries[0]!;
+    await preToolHook(query)(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "provider-background",
+        transcript_path: "/tmp/transcript",
+        cwd: dataDir,
+        tool_name: "Bash",
+        tool_input: { command: "held-background-job", run_in_background: true },
+        tool_use_id: "switch-bg-tool",
+      },
+      "switch-bg-tool",
+      { signal: new AbortController().signal },
+    );
+    query.output.emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "switch-bg-task",
+      tool_use_id: "switch-bg-tool",
+      description: "held job",
+      task_type: "shell",
+      uuid: "switch-bg-start",
+      session_id: "provider-background",
+    } as unknown as ClaudeSdkMessage);
+    await until(
+      () =>
+        backgroundWorkStore.listItems({ ownerSessionId: session.id })[0]
+          ?.state === "running",
+    );
+    query.output.emit({
+      ...result("switch-failure"),
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["Usage limit reached"],
+      api_error_status: 429,
+    } as unknown as ClaudeSdkMessage);
+    await turn;
+    await assert.rejects(
+      session.switchAccount(b, () => {}),
+      /Background work still holds/,
+    );
+    assert.equal(session.credentialProfileId, a);
+    assert.equal(sessionStore.get(session.id)?.credentialProfileId, a);
+    assert.equal(query.closeCalls, 0);
+    assert.equal(query.abortObserved, false);
+    assert.equal(backgroundWorkStore.hostForOwner(session.id)?.state, "live");
+    assert.equal(
+      backgroundWorkStore.listItems({ ownerSessionId: session.id })[0]?.state,
+      "running",
+    );
+  } finally {
+    session.dispose();
+    profiles.setCredentialProfileEnabled(a, false);
+    profiles.setCredentialProfileEnabled(b, false);
+  }
+});
 
 test("ordinary Claude turns close their transient process at result", async () => {
   const { session, queries } = makeHarness();

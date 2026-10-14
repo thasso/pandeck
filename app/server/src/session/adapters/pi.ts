@@ -49,6 +49,7 @@ export interface PiDriver {
     text: string,
     attachments?: unknown[],
     options?: {
+      continuation?: boolean;
       clientRequestId?: string;
       hidden?: boolean;
       /**
@@ -154,6 +155,7 @@ class PiAdapter implements PromptableAdapter {
             : {}),
           ...(options.hidden ? { hidden: true } : {}),
           ...(options.steerOnly ? { steerOnly: true } : {}),
+          ...(options.continuation ? { continuation: true } : {}),
         }),
       );
 
@@ -410,6 +412,7 @@ class PiAdapter implements PromptableAdapter {
         entries: scanned.map((e) => ({
           role: e.role,
           providerMessageId: e.id,
+          ...(e.continuation ? { continuation: true as const } : {}),
           ...(e.toolCallId ? { toolCallId: e.toolCallId } : {}),
           ...(e.toolCallIds ? { toolCallIds: e.toolCallIds } : {}),
           ...(e.unidentifiedToolCalls ? { unidentifiedToolCalls: true } : {}),

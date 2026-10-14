@@ -18,6 +18,10 @@
 - Coding resource loaders consume only the session's frozen skill names and
   rematerialize that same set before every reload; assistant personas keep
   `noSkills: true` and receive no library path.
+- Failover stages a registry/runtime on the same file/id; tools swap after
+  admission. SDK `display: false` custom turns retain settlement, retry,
+  compaction and queues; `Agent.continue` does not. Context edits retain
+  physical history.
 - Session-open/canonicalize paths encode pi SDK footguns (id minting on empty
   headers, pending-output retargeting): change them only with
   `sessionResolver.test.ts` green.

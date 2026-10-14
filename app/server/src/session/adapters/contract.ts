@@ -111,6 +111,8 @@ export type AdapterEvent =
       entries: {
         role: "user" | "assistant" | "toolResult";
         providerMessageId: string;
+        /** Native-only host continuation prompt, not an app user entry. */
+        continuation?: true;
         /** Tool result: the call it answers. */
         toolCallId?: string;
         /** Assistant message: the calls it declares. */
@@ -239,6 +241,8 @@ export interface RunFailureFacts {
   limitModel?: string;
   /** Narrow dead-login evidence derived from the raw error before display sanitization. */
   loginDeath?: true;
+  /** OpenAI explicitly rejected opaque reasoning after a cross-account replay. */
+  encryptedReasoningRejected?: true;
 }
 
 /**
@@ -283,6 +287,8 @@ export interface AgentRunResult {
 }
 
 export interface PromptOptions {
+  /** Retry an existing user turn without a new app-owned user entry. Server-only. */
+  continuation?: boolean;
   clientRequestId?: string;
   /** Hidden prompts (e.g. resume-with-answers) are not echoed as a user bubble by the client. */
   hidden?: boolean;

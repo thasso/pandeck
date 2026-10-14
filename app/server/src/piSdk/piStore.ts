@@ -73,7 +73,7 @@ import {
   type PromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
-import { PiLiveSession } from "./PiLiveSession.ts";
+import { PiLiveSession, type PiAccountSession } from "./PiLiveSession.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import {
   credentialProfileById,
@@ -651,10 +651,12 @@ class PiSessionStore {
     credentialProfileId = "default",
     promptStart?: PiPromptStart,
     requestedMode?: SessionMode,
-  ): Promise<{
-    session: AgentSession;
-    notices: Array<{ severity: NoticeSeverity; message: string }>;
-  }> {
+    staged = false,
+  ): Promise<
+    PiAccountSession & {
+      notices: Array<{ severity: NoticeSeverity; message: string }>;
+    }
+  > {
     // Session-START prompt conditions (Task 287). pi rebuilds the system prompt
     // on every active-tool change and on every reopen, so this reads the frozen
     // record whenever the session already has one — creation is the only call
@@ -728,12 +730,13 @@ class PiSessionStore {
     const activeSessionId = sm.getSessionId();
     // A durable server record wins over a caller's requested starting mode.
     // Legacy/unrecorded sessions normalize to Build.
-    this.sessionModes.set(
-      activeSessionId,
-      sessionModeOrDefault(
-        sessionStore.get(activeSessionId)?.mode ?? requestedMode,
-      ),
-    );
+    if (!staged)
+      this.sessionModes.set(
+        activeSessionId,
+        sessionModeOrDefault(
+          sessionStore.get(activeSessionId)?.mode ?? requestedMode,
+        ),
+      );
 
     // Direct tool path: the persona's AgentTools are adapted straight into pi
     // customTools (no MCP hop — the session MCP server serves the Claude
@@ -789,6 +792,7 @@ class PiSessionStore {
       agentTools,
       eagerToolNames,
       deferToolLoading: opts.deferToolLoading,
+      deferRegistration: staged,
       mode: () => this.sessionModes.get(activeSessionId) ?? "build",
       applyActiveToolNames: (activeNames) => {
         // Merge pi's non-bridge tools (built-ins) with the bridge-active names.
@@ -849,21 +853,29 @@ class PiSessionStore {
         }));
     } catch (err) {
       activation.dispose();
-      this.sessionModes.delete(activeSessionId);
+      if (!staged) this.sessionModes.delete(activeSessionId);
       throw err;
     }
     // Nor when the model it was on cannot be restored: pi would quietly pick
     // another one.
-    if (agent && modelFallbackMessage) {
+    if ((agent || staged) && modelFallbackMessage) {
       activation.dispose();
-      this.sessionModes.delete(activeSessionId);
+      if (!staged) this.sessionModes.delete(activeSessionId);
       session.dispose();
       throw new Error(
-        `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`,
+        agent
+          ? `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`
+          : `Cannot switch accounts: ${modelFallbackMessage}. The session must keep its model.`,
       );
     }
-    this.closeToolRuntime(session.sessionId); // paranoia: never leak a stale activation under the same key
-    this.toolRuntimes.set(session.sessionId, activation);
+    const commit = () => {
+      this.closeToolRuntime(session.sessionId);
+      this.toolRuntimes.set(session.sessionId, activation);
+      activation.register();
+      // A staged runtime may have waited across a live Build/Plan change.
+      activation.reapply();
+    };
+    if (!staged) commit();
     installToolPayloadProbe(session);
     installDynamicToolTurnRefresh(session);
     // Initial active set: eager + find_tools + everything the transcript
@@ -883,7 +895,15 @@ class PiSessionStore {
         message: `Extension "${err.path}" failed to load: ${err.error}`,
       });
     }
-    return { session, notices };
+    return {
+      session,
+      notices,
+      commit,
+      dispose: () => {
+        activation.dispose();
+        session.dispose();
+      },
+    };
   }
 
   private track(
@@ -917,6 +937,38 @@ class PiSessionStore {
       this.sessionModes.get(session.sessionId) ?? "build",
       (mode) => this.applySessionMode(session.sessionId, mode),
       credentialProfileId,
+      async (profileId) => {
+        const file = ls.sessionFile;
+        const selected = ls.modelSelection();
+        if (!file || !selected.model)
+          throw new Error(
+            "The pi session has no transcript or model to reopen.",
+          );
+        const model = await findModelForProfile(
+          profileId,
+          selected.model.provider,
+          selected.model.id,
+        );
+        if (!model)
+          throw new Error(
+            "The replacement account no longer offers this session's model.",
+          );
+        const sm = await openExistingSession(kind, file, {
+          expectedId: ls.id,
+          cwd: ls.cwd,
+        });
+        return this.create(
+          kind,
+          sm,
+          model,
+          selected.thinkingLevel,
+          ls.cwd,
+          profileId,
+          undefined,
+          ls.sessionMode,
+          true,
+        );
+      },
     );
     this.live.set(ls.key, ls);
     // Ownership from the first moment: an acquisition that is never viewed

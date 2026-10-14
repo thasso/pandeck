@@ -23,7 +23,10 @@ import { sessionRuntime } from "../session/runtimeInstance.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
-import { claudeProfileSessionStore } from "./profileSessionStore.ts";
+import {
+  claudeProfileSessionStore,
+  removeClaudeSessionFromAllProfiles,
+} from "./profileSessionStore.ts";
 import { SessionHeldElsewhereError } from "../harness.ts";
 import {
   credentialProfileById,
@@ -211,6 +214,7 @@ class ClaudeSdkSessionStore {
       // record cwd and the caller's cwd are fallbacks (e.g. pre-link creation).
       ...(cwdValue !== undefined ? { cwd: cwdValue } : {}),
       credentialProfileId:
+        sessionStore.get(id)?.credentialProfileId ??
         record?.credentialProfileId ??
         opts.credentialProfileId ??
         DEFAULT_CLAUDE_PROFILE_ID,
@@ -284,7 +288,7 @@ class ClaudeSdkSessionStore {
     const sourceMeta = sessionStore.getIncludingDeleted(sourceId);
     const requiresEnterprise = sourceRequiresEnterprise([sourceId]);
     const credentialProfileId =
-      record.credentialProfileId ?? sourceMeta?.credentialProfileId;
+      sourceMeta?.credentialProfileId ?? record.credentialProfileId;
     const ensureEnterpriseAccount = () => {
       if (
         requiresEnterprise &&
@@ -645,13 +649,21 @@ class ClaudeSdkSessionStore {
     if (!record?.providerSessionId) return;
     try {
       const seam = await this.seam();
-      if (!seam.deleteSession) return;
-      await seam.deleteSession(record.providerSessionId, {
+      await seam.deleteSession?.(record.providerSessionId, {
         dir: worktreeCwdForSession(id) ?? record.cwd ?? CWD,
         sessionStore: claudeProfileSessionStore(record.credentialProfileId),
       });
     } catch {
-      // Best-effort: the record and metadata row are already gone.
+      console.warn(
+        "[claude] Native session deletion failed; sweeping profile transcripts directly.",
+      );
+    } finally {
+      await removeClaudeSessionFromAllProfiles(
+        record.providerSessionId,
+        record.credentialProfileId,
+      ).catch(() => {
+        console.warn("[claude] Deleted-session profile sweep failed.");
+      });
     }
   }
 }

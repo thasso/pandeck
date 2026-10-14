@@ -58,7 +58,7 @@ export interface SessionMeta {
   providerSessionId?: string;
   model?: string;
   thinkingLevel?: string;
-  /** Immutable PA-owned credential profile selected before the first prompt. */
+  /** Current account; only live failover may replace an existing binding. */
   credentialProfileId?: string;
   /** Only enterprise accounts may run this session. Immutable after insertion. */
   requiresEnterprise?: boolean;
@@ -324,7 +324,7 @@ function upsert(input: SessionUpsert): boolean {
       .prepare(upsertSql)
       .run(
         input.id,
-        // Scope is INSERT-ONLY, like createdAt and the credential profile: the
+        // Scope is INSERT-ONLY, like createdAt: the
         // first stored value owns the row for its life. A later write can never
         // reclassify a session — not by stating a different scope, and not by
         // omitting one — because the access policy built on it (Task-477) would
@@ -351,9 +351,8 @@ function upsert(input: SessionUpsert): boolean {
         input.thinkingLevel !== undefined
           ? input.thinkingLevel
           : (prev?.thinking_level ?? null),
-        // A profile may be filled for a legacy row that predates binding, but it
-        // can never be replaced once persisted. Every runtime reopen must retain
-        // the account selected before this session's first prompt.
+        // Ordinary metadata refreshes cannot change the current binding.
+        // Live failover uses switchCredentialProfile's compare-and-set.
         prev?.credential_profile_id ?? input.credentialProfileId ?? null,
         prev?.requires_enterprise ?? (input.requiresEnterprise ? 1 : 0),
         sessionModeOrDefault(input.mode ?? prev?.mode),
@@ -370,6 +369,23 @@ function upsert(input: SessionUpsert): boolean {
     );
     return false;
   }
+}
+
+/** Live failover only: refuse a stale binding or a session deleted during the move. */
+function switchCredentialProfile(
+  id: string,
+  previous: string,
+  next: string,
+): void {
+  const result = getDb()
+    .prepare(
+      "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(next, id, previous);
+  if (result.changes !== 1)
+    throw new Error(
+      "The session's account changed or the session was deleted during the switch.",
+    );
 }
 
 /**
@@ -1743,6 +1759,7 @@ export const sessionStore = {
   claimScope,
   countArchived,
   upsert,
+  switchCredentialProfile,
   markDeleted,
   remove,
   markRead,

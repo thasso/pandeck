@@ -56,6 +56,8 @@ export interface PiToolActivationConfig {
   eagerToolNames: ReadonlySet<string>;
   /** False for the constrained manager variant: every usable tool stays active. */
   deferToolLoading: boolean;
+  /** A staged replacement registers only after its account move is admitted. */
+  deferRegistration?: boolean;
   /** Current Build/Plan mode; omitted only by mode-agnostic tests/callers. */
   mode?(): SessionMode;
   /**
@@ -80,6 +82,8 @@ export interface PiToolActivation {
    * active (and stay natively deferred at their original load point).
    */
   initialize(loadedSeed: Iterable<string>, usedSeed?: Iterable<string>): void;
+  /** Publish this activation for the live session after staged admission. */
+  register(): void;
   /** Reapply the current bridge set (for a Build/Plan policy change). */
   reapply(): void;
   /** Record a real tool call for diagnostics and prune protection. */
@@ -125,6 +129,8 @@ export function createPiToolActivation(
   const used = new Set<string>();
   const loadEvents: SessionToolLoadEvent[] = [];
   let initialized = false;
+  let disposed = false;
+  let unregisterExposure: (() => void) | undefined;
 
   const recordLoad = (
     via: SessionToolLoadEvent["via"],
@@ -208,6 +214,13 @@ export function createPiToolActivation(
       initialized = true;
       apply();
     },
+    register() {
+      if (disposed || unregisterExposure) return;
+      activations.set(config.sessionId, activation);
+      unregisterExposure = registerSessionToolExposure(config.sessionId, () =>
+        activation.exposure(),
+      );
+    },
     reapply() {
       if (initialized) apply();
     },
@@ -240,14 +253,13 @@ export function createPiToolActivation(
       // take the replacement's entry with it.
       if (activations.get(config.sessionId) === activation)
         activations.delete(config.sessionId);
-      unregisterExposure();
+      disposed = true;
+      unregisterExposure?.();
+      unregisterExposure = undefined;
       unsubscribeIntegrations();
     },
   };
-  activations.set(config.sessionId, activation);
-  const unregisterExposure = registerSessionToolExposure(config.sessionId, () =>
-    activation.exposure(),
-  );
+  if (!config.deferRegistration) activation.register();
   return activation;
 }
 

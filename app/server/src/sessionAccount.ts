@@ -7,6 +7,26 @@ import {
 } from "@assistant/shared";
 import { credentialProfileById } from "./credentialProfiles.ts";
 import { pickAccount } from "./accountRouter.ts";
+import { sessionStore } from "./db/sessionStore.ts";
+
+/** Rechecked after each asynchronous move step, before changing the binding. */
+export function assertSessionAccountSwitch(
+  sessionId: string,
+  previous: string,
+  next: string,
+  provider: CredentialProfileProvider,
+): void {
+  const source = sessionStore.get(sessionId);
+  if (!source || source.credentialProfileId !== previous)
+    throw new Error(
+      "The session's bound account is no longer available for this switch.",
+    );
+  const profile = credentialProfileById(next);
+  if (next === previous || !profile?.enabled || profile.provider !== provider)
+    throw new Error("The replacement account is no longer available.");
+  if (source.requiresEnterprise && !profile.enterprise)
+    throw new Error("This session requires an enterprise account.");
+}
 
 /** Shared interactive creation policy; inherited pins alone may be disabled. */
 export async function resolveSessionAccount(

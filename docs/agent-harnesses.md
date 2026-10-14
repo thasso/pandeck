@@ -45,6 +45,16 @@ larger record has unknown cwd and is conservatively retired, with history kept,
 rather than parsing a provider timeline on a view path or granting natives in an
 unverified directory.
 
+## Live account changes
+
+`LiveSession.credentialProfileId` is the current binding, not an immutable
+creation hint. A live driver can expose `switchAccount(profileId, admit)`; its
+backend preserves native identity/history and rechecks admission across awaits.
+Selection, reservation, Stop handling and continuation remain in the shared
+prompt/runtime path.
+[Account routing](account-routing.md#live-account-switching) owns the failover
+policy and replay limits.
+
 ## Target
 
 ![Target harness architecture](agent-harnesses.svg)

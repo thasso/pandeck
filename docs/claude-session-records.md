@@ -28,6 +28,30 @@ The harness reads its own entries for the commit tool's transcript, skill-load
 and tool-exposure accounting, question-tool repair, and context info. Deriving
 them from the log would change what those see, so the record keeps its own.
 
+## Account failover
+
+The credential profile is the current binding. Only live failover changes it,
+through a compare-and-set on the session row. `acquire` prefers that row over
+record metadata, so a failed metadata write cannot restore an older account.
+Every ordinary upsert preserves the row's established binding.
+
+The old process epoch must end before native history is copied. The copy keeps
+both `<providerSessionId>.jsonl` and `<providerSessionId>/`, including
+subagents, under the same project key in the replacement profile's `projects/`
+directory. It copies regular files/directories only, stages them before
+replacement. After the binding CAS commits, source JSONL/subagents are removed
+best-effort. Cleanup failures warn without content or paths; DELETE retries by
+sweeping every Claude profile/project root for the native id's JSONL and
+subagent directory. An abandoned copy removes the destination instead; missing
+native identity refuses the move. The resumed query uses the same provider
+session id with the replacement's credential environment. Signed thinking and
+tool history are copied byte-for-byte.
+
+The record timeline remains append-only. A model-only continuation creates no
+new committed user entry; switch notices live only in the app-owned display log.
+Selection, stop/enterprise checks and retry bounds belong to
+[account routing](account-routing.md#live-account-switching).
+
 ## Two files
 
 | File                 | Holds                                      | Written                                   |

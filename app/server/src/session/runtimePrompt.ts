@@ -12,6 +12,7 @@ import type {
   Harness,
   PromptAttachment,
   SessionMode,
+  ThinkingLevel,
 } from "@assistant/shared";
 import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
@@ -36,6 +37,14 @@ import { planTurnHintFor } from "./planHint.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
+import {
+  installAccountRecovery,
+  prepareAccountRecoveryTurn,
+} from "../sessionAccountSwitch.ts";
+import {
+  assertAccountRecoveryAdmission,
+  type AccountRecoveryTicket,
+} from "./runtime/accountRecoveryAdmission.ts";
 
 export interface RuntimePromptDriver {
   readonly id: string;
@@ -61,6 +70,12 @@ export interface RuntimePromptDriver {
    * with the error), and a new send acquires the live session.
    */
   readonly released?: boolean;
+  modelSelection?(): {
+    model?: { provider: string; id: string } | undefined;
+    thinkingLevel?: ThinkingLevel | undefined;
+  };
+  switchAccount?(profileId: string, admit: () => void): Promise<void>;
+  dropEncryptedReasoning?(admit: () => void): Promise<boolean>;
   contextInfo(): ContextInfo;
   broadcastState(): void;
   createRuntimeAdapter(): PromptableAdapter;
@@ -68,6 +83,8 @@ export interface RuntimePromptDriver {
 
 export type RuntimePromptFacadeOptions = RuntimePromptOptions & {
   attachments?: PromptAttachment[];
+  /** Server-only authority for the automatic continuation owning a switch. */
+  accountRecovery?: AccountRecoveryTicket;
   /**
    * The user's authority, captured when they acted, to run this turn on a
    * session a Stop holds and to lift that hold once it is appended
@@ -112,13 +129,51 @@ export function ensureRuntimeSessionWithRuntime(
       `Session ${driver.id} was released from memory; send it again.`,
     );
   const existing = runtime.get(driver.id);
+  const attachRecovery = (
+    live: ReturnType<SessionRuntime["createSession"]>,
+  ) => {
+    installAccountRecovery(
+      live,
+      driver,
+      () => {
+        assertSessionWorktreePresent(driver.sessionId);
+        assertTurnAllowed(driver.sessionId, undefined);
+      },
+      () => {
+        const releaseRun = beginPromptRun(driver.sessionId);
+        try {
+          const releaseAdmission = runtime.admitPrompt(driver.sessionId);
+          return () => {
+            releaseAdmission();
+            releaseRun();
+          };
+        } catch (error) {
+          releaseRun();
+          throw error;
+        }
+      },
+      (ticket, admit) =>
+        promptRuntimeSessionWithRuntime(runtime, driver, "", {
+          hidden: true,
+          continuation: true,
+          accountRecovery: ticket,
+          admit,
+          origin: { kind: "system", source: "account-switch" },
+          contextBlock:
+            "Continue the interrupted turn from the existing conversation. Do not repeat completed actions.",
+        }),
+    );
+    return live;
+  };
   if (!existing)
-    return runtime.createSession(driver.id, driver.createRuntimeAdapter());
+    return attachRecovery(
+      runtime.createSession(driver.id, driver.createRuntimeAdapter()),
+    );
   // A session brought live for viewing has no harness behind it yet. This is
   // where it gets one: the detached adapter is swapped for the driver's own,
   // which is why a prompt through this facade works on a session the reader
   // merely opened.
-  if (!existing.isDetached) return existing;
+  if (!existing.isDetached) return attachRecovery(existing);
   existing.rebindAdapter(driver.createRuntimeAdapter());
   for (const listener of harnessOpenedListeners) {
     try {
@@ -127,7 +182,7 @@ export function ensureRuntimeSessionWithRuntime(
       /* best-effort: one bad listener must not fail the prompt */
     }
   }
-  return existing;
+  return attachRecovery(existing);
 }
 
 /**
@@ -197,6 +252,7 @@ export async function beginRuntimeProviderTurn(
   driver: RuntimePromptDriver,
   origin: PromptOrigin,
 ): Promise<() => void> {
+  assertAccountRecoveryAdmission(driver.sessionId);
   assertSessionWorktreePresent(driver.sessionId);
   assertTurnAllowed(driver.sessionId, undefined);
   const releaseRun = beginPromptRun(driver.sessionId);
@@ -204,6 +260,7 @@ export async function beginRuntimeProviderTurn(
   try {
     await sessionSkills(driver.sessionId, driver.agentType);
     assertTurnAllowed(driver.sessionId, undefined);
+    assertAccountRecoveryAdmission(driver.sessionId);
     assertSessionEnterpriseAccount(driver);
     const live = ensureRuntimeSessionWithRuntime(sessionRuntime, driver);
     // The provider supplied no user message. Stamp its provenance on the next
@@ -230,7 +287,19 @@ export async function promptRuntimeSessionWithRuntime(
   text: string,
   facadeOptions: RuntimePromptFacadeOptions = {},
 ): Promise<void> {
-  const { admit, ...options } = facadeOptions;
+  const { admit, accountRecovery, ...options } = facadeOptions;
+  const assertRecoveryAdmission = () => {
+    // Keep the idle edge reserved without blocking a genuine steer into the
+    // admitted continuation. Both owners must still consider that run live.
+    if (
+      options.steer &&
+      driver.isRunning &&
+      runtime.get(driver.sessionId)?.isRunning
+    )
+      return;
+    assertAccountRecoveryAdmission(driver.sessionId, accountRecovery);
+  };
+  assertRecoveryAdmission();
   const memorySource = sessionStore.getIncludingDeleted(driver.sessionId);
   const excludedFromMemoryCapture =
     !memorySource || memorySource.requiresEnterprise === true;
@@ -260,11 +329,14 @@ export async function promptRuntimeSessionWithRuntime(
     // the runtime session exists or any user entry can be appended.
     await sessionSkills(driver.sessionId, driver.agentType);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
+    assertRecoveryAdmission();
     // Nothing below awaits before the append. The enterprise check runs before
     // `admit`, which must stay the last check: a peer admission reserves its
     // delivery, and a refusal after that reservation could strand the prompt.
     assertSessionEnterpriseAccount(driver);
     admit?.();
+    const live = ensureRuntimeSessionWithRuntime(runtime, driver);
+    prepareAccountRecoveryTurn(live, accountRecovery);
     return await runPromptWithRuntime(
       runtime,
       driver,
@@ -349,6 +421,7 @@ function withDeferredBackgroundContext(
   driver: RuntimePromptDriver,
   options: RuntimePromptFacadeOptions,
 ): { options: RuntimePromptFacadeOptions; commitIfDelivered: () => void } {
+  if (options.continuation) return { options, commitIfDelivered: () => {} };
   const pending = deferredBackgroundContext?.(driver.sessionId);
   if (!pending) return { options, commitIfDelivered: () => {} };
   const contextBlock = options.contextBlock
@@ -379,6 +452,7 @@ function withPlanTurnHint(
   driver: RuntimePromptDriver,
   options: RuntimePromptFacadeOptions,
 ): RuntimePromptFacadeOptions {
+  if (options.continuation) return options;
   const hint = planTurnHintFor(driver);
   if (!hint) return options;
   const contextBlock = options.contextBlock

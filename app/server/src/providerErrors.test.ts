@@ -7,6 +7,31 @@ import {
   shouldSuppressProviderRetry,
 } from "./providerErrors.ts";
 
+test.each([
+  "invalid_encrypted_content",
+  "The encrypted content gAAAA could not be verified.",
+  "Unable to decrypt the encrypted reasoning.",
+  "The reasoning signature is invalid.",
+])("explicit opaque-reasoning rejection is Codex-only: %s", (text) => {
+  for (const provider of ["openai-codex", "openai", "claude-sdk"]) {
+    const facts = runFailureFacts(
+      analyzeProviderError(text, { provider, model: "gpt-5.5" }),
+    );
+    assert.equal(
+      facts.encryptedReasoningRejected,
+      provider === "openai-codex" ? true : undefined,
+    );
+  }
+  assert.equal(
+    runFailureFacts(
+      analyzeProviderError("The encrypted reasoning is accepted", {
+        provider: "openai-codex",
+      }),
+    ).encryptedReasoningRejected,
+    undefined,
+  );
+});
+
 const CODEX = { provider: "openai-codex", model: "gpt-6.1-sol" };
 
 for (const text of [

@@ -77,6 +77,8 @@ export type LogEntryDraft = DistributiveOmit<
 export interface ScannedProviderEntry {
   role: SessionEntry["role"];
   providerMessageId: string;
+  /** Native-only host continuation prompt, not an app user entry. */
+  continuation?: true;
   /** Tool result: the call it answers. */
   toolCallId?: string;
   /** Assistant message: the calls it declares. */
@@ -93,6 +95,8 @@ export interface ScannedProviderEntry {
 export interface CompletedTurnBoundary {
   fromSeq: number;
   promptEntryIds: ReadonlySet<string>;
+  /** This turn started with one explicitly flagged native-only prompt. */
+  continuation?: true;
 }
 
 /** One entry's resolved anchors, as a completed-turn match produces them. */
@@ -280,6 +284,7 @@ export class SessionLog {
       scanned,
       turn.promptEntryIds,
       this.nativeIdsBoundBefore(turn.fromSeq),
+      turn.continuation === true,
     );
     if (!bindings) return;
     const bound = this.boundEntryIds();
@@ -692,28 +697,30 @@ function matchCompletedTurn(
   scanned: readonly ScannedProviderEntry[],
   promptEntryIds: ReadonlySet<string>,
   spentNativeIds: ReadonlySet<string>,
+  continuation: boolean,
 ): ResolvedBinding[] | undefined {
   const ours = splitOurTurn(entries, promptEntryIds);
   if (!ours) return undefined;
   const declared = declaredCallIds(ours.assistant);
   if (!declared) return undefined; // duplicate call ids: nothing is decidable
 
-  // Pair prompts from the END. No accepted prompt, or fewer native prompts than
-  // ours, means there is nothing this turn can be anchored to.
+  // Pair prompts from the END. A continuation explicitly owns one native-only
+  // prompt before any accepted steers; it never fabricates an app user row.
   const nativeUsers: number[] = [];
   scanned.forEach((row, index) => {
     if (row.role === "user") nativeUsers.push(index);
   });
-  if (ours.users.length > nativeUsers.length) return undefined;
-  // The last N native prompts, so every prompt row from here on is one of them
-  // (a steered turn owns the ones the provider wrote between its own messages).
-  const pairedUsers = nativeUsers.slice(nativeUsers.length - ours.users.length);
-  // Our FIRST prompt is where this turn starts in the provider's transcript. A
-  // turn with no accepted prompt has no such point: the rows after the
-  // provider's last prompt answer a prompt we do not hold, and binding our entry
-  // to them would let a fork cut a turn our copy cannot show.
-  const start = pairedUsers[0];
-  if (start === undefined) return undefined;
+  const nativeOnly = continuation ? 1 : 0;
+  const promptCount = ours.users.length + nativeOnly;
+  if (promptCount === 0 || promptCount > nativeUsers.length) return undefined;
+  // Every prompt in this tail must belong to this turn, with exactly one marked
+  // native-only row first when the runtime explicitly admitted a continuation.
+  const prompts = nativeUsers.slice(nativeUsers.length - promptCount);
+  const start = prompts[0]!;
+  if (continuation && !scanned[start]!.continuation) return undefined;
+  const pairedUsers = prompts.slice(nativeOnly);
+  if (pairedUsers.some((index) => scanned[index]!.continuation))
+    return undefined;
 
   // The calls the provider ANSWERED in this tail. A call it left hanging that
   // our turn does not declare either is the signature of an abandoned attempt —

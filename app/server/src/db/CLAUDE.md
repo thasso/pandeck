@@ -4,9 +4,9 @@
 - Session CONTENT never enters SQLite; conversation bodies live in session logs
   or harness stores. Durable locators are session/provider ids, not derived
   local paths.
-- Preserve `sessionStore.upsert` merge semantics: omitted optional fields do not
-  clear metadata. `projectStore.put` instead replaces child tables and edges, so
-  callers pass a complete record.
+- `sessionStore.upsert` omissions preserve fields; only failover's
+  `switchCredentialProfile` CAS changes bindings. `projectStore.put` replaces
+  child tables/edges, so pass complete records.
 - `session_index.scope` is DEFAULT-CLOSED and INSERT-ONLY: reads without
   explicit `scopes` cover `user` only; live lists use persisted scope
   (`liveDefaultScopeGate`) and exclude unreadable rows; registration claims

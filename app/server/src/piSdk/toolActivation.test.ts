@@ -53,6 +53,46 @@ function assistantActivation(
   return activation;
 }
 
+test("staged activation registers only at commit and cannot remove live exposure on disposal", () => {
+  const sessionId = "staged-activation";
+  const config = {
+    sessionId,
+    agentType: "assistant" as const,
+    agentTools: agentToolsFor("assistant"),
+    eagerToolNames: eagerToolNamesFor("assistant"),
+    deferToolLoading: true,
+    applyActiveToolNames: () => {},
+  };
+  const live = createPiToolActivation(config);
+  live.initialize(["kb_read"]);
+  const abandoned = createPiToolActivation({
+    ...config,
+    deferRegistration: true,
+  });
+  abandoned.initialize([]);
+  const committed = createPiToolActivation({
+    ...config,
+    deferRegistration: true,
+  });
+  committed.initialize([]);
+  try {
+    assert.deepEqual(toolExposureForSession(sessionId), live.exposure());
+    assert.deepEqual(sessionToolExposure(sessionId), live.exposure());
+    abandoned.dispose();
+    abandoned.register();
+    assert.deepEqual(toolExposureForSession(sessionId), live.exposure());
+    assert.deepEqual(sessionToolExposure(sessionId), live.exposure());
+    committed.register();
+    live.dispose();
+    assert.deepEqual(toolExposureForSession(sessionId), committed.exposure());
+    assert.deepEqual(sessionToolExposure(sessionId), committed.exposure());
+  } finally {
+    abandoned.dispose();
+    committed.dispose();
+    live.dispose();
+  }
+});
+
 test("initial active set is eager + find_tools; deferred tools stay out", () => {
   const applied: Array<ReadonlySet<string>> = [];
   const activation = assistantActivation(applied);

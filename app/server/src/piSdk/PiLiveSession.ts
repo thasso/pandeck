@@ -64,6 +64,7 @@ import {
 } from "../serialize.ts";
 import { deriveTitle, type LiveListInfo } from "../sessions.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { assertSessionAccountSwitch } from "../sessionAccount.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
 import { sessionAgentSummary } from "../agents/sessionAgent.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
@@ -149,6 +150,7 @@ import {
 import { listSessionArtifacts } from "../mcp/toolGroups/packRuntime.ts";
 import { errorText } from "../errors.ts";
 import { SessionBusyError } from "../session/runtime/errors.ts";
+import { assertAccountRecoveryAdmission } from "../session/runtime/accountRecoveryAdmission.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 
 const RELOAD_QUEUED_MESSAGE =
@@ -257,6 +259,13 @@ function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
  * loss. The underlying {@link AgentSession} keeps running across detach so a run
  * survives a tab close or reconnect.
  */
+/** A replacement engine prepared without changing the live wrapper or its tools. */
+export interface PiAccountSession {
+  session: AgentSession;
+  commit(): void;
+  dispose(): void;
+}
+
 export class PiLiveSession implements LiveSession {
   readonly live = true;
   readonly key: string;
@@ -308,6 +317,16 @@ export class PiLiveSession implements LiveSession {
    * (it only settles afterwards) and so can't tell "running" from "just ended".
    */
   private running = false;
+  private driveCompletion: Promise<unknown> | undefined;
+
+  get session(): AgentSession {
+    return this.agentSession;
+  }
+
+  get credentialProfileId(): string | undefined {
+    return this.profileId;
+  }
+
   /** Live title; a new conversation uses the stable placeholder until naming settles. */
   title: string | undefined;
   /** True only while the dedicated naming agent is running. */
@@ -317,7 +336,7 @@ export class PiLiveSession implements LiveSession {
 
   constructor(
     readonly kind: AgentType,
-    readonly session: AgentSession,
+    private agentSession: AgentSession,
     private readonly host: HarnessHost,
     private readonly onEvict: (key: string) => void,
     private initialNotices: Array<{
@@ -329,8 +348,12 @@ export class PiLiveSession implements LiveSession {
     private mode: SessionMode = "build",
     private readonly onModeChange: (mode: SessionMode) => void = () => {},
     /** The account the session runs on; its model resolves in that registry. */
-    readonly credentialProfileId: string | undefined = undefined,
+    private profileId: string | undefined = undefined,
+    private readonly reopenForAccount?: (
+      profileId: string,
+    ) => Promise<PiAccountSession>,
   ) {
+    const session = agentSession;
     this.key = session.sessionId;
     // Registered by its store (`track`) as soon as it is built.
     this.residency.hold(() => {
@@ -1003,6 +1026,7 @@ export class PiLiveSession implements LiveSession {
     name: string,
     args: unknown,
   ): { assistantId: string; toolId: string } {
+    assertAccountRecoveryAdmission(this.sessionId);
     if (this.running)
       throw new SessionBusyError(
         this.session.sessionId,
@@ -1018,6 +1042,7 @@ export class PiLiveSession implements LiveSession {
     name: string,
     args: unknown,
   ): { assistantId: string; toolId: string } {
+    assertAccountRecoveryAdmission(this.sessionId);
     this.residency.cancel();
     this.running = true;
     this.host.noteRunStarted();
@@ -1100,6 +1125,7 @@ export class PiLiveSession implements LiveSession {
    * teardown refreshes the state the commit changed.
    */
   async acceptCommitDryRun(entryId: string): Promise<void> {
+    assertAccountRecoveryAdmission(this.sessionId);
     if (this.running)
       throw new Error(
         "Cannot accept a commit dry run while the agent is streaming.",
@@ -1159,6 +1185,56 @@ export class PiLiveSession implements LiveSession {
     });
   }
 
+  /** Rebuild on the new login only after the old SDK operation has settled. */
+  async switchAccount(profileId: string, admit: () => void): Promise<void> {
+    const previous = this.profileId;
+    if (!previous || !this.reopenForAccount)
+      throw new Error("This pi session cannot switch accounts.");
+    const check = () => {
+      admit();
+      if (
+        this.disposed ||
+        this.running ||
+        this.session.isStreaming ||
+        this.profileId !== previous
+      )
+        throw new Error("The pi session changed during its account switch.");
+      assertSessionAccountSwitch(this.id, previous, profileId, "openai-codex");
+    };
+    await this.driveCompletion?.catch(() => {});
+    check();
+    const manager = this.session.sessionManager;
+    const leaf = manager.getLeafId();
+    const replacement = await this.reopenForAccount(profileId);
+    let committed = false;
+    try {
+      check();
+      if (replacement.session.sessionId !== this.id)
+        throw new Error("The reopened pi session has a different id.");
+      if (
+        manager.getLeafId() !== leaf ||
+        replacement.session.sessionManager.getLeafId() !== leaf
+      )
+        throw new Error("The pi transcript changed during its account switch.");
+      sessionStore.switchCredentialProfile(this.id, previous, profileId);
+      committed = true;
+      const old = this.session;
+      this.unsubscribe();
+      this.agentSession = replacement.session;
+      this.profileId = profileId;
+      this.unsubscribe = this.session.subscribe((event) =>
+        this.onAgentEvent(event),
+      );
+      replacement.commit();
+      old.dispose();
+      this.broadcastState();
+      void this.host.broadcastSessions();
+    } catch (error) {
+      if (!committed) replacement.dispose();
+      throw error;
+    }
+  }
+
   #promptRaw(
     text: string,
     attachments: PromptAttachment[] = [],
@@ -1166,8 +1242,10 @@ export class PiLiveSession implements LiveSession {
       hidden?: boolean;
       clientRequestId?: string;
       steerOnly?: boolean;
+      continuation?: boolean;
     } = {},
   ): PiPromptResponse {
+    if (options.continuation) return this.continueFailedTurn(text);
     const trimmedInput = text.trim();
     if (!trimmedInput && attachments.length === 0) return "ignored";
 
@@ -1274,6 +1352,7 @@ export class PiLiveSession implements LiveSession {
     const run = this.session.isStreaming
       ? this.session.steer(promptWithFiles, images)
       : this.session.prompt(promptWithFiles, { images });
+    if (!wasRunning) this.driveCompletion = run;
     if (options.steerOnly) {
       // A refused `steerOnly` is expected control flow, not a provider failure:
       // the adapter reports it as `steered: false` and delivery retries. Routing
@@ -1299,6 +1378,68 @@ export class PiLiveSession implements LiveSession {
         attachments,
       );
     return { outcome: wasRunning ? "steered" : "started", completed: run };
+  }
+
+  /** Only after explicit rejection: omit opaque OpenAI reasoning, not text/tools/history. */
+  async dropEncryptedReasoning(admit: () => void): Promise<boolean> {
+    await this.driveCompletion?.catch(() => undefined);
+    admit();
+    if (this.running || this.session.isStreaming || this.disposed) return false;
+    let changed = false;
+    const manager = this.session.sessionManager;
+    for (const { sourceEntry, messages } of manager.buildSessionProjection()
+      .entries) {
+      const message = messages[0];
+      if (
+        sourceEntry.type !== "message" ||
+        message?.role !== "assistant" ||
+        !/^openai(?:-|$)/.test(message.provider)
+      )
+        continue;
+      const content = message.content.filter(
+        (block) => block.type !== "thinking" || !block.thinkingSignature,
+      );
+      if (content.length === message.content.length) continue;
+      manager.appendContextEdit(
+        sourceEntry.id,
+        content.length ? { content } : null,
+      );
+      changed = true;
+    }
+    return changed;
+  }
+
+  /** SDK-owned continuation: model-only custom input, never another user message. */
+  private continueFailedTurn(context: string): PiPromptResponse {
+    if (this.disposed || this.running || this.session.isStreaming)
+      throw new Error("Cannot continue a running or released pi session.");
+    const branch = this.session.sessionManager.getBranch();
+    const last = [...branch]
+      .reverse()
+      .find((entry) => entry.type === "message");
+    // Like pi's own recovery, retain the failed response in the native file but
+    // omit it from model context; Agent.continue requires a user/tool-result tail.
+    if (
+      last?.type === "message" &&
+      last.message.role === "assistant" &&
+      last.message.stopReason === "error"
+    )
+      this.session.sessionManager.appendContextEdit(last.id, null);
+    this.session.state.messages =
+      this.session.sessionManager.buildSessionContext().messages;
+    this.residency.cancel();
+    this.running = true;
+    this.host.noteRunStarted();
+    // Agent.continue alone bypasses AgentSession's settle/retry/compaction and
+    // queue lifecycle. Its public custom-message turn preserves that lifecycle
+    // without persisting another user role or making this instruction visible.
+    const run = this.session.sendCustomMessage(
+      { customType: "account-continuation", content: context, display: false },
+      { triggerTurn: true },
+    );
+    this.driveCompletion = run;
+    void run.catch((error: unknown) => this.finishPromptError(error, false));
+    return { outcome: "started", completed: run };
   }
 
   private finishPromptError(err: unknown, wasRunning: boolean): void {
