@@ -88,6 +88,8 @@ describe("re-issuing a failed first send", () => {
         held,
         {
           harness: "claude-sdk",
+          agentType: "developer",
+          credentialProfileId: "claude-work",
           provider: "claude-sdk",
           modelId: "sonnet",
           thinkingLevel: "low",
@@ -109,12 +111,44 @@ describe("re-issuing a failed first send", () => {
     });
   });
 
+  it("follows the draft's engine, persona and account, not the held ones", () => {
+    // After a refused Claude agent send the user moves to an OpenAI account
+    // and the assistant persona: the retry is what they see now.
+    expect(
+      reissuedFirstSend(
+        held,
+        {
+          harness: "pi",
+          agentType: "assistant",
+          credentialProfileId: "openai-work",
+          provider: "openai-codex",
+          modelId: "gpt-6-luna",
+          thinkingLevel: "medium",
+        },
+        { text: "third try" },
+      ),
+    ).toEqual({
+      id: "draft",
+      harness: "pi",
+      agentType: "assistant",
+      credentialProfileId: "openai-work",
+      text: "third try",
+      modelProvider: "openai-codex",
+      modelId: "gpt-6-luna",
+      thinkingLevel: "medium",
+      attachTaskId: "780",
+      worktreeId: "wt-1",
+      clientRequestId: "req-1",
+    });
+  });
+
   it("carries the agent only while the draft still has it", () => {
     expect(
       reissuedFirstSend(
         held,
         {
           harness: "claude-sdk",
+          agentType: "developer",
           provider: "claude-sdk",
           modelId: "opus",
           thinkingLevel: "high",

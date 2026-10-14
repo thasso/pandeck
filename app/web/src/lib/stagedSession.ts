@@ -93,8 +93,11 @@ export function leftNewSessionPage(
 }
 
 /** What the pickers show for the draft right now. */
-interface DraftRuntime {
+export interface DraftRuntime {
   harness: Harness;
+  agentType: AgentType;
+  /** The account picked for it. */
+  credentialProfileId?: string | undefined;
   provider?: string | undefined;
   modelId?: string | undefined;
   thinkingLevel?: ThinkingLevel | undefined;
@@ -103,11 +106,11 @@ interface DraftRuntime {
 }
 
 /**
- * A failed first send re-issued from the composer. Its consumed context (the
- * Task, the worktree, the project to provision in) and request identity are
- * the held send's; what RUNS it is what the pickers show now, so a model,
- * effort, persona or agent pick made after the failure is the one sent, and a
- * dropped agent stays dropped.
+ * A failed first send re-issued, from the composer or a Retry button. Its
+ * consumed context (the Task, the worktree, the project to provision in) and
+ * request identity are the held send's; what RUNS it is what the pickers show
+ * now — engine, persona, account, model, effort and agent — so a pick made
+ * after the failure is the one sent, and a dropped agent stays dropped.
  */
 export function reissuedFirstSend(
   held: HarnessSendInput,
@@ -115,6 +118,8 @@ export function reissuedFirstSend(
   content: Pick<HarnessSendInput, "text" | "attachments">,
 ): HarnessSendInput {
   const {
+    agentType: _persona,
+    credentialProfileId: _account,
     modelProvider: _provider,
     modelId: _model,
     thinkingLevel: _thinking,
@@ -125,6 +130,10 @@ export function reissuedFirstSend(
   return {
     ...context,
     harness: draft.harness,
+    agentType: draft.agentType,
+    ...(draft.credentialProfileId !== undefined
+      ? { credentialProfileId: draft.credentialProfileId }
+      : {}),
     ...(draft.provider !== undefined ? { modelProvider: draft.provider } : {}),
     ...(draft.modelId !== undefined ? { modelId: draft.modelId } : {}),
     ...(draft.thinkingLevel !== undefined

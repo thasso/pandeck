@@ -369,6 +369,7 @@ import { IconButton } from "./components/common/IconButton.tsx";
 import {
   agentAcrossPersonaSwitch,
   agentDraft,
+  type DraftRuntime,
   leftNewSessionPage,
   reconcileStagedAgent,
   reissuedFirstSend,
@@ -2159,6 +2160,11 @@ function AppContent() {
     if (route.name !== "new" && route.name !== "sessions") {
       // A picked agent definition goes the same way.
       setPendingStart(leftNewSessionPage);
+    } else if (route.name === "sessions") {
+      // The Sessions list shows the draft without the agents list (subscribing
+      // there would resolve every definition on each visit), so a picked
+      // definition cannot be kept current there and is dropped.
+      setPendingStart((record) => record && withoutAgent(record));
     }
   }, [routeIdentity, route.name]);
   useEffect(() => {
@@ -3260,6 +3266,8 @@ function AppContent() {
   // Worktree row scopes to it), then land on the new-session page.
   const startSessionForTask = useCallback(
     (taskId: string, title: string) => {
+      // A fresh draft: a first send held for retry belongs to the one left.
+      setStagedSend(null);
       setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
@@ -3291,6 +3299,8 @@ function AppContent() {
   // first prompt (the composer shows it as removable staged context).
   const startSessionForProject = useCallback(
     (projectId: string) => {
+      // A fresh draft: a first send held for retry belongs to the one left.
+      setStagedSend(null);
       setPendingTaskAttach(null);
       setPendingFileContext(null);
       setPendingStart(null);
@@ -3309,6 +3319,8 @@ function AppContent() {
   // this file" routes here). `href` is the document's canonical viewer route.
   const startSessionForFile = useCallback(
     (href: string, title: string) => {
+      // A fresh draft: a first send held for retry belongs to the one left.
+      setStagedSend(null);
       setPendingTaskAttach(null);
       setPendingProjectContext(null);
       setPendingWorktreeContext(null);
@@ -3466,6 +3478,8 @@ function AppContent() {
       worktreeId: string,
       outcome: PullRequestCheckoutOutcome,
     ) => {
+      // A fresh draft: a first send held for retry belongs to the one left.
+      setStagedSend(null);
       // WHICH Task is decided by server ids only — the checkout's own edges
       // from this very answer, then the pull request's links — so a cold or
       // stale browser list can never be read as "there is no Task". The lists
@@ -3527,6 +3541,8 @@ function AppContent() {
   // the worktree while the standard landing owns model/thinking/persona choice.
   const startWorktreeReviewDraft = useCallback(
     (worktreeId: string, commentIds: string[]) => {
+      // A fresh draft: a first send held for retry belongs to the one left.
+      setStagedSend(null);
       // Shared context-derivation rule (lib/sessionHandoff.ts, also behind
       // /review and a plain start in a worktree): the draft inherits the
       // worktree's project AND its single implementing Task, so the review
@@ -3617,6 +3633,8 @@ function AppContent() {
    */
   const startReviewSessionForSession = useCallback(
     (extraText = ""): string | null => {
+      // A fresh draft: a first send held for retry belongs to the one left.
+      setStagedSend(null);
       const sourceId = displayCurrentId;
       if (!sourceId || !displayHasUserPrompt)
         return "Nothing to review yet — this session has no work to look at.";
@@ -4422,7 +4440,8 @@ function AppContent() {
   const stageAgent = (name: string | null) => {
     // A review handoff creates its session without a first send, so it cannot
     // start as an agent: the row is not offered for that draft.
-    if (!isNewChatRoute || runtimeHasStarted || pendingWorktreeReview) return;
+    if (route.name !== "new" || runtimeHasStarted || pendingWorktreeReview)
+      return;
     if (name === null) {
       // Back to a plain session on the same runtime. Only a staged record can
       // carry an agent.
@@ -4452,6 +4471,18 @@ function AppContent() {
   // the pickers keep showing what the first send will run.
   const stageAgentRef = useRef(stageAgent);
   stageAgentRef.current = stageAgent;
+  /**
+   * The draft as the pickers show it this render: what a re-issued first send
+   * runs (`reissuedFirstSend`), whichever control re-issues it.
+   */
+  const draftRuntime: DraftRuntime = {
+    ...firstPromptRuntimeSelection(displaySession),
+    agentType: displayAgentType,
+    credentialProfileId,
+    agent: (pendingStart ?? stagedStart)?.agent,
+  };
+  const draftRuntimeRef = useRef(draftRuntime);
+  draftRuntimeRef.current = draftRuntime;
   useEffect(() => {
     const change = reconcileStagedAgent(
       pendingStart,
@@ -4826,11 +4857,10 @@ function AppContent() {
       // rides along so the visible prompt is replaced rather than duplicated.
       const input: HarnessSendInput =
         routing === "reissue-first-send"
-          ? reissuedFirstSend(
-              stagedSend!.input!,
-              { ...runtime, agent: staged?.agent },
-              { text: sentText, attachments: allAttachments },
-            )
+          ? reissuedFirstSend(stagedSend!.input!, draftRuntimeRef.current, {
+              text: sentText,
+              attachments: allAttachments,
+            })
           : {
               id,
               harness: runtime.harness,
@@ -4966,9 +4996,24 @@ function AppContent() {
     const send = stagedSend;
     if (!send) return;
     pinTranscriptToBottom();
-    send.resend();
-    armStagedSend(send);
-  }, [stagedSend, pinTranscriptToBottom, armStagedSend]);
+    if (!send.input) {
+      // A review handoff: its bundle is re-run as it was.
+      send.resend();
+      armStagedSend(send);
+      return;
+    }
+    // A held first send runs what the pickers show NOW, like a composer
+    // retry: a pick made after the failure, or an agent the draft dropped
+    // since, must not be overruled by the copy held from before it.
+    const input = reissuedFirstSend(send.input, draftRuntimeRef.current, {
+      text: send.input.text,
+      ...(send.input.attachments !== undefined
+        ? { attachments: send.input.attachments }
+        : {}),
+    });
+    actions.harnessSend(input);
+    armStagedSend({ resend: () => actions.harnessSend(input), input });
+  }, [stagedSend, pinTranscriptToBottom, armStagedSend, actions]);
   const onRetryWorktreeProvision =
     firstSendFailed && provisionFailed ? retryFirstSend : undefined;
   const onRetryFirstSend = firstSendFailed ? retryFirstSend : undefined;
@@ -6375,7 +6420,13 @@ function AppContent() {
               }
               // A comment-review draft starts through the review handoff,
               // which carries no agent definition.
-              agents={pendingWorktreeReview ? undefined : state.agentLibrary}
+              // Offered on /sessions/create only, where the `agents` topic is
+              // held.
+              agents={
+                route.name === "new" && !pendingWorktreeReview
+                  ? state.agentLibrary
+                  : undefined
+              }
               selectedAgent={(pendingStart ?? stagedStart)?.agent ?? null}
               onSelectAgent={stageAgent}
             />
