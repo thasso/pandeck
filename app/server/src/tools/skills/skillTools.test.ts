@@ -112,6 +112,31 @@ describe("skill tools: reads", () => {
     assert.equal(listed.skills[0].name, "skill-000");
   });
 
+  test("skill_list bounds each diagnostic's text, whatever the folders hold", async () => {
+    // Long folder names that all declare one name: every one gets a
+    // duplicate-name diagnostic naming several of them.
+    for (let at = 0; at < 60; at++) {
+      const folder = `${"d".repeat(230)}-${String(at).padStart(3, "0")}`;
+      await mkdir(join(root, folder), { recursive: true });
+      await writeFile(
+        join(root, folder, "SKILL.md"),
+        "---\nname: shared\ndescription: Copy\n---\nBody.\n",
+      );
+    }
+
+    const listed = await call("skill_list");
+
+    assert.equal(listed.diagnosticCount, 60);
+    assert.equal(listed.diagnostics.length, 50);
+    assert.equal(listed.truncated, true);
+    for (const diagnostic of listed.diagnostics) {
+      assert.ok(diagnostic.error.length <= 510, diagnostic.error);
+      assert.match(diagnostic.error, /… \(cut\)$/);
+    }
+    // Folder and path are bounded by the filesystem; the text is what grew.
+    assert.ok(JSON.stringify(listed).length < 50 * 1_200);
+  });
+
   test("skill_list reports skills, diagnostics and repository state", async () => {
     const empty = await call("skill_list");
     assert.equal(empty.libraryPath, root);

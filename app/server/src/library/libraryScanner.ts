@@ -253,6 +253,9 @@ async function scanEntryFolder(
   return candidate;
 }
 
+/** How many folders a duplicate-name diagnostic names before "and N more". */
+const MAX_NAMED_DUPLICATE_FOLDERS = 5;
+
 function addDuplicateDiagnostics(
   kind: LibraryKind,
   candidates: EntryCandidate[],
@@ -270,13 +273,18 @@ function addDuplicateDiagnostics(
     const folders = group
       .map((candidate) => candidate.folder)
       .sort(compareText);
+    // Every conflicting folder carries this text, so it names a few of them:
+    // listing all would grow with the library on every one.
+    const named = folders.slice(0, MAX_NAMED_DUPLICATE_FOLDERS).join(", ");
+    const more = folders.length - MAX_NAMED_DUPLICATE_FOLDERS;
+    const listed = more > 0 ? `${named} and ${more} more` : named;
     for (const candidate of group) {
       candidate.diagnostics.push({
         code: "duplicate-name",
         folder: candidate.folder,
         path: candidate.path,
         declaredName: name,
-        error: `Duplicate declared ${kind.noun} name "${name}" in folders: ${folders.join(", ")}.`,
+        error: `Duplicate declared ${kind.noun} name "${name}" in folders: ${listed}.`,
       });
     }
   }

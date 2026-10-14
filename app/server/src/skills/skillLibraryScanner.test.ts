@@ -360,6 +360,20 @@ describe("scanSkillLibrary", () => {
     }
   });
 
+  test("a duplicate-name diagnostic names a few folders, not every one", async () => {
+    for (let at = 0; at < 8; at++)
+      await writeSkill(`copy-${at}`, "name: shared\ndescription: Copy");
+
+    const scan = await scanSkillLibrary(root);
+
+    assert.equal(scan.diagnostics.length, 8);
+    for (const diagnostic of scan.diagnostics)
+      assert.equal(
+        diagnostic.error,
+        'Duplicate declared skill name "shared" in folders: copy-0, copy-1, copy-2, copy-3, copy-4 and 3 more.',
+      );
+  });
+
   test("rescans uncommitted working-tree edits, additions, and removals instead of Git HEAD", async () => {
     await git(["init", "-b", "main"], root);
     await writeSkill("existing", "name: existing\ndescription: Committed");
