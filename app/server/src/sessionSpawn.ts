@@ -33,6 +33,7 @@ import {
   type SessionSpawnApprovalBody,
   type SessionSpawnApprovalItem,
   type SessionSpawnResolutionEdits,
+  peerRuntimeFamilyOf,
   supportedThinkingLevelsForModel,
   THINKING_LEVELS,
   type ThinkingLevel,
@@ -64,6 +65,13 @@ import {
   sessionContextEvidence,
 } from "./sessionContext.ts";
 import { readTask } from "./tasks.ts";
+import {
+  AgentSpawnRefusedError,
+  resolveAgentSpawn,
+  scanAgentsForSpawn,
+  type AgentSpawnRuntime,
+} from "./agents/agentSpawn.ts";
+import type { SessionAgent } from "./agents/sessionAgent.ts";
 import {
   isMainWorktreeId,
   mainCheckoutPathForProject,
@@ -718,8 +726,16 @@ async function spawnOne(
   // before those awaits is a claim about the past. A caller whose runtime comes
   // from live settings re-resolves here and the row runs on THAT, or not at
   // all; nothing between this call and `deps.create*` yields to the event loop.
+  let agent: SessionAgent | undefined;
   if (options.currentRuntime) {
     const runtime = await options.currentRuntime();
+    // The row was validated for the persona the definition had then; one
+    // edited to another persona since would run without that validation.
+    if (runtime.agent && runtime.agent.persona !== item.agentType)
+      throw new Error(
+        `Agent definition "${runtime.agent.name}" changed persona to ${runtime.agent.persona} while "${item.title}" was being started; nothing was created.`,
+      );
+    agent = runtime.agent;
     item.provider = runtime.provider;
     item.modelId = runtime.modelId;
     item.credentialProfileId = runtime.credentialProfileId;
@@ -738,6 +754,7 @@ async function spawnOne(
     promptEvidence: evidence,
     title: item.title,
     ...(worktree ? { worktree: { id: worktree.id, path: worktree.path } } : {}),
+    ...(agent ? { agent } : {}),
   };
   let spec: NewSession;
   if (item.provider === CLAUDE_SDK_PROVIDER) {
@@ -823,6 +840,8 @@ interface SpawnOneOptions {
     credentialProfileId: string;
     accountName?: string;
     thinkingLevel: ThinkingLevel;
+    /** The agent definition the session is spawned as, frozen at creation. */
+    agent?: SessionAgent | undefined;
   }>;
 }
 
@@ -885,15 +904,21 @@ registerApprovalExecutor("sessionSpawn", {
 
 /**
  * One row of a DIRECT batch ([Task-595](pa://task/595)): the same structural
- * fields as a proposal row, plus the approved runtime it must run on. There is
- * deliberately no provider/model/thinking/account field — the human's roster is
- * the only place those are chosen on this path.
+ * fields as a proposal row, plus what it must run on — an approved runtime
+ * (`profileId`) or an agent definition (`agent`), exactly one of them. There
+ * is deliberately no provider/model/thinking/account field: the human's roster
+ * and the definitions they approved are the only places those are chosen on
+ * this path. An agent row takes its persona from the definition.
  */
-export interface DirectSpawnRequestRow {
+export type DirectSpawnRequestRow = DirectSpawnRowFields &
+  (
+    | { profileId: string; agentType: SpawnAgentType; agent?: undefined }
+    | { agent: string; profileId?: undefined; agentType?: undefined }
+  );
+
+interface DirectSpawnRowFields {
   title: string;
-  agentType: SpawnAgentType;
   prompt: string;
-  profileId: string;
   responseRequested?: boolean;
   worktreeId?: string;
   projectId?: string;
@@ -903,7 +928,9 @@ export interface DirectSpawnRequestRow {
 /** What one direct row did, whether or not it worked. */
 export interface DirectSpawnRowResult {
   title: string;
-  profileId: string;
+  /** The approved runtime it named, or the agent definition. */
+  profileId?: string;
+  agent?: string;
   /** The runtime it actually ran on; absent when the runtime was refused. */
   runtime?: {
     name: string;
@@ -912,7 +939,10 @@ export interface DirectSpawnRowResult {
     thinkingLevel: ThinkingLevel;
     accountName?: string;
     family: string;
-    relativeCost: string;
+    /** The user's cost label; a definition has none. */
+    relativeCost?: string;
+    /** For an agent row: the `AGENT.md` blob it froze. */
+    blob?: string;
   };
   sessionId?: string;
   error?: string;
@@ -922,12 +952,12 @@ export interface DirectSpawnRowResult {
  * Create a batch of ordinary peer sessions on pre-approved runtimes, now.
  *
  * The structural half is validated for EVERY row first: a title, persona,
- * worktree, Project or Task the agent stated wrongly is its own mistake and
- * costs a tool error with nothing created. From there the rows are isolated —
- * each one resolves its approved runtime immediately before it is used, so a
- * roster edit between rows is honoured rather than assumed away, and a runtime,
- * creation or delivery failure is reported on that row while the others
- * continue.
+ * worktree, Project, Task or agent definition the agent stated wrongly is its
+ * own mistake and costs a tool error with nothing created. From there the rows
+ * are isolated — each one resolves its runtime immediately before it is used,
+ * so a roster or definition edit between rows is honoured rather than assumed
+ * away, and a runtime, creation or delivery failure is reported on that row
+ * while the others continue.
  */
 export async function spawnApprovedPeers(input: {
   senderSessionId: string;
@@ -935,10 +965,43 @@ export async function spawnApprovedPeers(input: {
 }): Promise<DirectSpawnRowResult[]> {
   assertBatchSize(input.rows);
   const structurals: StructuralRow[] = [];
-  for (const row of input.rows) {
+  // One scan resolves every agent row; each is resolved again before use.
+  let agents: Awaited<ReturnType<typeof scanAgentsForSpawn>> | undefined;
+  const earlyAgents = new Map<number, AgentSpawnRuntime>();
+  for (const [index, row] of input.rows.entries()) {
+    // Quoted in refusals before `validateStructure` checks its length.
+    const title = row.title?.trim() || "(untitled)";
+    const label =
+      title.length > MAX_SPAWN_TITLE_CHARS
+        ? `${title.slice(0, MAX_SPAWN_TITLE_CHARS)}…`
+        : title;
+    if (row.agent !== undefined) {
+      if (row.profileId !== undefined)
+        throw new SpawnProposalError(
+          `"${label}" must name either an agent or a profileId, not both.`,
+        );
+      if (!row.agent.trim())
+        throw new SpawnProposalError(`"${label}" names an empty agent.`);
+      agents ??= await scanAgentsForSpawn();
+      let early: AgentSpawnRuntime;
+      try {
+        early = await resolveAgentSpawn(row.agent.trim(), agents);
+      } catch (err) {
+        if (err instanceof AgentSpawnRefusedError)
+          throw new SpawnProposalError(`"${label}": ${err.message}`);
+        throw err;
+      }
+      // The definition decides the persona, so a developer agent still needs
+      // its worktree like any developer row.
+      earlyAgents.set(index, early);
+      structurals.push(
+        await validateStructure({ ...row, agentType: early.agent.persona }),
+      );
+      continue;
+    }
     if (!row.profileId?.trim())
       throw new SpawnProposalError(
-        `"${row.title?.trim() || "(untitled)"}" has no profileId. A direct spawn runs only on an approved runtime — call operation "profiles" first.`,
+        `"${label}" has no profileId. A direct spawn runs only on an approved runtime or an agent definition — call operation "profiles" or "agents" first.`,
       );
     structurals.push(await validateStructure(row));
   }
@@ -957,16 +1020,22 @@ export async function spawnApprovedPeers(input: {
       const structural = structurals[index]!;
       const result: DirectSpawnRowResult = {
         title: structural.title,
-        profileId: row.profileId.trim(),
+        ...(row.agent !== undefined
+          ? { agent: row.agent.trim() }
+          : { profileId: row.profileId.trim() }),
       };
       results.push(result);
       // An early resolution so a roster mistake costs no worktree lookups —
       // but it is NOT what the session runs on. `spawnOne` re-resolves through
       // `currentRuntime` immediately before creating anything, because the
-      // awaits in between are exactly where a Settings edit lands.
-      let runtime: ApprovedPeerRuntime;
+      // awaits in between are exactly where a Settings or definition edit
+      // lands.
+      const resolve = rowRuntime(row);
+      // An agent row was resolved with the batch already; the late read in
+      // `spawnOne` is the one that counts.
+      let runtime: RowRuntime;
       try {
-        runtime = await resolveApprovedPeerRuntime(row.profileId);
+        runtime = earlyAgents.get(index) ?? (await resolve());
       } catch (err) {
         result.error = errorText(err);
         continue;
@@ -986,14 +1055,14 @@ export async function spawnApprovedPeers(input: {
         ...(runtime.accountName ? { accountName: runtime.accountName } : {}),
         thinkingLevel: runtime.thinkingLevel,
       };
-      let finalRuntime: ApprovedPeerRuntime | undefined;
+      let finalRuntime: RowRuntime | undefined;
       try {
         await spawnOne(input.senderSessionId, item, {
           currentRuntime: async () => {
             // Throws if the row was disabled, deleted or made unrunnable while
             // this row was being prepared; a row edited to another runtime runs
             // on the CURRENT approval, which is the only one that exists.
-            const current = await resolveApprovedPeerRuntime(row.profileId);
+            const current = await resolve();
             finalRuntime = current;
             return current;
           },
@@ -1004,18 +1073,7 @@ export async function spawnApprovedPeers(input: {
       // Report only the late resolution used for creation. If late resolution
       // refused the row, repeating the earlier runtime here would imply that a
       // stale or fallback runtime had been attempted when nothing was created.
-      if (finalRuntime)
-        result.runtime = {
-          name: finalRuntime.name,
-          provider: finalRuntime.provider,
-          modelId: finalRuntime.modelId,
-          thinkingLevel: finalRuntime.thinkingLevel,
-          ...(finalRuntime.accountName
-            ? { accountName: finalRuntime.accountName }
-            : {}),
-          family: finalRuntime.family,
-          relativeCost: finalRuntime.relativeCost,
-        };
+      if (finalRuntime) result.runtime = reportedRuntime(finalRuntime);
       if (item.resultSessionId) {
         result.sessionId = item.resultSessionId;
         recordDirectPeerChild(input.senderSessionId, item.resultSessionId);
@@ -1026,4 +1084,46 @@ export async function spawnApprovedPeers(input: {
   }
   deps.broadcastSessions();
   return results;
+}
+
+/** What one direct row runs on: an approved runtime, or an agent definition. */
+type RowRuntime =
+  (ApprovedPeerRuntime & { agent?: undefined }) | AgentSpawnRuntime;
+
+/** A fresh resolution of one row's runtime, every time it is called. */
+function rowRuntime(row: DirectSpawnRequestRow): () => Promise<RowRuntime> {
+  if (row.agent !== undefined) {
+    const name = row.agent.trim();
+    return () => resolveAgentSpawn(name);
+  }
+  const profileId = row.profileId;
+  return () => resolveApprovedPeerRuntime(profileId);
+}
+
+function reportedRuntime(
+  runtime: RowRuntime,
+): NonNullable<DirectSpawnRowResult["runtime"]> {
+  const common = {
+    provider: runtime.provider,
+    modelId: runtime.modelId,
+    thinkingLevel: runtime.thinkingLevel,
+    ...(runtime.accountName ? { accountName: runtime.accountName } : {}),
+  };
+  if (runtime.agent)
+    return {
+      ...common,
+      name: `agent ${runtime.agent.name}${
+        runtime.agent.pinnedModel
+          ? ` (pinned ${runtime.agent.pinnedModel})`
+          : ""
+      }`,
+      family: peerRuntimeFamilyOf(runtime.provider, runtime.modelId),
+      blob: runtime.agent.blob,
+    };
+  return {
+    ...common,
+    name: runtime.name,
+    family: runtime.family,
+    relativeCost: runtime.relativeCost,
+  };
 }

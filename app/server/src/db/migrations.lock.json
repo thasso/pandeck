@@ -76,5 +76,6 @@
   "0075_inbox_position.sql": "63cbfc43837f6e34d1e06c61ab9468bdfb778eefcda840c47091dce4c31e368e",
   "0076_background_work_stop_origin.sql": "27c854f7145210991969092fdda707d4d455d386ebd5d6a44205496132ee893d",
   "0077_delegation_failure_notices.sql": "35464f33efa043b72e63e8e41a1d6fc0d91c5a99fd1780fea1aafeef321c247a",
-  "0078_worktree_creator_backfill.sql": "c0b0d7aa3ecf74f75759df7415cbbc3431c834fe3932eb1c8537ec8fbdbab0b4"
+  "0078_worktree_creator_backfill.sql": "c0b0d7aa3ecf74f75759df7415cbbc3431c834fe3932eb1c8537ec8fbdbab0b4",
+  "0079_session_agent.sql": "76bef4a316c06a80c022c73ab3bf0c919235a903a071e5b06a61efcbe791e666"
 }

@@ -3,6 +3,16 @@
 The skills library is user-authored source for reusable agent skills. It is
 separate from project-local skills and from Pandeck's generated runtime layouts.
 
+Its storage, scanning, anchored reads, authoring, history and tools are the
+shared Git-backed library core in `app/server/src/library/` and
+`tools/library/libraryTools.ts`, which agent definitions use too
+(`docs/agent-definitions.md#shared-library-core`). Skills supply one kind
+descriptor (`skills/skillLibrary.ts`: `SKILL.md`, the `name` + `description`
+rule, `Skill-*` trailers), `createSkill` (`skills/createSkill.ts`), and
+everything below that is about sessions: the on/off map, the per-session freeze,
+runtime layouts and injection. Every rule this document states for the library
+holds for any kind built on that core.
+
 ## Storage ownership
 
 `DATA_DIR/skills` is a dedicated Git working tree owned by the user. Personal
@@ -51,7 +61,7 @@ file itself would be.
 skills-specific YAML implementation. `description` must be a string. The
 declared `name` must be 1–64 characters and match `^[a-z0-9]+(?:-[a-z0-9]+)*$`:
 lowercase ASCII letters, digits, and single hyphens, with no leading or trailing
-hyphen. That rule is `isSafeSkillName` in `app/shared/skills.ts`, shared by the
+hyphen. That rule is `isSafeEntryName` in `app/shared/library.ts`, shared by the
 scanner and by settings, so what may be scanned and what may be toggled cannot
 drift apart. `description` must be a non-empty, non-whitespace string of at most
 1024 characters. These agentskills.io-compatible bounds are also safe to
@@ -111,14 +121,16 @@ the `skills` topic only while that section renders, and the server answers each
 subscribe with a fresh working-tree scan rather than a cached result, so
 reopening the view always shows current source.
 
-The topic has exactly one list shape, the `skillList` message, and one server
-seam that sends it. Its `list` carries the whole read model — valid summaries,
-every scan diagnostic, and the `libraryPath` the user maintains by hand — while
-a scan that could not run at all sets `error` instead. An error never arrives as
-an empty library: "no skills" is a claim about authored content, and a failed
-read is not entitled to make it. A subscribe answers on the topic rather than
-privately to the asking connection, so a second window opening the library also
-refreshes the first with the same authoritative scan.
+The topic has exactly one list shape, the `libraryList` message with
+`library: "skills"`, and one server seam that sends it
+(`library/libraryPublish.ts`, shared with the agents library). Its `list`
+carries the whole read model — valid summaries, every scan diagnostic, and the
+`libraryPath` the user maintains by hand — while a scan that could not run at
+all sets `error` instead. An error never arrives as an empty library: "no
+skills" is a claim about authored content, and a failed read is not entitled to
+make it. A subscribe answers on the topic rather than privately to the asking
+connection, so a second window opening the library also refreshes the first with
+the same authoritative scan.
 
 The browser holds one canonical skills load state in `useAssistant`. A first
 open loads, a re-open keeps the rows on screen while the rescan runs, an
@@ -127,7 +139,11 @@ failed scan adds its error beside whatever was last read. Diagnostics render
 next to the list, never dropped: a malformed or duplicate folder is visible with
 its source folder and reason even though it cannot be injected. The browser is a
 read-only view: there is no authoring UI, and a committed agent mutation reaches
-it as one ordinary authoritative `skillList` publish.
+it as one ordinary authoritative `libraryList` publish.
+
+The page is the shared library page (`LibrarySettingsSection`), which the Agents
+page uses too; the skills page adds the on/off switch to each row. Opening a
+skill also shows its folder's recent commits (`GET /api/skills/history`).
 
 ## Reading one skill
 
@@ -137,7 +153,7 @@ rest of `/api/`; file bodies are too large for the list topic and are wanted for
 one row at a time.
 
 `name` is the entire address. A caller never supplies a path. The name must
-satisfy `isSafeSkillName` — a name that could never be declared is refused as a
+satisfy `isSafeEntryName` — a name that could never be declared is refused as a
 malformed request before any scan runs — and it is then resolved through a fresh
 working-tree scan to the source folder that scan reported. A request therefore
 cannot select a folder the scanner rejected, cannot address a skill by its
@@ -150,7 +166,7 @@ requested skill:
   path, the body BELOW the frontmatter, the file's size in bytes, whether it was
   truncated, and a recursive tree of the whole selected skill folder. The
   frontmatter's own two fields travel as metadata, so the raw fence is not part
-  of the body. The body is bounded at 256 KiB (`MAX_SKILL_BODY_BYTES`); a bound
+  of the body. The body is bounded at 256 KiB (`MAX_ENTRY_BODY_BYTES`); a bound
   reached mid-character drops that character rather than emitting a replacement
   one. The deterministic tree puts `SKILL.md` first and then sorts each folder
   by byte-stable name. It is bounded to 1,000 entries, 16 levels, and 256 KiB of
@@ -256,7 +272,13 @@ five reads are classified `sideEffects: "none"` and the five mutations
   never creates one, and refuses a file that is not valid UTF-8 rather than
   committing the replacement characters a lossy decode would invent. A leading
   byte-order mark survives: the edited text is re-encoded whole, so a decoder
-  that ate the BOM would change bytes no replacement matched.
+  that ate the BOM would change bytes no replacement matched. No tool rewrites
+  an existing file in place through a hard link — a supporting file, or
+  `SKILL.md` itself — and the refusal comes before a byte changes: another name
+  (this skill's manifest, another skill's, any file outside the mutation) shares
+  the inode, so its bytes would change without its rule and survive a rollback
+  of the named path. Git never creates hard links, so this only refuses files
+  somebody linked by hand.
 - `skill_rename` — the folder move and the frontmatter name change in one
   commit.
 - `skill_delete` — the whole folder, resolved from the current declared name.
@@ -265,17 +287,20 @@ five reads are classified `sideEffects: "none"` and the five mutations
   option-shaped input and pass `--end-of-options`; a path scope still works for
   a folder that was deleted, which is how a removed skill stays inspectable.
 
-Every mutation needs a concise reason and may carry a related Task id.
+Every mutation needs a concise reason and may carry a related Task id. Every
+`skill_*` tool checks its arguments against its declared schema before running
+(`withCheckedArguments` in `tools/library/libraryTools.ts`); a wrong shape is
+refused, never coerced.
 
 ### What a mutation guarantees
 
-`SkillLibraryStore` is the one storage seam for both halves of the domain, so
-there is no second Git path. Under the canonical repository lock
+`LibraryStore` is the one storage seam for both halves of the domain, so there
+is no second Git path. Under the canonical repository lock
 (`withRepoLock(await repoLockKey(root), …)`, never nested) one mutation:
 initializes, verifies the repository is ENTIRELY clean and that Git can take the
 index lock, resolves and validates every target and path, applies the complete
 operation, re-scans, stages only the paths it registered, commits, and publishes
-one fresh `skillList` — all before the lock is released, so no publish can
+one fresh `libraryList` — all before the lock is released, so no publish can
 describe the NEXT mutation's half-written files, and a failed publish never
 unmakes a commit that is already made. Any failure restores every touched path
 in the index and the working tree and emits no success broadcast.
@@ -424,17 +449,17 @@ untracked can already be lying around, a successful commit contains the complete
 created, edited or deleted content it claims.
 
 Validation is the scanner's own rule, not a second "tool-valid" schema:
-`skillManifest.ts` parses and validates frontmatter for the scan and for every
-mutation, and formats the source a tool writes. A mutation must leave its target
-valid and introduce no new diagnostic or duplicate-name collision. Pre-existing
-unrelated diagnostics stay visible and stay uncommitted — a mutation neither
-repairs them nor inherits them.
+`library/entryManifest.ts` parses and validates frontmatter for the scan and for
+every mutation, and formats the source a tool writes. A mutation must leave its
+target valid and introduce no new diagnostic or duplicate-name collision.
+Pre-existing unrelated diagnostics stay visible and stay uncommitted — a
+mutation neither repairs them nor inherits them.
 
-Writes use the same anchored no-follow seam as reads (`skillSource.ts`): a path
-is resolved once below a held descriptor, so a component swapped for a symlink
-is refused rather than followed. Nothing authors a symlink; a manually authored
-supporting symlink remains browseable under the Phase 1 contract, but no tool
-writes through it or deletes it.
+Writes use the same anchored no-follow seam as reads (`library/entrySource.ts`):
+a path is resolved once below a held descriptor, so a component swapped for a
+symlink is refused rather than followed. Nothing authors a symlink; a manually
+authored supporting symlink remains browseable under the Phase 1 contract, but
+no tool writes through it or deletes it.
 
 Anchoring alone is not enough for a repository the user also edits by hand: the
 lock serializes the app against itself, not against a person. So every mutation
@@ -480,9 +505,9 @@ REMOVAL is the mirror image of that, and it has the same problem in reverse:
 `unlink` and `rmdir` take names too, and an `lstat` followed by an `unlink` of
 the same name is a guess — the name can be something else by the time the second
 call runs. So nothing is removed under a public name. A whole tree is renamed to
-a private `.pa-skill-removing-<uuid>` first and only then identified, checked
-against what the mutation put there, and emptied; a single file is moved aside
-the same way before it is examined and unlinked. Putting a rejected tree BACK is
+a private `.pa-removing-<uuid>` first and only then identified, checked against
+what the mutation put there, and emptied; a single file is moved aside the same
+way before it is examined and unlinked. Putting a rejected tree BACK is
 assembly, not a rename: `mkdir` claims the public name or fails, and the files
 are hard-linked across, so a directory a hand edit created at that name in the
 meantime is never replaced by the restore. A delete, a rename's cleanup of the
@@ -556,16 +581,20 @@ and reads each `SKILL.md` up to a generous cap instead of in full; the
 supporting-file tree holds only as many names at a time as it could ever answer
 with, and stops the moment an entry, metadata or depth bound is reached;
 `skill_list` bounds both of its lists and reports the true totals with an
-explicit `truncated`. An attachment import is checked against the per-file and
-whole-batch budgets on its RECORDED SIZE before a byte of it is read, and the
-read itself is bounded — looping to EOF, because one `read` is not a whole file,
-and refusing when what arrives is not the size the budgets were spent on, since
-a prefix of somebody's binary file is not what anyone asked to import.
+explicit `truncated`. The scanner bounds each diagnostic where it is made
+(`libraryScanner.ts`): its text is cut at 500 characters, marked "(cut)", a
+folder keeps at most five (the last saying how many more problems it has), and a
+duplicate-name diagnostic names at most five of its folders. An attachment
+import is checked against the per-file and whole-batch budgets on its RECORDED
+SIZE before a byte of it is read, and the read itself is bounded — looping to
+EOF, because one `read` is not a whole file, and refusing when what arrives is
+not the size the budgets were spent on, since a prefix of somebody's binary file
+is not what anyone asked to import.
 
 Bounds are the viewer's, not new ones: `SKILL.md` source is bounded at
-`MAX_SKILL_BODY_BYTES` (256 KiB), one supporting text write at
-`MAX_SKILL_FILE_PREVIEW_BYTES` (256 KiB), one attachment import at
-`MAX_SKILL_RAW_FILE_BYTES` (10 MiB), and one batch at 20 operations and 16 MiB.
+`MAX_ENTRY_BODY_BYTES` (256 KiB), one supporting text write at
+`MAX_ENTRY_FILE_PREVIEW_BYTES` (256 KiB), one attachment import at
+`MAX_ENTRY_RAW_FILE_BYTES` (10 MiB), and one batch at 20 operations and 16 MiB.
 A path may not be absolute, traverse, contain a backslash or NUL, or be
 `SKILL.md` itself.
 
@@ -690,6 +719,9 @@ runtime boundary is the backstop for every resume path and for legacy sessions:
 a pre-upgrade coding session with no row freezes when it is first started by the
 upgraded runtime, before the runtime session exists or a user turn is appended.
 Rendering `SessionState` is read-only and never creates that missing row.
+
+A session spawned from an agent definition freezes the definition's `skills`
+together with the globally enabled ones (`docs/agent-definitions.md`).
 
 A fork first reads (or, for a legacy parent, freezes) the parent's list and
 inserts that exact list for the child. It does not resolve against current

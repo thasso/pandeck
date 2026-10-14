@@ -201,7 +201,6 @@ import {
 import type { BacklogState } from "./hooks/useBacklog.ts";
 import { UserTimeZoneContext } from "./hooks/useUserTimeZone.ts";
 import {
-  hasModeAxis,
   isOptimisticHarness,
   locksModelAfterStart,
 } from "./lib/sessionCapabilities.ts";
@@ -243,6 +242,8 @@ import { useDirtyWorktrees } from "./hooks/useDirtyWorktrees.ts";
 import { useWorkflowIndicators } from "./hooks/useWorkflowIndicators.ts";
 import { useWorktreeWatches } from "./hooks/useWorktreeWatches.ts";
 import { useApnsRegistration } from "./hooks/useApnsRegistration.ts";
+import { useStagedAgentReconcile } from "./hooks/useStagedAgentReconcile.ts";
+import { useSavedAccount } from "./hooks/useSavedAccount.ts";
 import { taskStartSession, taskWorktreeIds } from "./lib/taskActivity.ts";
 import {
   acceptStatusSuggestionSave,
@@ -367,6 +368,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { useDialogs } from "./components/common/dialogs.tsx";
 import { IconButton } from "./components/common/IconButton.tsx";
+import {
+  agentAcrossPersonaSwitch,
+  agentDraft,
+  type DraftRuntime,
+  leftNewSessionPage,
+  reissuedFirstSend,
+  stagedSessionRecord,
+  withoutAgent,
+  type StagedSessionRecord,
+} from "./lib/stagedSession.ts";
 
 const SIDEBAR_MIN_WIDTH = 220;
 
@@ -913,13 +924,23 @@ function AppContent() {
         : (activeCredentialProfiles[0]?.id ?? ""),
     );
   }, [credentialProfileProjection, activeCredentialProfiles]);
-  useEffect(() => {
-    if (
-      credentialProfileId &&
-      credentialProfileId !== prefs.credentialProfileId
-    )
-      update({ credentialProfileId });
-  }, [credentialProfileId, prefs.credentialProfileId, update]);
+  const saveAccount = useCallback(
+    (id: string) => update({ credentialProfileId: id }),
+    [update],
+  );
+  const { markAgentAccount, clearAgentAccount } = useSavedAccount({
+    accountId: credentialProfileId,
+    savedAccountId: prefs.credentialProfileId,
+    save: saveAccount,
+  });
+  /** An account an agent definition chose: the draft's, never saved. */
+  const setAgentAccount = useCallback(
+    (id: string) => {
+      markAgentAccount(id);
+      setCredentialProfileId(id);
+    },
+    [markAgentAccount],
+  );
   const memory = useMemory(socket);
   const [sidebarOpen, setSidebarOpen] = useSessionStorageState(
     "assistant.shell.sidebar-open.v1",
@@ -1034,16 +1055,9 @@ function AppContent() {
   );
   // A single staged non-pi harness session: created optimistically on the client
   // and only realized server-side by its first prompt's harnessSend.
-  const [pendingStart, setPendingStart] = useState<{
-    id: string;
-    harness: Harness;
-    agentType: AgentType;
-    provider?: string;
-    modelId?: string;
-    thinkingLevel: ThinkingLevel;
-    /** Build/Plan staged for the first send (absent = Build). */
-    mode?: SessionMode;
-  } | null>(null);
+  const [pendingStart, setPendingStart] = useState<StagedSessionRecord | null>(
+    null,
+  );
   /**
    * A first send is armed and the server has not answered yet.
    *
@@ -1135,6 +1149,14 @@ function AppContent() {
    * the one thing `stagedTranscript` promises never to do.
    */
   const [stagedSend, setStagedSend] = useState<StagedFirstSend | null>(null);
+  /**
+   * What every fresh-draft starter does first (`startNewChat`, the
+   * `startSessionFor*`/`In*` and review-draft starters; `appAudit.test.ts`
+   * holds them to it): a first send held for retry belongs to the draft being
+   * left, and re-issuing it would carry that draft's Task, worktree and
+   * project into the new one.
+   */
+  const beginFreshDraft = useCallback(() => setStagedSend(null), []);
   /** Structured review threads staged for the new-session composer; the first send performs the handoff. */
   const [pendingWorktreeReview, setPendingWorktreeReview] =
     useState<PendingWorktreeReview | null>(null);
@@ -1865,6 +1887,7 @@ function AppContent() {
             modelId: defaultNewSessionModel?.id,
             thinkingLevel: defaultNewSessionThinking,
             mode: undefined as SessionMode | undefined,
+            agent: undefined as string | undefined,
           }
         : null),
     [
@@ -2154,11 +2177,13 @@ function AppContent() {
     // id), but a Plan restored on a later landing puts the next session under a
     // tool policy nobody chose for it.
     if (route.name !== "new" && route.name !== "sessions") {
-      setPendingStart((prev) => {
-        if (!prev || prev.mode === undefined) return prev;
-        const { mode: _spent, ...rest } = prev;
-        return rest;
-      });
+      // A picked agent definition goes the same way.
+      setPendingStart(leftNewSessionPage);
+    } else if (route.name === "sessions") {
+      // The Sessions list shows the draft without the agents list (subscribing
+      // there would resolve every definition on each visit), so a picked
+      // definition cannot be kept current there and is dropped.
+      setPendingStart((record) => record && withoutAgent(record));
     }
   }, [routeIdentity, route.name]);
   useEffect(() => {
@@ -2990,9 +3015,10 @@ function AppContent() {
     setPendingWorktreeReview(null);
     setSessionReviewDraft(null);
     setPendingStart(null);
+    beginFreshDraft();
     navigate(SESSIONS_CREATE_PATH);
     setComposerFocusToken((token) => token + 1);
-  }, [navigate]);
+  }, [beginFreshDraft, navigate]);
 
   // Stage a fresh session optimistically. No server session is created and the
   // URL is NOT changed yet; the real session is established by the first prompt's
@@ -3003,9 +3029,9 @@ function AppContent() {
       id?: string;
       harness: Harness;
       agentType: AgentType;
-      provider?: string;
-      modelId?: string;
-      thinkingLevel?: ThinkingLevel;
+      provider?: string | undefined;
+      modelId?: string | undefined;
+      thinkingLevel?: ThinkingLevel | undefined;
       /**
        * Build/Plan, stated by every caller (undefined = Build). A RESTAGE for one
        * axis (model, thinking, persona, account) passes the record's own mode on;
@@ -3014,22 +3040,13 @@ function AppContent() {
        * travel to the next one behind the user's back.
        */
       mode: SessionMode | undefined;
+      /** Only a restage that keeps the agent's runtime passes it on. */
+      agent?: string | undefined;
     }) => {
       flushSync(() => {
-        setPendingStart({
-          id: opts.id ?? createClientId(),
-          harness: opts.harness,
-          agentType: opts.agentType,
-          ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
-          ...(opts.modelId !== undefined ? { modelId: opts.modelId } : {}),
-          thinkingLevel: opts.thinkingLevel ?? "off",
-          // Only the personas WITH the mode axis can carry Plan, so a switch to
-          // an assistant persona drops it rather than hiding it.
-          ...(hasModeAxis({ agentType: opts.agentType }) &&
-          opts.mode !== undefined
-            ? { mode: opts.mode }
-            : {}),
-        });
+        setPendingStart(
+          stagedSessionRecord({ ...opts, id: opts.id ?? createClientId() }),
+        );
       });
       // Only pull focus back to the composer on desktop. On mobile every staging
       // control (agent type / model / thinking) is changed from inside the Runtime
@@ -3091,6 +3108,7 @@ function AppContent() {
         // persona switch (`startStagedSession` drops it where the axis is gone).
         // A fresh start has no `current`, so it stages Build.
         mode: current?.mode,
+        agent: agentAcrossPersonaSwitch(current, agentType),
       });
     },
     [
@@ -3265,6 +3283,7 @@ function AppContent() {
   // Worktree row scopes to it), then land on the new-session page.
   const startSessionForTask = useCallback(
     (taskId: string, title: string) => {
+      beginFreshDraft();
       setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
@@ -3284,6 +3303,7 @@ function AppContent() {
       revealNewSessionSurface();
     },
     [
+      beginFreshDraft,
       projectIdForTask,
       worktreeIdForTask,
       stageWorktreeContext,
@@ -3296,6 +3316,7 @@ function AppContent() {
   // first prompt (the composer shows it as removable staged context).
   const startSessionForProject = useCallback(
     (projectId: string) => {
+      beginFreshDraft();
       setPendingTaskAttach(null);
       setPendingFileContext(null);
       setPendingStart(null);
@@ -3306,7 +3327,7 @@ function AppContent() {
       navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
     },
-    [navigate, revealNewSessionSurface],
+    [beginFreshDraft, navigate, revealNewSessionSurface],
   );
 
   // Start a fresh session with a document staged as initial context (the
@@ -3314,6 +3335,7 @@ function AppContent() {
   // this file" routes here). `href` is the document's canonical viewer route.
   const startSessionForFile = useCallback(
     (href: string, title: string) => {
+      beginFreshDraft();
       setPendingTaskAttach(null);
       setPendingProjectContext(null);
       setPendingWorktreeContext(null);
@@ -3324,7 +3346,7 @@ function AppContent() {
       navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
     },
-    [navigate, revealNewSessionSurface],
+    [beginFreshDraft, navigate, revealNewSessionSurface],
   );
 
   // Following a comment link from the worktree panel's roster: the panel is the
@@ -3419,6 +3441,7 @@ function AppContent() {
   // same context the work already has instead of a bare worktree.
   const startSessionInWorktree = useCallback(
     (worktreeId: string) => {
+      beginFreshDraft();
       const context = sessionContextForWorktree(
         worktreeId,
         state.worktrees,
@@ -3444,6 +3467,7 @@ function AppContent() {
       });
     },
     [
+      beginFreshDraft,
       state.worktrees,
       backlogTasks,
       navigate,
@@ -3471,6 +3495,7 @@ function AppContent() {
       worktreeId: string,
       outcome: PullRequestCheckoutOutcome,
     ) => {
+      beginFreshDraft();
       // WHICH Task is decided by server ids only — the checkout's own edges
       // from this very answer, then the pull request's links — so a cold or
       // stale browser list can never be read as "there is no Task". The lists
@@ -3514,6 +3539,7 @@ function AppContent() {
       });
     },
     [
+      beginFreshDraft,
       backlogTasks,
       state.sessionListFresh,
       state.taskListFresh,
@@ -3532,6 +3558,7 @@ function AppContent() {
   // the worktree while the standard landing owns model/thinking/persona choice.
   const startWorktreeReviewDraft = useCallback(
     (worktreeId: string, commentIds: string[]) => {
+      beginFreshDraft();
       // Shared context-derivation rule (lib/sessionHandoff.ts, also behind
       // /review and a plain start in a worktree): the draft inherits the
       // worktree's project AND its single implementing Task, so the review
@@ -3597,6 +3624,7 @@ function AppContent() {
       });
     },
     [
+      beginFreshDraft,
       state.worktrees,
       state.worktreeComments,
       backlogTasks,
@@ -3625,6 +3653,9 @@ function AppContent() {
       const sourceId = displayCurrentId;
       if (!sourceId || !displayHasUserPrompt)
         return "Nothing to review yet — this session has no work to look at.";
+      // Only once a draft does start: a refused review leaves a held first
+      // send, and its Retry, where they were.
+      beginFreshDraft();
       const context = reviewContextForSession(
         {
           sessionId: sourceId,
@@ -3666,6 +3697,7 @@ function AppContent() {
       return null;
     },
     [
+      beginFreshDraft,
       displayCurrentId,
       displayHasUserPrompt,
       displaySession?.worktreeId,
@@ -3742,11 +3774,22 @@ function AppContent() {
         navigate(sessionPath(target.sessionId));
         return null;
       }
-      navigate(SESSIONS_CREATE_PATH);
+      // A tray beside the new-session page lands on the SAME route, so no
+      // route change retires a first send held there: a failed draft is not
+      // the session these comments start, so they start a fresh one.
+      if (stagedSend) startNewChat();
+      else navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
       return null;
     },
-    [mobileLayout, navigate, revealNewSessionSurface, setInspectorOpen],
+    [
+      mobileLayout,
+      navigate,
+      revealNewSessionSurface,
+      setInspectorOpen,
+      stagedSend,
+      startNewChat,
+    ],
   );
 
   /**
@@ -4005,6 +4048,7 @@ function AppContent() {
             ? pickerModels
             : undefined,
           displaySession?.model,
+          (pendingStart ?? stagedStart)?.agent !== undefined,
         )
       : undefined;
   const credentialProfileSendBlocked =
@@ -4310,7 +4354,10 @@ function AppContent() {
           activeCredentialProfiles.find(
             (profile) => profile.provider === profileProvider,
           );
-        if (selectedProfile) setCredentialProfileId(selectedProfile.id);
+        if (selectedProfile) {
+          clearAgentAccount();
+          setCredentialProfileId(selectedProfile.id);
+        }
         // Remember this explicit pick as the default for future new chats. The
         // profile sync effect is the sole persistence writer for its selection.
         update({ lastModelKey: modelKey({ provider, id }) });
@@ -4393,6 +4440,8 @@ function AppContent() {
               : {}),
             thinkingLevel: current?.thinkingLevel ?? currentThinkingLevel,
             mode,
+            // Build/Plan is not what runs the session: the agent stays.
+            agent: current?.agent,
           });
         } else {
           actions.setSessionMode(mode);
@@ -4400,6 +4449,7 @@ function AppContent() {
       },
     }),
     [
+      clearAgentAccount,
       actions,
       isNewChatRoute,
       runtimeHasStarted,
@@ -4415,6 +4465,70 @@ function AppContent() {
       update,
     ],
   );
+
+  /**
+   * Stage a fresh session as the agent definition `name` (or drop it): its
+   * persona, model and effort in one restage, on an account of its provider.
+   * The server resolves the definition again when the first prompt creates
+   * the session, so this is a preview of what it will run, not a promise.
+   */
+  const stageAgent = (name: string | null) => {
+    // A review handoff creates its session without a first send, so it cannot
+    // start as an agent: the row is not offered for that draft.
+    if (route.name !== "new" || runtimeHasStarted || pendingWorktreeReview)
+      return;
+    if (name === null) {
+      // Back to a plain session on the same runtime. Only a staged record can
+      // carry an agent.
+      if (pendingStart) setPendingStart(withoutAgent(pendingStart));
+      return;
+    }
+    const draft = agentDraft(
+      dataOf(state.agentLibrary),
+      name,
+      activeCredentialProfiles,
+      credentialProfileId,
+    );
+    if (!draft) return;
+    const { accountId, ...runtime } = draft;
+    setAgentAccount(accountId);
+    const current = pendingStart ?? stagedStart;
+    startStagedSession({
+      ...(current?.id !== undefined && current.id !== "pending-pi-session"
+        ? { id: current.id }
+        : {}),
+      ...runtime,
+      mode: current?.mode,
+    });
+  };
+  useStagedAgentReconcile({
+    active: route.name === "new",
+    list: dataOf(state.agentLibrary),
+    pendingStart,
+    setPendingStart,
+    accounts:
+      credentialProfileProjection !== undefined
+        ? activeCredentialProfiles
+        : undefined,
+    accountId: credentialProfileId,
+    setAccountId: setAgentAccount,
+  });
+  /**
+   * The draft as the pickers show it this render: what a re-issued first send
+   * runs (`reissuedFirstSend`), whichever control re-issues it.
+   */
+  const draftId = (pendingStart ?? stagedStart)?.id;
+  const draftRuntime: DraftRuntime = {
+    ...(draftId !== undefined && draftId !== "pending-pi-session"
+      ? { id: draftId }
+      : {}),
+    ...firstPromptRuntimeSelection(displaySession),
+    agentType: displayAgentType,
+    credentialProfileId,
+    agent: (pendingStart ?? stagedStart)?.agent,
+  };
+  const draftRuntimeRef = useRef(draftRuntime);
+  draftRuntimeRef.current = draftRuntime;
   // Capability-driven picker locking: non-pi harnesses pin model/thinking after
   // their first turn (see lib/sessionCapabilities.locksModelAfterStart).
   const modelLocked = displaySession
@@ -4773,15 +4887,16 @@ function AppContent() {
       // Re-sending after a failed first send reuses the HELD send: its staged
       // context (project to provision in, Task, worktree) was already consumed
       // and cleared, so rebuilding it from the pickers would silently drop it.
-      // Only the text/attachments are the composer's, and the clientRequestId
+      // What runs it is the pickers' NOW (`reissuedFirstSend`): a pick made
+      // after the failure is what the user sees, so it is what is sent. The
+      // text/attachments are the composer's, and the clientRequestId
       // rides along so the visible prompt is replaced rather than duplicated.
       const input: HarnessSendInput =
         routing === "reissue-first-send"
-          ? {
-              ...stagedSend!.input!,
+          ? reissuedFirstSend(stagedSend!.input!, draftRuntimeRef.current, {
               text: sentText,
               attachments: allAttachments,
-            }
+            })
           : {
               id,
               harness: runtime.harness,
@@ -4806,6 +4921,7 @@ function AppContent() {
                 ? { createWorktreeInProjectId }
                 : {}),
               ...(fileContext !== undefined ? { fileContext } : {}),
+              ...(staged?.agent !== undefined ? { agent: staged.agent } : {}),
             };
       const clientRequestId = actions.harnessSend(input);
       // Hold the send verbatim for the whole bootstrap: it is what the shell
@@ -4916,9 +5032,24 @@ function AppContent() {
     const send = stagedSend;
     if (!send) return;
     pinTranscriptToBottom();
-    send.resend();
-    armStagedSend(send);
-  }, [stagedSend, pinTranscriptToBottom, armStagedSend]);
+    if (!send.input) {
+      // A review handoff: its bundle is re-run as it was.
+      send.resend();
+      armStagedSend(send);
+      return;
+    }
+    // A held first send runs what the pickers show NOW, like a composer
+    // retry: a pick made after the failure, or an agent the draft dropped
+    // since, must not be overruled by the copy held from before it.
+    const input = reissuedFirstSend(send.input, draftRuntimeRef.current, {
+      text: send.input.text,
+      ...(send.input.attachments !== undefined
+        ? { attachments: send.input.attachments }
+        : {}),
+    });
+    actions.harnessSend(input);
+    armStagedSend({ resend: () => actions.harnessSend(input), input });
+  }, [stagedSend, pinTranscriptToBottom, armStagedSend, actions]);
   const onRetryWorktreeProvision =
     firstSendFailed && provisionFailed ? retryFirstSend : undefined;
   const onRetryFirstSend = firstSendFailed ? retryFirstSend : undefined;
@@ -6283,6 +6414,7 @@ function AppContent() {
                   ),
                 });
                 explicitProfileForNextModel.current = id;
+                clearAgentAccount();
                 // Before staging, so the flushSync in `startStagedSession`
                 // commits the new account and its models together — otherwise
                 // the carried model is momentarily absent from `pickerModels`
@@ -6323,6 +6455,17 @@ function AppContent() {
               onSelectThinking={(level) =>
                 runtimeActions.setThinkingLevel(level)
               }
+              // A comment-review draft starts through the review handoff,
+              // which carries no agent definition.
+              // Offered on /sessions/create only, where the `agents` topic is
+              // held.
+              agents={
+                route.name === "new" && !pendingWorktreeReview
+                  ? state.agentLibrary
+                  : undefined
+              }
+              selectedAgent={(pendingStart ?? stagedStart)?.agent ?? null}
+              onSelectAgent={stageAgent}
             />
           ) : null}
         </div>
@@ -6764,6 +6907,12 @@ function AppContent() {
         <SessionContextSections
           sessionId={displaySession?.sessionId}
           toolExposure={displaySession?.toolExposure}
+          agent={displaySession?.agent}
+          onOpenAgent={(name) =>
+            navigateFromInspector(
+              `${settingsPath("agents")}?entry=${encodeURIComponent(name)}`,
+            )
+          }
           activeSkills={displaySession?.activeSkills}
           skillInvocations={displaySession?.skillInvocations}
           skillLibrary={state.skillLibrary}
@@ -7249,6 +7398,7 @@ function AppContent() {
                       settings={state.settings}
                       memory={memory}
                       skills={state.skillLibrary}
+                      agents={state.agentLibrary}
                       prefs={prefs}
                       speechToText={state.speechToText}
                       serverBuild={state.serverBuild}

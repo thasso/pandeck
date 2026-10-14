@@ -8,7 +8,19 @@
  * persona gate applies, the account, what it resolves before a worktree can be
  * provisioned, and what its session is created with (`create.ts` knows how).
  */
-import type { ClientMessage, Harness, TaskSessionRef } from "@assistant/shared";
+import {
+  harnessForModelProvider,
+  type ClientMessage,
+  type Harness,
+  type TaskSessionRef,
+} from "@assistant/shared";
+import { publishAgentLibrary } from "../agents/agentLibraryList.ts";
+import type { SessionAgent } from "../agents/sessionAgent.ts";
+import {
+  AgentSpawnRefusedError,
+  resolveAgentSpawn,
+  type AgentSpawnRuntime,
+} from "../agents/agentSpawn.ts";
 import {
   defaultOpenAiProfileId,
   enabledCredentialProfileById,
@@ -19,6 +31,7 @@ import type { SessionPromptEvidence } from "../promptConditions.ts";
 import { getSettings } from "../settings.ts";
 import {
   createSession,
+  SessionAgentConflictError,
   SessionIdTakenError,
   sessionIdTakenMessage,
 } from "./create.ts";
@@ -82,6 +95,98 @@ interface FirstSendEngine {
   >;
 }
 
+/**
+ * The definition a send starts its session as, resolved now on the picked
+ * account: it decides the model and effort, and the persona and engine the
+ * client staged must be its own.
+ */
+async function firstSendAgent(
+  req: FirstSendRequest,
+  profileId: string,
+): Promise<{ refusal: FirstSendRefusal } | { agent?: AgentSpawnRuntime }> {
+  const resolved = await resolveFirstSendAgent(req, profileId);
+  // The browser picked from the `agents` list it holds. A refusal means that
+  // list no longer matches the library (a hand edit, a model or account
+  // change), so it is published again: the draft then follows it, and the
+  // next send runs what the pickers show rather than being refused again.
+  if ("refusal" in resolved) void publishAgentLibrary().catch(() => undefined);
+  return resolved;
+}
+
+/**
+ * The definition read AGAIN right before the session is created, which is
+ * what it freezes — as a spawn does. A worktree provisioned after `prepare`
+ * can take seconds, and a hand edit landing then (a tool denied, the body
+ * rewritten, the folder deleted) must not be lost to the earlier read. A
+ * runtime that moved since `prepare` refuses, like `prepare` does.
+ */
+async function agentAtCreation(
+  req: FirstSendRequest,
+  profileId: string,
+  prepared: AgentSpawnRuntime | undefined,
+): Promise<{ refusal: FirstSendRefusal } | { agent?: SessionAgent }> {
+  if (!prepared) return {};
+  // The same checks as `prepare`: a persona or engine that no longer matches
+  // the send refuses here, so only the runtime is left to compare below.
+  const again = await firstSendAgent(req, profileId);
+  if ("refusal" in again) return again;
+  const now = again.agent!;
+  if (
+    now.provider !== prepared.provider ||
+    now.modelId !== prepared.modelId ||
+    now.thinkingLevel !== prepared.thinkingLevel
+  ) {
+    void publishAgentLibrary().catch(() => undefined);
+    return {
+      refusal: {
+        message: `Agent "${now.agent.name}" changed while the session was being set up: it now runs on ${now.provider}/${now.modelId} at ${now.thinkingLevel} effort. The pickers now show its current runtime; send again to start it.`,
+      },
+    };
+  }
+  return { agent: now.agent };
+}
+
+async function resolveFirstSendAgent(
+  req: FirstSendRequest,
+  profileId: string,
+): Promise<{ refusal: FirstSendRefusal } | { agent?: AgentSpawnRuntime }> {
+  if (req.agent === undefined) return {};
+  let agent: AgentSpawnRuntime;
+  try {
+    agent = await resolveAgentSpawn(req.agent, undefined, { profileId });
+  } catch (error) {
+    if (error instanceof AgentSpawnRefusedError)
+      return { refusal: { message: error.message } };
+    throw error;
+  }
+  if (agent.agent.persona !== req.agentType)
+    return {
+      refusal: {
+        // The draft drops a definition whose persona changed rather than
+        // switch persona (and so worktree) under the user.
+        message: `Agent "${agent.agent.name}" runs as the ${agent.agent.persona} persona, not ${req.agentType}. It is no longer picked: send again for a plain ${req.agentType} session, or pick it on a new session.`,
+      },
+    };
+  if (harnessForModelProvider(agent.provider) !== req.harness)
+    return {
+      refusal: {
+        message: `Agent "${agent.agent.name}" runs on ${agent.provider}/${agent.modelId}, which this engine does not run.`,
+      },
+    };
+  // The pickers showed the definition's runtime when it was picked. If the
+  // definition changed since, running its new one would differ from what the
+  // user saw; say so instead of running it silently.
+  const staged = [req.modelProvider, req.modelId, req.thinkingLevel];
+  const current = [agent.provider, agent.modelId, agent.thinkingLevel];
+  if (staged.some((value, at) => value !== undefined && value !== current[at]))
+    return {
+      refusal: {
+        message: `Agent "${agent.agent.name}" changed since it was picked: it now runs on ${agent.provider}/${agent.modelId} at ${agent.thinkingLevel} effort. The pickers now show its current runtime; send again to start it.`,
+      },
+    };
+  return { agent };
+}
+
 /** A Claude send names its id, so one another engine holds is refused. */
 function claudeOwnershipRefusal(id: string): FirstSendRefusal | undefined {
   const holder = harnessRegistry.otherHolder(id, "claude-sdk");
@@ -111,28 +216,32 @@ const engines: Record<Harness, FirstSendEngine> = {
       return { profileId };
     },
     async prepare(req, profileId) {
+      const started = await firstSendAgent(req, profileId);
+      if ("refusal" in started) return started;
+      const { agent } = started;
       // A model the account does not offer ends the send before a worktree is
-      // provisioned for it.
+      // provisioned for it. An agent's is its definition's.
+      const provider = agent?.provider ?? req.modelProvider;
+      const modelId = agent?.modelId ?? req.modelId;
       let model: Awaited<ReturnType<typeof findModelForProfile>>;
-      if (req.modelProvider && req.modelId) {
-        model = await findModelForProfile(
-          profileId,
-          req.modelProvider,
-          req.modelId,
-        );
+      if (provider && modelId) {
+        model = await findModelForProfile(profileId, provider, modelId);
         if (!model)
           return {
             refusal: {
-              message: `Model ${req.modelProvider}/${req.modelId} is not available.`,
+              message: `Model ${provider}/${modelId} is not available.`,
             },
           };
       }
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
+        const frozen = await agentAtCreation(req, profileId, agent);
+        if ("refusal" in frozen) return frozen;
         const live = await createSession({
           harness: "pi",
           agentType: req.agentType,
           model,
-          thinkingLevel: req.thinkingLevel,
+          thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
+          ...(frozen.agent ? { agent: frozen.agent } : {}),
           mode: req.mode,
           ...(worktree ? { worktree } : {}),
           credentialProfileId: profileId,
@@ -173,7 +282,12 @@ const engines: Record<Harness, FirstSendEngine> = {
       return { profileId };
     },
     async prepare(req, profileId) {
+      const started = await firstSendAgent(req, profileId);
+      if ("refusal" in started) return started;
+      const { agent } = started;
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
+        const frozen = await agentAtCreation(req, profileId, agent);
+        if ("refusal" in frozen) return frozen;
         let live: LiveSession;
         try {
           live = await createSession({
@@ -182,15 +296,19 @@ const engines: Record<Harness, FirstSendEngine> = {
             // session registers.
             id: req.id,
             agentType: req.agentType,
-            modelId: req.modelId,
-            thinkingLevel: req.thinkingLevel,
+            modelId: agent?.modelId ?? req.modelId,
+            thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
+            ...(frozen.agent ? { agent: frozen.agent } : {}),
             mode: req.mode,
             ...(worktree ? { worktree } : {}),
             credentialProfileId: profileId,
             promptEvidence: evidence,
           });
         } catch (err) {
-          if (err instanceof SessionIdTakenError)
+          if (
+            err instanceof SessionIdTakenError ||
+            err instanceof SessionAgentConflictError
+          )
             return { refusal: { message: err.message, onSession: true } };
           throw err;
         }

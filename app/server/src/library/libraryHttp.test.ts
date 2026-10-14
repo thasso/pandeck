@@ -1,24 +1,28 @@
 /**
- * The `/api/skills/*` read surface ([Task-614](pa://task/614)).
+ * The `/api/<library>/*` read surface ([Task-614](pa://task/614)), exercised on
+ * the skills library and, where the agents library differs, on that too.
  *
  * What is asserted here is the boundary, not the read itself
  * (`skillDetail.test.ts` owns that): only GET is answered, the name is the
  * whole address and a path-shaped one is refused before any scan, an unknown
  * name is a 404, and a valid one serves the shared wire model. Run:
- *   pnpm --filter @assistant/server test src/skills/skillsHttp.test.ts
+ *   pnpm --filter @assistant/server test src/library/libraryHttp.test.ts
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
-import type { SkillDetailResponse } from "@assistant/shared";
+import type { EntryDetailResponse, EntryHistory } from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "skills-http-test-"));
 process.env.DATA_DIR = tmp;
 
-const { handleSkillsApi } = await import("./skillsHttp.ts");
+const { handleLibraryApi } = await import("./libraryHttp.ts");
+const { skillLibraryStore } = await import("../skills/skillLibrary.ts");
+const { agentLibraryStore } = await import("../agents/agentLibrary.ts");
 
 function writeSkill(folder: string, frontmatter: string, body: string): void {
   mkdirSync(join(tmp, "skills", folder), { recursive: true });
@@ -69,11 +73,12 @@ async function call(
       raw = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk ?? "");
     },
   } as unknown as ServerResponse;
-  await handleSkillsApi(
+  await handleLibraryApi(
     { method } as IncomingMessage,
     res,
     new URL(`http://x${pathname}`),
     () => ({}),
+    pathname.startsWith("/api/agents/") ? agentLibraryStore : skillLibraryStore,
   );
   let body: Record<string, unknown> = {};
   try {
@@ -88,9 +93,9 @@ test("serves one skill by declared name", async () => {
   const { status, body } = await call("/api/skills/detail?name=release-notes");
 
   assert.equal(status, 200);
-  const detail = body as unknown as SkillDetailResponse;
-  assert.equal(detail.kind, "skill");
-  if (detail.kind !== "skill") return;
+  const detail = body as unknown as EntryDetailResponse;
+  assert.equal(detail.kind, "entry");
+  if (detail.kind !== "entry") return;
   assert.equal(detail.name, "release-notes");
   assert.equal(detail.path, "notes-folder/SKILL.md");
   assert.equal(detail.markdown, "# Release notes\n\nSteps here.");
@@ -101,7 +106,7 @@ test("answers a known but unusable name with its reason, not an error status", a
   const { status, body } = await call("/api/skills/detail?name=half-written");
 
   assert.equal(status, 200);
-  const detail = body as unknown as SkillDetailResponse;
+  const detail = body as unknown as EntryDetailResponse;
   assert.equal(detail.kind, "invalid");
   if (detail.kind !== "invalid") return;
   assert.equal(detail.name, "half-written");
@@ -193,4 +198,49 @@ test("answers 405 for anything but GET, and 404 for an unknown route", async () 
     405,
   );
   assert.equal((await call("/api/skills/whatever")).status, 404);
+});
+
+test("lists an entry folder's commits, newest first", async () => {
+  await skillLibraryStore.ensureInitialized();
+  const root = join(tmp, "skills");
+  const git = (...args: string[]) =>
+    execFileSync(
+      "git",
+      ["-c", "user.name=Tester", "-c", "user.email=t@example.com", ...args],
+      { cwd: root },
+    );
+  git("add", "notes-folder");
+  git("commit", "-m", "Add release notes");
+  writeFileSync(join(root, "notes-folder", "references", "guide.md"), "# 2\n");
+  git("commit", "-am", "Revise the guide");
+  const { status, body } = await call("/api/skills/history?name=release-notes");
+
+  assert.equal(status, 200);
+  const history = body as unknown as EntryHistory;
+  assert.deepEqual(
+    history.commits.map((commit) => [commit.subject, commit.author]),
+    [
+      ["Revise the guide", "Tester"],
+      ["Add release notes", "Tester"],
+    ],
+  );
+  assert.equal(history.truncated, false);
+  const missing = await call("/api/skills/history?name=absent-skill");
+  assert.equal(missing.status, 404);
+});
+
+test("the agents library answers the same routes in its own words", async () => {
+  mkdirSync(join(tmp, "agents", "reviewer"), { recursive: true });
+  writeFileSync(
+    join(tmp, "agents", "reviewer", "AGENT.md"),
+    "---\nname: reviewer\ndescription: Reviews.\npersona: developer\nmodel: opus\n---\nReview.\n",
+  );
+  const detail = await call("/api/agents/detail?name=reviewer");
+  assert.equal(detail.status, 200);
+  assert.equal((detail.body as { path?: string }).path, "reviewer/AGENT.md");
+  const missing = await call("/api/agents/detail?name=absent");
+  assert.match(String(missing.body.error), /No agent named "absent"/);
+  // A skills route on the agents store is not one of its routes.
+  const crossed = await call("/api/agents/../skills/detail?name=reviewer");
+  assert.equal(crossed.status, 404);
 });

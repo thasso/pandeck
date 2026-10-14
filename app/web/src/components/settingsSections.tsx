@@ -5,6 +5,7 @@ import {
   Blocks,
   BookOpen,
   Bot,
+  UserRoundCog,
   Brain,
   Building2,
   Cable,
@@ -122,6 +123,7 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
     sections: [
       { id: "worktrees", label: "Worktrees", icon: <GitBranch size={15} /> },
       { id: "skills", label: "Skills", icon: <Blocks size={15} /> },
+      { id: "agents", label: "Agents", icon: <UserRoundCog size={15} /> },
       {
         id: "peer-runtimes",
         label: "Peer sessions",

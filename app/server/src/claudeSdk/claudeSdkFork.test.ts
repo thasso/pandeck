@@ -371,6 +371,18 @@ test("forking cuts the native transcript, the runtime log and the record alike",
     "---\nname: parent-skill\ndescription: Fork inheritance fixture\n---\n",
   );
   sessionStore.freezeSkills("fork-parent", '["parent-skill"]');
+  const parentAgent = {
+    name: "test-reviewer",
+    blob: "0".repeat(40),
+    persona: "developer",
+    provider: "claude-sdk",
+    model: "sonnet",
+    effort: "high",
+    denyTools: ["bash"],
+    skills: [],
+    body: "Review the tests.",
+  };
+  sessionStore.freezeAgent("fork-parent", JSON.stringify(parentAgent));
   const { parent, forkCalls } = await runtimeParent("fork-parent", [
     "first",
     "second",
@@ -477,6 +489,11 @@ test("forking cuts the native transcript, the runtime log and the record alike",
     "the child persists the parent's exact frozen skills without re-resolution",
   );
   assert.deepEqual(
+    JSON.parse(sessionStore.getAgent(child.id) ?? "null"),
+    parentAgent,
+    "the child continues as the parent's frozen agent definition",
+  );
+  assert.deepEqual(
     sessionRuntime
       .get("fork-parent")!
       .clientTimeline()
@@ -493,6 +510,16 @@ test("forking cuts the native transcript, the runtime log and the record alike",
       ?.path ?? "",
     /skills-runtime\/[0-9a-f]{64}$/,
     "the actual forked query mounts the inherited frozen skill plugin",
+  );
+  assert.match(
+    (forkQuery.options?.systemPrompt as { append?: string } | undefined)
+      ?.append ?? "",
+    /## Agent definition: test-reviewer\n[\s\S]*Review the tests\.\n\nThis session does not have these tools, whatever the instructions above say: bash\.$/,
+    "the forked query carries the agent's prompt layer",
+  );
+  assert.ok(
+    !(forkQuery.options?.tools as string[] | undefined)?.includes("Bash"),
+    "and leaves out the natives it denies",
   );
 });
 

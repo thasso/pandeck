@@ -102,7 +102,8 @@ import type {
   TaskSaveRequest,
   TaskSummary,
   NewWorktreeCommentAnchor,
-  SkillLibraryList,
+  EntryLibraryList,
+  LibraryTopic,
   SkillToggles,
   CodeDeliveryWorkflowConfig,
   WorkflowRunCard,
@@ -566,7 +567,13 @@ export interface UIState {
    * (`refreshing`), and a scan that FAILED must be able to say so beside them
    * instead of collapsing into "no skills yet".
    */
-  skillLibrary: LoadState<SkillLibraryList>;
+  skillLibrary: LoadState<EntryLibraryList>;
+  /**
+   * The agent definitions library from the `agents` topic, held exactly like
+   * {@link skillLibrary}: the Agents settings page and the new-session agent
+   * picker read it.
+   */
+  agentLibrary: LoadState<EntryLibraryList>;
   /**
    * The skill toggle map most recently SENT, with the request it went out as,
    * or null when nothing is in flight ([Task-613](pa://task/613)).
@@ -794,6 +801,13 @@ interface AppShellCache {
   credentialProfileProjection?: CredentialProfileProjection | null;
 }
 
+/** The library topics, and the state each one's list lands in. */
+const LIBRARY_STATE_FIELD = {
+  skills: "skillLibrary",
+  agents: "agentLibrary",
+} as const satisfies Record<LibraryTopic, keyof UIState>;
+const LIBRARY_TOPICS = Object.keys(LIBRARY_STATE_FIELD) as LibraryTopic[];
+
 const emptyInitial: UIState = {
   hydrated: false,
   hydrationSource: "empty",
@@ -853,6 +867,7 @@ const emptyInitial: UIState = {
   cachedWorktreeStatuses: NO_WORKTREE_STATUSES,
   worktreeNameProposal: null,
   skillLibrary: idle(),
+  agentLibrary: idle(),
   pendingSkillToggles: null,
   workflowRuns: null,
   workflowCards: {},
@@ -1725,8 +1740,8 @@ type Action =
   | { kind: "projectMutationStart"; key: string }
   | { kind: "projectMutationResult"; key: string; error?: string }
   | { kind: "worktreeListLoad" }
-  /** A `skills` subscribe went out: the server is scanning the library now. */
-  | { kind: "skillLibraryLoad" }
+  /** A library subscribe went out: the server is scanning that library now. */
+  | { kind: "libraryLoad"; library: LibraryTopic }
   /** A model refresh went out; the `models` echoing this id retires it. */
   | { kind: "modelsRefreshSent"; requestId: string }
   /**
@@ -4645,10 +4660,11 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       worktreeListError: null,
     };
   }
-  if (action.kind === "skillLibraryLoad") {
+  if (action.kind === "libraryLoad") {
     // Same query, so rows already on screen stay put and only the refresh
     // indicator changes; a first visit has nothing to keep and plainly loads.
-    return { ...state, skillLibrary: beginLoad(state.skillLibrary) };
+    const field = LIBRARY_STATE_FIELD[action.library];
+    return { ...state, [field]: beginLoad(state[field]) };
   }
   if (action.kind === "modelsRefreshSent") {
     return { ...state, modelsRefreshRequestId: action.requestId };
@@ -5509,19 +5525,16 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         workflowRuns: msg.runs,
         workflowCards: withPendingDelivery(msg.cards, state.workflowCards),
       };
-    case "skillList":
+    case "libraryList": {
       // A failed scan keeps the last good library beside its error (R2); it
       // never becomes an empty library, which would be a claim about authored
       // content that this message cannot make.
+      const field = LIBRARY_STATE_FIELD[msg.library];
       return {
         ...state,
-        skillLibrary: msg.list
-          ? ready(msg.list)
-          : failFrom(
-              state.skillLibrary,
-              msg.error ?? "Failed to read the skills library.",
-            ),
+        [field]: msg.list ? ready(msg.list) : failFrom(state[field], msg.error),
       };
+    }
     case "workflowRunStart":
       return {
         ...state,
@@ -6057,6 +6070,8 @@ export interface HarnessSendInput {
   createWorktreeInProjectId?: string;
   /** A document staged as context, as its canonical viewer route. */
   fileContext?: string;
+  /** Start the session as this agent definition; the server resolves it again. */
+  agent?: string;
   /**
    * Reuse a previous send's id when re-issuing it (a first send retried after
    * its worktree provisioning failed), so the optimistic echo is replaced
@@ -7618,7 +7633,9 @@ export function useAssistant({
             );
           // The re-declared skills subscription re-scans on the server, and the
           // rows already on screen are the ones that scan may correct.
-          if (topics.includes("skills")) dispatch({ kind: "skillLibraryLoad" });
+          for (const library of LIBRARY_TOPICS)
+            if (topics.includes(library))
+              dispatch({ kind: "libraryLoad", library });
           // Held run-detail topics are per connection too; a reconnect must
           // request a fresh bounded snapshot rather than wait for an event gap.
           for (const threadId of Object.keys(
@@ -8372,7 +8389,9 @@ export function useAssistant({
         if (added.includes("worktrees"))
           episodeListReadsRef.current.worktrees = true;
         // Subscribing IS the library read, so the pane is pending from here.
-        if (added.includes("skills")) dispatch({ kind: "skillLibraryLoad" });
+        for (const library of LIBRARY_TOPICS)
+          if (added.includes(library))
+            dispatch({ kind: "libraryLoad", library });
         if (added.length > 0)
           send(
             taskSubscribeMessage(

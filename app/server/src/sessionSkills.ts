@@ -1,12 +1,11 @@
 import {
   type AgentType,
   isCodingAgentType,
-  isSafeSkillName,
+  isSafeEntryName,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getSettings } from "./settings.ts";
-import { scanSkillLibrary } from "./skills/skillLibraryScanner.ts";
-import { skillLibraryStore } from "./skills/skillLibraryStore.ts";
+import { scanSkillLibrary, skillLibraryStore } from "./skills/skillLibrary.ts";
 import { resolveSkillNames } from "./skills/skillResolver.ts";
 
 export interface SessionSkillsDeps {
@@ -22,7 +21,7 @@ const REAL_DEPS: SessionSkillsDeps = {
   resolve: async () => {
     await skillLibraryStore.ensureInitialized();
     const scan = await scanSkillLibrary(skillLibraryStore.root);
-    return resolveSkillNames(scan.skills, [getSettings().skills]);
+    return resolveSkillNames(scan.entries, [getSettings().skills]);
   },
 };
 
@@ -30,16 +29,21 @@ const REAL_DEPS: SessionSkillsDeps = {
  * The names a coding session's first skills freeze would store, resolved ahead
  * so that freeze (`sessionSkills` with them as `preset`) awaits nothing.
  * Undefined when there is nothing to resolve: a non-coding persona, or a
- * session already frozen.
+ * session already frozen. `agentSkills` are the skills a spawned agent
+ * definition mounts: they join the globally enabled ones.
  */
 export async function sessionSkillPreset(
   sessionId: string,
   agentType: AgentType,
   deps: SessionSkillsDeps = REAL_DEPS,
+  agentSkills: readonly string[] = [],
 ): Promise<string[] | undefined> {
   if (!isCodingAgentType(agentType)) return undefined;
   if (deps.getFrozen(sessionId) !== undefined) return undefined;
-  return resolveSessionSkillNames(deps);
+  return normalizePreset([
+    ...(await resolveSessionSkillNames(deps)),
+    ...agentSkills,
+  ]);
 }
 
 /** The current skill names a first freeze stores; a failed resolve freezes none. */
@@ -74,7 +78,7 @@ export function parseSessionSkills(
   if (!Array.isArray(value)) return [];
   const names: string[] = [];
   for (const item of value) {
-    if (typeof item !== "string" || !isSafeSkillName(item)) return [];
+    if (typeof item !== "string" || !isSafeEntryName(item)) return [];
     names.push(item);
   }
   const normalized = [...new Set(names)].sort(compareText);
@@ -136,7 +140,7 @@ export async function sessionSkills(
 }
 
 function normalizePreset(names: readonly string[]): string[] {
-  if (names.some((name) => !isSafeSkillName(name))) return [];
+  if (names.some((name) => !isSafeEntryName(name))) return [];
   return [...new Set(names)].sort(compareText);
 }
 

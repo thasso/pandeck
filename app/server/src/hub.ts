@@ -32,7 +32,7 @@ import {
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { mergedSessionList } from "./harnesses/sessionList.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
-import { setSkillLibraryBroadcaster } from "./skills/skillLibraryEvents.ts";
+import { setLibraryBroadcaster } from "./library/libraryPublish.ts";
 import { setMemoryBroadcaster } from "./memoryEvents.ts";
 import { setAppNotificationBroadcaster } from "./webPush.ts";
 import { setUsageBroadcaster } from "./usageCache.ts";
@@ -278,9 +278,9 @@ class SessionHub {
         }
       },
     });
-    // The library's only path to browsers: one topic, one list shape.
-    setSkillLibraryBroadcaster({
-      broadcast: (msg) => this.broadcastTopic("skills", msg),
+    // The libraries' only path to browsers: one topic each, one list shape.
+    setLibraryBroadcaster({
+      broadcast: (msg, topic) => this.broadcastTopic(topic, msg),
     });
     setCommentBroadcaster({
       broadcast: (target, msg) =>

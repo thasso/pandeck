@@ -1,4 +1,4 @@
-import type { SkillSummary, SkillToggles } from "@assistant/shared";
+import type { EntrySummary, SkillToggles } from "@assistant/shared";
 
 /**
  * Resolve the skill names selected by ordered settings layers.
@@ -9,7 +9,7 @@ import type { SkillSummary, SkillToggles } from "@assistant/shared";
  * not present in this working-tree scan can never enter the result.
  */
 export function resolveSkillNames(
-  availableSkills: readonly Pick<SkillSummary, "name">[],
+  availableSkills: readonly Pick<EntrySummary, "name">[],
   layers: readonly SkillToggles[],
 ): string[] {
   const resolved = new Map<string, "on" | "off">();

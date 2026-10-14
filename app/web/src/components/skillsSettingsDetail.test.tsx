@@ -4,10 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   AppSettings,
-  SkillDetail,
-  SkillDetailResponse,
-  SkillFilePreviewResponse,
-  SkillLibraryList,
+  EntryDetail,
+  EntryDetailResponse,
+  EntryFilePreviewResponse,
+  EntryLibraryList,
 } from "@assistant/shared";
 import { ready, type LoadState } from "../lib/loadState.ts";
 import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
@@ -29,7 +29,7 @@ import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
 
 interface Pending {
   name: string;
-  resolve: (value: SkillDetailResponse) => void;
+  resolve: (value: EntryDetailResponse) => void;
   reject: (error: unknown) => void;
 }
 
@@ -37,25 +37,29 @@ interface Pending {
 const requests: Pending[] = [];
 const fileRequests: Array<{
   key: string;
-  resolve: (value: SkillFilePreviewResponse) => void;
+  resolve: (value: EntryFilePreviewResponse) => void;
   reject: (error: unknown) => void;
 }> = [];
 
-vi.mock("../lib/skillsApi.ts", () => ({
-  fetchSkillDetail: (name: string) =>
-    new Promise<SkillDetailResponse>((resolve, reject) => {
+// One api object, as `libraryApi` hands out, so `useFetchState` sees stable
+// fetchers. History is not what this file is about: it answers empty.
+const skillsApi = {
+  detail: (name: string) =>
+    new Promise<EntryDetailResponse>((resolve, reject) => {
       requests.push({ name, resolve, reject });
     }),
-  fetchSkillFilePreview: (key: string) =>
-    new Promise<SkillFilePreviewResponse>((resolve, reject) => {
+  filePreview: (key: string) =>
+    new Promise<EntryFilePreviewResponse>((resolve, reject) => {
       fileRequests.push({ key, resolve, reject });
     }),
-  skillFileUrl: (name: string, path: string) => `skill:${name}/${path}`,
-}));
+  history: async () => ({ commits: [], truncated: false }),
+  fileUrl: (name: string, path: string) => `skill:${name}/${path}`,
+};
+vi.mock("../lib/libraryApi.ts", () => ({ libraryApi: () => skillsApi }));
 
-const LIST: SkillLibraryList = {
+const LIST: EntryLibraryList = {
   libraryPath: "/data/skills",
-  skills: [
+  entries: [
     {
       name: "release-notes",
       description: "Draft release notes.",
@@ -73,10 +77,10 @@ const LIST: SkillLibraryList = {
 function detail(
   name: string,
   markdown: string,
-  supporting: SkillDetail["files"]["entries"] = [],
-): SkillDetail {
+  supporting: EntryDetail["files"]["entries"] = [],
+): EntryDetail {
   return {
-    kind: "skill",
+    kind: "entry",
     name,
     description: `${name} description`,
     folder: name,
@@ -122,7 +126,7 @@ afterEach(() => {
   container = null;
 });
 
-function show(library: LoadState<SkillLibraryList> = ready(LIST)): void {
+function show(library: LoadState<EntryLibraryList> = ready(LIST)): void {
   act(() => {
     root!.render(
       <SkillsSettingsSection
@@ -156,7 +160,7 @@ function clickFile(label: string): void {
   act(() => (row as HTMLElement).click());
 }
 
-async function answer(name: string, value: SkillDetailResponse): Promise<void> {
+async function answer(name: string, value: EntryDetailResponse): Promise<void> {
   const pending = requests.filter((request) => request.name === name).at(-1);
   if (!pending) throw new Error(`No request for ${name}`);
   await act(async () => {
@@ -166,7 +170,7 @@ async function answer(name: string, value: SkillDetailResponse): Promise<void> {
 
 async function answerFile(
   path: string,
-  value: SkillFilePreviewResponse,
+  value: EntryFilePreviewResponse,
 ): Promise<void> {
   const pending = fileRequests
     .filter((request) => request.key.endsWith(`\0${path}`))

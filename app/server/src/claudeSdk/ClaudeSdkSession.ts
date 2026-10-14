@@ -99,6 +99,12 @@ import {
 } from "../promptConditions.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
 import {
+  displayedSessionAgent,
+  sessionAgent,
+  sessionAgentSummary,
+  withoutDeniedTools,
+} from "../agents/sessionAgent.ts";
+import {
   skillInvocationTrail,
   type SkillInvocationToolCall,
   type SkillInvocationTranscript,
@@ -219,12 +225,11 @@ import {
   mapToolResults,
   resultProviderError,
 } from "./messageMapper.ts";
-import { buildClaudeSdkQueryOptions } from "./options.ts";
+import { buildClaudeSdkQueryOptions, claudeQueryModel } from "./options.ts";
 import { lastSavedCostState } from "./profileSessionStore.ts";
 import { prepareClaudeSkillRuntime } from "./skillInjection.ts";
 import {
   claudeSdkModelAlias,
-  claudeSdkModelId,
   claudeSdkModelOption,
   reasoningToThinking,
   knownClaudeSdkModelAlias,
@@ -1009,6 +1014,7 @@ export class ClaudeSdkSession implements LiveSession {
       this.id,
     );
     const activeSkillsValue = activeSkillsForSession(this.id, this.agentType);
+    const agentValue = sessionAgentSummary(this.id);
     const worktreeIdValue = this.safeWorktreeId();
     return {
       sessionId: this.id,
@@ -1034,6 +1040,7 @@ export class ClaudeSdkSession implements LiveSession {
             skillInvocations: this.skillInvocations(activeSkillsValue),
           }
         : {}),
+      ...(agentValue !== undefined ? { agent: agentValue } : {}),
       ...(isCodingAgentType(this.agentType)
         ? { artifacts: listSessionArtifacts(this.id) }
         : {}),
@@ -1284,7 +1291,11 @@ export class ClaudeSdkSession implements LiveSession {
       this.activeQuery.setModel
     ) {
       const alias = claudeSdkModelAlias(modelId);
-      await this.activeQuery.setModel(claudeSdkModelId(alias));
+      // The same pin-aware choice a new query makes: back on a pinned
+      // agent's alias, the retained process runs the pinned version.
+      await this.activeQuery.setModel(
+        claudeQueryModel(alias, sessionAgent(this.id)),
+      );
       this.modelId = alias;
       this.broadcastState();
       this.onPersist();
@@ -1829,6 +1840,7 @@ export class ClaudeSdkSession implements LiveSession {
             : {}),
           promptConditions: this.promptConditions(),
           frozenSkillNames,
+          agent: sessionAgent(this.id),
           outputPolicySessionId: this.id,
           lifecycleHooks: {
             preToolUse: (input) =>
@@ -2629,7 +2641,10 @@ export class ClaudeSdkSession implements LiveSession {
 
   /** The Tools-inspector projection: catalog universe + CLI tool-search load state. */
   private toolExposure(): SessionToolExposure {
-    const tools = AGENT_TYPES[this.agentType].tools();
+    const tools = withoutDeniedTools(
+      AGENT_TYPES[this.agentType].tools(),
+      displayedSessionAgent(this.id),
+    );
     const integrationActive = integrationGatedActiveToolNames(
       this.agentType,
       tools,
@@ -3045,6 +3060,9 @@ export class ClaudeSdkSession implements LiveSession {
             agentType: this.agentType,
             promptConditions: this.promptConditions(),
             frozenSkillNames: this.frozenSkillNames(),
+            // The same prompt the session's turns carry, or the cached prefix
+            // would move.
+            agent: sessionAgent(this.id),
             ...(this.additionalSystemPrompt
               ? { additionalSystemPrompt: this.additionalSystemPrompt }
               : {}),

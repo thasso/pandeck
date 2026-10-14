@@ -1,8 +1,8 @@
 /**
- * Validated, Git-committing authoring of the skills library
+ * Validated, Git-committing authoring of one Git-backed library
  * ([Task-633](pa://task/633), `docs/skills.md`).
  *
- * This is the layer between the agent tools and {@link SkillLibraryStore}: it
+ * This is the layer between the agent tools and {@link LibraryStore}: it
  * resolves a DECLARED name to the folder the scanner reported, applies one
  * complete operation through the anchored no-follow source seam, re-scans, and
  * only then lets the store commit. A caller never supplies a filesystem path,
@@ -10,7 +10,7 @@
  *
  * Two rules make a commit trustworthy. The repository must be entirely clean
  * first (the store enforces it), so what is committed is exactly what the tool
- * wrote — including untracked additions, which is why a created skill is
+ * wrote — including untracked additions, which is why a created entry is
  * complete rather than half-tracked. And the post-write scan must show the
  * target valid with NO diagnostic that was not already there: a mutation may
  * not repair, break or absorb a folder it was not asked about.
@@ -20,89 +20,86 @@ import type { Dirent } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
-  isSafeSkillName,
-  MAX_SKILL_BODY_BYTES,
-  MAX_SKILL_FILE_PREVIEW_BYTES,
-  MAX_SKILL_RAW_FILE_BYTES,
-  type SkillDiagnostic,
-  type SkillFileTree,
-  type SkillSummary,
+  isSafeEntryName,
+  MAX_ENTRY_BODY_BYTES,
+  MAX_ENTRY_FILE_PREVIEW_BYTES,
+  MAX_ENTRY_RAW_FILE_BYTES,
+  type EntryDiagnostic,
+  type EntryFileTree,
+  type EntrySummary,
 } from "@assistant/shared";
-import { publishSkillLibrary } from "./skillLibrary.ts";
-import { buildSkillFileTree } from "./skillFiles.ts";
+import { buildEntryFileTree } from "./entryFiles.ts";
 import {
-  assertSafeSkillName,
+  assertSafeEntryName,
   readManifestHandle,
-  assertSkillDescription,
-  assertSkillManifest,
-  formatSkillManifest,
-  SkillValidationError,
+  assertManifest,
+  assertManifestSize,
+  EntryValidationError,
   withDeclaredName,
-} from "./skillManifest.ts";
+} from "./entryManifest.ts";
 import {
-  scanSkillLibrary,
-  skillSourceIdentity,
-  type SkillLibraryScan,
-} from "./skillLibraryScanner.ts";
+  scanLibrary,
+  entrySourceIdentity,
+  type LibraryScan,
+} from "./libraryScanner.ts";
+import { capitalize, withArticle, type LibraryKind } from "./libraryKind.ts";
 import {
-  skillLibraryStore,
-  SkillMutationCancelledError,
-  type SkillCommitMeta,
-  type SkillCommittedEntry,
-  type SkillCommitResult,
-  type SkillLibraryStore,
-  type SkillMutationContext,
-  type SkillRepoStatus,
-} from "./skillLibraryStore.ts";
+  LibraryMutationCancelledError,
+  type LibraryCommitMeta,
+  type LibraryCommittedEntry,
+  type LibraryCommitResult,
+  type LibraryStore,
+  type LibraryMutationContext,
+  type LibraryRepoStatus,
+} from "./libraryStore.ts";
 import {
-  createSkillChildDirectory,
+  createEntryChildDirectory,
   directoryChangedAt,
-  createSkillChildFile,
-  ensureSkillChildDirectory,
-  iterateSkillDirectory,
-  linkSkillChild,
-  pinSkillHandle,
-  readSkillDirectory,
-  removeSkillChildFile,
-  removeVerifiedSkillTree,
-  rmdirSkillChild,
-  sameSkillSource,
-  readSkillChildLink,
-  skillChildChangedAt,
-  skillChildIdentity,
-  skillChildStillIs,
-  skillHandleIdentity,
-  type SkillPin,
-  type SkillTreeContents,
-  unlinkSkillChildIfSame,
-  SkillNameTakenError,
-  withReservedSkillFolder,
-  SKILL_FILE_NAME,
+  createEntryChildFile,
+  ensureEntryChildDirectory,
+  iterateEntryDirectory,
+  linkEntryChild,
+  pinEntryHandle,
+  readEntryDirectory,
+  removeEntryChildFile,
+  removeVerifiedEntryTree,
+  rmdirEntryChild,
+  sameEntrySource,
+  readEntryChildLink,
+  entryChildChangedAt,
+  entryChildIdentity,
+  entryChildStillIs,
+  entryHandleIdentity,
+  type EntryPin,
+  type EntryTreeContents,
+  unlinkEntryChildIfSame,
+  EntryNameTakenError,
+  withReservedEntryFolder,
   withLibraryRoot,
-  withSkillChild,
-  withSkillChildForUpdate,
-  withSkillSource,
-  writeSkillChildFile,
-  type SkillSourceIdentity,
-} from "./skillSource.ts";
+  withEntryChild,
+  withEntryChildForUpdate,
+  withEntrySource,
+  writeEntryChildFile,
+  type EntrySourceIdentity,
+} from "./entrySource.ts";
 
-/** Bound on `SKILL.md` source a tool writes or reads back for editing. */
-export const MAX_SKILL_SOURCE_BYTES = MAX_SKILL_BODY_BYTES;
+/** Bound on manifest source a tool writes or reads back for editing. */
+export const MAX_ENTRY_SOURCE_BYTES = MAX_ENTRY_BODY_BYTES;
 /** Bound on ONE supporting text file a tool writes. */
-export const MAX_SKILL_TEXT_FILE_BYTES = MAX_SKILL_FILE_PREVIEW_BYTES;
+export const MAX_ENTRY_TEXT_FILE_BYTES = MAX_ENTRY_FILE_PREVIEW_BYTES;
 /** Bound on ONE imported attachment; the same limit the raw viewer serves. */
-export const MAX_SKILL_IMPORT_BYTES = MAX_SKILL_RAW_FILE_BYTES;
+export const MAX_ENTRY_IMPORT_BYTES = MAX_ENTRY_RAW_FILE_BYTES;
 /** Bounds on one supporting-file batch. */
-export const MAX_SKILL_FILE_OPERATIONS = 20;
-const MAX_SKILL_BATCH_BYTES = 16 * 1024 * 1024;
-const MAX_SKILL_RELATIVE_PATH_BYTES = 4 * 1024;
+export const MAX_ENTRY_FILE_OPERATIONS = 20;
+const MAX_ENTRY_BATCH_BYTES = 16 * 1024 * 1024;
+const MAX_ENTRY_RELATIVE_PATH_BYTES = 4 * 1024;
 
-/** One skill the scanner currently reports as valid. */
-interface ResolvedSkill {
+/** One entry the scanner currently reports as valid. */
+interface ResolvedEntry {
   name: string;
   description: string;
   folder: string;
-  /** Library-relative `SKILL.md` path. */
+  /** Library-relative manifest path. */
   path: string;
 }
 
@@ -111,29 +108,29 @@ interface ResolvedSkill {
  *
  * `signal` is the tool call's cancellation. A mutation honours it only at its
  * own checkpoints — before it writes, and inside the read-only proofs that can
- * hash whatever a hand author left beside a skill — never once it is committed
+ * hash whatever a hand author left beside an entry — never once it is committed
  * to finishing. Stopping a mutation is therefore always "nothing happened",
  * never "half of it happened".
  */
-export interface SkillMutationOptions {
+export interface LibraryMutationOptions {
   signal?: AbortSignal;
 }
 
 /** What every mutation answers with. */
-export interface SkillMutationOutcome {
-  skill?: SkillSummary;
+export interface LibraryMutationOutcome {
+  entry?: EntrySummary;
   folder: string;
-  commit: SkillCommitResult;
-  status: SkillRepoStatus;
+  commit: LibraryCommitResult;
+  status: LibraryRepoStatus;
 }
 
 /** One supporting-file change inside a single batch. */
-export type SkillFileOperation =
+export type EntryFileOperation =
   | { op: "write"; path: string; content: string }
   | {
       op: "edit";
       path: string;
-      /** Exact, unique, non-overlapping replacements, as `skill_edit` applies. */
+      /** Exact, unique, non-overlapping replacements, as `<kind>_edit` applies. */
       edits: { oldText: string; newText: string }[];
     }
   | {
@@ -162,122 +159,149 @@ export interface AppliedFileOperation {
   replacements?: number;
 }
 
-/** The whole-library read behind `skill_list`. */
-export interface SkillLibraryOverview {
+/** The whole-library read behind `<kind>_list`. */
+export interface LibraryOverview {
   libraryPath: string;
-  skills: SkillSummary[];
-  diagnostics: SkillDiagnostic[];
-  repository: SkillRepoStatus;
+  entries: EntrySummary[];
+  diagnostics: EntryDiagnostic[];
+  repository: LibraryRepoStatus;
 }
 
-/** The one-skill read behind `skill_get`. */
-export interface SkillSourceRead {
+/** The one-entry read behind `<kind>_get`. */
+export interface EntrySourceRead {
   name: string;
   description: string;
   folder: string;
   path: string;
-  /** Complete `SKILL.md` source INCLUDING frontmatter, bounded. */
+  /** Complete manifest source INCLUDING frontmatter, bounded. */
   source: string;
+  /** The bytes `source` was decoded from, exactly as on disk. */
+  raw: Uint8Array;
   bytes: number;
   truncated: boolean;
-  files: SkillFileTree;
+  files: EntryFileTree;
 }
 
 /** Fresh scan plus compact repository state. */
-export async function readSkillLibraryOverview(
-  library: SkillLibraryStore = skillLibraryStore,
-): Promise<SkillLibraryOverview> {
+export async function readLibraryOverview(
+  library: LibraryStore,
+): Promise<LibraryOverview> {
+  const { kind } = library;
   await library.ensureInitialized();
-  const scan = await scanSkillLibrary(library.root);
+  const scan = await scanLibrary(kind, library.root);
   const repository = await library.status();
   return {
     libraryPath: library.root,
-    skills: scan.skills,
+    entries: scan.entries,
     diagnostics: scan.diagnostics,
     repository,
   };
 }
 
 /**
- * Read one valid skill's complete source and supporting-file tree. Returns
+ * Read one valid entry's complete source and supporting-file tree. Returns
  * `null` for a name the library does not currently declare as valid — a name
- * with a diagnostic is not editable, and `skill_list` already explains why.
+ * with a diagnostic is not editable, and `<prefix>_list` already explains why.
  */
-export async function readSkillSource(
+export async function readEntrySource(
   name: string,
-  library: SkillLibraryStore = skillLibraryStore,
-): Promise<SkillSourceRead | null> {
+  library: LibraryStore,
+): Promise<EntrySourceRead | null> {
+  const { kind } = library;
   await library.ensureInitialized();
-  const scan = await scanSkillLibrary(library.root);
-  return resolveSkillSource(library.root, scan, name);
+  const scan = await scanLibrary(kind, library.root);
+  return resolveEntrySource(library, scan, name);
 }
 
 /** Resolve against a completed scan while refusing any subsequent source swap. */
-export async function resolveSkillSource(
-  root: string,
-  scan: SkillLibraryScan,
+export async function resolveEntrySource(
+  library: LibraryStore,
+  scan: LibraryScan,
   name: string,
-): Promise<SkillSourceRead | null> {
-  if (!isSafeSkillName(name)) return null;
-  const summary = scan.skills.find((skill) => skill.name === name);
+): Promise<EntrySourceRead | null> {
+  const { kind } = library;
+  if (!isSafeEntryName(name)) return null;
+  const summary = scan.entries.find((entry) => entry.name === name);
   if (!summary) return null;
   const target = targetOf(summary);
-  const identity = skillSourceIdentity(scan, target.path);
+  const identity = entrySourceIdentity(scan, target.path);
   if (!identity) {
-    throw changedSinceScan(target.path, "has no stable source identity");
+    throw changedSinceScan(kind, target.path, "has no stable source identity");
   }
   try {
-    return await withLibraryRoot(root, (rootHandle) =>
-      withSkillSource(rootHandle, target.folder, async (source) => {
-        if (!sameSkillSource(source.identity, identity)) {
-          throw changedSinceScan(target.path, "changed identity");
-        }
-        const read = await readManifestHandle(source.file, source.size);
-        const manifest = assertSkillManifest(read.source, target.path);
-        if (
-          manifest.name !== target.name ||
-          manifest.description !== target.description
-        ) {
-          throw changedSinceScan(target.path, "changed frontmatter");
-        }
-        return {
-          name: target.name,
-          description: target.description,
-          folder: target.folder,
-          path: target.path,
-          source: read.source,
-          bytes: read.bytes,
-          truncated: read.truncated,
-          files: await buildSkillFileTree(source.folder),
-        };
-      }),
+    return await withLibraryRoot(library.root, (rootHandle) =>
+      withEntrySource(
+        rootHandle,
+        target.folder,
+        kind.manifestFile,
+        async (source) => {
+          if (!sameEntrySource(source.identity, identity)) {
+            throw changedSinceScan(kind, target.path, "changed identity");
+          }
+          assertManifestSize(kind, source.size, target.path);
+          const read = await readManifestHandle(source.file, source.size);
+          const manifest = assertManifest(kind, read.source, target.path);
+          if (
+            manifest.name !== target.name ||
+            manifest.description !== target.description
+          ) {
+            throw changedSinceScan(kind, target.path, "changed frontmatter");
+          }
+          return {
+            name: target.name,
+            description: target.description,
+            folder: target.folder,
+            path: target.path,
+            source: read.source,
+            raw: read.raw,
+            bytes: read.bytes,
+            truncated: read.truncated,
+            files: await buildEntryFileTree(kind, source.folder),
+          };
+        },
+      ),
     );
   } catch (error) {
-    if (error instanceof SkillValidationError) throw error;
-    throw changedSinceScan(target.path, "could not be reopened consistently");
+    if (error instanceof EntryValidationError) throw error;
+    throw changedSinceScan(
+      kind,
+      target.path,
+      "could not be reopened consistently",
+    );
   }
 }
 
-/** Create `<name>/SKILL.md` from a validated declared name, description, body. */
-export async function createSkill(
-  input: { name: string; description: string; body: string },
-  meta: SkillCommitMeta,
-  library: SkillLibraryStore = skillLibraryStore,
-  options: SkillMutationOptions = {},
-): Promise<SkillMutationOutcome> {
-  const name = assertSafeSkillName(input.name);
-  const description = assertSkillDescription(input.description);
-  const source = formatSkillManifest({ name, description, body: input.body });
-  assertSourceSize(source, `${name}/${SKILL_FILE_NAME}`);
+/**
+ * Create `<name>/<manifestFile>` from complete manifest source the kind has
+ * already rendered. The source must satisfy the kind's whole rule and declare
+ * exactly `name`, so the folder and the declared name cannot disagree.
+ */
+export async function createEntry(
+  input: { name: string; source: string },
+  meta: LibraryCommitMeta,
+  library: LibraryStore,
+  options: LibraryMutationOptions = {},
+): Promise<LibraryMutationOutcome> {
+  const { kind } = library;
+  const name = assertSafeEntryName(kind, input.name);
+  const { source } = input;
+  const path = `${name}/${kind.manifestFile}`;
+  assertSourceSize(kind, source, path);
+  const declared = assertManifest(kind, source, path).name;
+  if (declared !== name) {
+    throw new EntryValidationError(
+      `${path} declares the name "${declared}", not "${name}".`,
+    );
+  }
 
   return runMutation(
     library,
-    { ...meta, skillNames: [name] },
+    { ...meta, entryNames: [name] },
     async (ctx) => {
       // The pre-write scan reads every folder in the library, so it takes
       // the checkpoint too: nothing has happened yet, and a caller who
       // stopped should not have to wait out somebody's thousand folders.
-      const before = await scanSkillLibrary(ctx.root, {
+      const before = await scanLibrary(kind, ctx.root, {
         checkpoint: ctx.checkpoint,
       });
       assertNameIsFree(before, name);
@@ -289,7 +313,7 @@ export async function createSkill(
         // The manifest is then written through the HELD descriptor rather than
         // through the name a second time: re-opening the name is how a folder a
         // hand edit put there in between would end up being written into.
-        const created = await withReservedSkillFolder(
+        const created = await withReservedEntryFolder(
           rootHandle,
           name,
           async (reserved) => {
@@ -302,15 +326,15 @@ export async function createSkill(
               // commit has settled: the undo below runs after this scope is gone,
               // and a bare inode NUMBER would by then be as true of a folder a
               // hand author put at the name as of this one.
-              const folder = await pin(ctx, pinSkillHandle(reserved.handle));
+              const folder = await pin(ctx, pinEntryHandle(reserved.handle));
               // Create-or-fail, not a plain write: the reservation stands at a
               // public name, so a hand author can reach into it, and a manifest
               // that appeared in that instant is theirs to keep.
               const manifest = await pin(
                 ctx,
-                createSkillChildFile(
+                createEntryChildFile(
                   reserved.handle,
-                  SKILL_FILE_NAME,
+                  kind.manifestFile,
                   encode(source),
                 ),
               );
@@ -318,7 +342,7 @@ export async function createSkill(
               // bytes. Staging the FOLDER would stage whatever else stands in it
               // by then; staging the NAME alone would still take whatever a hand
               // author wrote over it in the meantime.
-              ctx.created(`${name}/${SKILL_FILE_NAME}`, {
+              ctx.created(`${name}/${kind.manifestFile}`, {
                 bytes: encode(source),
               });
               // Removing the folder again is this mutation's own job, not the
@@ -328,14 +352,14 @@ export async function createSkill(
               // takes back the manifest written here and leaves anything else.
               ctx.onRollback(() =>
                 withLibraryRoot(ctx.root, (undoRoot) =>
-                  removeAssembledSkill(
+                  removeAssembledEntry(
                     undoRoot,
                     name,
                     folder.identity,
                     [
                       {
                         kind: "file",
-                        name: SKILL_FILE_NAME,
+                        name: kind.manifestFile,
                         identity: manifest.identity,
                         // Written here, so the bytes written here are what must
                         // still be there for the undo to take it back.
@@ -350,11 +374,12 @@ export async function createSkill(
               // sound where a bare `stat` would not be: an inode number is reused
               // the instant a directory is removed, but not while it is open.
               if (
-                !(await skillChildStillIs(rootHandle, name, reserved.identity))
+                !(await entryChildStillIs(rootHandle, name, reserved.identity))
               ) {
                 throw changedSinceScan(
+                  kind,
                   name,
-                  "was taken over by another entry while the skill was being created",
+                  `was taken over by another entry while the ${kind.noun} was being created`,
                 );
               }
             } catch (error) {
@@ -364,17 +389,18 @@ export async function createSkill(
               // keeps rollback from deleting the user's folder to undo work that
               // never landed in it, and keeps staging from committing it.
               if (
-                !(await skillChildStillIs(rootHandle, name, reserved.identity))
+                !(await entryChildStillIs(rootHandle, name, reserved.identity))
               ) {
                 ctx.disown(name);
               }
-              if (error instanceof SkillNameTakenError) {
+              if (error instanceof EntryNameTakenError) {
                 // A manifest appeared inside the reservation between its `mkdir`
                 // and this write. Create-or-fail refused it rather than writing
                 // over it, and the raw EEXIST explains none of that.
                 throw changedSinceScan(
-                  `${name}/${SKILL_FILE_NAME}`,
-                  "was written by something else while the skill was being created",
+                  kind,
+                  `${name}/${kind.manifestFile}`,
+                  `was written by something else while the ${kind.noun} was being created`,
                 );
               }
               throw error;
@@ -383,8 +409,8 @@ export async function createSkill(
           },
         );
         if (created === null) {
-          throw new SkillValidationError(
-            `The library already contains a top-level entry named "${name}". Choose another skill name, or delete that entry by hand first.`,
+          throw new EntryValidationError(
+            `The library already contains a top-level entry named "${name}". Choose another ${kind.noun} name, or delete that entry by hand first.`,
           );
         }
       });
@@ -394,71 +420,106 @@ export async function createSkill(
   );
 }
 
-/** Apply exact unique text replacements to one skill's `SKILL.md`. */
-export async function editSkillSource(
+/** Apply exact unique text replacements to one entry's manifest. */
+export async function editEntrySource(
   input: { name: string; edits: { oldText: string; newText: string }[] },
-  meta: SkillCommitMeta,
-  library: SkillLibraryStore = skillLibraryStore,
-  options: SkillMutationOptions = {},
-): Promise<SkillMutationOutcome & { replacements: number }> {
-  const name = assertSafeSkillName(input.name);
+  meta: LibraryCommitMeta,
+  library: LibraryStore,
+  options: LibraryMutationOptions & {
+    /**
+     * The kind's own judgement of the change, made INSIDE the locked write on
+     * the exact source being replaced and its exact replacement, after the
+     * manifest rule and before a byte changes. Throw to refuse: a check made
+     * outside the lock would judge a file somebody can change before the write.
+     */
+    check?: (before: string, after: string) => void | Promise<void>;
+  } = {},
+): Promise<LibraryMutationOutcome & { replacements: number }> {
+  const { kind } = library;
+  const name = assertSafeEntryName(kind, input.name);
   if (input.edits.length === 0)
-    throw new SkillValidationError("At least one edit is required.");
+    throw new EntryValidationError("At least one edit is required.");
 
   const outcome = await runMutation(
     library,
-    { ...meta, skillNames: [name] },
+    { ...meta, entryNames: [name] },
     async (ctx) => {
       // The pre-write scan reads every folder in the library, so it takes
       // the checkpoint too: nothing has happened yet, and a caller who
       // stopped should not have to wait out somebody's thousand folders.
-      const before = await scanSkillLibrary(ctx.root, {
+      const before = await scanLibrary(kind, ctx.root, {
         checkpoint: ctx.checkpoint,
       });
-      const target = resolveSkill(before, name);
-      const identity = scannedIdentity(before, target);
+      const target = resolveEntry(kind, before, name);
+      const identity = scannedIdentity(kind, before, target);
       ctx.touch(target.path);
       // The manifest is read and rewritten through one handle below, and the
       // truncation is the first irreversible step; this is the last moment a
       // stop costs nothing.
       ctx.checkpoint();
       const replacements = await withLibraryRoot(ctx.root, (rootHandle) =>
-        withVerifiedSkillFolder(rootHandle, target, identity, async (folder) =>
-          // One handle for the read and the rewrite: the text an edit matched
-          // and the bytes it replaces belong to the same inode, and it is the
-          // inode the scan selected.
-          withSkillChildForUpdate(folder, SKILL_FILE_NAME, async (file) => {
-            if (!sameFileIdentity(file.identity, identity.file)) {
-              throw changedSinceScan(target.path, "changed identity");
-            }
-            const current = await readManifestHandle(file.handle, file.size);
-            if (current.truncated) {
-              throw new SkillValidationError(
-                `${target.path} is larger than ${MAX_SKILL_SOURCE_BYTES} bytes, so it cannot be edited through this tool; edit it by hand in the library.`,
+        withVerifiedEntryFolder(
+          kind,
+          rootHandle,
+          target,
+          identity,
+          async (folder) =>
+            // One handle for the read and the rewrite: the text an edit matched
+            // and the bytes it replaces belong to the same inode, and it is the
+            // inode the scan selected.
+            withEntryChildForUpdate(folder, kind.manifestFile, async (file) => {
+              if (!sameFileIdentity(file.identity, identity.file)) {
+                throw changedSinceScan(kind, target.path, "changed identity");
+              }
+              assertManifestSize(kind, file.size, target.path);
+              const current = await readManifestHandle(file.handle, file.size);
+              if (current.truncated) {
+                throw new EntryValidationError(
+                  `${target.path} is larger than ${MAX_ENTRY_SOURCE_BYTES} bytes, so it cannot be edited through this tool; edit it by hand in the library.`,
+                );
+              }
+              const applied = applyExactReplacements(
+                kind,
+                current.source,
+                input.edits,
+                target.path,
               );
-            }
-            const applied = applyExactReplacements(
-              current.source,
-              input.edits,
-              target.path,
-            );
-            const manifest = assertSkillManifest(applied.content, target.path);
-            if (manifest.name !== target.name) {
-              throw new SkillValidationError(
-                `An edit may not change the declared name ("${target.name}" → "${manifest.name}"). Use the rename tool, which also moves the source folder.`,
+              const manifest = assertManifest(
+                kind,
+                applied.content,
+                target.path,
               );
-            }
-            assertSourceSize(applied.content, target.path);
-            // From here the manifest's committed bytes are gone, so a later
-            // staging or commit failure must be able to restore this path.
-            const written = encode(applied.content);
-            ctx.damaged(target.path);
-            await file.replace(written);
-            // And now the path holds exactly these bytes, which is what makes
-            // restoring it safe: anything else there later is somebody else's.
-            ctx.wrote(target.path, written);
-            return applied.replacements;
-          }),
+              if (manifest.name !== target.name) {
+                throw new EntryValidationError(
+                  `An edit may not change the declared name ("${target.name}" → "${manifest.name}"). Use the rename tool, which also moves the source folder.`,
+                );
+              }
+              assertSourceSize(kind, applied.content, target.path);
+              if (options.check) {
+                await options.check(current.source, applied.content);
+                // The check awaits; a hand author is not held by the lock, so
+                // what is about to be replaced must still be what was judged.
+                // Nothing has been written yet, so refusing leaves their edit.
+                const { size } = await file.handle.stat();
+                const now = await readManifestHandle(file.handle, size);
+                if (now.truncated || now.source !== current.source) {
+                  throw changedSinceScan(
+                    kind,
+                    target.path,
+                    "changed while the edit was being checked",
+                  );
+                }
+              }
+              // From here the manifest's committed bytes are gone, so a later
+              // staging or commit failure must be able to restore this path.
+              const written = encode(applied.content);
+              await file.replace(written, () => ctx.damaged(target.path));
+              // And now the path holds exactly these bytes, which is what makes
+              // restoring it safe: anything else there later is somebody
+              // else's.
+              ctx.wrote(target.path, written);
+              return applied.replacements;
+            }),
         ),
       );
       return { before, name, folder: target.folder, extra: { replacements } };
@@ -469,36 +530,38 @@ export async function editSkillSource(
 }
 
 /** Apply one atomic batch of supporting-file writes, imports, and deletes. */
-export async function manageSkillFiles(
-  input: { name: string; operations: SkillFileOperation[] },
-  meta: SkillCommitMeta,
-  library: SkillLibraryStore = skillLibraryStore,
-  options: SkillMutationOptions = {},
-): Promise<SkillMutationOutcome & { applied: AppliedFileOperation[] }> {
-  const name = assertSafeSkillName(input.name);
-  const planned = await planFileOperations(input.operations);
+export async function manageEntryFiles(
+  input: { name: string; operations: EntryFileOperation[] },
+  meta: LibraryCommitMeta,
+  library: LibraryStore,
+  options: LibraryMutationOptions = {},
+): Promise<LibraryMutationOutcome & { applied: AppliedFileOperation[] }> {
+  const { kind } = library;
+  const name = assertSafeEntryName(kind, input.name);
+  const planned = await planFileOperations(kind, input.operations);
   /** How many replacements each `edit` made, filled in as they are applied. */
   const replacements = new Map<string, number>();
 
   const outcome = await runMutation(
     library,
-    { ...meta, skillNames: [name] },
+    { ...meta, entryNames: [name] },
     async (ctx) => {
       // The pre-write scan reads every folder in the library, so it takes
       // the checkpoint too: nothing has happened yet, and a caller who
       // stopped should not have to wait out somebody's thousand folders.
-      const before = await scanSkillLibrary(ctx.root, {
+      const before = await scanLibrary(kind, ctx.root, {
         checkpoint: ctx.checkpoint,
       });
-      const target = resolveSkill(before, name);
-      const identity = scannedIdentity(before, target);
+      const target = resolveEntry(kind, before, name);
+      const identity = scannedIdentity(kind, before, target);
       for (const operation of planned)
         ctx.touch(`${target.folder}/${operation.path}`);
       // The batch applies as a whole, so the whole of it is what a stop can
       // still avoid: from the first write below it either lands or is undone.
       ctx.checkpoint();
       await withLibraryRoot(ctx.root, (rootHandle) =>
-        withVerifiedSkillFolder(
+        withVerifiedEntryFolder(
+          kind,
           rootHandle,
           target,
           identity,
@@ -517,8 +580,9 @@ export async function manageSkillFiles(
                 // An edit never creates anything: the file it rewrites was
                 // committed before this mutation started (the tree was clean),
                 // so the generic restore owns undoing it, exactly as it does
-                // for a SKILL.md edit.
+                // for a manifest edit.
                 const written = await editRelativeFile(
+                  kind,
                   folder,
                   operation.path,
                   operation.edits,
@@ -530,6 +594,7 @@ export async function manageSkillFiles(
                 replacements.set(operation.path, written.replacements);
               } else {
                 await writeRelativeFile(
+                  kind,
                   folder,
                   operation.path,
                   operation.bytes,
@@ -542,12 +607,12 @@ export async function manageSkillFiles(
                   // still that inode — a file only while it is the one written
                   // here, a directory only while it is empty. Deepest first,
                   // which is the reverse of creation order.
-                  (created, kind, pinned) => {
+                  (created, createdKind, pinned) => {
                     ctx.hold(pinned.handle);
                     // Not in HEAD, so no restore can bring it back — but it
                     // does belong in the commit, and by its own exact path, so
                     // that staging the batch cannot sweep up a neighbour.
-                    if (kind === "file") {
+                    if (createdKind === "file") {
                       // These are bytes this batch wrote itself, so the proof
                       // is the bytes: the index entry has to hash to them.
                       ctx.created(`${target.folder}/${created}`, {
@@ -557,13 +622,14 @@ export async function manageSkillFiles(
                     ctx.onRollback(() =>
                       withLibraryRoot(ctx.root, (undoRoot) =>
                         removeCreatedEntry(
+                          kind,
                           undoRoot,
                           target,
                           identity,
                           created,
-                          kind,
+                          createdKind,
                           pinned.identity,
-                          kind === "file"
+                          createdKind === "file"
                             ? async (handle) =>
                                 (await ctx.blobId(handle)) ===
                                 (await ctx.blobId(operation.bytes))
@@ -608,31 +674,32 @@ export async function manageSkillFiles(
 }
 
 /** Move the source folder and rewrite the declared name in one commit. */
-export async function renameSkill(
+export async function renameEntry(
   input: { name: string; newName: string },
-  meta: SkillCommitMeta,
-  library: SkillLibraryStore = skillLibraryStore,
-  options: SkillMutationOptions = {},
-): Promise<SkillMutationOutcome & { previousName: string }> {
-  const name = assertSafeSkillName(input.name);
-  const newName = assertSafeSkillName(input.newName, "new name");
+  meta: LibraryCommitMeta,
+  library: LibraryStore,
+  options: LibraryMutationOptions = {},
+): Promise<LibraryMutationOutcome & { previousName: string }> {
+  const { kind } = library;
+  const name = assertSafeEntryName(kind, input.name);
+  const newName = assertSafeEntryName(kind, input.newName, "new name");
   if (name === newName)
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       `"${name}" is already the declared name; nothing to rename.`,
     );
 
   const outcome = await runMutation(
     library,
-    { ...meta, skillNames: [name, newName] },
+    { ...meta, entryNames: [name, newName] },
     async (ctx) => {
       // The pre-write scan reads every folder in the library, so it takes
       // the checkpoint too: nothing has happened yet, and a caller who
       // stopped should not have to wait out somebody's thousand folders.
-      const before = await scanSkillLibrary(ctx.root, {
+      const before = await scanLibrary(kind, ctx.root, {
         checkpoint: ctx.checkpoint,
       });
-      const target = resolveSkill(before, name);
-      const identity = scannedIdentity(before, target);
+      const target = resolveEntry(kind, before, name);
+      const identity = scannedIdentity(kind, before, target);
       assertNameIsFree(before, newName);
       ctx.touch(target.folder);
       // The destination is reserved by the next call, which is a write.
@@ -640,14 +707,15 @@ export async function renameSkill(
       await withLibraryRoot(ctx.root, async (rootHandle) => {
         // The destination is CLAIMED, never taken. `mkdir` fails on any entry
         // that already holds the name, and every step below is the same kind of
-        // create-or-fail call — `mkdir`, `link`, `O_CREAT|O_EXCL` — so the skill
-        // is assembled at the new name without a single operation that could
-        // replace something. A `rename` of the folder would have been simpler,
-        // but POSIX `rename` REPLACES an empty destination directory, and no
-        // check in front of it closes that window; `renameat2(RENAME_NOREPLACE)`
-        // is not reachable from this runtime, so the primitives that already
-        // refuse are used instead of one that has to be guarded.
-        const performed = await withReservedSkillFolder(
+        // create-or-fail call — `mkdir`, `link`, `O_CREAT|O_EXCL` — so the
+        // entry is assembled at the new name without a single operation that
+        // could replace something. A `rename` of the folder would have been
+        // simpler, but POSIX `rename` REPLACES an empty destination directory,
+        // and no check in front of it closes that window;
+        // `renameat2(RENAME_NOREPLACE)` is not reachable from this runtime, so
+        // the primitives that already refuse are used instead of one that has
+        // to be guarded.
+        const performed = await withReservedEntryFolder(
           rootHandle,
           newName,
           async (reserved) => {
@@ -659,8 +727,8 @@ export async function renameSkill(
             // commit settles: the undo runs after this scope is gone, and the
             // folder's inode NUMBER alone would by then say nothing about
             // whether the folder still is this one.
-            const destination = await pin(ctx, pinSkillHandle(reserved.handle));
-            const keep = pinKeeper(ctx, target.folder);
+            const destination = await pin(ctx, pinEntryHandle(reserved.handle));
+            const keep = pinKeeper(kind, ctx, target.folder);
             // What the undo must find at the new name: the placement plus the
             // fresh manifest. Filled AS each entry is placed, never afterwards,
             // because a placement that fails halfway must still be undoable
@@ -671,9 +739,10 @@ export async function renameSkill(
             const expectedSource: PlacedEntry[] = [];
             // The pinned source, which only exists once the folder below is
             // open: the removal further down is bound to these inodes.
-            let sourcePins: PinnedSkillSource | undefined;
+            let sourcePins: PinnedEntrySource | undefined;
             try {
-              await withVerifiedSkillFolder(
+              await withVerifiedEntryFolder(
+                kind,
                 rootHandle,
                 target,
                 identity,
@@ -682,22 +751,37 @@ export async function renameSkill(
                   // the folder identity that removal is bound to, and the
                   // manifest identity it checks the tree against, must be
                   // inodes this call holds and not numbers the scan wrote down.
-                  const pinned = await pinSkillSource(ctx, folder, target);
+                  const pinned = await pinEntrySource(
+                    kind,
+                    ctx,
+                    folder,
+                    target,
+                  );
                   sourcePins = pinned;
                   const rewritten = withDeclaredName(
+                    kind,
                     pinned.text,
                     target.path,
                     newName,
                   );
-                  assertSkillManifest(
+                  assertManifest(
+                    kind,
                     rewritten,
-                    `${newName}/${SKILL_FILE_NAME}`,
+                    `${newName}/${kind.manifestFile}`,
+                  );
+                  // A longer name can carry a manifest past its kind's bound.
+                  assertManifestSize(
+                    kind,
+                    Buffer.byteLength(rewritten, "utf8"),
+                    `${newName}/${kind.manifestFile}`,
+                    true,
                   );
 
                   // Everything except the manifest is hard-linked across: the
                   // new name is the same inode, so nothing is copied and the
                   // link itself proves later which names this call made.
-                  await placeSkillChildren(
+                  await placeEntryChildren(
+                    kind,
                     folder,
                     reserved.handle,
                     undoable,
@@ -710,16 +794,16 @@ export async function renameSkill(
                   // that appeared under the name in the meantime, and the pin
                   // comes from the descriptor it was created through.
                   const manifestPlaced = await keep(() =>
-                    createSkillChildFile(
+                    createEntryChildFile(
                       reserved.handle,
-                      SKILL_FILE_NAME,
+                      kind.manifestFile,
                       encode(rewritten),
                     ),
                   );
                   const placement = [...undoable];
                   undoable.push({
                     kind: "file",
-                    name: SKILL_FILE_NAME,
+                    name: kind.manifestFile,
                     identity: manifestPlaced.identity,
                     // Written here, not moved: these bytes are the expectation.
                     content: { kind: "bytes", bytes: encode(rewritten) },
@@ -731,7 +815,7 @@ export async function renameSkill(
                   // committed at the old path; the manifest is not moved at all
                   // — it is rewritten here, so it is proved by its bytes.
                   claimPlacedFiles(ctx, newName, target.folder, placement);
-                  ctx.created(`${newName}/${SKILL_FILE_NAME}`, {
+                  ctx.created(`${newName}/${kind.manifestFile}`, {
                     bytes: encode(rewritten),
                   });
                   // Everything is at the new name — but is the new name still
@@ -739,15 +823,16 @@ export async function renameSkill(
                   // above went into a directory nothing can reach any more, and
                   // removing the source would be deleting the only copy left.
                   if (
-                    !(await skillChildStillIs(
+                    !(await entryChildStillIs(
                       rootHandle,
                       newName,
                       reserved.identity,
                     ))
                   ) {
                     throw changedSinceScan(
+                      kind,
                       newName,
-                      "was taken over by another entry while the skill was being renamed",
+                      `was taken over by another entry while the ${kind.noun} was being renamed`,
                     );
                   }
                   // What the SOURCE must still hold before it may be removed
@@ -761,7 +846,7 @@ export async function renameSkill(
                   expectedSource.push(
                     {
                       kind: "file",
-                      name: SKILL_FILE_NAME,
+                      name: kind.manifestFile,
                       identity: pinned.manifest,
                       content:
                         sourceManifest === undefined
@@ -788,7 +873,7 @@ export async function renameSkill(
                 if (contents.holds) ctx.beyondCancellation();
                 return contents;
               });
-              const removal = await removeVerifiedSkillTree(
+              const removal = await removeVerifiedEntryTree(
                 rootHandle,
                 target.folder,
                 sourcePins!.folder,
@@ -803,9 +888,10 @@ export async function renameSkill(
                   ctx.damaged(target.folder);
                 }
                 throw changedSinceScan(
+                  kind,
                   target.folder,
                   removal === "unexpected-content"
-                    ? "gained content while the skill was being renamed"
+                    ? `gained content while the ${kind.noun} was being renamed`
                     : removal === "partial"
                       ? "could only be partly removed"
                       : "is no longer the folder that was scanned",
@@ -826,7 +912,7 @@ export async function renameSkill(
               // still holds nothing else.
               ctx.onRollback(() =>
                 withLibraryRoot(ctx.root, (undoRoot) =>
-                  removeAssembledSkill(
+                  removeAssembledEntry(
                     undoRoot,
                     newName,
                     destination.identity,
@@ -842,7 +928,7 @@ export async function renameSkill(
               // and a cancellation still live here would abandon that check and
               // leave the assembled destination standing.
               ctx.beyondCancellation();
-              const stillOurs = await skillChildStillIs(
+              const stillOurs = await entryChildStillIs(
                 rootHandle,
                 newName,
                 destination.identity,
@@ -851,7 +937,7 @@ export async function renameSkill(
               // destination is still the reservation: anything a hand author
               // added under it stays, and stays reachable.
               if (stillOurs) {
-                await removeAssembledSkill(
+                await removeAssembledEntry(
                   rootHandle,
                   newName,
                   destination.identity,
@@ -864,15 +950,16 @@ export async function renameSkill(
                 // mutation's to remove, and the raw errno from writing into an
                 // unlinked directory explains none of that.
                 throw changedSinceScan(
+                  kind,
                   newName,
-                  "was taken over by another entry while the skill was being renamed",
+                  `was taken over by another entry while the ${kind.noun} was being renamed`,
                 );
               }
-              if (error instanceof SkillNameTakenError) {
+              if (error instanceof EntryNameTakenError) {
                 // A create-or-fail call refused: something already holds a name
                 // the rename needed. That is the contract working, so it should
                 // read as a refusal and not as a raw filesystem error.
-                throw new SkillValidationError(
+                throw new EntryValidationError(
                   `Renaming "${name}" to "${newName}" would have had to overwrite something that already exists there (${error.message}); nothing was changed. Resolve it by hand in the library and retry.`,
                 );
               }
@@ -882,7 +969,7 @@ export async function renameSkill(
           },
         );
         if (performed === null) {
-          throw new SkillValidationError(
+          throw new EntryValidationError(
             `The library already contains a top-level entry named "${newName}"; a rename may not overwrite it.`,
           );
         }
@@ -899,26 +986,27 @@ export async function renameSkill(
   return { ...outcome, previousName: outcome.extra.previousName };
 }
 
-/** Delete one whole skill folder resolved from its current declared name. */
-export async function deleteSkill(
+/** Delete one whole entry folder resolved from its current declared name. */
+export async function deleteEntry(
   input: { name: string },
-  meta: SkillCommitMeta,
-  library: SkillLibraryStore = skillLibraryStore,
-  options: SkillMutationOptions = {},
-): Promise<SkillMutationOutcome> {
-  const name = assertSafeSkillName(input.name);
+  meta: LibraryCommitMeta,
+  library: LibraryStore,
+  options: LibraryMutationOptions = {},
+): Promise<LibraryMutationOutcome> {
+  const { kind } = library;
+  const name = assertSafeEntryName(kind, input.name);
   return runMutation(
     library,
-    { ...meta, skillNames: [name] },
+    { ...meta, entryNames: [name] },
     async (ctx) => {
       // The pre-write scan reads every folder in the library, so it takes
       // the checkpoint too: nothing has happened yet, and a caller who
       // stopped should not have to wait out somebody's thousand folders.
-      const before = await scanSkillLibrary(ctx.root, {
+      const before = await scanLibrary(kind, ctx.root, {
         checkpoint: ctx.checkpoint,
       });
-      const target = resolveSkill(before, name);
-      const identity = scannedIdentity(before, target);
+      const target = resolveEntry(kind, before, name);
+      const identity = scannedIdentity(kind, before, target);
       ctx.touch(target.folder);
       await withLibraryRoot(ctx.root, async (rootHandle) => {
         // Deleting under the PUBLIC name would unlink each child by a name that
@@ -929,12 +1017,13 @@ export async function deleteSkill(
         //
         // What it identifies the folder AS is pinned, not remembered: the scan's
         // numbers would also fit a folder a hand author removed and recreated
-        // here, and deleting that would destroy a skill this tool never read.
-        const source = await withVerifiedSkillFolder(
+        // here, and deleting that would destroy an entry this tool never read.
+        const source = await withVerifiedEntryFolder(
+          kind,
           rootHandle,
           target,
           identity,
-          (folder) => pinSkillSource(ctx, folder, target),
+          (folder) => pinEntrySource(kind, ctx, folder, target),
         );
         // One Git call for the whole expectation, not one per file, and a folder
         // bigger than this tool removes in a commit is refused BEFORE anything is
@@ -944,22 +1033,22 @@ export async function deleteSkill(
           maxPlacedEntries,
         );
         if (committed === undefined) {
-          throw new SkillValidationError(
-            `"${target.folder}" holds more than ${maxPlacedEntries} committed files, which is more than this tool removes in one commit. Remove the folder by hand, or split the skill.`,
+          throw new EntryValidationError(
+            `"${target.folder}" holds more than ${maxPlacedEntries} committed files, which is more than this tool removes in one commit. Remove the folder by hand, or split the ${kind.noun}.`,
           );
         }
         // Nothing has moved yet, so a stop here is free; the call below detaches
         // the folder.
         ctx.checkpoint();
         // The tree that goes must still hold the very manifest that was read,
-        // which no recreated folder can — and every other file in it must be one
-        // the repository has COMMITTED, with the content it committed. A delete
-        // is a request to remove a skill, not licence to remove whatever else has
-        // appeared in its folder since.
+        // which no recreated folder can — and every other file in it must be
+        // one the repository has COMMITTED, with the content it committed. A
+        // delete is a request to remove an entry, not licence to remove
+        // whatever else has appeared in its folder since.
         const proof = cancellableExpectation(async (tree) => {
           if (
             !sameFileIdentity(
-              (await skillChildIdentity(tree, SKILL_FILE_NAME)) ??
+              (await entryChildIdentity(tree, kind.manifestFile)) ??
                 MISSING_ENTRY,
               source.manifest,
             )
@@ -975,7 +1064,7 @@ export async function deleteSkill(
           if (contents.holds) ctx.beyondCancellation();
           return contents;
         });
-        const removal = await removeVerifiedSkillTree(
+        const removal = await removeVerifiedEntryTree(
           rootHandle,
           target.folder,
           source.folder,
@@ -985,6 +1074,7 @@ export async function deleteSkill(
         if (removal !== "removed") {
           if (removal === "partial") ctx.damaged(target.folder);
           throw changedSinceScan(
+            kind,
             target.folder,
             removal === "partial"
               ? "could only be partly removed"
@@ -1002,7 +1092,7 @@ export async function deleteSkill(
 }
 
 interface MutationPlan<E extends Record<string, unknown>> {
-  before: SkillLibraryScan;
+  before: LibraryScan;
   /** The declared name that must be valid afterwards; absent for a deletion. */
   name: string | undefined;
   folder: string;
@@ -1019,32 +1109,33 @@ interface MutationPlan<E extends Record<string, unknown>> {
  * uncommitted — this mutation neither repairs nor inherits them.
  */
 async function runMutation<E extends Record<string, unknown>>(
-  library: SkillLibraryStore,
-  meta: SkillCommitMeta,
-  apply: (ctx: SkillMutationContext) => Promise<MutationPlan<E>>,
-  options: SkillMutationOptions = {},
-): Promise<SkillMutationOutcome & { extra: E }> {
+  library: LibraryStore,
+  meta: LibraryCommitMeta,
+  apply: (ctx: LibraryMutationContext) => Promise<MutationPlan<E>>,
+  options: LibraryMutationOptions = {},
+): Promise<LibraryMutationOutcome & { extra: E }> {
+  const { kind } = library;
   const { value, commit, status } = await library.commitMutation(
     meta,
     async (ctx) => {
       const plan = await apply(ctx);
-      const after = await scanSkillLibrary(ctx.root);
+      const after = await scanLibrary(kind, ctx.root);
       assertNoNewDiagnostics(plan.before, after, plan.folder);
       const summary =
         plan.name === undefined
           ? undefined
-          : after.skills.find((skill) => skill.name === plan.name);
+          : after.entries.find((entry) => entry.name === plan.name);
       if (plan.name !== undefined && !summary) {
-        throw new SkillValidationError(
-          `After writing, the library does not report "${plan.name}" as a valid skill; the change was rolled back.`,
+        throw new EntryValidationError(
+          `After writing, the library does not report "${plan.name}" as a valid ${kind.noun}; the change was rolled back.`,
         );
       }
       if (plan.name === undefined) {
-        const lingering = after.skills.find(
-          (skill) => skill.path.split("/")[0] === plan.folder,
+        const lingering = after.entries.find(
+          (entry) => entry.path.split("/")[0] === plan.folder,
         );
         if (lingering) {
-          throw new SkillValidationError(
+          throw new EntryValidationError(
             `Folder "${plan.folder}" is still present after the deletion; the change was rolled back.`,
           );
         }
@@ -1060,12 +1151,12 @@ async function runMutation<E extends Record<string, unknown>>(
       // held: released first, it could scan the NEXT serialized mutation's
       // half-written files and broadcast that as this mutation's result. Its
       // own failure is not this mutation's — the commit is already made.
-      afterCommit: () => publishSkillLibrary(library),
+      afterCommit: () => kind.publish(library),
       ...(options.signal ? { signal: options.signal } : {}),
     },
   );
   return {
-    ...(value.summary ? { skill: value.summary } : {}),
+    ...(value.summary ? { entry: value.summary } : {}),
     folder: value.folder,
     commit,
     status,
@@ -1073,7 +1164,7 @@ async function runMutation<E extends Record<string, unknown>>(
   };
 }
 
-function targetOf(summary: SkillSummary): ResolvedSkill {
+function targetOf(summary: EntrySummary): ResolvedEntry {
   return {
     name: summary.name,
     description: summary.description,
@@ -1083,36 +1174,40 @@ function targetOf(summary: SkillSummary): ResolvedSkill {
 }
 
 /** Resolve a declared name against a scan, or explain why it cannot be used. */
-function resolveSkill(scan: SkillLibraryScan, name: string): ResolvedSkill {
-  const summary = scan.skills.find((skill) => skill.name === name);
+function resolveEntry(
+  kind: LibraryKind,
+  scan: LibraryScan,
+  name: string,
+): ResolvedEntry {
+  const summary = scan.entries.find((entry) => entry.name === name);
   if (summary) return targetOf(summary);
   const diagnostic = scan.diagnostics.find(
     (entry) => entry.declaredName === name,
   );
   if (diagnostic) {
-    throw new SkillValidationError(
-      `Skill "${name}" is not currently valid, so it cannot be changed: ${diagnostic.error} Fix the folder in the library first.`,
+    throw new EntryValidationError(
+      `${capitalize(kind.noun)} "${name}" is not currently valid, so it cannot be changed: ${diagnostic.error} Fix the folder in the library first.`,
     );
   }
-  throw new SkillValidationError(
-    `No valid skill declares the name "${name}". List the library to see the declared names it currently has.`,
+  throw new EntryValidationError(
+    `No valid ${kind.noun} declares the name "${name}". List the library to see the declared names it currently has.`,
   );
 }
 
-function assertNameIsFree(scan: SkillLibraryScan, name: string): void {
+function assertNameIsFree(scan: LibraryScan, name: string): void {
   const declared =
-    scan.skills.some((skill) => skill.name === name) ||
+    scan.entries.some((entry) => entry.name === name) ||
     scan.diagnostics.some((entry) => entry.declaredName === name);
   if (declared) {
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       `The library already declares the name "${name}"; two folders declaring one name make both ambiguous.`,
     );
   }
 }
 
 function assertNoNewDiagnostics(
-  before: SkillLibraryScan,
-  after: SkillLibraryScan,
+  before: LibraryScan,
+  after: LibraryScan,
   folder: string,
 ): void {
   const known = new Set(before.diagnostics.map(diagnosticKey));
@@ -1120,14 +1215,14 @@ function assertNoNewDiagnostics(
     (diagnostic) => !known.has(diagnosticKey(diagnostic)),
   );
   if (added.length === 0) return;
-  throw new SkillValidationError(
+  throw new EntryValidationError(
     `The change would introduce ${added.length} new library problem(s) beyond folder "${folder}", so it was rolled back: ${added
       .map((diagnostic) => `${diagnostic.path}: ${diagnostic.error}`)
       .join(" ")}`,
   );
 }
 
-function diagnosticKey(diagnostic: SkillDiagnostic): string {
+function diagnosticKey(diagnostic: EntryDiagnostic): string {
   return `${diagnostic.code} ${diagnostic.path}`;
 }
 
@@ -1147,22 +1242,23 @@ type PlannedFileOperation =
   | { op: "edit"; path: string; edits: { oldText: string; newText: string }[] };
 
 async function planFileOperations(
-  operations: SkillFileOperation[],
+  kind: LibraryKind,
+  operations: EntryFileOperation[],
 ): Promise<PlannedFileOperation[]> {
   if (operations.length === 0)
-    throw new SkillValidationError("At least one file operation is required.");
-  if (operations.length > MAX_SKILL_FILE_OPERATIONS) {
-    throw new SkillValidationError(
-      `At most ${MAX_SKILL_FILE_OPERATIONS} file operations may share one batch; split the change.`,
+    throw new EntryValidationError("At least one file operation is required.");
+  if (operations.length > MAX_ENTRY_FILE_OPERATIONS) {
+    throw new EntryValidationError(
+      `At most ${MAX_ENTRY_FILE_OPERATIONS} file operations may share one batch; split the change.`,
     );
   }
   const planned: PlannedFileOperation[] = [];
   const seen = new Set<string>();
   let totalBytes = 0;
   for (const operation of operations) {
-    const path = normalizeSupportingFilePath(operation.path);
+    const path = normalizeSupportingFilePath(kind, operation.path);
     if (seen.has(path))
-      throw new SkillValidationError(
+      throw new EntryValidationError(
         `Path "${path}" appears twice in one batch.`,
       );
     seen.add(path);
@@ -1172,21 +1268,21 @@ async function planFileOperations(
     }
     if (operation.op === "edit") {
       if (operation.edits.length === 0) {
-        throw new SkillValidationError(
+        throw new EntryValidationError(
           `Operation "edit" on "${path}" needs at least one edit.`,
         );
       }
       // No byte budget is spent here: an edit's result is only known once the
       // file has been read, and the read itself is bounded per file at
-      // MAX_SKILL_TEXT_FILE_BYTES, which caps a whole batch of them well below
-      // MAX_SKILL_BATCH_BYTES.
+      // MAX_ENTRY_TEXT_FILE_BYTES, which caps a whole batch of them well below
+      // MAX_ENTRY_BATCH_BYTES.
       planned.push({ op: "edit", path, edits: operation.edits });
       continue;
     }
     const limit =
       operation.op === "write"
-        ? MAX_SKILL_TEXT_FILE_BYTES
-        : MAX_SKILL_IMPORT_BYTES;
+        ? MAX_ENTRY_TEXT_FILE_BYTES
+        : MAX_ENTRY_IMPORT_BYTES;
     // The size is known before the bytes are, for an import, so BOTH budgets
     // are spent on the recorded size first. Reading twenty valid attachments
     // and then refusing their total is how a batch that can never be applied
@@ -1196,13 +1292,13 @@ async function planFileOperations(
         ? Buffer.byteLength(operation.content, "utf8")
         : operation.size;
     if (declared > limit) {
-      throw new SkillValidationError(
+      throw new EntryValidationError(
         `"${path}" is ${declared} bytes, above the ${limit}-byte limit for this operation.`,
       );
     }
-    if (totalBytes + declared > MAX_SKILL_BATCH_BYTES) {
-      throw new SkillValidationError(
-        `One batch may write at most ${MAX_SKILL_BATCH_BYTES} bytes in total.`,
+    if (totalBytes + declared > MAX_ENTRY_BATCH_BYTES) {
+      throw new EntryValidationError(
+        `One batch may write at most ${MAX_ENTRY_BATCH_BYTES} bytes in total.`,
       );
     }
     const bytes =
@@ -1212,7 +1308,7 @@ async function planFileOperations(
           // recorded, and a read that ignored that would undo the check above.
           await operation.read(limit);
     if (bytes.byteLength > limit) {
-      throw new SkillValidationError(
+      throw new EntryValidationError(
         `"${path}" is larger than the ${limit}-byte limit for this operation.`,
       );
     }
@@ -1220,14 +1316,14 @@ async function planFileOperations(
       // The budgets above were spent on the RECORDED size, so anything else
       // arriving means the attachment changed after it was resolved. Importing
       // it anyway would commit a prefix of a file nobody asked for.
-      throw new SkillValidationError(
+      throw new EntryValidationError(
         `Attachment "${operation.attachmentId}" changed while it was being imported to "${path}" (${declared} bytes recorded, ${bytes.byteLength} read). Retry the import.`,
       );
     }
     totalBytes += bytes.byteLength;
-    if (totalBytes > MAX_SKILL_BATCH_BYTES) {
-      throw new SkillValidationError(
-        `One batch may write at most ${MAX_SKILL_BATCH_BYTES} bytes in total.`,
+    if (totalBytes > MAX_ENTRY_BATCH_BYTES) {
+      throw new EntryValidationError(
+        `One batch may write at most ${MAX_ENTRY_BATCH_BYTES} bytes in total.`,
       );
     }
     planned.push({
@@ -1243,12 +1339,12 @@ async function planFileOperations(
 }
 
 /**
- * The one strict skill-relative path rule for authoring: no absolute or drive
+ * The one strict entry-relative path rule for authoring: no absolute or drive
  * path, no traversal or empty component, no backslash or NUL, bounded length —
- * and never `SKILL.md`, which has its own create/edit tools and its own
+ * and never the manifest, which has its own create/edit tools and its own
  * validation.
  */
-function normalizeSupportingFilePath(input: string): string {
+function normalizeSupportingFilePath(kind: LibraryKind, input: string): string {
   if (
     !input ||
     input !== input.trim() ||
@@ -1256,9 +1352,11 @@ function normalizeSupportingFilePath(input: string): string {
     input.includes("\\") ||
     isAbsolute(input) ||
     /^[a-zA-Z]:/.test(input) ||
-    Buffer.byteLength(input, "utf8") > MAX_SKILL_RELATIVE_PATH_BYTES
+    Buffer.byteLength(input, "utf8") > MAX_ENTRY_RELATIVE_PATH_BYTES
   ) {
-    throw new SkillValidationError(`Invalid skill-relative path: "${input}".`);
+    throw new EntryValidationError(
+      `Invalid ${kind.noun}-relative path: "${input}".`,
+    );
   }
   const components = input.split("/");
   if (
@@ -1270,12 +1368,17 @@ function normalizeSupportingFilePath(input: string): string {
         component.toLowerCase() === ".git",
     )
   ) {
-    throw new SkillValidationError(`Invalid skill-relative path: "${input}".`);
+    throw new EntryValidationError(
+      `Invalid ${kind.noun}-relative path: "${input}".`,
+    );
   }
   const path = components.join("/");
-  if (path === SKILL_FILE_NAME) {
-    throw new SkillValidationError(
-      `${SKILL_FILE_NAME} is the skill manifest; create or edit it with the skill create/edit tools instead.`,
+  // Case-blind: on a case-insensitive filesystem (macOS) `agent.md` IS the
+  // manifest, one inode with one link, and writing it would skip the checks
+  // and approval a manifest change goes through.
+  if (path.toLowerCase() === kind.manifestFile.toLowerCase()) {
+    throw new EntryValidationError(
+      `${kind.manifestFile} is the ${kind.noun} manifest; create or edit it with the ${kind.noun} create/edit tools instead.`,
     );
   }
   return path;
@@ -1290,9 +1393,9 @@ export function normalizeLibraryPath(input: string): string {
     input.includes("\\") ||
     isAbsolute(input) ||
     /^[a-zA-Z]:/.test(input) ||
-    Buffer.byteLength(input, "utf8") > MAX_SKILL_RELATIVE_PATH_BYTES
+    Buffer.byteLength(input, "utf8") > MAX_ENTRY_RELATIVE_PATH_BYTES
   ) {
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       `Invalid library-relative path: "${input}".`,
     );
   }
@@ -1306,31 +1409,52 @@ export function normalizeLibraryPath(input: string): string {
         component.startsWith("."),
     )
   ) {
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       `Invalid library-relative path: "${input}".`,
     );
   }
   return components.join("/");
 }
 
+/**
+ * What an edit would make of `content`, without touching anything: the same
+ * exact, unique, non-overlapping replacements the edit itself applies. For a
+ * caller that has to judge the result before deciding how to proceed.
+ */
+export function previewEntryEdit(
+  kind: LibraryKind,
+  content: string,
+  edits: { oldText: string; newText: string }[],
+  path: string,
+): string {
+  return applyExactReplacements(kind, content, edits, path).content;
+}
+
 /** Exact, unique, non-overlapping replacements against source already read. */
 function applyExactReplacements(
+  kind: LibraryKind,
   content: string,
   edits: { oldText: string; newText: string }[],
   path: string,
 ): { content: string; replacements: number } {
   const regions: { start: number; end: number; newText: string }[] = [];
   for (const edit of edits) {
+    // Typed by the tool schema, checked here too: a non-string `newText`
+    // would otherwise be written as "undefined" or "[object Object]".
+    if (typeof edit?.oldText !== "string" || typeof edit.newText !== "string")
+      throw new EntryValidationError(
+        "Every edit needs an oldText and a newText, both strings.",
+      );
     if (!edit.oldText)
-      throw new SkillValidationError("Every edit needs a non-empty oldText.");
+      throw new EntryValidationError("Every edit needs a non-empty oldText.");
     const first = content.indexOf(edit.oldText);
     if (first < 0)
-      throw new SkillValidationError(
-        `oldText not found in ${path}: ${JSON.stringify(edit.oldText.slice(0, 80))}. Read the skill again and copy the exact current text.`,
+      throw new EntryValidationError(
+        `oldText not found in ${path}: ${JSON.stringify(edit.oldText.slice(0, 80))}. Read the ${kind.noun} again and copy the exact current text.`,
       );
     const second = content.indexOf(edit.oldText, first + edit.oldText.length);
     if (second >= 0)
-      throw new SkillValidationError(
+      throw new EntryValidationError(
         `oldText is not unique in ${path}: ${JSON.stringify(edit.oldText.slice(0, 80))}. Include more surrounding text.`,
       );
     regions.push({
@@ -1342,7 +1466,7 @@ function applyExactReplacements(
   regions.sort((a, b) => a.start - b.start);
   for (let index = 1; index < regions.length; index++) {
     if (regions[index]!.start < regions[index - 1]!.end)
-      throw new SkillValidationError("Edits must not overlap.");
+      throw new EntryValidationError("Edits must not overlap.");
   }
   let next = "";
   let cursor = 0;
@@ -1352,7 +1476,7 @@ function applyExactReplacements(
   }
   next += content.slice(cursor);
   if (next === content)
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       `The edits leave ${path} unchanged; there is nothing to commit.`,
     );
   return { content: next, replacements: regions.length };
@@ -1395,15 +1519,15 @@ type PlacedEntry =
  * has not pinned.
  */
 async function pin(
-  ctx: SkillMutationContext,
-  pending: Promise<SkillPin>,
-): Promise<SkillPin> {
+  ctx: LibraryMutationContext,
+  pending: Promise<EntryPin>,
+): Promise<EntryPin> {
   const taken = await pending;
   ctx.hold(taken.handle);
   return taken;
 }
 
-type PinKeeper = (create: () => Promise<SkillPin>) => Promise<SkillPin>;
+type PinKeeper = (create: () => Promise<EntryPin>) => Promise<EntryPin>;
 
 /**
  * How many entries one rename may place.
@@ -1423,14 +1547,18 @@ export function setMaxPlacedEntriesForTests(value: number | null): void {
 }
 
 /** A keeper that refuses to place more than a rename can hold pinned. */
-function pinKeeper(ctx: SkillMutationContext, folder: string): PinKeeper {
+function pinKeeper(
+  kind: LibraryKind,
+  ctx: LibraryMutationContext,
+  folder: string,
+): PinKeeper {
   let held = 0;
   return async (create) => {
     if (held >= maxPlacedEntries) {
       // Refused BEFORE the create-or-fail call runs, so nothing is placed that
       // this mutation could not take back again.
-      throw new SkillValidationError(
-        `"${folder}" holds more than ${maxPlacedEntries} files and directories, which is more than this tool renames in one commit. Move the folder by hand, or split the skill.`,
+      throw new EntryValidationError(
+        `"${folder}" holds more than ${maxPlacedEntries} files and directories, which is more than this tool renames in one commit. Move the folder by hand, or split the ${kind.noun}.`,
       );
     }
     held += 1;
@@ -1439,11 +1567,12 @@ function pinKeeper(ctx: SkillMutationContext, folder: string): PinKeeper {
 }
 
 /**
- * Copy one skill folder's children to another open directory using only
+ * Copy one entry folder's children to another open directory using only
  * create-or-fail calls: `mkdir` for a directory, `link` for everything else.
- * `SKILL.md` is deliberately skipped — a rename rewrites it.
+ * The manifest is deliberately skipped — a rename rewrites it.
  */
-async function placeSkillChildren(
+async function placeEntryChildren(
+  kind: LibraryKind,
   source: FileHandle,
   destination: FileHandle,
   placed: PlacedEntry[],
@@ -1455,29 +1584,30 @@ async function placeSkillChildren(
   // Lazily, because the ceiling below is a bound on this READ as much as on the
   // descriptors: a hand-authored folder with a million siblings must not be
   // built into an array before the refusal at entry 513.
-  for await (const entry of iterateSkillDirectory(source)) {
+  for await (const entry of iterateEntryDirectory(source)) {
     const name = entry.name;
-    if (name === SKILL_FILE_NAME) continue;
+    if (name === kind.manifestFile) continue;
     if (entry.isDirectory()) {
       // The created directory is pinned by the call that creates it, so the
       // undo can tell it apart from a directory recreated at the same name.
       const created = await keep(() =>
-        createSkillChildDirectory(destination, name),
+        createEntryChildDirectory(destination, name),
       );
       const children: PlacedEntry[] = [];
       // Both inodes are recorded, because the two removals that follow are of
       // two different directories: the source cleanup removes the old one, an
       // undo removes the one this call just created.
-      await withSkillChild(source, name, async (sourceChild) => {
+      await withEntryChild(source, name, async (sourceChild) => {
         placed.push({
           kind: "directory",
           name,
-          sourceIdentity: await skillHandleIdentity(sourceChild.handle),
+          sourceIdentity: await entryHandleIdentity(sourceChild.handle),
           destinationIdentity: created.identity,
           children,
         });
-        await withSkillChild(destination, name, (destinationChild) =>
-          placeSkillChildren(
+        await withEntryChild(destination, name, (destinationChild) =>
+          placeEntryChildren(
+            kind,
             sourceChild.handle,
             destinationChild.handle,
             children,
@@ -1489,16 +1619,20 @@ async function placeSkillChildren(
       });
       continue;
     }
-    const identity = await skillChildIdentity(source, name);
+    const identity = await entryChildIdentity(source, name);
     if (!identity) {
-      throw changedSinceScan(name, "disappeared while the skill was copied");
+      throw changedSinceScan(
+        kind,
+        name,
+        `disappeared while the ${kind.noun} was copied`,
+      );
     }
     // The link makes the new name the same inode, and the pin keeps that inode
     // from ever being handed to anything else — which is what an undo, running
     // long after the source link is gone, has to be able to rely on. The
     // recorded identity is the PIN's, so everything downstream compares against
     // an inode this call holds rather than one it once looked at.
-    const linked = await keep(() => linkSkillChild(source, name, destination));
+    const linked = await keep(() => linkEntryChild(source, name, destination));
     // A symlink's target cannot change without the inode changing with it, so
     // only a regular file needs its content state remembered.
     placed.push({
@@ -1532,11 +1666,11 @@ async function treeHoldsExactly(
   /** Where each proof lands, by path relative to the tree being checked. */
   provedAt: Map<string, bigint> = new Map(),
   prefix = "",
-): Promise<SkillTreeContents> {
+): Promise<EntryTreeContents> {
   // Read lazily and stopped at the first surprise, so a tree somebody has piled
   // entries into costs this check a bounded read rather than all of them.
   const present: Dirent[] = [];
-  for await (const child of iterateSkillDirectory(tree)) {
+  for await (const child of iterateEntryDirectory(tree)) {
     if (present.length === expected.length) return { holds: false };
     present.push(child);
   }
@@ -1547,7 +1681,7 @@ async function treeHoldsExactly(
     if (!entry) return { holds: false };
     const relative = prefix ? `${prefix}/${child.name}` : child.name;
     if (entry.kind === "file") {
-      const identity = await skillChildIdentity(tree, child.name);
+      const identity = await entryChildIdentity(tree, child.name);
       if (
         !identity ||
         identity.dev !== entry.identity.dev ||
@@ -1573,9 +1707,9 @@ async function treeHoldsExactly(
       continue;
     }
     if (!child.isDirectory()) return { holds: false };
-    const matches = await withSkillChild(tree, child.name, async (handle) => {
+    const matches = await withEntryChild(tree, child.name, async (handle) => {
       if (!handle.directory) return false;
-      const identity = await skillHandleIdentity(handle.handle);
+      const identity = await entryHandleIdentity(handle.handle);
       if (
         identity.dev !== entry.sourceIdentity.dev ||
         identity.ino !== entry.sourceIdentity.ino
@@ -1622,14 +1756,14 @@ async function treeHoldsExactly(
  * reassembled at its public name, now holding only what that author wrote —
  * which the next scan reports instead of the undo having destroyed it.
  */
-async function removeAssembledSkill(
+async function removeAssembledEntry(
   rootHandle: FileHandle,
   folder: string,
   folderIdentity: { dev: number; ino: number },
   assembled: PlacedEntry[],
   blobId: BlobId,
 ): Promise<void> {
-  await removeVerifiedSkillTree(
+  await removeVerifiedEntryTree(
     rootHandle,
     folder,
     folderIdentity,
@@ -1648,7 +1782,7 @@ async function removeAssembledSkill(
  *
  * A removal detaches the folder to a private name before it proves anything, so
  * the proof — the one part of a delete or a rename that can hash gigabytes of
- * somebody's supporting files — runs while the skill is reachable under no
+ * somebody's supporting files — runs while the entry is reachable under no
  * public name at all. Throwing out of it would skip the reassembly that puts the
  * folder back. So a cancellation is turned into the answer the removal already
  * knows how to handle ("this tree does not hold what you expected"), which
@@ -1663,29 +1797,29 @@ async function removeAssembledSkill(
  * mutation may not remove. A stop is not that. Reported as an unmet expectation
  * it would surface as a phantom conflict — "the folder gained content" — over a
  * folder nobody touched, and worse, it would be reported to the caller as the
- * reason their skill was not deleted. So it passes straight through.
+ * reason their entry was not deleted. So it passes straight through.
  */
 function notCancelled<T>(fallback: T): (error: unknown) => T {
   return (error: unknown) => {
-    if (error instanceof SkillMutationCancelledError) throw error;
+    if (error instanceof LibraryMutationCancelledError) throw error;
     return fallback;
   };
 }
 
 function cancellableExpectation(
-  expectation: (tree: FileHandle) => Promise<SkillTreeContents>,
+  expectation: (tree: FileHandle) => Promise<EntryTreeContents>,
 ): {
-  expectation: (tree: FileHandle) => Promise<SkillTreeContents>;
+  expectation: (tree: FileHandle) => Promise<EntryTreeContents>;
   /** Throws the cancellation, if one was taken, after the tree is back. */
   rethrow: () => void;
 } {
-  let cancelled: SkillMutationCancelledError | undefined;
+  let cancelled: LibraryMutationCancelledError | undefined;
   return {
     expectation: async (tree) => {
       try {
         return await expectation(tree);
       } catch (error) {
-        if (!(error instanceof SkillMutationCancelledError)) throw error;
+        if (!(error instanceof LibraryMutationCancelledError)) throw error;
         cancelled = error;
         return { holds: false };
       }
@@ -1703,26 +1837,26 @@ function cancellableExpectation(
  *
  * The expectation a delete removes against. It has no placement to compare with
  * (nothing was moved anywhere), so the repository's own record is the only
- * account of what belonged to the skill, and the clean-tree precondition is
+ * account of what belonged to the entry, and the clean-tree precondition is
  * what makes it the account of what is on disk. Anything else present — a file
  * a hand author added, or one whose bytes they changed — is not this delete's
  * to take, and refuses it.
  */
 async function treeHoldsCommitted(
   tree: FileHandle,
-  ctx: SkillMutationContext,
+  ctx: LibraryMutationContext,
   /** What the repository committed under the folder, read once. */
-  committed: ReadonlyMap<string, SkillCommittedEntry>,
+  committed: ReadonlyMap<string, LibraryCommittedEntry>,
   /** What is left of the walk's budget, shared by every level. */
   budget: { entries: number; depth: number },
   provedAt: Map<string, bigint> = new Map(),
   prefix = "",
-): Promise<SkillTreeContents> {
+): Promise<EntryTreeContents> {
   if (budget.depth <= 0) return { holds: false };
   // Lazily, and against a shared budget: a delete may not be made unbounded by
   // the size of the folder it is asked to remove, and a walk that would exceed
   // what this tool removes in one commit refuses instead of running on.
-  for await (const child of iterateSkillDirectory(tree)) {
+  for await (const child of iterateEntryDirectory(tree)) {
     if (budget.entries <= 0) return { holds: false };
     budget.entries -= 1;
     // Per entry as well as per chunk: a folder of many small files is as long a
@@ -1735,7 +1869,7 @@ async function treeHoldsCommitted(
       // delete did not make.
       if (committed.has(relative)) return { holds: false };
       budget.depth -= 1;
-      const nested = await withSkillChild(tree, child.name, async (handle) =>
+      const nested = await withEntryChild(tree, child.name, async (handle) =>
         handle.directory
           ? (
               await treeHoldsCommitted(
@@ -1777,7 +1911,7 @@ const SYMLINK_MODE = "120000";
  * proved.
  *
  * A delete has no placement to compare against, so the committed entry is the
- * entire account of what belonged to the skill, and an entry is a mode and an
+ * entire account of what belonged to the entry, and an entry is a mode and an
  * object. Checking only the object accepts three different changes as if they
  * were none: a symlink put where a file was committed (an object id says
  * nothing about what KIND of thing holds it), a committed symlink repointed at
@@ -1789,15 +1923,15 @@ const SYMLINK_MODE = "120000";
 async function holdsCommittedEntry(
   directory: FileHandle,
   child: Dirent,
-  entry: SkillCommittedEntry,
-  ctx: SkillMutationContext,
+  entry: LibraryCommittedEntry,
+  ctx: LibraryMutationContext,
 ): Promise<bigint | undefined> {
   if (entry.mode === SYMLINK_MODE) {
     // Committed as a symlink, so it must still BE one, and point where the
     // repository says. A symlink cannot be opened or written through; it can
     // only be replaced, which the bracketed read below is what catches.
     if (!child.isSymbolicLink()) return undefined;
-    const link = await readSkillChildLink(directory, child.name);
+    const link = await readEntryChildLink(directory, child.name);
     if (link === undefined) return undefined;
     return (await ctx.blobId(link.target)) === entry.object
       ? link.changed
@@ -1809,7 +1943,7 @@ async function holdsCommittedEntry(
   // Committed as a regular file: a symlink at the same name is a REPLACEMENT,
   // and following it would read something outside the folder entirely.
   if (child.isSymbolicLink() || child.isDirectory()) return undefined;
-  return withSkillChild(directory, child.name, async (file) => {
+  return withEntryChild(directory, child.name, async (file) => {
     if (file.directory) return undefined;
     // One bracket around the whole proof — mode and content alike. Reading the
     // mode outside it would let a `chmod` land between the two and still be
@@ -1827,7 +1961,7 @@ async function holdsCommittedEntry(
 
 /** Whether a detached tree holds nothing at all. */
 async function treeIsEmpty(tree: FileHandle): Promise<boolean> {
-  return (await readSkillDirectory(tree)).length === 0;
+  return (await readEntryDirectory(tree)).length === 0;
 }
 
 /**
@@ -1850,11 +1984,11 @@ async function holdsPlacedContent(
   // A symlink is never opened — `O_NOFOLLOW` refuses it and following it would
   // read something else entirely — so its reading comes from `lstat`.
   if (content.kind === "symlink") {
-    return skillChildChangedAt(directory, name);
+    return entryChildChangedAt(directory, name);
   }
   const expected =
     content.kind === "bytes" ? await blobId(content.bytes) : content.object;
-  return withSkillChild(directory, name, async (child) => {
+  return withEntryChild(directory, name, async (child) => {
     if (child.directory) return undefined;
     // Bracketed, so the `ctime` handed on is one that held for the whole proof:
     // a write between the hash and the reading would otherwise be recorded as
@@ -1903,7 +2037,7 @@ async function removeAssembledEntries(
       // mtime back — is then somebody else's file, and stays.
       const holds = contentCheck(entry.content, blobId);
       if (holds !== "leave-it") {
-        await unlinkSkillChildIfSame(
+        await unlinkEntryChildIfSame(
           directory,
           entry.name,
           entry.identity,
@@ -1912,12 +2046,12 @@ async function removeAssembledEntries(
       }
       continue;
     }
-    const emptied = await withSkillChild(
+    const emptied = await withEntryChild(
       directory,
       entry.name,
       async (child) => {
         if (!child.directory) return false;
-        const identity = await skillHandleIdentity(child.handle);
+        const identity = await entryHandleIdentity(child.handle);
         if (
           identity.dev !== entry.destinationIdentity.dev ||
           identity.ino !== entry.destinationIdentity.ino
@@ -1930,7 +2064,7 @@ async function removeAssembledEntries(
       },
     ).catch(() => false);
     if (emptied) {
-      await rmdirSkillChild(directory, entry.name).catch(() => undefined);
+      await rmdirEntryChild(directory, entry.name).catch(() => undefined);
     }
   }
 }
@@ -1959,7 +2093,7 @@ async function placedContent(
 
 /** Claim each file a placement made, by its full library-relative path. */
 function claimPlacedFiles(
-  ctx: SkillMutationContext,
+  ctx: LibraryMutationContext,
   prefix: string,
   source: string,
   entries: PlacedEntry[],
@@ -2008,7 +2142,7 @@ type PlacedContent =
 type CreatedKind = "file" | "directory";
 
 /** The scanned source, held open, with the identities a removal may trust. */
-interface PinnedSkillSource {
+interface PinnedEntrySource {
   folder: { dev: number; ino: number };
   manifest: { dev: number; ino: number };
   /** The manifest source read through the pinned handle. */
@@ -2017,43 +2151,46 @@ interface PinnedSkillSource {
 
 /**
  * PIN the source a destructive step is about to act on, and prove through those
- * pins that it is still the skill the caller named.
+ * pins that it is still the entry the caller named.
  *
  * A scan's `dev`/`ino` is a number written down and let go of. By the time a
  * delete or a rename removes the folder, an inode number the scan recorded fits
  * a folder somebody removed and recreated exactly as well as the one that was
  * scanned — the kernel hands a freed number straight back. So the destruction
  * is bound to descriptors this call holds instead: the folder it opened, and
- * the `SKILL.md` inside it, whose bytes it also READ through that same handle
- * and which must still declare the skill the caller asked for. A folder that
+ * the manifest inside it, whose bytes it also READ through that same handle
+ * and which must still declare the entry the caller asked for. A folder that
  * was swapped for something else therefore fails the manifest check whatever
  * the numbers say, and the one case that passes — a folder recreated as the
- * same skill — is the skill the caller named.
+ * same entry — is the entry the caller named.
  */
-async function pinSkillSource(
-  ctx: SkillMutationContext,
+async function pinEntrySource(
+  kind: LibraryKind,
+  ctx: LibraryMutationContext,
   folder: FileHandle,
-  target: ResolvedSkill,
-): Promise<PinnedSkillSource> {
-  const pinnedFolder = await pin(ctx, pinSkillHandle(folder));
-  return withSkillChild(folder, SKILL_FILE_NAME, async (child) => {
+  target: ResolvedEntry,
+): Promise<PinnedEntrySource> {
+  const pinnedFolder = await pin(ctx, pinEntryHandle(folder));
+  return withEntryChild(folder, kind.manifestFile, async (child) => {
     if (child.directory) {
-      throw new SkillValidationError(`${target.path} is not a regular file.`);
+      throw new EntryValidationError(`${target.path} is not a regular file.`);
     }
+    assertManifestSize(kind, child.size, target.path);
     const read = await readManifestHandle(child.handle, child.size);
     if (read.truncated) {
-      throw new SkillValidationError(
-        `${target.path} is larger than ${MAX_SKILL_SOURCE_BYTES} bytes, so it cannot be rewritten through this tool.`,
+      throw new EntryValidationError(
+        `${target.path} is larger than ${MAX_ENTRY_SOURCE_BYTES} bytes, so it cannot be rewritten through this tool.`,
       );
     }
-    const manifest = assertSkillManifest(read.source, target.path);
+    const manifest = assertManifest(kind, read.source, target.path);
     if (manifest.name !== target.name) {
       throw changedSinceScan(
+        kind,
         target.path,
         `no longer declares "${target.name}"`,
       );
     }
-    const pinnedManifest = await pin(ctx, pinSkillHandle(child.handle));
+    const pinnedManifest = await pin(ctx, pinEntryHandle(child.handle));
     return {
       folder: pinnedFolder.identity,
       manifest: pinnedManifest.identity,
@@ -2065,23 +2202,25 @@ async function pinSkillSource(
 /**
  * Remove one entry a batch created, and only while it is still the one it made.
  *
- * Reached through the verified skill folder, so it cannot descend into a folder
+ * Reached through the verified entry folder, so it cannot descend into a folder
  * that replaced the scanned one, and `rmdir` refuses anything with content —
  * which is the whole guarantee: an undo may take back the scaffolding this
  * mutation put up, never something somebody else put inside it.
  */
 async function removeCreatedEntry(
+  libraryKind: LibraryKind,
   rootHandle: FileHandle,
-  target: ResolvedSkill,
-  identity: SkillSourceIdentity,
-  skillRelativePath: string,
-  kind: CreatedKind,
+  target: ResolvedEntry,
+  identity: EntrySourceIdentity,
+  entryRelativePath: string,
+  createdKind: CreatedKind,
   created: { dev: number; ino: number },
   /** Whether what stands there still holds the content this batch wrote. */
   holdsWritten?: (handle: FileHandle) => Promise<boolean>,
 ): Promise<void> {
-  const components = skillRelativePath.split("/");
-  await withVerifiedSkillFolder(
+  const components = entryRelativePath.split("/");
+  await withVerifiedEntryFolder(
+    libraryKind,
     rootHandle,
     target,
     identity,
@@ -2092,12 +2231,12 @@ async function removeCreatedEntry(
       ): Promise<void> => {
         const name = components[at]!;
         if (at === components.length - 1) {
-          if (kind === "file") {
+          if (createdKind === "file") {
             // Moved aside, identified AND read there before it is unlinked: the
             // file that goes is the one written here, with the bytes written
             // here. An inode survives a rewrite through it, so identity alone
             // would take back a hand author's edit as if it were this batch's.
-            await unlinkSkillChildIfSame(
+            await unlinkEntryChildIfSame(
               directory,
               name,
               created,
@@ -2109,7 +2248,7 @@ async function removeCreatedEntry(
           // resolves to the PINNED directory this batch made: a directory
           // somebody else created here in the meantime keeps the name, and one
           // that has anything in it is put back rather than removed.
-          await removeVerifiedSkillTree(
+          await removeVerifiedEntryTree(
             directory,
             name,
             created,
@@ -2120,7 +2259,7 @@ async function removeCreatedEntry(
           );
           return;
         }
-        await withSkillChild(directory, name, async (child) => {
+        await withEntryChild(directory, name, async (child) => {
           if (!child.directory) return;
           await descend(child.handle, at + 1);
         });
@@ -2130,23 +2269,24 @@ async function removeCreatedEntry(
   ).catch(() => undefined);
 }
 
-/** Open one skill folder below the library root, refusing links and non-folders. */
-async function withSkillFolderHandle<T>(
+/** Open one entry folder below the library root, refusing links and non-folders. */
+async function withEntryFolderHandle<T>(
+  kind: LibraryKind,
   rootHandle: FileHandle,
   folder: string,
   use: (handle: FileHandle) => Promise<T>,
 ): Promise<T> {
-  return withSkillChild(rootHandle, folder, async (child) => {
+  return withEntryChild(rootHandle, folder, async (child) => {
     if (!child.directory)
-      throw new SkillValidationError(
-        `"${folder}" is not a skill source folder.`,
+      throw new EntryValidationError(
+        `"${folder}" is not ${withArticle(kind.noun)} source folder.`,
       );
     return use(child.handle);
   });
 }
 
 /**
- * Open the skill folder the SCAN selected, by inode, and hold it for the whole
+ * Open the entry folder the SCAN selected, by inode, and hold it for the whole
  * operation.
  *
  * Every write, unlink and recursive removal a mutation performs goes through
@@ -2155,31 +2295,41 @@ async function withSkillFolderHandle<T>(
  * name" is not the same claim as "this is the directory the scan resolved" —
  * only the `dev`/`ino` the scan recorded makes it one.
  */
-async function withVerifiedSkillFolder<T>(
+async function withVerifiedEntryFolder<T>(
+  kind: LibraryKind,
   rootHandle: FileHandle,
-  target: ResolvedSkill,
-  identity: SkillSourceIdentity,
+  target: ResolvedEntry,
+  identity: EntrySourceIdentity,
   use: (folder: FileHandle) => Promise<T>,
 ): Promise<T> {
-  return withSkillFolderHandle(rootHandle, target.folder, async (folder) => {
-    if (!sameFileIdentity(await skillHandleIdentity(folder), identity.folder)) {
-      throw changedSinceScan(
-        target.folder,
-        "is no longer the folder that was scanned",
-      );
-    }
-    return use(folder);
-  });
+  return withEntryFolderHandle(
+    kind,
+    rootHandle,
+    target.folder,
+    async (folder) => {
+      if (
+        !sameFileIdentity(await entryHandleIdentity(folder), identity.folder)
+      ) {
+        throw changedSinceScan(
+          kind,
+          target.folder,
+          "is no longer the folder that was scanned",
+        );
+      }
+      return use(folder);
+    },
+  );
 }
 
-/** The identity a scan recorded for a resolvable skill; never absent for one. */
+/** The identity a scan recorded for a resolvable entry; never absent for one. */
 function scannedIdentity(
-  scan: SkillLibraryScan,
-  target: ResolvedSkill,
-): SkillSourceIdentity {
-  const identity = skillSourceIdentity(scan, target.path);
+  kind: LibraryKind,
+  scan: LibraryScan,
+  target: ResolvedEntry,
+): EntrySourceIdentity {
+  const identity = entrySourceIdentity(scan, target.path);
   if (!identity) {
-    throw changedSinceScan(target.path, "has no stable source identity");
+    throw changedSinceScan(kind, target.path, "has no stable source identity");
   }
   return identity;
 }
@@ -2194,21 +2344,26 @@ function sameFileIdentity(
   return actual.dev === expected.dev && actual.ino === expected.ino;
 }
 
-function changedSinceScan(path: string, detail: string): SkillValidationError {
-  return new SkillValidationError(
-    `${path} ${detail} since it was scanned; read the skill again before editing it.`,
+function changedSinceScan(
+  kind: LibraryKind,
+  path: string,
+  detail: string,
+): EntryValidationError {
+  return new EntryValidationError(
+    `${path} ${detail} since it was scanned; read the ${kind.noun} again before editing it.`,
   );
 }
 
 async function writeRelativeFile(
+  kind: LibraryKind,
   folder: FileHandle,
   path: string,
   content: Uint8Array,
   folderName: string,
   onCreated: (
-    skillRelativePath: string,
+    entryRelativePath: string,
     kind: CreatedKind,
-    pinned: SkillPin,
+    pinned: EntryPin,
   ) => void,
   onTruncated: () => void,
 ): Promise<void> {
@@ -2224,7 +2379,7 @@ async function writeRelativeFile(
       // A file this batch CREATED is not in HEAD, so no generic restore can
       // take it back: it is undone here or not at all — and only while it is
       // still the inode created, never by name.
-      const created = await writeSkillChildFile(
+      const created = await writeEntryChildFile(
         directory,
         name,
         content,
@@ -2236,22 +2391,22 @@ async function writeRelativeFile(
     // `mkdir` distinguishes "I created this" from "it was already here", so the
     // report is a fact rather than a probe that could race, and it comes with
     // the pin that keeps the fact true until the undo may need it.
-    const created = await ensureSkillChildDirectory(directory, name);
+    const created = await ensureEntryChildDirectory(directory, name);
     if (created) onCreated(childPath, "directory", created);
-    await withSkillChild(directory, name, async (child) => {
+    await withEntryChild(directory, name, async (child) => {
       if (!child.directory)
-        throw new SkillValidationError(`"${name}" is not a directory.`);
+        throw new EntryValidationError(`"${name}" is not a directory.`);
       await descend(child.handle, at + 1, childPath);
     });
   };
   try {
     await descend(folder, 0, "");
   } catch (error) {
-    if (error instanceof SkillValidationError) throw error;
+    if (error instanceof EntryValidationError) throw error;
     // A symlink or irregular entry standing in the path is the interesting
     // case, and the raw errno would explain none of it.
-    throw new SkillValidationError(
-      `Cannot write "${folderName}/${path}": the path is not a plain file this tool may create beneath the skill folder (${errorText(error)}).`,
+    throw new EntryValidationError(
+      `Cannot write "${folderName}/${path}": the path is not a plain file this tool may create beneath the ${kind.noun} folder (${errorText(error)}).`,
     );
   }
 }
@@ -2259,12 +2414,13 @@ async function writeRelativeFile(
 /**
  * Rewrite one EXISTING supporting file through exact text replacements.
  *
- * Read and rewrite share one open description, as a `SKILL.md` edit does: the
+ * Read and rewrite share one open description, as a manifest edit does: the
  * text a replacement matched and the bytes it overwrites then belong to the
  * same inode, not merely to the same name. Nothing here creates a file or a
  * directory — an edit addresses content that is already committed.
  */
 async function editRelativeFile(
+  kind: LibraryKind,
   folder: FileHandle,
   path: string,
   edits: { oldText: string; newText: string }[],
@@ -2279,44 +2435,43 @@ async function editRelativeFile(
   ): Promise<{ bytes: Uint8Array; replacements: number }> => {
     const name = components[at]!;
     if (at < components.length - 1) {
-      return withSkillChild(directory, name, async (child) => {
+      return withEntryChild(directory, name, async (child) => {
         if (!child.directory)
-          throw new SkillValidationError(`"${name}" is not a directory.`);
+          throw new EntryValidationError(`"${name}" is not a directory.`);
         return descend(child.handle, at + 1);
       });
     }
-    return withSkillChildForUpdate(directory, name, async (file) => {
-      if (file.size > MAX_SKILL_TEXT_FILE_BYTES) {
-        throw new SkillValidationError(
-          `"${fullPath}" is ${file.size} bytes, above the ${MAX_SKILL_TEXT_FILE_BYTES}-byte limit for an edit through this tool; rewrite it with a write operation or edit it by hand in the library.`,
+    return withEntryChildForUpdate(directory, name, async (file) => {
+      if (file.size > MAX_ENTRY_TEXT_FILE_BYTES) {
+        throw new EntryValidationError(
+          `"${fullPath}" is ${file.size} bytes, above the ${MAX_ENTRY_TEXT_FILE_BYTES}-byte limit for an edit through this tool; rewrite it with a write operation or edit it by hand in the library.`,
         );
       }
       const current = await readFileBytes(file.handle, file.size);
       if (current.byteLength !== file.size) {
-        throw new SkillValidationError(
+        throw new EntryValidationError(
           `"${fullPath}" changed while it was read; nothing was written.`,
         );
       }
       const source = decodeEditableText(current, fullPath);
-      const applied = applyExactReplacements(source, edits, fullPath);
+      const applied = applyExactReplacements(kind, source, edits, fullPath);
       const written = encode(applied.content);
-      if (written.byteLength > MAX_SKILL_TEXT_FILE_BYTES) {
-        throw new SkillValidationError(
-          `"${fullPath}" would be ${written.byteLength} bytes, above the ${MAX_SKILL_TEXT_FILE_BYTES}-byte limit for one supporting file.`,
+      if (written.byteLength > MAX_ENTRY_TEXT_FILE_BYTES) {
+        throw new EntryValidationError(
+          `"${fullPath}" would be ${written.byteLength} bytes, above the ${MAX_ENTRY_TEXT_FILE_BYTES}-byte limit for one supporting file.`,
         );
       }
       // From here the committed bytes are the only intact copy.
-      onTruncated();
-      await file.replace(written);
+      await file.replace(written, onTruncated);
       return { bytes: written, replacements: applied.replacements };
     });
   };
   try {
     return await descend(folder, 0);
   } catch (error) {
-    if (error instanceof SkillValidationError) throw error;
-    throw new SkillValidationError(
-      `Cannot edit "${fullPath}": it is not a plain existing file beneath the skill folder that this tool may rewrite (${errorText(error)}).`,
+    if (error instanceof EntryValidationError) throw error;
+    throw new EntryValidationError(
+      `Cannot edit "${fullPath}": it is not a plain existing file beneath the ${kind.noun} folder that this tool may rewrite (${errorText(error)}).`,
     );
   }
 }
@@ -2360,7 +2515,7 @@ function decodeEditableText(content: Uint8Array, path: string): string {
       content,
     );
   } catch {
-    throw new SkillValidationError(
+    throw new EntryValidationError(
       `"${path}" is not valid UTF-8 text, so it cannot be edited as text. Replace it with a write operation instead.`,
     );
   }
@@ -2375,30 +2530,35 @@ async function deleteRelativeFile(
   const descend = async (directory: FileHandle, at: number): Promise<void> => {
     const name = components[at]!;
     if (at === components.length - 1) {
-      await removeSkillChildFile(directory, name);
+      await removeEntryChildFile(directory, name);
       return;
     }
-    await withSkillChild(directory, name, async (child) => {
+    await withEntryChild(directory, name, async (child) => {
       if (!child.directory)
-        throw new SkillValidationError(`"${name}" is not a directory.`);
+        throw new EntryValidationError(`"${name}" is not a directory.`);
       await descend(child.handle, at + 1);
     });
   };
   try {
     await descend(folder, 0);
   } catch (error) {
-    if (error instanceof SkillValidationError) throw error;
-    throw new SkillValidationError(
+    if (error instanceof EntryValidationError) throw error;
+    throw new EntryValidationError(
       `Cannot delete "${folderName}/${path}": it is not a regular file that this tool may remove (${errorText(error)}).`,
     );
   }
 }
 
-function assertSourceSize(source: string, path: string): void {
+function assertSourceSize(
+  kind: LibraryKind,
+  source: string,
+  path: string,
+): void {
   const bytes = Buffer.byteLength(source, "utf8");
-  if (bytes > MAX_SKILL_SOURCE_BYTES) {
-    throw new SkillValidationError(
-      `${path} would be ${bytes} bytes, above the ${MAX_SKILL_SOURCE_BYTES}-byte limit for a skill manifest. Move detail into supporting files.`,
+  assertManifestSize(kind, bytes, path, true);
+  if (bytes > MAX_ENTRY_SOURCE_BYTES) {
+    throw new EntryValidationError(
+      `${path} would be ${bytes} bytes, above the ${MAX_ENTRY_SOURCE_BYTES}-byte limit for ${withArticle(kind.noun)} manifest. Move detail into supporting files.`,
     );
   }
 }

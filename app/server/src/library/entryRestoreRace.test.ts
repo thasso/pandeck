@@ -42,11 +42,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const { readFile, writeFile } = await import("node:fs/promises");
 const {
-  removeVerifiedSkillTree,
-  skillHandleIdentity,
+  removeVerifiedEntryTree,
+  entryHandleIdentity,
   withLibraryRoot,
-  withSkillChild,
-} = await import("./skillSource.ts");
+  withEntryChild,
+} = await import("./entrySource.ts");
 
 let root: string;
 
@@ -70,8 +70,8 @@ describe("a restore racing a writer that already holds the folder open", () => {
     let created = false;
     try {
       const identity = await withLibraryRoot(root, (rootHandle) =>
-        withSkillChild(rootHandle, name, (child) =>
-          skillHandleIdentity(child.handle),
+        withEntryChild(rootHandle, name, (child) =>
+          entryHandleIdentity(child.handle),
         ),
       );
       // The one entry has just been carried to the public name; the walk that
@@ -83,7 +83,7 @@ describe("a restore racing a writer that already holds the folder open", () => {
 
       // Refused, so the tree goes back through the restore.
       const outcome = await withLibraryRoot(root, (rootHandle) =>
-        removeVerifiedSkillTree(rootHandle, name, identity, async () => ({
+        removeVerifiedEntryTree(rootHandle, name, identity, async () => ({
           holds: false,
         })),
       );

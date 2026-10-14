@@ -1,7 +1,7 @@
 /**
- * Recursive supporting-file listing and bounded reads for one selected skill
+ * Recursive supporting-file listing and bounded reads for one selected entry
  * ([Task-615](pa://task/615), `docs/skills.md`). Paths are always relative to
- * the skill folder and every component is opened beneath the already-open
+ * the entry folder and every component is opened beneath the already-open
  * folder descriptor with no-follow semantics.
  */
 import { Buffer } from "node:buffer";
@@ -9,39 +9,38 @@ import type { Dirent } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { extname, isAbsolute } from "node:path";
 import {
-  isSafeSkillName,
-  MAX_SKILL_FILE_PREVIEW_BYTES,
-  MAX_SKILL_RAW_FILE_BYTES,
-  MAX_SKILL_TREE_DEPTH,
-  MAX_SKILL_TREE_ENTRIES,
-  MAX_SKILL_TREE_METADATA_BYTES,
-  type SkillFilePreviewResponse,
-  type SkillFileTree,
-  type SkillFileTreeEntry,
-  type SkillFileTreeLimit,
+  isSafeEntryName,
+  MAX_ENTRY_FILE_PREVIEW_BYTES,
+  MAX_ENTRY_RAW_FILE_BYTES,
+  MAX_ENTRY_TREE_DEPTH,
+  MAX_ENTRY_TREE_ENTRIES,
+  MAX_ENTRY_TREE_METADATA_BYTES,
+  type EntryFilePreviewResponse,
+  type EntryFileTree,
+  type EntryFileTreeEntry,
+  type EntryFileTreeLimit,
 } from "@assistant/shared";
 import {
-  scanSkillLibrary,
-  skillSourceIdentity,
-  type SkillLibraryScan,
-} from "./skillLibraryScanner.ts";
+  scanLibrary,
+  entrySourceIdentity,
+  type LibraryScan,
+} from "./libraryScanner.ts";
+import { manifestSizeIssue } from "./entryManifest.ts";
+import type { LibraryKind } from "./libraryKind.ts";
+import type { LibraryStore } from "./libraryStore.ts";
 import {
-  skillLibraryStore,
-  type SkillLibraryStore,
-} from "./skillLibraryStore.ts";
-import {
-  iterateSkillDirectory,
-  sameSkillSource,
-  SKILL_FILE_NAME,
-  IrregularSkillSourceError,
-  SymlinkedSkillSourceError,
+  entryHandleIdentity,
+  iterateEntryDirectory,
+  sameEntrySource,
+  IrregularEntrySourceError,
+  SymlinkedEntrySourceError,
   withLibraryRoot,
-  withSkillChild,
-  withSkillSource,
-  type SkillSource,
-} from "./skillSource.ts";
+  withEntryChild,
+  withEntrySource,
+  type EntrySource,
+} from "./entrySource.ts";
 
-const MAX_SKILL_RELATIVE_PATH_BYTES = 4 * 1024;
+const MAX_ENTRY_RELATIVE_PATH_BYTES = 4 * 1024;
 /**
  * How many names one directory listing ever holds at a time.
  *
@@ -51,7 +50,7 @@ const MAX_SKILL_RELATIVE_PATH_BYTES = 4 * 1024;
  * a million siblings costs this read a few thousand names instead of all of
  * them.
  */
-const MAX_SKILL_TREE_LISTING = 4_096;
+const MAX_ENTRY_TREE_LISTING = 4_096;
 
 const CONTENT_TYPES: Record<string, string> = {
   ".png": "image/png",
@@ -96,9 +95,9 @@ const CONTENT_TYPES: Record<string, string> = {
   ".sql": "text/plain; charset=utf-8",
 };
 
-export class InvalidSkillFilePathError extends Error {}
-export class SkillFileNotFoundError extends Error {}
-export class SkillFileTooLargeError extends Error {
+export class InvalidEntryFilePathError extends Error {}
+export class EntryFileNotFoundError extends Error {}
+export class EntryFileTooLargeError extends Error {
   constructor(
     readonly path: string,
     readonly bytes: number,
@@ -107,15 +106,15 @@ export class SkillFileTooLargeError extends Error {
   }
 }
 
-export interface SkillRawFile {
+export interface EntryRawFile {
   path: string;
   mimeType: string;
   bytes: number;
   content: Buffer;
 }
 
-/** Strict skill-relative path validation, before any library scan or open. */
-function normalizeSkillRelativePath(input: string): string {
+/** Strict entry-relative path validation, before any library scan or open. */
+function normalizeEntryRelativePath(kind: LibraryKind, input: string): string {
   if (
     !input ||
     input !== input.trim() ||
@@ -123,9 +122,9 @@ function normalizeSkillRelativePath(input: string): string {
     input.includes("\\") ||
     isAbsolute(input) ||
     /^[a-zA-Z]:/.test(input) ||
-    Buffer.byteLength(input, "utf8") > MAX_SKILL_RELATIVE_PATH_BYTES
+    Buffer.byteLength(input, "utf8") > MAX_ENTRY_RELATIVE_PATH_BYTES
   ) {
-    throw new InvalidSkillFilePathError("Invalid skill-relative path.");
+    throw new InvalidEntryFilePathError(`Invalid ${kind.noun}-relative path.`);
   }
   const components = input.split("/");
   if (
@@ -133,26 +132,27 @@ function normalizeSkillRelativePath(input: string): string {
       (component) => !component || component === "." || component === "..",
     )
   ) {
-    throw new InvalidSkillFilePathError("Invalid skill-relative path.");
+    throw new InvalidEntryFilePathError(`Invalid ${kind.noun}-relative path.`);
   }
   return components.join("/");
 }
 
 /** MIME classification shared by the tree metadata and raw response. */
-function skillFileMimeType(path: string): string {
+function entryFileMimeType(path: string): string {
   return (
     CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream"
   );
 }
 
-/** Build a deterministic, explicitly bounded tree under an open skill folder. */
-export async function buildSkillFileTree(
+/** Build a deterministic, explicitly bounded tree under an open entry folder. */
+export async function buildEntryFileTree(
+  kind: LibraryKind,
   folder: FileHandle,
-): Promise<SkillFileTree> {
+): Promise<EntryFileTree> {
   const state = {
     entryCount: 0,
     metadataBytes: 0,
-    limits: new Set<SkillFileTreeLimit>(),
+    limits: new Set<EntryFileTreeLimit>(),
     diagnostics: [] as string[],
     stopped: false,
   };
@@ -163,7 +163,7 @@ export async function buildSkillFileTree(
   };
 
   const reserveMetadata = (bytes: number): boolean => {
-    if (state.metadataBytes + bytes > MAX_SKILL_TREE_METADATA_BYTES) {
+    if (state.metadataBytes + bytes > MAX_ENTRY_TREE_METADATA_BYTES) {
       stopForMetadata();
       return false;
     }
@@ -184,7 +184,7 @@ export async function buildSkillFileTree(
     directory: FileHandle,
     parentPath: string,
     depth: number,
-  ): Promise<SkillFileTreeEntry[]> => {
+  ): Promise<EntryFileTreeEntry[]> => {
     if (state.stopped) return [];
     let dirents;
     try {
@@ -192,22 +192,26 @@ export async function buildSkillFileTree(
       // full listing would allocate a hand-authored million siblings before the
       // thousand-entry bound below could refuse a single one of them — the
       // bound has to apply to the READ, not just to the answer.
-      const listing = await boundedListing(directory, MAX_SKILL_TREE_LISTING);
+      const listing = await boundedListing(
+        kind,
+        directory,
+        MAX_ENTRY_TREE_LISTING,
+      );
       dirents = listing.entries;
       if (listing.more) state.limits.add("entries");
     } catch {
       addDiagnostic(
         parentPath
           ? `${parentPath} could not be read while its files were listed.`
-          : "The skill folder could not be read while its files were listed.",
+          : `The ${kind.noun} folder could not be read while its files were listed.`,
       );
       return [];
     }
 
-    const entries: SkillFileTreeEntry[] = [];
+    const entries: EntryFileTreeEntry[] = [];
     for (const dirent of dirents) {
       if (state.stopped) break;
-      if (state.entryCount >= MAX_SKILL_TREE_ENTRIES) {
+      if (state.entryCount >= MAX_ENTRY_TREE_ENTRIES) {
         state.limits.add("entries");
         state.stopped = true;
         break;
@@ -216,7 +220,7 @@ export async function buildSkillFileTree(
       const metadataCost =
         Buffer.byteLength(dirent.name, "utf8") +
         Buffer.byteLength(path, "utf8");
-      if (state.metadataBytes + metadataCost > MAX_SKILL_TREE_METADATA_BYTES) {
+      if (state.metadataBytes + metadataCost > MAX_ENTRY_TREE_METADATA_BYTES) {
         stopForMetadata();
         break;
       }
@@ -234,7 +238,7 @@ export async function buildSkillFileTree(
       }
 
       try {
-        await withSkillChild(directory, dirent.name, async (child) => {
+        await withEntryChild(directory, dirent.name, async (child) => {
           reserve();
           if (!child.directory) {
             entries.push({
@@ -242,22 +246,22 @@ export async function buildSkillFileTree(
               name: dirent.name,
               path,
               bytes: child.size,
-              mimeType: skillFileMimeType(path),
+              mimeType: entryFileMimeType(path),
             });
             return;
           }
 
-          const entry: SkillFileTreeEntry = {
+          const entry: EntryFileTreeEntry = {
             type: "directory",
             name: dirent.name,
             path,
           };
           entries.push(entry);
-          if (depth >= MAX_SKILL_TREE_DEPTH) {
+          if (depth >= MAX_ENTRY_TREE_DEPTH) {
             // Whether it has ANY child, which is one entry's worth of reading:
             // listing the whole directory to learn that it is non-empty is the
             // read this bound exists to avoid.
-            const nested = await boundedListing(child.handle, 1);
+            const nested = await boundedListing(kind, child.handle, 1);
             if (nested.entries.length > 0) state.limits.add("depth");
             return;
           }
@@ -265,12 +269,12 @@ export async function buildSkillFileTree(
           if (children.length > 0) entry.children = children;
         });
       } catch (error) {
-        if (error instanceof SymlinkedSkillSourceError) {
+        if (error instanceof SymlinkedEntrySourceError) {
           // A path swapped to a symlink after readdir is still visible but is
           // never followed.
           reserve();
           entries.push({ type: "symlink", name: dirent.name, path, bytes: 0 });
-        } else if (error instanceof IrregularSkillSourceError) {
+        } else if (error instanceof IrregularEntrySourceError) {
           addDiagnostic(`${path} is not a regular file or directory.`);
         } else {
           addDiagnostic(
@@ -297,19 +301,20 @@ export async function buildSkillFileTree(
  * The first `capacity` entries of one directory, in the tree's own order,
  * without ever holding more than that many.
  *
- * The order is the answer's: `SKILL.md` first, so the defining document
+ * The order is the answer's: the manifest first, so the defining document
  * survives a huge supporting subtree, then byte-lexical. Sorting normally means
  * reading everything first; keeping a sorted array of exactly the size the
  * caller could still use gives the same first N while the read stays bounded,
  * and `more` says whether anything was dropped for it.
  */
 async function boundedListing(
+  kind: LibraryKind,
   directory: FileHandle,
   capacity: number,
 ): Promise<{ entries: Dirent[]; more: boolean }> {
   const entries: Dirent[] = [];
   let more = false;
-  for await (const dirent of iterateSkillDirectory(directory)) {
+  for await (const dirent of iterateEntryDirectory(directory)) {
     if (capacity === 0) {
       more = true;
       break;
@@ -318,7 +323,8 @@ async function boundedListing(
     let high = entries.length;
     while (low < high) {
       const middle = (low + high) >> 1;
-      if (comesFirst(entries[middle]!.name, dirent.name)) low = middle + 1;
+      if (comesFirst(kind, entries[middle]!.name, dirent.name))
+        low = middle + 1;
       else high = middle;
     }
     if (low >= capacity) {
@@ -334,34 +340,34 @@ async function boundedListing(
   return { entries, more };
 }
 
-/** The listing order: `SKILL.md` first, then byte-lexical. */
-function comesFirst(left: string, right: string): boolean {
-  const leftRank = left === SKILL_FILE_NAME ? 0 : 1;
-  const rightRank = right === SKILL_FILE_NAME ? 0 : 1;
+/** The listing order: the manifest first, then byte-lexical. */
+function comesFirst(kind: LibraryKind, left: string, right: string): boolean {
+  const leftRank = left === kind.manifestFile ? 0 : 1;
+  const rightRank = right === kind.manifestFile ? 0 : 1;
   if (leftRank !== rightRank) return leftRank < rightRank;
   return left < right;
 }
 
-export async function readSkillRawFile(
+export async function readEntryRawFile(
   name: string,
   pathInput: string,
-  library: SkillLibraryStore = skillLibraryStore,
-): Promise<SkillRawFile | null> {
-  const path = normalizeSkillRelativePath(pathInput);
-  return withResolvedSkill(name, library, async (source) =>
-    withRelativeFile(source.folder, path, async (file) => {
-      if (file.size > MAX_SKILL_RAW_FILE_BYTES) {
-        throw new SkillFileTooLargeError(path, file.size);
+  library: LibraryStore,
+): Promise<EntryRawFile | null> {
+  const path = normalizeEntryRelativePath(library.kind, pathInput);
+  return withResolvedEntry(name, library, async (source) =>
+    withRelativeFile(library.kind, source, path, async (file) => {
+      if (file.size > MAX_ENTRY_RAW_FILE_BYTES) {
+        throw new EntryFileTooLargeError(path, file.size);
       }
       const content = await readBounded(file.handle, file.size);
       if (content.byteLength !== file.size) {
-        throw new SkillFileNotFoundError(
-          "The skill file does not exist or changed while it was read.",
+        throw new EntryFileNotFoundError(
+          `The ${library.kind.noun} file does not exist or changed while it was read.`,
         );
       }
       return {
         path,
-        mimeType: skillFileMimeType(path),
+        mimeType: entryFileMimeType(path),
         bytes: file.size,
         content,
       };
@@ -369,16 +375,16 @@ export async function readSkillRawFile(
   );
 }
 
-export async function readSkillFilePreview(
+export async function readEntryFilePreview(
   name: string,
   pathInput: string,
-  library: SkillLibraryStore = skillLibraryStore,
-): Promise<SkillFilePreviewResponse | null> {
-  const path = normalizeSkillRelativePath(pathInput);
-  return withResolvedSkill(name, library, async (source) =>
-    withRelativeFile(source.folder, path, async (file) => {
-      const mimeType = skillFileMimeType(path);
-      const previewBytes = Math.min(file.size, MAX_SKILL_FILE_PREVIEW_BYTES);
+  library: LibraryStore,
+): Promise<EntryFilePreviewResponse | null> {
+  const path = normalizeEntryRelativePath(library.kind, pathInput);
+  return withResolvedEntry(name, library, async (source) =>
+    withRelativeFile(library.kind, source, path, async (file) => {
+      const mimeType = entryFileMimeType(path);
+      const previewBytes = Math.min(file.size, MAX_ENTRY_FILE_PREVIEW_BYTES);
       const content = await readBounded(file.handle, previewBytes);
       if (!isTextMimeType(mimeType) || looksBinary(content)) {
         return {
@@ -395,7 +401,7 @@ export async function readSkillFilePreview(
         mimeType,
         text: new TextDecoder("utf-8").decode(content, { stream: true }),
         bytes: file.size,
-        truncated: file.size > MAX_SKILL_FILE_PREVIEW_BYTES,
+        truncated: file.size > MAX_ENTRY_FILE_PREVIEW_BYTES,
       };
     }),
   );
@@ -405,11 +411,11 @@ export async function readSkillFilePreview(
  * One agent-sized window of a supporting file's text.
  *
  * `bytes` is the whole file. `lineCount` counts only the lines this read could
- * see, which is the file's first {@link MAX_SKILL_FILE_PREVIEW_BYTES} bytes;
+ * see, which is the file's first {@link MAX_ENTRY_FILE_PREVIEW_BYTES} bytes;
  * `truncated` says the window stops short of the file's end, whether because
  * more lines follow or because the file itself runs past that bound.
  */
-export interface SkillTextWindow {
+export interface EntryTextWindow {
   path: string;
   mimeType: string;
   bytes: number;
@@ -422,17 +428,17 @@ export interface SkillTextWindow {
 }
 
 /** Line window defaults and bounds for one supporting-file read. */
-export const DEFAULT_SKILL_TEXT_WINDOW_LINES = 400;
-export const MAX_SKILL_TEXT_WINDOW_LINES = 2_000;
+export const DEFAULT_ENTRY_TEXT_WINDOW_LINES = 400;
+export const MAX_ENTRY_TEXT_WINDOW_LINES = 2_000;
 /**
  * How much text one window may carry regardless of its line count. A generated
  * reference is free to hold a single 200 KiB line, and a line budget alone
  * would let it decide how big a model's context gets.
  */
-export const MAX_SKILL_TEXT_WINDOW_BYTES = 64 * 1024;
+export const MAX_ENTRY_TEXT_WINDOW_BYTES = 64 * 1024;
 
 /** A file that is not UTF-8 text cannot be served as, or edited as, text. */
-export class SkillFileNotTextError extends Error {}
+export class EntryFileNotTextError extends Error {}
 
 /**
  * Read one supporting file as a bounded window of lines.
@@ -443,28 +449,28 @@ export class SkillFileNotTextError extends Error {}
  * is refused instead of being decoded into replacement characters somebody
  * could then "edit".
  */
-export async function readSkillTextWindow(
+export async function readEntryTextWindow(
   name: string,
   pathInput: string,
-  window: { offset?: number; limit?: number } = {},
-  library: SkillLibraryStore = skillLibraryStore,
-): Promise<SkillTextWindow | null> {
-  const path = normalizeSkillRelativePath(pathInput);
+  window: { offset?: number; limit?: number },
+  library: LibraryStore,
+): Promise<EntryTextWindow | null> {
+  const path = normalizeEntryRelativePath(library.kind, pathInput);
   const offset = boundedOffset(window.offset);
   const limit = boundedLimit(window.limit);
-  return withResolvedSkill(name, library, async (source) =>
-    withRelativeFile(source.folder, path, async (file) => {
-      const mimeType = skillFileMimeType(path);
-      const readable = Math.min(file.size, MAX_SKILL_FILE_PREVIEW_BYTES);
+  return withResolvedEntry(name, library, async (source) =>
+    withRelativeFile(library.kind, source, path, async (file) => {
+      const mimeType = entryFileMimeType(path);
+      const readable = Math.min(file.size, MAX_ENTRY_FILE_PREVIEW_BYTES);
       const content = await readBounded(file.handle, readable);
       if (!isTextMimeType(mimeType) || looksBinary(content)) {
-        throw new SkillFileNotTextError(
-          `"${path}" is ${mimeType} (${file.size} bytes), not UTF-8 text. Open it through the skills file route in Settings instead.`,
+        throw new EntryFileNotTextError(
+          `"${path}" is ${mimeType} (${file.size} bytes), not UTF-8 text. Open it through the ${library.kind.plural} file route in Settings instead.`,
         );
       }
-      const beyondBound = file.size > MAX_SKILL_FILE_PREVIEW_BYTES;
+      const beyondBound = file.size > MAX_ENTRY_FILE_PREVIEW_BYTES;
       const lines = textLines(
-        decodeWindow(content, path, mimeType, beyondBound),
+        decodeWindow(library.kind, content, path, mimeType, beyondBound),
         beyondBound,
       );
       const emitted = emittedLines(lines, offset, limit);
@@ -506,6 +512,7 @@ export async function readSkillTextWindow(
  * not do.
  */
 function decodeWindow(
+  kind: LibraryKind,
   content: Uint8Array,
   path: string,
   mimeType: string,
@@ -517,8 +524,8 @@ function decodeWindow(
       { stream: cutAtBound },
     );
   } catch {
-    throw new SkillFileNotTextError(
-      `"${path}" is declared ${mimeType} but is not valid UTF-8, so it cannot be served as text. Open it through the skills file route in Settings instead.`,
+    throw new EntryFileNotTextError(
+      `"${path}" is declared ${mimeType} but is not valid UTF-8, so it cannot be served as text. Open it through the ${kind.plural} file route in Settings instead.`,
     );
   }
 }
@@ -526,17 +533,17 @@ function decodeWindow(
 function boundedOffset(value: number | undefined): number {
   if (value === undefined) return 1;
   if (!Number.isFinite(value) || value < 1) {
-    throw new InvalidSkillFilePathError("offset must be a line number from 1.");
+    throw new InvalidEntryFilePathError("offset must be a line number from 1.");
   }
   return Math.floor(value);
 }
 
 function boundedLimit(value: number | undefined): number {
-  if (value === undefined) return DEFAULT_SKILL_TEXT_WINDOW_LINES;
+  if (value === undefined) return DEFAULT_ENTRY_TEXT_WINDOW_LINES;
   if (!Number.isFinite(value) || value < 1) {
-    throw new InvalidSkillFilePathError("limit must be a positive number.");
+    throw new InvalidEntryFilePathError("limit must be a positive number.");
   }
-  return Math.min(Math.floor(value), MAX_SKILL_TEXT_WINDOW_LINES);
+  return Math.min(Math.floor(value), MAX_ENTRY_TEXT_WINDOW_LINES);
 }
 
 /**
@@ -573,14 +580,14 @@ function emittedLines(
     // The separator this line will be joined with counts too.
     const separator = emitted.length > 0 ? 1 : 0;
     const cost = Buffer.byteLength(line, "utf8") + separator;
-    if (bytes + cost > MAX_SKILL_TEXT_WINDOW_BYTES) {
+    if (bytes + cost > MAX_ENTRY_TEXT_WINDOW_BYTES) {
       if (emitted.length > 0) break;
-      emitted.push(clipToBytes(line, MAX_SKILL_TEXT_WINDOW_BYTES));
+      emitted.push(clipToBytes(line, MAX_ENTRY_TEXT_WINDOW_BYTES));
       return { lines: emitted, clipped: true };
     }
     emitted.push(line);
     bytes += cost;
-    if (bytes >= MAX_SKILL_TEXT_WINDOW_BYTES) break;
+    if (bytes >= MAX_ENTRY_TEXT_WINDOW_BYTES) break;
   }
   return { lines: emitted, clipped: false };
 }
@@ -597,74 +604,101 @@ function clipToBytes(text: string, budget: number): string {
   );
 }
 
-async function withResolvedSkill<T>(
+async function withResolvedEntry<T>(
   name: string,
-  library: SkillLibraryStore,
-  use: (source: SkillSource) => Promise<T>,
+  library: LibraryStore,
+  use: (source: EntrySource) => Promise<T>,
 ): Promise<T | null> {
-  if (!isSafeSkillName(name)) return null;
+  if (!isSafeEntryName(name)) return null;
   await library.ensureInitialized();
-  const scan = await scanSkillLibrary(library.root);
-  return withResolvedSkillFromScan(library.root, scan, name, use);
+  const scan = await scanLibrary(library.kind, library.root);
+  return withResolvedEntryFromScan(library, scan, name, use);
 }
 
-async function withResolvedSkillFromScan<T>(
-  root: string,
-  scan: SkillLibraryScan,
+async function withResolvedEntryFromScan<T>(
+  library: LibraryStore,
+  scan: LibraryScan,
   name: string,
-  use: (source: SkillSource) => Promise<T>,
+  use: (source: EntrySource) => Promise<T>,
 ): Promise<T | null> {
-  const summary = scan.skills.find((skill) => skill.name === name);
+  const summary = scan.entries.find((entry) => entry.name === name);
   if (!summary) return null;
-  const identity = skillSourceIdentity(scan, summary.path);
+  const identity = entrySourceIdentity(scan, summary.path);
   if (!identity) return null;
   const folder = summary.path.slice(0, summary.path.indexOf("/"));
   try {
-    return await withLibraryRoot(root, (rootHandle) =>
-      withSkillSource(rootHandle, folder, async (source) => {
-        if (!sameSkillSource(source.identity, identity)) {
-          throw new SkillFileNotFoundError(
-            "The skill changed since it was scanned.",
-          );
-        }
-        return use(source);
-      }),
+    return await withLibraryRoot(library.root, (rootHandle) =>
+      withEntrySource(
+        rootHandle,
+        folder,
+        library.kind.manifestFile,
+        async (source) => {
+          if (!sameEntrySource(source.identity, identity)) {
+            throw new EntryFileNotFoundError(
+              `The ${library.kind.noun} changed since it was scanned.`,
+            );
+          }
+          return use(source);
+        },
+      ),
     );
   } catch (error) {
     if (
-      error instanceof InvalidSkillFilePathError ||
-      error instanceof SkillFileTooLargeError ||
-      error instanceof SkillFileNotTextError
+      error instanceof InvalidEntryFilePathError ||
+      error instanceof EntryFileTooLargeError ||
+      error instanceof EntryFileNotTextError
     ) {
       throw error;
     }
-    throw new SkillFileNotFoundError(
-      error instanceof SymlinkedSkillSourceError
-        ? "Symlinked skill files are not served."
-        : "The skill file does not exist or changed while it was read.",
+    throw new EntryFileNotFoundError(
+      error instanceof SymlinkedEntrySourceError
+        ? `Symlinked ${library.kind.noun} files are not served.`
+        : `The ${library.kind.noun} file does not exist or changed while it was read.`,
     );
   }
 }
 
 async function withRelativeFile<T>(
-  folder: FileHandle,
+  kind: LibraryKind,
+  source: EntrySource,
   path: string,
   use: (file: { handle: FileHandle; size: number }) => Promise<T>,
 ): Promise<T> {
   const components = path.split("/");
   const descend = async (directory: FileHandle, at: number): Promise<T> =>
-    withSkillChild(directory, components[at]!, async (child) => {
+    withEntryChild(directory, components[at]!, async (child) => {
       const last = at === components.length - 1;
       if (last) {
         if (child.directory)
-          throw new SkillFileNotFoundError("Path is a directory.");
+          throw new EntryFileNotFoundError("Path is a directory.");
+        // The manifest read as a file is still the manifest: its kind's bound
+        // applies to the handle opened HERE, not to the size the scan saw. It
+        // is recognised by name AND by inode, so a hard link to it under
+        // another name or path is held to the same bound.
+        if (
+          manifestSizeIssue(kind, child.size, path) !== undefined &&
+          (path === kind.manifestFile ||
+            sameInode(
+              await entryHandleIdentity(child.handle),
+              source.identity.file,
+            ))
+        ) {
+          throw new EntryFileTooLargeError(path, child.size);
+        }
         return use({ handle: child.handle, size: child.size });
       }
       if (!child.directory)
-        throw new SkillFileNotFoundError("Path is not a directory.");
+        throw new EntryFileNotFoundError("Path is not a directory.");
       return descend(child.handle, at + 1);
     });
-  return descend(folder, 0);
+  return descend(source.folder, 0);
+}
+
+function sameInode(
+  actual: { dev: number; ino: number },
+  expected: { dev: number; ino: number },
+): boolean {
+  return actual.dev === expected.dev && actual.ino === expected.ino;
 }
 
 async function readBounded(handle: FileHandle, bytes: number): Promise<Buffer> {

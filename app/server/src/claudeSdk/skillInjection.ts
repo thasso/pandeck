@@ -1,5 +1,4 @@
-import { scanSkillLibrary } from "../skills/skillLibraryScanner.ts";
-import { skillLibraryStore } from "../skills/skillLibraryStore.ts";
+import { scanSkillLibrary, skillLibraryStore } from "../skills/skillLibrary.ts";
 import { materializeSkillRuntime } from "../skills/skillRuntimeMaterializer.ts";
 
 /**

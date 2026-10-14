@@ -7,15 +7,16 @@ import { afterEach, beforeEach, describe, test } from "vitest";
 import type { AgentTool, ToolCallContext } from "../../mcp/tool.ts";
 import { git } from "../../gitExec.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
-import { SkillLibraryStore } from "../../skills/skillLibraryStore.ts";
-import { setSkillLibraryBroadcaster } from "../../skills/skillLibraryEvents.ts";
+import { LibraryStore } from "../../library/libraryStore.ts";
+import { setLibraryBroadcaster } from "../../library/libraryPublish.ts";
 import {
   skillLibraryTools,
   setSkillToolLibraryForTests,
-} from "./skillTools.ts";
+} from "./skillLibraryTools.ts";
+import { skillKind } from "../../skills/skillLibrary.ts";
 
 let root: string;
-let store: SkillLibraryStore;
+let store: LibraryStore;
 
 const ctx: ToolCallContext = {
   toolCallId: "tool-test",
@@ -56,15 +57,15 @@ async function expectFailure(
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skill-tools-test-"));
-  store = new SkillLibraryStore(root);
+  store = new LibraryStore(skillKind, root);
   await store.ensureInitialized();
   setSkillToolLibraryForTests(() => store);
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
 });
 
 afterEach(() => {
   setSkillToolLibraryForTests(null);
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -109,6 +110,31 @@ describe("skill tools: reads", () => {
     assert.equal(listed.skills.length, 200);
     assert.equal(listed.truncated, true);
     assert.equal(listed.skills[0].name, "skill-000");
+  });
+
+  test("skill_list bounds each diagnostic's text, whatever the folders hold", async () => {
+    // Long folder names that all declare one name: every one gets a
+    // duplicate-name diagnostic naming several of them.
+    for (let at = 0; at < 60; at++) {
+      const folder = `${"d".repeat(230)}-${String(at).padStart(3, "0")}`;
+      await mkdir(join(root, folder), { recursive: true });
+      await writeFile(
+        join(root, folder, "SKILL.md"),
+        "---\nname: shared\ndescription: Copy\n---\nBody.\n",
+      );
+    }
+
+    const listed = await call("skill_list");
+
+    assert.equal(listed.diagnosticCount, 60);
+    assert.equal(listed.diagnostics.length, 50);
+    assert.equal(listed.truncated, true);
+    for (const diagnostic of listed.diagnostics) {
+      assert.ok(diagnostic.error.length <= 510, diagnostic.error);
+      assert.match(diagnostic.error, /… \(cut\)$/);
+    }
+    // Folder and path are bounded by the filesystem; the text is what grew.
+    assert.ok(JSON.stringify(listed).length < 50 * 1_200);
   });
 
   test("skill_list reports skills, diagnostics and repository state", async () => {
@@ -352,7 +378,11 @@ describe("skill tools: mutations", () => {
       operations: [{ op: "edit", path: "references/tone.md", edits: [] }],
       reason: "Edit nothing",
     });
-    assert.match(empty.message, /needs at least one edit/);
+    // Refused by the tool's own schema before anything is read.
+    assert.match(
+      empty.message,
+      /operations\/0\/edits must not have fewer than 1 items/,
+    );
 
     // A refused batch leaves the file and the repository exactly as they were.
     assert.equal(
@@ -372,8 +402,12 @@ describe("skill tools: mutations", () => {
     });
     assert.equal(renamed.previousName, "release-notes");
     assert.equal(renamed.skill.name, "changelog-notes");
-    assert.equal(renamed.consequences.length, 2);
+    assert.equal(renamed.consequences.length, 3);
     assert.match(renamed.consequences.join(" "), /defaults to off/);
+    assert.match(
+      renamed.consequences.join(" "),
+      /Agent definitions whose skills list "release-notes" cannot be spawned/,
+    );
 
     const deleted = await call("skill_delete", {
       name: "changelog-notes",
@@ -381,6 +415,10 @@ describe("skill tools: mutations", () => {
     });
     assert.equal(deleted.deletedName, "changelog-notes");
     assert.match(deleted.consequences.join(" "), /Git history/);
+    assert.match(
+      deleted.consequences.join(" "),
+      /Agent definitions whose skills/,
+    );
     assert.deepEqual((await call("skill_list")).skills, []);
   });
 

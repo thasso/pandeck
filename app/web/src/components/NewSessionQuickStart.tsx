@@ -1,4 +1,10 @@
-import { FolderKanban, GitBranch, House, Plus } from "lucide-react";
+import {
+  FolderKanban,
+  GitBranch,
+  House,
+  Plus,
+  UserRoundCog,
+} from "lucide-react";
 import {
   supportedThinkingLevelsForModel,
   type ModelOption,
@@ -9,11 +15,26 @@ import {
   type ThinkingLevel,
   type WorktreeRecord,
   type CredentialProfileSummary,
+  accountProviderForModelProvider,
+  agentRuntimeOf,
+  type EntryLibraryList,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { orderCredentialProfilesByProvider } from "../lib/credentialProfiles.ts";
-import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+} from "./common/load.tsx";
+import {
+  dataOf,
+  errorOf,
+  isInitialLoad,
+  isPending,
+  type LoadState,
+} from "../lib/loadState.ts";
 import { Item } from "./ui/item.tsx";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import {
@@ -161,6 +182,9 @@ export function NewSessionQuickStart({
   onSelectModel,
   thinkingLevel,
   onSelectThinking,
+  agents,
+  selectedAgent = null,
+  onSelectAgent = () => {},
 }: {
   credentialProfiles?: CredentialProfileSummary[];
   /** Whether the account/model projection has data (including shell-cached data). */
@@ -215,6 +239,15 @@ export function NewSessionQuickStart({
   onSelectModel: (model: ModelOption) => void;
   thinkingLevel: ThinkingLevel;
   onSelectThinking: (level: ThinkingLevel) => void;
+  /**
+   * The agent definitions library (`docs/agent-definitions.md`): picking one
+   * stages its persona, model and effort, and the session starts as that
+   * agent. The row reserves its place while the first read is out and keeps
+   * its pills through a rescan; an authoritatively empty library has no row.
+   */
+  agents?: LoadState<EntryLibraryList> | undefined;
+  selectedAgent?: string | null;
+  onSelectAgent?: (name: string | null) => void;
 }) {
   // The row is the whole choice (no "More…" picker behind it): every active
   // worktree, narrowed to the staged project once one is picked — beside that
@@ -430,6 +463,13 @@ export function NewSessionQuickStart({
           separated from the project/worktree staging above. */}
         <hr className="mx-4 border-border" />
 
+        <AgentDefinitionRow
+          state={agents}
+          accounts={credentialProfilesLoaded ? credentialProfiles : undefined}
+          selectedAgent={selectedAgent}
+          onSelectAgent={onSelectAgent}
+        />
+
         {/* Build/Plan is the composer's Plan switch, not a row here. */}
         {agentPills ? (
           <QuickRow
@@ -535,4 +575,130 @@ export function NewSessionQuickStart({
       </Card>
     </div>
   );
+}
+
+/**
+ * The "Agent definition" row: one pill per definition, a definition that
+ * cannot start disabled with its reason. Idle (nobody subscribed) draws
+ * nothing; the first read reserves the row (R4); a rescan keeps the pills
+ * with an indicator (R2); a failed read says so in place.
+ */
+function AgentDefinitionRow({
+  state,
+  accounts,
+  selectedAgent,
+  onSelectAgent,
+}: {
+  state: LoadState<EntryLibraryList> | undefined;
+  /**
+   * The enabled accounts, once known. A definition is staged on an account of
+   * its model's provider, so none is offered before the accounts are read.
+   */
+  accounts: ReadonlyArray<{ provider: string }> | undefined;
+  selectedAgent: string | null;
+  onSelectAgent: (name: string | null) => void;
+}) {
+  if (!state || state.status === "idle") return null;
+  const agents = dataOf(state);
+  const error = errorOf(state);
+  if (isInitialLoad(state))
+    return (
+      // The status wraps the row: a listbox holds only its options.
+      <div role="status" aria-label="Loading agent definitions">
+        <QuickRow label="Agent definition" busy>
+          {[0, 1].map((i) => (
+            <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
+          ))}
+        </QuickRow>
+      </div>
+    );
+  if (!agents)
+    return error ? (
+      <div className="px-4">
+        <ErrorNote message={error} />
+      </div>
+    ) : null;
+  // An authoritatively empty library has nothing to offer: no row.
+  if (agents.entries.length === 0 && !error) return null;
+  // Why each definition cannot start here, if it cannot: the server's reason,
+  // or no enabled account of its model's provider. Each names its definition,
+  // so two alike still say which pill they explain.
+  const problemOf = (name: string): string | undefined => {
+    const runtime = agentRuntimeOf(agents, name);
+    if (runtime?.problem !== undefined) return runtime.problem;
+    if (runtime && accounts && !hasAccountFor(accounts, runtime.provider))
+      return `Agent "${name}" cannot start here: no enabled account runs ${runtime.provider} models.`;
+    return undefined;
+  };
+  const problems = agents.entries.flatMap((agent) => {
+    const problem = problemOf(agent.name);
+    return problem === undefined ? [] : [{ name: agent.name, problem }];
+  });
+  return (
+    <>
+      <QuickRow
+        label="Agent definition"
+        scrollKey={`${selectedAgent ?? ""}:${agents.entries.length}`}
+      >
+        {agents.entries.map((agent) => {
+          const runtime = agentRuntimeOf(agents, agent.name);
+          const problem = problemOf(agent.name);
+          const selected = agent.name === selectedAgent;
+          return (
+            <QuickPill
+              key={agent.name}
+              selected={selected}
+              // A definition that cannot start is not offered; the picked one
+              // stays clickable so it can always be unpicked.
+              disabled={
+                !selected &&
+                (problem !== undefined ||
+                  runtime === undefined ||
+                  accounts === undefined)
+              }
+              title={
+                problem ??
+                (selected
+                  ? `Start as a plain session instead of ${agent.name}`
+                  : `Start as ${agent.name}: ${agent.description}`)
+              }
+              onClick={() => onSelectAgent(selected ? null : agent.name)}
+            >
+              <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
+              <span className="min-w-0 truncate">{agent.name}</span>
+            </QuickPill>
+          );
+        })}
+      </QuickRow>
+      {/* Outside the listbox, and where a long row cannot scroll it away. */}
+      {isPending(state) ? (
+        <div className="flex justify-center px-4">
+          <RefreshIndicator label="Rescanning agents" />
+        </div>
+      ) : null}
+      {/* Why a definition cannot start, where touch and keyboard users see
+          it too: a disabled pill's title never shows. */}
+      {problems.length > 0 ? (
+        <ul className="px-4 text-sm text-muted-foreground">
+          {problems.map(({ name, problem }) => (
+            <li key={name}>{problem}</li>
+          ))}
+        </ul>
+      ) : null}
+      {error ? (
+        <div className="px-4">
+          <ErrorNote message={error} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** Whether an enabled account can run a model of this provider. */
+function hasAccountFor(
+  accounts: ReadonlyArray<{ provider: string }>,
+  modelProvider: string,
+): boolean {
+  const provider = accountProviderForModelProvider(modelProvider);
+  return accounts.some((account) => account.provider === provider);
 }

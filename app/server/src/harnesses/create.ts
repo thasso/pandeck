@@ -12,6 +12,10 @@ import type {
   SessionMode,
   ThinkingLevel,
 } from "@assistant/shared";
+import {
+  freezeSessionAgent,
+  type SessionAgent,
+} from "../agents/sessionAgent.ts";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { linkSessionToWorktree } from "../db/worktreeStore.ts";
@@ -40,6 +44,50 @@ export class SessionIdTakenError extends Error {
     super(sessionIdTakenMessage(sessionId, holder));
     this.name = "SessionIdTakenError";
   }
+}
+
+/**
+ * A Claude id that an agent creation may not use. `acquire` returns an
+ * existing session as it is — its persona, model, effort and account, not the
+ * ones this creation names — and the agent row is insert-only, written before
+ * the session: either way a definition could end up describing a session that
+ * runs something else, so the creation is refused instead.
+ */
+export class SessionAgentConflictError extends Error {
+  constructor(
+    readonly sessionId: string,
+    /** The stored agent row, if any. */
+    frozen: string | undefined,
+    agentName: string | undefined,
+    sessionExists: boolean,
+  ) {
+    const wanted =
+      agentName === undefined
+        ? "a plain session"
+        : `the "${agentName}" agent as it is defined now`;
+    super(
+      agentName !== undefined && sessionExists
+        ? `Session ${sessionId} already exists, and an agent only ever starts a new session; start a new session to run "${agentName}".`
+        : `Session ${sessionId} is already bound to ${boundTo(frozen)}, not to ${wanted}; start a new session${agentName === undefined ? "" : " to run it"}.`,
+    );
+    this.name = "SessionAgentConflictError";
+  }
+}
+
+/** What an id is bound to, in words: its stored agent row, or none. */
+function boundTo(frozen: string | undefined): string {
+  if (frozen === undefined) return "a plain session";
+  try {
+    const { name, blob } = JSON.parse(frozen) as {
+      name?: unknown;
+      blob?: unknown;
+    };
+    if (typeof name === "string" && typeof blob === "string")
+      return `the "${name}" agent as it was defined then (AGENT.md ${blob.slice(0, 7)})`;
+  } catch {
+    // Unreadable: said as such below.
+  }
+  return "an agent definition that can no longer be read";
 }
 
 /** A pi model handle, as the caller resolved it on the session's account. */
@@ -73,6 +121,11 @@ type SessionStart = SessionPlace & {
   promptEvidence?: SessionPromptEvidence | undefined;
   /** The title it starts with; a titled session is never auto-named. */
   title?: string | undefined;
+  /**
+   * The agent definition it is spawned as (`docs/agent-definitions.md`),
+   * frozen before its first query; its skills join the session's frozen ones.
+   */
+  agent?: SessionAgent | undefined;
 };
 
 /** A session to create, with what only its engine takes. */
@@ -106,7 +159,8 @@ export type NewSession =
  * takes its id, so its worktree edge and frozen prompt conditions are in place
  * before the store resolves them; pi mints its id and freezes its prompt
  * conditions inside creation, so its row and edge follow it. Either way its
- * current library skills are frozen before its first query.
+ * current library skills, and the agent definition it is spawned as, are
+ * frozen before its first query.
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
   // Resolved here for both engines alike: Claude's store would read a
@@ -119,12 +173,28 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     // Resolved first: from the ownership check below to the session's
     // registration nothing yields, so no other engine can take the id in
     // between, and a refusal comes before anything is written for it.
-    const skills = await sessionSkillPreset(id, spec.agentType);
+    const skills = await sessionSkillPreset(
+      id,
+      spec.agentType,
+      undefined,
+      spec.agent?.skills,
+    );
     const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
       onDisk: spec.id !== undefined,
     });
     if (holder) throw new SessionIdTakenError(id, holder);
+    // An agent only ever starts a NEW session: an existing one would keep its
+    // own runtime and account whatever this creation names (a first send is
+    // re-issued only while nothing was created). The one reuse is finishing a
+    // creation that failed after writing its agent row — and only with exactly
+    // that definition; a plain creation may not take over such an id either.
+    const frozen = sessionStore.getAgent(id);
+    const wanted = spec.agent ? JSON.stringify(spec.agent) : undefined;
+    const exists = spec.agent !== undefined && claudeSdkStore.exists(id);
+    if (exists || (frozen !== undefined && frozen !== wanted))
+      throw new SessionAgentConflictError(id, frozen, spec.agent?.name, exists);
     linkWorktree(id, spec.worktree?.id);
+    if (spec.agent) freezeSessionAgent(id, spec.agent);
     if (spec.promptEvidence)
       sessionPromptConditions(id, spec.agentType, spec.promptEvidence);
     // With the names resolved, the freeze lands right here, before the
@@ -162,6 +232,8 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       ...(spec.promptEvidence !== undefined
         ? { promptEvidence: spec.promptEvidence }
         : {}),
+      // Like the evidence: pi mints the id inside creation, which freezes it.
+      ...(spec.agent !== undefined ? { agent: spec.agent } : {}),
       ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
     },
   );

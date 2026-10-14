@@ -38,7 +38,8 @@ import {
   isTerminalWorkflowRunLifecycle,
   pendingWorkflowRunAttention,
 } from "./workflow.ts";
-import type { SkillLibraryList, SkillToggles } from "./skills.ts";
+import type { EntryLibraryList, LibraryTopic } from "./library.ts";
+import type { SkillToggles } from "./skills.ts";
 import type { PeerSpawnRuntime } from "./peerRuntimes.ts";
 import type { SettingsSectionId } from "./settingsRegistry.ts";
 import {
@@ -63,6 +64,7 @@ import type {
 export * from "./memory.ts";
 export * from "./memoryValidation.ts";
 export * from "./workflow.ts";
+export * from "./library.ts";
 export * from "./skills.ts";
 export * from "./comments.ts";
 export * from "./thinkingLevels.ts";
@@ -3242,6 +3244,7 @@ export type ApprovalKind =
   | "managedPullRequestMerge"
   | "managedCommitOverride"
   | "projectCreate"
+  | "agentDefinition"
   | "settingsInput";
 /**
  * pending → executing → executed | failed (approved path); rejected (declined);
@@ -3498,6 +3501,46 @@ export interface SettingsInputApprovalBody {
   reason?: string;
   /** Whether a value was already set when the card was raised. */
   wasConfigured: boolean;
+}
+
+/**
+ * An agent asking to create an agent definition, or to change one's `persona`,
+ * `model` or `effort` (`docs/agent-definitions.md`): what spawned sessions of
+ * it run AS and ON is the user's call. Nothing is written until approval; `resultCommit` records
+ * the commit execution made.
+ */
+export interface AgentDefinitionApprovalBody {
+  kind: "agentDefinition";
+  action: "create" | "edit";
+  /** Declared name, also the library folder. */
+  name: string;
+  description: string;
+  persona: "developer" | "assistant";
+  /**
+   * The persona before an edit that changes it: a persona decides the tools
+   * (a developer has native Bash, Edit and Write), so it is approved too.
+   */
+  personaBefore?: "developer" | "assistant";
+  /** The model as written, before (edit only) and after. */
+  model: { before?: string; after: string };
+  /** The connected model `after` resolved to when proposed: `provider/id`. */
+  resolvedModel: string;
+  /**
+   * Effort before (edit only) and after; absent means the definition default
+   * (`medium`). `effective` is the level the model will actually run at,
+   * present when it differs from `after`: a default, or a level fitted to the
+   * ones the model supports.
+   */
+  effort: {
+    before?: ThinkingLevel;
+    after?: ThinkingLevel;
+    effective?: ThinkingLevel;
+  };
+  /** The complete `AGENT.md` the approval would write. */
+  source: string;
+  /** The commit subject. */
+  reason: string;
+  resultCommit?: string;
 }
 
 /**
@@ -3790,6 +3833,7 @@ export type ApprovalBody =
   | ManagedPullRequestMergeApprovalBody
   | ManagedCommitOverrideApprovalBody
   | ProjectCreateApprovalBody
+  | AgentDefinitionApprovalBody
   | SettingsInputApprovalBody;
 
 /**
@@ -4360,6 +4404,22 @@ export type SessionIdleReason =
   /** A `/pr` card is waiting for the user to pick which Task the PR is for. */
   | "awaiting_task_choice";
 
+/** A session's frozen agent definition, as the inspector shows it. */
+export type SessionAgentSummary =
+  | {
+      name: string;
+      unreadable?: undefined;
+      /** Git blob id of the `AGENT.md` it was spawned from. */
+      blob: string;
+      /** `provider/id` of the model it runs on. */
+      model: string;
+      effort: ThinkingLevel;
+      denyTools: string[];
+      skills: string[];
+    }
+  /** A stored definition this build cannot read: the session refuses to run. */
+  | { name: string; unreadable: true };
+
 export interface SessionState {
   sessionId: string;
   sessionFile?: string;
@@ -4441,6 +4501,11 @@ export interface SessionState {
    * committed transcript. Present exactly when `activeSkills` is.
    */
   skillInvocations?: SessionSkillInvocation[];
+  /**
+   * The agent definition this session was spawned as, frozen at spawn
+   * (`docs/agent-definitions.md`). Absent for a session not spawned from one.
+   */
+  agent?: SessionAgentSummary;
   /** Session-managed screenshots/traces/downloads created by workshop browser tools. */
   artifacts?: SessionArtifact[];
   /** Queued automatic follow-up that will run after the dev server reloads. */
@@ -5910,7 +5975,9 @@ export type BroadcastTopic =
   | "usage"
   | "workflow"
   /** The user-owned skills library, rescanned on every subscribe. */
-  | "skills";
+  | "skills"
+  /** The user-owned agent definitions library, rescanned on every subscribe. */
+  | "agents";
 
 export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "tasks",
@@ -5921,6 +5988,7 @@ export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "usage",
   "workflow",
   "skills",
+  "agents",
 ];
 
 /** Cumulative finalized provider usage; live estimates never travel here. */
@@ -7541,6 +7609,13 @@ export type ClientMessage =
        * and, on failure, creates no session and runs no turn.
        */
       createWorktreeInProjectId?: string;
+      /**
+       * Start the session as this agent definition (`docs/agent-definitions.md`
+       * "UI"): its persona, model and effort are the definition's, resolved
+       * again here, and `agentType`/`harness` must match them. The account is
+       * the one picked, as for any new session.
+       */
+      agent?: string;
       clientRequestId?: string;
     }
   /** List worktrees (all projects, or one). Response: `worktreeList`. */
@@ -8313,18 +8388,24 @@ export type ServerMessage =
       updatedAt: number;
     }
   /**
-   * The `skills` topic's ONE list shape: a fresh working-tree scan of the
-   * user-owned library, answering a subscribe and carrying every later change.
+   * A library topic's ONE list shape (`skills`, `agents`; named by `library`):
+   * a fresh working-tree scan of that user-owned library, answering a
+   * subscribe and carrying every later change.
    *
    * Exactly one of `list`/`error` is set. A scan that could not run at all is
-   * an `error` rather than an empty library, because "no skills" is a claim
+   * an `error` rather than an empty library, because "no entries" is a claim
    * about authored content and a failed read is not entitled to make it; a
    * client keeps whatever it already had beside that message. Per-folder
    * failures are NOT this error — they travel inside `list.diagnostics`, which
    * is how a malformed folder stays visible with its reason.
    */
-  | { type: "skillList"; list: SkillLibraryList; error?: never }
-  | { type: "skillList"; list?: never; error: string }
+  | {
+      type: "libraryList";
+      library: LibraryTopic;
+      list: EntryLibraryList;
+      error?: never;
+    }
+  | { type: "libraryList"; library: LibraryTopic; list?: never; error: string }
   /**
    * Progress and outcome of a `startWorkflowRun` request, keyed to it by
    * `requestId`. `runId` is present from the first message on — the run row is

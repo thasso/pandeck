@@ -41,7 +41,7 @@ async function addSkill(
   folder: string,
   name: string,
   description = `${name} description`,
-): Promise<SkillRuntimeScan["skills"][number]> {
+): Promise<SkillRuntimeScan["entries"][number]> {
   const source = join(libraryDir, folder);
   await mkdir(join(source, "references"), { recursive: true });
   await writeFile(
@@ -58,10 +58,10 @@ async function addSkill(
 }
 
 function scan(
-  skills: SkillRuntimeScan["skills"],
+  skills: SkillRuntimeScan["entries"],
   diagnostics: SkillRuntimeScan["diagnostics"] = [],
 ): SkillRuntimeScan {
-  return { skills, diagnostics };
+  return { entries: skills, diagnostics };
 }
 
 function options(): { libraryDir: string; runtimeDir: string } {

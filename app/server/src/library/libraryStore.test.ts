@@ -13,7 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import { git, gitOptional } from "../gitExec.ts";
-import { SkillLibraryStore } from "./skillLibraryStore.ts";
+import { skillKind } from "../skills/skillLibrary.ts";
+import { LibraryStore } from "./libraryStore.ts";
 
 let tempRoot: string;
 let libraryRoot: string;
@@ -46,9 +47,9 @@ async function assertFreshReaderOwnedRepo(root: string): Promise<void> {
   assert.ok(!existsSync(join(root, ".gitignore")));
 }
 
-describe("SkillLibraryStore bounded reads", () => {
+describe("LibraryStore bounded reads", () => {
   test("streams a diff larger than the shared Git buffer with exact metadata", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await git(
       [
@@ -91,7 +92,7 @@ describe("SkillLibraryStore bounded reads", () => {
   }, 30_000);
 
   test("does not execute repository-configured diff programs", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await writeFile(join(libraryRoot, "notes.md"), "old\n", "utf8");
     await git(["add", "-A"], libraryRoot);
@@ -120,11 +121,11 @@ describe("SkillLibraryStore bounded reads", () => {
   });
 });
 
-describe("SkillLibraryStore initialization", () => {
+describe("LibraryStore initialization", () => {
   test("creates a missing library directory as an empty main-branch repository", async () => {
     assert.ok(!existsSync(libraryRoot));
 
-    await new SkillLibraryStore(libraryRoot).ensureInitialized();
+    await new LibraryStore(skillKind, libraryRoot).ensureInitialized();
 
     assert.ok(existsSync(join(libraryRoot, ".git")));
     assert.equal((await git(["status", "--short"], libraryRoot)).stdout, "");
@@ -133,12 +134,12 @@ describe("SkillLibraryStore initialization", () => {
 
   test("initializes a fresh directory without staging or changing its files", async () => {
     await mkdir(libraryRoot);
-    const skillPath = join(libraryRoot, "SKILL.md");
-    await writeFile(skillPath, "user-owned\n", "utf8");
+    const entryPath = join(libraryRoot, "SKILL.md");
+    await writeFile(entryPath, "user-owned\n", "utf8");
 
-    await new SkillLibraryStore(libraryRoot).ensureInitialized();
+    await new LibraryStore(skillKind, libraryRoot).ensureInitialized();
 
-    assert.equal(await readFile(skillPath, "utf8"), "user-owned\n");
+    assert.equal(await readFile(entryPath, "utf8"), "user-owned\n");
     assert.equal(
       (await git(["status", "--short"], libraryRoot)).stdout,
       "?? SKILL.md\n",
@@ -166,7 +167,7 @@ describe("SkillLibraryStore initialization", () => {
     await git(["config", "user.name", "Owner Override"], libraryRoot);
     const headBefore = (await git(["rev-parse", "HEAD"], libraryRoot)).stdout;
 
-    await new SkillLibraryStore(libraryRoot).ensureInitialized();
+    await new LibraryStore(skillKind, libraryRoot).ensureInitialized();
 
     assert.equal(
       (await git(["rev-parse", "HEAD"], libraryRoot)).stdout,
@@ -188,19 +189,19 @@ describe("SkillLibraryStore initialization", () => {
   test("serializes concurrent stores and remains idempotent on reopen", async () => {
     const stores = Array.from(
       { length: 8 },
-      () => new SkillLibraryStore(libraryRoot),
+      () => new LibraryStore(skillKind, libraryRoot),
     );
 
     await Promise.all(stores.map((store) => store.ensureInitialized()));
     await Promise.all(stores.map((store) => store.ensureInitialized()));
-    await new SkillLibraryStore(libraryRoot).ensureInitialized();
+    await new LibraryStore(skillKind, libraryRoot).ensureInitialized();
 
     assert.equal((await git(["status", "--short"], libraryRoot)).stdout, "");
     await assertFreshReaderOwnedRepo(libraryRoot);
   });
 
   test("retries initialization after git temporarily fails", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     vi.stubEnv("PATH", "");
 
     await assert.rejects(store.ensureInitialized(), /git init/);
@@ -212,7 +213,7 @@ describe("SkillLibraryStore initialization", () => {
   });
 });
 
-describe("SkillLibraryStore history and provenance", () => {
+describe("LibraryStore history and provenance", () => {
   async function userCommit(
     root: string,
     message: string,
@@ -237,7 +238,7 @@ describe("SkillLibraryStore history and provenance", () => {
   }
 
   test("an unborn repository has an empty history, and a read failure never poses as one", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
 
     assert.deepEqual(await store.history(), { entries: [], truncated: false });
 
@@ -248,7 +249,7 @@ describe("SkillLibraryStore history and provenance", () => {
   });
 
   test("the commit-count bound reports whether older commits remain", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await userCommit(libraryRoot, "First commit\n", "first.md");
     await userCommit(libraryRoot, "Second commit\n", "second.md");
@@ -267,7 +268,7 @@ describe("SkillLibraryStore history and provenance", () => {
   });
 
   test("a hand-authored enormous commit message is bounded, not dropped", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     // Both halves are what `%B` used to stream in full: a subject far past any
     // sane length, and a body large enough to overflow the buffered executor.
@@ -288,7 +289,7 @@ describe("SkillLibraryStore history and provenance", () => {
   });
 
   test("control bytes in hand-authored messages cannot forge history records", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await userCommit(
       libraryRoot,
@@ -311,7 +312,7 @@ describe("SkillLibraryStore history and provenance", () => {
   });
 
   test("repository status truly bounds a zero-width HEAD subject", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     // Git's `%<(N,trunc)` counts display columns, so combining marks bypass a
     // nominal width bound. The status read must bound retained characters.
@@ -332,7 +333,7 @@ describe("SkillLibraryStore history and provenance", () => {
       "utf8",
     );
     vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await userCommit(
       libraryRoot,
@@ -349,7 +350,7 @@ describe("SkillLibraryStore history and provenance", () => {
   });
 
   test("provenance reaches the commit as single bounded trailer lines", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
 
     await store.commitMutation(
@@ -363,7 +364,7 @@ describe("SkillLibraryStore history and provenance", () => {
         reason: "Add a skill",
         sessionId: "sess-1",
         taskId: "633",
-        skillNames: ["release-notes"],
+        entryNames: ["release-notes"],
       },
       async (ctx) => {
         const bytes = new TextEncoder().encode("notes\n");
@@ -393,7 +394,7 @@ describe("SkillLibraryStore history and provenance", () => {
   });
 
   test("an oversized reason and task id are bounded in the commit subject and trailer", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
 
     await store.commitMutation(
@@ -425,9 +426,9 @@ describe("SkillLibraryStore history and provenance", () => {
   });
 });
 
-describe("SkillLibraryStore history refuses to invent an empty past", () => {
+describe("LibraryStore history refuses to invent an empty past", () => {
   test("a Git that cannot run is an error, not a library without history", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await writeFile(join(libraryRoot, "notes.md"), "notes\n", "utf8");
     await git(["add", "-A"], libraryRoot);
@@ -455,7 +456,7 @@ describe("SkillLibraryStore history refuses to invent an empty past", () => {
   });
 
   test("a repository Git cannot read is an error, not an empty history", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await writeFile(join(libraryRoot, "notes.md"), "notes\n", "utf8");
     await git(["add", "-A"], libraryRoot);
@@ -485,7 +486,7 @@ describe("SkillLibraryStore history refuses to invent an empty past", () => {
   });
 
   test("a commit whose trailers exceed the stream cap is still reported", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     const messageFile = join(tempRoot, "huge-trailers.txt");
     await writeFile(
@@ -533,7 +534,7 @@ const meta = {
   sessionId: "sess-1",
 };
 
-describe("SkillLibraryStore: hashing an open descriptor", () => {
+describe("LibraryStore: hashing an open descriptor", () => {
   /**
    * A hash over a descriptor is a sequence of reads, and a writer who already
    * holds the inode open is not stopped by anything the reader can do to its
@@ -541,7 +542,7 @@ describe("SkillLibraryStore: hashing an open descriptor", () => {
    * a caller acting on that answer deletes bytes it never proved were its own.
    */
   test("an append during the read makes the answer unusable, not a match", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     const path = join(libraryRoot, "tone.md");
     await writeFile(path, "ours\n", "utf8");
@@ -602,9 +603,9 @@ describe("SkillLibraryStore: hashing an open descriptor", () => {
   });
 });
 
-describe("SkillLibraryStore: what reaches the commit", () => {
+describe("LibraryStore: what reaches the commit", () => {
   test("canonicalizes malformed Unicode before building commit identity", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
 
     await store.commitMutation(
@@ -626,7 +627,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("commit cleanup configuration cannot rewrite generated provenance", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await git(["config", "commit.cleanup", "strip"], libraryRoot);
 
@@ -656,7 +657,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
    * commit is allowed to happen.
    */
   test("a file written beside the mutation's own is not staged with it", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
 
     await store.commitMutation(
@@ -690,7 +691,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("a replacement of the mutation's OWN path refuses the commit", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     const head = await gitOptional(["rev-parse", "HEAD"], libraryRoot);
 
@@ -725,7 +726,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("moved content REWRITTEN IN PLACE at its new path refuses the commit", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await mkdir(join(libraryRoot, "release-notes"));
     await writeFile(
@@ -776,7 +777,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("a concurrent mode change on the mutation's own path refuses the commit", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     const head = await gitOptional(["rev-parse", "HEAD"], libraryRoot);
 
@@ -802,7 +803,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("an edit of a file the library already keeps executable still commits", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await mkdir(join(libraryRoot, "release-notes"));
     const path = join(libraryRoot, "release-notes", "run.sh");
@@ -832,7 +833,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("moved content that arrives intact is committed", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await mkdir(join(libraryRoot, "release-notes"));
     await writeFile(
@@ -863,7 +864,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("changed paths retain every legal filename byte", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     const path = 'line\nbreak\t"quoted" trailing ';
     const bytes = new TextEncoder().encode("ours\n");
@@ -896,7 +897,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
         "utf8",
       );
       vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);
-      const store = new SkillLibraryStore(libraryRoot);
+      const store = new LibraryStore(skillKind, libraryRoot);
       await store.ensureInitialized();
 
       const outcome = await store.commitMutation(
@@ -935,7 +936,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   }
 
   test("a post-commit hook that adds a commit undoes the whole mutation", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await writeFile(join(libraryRoot, "seed.md"), "seed\n", "utf8");
     await git(["add", "-A"], libraryRoot);
@@ -974,7 +975,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("a post-commit hook that amends away provenance undoes the mutation", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await writeFile(join(libraryRoot, "seed.md"), "seed\n", "utf8");
     await git(["add", "-A"], libraryRoot);
@@ -1013,7 +1014,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("a pre-commit hook that stages its own file undoes the commit", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await writeFile(join(libraryRoot, "seed.md"), "seed\n", "utf8");
     await git(["add", "-A"], libraryRoot);
@@ -1055,7 +1056,7 @@ describe("SkillLibraryStore: what reaches the commit", () => {
   });
 
   test("a change the mutation did not make refuses the commit", async () => {
-    const store = new SkillLibraryStore(libraryRoot);
+    const store = new LibraryStore(skillKind, libraryRoot);
     await store.ensureInitialized();
     await writeFile(join(libraryRoot, "kept.md"), "committed\n", "utf8");
     await git(["add", "-A"], libraryRoot);

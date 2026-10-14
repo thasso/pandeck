@@ -44,7 +44,7 @@ import {
   mergedActiveToolNames,
   type PiToolActivation,
 } from "./toolActivation.ts";
-import { modelRuntimeForProfile } from "./models.ts";
+import { findModelForProfile, modelRuntimeForProfile } from "./models.ts";
 import type { LiveListInfo } from "../sessions.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import {
@@ -61,6 +61,12 @@ import {
 import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import {
+  deniesNative,
+  freezeSessionAgent,
+  sessionAgent,
+  type SessionAgent,
+} from "../agents/sessionAgent.ts";
+import {
   parsePromptConditions,
   sessionPromptConditions,
   type PromptConditions,
@@ -69,7 +75,7 @@ import {
 import { PiLiveSession } from "./PiLiveSession.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import { defaultOpenAiProfileId } from "../credentialProfiles.ts";
-import { sessionSkills } from "../sessionSkills.ts";
+import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
 
@@ -97,6 +103,28 @@ interface PiPromptStart {
   evidence?: SessionPromptEvidence;
   inherit?: PromptConditions;
   inheritSkills?: readonly string[];
+  /**
+   * The agent definition it starts as: a spawn's, or a fork's parent's. Frozen
+   * inside creation, where pi mints the id; a reopen reads the stored row.
+   */
+  agent?: SessionAgent;
+}
+
+/** The model and thinking level a branch last selected, if any. */
+function branchRuntime(sm: SessionManager): {
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: ThinkingLevel;
+} {
+  let selected: { provider?: string; modelId?: string } = {};
+  let thinkingLevel: ThinkingLevel | undefined;
+  for (const entry of sm.getBranch()) {
+    if (entry.type === "model_change")
+      selected = { provider: entry.provider, modelId: entry.modelId };
+    if (entry.type === "thinking_level_change")
+      thinkingLevel = entry.thinkingLevel as ThinkingLevel;
+  }
+  return { ...selected, ...(thinkingLevel ? { thinkingLevel } : {}) };
 }
 
 function safeSessionId(sm: SessionManager): string | undefined {
@@ -252,6 +280,8 @@ class PiSessionStore {
        * cannot stage it by id — it rides the creation call instead.
        */
       promptEvidence?: SessionPromptEvidence;
+      /** The agent definition a spawn starts it as; frozen inside creation. */
+      agent?: SessionAgent;
       mode?: SessionMode;
       /**
        * Whose session this is. It is persisted before the live registry can
@@ -272,7 +302,12 @@ class PiSessionStore {
       thinkingLevel,
       cwd,
       credentialProfileId,
-      opts?.promptEvidence ? { evidence: opts.promptEvidence } : undefined,
+      opts?.promptEvidence || opts?.agent
+        ? {
+            ...(opts.promptEvidence ? { evidence: opts.promptEvidence } : {}),
+            ...(opts.agent ? { agent: opts.agent } : {}),
+          }
+        : undefined,
       opts?.mode,
     );
     this.canonicalizeCreatedPiSession(created.session);
@@ -526,6 +561,9 @@ class PiSessionStore {
     // Freeze a legacy parent before branching, then give the child exactly that
     // list. Settings changing between parent and child must not move the fork.
     const inheritSkills = await sessionSkills(parentSessionId, kind);
+    // A fork continues the parent as the same agent, read before the child
+    // exists so an unreadable parent row refuses the fork.
+    const inheritAgent = sessionAgent(parentSessionId);
     // A fork continues the parent's conversation in the parent's mode too —
     // Build/Plan travels like model and thinking level do.
     const mode = sessionModeOrDefault(parentMeta?.mode);
@@ -536,7 +574,11 @@ class PiSessionStore {
       undefined,
       cwd,
       credentialProfileId,
-      inherit ? { inherit, inheritSkills } : { inheritSkills },
+      {
+        ...(inherit ? { inherit } : {}),
+        inheritSkills,
+        ...(inheritAgent ? { agent: inheritAgent } : {}),
+      },
       mode,
     );
     this.canonicalizeCreatedPiSession(created.session);
@@ -588,8 +630,54 @@ class PiSessionStore {
           promptStart?.inherit,
         )
       : undefined;
+    // The agent definition, when it has one: frozen from the start's, else
+    // the stored row a reopen reads. Before the skills, which it adds to.
+    if (promptStart?.agent && !sessionId)
+      throw new Error(
+        `Agent "${promptStart.agent.name}" cannot start: pi gave the session no id to freeze it under.`,
+      );
+    const agent = !sessionId
+      ? undefined
+      : promptStart?.agent
+        ? freezeSessionAgent(sessionId, promptStart.agent)
+        : sessionAgent(sessionId);
+    // pi restores a session's model from its messages; one with none yet (a
+    // fork before the first prompt, a spawn reopened before it ran) would get
+    // pi's default model. An agent session never runs on a model it did not
+    // select: its branch's last selection, else the frozen one, or a refusal.
+    let startModel = model;
+    let startThinkingLevel = thinkingLevel;
+    if (
+      agent &&
+      startModel === undefined &&
+      sm.buildSessionContext().messages.length === 0
+    ) {
+      const selected = branchRuntime(sm);
+      const provider = selected.provider ?? agent.provider;
+      const modelId = selected.modelId ?? agent.model;
+      startModel = await findModelForProfile(
+        credentialProfileId,
+        provider,
+        modelId,
+      );
+      if (!startModel)
+        throw new Error(
+          `Agent "${agent.name}" runs on ${provider}/${modelId}, which its account no longer offers; it does not run on another model.`,
+        );
+      startThinkingLevel ??= selected.thinkingLevel ?? agent.effort;
+    }
+    const skillPreset =
+      promptStart?.inheritSkills ??
+      (sessionId && promptStart?.agent
+        ? await sessionSkillPreset(
+            sessionId,
+            kind,
+            undefined,
+            promptStart.agent.skills,
+          )
+        : undefined);
     const frozenSkillNames = sessionId
-      ? await sessionSkills(sessionId, kind, promptStart?.inheritSkills)
+      ? await sessionSkills(sessionId, kind, skillPreset)
       : [];
     const opts = await buildAgentOptions(
       kind,
@@ -597,6 +685,7 @@ class PiSessionStore {
       credentialProfileId,
       conditions,
       frozenSkillNames,
+      agent,
     );
     const activeSessionId = sm.getSessionId();
     // A durable server record wins over a caller's requested starting mode.
@@ -617,37 +706,40 @@ class PiSessionStore {
     // loader's execute window (pi records addedToolNames → native deferred
     // loading on supported models).
     let sessionRef: AgentSession | undefined;
-    const piBackgroundTools = isCodingAgentType(kind)
-      ? createPiBackgroundTools({
-          session: () => piToolSession(kind, sm, cwd),
-          bashConfig: () => {
-            const settings = sessionRef?.settingsManager;
-            const shellPath = settings?.getShellPath();
-            const commandPrefix = settings?.getShellCommandPrefix();
-            return {
-              ...(shellPath ? { shellPath } : {}),
-              ...(commandPrefix ? { commandPrefix } : {}),
-            };
-          },
-          identity: () => {
-            const current = sessionRef;
-            const selectedModel = current?.model as
-              { provider?: string; id?: string } | undefined;
-            const sessionFile = sm.getSessionFile();
-            return {
-              sessionId: sm.getSessionId(),
-              ...(sessionFile ? { sessionFile } : {}),
-              ...(selectedModel?.provider
-                ? { provider: selectedModel.provider }
-                : {}),
-              ...(selectedModel?.id ? { model: selectedModel.id } : {}),
-              ...(current?.thinkingLevel
-                ? { reasoningLevel: current.thinkingLevel }
-                : {}),
-            };
-          },
-        })
-      : [];
+    // Its background bash and monitor run shell commands: a definition that
+    // denies bash denies them too.
+    const piBackgroundTools =
+      isCodingAgentType(kind) && !deniesNative(agent, "bash")
+        ? createPiBackgroundTools({
+            session: () => piToolSession(kind, sm, cwd),
+            bashConfig: () => {
+              const settings = sessionRef?.settingsManager;
+              const shellPath = settings?.getShellPath();
+              const commandPrefix = settings?.getShellCommandPrefix();
+              return {
+                ...(shellPath ? { shellPath } : {}),
+                ...(commandPrefix ? { commandPrefix } : {}),
+              };
+            },
+            identity: () => {
+              const current = sessionRef;
+              const selectedModel = current?.model as
+                { provider?: string; id?: string } | undefined;
+              const sessionFile = sm.getSessionFile();
+              return {
+                sessionId: sm.getSessionId(),
+                ...(sessionFile ? { sessionFile } : {}),
+                ...(selectedModel?.provider
+                  ? { provider: selectedModel.provider }
+                  : {}),
+                ...(selectedModel?.id ? { model: selectedModel.id } : {}),
+                ...(current?.thinkingLevel
+                  ? { reasoningLevel: current.thinkingLevel }
+                  : {}),
+              };
+            },
+          })
+        : [];
     const agentTools = [...opts.agentTools, ...piBackgroundTools];
     const eagerToolNames = new Set([
       ...opts.eagerToolNames,
@@ -712,13 +804,25 @@ class PiSessionStore {
           ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
           customTools,
           excludeTools: opts.excludeTools,
-          ...(model !== undefined ? { model } : {}),
-          ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+          ...(startModel !== undefined ? { model: startModel } : {}),
+          ...(startThinkingLevel !== undefined
+            ? { thinkingLevel: startThinkingLevel }
+            : {}),
         }));
     } catch (err) {
       activation.dispose();
       this.sessionModes.delete(activeSessionId);
       throw err;
+    }
+    // Nor when the model it was on cannot be restored: pi would quietly pick
+    // another one.
+    if (agent && modelFallbackMessage) {
+      activation.dispose();
+      this.sessionModes.delete(activeSessionId);
+      session.dispose();
+      throw new Error(
+        `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`,
+      );
     }
     this.closeToolRuntime(session.sessionId); // paranoia: never leak a stale activation under the same key
     this.toolRuntimes.set(session.sessionId, activation);

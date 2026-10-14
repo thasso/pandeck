@@ -15,7 +15,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { isSafeSkillName } from "@assistant/shared";
+import { isSafeEntryName } from "@assistant/shared";
 import { SKILLS_LIBRARY_DIR, SKILLS_RUNTIME_DIR } from "../config.ts";
 
 const RUNTIME_METADATA_FILE = ".pa-skills-runtime.json";
@@ -40,7 +40,7 @@ export interface SkillRuntimeMaterializerOptions {
 
 /** The scanner projection materialization needs; a full library scan is structurally compatible. */
 export interface SkillRuntimeScan {
-  readonly skills: readonly {
+  readonly entries: readonly {
     readonly name: string;
     readonly path: string;
   }[];
@@ -121,7 +121,7 @@ function normalizeNames(names: readonly string[]): string[] {
     // The shared predicate, never a copy of it: a name is a directory child
     // here and the toggle map's key in settings, so a second rule would let
     // what may be enabled and what may be materialized drift apart.
-    if (typeof name !== "string" || !isSafeSkillName(name)) {
+    if (typeof name !== "string" || !isSafeEntryName(name)) {
       throw new SkillRuntimeMaterializationError(
         `Invalid frozen skill name ${JSON.stringify(name)}.`,
       );
@@ -136,7 +136,7 @@ async function resolveRuntimeSources(
   scan: SkillRuntimeScan,
   libraryDir: string,
 ): Promise<RuntimeSource[]> {
-  const summaries = summariesByName(scan.skills);
+  const summaries = summariesByName(scan.entries);
   const sources: RuntimeSource[] = [];
   for (const name of names) {
     const summary = summaries.get(name);
@@ -150,10 +150,10 @@ async function resolveRuntimeSources(
   return sources;
 }
 
-type RuntimeScanSummary = SkillRuntimeScan["skills"][number];
+type RuntimeScanSummary = SkillRuntimeScan["entries"][number];
 
 function summariesByName(
-  skills: SkillRuntimeScan["skills"],
+  skills: SkillRuntimeScan["entries"],
 ): Map<string, RuntimeScanSummary> {
   const summaries = new Map<string, RuntimeScanSummary>();
   for (const skill of skills) {

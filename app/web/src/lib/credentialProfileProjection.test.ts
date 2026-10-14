@@ -82,4 +82,36 @@ describe("credential profile projection admission", () => {
       ),
     ).toMatch(/select a model/i);
   });
+
+  it("leaves a staged agent's model to the server, hidden from the pickers or not", () => {
+    const hidden = { provider: "claude-sdk", id: "haiku" };
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection()),
+        profile.id,
+        [model],
+        hidden,
+        true,
+      ),
+    ).toBeUndefined();
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection([])),
+        profile.id,
+        [],
+        hidden,
+        true,
+      ),
+    ).toBeUndefined();
+    // The account is still the draft's to pick.
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection()),
+        "missing",
+        [model],
+        hidden,
+        true,
+      ),
+    ).toMatch(/select a credential profile/i);
+  });
 });

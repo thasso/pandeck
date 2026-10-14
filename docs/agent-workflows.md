@@ -101,9 +101,11 @@ the outcome:
 - **Peer sessions started with `session_spawn`** ([Task-553](pa://task/553),
   [Task-595](pa://task/595)) are the free-form lane. The initiating agent is the
   coordinator: it writes the roles as ordinary prose, spawns ordinary
-  `scope = "user"` sessions on runtimes the user approved once in Settings, and
-  drives the review/fix/re-review loop over peer prompts. There is no watchdog,
-  no ownership registry, no result contract and no automatic report — the server
+  `scope = "user"` sessions on runtimes the user approved once in Settings, or
+  as a named agent definition from the user's library, whose model and effort
+  the user approved (`docs/agent-definitions.md`), and drives the
+  review/fix/re-review loop over peer prompts. There is no watchdog, no
+  ownership registry, no result contract and no automatic report — the server
   durably records one `spawned` edge from coordinator to child before delivering
   the opening prompt, and tells each child which session to answer. Either side
   exposes that parentage as navigable **Spawned by** / **Spawned sessions** rows

@@ -12,17 +12,17 @@ import { mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
-import { MAX_SKILL_BODY_BYTES } from "@assistant/shared";
-import { readSkillDetail, resolveSkillDetail } from "./skillDetail.ts";
-import { scanSkillLibrary } from "./skillLibraryScanner.ts";
-import { SkillLibraryStore } from "./skillLibraryStore.ts";
+import { MAX_ENTRY_BODY_BYTES } from "@assistant/shared";
+import { readEntryDetail, resolveEntryDetail } from "../library/entryDetail.ts";
+import { scanSkillLibrary, skillKind } from "./skillLibrary.ts";
+import { LibraryStore } from "../library/libraryStore.ts";
 
 let root: string;
-let library: SkillLibraryStore;
+let library: LibraryStore;
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "skill-detail-test-"));
-  library = new SkillLibraryStore(root);
+  library = new LibraryStore(skillKind, root);
 });
 
 afterEach(() => {
@@ -42,7 +42,7 @@ async function writeSkill(
   );
 }
 
-describe("readSkillDetail", () => {
+describe("readEntryDetail", () => {
   test("serves the body below the frontmatter with compact metadata", async () => {
     await writeSkill(
       "release-notes-folder",
@@ -50,11 +50,11 @@ describe("readSkillDetail", () => {
       "# Release notes\n\nSteps here.\n",
     );
 
-    const detail = await readSkillDetail("release-notes", library);
+    const detail = await readEntryDetail("release-notes", library);
     const { size } = await stat(join(root, "release-notes-folder", "SKILL.md"));
 
     assert.deepEqual(detail, {
-      kind: "skill",
+      kind: "entry",
       name: "release-notes",
       description: "Draft release notes.",
       folder: "release-notes-folder",
@@ -89,11 +89,11 @@ describe("readSkillDetail", () => {
     );
 
     assert.equal(
-      (await readSkillDetail("declared-name", library))?.kind,
-      "skill",
+      (await readEntryDetail("declared-name", library))?.kind,
+      "entry",
     );
     // The folder is identity for diagnostics only; it is not an address.
-    assert.equal(await readSkillDetail("some-folder", library), null);
+    assert.equal(await readEntryDetail("some-folder", library), null);
   });
 
   test("refuses a path-shaped name before touching the filesystem", async () => {
@@ -107,14 +107,14 @@ describe("readSkillDetail", () => {
       "Ok",
       "",
     ]) {
-      assert.equal(await readSkillDetail(name, library), null, name);
+      assert.equal(await readEntryDetail(name, library), null, name);
     }
   });
 
   test("answers null for a name no folder declares", async () => {
     await writeSkill("ok", "name: ok\ndescription: Fine.");
 
-    assert.equal(await readSkillDetail("missing-skill", library), null);
+    assert.equal(await readEntryDetail("missing-skill", library), null);
   });
 
   test("answers a malformed folder's own diagnostic instead of a body", async () => {
@@ -124,7 +124,7 @@ describe("readSkillDetail", () => {
       "# Body\n",
     );
 
-    const detail = await readSkillDetail("broken-skill", library);
+    const detail = await readEntryDetail("broken-skill", library);
 
     assert.equal(detail?.kind, "invalid");
     assert.equal(detail?.kind === "invalid" && detail.name, "broken-skill");
@@ -139,7 +139,7 @@ describe("readSkillDetail", () => {
     await writeSkill("first", "name: shared\ndescription: One.", "# First\n");
     await writeSkill("second", "name: shared\ndescription: Two.", "# Second\n");
 
-    const detail = await readSkillDetail("shared", library);
+    const detail = await readEntryDetail("shared", library);
 
     assert.equal(detail?.kind, "invalid");
     assert.match(
@@ -154,31 +154,31 @@ describe("readSkillDetail", () => {
   });
 
   test("truncates a body past the byte bound and says so", async () => {
-    const body = `# Big\n\n${"x".repeat(MAX_SKILL_BODY_BYTES)}\n`;
+    const body = `# Big\n\n${"x".repeat(MAX_ENTRY_BODY_BYTES)}\n`;
     await writeSkill("big", "name: big\ndescription: Large.", body);
 
-    const detail = await readSkillDetail("big", library);
+    const detail = await readEntryDetail("big", library);
 
-    assert.equal(detail?.kind, "skill");
-    if (detail?.kind !== "skill") return;
+    assert.equal(detail?.kind, "entry");
+    if (detail?.kind !== "entry") return;
     assert.equal(detail.truncated, true);
-    assert.equal(detail.bytes > MAX_SKILL_BODY_BYTES, true);
+    assert.equal(detail.bytes > MAX_ENTRY_BODY_BYTES, true);
     assert.equal(
-      Buffer.byteLength(detail.markdown, "utf8") <= MAX_SKILL_BODY_BYTES,
+      Buffer.byteLength(detail.markdown, "utf8") <= MAX_ENTRY_BODY_BYTES,
       true,
     );
     assert.match(detail.markdown, /^# Big/);
   });
 
   test("never cuts a multi-byte character in half at the bound", async () => {
-    const body = `# Wide\n\n${"é".repeat(MAX_SKILL_BODY_BYTES)}\n`;
+    const body = `# Wide\n\n${"é".repeat(MAX_ENTRY_BODY_BYTES)}\n`;
     await writeSkill("wide", "name: wide\ndescription: Multi-byte.", body);
 
-    const detail = await readSkillDetail("wide", library);
+    const detail = await readEntryDetail("wide", library);
 
-    assert.equal(detail?.kind === "skill" && detail.truncated, true);
+    assert.equal(detail?.kind === "entry" && detail.truncated, true);
     assert.equal(
-      detail?.kind === "skill" && detail.markdown.includes("�"),
+      detail?.kind === "entry" && detail.markdown.includes("�"),
       false,
     );
   });
@@ -186,27 +186,27 @@ describe("readSkillDetail", () => {
   test("applies the bound below frontmatter, not to the whole file", async () => {
     await writeSkill(
       "large-frontmatter",
-      `name: large-frontmatter\ndescription: Large metadata\nextra: ${"x".repeat(MAX_SKILL_BODY_BYTES)}`,
+      `name: large-frontmatter\ndescription: Large metadata\nextra: ${"x".repeat(MAX_ENTRY_BODY_BYTES)}`,
       "# Small body\n",
     );
 
-    const detail = await readSkillDetail("large-frontmatter", library);
+    const detail = await readEntryDetail("large-frontmatter", library);
 
-    assert.equal(detail?.kind, "skill");
-    if (detail?.kind !== "skill") return;
+    assert.equal(detail?.kind, "entry");
+    if (detail?.kind !== "entry") return;
     assert.equal(detail.markdown, "# Small body");
     assert.equal(detail.truncated, false);
-    assert.equal(detail.bytes > MAX_SKILL_BODY_BYTES, true);
+    assert.equal(detail.bytes > MAX_ENTRY_BODY_BYTES, true);
   });
 });
 
-describe("resolveSkillDetail", () => {
+describe("resolveEntryDetail", () => {
   test("reports a skill deleted between the scan and the read", async () => {
     await writeSkill("gone", "name: gone\ndescription: About to vanish.");
     const scan = await scanSkillLibrary(root);
     await rm(join(root, "gone"), { recursive: true, force: true });
 
-    const detail = await resolveSkillDetail(root, scan, "gone");
+    const detail = await resolveEntryDetail(library, scan, "gone");
 
     assert.equal(detail?.kind, "invalid");
     if (detail?.kind !== "invalid") return;
@@ -227,7 +227,7 @@ describe("resolveSkillDetail", () => {
       "utf8",
     );
 
-    const detail = await resolveSkillDetail(root, scan, "edited");
+    const detail = await resolveEntryDetail(library, scan, "edited");
 
     assert.equal(detail?.kind, "invalid");
     assert.match(
@@ -245,7 +245,7 @@ describe("resolveSkillDetail", () => {
       "utf8",
     );
 
-    const malformed = await resolveSkillDetail(root, scan, "edited");
+    const malformed = await resolveEntryDetail(library, scan, "edited");
     assert.equal(malformed?.kind, "invalid");
 
     await writeFile(
@@ -253,7 +253,7 @@ describe("resolveSkillDetail", () => {
       "---\nname: other\ndescription: Being edited.\n---\n# Body\n",
       "utf8",
     );
-    const renamed = await resolveSkillDetail(root, scan, "edited");
+    const renamed = await resolveEntryDetail(library, scan, "edited");
     assert.equal(renamed?.kind, "invalid");
   });
 
@@ -270,7 +270,7 @@ describe("resolveSkillDetail", () => {
       await rm(join(root, "swapped"), { recursive: true, force: true });
       await symlink(outside, join(root, "swapped"));
 
-      const detail = await resolveSkillDetail(root, scan, "swapped");
+      const detail = await resolveEntryDetail(library, scan, "swapped");
 
       assert.equal(detail?.kind, "invalid");
       assert.equal(JSON.stringify(detail).includes("# Outside"), false);
@@ -285,7 +285,7 @@ describe("resolveSkillDetail", () => {
     await rm(join(root, "swapped"), { recursive: true, force: true });
     await writeFile(join(root, "swapped"), "not a folder\n", "utf8");
 
-    const detail = await resolveSkillDetail(root, scan, "swapped");
+    const detail = await resolveEntryDetail(library, scan, "swapped");
 
     assert.equal(detail?.kind, "invalid");
     assert.equal(detail?.kind === "invalid" && detail.name, "swapped");

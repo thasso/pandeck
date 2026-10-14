@@ -13,10 +13,19 @@
  * - `propose` ([Task-553](pa://task/553)) is the original path for anything
  *   outside the roster: it creates nothing, writes one approval card and ends
  *   the turn, and the user chooses each session's runtime there.
+ * - `agents` ([Task-783](pa://task/783)) reads the agent definitions and what
+ *   each would run on now. Read-only. A `spawn` row naming one with `agent`
+ *   takes its persona, model and effort from the definition the user approved
+ *   (`docs/agent-definitions.md`) instead of a roster row.
  *
  * What either path creates is an ordinary session the user can read, re-prompt
  * and take over — never a subagent, and nothing here reaches that registry.
  */
+import {
+  listSpawnableAgents,
+  type SpawnableAgent,
+} from "../../agents/agentSpawn.ts";
+import { MAX_LISTED_ENTRIES } from "../library/libraryTools.ts";
 import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
 import { sessionStore } from "../../db/sessionStore.ts";
 import {
@@ -41,7 +50,7 @@ import {
   type SpawnRequestRow,
 } from "../../sessionSpawn.ts";
 
-type SpawnOperation = "profiles" | "spawn" | "propose";
+type SpawnOperation = "profiles" | "agents" | "spawn" | "propose";
 type SpawnParams = { operation?: unknown; sessions?: unknown };
 
 export function sessionSpawnTools(): AgentTool[] {
@@ -53,9 +62,9 @@ function makeSessionSpawnTool() {
     name: "session_spawn",
     label: "Spawn Sessions",
     description:
-      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; it is read-only and remains available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each session is an ordinary conversation the user can watch and take over, so use this for work that deserves its own session and stay where you are for anything smaller. YOU own what you start: keep the returned ids, expect each one to answer you with a peer message, follow up yourself when one goes quiet, and use session_control if you need to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
+      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, model and effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each session is an ordinary conversation the user can watch and take over, so use this for work that deserves its own session and stay where you are for anything smaller. YOU own what you start: keep the returned ids, expect each one to answer you with a peer message, follow up yourself when one goes quiet, and use session_control if you need to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
     searchHint:
-      "spawn start delegate implementer reviewer parallel helpers approved runtimes profiles cross-family review",
+      "spawn start delegate implementer reviewer parallel helpers approved runtimes profiles cross-family review named role definitions",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -63,19 +72,19 @@ function makeSessionSpawnTool() {
       properties: {
         operation: {
           type: "string",
-          enum: ["profiles", "spawn", "propose"],
+          enum: ["profiles", "agents", "spawn", "propose"],
           description:
-            'What to do. "profiles": list the approved runtimes (no other field; read-only and available in Plan). "spawn": start sessions now (Build-only), every row naming a profileId from that list. "propose": ask the user to approve a batch (Build-only), rows may carry provider/modelId/thinkingLevel hints instead.',
+            'What to do. "profiles": list the approved runtimes (no other field; read-only and available in Plan). "agents": list the agent definitions and what each runs on (no other field; read-only and available in Plan). "spawn": start sessions now (Build-only), every row naming a profileId from "profiles" or an agent from "agents". "propose": ask the user to approve a batch (Build-only), rows may carry provider/modelId/thinkingLevel hints instead.',
         },
         sessions: {
           type: "array",
           minItems: 1,
           maxItems: MAX_SPAWN_ROWS,
-          description: `The sessions, at most ${MAX_SPAWN_ROWS} — one card has to stay readable, and at most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} directly spawned peer turns may run at once. Required for "spawn" and "propose", forbidden for "profiles".`,
+          description: `The sessions, at most ${MAX_SPAWN_ROWS} — one card has to stay readable, and at most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} directly spawned peer turns may run at once. Required for "spawn" and "propose", forbidden for "profiles" and "agents".`,
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["title", "agentType", "prompt"],
+            required: ["title", "prompt"],
             properties: {
               title: {
                 type: "string",
@@ -85,7 +94,7 @@ function makeSessionSpawnTool() {
                 type: "string",
                 enum: ["developer", "assistant"],
                 description:
-                  "Persona for the new session. A developer session works in a repository and REQUIRES worktreeId; an assistant session does not.",
+                  "Persona for the new session. A developer session works in a repository and REQUIRES worktreeId; an assistant session does not. Required, except on an agent row, whose definition decides it.",
               },
               prompt: {
                 type: "string",
@@ -94,7 +103,12 @@ function makeSessionSpawnTool() {
               profileId: {
                 type: "string",
                 description:
-                  'Required for "spawn", forbidden for "propose": the id of an approved runtime from `operation: "profiles"`. An unknown, disabled or currently unavailable id is refused — nothing falls back to another runtime or turns into a proposal.',
+                  'On "spawn", this or agent is required; forbidden for "propose": the id of an approved runtime from `operation: "profiles"`. An unknown, disabled or currently unavailable id is refused — nothing falls back to another runtime or turns into a proposal.',
+              },
+              agent: {
+                type: "string",
+                description:
+                  'Only for "spawn", instead of profileId and agentType: the name of an agent definition from `operation: "agents"`. The session runs as that agent — its persona, instructions, model and effort — and a developer agent still needs worktreeId. The prompt names the target and the task; the definition is the role.',
               },
               worktreeId: {
                 type: "string",
@@ -156,14 +170,16 @@ function makeSessionSpawnTool() {
             `session_spawn takes only "operation" and "sessions" (got "${key}").`,
           );
       const operation = readOperation(params.operation);
-      if (operation === "profiles") {
+      if (operation === "profiles" || operation === "agents") {
         if (params.sessions !== undefined)
-          throw new Error('operation "profiles" takes no sessions.');
-        return { content: [{ type: "text", text: await rosterText() }] };
+          throw new Error(`operation "${operation}" takes no sessions.`);
+        const text =
+          operation === "profiles" ? await rosterText() : await agentsText();
+        return { content: [{ type: "text", text }] };
       }
       if (sessionStore.get(ctx.session.sessionId)?.mode === "plan")
         throw new Error(
-          `operation "${operation}" is Build-only; operation "profiles" remains available in Plan mode.`,
+          `operation "${operation}" is Build-only; operations "profiles" and "agents" remain available in Plan mode.`,
         );
       const rows = readRows(params.sessions, operation);
       if (operation === "spawn") return await runDirectSpawn(rows, ctx);
@@ -201,6 +217,60 @@ async function rosterText(): Promise<string> {
   ].join("\n");
 }
 
+/* --------------------------------- agents --------------------------------- */
+
+/** The definitions as the coordinator reads them, with why any cannot run. */
+async function agentsText(): Promise<string> {
+  return spawnableAgentsText(await listSpawnableAgents());
+}
+
+/** A description longer than this is cut; `agent_get` reads it whole. */
+const MAX_LISTED_DESCRIPTION_CHARS = 300;
+
+/**
+ * The listing, bounded like `agent_list`: a hand-authored library has no
+ * entry ceiling, and this answer lands in the caller's context whole. The
+ * header states the true total, and any definition can still be spawned by
+ * name or read with `agent_get`.
+ */
+export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
+  if (agents.length === 0)
+    return "No agent definitions exist. The user, or agent_create with their approval, can add one.";
+  const shown = agents.slice(0, MAX_LISTED_ENTRIES);
+  const lines = shown.map((agent) => {
+    if ("problem" in agent)
+      return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem, "spawning it refuses with the whole reason")}`;
+    const { runtime } = agent;
+    return [
+      `- ${agent.name}: ${clip(agent.description, "agent_get reads it whole")}`,
+      `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
+        runtime.agent.pinnedModel
+          ? ` (pinned ${runtime.agent.pinnedModel})`
+          : ""
+      }, ${runtime.thinkingLevel} effort${
+        runtime.accountName ? `, account ${runtime.accountName}` : ""
+      }${runtime.agent.persona === "developer" ? "; needs a worktreeId" : ""}`,
+    ].join("\n");
+  });
+  const omitted = agents.length - shown.length;
+  return [
+    `Agent definitions (${agents.length}${omitted > 0 ? `, the first ${shown.length} listed` : ""}). Spawn one with a row naming it as agent (no profileId, no agentType); the prompt still states the target and the task.`,
+    ...lines,
+    ...(omitted > 0
+      ? [
+          `${omitted} more not listed; any definition can still be spawned by its name.`,
+        ]
+      : []),
+  ].join("\n");
+}
+
+/** `text`, cut with a pointer to where the rest is. */
+function clip(text: string, whereWhole: string): string {
+  return text.length > MAX_LISTED_DESCRIPTION_CHARS
+    ? `${text.slice(0, MAX_LISTED_DESCRIPTION_CHARS)}… (${whereWhole})`
+    : text;
+}
+
 /* ------------------------------ direct spawn ------------------------------ */
 
 async function runDirectSpawn(
@@ -213,9 +283,9 @@ async function runDirectSpawn(
   // (`checkRawRow`), where a stated value cannot be confused with an omitted
   // one. What is left here is this operation's own requirement.
   const direct: DirectSpawnRequestRow[] = rows.map((row) => {
-    if (!row.profileId)
+    if (!row.profileId && !row.agent)
       throw new Error(
-        `"${row.title}" has no profileId. Call operation "profiles" and name one approved runtime per row.`,
+        `"${row.title}" has no profileId or agent. Call operation "profiles" or "agents" and name one approved runtime or one agent definition per row.`,
       );
     if (row.prompt.length > budget)
       throw new Error(
@@ -223,9 +293,10 @@ async function runDirectSpawn(
       );
     return {
       title: row.title,
-      agentType: row.agentType,
       prompt: row.prompt,
-      profileId: row.profileId,
+      ...(row.agent
+        ? { agent: row.agent }
+        : { profileId: row.profileId!, agentType: row.agentType! }),
       ...(row.responseRequested === undefined
         ? {}
         : { responseRequested: row.responseRequested }),
@@ -259,8 +330,14 @@ function directSpawnText(results: DirectSpawnRowResult[]): string {
   const started = results.filter((row) => row.sessionId);
   const lines = results.map((row) => {
     const runtime = row.runtime
-      ? `${row.runtime.name} (${row.runtime.provider}/${row.runtime.modelId}, ${row.runtime.thinkingLevel} thinking, family ${row.runtime.family}, relative cost ${row.runtime.relativeCost})`
-      : `profile ${row.profileId}`;
+      ? `${row.runtime.name} (${row.runtime.provider}/${row.runtime.modelId}, ${row.runtime.thinkingLevel} thinking, family ${row.runtime.family}${
+          row.runtime.relativeCost
+            ? `, relative cost ${row.runtime.relativeCost}`
+            : ""
+        })`
+      : row.agent
+        ? `agent ${row.agent}`
+        : `profile ${row.profileId}`;
     if (!row.sessionId)
       return `- "${row.title}" NOT started on ${runtime}: ${row.error ?? "unknown error"}`;
     return `- "${row.title}" → session ${row.sessionId} on ${runtime}${
@@ -299,7 +376,8 @@ async function runProposal(
     body = await buildSpawnProposal({
       senderSessionId: ctx.session.sessionId,
       rows: rows.map(
-        ({ profileId: _ignored, ...row }) => row as SpawnRequestRow,
+        ({ profileId: _profile, agent: _agent, ...row }) =>
+          row as SpawnRequestRow,
       ),
     });
   } catch (err) {
@@ -333,17 +411,27 @@ async function runProposal(
 /* ------------------------------- parameters ------------------------------- */
 
 function readOperation(value: unknown): SpawnOperation {
-  if (value === "profiles" || value === "spawn" || value === "propose")
+  if (
+    value === "profiles" ||
+    value === "agents" ||
+    value === "spawn" ||
+    value === "propose"
+  )
     return value;
   throw new Error(
-    'operation must be "profiles", "spawn" or "propose" (got ' +
+    'operation must be "profiles", "agents", "spawn" or "propose" (got ' +
       `${JSON.stringify(value)}).`,
   );
 }
 
-/** One row as parsed off the wire; which fields are legal is the caller's rule. */
-interface ParsedRow extends SpawnRequestRow {
+/**
+ * One row as parsed off the wire; which fields are legal is the caller's rule.
+ * `agentType` is absent exactly on an agent row.
+ */
+interface ParsedRow extends Omit<SpawnRequestRow, "agentType"> {
+  agentType?: SpawnRequestRow["agentType"];
   profileId?: string;
+  agent?: string;
 }
 
 /** Every property a row may carry, on any operation. */
@@ -352,6 +440,7 @@ const ROW_PROPERTIES = [
   "agentType",
   "prompt",
   "profileId",
+  "agent",
   "worktreeId",
   "projectId",
   "taskId",
@@ -396,7 +485,7 @@ function stated(row: Record<string, unknown>, key: string): boolean {
 function checkRawRow(
   row: Record<string, unknown>,
   index: number,
-  operation: Exclude<SpawnOperation, "profiles">,
+  operation: Exclude<SpawnOperation, "profiles" | "agents">,
 ): void {
   const where = `sessions[${index}]`;
   for (const key of Object.keys(row))
@@ -409,12 +498,26 @@ function checkRawRow(
     for (const key of RUNTIME_HINTS)
       if (stated(row, key))
         throw new Error(
-          `${where} sets ${key}, which operation "spawn" does not accept: the approved runtime named by profileId decides the account, model and thinking level. Use operation "propose" to ask the user for a different runtime.`,
+          stated(row, "agent")
+            ? `${where} sets ${key}, which an agent row does not accept: the agent definition decides the model and effort, and the account follows from the model.`
+            : `${where} sets ${key}, which operation "spawn" does not accept: the approved runtime named by profileId decides the account, model and thinking level. Use operation "propose" to ask the user for a different runtime.`,
         );
-  } else if (stated(row, "profileId"))
-    throw new Error(
-      `${where} names a profileId, which belongs to operation "spawn". A proposal lets the user pick the runtime, so drop it or spawn directly.`,
-    );
+    if (stated(row, "agent"))
+      for (const key of ["profileId", "agentType"] as const)
+        if (stated(row, key))
+          throw new Error(
+            `${where} names an agent and sets ${key}: the definition decides the persona and the runtime, so drop ${key}.`,
+          );
+  } else {
+    if (stated(row, "profileId"))
+      throw new Error(
+        `${where} names a profileId, which belongs to operation "spawn". A proposal lets the user pick the runtime, so drop it or spawn directly.`,
+      );
+    if (stated(row, "agent"))
+      throw new Error(
+        `${where} names an agent, which belongs to operation "spawn": the user already approved what a definition runs on, so spawn it directly.`,
+      );
+  }
 
   // Kind checks for what remains. A stated value of the wrong type is refused
   // rather than ignored, for the same reason: silence would hide the request.
@@ -432,14 +535,18 @@ function checkRawRow(
       );
   }
 
-  for (const key of ["title", "agentType", "prompt"] as const)
+  for (const key of ["title", "prompt"] as const)
     if (!stated(row, key)) throw new Error(`${where}.${key} is required.`);
+  if (!stated(row, "agent") && !stated(row, "agentType"))
+    throw new Error(
+      `${where}.agentType is required unless the row names an agent.`,
+    );
 }
 
 /** Shape-check the array, then read the rows it is now safe to read. */
 function readRows(
   value: unknown,
-  operation: Exclude<SpawnOperation, "profiles">,
+  operation: Exclude<SpawnOperation, "profiles" | "agents">,
 ): ParsedRow[] {
   if (!Array.isArray(value) || value.length === 0)
     throw new Error("sessions must be a non-empty array of session requests.");
@@ -450,12 +557,15 @@ function readRows(
     checkRawRow(row, index, operation);
     return {
       title: text(row.title),
-      agentType: text(row.agentType) as SpawnRequestRow["agentType"],
+      ...(stated(row, "agentType")
+        ? { agentType: text(row.agentType) as SpawnRequestRow["agentType"] }
+        : {}),
       prompt: text(row.prompt),
       ...(typeof row.responseRequested === "boolean"
         ? { responseRequested: row.responseRequested }
         : {}),
       ...optional(row, "profileId"),
+      ...optional(row, "agent"),
       ...optional(row, "worktreeId"),
       ...optional(row, "projectId"),
       ...optional(row, "taskId"),

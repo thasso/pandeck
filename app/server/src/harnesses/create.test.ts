@@ -283,3 +283,138 @@ test("a worktree named without its path runs in its live checkout on both engine
     path,
   );
 });
+
+test("an agent is never grafted onto a Claude session that already exists", async () => {
+  const { SessionAgentConflictError } = await import("./create.ts");
+  const agent = {
+    name: "researcher",
+    blob: "b".repeat(40),
+    persona: "assistant" as const,
+    provider: "claude-sdk",
+    model: "opus",
+    effort: "high" as const,
+    denyTools: [],
+    skills: [],
+    body: "Research carefully.",
+  };
+  const acquire = vi
+    .spyOn(claudeSdkStore, "acquire")
+    .mockImplementation(
+      (id: string) => ({ sessionId: id, setTitle() {} }) as never,
+    );
+  vi.spyOn(claudeSdkStore, "exists").mockReturnValue(true);
+  const start = (id: string, name = "researcher") =>
+    createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: "profile-1",
+      agent: { ...agent, name },
+    });
+
+  // A plain session under the id: it would keep its own runtime.
+  await assert.rejects(start("existing-plain"), SessionAgentConflictError);
+  assert.equal(sessionStore.getAgent("existing-plain"), undefined);
+
+  // A session created as another agent.
+  sessionStore.freezeAgent(
+    "existing-other",
+    JSON.stringify({ ...agent, name: "drafter" }),
+  );
+  await assert.rejects(start("existing-other"), SessionAgentConflictError);
+  assert.equal(
+    JSON.parse(sessionStore.getAgent("existing-other")!).name,
+    "drafter",
+  );
+  assert.equal(acquire.mock.calls.length, 0);
+
+  // Not even as the same agent: the session runs what it was created with,
+  // not what this creation names (another account, say).
+  sessionStore.freezeAgent("existing-same", JSON.stringify(agent));
+  await assert.rejects(
+    start("existing-same"),
+    /already exists, and an agent only ever starts a new session/,
+  );
+  assert.equal(acquire.mock.calls.length, 0);
+});
+
+test("a second agent creation under a live Claude id is refused, not merged into it", async () => {
+  const { SessionAgentConflictError } = await import("./create.ts");
+  const agent = {
+    name: "researcher",
+    blob: "d".repeat(40),
+    persona: "assistant" as const,
+    provider: "claude-sdk",
+    model: "opus",
+    effort: "high" as const,
+    denyTools: [],
+    skills: [],
+    body: "Research carefully.",
+  };
+  const start = (credentialProfileId: string) =>
+    createSession({
+      harness: "claude-sdk",
+      id: "live-agent",
+      agentType: "assistant",
+      credentialProfileId,
+      agent,
+    });
+
+  // The real store: the first creation makes the session.
+  const first = await start("account-a");
+  assert.equal(claudeSdkStore.get("live-agent"), first);
+  // The same definition on another account would get that session back.
+  await assert.rejects(start("account-b"), SessionAgentConflictError);
+});
+
+test("an agent row left by a creation that never finished binds its id", async () => {
+  const { SessionAgentConflictError } = await import("./create.ts");
+  const agent = {
+    name: "reviewer",
+    blob: "c".repeat(40),
+    persona: "assistant" as const,
+    provider: "claude-sdk",
+    model: "opus",
+    effort: "high" as const,
+    denyTools: ["worktree_push"],
+    skills: [],
+    body: "Review only.",
+  };
+  const acquire = vi
+    .spyOn(claudeSdkStore, "acquire")
+    .mockImplementation(
+      (id: string) => ({ sessionId: id, setTitle() {} }) as never,
+    );
+  // No Claude session exists: only the row the failed creation wrote first.
+  vi.spyOn(claudeSdkStore, "exists").mockReturnValue(false);
+  const start = (id: string, spec: Partial<typeof agent> | undefined) =>
+    createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: "profile-1",
+      ...(spec ? { agent: { ...agent, ...spec } } : {}),
+    });
+  for (const id of ["abandoned-other", "abandoned-plain", "abandoned-edited"])
+    sessionStore.freezeAgent(id, JSON.stringify(agent));
+
+  await assert.rejects(
+    start("abandoned-other", { name: "drafter", model: "sonnet" }),
+    SessionAgentConflictError,
+  );
+  await assert.rejects(
+    start("abandoned-plain", undefined),
+    SessionAgentConflictError,
+  );
+  // Same name, but the definition changed since: the row would not describe it.
+  await assert.rejects(
+    start("abandoned-edited", { denyTools: [] }),
+    /Session abandoned-edited is already bound to the "reviewer" agent as it was defined then \(AGENT\.md ccccccc\), not to the "reviewer" agent as it is defined now; start a new session to run it\./,
+  );
+  assert.equal(acquire.mock.calls.length, 0);
+
+  // The same creation retried finishes it.
+  sessionStore.freezeAgent("abandoned-same", JSON.stringify(agent));
+  await start("abandoned-same", {});
+  assert.equal(acquire.mock.calls.length, 1);
+});

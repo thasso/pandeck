@@ -107,6 +107,35 @@ test("Plan keeps Task mutations but removes other side-effecting app tools", () 
   }
 });
 
+test("find_tools only knows the tools this session has (an agent's denied ones are gone)", async () => {
+  const activation = createPiToolActivation({
+    sessionId: `activation-denied-${Date.now()}`,
+    agentType: "assistant",
+    agentTools: agentToolsFor("assistant").filter(
+      (tool) => tool.name !== "web_fetch",
+    ),
+    eagerToolNames: eagerToolNamesFor("assistant"),
+    deferToolLoading: true,
+    applyActiveToolNames: () => {},
+  });
+  try {
+    activation.initialize([]);
+    const findTools = activation.piToolUniverse.find(
+      (tool) => tool.name === "find_tools",
+    )!;
+    const result = await findTools.execute({ names: ["web_fetch"] }, CTX);
+    const payload = JSON.parse(
+      (result.content[0] as { text: string }).text,
+    ) as { unavailable?: Array<{ how: string }> };
+    assert.equal(
+      payload.unavailable?.[0]?.how,
+      "Unknown tool name for this session.",
+    );
+  } finally {
+    activation.dispose();
+  }
+});
+
 test("find_tools activates deferred tools additively inside its execute window", async () => {
   const applied: Array<ReadonlySet<string>> = [];
   const activation = assistantActivation(applied);

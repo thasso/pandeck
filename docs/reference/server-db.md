@@ -85,7 +85,11 @@ facade.
   (migration `0053_session_skills.sql`, `freezeSkills`/`getSkills`) uses the
   same pre-metadata, insert-only shape for the sorted library-skill names frozen
   by `../sessionSkills.ts`; the store treats its JSON as opaque and the
-  lifecycle seam validates it. `session_worktree_ack` (migration
+  lifecycle seam validates it. `session_agent` (migration
+  `0079_session_agent.sql`, `freezeAgent`/`getAgent`) has the same shape for the
+  agent definition a session was spawned as (`../agents/sessionAgent.ts`),
+  except that a failed write throws: a session never starts without the
+  definition it was spawned as. `session_worktree_ack` (migration
   `0035_session_worktree_missing_ack.sql`,
   `acknowledgeMissingWorktree`/`worktreeMissingAck`/`worktreeMissingAckBySession`)
   records that the user accepted running a session in the app CWD after the

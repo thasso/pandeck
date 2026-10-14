@@ -48,15 +48,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const {
-  createSkillChildDirectory,
-  createSkillChildFile,
-  ensureSkillChildDirectory,
-  linkSkillChild,
+  createEntryChildDirectory,
+  createEntryChildFile,
+  ensureEntryChildDirectory,
+  linkEntryChild,
   withLibraryRoot,
-  withReservedSkillFolder,
-  withSkillChild,
-  writeSkillChildFile,
-} = await import("./skillSource.ts");
+  withReservedEntryFolder,
+  withEntryChild,
+  writeEntryChildFile,
+} = await import("./entrySource.ts");
 
 let root: string;
 
@@ -79,7 +79,7 @@ async function withPinsRefused<T>(
   use: (folder: import("node:fs/promises").FileHandle) => Promise<T>,
 ): Promise<unknown> {
   return withLibraryRoot(root, (rootHandle) =>
-    withSkillChild(rootHandle, "folder", async (child) => {
+    withEntryChild(rootHandle, "folder", async (child) => {
       refusePins = true;
       return use(child.handle).catch((error: unknown) => error);
     }),
@@ -87,9 +87,9 @@ async function withPinsRefused<T>(
 }
 
 describe("a create-or-fail primitive that cannot pin what it created", () => {
-  test("createSkillChildFile leaves no file behind", async () => {
+  test("createEntryChildFile leaves no file behind", async () => {
     const error = await withPinsRefused((folder) =>
-      createSkillChildFile(
+      createEntryChildFile(
         folder,
         "orphan.txt",
         new TextEncoder().encode("agent\n"),
@@ -104,9 +104,9 @@ describe("a create-or-fail primitive that cannot pin what it created", () => {
     );
   });
 
-  test("writeSkillChildFile leaves no file it created behind", async () => {
+  test("writeEntryChildFile leaves no file it created behind", async () => {
     const error = await withPinsRefused((folder) =>
-      writeSkillChildFile(
+      writeEntryChildFile(
         folder,
         "orphan.txt",
         new TextEncoder().encode("agent\n"),
@@ -117,11 +117,11 @@ describe("a create-or-fail primitive that cannot pin what it created", () => {
     assert.ok(!existsSync(join(root, "folder", "orphan.txt")));
   });
 
-  test("writeSkillChildFile still REPLACES an existing file, which needs no pin", async () => {
+  test("writeEntryChildFile still REPLACES an existing file, which needs no pin", async () => {
     await writeFile(join(root, "folder", "existing.txt"), "old\n", "utf8");
 
     const created = await withPinsRefused((folder) =>
-      writeSkillChildFile(
+      writeEntryChildFile(
         folder,
         "existing.txt",
         new TextEncoder().encode("new\n"),
@@ -133,18 +133,18 @@ describe("a create-or-fail primitive that cannot pin what it created", () => {
     assert.equal(created, undefined);
   });
 
-  test("createSkillChildDirectory leaves no directory behind", async () => {
+  test("createEntryChildDirectory leaves no directory behind", async () => {
     const error = await withPinsRefused((folder) =>
-      createSkillChildDirectory(folder, "orphan"),
+      createEntryChildDirectory(folder, "orphan"),
     );
 
     expect(error).toBeInstanceOf(Error);
     assert.ok(!existsSync(join(root, "folder", "orphan")));
   });
 
-  test("ensureSkillChildDirectory leaves no directory it created behind", async () => {
+  test("ensureEntryChildDirectory leaves no directory it created behind", async () => {
     const error = await withPinsRefused((folder) =>
-      ensureSkillChildDirectory(folder, "orphan"),
+      ensureEntryChildDirectory(folder, "orphan"),
     );
 
     expect(error).toBeInstanceOf(Error);
@@ -152,14 +152,14 @@ describe("a create-or-fail primitive that cannot pin what it created", () => {
     assert.ok(!existsSync(join(root, "folder", "orphan")));
   });
 
-  test("withReservedSkillFolder leaves no reservation behind", async () => {
+  test("withReservedEntryFolder leaves no reservation behind", async () => {
     // The failure lands between the `mkdir` and the callback, so the caller has
     // registered neither the path nor an undo — and an empty directory is
     // invisible to `git status`, so nothing downstream would ever notice it.
     let reached = false;
     const error = await withLibraryRoot(root, async (rootHandle) => {
       refuseNextOpen = true;
-      return withReservedSkillFolder(rootHandle, "reserved", async () => {
+      return withReservedEntryFolder(rootHandle, "reserved", async () => {
         reached = true;
         return true;
       }).catch((error: unknown) => error);
@@ -175,7 +175,7 @@ describe("a create-or-fail primitive that cannot pin what it created", () => {
     // put in the folder and holds the pins that prove it, so the reservation
     // must NOT be pulled out from under its own undo.
     const error = await withLibraryRoot(root, (rootHandle) =>
-      withReservedSkillFolder(rootHandle, "reserved", async () => {
+      withReservedEntryFolder(rootHandle, "reserved", async () => {
         await writeFile(join(root, "reserved", "ours.md"), "ours\n", "utf8");
         throw new Error("the mutation failed after reserving");
       }).catch((error: unknown) => error),
@@ -185,14 +185,14 @@ describe("a create-or-fail primitive that cannot pin what it created", () => {
     assert.ok(existsSync(join(root, "reserved", "ours.md")));
   });
 
-  test("linkSkillChild leaves no link behind", async () => {
+  test("linkEntryChild leaves no link behind", async () => {
     await mkdir(join(root, "destination"));
 
     const error = await withLibraryRoot(root, (rootHandle) =>
-      withSkillChild(rootHandle, "folder", (source) =>
-        withSkillChild(rootHandle, "destination", async (destination) => {
+      withEntryChild(rootHandle, "folder", (source) =>
+        withEntryChild(rootHandle, "destination", async (destination) => {
           refusePins = true;
-          return linkSkillChild(
+          return linkEntryChild(
             source.handle,
             "SKILL.md",
             destination.handle,

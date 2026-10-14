@@ -10,10 +10,11 @@
   window. Plan removes catalog tools with local/external side effects except
   `task_manage`, the deliberate durable-Task exception; the execute adapter
   independently denies stale calls.
-- Coding sessions register provider-native `bash`/`monitor` shadows up front.
-  This is pi's equivalent of Claude native-tool hooks, not a second catalog
-  path. Foreground Bash delegates upstream; background work retains frozen
-  `PI_*` identity but no `AgentSession` or live-session reference.
+- Coding sessions register provider-native `bash`/`monitor` shadows up front,
+  unless the session's frozen agent definition denies `bash`. This is pi's
+  equivalent of Claude native-tool hooks, not a second catalog path. Foreground
+  Bash delegates upstream; background work retains frozen `PI_*` identity but no
+  `AgentSession` or live-session reference.
 - Coding resource loaders consume only the session's frozen skill names and
   rematerialize that same set before every reload; assistant personas keep
   `noSkills: true` and receive no library path.

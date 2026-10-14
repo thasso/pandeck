@@ -926,14 +926,15 @@ capability logic.
   removal that SKIPPED the check, an unforced one that established nothing, or a
   kept branch. Two copies of these would drift into claiming a verification that
   never ran.
-- `skillsApi.ts` owns per-skill HTTP reads. `fetchSkillDetail(name)` gets the
-  bounded `SKILL.md` plus recursive tree; `fetchSkillFilePreview` reads one
-  bounded text/Markdown preview keyed by NAME + NUL + skill-relative path; and
-  `skillFileUrl` builds the token-carrying bounded raw/image/download URL
-  ([Task-614](pa://task/614), [Task-615](pa://task/615)). The LIST is not here —
-  it arrives on the `skills` topic through `useAssistant`. Fetches take an
-  `AbortSignal` so `useFetchState` aborts the previous skill or file when its
-  key changes.
+- `libraryApi.ts` owns per-entry HTTP reads of a library (`skills`, `agents`).
+  `libraryApi(library)` returns one cached object per library: `detail(name)`
+  gets the bounded manifest plus recursive tree; `filePreview` reads one bounded
+  text/Markdown preview keyed by NAME + NUL + entry-relative path; `history`
+  lists the entry folder's recent commits; and `fileUrl` builds the
+  token-carrying bounded raw/image/download URL ([Task-614](pa://task/614),
+  [Task-615](pa://task/615)). The LIST is not here — it arrives on the library's
+  topic through `useAssistant`. Fetches take an `AbortSignal` so `useFetchState`
+  aborts the previous entry or file when its key changes.
 - `knowledgeMarkdownDiff.ts` owns the pure Markdown diff helpers backing the KB
   tool cards' rendered diff: frontmatter strip, `diffMarkdownLines` (line-level
   runs), `diffMarkdownWords` (word-level segments), and

@@ -65,6 +65,7 @@ import {
 import { deriveTitle, type LiveListInfo } from "../sessions.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
+import { sessionAgentSummary } from "../agents/sessionAgent.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
 import type { HarnessHost, LiveSession, Viewer } from "../harness.ts";
@@ -1634,6 +1635,7 @@ export class PiLiveSession implements LiveSession {
     const pendingPostReloadContinuationValue = getPendingPostReloadContinuation(
       this.session.sessionId,
     );
+    const agentValue = sessionAgentSummary(this.session.sessionId);
     const worktreeIdValue = this.safeWorktreeId();
     return {
       sessionId: this.session.sessionId,
@@ -1661,6 +1663,7 @@ export class PiLiveSession implements LiveSession {
             skillInvocations: this.skillInvocations(activeSkillsValue),
           }
         : {}),
+      ...(agentValue !== undefined ? { agent: agentValue } : {}),
       ...(isCodingAgentType(this.kind)
         ? { artifacts: listSessionArtifacts(this.session.sessionId) }
         : {}),

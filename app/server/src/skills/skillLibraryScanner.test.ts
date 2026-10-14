@@ -7,14 +7,12 @@ import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import { git } from "../gitExec.ts";
 import type {
-  SkillDiagnostic,
-  SkillDiagnosticCode,
-  SkillSummary,
+  EntryDiagnostic,
+  EntryDiagnosticCode,
+  EntrySummary,
 } from "@assistant/shared";
-import {
-  scanSkillLibrary,
-  type SkillLibraryScan,
-} from "./skillLibraryScanner.ts";
+import { scanSkillLibrary } from "./skillLibrary.ts";
+import type { LibraryScan } from "../library/libraryScanner.ts";
 
 let root: string;
 
@@ -41,15 +39,15 @@ async function writeSkill(
 }
 
 function diagnosticCodes(
-  scan: SkillLibraryScan,
-): Array<`${string}:${SkillDiagnosticCode}`> {
+  scan: LibraryScan,
+): Array<`${string}:${EntryDiagnosticCode}`> {
   return scan.diagnostics.map(
-    (diagnostic: SkillDiagnostic) =>
+    (diagnostic: EntryDiagnostic) =>
       `${diagnostic.path}:${diagnostic.code}` as const,
   );
 }
 
-function skillNames(skills: SkillSummary[]): string[] {
+function skillNames(skills: EntrySummary[]): string[] {
   return skills.map(({ name }) => name);
 }
 
@@ -68,7 +66,7 @@ describe("scanSkillLibrary", () => {
     await writeFile(join(root, "README.md"), "not a skill folder\n", "utf8");
 
     assert.deepEqual(await scanSkillLibrary(root), {
-      skills: [
+      entries: [
         {
           name: "alpha-skill",
           description: "First declared skill",
@@ -90,10 +88,10 @@ describe("scanSkillLibrary", () => {
 
     const scan = await scanSkillLibrary(root);
 
-    assert.deepEqual(scan.skills, []);
+    assert.deepEqual(scan.entries, []);
     assert.deepEqual(diagnosticCodes(scan), [
-      "missing/SKILL.md:missing-skill-file",
-      "unreadable/SKILL.md:unreadable-skill-file",
+      "missing/SKILL.md:missing-manifest",
+      "unreadable/SKILL.md:unreadable-manifest",
     ]);
     assert.deepEqual(
       scan.diagnostics.map(({ folder, error }) => ({ folder, error })),
@@ -131,7 +129,7 @@ describe("scanSkillLibrary", () => {
 
     const scan = await scanSkillLibrary(root);
 
-    assert.deepEqual(scan.skills, [
+    assert.deepEqual(scan.entries, [
       {
         name: "linked-folder",
         description: "Linked folder",
@@ -139,8 +137,8 @@ describe("scanSkillLibrary", () => {
       },
     ]);
     assert.deepEqual(diagnosticCodes(scan), [
-      "file-link/SKILL.md:symlinked-skill-source",
-      "linked-folder/SKILL.md:symlinked-skill-source",
+      "file-link/SKILL.md:symlinked-source",
+      "linked-folder/SKILL.md:symlinked-source",
     ]);
     assert.deepEqual(
       scan.diagnostics.map(({ path, error }) => ({ path, error })),
@@ -170,7 +168,7 @@ describe("scanSkillLibrary", () => {
     // A link standing where a FILE would is a top-level file by another name,
     // and top-level files are not library entries: it must not be dressed up as
     // a folder that needs a fix.
-    assert.deepEqual(skillNames(scan.skills), ["real"]);
+    assert.deepEqual(skillNames(scan.entries), ["real"]);
     assert.deepEqual(diagnosticCodes(scan), []);
   });
 
@@ -191,12 +189,12 @@ describe("scanSkillLibrary", () => {
 
     const scan = await scanSkillLibrary(root);
 
-    assert.deepEqual(skillNames(scan.skills), ["linked-one", "valid-one"]);
+    assert.deepEqual(skillNames(scan.entries), ["linked-one", "valid-one"]);
     // Only the entries that stand where a folder would: the loose file and the
     // link to it contribute nothing at all.
     assert.deepEqual(diagnosticCodes(scan), [
-      "b-empty/SKILL.md:missing-skill-file",
-      "c-linked-folder/SKILL.md:symlinked-skill-source",
+      "b-empty/SKILL.md:missing-manifest",
+      "c-linked-folder/SKILL.md:symlinked-source",
       "m-broken/SKILL.md:missing-name",
     ]);
   });
@@ -256,7 +254,7 @@ describe("scanSkillLibrary", () => {
 
     const scan = await scanSkillLibrary(root);
 
-    assert.deepEqual(scan.skills, [
+    assert.deepEqual(scan.entries, [
       {
         name: "a".repeat(64),
         description: "At the limit",
@@ -299,7 +297,7 @@ describe("scanSkillLibrary", () => {
 
     const scan = await scanSkillLibrary(root);
 
-    assert.deepEqual(scan.skills, [
+    assert.deepEqual(scan.entries, [
       {
         name: "boundary-description",
         description: "x".repeat(1024),
@@ -338,7 +336,7 @@ describe("scanSkillLibrary", () => {
 
     const scan = await scanSkillLibrary(root);
 
-    assert.deepEqual(scan.skills, [
+    assert.deepEqual(scan.entries, [
       {
         name: "unique",
         description: "Unique",
@@ -362,6 +360,20 @@ describe("scanSkillLibrary", () => {
     }
   });
 
+  test("a duplicate-name diagnostic names a few folders, not every one", async () => {
+    for (let at = 0; at < 8; at++)
+      await writeSkill(`copy-${at}`, "name: shared\ndescription: Copy");
+
+    const scan = await scanSkillLibrary(root);
+
+    assert.equal(scan.diagnostics.length, 8);
+    for (const diagnostic of scan.diagnostics)
+      assert.equal(
+        diagnostic.error,
+        'Duplicate declared skill name "shared" in folders: copy-0, copy-1, copy-2, copy-3, copy-4 and 3 more.',
+      );
+  });
+
   test("rescans uncommitted working-tree edits, additions, and removals instead of Git HEAD", async () => {
     await git(["init", "-b", "main"], root);
     await writeSkill("existing", "name: existing\ndescription: Committed");
@@ -381,24 +393,24 @@ describe("scanSkillLibrary", () => {
     const head = (await git(["rev-parse", "HEAD"], root)).stdout.trim();
 
     assert.equal(
-      (await scanSkillLibrary(root)).skills[0]?.description,
+      (await scanSkillLibrary(root)).entries[0]?.description,
       "Committed",
     );
 
     await writeSkill("existing", "name: existing\ndescription: Edited");
     assert.equal(
-      (await scanSkillLibrary(root)).skills[0]?.description,
+      (await scanSkillLibrary(root)).entries[0]?.description,
       "Edited",
     );
 
     await writeSkill("added", "name: added\ndescription: Uncommitted addition");
-    assert.deepEqual(skillNames((await scanSkillLibrary(root)).skills), [
+    assert.deepEqual(skillNames((await scanSkillLibrary(root)).entries), [
       "added",
       "existing",
     ]);
 
     await rm(join(root, "existing"), { recursive: true });
-    assert.deepEqual((await scanSkillLibrary(root)).skills, [
+    assert.deepEqual((await scanSkillLibrary(root)).entries, [
       {
         name: "added",
         description: "Uncommitted addition",
@@ -459,7 +471,7 @@ describe("scanSkillLibrary", () => {
         const scan = await scanSkillLibrary(root);
         scans++;
         assert.equal(
-          scan.skills.some((skill) => skill.name === "outside-skill"),
+          scan.entries.some((skill) => skill.name === "outside-skill"),
           false,
           "an outside file was reported as a library skill",
         );

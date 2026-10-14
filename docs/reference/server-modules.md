@@ -924,19 +924,20 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   canonical, always-valid frontmatter skeleton (enums/schema literal derived
   from the constants so agent guidance cannot drift from validation) surfaced in
   the KB write/edit tool schemas and guidance.
-- `skills/skillLibrary.ts` owns the browser-facing read of the library: it
-  bootstraps the store, scans the working tree, and builds the `skills` topic's
-  one `skillList` message (`libraryPath` + summaries + diagnostics), answering a
-  read that could not run at all with `error` rather than an empty library.
-  `publishSkillLibrary` pushes that message through the topic seam, which is
-  what a `skills` subscribe calls in `connection.ts`: the subscribe IS the
-  authoritative rescan, and its result reaches every subscriber rather than the
-  asking connection alone, so two open windows cannot disagree. Nothing here
-  caches — a cached index would let Settings show a skill that no longer matches
-  the file a session injects.
-- `skills/skillDetail.ts` owns the bounded read of ONE skill
-  ([Task-614](pa://task/614)). `readSkillDetail(name)` accepts a DECLARED name
-  only — `isSafeSkillName` first, then a fresh scan, then the file that scan
+- `library/libraryPublish.ts` owns the browser-facing read of every library: it
+  bootstraps the store, scans the working tree, and builds the library topic's
+  one `libraryList` message (`libraryPath` + summaries + diagnostics, plus
+  `agentRuntimes` for agents via `agents/agentLibraryList.ts`), answering a read
+  that could not run at all with `error` rather than an empty library.
+  `publishSkillLibrary` (`skills/skillLibrary.ts`) and `publishAgentLibrary`
+  push that message through the topic seam, which is what a `skills` subscribe
+  calls in `connection.ts`: the subscribe IS the authoritative rescan, and its
+  result reaches every subscriber rather than the asking connection alone, so
+  two open windows cannot disagree. Nothing here caches — a cached index would
+  let Settings show a skill that no longer matches the file a session injects.
+- `library/entryDetail.ts` owns the bounded read of ONE skill
+  ([Task-614](pa://task/614)). `readEntryDetail(name)` accepts a DECLARED name
+  only — `isSafeEntryName` first, then a fresh scan, then the file that scan
   reported — so a caller can neither supply a path nor address a folder the
   scanner rejected. It answers `null` for a name the library does not declare at
   all (the caller's 404) and the shared invalid state for one it declares and
@@ -944,17 +945,17 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   frontmatter that happened between the scan and the read. That race never
   becomes a filesystem error and never falls through to another folder — an
   `ENOENT` would leak an absolute path, and a fallback would serve one skill's
-  instructions under another's name. `resolveSkillDetail` is the same resolution
+  instructions under another's name. `resolveEntryDetail` is the same resolution
   against a caller-held scan, which is the only way to exercise that race. It
-  opens the source through `skillSource.ts` and compares the scan's recorded
-  folder and file identity before serving anything, so a folder or file replaced
-  since the scan answers invalid instead of being read. The body is the Markdown
-  below the frontmatter, read through one handle so the reported `bytes`
-  describe the file that was read, bounded by `MAX_SKILL_BODY_BYTES` and decoded
-  in streaming mode so a character cut by the bound is dropped rather than
-  mangled.
-- `skills/skillFiles.ts` builds one deterministic recursive supporting-file tree
-  beneath the open skill folder and owns skill-relative path reads
+  opens the source through `library/entrySource.ts` and compares the scan's
+  recorded folder and file identity before serving anything, so a folder or file
+  replaced since the scan answers invalid instead of being read. The body is the
+  Markdown below the frontmatter, read through one handle so the reported
+  `bytes` describe the file that was read, bounded by `MAX_ENTRY_BODY_BYTES` and
+  decoded in streaming mode so a character cut by the bound is dropped rather
+  than mangled.
+- `library/entryFiles.ts` builds one deterministic recursive supporting-file
+  tree beneath the open skill folder and owns skill-relative path reads
   ([Task-615](pa://task/615)). `SKILL.md` sorts first and each remaining sibling
   sorts byte-lexically; shared entry/depth/path-metadata limits bound the answer
   and travel with it. The READ is bounded too: each directory is iterated lazily
@@ -962,12 +963,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   bounded insertion keeps the same deterministic first N a full sort would
   give), and the depth check asks whether a directory has ANY child instead of
   listing it. Reads validate every relative component and open it beneath the
-  held folder descriptor through `skillSource.ts`, never following a
+  held folder descriptor through `library/entrySource.ts`, never following a
   supporting-file symlink. It classifies MIME from a fixed map, detects NULs in
   text previews, bounds previews and raw files separately, and converts
-  deletion/replacement races to path-free domain errors. `readSkillTextWindow`
+  deletion/replacement races to path-free domain errors. `readEntryTextWindow`
   is the agent-facing read behind `skill_read_file`: it reuses the same resolve
-  and no-follow open, refuses a non-text file as `SkillFileNotTextError` rather
+  and no-follow open, refuses a non-text file as `EntryFileNotTextError` rather
   than decoding it, and answers one line window bounded by BOTH a line cap and a
   byte budget — a lone line longer than the budget is clipped at a character
   boundary and reported as truncated, since refusing it would make the file
@@ -982,19 +983,22 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   U+FEFF, since a window that disagrees with the bytes on disk is not verbatim.
   The prefix's last line is dropped when the file runs past the 256 KiB read
   bound, because half a line is not a line an edit can be copied out of.
-- `skills/skillsHttp.ts` owns `/api/skills/*`, dispatched from `index.ts` and
-  therefore behind the same token/origin gate as the rest of the API surface.
-  `GET /api/skills/detail?name=<declared-name>` serves bounded instructions plus
-  the recursive tree. `GET /api/skills/file?name=…&path=…` serves bounded raw
-  bytes; `preview=text` returns the shared bounded preview union. Missing/unsafe
-  names and paths are 400, unknown/deleted files are 404, and oversized raw
-  files are 413. Raw responses carry fixed MIME, no-sniff, sandbox CSP,
-  no-store, and safe disposition headers. The library LIST deliberately stays on
-  the `skills` topic.
-- `skills/skillLibraryEvents.ts` is the domain's ONE broadcaster seam, installed
-  by `hub.ts` as `broadcastTopic("skills", …)`. The default no-op keeps unit
-  tests and one-shot callers hubless; the domain never broadcasts app-wide.
-- `skills/skillSource.ts` owns the ONE way library bytes are reached and now
+- `library/libraryHttp.ts` owns `/api/<library>/*` (`skills`, `agents`),
+  dispatched from `index.ts` per store and therefore behind the same
+  token/origin gate as the rest of the API surface.
+  `GET /api/<library>/detail?name=<declared-name>` serves bounded instructions
+  plus the recursive tree. `GET /api/<library>/file?name=…&path=…` serves
+  bounded raw bytes; `preview=text` returns the shared bounded preview union.
+  `GET /api/<library>/history?name=…` lists the entry folder's recent commits.
+  Missing/unsafe names and paths are 400, unknown/deleted files are 404, and
+  oversized raw files are 413. Raw responses carry fixed MIME, no-sniff, sandbox
+  CSP, no-store, and safe disposition headers. The library LIST deliberately
+  stays on the library's topic.
+- `library/libraryPublish.ts` is also the libraries' ONE broadcaster seam,
+  installed by `hub.ts` as `broadcastTopic(topic, …)` for the library's own
+  topic. The default no-op keeps unit tests and one-shot callers hubless; a
+  library never broadcasts app-wide.
+- `library/entrySource.ts` owns the ONE way library bytes are reached and now
   written, shared by the scan, the single-skill read, and the authoring tools.
   It opens the library root, then each component below it relative to that
   descriptor through `/proc/self/fd` with `O_NOFOLLOW`, and hands back the live
@@ -1010,29 +1014,29 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   waiting for a writer; the kind of each entry is then checked on the open
   handle. `/proc/self/fd` makes this Linux-only by construction, with no
   pathname fallback. The authoring helpers write through the same anchor:
-  `O_NOFOLLOW|O_CREAT|O_TRUNC` file writes, `withSkillChildForUpdate` for the
+  `O_NOFOLLOW|O_CREAT|O_TRUNC` file writes, `withEntryChildForUpdate` for the
   read-then-rewrite of one open `SKILL.md` inode, directory creation that
   refuses an existing link and reports whether it created, and top-level folder
-  reservation (`withReservedSkillFolder`, whose `mkdir` cannot overwrite, which
+  reservation (`withReservedEntryFolder`, whose `mkdir` cannot overwrite, which
   refuses a reservation that is not EMPTY when it is opened — no syscall creates
   a directory AND returns its descriptor, so a directory adopted in that gap
   must at least be one that can lose nothing — and which HOLDS it open so its
   inode cannot be reused underneath a later check), the create-or-fail placement
-  set (`createSkillChildDirectory`, `createSkillChildFile`, `linkSkillChild`,
-  each failing `EEXIST` as `SkillNameTakenError`, with `link` keeping a symlink
-  a symlink), and `skillChildStillIs` for re-checking that a name still resolves
+  set (`createEntryChildDirectory`, `createEntryChildFile`, `linkEntryChild`,
+  each failing `EEXIST` as `EntryNameTakenError`, with `link` keeping a symlink
+  a symlink), and `entryChildStillIs` for re-checking that a name still resolves
   to a pinned inode. REMOVAL never acts on a public name: A removal that fails
   once entries are already gone reports `partial` rather than "not ours", so the
   caller can have Git restore what it took instead of refusing over a tree it
-  has broken. `removeVerifiedSkillTree` renames a whole tree to a private
-  `.pa-skill-removing-<uuid>` and only then identifies it, optionally checks its
+  has broken. `removeVerifiedEntryTree` renames a whole tree to a private
+  `.pa-removing-<uuid>` and only then identifies it, optionally checks its
   contents, and empties it, so every unlink and `rmdir` below resolves a name
-  nothing else can rebind; `unlinkSkillChildIfSame` does the same move-aside for
+  nothing else can rebind; `unlinkEntryChildIfSame` does the same move-aside for
   one file, brackets that check with the inode's `ctime` and puts the `unlink`
   immediately after the second reading. `clearSkillDirectory` does the same for
   a whole tree, which needs it more: proving and emptying are separate walks and
   the proof of an early file can be arbitrarily old by the time its unlink comes
-  round, so `SkillTreeContents.provedAt` carries each entry's `ctime` from the
+  round, so `EntryTreeContents.provedAt` carries each entry's `ctime` from the
   check into the walk — files AND directories — and the walk rereads each one
   before it acts: a directory before listing it, a file before unlinking it. An
   entry whose reading moved, or that has NO reading recorded, stops the removal,
@@ -1080,25 +1084,25 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   create-or-fail primitive takes the creation BACK when it cannot pin it (a
   second open can fail on its own, `EMFILE` most plausibly, and a created name
   nothing can prove ownership of is one no undo may remove), and otherwise hands
-  back a `SkillPin` (`createSkillChildDirectory` from the re-opened name it
-  requires to be EMPTY, `createSkillChildFile` from the descriptor it wrote
-  through, `linkSkillChild` from a pin verified against the still-present source
-  link, `ensureSkillChildDirectory` only when `mkdir` itself created the
-  directory), and `pinSkillHandle` re-pins an inode a caller already holds
+  back a `EntryPin` (`createEntryChildDirectory` from the re-opened name it
+  requires to be EMPTY, `createEntryChildFile` from the descriptor it wrote
+  through, `linkEntryChild` from a pin verified against the still-present source
+  link, `ensureEntryChildDirectory` only when `mkdir` itself created the
+  directory), and `pinEntryHandle` re-pins an inode a caller already holds
   without resolving any name. A pin is opened `O_PATH`: a descriptor that refers
   to an inode without opening it for I/O, which is what lets a SYMLINK be pinned
   at all — an ordinary open answers `ELOOP` — and it is taken through
-  `/proc/self/fd`, so no pathname is walked twice. `writeSkillChildFile` tries
+  `/proc/self/fd`, so no pathname is walked twice. `writeEntryChildFile` tries
   `O_CREAT|O_EXCL` FIRST and returns a pin only when it CREATED the file, so a
   caller learns from the kernel rather than from a probe whether Git or the
-  mutation owns that path's undo. `withReservedSkillFolder` takes its own
+  mutation owns that path's undo. `withReservedEntryFolder` takes its own
   `mkdir` back when anything between it and the callback fails: until the caller
   HAS the reservation, no path and no undo are registered anywhere, and an empty
-  directory is invisible to `git status`. `iterateSkillDirectory` is the lazy
+  directory is invisible to `git status`. `iterateEntryDirectory` is the lazy
   read for a caller with a bound of its own: `readdir` materializes every name
   before the first can be looked at, `opendir` does not. Nothing here creates a
   symlink or writes through one.
-- `skills/skillLibraryScanner.ts` owns a fresh, deterministic read of the skills
+- `library/libraryScanner.ts` owns a fresh, deterministic read of the skills
   library working tree. It scans only non-hidden top-level entries that stand
   where a folder would — a directory, or a symlink RESOLVING to one, which is
   listed with its refusal so a linked-in skill does not silently vanish; a link
@@ -1108,13 +1112,13 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `MAX_SCANNED_MANIFEST_BYTES` — generous, because the served-body bound
   deliberately does not apply to frontmatter, but finite, because this read
   happens for every folder on every list and every mutation. It reads every
-  candidate through `skillSource.ts`, validates `SKILL.md` through the shared
-  `skillManifest.ts` rule and only decorates its issues with the folder they
-  belong to, keeps source folder/path identity separate from the declared name,
-  and returns the shared wire model's valid summaries plus explicit
-  malformed/duplicate diagnostics. It never consults or caches by Git HEAD;
-  duplicate declared names make every affected folder non-injectable. What a
-  declared name may be is the shared `isSafeSkillName`, not a scanner-local
+  candidate through `library/entrySource.ts`, validates `SKILL.md` through the
+  shared `library/entryManifest.ts` rule and only decorates its issues with the
+  folder they belong to, keeps source folder/path identity separate from the
+  declared name, and returns the shared wire model's valid summaries plus
+  explicit malformed/duplicate diagnostics. It never consults or caches by Git
+  HEAD; duplicate declared names make every affected folder non-injectable. What
+  a declared name may be is the shared `isSafeEntryName`, not a scanner-local
   regex, because `settings.ts` keys the toggle map on that same name.
 - `skills/skillResolver.ts` is the pure name resolver. It intersects valid scan
   summaries with an ordered list of toggle layers, applies later-layer
@@ -1148,8 +1152,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   how the last entry goes. New coding sessions consume the global map through
   `sessionSkills.ts`, and both harnesses inject the resulting frozen names;
   narrower project/session scopes ([Task-532](pa://task/532)) are a later phase.
-- `skills/skillLibraryStore.ts` owns lazy, idempotent bootstrap of the
-  user-owned `DATA_DIR/skills` repository AND the one committing mutation seam
+- `library/libraryStore.ts` owns lazy, idempotent bootstrap of the user-owned
+  `DATA_DIR/skills` repository AND the one committing mutation seam
   ([Task-633](pa://task/633)). Bootstrap creates the directory and runs only
   `git init -b main` when `.git` is absent — still no author config, staging,
   commit, `.gitignore`, or change to an existing repository — while a stable
@@ -1198,8 +1202,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   undos, the pin release and the status proof all still run, and a restore that
   could not run is named in the error. Every mutation reports at the moment of
   the change rather than before attempting one — a write at the truncating open
-  (`writeSkillChildFile`'s `onTruncated`), a removal only once it succeeded, and
-  rename/delete once `removeVerifiedSkillTree` reports `removed`. Reporting
+  (`writeEntryChildFile`'s `onTruncated`), a removal only once it succeeded, and
+  rename/delete once `removeVerifiedEntryTree` reports `removed`. Reporting
   earlier would let a refused operation revert a hand edit; reporting never
   would let a refused COMMIT leave the mutation applied. The generic
   `git clean -fdq` runs for exactly one case, a path that did NOT exist when it
@@ -1245,7 +1249,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   input, pass `--end-of-options`, and carry the caller's `AbortSignal`.
   `commitMutation` takes one too, and exposes it to the mutation as
   `ctx.checkpoint()` plus a one-way `ctx.beyondCancellation()`: the checkpoint
-  throws `SkillMutationCancelledError` while stopping is still free and does
+  throws `LibraryMutationCancelledError` while stopping is still free and does
   nothing after, and the store latches it off itself at the first
   `damaged`/`removed` claim, once `run` returns, and before any rollback — so
   the undos, which hash content through the same `blobId`, can never be cut
@@ -1257,7 +1261,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   one bootstrap and one lock chain. `config.ts` separately exposes
   `SKILLS_RUNTIME_DIR` for generated `DATA_DIR/skills-runtime` output; bootstrap
   never creates it.
-- `skills/skillManifest.ts` is the ONE frontmatter rule, shared by the scanner
+- `library/entryManifest.ts` is the ONE frontmatter rule, shared by the scanner
   and by authoring. `parseSkillManifest` returns either a valid manifest or the
   scanner's own diagnostic codes (plus a recovered name, which duplicate
   detection still needs); `assertSkillManifest` is the throwing form a mutation
@@ -1266,8 +1270,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   as a JSON-quoted one, which the shared YAML subset reads back byte-for-byte,
   and `withDeclaredName` rewrites only the root `name:` line for a rename rather
   than reformatting a hand-authored file.
-- `skills/skillAuthoring.ts` is the layer between the agent tools and the store.
-  It resolves a DECLARED name to the scanned folder and opens it by INODE
+- `library/libraryAuthoring.ts` is the layer between the agent tools and the
+  store. It resolves a DECLARED name to the scanned folder and opens it by INODE
   (`withVerifiedSkillFolder` compares the scan's `dev`/`ino`), because the
   repository lock serializes the app against itself and not against the user
   hand-authoring the same tree, applies create/edit/file- batch/rename/delete
@@ -1277,7 +1281,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   NUL, or `SKILL.md`), the operation/byte bounds, the exact-replacement editor,
   and the bounded `skill_get`/`skill_list` reads. A batch's `edit` operation
   runs that same editor over a supporting file: it reads and rewrites through
-  ONE open description (`withSkillChildForUpdate`), so the text a replacement
+  ONE open description (`withEntryChildForUpdate`), so the text a replacement
   matched and the bytes it overwrites belong to the same inode; it refuses a
   file that is not valid UTF-8 instead of writing back what a lossy decode
   invented, decoding with `ignoreBOM` because the edited string is re-encoded
@@ -1292,7 +1296,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `renameat2(RENAME_NOREPLACE)`, so the new name is ASSEMBLED out of
   create-or-fail calls instead — `mkdir` per directory, `link` per file or
   symlink, `O_CREAT|O_EXCL` for the rewritten manifest — and the old folder is
-  removed as a WHOLE through `removeVerifiedSkillTree`, which refuses it if it
+  removed as a WHOLE through `removeVerifiedEntryTree`, which refuses it if it
   gained content. Hard links make that placement free and its ownership
   provable, which is what lets `placeSkillChildren` and the tree check act on
   inodes rather than on names, and a rename reports the source as modified
@@ -1302,8 +1306,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   A create writes through the held descriptor and then proves the name still
   resolves to it, DISOWNING the path (`ctx.disown`) when it does not, so neither
   staging nor rollback touches a folder that turned out to be the user's. A
-  delete moves the verified folder to a private `.pa-skill-deleting-<uuid>` name
-  and empties it there, so no unlink resolves a name another actor addresses.
+  delete moves the verified folder to a private `.pa-removing-<uuid>` name and
+  empties it there, so no unlink resolves a name another actor addresses.
   Destinations are registered with the rollback only AFTER they exist, and each
   mutation undoes itself without overwriting, against PINNED identities only. A
   DESTRUCTIVE step is pinned too: `pinSkillSource` opens the scanned folder,
@@ -1313,7 +1317,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   removed-and-recreated folder answers to just as well. A rename places at most
   `MAX_PLACED_ENTRIES` (512) entries, since each costs a held descriptor, and
   refuses a larger folder rather than placing what it could not take back; the
-  source is walked through `iterateSkillDirectory`, so that ceiling bounds the
+  source is walked through `iterateEntryDirectory`, so that ceiling bounds the
   READ too and a folder big enough to be a problem is never listed into memory
   before the refusal. `removeAssembledSkill` detaches the assembled folder to a
   private name and, inside that detached tree, takes back entry by entry exactly
@@ -1323,7 +1327,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   delete proves each entry as the KIND of thing the repository committed
   (`holdsCommittedEntry`): a committed symlink must still be one and must still
   point where its committed blob says, read back through the anchored, `ctime`-
-  bracketed `readSkillChildLink` since a symlink can only be replaced, never
+  bracketed `readEntryChildLink` since a symlink can only be replaced, never
   written through; a committed file must not have become a symlink or a
   directory, and its mode is compared inside the same bracket as its content, so
   a `chmod` landing between the two cannot be recorded as the proved reading.
@@ -2650,11 +2654,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `hub.broadcastTopic(topic, msg)` sends only to connections whose
   `Viewer.wantsTopic(topic)` is true (`BroadcastTopic` in `@assistant/shared`:
   `tasks`, `projects`, `worktrees`, `skills`, …), and every domain broadcaster
-  seam (`taskEvents`/`worktreeEvents`/`skills/skillLibraryEvents`) exposes
-  exactly one `broadcast` the hub binds to its topic; migrated Projects instead
-  expose notify-with-touched-ids from `projectRegistry.ts`, which the hub
-  projects into that same topic. A `broadcastAll` seam would let a domain
-  quietly opt out of addressing. `connection.ts` owns the `topics` set behind
+  seam (`taskEvents`/`worktreeEvents`/`library/libraryPublish`) exposes exactly
+  one `broadcast` the hub binds to its topic; migrated Projects instead expose
+  notify-with-touched-ids from `projectRegistry.ts`, which the hub projects into
+  that same topic. A `broadcastAll` seam would let a domain quietly opt out of
+  addressing. `connection.ts` owns the `topics` set behind
   `subscribe`/`unsubscribe`, and subscribing is ALSO the authoritative read for
   every stateful list: cold `tasks`/`projects` and the complete app-level
   `worktrees` list answer with their current snapshot; warm migrated domains

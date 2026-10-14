@@ -1,55 +1,51 @@
 /**
- * The bounded read of ONE skill ([Task-614](pa://task/614), `docs/skills.md`).
+ * The bounded read of ONE library entry ([Task-614](pa://task/614),
+ * `docs/skills.md`).
  *
- * A skill is addressed by its DECLARED name and by nothing else. The caller
- * never supplies a path: the name is checked against `isSafeSkillName`, then
+ * An entry is addressed by its DECLARED name and by nothing else. The caller
+ * never supplies a path: the name is checked against `isSafeEntryName`, then
  * resolved through a fresh working-tree scan, and the file that is read is the
  * one that scan reported.
  */
 import { Buffer } from "node:buffer";
 import type { FileHandle } from "node:fs/promises";
 import {
-  isSafeSkillName,
-  MAX_SKILL_BODY_BYTES,
-  type SkillDetailResponse,
+  isSafeEntryName,
+  MAX_ENTRY_BODY_BYTES,
+  type EntryDetailResponse,
 } from "@assistant/shared";
+import { buildEntryFileTree } from "./entryFiles.ts";
+import { manifestSizeIssue } from "./entryManifest.ts";
 import {
-  parseYamlSubset,
-  splitYamlFrontmatter,
-} from "@assistant/shared/frontmatter";
-import { buildSkillFileTree } from "./skillFiles.ts";
+  scanLibrary,
+  entrySourceIdentity,
+  type LibraryScan,
+} from "./libraryScanner.ts";
+import type { LibraryKind } from "./libraryKind.ts";
+import type { LibraryStore } from "./libraryStore.ts";
 import {
-  scanSkillLibrary,
-  skillSourceIdentity,
-  type SkillLibraryScan,
-} from "./skillLibraryScanner.ts";
-import {
-  skillLibraryStore,
-  type SkillLibraryStore,
-} from "./skillLibraryStore.ts";
-import {
-  sameSkillSource,
+  sameEntrySource,
   withLibraryRoot,
-  withSkillSource,
-} from "./skillSource.ts";
+  withEntrySource,
+} from "./entrySource.ts";
 
 const READ_CHUNK_BYTES = 64 * 1024;
 
 /**
- * Read one skill by declared name.
+ * Read one entry by declared name.
  *
  * Returns `null` when the library has nothing to say about the name at all —
  * an unsafe name, or one no folder declares. An invalid state is reserved for
  * a name the library DOES know and cannot serve.
  */
-export async function readSkillDetail(
+export async function readEntryDetail(
   name: string,
-  library: SkillLibraryStore = skillLibraryStore,
-): Promise<SkillDetailResponse | null> {
-  if (!isSafeSkillName(name)) return null;
+  library: LibraryStore,
+): Promise<EntryDetailResponse | null> {
+  if (!isSafeEntryName(name)) return null;
   await library.ensureInitialized();
-  const scan = await scanSkillLibrary(library.root);
-  return resolveSkillDetail(library.root, scan, name);
+  const scan = await scanLibrary(library.kind, library.root);
+  return resolveEntryDetail(library, scan, name);
 }
 
 /**
@@ -59,16 +55,16 @@ export async function readSkillDetail(
  * opens each path component with no-follow semantics through a directory file
  * descriptor, then compares those identities before serving anything. This
  * turns a folder replacement or symlink swap into an invalid answer rather
- * than allowing an unrelated directory to answer for the scanned skill.
+ * than allowing an unrelated directory to answer for the scanned entry.
  */
-export async function resolveSkillDetail(
-  root: string,
-  scan: SkillLibraryScan,
+export async function resolveEntryDetail(
+  library: LibraryStore,
+  scan: LibraryScan,
   name: string,
-): Promise<SkillDetailResponse | null> {
-  if (!isSafeSkillName(name)) return null;
+): Promise<EntryDetailResponse | null> {
+  if (!isSafeEntryName(name)) return null;
 
-  const summary = scan.skills.find((skill) => skill.name === name);
+  const summary = scan.entries.find((entry) => entry.name === name);
   if (!summary) {
     const diagnostic = scan.diagnostics.find(
       (entry) => entry.declaredName === name,
@@ -83,7 +79,7 @@ export async function resolveSkillDetail(
     };
   }
 
-  const identity = skillSourceIdentity(scan, summary.path);
+  const identity = entrySourceIdentity(scan, summary.path);
   if (!identity) {
     return unavailable(
       summary,
@@ -92,38 +88,55 @@ export async function resolveSkillDetail(
   }
 
   try {
-    return await withLibraryRoot(root, (rootHandle) =>
-      withSkillSource(rootHandle, folderOf(summary.path), async (source) => {
-        if (!sameSkillSource(source.identity, identity)) {
-          return unavailable(
-            summary,
-            `${summary.path} changed since it was scanned.`,
-          );
-        }
+    return await withLibraryRoot(library.root, (rootHandle) =>
+      withEntrySource(
+        rootHandle,
+        folderOf(summary.path),
+        library.kind.manifestFile,
+        async (source) => {
+          if (!sameEntrySource(source.identity, identity)) {
+            return unavailable(
+              summary,
+              `${summary.path} changed since it was scanned.`,
+            );
+          }
 
-        const read = await readBounded(source.file);
-        try {
-          validateRereadFrontmatter(read.frontmatter, summary, summary.path);
-        } catch {
-          return unavailable(
-            summary,
-            `${summary.path} no longer has frontmatter matching the scan; the library changed since it was scanned.`,
-          );
-        }
+          // Refuse an oversized rewrite before reading any of it: one fresh
+          // size, checked here and then read to exactly, so growth after the
+          // open is seen and nothing past the bound is ever read.
+          const { size } = await source.file.stat();
+          if (
+            manifestSizeIssue(library.kind, size, summary.path) !== undefined
+          ) {
+            return unavailable(
+              summary,
+              `${summary.path} no longer matches the scan or its ${library.kind.noun} rule; the library changed since it was scanned.`,
+            );
+          }
+          const read = await readBounded(source.file, size);
+          try {
+            validateReread(library.kind, read, summary, summary.path);
+          } catch {
+            return unavailable(
+              summary,
+              `${summary.path} no longer matches the scan or its ${library.kind.noun} rule; the library changed since it was scanned.`,
+            );
+          }
 
-        const files = await buildSkillFileTree(source.folder);
-        return {
-          kind: "skill",
-          name: summary.name,
-          description: summary.description,
-          folder: folderOf(summary.path),
-          path: summary.path,
-          markdown: read.body.trim(),
-          bytes: read.bytes,
-          truncated: read.truncated,
-          files,
-        };
-      }),
+          const files = await buildEntryFileTree(library.kind, source.folder);
+          return {
+            kind: "entry",
+            name: summary.name,
+            description: summary.description,
+            folder: folderOf(summary.path),
+            path: summary.path,
+            markdown: read.body.trim(),
+            bytes: read.bytes,
+            truncated: read.truncated,
+            files,
+          };
+        },
+      ),
     );
   } catch (error) {
     if (error instanceof InvalidFrontmatterError) {
@@ -151,7 +164,7 @@ export async function resolveSkillDetail(
 function unavailable(
   summary: { name: string; path: string },
   error: string,
-): SkillDetailResponse {
+): EntryDetailResponse {
   return {
     kind: "invalid",
     name: summary.name,
@@ -177,12 +190,14 @@ interface BoundedRead {
 }
 
 /**
- * Read the complete frontmatter and at most {@link MAX_SKILL_BODY_BYTES} of the
+ * Read the complete frontmatter and at most {@link MAX_ENTRY_BODY_BYTES} of the
  * bytes below its closing fence. The handle is already anchored beneath the
- * directory identity checked by {@link resolveSkillDetail}.
+ * directory identity checked by {@link resolveEntryDetail}.
  */
-async function readBounded(handle: FileHandle): Promise<BoundedRead> {
-  const { size } = await handle.stat();
+async function readBounded(
+  handle: FileHandle,
+  size: number,
+): Promise<BoundedRead> {
   let data = Buffer.alloc(0);
   let position = 0;
   let bodyStart: number | undefined;
@@ -199,7 +214,7 @@ async function readBounded(handle: FileHandle): Promise<BoundedRead> {
   if (bodyStart === undefined) throw new InvalidFrontmatterError();
 
   const bodyBytes = size - bodyStart;
-  const bodyReadLimit = Math.min(MAX_SKILL_BODY_BYTES, bodyBytes);
+  const bodyReadLimit = Math.min(MAX_ENTRY_BODY_BYTES, bodyBytes);
   const targetBytes = bodyStart + bodyReadLimit;
   while (position < targetBytes) {
     const chunk = Buffer.alloc(targetBytes - position);
@@ -220,7 +235,7 @@ async function readBounded(handle: FileHandle): Promise<BoundedRead> {
     frontmatter,
     body,
     bytes: size,
-    truncated: bodyBytes > MAX_SKILL_BODY_BYTES,
+    truncated: bodyBytes > MAX_ENTRY_BODY_BYTES,
   };
 }
 
@@ -258,26 +273,28 @@ function findBodyStart(data: Buffer, atEof: boolean): number | undefined {
   return undefined;
 }
 
-function validateRereadFrontmatter(
-  frontmatter: string,
+/**
+ * The reread must still satisfy the kind's WHOLE rule and still declare what
+ * the scan reported: a same-inode rewrite that breaks a kind-specific field
+ * leaves `name` and `description` alone, and serving it would show as valid an
+ * entry the library would now report as broken.
+ */
+function validateReread(
+  kind: LibraryKind,
+  read: BoundedRead,
   summary: { name: string; description: string },
   path: string,
 ): void {
-  const { yaml } = splitYamlFrontmatter(frontmatter, path);
-  const parsed = parseYamlSubset(yaml, `${path} frontmatter`);
+  // Size from the real file, not from the clipped body the rule is handed.
+  const parsed = kind.parseManifest(read.frontmatter + read.body, path);
   if (
-    !isRecord(parsed) ||
-    typeof parsed.name !== "string" ||
-    typeof parsed.description !== "string" ||
-    parsed.name !== summary.name ||
-    parsed.description !== summary.description
+    manifestSizeIssue(kind, read.bytes, path) !== undefined ||
+    !parsed.ok ||
+    parsed.manifest.name !== summary.name ||
+    parsed.manifest.description !== summary.description
   ) {
     throw new Error("frontmatter metadata changed");
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

@@ -87,6 +87,18 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
     mode: "plan",
   });
   sessionStore.freezeSkills(parentId, '["parent-skill"]');
+  const parentAgent = {
+    name: "test-reviewer",
+    blob: "0".repeat(40),
+    persona: "developer",
+    provider: "openai-codex",
+    model: "gpt-5",
+    effort: "high",
+    denyTools: ["bash"],
+    skills: [],
+    body: "Review the tests.",
+  };
+  sessionStore.freezeAgent(parentId, JSON.stringify(parentAgent));
 
   const internals = piStore as unknown as StoreInternals;
   const originalCreate = internals.create;
@@ -94,11 +106,13 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
   const originalBroadcastSessions = hub.broadcastSessions;
   let requestedMode: unknown;
   let inheritedSkills: unknown;
+  let inheritedAgent: unknown;
 
   internals.create = async (...args: unknown[]) => {
     const manager = args[1] as FakeSessionManager;
     inheritedSkills = (args[6] as { inheritSkills?: unknown } | undefined)
       ?.inheritSkills;
+    inheritedAgent = (args[6] as { agent?: unknown } | undefined)?.agent;
     requestedMode = args[7];
     return {
       session: {
@@ -145,6 +159,11 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
       inheritedSkills,
       ["parent-skill"],
       "the create call receives the parent's exact frozen skill list",
+    );
+    assert.deepEqual(
+      inheritedAgent,
+      parentAgent,
+      "the create call receives the parent's frozen agent definition",
     );
     assert.equal(requestedMode, "plan", "create() is asked for Plan");
     assert.equal(

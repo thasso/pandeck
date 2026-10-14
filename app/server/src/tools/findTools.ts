@@ -20,6 +20,11 @@ const MAX_GROUPS = 2;
 /** Per-session activation surface the pi wiring provides. */
 export interface FindToolsHost {
   agentType: AgentType;
+  /**
+   * The tools this session has at all, when narrower than its persona's (a
+   * spawned agent's denied tools): the rest are not searchable or loadable.
+   */
+  sessionToolNames?: ReadonlySet<string>;
   usableToolNames(): ReadonlySet<string>;
   activeToolNames(): ReadonlySet<string>;
   activate(names: string[]): string[];
@@ -201,7 +206,9 @@ function oneLine(text: string): string {
 export function createFindToolsTool(host: FindToolsHost): AgentTool {
   const groups = toolGroupsFor(host.agentType);
   const catalog = groups.flatMap((group) =>
-    group.tools.map((tool) => emptyScoredTool(tool, group)),
+    group.tools
+      .filter((tool) => host.sessionToolNames?.has(tool.name) ?? true)
+      .map((tool) => emptyScoredTool(tool, group)),
   );
   const byName = new Map(
     catalog.map((candidate) => [candidate.tool.name, candidate]),

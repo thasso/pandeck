@@ -535,6 +535,25 @@ export const approvalBodies: ApprovalCard[] = [
       resultWebUrl: "https://github.com/acme/player-sdk",
     },
   }),
+  approval("appr_agent", {
+    kind: "agentDefinition",
+    status: "pending",
+    title: "Change agent runtime",
+    body: {
+      kind: "agentDefinition",
+      action: "edit",
+      name: "test-reviewer",
+      description:
+        "Verifies that the tests a branch adds fail without its code changes.",
+      persona: "developer",
+      model: { before: "sonnet", after: "opus" },
+      resolvedModel: "claude-sdk/opus",
+      effort: { before: "medium", after: "max", effective: "high" },
+      source:
+        '---\nname: test-reviewer\ndescription: "Verifies that the tests a branch adds fail without its code changes."\npersona: developer\nmodel: "opus"\neffort: max\ntools:\n  deny: [worktree_commit, worktree_push]\n---\n\nYou are a test reviewer. Revert the code changes, keep the new tests, and report which ones still pass.\n',
+      reason: "Run test-reviewer on Opus",
+    },
+  }),
   approval("appr_confluence", {
     kind: "confluencePage",
     status: "pending",

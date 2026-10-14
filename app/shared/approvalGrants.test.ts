@@ -1,5 +1,9 @@
 import { expect, test } from "vitest";
-import { approvalGrantKeys, approvalGrantLabel } from "./approvalGrants.ts";
+import {
+  approvalGrantKeys,
+  approvalGrantLabel,
+  GRANTABLE_OPERATIONS,
+} from "./approvalGrants.ts";
 
 test("a grant key is the operation, never the target", () => {
   expect(
@@ -92,4 +96,15 @@ test("a commit review override is never grantable", () => {
       },
     }),
   ).toEqual([]);
+});
+
+test("the agent-definition grant says it covers persona changes too", () => {
+  // A persona decides the tools: granting this lets an assistant definition
+  // become a developer with Bash, Edit and Write without another card.
+  const agents = GRANTABLE_OPERATIONS.find(
+    (operation) => operation.key === "agentDefinition",
+  );
+  expect(agents?.label).toMatch(/persona/);
+  expect(agents?.covers).toMatch(/persona/);
+  expect(approvalGrantLabel("agentDefinition")).toMatch(/persona/);
 });

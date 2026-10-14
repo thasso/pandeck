@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AgentType,
   CredentialProfileSummary,
+  EntryLibraryList,
   ModelOption,
   ProjectRecord,
   SessionMode,
@@ -15,6 +16,14 @@ import {
   orderProjectsByActivity,
   orderWorktreesByActivity,
 } from "./NewSessionQuickStart.tsx";
+import {
+  failed,
+  idle,
+  loading,
+  ready,
+  refreshing,
+  type LoadState,
+} from "../lib/loadState.ts";
 
 const project = {
   id: "proj",
@@ -75,11 +84,15 @@ function render(
     usageIndicators?: UsageIndicator[] | null;
     newWorktreeStaged?: boolean;
     mode?: SessionMode;
+    agents?: LoadState<EntryLibraryList>;
+    selectedAgent?: string | null;
+    profilesLoaded?: boolean;
   } = {},
 ): string {
   return renderToStaticMarkup(
     <NewSessionQuickStart
       credentialProfiles={opts.profiles ?? []}
+      credentialProfilesLoaded={opts.profilesLoaded ?? true}
       usageIndicators={opts.usageIndicators ?? null}
       selectedCredentialProfileId={opts.selectedProfileId}
       onSelectCredentialProfile={() => {}}
@@ -101,6 +114,8 @@ function render(
       onSelectModel={() => {}}
       thinkingLevel={opts.thinkingLevel ?? "medium"}
       onSelectThinking={() => {}}
+      agents={opts.agents}
+      selectedAgent={opts.selectedAgent ?? null}
     />,
   );
 }
@@ -499,5 +514,143 @@ describe("NewSessionQuickStart", () => {
     expect(html).toContain("feature/thing");
     expect(html).not.toContain("GPT Test");
     expect(html).not.toContain("Thinking");
+  });
+});
+
+describe("agent definitions row", () => {
+  const claudeAccount = {
+    id: "claude-default",
+    name: "Default Claude",
+    provider: "claude",
+    enabled: true,
+    status: "ready",
+    createdAt: 1,
+    updatedAt: 1,
+  } as CredentialProfileSummary;
+  const agents: EntryLibraryList = {
+    libraryPath: "/data/agents",
+    entries: [
+      {
+        name: "test-reviewer",
+        description: "Reviews tests.",
+        path: "test-reviewer/AGENT.md",
+      },
+      { name: "stale", description: "Old.", path: "stale/AGENT.md" },
+    ],
+    diagnostics: [],
+    agentRuntimes: {
+      "test-reviewer": {
+        persona: "developer",
+        provider: "claude-sdk",
+        modelId: "opus",
+        thinkingLevel: "high",
+      },
+      stale: { problem: 'No enabled account offers a model "gemini".' },
+    },
+  };
+
+  it("offers each definition, and one that cannot start says why", () => {
+    const html = render([], {
+      agents: ready(agents),
+      selectedAgent: "test-reviewer",
+      profiles: [claudeAccount],
+    });
+    expect(html).toContain("Agent definition");
+    expect(html).toContain("test-reviewer");
+    expect(html).toContain(
+      'title="Start as a plain session instead of test-reviewer"',
+    );
+    // The unusable one is shown, disabled, and its reason is visible text.
+    expect(html).toMatch(
+      /title="No enabled account offers a model &quot;gemini&quot;\."[^>]*disabled|disabled[^>]*title="No enabled account offers a model &quot;gemini&quot;\."/,
+    );
+    expect(html).toContain(
+      "<li>No enabled account offers a model &quot;gemini&quot;.</li>",
+    );
+  });
+
+  it("offers nothing before the accounts are read, nor without an account of its provider", () => {
+    const unread = render([], {
+      agents: ready(agents),
+      profilesLoaded: false,
+    });
+    expect(unread).toMatch(
+      /<button[^>]*\sdisabled=""[^>]*title="Start as test-reviewer: Reviews tests\."|<button[^>]*title="Start as test-reviewer: Reviews tests\."[^>]*\sdisabled=""/,
+    );
+
+    const noClaude = render([], { agents: ready(agents), profiles: [] });
+    expect(noClaude).toContain(
+      "<li>Agent &quot;test-reviewer&quot; cannot start here: no enabled account runs claude-sdk models.</li>",
+    );
+  });
+
+  it("keeps a picked definition clickable after it stops being able to start", () => {
+    const html = render([], {
+      agents: ready({
+        ...agents,
+        agentRuntimes: {
+          ...agents.agentRuntimes,
+          "test-reviewer": { problem: "Gone." },
+        },
+      }),
+      selectedAgent: "test-reviewer",
+    });
+    expect(html).toMatch(
+      /<button(?![^>]*\sdisabled="")[^>]*title="Gone\."[^>]*>/,
+    );
+  });
+
+  it("shows no row unsubscribed or for an authoritatively empty library", () => {
+    expect(render([], {})).not.toContain("Agent definition");
+    expect(render([], { agents: idle() })).not.toContain("Agent definition");
+    expect(
+      render([], {
+        agents: ready({ ...agents, entries: [], agentRuntimes: {} }),
+      }),
+    ).not.toContain("Agent definition");
+  });
+
+  /** The markup inside the row's listbox, which may hold only its options. */
+  function agentListbox(html: string): string {
+    const open = html.indexOf('role="listbox" aria-label="Agent definition"');
+    expect(open).toBeGreaterThan(-1);
+    const start = html.indexOf(">", open) + 1;
+    let depth = 1;
+    const tag = /<(\/?)div\b[^>]*>/g;
+    tag.lastIndex = start;
+    for (let match = tag.exec(html); match; match = tag.exec(html)) {
+      depth += match[1] ? -1 : 1;
+      if (depth === 0) return html.slice(start, match.index);
+    }
+    throw new Error("unclosed listbox");
+  }
+
+  it("reserves the row while the first read is out", () => {
+    const html = render([], { agents: loading() });
+    expect(html).toContain("Agent definition");
+    expect(html).toContain('aria-busy="true"');
+    // R6: the placeholder is a labelled status region, not just a busy list.
+    expect(html).toMatch(
+      /role="status" aria-label="Loading agent definitions"/,
+    );
+    expect(agentListbox(html)).not.toContain('role="status"');
+    expect(html).not.toContain("test-reviewer");
+  });
+
+  it("keeps the pills through a rescan and says a failed read in place", () => {
+    const rescanning = render([], { agents: refreshing(agents) });
+    expect(rescanning).toContain("test-reviewer");
+    expect(rescanning).toContain("Rescanning agents");
+    expect(agentListbox(rescanning)).toContain("test-reviewer");
+    expect(agentListbox(rescanning)).not.toContain("Rescanning agents");
+
+    const failedRescan = render([], {
+      agents: failed("Scan failed: EACCES", agents),
+    });
+    expect(failedRescan).toContain("test-reviewer");
+    expect(failedRescan).toContain("Scan failed: EACCES");
+
+    const failedFirst = render([], { agents: failed("Scan failed: EACCES") });
+    expect(failedFirst).toContain("Scan failed: EACCES");
   });
 });

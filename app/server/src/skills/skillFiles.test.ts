@@ -8,34 +8,35 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import {
-  MAX_SKILL_FILE_PREVIEW_BYTES,
-  MAX_SKILL_RAW_FILE_BYTES,
-  MAX_SKILL_TREE_DEPTH,
-  MAX_SKILL_TREE_ENTRIES,
-  MAX_SKILL_TREE_METADATA_BYTES,
+  MAX_ENTRY_FILE_PREVIEW_BYTES,
+  MAX_ENTRY_RAW_FILE_BYTES,
+  MAX_ENTRY_TREE_DEPTH,
+  MAX_ENTRY_TREE_ENTRIES,
+  MAX_ENTRY_TREE_METADATA_BYTES,
 } from "@assistant/shared";
-import { readSkillDetail } from "./skillDetail.ts";
+import { readEntryDetail } from "../library/entryDetail.ts";
 import {
-  InvalidSkillFilePathError,
-  MAX_SKILL_TEXT_WINDOW_BYTES,
-  MAX_SKILL_TEXT_WINDOW_LINES,
-  readSkillFilePreview,
-  readSkillRawFile,
-  readSkillTextWindow,
-  SkillFileNotFoundError,
-  SkillFileNotTextError,
-  SkillFileTooLargeError,
-} from "./skillFiles.ts";
-import { SkillLibraryStore } from "./skillLibraryStore.ts";
+  EntryFileNotFoundError,
+  EntryFileNotTextError,
+  EntryFileTooLargeError,
+  InvalidEntryFilePathError,
+  MAX_ENTRY_TEXT_WINDOW_BYTES,
+  MAX_ENTRY_TEXT_WINDOW_LINES,
+  readEntryFilePreview,
+  readEntryRawFile,
+  readEntryTextWindow,
+} from "../library/entryFiles.ts";
+import { LibraryStore } from "../library/libraryStore.ts";
+import { skillKind } from "./skillLibrary.ts";
 
 const execFile = promisify(execFileCallback);
 
 let root: string;
-let library: SkillLibraryStore;
+let library: LibraryStore;
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skill-files-test-"));
-  library = new SkillLibraryStore(root);
+  library = new LibraryStore(skillKind, root);
   await mkdir(join(root, "source"), { recursive: true });
   await writeFile(
     join(root, "source", "SKILL.md"),
@@ -46,9 +47,9 @@ beforeEach(async () => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 async function detail() {
-  const result = await readSkillDetail("test-skill", library);
-  assert.equal(result?.kind, "skill");
-  if (result?.kind !== "skill") throw new Error("skill was not readable");
+  const result = await readEntryDetail("test-skill", library);
+  assert.equal(result?.kind, "entry");
+  if (result?.kind !== "entry") throw new Error("skill was not readable");
   return result;
 }
 
@@ -108,14 +109,14 @@ describe("skill file tree", () => {
 
     const files = (await detail()).files;
 
-    assert.equal(files.entryCount, MAX_SKILL_TREE_ENTRIES);
+    assert.equal(files.entryCount, MAX_ENTRY_TREE_ENTRIES);
     assert.equal(files.truncated, true);
     // Deterministic despite the bound: the defining document first, then the
     // byte-lexically smallest names, not whatever readdir happened to yield.
     assert.equal(files.entries[0]?.name, "SKILL.md");
     assert.equal(files.entries[1]?.name, "file-000000.txt");
     assert.equal(
-      files.entries[MAX_SKILL_TREE_ENTRIES - 1]?.name,
+      files.entries[MAX_ENTRY_TREE_ENTRIES - 1]?.name,
       "file-000998.txt",
     );
   });
@@ -137,7 +138,7 @@ describe("skill file tree", () => {
     assert.equal(files.entryCount, 1);
     assert.equal(files.truncated, true);
     assert.equal(files.limits.includes("metadata-bytes"), true);
-    assert.equal(files.metadataBytes <= MAX_SKILL_TREE_METADATA_BYTES, true);
+    assert.equal(files.metadataBytes <= MAX_ENTRY_TREE_METADATA_BYTES, true);
     assert.equal(files.diagnostics.length < paths.length, true);
     assert.equal(
       files.diagnostics.every((diagnostic) =>
@@ -148,14 +149,14 @@ describe("skill file tree", () => {
   });
 
   test("surfaces entry, depth, and metadata-byte bounds", async () => {
-    for (let index = 0; index < MAX_SKILL_TREE_ENTRIES; index += 1) {
+    for (let index = 0; index < MAX_ENTRY_TREE_ENTRIES; index += 1) {
       await writeFile(
         join(root, "source", `f-${String(index).padStart(4, "0")}.txt`),
         "x",
       );
     }
     const entryBound = (await detail()).files;
-    assert.equal(entryBound.entryCount, MAX_SKILL_TREE_ENTRIES);
+    assert.equal(entryBound.entryCount, MAX_ENTRY_TREE_ENTRIES);
     assert.equal(entryBound.truncated, true);
     assert.equal(entryBound.limits.includes("entries"), true);
 
@@ -166,7 +167,7 @@ describe("skill file tree", () => {
       "---\nname: test-skill\ndescription: Test.\n---\n# Test\n",
     );
     let current = join(root, "source");
-    for (let depth = 0; depth <= MAX_SKILL_TREE_DEPTH; depth += 1) {
+    for (let depth = 0; depth <= MAX_ENTRY_TREE_DEPTH; depth += 1) {
       current = join(current, `d${depth}`);
       await mkdir(current);
     }
@@ -178,7 +179,7 @@ describe("skill file tree", () => {
     for (let branch = 0; branch < branchCount; branch += 1) {
       current = join(root, "source", `branch-${branch}`);
       await mkdir(current);
-      for (let depth = 0; depth < MAX_SKILL_TREE_DEPTH; depth += 1) {
+      for (let depth = 0; depth < MAX_ENTRY_TREE_DEPTH; depth += 1) {
         current = join(
           current,
           `${String(depth).padStart(2, "0")}-${"x".repeat(170)}`,
@@ -188,7 +189,7 @@ describe("skill file tree", () => {
     }
     const byteBound = (await detail()).files;
     assert.equal(byteBound.limits.includes("metadata-bytes"), true);
-    assert.equal(byteBound.entryCount < MAX_SKILL_TREE_ENTRIES, true);
+    assert.equal(byteBound.entryCount < MAX_ENTRY_TREE_ENTRIES, true);
     const listedBranches = byteBound.entries
       .filter((entry) => entry.name.startsWith("branch-"))
       .map((entry) => entry.name);
@@ -211,10 +212,10 @@ describe("skill file reads", () => {
     );
     await writeFile(
       join(root, "source", "references", "large.txt"),
-      `wide\n${"é".repeat(MAX_SKILL_FILE_PREVIEW_BYTES)}`,
+      `wide\n${"é".repeat(MAX_ENTRY_FILE_PREVIEW_BYTES)}`,
     );
 
-    const raw = await readSkillRawFile(
+    const raw = await readEntryRawFile(
       "test-skill",
       "references/guide.md",
       library,
@@ -223,7 +224,7 @@ describe("skill file reads", () => {
     assert.equal(raw?.bytes, Buffer.byteLength("# Guide\n"));
     assert.equal(raw?.content.toString("utf8"), "# Guide\n");
 
-    const preview = await readSkillFilePreview(
+    const preview = await readEntryFilePreview(
       "test-skill",
       "references/large.txt",
       library,
@@ -240,7 +241,7 @@ describe("skill file reads", () => {
       Buffer.from([65, 0, 66]),
     );
 
-    const preview = await readSkillFilePreview(
+    const preview = await readEntryFilePreview(
       "test-skill",
       "pretend.txt",
       library,
@@ -269,22 +270,22 @@ describe("skill file reads", () => {
       "a\0b",
     ]) {
       await assert.rejects(
-        readSkillRawFile("test-skill", path, library),
-        InvalidSkillFilePathError,
+        readEntryRawFile("test-skill", path, library),
+        InvalidEntryFilePathError,
         path,
       );
     }
 
     await assert.rejects(
-      readSkillRawFile("test-skill", "%2e%2e/secret", library),
-      SkillFileNotFoundError,
+      readEntryRawFile("test-skill", "%2e%2e/secret", library),
+      EntryFileNotFoundError,
     );
   });
 
   test("reads supporting files whose names contain percent signs", async () => {
     await writeFile(join(root, "source", "50%-off.md"), "half price\n");
 
-    const raw = await readSkillRawFile("test-skill", "50%-off.md", library);
+    const raw = await readEntryRawFile("test-skill", "50%-off.md", library);
 
     assert.equal(raw?.content.toString("utf8"), "half price\n");
   });
@@ -297,12 +298,12 @@ describe("skill file reads", () => {
     await symlink("inside.txt", join(root, "source", "alias.txt"));
 
     await assert.rejects(
-      readSkillRawFile("test-skill", "escape.txt", library),
-      SkillFileNotFoundError,
+      readEntryRawFile("test-skill", "escape.txt", library),
+      EntryFileNotFoundError,
     );
     await assert.rejects(
-      readSkillRawFile("test-skill", "alias.txt", library),
-      SkillFileNotFoundError,
+      readEntryRawFile("test-skill", "alias.txt", library),
+      EntryFileNotFoundError,
     );
     const tree = (await detail()).files.entries;
     assert.equal(
@@ -316,20 +317,20 @@ describe("skill file reads", () => {
     await rm(join(root, "source", "gone.txt"));
 
     await assert.rejects(
-      readSkillRawFile("test-skill", "gone.txt", library),
-      SkillFileNotFoundError,
+      readEntryRawFile("test-skill", "gone.txt", library),
+      EntryFileNotFoundError,
     );
   });
 
   test("refuses a raw file larger than the download bound", async () => {
     await writeFile(
       join(root, "source", "huge.bin"),
-      Buffer.alloc(MAX_SKILL_RAW_FILE_BYTES + 1),
+      Buffer.alloc(MAX_ENTRY_RAW_FILE_BYTES + 1),
     );
 
     await assert.rejects(
-      readSkillRawFile("test-skill", "huge.bin", library),
-      SkillFileTooLargeError,
+      readEntryRawFile("test-skill", "huge.bin", library),
+      EntryFileTooLargeError,
     );
   });
 });
@@ -342,7 +343,7 @@ describe("skill text windows", () => {
     path: string,
     options: { offset?: number; limit?: number } = {},
   ) {
-    const read = await readSkillTextWindow(
+    const read = await readEntryTextWindow(
       "test-skill",
       path,
       options,
@@ -394,13 +395,13 @@ describe("skill text windows", () => {
   test("caps the line count and the window's own size", async () => {
     await writeFile(
       join(root, "source", "wide.md"),
-      `${lines(MAX_SKILL_TEXT_WINDOW_LINES + 100).join("\n")}\n`,
+      `${lines(MAX_ENTRY_TEXT_WINDOW_LINES + 100).join("\n")}\n`,
     );
     // Every line is well under the byte budget, so the LINE cap decides.
     const capped = await window("wide.md", {
-      limit: MAX_SKILL_TEXT_WINDOW_LINES + 100,
+      limit: MAX_ENTRY_TEXT_WINDOW_LINES + 100,
     });
-    assert.equal(capped.lastLine, MAX_SKILL_TEXT_WINDOW_LINES);
+    assert.equal(capped.lastLine, MAX_ENTRY_TEXT_WINDOW_LINES);
     assert.equal(capped.truncated, true);
 
     await writeFile(
@@ -409,7 +410,7 @@ describe("skill text windows", () => {
     );
     const bounded = await window("fat.md", { limit: 40 });
     assert.ok(
-      Buffer.byteLength(bounded.text, "utf8") <= MAX_SKILL_TEXT_WINDOW_BYTES,
+      Buffer.byteLength(bounded.text, "utf8") <= MAX_ENTRY_TEXT_WINDOW_BYTES,
       "a window never exceeds its byte budget",
     );
     assert.ok(bounded.lastLine < 40, "it stopped short of the last line");
@@ -420,7 +421,7 @@ describe("skill text windows", () => {
     // A single line nobody can page past would otherwise be emitted whole.
     await writeFile(
       join(root, "source", "one-line.md"),
-      `${"ü".repeat(MAX_SKILL_TEXT_WINDOW_BYTES)}\n`,
+      `${"ü".repeat(MAX_ENTRY_TEXT_WINDOW_BYTES)}\n`,
     );
 
     const read = await window("one-line.md");
@@ -428,7 +429,7 @@ describe("skill text windows", () => {
     assert.equal(read.lineCount, 1);
     assert.equal(read.truncated, true);
     assert.ok(
-      Buffer.byteLength(read.text, "utf8") <= MAX_SKILL_TEXT_WINDOW_BYTES,
+      Buffer.byteLength(read.text, "utf8") <= MAX_ENTRY_TEXT_WINDOW_BYTES,
     );
     assert.ok(!read.text.includes("�"), "never cut mid-character");
   });
@@ -449,12 +450,12 @@ describe("skill text windows", () => {
     // The final line of the prefix may be half a line, so it is not offered.
     await writeFile(
       join(root, "source", "huge.md"),
-      "x".repeat(MAX_SKILL_FILE_PREVIEW_BYTES + 10),
+      "x".repeat(MAX_ENTRY_FILE_PREVIEW_BYTES + 10),
     );
 
     const read = await window("huge.md");
 
-    assert.equal(read.bytes, MAX_SKILL_FILE_PREVIEW_BYTES + 10);
+    assert.equal(read.bytes, MAX_ENTRY_FILE_PREVIEW_BYTES + 10);
     assert.equal(read.lineCount, 0);
     assert.equal(read.truncated, true);
   });
@@ -467,12 +468,12 @@ describe("skill text windows", () => {
     );
 
     await assert.rejects(
-      readSkillTextWindow("test-skill", "logo.png", {}, library),
-      SkillFileNotTextError,
+      readEntryTextWindow("test-skill", "logo.png", {}, library),
+      EntryFileNotTextError,
     );
     await assert.rejects(
-      readSkillTextWindow("test-skill", "pretend.txt", {}, library),
-      SkillFileNotTextError,
+      readEntryTextWindow("test-skill", "pretend.txt", {}, library),
+      EntryFileNotTextError,
     );
   });
 
@@ -487,8 +488,8 @@ describe("skill text windows", () => {
     );
 
     await assert.rejects(
-      readSkillTextWindow("test-skill", "latin.md", {}, library),
-      SkillFileNotTextError,
+      readEntryTextWindow("test-skill", "latin.md", {}, library),
+      EntryFileNotTextError,
     );
   });
 
@@ -502,8 +503,8 @@ describe("skill text windows", () => {
     );
 
     await assert.rejects(
-      readSkillTextWindow("test-skill", "chopped.md", {}, library),
-      SkillFileNotTextError,
+      readEntryTextWindow("test-skill", "chopped.md", {}, library),
+      EntryFileNotTextError,
     );
   });
 
@@ -513,7 +514,7 @@ describe("skill text windows", () => {
     // bound is this read's own doing, not bad content.
     await writeFile(
       join(root, "source", "cut.md"),
-      `${"x".repeat(MAX_SKILL_FILE_PREVIEW_BYTES - 1)}ü\n`,
+      `${"x".repeat(MAX_ENTRY_FILE_PREVIEW_BYTES - 1)}ü\n`,
     );
 
     const bom = await window("bom.md");
@@ -529,23 +530,23 @@ describe("skill text windows", () => {
     await symlink("inside.txt", join(root, "source", "alias.txt"));
 
     await assert.rejects(
-      readSkillTextWindow("test-skill", "../secret", {}, library),
-      InvalidSkillFilePathError,
+      readEntryTextWindow("test-skill", "../secret", {}, library),
+      InvalidEntryFilePathError,
     );
     await assert.rejects(
-      readSkillTextWindow("test-skill", "alias.txt", {}, library),
-      SkillFileNotFoundError,
+      readEntryTextWindow("test-skill", "alias.txt", {}, library),
+      EntryFileNotFoundError,
     );
     await assert.rejects(
-      readSkillTextWindow("test-skill", "inside.txt", { offset: 0 }, library),
-      InvalidSkillFilePathError,
+      readEntryTextWindow("test-skill", "inside.txt", { offset: 0 }, library),
+      InvalidEntryFilePathError,
     );
     await assert.rejects(
-      readSkillTextWindow("test-skill", "inside.txt", { limit: 0 }, library),
-      InvalidSkillFilePathError,
+      readEntryTextWindow("test-skill", "inside.txt", { limit: 0 }, library),
+      InvalidEntryFilePathError,
     );
     assert.equal(
-      await readSkillTextWindow("no-such-skill", "inside.txt", {}, library),
+      await readEntryTextWindow("no-such-skill", "inside.txt", {}, library),
       null,
     );
   });

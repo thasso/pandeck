@@ -50,6 +50,7 @@ export const SETTINGS_SECTION_IDS = [
   "notifications",
   "worktrees",
   "skills",
+  "agents",
   "peer-runtimes",
   "background-processes",
   "port-forwarding",
@@ -117,6 +118,8 @@ export const SETTINGS_OUTSIDE_REGISTRY: Partial<
     "OpenAI accounts are credential profiles: list and manage them with accounts_read and accounts_update, sign them in with accounts_sign_in.",
   memory:
     "Memory cards themselves are managed with the memory tools, not settings.",
+  agents:
+    "Agent definitions are a library, not settings: read them with session_spawn operation agents and the agent_* tools.",
   notifications:
     "Push subscriptions belong to each browser or app install, not the server.",
   "port-forwarding":

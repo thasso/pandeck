@@ -1,8 +1,9 @@
 /**
- * Storage seam for the user-owned skills library.
+ * Storage seam for one user-owned Git-backed library (skills, agent
+ * definitions; the kind is a {@link LibraryKind}).
  *
  * Phase 1 made Pandeck a pure reader. It is now a reader AND the one
- * place a `skill_*` tool mutation reaches the repository
+ * place a library tool mutation reaches the repository
  * ([Task-633](pa://task/633), `docs/skills.md`): bootstrap still never authors
  * anything, the user still owns branches, remotes and history, and every scan
  * still reads the working tree — but a deliberate tool call commits here rather
@@ -21,7 +22,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { SKILLS_LIBRARY_DIR } from "../config.ts";
+import type { LibraryKind } from "./libraryKind.ts";
 import {
   git,
   gitBoundedStdout,
@@ -34,7 +35,7 @@ import {
 const bootstrapLocks = new Map<string, Promise<unknown>>();
 
 /** Compact per-commit metadata; deliberately smaller than `git log` output. */
-export interface SkillHistoryEntry {
+export interface LibraryHistoryEntry {
   commit: string;
   shortCommit: string;
   author: string;
@@ -45,21 +46,21 @@ export interface SkillHistoryEntry {
 }
 
 /** Who a tool mutation is attributed to; drives author identity and trailers. */
-interface SkillCommitActor {
+interface LibraryCommitActor {
   /** Stable local id, e.g. `claude:developer:<sessionId>`. */
   id: string;
   name: string;
 }
 
 /** Provenance recorded on every tool-made commit. */
-export interface SkillCommitMeta {
-  actor: SkillCommitActor;
+export interface LibraryCommitMeta {
+  actor: LibraryCommitActor;
   /** Short imperative reason; becomes the commit subject. */
   reason: string;
   sessionId: string;
   taskId?: string;
-  /** Declared skill names the mutation touched. */
-  skillNames?: string[];
+  /** Declared entry names the mutation touched. */
+  entryNames?: string[];
 }
 
 /**
@@ -68,12 +69,12 @@ export interface SkillCommitMeta {
  * silently returned fewer commits than asked for would be indistinguishable
  * from a short history.
  */
-export interface SkillHistory {
-  entries: SkillHistoryEntry[];
+export interface LibraryHistory {
+  entries: LibraryHistoryEntry[];
   truncated: boolean;
 }
 
-export interface SkillCommitResult {
+export interface LibraryCommitResult {
   commit: string;
   shortCommit: string;
   /** Library-relative paths the commit actually changed. */
@@ -81,24 +82,24 @@ export interface SkillCommitResult {
 }
 
 /** One uncommitted change standing between the user and a tool mutation. */
-interface SkillRepoChange {
+interface LibraryRepoChange {
   /** Two-letter porcelain status, e.g. ` M`, `??`, `A `. */
   status: string;
   path: string;
 }
 
 /** Compact repository state shown beside every list and refusal. */
-export interface SkillRepoStatus {
+export interface LibraryRepoStatus {
   clean: boolean;
   changeCount: number;
   /** Bounded sample of the changes; the count is authoritative. */
-  changes: SkillRepoChange[];
+  changes: LibraryRepoChange[];
   branch?: string;
   head?: { commit: string; shortCommit: string; subject: string };
 }
 
 /** What a mutation may do while it holds the repository lock. */
-export interface SkillMutationContext {
+export interface LibraryMutationContext {
   root: string;
   /**
    * Register every library-relative path the mutation may touch, BEFORE
@@ -179,7 +180,7 @@ export interface SkillMutationContext {
   committedFiles(
     prefix: string,
     limit: number,
-  ): Promise<ReadonlyMap<string, SkillCommittedEntry> | undefined>;
+  ): Promise<ReadonlyMap<string, LibraryCommittedEntry> | undefined>;
   /**
    * Whether a file on disk still carries the mode the repository committed for
    * it — asked in GIT's terms, not the kernel's.
@@ -244,7 +245,7 @@ export interface SkillMutationContext {
    */
   beyondCancellation(): void;
   /** The scan-time state of the repository, for messages and results. */
-  status: SkillRepoStatus;
+  status: LibraryRepoStatus;
 }
 
 /**
@@ -279,13 +280,13 @@ export type ClaimProof = { bytes: Uint8Array } | { movedFrom: string };
  * KIND of thing, with the same bit set?" — and for a symlink the object is the
  * blob of its TARGET, which is only meaningful once the mode says so.
  */
-export interface SkillCommittedEntry {
+export interface LibraryCommittedEntry {
   mode: string;
   object: string;
 }
 
 /** A refusal that names what the caller has to do about it. */
-class SkillRepositoryError extends Error {}
+class LibraryRepositoryError extends Error {}
 
 /**
  * A mutation the caller stopped, at a point where stopping changed nothing.
@@ -295,7 +296,7 @@ class SkillRepositoryError extends Error {}
  * that wants to distinguish "you asked me to stop" from "this could not be
  * done" needs more than a message to do it on.
  */
-export class SkillMutationCancelledError extends Error {}
+export class LibraryMutationCancelledError extends Error {}
 
 /**
  * What a mutation registered about one path, and what rollback may do with it.
@@ -392,14 +393,16 @@ async function withBootstrapLock<T>(
  */
 function assertGitRevision(value: string, label: string): string {
   const rev = value.trim();
-  if (!rev) throw new SkillRepositoryError(`A ${label} revision is required.`);
+  if (!rev)
+    throw new LibraryRepositoryError(`A ${label} revision is required.`);
   if (rev.startsWith("-"))
-    throw new SkillRepositoryError(`Invalid ${label} revision: "${value}".`);
+    throw new LibraryRepositoryError(`Invalid ${label} revision: "${value}".`);
   return rev;
 }
 
 /** Lazy, idempotent bootstrap plus the committing mutation seam. */
-export class SkillLibraryStore {
+export class LibraryStore {
+  readonly kind: LibraryKind;
   readonly root: string;
   private initialized: Promise<void> | undefined;
   /** The repository's hash algorithm, asked once and reused. */
@@ -407,7 +410,8 @@ export class SkillLibraryStore {
   /** Whether this repository tracks file modes (`core.fileMode`), asked once. */
   private fileModes: Promise<boolean> | undefined;
 
-  constructor(root: string = SKILLS_LIBRARY_DIR) {
+  constructor(kind: LibraryKind, root: string) {
+    this.kind = kind;
     this.root = root;
   }
 
@@ -436,17 +440,17 @@ export class SkillLibraryStore {
 
   private lockKey(): string {
     try {
-      return `skills:${realpathSync(this.root)}`;
+      return `${this.kind.plural}:${realpathSync(this.root)}`;
     } catch {
-      return `skills:${resolve(this.root)}`;
+      return `${this.kind.plural}:${resolve(this.root)}`;
     }
   }
 
   /**
    * Current repository state: cleanliness (including UNTRACKED files, which is
-   * what makes a committed skill complete), the branch, and HEAD.
+   * what makes a committed entry complete), the branch, and HEAD.
    */
-  async status(): Promise<SkillRepoStatus> {
+  async status(): Promise<LibraryRepoStatus> {
     await this.ensureInitialized();
     return this.readStatus();
   }
@@ -460,8 +464,8 @@ export class SkillLibraryStore {
    * restores every touched path and leaves HEAD where it was.
    */
   async commitMutation<T>(
-    meta: SkillCommitMeta,
-    run: (context: SkillMutationContext) => Promise<T>,
+    meta: LibraryCommitMeta,
+    run: (context: LibraryMutationContext) => Promise<T>,
     options: {
       /**
        * Runs after a successful commit while the repository lock is STILL
@@ -472,11 +476,15 @@ export class SkillLibraryStore {
       /**
        * The caller's cancellation. Honoured at the mutation's own checkpoints
        * only, and never once it is beyond stopping — see
-       * {@link SkillMutationContext.checkpoint}.
+       * {@link LibraryMutationContext.checkpoint}.
        */
       signal?: AbortSignal;
     } = {},
-  ): Promise<{ value: T; commit: SkillCommitResult; status: SkillRepoStatus }> {
+  ): Promise<{
+    value: T;
+    commit: LibraryCommitResult;
+    status: LibraryRepoStatus;
+  }> {
     await this.ensureInitialized();
     // Node replaces malformed UTF-16 (for example a lone surrogate left by
     // code-unit clipping) with U+FFFD when it writes or spawns. Canonicalize
@@ -484,22 +492,24 @@ export class SkillLibraryStore {
     // identity proved after Git's UTF-8 round trip are the same strings.
     const canonicalMeta = canonicalCommitMeta(meta);
     const reason = canonicalMeta.reason.trim();
-    if (!reason) throw new SkillRepositoryError("A commit reason is required.");
+    if (!reason)
+      throw new LibraryRepositoryError("A commit reason is required.");
 
     return withRepoLock(await repoLockKey(this.root), async () => {
       /** Whether stopping is still free. Latched off, never back on. */
       let cancellable = true;
       const checkpoint = (): void => {
         if (!cancellable || options.signal?.aborted !== true) return;
-        throw new SkillMutationCancelledError(
-          `The skills library mutation "${reason}" was cancelled before it changed anything.`,
+        throw new LibraryMutationCancelledError(
+          `The ${this.kind.plural} library mutation "${reason}" was cancelled before it changed anything.`,
         );
       };
       // Before the cleanliness read, so a call cancelled while it waited for
       // the repository lock does no work at all.
       checkpoint();
       const status = await this.readStatus();
-      if (!status.clean) throw dirtyRepositoryError(this.root, status);
+      if (!status.clean)
+        throw dirtyRepositoryError(this.kind, this.root, status);
       await this.assertIndexUsable();
 
       const touched = new Map<string, TouchedPath>();
@@ -521,7 +531,7 @@ export class SkillLibraryStore {
         touched.set(path, entry);
         return entry;
       };
-      const context: SkillMutationContext = {
+      const context: LibraryMutationContext = {
         root: this.root,
         status,
         touch: (...paths) => {
@@ -580,13 +590,13 @@ export class SkillLibraryStore {
           this.modeStillCommitted(committed, current),
         // Hashing a hand-authored file is the one unbounded stretch of work a
         // mutation does — the library is the user's, and nothing caps what they
-        // put beside a skill — so the checkpoint goes INSIDE the read loop
+        // put beside an entry — so the checkpoint goes INSIDE the read loop
         // rather than only around it. Past `beyondCancellation` it is inert,
         // which is what lets the same call be used by a removal's own checks.
         blobId: (content) => this.blobId(content, checkpoint),
       };
       let value: T;
-      let commit: SkillCommitResult;
+      let commit: LibraryCommitResult;
       try {
         value = await run(context);
         // The work is done and the Git handoff is next; there is nothing left
@@ -601,7 +611,7 @@ export class SkillLibraryStore {
           .map(([path]) => path)
           .sort();
         if (paths.length === 0) {
-          throw new SkillRepositoryError(
+          throw new LibraryRepositoryError(
             "The mutation registered no paths to commit.",
           );
         }
@@ -659,8 +669,8 @@ export class SkillLibraryStore {
     );
     const directory = gitDir.code === 0 ? gitDir.stdout.trim() : "";
     if (!directory || !existsSync(join(directory, "index.lock"))) return;
-    throw new SkillRepositoryError(
-      `The skills repository at ${this.root} has a Git index lock (${join(directory, "index.lock")}), so no skill mutation can run: another Git process is using it, or a previous one left it behind. Wait for that process or remove the stale lock, then retry. Reads, history, and diffs remain available meanwhile.`,
+    throw new LibraryRepositoryError(
+      `The ${this.kind.plural} repository at ${this.root} has a Git index lock (${join(directory, "index.lock")}), so no ${this.kind.noun} mutation can run: another Git process is using it, or a previous one left it behind. Wait for that process or remove the stale lock, then retry. Reads, history, and diffs remain available meanwhile.`,
     );
   }
 
@@ -673,7 +683,7 @@ export class SkillLibraryStore {
    */
   async history(
     options: { path?: string; limit?: number; signal?: AbortSignal } = {},
-  ): Promise<SkillHistory> {
+  ): Promise<LibraryHistory> {
     await this.ensureInitialized();
     if (await this.isUnborn()) return { entries: [], truncated: false };
     const limit = options.limit ?? HISTORY_LIMIT_DEFAULT;
@@ -696,7 +706,7 @@ export class SkillLibraryStore {
       options.signal,
     );
     const fields = patch.split("\0");
-    const parsedEntries: SkillHistoryEntry[] = [];
+    const parsedEntries: LibraryHistoryEntry[] = [];
     // A stream cut inside the trailer still has all five fields and identifies
     // a real commit; a cut in any earlier field does not. With complete output
     // the record terminator supplies the fifth delimiter. No commit message can
@@ -757,14 +767,14 @@ export class SkillLibraryStore {
     );
     if (result.code === 0) return false;
     if (result.code === 1) return true;
-    throw new SkillRepositoryError(
-      `The skills repository at ${this.root} could not be read (git rev-parse exited ${result.code}): ${
+    throw new LibraryRepositoryError(
+      `The ${this.kind.plural} repository at ${this.root} could not be read (git rev-parse exited ${result.code}): ${
         result.stderr.trim() || "no error output"
       }. This is a repository problem, not an empty history.`,
     );
   }
 
-  private async readStatus(): Promise<SkillRepoStatus> {
+  private async readStatus(): Promise<LibraryRepoStatus> {
     const porcelain = await git(
       ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
       this.root,
@@ -815,9 +825,9 @@ export class SkillLibraryStore {
    * detach a maintenance process that would outlive this lock.
    */
   private async commitStaged(
-    meta: SkillCommitMeta & { reason: string },
+    meta: LibraryCommitMeta & { reason: string },
   ): Promise<{
-    result: SkillCommitResult;
+    result: LibraryCommitResult;
     identity: ExpectedCommitIdentity;
   }> {
     const staged = await git(
@@ -835,16 +845,18 @@ export class SkillLibraryStore {
       .split("\0")
       .filter((path) => path !== "");
     if (changedPaths.length === 0) {
-      throw new SkillRepositoryError(
+      throw new LibraryRepositoryError(
         "Nothing changed, so there is nothing to commit; the requested content already matches the library.",
       );
     }
     const identity: ExpectedCommitIdentity = {
-      message: buildCommitMessage(meta, changedPaths),
-      authorName: trailerValue(meta.actor.name) || "skill agent",
-      authorEmail: actorEmail(meta.actor),
+      message: buildCommitMessage(this.kind, meta, changedPaths),
+      authorName: trailerValue(meta.actor.name) || `${this.kind.noun} agent`,
+      authorEmail: actorEmail(this.kind, meta.actor),
     };
-    const directory = await mkdtemp(join(tmpdir(), "skills-commit-"));
+    const directory = await mkdtemp(
+      join(tmpdir(), `${this.kind.plural}-commit-`),
+    );
     const file = join(directory, "message.txt");
     try {
       await writeFile(file, identity.message, "utf8");
@@ -929,8 +941,8 @@ export class SkillLibraryStore {
     const after = await this.readStatus().catch(() => undefined);
     if (after?.clean && !restoreFailure) return cause;
     if (!after) {
-      return new SkillRepositoryError(
-        `The mutation failed AND the skills repository at ${this.root} could not be read afterwards, so what is left in it is unknown. Check it by hand before retrying. The original failure was: ${
+      return new LibraryRepositoryError(
+        `The mutation failed AND the ${this.kind.plural} repository at ${this.root} could not be read afterwards, so what is left in it is unknown. Check it by hand before retrying. The original failure was: ${
           cause instanceof Error ? cause.message : String(cause)
         }`,
       );
@@ -938,18 +950,18 @@ export class SkillLibraryStore {
     if (after.clean) {
       // Nothing is left behind, but part of the undo did not run, so say so
       // rather than presenting a clean tree as a complete rollback.
-      return new SkillRepositoryError(
+      return new LibraryRepositoryError(
         `The mutation failed and its Git restore could not run (${
           restoreFailure instanceof Error
             ? restoreFailure.message
             : String(restoreFailure)
-        }); the skills repository at ${this.root} is clean again. The original failure was: ${
+        }); the ${this.kind.plural} repository at ${this.root} is clean again. The original failure was: ${
           cause instanceof Error ? cause.message : String(cause)
         }`,
       );
     }
-    return new SkillRepositoryError(
-      `The mutation failed AND its changes could not be undone, so the skills repository at ${this.root} now holds ${after.changeCount} uncommitted change(s): ${after.changes
+    return new LibraryRepositoryError(
+      `The mutation failed AND its changes could not be undone, so the ${this.kind.plural} repository at ${this.root} now holds ${after.changeCount} uncommitted change(s): ${after.changes
         .map((change) => `${change.status.trim() || "??"} ${change.path}`)
         .join(
           ", ",
@@ -989,12 +1001,12 @@ export class SkillLibraryStore {
       "HEAD",
     );
     if (unexpected.length === 0) return;
-    throw new SkillRepositoryError(
+    throw new LibraryRepositoryError(
       `The commit would have contained ${unexpected.length} change(s) this mutation did not make: ${unexpected
         .slice(0, MAX_STATUS_CHANGES)
         .join(
           ", ",
-        )}. Something else wrote in the skills repository at ${this.root} while the mutation ran, so nothing was committed. Resolve those changes by hand, then retry.`,
+        )}. Something else wrote in the ${this.kind.plural} repository at ${this.root} while the mutation ran, so nothing was committed. Resolve those changes by hand, then retry.`,
     );
   }
 
@@ -1037,13 +1049,13 @@ export class SkillLibraryStore {
   private async committedFiles(
     prefix: string,
     limit: number,
-  ): Promise<ReadonlyMap<string, SkillCommittedEntry> | undefined> {
+  ): Promise<ReadonlyMap<string, LibraryCommittedEntry> | undefined> {
     const listed = await gitOptional(
       ["ls-tree", "-r", "-z", "HEAD", "--", prefix],
       this.root,
     );
     if (listed.code !== 0) return new Map();
-    const files = new Map<string, SkillCommittedEntry>();
+    const files = new Map<string, LibraryCommittedEntry>();
     for (const record of listed.stdout.split("\0")) {
       if (record === "") continue;
       // `<mode> <type> <object>\t<path>`
@@ -1180,8 +1192,8 @@ export class SkillLibraryStore {
       actualParents.some((value, index) => value !== expectedParents[index])
     ) {
       await this.undoCommit(parent);
-      throw new SkillRepositoryError(
-        `The commit did not leave exactly one new commit on the skills repository, so it was undone. Something else — most likely a \`post-commit\` hook in ${this.root} — moved HEAD while the commit was being made. Resolve that hook or repository automation, then retry.`,
+      throw new LibraryRepositoryError(
+        `The commit did not leave exactly one new commit on the ${this.kind.plural} repository, so it was undone. Something else — most likely a \`post-commit\` hook in ${this.root} — moved HEAD while the commit was being made. Resolve that hook or repository automation, then retry.`,
       );
     }
     // A same-parent amend evades the ancestry proof: it replaces the commit
@@ -1214,8 +1226,8 @@ export class SkillLibraryStore {
       authorEmail.trimEnd() !== expected.authorEmail
     ) {
       await this.undoCommit(parent);
-      throw new SkillRepositoryError(
-        `The skills commit's generated message or author was replaced, so it was undone. Something else — most likely a \`post-commit\` hook in ${this.root} — amended HEAD while the commit was being made. Resolve that hook or repository automation, then retry.`,
+      throw new LibraryRepositoryError(
+        `The ${this.kind.plural} commit's generated message or author was replaced, so it was undone. Something else — most likely a \`post-commit\` hook in ${this.root} — amended HEAD while the commit was being made. Resolve that hook or repository automation, then retry.`,
       );
     }
     const committed = await git(
@@ -1234,12 +1246,12 @@ export class SkillLibraryStore {
     // disk: a hook's own file stays, untracked and reported, rather than being
     // destroyed to undo its staging.
     await this.undoCommit(parent);
-    throw new SkillRepositoryError(
+    throw new LibraryRepositoryError(
       `The commit was made with ${unexpected.length} change(s) this mutation did not make, so it was undone: ${unexpected
         .slice(0, MAX_STATUS_CHANGES)
         .join(
           ", ",
-        )}. Something else — most likely a \`pre-commit\` hook in the skills repository at ${this.root} — staged content while the commit was being made. Resolve those changes by hand, then retry.`,
+        )}. Something else — most likely a \`pre-commit\` hook in the ${this.kind.plural} repository at ${this.root} — staged content while the commit was being made. Resolve those changes by hand, then retry.`,
     );
   }
 
@@ -1264,6 +1276,15 @@ export class SkillLibraryStore {
     const [mode, object] = entry?.split(" ") ?? [];
     if (mode === undefined || object === undefined) return undefined;
     return { mode, object };
+  }
+
+  /**
+   * The id Git gives these bytes as a blob in THIS repository — SHA-1 or
+   * SHA-256, whichever the user's repository uses — so a frozen copy names
+   * its exact source.
+   */
+  async gitBlobIdOf(content: Uint8Array): Promise<string> {
+    return this.blobId(content);
   }
 
   /** The object id Git gives this content as a blob, in this repository. */
@@ -1301,7 +1322,7 @@ export class SkillLibraryStore {
     while (position < size) {
       // Between chunks and not inside one: the file is only being READ, so the
       // hash can be abandoned wherever it has got to without leaving anything
-      // behind — and a multi-gigabyte file a hand author put beside a skill
+      // behind — and a multi-gigabyte file a hand author put beside an entry
       // does not have to be hashed to the end before a stop is noticed.
       checkpoint?.();
       const { bytesRead } = await content.read(
@@ -1399,21 +1420,22 @@ function digestOf(content: Uint8Array): string {
 
 /** The one refusal every mutation shares, carrying what the user must resolve. */
 function dirtyRepositoryError(
+  kind: LibraryKind,
   root: string,
-  status: SkillRepoStatus,
-): SkillRepositoryError {
+  status: LibraryRepoStatus,
+): LibraryRepositoryError {
   const sample = status.changes
     .map((change) => `${change.status.trim() || "??"} ${change.path}`)
     .join(", ");
-  return new SkillRepositoryError(
-    `The skills repository at ${root} has ${status.changeCount} uncommitted change(s), so no skill mutation can run: ${sample}${
+  return new LibraryRepositoryError(
+    `The ${kind.plural} repository at ${root} has ${status.changeCount} uncommitted change(s), so no ${kind.noun} mutation can run: ${sample}${
       status.changeCount > status.changes.length ? ", …" : ""
     }. Commit or discard them in that repository (it is the user's own Git working tree), then retry. Reads, history, and diffs remain available meanwhile.`,
   );
 }
 
-function parsePorcelain(stdout: string): SkillRepoChange[] {
-  const changes: SkillRepoChange[] = [];
+function parsePorcelain(stdout: string): LibraryRepoChange[] {
+  const changes: LibraryRepoChange[] = [];
   const records = stdout.split("\0");
   for (let index = 0; index < records.length; index++) {
     const record = records[index];
@@ -1431,7 +1453,7 @@ function canonicalUtf8(value: string): string {
   return Buffer.from(value, "utf8").toString("utf8");
 }
 
-function canonicalCommitMeta(meta: SkillCommitMeta): SkillCommitMeta {
+function canonicalCommitMeta(meta: LibraryCommitMeta): LibraryCommitMeta {
   return {
     ...meta,
     reason: canonicalUtf8(meta.reason),
@@ -1443,20 +1465,20 @@ function canonicalCommitMeta(meta: SkillCommitMeta): SkillCommitMeta {
     ...(meta.taskId === undefined
       ? {}
       : { taskId: canonicalUtf8(meta.taskId) }),
-    ...(meta.skillNames === undefined
+    ...(meta.entryNames === undefined
       ? {}
-      : { skillNames: meta.skillNames.map(canonicalUtf8) }),
+      : { entryNames: meta.entryNames.map(canonicalUtf8) }),
   };
 }
 
-function actorEmail(actor: SkillCommitActor): string {
+function actorEmail(kind: LibraryKind, actor: LibraryCommitActor): string {
   const slug =
     actor.id
       .trim()
       .toLowerCase()
       .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "agent";
-  return `${slug}@skills.local`;
+  return `${slug}@${kind.plural}.local`;
 }
 
 /**
@@ -1482,26 +1504,28 @@ function trailerValue(
 }
 
 function buildCommitMessage(
-  meta: SkillCommitMeta & { reason: string },
+  kind: LibraryKind,
+  meta: LibraryCommitMeta & { reason: string },
   paths: string[],
 ): string {
   const subject =
-    trailerValue(meta.reason, MAX_COMMIT_REASON_CHARS) || "Update skill";
+    trailerValue(meta.reason, MAX_COMMIT_REASON_CHARS) || `Update ${kind.noun}`;
+  const prefix = kind.trailerPrefix;
   const lines = [subject, ""];
   const actor = trailerValue(meta.actor.id);
   const name = trailerValue(meta.actor.name);
-  lines.push(`Skill-Actor: ${actor}${name ? ` (${name})` : ""}`);
-  lines.push(`Skill-Session: ${trailerValue(meta.sessionId)}`);
+  lines.push(`${prefix}-Actor: ${actor}${name ? ` (${name})` : ""}`);
+  lines.push(`${prefix}-Session: ${trailerValue(meta.sessionId)}`);
   const taskId = meta.taskId
     ? trailerValue(meta.taskId, MAX_COMMIT_TASK_ID_CHARS)
     : "";
-  if (taskId) lines.push(`Skill-Task: ${taskId}`);
-  if (meta.skillNames?.length)
-    lines.push(`Skill-Names: ${meta.skillNames.join(", ")}`);
+  if (taskId) lines.push(`${prefix}-Task: ${taskId}`);
+  if (meta.entryNames?.length)
+    lines.push(`${prefix}-Names: ${meta.entryNames.join(", ")}`);
   // A Git path may contain commas, quotes, trailing spaces, or any byte except
   // NUL and slash. JSON keeps the one-line trailer machine-decodable without
   // changing those paths (control bytes are escaped rather than collapsed).
-  lines.push(`Skill-Paths: ${JSON.stringify(paths)}`);
+  lines.push(`${prefix}-Paths: ${JSON.stringify(paths)}`);
   return lines.join("\n") + "\n";
 }
 
@@ -1510,7 +1534,7 @@ function buildCommitMessage(
  * hand-authored, so a commit subject or trailer is arbitrary user text and a
  * compact history must not become the largest thing in a tool result.
  */
-function parseHistoryRecord(fields: string[]): SkillHistoryEntry {
+function parseHistoryRecord(fields: string[]): LibraryHistoryEntry {
   const [commit = "", author = "", date = "", subject = "", block = ""] =
     fields;
   const trailers: Record<string, string> = {};
@@ -1536,10 +1560,3 @@ function boundField(value: string): string {
     ? `${text.slice(0, MAX_HISTORY_FIELD_CHARS - 1)}…`
     : text;
 }
-
-/**
- * The process-wide library store. Every read path — the `skills` topic, the
- * bounded HTTP detail read, and the agent tools — goes through this one
- * instance so they share a single bootstrap and one mutation lock chain.
- */
-export const skillLibraryStore = new SkillLibraryStore();
