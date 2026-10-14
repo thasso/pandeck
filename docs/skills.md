@@ -581,13 +581,15 @@ and reads each `SKILL.md` up to a generous cap instead of in full; the
 supporting-file tree holds only as many names at a time as it could ever answer
 with, and stops the moment an entry, metadata or depth bound is reached;
 `skill_list` bounds both of its lists and reports the true totals with an
-explicit `truncated`, and cuts each diagnostic's text at 500 characters, marked
-"(cut)"; a duplicate-name diagnostic names at most five of its folders. An
-attachment import is checked against the per-file and whole-batch budgets on its
-RECORDED SIZE before a byte of it is read, and the read itself is bounded —
-looping to EOF, because one `read` is not a whole file, and refusing when what
-arrives is not the size the budgets were spent on, since a prefix of somebody's
-binary file is not what anyone asked to import.
+explicit `truncated`. The scanner bounds each diagnostic where it is made
+(`libraryScanner.ts`): its text is cut at 500 characters, marked "(cut)", a
+folder keeps at most five (the last saying how many more problems it has), and a
+duplicate-name diagnostic names at most five of its folders. An attachment
+import is checked against the per-file and whole-batch budgets on its RECORDED
+SIZE before a byte of it is read, and the read itself is bounded — looping to
+EOF, because one `read` is not a whole file, and refusing when what arrives is
+not the size the budgets were spent on, since a prefix of somebody's binary file
+is not what anyone asked to import.
 
 Bounds are the viewer's, not new ones: `SKILL.md` source is bounded at
 `MAX_ENTRY_BODY_BYTES` (256 KiB), one supporting text write at

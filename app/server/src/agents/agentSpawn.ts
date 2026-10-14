@@ -85,14 +85,29 @@ export async function scanAgentsForSpawn(): Promise<{
 
 /** Why `name` is not a valid definition, in the scanner's own words. */
 function notFoundReason(name: string, diagnostics: EntryDiagnostic[]): string {
-  const problems = diagnostics.filter(
-    (diagnostic) =>
-      diagnostic.declaredName === name || diagnostic.folder === name,
-  );
-  return problems.length > 0
-    ? `Agent definition "${name}" is not valid: ${problems.map((problem) => problem.error).join(" ")}`
-    : `There is no agent definition named "${name}". Call session_spawn with operation "agents" for the ones that exist.`;
+  // Each diagnostic is bounded, but a name can match a thousand folders: the
+  // reasons are deduplicated and a few are quoted.
+  const problems = [
+    ...new Set(
+      diagnostics
+        .filter(
+          (diagnostic) =>
+            diagnostic.declaredName === name || diagnostic.folder === name,
+        )
+        .map((diagnostic) => diagnostic.error),
+    ),
+  ];
+  if (problems.length === 0)
+    return `There is no agent definition named "${name}". Call session_spawn with operation "agents" for the ones that exist.`;
+  const quoted = problems.slice(0, MAX_QUOTED_PROBLEMS);
+  const more = problems.length - quoted.length;
+  return `Agent definition "${name}" is not valid: ${quoted.join(" ")}${
+    more > 0 ? ` And ${more} more problems; agent_list shows them.` : ""
+  }`;
 }
+
+/** How many distinct problems a refusal quotes. */
+const MAX_QUOTED_PROBLEMS = 3;
 
 /**
  * Resolve one definition for a spawn, against `scanned` when the caller holds

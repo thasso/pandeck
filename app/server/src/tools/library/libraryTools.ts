@@ -66,7 +66,6 @@ const MAX_TREE_ROWS = 200;
 /** How many entries and diagnostics one `<prefix>_list` result carries. */
 export const MAX_LISTED_ENTRIES = 200;
 const MAX_LISTED_DIAGNOSTICS = 50;
-const MAX_LISTED_DIAGNOSTIC_CHARS = 500;
 
 /**
  * A mutation the kind sent to the user instead of committing: the tool answers
@@ -280,12 +279,8 @@ export function libraryTools(spec: LibraryToolSpec): AgentTool[] {
           folder: diagnostic.folder,
           path: diagnostic.path,
           code: diagnostic.code,
-          // A diagnostic's text comes from the folder (a parse error, a
-          // name), so it is bounded too, and says so when cut.
-          error:
-            diagnostic.error.length > MAX_LISTED_DIAGNOSTIC_CHARS
-              ? `${diagnostic.error.slice(0, MAX_LISTED_DIAGNOSTIC_CHARS)}… (cut)`
-              : diagnostic.error,
+          // Bounded by the scanner (`clipDiagnostic`).
+          error: diagnostic.error,
         })),
       });
     },

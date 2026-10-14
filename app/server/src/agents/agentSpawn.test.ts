@@ -25,6 +25,7 @@ import {
   setAgentSpawnSourcesForTests,
 } from "./agentSpawn.ts";
 import { LibraryStore } from "../library/libraryStore.ts";
+import { scanLibrary } from "../library/libraryScanner.ts";
 
 function model(
   provider: string,
@@ -230,4 +231,45 @@ test("the frozen blob id names the bytes on disk, a BOM or invalid UTF-8 include
     const { agent } = await resolveAgentSpawn(name);
     assert.equal(agent.blob, hashObject(name), name);
   }
+});
+
+test("a refusal for an invalid definition stays bounded, however much is wrong", async () => {
+  // Thousands of unknown keys, each its own problem quoting its key.
+  const keys = Array.from(
+    { length: 2500 },
+    (_, at) => `k${at}${"x".repeat(40)}: 1`,
+  ).join("\n");
+  mkdirSync(join(root, "rev"), { recursive: true });
+  writeFileSync(
+    join(root, "rev", "AGENT.md"),
+    `---\nname: rev\ndescription: Reviews.\npersona: developer\nmodel: opus\n${keys}\n---\nReview.\n`,
+  );
+  // And a name a thousand folders declare, each with a problem of its own.
+  for (let at = 0; at < 1000; at++)
+    write(`dup-${at}`, reviewer().replace("---\n", `---\nextra${at}: 1\n`));
+
+  for (const name of ["rev", "test-reviewer"]) {
+    const refusal = await resolveAgentSpawn(name).then(
+      () => assert.fail(`${name} should be refused`),
+      (error: Error) => error,
+    );
+    assert.ok(refusal instanceof AgentSpawnRefusedError);
+    assert.ok(
+      refusal.message.length < 3_000,
+      `${name}: ${refusal.message.length}`,
+    );
+  }
+});
+
+test("a folder keeps a few diagnostics, the last saying how many more", async () => {
+  const keys = Array.from({ length: 8 }, (_, at) => `extra${at}: 1`).join("\n");
+  write("noisy", reviewer().replace("---\n", `---\n${keys}\n`));
+
+  const { diagnostics } = await scanLibrary(agentKind, root);
+
+  assert.equal(diagnostics.length, 5);
+  assert.match(
+    diagnostics.at(-1)!.error,
+    /And 3 more problems in noisy\/AGENT\.md\.$/,
+  );
 });

@@ -223,7 +223,8 @@ approval card (`docs/approvals.md`):
   caller knows why one it was told about cannot be used. The answer is bounded
   like `agent_list` (200 rows, the true total stated), with descriptions and
   reasons cut at 300 characters; a definition left out can still be spawned by
-  name.
+  name. Spawning an invalid one is refused with at most three of its distinct
+  problems and how many more there are (`notFoundReason`).
 - An `agent` field on a `spawn` row, naming a definition. The row then takes no
   `profileId` and no `agentType`; stating either is refused. Model, effort, and
   persona come from the definition and the account from the account function.
