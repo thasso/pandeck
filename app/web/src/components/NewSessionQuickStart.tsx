@@ -624,12 +624,13 @@ function AgentDefinitionRow({
   // An authoritatively empty library has nothing to offer: no row.
   if (agents.entries.length === 0 && !error) return null;
   // Why each definition cannot start here, if it cannot: the server's reason,
-  // or no enabled account of its model's provider.
+  // or no enabled account of its model's provider. Each names its definition,
+  // so two alike still say which pill they explain.
   const problemOf = (name: string): string | undefined => {
     const runtime = agentRuntimeOf(agents, name);
     if (runtime?.problem !== undefined) return runtime.problem;
     if (runtime && accounts && !hasAccountFor(accounts, runtime.provider))
-      return `No enabled account runs ${runtime.provider} models.`;
+      return `Agent "${name}" cannot start here: no enabled account runs ${runtime.provider} models.`;
     return undefined;
   };
   const problems = agents.entries.flatMap((agent) => {

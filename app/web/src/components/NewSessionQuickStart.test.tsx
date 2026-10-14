@@ -580,7 +580,7 @@ describe("agent definitions row", () => {
 
     const noClaude = render([], { agents: ready(agents), profiles: [] });
     expect(noClaude).toContain(
-      "<li>No enabled account runs claude-sdk models.</li>",
+      "<li>Agent &quot;test-reviewer&quot; cannot start here: no enabled account runs claude-sdk models.</li>",
     );
   });
 

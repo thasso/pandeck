@@ -374,17 +374,18 @@ handoff creates the session without a first send. The row and the pick belong to
 `/sessions/create`, where the `agents` topic is held; the Sessions list route
 shows the draft without them, so a pick is dropped there. Every fresh draft (a
 new session, one for a Task, project, file or worktree, a pull request or
-review) also retires a first send held for retry. The pick follows the agents
-list (`reconcileStagedAgent`): a definition that is gone or cannot start any
-more is dropped, and one whose runtime changed is restaged, so the pickers show
-what will run. The first send carries `agent`, and the server resolves the
-definition again on the picked account (`harnesses/firstSend.ts`): the session
-runs on the definition's model and effort and freezes it exactly as a spawn
-does. A persona, engine, model or effort that no longer matches the definition
-refuses the send rather than run something other than what the pickers showed.
-The refusal says what the definition runs on now and republishes the agents
-list, so the draft follows it and the next send starts the definition.
-`appAudit.test.ts` holds `App` to the fresh-draft and re-issue helpers.
+review) also retires a first send held for retry. On that page the pick follows
+the agents list (`hooks/useStagedAgentReconcile.ts`), and never undoes what
+leaving the page spent: a definition that is gone or cannot start any more is
+dropped, and one whose runtime changed is restaged, so the pickers show what
+will run. The first send carries `agent`, and the server resolves the definition
+again on the picked account (`harnesses/firstSend.ts`): the session runs on the
+definition's model and effort and freezes it exactly as a spawn does. A persona,
+engine, model or effort that no longer matches the definition refuses the send
+rather than run something other than what the pickers showed. The refusal says
+what the definition runs on now and republishes the agents list, so the draft
+follows it and the next send starts the definition. `appAudit.test.ts` holds
+`App` to the fresh-draft and re-issue helpers.
 
 ## Out of scope
 

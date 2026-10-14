@@ -242,6 +242,7 @@ import { useDirtyWorktrees } from "./hooks/useDirtyWorktrees.ts";
 import { useWorkflowIndicators } from "./hooks/useWorkflowIndicators.ts";
 import { useWorktreeWatches } from "./hooks/useWorktreeWatches.ts";
 import { useApnsRegistration } from "./hooks/useApnsRegistration.ts";
+import { useStagedAgentReconcile } from "./hooks/useStagedAgentReconcile.ts";
 import { taskStartSession, taskWorktreeIds } from "./lib/taskActivity.ts";
 import {
   acceptStatusSuggestionSave,
@@ -371,7 +372,6 @@ import {
   agentDraft,
   type DraftRuntime,
   leftNewSessionPage,
-  reconcileStagedAgent,
   reissuedFirstSend,
   stagedSessionRecord,
   withoutAgent,
@@ -4472,43 +4472,15 @@ function AppContent() {
       mode: current?.mode,
     });
   };
-  // The staged agent follows the library: a definition deleted, renamed or
-  // made unrunnable is dropped, and one whose runtime changed is restaged, so
-  // the pickers keep showing what the first send will run. Written straight to
-  // the record: a passive effect must neither flushSync nor pull focus to the
-  // composer the way a click's restage does.
-  useEffect(() => {
-    const list = dataOf(state.agentLibrary);
-    const change = reconcileStagedAgent(pendingStart, list);
-    if (change === "keep" || !pendingStart?.agent) return;
-    const draft =
-      change === "restage"
-        ? agentDraft(
-            list,
-            pendingStart.agent,
-            activeCredentialProfiles,
-            credentialProfileId,
-          )
-        : undefined;
-    if (!draft) {
-      setPendingStart(withoutAgent(pendingStart));
-      return;
-    }
-    const { accountId, ...runtime } = draft;
-    setCredentialProfileId(accountId);
-    setPendingStart(
-      stagedSessionRecord({
-        ...runtime,
-        id: pendingStart.id,
-        mode: pendingStart.mode,
-      }),
-    );
-  }, [
-    state.agentLibrary,
+  useStagedAgentReconcile({
+    active: route.name === "new",
+    list: dataOf(state.agentLibrary),
     pendingStart,
-    activeCredentialProfiles,
-    credentialProfileId,
-  ]);
+    setPendingStart,
+    accounts: activeCredentialProfiles,
+    accountId: credentialProfileId,
+    setAccountId: setCredentialProfileId,
+  });
   /**
    * The draft as the pickers show it this render: what a re-issued first send
    * runs (`reissuedFirstSend`), whichever control re-issues it.
