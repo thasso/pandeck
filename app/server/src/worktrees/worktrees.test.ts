@@ -437,7 +437,8 @@ test("worktree_create records its caller and worktree_status lists the spawn tre
       harness: "pi",
       agentType: "developer",
     });
-  sessionStore.linkSpawned("tree-coord", "tree-peer");
+  // A child born user-owned remains in the worktree provenance tree.
+  sessionStore.linkSpawned("tree-coord", "tree-peer", 123, "taken-over");
   sessionStore.linkSpawned("tree-peer", "tree-grandpeer");
   const ctxFor = (sessionId: string) => ({
     toolCallId: `tree-${sessionId}`,
@@ -575,6 +576,10 @@ test("worktree_create records its caller and worktree_status lists the spawn tre
     false,
     "the synthetic main checkout is never owned",
   );
+
+  // Hand back changes control, not the worktree tree or its holders.
+  sessionStore.setSpawnedOwnership("tree-peer", "coordinator");
+  assert.deepEqual(await treeOf("tree-coord"), fromRoot);
 
   // A peer sees its own subtree, not its coordinator's.
   const fromPeer = await treeOf("tree-peer");

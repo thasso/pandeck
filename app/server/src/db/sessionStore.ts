@@ -1302,12 +1302,15 @@ function linkInternal(input: {
  * different coordinator is refused: parentage is stored identity, never a
  * title- or transcript-derived guess that a later caller may overwrite. The
  * idempotent repeat also leaves the stored metadata alone, so re-linking cannot
- * reset a child the user has already taken over.
+ * reset a child the user has already taken over. Creation defaults to coordinator
+ * ownership; a child born user-owned records taken-over and its creation timestamp
+ * in this same insert, before its opening prompt can be delivered.
  */
 function linkSpawned(
   parentSessionId: string,
   childSessionId: string,
   createdAt = Date.now(),
+  ownership: SettableSpawnOwnership = "coordinator",
 ): void {
   const existing = getDb()
     .prepare(
@@ -1334,7 +1337,11 @@ function linkSpawned(
       parentSessionId,
       childSessionId,
       createdAt,
-      JSON.stringify({ ownership: "coordinator" }),
+      JSON.stringify(
+        ownership === "taken-over"
+          ? { ownership, takenOverAt: createdAt }
+          : { ownership },
+      ),
     );
 }
 

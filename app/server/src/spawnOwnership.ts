@@ -1,8 +1,8 @@
 /**
  * Ownership of agent-spawned peer sessions ([Task-637](pa://task/637)).
  *
- * A `session_spawn` child starts out owned by its coordinator, and it stays
- * that way until the user SAYS otherwise — the explicit Take over (and its
+ * A `session_spawn` child defaults to coordinator ownership, or starts taken
+ * over with owner `user`. Changing that later requires explicit Take over (and its
  * reverse, Hand back) command. Messaging a peer is not that decision: users
  * poke stalled peers all the time, and a poke that silently moved ownership
  * pulled the peer out of its coordinator's fold and revoked the

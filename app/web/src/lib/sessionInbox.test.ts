@@ -247,6 +247,63 @@ describe("isShelvedSession", () => {
 });
 
 describe("buildSessionInbox", () => {
+  it("keeps work born user-owned top-level with unread outcomes and its own Settle", () => {
+    const parent = session({ id: "pa" });
+    const child = session({
+      id: "my-work",
+      spawnedBySessionId: parent.id,
+      spawnOwnership: "taken-over",
+      unread: true,
+      outcomeAttention: {
+        revision: 1,
+        settledRevision: 0,
+        kind: "completed",
+        at: NOW,
+      },
+    });
+    const view = buildSessionInbox([parent, child]);
+    const all = cards([...view.needsYou, ...view.active]);
+    expect(all.map((card) => card.session.id).sort()).toEqual([
+      "my-work",
+      "pa",
+    ]);
+    const mine = all.find((card) => card.session.id === child.id)!;
+    expect(mine.status).toBe("unread");
+    expect(sessionStatusBadge(child, mine.status, NOW)?.label).toBe("Done");
+    expect(mine.session.unread).toBe(true);
+    expect(sessionSettleCascade(child.id, [parent, child], [], {})).toEqual({
+      peerIds: [],
+    });
+    expect(sessionSettleCascade(parent.id, [parent, child], [], {})).toEqual({
+      peerIds: [],
+    });
+    expect(
+      spawnTreeStall(
+        [parent, child],
+        new Map([
+          [parent.id, parent],
+          [child.id, child],
+        ]),
+      ),
+    ).toBeUndefined();
+    // Hand back only folds ownership; no requested reply means no false stall.
+    const handedBack = { ...child, spawnOwnership: "coordinator" as const };
+    const folded = buildSessionInbox([parent, handedBack]);
+    expect(
+      cards([...folded.needsYou, ...folded.active]).map(
+        (card) => card.session.id,
+      ),
+    ).toEqual([parent.id]);
+    expect(
+      spawnTreeStall(
+        [parent, handedBack],
+        new Map([
+          [parent.id, parent],
+          [child.id, handedBack],
+        ]),
+      ),
+    ).toBeUndefined();
+  });
   it("splits Needs you from the rest and orders newest-created first, then id", () => {
     // Neither state nor activity moves a card: the list holds still while it
     // is read, and the state is on the card instead.

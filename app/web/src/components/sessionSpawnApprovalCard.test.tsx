@@ -138,6 +138,46 @@ test("approving with no changes sends no edits", () => {
   expect(resolved).toEqual([{ decision: "approved", edits: undefined }]);
 });
 
+test("the ownership choice rides along with approval without mutating the proposal", async () => {
+  const data = card();
+  render(data);
+  await act(async () =>
+    host
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Owner of Reviewer: auth"]',
+      )
+      ?.click(),
+  );
+  const option = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((element) => element.textContent?.trim() === "User-owned");
+  expect(option).toBeDefined();
+  await act(async () => option?.click());
+  expect(host.textContent).toContain("User's inbox · No report owed");
+  act(() => button("Approve")?.click());
+  expect(resolved[0]?.edits).toEqual({
+    kind: "sessionSpawn",
+    items: [{ rowId: "row_a", owner: "user" }],
+  });
+  expect(
+    data.body.kind === "sessionSpawn" && data.body.items[0]?.owner,
+  ).toBeUndefined();
+});
+
+test("a resolved user-owned proposal shows ownership without offering a picker", () => {
+  const data = card({ status: "executed" });
+  if (data.body.kind === "sessionSpawn") {
+    data.body.items[0]!.owner = "user";
+    data.body.items[0]!.responseRequestWithdrawn = true;
+  }
+  render(data);
+  expect(host.textContent).toContain("User's inbox · No report owed");
+  expect(host.textContent).toContain("Awaited reply withdrawn");
+  expect(
+    host.querySelector('[aria-label="Owner of Reviewer: auth"]'),
+  ).toBeNull();
+});
+
 test("a skipped row rides along with the approval, leaving the card untouched", () => {
   const data = card();
   render(data);

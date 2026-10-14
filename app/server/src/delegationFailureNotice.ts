@@ -172,7 +172,7 @@ export function categoryForFailureReason(
 /* ------------------------------ eligibility ------------------------------ */
 
 /** A session that may still receive a notice, or be reported about. */
-function liveUserSession(sessionId: string): SessionMeta | undefined {
+export function liveUserSession(sessionId: string): SessionMeta | undefined {
   const meta = sessionStore.get(sessionId);
   if (!meta || meta.scope !== "user" || meta.archivedAt !== undefined)
     return undefined;

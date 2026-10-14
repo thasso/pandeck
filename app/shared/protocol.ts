@@ -3798,7 +3798,11 @@ export interface SessionSpawnApprovalItem {
   agentType: "developer" | "assistant";
   /** The opening prompt, delivered as a peer prompt from the proposing session. */
   prompt: string;
+  /** Who owns the work from creation; absent means coordinator. */
+  owner?: "coordinator" | "user";
   responseRequested: boolean;
+  /** Choosing user ownership at approval withdrew the proposed awaited reply. */
+  responseRequestWithdrawn?: boolean;
   provider: string;
   modelId: string;
   modelName?: string;
@@ -3864,6 +3868,7 @@ export interface SessionSpawnResolutionEdits {
     rowId: string;
     /** Drop this row: approve the rest of the batch without it. */
     skip?: boolean;
+    owner?: "coordinator" | "user";
     provider?: string;
     modelId?: string;
     credentialProfileId?: string;

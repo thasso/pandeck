@@ -132,6 +132,31 @@ test("SQLite session store persists and batch-reads one spawned parent per child
   getDb().prepare("DELETE FROM session_index WHERE id = ?").run(otherParent);
 });
 
+test("SQLite session store creates a user-owned edge atomically and preserves it on re-link", () => {
+  const suffix = `${Date.now()}-${Math.random()}`;
+  const parent = `born-parent-${suffix}`;
+  const child = `born-child-${suffix}`;
+  for (const id of [parent, child])
+    sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  sessionStore.linkSpawned(parent, child, 123, "taken-over");
+  sessionStore.linkSpawned(parent, child, 456);
+  assert.deepEqual(sessionStore.spawnedParentsByChildIds([child]).get(child), {
+    parentSessionId: parent,
+    ownership: "taken-over",
+    takenOverAt: 123,
+  });
+  assert.ok(
+    sessionStore.spawnedDescendantIds(parent).includes(child),
+    "worktree tree membership retains every provenance edge",
+  );
+  assert.equal(sessionStore.spawnedParentByChild().get(child), parent);
+  assert.equal(sessionStore.setSpawnedOwnership(child, "coordinator"), true);
+  assert.deepEqual(sessionStore.spawnedParentsByChildIds([child]).get(child), {
+    parentSessionId: parent,
+    ownership: "coordinator",
+  });
+});
+
 test("SQLite session store sets spawn ownership on the user's word", () => {
   const suffix = `${Date.now()}-${Math.random()}`;
   const parent = `own-parent-${suffix}`;

@@ -481,6 +481,42 @@ test("an UNTOUCHED row is revalidated too, and a stale one blocks approval", asy
   );
 });
 
+test.each(["someone", null, 7, true, {}, []])(
+  "invalid owner %j is refused at the wire and on a skipped approval row",
+  async (owner) => {
+    const { validateClientMessage } =
+      await import("./validateClientMessage.ts");
+    const edits = {
+      kind: "sessionSpawn" as const,
+      items: [{ rowId: "row_1", skip: true, owner }],
+    };
+    expect(
+      validateClientMessage({
+        type: "resolveApproval",
+        approvalId: "appr_1",
+        decision: "approved",
+        edits,
+      }).ok,
+    ).toBe(false);
+    await expect(
+      prepareSpawnApproval(pendingCard(), edits as never),
+    ).rejects.toThrow(/owner/);
+  },
+);
+
+test("valid owner choices are accepted at the approval wire boundary", async () => {
+  const { validateClientMessage } = await import("./validateClientMessage.ts");
+  for (const owner of [undefined, "coordinator", "user"])
+    expect(
+      validateClientMessage({
+        type: "resolveApproval",
+        approvalId: "appr_1",
+        decision: "approved",
+        edits: { kind: "sessionSpawn", items: [{ rowId: "row_1", owner }] },
+      }).ok,
+    ).toBe(true);
+});
+
 test("a skipped row is not revalidated: skipping a broken row is the way out", async () => {
   const card = pendingCard({ modelId: "gpt-4-retired" });
 
@@ -1108,6 +1144,135 @@ test("the child is told to report back to its coordinator, exactly once", async 
       "Reporting back to your coordinator",
     ).length - 1,
   ).toBe(1);
+});
+
+test("a user-owned direct spawn keeps provenance, full prompt budget and no reporting route", async () => {
+  approveRuntimes();
+  const { MAX_PEER_PROMPT_CHARS } = await import("./peerPrompt.ts");
+  const prompt = "x".repeat(MAX_PEER_PROMPT_CHARS);
+  const text = await spawnDirect([
+    {
+      ...row({ title: "User work", owner: "user", prompt }),
+      profileId: "pr_terra",
+    },
+  ]);
+  const delivered = recorded.delivered[0]!;
+  const childId = String(delivered.targetSessionId);
+  expect(delivered).toMatchObject({
+    senderSessionId: SENDER,
+    prompt,
+    responseRequested: false,
+  });
+  expect(recorded.events).toContain(`deliver:${SENDER}:taken-over`);
+  expect(sessionStore.spawnedParentsByChildIds([childId]).get(childId)).toEqual(
+    {
+      parentSessionId: SENDER,
+      ownership: "taken-over",
+      takenOverAt: sessionStore.get(childId)!.createdAt,
+    },
+  );
+  expect(text).toContain("owner user");
+  expect(text).toContain("owe you no report");
+  expect(text).not.toContain("were told to report back");
+  const { sessionRunOutcomeNeedsUser } =
+    await import("./sessionOutcomePolicy.ts");
+  expect(
+    sessionRunOutcomeNeedsUser(childId, "end", {
+      kind: "agent",
+      agentId: SENDER,
+    }),
+  ).toBe(true);
+});
+
+test.each(["spawn", "propose"] as const)(
+  "%s refuses user ownership with an awaited reply or an invalid owner before effects",
+  async (operation) => {
+    approveRuntimes();
+    for (const patch of [
+      { owner: "user", responseRequested: true },
+      { owner: "someone" },
+      { owner: null },
+    ]) {
+      await expect(
+        runSpawnOperation(operation, [
+          {
+            ...row(patch),
+            ...(operation === "spawn" ? { profileId: "pr_terra" } : {}),
+          },
+        ]),
+      ).rejects.toThrow(/owner/);
+    }
+    expect(recorded.delivered).toHaveLength(0);
+    expect(recorded.pi).toHaveLength(0);
+    expect(recorded.claude).toHaveLength(0);
+  },
+);
+
+test("user-owned proposal approval and ownership edits honour the chosen owner", async () => {
+  const { card } = await propose([
+    row({ owner: "user", prompt: "Start my work." }),
+    row({ title: "Helper", responseRequested: true }),
+  ]);
+  expect(bodyOf(card).items[0]).toMatchObject({
+    owner: "user",
+    responseRequested: false,
+  });
+  const { card: done, outcomePrompt } = await resolveApproval(
+    card.id,
+    "approved",
+    {
+      kind: "sessionSpawn",
+      items: [{ rowId: bodyOf(card).items[1]!.rowId, owner: "user" }],
+    },
+  );
+  expect(done.resultSummary).toContain(
+    `"Helper" (${bodyOf(done).items[1]!.resultSessionId}, owner user, awaited reply withdrawn)`,
+  );
+  expect(outcomePrompt).toContain("owner user, awaited reply withdrawn");
+  expect(bodyOf(done).items[1]?.responseRequestWithdrawn).toBe(true);
+  expect(recorded.delivered).toHaveLength(2);
+  for (const delivered of recorded.delivered) {
+    expect(delivered.responseRequested).toBe(false);
+    expect(delivered.prompt).not.toContain(
+      "Reporting back to your coordinator",
+    );
+    const childId = String(delivered.targetSessionId);
+    expect(
+      sessionStore.spawnedParentsByChildIds([childId]).get(childId)?.ownership,
+    ).toBe("taken-over");
+  }
+  // Hand back changes authority only, not the opening message or reply ledger.
+  const { setSpawnOwnership } = await import("./spawnOwnership.ts");
+  const childId = String(recorded.delivered[0]!.targetSessionId);
+  expect(setSpawnOwnership(childId, "coordinator")).toBe("changed");
+  expect(sessionStore.spawnedParentsByChildIds([childId]).get(childId)).toEqual(
+    { parentSessionId: SENDER, ownership: "coordinator" },
+  );
+  expect(recorded.delivered).toHaveLength(2);
+});
+
+test("approval can hand a proposed user-owned row to the coordinator without creating a reply debt", async () => {
+  const { card } = await propose([row({ owner: "user" })]);
+  const { card: done, outcomePrompt } = await resolveApproval(
+    card.id,
+    "approved",
+    {
+      kind: "sessionSpawn",
+      items: [{ rowId: bodyOf(card).items[0]!.rowId, owner: "coordinator" }],
+    },
+  );
+  expect(done.resultSummary).toContain(
+    `(${bodyOf(done).items[0]!.resultSessionId}, owner coordinator)`,
+  );
+  expect(outcomePrompt).toContain("owner coordinator");
+  expect(outcomePrompt).not.toContain("awaited reply withdrawn");
+  const delivered = recorded.delivered[0]!;
+  expect(delivered.responseRequested).toBe(false);
+  expect(
+    sessionStore
+      .spawnedParentsByChildIds([String(delivered.targetSessionId)])
+      .get(String(delivered.targetSessionId))?.ownership,
+  ).toBe("coordinator");
 });
 
 test("a direct row awaits an answer unless it explicitly says otherwise", async () => {

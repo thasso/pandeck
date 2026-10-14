@@ -412,6 +412,13 @@ test("only a directly owned session raises top-level attention", async () => {
       sessionStore.linkSpawned(parentId, childId);
       sessionStore.setSpawnedOwnership(childId, "taken-over");
     },
+    "born-user-owned": (parentId, childId) =>
+      sessionStore.linkSpawned(
+        parentId,
+        childId,
+        sessionStore.get(childId)!.createdAt,
+        "taken-over",
+      ),
     // An edge from before ownership tracking: no metadata to classify.
     unknown: (parentId, childId) => {
       sessionStore.linkSpawned(parentId, childId);
@@ -425,6 +432,7 @@ test("only a directly owned session raises top-level attention", async () => {
   const wakes: Record<string, boolean> = {
     manual: true,
     "taken-over": true,
+    "born-user-owned": true,
     unknown: true,
     coordinator: false,
   };
@@ -441,6 +449,28 @@ test("only a directly owned session raises top-level attention", async () => {
       `a ${ownership} session ${wakes[ownership] ? "wakes" : "stays settled"} on completion`,
     );
   }
+});
+
+test("a session born user-owned raises an unread outcome that Settle acknowledges", async () => {
+  const { id, adapter } = await liveSession();
+  const parent = (await liveSession()).id;
+  sessionStore.linkSpawned(
+    parent,
+    id,
+    sessionStore.get(id)!.createdAt,
+    "taken-over",
+  );
+  sessionStore.updateStats(id, { updatedAt: Date.now() - 60_000 });
+  sessionStore.markRead(id, sessionStore.get(id)!.updatedAt);
+  adapter.emit({ type: "messageStarted", streamId: "user-work" });
+  adapter.emit({ type: "runCompleted", stopReason: "end" });
+  const meta = sessionStore.get(id)!;
+  assert.ok(meta.updatedAt > (meta.readAt ?? 0));
+  assert.equal(meta.outcomeAttention?.revision, 1);
+  assert.equal(meta.outcomeAttention?.kind, "completed");
+  sessionStore.setSettled(id, true);
+  assert.equal(sessionStore.get(id)?.outcomeAttention?.settledRevision, 1);
+  assert.equal(sessionStore.get(id)?.readAt, sessionStore.get(id)?.updatedAt);
 });
 
 test("a shelved coordinator-owned peer wakes on a failure, and on nothing else", async () => {
