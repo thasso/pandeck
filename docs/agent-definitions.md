@@ -84,8 +84,8 @@ You are a test reviewer. ...
 | `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.          |
 
 The body is the role instructions. It must be non-empty, and the whole
-`AGENT.md` has a size bound (`maxManifestBytes`, proposed: 16 KiB) so a
-definition cannot carry a prompt the persona budgets never accounted for.
+`AGENT.md` has a size bound (`maxManifestBytes`, 16 KiB) so a definition cannot
+carry a prompt the persona budgets never accounted for.
 
 One rule decides validity, and the scanner and the authoring tools ask it from
 both sides, as `library/entryManifest.ts` does for skills. A hand-written file
@@ -237,11 +237,12 @@ changed fails it too, since the row was checked for the old persona.
 ### What a spawn freezes
 
 The second read is frozen in the insert-only `session_agent` table (migration
-`0079_session_agent.sql`): name, the `AGENT.md` git blob id, persona, provider,
-model, the concrete version a definition pinned (`claude-opus-5-5` rather than
-`opus`), effective effort, deny list, the definition's own skills, and the body
-text. Like `session_skills`, the first insert wins for the session's life, a
-fork copies the parent's row, and resumes read the row rather than the library.
+`0079_session_agent.sql`): name, the `AGENT.md` git blob id (in the library
+repository's own object format, SHA-1 or SHA-256), persona, provider, model, the
+concrete version a definition pinned (`claude-opus-5-5` rather than `opus`),
+effective effort, deny list, the definition's own skills, and the body text.
+Like `session_skills`, the first insert wins for the session's life, a fork
+copies the parent's row, and resumes read the row rather than the library.
 Editing or deleting a definition affects new spawns only. A row that does not
 parse fails closed: the session refuses to run rather than run without its role
 and its denied tools.

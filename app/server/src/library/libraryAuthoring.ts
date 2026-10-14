@@ -510,8 +510,7 @@ export async function editEntrySource(
               // From here the manifest's committed bytes are gone, so a later
               // staging or commit failure must be able to restore this path.
               const written = encode(applied.content);
-              ctx.damaged(target.path);
-              await file.replace(written);
+              await file.replace(written, () => ctx.damaged(target.path));
               // And now the path holds exactly these bytes, which is what makes
               // restoring it safe: anything else there later is somebody
               // else's.
@@ -2451,8 +2450,7 @@ async function editRelativeFile(
         );
       }
       // From here the committed bytes are the only intact copy.
-      onTruncated();
-      await file.replace(written);
+      await file.replace(written, onTruncated);
       return { bytes: written, replacements: applied.replacements };
     });
   };

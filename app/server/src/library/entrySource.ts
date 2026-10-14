@@ -1310,8 +1310,14 @@ export async function withEntryChildForUpdate<T>(
     handle: FileHandle;
     size: number;
     identity: { dev: number; ino: number };
-    /** Replace the whole file through this same open description. */
-    replace: (content: Uint8Array) => Promise<void>;
+    /**
+     * Replace the whole file through this same open description. The file must
+     * still have one name: `use` may await for a while, and a hard link made
+     * meanwhile would carry the new bytes to a name nobody claimed.
+     * `onTruncating` runs once that check passed, just before the old bytes
+     * go, so a refusal leaves nothing to restore.
+     */
+    replace: (content: Uint8Array, onTruncating?: () => void) => Promise<void>;
   }) => Promise<T>,
 ): Promise<T> {
   assertPathComponent(name);
@@ -1329,7 +1335,9 @@ export async function withEntryChildForUpdate<T>(
       handle,
       size: stats.size,
       identity: { dev: stats.dev, ino: stats.ino },
-      replace: async (content) => {
+      replace: async (content, onTruncating) => {
+        assertSingleLink(name, (await handle.stat()).nlink);
+        onTruncating?.();
         await handle.truncate(0);
         if (content.byteLength > 0)
           await handle.write(content, 0, content.byteLength, 0);

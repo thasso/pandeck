@@ -7,6 +7,7 @@
  *   pnpm --filter @assistant/server test src/agents/agentSpawn.test.ts
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,7 +24,6 @@ import {
   resolveAgentSpawn,
   setAgentSpawnSourcesForTests,
 } from "./agentSpawn.ts";
-import { gitBlobId } from "./sessionAgent.ts";
 import { LibraryStore } from "../library/libraryStore.ts";
 
 function model(
@@ -45,6 +45,14 @@ let root: string;
 let models: AgentModelOption[];
 let offered: boolean;
 const accounts: string[] = [];
+
+/** What `git hash-object` says for a definition's file in its repository. */
+function hashObject(folder: string): string {
+  return execFileSync("git", ["hash-object", join(folder, "AGENT.md")], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+}
 
 function write(folder: string, source: string): string {
   mkdirSync(join(root, folder), { recursive: true });
@@ -93,11 +101,11 @@ afterEach(() => {
 });
 
 test("a definition resolves to its model, account and the exact bytes it froze", async () => {
-  const source = write("test-reviewer", reviewer({ effort: "high" }));
+  write("test-reviewer", reviewer({ effort: "high" }));
   const runtime = await resolveAgentSpawn("test-reviewer");
   assert.deepEqual(runtime.agent, {
     name: "test-reviewer",
-    blob: gitBlobId(source),
+    blob: hashObject("test-reviewer"),
     persona: "developer",
     provider: "claude-sdk",
     model: "opus",
@@ -180,4 +188,22 @@ test('operation "agents" lists runnable definitions and why the rest are not', a
   assert.match(solo.problem, /No enabled account offers a model "gemini"/);
   const broken = byName.get("broken");
   assert.ok(broken && "problem" in broken);
+});
+
+test("the frozen blob id is the library repository's own, SHA-256 included", async () => {
+  root = mkdtempSync(join(tmpdir(), "agent-spawn-sha256-"));
+  execFileSync("git", ["init", "-q", "--object-format=sha256", root]);
+  const store = new LibraryStore(agentKind, root);
+  await store.ensureInitialized();
+  setAgentSpawnSourcesForTests({
+    library: () => store,
+    accountFor: (provider) => `acct-${provider}`,
+    offers: async () => true,
+    accountName: () => undefined,
+  });
+  write("test-reviewer", reviewer({ body: "Body — with ünïcode." }));
+
+  const { agent } = await resolveAgentSpawn("test-reviewer");
+  assert.equal(agent.blob.length, 64);
+  assert.equal(agent.blob, hashObject("test-reviewer"));
 });

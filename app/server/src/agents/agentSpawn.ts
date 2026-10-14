@@ -5,6 +5,7 @@
  * run as. Nothing here falls back: a definition whose model no longer
  * resolves, or whose account does not offer it, refuses the spawn.
  */
+import { Buffer } from "node:buffer";
 import {
   HARNESSES,
   harnessForModelProvider,
@@ -22,7 +23,7 @@ import { scanLibrary, type LibraryScan } from "../library/libraryScanner.ts";
 import type { LibraryStore } from "../library/libraryStore.ts";
 import { agentKind, agentLibraryStore } from "./agentLibrary.ts";
 import { checkAgentRuntime } from "./agentRuntime.ts";
-import { gitBlobId, type SessionAgent } from "./sessionAgent.ts";
+import type { SessionAgent } from "./sessionAgent.ts";
 
 /** A definition that cannot be spawned right now; the reason is the message. */
 export class AgentSpawnRefusedError extends Error {}
@@ -155,10 +156,11 @@ export async function resolveAgentSpawn(
     );
   const { thinkingLevel } = runtime;
   const accountName = sources.accountName(credentialProfileId);
+  const blob = await library.gitBlobIdOf(Buffer.from(read.source, "utf8"));
   return {
     agent: {
       name: manifest.name,
-      blob: gitBlobId(read.source),
+      blob,
       persona: manifest.persona,
       provider: model.provider,
       model: model.id,

@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { link, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelOption, ServerMessage } from "@assistant/shared";
@@ -701,6 +701,53 @@ describe("agent tool races and pins", () => {
     const now = readFileSync(manifest(), "utf8");
     assert.match(now, /model: "opus"/, "the hand edit is kept");
     assert.doesNotMatch(now, /careful test reviewer/);
+  });
+
+  test("a hard link made while the locked check awaits is refused before anything is rewritten", async () => {
+    await createApproved();
+    const before = readFileSync(manifest(), "utf8");
+    const outside = mkdtempSync(join(tmpdir(), "agent-alias-"));
+    const alias = join(outside, "AGENT.md");
+    let armed = true;
+    setAgentRuntimeSourcesForTests({
+      models: async () => [
+        model("claude-sdk", "opus"),
+        model("claude-sdk", "sonnet"),
+      ],
+      skillNames: async () => [],
+      // Called inside the locked check (the definition denies a tool): the
+      // bytes stay the same, only a second name appears.
+      toolNames: async () => {
+        if (armed) {
+          armed = false;
+          await link(manifest(), alias);
+        }
+        return ["worktree_push", "worktree_commit"];
+      },
+    });
+    try {
+      await assert.rejects(
+        tool("agent_edit").execute(
+          {
+            name: "test-reviewer",
+            edits: [
+              {
+                oldText: "You are a test reviewer.",
+                newText: "You are a careful test reviewer.",
+              },
+            ],
+            reason: "Careful",
+          },
+          ctx(),
+        ),
+        /hard links/,
+      );
+      assert.equal(armed, false, "the link landed inside the check");
+      assert.equal(readFileSync(manifest(), "utf8"), before);
+      assert.equal(readFileSync(alias, "utf8"), before);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   test("a hand edit made while an approved card's locked check awaits is refused, not overwritten", async () => {

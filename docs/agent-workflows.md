@@ -102,16 +102,17 @@ the outcome:
   [Task-595](pa://task/595)) are the free-form lane. The initiating agent is the
   coordinator: it writes the roles as ordinary prose, spawns ordinary
   `scope = "user"` sessions on runtimes the user approved once in Settings, or
-  as a named agent definition whose role, model and effort the user approved
-  (`docs/agent-definitions.md`), and drives the review/fix/re-review loop over
-  peer prompts. There is no watchdog, no ownership registry, no result contract
-  and no automatic report — the server durably records one `spawned` edge from
-  coordinator to child before delivering the opening prompt, and tells each
-  child which session to answer. Either side exposes that parentage as navigable
-  **Spawned by** / **Spawned sessions** rows in the Session inspector, and the
-  Sessions inbox folds a coordinator and the peers it still owns into ONE card
-  (below). An idle child means nothing; chasing it is the coordinator's job.
-  Choose it for experimentation, where a cheap wrong answer is recoverable.
+  as a named agent definition from the user's library, whose model and effort
+  the user approved (`docs/agent-definitions.md`), and drives the
+  review/fix/re-review loop over peer prompts. There is no watchdog, no
+  ownership registry, no result contract and no automatic report — the server
+  durably records one `spawned` edge from coordinator to child before delivering
+  the opening prompt, and tells each child which session to answer. Either side
+  exposes that parentage as navigable **Spawned by** / **Spawned sessions** rows
+  in the Session inspector, and the Sessions inbox folds a coordinator and the
+  peers it still owns into ONE card (below). An idle child means nothing;
+  chasing it is the coordinator's job. Choose it for experimentation, where a
+  cheap wrong answer is recoverable.
 
   That spawn edge also carries WHO OWNS the child ([Task-637](pa://task/637)),
   as `SessionListItem.spawnOwnership`:

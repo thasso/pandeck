@@ -7,8 +7,7 @@
  *   pnpm --filter @assistant/server test src/agents/sessionAgent.test.ts
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -23,7 +22,6 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const {
   agentPromptLayer,
   freezeSessionAgent,
-  gitBlobId,
   sessionAgent,
   sessionAgentSummary,
   SessionAgentUnreadableError,
@@ -65,16 +63,6 @@ test("an unreadable row refuses to run rather than run without the agent", () =>
     unreadable: true,
   });
   assert.equal(sessionAgentSummary("never-spawned"), undefined);
-});
-
-test("the blob id is git's own, so a row names its exact AGENT.md", () => {
-  const source = "---\nname: x\n---\nBody — with ünïcode\n";
-  const file = join(tmp, "AGENT.md");
-  writeFileSync(file, source);
-  assert.equal(
-    gitBlobId(source),
-    execFileSync("git", ["hash-object", file], { encoding: "utf8" }).trim(),
-  );
 });
 
 test("denied app tools leave the toolset; native names never match app tools", () => {

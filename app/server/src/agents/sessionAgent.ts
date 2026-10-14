@@ -7,8 +7,6 @@
  * A row that does not parse fails CLOSED: the session refuses to run rather
  * than run without the role and the denied tools it was spawned with.
  */
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 import {
   isSafeEntryName,
   THINKING_LEVELS,
@@ -45,15 +43,6 @@ export interface SessionAgent {
 
 /** A stored row this build cannot read; the session must not run without it. */
 export class SessionAgentUnreadableError extends Error {}
-
-/** The id `git hash-object` gives these bytes, so a row names its exact source. */
-export function gitBlobId(source: string): string {
-  const bytes = Buffer.from(source, "utf8");
-  return createHash("sha1")
-    .update(`blob ${bytes.length}\0`)
-    .update(bytes)
-    .digest("hex");
-}
 
 function isStringList(value: unknown): value is string[] {
   return (

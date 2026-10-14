@@ -1278,6 +1278,15 @@ export class LibraryStore {
     return { mode, object };
   }
 
+  /**
+   * The id Git gives these bytes as a blob in THIS repository — SHA-1 or
+   * SHA-256, whichever the user's repository uses — so a frozen copy names
+   * its exact source.
+   */
+  async gitBlobIdOf(content: Uint8Array): Promise<string> {
+    return this.blobId(content);
+  }
+
   /** The object id Git gives this content as a blob, in this repository. */
   private async blobId(
     content: Uint8Array | FileHandle,
