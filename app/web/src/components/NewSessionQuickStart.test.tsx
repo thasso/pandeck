@@ -16,6 +16,14 @@ import {
   orderProjectsByActivity,
   orderWorktreesByActivity,
 } from "./NewSessionQuickStart.tsx";
+import {
+  failed,
+  idle,
+  loading,
+  ready,
+  refreshing,
+  type LoadState,
+} from "../lib/loadState.ts";
 
 const project = {
   id: "proj",
@@ -76,7 +84,7 @@ function render(
     usageIndicators?: UsageIndicator[] | null;
     newWorktreeStaged?: boolean;
     mode?: SessionMode;
-    agents?: EntryLibraryList;
+    agents?: LoadState<EntryLibraryList>;
     selectedAgent?: string | null;
   } = {},
 ): string {
@@ -531,7 +539,10 @@ describe("agent definitions row", () => {
   };
 
   it("offers each definition, and one that cannot start says why", () => {
-    const html = render([], { agents, selectedAgent: "test-reviewer" });
+    const html = render([], {
+      agents: ready(agents),
+      selectedAgent: "test-reviewer",
+    });
     expect(html).toContain("Agent definition");
     expect(html).toContain("test-reviewer");
     expect(html).toContain(
@@ -543,10 +554,35 @@ describe("agent definitions row", () => {
     );
   });
 
-  it("shows no row without definitions", () => {
+  it("shows no row unsubscribed or for an authoritatively empty library", () => {
     expect(render([], {})).not.toContain("Agent definition");
+    expect(render([], { agents: idle() })).not.toContain("Agent definition");
     expect(
-      render([], { agents: { ...agents, entries: [], agentRuntimes: {} } }),
+      render([], {
+        agents: ready({ ...agents, entries: [], agentRuntimes: {} }),
+      }),
     ).not.toContain("Agent definition");
+  });
+
+  it("reserves the row while the first read is out", () => {
+    const html = render([], { agents: loading() });
+    expect(html).toContain("Agent definition");
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain("test-reviewer");
+  });
+
+  it("keeps the pills through a rescan and says a failed read in place", () => {
+    const rescanning = render([], { agents: refreshing(agents) });
+    expect(rescanning).toContain("test-reviewer");
+    expect(rescanning).toContain("Rescanning agents");
+
+    const failedRescan = render([], {
+      agents: failed("Scan failed: EACCES", agents),
+    });
+    expect(failedRescan).toContain("test-reviewer");
+    expect(failedRescan).toContain("Scan failed: EACCES");
+
+    const failedFirst = render([], { agents: failed("Scan failed: EACCES") });
+    expect(failedFirst).toContain("Scan failed: EACCES");
   });
 });

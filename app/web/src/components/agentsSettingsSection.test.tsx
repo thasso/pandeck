@@ -21,6 +21,9 @@ import { AgentsSettingsSection } from "./AgentsSettingsSection.tsx";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 const asked: string[] = [];
+/** While set, a history read waits for `release`. */
+let holdHistory = false;
+let release: () => void = () => {};
 const agentsApi = {
   detail: async (name: string): Promise<EntryDetailResponse> => {
     asked.push(`detail:${name}`);
@@ -54,6 +57,7 @@ const agentsApi = {
   filePreview: () => new Promise(() => {}),
   history: async (name: string): Promise<EntryHistory> => {
     asked.push(`history:${name}`);
+    if (holdHistory) await new Promise<void>((resolve) => (release = resolve));
     return {
       commits: [
         {
@@ -136,4 +140,34 @@ it("opens the linked definition with its AGENT.md and history", async () => {
   expect(text).toContain("Prove each new test fails without its change.");
   expect(text).toContain("Raise test-reviewer effort");
   expect(text).toContain("abc1234");
+});
+
+it("keeps the history on screen while a rescan rereads it", async () => {
+  await act(async () => {
+    root!.render(
+      <AgentsSettingsSection
+        library={ready(LIST)}
+        initialSelected="test-reviewer"
+      />,
+    );
+  });
+  expect(container!.textContent).toContain("Raise test-reviewer effort");
+
+  // A rescan rebuilds the open entry, which rereads its history.
+  holdHistory = true;
+  await act(async () => {
+    root!.render(
+      <AgentsSettingsSection
+        library={ready({ ...LIST })}
+        initialSelected="test-reviewer"
+      />,
+    );
+  });
+  const text = container!.textContent ?? "";
+  expect(text).toContain("Raise test-reviewer effort");
+  // The indicator's label is its screen-reader text.
+  expect(text).toContain("Rereading the history of test-reviewer");
+
+  holdHistory = false;
+  await act(async () => release());
 });

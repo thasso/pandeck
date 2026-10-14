@@ -435,10 +435,16 @@ function EntryHistoryList({
   }, [detail, reload]);
   const history = dataOf(state);
   const error = errorOf(state);
+  const rereading = isPending(state) && history !== undefined;
 
   return (
     <div className="mt-3 overflow-hidden rounded-lg border">
-      <div className="border-b p-3 text-sm font-medium">History</div>
+      <div className="flex items-center justify-between gap-2 border-b p-3 text-sm font-medium">
+        History
+        {rereading ? (
+          <RefreshIndicator label={`Rereading the history of ${name}`} />
+        ) : null}
+      </div>
       {error ? (
         <ErrorNote className="m-3" message={error} onRetry={reload} />
       ) : null}

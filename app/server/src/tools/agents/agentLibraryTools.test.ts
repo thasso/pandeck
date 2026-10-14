@@ -13,10 +13,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ModelOption } from "@assistant/shared";
+import type { ModelOption, ServerMessage } from "@assistant/shared";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import { agentKind } from "../../agents/agentLibrary.ts";
 import { setAgentRuntimeSourcesForTests } from "../../agents/agentRuntime.ts";
+import { setAgentSpawnSourcesForTests } from "../../agents/agentSpawn.ts";
+import { setLibraryBroadcaster } from "../../library/libraryPublish.ts";
 import { git } from "../../gitExec.ts";
 import { LibraryStore } from "../../library/libraryStore.ts";
 import type { AgentTool, ToolCallContext } from "../../mcp/tool.ts";
@@ -212,6 +214,34 @@ describe("agent_create", () => {
     ).stdout;
     assert.match(trailers, /Agent-Names: test-reviewer/);
     assert.match(trailers, /Agent-Session: sess-agents-/);
+  });
+
+  test("an approved create republishes the agents topic with the new runtime", async () => {
+    const published: ServerMessage[] = [];
+    setLibraryBroadcaster({
+      broadcast: (message, topic) => {
+        if (topic === "agents") published.push(message);
+      },
+    });
+    setAgentSpawnSourcesForTests({ offers: async () => true });
+    try {
+      await createApproved();
+      const message = published.at(-1);
+      assert.ok(message?.type === "libraryList" && message.list);
+      assert.deepEqual(
+        message.list.entries.map((entry) => entry.name),
+        ["test-reviewer"],
+      );
+      assert.deepEqual(message.list.agentRuntimes?.["test-reviewer"], {
+        persona: "developer",
+        provider: "claude-sdk",
+        modelId: "sonnet",
+        thinkingLevel: "medium",
+      });
+    } finally {
+      setLibraryBroadcaster({ broadcast: () => {} });
+      setAgentSpawnSourcesForTests(null);
+    }
   });
 
   test("a model no connected account offers is refused before any card", async () => {

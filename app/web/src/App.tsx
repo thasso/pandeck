@@ -201,7 +201,6 @@ import {
 import type { BacklogState } from "./hooks/useBacklog.ts";
 import { UserTimeZoneContext } from "./hooks/useUserTimeZone.ts";
 import {
-  hasModeAxis,
   isOptimisticHarness,
   locksModelAfterStart,
 } from "./lib/sessionCapabilities.ts";
@@ -367,6 +366,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { useDialogs } from "./components/common/dialogs.tsx";
 import { IconButton } from "./components/common/IconButton.tsx";
+import {
+  agentAcrossPersonaSwitch,
+  leftNewSessionPage,
+  stagedSessionRecord,
+  type StagedSessionRecord,
+} from "./lib/stagedSession.ts";
 
 const SIDEBAR_MIN_WIDTH = 220;
 
@@ -1034,16 +1039,9 @@ function AppContent() {
   );
   // A single staged non-pi harness session: created optimistically on the client
   // and only realized server-side by its first prompt's harnessSend.
-  const [pendingStart, setPendingStart] = useState<{
-    id: string;
-    harness: Harness;
-    agentType: AgentType;
-    provider?: string;
-    modelId?: string;
-    thinkingLevel: ThinkingLevel;
-    /** Build/Plan staged for the first send (absent = Build). */
-    mode?: SessionMode;
-  } | null>(null);
+  const [pendingStart, setPendingStart] = useState<StagedSessionRecord | null>(
+    null,
+  );
   /**
    * A first send is armed and the server has not answered yet.
    *
@@ -1063,13 +1061,6 @@ function AppContent() {
   const [pendingProjectContext, setPendingProjectContext] = useState<
     string | null
   >(null);
-  /**
-   * An agent definition the next fresh session starts as
-   * (`docs/agent-definitions.md` "UI"). Picking it stages its runtime; picking
-   * a persona, model, effort or account by hand drops it again, so the staged
-   * runtime is never claimed to be the definition's when it no longer is.
-   */
-  const [pendingAgent, setPendingAgent] = useState<string | null>(null);
   /** A document staged as context on the next fresh session (its viewer route). */
   const [pendingFileContext, setPendingFileContext] = useState<{
     href: string;
@@ -1872,6 +1863,7 @@ function AppContent() {
             modelId: defaultNewSessionModel?.id,
             thinkingLevel: defaultNewSessionThinking,
             mode: undefined as SessionMode | undefined,
+            agent: undefined as string | undefined,
           }
         : null),
     [
@@ -2161,11 +2153,8 @@ function AppContent() {
     // id), but a Plan restored on a later landing puts the next session under a
     // tool policy nobody chose for it.
     if (route.name !== "new" && route.name !== "sessions") {
-      setPendingStart((prev) => {
-        if (!prev || prev.mode === undefined) return prev;
-        const { mode: _spent, ...rest } = prev;
-        return rest;
-      });
+      // A picked agent definition goes the same way.
+      setPendingStart(leftNewSessionPage);
     }
   }, [routeIdentity, route.name]);
   useEffect(() => {
@@ -3021,22 +3010,13 @@ function AppContent() {
        * travel to the next one behind the user's back.
        */
       mode: SessionMode | undefined;
+      /** Only a restage that keeps the agent's runtime passes it on. */
+      agent?: string | undefined;
     }) => {
       flushSync(() => {
-        setPendingStart({
-          id: opts.id ?? createClientId(),
-          harness: opts.harness,
-          agentType: opts.agentType,
-          ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
-          ...(opts.modelId !== undefined ? { modelId: opts.modelId } : {}),
-          thinkingLevel: opts.thinkingLevel ?? "off",
-          // Only the personas WITH the mode axis can carry Plan, so a switch to
-          // an assistant persona drops it rather than hiding it.
-          ...(hasModeAxis({ agentType: opts.agentType }) &&
-          opts.mode !== undefined
-            ? { mode: opts.mode }
-            : {}),
-        });
+        setPendingStart(
+          stagedSessionRecord({ ...opts, id: opts.id ?? createClientId() }),
+        );
       });
       // Only pull focus back to the composer on desktop. On mobile every staging
       // control (agent type / model / thinking) is changed from inside the Runtime
@@ -3098,6 +3078,7 @@ function AppContent() {
         // persona switch (`startStagedSession` drops it where the axis is gone).
         // A fresh start has no `current`, so it stages Build.
         mode: current?.mode,
+        agent: agentAcrossPersonaSwitch(current, agentType),
       });
     },
     [
@@ -4400,6 +4381,8 @@ function AppContent() {
               : {}),
             thinkingLevel: current?.thinkingLevel ?? currentThinkingLevel,
             mode,
+            // Build/Plan is not what runs the session: the agent stays.
+            agent: current?.agent,
           });
         } else {
           actions.setSessionMode(mode);
@@ -4430,8 +4413,16 @@ function AppContent() {
    * the session, so this is a preview of what it will run, not a promise.
    */
   const stageAgent = (name: string | null) => {
-    setPendingAgent(name);
-    if (name === null || !isNewChatRoute || runtimeHasStarted) return;
+    if (!isNewChatRoute || runtimeHasStarted) return;
+    const current = pendingStart ?? stagedStart;
+    if (name === null) {
+      // Back to a plain session on the same runtime. Only a staged record can
+      // carry an agent.
+      if (pendingStart?.agent === undefined) return;
+      const { agent: _dropped, ...plain } = pendingStart;
+      setPendingStart(plain);
+      return;
+    }
     const runtime = dataOf(state.agentLibrary)?.agentRuntimes?.[name];
     if (!runtime || runtime.problem !== undefined) return;
     const accountProvider = accountProviderForModelProvider(runtime.provider);
@@ -4445,7 +4436,6 @@ function AppContent() {
         (profile) => profile.provider === accountProvider,
       );
     if (account) setCredentialProfileId(account.id);
-    const current = pendingStart ?? stagedStart;
     startStagedSession({
       ...(current?.id !== undefined && current.id !== "pending-pi-session"
         ? { id: current.id }
@@ -4456,6 +4446,7 @@ function AppContent() {
       modelId: runtime.modelId,
       thinkingLevel: runtime.thinkingLevel,
       mode: current?.mode,
+      agent: name,
     });
   };
   // Capability-driven picker locking: non-pi harnesses pin model/thinking after
@@ -4849,10 +4840,9 @@ function AppContent() {
                 ? { createWorktreeInProjectId }
                 : {}),
               ...(fileContext !== undefined ? { fileContext } : {}),
-              ...(pendingAgent !== null ? { agent: pendingAgent } : {}),
+              ...(staged?.agent !== undefined ? { agent: staged.agent } : {}),
             };
       const clientRequestId = actions.harnessSend(input);
-      if (input.agent !== undefined) setPendingAgent(null);
       // Hold the send verbatim for the whole bootstrap: it is what the shell
       // renders the staged identity from, and if it fails there is no session
       // and no turn — the card's Retry, the bootstrap narration's and the next
@@ -6312,7 +6302,6 @@ function AppContent() {
               usageIndicators={state.usageIndicators}
               selectedCredentialProfileId={credentialProfileId}
               onSelectCredentialProfile={(id) => {
-                setPendingAgent(null);
                 const profile = activeCredentialProfiles.find(
                   (item) => item.id === id,
                 );
@@ -6351,10 +6340,7 @@ function AppContent() {
               }}
               agentTypes={availableAgentTypes}
               selectedAgentType={agentTypeForPicker}
-              onSelectAgentType={(agentType) => {
-                setPendingAgent(null);
-                switchStagedAgentType(agentType);
-              }}
+              onSelectAgentType={switchStagedAgentType}
               worktrees={orderedWorktrees}
               worktreesLoaded={state.worktrees !== null}
               projects={orderedPickerProjects}
@@ -6367,17 +6353,13 @@ function AppContent() {
               onSelectNewWorktree={stageNewWorktree}
               models={pickerModels}
               selectedModel={displaySession?.model}
-              onSelectModel={(m) => {
-                setPendingAgent(null);
-                runtimeActions.setModel(m.provider, m.id);
-              }}
+              onSelectModel={(m) => runtimeActions.setModel(m.provider, m.id)}
               thinkingLevel={currentThinkingLevel}
-              onSelectThinking={(level) => {
-                setPendingAgent(null);
-                runtimeActions.setThinkingLevel(level);
-              }}
-              agents={dataOf(state.agentLibrary)}
-              selectedAgent={pendingAgent}
+              onSelectThinking={(level) =>
+                runtimeActions.setThinkingLevel(level)
+              }
+              agents={state.agentLibrary}
+              selectedAgent={(pendingStart ?? stagedStart)?.agent ?? null}
               onSelectAgent={stageAgent}
             />
           ) : null}

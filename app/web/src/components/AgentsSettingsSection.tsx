@@ -34,9 +34,10 @@ const AGENTS_COPY: LibraryPageCopy = {
   listTitle: "Available agents",
   listDescription: (
     <>
-      Each runs on the model and effort shown, on the first enabled account for
-      that model. The new-session page can start one too. Select an agent to
-      read its <code>AGENT.md</code>.
+      Each runs on the model and effort shown. A spawn uses the first enabled
+      account of the model's provider, which is what this list checks; a session
+      started from the new-session page uses the account picked there. Select an
+      agent to read its <code>AGENT.md</code>.
     </>
   ),
   emptyText: (

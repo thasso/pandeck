@@ -20,7 +20,19 @@ import {
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { orderCredentialProfilesByProvider } from "../lib/credentialProfiles.ts";
-import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+} from "./common/load.tsx";
+import {
+  dataOf,
+  errorOf,
+  isInitialLoad,
+  isPending,
+  type LoadState,
+} from "../lib/loadState.ts";
 import { Item } from "./ui/item.tsx";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import {
@@ -226,11 +238,12 @@ export function NewSessionQuickStart({
   thinkingLevel: ThinkingLevel;
   onSelectThinking: (level: ThinkingLevel) => void;
   /**
-   * The agent definitions library (`docs/agent-definitions.md`), when it has
-   * been read: picking one stages its persona, model and effort, and the
-   * session starts as that agent.
+   * The agent definitions library (`docs/agent-definitions.md`): picking one
+   * stages its persona, model and effort, and the session starts as that
+   * agent. The row reserves its place while the first read is out and keeps
+   * its pills through a rescan; an authoritatively empty library has no row.
    */
-  agents?: EntryLibraryList | undefined;
+  agents?: LoadState<EntryLibraryList> | undefined;
   selectedAgent?: string | null;
   onSelectAgent?: (name: string | null) => void;
 }) {
@@ -448,36 +461,11 @@ export function NewSessionQuickStart({
           separated from the project/worktree staging above. */}
         <hr className="mx-4 border-border" />
 
-        {agents && agents.entries.length > 0 ? (
-          <QuickRow
-            label="Agent definition"
-            scrollKey={`${selectedAgent ?? ""}:${agents.entries.length}`}
-          >
-            {agents.entries.map((agent) => {
-              const runtime = agents.agentRuntimes?.[agent.name];
-              const problem = runtime?.problem;
-              const selected = agent.name === selectedAgent;
-              return (
-                <QuickPill
-                  key={agent.name}
-                  selected={selected}
-                  // A definition that cannot start says why instead.
-                  disabled={problem !== undefined || runtime === undefined}
-                  title={
-                    problem ??
-                    (selected
-                      ? `Start as a plain session instead of ${agent.name}`
-                      : `Start as ${agent.name}: ${agent.description}`)
-                  }
-                  onClick={() => onSelectAgent(selected ? null : agent.name)}
-                >
-                  <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
-                  <span className="min-w-0 truncate">{agent.name}</span>
-                </QuickPill>
-              );
-            })}
-          </QuickRow>
-        ) : null}
+        <AgentDefinitionRow
+          state={agents}
+          selectedAgent={selectedAgent}
+          onSelectAgent={onSelectAgent}
+        />
 
         {/* Build/Plan is the composer's Plan switch, not a row here. */}
         {agentPills ? (
@@ -583,5 +571,81 @@ export function NewSessionQuickStart({
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * The "Agent definition" row: one pill per definition, a definition that
+ * cannot start disabled with its reason. Idle (nobody subscribed) draws
+ * nothing; the first read reserves the row (R4); a rescan keeps the pills
+ * with an indicator (R2); a failed read says so in place.
+ */
+function AgentDefinitionRow({
+  state,
+  selectedAgent,
+  onSelectAgent,
+}: {
+  state: LoadState<EntryLibraryList> | undefined;
+  selectedAgent: string | null;
+  onSelectAgent: (name: string | null) => void;
+}) {
+  if (!state || state.status === "idle") return null;
+  const agents = dataOf(state);
+  const error = errorOf(state);
+  if (isInitialLoad(state))
+    return (
+      <QuickRow label="Agent definition" busy>
+        {[0, 1].map((i) => (
+          <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
+        ))}
+      </QuickRow>
+    );
+  if (!agents)
+    return error ? (
+      <div className="px-4">
+        <ErrorNote message={error} />
+      </div>
+    ) : null;
+  // An authoritatively empty library has nothing to offer: no row.
+  if (agents.entries.length === 0 && !error) return null;
+  return (
+    <>
+      <QuickRow
+        label="Agent definition"
+        scrollKey={`${selectedAgent ?? ""}:${agents.entries.length}`}
+      >
+        {agents.entries.map((agent) => {
+          const runtime = agents.agentRuntimes?.[agent.name];
+          const problem = runtime?.problem;
+          const selected = agent.name === selectedAgent;
+          return (
+            <QuickPill
+              key={agent.name}
+              selected={selected}
+              // A definition that cannot start says why instead.
+              disabled={problem !== undefined || runtime === undefined}
+              title={
+                problem ??
+                (selected
+                  ? `Start as a plain session instead of ${agent.name}`
+                  : `Start as ${agent.name}: ${agent.description}`)
+              }
+              onClick={() => onSelectAgent(selected ? null : agent.name)}
+            >
+              <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
+              <span className="min-w-0 truncate">{agent.name}</span>
+            </QuickPill>
+          );
+        })}
+        {isPending(state) ? (
+          <RefreshIndicator label="Rescanning agents" />
+        ) : null}
+      </QuickRow>
+      {error ? (
+        <div className="px-4">
+          <ErrorNote message={error} />
+        </div>
+      ) : null}
+    </>
   );
 }

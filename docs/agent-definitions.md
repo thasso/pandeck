@@ -359,13 +359,17 @@ Both pages read through the same server pieces, one per library:
   (`library/libraryHttp.ts`).
 
 The new-session page offers the definitions as an "Agent definition" row
-(`NewSessionQuickStart`). Picking one stages its persona, model and effort, on
-an account of the model's provider; picking a persona, model, effort or account
-by hand drops it again. The first send carries `agent`, and the server resolves
-the definition again on the picked account (`harnesses/firstSend.ts`): the
-session runs on the definition's model and effort and freezes it exactly as a
-spawn does. A persona or engine that no longer matches the definition refuses
-the send.
+(`NewSessionQuickStart`): it reserves its place while the first read is out,
+keeps its pills with an indicator through a rescan, says a failed read in place,
+and has no row for an empty library. Picking one stages its persona, model and
+effort, on an account of the model's provider. The pick lives on the staged
+session record (`lib/stagedSession.ts`), so a model, effort, account or persona
+pick from any picker drops it, as do a fresh start and leaving the page; staging
+a worktree for the same persona keeps it. The first send carries `agent`, and
+the server resolves the definition again on the picked account
+(`harnesses/firstSend.ts`): the session runs on the definition's model and
+effort and freezes it exactly as a spawn does. A persona or engine that no
+longer matches the definition refuses the send.
 
 ## Out of scope
 

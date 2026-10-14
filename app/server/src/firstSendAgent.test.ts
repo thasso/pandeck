@@ -30,7 +30,14 @@ vi.mock("./session/runtimePrompt.ts", () => ({
   },
 }));
 
+vi.mock("./piSdk/models.ts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  findModelForProfile: async (_profile: string, provider: string, id: string) =>
+    ({ provider, id }) as never,
+}));
+
 const { Connection } = await import("./connection.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { AGENTS_LIBRARY_DIR } = await import("./config.ts");
@@ -44,6 +51,20 @@ const claudeProfile = createCredentialProfile({
   provider: "claude",
 });
 
+mkdirSync(join(AGENTS_LIBRARY_DIR, "drafter"), { recursive: true });
+writeFileSync(
+  join(AGENTS_LIBRARY_DIR, "drafter", "AGENT.md"),
+  formatAgentManifest({
+    name: "drafter",
+    description: "Drafts notes.",
+    persona: "assistant",
+    model: "gpt-5",
+    effort: "low",
+    denyTools: [],
+    skills: [],
+    body: "Draft briefly.",
+  }),
+);
 mkdirSync(join(AGENTS_LIBRARY_DIR, "researcher"), { recursive: true });
 writeFileSync(
   join(AGENTS_LIBRARY_DIR, "researcher", "AGENT.md"),
@@ -60,6 +81,8 @@ writeFileSync(
 );
 
 let acquired: Array<{ id: string; opts: Record<string, unknown> }>;
+let piAcquired: unknown[][];
+let offeredOn: string[];
 
 function makeConnection() {
   const sent: Array<{ type?: string; message?: string }> = [];
@@ -86,12 +109,26 @@ function makeConnection() {
       setTitle() {},
     };
   }) as never);
+  vi.spyOn(piStore, "acquireNew").mockImplementation((async (
+    ...args: unknown[]
+  ) => {
+    piAcquired.push(args);
+    return {
+      sessionId: "pi-agent-session",
+      sessionMode: "build",
+      broadcastState() {},
+      contextInfo: () => ({}),
+      rename() {},
+    };
+  }) as never);
   conn.view = () => {};
   return { conn, sent };
 }
 
 beforeEach(() => {
   acquired = [];
+  piAcquired = [];
+  offeredOn = [];
   prompts.length = 0;
   setAgentRuntimeSourcesForTests({
     models: async () => [
@@ -103,11 +140,24 @@ beforeEach(() => {
         supportedThinkingLevels: ["low", "medium", "high"],
         contextWindow: 200_000,
       },
+      {
+        provider: "openai-codex",
+        id: "gpt-5",
+        name: "GPT-5",
+        reasoning: true,
+        supportedThinkingLevels: ["low", "medium", "high"],
+        contextWindow: 200_000,
+      },
     ],
     skillNames: async () => [],
     toolNames: async () => [],
   });
-  setAgentSpawnSourcesForTests({ offers: async () => true });
+  setAgentSpawnSourcesForTests({
+    offers: async (profileId) => {
+      offeredOn.push(profileId);
+      return true;
+    },
+  });
 });
 
 afterAll(() => {
@@ -134,6 +184,8 @@ test("a first send naming an agent runs as that definition and freezes it", asyn
   assert.equal(acquired[0]?.opts.modelId, "opus");
   assert.equal(acquired[0]?.opts.thinkingLevel, "high");
   assert.equal(acquired[0]?.opts.credentialProfileId, claudeProfile.id);
+  // Resolved on the account the user picked, not the automatic one.
+  assert.deepEqual(offeredOn, [claudeProfile.id]);
   assert.deepEqual(
     JSON.parse(sessionStore.getAgent("agent-first-send") ?? "null"),
     {
@@ -180,4 +232,51 @@ test("a send staged for another persona or an unknown agent is refused before an
     /Agent \\"researcher\\" runs as the assistant persona, not workshop/,
   );
   assert.match(said, /no agent definition named \\"nobody\\"/);
+});
+
+test("a pi first send runs the definition's model and effort and hands it the agent", async () => {
+  const { conn } = makeConnection();
+
+  await conn.handleFirstSend({
+    harness: "pi",
+    id: "pi-optimistic",
+    agentType: "assistant",
+    text: "Draft it.",
+    modelProvider: "openai-codex",
+    modelId: "gpt-other",
+    thinkingLevel: "high",
+    agent: "drafter",
+  });
+
+  assert.equal(piAcquired.length, 1);
+  const [kind, model, thinking, opts] = piAcquired[0] as [
+    string,
+    { provider: string; id: string },
+    string,
+    { agent?: { name: string; model: string } },
+  ];
+  assert.equal(kind, "assistant");
+  assert.deepEqual(model, { provider: "openai-codex", id: "gpt-5" });
+  assert.equal(thinking, "low");
+  assert.equal(opts.agent?.name, "drafter");
+  assert.deepEqual(prompts, ["Draft it."]);
+});
+
+test("a send staged on another engine than the definition's is refused", async () => {
+  const { conn, sent } = makeConnection();
+
+  await conn.handleFirstSend({
+    harness: "pi",
+    id: "pi-wrong-engine",
+    agentType: "assistant",
+    text: "hello",
+    agent: "researcher",
+  });
+
+  assert.equal(piAcquired.length, 0);
+  assert.equal(acquired.length, 0);
+  assert.match(
+    JSON.stringify(sent),
+    /runs on claude-sdk\/opus, which this engine does not run/,
+  );
 });

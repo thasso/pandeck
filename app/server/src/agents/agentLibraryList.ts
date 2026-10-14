@@ -21,8 +21,10 @@ async function agentRuntimes(
   const runtimes: Record<string, AgentRuntimeSummary> = {};
   const valid = new Set(scan.entries.map((entry) => entry.name));
   for (const row of await listSpawnableAgents({ library, scan })) {
-    // Diagnostics already say why a folder is not a definition.
-    if (!valid.has(row.name)) continue;
+    // Diagnostics already say why a folder is not a definition, and one
+    // listed under a valid definition's name must not replace its runtime:
+    // the definitions come first, so the first row for a name wins.
+    if (!valid.has(row.name) || runtimes[row.name]) continue;
     runtimes[row.name] =
       "problem" in row
         ? { problem: row.problem }

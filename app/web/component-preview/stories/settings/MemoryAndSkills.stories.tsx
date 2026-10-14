@@ -28,7 +28,9 @@ import {
   type StagedMemoryScope,
 } from "../../../src/components/LoadedMemorySection.tsx";
 import { SkillsSettingsSection } from "../../../src/components/SkillsSettingsSection.tsx";
+import { AgentsSettingsSection } from "../../../src/components/AgentsSettingsSection.tsx";
 import {
+  settingsAgents,
   settingsFixture,
   settingsMemory,
   settingsModels,
@@ -282,10 +284,12 @@ function SkillsPreview({
   state,
   skills = {},
   detail = "answer",
+  history = "answer",
 }: {
   state: LoadState<EntryLibraryList>;
   skills?: SkillToggles;
   detail?: "answer" | "loading" | "error";
+  history?: "answer" | "loading" | "empty" | "error";
 }) {
   const [toggles, setToggles] = useState(skills);
   useLayoutEffect(() => {
@@ -294,7 +298,11 @@ function SkillsPreview({
       const request = input instanceof Request ? input : null;
       const url = new URL(request?.url ?? String(input), window.location.href);
       const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
-      if (method === "GET" && url.pathname === "/api/skills/history")
+      if (method === "GET" && url.pathname === "/api/skills/history") {
+        if (history === "loading") return new Promise<Response>(() => {});
+        if (history === "error")
+          return json({ error: "git log failed: not a repository" }, 500);
+        if (history === "empty") return json({ commits: [], truncated: false });
         return json({
           commits: [
             {
@@ -306,6 +314,7 @@ function SkillsPreview({
           ],
           truncated: false,
         });
+      }
       if (method !== "GET" || url.pathname !== "/api/skills/detail")
         return json(
           { error: "Network actions are disabled in previews." },
@@ -328,7 +337,7 @@ function SkillsPreview({
     return () => {
       window.fetch = original;
     };
-  }, [detail]);
+  }, [detail, history]);
   return (
     <SkillsSettingsSection
       library={state}
@@ -488,7 +497,7 @@ export const SkillsRescanFailed: Story = {
   ),
 };
 
-export const EntryDetail: Story = {
+export const SkillDetail: Story = {
   render: () => <SkillsPreview state={ready(library)} />,
   play: openSkill("release-notes"),
 };
@@ -504,3 +513,83 @@ export const SkillDetailError: Story = {
   render: () => <SkillsPreview state={ready(library)} detail="error" />,
   play: openSkill("release-notes"),
 };
+export const SkillHistoryLoading: Story = {
+  render: () => <SkillsPreview state={ready(library)} history="loading" />,
+  play: openSkill("release-notes"),
+};
+export const SkillHistoryEmpty: Story = {
+  render: () => <SkillsPreview state={ready(library)} history="empty" />,
+  play: openSkill("release-notes"),
+};
+export const SkillHistoryError: Story = {
+  render: () => <SkillsPreview state={ready(library)} history="error" />,
+  play: openSkill("release-notes"),
+};
+
+/**
+ * Serves the agent detail and history reads locally for one definition, so
+ * the open pane shows an `AGENT.md` as the Agents page does.
+ */
+function AgentsPreview() {
+  useLayoutEffect(() => {
+    const original = window.fetch;
+    window.fetch = async (input) => {
+      const url = new URL(String(input), window.location.href);
+      if (url.pathname === "/api/agents/history")
+        return json({
+          commits: [
+            {
+              shortCommit: "9b1e44d",
+              author: "Developer",
+              date: new Date(now - DAY).toISOString(),
+              subject: "Raise test-reviewer effort",
+            },
+          ],
+          truncated: false,
+        });
+      if (url.pathname !== "/api/agents/detail")
+        return json(
+          { error: "Network actions are disabled in previews." },
+          405,
+        );
+      const detail: EntryDetailResponse = {
+        kind: "entry",
+        name: "test-reviewer",
+        description: settingsAgents.entries[0]!.description,
+        folder: "test-reviewer",
+        path: "test-reviewer/AGENT.md",
+        markdown:
+          "Check out the change in a scratch worktree, revert the code but keep the tests, and confirm every new test fails. Report each one that passes.",
+        bytes: 312,
+        truncated: false,
+        files: {
+          entries: [
+            {
+              type: "file",
+              name: "AGENT.md",
+              path: "AGENT.md",
+              bytes: 312,
+              mimeType: "text/markdown; charset=utf-8",
+            },
+          ],
+          entryCount: 1,
+          metadataBytes: 8,
+          truncated: false,
+          limits: [],
+          diagnostics: [],
+        },
+      };
+      return json(detail);
+    };
+    return () => {
+      window.fetch = original;
+    };
+  }, []);
+  return (
+    <AgentsSettingsSection
+      library={ready(settingsAgents)}
+      initialSelected="test-reviewer"
+    />
+  );
+}
+export const AgentDetail: Story = { render: () => <AgentsPreview /> };
