@@ -1063,7 +1063,7 @@ test("the artifact cap never evicts the output of a fact still owed or unhandled
     setArtifactRetentionGuard,
   } = await import("./mcp/toolGroups/packRuntime.ts");
   setArtifactRetentionGuard((sessionId) =>
-    backgroundDeliveryOutboxStore.owedArtifactIds(sessionId),
+    backgroundDeliveryOutboxStore.protectedArtifactIds(sessionId),
   );
   const stage = (name: string) =>
     stageSessionArtifact(id, {
@@ -1112,4 +1112,418 @@ test("the artifact cap never evicts the output of a fact still owed or unhandled
     "the cap still applies to everything else",
   );
   setArtifactRetentionGuard(undefined);
+});
+
+/* ------------------- review findings: regressions ------------------- */
+
+test("an ordinary Pi steer the real producer refuses after its run closed cleanly keeps the deferred fact owed", async () => {
+  // PiLiveSession -> PiAdapter -> prompt facade -> runtime -> SQLite, around
+  // a scripted native AgentSession: it settles the running turn while the
+  // steer is pending, then refuses the steer. The provider took zero copies.
+  const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
+  serial += 1;
+  const id = `handling-pi-${serial}`;
+  sessionStore.upsert({
+    id,
+    scope: "user",
+    harness: "pi",
+    agentType: "assistant",
+    title: `handling ${serial}`,
+  });
+  let listener: ((event: Record<string, unknown>) => void) | undefined;
+  let streaming = false;
+  let resolveRun: (() => void) | undefined;
+  let steers = 0;
+  const native = {
+    sessionId: id,
+    sessionName: "Fixture",
+    get isStreaming() {
+      return streaming;
+    },
+    sessionManager: { getBranch: () => [] },
+    subscribe: (l: (event: Record<string, unknown>) => void) => {
+      listener = l;
+      return () => {};
+    },
+    getSessionStats: () => ({
+      totalMessages: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: 0,
+      contextSize: 0,
+    }),
+    prompt: () => {
+      streaming = true;
+      return new Promise<void>((resolve) => (resolveRun = resolve));
+    },
+    steer: () => {
+      steers += 1;
+      streaming = false;
+      listener?.({ type: "agent_settled" });
+      resolveRun?.();
+      return Promise.reject(new Error("Cannot steer while idle"));
+    },
+    abort: async () => {
+      streaming = false;
+    },
+    dispose: () => {},
+  };
+  const host = {
+    broadcastSessions: async () => {},
+    noteRunStarted: () => {},
+    checkPendingReload: () => {},
+    isReloadQueued: () => false,
+    browserRuntimesFor: () => [],
+  };
+  const live = new PiLiveSession(
+    "assistant",
+    native as never,
+    host as never,
+    () => {},
+  );
+  const adapter = live.createRuntimeAdapter();
+  sessionRuntime.createSession(id, adapter);
+  drivers.set(id, driverOf(id, adapter));
+  const w = wire();
+  try {
+    const run = promptRuntimeSession(drivers.get(id)!, "long turn", {
+      clientRequestId: `first-${id}`,
+    }).catch(() => {});
+    await settle();
+    listener?.({ type: "agent_start" });
+    assert.equal(drivers.get(id)!.isRunning, true);
+    const item = finished(id, { stopped: true });
+    w.owe(id, item, true);
+    await promptRuntimeSession(drivers.get(id)!, "decision", {
+      steer: true,
+      hidden: true,
+      clientRequestId: `second-${id}`,
+      origin: { kind: "system", source: "approval" },
+    }).catch(() => {});
+    await run;
+    await settle();
+    assert.equal(steers, 1);
+    assert.deepEqual(rows(id), [
+      { itemId: item.id, phase: "owed", interruption: null },
+    ]);
+    assert.equal(w.delivery.queuedCount(id), 1, "back for the next turn");
+    // And the next turn can still claim, carry and retire it.
+    streaming = false;
+    native.prompt = () => Promise.resolve();
+    await promptRuntimeSession(drivers.get(id)!, "next", {
+      clientRequestId: `third-${id}`,
+    });
+    await settle();
+    assert.deepEqual(rows(id), []);
+  } finally {
+    w.delivery.stop();
+    sessionRuntime.closeForTeardown(id);
+    live.dispose();
+  }
+});
+
+test("an ordinary steer binds only once the provider takes it: before its run closes it is that run's; after, it is unknown", async () => {
+  for (const order of ["accept-then-close", "close-then-accept"] as const) {
+    const { id, provider } = session();
+    const w = wire();
+    provider.mode = "manual";
+    void promptRuntimeSession(drivers.get(id)!, "long task", {
+      clientRequestId: `human-${id}`,
+    }).catch(() => {});
+    await settle();
+    const item = finished(id, { stopped: true });
+    w.owe(id, item, true);
+    let accept!: () => void;
+    provider.steer = () =>
+      new Promise((resolve) => {
+        accept = () => resolve({ stopReason: "end" });
+      });
+    const steer = promptRuntimeSession(drivers.get(id)!, "decision", {
+      clientRequestId: `steer-${id}`,
+      steer: true,
+      hidden: true,
+      origin: { kind: "system", source: "approval" },
+    });
+    await settle();
+    assert.equal(rows(id)[0]?.phase, "reserved", `${order}: not bound yet`);
+    if (order === "accept-then-close") {
+      accept();
+      await steer;
+      assert.equal(rows(id)[0]?.phase, "handling");
+      provider.open.shift()!({ stopReason: "end" });
+      await settle();
+      assert.deepEqual(rows(id), [], "its run's clean end retires it");
+    } else {
+      provider.open.shift()!({ stopReason: "end" });
+      await settle();
+      assert.equal(
+        rows(id)[0]?.phase,
+        "reserved",
+        "a clean end before acceptance retires nothing",
+      );
+      accept();
+      await steer;
+      assert.deepEqual(rows(id), [
+        { itemId: item.id, phase: "interrupted", interruption: "unknown" },
+      ]);
+    }
+  }
+});
+
+test("a clean run end the store refuses to record is retried as that outcome, whatever the prompt throws after it", async () => {
+  const { id, provider } = session();
+  const w = wire();
+  const item = finished(id);
+  // The adapter reports a clean completion, then the prompt resolves failed.
+  provider.mode = "manual";
+  provider.adapter.prompt = (text: string) => {
+    provider.texts.push(text);
+    provider.emit({ type: "runCompleted", stopReason: "end" });
+    return Promise.resolve({
+      stopReason: "error",
+      errorMessage: "late producer error",
+    });
+  };
+  getDb().exec(
+    `CREATE TEMP TRIGGER refuse_retire_${serial} BEFORE DELETE ON background_delivery_outbox WHEN OLD.session_id='${id}' BEGIN SELECT RAISE(ABORT,'fixture write refused'); END`,
+  );
+  try {
+    w.owe(id, item);
+    await settle();
+  } finally {
+    getDb().exec(`DROP TRIGGER refuse_retire_${serial}`);
+  }
+  assert.equal(
+    rows(id)[0]?.phase,
+    "handling",
+    "the late error relabels nothing",
+  );
+  const other = session();
+  await promptRuntimeSession(drivers.get(other.id)!, "unrelated", {
+    clientRequestId: `human-${other.id}`,
+  });
+  await settle();
+  assert.deepEqual(rows(id), [], "retired by the clean outcome it had");
+});
+
+test("a failure the store refuses to record stays first when a Stop of the same run arrives later; a newer attempt is fenced", async () => {
+  const { id } = session();
+  backgroundDeliveryOutboxStore.save({
+    sessionId: id,
+    itemId: "item-fenced",
+    revision: 1,
+    disposition: "wake",
+    retained: false,
+  });
+  backgroundDeliveryOutboxStore.reserve(
+    id,
+    "attempt-a",
+    [{ itemId: "item-fenced", revision: 1 }],
+    "owed",
+  );
+  backgroundDeliveryOutboxStore.bind(id, "attempt-a", "run-a", "entry-a");
+  getDb().exec(
+    `CREATE TEMP TRIGGER refuse_interrupt_${serial} BEFORE UPDATE OF phase ON background_delivery_outbox WHEN OLD.session_id='${id}' AND NEW.phase='interrupted' BEGIN SELECT RAISE(ABORT,'fixture write refused'); END`,
+  );
+  try {
+    notices.settleBackgroundHandling(id, {
+      runId: "run-a",
+      stopReason: "error",
+      abortRequested: false,
+    });
+  } finally {
+    getDb().exec(`DROP TRIGGER refuse_interrupt_${serial}`);
+  }
+  assert.equal(rows(id)[0]?.phase, "handling");
+  // A late Stop report of the same run: the failure retry goes first.
+  notices.settleBackgroundHandling(id, {
+    runId: "run-a",
+    stopReason: "aborted",
+    abortRequested: true,
+  });
+  assert.equal(rows(id)[0]?.interruption, "failed");
+
+  // A Recover rebinds it under a new attempt; old run outcomes touch nothing.
+  const [ref] = notices.unhandledBackgroundBatch(id);
+  assert.ok(
+    backgroundDeliveryOutboxStore.reserve(
+      id,
+      "attempt-b",
+      [ref!],
+      "interrupted",
+    ),
+  );
+  backgroundDeliveryOutboxStore.bind(id, "attempt-b", "run-b", "entry-b");
+  notices.settleBackgroundHandling(id, {
+    runId: "run-a",
+    stopReason: "end",
+    abortRequested: false,
+  });
+  assert.equal(rows(id)[0]?.phase, "handling", "fenced by its new attempt");
+});
+
+test("more than 80 protected completion outputs, each captured before its terminal receipt, all stay readable", async () => {
+  const { id } = session();
+  const { sessionArtifactFile, setArtifactRetentionGuard } =
+    await import("./mcp/toolGroups/packRuntime.ts");
+  const { captureTaskOutputArtifact } = await import("./outputPolicy.ts");
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const outputRoot = join(DATA_DIR, `native-output-${id}`);
+  mkdirSync(outputRoot, { recursive: true });
+  setArtifactRetentionGuard((sessionId) =>
+    backgroundDeliveryOutboxStore.protectedArtifactIds(sessionId),
+  );
+  const captured: string[] = [];
+  try {
+    for (let i = 0; i < 83; i += 1) {
+      const reserved = backgroundWorkStore.reserveItem({
+        ownerSessionId: id,
+        backend: "host-process",
+        kind: "shell",
+        label: `output ${i}`,
+        sourceRequestId: `${id}:output:${i}`,
+        lifetimeMs: 60_000,
+        settingsGeneration: 1,
+        bootEpoch: "test",
+        ownerLimit: 1_000,
+      });
+      const output = join(outputRoot, `output-${i}.txt`);
+      writeFileSync(output, `original terminal output ${i}`);
+      // The producers' order: capture, then evidence and terminal row, then
+      // the receipt.
+      const evidence = captureTaskOutputArtifact({
+        sessionId: id,
+        outputFile: output,
+        trustedRoot: outputRoot,
+        sourceTool: "pi background work",
+        artifactLabel: "pi background work output",
+      });
+      assert.ok(evidence.artifactId);
+      captured.push(evidence.artifactId);
+      assert.ok(
+        sessionArtifactFile(id, evidence.artifactId),
+        `${i}: readable right after its capture`,
+      );
+      const item = backgroundWorkStore.terminalize({
+        itemId: reserved.id,
+        state: "completed",
+        evidence,
+      });
+      backgroundDeliveryOutboxStore.save({
+        sessionId: id,
+        itemId: item.id,
+        revision: item.revision,
+        disposition: "wake",
+        retained: false,
+      });
+      backgroundDeliveryOutboxStore.reserve(
+        id,
+        `artifact-attempt-${id}-${i}`,
+        [{ itemId: item.id, revision: item.revision }],
+        "owed",
+      );
+      backgroundDeliveryOutboxStore.settleAttempt(
+        id,
+        `artifact-attempt-${id}-${i}`,
+        "failed",
+      );
+    }
+    assert.equal(notices.unhandledBackground(id).count, 83);
+    for (const artifactId of captured)
+      assert.ok(sessionArtifactFile(id, artifactId), artifactId);
+
+    // Work that ended with no debt keeps no protection: once those debts are
+    // dismissed, the cap applies again.
+    while (notices.unhandledBackground(id).count > 0)
+      notices.dismissBackgroundHandling(
+        id,
+        notices.unhandledBackgroundBatch(id),
+      );
+    const { stageSessionArtifact } =
+      await import("./mcp/toolGroups/packRuntime.ts");
+    stageSessionArtifact(id, {
+      name: "after.txt",
+      mimeType: "text/plain",
+      kind: "file",
+      label: "after",
+      sourceTool: "test",
+      bytes: new TextEncoder().encode("after"),
+    });
+    assert.equal(
+      sessionArtifactFile(id, captured[0]!),
+      undefined,
+      "the oldest unowned output is evicted again",
+    );
+  } finally {
+    setArtifactRetentionGuard(undefined);
+  }
+});
+
+test("a prompt cap lowered below any update still carries each presented fact by its identity, never as a count", async () => {
+  const { id, provider } = session();
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    held: hold.automaticTurnsHeld,
+    disposition: notices.completionDisposition,
+    outbox: notices.backgroundDeliveryOutbox,
+    offer: notices.offerBackgroundCompletion(async (sessionId) =>
+      drivers.get(sessionId),
+    ),
+    maxPromptChars: 160,
+  });
+  const item = finished(id, { outcome: "x".repeat(20_000) });
+  notices.enqueueCompletionNotice(delivery, item, false);
+  await delivery.drain(id);
+  await settle();
+  assert.equal(provider.texts.length, 1);
+  const json = JSON.parse(provider.texts[0]!.split("\n")[1]!) as {
+    updates: Array<{ taskId: string }>;
+    omittedCount?: number;
+  };
+  assert.deepEqual(
+    json.updates.map((u) => u.taskId),
+    [item.id],
+    "the identity the model can read it by",
+  );
+  assert.equal(json.omittedCount, undefined);
+  assert.deepEqual(rows(id), [], "presented, and its turn ended cleanly");
+});
+
+test("Recover refused by an archive, a delete or a Stop landing during the facade's last await claims and exposes nothing", async () => {
+  for (const race of ["archive", "delete", "hold"] as const) {
+    const { id, provider } = session();
+    const w = wire();
+    provider.mode = "error";
+    w.owe(id, finished(id));
+    await settle();
+    const before = notices.unhandledBackgroundBatch(id);
+    assert.equal(before.length, 1);
+    provider.mode = "end";
+    const result = await notices.recoverBackgroundHandling(
+      w.delivery,
+      id,
+      async (sessionId) => {
+        // After Recover's own late check, while the facade awaits.
+        queueMicrotask(() =>
+          queueMicrotask(() => {
+            if (race === "archive") sessionStore.setArchived(sessionId, true);
+            else if (race === "delete")
+              getDb()
+                .prepare("UPDATE session_index SET deleted_at_ms=? WHERE id=?")
+                .run(Date.now(), sessionId);
+            else hold.holdAutomaticTurns(sessionId);
+          }),
+        );
+        return drivers.get(sessionId);
+      },
+    );
+    if ("done" in result) await result.done;
+    await settle();
+    assert.equal(provider.texts.length, 1, `${race}: nothing new reached it`);
+    assert.deepEqual(
+      notices.unhandledBackgroundBatch(id),
+      before,
+      `${race}: the facts stay as the user was shown them`,
+    );
+    if (race === "hold") hold.resumeAutomaticTurns(id);
+  }
 });

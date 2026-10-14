@@ -445,14 +445,20 @@ export const backgroundDeliveryOutboxStore = {
   },
 
   /**
-   * The output artifacts of every fact this session is owed or has not
-   * finished handling, in any phase: the sources a Recover or a restored
-   * delivery points the agent at, which no artifact cap may evict.
+   * The output artifacts no cap may evict for this session: those of its
+   * background work not yet terminal (evidence is recorded before the end is),
+   * and those of every fact it is owed or has not finished handling, in any
+   * phase — the sources a delivery or a Recover points the agent at. Work
+   * that ended with no debt keeps no protection.
    */
-  owedArtifactIds(sessionId: string): Set<string> {
+  protectedArtifactIds(sessionId: string): Set<string> {
     const rows = getDb()
       .prepare(
-        "SELECT DISTINCT i.evidence_artifact_id AS id FROM background_delivery_outbox o JOIN background_work_items i ON i.id = o.item_id WHERE o.session_id=? AND i.evidence_artifact_id IS NOT NULL",
+        `SELECT DISTINCT i.evidence_artifact_id AS id FROM background_work_items i
+         WHERE i.owner_session_id = ? AND i.evidence_artifact_id IS NOT NULL
+           AND (i.state NOT IN ('completed','failed','stopped','lost','not-started')
+                OR EXISTS (SELECT 1 FROM background_delivery_outbox o
+                           WHERE o.session_id = i.owner_session_id AND o.item_id = i.id))`,
       )
       .all(sessionId) as { id: string }[];
     return new Set(rows.map((r) => r.id));

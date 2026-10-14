@@ -353,10 +353,10 @@ setBackgroundRecovery((sessionId, refs) =>
     refs,
   ),
 );
-// The cap on a session's artifacts never evicts the output of a fact it is
-// still owed or has not finished handling.
+// The cap on a session's artifacts never evicts the output of work still
+// running, or of a fact its session is owed or has not finished handling.
 setArtifactRetentionGuard((sessionId) =>
-  backgroundDeliveryOutboxStore.owedArtifactIds(sessionId),
+  backgroundDeliveryOutboxStore.protectedArtifactIds(sessionId),
 );
 setBackgroundHandlingHost({
   changed: (sessionId) => {

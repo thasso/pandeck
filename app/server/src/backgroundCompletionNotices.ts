@@ -483,8 +483,8 @@ export function offerBackgroundCompletion(
           contextBlock: signal.contextBlock,
           clientRequestId,
           ...claim,
-          onUserEntry: (entryId, runId) => {
-            claim.onUserEntry(entryId, runId);
+          onUserEntry: (entryId, runId, taken) => {
+            claim.onUserEntry(entryId, runId, taken);
             accepted();
           },
         }),
@@ -509,6 +509,14 @@ export function offerBackgroundCompletion(
       );
     return "unavailable";
   };
+}
+
+/** A Recover the session stopped being eligible for before its append. */
+class BackgroundRecoveryRefusedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "BackgroundRecoveryRefusedError";
+  }
 }
 
 /** How many interrupted facts one Recover hands the session at most. */
@@ -628,6 +636,7 @@ export async function recoverBackgroundHandling(
     })),
     "interrupted",
   );
+  const hooks = attempt.hooks();
   const done = (async () => {
     let thrown: unknown;
     try {
@@ -660,10 +669,18 @@ export async function recoverBackgroundHandling(
         },
         contextBlock,
         clientRequestId: `background-recovery:${attempt.id}`,
-        // `admit` claims after the facade's last await, right before the
-        // append: a compare-and-set on each fact's interrupted attempt, so a
-        // second Recover or a Dismiss racing this one finds nothing to take.
-        ...attempt.hooks(),
+        ...hooks,
+        // After the facade's last await, right before the append: the user's
+        // eligibility is asked once more (an archive or delete may have landed
+        // while the facade awaited; the facade itself rechecks the hold), then
+        // the claim — a compare-and-set on each fact's interrupted attempt, so
+        // a second Recover or a Dismiss racing this one finds nothing to take.
+        // A refusal here claims nothing: the facts stay as they were.
+        admit: () => {
+          const refused = recoveryRefusal(sessionId);
+          if (refused) throw new BackgroundRecoveryRefusedError(refused);
+          hooks.admit();
+        },
       });
     } catch (error) {
       thrown = error;

@@ -305,7 +305,7 @@ test("an explicit Stop keeps its deferral and is not retained across restart", a
   const carried = h.delivery.claimDeferredContext(session)!;
   assert.match(carried.block, new RegExp(item.id));
   assert.doesNotMatch(carried.block, /frozen deadline/);
-  carried.hooks.onUserEntry?.("entry-explicit", "run-explicit");
+  carried.hooks.onUserEntry?.("entry-explicit", "run-explicit", true);
   carried.finished(undefined);
   notices.settleBackgroundHandling(session, {
     runId: "run-explicit",

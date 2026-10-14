@@ -400,7 +400,7 @@ test("a claim refused before its append gives the fact back; an appended one kee
   refused.finished(new Error("busy"));
   const accepted = delivery.claimDeferredContext("owner-peek");
   assert.ok(accepted, "a refused turn must not consume the only copy");
-  accepted.hooks.onUserEntry?.("entry", "run");
+  accepted.hooks.onUserEntry?.("entry", "run", true);
   accepted.finished(undefined);
   assert.equal(delivery.claimDeferredContext("owner-peek"), undefined);
 });
@@ -419,7 +419,7 @@ test("a fact deferred after a claim is not taken with the claimed batch", async 
   assert.match(pending.block, /"taskId":"first"/);
   // Arrives after the block was built, so it was never sent.
   delivery.enqueue("owner-race", notice("second"));
-  pending.hooks.onUserEntry?.("entry", "run");
+  pending.hooks.onUserEntry?.("entry", "run", true);
   pending.finished(undefined);
 
   const remaining = delivery.claimDeferredContext("owner-race");
@@ -474,7 +474,7 @@ test("deferred output files are cleaned up once their block is exposed", async (
 
   const pending = delivery.claimDeferredContext("owner-files");
   assert.ok(pending);
-  pending.hooks.onUserEntry?.("entry", "run");
+  pending.hooks.onUserEntry?.("entry", "run", true);
   pending.finished(undefined);
   assert.deepEqual(discarded, ["/tmp/turn-scoped"]);
 });
@@ -718,7 +718,7 @@ test("the outbox keeps an owed completion until the run it reached ends cleanly,
   const carrier = delivery.claimDeferredContext("owner-outbox")!;
   assert.equal(phaseOf("owner-outbox|deferred:1"), "reserved");
   assert.equal(delivery.queuedCount("owner-outbox"), 0, "claimed, not queued");
-  carrier.hooks.onUserEntry?.("entry-human", "run-human");
+  carrier.hooks.onUserEntry?.("entry-human", "run-human", true);
   carrier.finished(undefined);
   assert.equal(phaseOf("owner-outbox|deferred:1"), "handling");
   settleRun("run-human");
@@ -840,9 +840,65 @@ test("the queued count follows real queued work and announces every change", asy
   await delivery.drain("owner-count");
   assert.equal(delivery.queuedCount("owner-count"), 1);
   const carrier = delivery.claimDeferredContext("owner-count")!;
-  carrier.hooks.onUserEntry?.("entry", "run");
+  carrier.hooks.onUserEntry?.("entry", "run", true);
   carrier.finished(undefined);
   assert.equal(delivery.queuedCount("owner-count"), 0);
   assert.equal(changes.at(-1), 0);
   assert.equal(delivery.queuedCount("another-session"), 0);
+});
+
+test("under any cap every offered turn carries identities, oversized ones trimmed to the bare id, and the rest follow in order", async () => {
+  const offers: Array<{ carried: string[]; block: string }> = [];
+  const longId = (tag: string) => `${tag}-${"i".repeat(190)}`;
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    offer: (_sessionId, offer, _key, attempt) => {
+      offers.push({ carried: carried(offer), block: offer.contextBlock });
+      attempt.reserve();
+      attempt.exposed("entry", "run");
+      return Promise.resolve("delivered");
+    },
+    // Below the floor: the floor applies.
+    maxPromptChars: 160,
+  });
+  for (const tag of ["a", "b", "c"])
+    delivery.enqueue("owner-cap", {
+      ...notice(longId(tag)),
+      outcomeSummary: "x".repeat(5_000),
+      output: { path: `/data/${"p".repeat(400)}/output.txt` },
+    });
+  for (let i = 0; i < 40 && offers.length < 3; i += 1) await flush();
+  assert.deepEqual(
+    offers.map((o) => o.carried),
+    [[longId("a")], [longId("b")], [longId("c")]],
+    "oldest first, one per turn, each by its whole id",
+  );
+  for (const offer of offers) {
+    assert.ok(offer.block.length <= 1_200);
+    assert.doesNotMatch(offer.block, /x{100}/, "trimmed, never the body");
+  }
+  assert.equal(delivery.queuedCount("owner-cap"), 0);
+});
+
+test("a cap that fits some but not all updates carries those whole and owes the rest", async () => {
+  const offers: string[][] = [];
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    offer: (_sessionId, offer, _key, attempt) => {
+      offers.push(carried(offer));
+      attempt.reserve();
+      attempt.exposed("entry", "run");
+      return Promise.resolve("delivered");
+    },
+    maxPromptChars: 1_200,
+  });
+  for (const tag of ["one", "two", "three", "four"])
+    delivery.enqueue("owner-partial", {
+      ...notice(tag),
+      outcomeSummary: "y".repeat(300),
+    });
+  for (let i = 0; i < 40 && offers.flat().length < 4; i += 1) await flush();
+  assert.deepEqual(offers.flat(), ["one", "two", "three", "four"]);
+  assert.ok(offers.length > 1, "split across turns");
+  assert.ok(offers.every((o) => o.length > 0));
 });

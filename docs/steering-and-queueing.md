@@ -320,14 +320,20 @@ a turn that fails, is stopped or is cut off leaves it for the user
   another turn. The claim is `reserved`, all or nothing, a compare-and-set. A
   claim the store refuses or cannot write exposes nothing, and the fact waits as
   if the session were busy. The append binds the batch to the run it opened or
-  joined (`handling`, with the run and entry ids). Only that run's `RunOutcome`
-  settles it: a clean end nobody aborted retires exactly the rows bound to it;
-  an abort somebody asked for (a Stop, a stand-down, a teardown) makes them
-  `interrupted` as `stopped`, and any other end as `failed`. The runtime decides
-  which end came first, so a failure reported before a Stop stays a failure.
-  Whether the prompt resolved or threw, an idle edge, output, a viewer, or
-  another run ending cleanly settles nothing, and a stale, duplicate or foreign
-  callback finds no row to move.
+  joined (`handling`, with the run and entry ids), but only once the provider
+  has taken it. An ordinary steer is written before the provider answers: its
+  batch stays claimed and unbound until the runtime reports the acceptance
+  (`onProviderAccepted`), and is bound only if its run is still open then. A run
+  that closes first, cleanly or not, settles nothing of it; acceptance after
+  that close is `unknown`, a decline gives it back. Only that run's `RunOutcome`
+  settles it, and once bound nothing else does (a prompt that throws after its
+  run reported a clean end relabels nothing): a clean end nobody aborted retires
+  exactly the rows bound to it; an abort somebody asked for (a Stop, a
+  stand-down, a teardown) makes them `interrupted` as `stopped`, and any other
+  end as `failed`. The runtime decides which end came first, so a failure
+  reported before a Stop stays a failure. Whether the prompt resolved or threw,
+  an idle edge, output, a viewer, or another run ending cleanly settles nothing,
+  and a stale, duplicate or foreign callback finds no row to move.
 - **Exposure comes from the runtime, never from an error.** The runtime calls
   `onProviderCall` right before it hands the adapter any prompt, with the run
   open then, and `onProviderDeclined` only when the adapter answered that it
@@ -349,10 +355,12 @@ a turn that fails, is stopped or is cut off leaves it for the user
   row nor reopens one.
 - **Settlement that cannot be written.** A binding the store refuses leaves the
   batch claimed under its attempt, which the run's outcome then settles by
-  attempt. A settlement the store refuses is kept in memory and retried at the
-  next run end of any session; the runtime's emitter swallows a listener's
-  exception, so nothing here throws. A process that dies first leaves those rows
-  claimed or bound, and boot interrupts them.
+  attempt. A settlement the store refuses is kept in memory as that exact
+  outcome and retried at the next run end of any session, in order, so a failure
+  stays first ahead of a later report of the same run, and a newer attempt's
+  binding fences an older run's retry; the runtime's emitter swallows a
+  listener's exception, so nothing here throws. A process that dies first leaves
+  those rows claimed or bound, and boot interrupts them.
 - **Restart.** No run survives a process. Boot first marks every `reserved` or
   `handling` row `interrupted` as `restart`, then restores owed rows as above.
   It runs inside the synchronous listen callback, before anything this process
@@ -369,9 +377,10 @@ a turn that fails, is stopped or is cut off leaves it for the user
   later turn of the user's or an agent's, an idle edge, a boot and a notice
   recover nothing. Recover is refused while the session is stopped (resume
   first; a held session is not even acquired), archived, deleted or running,
-  checked again after the harness acquisition, and the run door rechecks the
-  hold and the worktree after its last await; a refusal there leaves the facts
-  interrupted as they were, never owed. Its turn carries a bounded model-only
+  checked again after the harness acquisition, and once more inside the facade's
+  `admit`, after its last await and before the claim (the run door also rechecks
+  the hold); a refusal at any of these leaves the facts interrupted under the
+  attempt the user was shown, never owed. Its turn carries a bounded model-only
   reference: each task id (never cut), the revision it was owed under, label,
   state, output file, link, the earlier entry and how that attempt ended, and
   how many are left. The earlier block was model-only and may be gone from the
@@ -395,9 +404,12 @@ a turn that fails, is stopped or is cut off leaves it for the user
   archival (`settleBlockedReason`), so the only place to recover them never
   disappears.
 - **Sources stay readable.** The per-session artifact cap (80) never evicts the
-  output artifact of a fact with an outbox row in any phase; everything else
-  keeps the cap. A guard that cannot answer evicts nothing that time.
-  Background-work rows have no retention of their own.
+  artifact being added (a background output is captured before the evidence
+  naming it is recorded), the output of background work not yet terminal, or the
+  output of a fact with an outbox row in any phase. Work that ended with no debt
+  keeps no protection, and an abandoned capture is removed by its producer. A
+  guard that cannot answer evicts nothing that time. Background-work rows have
+  no retention of their own.
 - **What it cannot see.** The Claude CLI injects its own `<task-notification>`
   into a running turn and may wake itself for its own task through a turn with
   no PA entry. Neither is bound to a PA receipt, so neither handles one, clean
@@ -412,10 +424,12 @@ a turn that fails, is stopped or is cut off leaves it for the user
   retirement write never landed is read the same way, so the user may be asked
   to recover a fact a clean turn did handle. A wake or deferred block the prompt
   cap cannot carry whole takes the oldest updates and leaves the rest owed for
-  the next turn. The bounded queue's overflow still drops never-exposed facts as
-  before (oldest deferred, newest wake), and a single update too large for the
-  prompt cap even when trimmed is carried as a count. The table lives in one
-  database: two servers on one data directory are not supported.
+  the next turn. The cap never goes below 1,200 characters, so a single update
+  trimmed to its identity (task id, kind, state) always fits: a fact is carried
+  by an identity the model can look up or not at all, never as a count, and
+  nothing is offered when nothing fits. The bounded queue's overflow still drops
+  never-exposed facts as before (oldest deferred, newest wake),. The table lives
+  in one database: two servers on one data directory are not supported.
 
 ### Composer
 

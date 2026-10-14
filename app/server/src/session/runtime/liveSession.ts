@@ -81,9 +81,23 @@ export interface RuntimePromptOptions extends PromptOptions {
    * turn (the identity shared with Task 96/99). `runId` is the durable run the
    * entry belongs to — the run it opened, or the one a steer joined — whose
    * {@link RunOutcome} says how the turn carrying it ended; undefined only when
-   * no run was open to join. Not forwarded to the adapter.
+   * no run was open to join. `accepted` is false for the one entry written
+   * BEFORE the provider answered — an ordinary steer — whose acceptance
+   * {@link onProviderAccepted} reports later, or a decline instead. Not
+   * forwarded to the adapter.
    */
-  onUserEntry?: (entryId: string, runId: string | undefined) => void;
+  onUserEntry?: (
+    entryId: string,
+    runId: string | undefined,
+    accepted: boolean,
+  ) => void;
+  /**
+   * The provider took an entry written before it answered (an ordinary steer),
+   * with the run open at the moment the runtime learned it: if that is no
+   * longer the entry's run, the run closed first and which turn read it cannot
+   * be told. Never called on a teardown's stand-in answer. Not forwarded.
+   */
+  onProviderAccepted?: (openRunId: string | undefined) => void;
   /**
    * Called once before this prompt settles. Account recovery defers it until
    * continuation decides the admitted turn's outcome. Never for a steer
@@ -932,6 +946,7 @@ export class LiveRuntimeSession {
       onRunEnded,
       onProviderCall,
       onProviderDeclined,
+      onProviderAccepted,
       peerPrompt: _peerPrompt,
       peerMessageIds: _peerMessageIds,
       ...adapterOpts
@@ -1002,7 +1017,7 @@ export class LiveRuntimeSession {
       }
       this.beginTurn(turnOrigin);
       const steeredEntryId = this.appendUserEntry(text, options, "steer");
-      if (onUserEntry) onUserEntry(steeredEntryId, this.openRunId());
+      if (onUserEntry) onUserEntry(steeredEntryId, this.openRunId(), true);
       this.turnPromptEntryIds.add(steeredEntryId);
       return;
     }
@@ -1045,7 +1060,7 @@ export class LiveRuntimeSession {
           entryFailed = true;
           throw error;
         }
-        if (onUserEntry) onUserEntry(entryId, this.openRunId());
+        if (onUserEntry) onUserEntry(entryId, this.openRunId(), true);
         if (this.turnOpen) this.turnPromptEntryIds.add(entryId);
       };
       let result: AgentRunResult;
@@ -1144,7 +1159,12 @@ export class LiveRuntimeSession {
       throw error;
     }
     if (entryId && onUserEntry)
-      onUserEntry(entryId, steering ? this.openRunId() : ownRunId);
+      onUserEntry(
+        entryId,
+        steering ? this.openRunId() : ownRunId,
+        // A steer is written before the provider answers whether it took it.
+        !steering,
+      );
 
     if (steering) {
       // Only a steering prompt the provider TOOK belongs to the running turn:
@@ -1154,6 +1174,8 @@ export class LiveRuntimeSession {
       // Already in the log; a teardown closed its run, which says how it went.
       onProviderCall?.(this.openRunId());
       let result: AgentRunResult;
+      // A teardown's stand-in answer, told apart from the provider's own.
+      const tornDown: AgentRunResult = { stopReason: "end" };
       try {
         result = await this.untilTeardown(
           this.adapter.prompt(modelText, {
@@ -1161,7 +1183,7 @@ export class LiveRuntimeSession {
             ...adapterOpts,
             steer: true,
           }),
-          { stopReason: "end" },
+          tornDown,
         );
       } catch (error) {
         // A steer the provider did not take rejects (see above).
@@ -1175,6 +1197,7 @@ export class LiveRuntimeSession {
           result.code,
         );
       }
+      if (result !== tornDown) onProviderAccepted?.(this.openRunId());
       this.turnPromptEntryIds.add(entryId);
       return;
     }

@@ -365,13 +365,13 @@ function withHumanResume(
   return {
     ...rest,
     // Runs inside the runtime's append; nothing here may throw.
-    onUserEntry: (entryId, runId) => {
+    onUserEntry: (entryId, runId, accepted) => {
       try {
         spendHumanResume(resumeHold);
       } catch (err) {
         console.warn("[stop-hold] could not lift a hold:", err);
       }
-      options.onUserEntry?.(entryId, runId);
+      options.onUserEntry?.(entryId, runId, accepted);
     },
   };
 }
@@ -392,7 +392,10 @@ export interface DeferredBackgroundContext {
    */
   hooks: Pick<
     RuntimePromptOptions,
-    "onUserEntry" | "onProviderCall" | "onProviderDeclined"
+    | "onUserEntry"
+    | "onProviderCall"
+    | "onProviderDeclined"
+    | "onProviderAccepted"
   >;
   /** The carrying prompt is over: what it threw, undefined when it resolved. */
   finished(thrown: unknown): void;
@@ -454,9 +457,9 @@ function withDeferredBackgroundContext(
     options: {
       ...options,
       contextBlock,
-      onUserEntry: (entryId, runId) => {
-        pending.hooks.onUserEntry?.(entryId, runId);
-        options.onUserEntry?.(entryId, runId);
+      onUserEntry: (entryId, runId, accepted) => {
+        pending.hooks.onUserEntry?.(entryId, runId, accepted);
+        options.onUserEntry?.(entryId, runId, accepted);
       },
       onProviderCall: (openRunId) => {
         pending.hooks.onProviderCall?.(openRunId);
@@ -465,6 +468,10 @@ function withDeferredBackgroundContext(
       onProviderDeclined: () => {
         pending.hooks.onProviderDeclined?.();
         options.onProviderDeclined?.();
+      },
+      onProviderAccepted: (openRunId) => {
+        pending.hooks.onProviderAccepted?.(openRunId);
+        options.onProviderAccepted?.(openRunId);
       },
     },
     finished: (thrown) => pending.finished(thrown),
@@ -489,9 +496,9 @@ function withPlanTurnHint(
   return {
     ...options,
     contextBlock,
-    onUserEntry: (entryId, runId) => {
+    onUserEntry: (entryId, runId, accepted) => {
       hint.commit();
-      options.onUserEntry?.(entryId, runId);
+      options.onUserEntry?.(entryId, runId, accepted);
     },
   };
 }
@@ -560,10 +567,10 @@ async function runPromptWithRuntime(
   const enriched: RuntimePromptFacadeOptions = {
     ...options,
     ...(decision?.memoryBlock ? { memoryBlock: decision.memoryBlock } : {}),
-    onUserEntry: (entryId, runId) => {
+    onUserEntry: (entryId, runId, accepted) => {
       capturedTurnId = entryId;
       capturedAtMs = Date.now();
-      options.onUserEntry?.(entryId, runId);
+      options.onUserEntry?.(entryId, runId, accepted);
     },
   };
 

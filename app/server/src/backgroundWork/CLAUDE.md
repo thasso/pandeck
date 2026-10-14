@@ -43,11 +43,10 @@
   model-only context and never reads as that turn's instruction. Sample
   turn-running at durability. A `wake` may join a running turn with `steerOnly`;
   a refusal is busy, never delivered.
-- DELIVERED is not HANDLED. Claim a fact in the outbox just before its append,
-  bind it to the run that append joined, and retire it ONLY on that run's clean
-  `RunOutcome`. A failed, stopped, cut-off or unknown attempt stays interrupted
-  for the user's Recover or Dismiss: never re-offer it or let another run settle
-  it.
+- DELIVERED is not HANDLED. Claim a fact in the outbox before its append, bind
+  it to its run once the provider took it, and retire it ONLY on that run's
+  clean `RunOutcome`. A failed, stopped, cut-off or unknown attempt stays
+  interrupted for the user's Recover or Dismiss: never re-offer it.
 - Deployment drain uses the hub lifecycle authority: close admission before
   sampling, wait for prompted turns, allow bounded natural completion, record
   `stopped-for-deployment`, then Stop through ports. Restart resumes nothing.
