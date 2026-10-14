@@ -225,12 +225,11 @@ import {
   mapToolResults,
   resultProviderError,
 } from "./messageMapper.ts";
-import { buildClaudeSdkQueryOptions } from "./options.ts";
+import { buildClaudeSdkQueryOptions, claudeQueryModel } from "./options.ts";
 import { lastSavedCostState } from "./profileSessionStore.ts";
 import { prepareClaudeSkillRuntime } from "./skillInjection.ts";
 import {
   claudeSdkModelAlias,
-  claudeSdkModelId,
   claudeSdkModelOption,
   reasoningToThinking,
   knownClaudeSdkModelAlias,
@@ -1292,7 +1291,11 @@ export class ClaudeSdkSession implements LiveSession {
       this.activeQuery.setModel
     ) {
       const alias = claudeSdkModelAlias(modelId);
-      await this.activeQuery.setModel(claudeSdkModelId(alias));
+      // The same pin-aware choice a new query makes: back on a pinned
+      // agent's alias, the retained process runs the pinned version.
+      await this.activeQuery.setModel(
+        claudeQueryModel(alias, sessionAgent(this.id)),
+      );
       this.modelId = alias;
       this.broadcastState();
       this.onPersist();

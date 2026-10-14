@@ -226,7 +226,11 @@ async function agentsText(): Promise<string> {
     const { runtime } = agent;
     return [
       `- ${agent.name}: ${agent.description}`,
-      `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}, ${runtime.thinkingLevel} effort${
+      `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
+        runtime.agent.pinnedModel
+          ? ` (pinned ${runtime.agent.pinnedModel})`
+          : ""
+      }, ${runtime.thinkingLevel} effort${
         runtime.accountName ? `, account ${runtime.accountName}` : ""
       }${runtime.agent.persona === "developer" ? "; needs a worktreeId" : ""}`,
     ].join("\n");

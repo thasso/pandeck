@@ -165,6 +165,7 @@ export function createPiToolActivation(
   const findToolsTool = config.deferToolLoading
     ? createFindToolsTool({
         agentType: config.agentType,
+        sessionToolNames: new Set(config.agentTools.map((tool) => tool.name)),
         usableToolNames,
         activeToolNames,
         activate: (names) => {

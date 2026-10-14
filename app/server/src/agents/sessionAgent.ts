@@ -128,7 +128,12 @@ export function freezeSessionAgent(
 
 /** The system-prompt layer the definition's body becomes, after the persona's. */
 export function agentPromptLayer(agent: SessionAgent): string {
-  return `## Agent definition: ${agent.name}\n\nYou were started as the "${agent.name}" agent. These instructions define your role in this session:\n\n${agent.body}`;
+  // The persona's own layers may still name a tool the definition denies.
+  const denied =
+    agent.denyTools.length > 0
+      ? `\n\nThis session does not have these tools, whatever the instructions above say: ${agent.denyTools.join(", ")}.`
+      : "";
+  return `## Agent definition: ${agent.name}\n\nYou were started as the "${agent.name}" agent. These instructions define your role in this session:\n\n${agent.body}${denied}`;
 }
 
 /** Whether the definition denies one of the harness-neutral native tools. */

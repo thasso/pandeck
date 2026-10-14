@@ -399,7 +399,7 @@ export function buildClaudeSdkQueryOptions(
  * however the alias is mapped by then; a model the user switched to runs as
  * usual.
  */
-function claudeQueryModel(
+export function claudeQueryModel(
   modelId: string,
   agent: SessionAgent | undefined,
 ): string {

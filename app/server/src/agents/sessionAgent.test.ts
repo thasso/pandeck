@@ -33,6 +33,7 @@ const { buildClaudeSdkQueryOptions, claudeSdkSystemPrompt } =
   await import("../claudeSdk/options.ts");
 const { buildAgentOptions } = await import("../piSdk/options.ts");
 const { CLAUDE_SDK_MODELS } = await import("../claudeSdk/modelSettings.ts");
+const { ClaudeSdkSession } = await import("../claudeSdk/ClaudeSdkSession.ts");
 const { createClaudeSessionToolServer } =
   await import("../claudeSdk/toolServer.ts");
 
@@ -136,18 +137,23 @@ test("pi: the body is the last prompt layer and denied tools are excluded", asyn
   assert.ok(!names.includes("worktree_push"));
   assert.ok(names.includes("worktree_commit"));
 
+  const assistantAgent = {
+    ...reviewer,
+    persona: "assistant" as const,
+    denyTools: ["task_manage"],
+  };
   const assistant = await buildAgentOptions(
     "assistant",
     tmp,
     "default",
     undefined,
     [],
-    { ...reviewer, persona: "assistant", denyTools: ["task_manage"] },
+    assistantAgent,
   );
   assert.ok(
     assistant.resourceLoader
       .getSystemPrompt()
-      ?.endsWith(agentPromptLayer(reviewer)),
+      ?.endsWith(agentPromptLayer(assistantAgent)),
   );
   assert.ok(!assistant.agentTools.some((tool) => tool.name === "task_manage"));
 });
@@ -219,6 +225,56 @@ test("Claude: a pinned agent runs its version even after the alias moves", () =>
       }).model,
       "claude-opus-future",
     );
+  } finally {
+    opus.sdkModelId = original;
+  }
+});
+
+test("Claude: a retained process switched back to the agent's alias runs the pin", async () => {
+  freezeSessionAgent("claude-retained", {
+    ...reviewer,
+    pinnedModel: "claude-opus-5-5",
+  });
+  const switches = async (id: string) => {
+    const session = new ClaudeSdkSession(id, {
+      seam: async () => ({
+        query() {
+          throw new Error("no query in this test");
+        },
+      }),
+      modelId: "opus",
+      agentType: "developer",
+    });
+    const calls: string[] = [];
+    // A process kept alive for background work takes model switches as
+    // controls rather than as a new query.
+    Object.assign(session, {
+      activeQuery: {
+        async setModel(model: string) {
+          calls.push(model);
+        },
+      },
+      retainedEpochKey: "retained",
+      queryEpochKey: "retained",
+    });
+    await session.setModel("sonnet");
+    await session.setModel("opus");
+    return calls;
+  };
+  const opus = CLAUDE_SDK_MODELS.find((entry) => entry.id === "opus")!;
+  const sonnet = CLAUDE_SDK_MODELS.find((entry) => entry.id === "sonnet")!;
+  const original = opus.sdkModelId;
+  opus.sdkModelId = "claude-opus-future";
+  try {
+    assert.deepEqual(await switches("claude-retained"), [
+      sonnet.sdkModelId,
+      "claude-opus-5-5",
+    ]);
+    // A session not spawned from a pinned definition follows the alias.
+    assert.deepEqual(await switches("claude-retained-plain"), [
+      sonnet.sdkModelId,
+      "claude-opus-future",
+    ]);
   } finally {
     opus.sdkModelId = original;
   }

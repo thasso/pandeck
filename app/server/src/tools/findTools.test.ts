@@ -26,7 +26,10 @@ interface HostState {
 
 function makeHost(
   overrides?: Partial<
-    Pick<FindToolsHost, "usableToolNames" | "activeToolNames">
+    Pick<
+      FindToolsHost,
+      "usableToolNames" | "activeToolNames" | "sessionToolNames"
+    >
   >,
 ): HostState {
   const eager = eagerToolNamesFor("assistant");
@@ -221,6 +224,28 @@ test("asking to spawn a named agent finds session_spawn", async () => {
       ),
     JSON.stringify(payload),
   );
+});
+
+test("a tool the session does not have is neither found nor loadable", async () => {
+  const all = agentToolsFor("assistant").map((tool) => tool.name);
+  const { host, activated } = makeHost({
+    sessionToolNames: new Set(
+      all.filter((name) => name !== "jira_search_issues"),
+    ),
+  });
+  const byName = await run(host, { names: ["jira_search_issues"] });
+  assert.deepEqual(byName.unavailable, [
+    { tool: "jira_search_issues", how: "Unknown tool name for this session." },
+  ]);
+  const searched = await run(host, "search jira issues", 8);
+  assert.ok(
+    ![
+      ...(searched.loaded ?? []),
+      ...(searched.candidates ?? []).map((c) => c.name),
+    ].includes("jira_search_issues"),
+    JSON.stringify(searched),
+  );
+  assert.ok(activated.every((names) => !names.includes("jira_search_issues")));
 });
 
 test("an ambiguous broad search returns candidates without activation", async () => {

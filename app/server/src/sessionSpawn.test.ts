@@ -11,7 +11,13 @@
  * ones drive `hub`, whose two harnesses have their own suites.
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -89,6 +95,8 @@ const { setAgentRuntimeSourcesForTests } =
   await import("./agents/agentRuntime.ts");
 const { setAgentSpawnSourcesForTests } = await import("./agents/agentSpawn.ts");
 const { LibraryStore } = await import("./library/libraryStore.ts");
+const { sessionAgent } = await import("./agents/sessionAgent.ts");
+const { buildClaudeSdkQueryOptions } = await import("./claudeSdk/options.ts");
 
 const spawnTool = sessionSpawnTools()[0]!;
 const SENDER = "spawner-session";
@@ -1573,6 +1581,22 @@ test("an agent row runs as its definition and freezes it for the session", async
   expect(text).toContain("family claude");
   expect(text).not.toContain("relative cost");
   expect(recorded.delivered).toHaveLength(1);
+
+  // Editing, then deleting, the definition changes new spawns only: what this
+  // session's queries are built from is still the frozen copy.
+  writeAgent({ body: "Edited after the spawn.", denyTools: [] });
+  rmSync(join(agentsRoot, "test-reviewer"), { recursive: true });
+  const options = buildClaudeSdkQueryOptions({
+    cwd: tmp,
+    abortController: new AbortController(),
+    modelId: "sonnet",
+    thinkingLevel: "low",
+    agentType: "developer",
+    agent: sessionAgent(id),
+  });
+  expect((options.systemPrompt as { append: string }).append).toMatch(
+    /You are a test reviewer\.\n\nThis session does not have these tools, whatever the instructions above say: worktree_push\.$/,
+  );
 });
 
 test("an assistant agent on a pi model hands its definition to pi creation", async () => {

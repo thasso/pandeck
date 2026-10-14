@@ -821,7 +821,7 @@ class PiSessionStore {
       this.sessionModes.delete(activeSessionId);
       session.dispose();
       throw new Error(
-        `Agent "${agent.name}" cannot resume: ${modelFallbackMessage}. It does not run on another model.`,
+        `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`,
       );
     }
     this.closeToolRuntime(session.sessionId); // paranoia: never leak a stale activation under the same key

@@ -139,7 +139,8 @@ persona's normal toolset and can never add to it. Entries are:
   `mcp__pa__worktree_push`). They leave the session's toolset entirely
   (`withoutDeniedTools` in `agents/sessionAgent.ts`): Claude's session tool
   server neither lists nor serves them (`claudeSdk/toolServer.ts`), and pi never
-  registers them (`piSdk/options.ts`).
+  registers them (`piSdk/options.ts`), nor can its `find_tools` find or load
+  them.
 - **Native capabilities** by harness-neutral names: `bash`, `edit`, `write`, for
   the `developer` persona (an `assistant` has none). Claude drops them from
   `tools:` and therefore lists them in `disallowedTools` (`bash` → `Bash` and
@@ -246,8 +247,9 @@ The session runs the model it was spawned on, never one a harness picks:
 
 - A Claude query of a pinned definition runs the pinned version while the
   session is on the definition's alias, however the alias is mapped later
-  (`claudeQueryModel` in `claudeSdk/options.ts`). A model the user switched the
-  session to runs as usual.
+  (`claudeQueryModel` in `claudeSdk/options.ts`, which also picks the model a
+  retained process switches to). A model the user switched the session to runs
+  as usual.
 - pi restores a session's model from its messages. An agent session without any
   (a fork before the first prompt, a spawn reopened before it ran) starts on its
   branch's last selected model, else the frozen one, and refuses when the
@@ -259,7 +261,8 @@ The session runs the model it was spawned on, never one a harness picks:
 - The body is one more system-prompt layer, `## Agent definition: <name>`,
   appended after the persona's layers on both harnesses (`agentPromptLayer`). It
   survives compaction and the coordinator cannot paraphrase it away, which it
-  could if the body travelled in the opening prompt.
+  could if the body travelled in the opening prompt. It ends by naming the
+  denied tools, since the persona's own layers may still mention them.
 - The deny list removes tools as described in "Tools".
 - `skills` joins the globally enabled skills in the session's frozen skill list
   (`sessionSkillPreset`), so the skills runtime mounts them through the existing

@@ -514,7 +514,7 @@ test("forking cuts the native transcript, the runtime log and the record alike",
   assert.match(
     (forkQuery.options?.systemPrompt as { append?: string } | undefined)
       ?.append ?? "",
-    /## Agent definition: test-reviewer\n[\s\S]*Review the tests\.$/,
+    /## Agent definition: test-reviewer\n[\s\S]*Review the tests\.\n\nThis session does not have these tools, whatever the instructions above say: bash\.$/,
     "the forked query carries the agent's prompt layer",
   );
   assert.ok(

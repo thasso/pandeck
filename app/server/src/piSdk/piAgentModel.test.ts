@@ -136,7 +136,7 @@ test("an agent session whose model cannot be restored refuses to resume", async 
 
   await assert.rejects(
     piStore.acquireExisting("developer", file, id),
-    /Agent "test-reviewer" cannot resume: .*retired.* It does not run on another model/,
+    /Agent "test-reviewer" cannot run: .*retired.* It does not run on another model/,
   );
 });
 

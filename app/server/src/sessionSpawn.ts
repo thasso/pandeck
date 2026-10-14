@@ -967,13 +967,16 @@ export async function spawnApprovedPeers(input: {
   const structurals: StructuralRow[] = [];
   // One scan resolves every agent row; each is resolved again before use.
   let agents: Awaited<ReturnType<typeof scanAgentsForSpawn>> | undefined;
-  for (const row of input.rows) {
+  const earlyAgents = new Map<number, AgentSpawnRuntime>();
+  for (const [index, row] of input.rows.entries()) {
     const label = row.title?.trim() || "(untitled)";
     if (row.agent !== undefined) {
-      if (!row.agent.trim() || row.profileId !== undefined)
+      if (row.profileId !== undefined)
         throw new SpawnProposalError(
           `"${label}" must name either an agent or a profileId, not both.`,
         );
+      if (!row.agent.trim())
+        throw new SpawnProposalError(`"${label}" names an empty agent.`);
       agents ??= await scanAgentsForSpawn();
       let early: AgentSpawnRuntime;
       try {
@@ -985,6 +988,7 @@ export async function spawnApprovedPeers(input: {
       }
       // The definition decides the persona, so a developer agent still needs
       // its worktree like any developer row.
+      earlyAgents.set(index, early);
       structurals.push(
         await validateStructure({ ...row, agentType: early.agent.persona }),
       );
@@ -1022,9 +1026,11 @@ export async function spawnApprovedPeers(input: {
       // awaits in between are exactly where a Settings or definition edit
       // lands.
       const resolve = rowRuntime(row);
+      // An agent row was resolved with the batch already; the late read in
+      // `spawnOne` is the one that counts.
       let runtime: RowRuntime;
       try {
-        runtime = await resolve();
+        runtime = earlyAgents.get(index) ?? (await resolve());
       } catch (err) {
         result.error = errorText(err);
         continue;
@@ -1101,7 +1107,11 @@ function reportedRuntime(
   if (runtime.agent)
     return {
       ...common,
-      name: `agent ${runtime.agent.name}`,
+      name: `agent ${runtime.agent.name}${
+        runtime.agent.pinnedModel
+          ? ` (pinned ${runtime.agent.pinnedModel})`
+          : ""
+      }`,
       family: peerRuntimeFamilyOf(runtime.provider, runtime.modelId),
       blob: runtime.agent.blob,
     };
