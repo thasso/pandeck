@@ -3639,10 +3639,12 @@ function AppContent() {
    */
   const startReviewSessionForSession = useCallback(
     (extraText = ""): string | null => {
-      beginFreshDraft();
       const sourceId = displayCurrentId;
       if (!sourceId || !displayHasUserPrompt)
         return "Nothing to review yet — this session has no work to look at.";
+      // Only once a draft does start: a refused review leaves a held first
+      // send, and its Retry, where they were.
+      beginFreshDraft();
       const context = reviewContextForSession(
         {
           sessionId: sourceId,
@@ -4024,6 +4026,7 @@ function AppContent() {
             ? pickerModels
             : undefined,
           displaySession?.model,
+          (pendingStart ?? stagedStart)?.agent !== undefined,
         )
       : undefined;
   const credentialProfileSendBlocked =
@@ -4477,7 +4480,10 @@ function AppContent() {
     list: dataOf(state.agentLibrary),
     pendingStart,
     setPendingStart,
-    accounts: activeCredentialProfiles,
+    accounts:
+      credentialProfileProjection !== undefined
+        ? activeCredentialProfiles
+        : undefined,
     accountId: credentialProfileId,
     setAccountId: setCredentialProfileId,
   });

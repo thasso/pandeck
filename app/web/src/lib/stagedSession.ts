@@ -201,8 +201,13 @@ export function agentDraft(
 
 /**
  * How a draft's agent follows a new agents list: dropped when the definition
- * is gone or cannot start, restaged when what it runs on changed, else kept.
- * An unread list says nothing, so it keeps.
+ * is gone, cannot start, or runs as another persona now; restaged when its
+ * model or effort changed; else kept. An unread list says nothing, so it keeps.
+ *
+ * A persona is not restaged under the user: it decides which worktree the
+ * draft needs, and a draft whose first send is held for retry offers no
+ * persona or worktree picker any more. Restaging it would leave a Developer
+ * draft without a worktree that no control can give it.
  */
 export function reconcileStagedAgent(
   record: StagedSessionRecord | null,
@@ -211,8 +216,8 @@ export function reconcileStagedAgent(
   if (!record?.agent || !list) return "keep";
   const runtime = agentRuntimeOf(list, record.agent);
   if (!runtime || runtime.problem !== undefined) return "drop";
+  if (runtime.persona !== record.agentType) return "drop";
   const same =
-    runtime.persona === record.agentType &&
     runtime.provider === record.provider &&
     runtime.modelId === record.modelId &&
     runtime.thinkingLevel === record.thinkingLevel;

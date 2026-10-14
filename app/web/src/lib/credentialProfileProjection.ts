@@ -16,12 +16,18 @@ export function credentialProfileProjectionBlocksSend(
  * Fetch progress and fetch failures are deliberately NOT returned here: the
  * quick-start runtime section is their one narration on the surface. Composer
  * controls are disabled quietly until data exists.
+ *
+ * A staged agent definition (`docs/agent-definitions.md` "UI") skips the model
+ * checks: it runs its own model, which Settings → Models may hide from the
+ * pickers, and the server checks that model against the picked account and
+ * refuses with the reason.
  */
 export function credentialProfileProjectionBlockReason(
   load: LoadState<CredentialProfileProjection>,
   selectedProfileId: string,
   selectedModels: ModelOption[] | undefined,
   selectedModel?: Pick<ModelOption, "provider" | "id">,
+  agentStaged = false,
 ): string | undefined {
   const projection = dataOf(load);
   if (!projection) return undefined;
@@ -31,7 +37,7 @@ export function credentialProfileProjectionBlockReason(
     !profiles.some((profile) => profile.id === selectedProfileId)
   )
     return "Select a credential profile to continue.";
-  if (selectedModels === undefined) return undefined;
+  if (selectedModels === undefined || agentStaged) return undefined;
   if (selectedModels.length === 0)
     return "No visible models are available for this credential profile. Connect it in Settings or enable one under Models, then retry.";
   if (

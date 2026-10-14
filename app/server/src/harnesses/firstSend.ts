@@ -127,7 +127,9 @@ async function resolveFirstSendAgent(
   if (agent.agent.persona !== req.agentType)
     return {
       refusal: {
-        message: `Agent "${agent.agent.name}" runs as the ${agent.agent.persona} persona, not ${req.agentType}.`,
+        // The draft drops a definition whose persona changed rather than
+        // switch persona (and so worktree) under the user.
+        message: `Agent "${agent.agent.name}" runs as the ${agent.agent.persona} persona, not ${req.agentType}. It is no longer picked: send again for a plain ${req.agentType} session, or pick it on a new session.`,
       },
     };
   if (harnessForModelProvider(agent.provider) !== req.harness)

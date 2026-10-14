@@ -19,9 +19,16 @@ import { useStagedAgentReconcile } from "./useStagedAgentReconcile.ts";
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const ACCOUNTS = [{ id: "claude-work", provider: "claude" }];
+const ACCOUNTS = [
+  { id: "claude-work", provider: "claude" },
+  { id: "claude-home", provider: "claude" },
+];
+const OPENAI_ONLY = [{ id: "openai-work", provider: "openai-codex" }];
 
-function list(thinkingLevel: "high" | "low"): EntryLibraryList {
+function list(
+  thinkingLevel: "high" | "low",
+  persona: "developer" | "assistant" = "developer",
+): EntryLibraryList {
   return {
     libraryPath: "/data/agents",
     entries: [
@@ -34,7 +41,7 @@ function list(thinkingLevel: "high" | "low"): EntryLibraryList {
     diagnostics: [],
     agentRuntimes: {
       "test-reviewer": {
-        persona: "developer",
+        persona,
         provider: "claude-sdk",
         modelId: "opus",
         thinkingLevel,
@@ -55,14 +62,17 @@ const PICKED = stagedSessionRecord({
 });
 
 let seen: StagedSessionRecord | null = null;
+let seenAccount: string | undefined;
 
 /** App's two writers of the record: leaving the page, then the reconcile. */
 function Draft({
   onNewPage,
   agents,
+  accounts = ACCOUNTS,
 }: {
   onNewPage: boolean;
   agents: EntryLibraryList;
+  accounts?: ReadonlyArray<{ id: string; provider: string }>;
 }) {
   const [pendingStart, setPendingStart] = useState<StagedSessionRecord | null>(
     PICKED,
@@ -71,16 +81,25 @@ function Draft({
   useEffect(() => {
     if (!onNewPage) setPendingStart(leftNewSessionPage);
   }, [onNewPage]);
+  // App's account sync: an account that is gone falls back to the first.
+  useEffect(() => {
+    setAccountId((current) =>
+      accounts.some((account) => account.id === current)
+        ? current
+        : (accounts[0]?.id ?? ""),
+    );
+  }, [accounts]);
   useStagedAgentReconcile({
     active: onNewPage,
     list: agents,
     pendingStart,
     setPendingStart,
-    accounts: ACCOUNTS,
+    accounts,
     accountId,
     setAccountId,
   });
   seen = pendingStart;
+  seenAccount = accountId;
   return null;
 }
 
@@ -117,4 +136,38 @@ it("stops at the page, so it does not bring back what leaving it spent", () => {
   expect(seen?.agent).toBeUndefined();
   expect(seen?.mode).toBeUndefined();
   expect(seen?.thinkingLevel).toBe("high");
+});
+
+it("drops a pick whose persona changed instead of switching the draft's persona", () => {
+  act(() => root!.render(<Draft onNewPage agents={list("high")} />));
+
+  // A hand edit makes the definition an assistant: switching the draft would
+  // change which worktree it needs, past a first send held for retry that
+  // offers no picker to change it.
+  act(() =>
+    root!.render(<Draft onNewPage agents={list("high", "assistant")} />),
+  );
+  expect(seen?.agent).toBeUndefined();
+  expect(seen).toMatchObject({ id: "draft", agentType: "developer" });
+});
+
+it("keeps the draft on an account of the definition's provider, or drops it", () => {
+  act(() => root!.render(<Draft onNewPage agents={list("high")} />));
+  expect(seenAccount).toBe("claude-work");
+
+  // The picked account is disabled; the next one is another provider's.
+  const others = [OPENAI_ONLY[0]!, ACCOUNTS[1]!];
+  act(() =>
+    root!.render(<Draft onNewPage agents={list("high")} accounts={others} />),
+  );
+  expect(seenAccount).toBe("claude-home");
+  expect(seen?.agent).toBe("test-reviewer");
+
+  // No account of its provider is left.
+  act(() =>
+    root!.render(
+      <Draft onNewPage agents={list("high")} accounts={OPENAI_ONLY} />,
+    ),
+  );
+  expect(seen?.agent).toBeUndefined();
 });

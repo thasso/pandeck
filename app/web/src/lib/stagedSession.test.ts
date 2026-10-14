@@ -239,6 +239,21 @@ describe("staging an agent definition", () => {
         },
       }),
     ).toBe("restage");
+    // A persona change is dropped, not restaged: the draft keeps the persona
+    // its context was staged for.
+    expect(
+      reconcileStagedAgent(record, {
+        ...list,
+        agentRuntimes: {
+          "test-reviewer": {
+            persona: "assistant",
+            provider: "claude-sdk",
+            modelId: "opus",
+            thinkingLevel: "high",
+          },
+        },
+      }),
+    ).toBe("drop");
     expect(
       reconcileStagedAgent(record, {
         ...list,
