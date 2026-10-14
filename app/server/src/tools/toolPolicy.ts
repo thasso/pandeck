@@ -61,9 +61,9 @@ const PLAN_MODE_ALLOWED_MUTATING_TOOLS = new Set([
   // Background Stop is an explicit safety control, not a new-work mutation;
   // list/status and Stop must remain available while planning.
   "background_tasks",
-  // The discriminated `profiles` and `agents` operations are read-only; the tool itself
-  // rejects `spawn` and `propose` against the caller's persisted Plan mode
-  // before either operation can create anything.
+  // The discriminated `profiles` and `agents` operations are read-only; the
+  // tool itself rejects `spawn` and `propose` against the caller's persisted
+  // Plan mode before either operation can create anything.
   "session_spawn",
 ]);
 

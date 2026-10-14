@@ -1758,11 +1758,11 @@ export class Connection implements Viewer {
         });
       }
       if (topic === "worktrees") void this.onListWorktrees();
-      // A library (skills, agents) is hand-authored on disk, so a subscribe is a fresh
-      // SCAN, never a cached index. It answers through the topic broadcast: the
-      // scan is authoritative for everyone already showing the library too, and
-      // a second shape addressed at this one connection is exactly how browse
-      // and injection start disagreeing.
+      // A library (skills, agents) is hand-authored on disk, so a subscribe is
+      // a fresh SCAN, never a cached index. It answers through the topic
+      // broadcast: the scan is authoritative for everyone already showing the
+      // library too, and a second shape addressed at this one connection is
+      // exactly how browse and injection start disagreeing.
       if (topic === "skills") void publishSkillLibrary();
       if (topic === "agents") void publishAgentLibrary();
       if (topic === "workflow") this.send(workflowRunListMessage());

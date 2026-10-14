@@ -513,7 +513,8 @@ export async function editEntrySource(
               ctx.damaged(target.path);
               await file.replace(written);
               // And now the path holds exactly these bytes, which is what makes
-              // restoring it safe: anything else there later is somebody else's.
+              // restoring it safe: anything else there later is somebody
+              // else's.
               ctx.wrote(target.path, written);
               return applied.replacements;
             }),
@@ -704,13 +705,14 @@ export async function renameEntry(
       await withLibraryRoot(ctx.root, async (rootHandle) => {
         // The destination is CLAIMED, never taken. `mkdir` fails on any entry
         // that already holds the name, and every step below is the same kind of
-        // create-or-fail call — `mkdir`, `link`, `O_CREAT|O_EXCL` — so the entry
-        // is assembled at the new name without a single operation that could
-        // replace something. A `rename` of the folder would have been simpler,
-        // but POSIX `rename` REPLACES an empty destination directory, and no
-        // check in front of it closes that window; `renameat2(RENAME_NOREPLACE)`
-        // is not reachable from this runtime, so the primitives that already
-        // refuse are used instead of one that has to be guarded.
+        // create-or-fail call — `mkdir`, `link`, `O_CREAT|O_EXCL` — so the
+        // entry is assembled at the new name without a single operation that
+        // could replace something. A `rename` of the folder would have been
+        // simpler, but POSIX `rename` REPLACES an empty destination directory,
+        // and no check in front of it closes that window;
+        // `renameat2(RENAME_NOREPLACE)` is not reachable from this runtime, so
+        // the primitives that already refuse are used instead of one that has
+        // to be guarded.
         const performed = await withReservedEntryFolder(
           rootHandle,
           newName,
@@ -1037,10 +1039,10 @@ export async function deleteEntry(
         // the folder.
         ctx.checkpoint();
         // The tree that goes must still hold the very manifest that was read,
-        // which no recreated folder can — and every other file in it must be one
-        // the repository has COMMITTED, with the content it committed. A delete
-        // is a request to remove an entry, not licence to remove whatever else has
-        // appeared in its folder since.
+        // which no recreated folder can — and every other file in it must be
+        // one the repository has COMMITTED, with the content it committed. A
+        // delete is a request to remove an entry, not licence to remove
+        // whatever else has appeared in its folder since.
         const proof = cancellableExpectation(async (tree) => {
           if (
             !sameFileIdentity(

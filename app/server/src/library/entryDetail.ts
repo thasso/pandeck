@@ -1,5 +1,6 @@
 /**
- * The bounded read of ONE library entry ([Task-614](pa://task/614), `docs/skills.md`).
+ * The bounded read of ONE library entry ([Task-614](pa://task/614),
+ * `docs/skills.md`).
  *
  * An entry is addressed by its DECLARED name and by nothing else. The caller
  * never supplies a path: the name is checked against `isSafeEntryName`, then

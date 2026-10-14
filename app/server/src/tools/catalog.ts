@@ -1049,10 +1049,11 @@ export function eagerToolNamesFor(
 }
 
 /**
- * Apply the Build/Plan tool policy to an otherwise-active catalog set.
- * Build is intentionally an identity projection; Plan retains read-only tools,
- * the Task manager, and `session_spawn` for its read-only runtime-profile and
- * agent-definition operations. The tool itself refuses its session-creating operations in Plan.
+ * Apply the Build/Plan tool policy to an otherwise-active catalog set. Build is
+ * intentionally an identity projection; Plan retains read-only tools, the Task
+ * manager, and `session_spawn` for its read-only runtime-profile and
+ * agent-definition operations. The tool itself refuses its session-creating
+ * operations in Plan.
  */
 export function modeGatedActiveToolNames(
   mode: SessionMode,

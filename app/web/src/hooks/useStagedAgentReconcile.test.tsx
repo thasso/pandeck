@@ -109,7 +109,7 @@ it("restages a pick whose runtime changed, keeping the draft's id and Plan", () 
   });
 });
 
-it("does not bring back the agent and Plan that leaving the page spent", () => {
+it("stops at the page, so it does not bring back what leaving it spent", () => {
   act(() => root!.render(<Draft onNewPage agents={list("high")} />));
 
   // Navigation away and a changed runtime land in the same render.

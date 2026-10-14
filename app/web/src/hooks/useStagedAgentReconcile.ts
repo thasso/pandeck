@@ -14,12 +14,12 @@ import {
  * runtime changed is restaged, so the pickers keep showing what the first send
  * will run.
  *
- * Only on the new-session page, where the agents list is held: off it the pick
- * is already spent. Each write is written straight to the record — a passive
- * effect must neither flushSync nor pull focus to the composer the way a
- * click's restage does — and lands only on the record it was computed from, so
- * an update queued in the same commit (leaving the page spends the agent and
- * Plan) is never overwritten by one built from the record before it.
+ * Only on the new-session page, where the agents list is held. Off it the pick
+ * is already spent, and leaving the page spends it in the same commit a
+ * changed list may arrive in: a restage built from the record before that
+ * would bring the agent and Plan back. Each write goes straight to the record —
+ * a passive effect must neither flushSync nor pull focus to the composer the
+ * way a click's restage does.
  */
 export function useStagedAgentReconcile({
   active,
@@ -47,19 +47,18 @@ export function useStagedAgentReconcile({
       change === "restage"
         ? agentDraft(list, pendingStart.agent, accounts, accountId)
         : undefined;
-    const read = pendingStart;
     if (!draft) {
-      setPendingStart((current) =>
-        current === read ? withoutAgent(read) : current,
-      );
+      setPendingStart(withoutAgent(pendingStart));
       return;
     }
     const { accountId: draftAccountId, ...runtime } = draft;
     setAccountId(draftAccountId);
-    setPendingStart((current) =>
-      current === read
-        ? stagedSessionRecord({ ...runtime, id: read.id, mode: read.mode })
-        : current,
+    setPendingStart(
+      stagedSessionRecord({
+        ...runtime,
+        id: pendingStart.id,
+        mode: pendingStart.mode,
+      }),
     );
   }, [
     active,

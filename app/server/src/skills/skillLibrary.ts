@@ -5,9 +5,10 @@
  *
  * Subscribing to the `skills` topic IS the authoritative read: this module
  * bootstraps storage if needed, scans the working tree fresh, and publishes the
- * result through the shared topic seam (`library/libraryPublish.ts`). Nothing here caches — the library is
- * hand-authored, and a cached index would let Settings show a skill that no
- * longer matches the file a session is about to inject.
+ * result through the shared topic seam (`library/libraryPublish.ts`). Nothing
+ * here caches — the library is hand-authored, and a cached index would let
+ * Settings show a skill that no longer matches the file a session is about to
+ * inject.
  *
  * Every subscriber receives the same publish, so a second window that opens the
  * library also refreshes the first one instead of the two drifting apart.

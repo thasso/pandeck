@@ -6,10 +6,10 @@
  * single-entry read alike. Both used to resolve a pathname twice — once to
  * check what was there, once to read it — and a pathname is not a thing but a
  * question the kernel re-answers every time it is asked. Between the two
- * answers a user script, a `git checkout`, or an attacker can replace a manifest
- * or its folder with a symlink, and the second answer is then a file outside the
- * library. A stress run reproduced exactly that: an outside file's frontmatter
- * appeared in a scan as a valid summary with no diagnostic.
+ * answers a user script, a `git checkout`, or an attacker can replace a
+ * manifest or its folder with a symlink, and the second answer is then a file
+ * outside the library. A stress run reproduced exactly that: an outside file's
+ * frontmatter appeared in a scan as a valid summary with no diagnostic.
  *
  * So the path is resolved ONCE. The library root is opened, each component
  * below it is opened relative to that descriptor through `/proc/self/fd` with
@@ -22,8 +22,9 @@
  *
  * `O_NONBLOCK` is part of that safety, not a performance choice: opening a FIFO
  * for reading blocks until a writer arrives, so without it a named pipe left
- * where the manifest belongs would hang a scan or an HTTP read indefinitely. The
- * handle is checked for being a regular file before anything is read from it.
+ * where the manifest belongs would hang a scan or an HTTP read indefinitely.
+ * The handle is checked for being a regular file before anything is read from
+ * it.
  *
  * The `/proc/self/fd` anchor makes this Linux-only by construction, which is
  * what the app deploys on; there is no silent pathname fallback, because a
@@ -52,8 +53,8 @@ const ROOT_DIRECTORY_FLAGS = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY;
  * Deliberately WITHOUT `O_DIRECTORY`: Linux answers `O_DIRECTORY|O_NOFOLLOW` on
  * a symlink with `ENOTDIR`, which would report a linked folder as an ordinary
  * unreadable entry and lose the one diagnostic that tells the user why their
- * link is not an entry. Opened plainly, a symlink is `ELOOP` and anything that is
- * not a directory is caught by the `fstat` below instead.
+ * link is not an entry. Opened plainly, a symlink is `ELOOP` and anything that
+ * is not a directory is caught by the `fstat` below instead.
  */
 const SOURCE_FLAGS =
   fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
@@ -152,9 +153,9 @@ export async function withLibraryRoot<T>(
 }
 
 /**
- * Open `<folder>/<manifestFile>` beneath an open library root and hand the caller the
- * live handle. Both handles are closed when `use` settles, so a caller must
- * finish reading inside it.
+ * Open `<folder>/<manifestFile>` beneath an open library root and hand the
+ * caller the live handle. Both handles are closed when `use` settles, so a
+ * caller must finish reading inside it.
  *
  * Throws {@link SymlinkedEntrySourceError} when either component is a symlink,
  * {@link IrregularEntrySourceError} when either exists but is the wrong kind of
@@ -1297,10 +1298,10 @@ export async function entryHandleIdentity(
  * Open one child for READ-THEN-WRITE and keep the single handle live through
  * `use`, so a caller reads and rewrites the SAME inode.
  *
- * The manifest is edited by replacing text that was read a moment earlier. Doing
- * that as read-by-name then create-by-name would truncate whatever holds the
- * name at write time, which need not be the file whose text was matched; one
- * handle removes the question.
+ * The manifest is edited by replacing text that was read a moment earlier.
+ * Doing that as read-by-name then create-by-name would truncate whatever holds
+ * the name at write time, which need not be the file whose text was matched;
+ * one handle removes the question.
  */
 export async function withEntryChildForUpdate<T>(
   directory: FileHandle,
