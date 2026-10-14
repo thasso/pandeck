@@ -46,6 +46,11 @@ import {
   fetchOpenAiAccountUsage,
 } from "./harnesses/usage.ts";
 import { errorText } from "./errors.ts";
+import {
+  observeAccountHealth,
+  reportAccountUsageSnapshot,
+  reportAccountUsageFailure,
+} from "./accountHealth.ts";
 
 const CACHE_DIR = join(DATA_DIR, "cache", "usage");
 const CACHE_FILE_VERSION = 1;
@@ -294,17 +299,23 @@ function shouldRevalidate(entry: CacheEntry, now: number): boolean {
 async function runFetch(entry: CacheEntry): Promise<UsageSnapshot> {
   const policy = USAGE_POLICY[entry.provider];
   const started = deps.now();
+  let observation: ReturnType<typeof observeAccountHealth>;
   entry.nextAttemptAt = Math.max(
     entry.nextAttemptAt,
     started + policy.minIntervalMs,
   );
-  const task = async (): Promise<UsageSnapshot> =>
-    entry.provider === "claude"
+  const task = async (): Promise<UsageSnapshot> => {
+    // Stamp when the gated fetch actually starts reading credentials, not while
+    // it is waiting behind another account's subprocess.
+    observation = observeAccountHealth(entry.profileId);
+    return entry.provider === "claude"
       ? await deps.fetchClaude(entry.profileId, policy.fetchTimeoutMs)
       : await deps.fetchOpenAi(entry.profileId);
+  };
   const promise = gates[entry.provider]
     .run(task)
     .then((snapshot) => {
+      reportAccountUsageSnapshot(entry.profileId, snapshot, observation);
       entry.snapshot = snapshot;
       entry.fetchedAt = deps.now();
       entry.failures = 0;
@@ -321,6 +332,12 @@ async function runFetch(entry: CacheEntry): Promise<UsageSnapshot> {
       // turn that moved these numbers is still unaccounted for.
       entry.failures += 1;
       entry.lastError = errorText(err);
+      if (entry.provider === "claude")
+        reportAccountUsageFailure(
+          entry.profileId,
+          entry.lastError,
+          observation,
+        );
       entry.nextAttemptAt =
         deps.now() +
         (BACKOFF_MS[entry.failures - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1]!);

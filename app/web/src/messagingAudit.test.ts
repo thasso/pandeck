@@ -7,7 +7,8 @@ import { expect, it } from "vitest";
  * pushes the page down is not a message surface — it cannot say which object it
  * is about, cannot be acted on, and outlives the thing it describes. The app
  * carried three of them (the global notice bar, its Settings copy, the
- * dev-restart bar) and the last one moved into the app status slot.
+ * dev-restart bar) and the last one moved into the app status slot. The user's
+ * account-login exception uses that same slot, not a second banner.
  *
  * This is an audit rather than a render test because the failure is a NEW one
  * appearing: nothing that exists today breaks when someone adds a fourth, and
@@ -39,7 +40,7 @@ it("has no tinted full-width banner outside the app status slot", () => {
     .map((path) => path.slice(SRC.length));
   expect(
     offenders,
-    `A tinted full-width bar is the banner channel returning. A failure belongs on its object (\`ErrorNote\`), an event whose surface is gone belongs in a toast, and app-wide lifecycle state belongs in \`AppStatus\`. See docs/messaging.md.`,
+    `A tinted full-width bar is the banner channel returning. A failure belongs on its object (\`ErrorNote\`), an event whose surface is gone belongs in a toast, and app-wide lifecycle state and the explicit account-login exception belong in \`AppStatus\`. See docs/messaging.md.`,
   ).toEqual([]);
 });
 

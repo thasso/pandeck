@@ -43,6 +43,7 @@ function profile(
     createdAt: 0,
     updatedAt: 0,
     status: "ready",
+    health: { state: "unknown", since: null },
   };
 }
 

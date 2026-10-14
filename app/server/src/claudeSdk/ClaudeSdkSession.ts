@@ -459,6 +459,7 @@ interface ProviderFailure {
   reason: string;
   /** The wording the provider gave the user; may be empty. */
   text: string;
+  statusCode?: number;
 }
 
 /**
@@ -2019,6 +2020,9 @@ export class ClaudeSdkSession implements LiveSession {
           errorMessage: this.pendingProviderError
             ? providerFailureMessage(this.pendingProviderError)
             : fatalError,
+          ...(this.pendingProviderError?.statusCode !== undefined
+            ? { statusCode: this.pendingProviderError.statusCode }
+            : {}),
         });
       else if (
         this.abortingTurn &&
@@ -2772,12 +2776,16 @@ export class ClaudeSdkSession implements LiveSession {
   private turnOutcome(): {
     stopReason: "end" | "error";
     errorMessage?: string;
+    statusCode?: number;
   } {
     const failure = this.pendingProviderError;
     return failure
       ? {
           stopReason: "error",
           errorMessage: providerFailureMessage(failure),
+          ...(failure.statusCode !== undefined
+            ? { statusCode: failure.statusCode }
+            : {}),
         }
       : { stopReason: "end" };
   }
@@ -2786,17 +2794,26 @@ export class ClaudeSdkSession implements LiveSession {
   private finishTurn(result: {
     stopReason: "end" | "error" | "aborted";
     errorMessage?: string;
+    statusCode?: number;
   }): void {
     if (!this.running && !this.liveTurn) return;
-    // A failed run is recorded before anyone hears of it: the runtime takes
-    // the fact first, then the viewers get the turn's end below.
-    if (result.stopReason === "error" && result.errorMessage)
-      this.adapterEvents.runFailing(
-        result.errorMessage,
-        runFailureFacts(
-          analyzeProviderError(result.errorMessage, { provider: "anthropic" }),
-        ),
-      );
+    const errorMessage =
+      result.stopReason === "error" ? result.errorMessage : undefined;
+    const errorInfo = errorMessage
+      ? analyzeProviderError(errorMessage, {
+          provider: "anthropic",
+          model: this.modelId,
+          ...(result.statusCode !== undefined
+            ? { statusCode: result.statusCode }
+            : {}),
+          // A credential profile is a CLI OAuth login with inherited
+          // credential variables scrubbed; otherwise an API key may answer.
+          authMode: this.credentialProfileId ? "subscription" : "unknown",
+        })
+      : undefined;
+    // The runtime receives the structured failure before viewers see the end.
+    if (errorMessage && errorInfo)
+      this.adapterEvents.runFailing(errorMessage, runFailureFacts(errorInfo));
     // A run that ends — failed, stopped or with a steer the turn never read —
     // took nothing more: whatever is still queued goes back to its sender.
     void this.withdrawPendingSteers();
@@ -2804,20 +2821,6 @@ export class ClaudeSdkSession implements LiveSession {
     const id = this.liveTurnId;
     const turn = this.liveTurn;
     const aborted = result.stopReason === "aborted";
-    const errorMessage =
-      result.stopReason === "error" ? result.errorMessage : undefined;
-    // Classify for the client the way the pi harness does, so a quota/auth/rate
-    // failure reads as that rather than as raw provider prose.
-    const errorInfo = errorMessage
-      ? analyzeProviderError(errorMessage, {
-          provider: "anthropic",
-          model: this.modelId,
-          // A credential profile is a CLI OAuth login with the inherited
-          // credential variables scrubbed; without one an API key in the
-          // environment could still be what answered.
-          authMode: this.credentialProfileId ? "subscription" : "unknown",
-        })
-      : undefined;
     if (turn) {
       turn.streaming = false;
       if (errorMessage) {
@@ -3284,7 +3287,12 @@ export class ClaudeSdkSession implements LiveSession {
    * `result` that follows only restates it generically.
    */
   private noteProviderFailure(failure: ProviderFailure): void {
-    if (this.pendingProviderError) return;
+    if (this.pendingProviderError) {
+      // A result can supply the HTTP status omitted by its synthetic assistant.
+      if (failure.statusCode !== undefined)
+        this.pendingProviderError.statusCode ??= failure.statusCode;
+      return;
+    }
     this.pendingProviderError = failure;
   }
 

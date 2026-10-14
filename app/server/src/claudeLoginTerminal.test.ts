@@ -24,6 +24,15 @@ process.env.HOME = join(tmp, "home");
 const profiles = await import("./credentialProfiles.ts");
 const terminal = await import("./claudeLoginTerminal.ts");
 const { setChildProcessEnvOverlay } = await import("./subprocessEnv.ts");
+const health = await import("./accountHealth.ts");
+health.initializeAccountHealth({
+  profiles: profiles.listCredentialProfiles,
+  hasCredential: profiles.credentialProfileHasCredential,
+  broadcast: () => {},
+  push: async () => {},
+  subscribeChanges: profiles.subscribeCredentialProfileChanges,
+  subscribeDeleted: profiles.subscribeCredentialProfileDeleted,
+});
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -206,6 +215,80 @@ test("keeps one active process per profile across browser reconnects and support
   assert.equal((first.sent.at(-1) as { status?: string }).status, "cancelled");
   assert.equal((second.sent.at(-1) as { status?: string }).status, "cancelled");
 });
+
+test.each(["cancelled", "error"] as const)(
+  "a fresh Claude login keeps card health but no app alert on start and %s",
+  (outcome) => {
+    const profile = profiles.createCredentialProfile({
+      name: "Fresh",
+      provider: "claude",
+    });
+    const child = new FakeChild();
+    terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
+    const socket = new FakeSocket();
+    terminal.attachClaudeLoginSocket(
+      socket as unknown as WebSocket,
+      request(profile.id),
+    );
+    let current = profiles.credentialProfileSummaryById(profile.id)!;
+    assert.equal(current.status, "connecting");
+    assert.equal(current.health.state, "needs-login");
+    if (outcome === "cancelled")
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "cancel" })));
+    else child.emit("close", 1, null);
+    current = profiles.credentialProfileSummaryById(profile.id)!;
+    assert.equal(
+      current.status,
+      outcome === "cancelled" ? "disconnected" : "error",
+    );
+    assert.equal(current.health.state, "needs-login");
+    const alerts: string[] = [];
+    health.sendAccountLoginAlertsTo({
+      send: (message) => {
+        if (message.type === "accountLoginAlerts")
+          alerts.push(...message.accounts.map((account) => account.profileId));
+      },
+    });
+    assert.equal(alerts.includes(profile.id), false);
+  },
+);
+
+test.each(["cancelled", "error", "ready"] as const)(
+  "a Claude re-login with an old credential clears health only on genuine completion, not %s cleanup",
+  (outcome) => {
+    const profile = profiles.createCredentialProfile({
+      name: "Rejected old login",
+      provider: "claude",
+    });
+    writeFileSync(
+      join(profiles.claudeConfigDir(profile.id), ".credentials.json"),
+      '{"oauth":"old"}',
+    );
+    health.reportAccountRunFailure(
+      profile.id,
+      { kind: "auth", loginDeath: true },
+      "claude-sdk",
+    );
+    const child = new FakeChild();
+    terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
+    const socket = new FakeSocket();
+    terminal.attachClaudeLoginSocket(
+      socket as unknown as WebSocket,
+      request(profile.id),
+    );
+    assert.equal(
+      health.readAccountHealth(profile.id, true).state,
+      "needs-login",
+    );
+    if (outcome === "cancelled")
+      socket.emit("message", Buffer.from(JSON.stringify({ type: "cancel" })));
+    else child.emit("close", outcome === "ready" ? 0 : 1, null);
+    assert.equal(
+      health.readAccountHealth(profile.id, true).state,
+      outcome === "ready" ? "ok" : "needs-login",
+    );
+  },
+);
 
 test("profile deletion cancels an in-flight login before its private directory is removed", () => {
   const profile = profiles.createCredentialProfile({

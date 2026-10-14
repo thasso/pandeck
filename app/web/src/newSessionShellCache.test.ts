@@ -20,6 +20,7 @@ it("hydrates every boot-critical new-session source from the app-shell cache", (
     provider: "claude",
     enabled: true,
     status: "ready",
+    health: { state: "unknown", since: null },
     createdAt: 1,
     updatedAt: 1,
   };

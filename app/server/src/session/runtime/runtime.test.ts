@@ -22,6 +22,8 @@ const {
   setSessionIdleHook,
   subscribeSessionRunCompleted,
   subscribeSessionRunEnded,
+  subscribeSessionRunFailed,
+  setRunFailureHook,
   subscribeSessionRunStarted,
   subscribeSessionToolCompleted,
 } = await import("./liveSession.ts");
@@ -33,6 +35,16 @@ const {
   SteerWithdrawnError,
 } = await import("./errors.ts");
 const { SessionLogStore } = await import("../log/store.ts");
+const { createPiAdapter } = await import("../adapters/pi.ts");
+const { createClaudeSdkAdapter } = await import("../adapters/claudeSdk.ts");
+const { NativeAdapterEventSource } =
+  await import("../adapters/nativeEvents.ts");
+const {
+  analyzeProviderError,
+  providerErrorDisplayText,
+  runFailureFacts,
+  isLoginDeath,
+} = await import("../../providerErrors.ts");
 await import("../adapters/contract.ts");
 type AdapterEvent = import("../adapters/contract.ts").AdapterEvent;
 type AgentRunResult = import("../adapters/contract.ts").AgentRunResult;
@@ -93,6 +105,9 @@ class ScriptedAdapter implements PromptableAdapter {
   }
   setReasoning(level: string): void {
     this.reasoning = level;
+  }
+  modelProvider(): string | undefined {
+    return this.model?.provider;
   }
   async listModels() {
     return [{ provider: "scripted", id: "m1" }];
@@ -567,6 +582,232 @@ test("failed run: throw + cleanup", async () => {
   );
   assert.deepEqual(statuses, ["error"], "runStatus error emitted");
 });
+
+test("failure subscribers are isolated, removable and once per run even when the durable hook retries", async () => {
+  const { runtime, adapter } = makeRuntime();
+  const reports: import("./liveSession.ts").RunFailureReport[] = [];
+  const order: string[] = [];
+  const unbroken = subscribeSessionRunFailed((report) => {
+    order.push("listener");
+    reports.push(report);
+  });
+  const broken = subscribeSessionRunFailed(() => {
+    throw new Error("listener failed");
+  });
+  let hookCalls = 0;
+  setRunFailureHook(() => {
+    order.push("durable-hook");
+    hookCalls++;
+    if (hookCalls === 1) throw new Error("disk failed");
+  });
+  try {
+    const run = runtime.prompt("s1", "login");
+    await tick();
+    adapter.emit({
+      type: "runCompleted",
+      stopReason: "error",
+      errorMessage: "OAuth token has expired",
+      failure: { kind: "auth" },
+    });
+    adapter.finishRun({
+      stopReason: "error",
+      errorMessage: "OAuth token has expired",
+    });
+    await assert.rejects(() => run, RunFailedError);
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0]?.failure?.kind, "auth");
+    assert.equal(reports[0]?.errorMessage, "OAuth token has expired");
+    assert.deepEqual(order.slice(0, 2), ["durable-hook", "listener"]);
+    const next = runtime.prompt("s1", "retry boundary");
+    await tick();
+    adapter.finishRun({ stopReason: "end" });
+    await next;
+    assert.ok(hookCalls >= 2);
+    assert.equal(reports.length, 1);
+    unbroken();
+    const third = runtime.prompt("s1", "another failure");
+    await tick();
+    adapter.finishRun({
+      stopReason: "error",
+      errorMessage: "401",
+    });
+    await assert.rejects(() => third, RunFailedError);
+    assert.equal(reports.length, 1);
+  } finally {
+    unbroken();
+    broken();
+    setRunFailureHook(undefined);
+  }
+});
+
+test.each([
+  "OpenAI Codex token refresh failed (401): raw secret",
+  "Invalid API key · Please run /login",
+  "OAuth token has expired",
+])(
+  "raw classifier -> display -> native run failure preserves login death: %s",
+  async (raw) => {
+    const { runtime, adapter } = makeRuntime();
+    const native = new NativeAdapterEventSource();
+    const offNative = native.subscribe((event) => adapter.emit(event));
+    const reports: import("./liveSession.ts").RunFailureReport[] = [];
+    const off = subscribeSessionRunFailed((report) => reports.push(report));
+    try {
+      const run = runtime.prompt("s1", "login");
+      await tick();
+      const info = analyzeProviderError(raw);
+      const displayed = providerErrorDisplayText(info);
+      assert.equal(isLoginDeath(displayed), false);
+      native.messageStarted("m1");
+      native.runFailing(displayed, runFailureFacts(info));
+      native.messageCompleted("m1", {
+        errorMessage: displayed,
+        failure: runFailureFacts(info),
+      });
+      adapter.finishRun({ stopReason: "error", errorMessage: displayed });
+      await assert.rejects(() => run, RunFailedError);
+      assert.equal(reports.length, 1);
+      assert.deepEqual(reports[0]?.failure, { kind: "auth", loginDeath: true });
+      assert.equal(reports[0]?.errorMessage, displayed);
+    } finally {
+      off();
+      offNative();
+    }
+  },
+);
+
+test.each(["pi", "claude"])(
+  "%s's real adapter preserves classifier facts through display and runtime failure",
+  async (harness) => {
+    const native = new NativeAdapterEventSource();
+    const info = analyzeProviderError(
+      harness === "pi"
+        ? "OpenAI Codex token refresh failed (401): raw secret"
+        : "Invalid API key · Please run /login",
+    );
+    const displayed = providerErrorDisplayText(info);
+    assert.equal(isLoginDeath(displayed), false);
+    const drive = () => {
+      native.messageStarted("m1");
+      native.runFailing(displayed, runFailureFacts(info));
+      native.messageCompleted("m1", {
+        errorMessage: displayed,
+        failure: runFailureFacts(info),
+      });
+    };
+    const controls = {
+      subscribeAdapterEvents: native.subscribe.bind(native),
+      abort: () => {},
+      setModel: () => {},
+      setThinkingLevel: () => {},
+    };
+    const adapter =
+      harness === "pi"
+        ? createPiAdapter("s1", {
+            ...controls,
+            sessionFile: undefined,
+            prompt: () => {
+              drive();
+              return "started";
+            },
+          })
+        : createClaudeSdkAdapter("s1", {
+            ...controls,
+            prompt: async () => drive(),
+            steer: async () => "refused",
+          });
+    const runtime = new SessionRuntime(new SessionLogStore(true));
+    runtime.createSession("s1", adapter);
+    const reports: import("./liveSession.ts").RunFailureReport[] = [];
+    const off = subscribeSessionRunFailed((report) => reports.push(report));
+    try {
+      await assert.rejects(() => runtime.prompt("s1", "login"), RunFailedError);
+      assert.deepEqual(
+        reports.map((report) => report.failure),
+        [{ kind: "auth", loginDeath: true }],
+      );
+    } finally {
+      off();
+      await adapter.dispose();
+    }
+  },
+);
+
+test.each(["thrown", "fallback"])(
+  "classifies %s adapter auth errors when no failure facts were emitted",
+  async (mode) => {
+    const { runtime, adapter } = makeRuntime();
+    const reports: import("./liveSession.ts").RunFailureReport[] = [];
+    const off = subscribeSessionRunFailed((report) => reports.push(report));
+    try {
+      if (mode === "thrown")
+        adapter.prompt = () =>
+          Promise.reject(
+            new Error("OpenAI Codex token refresh failed (401): Unauthorized"),
+          );
+      const run = runtime.prompt("s1", "login");
+      if (mode === "fallback") {
+        await tick();
+        adapter.finishRun({
+          stopReason: "error",
+          errorMessage: "OAuth token has expired",
+        });
+      }
+      await assert.rejects(() => run);
+      assert.deepEqual(reports[0]?.failure, { kind: "auth", loginDeath: true });
+    } finally {
+      off();
+    }
+  },
+);
+
+test.each([
+  ["token refresh failed", "auth"],
+  ["OpenAI Codex token refresh failed (500): Internal Server Error", "server"],
+  ["OpenAI Codex token refresh failed (403): Forbidden", "auth"],
+  ["OpenAI Codex token refresh failed (403): Unauthorized", "auth"],
+  ["OpenAI Codex token refresh failed (503): Unauthorized upstream", "server"],
+])(
+  "a thrown refresh failure without credential rejection carries no login-death fact: %s",
+  async (message, kind) => {
+    const { runtime, adapter } = makeRuntime();
+    const reports: import("./liveSession.ts").RunFailureReport[] = [];
+    const off = subscribeSessionRunFailed((report) => reports.push(report));
+    try {
+      adapter.prompt = () => Promise.reject(new Error(message));
+      await assert.rejects(() => runtime.prompt("s1", "login"));
+      assert.deepEqual(reports[0]?.failure, { kind });
+    } finally {
+      off();
+    }
+  },
+);
+
+test.each(["returned", "thrown"] as const)(
+  "a %s Codex failure without status stays non-mortal in the runtime fallback",
+  async (mode) => {
+    const { runtime, adapter } = makeRuntime();
+    adapter.setModel({ provider: "openai-codex", id: "gpt-test" });
+    const reports: import("./liveSession.ts").RunFailureReport[] = [];
+    const off = subscribeSessionRunFailed((report) => reports.push(report));
+    try {
+      if (mode === "thrown")
+        adapter.prompt = () => Promise.reject(new Error("Unauthorized"));
+      const run = runtime.prompt("s1", "login");
+      if (mode === "returned") {
+        await tick();
+        adapter.finishRun({
+          stopReason: "error",
+          errorMessage: "Unauthorized",
+        });
+      }
+      await assert.rejects(() => run);
+      assert.deepEqual(reports[0]?.failure, { kind: "auth" });
+    } finally {
+      off();
+    }
+  },
+);
 
 /* --------------------------- abort settles to idle ----------------------- */
 test("abort settles to idle", async () => {

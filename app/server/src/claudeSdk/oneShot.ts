@@ -96,6 +96,7 @@ export interface ClaudeSdkOneShotResult {
    * before that, possibly nothing.
    */
   failure?: string;
+  failureStatus?: number;
 }
 
 /** Test seam override; defaults to the real installed SDK. */
@@ -231,6 +232,7 @@ export async function runClaudeSdkOneShot(
   let text = "";
   let usage: ClaudeUsage = {};
   let resultError: string | undefined;
+  let failureStatus: number | undefined;
 
   try {
     const query = seam.query({
@@ -259,13 +261,20 @@ export async function runClaudeSdkOneShot(
         // A one-shot query runs once, so the epoch running total IS this run.
         usage = mapResultEpochUsage(message);
         const failed = resultProviderError(message);
-        if (failed)
+        if (failed) {
           resultError ??=
             failed.text || `Claude SDK run ended with: ${failed.reason}`;
+          failureStatus ??= failed.statusCode;
+        }
       }
     }
   } catch (err) {
     if (timedOut) throw new Error(timeoutMessage);
+    // SDK process wrappers must not discard an already reported API failure.
+    if (resultError)
+      throw Object.assign(new Error(resultError, { cause: err }), {
+        status: failureStatus,
+      });
     throw err instanceof Error ? err : new Error(String(err));
   } finally {
     clearTimeout(timer);
@@ -273,5 +282,10 @@ export async function runClaudeSdkOneShot(
   }
 
   if (timedOut) throw new Error(timeoutMessage);
-  return { text, usage, ...(resultError ? { failure: resultError } : {}) };
+  return {
+    text,
+    usage,
+    ...(resultError ? { failure: resultError } : {}),
+    ...(failureStatus !== undefined ? { failureStatus } : {}),
+  };
 }

@@ -30,6 +30,7 @@ import type {
   RunFailureFacts,
 } from "../adapters/contract.ts";
 import { isDetachedAdapter } from "../adapters/detached.ts";
+import { analyzeProviderError, runFailureFacts } from "../../providerErrors.ts";
 import { contextInfoFromSnapshot, type StatsOptions } from "./stats.ts";
 import {
   projectForClient,
@@ -183,6 +184,18 @@ export interface RunFailureReport {
   at: number;
 }
 
+/** Isolated best-effort consumers; durable hook retries never repeat these. */
+const runFailureListeners = new Set<(report: RunFailureReport) => void>();
+
+/** Independent best-effort consumers, notified once even if the durable hook retries. */
+export function subscribeSessionRunFailed(
+  listener: (report: RunFailureReport) => void,
+): () => void {
+  runFailureListeners.add(listener);
+  return () => runFailureListeners.delete(listener);
+}
+
+let runFailureHook: ((report: RunFailureReport) => void) | undefined;
 /**
  * Notified once per failed turn, synchronously and BEFORE anything else learns
  * of it: before the turn's error entry is appended or announced, before the
@@ -192,11 +205,9 @@ export interface RunFailureReport {
  * anywhere: the runtime keeps the report in memory and retries it at every
  * turn boundary (a process exit loses it). What the hook decided at the
  * failure is the hook's to keep across those retries. An aborted turn, or one
- * an abort was asked of, never reaches
- * it, and neither does a straggler of an earlier provider run. Kept as a seam
- * so the runtime layer does not depend on the peer-prompt engine.
+ * an abort was asked of, never reaches it, nor does an earlier run's straggler.
+ * Kept as a seam so runtime does not depend on the peer-prompt engine.
  */
-let runFailureHook: ((report: RunFailureReport) => void) | undefined;
 export function setRunFailureHook(
   fn: ((report: RunFailureReport) => void) | undefined,
 ): void {
@@ -209,18 +220,55 @@ export function setRunFailureHook(
  * automatic turn. Out-of-band and synthetic observed turns also open here; a
  * later provider completion decides whether the captured boundary matters.
  */
-const runStartedListeners = new Set<(sessionId: string) => void>();
+type RunStartedListener = (
+  sessionId: string,
+  runId: string,
+  modelProvider: string | undefined,
+) => void;
+const runStartedListeners = new Set<RunStartedListener>();
 export function subscribeSessionRunStarted(
-  listener: (sessionId: string) => void,
+  listener: RunStartedListener,
 ): () => void {
   runStartedListeners.add(listener);
   return () => runStartedListeners.delete(listener);
 }
-
-function emitRunStarted(sessionId: string): void {
+function emitRunStarted(
+  sessionId: string,
+  runId: string,
+  modelProvider: string | undefined,
+): void {
   for (const listener of runStartedListeners) {
     try {
-      listener(sessionId);
+      listener(sessionId, runId, modelProvider);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+/** Cleanup on every closed/disposed turn, including ones with no native completion.
+ * Only a normalized provider completion carries a stop reason as evidence.
+ */
+type TurnClosedListener = (
+  sessionId: string,
+  runId: string,
+  stopReason: AgentStopReason | undefined,
+) => void;
+const turnClosedListeners = new Set<TurnClosedListener>();
+export function subscribeSessionTurnClosed(
+  listener: TurnClosedListener,
+): () => void {
+  turnClosedListeners.add(listener);
+  return () => turnClosedListeners.delete(listener);
+}
+function emitTurnClosed(
+  sessionId: string,
+  runId: string,
+  stopReason?: AgentStopReason,
+): void {
+  for (const listener of turnClosedListeners) {
+    try {
+      listener(sessionId, runId, stopReason);
     } catch {
       /* best-effort */
     }
@@ -335,6 +383,7 @@ export class LiveRuntimeSession {
   private turnRunId: string | undefined;
   /** The run whose failure was last recorded, so one turn records once. */
   private recordedFailureRunId: string | undefined;
+  private notifiedFailureRunId: string | undefined;
   /**
    * Failures the hook could not make durable anywhere (it threw), oldest
    * first. Memory is all that holds them, so they are retried at every turn
@@ -453,7 +502,11 @@ export class LiveRuntimeSession {
     this.turnOrigin = origin;
     this.turnOpen = true;
     this.turnRunId = randomUUID();
-    emitRunStarted(this.sessionId);
+    emitRunStarted(
+      this.sessionId,
+      this.turnRunId,
+      this.adapter.modelProvider?.(),
+    );
     this.log.append({ type: "run.started", runId: this.turnRunId });
   }
 
@@ -481,6 +534,7 @@ export class LiveRuntimeSession {
     stopReason: RunOutcome["stopReason"] = "end",
     only?: string,
     abortRequested = false,
+    nativeStopReason?: AgentStopReason,
   ): void {
     if (!this.turnOpen) return;
     if (only !== undefined && this.turnRunId !== only) return;
@@ -489,16 +543,25 @@ export class LiveRuntimeSession {
     this.turnRunId = undefined;
     if (!runId) return;
     this.retryUnrecordedFailures();
-    this.log.append({
-      type: stopReason === "aborted" ? "run.aborted" : "run.ended",
-      runId,
-    });
     const outcome: RunOutcome = {
       runId,
       stopReason,
       abortRequested:
         !this.turnFailed && (this.abortRequested || abortRequested),
     };
+    try {
+      this.log.append({
+        type: stopReason === "aborted" ? "run.aborted" : "run.ended",
+        runId,
+      });
+    } finally {
+      // Only a normalized provider completion proves account health success.
+      emitTurnClosed(
+        this.sessionId,
+        runId,
+        outcome.abortRequested ? "aborted" : nativeStopReason,
+      );
+    }
     this.recentOutcomes.set(runId, outcome);
     for (const old of this.recentOutcomes.keys()) {
       if (this.recentOutcomes.size <= RECENT_OUTCOMES_MAX) break;
@@ -559,14 +622,36 @@ export class LiveRuntimeSession {
     this.unrecordedFailures = this.unrecordedFailures.filter(
       (r) => r.runId !== runId,
     );
-    this.recordFailure({
+    const modelProvider = this.adapter.modelProvider?.();
+    const report: RunFailureReport = {
       sessionId: this.sessionId,
       runId,
       origin: this.turnOrigin,
       errorMessage,
-      failure,
+      failure:
+        failure ??
+        (errorMessage
+          ? runFailureFacts(
+              analyzeProviderError(errorMessage, {
+                ...(modelProvider !== undefined
+                  ? { provider: modelProvider }
+                  : {}),
+              }),
+            )
+          : undefined),
       at: Date.now(),
-    });
+    };
+    this.recordFailure(report);
+    if (this.notifiedFailureRunId !== runId) {
+      this.notifiedFailureRunId = runId;
+      for (const listener of runFailureListeners) {
+        try {
+          listener(report);
+        } catch {
+          /* Independent best-effort listeners. */
+        }
+      }
+    }
   }
 
   /**
@@ -911,7 +996,7 @@ export class LiveRuntimeSession {
         this.reportRunFailure(
           this.openRunId() === ownRunId ? ownRunId : undefined,
           result.errorMessage,
-          undefined,
+          result.failure,
         );
         throw new RunFailedError(
           result.errorMessage ?? "Unknown provider error",
@@ -1233,6 +1318,7 @@ export class LiveRuntimeSession {
           event.stopReason,
           undefined,
           event.abortRequested === true,
+          event.stopReason,
         );
         this.setRunning(false);
         emitRunCompleted(this.sessionId, event.stopReason, origin);
@@ -1519,6 +1605,7 @@ export class LiveRuntimeSession {
     if (this.disposed) return;
     this.endForTeardown();
     this.disposed = true;
+    if (this.turnRunId) emitTurnClosed(this.sessionId, this.turnRunId);
     this.progress.dispose();
     this.unsubscribeAdapter();
     this.subscribers.clear();

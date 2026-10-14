@@ -69,6 +69,7 @@ const profile = (
   provider,
   enabled: true,
   status: "ready",
+  health: { state: "unknown", since: null },
   createdAt: 0,
   updatedAt: 0,
 });

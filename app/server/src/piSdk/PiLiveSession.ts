@@ -949,6 +949,7 @@ export class PiLiveSession implements LiveSession {
             aborted
               ? undefined
               : (error ?? "Pi retry ended before another attempt started."),
+            !aborted && errorInfo ? runFailureFacts(errorInfo) : undefined,
           );
         }
         this.broadcastState();
@@ -1141,6 +1142,7 @@ export class PiLiveSession implements LiveSession {
         this.setModel(model as Parameters<AgentSession["setModel"]>[0]),
       setThinkingLevel: (level) =>
         this.setThinkingLevel(level as ThinkingLevel),
+      modelProvider: () => this.session.model?.provider,
       completionMetadata: () => {
         const model = (this.session.model as unknown as PiModel | undefined)
           ?.id;
@@ -1299,7 +1301,9 @@ export class PiLiveSession implements LiveSession {
   }
 
   private finishPromptError(err: unknown, wasRunning: boolean): void {
-    const message = `Failed to send prompt: ${errorText(err)}`;
+    const raw = errorText(err);
+    const message = `Failed to send prompt: ${raw}`;
+    const failure = runFailureFacts(this.providerErrorInfo(raw));
 
     // If this was a queued steer/follow-up while the agent is already running,
     // keep the active turn intact and only surface the banner.
@@ -1321,13 +1325,16 @@ export class PiLiveSession implements LiveSession {
     }
     // The run is open now; it is recorded as failed before the banner or the
     // turn's end tells anyone.
-    this.adapterEvents.runFailing(message);
+    this.adapterEvents.runFailing(message, failure);
     this.notice("error", message);
     if (!id) {
-      this.adapterEvents.runCompleted("error", message);
+      this.adapterEvents.runCompleted("error", message, failure);
     } else {
       this.broadcast({ type: "assistantEnd", sessionId, id, error: message });
-      this.adapterEvents.messageCompleted(id, { errorMessage: message });
+      this.adapterEvents.messageCompleted(id, {
+        errorMessage: message,
+        failure,
+      });
     }
     this.currentAssistantId = undefined;
     this.currentAssistantError = undefined;

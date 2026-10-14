@@ -31,6 +31,12 @@ const {
   piAgentDir,
   renameCredentialProfile,
   setCredentialProfileEnabled,
+  subscribeCredentialProfileChanges,
+  subscribeCredentialProfileDeleted,
+  credentialProfileHasCredential,
+  clearCredentialProfileLoginState,
+  completeCredentialProfileLogin,
+  credentialProfileSummaryById,
 } = await import("./credentialProfiles.ts");
 const { setChildProcessEnvOverlay } = await import("./subprocessEnv.ts");
 
@@ -232,6 +238,80 @@ test("scrubs ambient Claude credentials and manages non-default profile lifecycl
     /default.*deleted/i,
   );
   assert.doesNotThrow(() => readFileSync(join(root, "profiles.json"), "utf8"));
+});
+
+test("health follows registry deletion, disabling and completed login without leaking provider credentials", async () => {
+  const {
+    initializeAccountHealth,
+    reportAccountRunFailure,
+    readAccountHealth,
+    sendAccountLoginAlertsTo,
+  } = await import("./accountHealth.ts");
+  initializeAccountHealth({
+    profiles: listCredentialProfiles,
+    hasCredential: credentialProfileHasCredential,
+    broadcast: () => {},
+    push: async () => {},
+    subscribeChanges: subscribeCredentialProfileChanges,
+    subscribeDeleted: subscribeCredentialProfileDeleted,
+  });
+  // A Claude-only installation has enabled defaults, but no OpenAI login alert.
+  mkdirSync(claudeConfigDir("claude-default"), { recursive: true });
+  writeFileSync(
+    join(claudeConfigDir("claude-default"), ".credentials.json"),
+    '{"token":"CLAUDE-SECRET"}',
+  );
+  const defaults = listCredentialProfiles();
+  assert.equal(
+    defaults.find((p) => p.id === "default")?.health.state,
+    "needs-login",
+  );
+  let initialAlerts: string[] = [];
+  sendAccountLoginAlertsTo({
+    send: (message) => {
+      if (message.type === "accountLoginAlerts")
+        initialAlerts = message.accounts.map((a) => a.profileId);
+    },
+  });
+  assert.deepEqual(initialAlerts, []);
+  const profile = createCredentialProfile({
+    name: "Private",
+    provider: "openai-codex",
+  });
+  assert.equal(profile.health.state, "needs-login");
+  writeFileSync(
+    join(piAgentDir(profile.id), "auth.json"),
+    JSON.stringify({ "openai-codex": { access: "SECRET" } }),
+  );
+  clearCredentialProfileLoginState(profile.id);
+  assert.equal(
+    credentialProfileSummaryById(profile.id)?.health.state,
+    "unknown",
+  );
+  completeCredentialProfileLogin(profile.id);
+  assert.equal(credentialProfileSummaryById(profile.id)?.health.state, "ok");
+  reportAccountRunFailure(
+    profile.id,
+    { kind: "auth", loginDeath: true },
+    "openai-codex",
+  );
+  assert.equal(
+    credentialProfileSummaryById(profile.id)?.health.state,
+    "needs-login",
+  );
+  const disabled = setCredentialProfileEnabled(profile.id, false);
+  assert.equal(disabled.health.state, "needs-login");
+  const accounts: string[] = [];
+  sendAccountLoginAlertsTo({
+    send: (message) => {
+      if (message.type === "accountLoginAlerts")
+        accounts.push(...message.accounts.map((a) => a.profileId));
+    },
+  });
+  assert.equal(accounts.includes(profile.id), false);
+  assert.doesNotMatch(JSON.stringify(disabled.health), /SECRET/);
+  deleteCredentialProfile(profile.id);
+  assert.equal(readAccountHealth(profile.id, true).state, "unknown");
 });
 
 afterAll(() => {

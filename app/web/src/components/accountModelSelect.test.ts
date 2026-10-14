@@ -92,6 +92,7 @@ describe("account page usage", () => {
     provider: "openai-codex",
     enabled: true,
     status: "ready",
+    health: { state: "unknown", since: null },
     usage: {
       pinnedSlots: [
         { key: "commitAgent", label: "Commit agent", section: "commit" },

@@ -23,6 +23,7 @@ import type {
   ForkCapability,
   PromptableAdapter,
   PromptOptions,
+  RunFailureFacts,
 } from "./contract.ts";
 import type { AdapterEventListener } from "./nativeEvents.ts";
 
@@ -90,6 +91,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
   private readonly unsubscribeDriver: () => void;
   private boundProviderSessionId: string | undefined;
   private lastError: string | undefined;
+  private lastFailure: RunFailureFacts | undefined;
   private lastStopReason: AgentRunResult["stopReason"] | undefined;
   /** The newest provider run that completed; an older one's end is a straggler. */
   private lastCompletedRun = 0;
@@ -108,6 +110,10 @@ class ClaudeSdkAdapter implements PromptableAdapter {
   subscribe(listener: (event: AdapterEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  modelProvider(): string {
+    return this.provider;
   }
 
   getBinding(): ProviderBinding {
@@ -152,6 +158,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
       return { stopReason: "end", steerDelivery: delivery };
     }
     this.lastError = undefined;
+    this.lastFailure = undefined;
     this.lastStopReason = undefined;
     await this.driver.prompt(text, {
       ...(options.clientRequestId
@@ -165,7 +172,11 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     const stopReason =
       this.lastStopReason ?? (this.lastError ? "error" : "end");
     return this.lastError
-      ? { stopReason: "error", errorMessage: this.lastError }
+      ? {
+          stopReason: "error",
+          errorMessage: this.lastError,
+          ...(this.lastFailure ? { failure: this.lastFailure } : {}),
+        }
       : { stopReason };
   }
 
@@ -216,6 +227,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     if (event.type === "runCompleted") {
       this.lastStopReason = event.stopReason;
       this.lastError = event.errorMessage;
+      this.lastFailure = event.failure;
     }
     this.emit(event);
   }

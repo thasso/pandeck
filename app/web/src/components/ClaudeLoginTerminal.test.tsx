@@ -15,6 +15,7 @@ const profile = {
   createdAt: 0,
   updatedAt: 0,
   status: "ready" as const,
+  health: { state: "unknown" as const, since: null },
 };
 
 describe("ClaudeLoginTerminal", () => {

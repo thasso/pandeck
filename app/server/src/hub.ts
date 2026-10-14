@@ -34,7 +34,17 @@ import { mergedSessionList } from "./harnesses/sessionList.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
 import { setLibraryBroadcaster } from "./library/libraryPublish.ts";
 import { setMemoryBroadcaster } from "./memoryEvents.ts";
-import { setAppNotificationBroadcaster } from "./webPush.ts";
+import {
+  setAppNotificationBroadcaster,
+  deliverAppNotification,
+} from "./webPush.ts";
+import { initializeAccountHealth } from "./accountHealth.ts";
+import {
+  listCredentialProfiles,
+  credentialProfileHasCredential,
+  subscribeCredentialProfileChanges,
+  subscribeCredentialProfileDeleted,
+} from "./credentialProfiles.ts";
 import { setUsageBroadcaster } from "./usageCache.ts";
 import { onSettingsChanged } from "./settingsService.ts";
 import {
@@ -301,6 +311,14 @@ class SessionHub {
     setAppNotificationBroadcaster({
       broadcastAll: (notification) =>
         this.broadcastAll({ type: "appNotification", ...notification }),
+    });
+    initializeAccountHealth({
+      broadcast: (message) => this.broadcastAll(message),
+      push: deliverAppNotification,
+      profiles: listCredentialProfiles,
+      hasCredential: credentialProfileHasCredential,
+      subscribeChanges: subscribeCredentialProfileChanges,
+      subscribeDeleted: subscribeCredentialProfileDeleted,
     });
     // The usage cache never fetches headlessly, so it asks the hub whether any
     // browser is attached at all before doing background work.

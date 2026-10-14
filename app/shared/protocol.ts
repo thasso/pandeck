@@ -328,6 +328,19 @@ export function clampThinkingLevelForModel(
 export type CredentialProfileProvider = "openai-codex" | "claude";
 export type CredentialProfileStatus =
   "disconnected" | "connecting" | "ready" | "error";
+export interface AccountHealth {
+  state: "ok" | "needs-login" | "unknown";
+  since: number | null;
+  /** App-owned wording only. Never provider messages or credentials. */
+  reason?: string;
+}
+
+export interface AccountLoginAlert {
+  profileId: string;
+  name: string;
+  provider: CredentialProfileProvider;
+}
+
 export interface CredentialProfileSummary {
   id: string;
   name: string;
@@ -337,6 +350,7 @@ export interface CredentialProfileSummary {
   createdAt: number;
   updatedAt: number;
   status: CredentialProfileStatus;
+  health: AccountHealth;
   error?: string;
   setup?: {
     path: string;
@@ -8336,6 +8350,8 @@ export type ServerMessage =
       body: string;
       navigatePath: string;
     }
+  /** Authoritative app-wide login state, replayed on connect and broadcast on change, unlike advisory appNotification. */
+  | { type: "accountLoginAlerts"; accounts: AccountLoginAlert[] }
   /**
    * Dev-only: the server is about to reload to apply a server/shared code edit.
    * `pending` = globally queued and waiting for all active runs plus a short

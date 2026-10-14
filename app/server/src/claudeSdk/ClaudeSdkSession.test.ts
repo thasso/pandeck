@@ -151,12 +151,16 @@ function scriptedMessages(): ClaudeSdkMessage[] {
   ];
 }
 
-function fakeSeam(messages: ClaudeSdkMessage[]): ClaudeSdkSeam {
+function fakeSeam(
+  messages: ClaudeSdkMessage[],
+  failureAfterMessages?: Error,
+): ClaudeSdkSeam {
   return {
     query(_params: ClaudeQueryParams) {
       return {
         async *[Symbol.asyncIterator]() {
           for (const m of messages) yield m;
+          if (failureAfterMessages) throw failureAfterMessages;
         },
       };
     },
@@ -340,6 +344,98 @@ async function main(): Promise<void> {
 test("maps scripted Claude SDK turns", async () => {
   await main();
 });
+
+for (const source of [
+  "wrapper",
+  "structured",
+  "synthetic-result",
+  "structured-throw",
+] as const) {
+  test.each([
+    {
+      status: 403,
+      text: '{"error":{"type":"authentication_error","message":"Unauthorized"}}',
+      kind: "auth",
+      loginDeath: false,
+    },
+    {
+      status: 403,
+      text: '{"error":{"type":"permission_error","message":"OAuth token has been revoked"}}',
+      kind: "auth",
+      loginDeath: true,
+    },
+    {
+      status: 503,
+      text: '{"error":{"type":"authentication_error","message":"Unauthorized"}}',
+      kind: "server",
+      loginDeath: false,
+    },
+    {
+      status: 401,
+      text: "The request could not be processed",
+      kind: "auth",
+      loginDeath: true,
+    },
+  ])(
+    `Claude session ${source} preserves status $status: $text`,
+    async (row) => {
+      const messages: ClaudeSdkMessage[] = [];
+      if (source === "synthetic-result")
+        messages.push({
+          type: "assistant",
+          error: "permission_error",
+          message: {
+            model: "<synthetic>",
+            content: [{ type: "text", text: row.text }],
+          },
+        } as unknown as ClaudeSdkMessage);
+      messages.push({
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        ...(source !== "wrapper" ? { api_error_status: row.status } : {}),
+        result:
+          source === "wrapper"
+            ? `API Error: ${row.status} ${row.text}`
+            : row.text,
+        session_id: "status-session",
+        modelUsage: {},
+      } as unknown as ClaudeSdkMessage);
+      const session = new ClaudeSdkSession("claude-status-session", {
+        seam: () =>
+          Promise.resolve(
+            fakeSeam(
+              messages,
+              source === "structured-throw"
+                ? new Error("Claude Code process exited with code 1")
+                : undefined,
+            ),
+          ),
+      });
+      const envelopes: ServerMessage[] = [];
+      const failures: Array<{ kind: string; loginDeath?: boolean }> = [];
+      session.addViewer({ send: (message) => envelopes.push(message) });
+      const unsubscribe = session.subscribeAdapterEvents((event) => {
+        if (event.type === "runFailing" && event.failure)
+          failures.push(event.failure);
+      });
+      try {
+        const result = await session.createRuntimeAdapter().prompt("continue");
+        assert.equal(result.stopReason, "error");
+        assert.equal(result.failure?.kind, row.kind);
+        assert.equal(result.failure?.loginDeath === true, row.loginDeath);
+        assert.equal(failures.length, 1);
+        assert.equal(failures[0]?.loginDeath === true, row.loginDeath);
+        const end = envelopes.find((event) => event.type === "assistantEnd");
+        assert.ok(end?.type === "assistantEnd");
+        assert.equal(end.errorInfo?.statusCode, row.status);
+      } finally {
+        unsubscribe();
+        session.dispose();
+      }
+    },
+  );
+}
 
 test("synthetic provider errors do not replace the selected model", async () => {
   let captured: ClaudeQueryParams | undefined;

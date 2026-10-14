@@ -787,6 +787,10 @@ export interface UIState {
   revealRequest: { requestId: string; target: TimelineAnchorTarget } | null;
   /** Dev-only: server is reloading to apply a code change (see devReload). */
   reloading: DevReloadState | null;
+  accountLoginAlerts: Extract<
+    ServerMessage,
+    { type: "accountLoginAlerts" }
+  >["accounts"];
   /** Compact title/route/existence metadata for resolved pa:// object links. */
   objectLinks: Record<string, PaObjectLinkResolution>;
 }
@@ -926,6 +930,7 @@ const emptyInitial: UIState = {
   messageReveal: null,
   revealRequest: null,
   reloading: null,
+  accountLoginAlerts: [],
   objectLinks: {},
 };
 
@@ -5919,6 +5924,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     case "notice":
       // Said at its arrival; what remains is the viewed chat's outcome.
       return { ...state, error: msg.severity === "error" ? msg.message : null };
+    case "accountLoginAlerts":
+      return { ...state, accountLoginAlerts: msg.accounts };
     case "devReload":
       return {
         ...state,
@@ -7699,6 +7706,8 @@ export function useAssistant({
       }
       // Before the dispatch, so what is said is decided by the message and the
       // state it ARRIVED into — never by the state it leaves behind.
+      if (msg.type === "accountLoginAlerts")
+        window.dispatchEvent(new Event("accountHealthChanged"));
       announceArrival(msg, stateRef.current);
       dispatch({
         kind: "server",

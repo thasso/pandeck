@@ -232,9 +232,13 @@ import {
   setHumanPromptHook,
   setSessionIdleHook,
   subscribeSessionRunCompleted,
+  subscribeSessionRunFailed,
+  subscribeSessionRunStarted,
+  subscribeSessionTurnClosed,
   subscribeSessionToolCompleted,
 } from "./session/runtime/liveSession.ts";
 import { notifySessionTurnCompleted } from "./webPush.ts";
+import { trackSessionRunHealth } from "./accountHealth.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { sessionArtifactDeliveryHeaders } from "./sessionArtifactHttp.ts";
 import {
@@ -1885,6 +1889,12 @@ server.listen(PORT, HOST, () => {
     if (session.credentialProfileId) return session.credentialProfileId;
     return automaticProfileIdFor(HARNESSES[session.harness].accountProvider);
   };
+  trackSessionRunHealth({
+    session: (sessionId) => sessionStore.get(sessionId),
+    subscribeStarted: subscribeSessionRunStarted,
+    subscribeFailed: subscribeSessionRunFailed,
+    subscribeClosed: subscribeSessionTurnClosed,
+  });
   // Declarative Web Push is driven by a real normalized run completion, not a
   // generic idle transition or synthetic host command.
   subscribeSessionRunCompleted((sessionId, stopReason, origin) => {

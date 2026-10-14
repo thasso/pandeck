@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
-import { beforeEach, test, vi } from "vitest";
+import { afterEach, beforeEach, test, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { CredentialProfileSummary } from "@assistant/shared";
 import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import {
+  AccountHealthStore,
+  observeAccountHealth,
+  reportAccountRunWorking,
+  reportAccountRunFailure,
+} from "../accountHealth.ts";
 import {
   findPiModelExact,
   runPiOneShot,
@@ -23,11 +33,22 @@ vi.mock("../piSdk/oneShot.ts", () => ({
   runPiOneShot: vi.fn(),
   selectPiModelWithFallback: vi.fn(),
 }));
+vi.mock("../accountHealth.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../accountHealth.ts")>()),
+  observeAccountHealth: vi.fn(),
+  reportAccountRunWorking: vi.fn(),
+  reportAccountRunFailure: vi.fn(),
+}));
 vi.mock("../db/sessionStore.ts", () => ({
   sessionStore: { createInternalUsageSession: vi.fn() },
 }));
 
 const piModel = { id: "fallback-model", provider: "openai-codex" };
+const directories: string[] = [];
+afterEach(() => {
+  for (const dir of directories.splice(0))
+    rmSync(dir, { recursive: true, force: true });
+});
 
 function request(overrides: Partial<OneShotRequest> = {}): OneShotRequest {
   return {
@@ -47,6 +68,157 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(selectPiModelWithFallback).mockResolvedValue(piModel as never);
 });
+
+test.each(["success", "returned-failure", "thrown-failure"] as const)(
+  "health registry errors cannot replace a one-shot %s",
+  async (outcome) => {
+    const dir = mkdtempSync(join(tmpdir(), "one-shot-health-best-effort-"));
+    directories.push(dir);
+    const row: CredentialProfileSummary = {
+      id: "profile-1",
+      name: "Own",
+      provider: "openai-codex",
+      enabled: true,
+      status: "ready",
+      health: { state: "unknown", since: null },
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    let broken = false;
+    const deps = {
+      profiles: () => {
+        if (broken) throw new Error("SECRET registry error");
+        return health.summaries(() => [
+          { ...row, health: health.read(row.id, true) },
+        ]);
+      },
+      hasCredential: () => true,
+      now: Date.now,
+      persistPath: join(dir, "health.json"),
+      push: async () => {},
+    };
+    const health: AccountHealthStore = new AccountHealthStore(deps);
+    deps.profiles();
+    vi.mocked(observeAccountHealth).mockImplementation(
+      health.observe.bind(health),
+    );
+    vi.mocked(reportAccountRunWorking).mockImplementation(
+      health.runWorking.bind(health),
+    );
+    vi.mocked(reportAccountRunFailure).mockImplementation(
+      health.runFailure.bind(health),
+    );
+    const error = new Error("Unauthorized");
+    if (outcome === "thrown-failure")
+      vi.mocked(runPiOneShot).mockRejectedValue(error);
+    else
+      vi.mocked(runPiOneShot).mockResolvedValue({
+        text: "partial",
+        usage: {},
+        ...(outcome === "returned-failure"
+          ? { stopReason: "error", errorMessage: error.message }
+          : {}),
+      });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    broken = true;
+    try {
+      if (outcome === "thrown-failure")
+        await assert.rejects(
+          runOneShot(request()),
+          (err: unknown) => err === error,
+        );
+      else {
+        const result = await runOneShot(request());
+        assert.equal(result.text, "partial");
+        assert.equal(
+          result.failure,
+          outcome === "returned-failure" ? error.message : undefined,
+        );
+      }
+      assert.equal(warn.mock.calls.length, 1);
+    } finally {
+      warn.mockRestore();
+    }
+  },
+);
+
+test.each(["returned", "thrown"] as const)(
+  "a slow one-shot's %s login death beats intervening usage but not a completed login",
+  async (outcome) => {
+    const dir = mkdtempSync(join(tmpdir(), "one-shot-health-"));
+    directories.push(dir);
+    const rows: CredentialProfileSummary[] = [
+      {
+        id: "profile-1",
+        name: "Own",
+        provider: "claude",
+        enabled: true,
+        status: "ready",
+        health: { state: "unknown", since: null },
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const push = vi.fn(async () => {});
+    const deps = {
+      profiles: () =>
+        health.summaries(() =>
+          rows.map((row) => ({ ...row, health: health.read(row.id, true) })),
+        ),
+      hasCredential: () => true,
+      now: Date.now,
+      persistPath: join(dir, "health.json"),
+      push,
+    };
+    const health: AccountHealthStore = new AccountHealthStore(deps);
+    deps.profiles();
+    vi.mocked(observeAccountHealth).mockImplementation(
+      health.observe.bind(health),
+    );
+    vi.mocked(reportAccountRunFailure).mockImplementation(
+      health.runFailure.bind(health),
+    );
+    vi.mocked(reportAccountRunWorking).mockImplementation(
+      health.runWorking.bind(health),
+    );
+    for (const loginCompleted of [false, true]) {
+      let release!: () => void;
+      let began!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        began = resolve;
+      });
+      vi.mocked(runClaudeSdkOneShot).mockImplementation(async () => {
+        began();
+        await pending;
+        if (outcome === "thrown") throw new Error("refresh token revoked");
+        return { text: "partial", usage: {}, failure: "refresh token revoked" };
+      });
+      const run = runOneShot(
+        request({ model: { provider: "claude-sdk", modelId: "sonnet" } }),
+      );
+      const finished = run.then(
+        (result) => result,
+        (error: unknown) => error,
+      );
+      await started;
+      health.usageSnapshot("profile-1", {
+        fetchedAt: 0,
+        rateLimitsAvailable: true,
+      });
+      if (loginCompleted) health.loginCompleted("profile-1");
+      release();
+      await finished;
+      assert.equal(
+        health.read("profile-1", true).state,
+        loginCompleted ? "ok" : "needs-login",
+      );
+    }
+    assert.equal(push.mock.calls.length, 1);
+  },
+);
 
 test("a Claude model runs on the Claude engine with its usage normalized", async () => {
   vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
@@ -234,6 +406,69 @@ test("an unrecorded run stores nothing", async () => {
     0,
   );
 });
+
+test("one-shots report health for their actual account on success, partial failure and thrown login failure", async () => {
+  vi.mocked(runPiOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  await runOneShot(request());
+  assert.deepEqual(vi.mocked(reportAccountRunWorking).mock.calls, [
+    ["profile-1", "openai-codex", undefined],
+  ]);
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
+    text: "partial",
+    usage: {},
+    failure: "Invalid API key · Please run /login",
+  });
+  await runOneShot(
+    request({
+      credentialProfileId: "claude-account",
+      model: { provider: "claude-sdk", modelId: "sonnet" },
+    }),
+  );
+  assert.deepEqual(vi.mocked(reportAccountRunFailure).mock.calls[0], [
+    "claude-account",
+    { kind: "auth", loginDeath: true },
+    "claude-sdk",
+    undefined,
+  ]);
+  vi.mocked(runPiOneShot).mockRejectedValue(
+    new Error("OpenAI Codex token refresh failed (401): details"),
+  );
+  await assert.rejects(() => runOneShot(request()), /token refresh failed/);
+  assert.deepEqual(vi.mocked(reportAccountRunFailure).mock.calls[1], [
+    "profile-1",
+    { kind: "auth", loginDeath: true },
+    "openai-codex",
+    undefined,
+  ]);
+  assert.equal(vi.mocked(reportAccountRunWorking).mock.calls.length, 1);
+});
+
+test.each(["github-copilot", "openai-compatible"])(
+  "reports the actual %s model rather than its bound Codex profile on either outcome",
+  async (provider) => {
+    vi.mocked(selectPiModelWithFallback).mockResolvedValue({
+      ...piModel,
+      provider,
+    } as never);
+    const observation = { startedAt: 1, order: 2, generation: 0 };
+    vi.mocked(observeAccountHealth).mockReturnValue(observation);
+    vi.mocked(runPiOneShot).mockResolvedValue({ text: "ok", usage: {} });
+    await runOneShot(request());
+    assert.deepEqual(vi.mocked(reportAccountRunWorking).mock.calls[0], [
+      "profile-1",
+      provider,
+      observation,
+    ]);
+    vi.mocked(runPiOneShot).mockRejectedValue(new Error("401 unauthorized"));
+    await assert.rejects(() => runOneShot(request()), /401/);
+    assert.deepEqual(vi.mocked(reportAccountRunFailure).mock.calls[0], [
+      "profile-1",
+      { kind: "auth", loginDeath: true },
+      provider,
+      observation,
+    ]);
+  },
+);
 
 test("a thrown engine error passes through unchanged and is not recorded", async () => {
   vi.mocked(runPiOneShot).mockRejectedValue(new Error("Timed out."));

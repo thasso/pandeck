@@ -17,6 +17,7 @@ import {
   claudeProfileEnvironment,
   claudeProfileHasCredential,
   clearCredentialProfileLoginState,
+  completeCredentialProfileLogin,
   credentialProfileById,
   setCredentialProfileLoginState,
   subscribeCredentialProfileDeleted,
@@ -179,7 +180,7 @@ function finish(
   run.status = status;
   if (message !== undefined) run.error = message;
   clearTimeout(run.timeout);
-  if (status === "ready") clearCredentialProfileLoginState(run.profileId);
+  if (status === "ready") completeCredentialProfileLogin(run.profileId);
   else if (status === "error" && credentialProfileById(run.profileId)) {
     setCredentialProfileLoginState(run.profileId, {
       status: "error",

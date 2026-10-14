@@ -1,4 +1,5 @@
 import type { ProviderErrorInfo, ProviderErrorKind } from "@assistant/shared";
+import { isSubscriptionAccountModel } from "@assistant/shared/accountHealth";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
 
 export interface ProviderErrorContext {
@@ -7,6 +8,7 @@ export interface ProviderErrorContext {
   api?: string;
   responseId?: string;
   authMode?: "subscription" | "api_key" | "unknown";
+  statusCode?: number;
 }
 
 interface Classification {
@@ -17,6 +19,57 @@ interface Classification {
   detail: string;
 }
 
+const LOGIN_DEATH_RE =
+  /\b401\b|\bunauthorized\b|authentication_error|invalid[ _]api[ _]key|please run \/login|not (?:logged|signed) in|oauth token (?:has (?:been )?)?(?:expired|revoked)|refresh[ _](?:token|credential)s? (?:is |was )?(?:invalid|expired|revoked|rejected)|no api key|invalid_grant/i;
+
+const REJECTED_CREDENTIAL_RE =
+  /\b(?:oauth[ _])?(?:access[ _]|refresh[ _])?(?:token|credential)s? (?:has (?:been )?|is |was )?(?:revoked|expired|rejected)\b/i;
+
+export function isLoginDeath(
+  message: string | undefined,
+  context: ProviderErrorContext = {},
+): boolean {
+  if (!message) return false;
+  const status = context.statusCode ?? responseStatus(message);
+  const codex =
+    isSubscriptionAccountModel("openai-codex", context.provider) ||
+    context.api === "openai-codex-responses" ||
+    /^Codex error:/i.test(message) ||
+    /OpenAI Codex token refresh failed/i.test(message);
+  // Codex SSE drops HTTP status. Its bare auth prose cannot prove a dead login.
+  if (codex && status === undefined) return false;
+  // A known response status takes precedence over conflicting provider prose.
+  if (status === 403) {
+    const claude =
+      context.provider === "anthropic" ||
+      isSubscriptionAccountModel("claude", context.provider) ||
+      (!context.provider &&
+        !/^Codex error:/i.test(message) &&
+        !/token refresh failed\s*\(/i.test(message) &&
+        /API Error:\s*403\b/i.test(message));
+    return claude && REJECTED_CREDENTIAL_RE.test(message);
+  }
+  if (status)
+    return (
+      status === 401 ||
+      (status === 400 &&
+        (/invalid_grant/i.test(message) ||
+          (codex && REJECTED_CREDENTIAL_RE.test(message))))
+    );
+  return LOGIN_DEATH_RE.test(message) || REJECTED_CREDENTIAL_RE.test(message);
+}
+
+function responseStatus(message: string): number | undefined {
+  const wrapped =
+    /token refresh failed\s*\((\d{3})\)/i.exec(message)?.[1] ??
+    /API Error:\s*(\d{3})\b/i.exec(message)?.[1] ??
+    /^(\d{3}):\s*/.exec(message)?.[1];
+  return (
+    parseCodexError(message)?.statusCode ??
+    (wrapped ? Number(wrapped) : undefined)
+  );
+}
+
 const CONTENT_POLICY_RE =
   /flagged for possible cybersecurity risk|flagged as potentially violating|violat\w* (our |the )?usage polic|content[_ ]policy|content[_ ]filter|invalid_prompt|cyber_policy/i;
 const QUOTA_RE =
@@ -25,7 +78,7 @@ const RATE_LIMIT_RE = /rate.?limit|too many requests|\b429\b|retry after/i;
 const TIMEOUT_RE =
   /timed? out|timeout|idle timeout|deadline exceeded|aborted due to timeout/i;
 const AUTH_RE =
-  /unauthorized|forbidden|invalid api key|invalid_api_key|permission denied|authentication|auth.*failed|401|403/i;
+  /forbidden|permission denied|authentication|auth.*failed|\b403\b|token refresh failed/i;
 const SERVER_RE =
   /overloaded|provider.?returned.?error|\b500\b|\b502\b|\b503\b|\b504\b|service.?unavailable|server.?error|internal.?error/i;
 const NETWORK_RE =
@@ -37,12 +90,15 @@ export function analyzeProviderError(
 ): ProviderErrorInfo {
   const raw = rawMessage.trim() || "Unknown provider error";
   const codex = parseCodexError(raw);
-  const classification = classify(raw, codex);
+  const classification = classify(raw, codex, context);
+  const statusCode = context.statusCode ?? responseStatus(raw);
   const providerValue = cleanOptional(context.provider);
   const modelValue = cleanOptional(context.model);
   const apiValue = cleanOptional(context.api);
   const responseIdValue = cleanOptional(context.responseId);
   return {
+    ...codex,
+    ...(statusCode !== undefined ? { statusCode } : {}),
     kind: classification.kind,
     title: classification.title,
     summary: classification.summary,
@@ -56,7 +112,6 @@ export function analyzeProviderError(
     ...(responseIdValue !== undefined ? { responseId: responseIdValue } : {}),
     authMode: context.authMode ?? "unknown",
     detail: classification.detail,
-    ...codex,
   };
 }
 
@@ -74,6 +129,9 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
       : undefined;
   return {
     kind: info.kind,
+    ...(info.kind === "auth" && isLoginDeath(info.rawMessage, info)
+      ? { loginDeath: true }
+      : {}),
     // Checked after the conversion: seconds that look fine can still overflow
     // into a number no `Date` represents.
     ...(resetAtMs !== undefined &&
@@ -118,9 +176,12 @@ export function shouldSuppressProviderRetry(
 
 function classify(
   raw: string,
-  parsed?: Partial<ProviderErrorInfo>,
+  parsed: Partial<ProviderErrorInfo> | undefined,
+  context: ProviderErrorContext,
 ): Classification {
-  if (CONTENT_POLICY_RE.test(raw)) {
+  const loginDeath = isLoginDeath(raw, context);
+  const serverStatus = (context.statusCode ?? responseStatus(raw) ?? 0) >= 500;
+  if (!loginDeath && !serverStatus && CONTENT_POLICY_RE.test(raw)) {
     return {
       kind: "content_policy",
       title: "Provider refused the content",
@@ -131,7 +192,11 @@ function classify(
         "Start a fresh session with a short handoff that leaves out the flagged material, or switch to a different model/provider.",
     };
   }
-  if (parsed?.kind === "quota" || QUOTA_RE.test(raw)) {
+  if (
+    !loginDeath &&
+    !serverStatus &&
+    (parsed?.kind === "quota" || QUOTA_RE.test(raw))
+  ) {
     const reset = parsed?.resetInSeconds
       ? ` Resets ${formatDuration(parsed.resetInSeconds)} from the error timestamp.`
       : "";
@@ -144,7 +209,13 @@ function classify(
         "Immediate retries are unlikely to help. Switch model/provider, wait for the provider reset window, or update the subscription/billing state.",
     };
   }
-  if (AUTH_RE.test(raw)) {
+  if (
+    loginDeath ||
+    (!serverStatus &&
+      (AUTH_RE.test(raw) ||
+        LOGIN_DEATH_RE.test(raw) ||
+        REJECTED_CREDENTIAL_RE.test(raw)))
+  ) {
     return {
       kind: "auth",
       title: "Model authentication failed",
@@ -155,7 +226,7 @@ function classify(
         "Refresh login credentials or choose a model/provider with valid authentication before retrying.",
     };
   }
-  if (RATE_LIMIT_RE.test(raw)) {
+  if (!serverStatus && RATE_LIMIT_RE.test(raw)) {
     return {
       kind: "rate_limit",
       title: "Provider rate limit hit",
@@ -166,7 +237,7 @@ function classify(
         "A delayed retry may work unless the message also mentions a daily/monthly quota or billing limit.",
     };
   }
-  if (TIMEOUT_RE.test(raw)) {
+  if (!serverStatus && TIMEOUT_RE.test(raw)) {
     return {
       kind: "timeout",
       title: "Provider request timed out",
@@ -177,7 +248,7 @@ function classify(
         "This can be transient, caused by provider overload, networking, or a long-running request. Retrying or switching model may help.",
     };
   }
-  if (SERVER_RE.test(raw)) {
+  if (serverStatus || SERVER_RE.test(raw)) {
     return {
       kind: "server",
       title: "Provider service error",

@@ -21,6 +21,7 @@ const profiles = [
   {
     id: "claude-default",
     name: "Claude",
+    health: { state: "unknown", since: null },
     provider: "claude",
     enabled: true,
     status: "ready",
@@ -28,6 +29,7 @@ const profiles = [
   {
     id: "default",
     name: "OpenAI",
+    health: { state: "unknown", since: null },
     provider: "openai-codex",
     enabled: true,
     status: "ready",
@@ -35,6 +37,7 @@ const profiles = [
   {
     id: "openai-work",
     name: "OpenAI work",
+    health: { state: "needs-login", since: null },
     provider: "openai-codex",
     enabled: true,
     status: "disconnected",
@@ -87,6 +90,27 @@ test("PA working directory shows the server default and saves on blur", async ()
 });
 
 describe("credential profile settings", () => {
+  test("shows needs-login and its app-owned reason beside setup status", () => {
+    const html = renderToStaticMarkup(
+      <CredentialProfileCard
+        profile={{
+          ...profiles[0]!,
+          health: {
+            state: "needs-login",
+            since: 1,
+            reason: "Reconnect this account.",
+          },
+        }}
+        providerLabel="Claude"
+        connectionLabel="Reconnect"
+        onToggle={() => {}}
+        onConnect={() => {}}
+      />,
+    );
+    expect(html).toContain("Needs login");
+    expect(html).toContain("Reconnect this account.");
+    expect(html).toContain("ready");
+  });
   test("keeps Claude and OpenAI profile pages isolated", () => {
     expect(
       credentialProfilesForProvider(profiles, "claude").map(
@@ -145,6 +169,7 @@ const profile = (
   provider: "claude",
   enabled: true,
   status,
+  health: { state: "unknown", since: null },
   createdAt: 0,
   updatedAt: 0,
 });

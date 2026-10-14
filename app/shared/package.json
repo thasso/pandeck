@@ -14,6 +14,7 @@
     "./objectLinks": "./objectLinks.ts",
     "./comments": "./comments.ts",
     "./usage": "./usage.ts",
+    "./accountHealth": "./accountHealth.ts",
     "./servedFiles": "./servedFiles.ts",
     "./documentTargets": "./documentTargets.ts",
     "./frontmatter": "./frontmatter.ts",

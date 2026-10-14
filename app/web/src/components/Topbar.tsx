@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { AccountLoginAlert } from "@assistant/shared";
 import {
   ArrowLeft,
   ArrowRight,
@@ -63,6 +64,8 @@ interface Props {
   connected: boolean;
   reloading: AppReloadState | null | undefined;
   hydrationSource: "empty" | "cache" | "live";
+  accountLoginAlerts?: AccountLoginAlert[] | undefined;
+  onNavigate?: ((path: string) => void) | undefined;
 }
 
 /** Shared shape of every header action: a muted icon button. */
@@ -76,6 +79,8 @@ export function Topbar({
   connected,
   reloading,
   hydrationSource,
+  accountLoginAlerts,
+  onNavigate,
 }: Props) {
   const dragRegion = usesOverlayTitlebar();
   // Read through an external store rather than state: the position changes from
@@ -133,6 +138,8 @@ export function Topbar({
           connected={connected}
           reloading={reloading}
           hydrationSource={hydrationSource}
+          accountLoginAlerts={accountLoginAlerts}
+          onNavigate={onNavigate}
           placement="bar"
         />
       </div>

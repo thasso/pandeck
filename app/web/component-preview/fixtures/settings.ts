@@ -15,6 +15,7 @@ export const settingsProfiles: CredentialProfileSummary[] = [
   {
     id: "claude-default",
     name: "Claude personal",
+    health: { state: "unknown", since: null },
     provider: "claude",
     enabled: true,
     status: "ready",
@@ -24,6 +25,7 @@ export const settingsProfiles: CredentialProfileSummary[] = [
   {
     id: "default",
     name: "OpenAI work",
+    health: { state: "unknown", since: null },
     provider: "openai-codex",
     enabled: true,
     status: "ready",

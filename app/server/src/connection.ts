@@ -85,6 +85,7 @@ import { testTempoSettings } from "./tempoSettings.ts";
 import { testConfluenceSettings } from "./confluenceSettings.ts";
 import { testJiraSettings } from "./jiraSettings.ts";
 import { hub } from "./hub.ts";
+import { sendAccountLoginAlertsTo } from "./accountHealth.ts";
 import {
   isLiveSession,
   type HarnessDriver,
@@ -665,6 +666,7 @@ export class Connection implements Viewer {
     });
     if (initial.unavailable) this.send(initial.unavailable);
     hub.sendReloadStateTo(this);
+    sendAccountLoginAlertsTo(this);
     await hub.sendPermanentAssistantUnreadTo(this);
     await this.deliverInitialPendingAgentRelays();
     await this.maybeStartPostReloadContinuation();

@@ -235,6 +235,8 @@ export type AdapterEvent =
 export interface RunFailureFacts {
   kind: ProviderErrorKind;
   resetAtMs?: number;
+  /** Narrow dead-login evidence derived from the raw error before display sanitization. */
+  loginDeath?: true;
 }
 
 /**
@@ -250,6 +252,7 @@ export type ProviderActivityKind = "output" | "response" | "lifecycle";
 export interface AgentRunResult {
   stopReason: "end" | "error" | "aborted";
   errorMessage?: string;
+  failure?: RunFailureFacts;
   code?: string;
   /**
    * Answers a {@link PromptOptions.steerOnly} request: `false` means the turn was
@@ -345,6 +348,8 @@ interface SessionAdapter {
 
 /** A {@link SessionAdapter} that also owns its conversation and accepts prompts. */
 export interface PromptableAdapter extends SessionAdapter {
+  /** The live model provider at run start, not a persisted session projection. */
+  modelProvider?(): string | undefined;
   /** Run one prompt to completion. Resolves with the run result (errors resolve, not reject). */
   prompt(text: string, options?: PromptOptions): Promise<AgentRunResult>;
   abort(): void | Promise<void>;

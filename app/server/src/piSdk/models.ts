@@ -1,4 +1,10 @@
-import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  CredentialSynchronizationError,
+  readStoredCredential,
+  ModelRegistry,
+  ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
+import type { Credential } from "@earendil-works/pi-ai";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { chmodSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
@@ -15,14 +21,15 @@ import {
 import { errorText } from "../errors.ts";
 import {
   clearCredentialProfileLoginState,
+  completeCredentialProfileLogin,
   credentialProfileById,
   ensureDefaultPiProfile,
   listCredentialProfiles,
   openAiProfileHasCredential,
-  openAiProfileLoginCredentialPersisted,
   piAgentDir,
   setCredentialProfileDeletedHandler,
   setCredentialProfileLoginState,
+  subscribeCredentialProfileDeleted,
 } from "../credentialProfiles.ts";
 
 /**
@@ -296,18 +303,71 @@ let openAiProfileLoginTimeoutMs = OPENAI_PROFILE_LOGIN_TIMEOUT_MS;
 type OpenAiProfileLogin = (
   runtime: ModelRuntime,
   interaction: Parameters<ModelRuntime["login"]>[2],
+  onCredentialCommitted: () => void,
+  authPath: string,
 ) => Promise<unknown>;
-let runOpenAiProfileLogin: OpenAiProfileLogin = (runtime, interaction) =>
-  runtime.login("openai-codex", "oauth", interaction);
+
+const loginWithCommitSignal: OpenAiProfileLogin = async (
+  runtime,
+  interaction,
+  committed,
+  authPath,
+) => {
+  const provider = runtime.getProvider("openai-codex");
+  const oauth = provider?.auth.oauth;
+  if (!provider || !oauth)
+    throw new Error("OpenAI device-code login is unavailable.");
+  let ownCredential: Credential | undefined;
+  let notified = false;
+  const checkCommit = () => {
+    if (notified || !ownCredential) return;
+    // Match the credential obtained by THIS flow, never an arbitrary file change.
+    const stored = readStoredCredential("openai-codex", authPath);
+    if (stored && JSON.stringify(stored) === JSON.stringify(ownCredential)) {
+      notified = true;
+      clearInterval(check);
+      committed();
+    }
+  };
+  runtime.registerNativeProvider({
+    ...provider,
+    auth: {
+      ...provider.auth,
+      oauth: {
+        ...oauth,
+        async login(input, options) {
+          const credential = await oauth.login(input, options);
+          ownCredential = credential;
+          return credential;
+        },
+      },
+    },
+  });
+  const check = setInterval(checkCommit, 250);
+  check.unref?.();
+  try {
+    return await runtime.login("openai-codex", "oauth", interaction);
+  } catch (error) {
+    if (
+      error instanceof CredentialSynchronizationError &&
+      error.providerId === "openai-codex" &&
+      error.operation === "login"
+    )
+      committed();
+    throw error;
+  } finally {
+    checkCommit();
+    clearInterval(check);
+  }
+};
+let runOpenAiProfileLogin: OpenAiProfileLogin = loginWithCommitSignal;
 
 /** Inject the provider login operation without exposing credentials (tests only). */
 export function setOpenAiProfileLoginForTests(
   login: OpenAiProfileLogin | null,
-): void {
-  runOpenAiProfileLogin =
-    login ??
-    ((runtime, interaction) =>
-      runtime.login("openai-codex", "oauth", interaction));
+): OpenAiProfileLogin {
+  runOpenAiProfileLogin = login ?? loginWithCommitSignal;
+  return loginWithCommitSignal;
 }
 
 /** Override the operation timeout without waiting ten minutes (tests only). */
@@ -327,36 +387,73 @@ export function startOpenAiProfileLogin(profileId: string): void {
   const operation: ProfileLoginOperation = { invalidated: false, agentDir };
   const isCurrent = () =>
     !operation.invalidated && profileLogins.get(profileId) === operation;
+  let completed = false;
+  const completeLogin = () => {
+    if (!isCurrent() || completed) return;
+    completed = true;
+    completeCredentialProfileLogin(profileId);
+    // The login-only facade does not update the runtime used by actual sessions.
+    // Refresh that account's snapshot independently; failure cannot undo login.
+    let deleted = operation.invalidated;
+    const unsubscribe = subscribeCredentialProfileDeleted((id) => {
+      if (id === profileId) deleted = true;
+    });
+    void Promise.resolve()
+      .then(async () => {
+        if (deleted) return;
+        const runtime = await modelRuntimeForProfile(profileId);
+        if (!deleted) await runtime.refresh({ force: true });
+      })
+      .catch(() => {})
+      .finally(() => {
+        unsubscribe();
+        // A refresh may outlive the login operation and recreate SDK files.
+        if (deleted) {
+          try {
+            rmSync(dirname(agentDir), { recursive: true, force: true });
+          } catch {
+            /* Best-effort retirement of this deleted account's SDK state. */
+          }
+        }
+      });
+  };
   profileLogins.set(profileId, operation);
   clearCredentialProfileLoginState(profileId);
   setCredentialProfileLoginState(profileId, { status: "connecting" });
   void (async () => {
-    const runtime =
-      profileId === defaultPiProfile.id
-        ? modelRuntime
-        : await modelRuntimeForProfile(profileId);
-    const providerLogin = runOpenAiProfileLogin(runtime, {
-      notify(event) {
-        // Device codes/URLs are short-lived authorization instructions, not
-        // credentials. Keep them out of persistent metadata and logs.
-        if (event.type === "device_code" && isCurrent())
-          setCredentialProfileLoginState(profileId, {
-            status: "connecting",
-            verificationUri: event.verificationUri,
-            userCode: event.userCode,
-          });
-      },
-      async prompt(prompt) {
-        // The provider asks once to choose browser vs device code. Our remote UI
-        // deliberately selects its documented headless/device-code option.
-        if (
-          prompt.type === "select" &&
-          prompt.options.some((option) => option.id === "device_code")
-        )
-          return "device_code";
-        throw new Error("This OpenAI login requires the device-code flow.");
-      },
+    // A login-only facade can attest its own OAuth result without changing a
+    // live run's provider. The SDK still owns all credential serialization.
+    const runtime = await ModelRuntime.create({
+      ...runtimeOptions(agentDir),
+      refreshOnCreate: false,
     });
+    const providerLogin = runOpenAiProfileLogin(
+      runtime,
+      {
+        notify(event) {
+          // Device codes/URLs are short-lived authorization instructions, not
+          // credentials. Keep them out of persistent metadata and logs.
+          if (event.type === "device_code" && isCurrent() && !completed)
+            setCredentialProfileLoginState(profileId, {
+              status: "connecting",
+              verificationUri: event.verificationUri,
+              userCode: event.userCode,
+            });
+        },
+        async prompt(prompt) {
+          // The provider asks once to choose browser vs device code. Our remote UI
+          // deliberately selects its documented headless/device-code option.
+          if (
+            prompt.type === "select" &&
+            prompt.options.some((option) => option.id === "device_code")
+          )
+            return "device_code";
+          throw new Error("This OpenAI login requires the device-code flow.");
+        },
+      },
+      completeLogin,
+      `${agentDir}/auth.json`,
+    );
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -373,13 +470,19 @@ export function startOpenAiProfileLogin(profileId: string): void {
           );
         }),
       ]);
-      if (isCurrent()) clearCredentialProfileLoginState(profileId);
+      completeLogin();
     } catch (error) {
+      if (completed) {
+        // Retain serialization until a hanging post-login refresh actually
+        // settles, but never turn a committed login back into an error.
+        await providerLogin.catch(() => {});
+        return;
+      }
       if (
         error instanceof Error &&
         error.message.startsWith("OpenAI device-code login timed out.")
       ) {
-        if (isCurrent() && !openAiProfileLoginCredentialPersisted(profileId)) {
+        if (isCurrent()) {
           setCredentialProfileLoginState(profileId, {
             status: "error",
             error: error.message,
@@ -389,7 +492,7 @@ export function startOpenAiProfileLogin(profileId: string): void {
         // in-flight map until it truly settles, so a retry cannot race its auth
         // file; then surface its actual result.
         await providerLogin;
-        if (isCurrent()) clearCredentialProfileLoginState(profileId);
+        completeLogin();
         return;
       }
       throw error;
@@ -398,17 +501,14 @@ export function startOpenAiProfileLogin(profileId: string): void {
     }
   })()
     .catch((error) => {
-      if (isCurrent()) {
-        if (openAiProfileLoginCredentialPersisted(profileId))
-          clearCredentialProfileLoginState(profileId);
-        else
-          setCredentialProfileLoginState(profileId, {
-            status: "error",
-            error:
-              error instanceof Error
-                ? error.message.slice(0, 180)
-                : "OpenAI login failed.",
-          });
+      if (isCurrent() && !completed) {
+        setCredentialProfileLoginState(profileId, {
+          status: "error",
+          error:
+            error instanceof Error
+              ? error.message.slice(0, 180)
+              : "OpenAI login failed.",
+        });
       }
     })
     .finally(() => {

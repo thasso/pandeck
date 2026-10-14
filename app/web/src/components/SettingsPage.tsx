@@ -635,15 +635,23 @@ export function CredentialProfileCard({
             variant={
               !profile.enabled
                 ? "secondary"
-                : profile.status === "ready"
-                  ? "success"
-                  : profile.status === "error"
-                    ? "destructive"
-                    : "warning"
+                : profile.health.state === "needs-login"
+                  ? "destructive"
+                  : profile.status === "ready"
+                    ? "success"
+                    : profile.status === "error"
+                      ? "destructive"
+                      : "warning"
             }
           >
             {providerLabel} · {profile.enabled ? profile.status : "disabled"}
           </Badge>
+          {profile.enabled && profile.health.state === "needs-login" ? (
+            <p className="mt-1 text-xs text-destructive">
+              Needs login
+              {profile.health.reason ? ` · ${profile.health.reason}` : ""}
+            </p>
+          ) : null}
         </div>
         {onRename || onDelete ? (
           <div className="flex shrink-0 items-center gap-0.5">
@@ -815,6 +823,12 @@ function CredentialProfilesSection({
   };
   useEffect(() => {
     void refresh();
+    // Re-read safe account summaries when runtime health changes while Settings
+    // is already open. The socket state still belongs only to useAssistant.
+    const healthChanged = () => void refresh();
+    window.addEventListener("accountHealthChanged", healthChanged);
+    return () =>
+      window.removeEventListener("accountHealthChanged", healthChanged);
   }, []);
   const providerProfiles = credentialProfilesForProvider(profiles, provider);
   useEffect(() => {

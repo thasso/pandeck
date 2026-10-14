@@ -115,6 +115,7 @@ const disabledAccount: CredentialProfileSummary = {
   createdAt: 0,
   updatedAt: 0,
   status: "ready",
+  health: { state: "unknown", since: null },
 };
 
 const text = () => container?.textContent ?? "";

@@ -30,6 +30,13 @@ import {
   type PiRegistryModel,
 } from "../piSdk/oneShot.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import {
+  observeAccountHealth,
+  reportAccountRunWorking,
+  reportAccountRunFailure,
+} from "../accountHealth.ts";
+import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
+import { errorText } from "../errors.ts";
 
 export interface OneShotRequest {
   /** The configured model; its picker provider selects the harness. */
@@ -86,6 +93,7 @@ export class NoHelperModelError extends Error {
 }
 
 interface EngineRun extends OneShotResult {
+  failureStatus?: number;
   harness: Harness;
   /** Provider and model to record the run under. */
   recordedProvider: string;
@@ -97,10 +105,58 @@ export async function runOneShot(
   request: OneShotRequest,
 ): Promise<OneShotResult> {
   const startedAt = Date.now();
-  const run =
-    request.model.provider === CLAUDE_SDK_PROVIDER
-      ? await runOnClaude(request)
-      : await runOnPi(request);
+  const observation = observeAccountHealth(request.credentialProfileId);
+  let healthModelProvider = request.model.provider;
+  let run: EngineRun;
+  try {
+    run =
+      request.model.provider === CLAUDE_SDK_PROVIDER
+        ? await runOnClaude(request)
+        : await runOnPi(request, (provider) => {
+            healthModelProvider = provider;
+          });
+  } catch (err) {
+    const message = errorText(err);
+    const statusCode =
+      typeof err === "object" &&
+      err !== null &&
+      "status" in err &&
+      typeof err.status === "number"
+        ? err.status
+        : undefined;
+    reportAccountRunFailure(
+      request.credentialProfileId,
+      runFailureFacts(
+        analyzeProviderError(message, {
+          provider: healthModelProvider,
+          ...(statusCode !== undefined ? { statusCode } : {}),
+        }),
+      ),
+      healthModelProvider,
+      observation,
+    );
+    throw err;
+  }
+  if (run.failure !== undefined)
+    reportAccountRunFailure(
+      request.credentialProfileId,
+      runFailureFacts(
+        analyzeProviderError(run.failure, {
+          provider: healthModelProvider,
+          ...(run.failureStatus !== undefined
+            ? { statusCode: run.failureStatus }
+            : {}),
+        }),
+      ),
+      healthModelProvider,
+      observation,
+    );
+  else
+    reportAccountRunWorking(
+      request.credentialProfileId,
+      healthModelProvider,
+      observation,
+    );
   if (request.record)
     sessionStore.createInternalUsageSession({
       purpose: request.record.purpose,
@@ -145,10 +201,16 @@ async function runOnClaude(request: OneShotRequest): Promise<EngineRun> {
     text: result.text,
     usage: agentUsageFromClaude(result.usage),
     ...(result.failure !== undefined ? { failure: result.failure } : {}),
+    ...(result.failureStatus !== undefined
+      ? { failureStatus: result.failureStatus }
+      : {}),
   };
 }
 
-async function runOnPi(request: OneShotRequest): Promise<EngineRun> {
+async function runOnPi(
+  request: OneShotRequest,
+  onModel: (provider: string) => void,
+): Promise<EngineRun> {
   if (request.documents?.length)
     throw new Error("Document input needs a Claude model.");
   const model = await piModelFor(request);
@@ -156,6 +218,7 @@ async function runOnPi(request: OneShotRequest): Promise<EngineRun> {
     throw new NoHelperModelError(
       request.noModelMessage ?? "No model is available for this helper run.",
     );
+  onModel(model.provider);
   const result = await runPiOneShot({
     model,
     credentialProfileId: request.credentialProfileId,

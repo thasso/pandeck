@@ -7112,6 +7112,8 @@ function AppContent() {
                       connected={state.connected}
                       reloading={state.reloading}
                       hydrationSource={state.hydrationSource}
+                      accountLoginAlerts={state.accountLoginAlerts}
+                      onNavigate={navigate}
                     />
                   )
                 }
@@ -7684,6 +7686,8 @@ function AppContent() {
                 connected={state.connected}
                 reloading={state.reloading}
                 hydrationSource={state.hydrationSource}
+                accountLoginAlerts={state.accountLoginAlerts}
+                onNavigate={navigate}
                 placement="floating"
               />
               <ToastViewport />
