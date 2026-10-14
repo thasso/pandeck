@@ -3,6 +3,13 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.57.0] - 2026-10-14
+
+### Other changes
+
+- Allow Automatic accounts for peer runtimes
+  ([PR #132](https://github.com/thasso/pandeck/pull/132))
+
 ## [0.56.0] - 2026-10-14
 
 ### Other changes
