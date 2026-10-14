@@ -243,6 +243,7 @@ import { useWorkflowIndicators } from "./hooks/useWorkflowIndicators.ts";
 import { useWorktreeWatches } from "./hooks/useWorktreeWatches.ts";
 import { useApnsRegistration } from "./hooks/useApnsRegistration.ts";
 import { useStagedAgentReconcile } from "./hooks/useStagedAgentReconcile.ts";
+import { useSavedAccount } from "./hooks/useSavedAccount.ts";
 import { taskStartSession, taskWorktreeIds } from "./lib/taskActivity.ts";
 import {
   acceptStatusSuggestionSave,
@@ -923,13 +924,23 @@ function AppContent() {
         : (activeCredentialProfiles[0]?.id ?? ""),
     );
   }, [credentialProfileProjection, activeCredentialProfiles]);
-  useEffect(() => {
-    if (
-      credentialProfileId &&
-      credentialProfileId !== prefs.credentialProfileId
-    )
-      update({ credentialProfileId });
-  }, [credentialProfileId, prefs.credentialProfileId, update]);
+  const saveAccount = useCallback(
+    (id: string) => update({ credentialProfileId: id }),
+    [update],
+  );
+  const { markAgentAccount, clearAgentAccount } = useSavedAccount({
+    accountId: credentialProfileId,
+    savedAccountId: prefs.credentialProfileId,
+    save: saveAccount,
+  });
+  /** An account an agent definition chose: the draft's, never saved. */
+  const setAgentAccount = useCallback(
+    (id: string) => {
+      markAgentAccount(id);
+      setCredentialProfileId(id);
+    },
+    [markAgentAccount],
+  );
   const memory = useMemory(socket);
   const [sidebarOpen, setSidebarOpen] = useSessionStorageState(
     "assistant.shell.sidebar-open.v1",
@@ -4343,7 +4354,10 @@ function AppContent() {
           activeCredentialProfiles.find(
             (profile) => profile.provider === profileProvider,
           );
-        if (selectedProfile) setCredentialProfileId(selectedProfile.id);
+        if (selectedProfile) {
+          clearAgentAccount();
+          setCredentialProfileId(selectedProfile.id);
+        }
         // Remember this explicit pick as the default for future new chats. The
         // profile sync effect is the sole persistence writer for its selection.
         update({ lastModelKey: modelKey({ provider, id }) });
@@ -4435,6 +4449,7 @@ function AppContent() {
       },
     }),
     [
+      clearAgentAccount,
       actions,
       isNewChatRoute,
       runtimeHasStarted,
@@ -4476,7 +4491,7 @@ function AppContent() {
     );
     if (!draft) return;
     const { accountId, ...runtime } = draft;
-    setCredentialProfileId(accountId);
+    setAgentAccount(accountId);
     const current = pendingStart ?? stagedStart;
     startStagedSession({
       ...(current?.id !== undefined && current.id !== "pending-pi-session"
@@ -4496,7 +4511,7 @@ function AppContent() {
         ? activeCredentialProfiles
         : undefined,
     accountId: credentialProfileId,
-    setAccountId: setCredentialProfileId,
+    setAccountId: setAgentAccount,
   });
   /**
    * The draft as the pickers show it this render: what a re-issued first send
@@ -6399,6 +6414,7 @@ function AppContent() {
                   ),
                 });
                 explicitProfileForNextModel.current = id;
+                clearAgentAccount();
                 // Before staging, so the flushSync in `startStagedSession`
                 // commits the new account and its models together — otherwise
                 // the carried model is momentarily absent from `pickerModels`

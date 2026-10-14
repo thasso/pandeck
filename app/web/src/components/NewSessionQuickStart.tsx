@@ -603,17 +603,14 @@ function AgentDefinitionRow({
   const error = errorOf(state);
   if (isInitialLoad(state))
     return (
-      <QuickRow label="Agent definition" busy>
-        <div
-          role="status"
-          aria-label="Loading agent definitions"
-          className="flex gap-2"
-        >
+      // The status wraps the row: a listbox holds only its options.
+      <div role="status" aria-label="Loading agent definitions">
+        <QuickRow label="Agent definition" busy>
           {[0, 1].map((i) => (
             <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
           ))}
-        </div>
-      </QuickRow>
+        </QuickRow>
+      </div>
     );
   if (!agents)
     return error ? (
@@ -672,10 +669,13 @@ function AgentDefinitionRow({
             </QuickPill>
           );
         })}
-        {isPending(state) ? (
-          <RefreshIndicator label="Rescanning agents" />
-        ) : null}
       </QuickRow>
+      {/* Outside the listbox, and where a long row cannot scroll it away. */}
+      {isPending(state) ? (
+        <div className="flex justify-center px-4">
+          <RefreshIndicator label="Rescanning agents" />
+        </div>
+      ) : null}
       {/* Why a definition cannot start, where touch and keyboard users see
           it too: a disabled pill's title never shows. */}
       {problems.length > 0 ? (

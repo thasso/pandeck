@@ -610,6 +610,21 @@ describe("agent definitions row", () => {
     ).not.toContain("Agent definition");
   });
 
+  /** The markup inside the row's listbox, which may hold only its options. */
+  function agentListbox(html: string): string {
+    const open = html.indexOf('role="listbox" aria-label="Agent definition"');
+    expect(open).toBeGreaterThan(-1);
+    const start = html.indexOf(">", open) + 1;
+    let depth = 1;
+    const tag = /<(\/?)div\b[^>]*>/g;
+    tag.lastIndex = start;
+    for (let match = tag.exec(html); match; match = tag.exec(html)) {
+      depth += match[1] ? -1 : 1;
+      if (depth === 0) return html.slice(start, match.index);
+    }
+    throw new Error("unclosed listbox");
+  }
+
   it("reserves the row while the first read is out", () => {
     const html = render([], { agents: loading() });
     expect(html).toContain("Agent definition");
@@ -618,6 +633,7 @@ describe("agent definitions row", () => {
     expect(html).toMatch(
       /role="status" aria-label="Loading agent definitions"/,
     );
+    expect(agentListbox(html)).not.toContain('role="status"');
     expect(html).not.toContain("test-reviewer");
   });
 
@@ -625,6 +641,8 @@ describe("agent definitions row", () => {
     const rescanning = render([], { agents: refreshing(agents) });
     expect(rescanning).toContain("test-reviewer");
     expect(rescanning).toContain("Rescanning agents");
+    expect(agentListbox(rescanning)).toContain("test-reviewer");
+    expect(agentListbox(rescanning)).not.toContain("Rescanning agents");
 
     const failedRescan = render([], {
       agents: failed("Scan failed: EACCES", agents),

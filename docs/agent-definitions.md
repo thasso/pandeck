@@ -386,20 +386,23 @@ leaving the page spent: a definition that is gone, cannot start any more, or now
 runs as another persona is dropped, and one whose model or effort changed is
 restaged, so the pickers show what will run. A persona is never switched under
 the user: it decides which worktree the draft needs, and a draft whose first
-send is held for retry offers no persona or worktree picker. The pick follows
-the accounts the same way: when its account is disabled the draft moves to
-another of the definition's provider, and with none left the pick is dropped. A
-staged definition skips the composer's model checks, since its model may be one
-Settings → Models hides from the pickers; the server checks it against the
-account. The first send carries `agent`, and the server resolves the definition
-again on the picked account (`harnesses/firstSend.ts`): the session runs on the
-definition's model and effort and freezes it exactly as a spawn does. A persona,
-engine, model or effort that no longer matches the definition refuses the send
-rather than run something other than what the pickers showed. The refusal says
-what the definition runs on now and republishes the agents list, so the draft
-follows it: after a model or effort change the next send starts the definition,
-and after a persona change the agent is no longer picked and the next send is a
-plain session of the draft's persona. `appAudit.test.ts` holds `App` to the
+send is held for retry offers no persona or worktree picker. The account a
+definition chose is the draft's, like its model and effort, so it is not saved
+as the default for later sessions (`hooks/useSavedAccount.ts`); the next draft
+in the same tab still opens on it. The pick follows the accounts the same way:
+when its account is disabled the draft moves to another of the definition's
+provider, and with none left the pick is dropped. A staged definition skips the
+composer's model checks, since its model may be one Settings → Models hides from
+the pickers; the server checks it against the account. The first send carries
+`agent`, and the server resolves the definition again on the picked account
+(`harnesses/firstSend.ts`): the session runs on the definition's model and
+effort and freezes it exactly as a spawn does. A persona, engine, model or
+effort that no longer matches the definition refuses the send rather than run
+something other than what the pickers showed. The refusal says what the
+definition runs on now and republishes the agents list, so the draft follows it:
+after a model or effort change the next send starts the definition, and after a
+persona change the agent is no longer picked and the next send is a plain
+session of the draft's persona. `appAudit.test.ts` holds `App` to the
 fresh-draft and re-issue helpers.
 
 ## Out of scope
