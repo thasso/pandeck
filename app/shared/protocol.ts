@@ -4420,6 +4420,13 @@ export interface DisplayMessage {
    * rather than badging each of them.
    */
   inheritedFrom?: SessionEntryOrigin;
+  /**
+   * Set on the CONTINUATION of an entry split around an anchored card
+   * (`cardPlacement.ts`): the entry this row's blocks belong to and the index
+   * its first block has there. Comment and block addresses are entry
+   * coordinates, so a row reads them through this, never its own id/index.
+   */
+  fragment?: { entryId: string; blockOffset: number };
   streaming?: boolean;
   error?: string;
   errorInfo?: ProviderErrorInfo;

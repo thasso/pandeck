@@ -4,6 +4,7 @@ import type {
   DisplayMessage,
   SessionState,
 } from "@assistant/shared";
+import { displayEntryId } from "@assistant/shared/cardPlacement";
 import { isTransientMessageId } from "./sessionPreview.ts";
 import { sessionIdFromPathname } from "./sessionRoutes.ts";
 
@@ -110,7 +111,7 @@ function sanitizeMessages(messages: DisplayMessage[]): DisplayMessage[] {
   // the stale preview and it (see isTransientMessageId). The streaming flag is a
   // moment-in-time state too and must not resurrect as a stuck spinner.
   return messages
-    .filter((message) => !isTransientMessageId(message.id))
+    .filter((message) => !isTransientMessageId(displayEntryId(message)))
     .slice(-60)
     .map(({ streaming: _streaming, ...message }) => ({
       ...message,

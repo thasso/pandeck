@@ -10,6 +10,7 @@
     "./session": "./session/index.ts",
     "./runtime": "./runtimeEvents.ts",
     "./display": "./displayMapping.ts",
+    "./cardPlacement": "./cardPlacement.ts",
     "./turnStats": "./turnStats.ts",
     "./objectLinks": "./objectLinks.ts",
     "./comments": "./comments.ts",

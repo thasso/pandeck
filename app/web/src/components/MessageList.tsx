@@ -84,6 +84,7 @@ import {
 import { sessionReferenceKey } from "../lib/transcriptKeys.ts";
 import { mentionedSessionIds } from "../lib/transcriptMentions.ts";
 import { isTransientMessageId } from "../lib/sessionPreview.ts";
+import { displayEntryId } from "@assistant/shared/cardPlacement";
 import type { PromptQueueState } from "../hooks/useAssistant.ts";
 import { useTranscriptScroll } from "../hooks/useTranscriptScroll.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
@@ -487,7 +488,9 @@ function MessageActionsBar({
     window.setTimeout(() => setCopied(false), 1200);
   };
 
-  const canComment = Boolean(onCommentMessage && message.id !== "live");
+  const canComment = Boolean(
+    onCommentMessage && displayEntryId(message) !== "live",
+  );
   // Resend puts the prompt back in the composer rather than sending it: a turn
   // can fail after tool calls have already run, so re-running it is the reader's
   // call, not a one-click repeat. Only the text travels, so a prompt that carried
@@ -1236,6 +1239,8 @@ const WINDOW_STEP_ROWS = 240;
  * direction, and a row carrying one is still that entry's row.
  */
 function messageHasEntry(message: DisplayMessage, entryId: string): boolean {
+  // A turn split around a card answers through its head row, which keeps the id.
+  if (message.fragment) return false;
   return (
     message.id === entryId ||
     message.forkBeforeEntryId === entryId ||
@@ -1948,11 +1953,11 @@ export function MessageList({
                 : undefined;
             const turnEnd = turnEndByMessageId.get(m.id);
             const rowCanComment = Boolean(
-              m.createdAt && !isTransientMessageId(m.id),
+              m.createdAt && !isTransientMessageId(displayEntryId(m)),
             );
             const toolCommentTargets =
               commentEnabled && rowCanComment
-                ? commentProjection.targetsByMessage.get(m.id)
+                ? commentProjection.targetsByMessage.get(displayEntryId(m))
                 : undefined;
             const chatCommentable = Boolean(
               commentEnabled &&

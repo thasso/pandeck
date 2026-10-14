@@ -1,4 +1,5 @@
 import type { DisplayMessage } from "@assistant/shared";
+import { displayEntryId } from "@assistant/shared/cardPlacement";
 
 /**
  * Rows that describe a moment in time rather than durable transcript content:
@@ -8,7 +9,8 @@ import type { DisplayMessage } from "@assistant/shared";
  * saved mid-turn ends with "live", which matches the CURRENT turn's streaming
  * row and would anchor the merge below at the end of the live list, truncating
  * the displayed transcript to the stale preview until the turn completes. They
- * must never be persisted in previews or used as merge anchors.
+ * must never be persisted in previews or used as merge anchors. Pass a row's
+ * `displayEntryId`: a card splitting the live turn gives it a continuation row.
  */
 export function isTransientMessageId(id: string): boolean {
   return id === "live" || id.startsWith("creq-");
@@ -26,7 +28,7 @@ export function appendLiveMessagesAfterPreview(
   liveMessages: DisplayMessage[],
 ): DisplayMessage[] {
   const durablePreview = previewMessages.filter(
-    (message) => !isTransientMessageId(message.id),
+    (message) => !isTransientMessageId(displayEntryId(message)),
   );
   if (durablePreview.length === 0) return liveMessages;
   const liveIndexById = new Map(

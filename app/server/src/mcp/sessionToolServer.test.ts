@@ -213,6 +213,14 @@ test("session tool server wire contract", async () => {
       details: { status: "half" },
     });
 
+    // The Claude CLI names its tool_use under its own key; cards anchor on it.
+    await client.callTool({
+      name: "probe",
+      arguments: { value: "claude" },
+      _meta: { "claudecode/toolUseId": "toolu_01abc" },
+    });
+    assert.equal(seenCtx[1]?.toolCallId, "toolu_01abc");
+
     // Non-object details ride the same key — no shape is special-cased.
     const arr = (await client.callTool({
       name: "list_details",

@@ -28,6 +28,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { notifySessionBlocked } from "./webPush.ts";
+import { placeCardRows } from "@assistant/shared/cardPlacement";
 import {
   applyPatch,
   approvalGrantKeys,
@@ -241,56 +242,7 @@ export function withApprovalBlocks(
   messages: DisplayMessage[],
   sessionId: string,
 ): DisplayMessage[] {
-  const result = [...messages];
-  for (const message of approvalBlocksForSession(sessionId)) {
-    const approval = approvalCardFromMessage(message);
-    let insertAt = -1;
-    if (approval?.sourceToolCallId) {
-      const anchor = result.findIndex((candidate) =>
-        candidate.blocks.some(
-          (block) =>
-            block.kind === "tool" && block.toolId === approval.sourceToolCallId,
-        ),
-      );
-      if (anchor >= 0) {
-        insertAt = anchor + 1;
-        while (
-          insertAt < result.length &&
-          approvalCardFromMessage(result[insertAt]!)?.sourceToolCallId ===
-            approval.sourceToolCallId
-        )
-          insertAt += 1;
-      }
-    }
-    if (insertAt < 0) {
-      const createdAt = approval?.createdAt ?? 0;
-      insertAt = result.findIndex(
-        (candidate) =>
-          candidate.createdAt && Date.parse(candidate.createdAt) > createdAt,
-      );
-      if (insertAt < 0) {
-        let lastDated = -1;
-        for (let index = 0; index < result.length; index += 1)
-          if (result[index]!.createdAt) lastDated = index;
-        insertAt = lastDated >= 0 ? lastDated + 1 : result.length;
-      }
-    }
-    result.splice(insertAt, 0, message);
-  }
-  return result;
-}
-
-function approvalCardFromMessage(
-  message: DisplayMessage,
-): ApprovalCard | undefined {
-  return message.blocks.find(
-    (
-      block,
-    ): block is Extract<
-      (typeof message.blocks)[number],
-      { kind: "approval" }
-    > => block.kind === "approval",
-  )?.approval;
+  return placeCardRows(messages, approvalBlocksForSession(sessionId));
 }
 
 /* ----------------------------- creation ---------------------------------- */
