@@ -329,6 +329,10 @@ import {
 } from "./components/KnowledgeOpenTargets.tsx";
 import { KnowledgeInspector } from "./components/KnowledgeInspector.tsx";
 import { PaObjectLinkSourceProvider } from "./components/PaObjectLinks.tsx";
+import {
+  TaskLiveSourceProvider,
+  useTaskLiveSourceValue,
+} from "./components/TaskLiveState.tsx";
 import { useWorktreeCommentWatch } from "./hooks/useCommentWatch.ts";
 import { useMobileLayout } from "./components/shell/useMobileLayout.ts";
 import {
@@ -2505,6 +2509,12 @@ function AppContent() {
       ...(mobileLayout ? {} : { openInPanel: openKnowledgeInSidePanel }),
     }),
     [mobileLayout, openKnowledgeFile, openKnowledgeInSidePanel],
+  );
+  // What a transcript Task card reads to learn whether its recorded status
+  // suggestion has been answered since (`TaskLiveState.tsx`).
+  const taskLiveSource = useTaskLiveSourceValue(
+    state,
+    actions.requestTaskDetail,
   );
   const openSettingsSection = useCallback(
     (section: SettingsSection) => navigate(settingsPath(section)),
@@ -6302,69 +6312,71 @@ function AppContent() {
             // costs (a no-op outside profiling builds).
             <Profiler id="Transcript" onRender={recordTranscriptRender}>
               <Suspense fallback={<TranscriptChunkFallback />}>
-                <MessageList
-                  sessionId={displayCurrentId}
-                  messages={displayMessagesWithPeerPromptOverrides}
-                  timeline={state.timeline}
-                  chatComments={chatComments}
-                  commentDraft={chatCommentDraft}
-                  onCommentDraftChange={setChatCommentDraft}
-                  onCommentSelectionChange={onChatCommentSelectionChange}
-                  sessionStreaming={displayStreaming}
-                  runProgress={
-                    shownOptimisticSession ? null : state.runProgress
-                  }
-                  queuedPeerCount={
-                    displaySession?.queuedPeerPrompts?.length ?? 0
-                  }
-                  queuedBackgroundCount={
-                    displaySession?.queuedBackgroundUpdates ?? 0
-                  }
-                  promptQueueStates={state.promptQueueStates}
-                  appearance={state.settings.appearance}
-                  sessionCanSteer={Boolean(displaySession?.canSteer)}
-                  sessions={state.sessions}
-                  changedFiles={workspaceChangedFiles}
-                  paObjectReferences={paObjectReferences}
-                  onOpenPaObject={openPaObject}
-                  view={transcriptView}
-                  onAcceptCommitDryRun={actions.acceptCommitDryRun}
-                  onCreateDraftSession={actions.createDraftSession}
-                  models={messageModels}
-                  defaultModel={displaySession?.model}
-                  defaultThinkingLevel={displaySession?.thinkingLevel}
-                  onForkMessage={forkMessage}
-                  onResendPrompt={resendPrompt}
-                  onOpenSession={openSession}
-                  onOpenChangedFile={openWorkspaceFile}
-                  onOpenTask={openTaskById}
-                  onOpenBackgroundWork={openBackgroundWork}
-                  onOpenWorktree={openWorktree}
-                  onRetryWorktreeProvision={onRetryWorktreeProvision}
-                  onApplyTaskStatusSuggestion={applyTaskStatusSuggestion}
-                  onResolveApproval={actions.resolveApproval}
-                  approvalGrants={approvalGrants}
-                  onRevokeApprovalGrant={actions.revokeApprovalGrant}
-                  accountModels={settingsAccountModels}
-                  onChoosePullRequestTask={actions.choosePullRequestTask}
-                  onPullRequestCardAction={runPullRequestCardAction}
-                  pendingQuestion={displaySession?.pendingQuestion}
-                  answeredQuestions={displaySession?.answeredQuestions}
-                  onRespondToQuestion={respondToQuestion}
-                  onLoadTimelineBlock={actions.loadTimelineBlock}
-                  onLiveBodyDemand={actions.setLiveBodyDemand}
-                  turnStatsSeed={transcriptTurnStatsSeed}
-                  hasOlderMessages={hasOlderTimelineEntries}
-                  loadingOlderMessages={state.timelineRangePending !== null}
-                  onLoadOlderMessages={actions.loadOlderTimeline}
-                  focusEntry={transcriptFocusEntry}
-                  onFocusEntryApplied={retireMessageFocus}
-                  forkBoundary={transcriptForkBoundary}
-                  pinToBottomToken={transcriptPinToken}
-                  onRegisterViewHold={registerTranscriptViewHold}
-                  loadingPreview={usePreview}
-                  onPreviewInteraction={markPreviewInteracted}
-                />
+                <TaskLiveSourceProvider source={taskLiveSource}>
+                  <MessageList
+                    sessionId={displayCurrentId}
+                    messages={displayMessagesWithPeerPromptOverrides}
+                    timeline={state.timeline}
+                    chatComments={chatComments}
+                    commentDraft={chatCommentDraft}
+                    onCommentDraftChange={setChatCommentDraft}
+                    onCommentSelectionChange={onChatCommentSelectionChange}
+                    sessionStreaming={displayStreaming}
+                    runProgress={
+                      shownOptimisticSession ? null : state.runProgress
+                    }
+                    queuedPeerCount={
+                      displaySession?.queuedPeerPrompts?.length ?? 0
+                    }
+                    queuedBackgroundCount={
+                      displaySession?.queuedBackgroundUpdates ?? 0
+                    }
+                    promptQueueStates={state.promptQueueStates}
+                    appearance={state.settings.appearance}
+                    sessionCanSteer={Boolean(displaySession?.canSteer)}
+                    sessions={state.sessions}
+                    changedFiles={workspaceChangedFiles}
+                    paObjectReferences={paObjectReferences}
+                    onOpenPaObject={openPaObject}
+                    view={transcriptView}
+                    onAcceptCommitDryRun={actions.acceptCommitDryRun}
+                    onCreateDraftSession={actions.createDraftSession}
+                    models={messageModels}
+                    defaultModel={displaySession?.model}
+                    defaultThinkingLevel={displaySession?.thinkingLevel}
+                    onForkMessage={forkMessage}
+                    onResendPrompt={resendPrompt}
+                    onOpenSession={openSession}
+                    onOpenChangedFile={openWorkspaceFile}
+                    onOpenTask={openTaskById}
+                    onOpenBackgroundWork={openBackgroundWork}
+                    onOpenWorktree={openWorktree}
+                    onRetryWorktreeProvision={onRetryWorktreeProvision}
+                    onApplyTaskStatusSuggestion={applyTaskStatusSuggestion}
+                    onResolveApproval={actions.resolveApproval}
+                    approvalGrants={approvalGrants}
+                    onRevokeApprovalGrant={actions.revokeApprovalGrant}
+                    accountModels={settingsAccountModels}
+                    onChoosePullRequestTask={actions.choosePullRequestTask}
+                    onPullRequestCardAction={runPullRequestCardAction}
+                    pendingQuestion={displaySession?.pendingQuestion}
+                    answeredQuestions={displaySession?.answeredQuestions}
+                    onRespondToQuestion={respondToQuestion}
+                    onLoadTimelineBlock={actions.loadTimelineBlock}
+                    onLiveBodyDemand={actions.setLiveBodyDemand}
+                    turnStatsSeed={transcriptTurnStatsSeed}
+                    hasOlderMessages={hasOlderTimelineEntries}
+                    loadingOlderMessages={state.timelineRangePending !== null}
+                    onLoadOlderMessages={actions.loadOlderTimeline}
+                    focusEntry={transcriptFocusEntry}
+                    onFocusEntryApplied={retireMessageFocus}
+                    forkBoundary={transcriptForkBoundary}
+                    pinToBottomToken={transcriptPinToken}
+                    onRegisterViewHold={registerTranscriptViewHold}
+                    loadingPreview={usePreview}
+                    onPreviewInteraction={markPreviewInteracted}
+                  />
+                </TaskLiveSourceProvider>
               </Suspense>
             </Profiler>
           }

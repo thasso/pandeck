@@ -638,6 +638,17 @@ export interface UIState {
   taskDetails: Record<string, LoadState<TaskItem | null>>;
   /** Least-recently-used order for the bounded per-Task body cache. */
   taskDetailsLru: string[];
+  /**
+   * Every Task this tab has read or saved: its status and pending suggestion as
+   * of that read, `null` when it was not found. Kept OUTSIDE the body cache on
+   * purpose — a transcript Task card asks it whether its recorded suggestion was
+   * answered, and an LRU eviction there would put the answered question back.
+   * Uncapped because an entry is a few fields and Task ids are finite. A record
+   * is a last-known value, not a subscription: the card re-reads on mount and
+   * reconnect, and leaving the live projection drops it
+   * (`forgetTaskStatuses`).
+   */
+  taskStatuses: Record<string, TaskStatusRecord | null>;
   /** Pending/settled/error state for Task controls, keyed by Task + operation. */
   taskMutations: Record<string, LoadState<true>>;
   /* ---- runtime-native chat state (source of truth; `messages` is derived) ---- */
@@ -883,6 +894,7 @@ const emptyInitial: UIState = {
   worktreeMerge: {},
   taskDetails: {},
   taskDetailsLru: [],
+  taskStatuses: {},
   taskMutations: {},
   timeline: [],
   timelineStart: 0,
@@ -1316,6 +1328,49 @@ export function createInitialState(): UIState {
     worktrees: cache.worktrees ?? null,
     cachedWorktreeStatuses: cache.worktreeStatuses ?? NO_WORKTREE_STATUSES,
   };
+}
+
+/** A Task's status and pending suggestion as last read, without its body. */
+export type TaskStatusRecord = Pick<
+  TaskSummary,
+  "status" | "statusSuggestion" | "updatedAt"
+>;
+
+/** `taskStatuses` after a read or save of `id`; the same object when unchanged. */
+function withTaskStatus(
+  statuses: Record<string, TaskStatusRecord | null>,
+  id: string,
+  item: TaskItem | null,
+): Record<string, TaskStatusRecord | null> {
+  const next: TaskStatusRecord | null = item
+    ? {
+        status: item.status,
+        updatedAt: item.updatedAt,
+        ...(item.statusSuggestion
+          ? { statusSuggestion: item.statusSuggestion }
+          : {}),
+      }
+    : null;
+  return id in statuses && wireValueEqual(statuses[id], next)
+    ? statuses
+    : { ...statuses, [id]: next };
+}
+
+/**
+ * `taskStatuses` without the Tasks that LEFT the live projection — a `delete`
+ * event or a digest that no longer lists them. Archived or deleted, neither
+ * can tell which, so the record is dropped rather than marked gone, and a card
+ * still asking about the Task reads it again.
+ */
+function forgetTaskStatuses(
+  statuses: Record<string, TaskStatusRecord | null>,
+  ids: readonly string[],
+): Record<string, TaskStatusRecord | null> {
+  const known = ids.filter((id) => id in statuses);
+  if (known.length === 0) return statuses;
+  const next = { ...statuses };
+  for (const id of known) delete next[id];
+  return next;
 }
 
 /**
@@ -3604,6 +3659,12 @@ function applyTaskDigest(state: UIState, message: TaskDigestMessage): UIState {
   if (!changedIds || !state.taskList) return state;
   const liveIds = new Set(message.entries.map((entry) => entry.id));
   const items = state.taskList.items.filter((item) => liveIds.has(item.id));
+  const taskStatuses = forgetTaskStatuses(
+    state.taskStatuses,
+    state.taskList.items
+      .filter((item) => !liveIds.has(item.id))
+      .map((item) => item.id),
+  );
   const currentRevisions = state.stateEventRevisions.tasks!;
   const revisions: Record<string, number> = {};
   for (const entry of message.entries) {
@@ -3620,6 +3681,7 @@ function applyTaskDigest(state: UIState, message: TaskDigestMessage): UIState {
         : { ...state.taskList, items },
     stateEventRevisions: { ...state.stateEventRevisions, tasks: revisions },
     taskListFresh: changedIds.length === 0,
+    taskStatuses,
     error: null,
   };
 }
@@ -3689,6 +3751,7 @@ function applyEvent(
   const currentRevisions = state.stateEventRevisions[message.topic] ?? {};
   let revisions: Record<string, number> | null = null;
   let items = state.taskList?.items;
+  let taskStatuses = state.taskStatuses;
 
   for (const event of message.events) {
     const knownRevision =
@@ -3697,6 +3760,8 @@ function applyEvent(
 
     revisions ??= { ...currentRevisions };
     revisions[event.id] = event.revision;
+    if (event.kind === "delete")
+      taskStatuses = forgetTaskStatuses(taskStatuses, [event.id]);
     if (!items) continue;
 
     const index = items.findIndex((item) => item.id === event.id);
@@ -3732,6 +3797,7 @@ function applyEvent(
       taskList === state.taskList
         ? state.taskDetails
         : reconcileTaskDetails(state.taskDetails, taskList?.items),
+    taskStatuses,
   };
 }
 
@@ -3981,6 +4047,7 @@ function applyTaskSaved(
     taskList,
     taskDetails: detailCache.cache,
     taskDetailsLru: detailCache.lru,
+    taskStatuses: withTaskStatus(state.taskStatuses, item.id, item),
     error: null,
   };
 }
@@ -4883,6 +4950,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ...state,
       taskDetails: projection.cache,
       taskDetailsLru: projection.lru,
+      ...(action.error
+        ? {}
+        : {
+            taskStatuses: withTaskStatus(
+              state.taskStatuses,
+              action.id,
+              action.item,
+            ),
+          }),
     };
   }
   if (action.kind === "unwatchComments") {
@@ -5737,6 +5813,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ...state,
         taskDetails: projection.cache,
         taskDetailsLru: projection.lru,
+        ...(msg.error
+          ? {}
+          : {
+              taskStatuses: withTaskStatus(
+                state.taskStatuses,
+                msg.id,
+                msg.item,
+              ),
+            }),
       };
     }
     case "forkedSession": {
