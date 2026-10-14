@@ -182,32 +182,34 @@ satisfy the content rule and the runtime check (`agents/agentRuntime.ts`): the
 model resolves against the enabled accounts, the denied tools are the persona's
 own or native, the skills are valid library skills.
 
-### Model and effort changes need approval
+### Persona, model and effort changes need approval
 
 The Settings roster of approved peer runtimes exists so the user controls what
 spawned sessions cost. A definition that names its own model moves that control
 into the file. A hand edit is the user's own choice. An agent-tool mutation that
-sets what a definition runs on therefore goes through an `agentDefinition`
-approval card (`docs/approvals.md`):
+sets what a definition runs as or on therefore goes through an `agentDefinition`
+approval card (`docs/approvals.md`). The persona counts: it decides the tools,
+and a developer has native Bash, Edit and Write an assistant does not.
 
 - **Create** always sets a model, so every `agent_create` is a card. It shows
   the persona, the model as written and the connected model it resolved to, the
   effort, and the complete `AGENT.md`. Nothing is written until approval; the
   executor checks the runtime again and creates the entry.
 - **Edit** is previewed first (`previewEntryEdit`). When the result changes
-  `model` or `effort`, it is a card showing before and after, and the executor
-  applies the same edits only if the model still resolves to what the card
-  showed, at the effort the card showed, and the locked result is byte-for-byte
-  the `AGENT.md` the card showed, so a hand edit made while the card waited
-  refuses rather than being carried along. An edit may never change the declared
-  name: the card names its target by it. Any other edit commits directly; inside
-  the locked write it is judged again (`editEntrySource`'s `check`), and the
-  file must still hold the bytes that were judged when the write starts: model
-  and effort must still be unchanged, and the denied tools and skills must still
-  exist. Every locked agent edit, approved or direct, also re-reads the file
-  after its check and refuses if a hand edit landed meanwhile, leaving that edit
-  in place. A direct edit does not re-resolve the model, so a definition whose
-  account went away can still have its instructions fixed.
+  `persona`, `model` or `effort`, it is a card showing before and after, and the
+  executor applies the same edits only if the model still resolves to what the
+  card showed, at the effort the card showed, and the locked result is
+  byte-for-byte the `AGENT.md` the card showed, so a hand edit made while the
+  card waited refuses rather than being carried along. An edit may never change
+  the declared name: the card names its target by it. Any other edit commits
+  directly; inside the locked write it is judged again (`editEntrySource`'s
+  `check`), and the file must still hold the bytes that were judged when the
+  write starts: persona, model and effort must still be unchanged, and the
+  denied tools and skills must still exist. Every locked agent edit, approved or
+  direct, also re-reads the file after its check and refuses if a hand edit
+  landed meanwhile, leaving that edit in place. A direct edit does not
+  re-resolve the model, so a definition whose account went away can still have
+  its instructions fixed.
 - Rename, delete and supporting files never change what a definition runs on and
   commit directly; `AGENT.md` itself is refused by `agent_manage_files` under
   any case, since a case-insensitive filesystem opens `agent.md` as the
@@ -410,18 +412,17 @@ the pickers; the server checks it against the account. The first send carries
 effort and freezes it exactly as a spawn does, read again right before the
 session is created (a worktree provisioned first can take seconds). A runtime
 that moved between the two reads refuses the send. A Claude send names its own
-id, so only a retry of the same creation may reuse one: an agent row already
-stored for the id must be byte-for-byte what this send would freeze, whether or
-not the session was created after it (the row is written first), and an agent
-never lands on a plain session that exists (`SessionAgentConflictError`).
-Otherwise a definition would describe a session that runs something else. A
-persona, engine, model or effort that no longer matches the definition refuses
-the send rather than run something other than what the pickers showed. The
-refusal says what the definition runs on now and republishes the agents list, so
-the draft follows it: after a model or effort change the next send starts the
-definition, and after a persona change the agent is no longer picked and the
-next send is a plain session of the draft's persona. `appAudit.test.ts` holds
-`App` to the fresh-draft and re-issue helpers.
+id, and an agent only ever starts a NEW session (`SessionAgentConflictError`):
+an existing one would keep its own runtime and account whatever the send names.
+The one reuse is finishing a creation that failed after writing its agent row,
+and only with byte-for-byte that definition; a plain creation may not take such
+an id over either. A persona, engine, model or effort that no longer matches the
+definition refuses the send rather than run something other than what the
+pickers showed. The refusal says what the definition runs on now and republishes
+the agents list, so the draft follows it: after a model or effort change the
+next send starts the definition, and after a persona change the agent is no
+longer picked and the next send is a plain session of the draft's persona.
+`appAudit.test.ts` holds `App` to the fresh-draft and re-issue helpers.
 
 ## Out of scope
 

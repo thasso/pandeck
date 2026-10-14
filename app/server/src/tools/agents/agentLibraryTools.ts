@@ -64,12 +64,18 @@ export function setAgentToolLibraryForTests(
 const PENDING_NOTE =
   "Nothing is written yet. Do not claim it succeeded until the approved result appears.";
 
-/** What a definition says it runs on, for comparing two versions of it. */
+/**
+ * What a definition says it runs AS and ON, for comparing two versions of it:
+ * a change to any of these needs the user's approval. The persona belongs
+ * here because it decides the tools — a developer has native Bash, Edit and
+ * Write an assistant does not — so moving to it widens what the agent can do.
+ */
 function runsOn(manifest: {
+  persona: AgentPersona;
   model: string;
   effort?: ThinkingLevel | undefined;
 }): string {
-  return `${manifest.model}\u0000${manifest.effort ?? ""}`;
+  return `${manifest.persona}\u0000${manifest.model}\u0000${manifest.effort ?? ""}`;
 }
 
 function manifestPath(name: string): string {
@@ -103,6 +109,9 @@ async function propose(
     name: after.name,
     description: after.description,
     persona: after.persona,
+    ...(before && before.persona !== after.persona
+      ? { personaBefore: before.persona }
+      : {}),
     model: {
       ...(before ? { before: before.model } : {}),
       after: after.model,
@@ -187,6 +196,8 @@ function cardSummary(body: AgentDefinitionApprovalBody): string {
   if (body.action === "create")
     return `a new ${body.persona} agent "${body.name}" on ${body.model.after} (${body.resolvedModel}), effort ${effort(body.effort.after)}`;
   const changes: string[] = [];
+  if (body.personaBefore !== undefined)
+    changes.push(`persona ${body.personaBefore} → ${body.persona}`);
   if (body.model.before !== body.model.after)
     changes.push(
       `model ${body.model.before} → ${body.model.after} (${body.resolvedModel})`,
@@ -310,7 +321,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
     },
   },
   edit: {
-    note: "An edit that changes model or effort is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
+    note: "An edit that changes persona, model or effort is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
     async run(input, meta, library, options, ctx) {
       const current = await readEntrySource(input.name, library);
       if (!current)
@@ -345,7 +356,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
           const now = definitionOf(lockedAfter, input.name);
           if (runsOn(was) !== runsOn(now))
             throw new EntryValidationError(
-              `${current.path} changed since this edit was checked, and the edit would now change its model or effort; read it again and retry.`,
+              `${current.path} changed since this edit was checked, and the edit would now change its persona, model or effort; read it again and retry.`,
             );
           await checkAgentRuntime(now, { checkModel: false });
         },

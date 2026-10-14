@@ -47,11 +47,11 @@ export class SessionIdTakenError extends Error {
 }
 
 /**
- * A Claude id already bound to something other than what this creation would
- * freeze. `acquire` returns an existing session as it is — its persona, model,
- * effort and account — and the agent row is insert-only, written before the
- * session: either way a definition could end up describing a session it does
- * not run as, so the creation is refused instead.
+ * A Claude id that an agent creation may not use. `acquire` returns an
+ * existing session as it is — its persona, model, effort and account, not the
+ * ones this creation names — and the agent row is insert-only, written before
+ * the session: either way a definition could end up describing a session that
+ * runs something else, so the creation is refused instead.
  */
 export class SessionAgentConflictError extends Error {
   constructor(
@@ -59,13 +59,16 @@ export class SessionAgentConflictError extends Error {
     /** The stored agent row, if any. */
     frozen: string | undefined,
     agentName: string | undefined,
+    sessionExists: boolean,
   ) {
     const wanted =
       agentName === undefined
         ? "a plain session"
         : `the "${agentName}" agent as it is defined now`;
     super(
-      `Session ${sessionId} is already bound to ${boundTo(frozen)}, not to ${wanted}; start a new session${agentName === undefined ? "" : " to run it"}.`,
+      agentName !== undefined && sessionExists
+        ? `Session ${sessionId} already exists, and an agent only ever starts a new session; start a new session to run "${agentName}".`
+        : `Session ${sessionId} is already bound to ${boundTo(frozen)}, not to ${wanted}; start a new session${agentName === undefined ? "" : " to run it"}.`,
     );
     this.name = "SessionAgentConflictError";
   }
@@ -180,17 +183,16 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       onDisk: spec.id !== undefined,
     });
     if (holder) throw new SessionIdTakenError(id, holder);
-    // Only a retry of the same creation may reuse the id: its agent row, if
-    // any, holds exactly what this one would freeze — whether or not the
-    // session itself got created after it (the row is written first) — and an
-    // agent never lands on a plain session that exists.
+    // An agent only ever starts a NEW session: an existing one would keep its
+    // own runtime and account whatever this creation names (a first send is
+    // re-issued only while nothing was created). The one reuse is finishing a
+    // creation that failed after writing its agent row — and only with exactly
+    // that definition; a plain creation may not take over such an id either.
     const frozen = sessionStore.getAgent(id);
     const wanted = spec.agent ? JSON.stringify(spec.agent) : undefined;
-    if (
-      frozen !== wanted &&
-      (frozen !== undefined || claudeSdkStore.exists(id))
-    )
-      throw new SessionAgentConflictError(id, frozen, spec.agent?.name);
+    const exists = spec.agent !== undefined && claudeSdkStore.exists(id);
+    if (exists || (frozen !== undefined && frozen !== wanted))
+      throw new SessionAgentConflictError(id, frozen, spec.agent?.name, exists);
     linkWorktree(id, spec.worktree?.id);
     if (spec.agent) freezeSessionAgent(id, spec.agent);
     if (spec.promptEvidence)

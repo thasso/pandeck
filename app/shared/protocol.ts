@@ -3516,6 +3516,11 @@ export interface AgentDefinitionApprovalBody {
   name: string;
   description: string;
   persona: "developer" | "assistant";
+  /**
+   * The persona before an edit that changes it: a persona decides the tools
+   * (a developer has native Bash, Edit and Write), so it is approved too.
+   */
+  personaBefore?: "developer" | "assistant";
   /** The model as written, before (edit only) and after. */
   model: { before?: string; after: string };
   /** The connected model `after` resolved to when proposed: `provider/id`. */

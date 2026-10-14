@@ -960,7 +960,9 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
     <>
       <Row label="Agent">
         <span className="font-mono">{body.name}</span>{" "}
-        <span className="text-muted-foreground">· {body.persona}</span>
+        <span className="text-muted-foreground">
+          · <Change before={body.personaBefore} after={body.persona} />
+        </span>
       </Row>
       <Row label="Model">
         <Change before={body.model.before} after={body.model.after} />{" "}

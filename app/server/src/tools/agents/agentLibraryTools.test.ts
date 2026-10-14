@@ -388,6 +388,24 @@ describe("agent_edit", () => {
     assert.equal(await headSubject(), "Run test-reviewer on Opus");
   });
 
+  test("an edit that changes the persona is a card too: a persona decides the tools", async () => {
+    await createApproved();
+    const original = readFileSync(manifest(), "utf8");
+    const { result, text } = await call("agent_edit", {
+      name: "test-reviewer",
+      edits: [{ oldText: "persona: developer", newText: "persona: assistant" }],
+      reason: "Make it an assistant",
+    });
+    assert.equal(result.terminate, true);
+    assert.match(text, /persona developer → assistant/);
+    assert.equal(readFileSync(manifest(), "utf8"), original);
+    const card = latestCard();
+    assert.equal(card.body.kind, "agentDefinition");
+    if (card.body.kind !== "agentDefinition") return;
+    assert.equal(card.body.personaBefore, "developer");
+    assert.equal(card.body.persona, "assistant");
+  });
+
   test("approval refuses when the file no longer comes out at the approved runtime", async () => {
     await createApproved();
     await call("agent_edit", {
@@ -710,7 +728,7 @@ describe("agent tool races and pins", () => {
         },
         ctx(),
       ),
-      /changed since this edit was checked, and the edit would now change its model or effort/,
+      /changed since this edit was checked, and the edit would now change its persona, model or effort/,
     );
     assert.equal(armed, false);
     assert.match(readFileSync(manifest(), "utf8"), /model: "sonnet-fans"/);

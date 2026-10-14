@@ -273,3 +273,13 @@ test("a folder keeps a few diagnostics, the last saying how many more", async ()
     /And 3 more problems in noisy\/AGENT\.md\.$/,
   );
 });
+
+test("a name no definition could declare is refused without being quoted", async () => {
+  const name = `bad name ${"x".repeat(5000)}`;
+  await assert.rejects(resolveAgentSpawn(name), (error: Error) => {
+    assert.ok(error instanceof AgentSpawnRefusedError);
+    assert.match(error.message, /not a valid agent name/);
+    assert.ok(error.message.length < 200);
+    return true;
+  });
+});

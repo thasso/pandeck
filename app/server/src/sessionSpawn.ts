@@ -969,7 +969,12 @@ export async function spawnApprovedPeers(input: {
   let agents: Awaited<ReturnType<typeof scanAgentsForSpawn>> | undefined;
   const earlyAgents = new Map<number, AgentSpawnRuntime>();
   for (const [index, row] of input.rows.entries()) {
-    const label = row.title?.trim() || "(untitled)";
+    // Quoted in refusals before `validateStructure` checks its length.
+    const title = row.title?.trim() || "(untitled)";
+    const label =
+      title.length > MAX_SPAWN_TITLE_CHARS
+        ? `${title.slice(0, MAX_SPAWN_TITLE_CHARS)}…`
+        : title;
     if (row.agent !== undefined) {
       if (row.profileId !== undefined)
         throw new SpawnProposalError(

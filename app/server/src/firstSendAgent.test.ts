@@ -439,6 +439,6 @@ test("an agent first send to an id that already holds a Claude session is refuse
   assert.equal(sessionStore.getAgent("agent-existing"), undefined);
   assert.match(
     JSON.stringify(sent),
-    /is already bound to a plain session, not to the \\"researcher\\" agent as it is defined now/,
+    /already exists, and an agent only ever starts a new session/,
   );
 });

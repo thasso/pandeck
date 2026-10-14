@@ -328,10 +328,43 @@ test("an agent is never grafted onto a Claude session that already exists", asyn
   );
   assert.equal(acquire.mock.calls.length, 0);
 
-  // A retry of the same creation lands on the session it made.
+  // Not even as the same agent: the session runs what it was created with,
+  // not what this creation names (another account, say).
   sessionStore.freezeAgent("existing-same", JSON.stringify(agent));
-  await start("existing-same");
-  assert.equal(acquire.mock.calls.length, 1);
+  await assert.rejects(
+    start("existing-same"),
+    /already exists, and an agent only ever starts a new session/,
+  );
+  assert.equal(acquire.mock.calls.length, 0);
+});
+
+test("a second agent creation under a live Claude id is refused, not merged into it", async () => {
+  const { SessionAgentConflictError } = await import("./create.ts");
+  const agent = {
+    name: "researcher",
+    blob: "d".repeat(40),
+    persona: "assistant" as const,
+    provider: "claude-sdk",
+    model: "opus",
+    effort: "high" as const,
+    denyTools: [],
+    skills: [],
+    body: "Research carefully.",
+  };
+  const start = (credentialProfileId: string) =>
+    createSession({
+      harness: "claude-sdk",
+      id: "live-agent",
+      agentType: "assistant",
+      credentialProfileId,
+      agent,
+    });
+
+  // The real store: the first creation makes the session.
+  const first = await start("account-a");
+  assert.equal(claudeSdkStore.get("live-agent"), first);
+  // The same definition on another account would get that session back.
+  await assert.rejects(start("account-b"), SessionAgentConflictError);
 });
 
 test("an agent row left by a creation that never finished binds its id", async () => {

@@ -8,6 +8,7 @@
 import {
   HARNESSES,
   harnessForModelProvider,
+  isSafeEntryName,
   type EntryDiagnostic,
   type ThinkingLevel,
 } from "@assistant/shared";
@@ -119,6 +120,12 @@ export async function resolveAgentSpawn(
   /** An account the caller picked, in place of the automatic one. */
   options: { profileId?: string } = {},
 ): Promise<AgentSpawnRuntime> {
+  // A name no definition could declare is refused unquoted: it is the
+  // caller's own input, of any size.
+  if (!isSafeEntryName(name))
+    throw new AgentSpawnRefusedError(
+      `That is not a valid agent name. Call session_spawn with operation "agents" for the ones that exist.`,
+    );
   const { library, scan } = scanned ?? (await scanAgentsForSpawn());
   let read;
   try {
