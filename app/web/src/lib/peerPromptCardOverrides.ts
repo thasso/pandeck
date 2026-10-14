@@ -2,6 +2,7 @@ import { applyPatch } from "@assistant/shared";
 import type {
   DisplayMessage,
   PeerPromptCard,
+  PeerPromptInterruption,
   PeerPromptState,
   PeerPromptThreadsProjection,
 } from "@assistant/shared";
@@ -16,6 +17,8 @@ interface PeerPromptCardOverride {
    * because the newer override merely omitted the key.
    */
   failureReason?: string | undefined;
+  /** Cleared the same way: an answered request no longer shows its Stop. */
+  interruption?: PeerPromptInterruption | undefined;
 }
 
 export type PeerPromptCardOverrides = Record<string, PeerPromptCardOverride>;
@@ -44,6 +47,7 @@ export function seedPeerPromptCardOverridesFromHistory(
       overrides[message.id] = {
         state: message.state,
         failureReason: message.failureReason,
+        interruption: message.interruption,
       };
     }
   }
@@ -61,6 +65,7 @@ export function applyPeerPromptCardOverride(
   return applyPatch(card, {
     state: override.state,
     failureReason: override.failureReason,
+    interruption: override.interruption,
   });
 }
 

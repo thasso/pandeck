@@ -129,15 +129,107 @@ card, which the commands address it by.
   no lease, since a deferred steer can wait a whole tool step and a lease sweep
   would requeue it to be sent twice; boot recovery reconciles a stranded one. A
   steer withdrawn unread goes back to waiting; one the CLI may already have read
-  is marked `interrupted`, which tells a sender waiting on a reply. An idle
-  session gets it as its next turn, ahead of the user's own queue, because the
-  user chose it. A running turn that cannot steer offers no send-now: the row is
-  delivered when the turn ends. Send-now holds the recipient's delivery
-  authority: one arriving during an automatic delivery waits out that turn and
-  goes before the drain claims its next batch, which resumes from the FIFO head
-  once the send is done. A peer drain held up by a send-now settles only after
-  that resumed drain (the user's queued message sent, or the peer FIFO drained),
-  so a background completion waiting on it never takes their turn.
+  is marked `interrupted`, which tells a sender waiting on a reply — unless a
+  Stop ended that turn, which records it as stopped (below). Either way it is
+  never sent again on its own: whether the turn read it is unknown, and the
+  sender (or the user) decides. An idle session gets it as its next turn, ahead
+  of the user's own queue, because the user chose it. A running turn that cannot
+  steer offers no send-now: the row is delivered when the turn ends. Send-now
+  holds the recipient's delivery authority: one arriving during an automatic
+  delivery waits out that turn and goes before the drain claims its next batch,
+  which resumes from the FIFO head once the send is done. A peer drain held up
+  by a send-now settles only after that resumed drain (the user's queued message
+  sent, or the peer FIFO drained), so a background completion waiting on it
+  never takes their turn.
+- **How a delivered batch settles.** Right before its turn is appended — after
+  the facade's last await, so nothing changes in between — the batch passes its
+  claim (`admit` → `reserveAdmission`): every member must still be `dispatching`
+  under this claim's `attempts`, or NOTHING is sent. A row the lease sweep put
+  back, the user withdrew, or a newer claim took fails the whole batch; the
+  members still held go back to the queue with no attempt spent, and the drain
+  claims afresh. Passing clears the lease, so from then on a row leaves
+  `dispatching` only through its own delivery or boot recovery, which reads the
+  recipient's log: never swept back, never withdrawable, never sent twice. A
+  database that cannot check fails closed: nothing is sent, under the bounded
+  retry. The batch is recorded admitted as the runtime appends it
+  (`onUserEntry`), in one transaction; a write refused there is tried once more
+  at settlement, and if that fails too the rows stay reserved for boot. Any
+  other refusal before the append — a Stop at the run door (also of a steer), a
+  busy session, a harness released meanwhile — likewise leaves the rows
+  `dispatching`, so they go back to the queue (a Stop spends no attempt) or
+  under the bounded retry; a released instance is sent nothing more. Admitted
+  rows are never retried or re-queued: the prompt is in the recipient's context
+  and its tools may have run. They settle from the `RunOutcome` the runtime
+  records as the run's bracket closes (the run the batch opened; for a steer,
+  the run it joined), never from whether the prompt resolved, since a Stop
+  resolves it like a finished turn:
+  - a clean end is `completed`, or `awaiting_response` when a reply was asked
+    for — the turn finishing does not answer the request;
+  - an abort someone ASKED for (the user's Stop, a coordinator's stand-down),
+    including one that kept an earlier attempt's error, is `stopped` — unless
+    the run's failure was reported before the abort, which leaves it a failure.
+    A row without a requested reply is `interrupted`; a requested reply stays
+    owed as `awaiting_response` with `interruptionKind: "stopped"`, so a later
+    answer still correlates and clears it, the session list still counts it, it
+    expires on its original deadline, and a later real failure of the recipient
+    still reports it. No failure notice is sent and no `failureReason` is
+    written: nothing failed. Cards, history and the peer summary carry
+    `interruption: "stopped"` (`PeerPromptInterruption`) while it explains the
+    state — "Stopped", or "Awaiting response" with a note that the turn was
+    stopped — and drop it once the request is answered;
+  - any other end — a provider failure, an abort nobody asked for, an end
+    nothing reported — is `interrupted` (`failure`), which tells a sender
+    waiting on a reply once (the delegation failure notice covers rows it
+    records).
+
+  A session torn down mid-turn — deleted, or its harness released — ends its
+  open run the same way, as an end someone asked for, before anything stops
+  observing it: its store calls `SessionRuntime.closeForTeardown` ahead of the
+  harness's own dispose, and `disposeSession` does it first. Waiting prompts and
+  steers are released, whatever the provider answers afterwards (a default clean
+  end included) is ignored, the session takes no new prompt and its idle edge
+  offers no queued work. A failure the run reported before the teardown stays a
+  failure. Only a process that dies leaves a run for boot recovery, which
+  records it as `restart`. A steer acceptance the provider had already queued
+  when its run closed (Claude's `command_lifecycle` arriving after a teardown or
+  after the run ended) appends nothing after the close: the message counts as
+  possibly read — `stopped` when that close was a Stop or teardown, otherwise
+  the uncertain-read notice — and is never sent again.
+
+  A delivery the runtime never confirmed (no `onUserEntry`), whether its prompt
+  threw or resolved, is reconciled before anything is retried or refunded,
+  because the log's append persists the entry before its own bookkeeping (the
+  session's stats row) and a producer may swallow that bookkeeping's failure:
+  - a batch refused before its claim gate never reached anything: unsent;
+  - a steer the provider took whose entry write then failed is delivered on the
+    provider's word (`SteerEntryFailedError`), log or no log;
+  - otherwise the canonical log decides, with three answers. The key found means
+    delivered: its turn failed (`interrupted`, `failure`, sender told once),
+    never a draft, and a new turn's run is closed — a steer leaves the run it
+    joined alone. The log read without the key (or not there at all) means
+    unsent, under the usual retry. A log that cannot be read proves nothing: the
+    rows stay reserved, unrefunded and unwithdrawable, for a boot that can read
+    it, and nothing is sent to that recipient until its log reads
+    (`LOG_UNREADABLE_REASON` on the bounded retry). Boot likewise leaves a row
+    it cannot reconcile `dispatching`.
+
+  Passing the claim gate is recorded durably (`reserved_at_ms`, with the batch
+  it would be delivered as), because a provider can take input before the app's
+  log records it and the receipt of that may itself fail to persist. Boot
+  recovery therefore asks two questions of a `dispatching` row whose key the log
+  lacks: a row that never passed its gate is requeued; a reserved one may have
+  reached the recipient, so it is `interrupted` (`restart`, "not sent again")
+  and its sender, if it asked for a reply, is told once. The store refuses to
+  requeue a reserved row whatever its caller decides. A delivery that KNOWS
+  nothing was sent — a Stop at the door, a stale claim, a busy session, a
+  withdrawal the provider confirmed unread — puts the row back unreserved.
+
+  An answer sent before the Stop keeps the request `replied`. Each settlement is
+  a compare-and-set from the admitted states, so a duplicate or late callback,
+  or a straggler of an older run, never rewrites a newer outcome. Resume drains
+  only rows that were never admitted. Rows completed before this distinction
+  existed are not relabeled.
+
 - Agent handoffs are not listed: they steer themselves into a turn that takes
   one and queue only behind a turn that cannot.
 

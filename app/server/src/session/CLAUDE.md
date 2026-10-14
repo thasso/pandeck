@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3328 reason="eleven dense contracts. The newest is residency: a harness idle eviction that disposed its runtime session instead of releasing it would kill a reader's detached view, and a view that never released kept every session opened since boot resident (a 5.9 MB log holds 8.7 MB of heap)." task=session-eviction date=2026-09-29 -->
+<!-- instruction-budget: bytes=3600 reason="eleven dense contracts. The newest is teardown: a store that disposed its harness before closing the runtime run lost a mid-turn outcome, and the provider's default clean end then marked stopped peer work completed. Residency before it: a harness idle eviction that disposed its runtime session instead of releasing it would kill a reader's detached view." task=peer-turn-interruptions date=2026-10-13 -->
 
 # Session subsystem
 
@@ -9,7 +9,9 @@
 - A DETACHED runtime session belongs to its views: attach `retainView`s it and
   detach releases it after a grace. One with a harness bound belongs to that
   harness's store, whose idle eviction calls `releaseHarness`; `disposeSession`
-  is for deletes and would kill a reader's detached view.
+  is for deletes and would kill a reader's detached view. A store tearing a
+  session down calls `closeForTeardown` BEFORE its harness's own dispose: once
+  its events stop, a mid-turn run's default clean end would read as success.
 - Assistant entry `usage` is ONE run's own delta, never a cumulative: harnesses
   convert their cumulative totals through `adapters/nativeEvents.ts`'s
   `perTurnUsage`, and consumers sum entries.

@@ -20,14 +20,33 @@ export class SteerWithdrawnError extends SessionBusyError {
   /**
    * @param uncertain The provider never confirmed the message was dropped
    * unread: it may have been read, so handing it back must say so.
+   * @param stopped The turn ended on an abort someone asked for (a Stop, a
+   * stand-down), not on a failure.
    */
   constructor(
     sessionId: string,
     readonly uncertain = false,
+    readonly stopped = false,
   ) {
     super(sessionId);
     this.name = "SteerWithdrawnError";
     this.message = `Session ${sessionId} ended its turn before reading the steer.`;
+  }
+}
+
+/**
+ * The provider TOOK a steer, and recording its entry failed partway: the
+ * entry may already be on disk (the log persists before its bookkeeping).
+ * Raised once the steer call returns, however its producer handled the
+ * failure inside its acceptance callback — the message was delivered, so it
+ * must never read as unsent.
+ */
+export class SteerEntryFailedError extends Error {
+  constructor(sessionId: string) {
+    super(
+      `Session ${sessionId} took the steer, but recording its entry failed.`,
+    );
+    this.name = "SteerEntryFailedError";
   }
 }
 

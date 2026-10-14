@@ -491,10 +491,23 @@ export class SessionRuntime {
     return this.disposeSession(sessionId);
   }
 
+  /**
+   * A session is about to be torn down: close its open run as a deliberate
+   * end while its outcome can still be told ({@link LiveRuntimeSession.endForTeardown}).
+   * Harness stores call this BEFORE disposing their own session, whose
+   * teardown stops the events the runtime would otherwise learn the end from.
+   */
+  closeForTeardown(sessionId: string): void {
+    this.live.get(sessionId)?.endForTeardown();
+  }
+
   /** Dispose a session's live runtime (unsubscribe + release the adapter). The log is untouched. */
   async disposeSession(sessionId: string): Promise<void> {
     const session = this.live.get(sessionId);
     if (!session) return;
+    // Before the log is evicted and anything unsubscribed: the run's closing
+    // marker and its outcome need both.
+    session.endForTeardown();
     this.live.delete(sessionId);
     this.cancelViewRelease(sessionId);
     this.viewCounts.delete(session);

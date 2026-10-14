@@ -15,6 +15,7 @@ import type {
   CommitDisplay,
   KnowledgeEntryCard,
   PeerPromptCard,
+  PeerPromptInterruption,
   PeerPromptState,
   PushDisplay,
   TaskStatus,
@@ -162,6 +163,20 @@ export function isPeerPromptState(value: unknown): value is PeerPromptState {
   return typeof value === "string" && Object.hasOwn(PEER_PROMPT_STATES, value);
 }
 
+const PEER_PROMPT_INTERRUPTIONS: Record<PeerPromptInterruption, true> = {
+  restart: true,
+  failure: true,
+  stopped: true,
+};
+
+function isPeerPromptInterruption(
+  value: unknown,
+): value is PeerPromptInterruption {
+  return (
+    typeof value === "string" && Object.hasOwn(PEER_PROMPT_INTERRUPTIONS, value)
+  );
+}
+
 /**
  * Validate an untrusted peer-prompt card (a tool payload parsed out of model
  * output, which may be partial, streaming or malformed) into a real
@@ -200,6 +215,9 @@ export function parsePeerPromptCard(value: unknown): PeerPromptCard | null {
       : {}),
     ...(typeof raw.failureReason === "string" && raw.failureReason
       ? { failureReason: raw.failureReason }
+      : {}),
+    ...(isPeerPromptInterruption(raw.interruption)
+      ? { interruption: raw.interruption }
       : {}),
     state: raw.state,
   };

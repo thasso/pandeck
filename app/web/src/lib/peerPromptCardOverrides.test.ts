@@ -40,6 +40,18 @@ describe("applyPeerPromptCardOverride", () => {
     expect(patched.failureReason).toBe("boom");
     expect(patched.message).toBe("hi"); // other fields preserved
   });
+
+  it("carries a Stop and clears it once the request is answered", () => {
+    const stopped = applyPeerPromptCardOverride(card(), {
+      k1: { state: "awaiting_response", interruption: "stopped" },
+    });
+    expect(stopped.interruption).toBe("stopped");
+    const answered = applyPeerPromptCardOverride(stopped, {
+      k1: { state: "replied" },
+    });
+    expect(answered.state).toBe("replied");
+    expect(answered).not.toHaveProperty("interruption");
+  });
 });
 
 describe("applyPeerPromptCardOverridesToMessages", () => {

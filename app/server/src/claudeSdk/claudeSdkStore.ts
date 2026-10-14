@@ -564,6 +564,9 @@ class ClaudeSdkSessionStore {
     sessionStore.remove(id); // tombstone the SDK session's metadata row
     const session = this.sessions.get(id);
     const record = session?.toRecordMeta() ?? this.metaForRemoval(id);
+    // A turn still running ends here, as a deliberate end, while the runtime
+    // can still tell it: disposing the session stops its completion first.
+    sessionRuntime.closeForTeardown(id);
     session?.dispose();
     // Dispose any runtime-backed session bound to it.
     void sessionRuntime.disposeSession(id);

@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   knowledgeEntryCardOf,
+  parsePeerPromptCard,
   toolCardOf,
   toolCardReadsInput,
   toolCardReadsOutput,
@@ -181,5 +182,23 @@ describe("toolCardOf", () => {
       expect(toolCardReadsInput(kind), kind).toBe(false);
       expect(toolCardReadsOutput(kind), kind).toBe(true);
     }
+  });
+});
+
+describe("parsePeerPromptCard", () => {
+  it("keeps a known interruption and drops anything else", () => {
+    const base = { direction: "sent", message: "m", state: "interrupted" };
+    expect(
+      parsePeerPromptCard({ ...base, interruption: "stopped" })?.interruption,
+    ).toBe("stopped");
+    expect(
+      parsePeerPromptCard({ ...base, interruption: "failure" })?.interruption,
+    ).toBe("failure");
+    expect(
+      parsePeerPromptCard({ ...base, interruption: "paused" }),
+    ).not.toHaveProperty("interruption");
+    expect(
+      parsePeerPromptCard({ ...base, interruption: 1 }),
+    ).not.toHaveProperty("interruption");
   });
 });

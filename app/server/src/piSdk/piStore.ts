@@ -927,6 +927,9 @@ class PiSessionStore {
     const ls = this.live.get(key);
     if (!ls) return;
     this.live.delete(key);
+    // A turn still running ends here, as a deliberate end, while the runtime
+    // can still tell it: disposing the pi session stops its events first.
+    sessionRuntime.closeForTeardown(key);
     ls.dispose();
     this.closeToolRuntime(key);
     this.sessionModes.delete(key);

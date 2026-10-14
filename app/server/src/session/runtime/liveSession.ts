@@ -48,8 +48,10 @@ import type {
   TimelineRangeResult,
 } from "../log/store.ts";
 import {
+  InactiveSessionError,
   RunFailedError,
   SessionBusyError,
+  SteerEntryFailedError,
   SteerNotTakenError,
   SteerWithdrawnError,
 } from "./errors.ts";
@@ -78,10 +80,62 @@ export interface RuntimePromptOptions extends PromptOptions {
    * turn (the identity shared with Task 96/99). Not forwarded to the adapter.
    */
   onUserEntry?: (entryId: string) => void;
+  /**
+   * Called once, synchronously, as the turn this prompt OPENED closes —
+   * whichever end closes it — and before the prompt settles. Never for a steer
+   * (it joins a run it does not own: {@link subscribeSessionRunEnded}), a
+   * duplicate, or a prompt refused before its entry was appended. Not
+   * forwarded to the adapter.
+   */
+  onRunEnded?: (outcome: RunOutcome) => void;
   /** Sanitized peer-prompt card recorded on the durable user entry for rendering. */
   peerPrompt?: import("@assistant/shared").PeerPromptCard;
   /** Durable admission keys for every peer message combined into this entry (server-only). */
   peerMessageIds?: string[];
+}
+
+/**
+ * How one durable run ended, as the runtime closed its bracket: the terminal
+ * fact a caller reads instead of whether a prompt resolved or threw. A Stop
+ * resolves a prompt like a finished turn, and a stopped run that kept an
+ * earlier attempt's error rejects like a failed one.
+ */
+export interface RunOutcome {
+  /** The run's durable id (`run.started`). */
+  runId: string;
+  stopReason: "end" | "error" | "aborted";
+  /**
+   * An abort was ASKED of this run — the user's Stop, a coordinator's
+   * stand-down — so how it ended is that abort's doing, an `error` beside it
+   * included. A provider-side abort never sets it, and neither does an abort
+   * that lands after the run's failure was reported: that failure stands.
+   */
+  abortRequested: boolean;
+}
+
+/**
+ * Notified once per durable run as its bracket closes, from whichever end
+ * closes it. For a caller that joined a run it did not open (a steer); the
+ * opener has {@link RuntimePromptOptions.onRunEnded}.
+ */
+const runEndedListeners = new Set<
+  (sessionId: string, outcome: RunOutcome) => void
+>();
+export function subscribeSessionRunEnded(
+  listener: (sessionId: string, outcome: RunOutcome) => void,
+): () => void {
+  runEndedListeners.add(listener);
+  return () => runEndedListeners.delete(listener);
+}
+
+function emitRunEnded(sessionId: string, outcome: RunOutcome): void {
+  for (const listener of runEndedListeners) {
+    try {
+      listener(sessionId, outcome);
+    } catch {
+      /* best-effort */
+    }
+  }
 }
 
 /**
@@ -240,6 +294,9 @@ function emitToolCompleted(sessionId: string): void {
   }
 }
 
+/** How many closed runs' outcomes a session keeps for late answers. */
+const RECENT_OUTCOMES_MAX = 8;
+
 export class LiveRuntimeSession {
   private runState: SnapshotRunState = "idle";
   private readonly streaming = new Map<string, StreamingEntry>();
@@ -250,6 +307,14 @@ export class LiveRuntimeSession {
   private config: SessionConfig = {};
   private availableModels: SessionConfigModel[] | undefined;
   private disposed = false;
+  /**
+   * The session is being torn down (deleted, or its harness released): no
+   * new prompt is taken, the idle edge offers nothing, and a prompt still
+   * waiting on the provider stops waiting — its source is going away.
+   */
+  private tornDown = false;
+  /** Provider waits a teardown ends, each removed as its own wait settles. */
+  private readonly teardownWaiters = new Set<() => void>();
   /**
    * The log cursor when the CURRENT (or most recent) turn began — the boundary a
    * post-turn provider scan is reconciled against, so only that turn is bound and
@@ -282,6 +347,21 @@ export class LiveRuntimeSession {
   private lastClosedProviderRun: ProviderRunId = 0;
   /** An abort was asked of the open turn: how it ends is the abort's doing. */
   private abortRequested = false;
+  /**
+   * The open turn's failure was already reported: how it ended is decided,
+   * and a Stop or teardown abort that lands afterwards does not relabel it.
+   */
+  private turnFailed = false;
+  /** The prompt that opened each still-open run, waiting to hear how it ends. */
+  private readonly runEndWaiters = new Map<
+    string,
+    (outcome: RunOutcome) => void
+  >();
+  /**
+   * The last few closed runs' outcomes, for an answer that arrives after its
+   * run closed (a withdrawn steer). Bounded: only the newest matter.
+   */
+  private readonly recentOutcomes = new Map<string, RunOutcome>();
   /**
    * Why the open turn is running. A visible human steer takes precedence over
    * its earlier trigger: once the user joins a turn, its result is theirs.
@@ -367,6 +447,7 @@ export class LiveRuntimeSession {
     this.retryUnrecordedFailures();
     this.turnProviderRun = undefined;
     this.abortRequested = false;
+    this.turnFailed = false;
     this.turnStartSeq = this.log.seqCursor;
     this.turnPromptEntryIds = new Set();
     this.turnOrigin = origin;
@@ -390,8 +471,17 @@ export class LiveRuntimeSession {
    * prompt's own settlement — because not every adapter emits both. The
    * `turnOpen` guard is what keeps the closing marker single when both fire;
    * `only` keeps a settlement from closing a turn other than its own.
+   *
+   * The ONE place a run's {@link RunOutcome} is decided, so its opener and
+   * every {@link subscribeSessionRunEnded} listener hear the same answer, once.
+   * `abortRequested` adds an emitter's own word that the abort was asked for
+   * to the runtime's.
    */
-  private endTurn(outcome: "ended" | "aborted" = "ended", only?: string): void {
+  private endTurn(
+    stopReason: RunOutcome["stopReason"] = "end",
+    only?: string,
+    abortRequested = false,
+  ): void {
     if (!this.turnOpen) return;
     if (only !== undefined && this.turnRunId !== only) return;
     this.turnOpen = false;
@@ -400,9 +490,33 @@ export class LiveRuntimeSession {
     if (!runId) return;
     this.retryUnrecordedFailures();
     this.log.append({
-      type: outcome === "aborted" ? "run.aborted" : "run.ended",
+      type: stopReason === "aborted" ? "run.aborted" : "run.ended",
       runId,
     });
+    const outcome: RunOutcome = {
+      runId,
+      stopReason,
+      abortRequested:
+        !this.turnFailed && (this.abortRequested || abortRequested),
+    };
+    this.recentOutcomes.set(runId, outcome);
+    for (const old of this.recentOutcomes.keys()) {
+      if (this.recentOutcomes.size <= RECENT_OUTCOMES_MAX) break;
+      this.recentOutcomes.delete(old);
+    }
+    const waiter = this.runEndWaiters.get(runId);
+    this.runEndWaiters.delete(runId);
+    try {
+      waiter?.(outcome);
+    } catch {
+      /* best-effort: a waiter must not break the run's close */
+    }
+    emitRunEnded(this.sessionId, outcome);
+  }
+
+  /** The open turn's run id — the run a steer appended now joins. */
+  get currentRunId(): string | undefined {
+    return this.openRunId();
   }
 
   /** The open turn's run id, if a turn is open. */
@@ -440,6 +554,7 @@ export class LiveRuntimeSession {
     failure: RunFailureFacts | undefined,
   ): void {
     if (runId === undefined || this.abortRequested) return;
+    if (this.openRunId() === runId) this.turnFailed = true;
     if (this.recordedFailureRunId === runId) return;
     this.unrecordedFailures = this.unrecordedFailures.filter(
       (r) => r.runId !== runId,
@@ -500,7 +615,7 @@ export class LiveRuntimeSession {
     if (running) this.progress.start();
     // A running→idle transition is the browser-independent trigger to drain any
     // peer prompts queued behind this turn, whatever drove it.
-    if (next === "idle") {
+    if (next === "idle" && !this.tornDown) {
       try {
         idleHook?.(this.sessionId);
       } catch {
@@ -530,10 +645,12 @@ export class LiveRuntimeSession {
       memoryBlock,
       contextBlock,
       onUserEntry,
+      onRunEnded,
       peerPrompt: _peerPrompt,
       peerMessageIds: _peerMessageIds,
       ...adapterOpts
     } = options;
+    if (this.tornDown) throw new InactiveSessionError(this.sessionId);
     if (clientRequestId && this.handledRequestIds.has(clientRequestId)) return; // dup (precedes busy gate)
     const steering =
       this.runState === "running" &&
@@ -611,24 +728,75 @@ export class LiveRuntimeSession {
       // Recorded at the provider's own acceptance, inside its run: the entry
       // joins that run (a follow-up continues it) and never opens a bracket.
       let recorded = false;
+      // The run this steer was aimed at, so a withdrawal can say whether that
+      // run was stopped on purpose.
+      const aimedRun = this.openRunId();
+      // An acceptance the provider had already queued can still arrive after
+      // that run closed — a teardown, or the run ending first. The run it was
+      // aimed at is over, so nothing is appended after its close; the message
+      // may have been read, which the caller is told.
+      let acceptedLate = false;
+      // The provider took it and its entry write threw: delivered, whatever
+      // the producer does with the exception inside its own callback.
+      let entryFailed = false;
       const record = (delivery: PromptDelivery): void => {
-        if (recorded) return;
+        if (recorded || acceptedLate) return;
+        if (
+          this.tornDown ||
+          (aimedRun !== undefined && this.openRunId() !== aimedRun)
+        ) {
+          acceptedLate = true;
+          return;
+        }
         recorded = true;
-        const entryId = this.appendUserEntry(text, options, delivery);
+        let entryId: string;
+        try {
+          entryId = this.appendUserEntry(text, options, delivery);
+        } catch (error) {
+          entryFailed = true;
+          throw error;
+        }
         if (onUserEntry) onUserEntry(entryId);
         if (this.turnOpen) this.turnPromptEntryIds.add(entryId);
       };
       let result: AgentRunResult;
       try {
-        result = await this.adapter.prompt(modelText, {
-          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-          ...adapterOpts,
-          steer: true,
-          onSteerAccepted: record,
-        });
+        // A teardown ends the wait: whatever became of the message is no
+        // longer known, so it reads as possibly read and is never re-sent.
+        result = await this.untilTeardown(
+          this.adapter.prompt(modelText, {
+            ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+            ...adapterOpts,
+            steer: true,
+            onSteerAccepted: record,
+          }),
+          {
+            stopReason: "end",
+            steerWithdrawn: true,
+            steerUncertain: true,
+          },
+        );
       } catch (error) {
+        if (entryFailed) throw new SteerEntryFailedError(this.sessionId);
         if (!recorded) releaseKey();
+        // Taken after its run closed, then the provider failed: it may still
+        // have been read, which outranks how the provider ended.
+        if (acceptedLate && !recorded)
+          throw new SteerWithdrawnError(
+            this.sessionId,
+            true,
+            this.abortWasRequested(aimedRun),
+          );
         throw error;
+      }
+      if (entryFailed) throw new SteerEntryFailedError(this.sessionId);
+      if (acceptedLate && !recorded) {
+        releaseKey();
+        throw new SteerWithdrawnError(
+          this.sessionId,
+          true,
+          this.abortWasRequested(aimedRun),
+        );
       }
       if (result.stopReason === "error" && !recorded) {
         releaseKey();
@@ -643,10 +811,11 @@ export class LiveRuntimeSession {
       // lets a handoff fall back to its queue instead of losing the decision.
       if (!recorded) {
         releaseKey();
-        throw result.steerWithdrawn
+        throw result.steerWithdrawn || acceptedLate
           ? new SteerWithdrawnError(
               this.sessionId,
-              result.steerUncertain === true,
+              result.steerUncertain === true || acceptedLate,
+              this.abortWasRequested(aimedRun),
             )
           : new SessionBusyError(this.sessionId);
       }
@@ -660,11 +829,26 @@ export class LiveRuntimeSession {
     // The run this prompt belongs to. A late result of it must neither fail
     // nor close a turn that opened after it.
     const ownRunId = this.turnRunId;
-    const entryId = this.appendUserEntry(
-      text,
-      options,
-      steering ? "steer" : undefined,
-    );
+    let entryId: string;
+    try {
+      entryId = this.appendUserEntry(
+        text,
+        options,
+        steering ? "steer" : undefined,
+      );
+    } catch (error) {
+      // The entry may be on disk already — the append persists it before its
+      // own bookkeeping — but the provider never got it: this prompt's run
+      // ends here, failed, rather than stay open for the next prompt to join.
+      if (!steering) {
+        try {
+          this.endTurn("error", ownRunId);
+        } catch {
+          /* the log refusing again leaves the bracket for boot to see */
+        }
+      }
+      throw error;
+    }
     if (onUserEntry) onUserEntry(entryId);
 
     if (steering) {
@@ -672,11 +856,15 @@ export class LiveRuntimeSession {
       // this call rejects (or reports an error) when it did not, and the durable
       // entry then stays out of the turn's prompt set so no post-turn scan can
       // pair it with a native prompt that belongs to an earlier turn.
-      const result = await this.adapter.prompt(modelText, {
-        ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-        ...adapterOpts,
-        steer: true,
-      });
+      // Already in the log; a teardown closed its run, which says how it went.
+      const result = await this.untilTeardown(
+        this.adapter.prompt(modelText, {
+          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+          ...adapterOpts,
+          steer: true,
+        }),
+        { stopReason: "end" },
+      );
       if (result.stopReason === "error")
         throw new RunFailedError(
           result.errorMessage ?? "Unknown provider error",
@@ -689,14 +877,24 @@ export class LiveRuntimeSession {
     // The turn's own prompt. A provider that refuses it throws below and no scan
     // ever arrives for this turn, so claiming it here cannot mis-bind anything.
     this.turnPromptEntryIds.add(entryId);
+    // Only the prompt that opened the run hears how it ends; a steer joins.
+    if (ownRunId && onRunEnded) this.runEndWaiters.set(ownRunId, onRunEnded);
     this.setRunning(true);
+    // How this prompt saw its run end; a throw is a failed run.
+    let settled: RunOutcome["stopReason"] = "error";
     try {
       let result: AgentRunResult;
       try {
-        result = await this.adapter.prompt(modelText, {
-          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-          ...adapterOpts,
-        });
+        // A teardown ends the wait: the run is closed (`endForTeardown`) and
+        // whatever the provider answers afterwards — a default clean end
+        // included — is no evidence of how it went.
+        result = await this.untilTeardown(
+          this.adapter.prompt(modelText, {
+            ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+            ...adapterOpts,
+          }),
+          { stopReason: "aborted" },
+        );
       } catch (error) {
         // The prompt is already in the log, so a harness that throws instead
         // of answering ended this turn as surely as a failed run does.
@@ -707,6 +905,7 @@ export class LiveRuntimeSession {
         );
         throw error;
       }
+      settled = result.stopReason;
       if (result.stopReason === "error") {
         // An adapter that resolves without emitting its completion event.
         this.reportRunFailure(
@@ -720,7 +919,9 @@ export class LiveRuntimeSession {
         );
       }
     } finally {
-      this.endTurn("ended", ownRunId);
+      // A no-op when the completion event already closed the run; otherwise
+      // the adapter's own answer is how it ended.
+      this.endTurn(settled, ownRunId);
       // A turn that opened after this one ended is not this prompt's to idle.
       if (!this.turnOpen) this.setRunning(false);
     }
@@ -795,8 +996,18 @@ export class LiveRuntimeSession {
   }
 
   abort(): void | Promise<void> {
-    if (this.turnOpen) this.abortRequested = true;
+    // A turn already reported failed stays failed: this abort only tears it
+    // down, and its outcome must not read as the Stop's doing.
+    if (this.turnOpen && !this.turnFailed) this.abortRequested = true;
     return this.adapter.abort();
+  }
+
+  /** Whether an abort was asked of `runId`, open or recently closed. */
+  private abortWasRequested(runId: string | undefined): boolean {
+    if (runId === undefined) return false;
+    if (this.openRunId() === runId)
+      return this.abortRequested && !this.turnFailed;
+    return this.recentOutcomes.get(runId)?.abortRequested === true;
   }
 
   /* ---------------------------- ingestion -------------------------------- */
@@ -1018,7 +1229,11 @@ export class LiveRuntimeSession {
         // turns; prompt()'s finally also calls this, so the normal path remains
         // idempotent. This is the only end that knows HOW the run stopped.
         const origin = this.turnOrigin;
-        this.endTurn(event.stopReason === "aborted" ? "aborted" : "ended");
+        this.endTurn(
+          event.stopReason,
+          undefined,
+          event.abortRequested === true,
+        );
         this.setRunning(false);
         emitRunCompleted(this.sessionId, event.stopReason, origin);
         return;
@@ -1261,8 +1476,48 @@ export class LiveRuntimeSession {
 
   /* ----------------------------- lifecycle ------------------------------- */
 
+  /**
+   * The session is going away — deleted, or its harness released — while its
+   * provider may still be mid-turn. Called BEFORE anything stops observing it
+   * (the harness store's own dispose, the runtime's unsubscribe), because
+   * after that no completion can arrive to say how the run ended.
+   *
+   * An open run closes here as an end someone ASKED for: its opener and every
+   * {@link subscribeSessionRunEnded} listener hear it once, and a failure the
+   * run already reported keeps it a failure. A prompt still waiting on the
+   * provider stops waiting, no new prompt is taken, and the idle edge offers
+   * no queued work to a session that is leaving. Idempotent.
+   */
+  endForTeardown(): void {
+    if (this.tornDown) return;
+    this.tornDown = true;
+    if (this.turnOpen) {
+      this.streaming.clear();
+      this.endTurn(this.turnFailed ? "error" : "aborted", undefined, true);
+    }
+    this.setRunning(false);
+    for (const wake of [...this.teardownWaiters]) wake();
+    this.teardownWaiters.clear();
+  }
+
+  /** `work`'s answer, or `onTeardown` if the session is torn down first. */
+  private untilTeardown(
+    work: Promise<AgentRunResult>,
+    onTeardown: AgentRunResult,
+  ): Promise<AgentRunResult> {
+    let wake: () => void = () => {};
+    const torn = new Promise<AgentRunResult>((resolve) => {
+      wake = () => resolve(onTeardown);
+    });
+    this.teardownWaiters.add(wake);
+    return Promise.race([work, torn]).finally(() =>
+      this.teardownWaiters.delete(wake),
+    );
+  }
+
   dispose(): void | Promise<void> {
     if (this.disposed) return;
+    this.endForTeardown();
     this.disposed = true;
     this.progress.dispose();
     this.unsubscribeAdapter();

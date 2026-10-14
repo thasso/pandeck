@@ -19,9 +19,11 @@ function enqueue(
     sender: string;
     responseRequested: boolean;
     expiresAt: number;
+    /** Share one conversation, so a FIFO batch claims the rows together. */
+    conversation: { conversationId: string; chainId: string };
   }> = {},
 ) {
-  const { conversationId, chainId } = conv();
+  const { conversationId, chainId } = over.conversation ?? conv();
   return store.enqueue({
     conversationId,
     chainId,
@@ -588,15 +590,15 @@ describe("peerPromptStore", () => {
     );
   });
 
-  it("allows retryable/interrupted transitions from acknowledged (busy-race / crash)", () => {
+  it("never retries an admitted row, but interrupts one (crash)", () => {
     const m = enqueue(`r-${seq++}`);
     store.claimNext(m.recipientSessionId, "d", 1000);
     store.markAdmitted(m.id);
     store.markAcknowledged(m.id);
-    assert.equal(
-      store.markRetryable(m.id, "provider failed", 5000)?.status,
-      "retryable_failed",
-    );
+    // It reached the recipient's log: whatever its turn did, it is not sent again.
+    assert.equal(store.markRetryable(m.id, "provider failed", 5000), undefined);
+    assert.equal(store.returnHeldToQueue(m.id), undefined);
+    assert.equal(store.getById(m.id)?.status, "acknowledged");
     const m2 = enqueue(`r-${seq++}`);
     store.claimNext(m2.recipientSessionId, "d", 1000);
     store.markAdmitted(m2.id);
@@ -610,13 +612,9 @@ describe("peerPromptStore", () => {
   it("requeues due retries and leaves not-yet-due rows alone", () => {
     const m1 = enqueue(`r-${seq++}`);
     store.claimNext(m1.recipientSessionId, "d", 1000);
-    store.markAdmitted(m1.id);
-    store.markAcknowledged(m1.id);
     store.markRetryable(m1.id, "boom", -1); // already due (backoff in the past)
     const m2 = enqueue(`r-${seq++}`);
     store.claimNext(m2.recipientSessionId, "d", 1000);
-    store.markAdmitted(m2.id);
-    store.markAcknowledged(m2.id);
     store.markRetryable(m2.id, "boom", 60_000); // not due yet
 
     // The store is shared across this file: a retry an earlier test scheduled
@@ -819,5 +817,159 @@ describe("peerPromptStore", () => {
 
     const members = store.listByBatchHead(recipient, m1.id);
     assert.deepEqual(members.map((m) => m.id).sort(), [m1.id, m2.id].sort());
+  });
+
+  it("reserves a claimed batch before its append only while the claim holds every row", () => {
+    const recipient = `r-${seq++}`;
+    const conversation = conv();
+    const head = enqueue(recipient, { conversation });
+    const second = enqueue(recipient, { conversation });
+    const claimed = store.claimBatch(recipient, "d", 60_000, 5, 10_000);
+    assert.deepEqual(
+      claimed.map((m) => m.id),
+      [head.id, second.id],
+    );
+    const claims = claimed.map((m) => ({ id: m.id, attempts: m.attempts }));
+
+    // The sweep put both back after the lease ran out, and a newer claim took
+    // the second: the batch is no longer this delivery's — none of it.
+    store.requeueExpiredLeases(Date.now() + 120_000);
+    const reclaimed = store.claimOne(second.id, "send-now")!;
+    assert.equal(reclaimed.attempts, claimed[1]!.attempts + 1);
+    assert.equal(store.reserveAdmission(claims, head.id), false);
+    assert.equal(store.getById(head.id)?.status, "queued", "nothing moved");
+    assert.deepEqual(store.recordAdmission(claims, head.id), []);
+    // An older claim's failure cannot requeue or fail the newer claim's row.
+    assert.equal(
+      store.markRetryable(second.id, "late", 0, Date.now(), {
+        attempts: claimed[1]!.attempts,
+      }),
+      undefined,
+    );
+    assert.equal(
+      store.returnHeldToQueue(second.id, { attempts: claimed[1]!.attempts }),
+      undefined,
+    );
+    assert.equal(store.getById(second.id)?.status, "dispatching");
+
+    // A batch whose claim holds: reserved against the sweep, then admitted.
+    const fresh = enqueue(`r-${seq++}`);
+    const [only] = store.claimBatch(fresh.recipientSessionId, "d", 1, 5, 99);
+    const claim = [{ id: only!.id, attempts: only!.attempts }];
+    assert.equal(store.reserveAdmission(claim, only!.id), true);
+    assert.equal(store.getById(only!.id)?.leaseExpiresAt, undefined);
+    assert.deepEqual(
+      store
+        .requeueExpiredLeases(Date.now() + 120_000)
+        .filter((m) => m.id === only!.id),
+      [],
+      "a reserved row is never swept back to the queue",
+    );
+    assert.equal(store.cancelOne(only!.id, "withdrawn"), undefined);
+    // Reserved, with its batch: boot never puts it back to be sent again.
+    assert.ok(store.getById(only!.id)?.reservedAt !== undefined);
+    assert.equal(store.getById(only!.id)?.batchHeadId, only!.id);
+    assert.deepEqual(
+      store.applyRecoveryDecisions(
+        [{ id: only!.id, toStatus: "queued" }],
+        "boot",
+        "restart",
+      ),
+      [],
+    );
+    assert.equal(store.getById(only!.id)?.status, "dispatching");
+    assert.deepEqual(store.recordAdmission(claim, only!.id), [only!.id]);
+    const row = store.getById(only!.id)!;
+    assert.equal(row.status, "acknowledged");
+    assert.equal(row.batchHeadId, only!.id);
+    assert.ok(row.acceptedAt !== undefined && row.acknowledgedAt !== undefined);
+  });
+
+  it("records a stopped turn without completing it, and keeps a requested reply owed", () => {
+    const recipient = `r-${seq++}`;
+    const sender = `s-${seq++}`;
+    const conversation = conv();
+    const plain = enqueue(recipient, { sender, conversation });
+    const asked = enqueue(recipient, {
+      sender,
+      conversation,
+      responseRequested: true,
+      expiresAt: Date.now() + 60_000,
+    });
+    const answered = enqueue(recipient, {
+      sender,
+      conversation,
+      responseRequested: true,
+    });
+    const claimed = store.claimBatch(recipient, "d", 60_000, 5, 10_000);
+    store.recordAdmission(
+      claimed.map((m) => ({ id: m.id, attempts: m.attempts })),
+      plain.id,
+    );
+    // An answer sent before the Stop is kept.
+    store.markReplied(answered.id, "reply-1");
+
+    const deadline = store.getById(asked.id)!.expiresAt;
+    for (const id of [plain.id, asked.id, answered.id]) store.markStopped(id);
+
+    const plainRow = store.getById(plain.id)!;
+    assert.equal(plainRow.status, "interrupted");
+    assert.equal(plainRow.interruptionKind, "stopped");
+    assert.equal(plainRow.completedAt, undefined);
+    const askedRow = store.getById(asked.id)!;
+    assert.equal(askedRow.status, "awaiting_response");
+    assert.equal(askedRow.interruptionKind, "stopped");
+    assert.equal(askedRow.failureReason, undefined, "nothing failed");
+    assert.equal(askedRow.completedAt, undefined);
+    assert.equal(askedRow.expiresAt, deadline, "the Stop renews no deadline");
+    assert.equal(store.getById(answered.id)?.status, "replied");
+    assert.equal(store.getById(answered.id)?.interruptionKind, undefined);
+
+    // Owed, not announced: no notice, and a later answer still correlates.
+    const owing = store.interruptedOwingSenderNotice(sender).map((m) => m.id);
+    assert.deepEqual(owing, []);
+    assert.ok(!store.senderIdsOwingNotice().includes(sender));
+    assert.deepEqual(
+      store.unrepliedRequestsBetween(sender, recipient).map((m) => m.id),
+      [asked.id],
+    );
+    assert.equal(store.outstandingResponseRequestCount(sender), 1);
+    // The answer settles it: no longer owed, the Stop kept only as history.
+    const replied = store.markReplied(asked.id, "reply-2")!;
+    assert.equal(replied.status, "replied");
+    assert.equal(replied.interruptionKind, "stopped");
+    assert.equal(store.outstandingResponseRequestCount(sender), 0);
+    // A second, late outcome for the same turn changes nothing.
+    assert.equal(store.markCompleted(plain.id), undefined);
+    assert.equal(store.markInterrupted(plain.id, "late", "failure"), undefined);
+    assert.equal(store.getById(plain.id)?.interruptionKind, "stopped");
+  });
+
+  it("a row known unsent goes back unreserved; one never reserved is requeued at boot", () => {
+    for (const putBack of ["held", "retry", "release"] as const) {
+      const m = enqueue(`r-${seq++}`);
+      const [claimed] = store.claimBatch(m.recipientSessionId, "d", 1, 5, 99);
+      const claim = { attempts: claimed!.attempts };
+      assert.ok(store.reserveAdmission([{ id: m.id, ...claim }], m.id));
+      if (putBack === "held") store.returnHeldToQueue(m.id, claim);
+      else if (putBack === "retry")
+        store.markRetryable(m.id, "busy", 0, Date.now(), claim);
+      else store.releaseToQueue(m.id, claim);
+      const row = store.getById(m.id)!;
+      assert.equal(row.reservedAt, undefined, putBack);
+      assert.equal(row.batchHeadId, undefined, putBack);
+    }
+    const unreserved = enqueue(`r-${seq++}`);
+    store.claimBatch(unreserved.recipientSessionId, "crashed", 60_000, 5, 99);
+    assert.deepEqual(
+      store
+        .applyRecoveryDecisions(
+          [{ id: unreserved.id, toStatus: "queued" }],
+          "boot",
+          "restart",
+        )
+        .map((r) => r.status),
+      ["queued"],
+    );
   });
 });
