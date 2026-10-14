@@ -1,13 +1,23 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { DisplayBlock, TaskSaveRequest } from "@assistant/shared";
+import type {
+  DisplayBlock,
+  TaskSaveRequest,
+  TaskSummary,
+} from "@assistant/shared";
 import { parseTaskManagePayload } from "@assistant/shared/toolCards";
 import {
   TaskManageToolCard,
   changeSummary,
   changedOperationKinds,
+  recordedSuggestionState,
 } from "./TaskManageToolCard.tsx";
+import {
+  TaskLiveSourceProvider,
+  type TaskLiveSource,
+} from "./TaskLiveState.tsx";
 import { acceptStatusSuggestionSave } from "../lib/backlogTree.ts";
+import type { TaskStatusRecord } from "../hooks/useAssistant.ts";
 import { renderToolBlock, toolBlockIsVisible } from "./tools/registry.tsx";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
@@ -211,6 +221,102 @@ describe("TaskManageToolCard", () => {
       clearStatusSuggestion: true,
     });
     expect("title" in sent[0]!).toBe(false);
+  });
+});
+
+describe("a recorded suggestion against the live Task", () => {
+  const recorded = { to: "done", at: 5 } as const;
+  function live(fields: Partial<TaskStatusRecord>): TaskStatusRecord {
+    return { status: "todo", updatedAt: 6, ...fields };
+  }
+  function renderWithLive(
+    statuses: TaskLiveSource["statuses"],
+    listed: TaskSummary[] = [],
+  ): string {
+    return renderToStaticMarkup(
+      <TaskLiveSourceProvider
+        source={{
+          statuses,
+          listed: new Map(listed.map((task) => [task.id, task])),
+          connected: true,
+          request: () => {},
+        }}
+      >
+        <TaskManageToolCard
+          block={suggestionBlock}
+          onApplyTaskStatusSuggestion={() => {}}
+        />
+      </TaskLiveSourceProvider>,
+    );
+  }
+
+  it("reads what the Task says now", () => {
+    expect(recordedSuggestionState(recorded, undefined)).toBe("unknown");
+    expect(recordedSuggestionState(recorded, null)).toBe("settled");
+    expect(
+      recordedSuggestionState(recorded, live({ statusSuggestion: recorded })),
+    ).toBe("pending");
+    expect(recordedSuggestionState(recorded, live({ status: "done" }))).toBe(
+      "accepted",
+    );
+    // Dismissed: the Task stayed put and the claim is gone.
+    expect(recordedSuggestionState(recorded, live({}))).toBe("settled");
+  });
+
+  it("settles when a LATER claim with the same target replaced it", () => {
+    const later = { to: "done", at: 10, reason: "new work" } as const;
+    expect(
+      recordedSuggestionState(recorded, live({ statusSuggestion: later })),
+    ).toBe("settled");
+    const html = renderWithLive({ "297": live({ statusSuggestion: later }) });
+    expect(html).not.toContain("Confirm done");
+    // A payload too old to carry `at` can only match on the target.
+    expect(
+      recordedSuggestionState(
+        { to: "done", at: 0 },
+        live({ statusSuggestion: later }),
+      ),
+    ).toBe("pending");
+  });
+
+  it("no longer asks once the Task was confirmed, e.g. after a reload", () => {
+    const html = renderWithLive({ "297": live({ status: "done" }) });
+    expect(html).not.toContain("Confirm done");
+    expect(html).toContain("Confirmed done");
+  });
+
+  it("drops the question for a dismissed suggestion or a deleted Task", () => {
+    for (const record of [live({}), null]) {
+      const html = renderWithLive({ "297": record });
+      expect(html).not.toContain("Confirm done");
+      expect(html).not.toContain("says done");
+    }
+  });
+
+  it("takes the newer of its own read and the Backlog summary", () => {
+    const summary = (status: "todo" | "done", updatedAt: number) =>
+      ({
+        id: "297",
+        title: "Render Task mutations",
+        status,
+        updatedAt,
+      }) as TaskSummary;
+    const read = live({ statusSuggestion: recorded });
+    expect(renderWithLive({ "297": read }, [summary("done", 9)])).toContain(
+      "Confirmed done",
+    );
+    // A cached list older than the read says nothing new.
+    expect(renderWithLive({ "297": read }, [summary("done", 2)])).toContain(
+      "Confirm done",
+    );
+  });
+
+  it("still asks while the Task waits for the answer", () => {
+    expect(
+      renderWithLive({ "297": live({ statusSuggestion: recorded }) }),
+    ).toContain("Confirm done");
+    // Before the live state arrives, the card shows what it recorded.
+    expect(renderWithLive({})).toContain("Confirm done");
   });
 });
 

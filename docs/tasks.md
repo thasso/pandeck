@@ -165,6 +165,15 @@ Status is OBSERVED, not reported (`224be3de`). The rules follow from that:
   ordinary user save and never resumes a session, and it carries no title —
   confirming a status is not a rename, and the transcript's copy of the title is
   as old as the mutation.
+- The transcript card's copy of the suggestion is just as old, so the card reads
+  the Task (`getTask`) on mount, on every reconnect, and when the Task leaves
+  the live list (a `delete` event or digest catch-up), keeping the result in the
+  client's uncapped `taskStatuses` record rather than the bounded body cache. It
+  shows the newest of that record and the Backlog and session summaries the tab
+  holds, ignoring any copy older than the claim. Confirmed shows as confirmed;
+  dismissed, deleted, or replaced by a later claim (a different `at`, even with
+  the same target) drops the question. Only until a read answers — or when the
+  server refused it — does the recorded payload decide.
 
 ## What a Task-attached session is given
 

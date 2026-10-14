@@ -1,15 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ClipboardList, Undo2 } from "lucide-react";
 import type {
   DisplayBlock,
   TaskStatus,
   TaskStatusSuggestion,
+  TaskSummary,
 } from "@assistant/shared";
 import {
   parseTaskManagePayload,
   type ChangedTaskPayload,
 } from "@assistant/shared/toolCards";
 import { pendingStatusSuggestion } from "../lib/backlogTree.ts";
+import type { TaskStatusRecord } from "../hooks/useAssistant.ts";
+import { useTaskLiveSource } from "./TaskLiveState.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TASK_STATUS_LABEL, TaskStatusIcon } from "./TaskStatusIcon.tsx";
 import { NoticeList } from "./tools/NoticeList.tsx";
@@ -96,6 +99,36 @@ export function changeSummary(
 }
 
 /**
+ * Where the suggestion this card RECORDED stands now, given the Task's live
+ * state: `unknown` until that state arrives (the card shows what it recorded),
+ * `pending` while the Task still waits for the same answer, `accepted` once its
+ * status is where the suggestion pointed, and `settled` when it was dismissed,
+ * overtaken, or the Task is gone — no longer a question this card can answer.
+ *
+ * "The same answer" is the same CLAIM, not just the same target: a later agent
+ * saying `done` again is a new question with its own reason, and answering it
+ * from this card would answer something the user never read here. `at` tells
+ * the two apart (a retried write keeps it); a payload without one matches on
+ * the target alone.
+ */
+export function recordedSuggestionState(
+  recorded: TaskStatusSuggestion,
+  live: LiveTask | null | undefined,
+): "unknown" | "pending" | "accepted" | "settled" {
+  if (live === undefined) return "unknown";
+  if (live === null) return "settled";
+  const pending = pendingStatusSuggestion(live);
+  if (
+    pending?.to === recorded.to &&
+    (recorded.at === 0 || pending.at === recorded.at)
+  )
+    return "pending";
+  return live.status === recorded.to ? "accepted" : "settled";
+}
+
+type LiveTask = Pick<TaskSummary, "status" | "statusSuggestion">;
+
+/**
  * @component TaskManageToolCard
  * @purpose What an agent just did to the user's Backlog, in band: the Tasks it
  *   created or changed as chips that open them, and any status it suggested with
@@ -115,9 +148,9 @@ export function TaskManageToolCard({
   onApplyTaskStatusSuggestion?:
     ((task: { id: string; status: TaskStatus }) => void) | undefined;
 }) {
-  // Answered LOCALLY: the transcript has no live Backlog subscription, so the
-  // recorded payload cannot learn that the suggestion is resolved. Re-confirming
-  // after a reload is a no-op save, not a second change.
+  // Answered locally FIRST, so the button turns over on the click rather than
+  // on the server's reply; after a reload the row learns the answer from the
+  // Task's live state (`TaskLiveState.tsx`).
   const [confirmed, setConfirmed] = useState<Record<string, TaskStatus>>({});
   const payload = parseTaskManagePayload(block.output);
   if (!payload) return null;
@@ -178,15 +211,20 @@ function TaskRow({
   // The ONE rule for "still waiting for an answer" (`backlogTree.ts`): a
   // suggestion the Task's status already satisfies is provenance, not a
   // question, so it gets no amber glyph and no button.
-  const suggestion = pendingStatusSuggestion(task);
-  const status = confirmedTo ?? task.status;
+  const recorded = pendingStatusSuggestion(task);
+  const live = useLiveTask(task.id, recorded);
+  const answer = recorded ? recordedSuggestionState(recorded, live) : "settled";
+  const suggestion = answer === "settled" ? undefined : recorded;
+  const answeredTo =
+    confirmedTo ?? (answer === "accepted" ? recorded?.to : undefined);
+  const status = confirmedTo ?? live?.status ?? task.status;
   return (
     <li className="flex min-w-0 flex-col gap-0.5">
       <span className="flex min-w-0 items-center gap-1.5">
         <TaskStatusIcon
           status={status}
           size={14}
-          claimed={Boolean(suggestion) && !confirmedTo}
+          claimed={Boolean(suggestion) && !answeredTo}
         />
         <TaskChip id={task.id} label={task.title} onOpenTask={onOpenTask} />
         {summary ? (
@@ -199,11 +237,53 @@ function TaskRow({
         <SuggestionRow
           suggestion={suggestion}
           title={task.title}
-          confirmed={Boolean(confirmedTo)}
+          confirmed={Boolean(answeredTo)}
           onConfirm={onConfirm}
         />
       ) : null}
     </li>
+  );
+}
+
+/**
+ * The Task's current state while this row has a recorded question to settle:
+ * the newest of what this tab last read and the summaries it holds, ignoring
+ * any copy older than the claim itself — that copy predates the question and
+ * cannot have answered it.
+ *
+ * A record is a last-known value, so the row reads the Task once per mount and
+ * once per connection, and again whenever its record is dropped (the Task left
+ * the live projection). Reads are deduped in flight; a refused one waits for the next
+ * connection rather than retrying in a loop, and no record is ever evicted, so
+ * nothing can read in a ring.
+ */
+function useLiveTask(
+  taskId: string,
+  recorded: TaskStatusSuggestion | undefined,
+): LiveTask | null | undefined {
+  const source = useTaskLiveSource();
+  const wanted = recorded !== undefined;
+  const record = wanted ? source?.statuses[taskId] : undefined;
+  const known = record !== undefined;
+  const listed = wanted ? source?.listed.get(taskId) : undefined;
+  const connected = source?.connected ?? false;
+  const request = source?.request;
+  useEffect(() => {
+    if (wanted && connected && request) request(taskId);
+  }, [wanted, connected, request, taskId]);
+  useEffect(() => {
+    if (wanted && connected && !known && request) request(taskId);
+  }, [wanted, connected, known, request, taskId]);
+  if (record === null) return null;
+  const notBefore = recorded?.at ?? 0;
+  const candidates = [record, listed].filter(
+    (copy): copy is TaskStatusRecord =>
+      copy !== undefined && copy.updatedAt >= notBefore,
+  );
+  return candidates.reduce<TaskStatusRecord | undefined>(
+    (newest, copy) =>
+      !newest || copy.updatedAt > newest.updatedAt ? copy : newest,
+    undefined,
   );
 }
 
