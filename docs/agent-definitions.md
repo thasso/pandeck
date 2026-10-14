@@ -170,6 +170,10 @@ deferred catalog group (`agents`) for the `assistant`, `personal-assistant`,
 `developer`, and `workshop` personas. Reads are `sideEffects: "none"` and
 mutations `"local"`, so Plan mode exposes only the reads. Every mutation needs a
 reason, may name a Task, and is one commit with `Agent-*` provenance trailers.
+Every library tool, `skill_*` included, checks its arguments against the schema
+it declares before doing anything (`withCheckedArguments` in
+`tools/library/libraryTools.ts`): not every adapter enforces the schema, and a
+wrong shape is refused rather than coerced into the file.
 
 `agent_create` takes the definition as fields (`persona`, `model`, `effort`,
 `denyTools`, `skills`, `body`) and renders `AGENT.md` deterministically

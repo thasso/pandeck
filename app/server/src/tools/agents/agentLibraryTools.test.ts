@@ -146,11 +146,54 @@ describe("agent_create", () => {
     ] as const) {
       await assert.rejects(
         tool("agent_create").execute({ ...definition, [field]: value }, ctx()),
-        new RegExp(`${field} must be a list of names`),
+        new RegExp(`Invalid arguments for agent_create: /${field}`),
       );
     }
     assert.equal(approvalsForSession(sessionId).length, cards);
     assert.equal(existsSync(manifest()), false);
+  });
+
+  test("a persona or effort outside its enum is refused before any card", async () => {
+    const cards = approvalsForSession(sessionId).length;
+    for (const patch of [
+      { persona: "developer\nskills: [x]" },
+      { effort: "high\nskills: [x]" },
+    ]) {
+      await assert.rejects(
+        tool("agent_create").execute({ ...definition, ...patch }, ctx()),
+        /Invalid arguments for agent_create/,
+      );
+    }
+    assert.equal(approvalsForSession(sessionId).length, cards);
+  });
+
+  test("an edit without a string newText is refused, not written as text", async () => {
+    await createApproved();
+    const before = readFileSync(manifest(), "utf8");
+    for (const edit of [
+      { oldText: "You are a test reviewer." },
+      { oldText: "You are a test reviewer.", newText: 7 },
+    ]) {
+      await assert.rejects(
+        tool("agent_edit").execute(
+          { name: "test-reviewer", edits: [edit], reason: "Break it" },
+          ctx(),
+        ),
+        /Invalid arguments for agent_edit: \/edits\/0/,
+      );
+      await assert.rejects(
+        tool("agent_manage_files").execute(
+          {
+            name: "test-reviewer",
+            operations: [{ op: "edit", path: "notes.md", edits: [edit] }],
+            reason: "Break it",
+          },
+          ctx(),
+        ),
+        /Invalid arguments for agent_manage_files/,
+      );
+    }
+    assert.equal(readFileSync(manifest(), "utf8"), before);
   });
 
   test("the card shows the effort the model will actually run at", async () => {

@@ -13,6 +13,8 @@
  * tools are the same code: a kind supplies its names, its create fields, and
  * the consequences of a rename or delete, and nothing else.
  */
+import type { TSchema } from "typebox";
+import { Value } from "typebox/value";
 import {
   defineAgentTool,
   type AgentTool,
@@ -749,7 +751,33 @@ export function libraryTools(spec: LibraryToolSpec): AgentTool[] {
     deleteTool,
     historyTool,
     diffTool,
-  ];
+  ].map(withCheckedArguments);
+}
+
+/**
+ * Every library tool holds its arguments to the schema it declares. Not every
+ * adapter enforces that schema, and a tool that coerced a wrong shape would
+ * write it: a missing `newText` became the text "undefined", a `denyTools`
+ * string was dropped and the agent created with fewer restrictions.
+ */
+function withCheckedArguments(tool: AgentTool): AgentTool {
+  return {
+    ...tool,
+    async execute(params, ctx) {
+      const errors = [...Value.Errors(tool.parameters as TSchema, params)];
+      if (errors.length > 0)
+        throw new EntryValidationError(
+          `Invalid arguments for ${tool.name}: ${errors
+            .slice(0, 3)
+            .map(
+              (error) =>
+                `${error.instancePath || "arguments"} ${error.message}`,
+            )
+            .join("; ")}. Nothing was changed.`,
+        );
+      return await tool.execute(params, ctx);
+    },
+  };
 }
 
 function resolveFileOperation(

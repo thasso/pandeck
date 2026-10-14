@@ -1439,6 +1439,12 @@ function applyExactReplacements(
 ): { content: string; replacements: number } {
   const regions: { start: number; end: number; newText: string }[] = [];
   for (const edit of edits) {
+    // Typed by the tool schema, checked here too: a non-string `newText`
+    // would otherwise be written as "undefined" or "[object Object]".
+    if (typeof edit?.oldText !== "string" || typeof edit.newText !== "string")
+      throw new EntryValidationError(
+        "Every edit needs an oldText and a newText, both strings.",
+      );
     if (!edit.oldText)
       throw new EntryValidationError("Every edit needs a non-empty oldText.");
     const first = content.indexOf(edit.oldText);

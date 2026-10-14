@@ -353,7 +353,11 @@ describe("skill tools: mutations", () => {
       operations: [{ op: "edit", path: "references/tone.md", edits: [] }],
       reason: "Edit nothing",
     });
-    assert.match(empty.message, /needs at least one edit/);
+    // Refused by the tool's own schema before anything is read.
+    assert.match(
+      empty.message,
+      /operations\/0\/edits must not have fewer than 1 items/,
+    );
 
     // A refused batch leaves the file and the repository exactly as they were.
     assert.equal(
