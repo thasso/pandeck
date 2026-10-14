@@ -376,7 +376,7 @@ test("an agent row left by a creation that never finished binds its id", async (
   // Same name, but the definition changed since: the row would not describe it.
   await assert.rejects(
     start("abandoned-edited", { denyTools: [] }),
-    SessionAgentConflictError,
+    /Session abandoned-edited is already bound to the "reviewer" agent as it was defined then \(AGENT\.md ccccccc\), not to the "reviewer" agent as it is defined now; start a new session to run it\./,
   );
   assert.equal(acquire.mock.calls.length, 0);
 

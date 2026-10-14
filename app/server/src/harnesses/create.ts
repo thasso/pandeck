@@ -56,15 +56,35 @@ export class SessionIdTakenError extends Error {
 export class SessionAgentConflictError extends Error {
   constructor(
     readonly sessionId: string,
+    /** The stored agent row, if any. */
+    frozen: string | undefined,
     agentName: string | undefined,
   ) {
-    super(
+    const wanted =
       agentName === undefined
-        ? `Session ${sessionId} is bound to an agent definition; start a new session.`
-        : `Session ${sessionId} already exists and was not created as the "${agentName}" agent; start a new session to run it.`,
+        ? "a plain session"
+        : `the "${agentName}" agent as it is defined now`;
+    super(
+      `Session ${sessionId} is already bound to ${boundTo(frozen)}, not to ${wanted}; start a new session${agentName === undefined ? "" : " to run it"}.`,
     );
     this.name = "SessionAgentConflictError";
   }
+}
+
+/** What an id is bound to, in words: its stored agent row, or none. */
+function boundTo(frozen: string | undefined): string {
+  if (frozen === undefined) return "a plain session";
+  try {
+    const { name, blob } = JSON.parse(frozen) as {
+      name?: unknown;
+      blob?: unknown;
+    };
+    if (typeof name === "string" && typeof blob === "string")
+      return `the "${name}" agent as it was defined then (AGENT.md ${blob.slice(0, 7)})`;
+  } catch {
+    // Unreadable: said as such below.
+  }
+  return "an agent definition that can no longer be read";
 }
 
 /** A pi model handle, as the caller resolved it on the session's account. */
@@ -170,7 +190,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       frozen !== wanted &&
       (frozen !== undefined || claudeSdkStore.exists(id))
     )
-      throw new SessionAgentConflictError(id, spec.agent?.name);
+      throw new SessionAgentConflictError(id, frozen, spec.agent?.name);
     linkWorktree(id, spec.worktree?.id);
     if (spec.agent) freezeSessionAgent(id, spec.agent);
     if (spec.promptEvidence)
