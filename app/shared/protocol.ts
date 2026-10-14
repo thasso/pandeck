@@ -177,13 +177,20 @@ export function isOrdinarilyCreatableAgentType(
 }
 
 /**
- * The code-editing personas (Workshop and Developer) that get file/shell tools,
- * git-worktree/commit/review treatment, and toolGroups. The Assistant persona has
- * none of that. Use this instead of comparing to `"workshop"` directly so the
+ * The code-editing personas (Workshop and Developer) that get project context,
+ * git-worktree/commit/review treatment, and toolGroups. Native file/shell access
+ * is a separate capability. Use this instead of comparing to `"workshop"` directly so the
  * Developer persona is never accidentally excluded.
  */
 export function isCodingAgentType(agentType: AgentType | undefined): boolean {
   return agentType === "workshop" || agentType === "developer";
+}
+
+/** Native file and shell access, independent of project coding privileges. */
+export function hasNativeTools(agentType: AgentType | undefined): boolean {
+  return (
+    isCodingAgentType(agentType) || isPersonalAssistantAgentType(agentType)
+  );
 }
 
 /**
@@ -532,6 +539,10 @@ export interface CredentialProfilePin {
 
 /** Configurable identity/model profile for the singleton Personal Assistant session. */
 export interface PermanentAssistantSettings extends CredentialProfilePin {
+  /** Empty uses the dedicated directory under DATA_DIR. Refused by agent settings tools. */
+  workingDirectory: string;
+  /** Server-derived default directory; never persisted or agent-writable. */
+  defaultWorkingDirectory: string;
   name: string;
   provider: string;
   modelId: string;

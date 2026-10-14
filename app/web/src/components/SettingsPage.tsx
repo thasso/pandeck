@@ -1340,6 +1340,13 @@ function PermanentAssistantSection({
   onUpdate,
 }: AgentSectionProps) {
   const profile = settings.permanentAssistant;
+  const [workingDirectory, setWorkingDirectory] = useState(
+    profile.workingDirectory,
+  );
+  useEffect(
+    () => setWorkingDirectory(profile.workingDirectory),
+    [profile.workingDirectory],
+  );
   const save = (patch: Partial<typeof profile>) =>
     onUpdate({ permanentAssistant: { ...profile, ...patch } });
   return (
@@ -1366,6 +1373,23 @@ function PermanentAssistantSection({
           modelLabel="Assistant model"
           onChange={save}
         />
+        <Field label="Working directory">
+          <Input
+            aria-label="Personal Assistant working directory"
+            value={workingDirectory}
+            placeholder={profile.defaultWorkingDirectory}
+            onChange={(event) => setWorkingDirectory(event.target.value)}
+            onBlur={() => {
+              if (workingDirectory !== profile.workingDirectory)
+                save({ workingDirectory });
+            }}
+          />
+          <FieldDescription>
+            An existing absolute directory for shell commands and files. Leave
+            empty to use {profile.defaultWorkingDirectory}. Change this in
+            Settings, not through agent settings tools.
+          </FieldDescription>
+        </Field>
         <Field label="Additional instructions">
           <Textarea
             value={profile.additionalInstructions}
@@ -1381,10 +1405,10 @@ function PermanentAssistantSection({
           </FieldDescription>
         </Field>
         <FieldDescription>
-          Changing the name, provider, model, thinking level, or additional
-          instructions starts a new permanent conversation the next time you
-          open the Personal Assistant. The previous conversation remains
-          available in Sessions.
+          Changing this profile, including the working directory, starts a new
+          permanent conversation the next time you open the Personal Assistant.
+          The previous conversation stays on disk and remains reachable by its
+          session link.
         </FieldDescription>
       </SettingsCard>
     </div>

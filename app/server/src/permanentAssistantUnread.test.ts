@@ -17,10 +17,15 @@ const {
 } = await import("./permanentAssistantUnread.ts");
 const { mergedSessionList } = await import("./harnesses/sessionList.ts");
 const { hub } = await import("./hub.ts");
+const { harnessRegistry } = await import("./harnesses/registry.ts");
 const { Connection } = await import("./connection.ts");
 let counter = 0;
 const ids: string[] = [];
 function seed(updatedAt = 100) {
+  // The metadata-only fixture stands in for a PA with a matching stored cwd.
+  vi.spyOn(harnessRegistry, "cwdForSession").mockReturnValue(
+    join(tmp, "data", "personal-assistant"),
+  );
   const id = `pa-unread-${counter++}`;
   ids.push(id);
   sessionStore.upsert({

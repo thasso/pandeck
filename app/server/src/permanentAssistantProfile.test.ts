@@ -5,6 +5,8 @@ import { permanentAssistantProfileInstructions } from "./permanentAssistantProfi
 test("permanent Assistant profile includes its configured identity and instructions", () => {
   const prompt = permanentAssistantProfileInstructions({
     name: "Ada",
+    workingDirectory: "",
+    defaultWorkingDirectory: "/data/personal-assistant",
     provider: "github-copilot",
     modelId: "gpt-4.1",
     thinkingLevel: "off",

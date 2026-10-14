@@ -9,6 +9,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   type AgentType,
   isCodingAgentType,
+  hasNativeTools,
   type SessionMode,
   type ThinkingLevel,
 } from "@assistant/shared";
@@ -235,16 +236,9 @@ export function buildClaudeSdkQueryOptions(
   input: BuildClaudeSdkQueryOptionsInput,
 ): ClaudeSdkOptions {
   const agentType = input.agentType ?? "workshop";
-  // The assistant personas (ordinary `assistant` and the singleton
-  // `personal-assistant`) have NO native file/shell tools — all of their
-  // capability is the dedicated `pa` integration tools over the bridge (mirrors
-  // the pi assistant, which has no built-in tools). Only the coding personas get
-  // the native Read/Write/Edit/Bash. An explicit `nativeTools` override still wins.
-  const isAssistantPersona =
-    agentType === "assistant" ||
-    agentType === "personal-assistant" ||
-    agentType === "workflow-coordinator";
-  const defaultNative = isAssistantPersona ? [] : CLAUDE_SDK_NATIVE_TOOLS;
+  const defaultNative = hasNativeTools(agentType)
+    ? CLAUDE_SDK_NATIVE_TOOLS
+    : [];
   // Plan mode never shapes the native set: it is a per-call refusal against
   // the live mode (see CLAUDE_NATIVE_MUTATING_TOOLS) — and never
   // `permissionMode: "plan"`, which would stop tool execution generally and
@@ -291,7 +285,7 @@ export function buildClaudeSdkQueryOptions(
     ? []
     : [
         ...native,
-        ...(!isAssistantPersona ? ["Skill"] : []),
+        ...(isCodingAgentType(agentType) ? ["Skill"] : []),
         ...(agentType === "workflow-coordinator" ? [] : ["ToolSearch"]),
       ];
   const cwd = isAbsolute(input.cwd) ? input.cwd : pathResolve(input.cwd);
@@ -326,7 +320,7 @@ export function buildClaudeSdkQueryOptions(
     // The host-owned persona/tool policy is authoritative: bypass mode
     // auto-approves ordinary coding Bash commands (no per-command prompt), so
     // most shell use behaves like pi. The native tool allowlist above still
-    // prevents assistant personas from receiving Bash (or any file tool) at all.
+    // prevents personas without native access from receiving file/shell tools.
     // Org-managed settings can silently downgrade this to `default`; the
     // `canUseTool` callback below then approves the same policy.
     //
@@ -348,7 +342,7 @@ export function buildClaudeSdkQueryOptions(
     // Assistant personas must not inherit project/user settings: in particular,
     // a run worktree's CLAUDE.md must not enter the coordinator's authority
     // context. Their complete instruction surface is the locked-down prompt.
-    ...(isAssistantPersona ? { settingSources: [] } : {}),
+    ...(!isCodingAgentType(agentType) ? { settingSources: [] } : {}),
     ...(librarySkillPlugin
       ? {
           plugins: [

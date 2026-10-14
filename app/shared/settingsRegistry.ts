@@ -100,6 +100,8 @@ export interface SettingDescriptor {
   clearWith?: string;
   /** `oauth`: the server route that starts the browser flow. */
   connectPath?: string;
+  /** Refused by agent settings tools; the Settings UI may write it. Not a shell boundary. */
+  uiOnly?: boolean;
   /** Units, or what an empty value means. */
   hint?: string;
 }
@@ -145,7 +147,7 @@ function setting(
   section: SettingsSectionId,
   label: string,
   value: SettingValueSpec,
-  extra: Pick<SettingDescriptor, "optional" | "hint"> = {},
+  extra: Pick<SettingDescriptor, "optional" | "hint" | "uiOnly"> = {},
 ): SettingDescriptor {
   return { path, section, label, access: "value", value, ...extra };
 }
@@ -335,6 +337,21 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     STRING,
   ),
   ...modelSlot("permanentAssistant", "personal-assistant", "Assistant"),
+  setting(
+    "permanentAssistant.workingDirectory",
+    "personal-assistant",
+    "Working directory",
+    STRING,
+    {
+      uiOnly: true,
+      hint: "Empty uses the default directory. Agent settings tools refuse changes; use Settings.",
+    },
+  ),
+  readonly(
+    "permanentAssistant.defaultWorkingDirectory",
+    "personal-assistant",
+    "Default working directory",
+  ),
   setting(
     "permanentAssistant.additionalInstructions",
     "personal-assistant",

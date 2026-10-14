@@ -431,9 +431,40 @@ function bashBody(block: ToolBlock, wrapLines: boolean): ReactNode {
   );
 }
 
+function workingDirectoryNotice(block: ToolBlock): string | undefined {
+  if (!block.done || block.isError || typeof block.output !== "string")
+    return undefined;
+  try {
+    const payload: unknown = JSON.parse(block.output);
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "renderKind" in payload &&
+      payload.renderKind === "workingDirectoryNotice" &&
+      "message" in payload &&
+      typeof payload.message === "string"
+    )
+      return payload.message;
+  } catch {
+    // Partial and malformed output stays a normal tool block.
+  }
+  return undefined;
+}
+
 // --- The registry ------------------------------------------------------------
 
 const TOOL_RENDERERS: ToolRenderer[] = [
+  {
+    match: (block) =>
+      normalizedToolName(block.name) === "working_directory" &&
+      typeof workingDirectoryNotice(block) === "string",
+    variant: "card",
+    render: (block) => (
+      <AppCard label="Working directory" tone="warning">
+        <p className="text-sm">{workingDirectoryNotice(block)}</p>
+      </AppCard>
+    ),
+  },
   // Cards first — domain widgets that replace the whole tool presentation.
   {
     match: shouldRenderGoogleWorkspaceTool,

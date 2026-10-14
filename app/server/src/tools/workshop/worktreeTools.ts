@@ -113,7 +113,7 @@ const worktreeCreate = defineAgentTool<{
   name: "worktree_create",
   label: "Create managed worktree",
   description:
-    "Create and register a managed git worktree, visible in the app and usable as a commit target. The returned path is where to cd; this does not relink the calling session, but records it as the creator, so worktree_status sessionTree keeps listing it.",
+    "Create and register a managed git worktree, visible in the app and usable as a commit target. The returned path is the new checkout; this does not relink the calling session, but records it as the creator, so worktree_status sessionTree keeps listing it.",
   parameters: createSchema as unknown as Record<string, unknown>,
   async execute(params, ctx) {
     const projectId = params.projectId ?? (await callingProjectId(ctx.session));

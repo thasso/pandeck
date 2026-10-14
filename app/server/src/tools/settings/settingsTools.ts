@@ -138,7 +138,7 @@ function entryFor(descriptor: SettingDescriptor, settings: AppSettings) {
   return {
     path,
     label,
-    access,
+    access: descriptor.uiOnly ? "readonly" : access,
     ...(value ? { type: describeValue(value) } : {}),
     ...state,
     ...(hint ? { hint } : {}),

@@ -2,8 +2,8 @@
 
 Everything the Settings page reads or writes is described in one registry,
 written through one service, and pushed to every connected client. The Personal
-Assistant uses the same registry and service, so anything the user can set, the
-assistant can set too, and secrets stay out of its context
+Assistant uses the same registry and service, except settings marked `uiOnly`
+are refused on every agent settings-tool path. Secrets stay out of its context
 ([Task-729](pa://task/729)).
 
 ## The registry
@@ -37,6 +37,9 @@ assistant can set too, and secrets stay out of its context
   `JSON_SETTING_VALIDATORS`; a test requires one for every `json` setting.
 - `optional`: writing `""` removes the field, for example an account pin back to
   automatic.
+- `uiOnly`: writable through the Settings UI, refused by agent settings tools.
+  `settings_read` reports it as read-only and `settingsPatchForWrites` refuses
+  an agent write.
 
 A section with nothing in the registry, or that shows something the registry
 does not hold, says what and where in `SETTINGS_OUTSIDE_REGISTRY`: Claude and
@@ -69,14 +72,14 @@ It writes app sections through `updateSettings` (each section replaced whole)
 and integration sections through their own module, then runs what the written
 sections need:
 
-| Section written       | Effect                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `permanentAssistant`  | A changed name, model, thinking level or instructions rotates the Personal Assistant to a fresh session |
-| `slack`               | Reconcile Socket Mode                                                                                   |
-| `github`              | Reconcile the package proxy                                                                             |
-| `openAiCompatible`    | Sync the configured model providers                                                                     |
-| any other integration | `notifyIntegrationToolsChanged` (live `tools/list_changed`)                                             |
-| `knowledgeBase`       | `notifyIntegrationToolsChanged`: the setting gates the `kb_*` tool groups                               |
+| Section written       | Effect                                                                                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `permanentAssistant`  | A changed name, provider, model, thinking level, instructions or working directory rotates the Personal Assistant to a fresh session |
+| `slack`               | Reconcile Socket Mode                                                                                                                |
+| `github`              | Reconcile the package proxy                                                                                                          |
+| `openAiCompatible`    | Sync the configured model providers                                                                                                  |
+| any other integration | `notifyIntegrationToolsChanged` (live `tools/list_changed`)                                                                          |
+| `knowledgeBase`       | `notifyIntegrationToolsChanged`: the setting gates the `kb_*` tool groups                                                            |
 
 The service imports no engine (`docs/agent-harnesses.md`): the model-provider
 sync is the engine's `syncConfiguredModelProviders`, installed at boot by
@@ -112,6 +115,36 @@ read-only settings, bad values and non-null OAuth writes.
 The connection-test messages (`saveAndTest*`, `test*`) still answer only the
 client that asked: a test result is that client's request, not shared state.
 What a test persists, such as discovered models, reaches every client.
+
+## Personal Assistant working directory
+
+`permanentAssistant.workingDirectory` is refused on every agent settings-tool
+path. This is not a boundary against the PA's shell, which can edit the settings
+file directly. The user accepts that trade-off; no DATA_DIR path refusal is
+imposed. Empty uses `DATA_DIR/personal-assistant`, created on demand when a
+session starts. The server supplies `defaultWorkingDirectory` for the input's
+placeholder, derives it on each settings read and never persists it. Existing
+settings files receive the empty default without a database migration.
+
+A non-empty value must be an absolute path to an existing directory. The server
+refuses relative paths, files and unavailable directories when the directory
+value changes, and normalizes valid paths with `path.resolve()` before saving.
+An unchanged vanished directory does not block other profile edits or account
+pin cleanup. Both harnesses receive the resolved cwd at session creation;
+changing the setting rotates the singleton rather than changing a live session's
+cwd. If a configured directory disappears, the next acquisition retires any
+session with the old cwd, uses the dedicated default and records an
+always-visible working-directory card in its transcript. A restored configured
+directory likewise starts a fresh session rather than keeping the fallback cwd.
+Pre-upgrade sessions in the app checkout are retired before opening. History is
+kept. A synthetic notice failure does not block opening; failure to create the
+default directory does, since the app requires a writable DATA_DIR. The saved
+setting is left intact so the user can fix it in Settings.
+
+The PA's native tools are for checks and errands in this directory. Project code
+changes must use `worktree_create` and `session_spawn` with a developer, with
+`owner: "user"` when the user will follow the work. The PA must not edit project
+checkouts directly. Native access is not a sandbox or a security boundary.
 
 ## Agent tools
 

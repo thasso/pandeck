@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   AGENT_TYPE_IDS,
-  isCodingAgentType,
+  hasNativeTools,
   sessionModeOrDefault,
   type AgentType,
   type NoticeSeverity,
@@ -709,7 +709,7 @@ class PiSessionStore {
     // Its background bash and monitor run shell commands: a definition that
     // denies bash denies them too.
     const piBackgroundTools =
-      isCodingAgentType(kind) && !deniesNative(agent, "bash")
+      hasNativeTools(kind) && !deniesNative(agent, "bash")
         ? createPiBackgroundTools({
             session: () => piToolSession(kind, sm, cwd),
             bashConfig: () => {

@@ -1,6 +1,10 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  DEFAULT_ASSISTANT_WORKING_DIRECTORY,
+  validateAssistantWorkingDirectory,
+} from "./permanentAssistantDirectory.ts";
 import type {
   AppearanceSettings,
   AppSettings,
@@ -99,8 +103,12 @@ function normalizeAppearanceSettings(
     ),
   };
 }
-const DEFAULT_PERMANENT_ASSISTANT_SETTINGS: PermanentAssistantSettings = {
+const DEFAULT_PERMANENT_ASSISTANT_SETTINGS: Omit<
+  PermanentAssistantSettings,
+  "defaultWorkingDirectory"
+> = {
   name: "Personal Assistant",
+  workingDirectory: "",
   ...DEFAULT_HELPER_MODEL,
   thinkingLevel: "off",
   additionalInstructions: "",
@@ -494,6 +502,7 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
     permanentAssistant: {
       ...DEFAULT_PERMANENT_ASSISTANT_SETTINGS,
       ...(stored.permanentAssistant ?? {}),
+      defaultWorkingDirectory: DEFAULT_ASSISTANT_WORKING_DIRECTORY,
     },
     sessionNaming: {
       ...DEFAULT_SESSION_NAMING_SETTINGS,
@@ -564,6 +573,21 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
  */
 export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   const stored = readStoredAppSettings();
+  const assistant = patch.permanentAssistant
+    ? { ...DEFAULT_PERMANENT_ASSISTANT_SETTINGS, ...patch.permanentAssistant }
+    : undefined;
+  if (assistant) {
+    // A vanished cwd must not block unrelated profile edits or account unpinning.
+    if (
+      assistant.workingDirectory !==
+      (stored.permanentAssistant?.workingDirectory ?? "")
+    )
+      assistant.workingDirectory = validateAssistantWorkingDirectory(
+        assistant.workingDirectory,
+      );
+    delete (assistant as Partial<PermanentAssistantSettings>)
+      .defaultWorkingDirectory;
+  }
   // Only these sections are persisted to the app-settings file. Secret-backed
   // integration sections have dedicated update functions and private storage.
   const persisted = {
@@ -571,10 +595,7 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     ...(patch.models ? { models: patch.models } : {}),
     ...(patch.permanentAssistant
       ? {
-          permanentAssistant: {
-            ...DEFAULT_PERMANENT_ASSISTANT_SETTINGS,
-            ...patch.permanentAssistant,
-          },
+          permanentAssistant: assistant,
         }
       : {}),
     ...(patch.sessionNaming ? { sessionNaming: patch.sessionNaming } : {}),

@@ -72,7 +72,9 @@ directly, so Task-derived sessions are scoped correctly too.
 
 The permanent Personal Assistant is its own stable `personal-assistant` persona
 (server-owned, singleton-only, never selectable in ordinary pickers/creation).
-It shares the ordinary Assistant tool universe but owns dedicated behavior
+It has the ordinary Assistant integrations plus Settings, native shell/file
+access and deferred worktree creation/status. Its working-directory and coding
+delegation contract is in [settings.md](settings.md). It owns dedicated behavior
 guidance and the permanent profile suffix. In v1, Personal Assistant and
 ordinary Assistant auto-capture; Developer/Workshop load/search memory but do
 not auto-capture ordinary coding turns and write only on explicit user

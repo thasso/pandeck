@@ -200,6 +200,8 @@ const defaultSettings: AppSettings = {
   skills: {},
   permanentAssistant: {
     name: "Personal Assistant",
+    workingDirectory: "",
+    defaultWorkingDirectory: "",
     ...DEFAULT_HELPER_MODEL,
     thinkingLevel: "off",
     additionalInstructions: "",

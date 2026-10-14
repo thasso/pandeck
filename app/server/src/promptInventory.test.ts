@@ -300,7 +300,11 @@ describe("prompt inventory", () => {
         (l) => l.id === "tools:eager:harness-builtin",
       )!;
 
-    for (const agentType of ["workshop", "developer"] as const) {
+    for (const agentType of [
+      "workshop",
+      "developer",
+      "personal-assistant",
+    ] as const) {
       const pi = row(agentType, "pi");
       assert.equal(
         pi.chars,
@@ -314,7 +318,7 @@ describe("prompt inventory", () => {
           `${agentType}: the row must break out ${name}`,
         );
     }
-    for (const agentType of ["assistant", "personal-assistant"] as const)
+    for (const agentType of ["assistant", "workflow-coordinator"] as const)
       assert.equal(
         row(agentType, "pi").chars,
         0,

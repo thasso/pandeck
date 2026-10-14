@@ -261,7 +261,7 @@ test("never-used loads prune only after six idle hours; called tools survive", a
   }
 });
 
-test("coding personas activate pi's search builtins; assistant personas get none", async () => {
+test("native-tool personas activate pi's search builtins; other personas get none", async () => {
   // Task-316: pi registers all seven builtin DEFINITIONS but activates only
   // read/bash/edit/write, so grep/find ride the built-in half of piStore's
   // active-set merge. Never a `tools:` allowlist (see options.ts). `ls` stays
@@ -287,7 +287,7 @@ test("coding personas activate pi's search builtins; assistant personas get none
     );
     assert.equal(opts.noTools, undefined);
   }
-  for (const agentType of ["assistant", "personal-assistant"] as const) {
+  for (const agentType of ["assistant", "workflow-coordinator"] as const) {
     const opts = await buildAgentOptions(agentType, process.cwd());
     assert.deepEqual(
       opts.extraBuiltinToolNames,

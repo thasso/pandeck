@@ -39,6 +39,8 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "permanentAssistant.thinkingLevel",
   "permanentAssistant.credentialProfileId",
   "permanentAssistant.additionalInstructions",
+  "permanentAssistant.workingDirectory",
+  "permanentAssistant.defaultWorkingDirectory",
   // memory
   "memory.loadingEnabled",
   "memory.learningMode",

@@ -176,6 +176,42 @@ describe("tool catalog", () => {
     }
   });
 
+  test("PA only gets deferred worktree creation and status, not coding groups", () => {
+    const groups = toolGroupsFor("personal-assistant");
+    const start = groups.find((group) => group.id === "worktree-start")!;
+    assert.equal(start.loading, "deferred");
+    assert.deepEqual(
+      start.tools.map((tool) => tool.name),
+      ["worktree_create", "worktree_status"],
+    );
+    assert.deepEqual(
+      agentToolsFor("personal-assistant")
+        .filter(
+          (tool) =>
+            tool.name.startsWith("worktree_") ||
+            tool.name.startsWith("review_"),
+        )
+        .map((tool) => tool.name),
+      ["worktree_create", "worktree_status"],
+    );
+    assert.equal(
+      groups.some((group) =>
+        [
+          "managed-delivery",
+          "worktree-review",
+          "worktree-review-authoring",
+        ].includes(group.id),
+      ),
+      false,
+    );
+    assert.equal(
+      agentToolsFor("assistant").some((tool) =>
+        tool.name.startsWith("worktree_"),
+      ),
+      false,
+    );
+  });
+
   test("eager sets match the decided small core", () => {
     const assistantEager = eagerToolNamesFor("assistant");
     for (const expected of [
@@ -554,7 +590,7 @@ describe("tool catalog", () => {
     const permanent = agentToolsFor("personal-assistant")
       .map((tool) => tool.name)
       .sort();
-    // The Personal Assistant alone also gets the settings tools.
+    // The Personal Assistant also gets settings and coding-start tools.
     assert.deepEqual(
       permanent,
       [
@@ -565,6 +601,8 @@ describe("tool catalog", () => {
         "accounts_read",
         "accounts_update",
         "accounts_sign_in",
+        "worktree_create",
+        "worktree_status",
       ].sort(),
     );
     const workshop = new Set(
