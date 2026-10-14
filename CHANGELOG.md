@@ -3,6 +3,75 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.56.0] - 2026-10-14
+
+### Other changes
+
+- Route sessions and background agents across subscription accounts
+  ([PR #130](https://github.com/thasso/pandeck/pull/130))
+- Persist task suggestion answers across reloads
+  ([PR #129](https://github.com/thasso/pandeck/pull/129))
+- Add a draggable title strip to narrow macOS layouts
+  ([PR #128](https://github.com/thasso/pandeck/pull/128))
+- Give Personal Assistant native tools and a configurable working directory
+  ([PR #126](https://github.com/thasso/pandeck/pull/126))
+- Support user-owned sessions in session_spawn
+  ([PR #125](https://github.com/thasso/pandeck/pull/125))
+- Add Personal Assistant unread dots and visibility-aware read handling
+  ([PR #124](https://github.com/thasso/pandeck/pull/124))
+- Record interrupted peer turns without replaying admitted work
+  ([PR #120](https://github.com/thasso/pandeck/pull/120))
+- Add user-authored agent definitions spawnable by name
+  ([PR #123](https://github.com/thasso/pandeck/pull/123))
+- Add user approval for blocked commit overrides
+  ([PR #122](https://github.com/thasso/pandeck/pull/122))
+- Show Jira user display names on mutation approval cards
+  ([PR #121](https://github.com/thasso/pandeck/pull/121))
+- Fix Claude prompt lifecycle, resumed usage, and Stop-all races
+  ([PR #119](https://github.com/thasso/pandeck/pull/119))
+- Add approval-gated Jira sprint edits
+  ([PR #118](https://github.com/thasso/pandeck/pull/118))
+- Render proposed approval text as Markdown
+  ([PR #117](https://github.com/thasso/pandeck/pull/117))
+- Add managed pull request base retargeting for GitHub and Forgejo
+  ([PR #116](https://github.com/thasso/pandeck/pull/116))
+- Link push cards to hosted branches and existing pull requests
+  ([PR #115](https://github.com/thasso/pandeck/pull/115))
+- Track worktrees and pull requests per session spawn tree, with an idle cleanup
+  queue ([PR #114](https://github.com/thasso/pandeck/pull/114))
+- Add refreshable session status cards with a no-tool agent
+  ([PR #113](https://github.com/thasso/pandeck/pull/113))
+- Measure inbox card reorders relative to the list
+  ([PR #112](https://github.com/thasso/pandeck/pull/112))
+- Update Sonnet and Haiku aliases to 5.5
+  ([PR #111](https://github.com/thasso/pandeck/pull/111))
+- Fix flipped attention card action overflow on phones
+  ([PR #110](https://github.com/thasso/pandeck/pull/110))
+- Notify coordinators when delegated session work fails
+  ([PR #109](https://github.com/thasso/pandeck/pull/109))
+- Pin the mobile workflow sheet to the viewport
+  ([PR #108](https://github.com/thasso/pandeck/pull/108))
+- Prevent WebKit spinner wobble and size busy icons
+  ([PR #107](https://github.com/thasso/pandeck/pull/107))
+- Move merge options into card footers and standardize overflow menus
+  ([PR #105](https://github.com/thasso/pandeck/pull/105))
+- Treat GitHub review-bot check failures as review state
+  ([PR #106](https://github.com/thasso/pandeck/pull/106))
+- Set sidebar surfaces apart from the main pane
+  ([PR #104](https://github.com/thasso/pandeck/pull/104))
+- Wake parked session owners when background jobs reach deadlines
+  ([PR #103](https://github.com/thasso/pandeck/pull/103))
+- Redact credentials from commit review context
+  ([PR #102](https://github.com/thasso/pandeck/pull/102))
+- Show observed live progress for running sessions
+  ([PR #101](https://github.com/thasso/pandeck/pull/101))
+- Add durable drag-to-reorder for the Sessions inbox working set
+  ([PR #100](https://github.com/thasso/pandeck/pull/100))
+- Add mid-turn /rename command for session title regeneration
+  ([PR #99](https://github.com/thasso/pandeck/pull/99))
+- Make Stop hold automatic session turns until explicit resume
+  ([PR #98](https://github.com/thasso/pandeck/pull/98))
+
 ## [0.55.0] - 2026-10-12
 
 ### Other changes
