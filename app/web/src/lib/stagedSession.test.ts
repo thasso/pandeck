@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { EntryLibraryList } from "@assistant/shared";
 import {
   agentAcrossPersonaSwitch,
+  agentDraft,
   leftNewSessionPage,
+  reconcileStagedAgent,
+  reissuedFirstSend,
   stagedSessionRecord,
+  withoutAgent,
 } from "./stagedSession.ts";
 
 /**
@@ -58,5 +63,139 @@ describe("staged session record", () => {
     });
     expect(leftNewSessionPage(left)).toBe(left);
     expect(leftNewSessionPage(null)).toBeNull();
+  });
+});
+
+describe("re-issuing a failed first send", () => {
+  const held = {
+    id: "draft",
+    harness: "claude-sdk" as const,
+    agentType: "developer" as const,
+    text: "first try",
+    modelProvider: "claude-sdk",
+    modelId: "opus",
+    thinkingLevel: "high" as const,
+    agent: "test-reviewer",
+    credentialProfileId: "claude-work",
+    attachTaskId: "780",
+    worktreeId: "wt-1",
+    clientRequestId: "req-1",
+  };
+
+  it("keeps the consumed context and request, and sends what the pickers show now", () => {
+    expect(
+      reissuedFirstSend(
+        held,
+        {
+          harness: "claude-sdk",
+          provider: "claude-sdk",
+          modelId: "sonnet",
+          thinkingLevel: "low",
+        },
+        { text: "second try" },
+      ),
+    ).toEqual({
+      id: "draft",
+      harness: "claude-sdk",
+      agentType: "developer",
+      text: "second try",
+      modelProvider: "claude-sdk",
+      modelId: "sonnet",
+      thinkingLevel: "low",
+      credentialProfileId: "claude-work",
+      attachTaskId: "780",
+      worktreeId: "wt-1",
+      clientRequestId: "req-1",
+    });
+  });
+
+  it("carries the agent only while the draft still has it", () => {
+    expect(
+      reissuedFirstSend(
+        held,
+        {
+          harness: "claude-sdk",
+          provider: "claude-sdk",
+          modelId: "opus",
+          thinkingLevel: "high",
+          agent: "test-reviewer",
+        },
+        { text: "again" },
+      ).agent,
+    ).toBe("test-reviewer");
+  });
+});
+
+describe("staging an agent definition", () => {
+  const list: EntryLibraryList = {
+    libraryPath: "/data/agents",
+    entries: [],
+    diagnostics: [],
+    agentRuntimes: {
+      "test-reviewer": {
+        persona: "developer",
+        provider: "claude-sdk",
+        modelId: "opus",
+        thinkingLevel: "high",
+      },
+      stale: { problem: "No model." },
+    },
+  };
+  const accounts = [
+    { id: "openai-1", provider: "openai-codex" },
+    { id: "claude-1", provider: "claude" },
+    { id: "claude-2", provider: "claude" },
+  ];
+
+  it("stages the definition's runtime on an account of its provider", () => {
+    expect(agentDraft(list, "test-reviewer", accounts, "claude-2")).toEqual({
+      harness: "claude-sdk",
+      agentType: "developer",
+      provider: "claude-sdk",
+      modelId: "opus",
+      thinkingLevel: "high",
+      agent: "test-reviewer",
+      accountId: "claude-2",
+    });
+    // A picked account of another provider gives way to the first Claude one.
+    expect(
+      agentDraft(list, "test-reviewer", accounts, "openai-1")?.accountId,
+    ).toBe("claude-1");
+    expect(agentDraft(list, "stale", accounts, "claude-1")).toBeUndefined();
+    expect(agentDraft(list, "nobody", accounts, "claude-1")).toBeUndefined();
+  });
+
+  it("follows the library: keep, restage on a changed runtime, drop when gone", () => {
+    const record = stagedSessionRecord({
+      id: "draft",
+      ...agentDraft(list, "test-reviewer", accounts, "claude-1")!,
+      mode: undefined,
+    });
+    expect(reconcileStagedAgent(record, list)).toBe("keep");
+    expect(reconcileStagedAgent(record, undefined)).toBe("keep");
+    expect(
+      reconcileStagedAgent(record, {
+        ...list,
+        agentRuntimes: {
+          "test-reviewer": {
+            persona: "developer",
+            provider: "claude-sdk",
+            modelId: "opus",
+            thinkingLevel: "medium",
+          },
+        },
+      }),
+    ).toBe("restage");
+    expect(
+      reconcileStagedAgent(record, {
+        ...list,
+        agentRuntimes: { "test-reviewer": { problem: "Gone." } },
+      }),
+    ).toBe("drop");
+    expect(reconcileStagedAgent(record, { ...list, agentRuntimes: {} })).toBe(
+      "drop",
+    );
+    expect(withoutAgent(record).agent).toBeUndefined();
+    expect(withoutAgent(record).modelId).toBe("opus");
   });
 });

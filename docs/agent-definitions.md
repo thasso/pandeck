@@ -365,11 +365,17 @@ and has no row for an empty library. Picking one stages its persona, model and
 effort, on an account of the model's provider. The pick lives on the staged
 session record (`lib/stagedSession.ts`), so a model, effort, account or persona
 pick from any picker drops it, as do a fresh start and leaving the page; staging
-a worktree for the same persona keeps it. The first send carries `agent`, and
-the server resolves the definition again on the picked account
+a worktree for the same persona keeps it. A first send retried after a failure
+runs what the pickers show then (`reissuedFirstSend`). A comment-review draft
+offers no definitions: its handoff creates the session without a first send. The
+pick follows the agents list (`reconcileStagedAgent`): a definition that is gone
+or cannot start any more is dropped, and one whose runtime changed is restaged,
+so the pickers show what will run. The first send carries `agent`, and the
+server resolves the definition again on the picked account
 (`harnesses/firstSend.ts`): the session runs on the definition's model and
-effort and freezes it exactly as a spawn does. A persona or engine that no
-longer matches the definition refuses the send.
+effort and freezes it exactly as a spawn does. A persona, engine, model or
+effort that no longer matches the definition refuses the send rather than run
+something other than what the pickers showed.
 
 ## Out of scope
 

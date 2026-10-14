@@ -9,12 +9,17 @@
  * persona pick from any picker, and every fresh start, drops it without each
  * caller having to remember.
  */
-import type {
-  AgentType,
-  Harness,
-  SessionMode,
-  ThinkingLevel,
+import {
+  accountProviderForModelProvider,
+  agentRuntimeOf,
+  harnessForModelProvider,
+  type AgentType,
+  type EntryLibraryList,
+  type Harness,
+  type SessionMode,
+  type ThinkingLevel,
 } from "@assistant/shared";
+import type { HarnessSendInput } from "../hooks/useAssistant.ts";
 import { hasModeAxis } from "./sessionCapabilities.ts";
 
 export interface StagedSessionRecord {
@@ -85,4 +90,115 @@ export function leftNewSessionPage(
     return record;
   const { mode: _spent, agent: _left, ...rest } = record;
   return rest;
+}
+
+/** What the pickers show for the draft right now. */
+interface DraftRuntime {
+  harness: Harness;
+  provider?: string | undefined;
+  modelId?: string | undefined;
+  thinkingLevel?: ThinkingLevel | undefined;
+  mode?: SessionMode | undefined;
+  agent?: string | undefined;
+}
+
+/**
+ * A failed first send re-issued from the composer. Its consumed context (the
+ * Task, the worktree, the project to provision in) and request identity are
+ * the held send's; what RUNS it is what the pickers show now, so a model,
+ * effort, persona or agent pick made after the failure is the one sent, and a
+ * dropped agent stays dropped.
+ */
+export function reissuedFirstSend(
+  held: HarnessSendInput,
+  draft: DraftRuntime,
+  content: Pick<HarnessSendInput, "text" | "attachments">,
+): HarnessSendInput {
+  const {
+    modelProvider: _provider,
+    modelId: _model,
+    thinkingLevel: _thinking,
+    mode: _mode,
+    agent: _agent,
+    ...context
+  } = held;
+  return {
+    ...context,
+    harness: draft.harness,
+    ...(draft.provider !== undefined ? { modelProvider: draft.provider } : {}),
+    ...(draft.modelId !== undefined ? { modelId: draft.modelId } : {}),
+    ...(draft.thinkingLevel !== undefined
+      ? { thinkingLevel: draft.thinkingLevel }
+      : {}),
+    ...(draft.mode !== undefined ? { mode: draft.mode } : {}),
+    ...(draft.agent !== undefined ? { agent: draft.agent } : {}),
+    text: content.text,
+    ...(content.attachments !== undefined
+      ? { attachments: content.attachments }
+      : {}),
+  };
+}
+
+/** A draft without its agent definition: the same runtime, a plain session. */
+export function withoutAgent(record: StagedSessionRecord): StagedSessionRecord {
+  if (record.agent === undefined) return record;
+  const { agent: _dropped, ...plain } = record;
+  return plain;
+}
+
+/**
+ * What staging the definition `name` sets: its persona, engine, model and
+ * effort, and the account to run it on — the picked one when it is of the
+ * model's provider, else the first of that provider. Undefined when the
+ * definition cannot start (unknown, or with a problem).
+ */
+export function agentDraft(
+  list: EntryLibraryList | undefined,
+  name: string,
+  accounts: ReadonlyArray<{ id: string; provider: string }>,
+  pickedAccountId: string | undefined,
+):
+  | (Omit<StagedSessionInput, "id" | "mode"> & {
+      agent: string;
+      accountId?: string;
+    })
+  | undefined {
+  const runtime = agentRuntimeOf(list, name);
+  if (!runtime || runtime.problem !== undefined) return undefined;
+  const accountProvider = accountProviderForModelProvider(runtime.provider);
+  const account =
+    accounts.find(
+      (candidate) =>
+        candidate.id === pickedAccountId &&
+        candidate.provider === accountProvider,
+    ) ?? accounts.find((candidate) => candidate.provider === accountProvider);
+  return {
+    harness: harnessForModelProvider(runtime.provider),
+    agentType: runtime.persona,
+    provider: runtime.provider,
+    modelId: runtime.modelId,
+    thinkingLevel: runtime.thinkingLevel,
+    agent: name,
+    ...(account ? { accountId: account.id } : {}),
+  };
+}
+
+/**
+ * How a draft's agent follows a new agents list: dropped when the definition
+ * is gone or cannot start, restaged when what it runs on changed, else kept.
+ * An unread list says nothing, so it keeps.
+ */
+export function reconcileStagedAgent(
+  record: StagedSessionRecord | null,
+  list: EntryLibraryList | undefined,
+): "keep" | "drop" | "restage" {
+  if (!record?.agent || !list) return "keep";
+  const runtime = agentRuntimeOf(list, record.agent);
+  if (!runtime || runtime.problem !== undefined) return "drop";
+  const same =
+    runtime.persona === record.agentType &&
+    runtime.provider === record.provider &&
+    runtime.modelId === record.modelId &&
+    runtime.thinkingLevel === record.thinkingLevel;
+  return same ? "keep" : "restage";
 }

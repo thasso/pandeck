@@ -128,7 +128,8 @@ export function topicsForSurface({
   )
     topics.add("skills");
   // The Agents section lists the definitions; the new-session page offers
-  // them as a starting point.
+  // them as a starting point. Not the Sessions inbox route, as for projects
+  // and worktrees: each subscribe resolves every definition.
   if (
     (routeName === "settings" && settingsSection === "agents") ||
     routeName === "new"

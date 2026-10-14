@@ -122,6 +122,17 @@ async function firstSendAgent(
         message: `Agent "${agent.agent.name}" runs on ${agent.provider}/${agent.modelId}, which this engine does not run.`,
       },
     };
+  // The pickers showed the definition's runtime when it was picked. If the
+  // definition changed since, running its new one would differ from what the
+  // user saw; say so instead of running it silently.
+  const staged = [req.modelProvider, req.modelId, req.thinkingLevel];
+  const resolved = [agent.provider, agent.modelId, agent.thinkingLevel];
+  if (staged.some((value, at) => value !== undefined && value !== resolved[at]))
+    return {
+      refusal: {
+        message: `Agent "${agent.agent.name}" now runs on ${agent.provider}/${agent.modelId} at ${agent.thinkingLevel} effort, not what was picked. Pick it again to start it.`,
+      },
+    };
   return { agent };
 }
 

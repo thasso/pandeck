@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  agentRuntimeOf,
   BROADCAST_TOPICS,
   isSafeEntryName,
   isSkillEnabled,
@@ -120,5 +121,25 @@ describe("declared skill names", () => {
     ])
       expect(isSafeEntryName(name)).toBe(false);
     expect(isSafeEntryName("x".repeat(MAX_ENTRY_NAME_CHARS))).toBe(true);
+  });
+});
+
+describe("agent runtime lookup", () => {
+  test("reads only a definition's own runtime, never an inherited member", () => {
+    const list = JSON.parse(
+      JSON.stringify({
+        libraryPath: "/data/agents",
+        entries: [],
+        diagnostics: [],
+        agentRuntimes: { constructor: { problem: "No model." } },
+      }),
+    );
+    expect(agentRuntimeOf(list, "constructor")).toEqual({
+      problem: "No model.",
+    });
+    expect(agentRuntimeOf({ ...list, agentRuntimes: {} }, "constructor")).toBe(
+      undefined,
+    );
+    expect(agentRuntimeOf(undefined, "toString")).toBe(undefined);
   });
 });

@@ -24,7 +24,7 @@ async function agentRuntimes(
     // Diagnostics already say why a folder is not a definition, and one
     // listed under a valid definition's name must not replace its runtime:
     // the definitions come first, so the first row for a name wins.
-    if (!valid.has(row.name) || runtimes[row.name]) continue;
+    if (!valid.has(row.name) || Object.hasOwn(runtimes, row.name)) continue;
     runtimes[row.name] =
       "problem" in row
         ? { problem: row.problem }

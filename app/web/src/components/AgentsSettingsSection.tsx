@@ -8,7 +8,7 @@
  * user owns the files and their Git history.
  */
 import { TriangleAlert } from "lucide-react";
-import type { EntryLibraryList } from "@assistant/shared";
+import { agentRuntimeOf, type EntryLibraryList } from "@assistant/shared";
 import type { LoadState } from "../lib/loadState.ts";
 import {
   LibrarySettingsSection,
@@ -77,7 +77,7 @@ export function AgentsSettingsSection({
       library={library}
       initialSelected={initialSelected}
       rowMeta={(agent, list) => {
-        const runtime = list.agentRuntimes?.[agent.name];
+        const runtime = agentRuntimeOf(list, agent.name);
         if (!runtime) return null;
         const label = agentRuntimeLabel(runtime);
         return label ? (

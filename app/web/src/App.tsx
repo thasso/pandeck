@@ -368,8 +368,12 @@ import { useDialogs } from "./components/common/dialogs.tsx";
 import { IconButton } from "./components/common/IconButton.tsx";
 import {
   agentAcrossPersonaSwitch,
+  agentDraft,
   leftNewSessionPage,
+  reconcileStagedAgent,
+  reissuedFirstSend,
   stagedSessionRecord,
+  withoutAgent,
   type StagedSessionRecord,
 } from "./lib/stagedSession.ts";
 
@@ -2986,6 +2990,9 @@ function AppContent() {
     setPendingWorktreeReview(null);
     setSessionReviewDraft(null);
     setPendingStart(null);
+    // A failed first send held for retry belongs to the draft being thrown
+    // away; a fresh start must not re-issue it.
+    setStagedSend(null);
     navigate(SESSIONS_CREATE_PATH);
     setComposerFocusToken((token) => token + 1);
   }, [navigate]);
@@ -2999,9 +3006,9 @@ function AppContent() {
       id?: string;
       harness: Harness;
       agentType: AgentType;
-      provider?: string;
-      modelId?: string;
-      thinkingLevel?: ThinkingLevel;
+      provider?: string | undefined;
+      modelId?: string | undefined;
+      thinkingLevel?: ThinkingLevel | undefined;
       /**
        * Build/Plan, stated by every caller (undefined = Build). A RESTAGE for one
        * axis (model, thinking, persona, account) passes the record's own mode on;
@@ -4413,42 +4420,48 @@ function AppContent() {
    * the session, so this is a preview of what it will run, not a promise.
    */
   const stageAgent = (name: string | null) => {
-    if (!isNewChatRoute || runtimeHasStarted) return;
-    const current = pendingStart ?? stagedStart;
+    // A review handoff creates its session without a first send, so it cannot
+    // start as an agent: the row is not offered for that draft.
+    if (!isNewChatRoute || runtimeHasStarted || pendingWorktreeReview) return;
     if (name === null) {
       // Back to a plain session on the same runtime. Only a staged record can
       // carry an agent.
-      if (pendingStart?.agent === undefined) return;
-      const { agent: _dropped, ...plain } = pendingStart;
-      setPendingStart(plain);
+      if (pendingStart) setPendingStart(withoutAgent(pendingStart));
       return;
     }
-    const runtime = dataOf(state.agentLibrary)?.agentRuntimes?.[name];
-    if (!runtime || runtime.problem !== undefined) return;
-    const accountProvider = accountProviderForModelProvider(runtime.provider);
-    const account =
-      activeCredentialProfiles.find(
-        (profile) =>
-          profile.id === credentialProfileId &&
-          profile.provider === accountProvider,
-      ) ??
-      activeCredentialProfiles.find(
-        (profile) => profile.provider === accountProvider,
-      );
-    if (account) setCredentialProfileId(account.id);
+    const draft = agentDraft(
+      dataOf(state.agentLibrary),
+      name,
+      activeCredentialProfiles,
+      credentialProfileId,
+    );
+    if (!draft) return;
+    const { accountId, ...runtime } = draft;
+    if (accountId) setCredentialProfileId(accountId);
+    const current = pendingStart ?? stagedStart;
     startStagedSession({
       ...(current?.id !== undefined && current.id !== "pending-pi-session"
         ? { id: current.id }
         : {}),
-      harness: harnessForModelProvider(runtime.provider),
-      agentType: runtime.persona,
-      provider: runtime.provider,
-      modelId: runtime.modelId,
-      thinkingLevel: runtime.thinkingLevel,
+      ...runtime,
       mode: current?.mode,
-      agent: name,
     });
   };
+  // The staged agent follows the library: a definition deleted, renamed or
+  // made unrunnable is dropped, and one whose runtime changed is restaged, so
+  // the pickers keep showing what the first send will run.
+  const stageAgentRef = useRef(stageAgent);
+  stageAgentRef.current = stageAgent;
+  useEffect(() => {
+    const change = reconcileStagedAgent(
+      pendingStart,
+      dataOf(state.agentLibrary),
+    );
+    if (change === "drop")
+      setPendingStart((record) => record && withoutAgent(record));
+    else if (change === "restage" && pendingStart?.agent)
+      stageAgentRef.current(pendingStart.agent);
+  }, [state.agentLibrary, pendingStart]);
   // Capability-driven picker locking: non-pi harnesses pin model/thinking after
   // their first turn (see lib/sessionCapabilities.locksModelAfterStart).
   const modelLocked = displaySession
@@ -4807,15 +4820,17 @@ function AppContent() {
       // Re-sending after a failed first send reuses the HELD send: its staged
       // context (project to provision in, Task, worktree) was already consumed
       // and cleared, so rebuilding it from the pickers would silently drop it.
-      // Only the text/attachments are the composer's, and the clientRequestId
+      // What runs it is the pickers' NOW (`reissuedFirstSend`): a pick made
+      // after the failure is what the user sees, so it is what is sent. The
+      // text/attachments are the composer's, and the clientRequestId
       // rides along so the visible prompt is replaced rather than duplicated.
       const input: HarnessSendInput =
         routing === "reissue-first-send"
-          ? {
-              ...stagedSend!.input!,
-              text: sentText,
-              attachments: allAttachments,
-            }
+          ? reissuedFirstSend(
+              stagedSend!.input!,
+              { ...runtime, agent: staged?.agent },
+              { text: sentText, attachments: allAttachments },
+            )
           : {
               id,
               harness: runtime.harness,
@@ -6358,7 +6373,9 @@ function AppContent() {
               onSelectThinking={(level) =>
                 runtimeActions.setThinkingLevel(level)
               }
-              agents={state.agentLibrary}
+              // A comment-review draft starts through the review handoff,
+              // which carries no agent definition.
+              agents={pendingWorktreeReview ? undefined : state.agentLibrary}
               selectedAgent={(pendingStart ?? stagedStart)?.agent ?? null}
               onSelectAgent={stageAgent}
             />

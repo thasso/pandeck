@@ -173,9 +173,10 @@ test("a first send naming an agent runs as that definition and freezes it", asyn
     id: "agent-first-send",
     agentType: "assistant",
     text: "What changed?",
-    // The client's staging is overruled by the definition.
-    modelId: "sonnet",
-    thinkingLevel: "low",
+    // What the pickers showed when the definition was picked.
+    modelProvider: "claude-sdk",
+    modelId: "opus",
+    thinkingLevel: "high",
     agent: "researcher",
     credentialProfileId: claudeProfile.id,
   });
@@ -243,8 +244,8 @@ test("a pi first send runs the definition's model and effort and hands it the ag
     agentType: "assistant",
     text: "Draft it.",
     modelProvider: "openai-codex",
-    modelId: "gpt-other",
-    thinkingLevel: "high",
+    modelId: "gpt-5",
+    thinkingLevel: "low",
     agent: "drafter",
   });
 
@@ -278,5 +279,28 @@ test("a send staged on another engine than the definition's is refused", async (
   assert.match(
     JSON.stringify(sent),
     /runs on claude-sdk\/opus, which this engine does not run/,
+  );
+});
+
+test("a definition whose runtime changed since it was picked is refused, not run", async () => {
+  const { conn, sent } = makeConnection();
+
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
+    id: "agent-stale-pick",
+    agentType: "assistant",
+    text: "hello",
+    modelProvider: "claude-sdk",
+    modelId: "opus",
+    thinkingLevel: "low",
+    agent: "researcher",
+    credentialProfileId: claudeProfile.id,
+  });
+
+  assert.equal(acquired.length, 0);
+  assert.equal(prompts.length, 0);
+  assert.match(
+    JSON.stringify(sent),
+    /Agent \\"researcher\\" now runs on claude-sdk\/opus at high effort, not what was picked/,
   );
 });

@@ -548,9 +548,28 @@ describe("agent definitions row", () => {
     expect(html).toContain(
       'title="Start as a plain session instead of test-reviewer"',
     );
-    // The unusable one is shown, disabled, with its reason as the title.
+    // The unusable one is shown, disabled, and its reason is visible text.
     expect(html).toMatch(
       /title="No enabled account offers a model &quot;gemini&quot;\."[^>]*disabled|disabled[^>]*title="No enabled account offers a model &quot;gemini&quot;\."/,
+    );
+    expect(html).toContain(
+      "<li>No enabled account offers a model &quot;gemini&quot;.</li>",
+    );
+  });
+
+  it("keeps a picked definition clickable after it stops being able to start", () => {
+    const html = render([], {
+      agents: ready({
+        ...agents,
+        agentRuntimes: {
+          ...agents.agentRuntimes,
+          "test-reviewer": { problem: "Gone." },
+        },
+      }),
+      selectedAgent: "test-reviewer",
+    });
+    expect(html).toMatch(
+      /<button(?![^>]*\sdisabled="")[^>]*title="Gone\."[^>]*>/,
     );
   });
 

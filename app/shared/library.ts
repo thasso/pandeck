@@ -59,6 +59,19 @@ export type AgentRuntimeSummary =
     }
   | { problem: string; persona?: never };
 
+/**
+ * One definition's runtime from an agents list. An own-property read: a
+ * definition may be named like an `Object.prototype` member (`constructor`),
+ * and a decoded list is an ordinary object.
+ */
+export function agentRuntimeOf(
+  list: EntryLibraryList | undefined,
+  name: string,
+): AgentRuntimeSummary | undefined {
+  const runtimes = list?.agentRuntimes;
+  return runtimes && Object.hasOwn(runtimes, name) ? runtimes[name] : undefined;
+}
+
 /** One entry folder's recent commits, newest first (`/api/<library>/history`). */
 export interface EntryHistory {
   commits: Array<{

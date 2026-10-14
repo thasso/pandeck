@@ -73,7 +73,7 @@ import {
 /**
  * @component SessionContextSections
  * @purpose The session inspector's feature content: queued post-reload
- * continuation, the agent definition it was spawned as, library skills (loaded /
+ * continuation, the agent definition it runs as, library skills (loaded /
  * available / not mounted),
  * deferred-tool exposure (the "Tools" section: loaded/available/unavailable
  * per catalog group + load trail, including the browser tool groups), the
@@ -87,7 +87,7 @@ import {
 interface SessionContextSectionsProps {
   sessionId?: string | undefined;
   toolExposure?: SessionToolExposure | undefined;
-  /** The agent definition the session was spawned as, when it was. */
+  /** The agent definition the session runs as, when it has one. */
   agent?: SessionAgentSummary | undefined;
   /** Open an agent definition on the Agents settings page. */
   onOpenAgent?: ((name: string) => void) | undefined;
@@ -205,7 +205,7 @@ function PostReloadContinuationCard({
 }
 
 /**
- * The agent definition this session was spawned as, as it was frozen at spawn:
+ * The agent definition this session runs as, as it was frozen at its start:
  * a later edit to the definition changes new spawns only, so this shows what
  * THIS session runs as.
  */
@@ -247,7 +247,7 @@ function AgentSection({
               {agent.name}
             </PropertyText>
           )}
-          <PropertyLabel>Spawned on</PropertyLabel>
+          <PropertyLabel>Runs on</PropertyLabel>
           <PropertyText className="text-foreground">
             {agent.model}, {agent.effort} effort
           </PropertyText>

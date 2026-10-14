@@ -15,6 +15,7 @@ import {
   type ThinkingLevel,
   type WorktreeRecord,
   type CredentialProfileSummary,
+  agentRuntimeOf,
   type EntryLibraryList,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
@@ -615,15 +616,18 @@ function AgentDefinitionRow({
         scrollKey={`${selectedAgent ?? ""}:${agents.entries.length}`}
       >
         {agents.entries.map((agent) => {
-          const runtime = agents.agentRuntimes?.[agent.name];
+          const runtime = agentRuntimeOf(agents, agent.name);
           const problem = runtime?.problem;
           const selected = agent.name === selectedAgent;
           return (
             <QuickPill
               key={agent.name}
               selected={selected}
-              // A definition that cannot start says why instead.
-              disabled={problem !== undefined || runtime === undefined}
+              // A definition that cannot start is not offered; the picked one
+              // stays clickable so it can always be unpicked.
+              disabled={
+                !selected && (problem !== undefined || runtime === undefined)
+              }
               title={
                 problem ??
                 (selected
@@ -641,6 +645,20 @@ function AgentDefinitionRow({
           <RefreshIndicator label="Rescanning agents" />
         ) : null}
       </QuickRow>
+      {/* Why a definition cannot start, where touch and keyboard users see
+          it too: a disabled pill's title never shows. */}
+      {agents.entries.some(
+        (agent) => agentRuntimeOf(agents, agent.name)?.problem !== undefined,
+      ) ? (
+        <ul className="px-4 text-sm text-muted-foreground">
+          {agents.entries.map((agent) => {
+            const problem = agentRuntimeOf(agents, agent.name)?.problem;
+            return problem !== undefined ? (
+              <li key={agent.name}>{problem}</li>
+            ) : null;
+          })}
+        </ul>
+      ) : null}
       {error ? (
         <div className="px-4">
           <ErrorNote message={error} />
