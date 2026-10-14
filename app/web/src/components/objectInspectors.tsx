@@ -1322,7 +1322,7 @@ export function SessionInspector({
   /** Session-scoped task progress merged into the inspector's single Tasks section. */
   sessionTasks?: TaskSummary[];
   forkOrigin?: SessionForkOrigin | undefined;
-  /** Immutable credential profile selected before the first prompt. */
+  /** Current account binding; only a live account switch replaces it. */
   credentialProfile?:
     { name: string; provider: "openai-codex" | "claude" } | undefined;
   /** The model this session runs on (staged selection while it is still a draft). */

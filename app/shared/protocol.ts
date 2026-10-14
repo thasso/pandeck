@@ -566,10 +566,11 @@ export interface AppearanceSettings {
 }
 
 /**
- * The provider account a configured model slot runs on. Unset means automatic:
- * the first enabled account of the slot model's provider, which is also the
- * fallback when the pinned account is disabled or deleted — pinning an account
- * must never be able to break background automation.
+ * The provider account a configured model slot runs on. Unset means Automatic:
+ * the account router (`accountRouter.ts`) picks one on each run. A missing,
+ * disabled or wrong-provider pin degrades to Automatic within the run's
+ * enterprise scope; a run that requires an enterprise account refuses rather
+ * than fall back to a personal one (`docs/account-routing.md`).
  */
 export interface CredentialProfilePin {
   credentialProfileId?: string;
@@ -1811,7 +1812,7 @@ export interface SessionListItem {
   model?: { provider: string; id: string; name?: string };
   /** Thinking/reasoning level used by the session, when known. */
   thinkingLevel?: ThinkingLevel;
-  /** Immutable credential profile selected before this session's first prompt. */
+  /** Current account binding; only a live account switch replaces it. */
   credentialProfileId?: string;
   /** Only enterprise accounts may run this session; absent means no restriction. */
   requiresEnterprise?: boolean;
