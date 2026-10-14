@@ -1,16 +1,15 @@
 /**
  * The approved peer-runtime roster ([Task-595](pa://task/595)): the server side
- * of the small set of exact account/model/thinking options a human pre-approved
- * for agents to start ordinary peer sessions on.
+ * of the small set of model/thinking options and account policies a human
+ * pre-approved for agents to start ordinary peer sessions on.
  *
  * It answers three questions and nothing else:
  *
  * - what the roster currently looks like, with each row's real availability,
  *   inferred family, and user-owned cost/selection guidance (`peerRuntimeRoster`);
  * - whether ONE named row can run RIGHT NOW, exactly as approved
- *   (`resolveApprovedPeerRuntime`) — there is no fallback, no nearest model and
- *   no automatic account, because a substitution is a runtime the human never
- *   approved;
+ *   (`resolveApprovedPeerRuntime`) — model and thinking never substitute; an
+ *   account is routed only when the human approved Automatic, never for a pin;
  * - whether a coordinator may start another direct peer turn at this moment
  *   (`admitDirectPeerTurns`), a fixed server policy rather than a setting.
  *
@@ -37,6 +36,7 @@ import {
   credentialProfileById,
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
+import { pickAccount } from "./accountRouter.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { modelsForAccount } from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
@@ -124,7 +124,9 @@ function rosterEntry(
 ): PeerRuntimeRosterEntry {
   const model = options.find(
     (option) =>
-      option.credentialProfileId === row.credentialProfileId &&
+      (row.credentialProfileId
+        ? option.credentialProfileId === row.credentialProfileId
+        : !option.accountDisabled) &&
       option.provider === row.provider &&
       option.id === row.modelId,
   );
@@ -139,7 +141,11 @@ function rosterEntry(
     modelId: row.modelId,
     ...(model?.name ? { modelName: model.name } : {}),
     thinkingLevel: row.thinkingLevel,
-    ...(model?.accountName ? { accountName: model.accountName } : {}),
+    ...(!row.credentialProfileId
+      ? { accountName: "Automatic" }
+      : model?.accountName
+        ? { accountName: model.accountName }
+        : {}),
     available: !reason,
     ...(reason ? { unavailableReason: reason } : {}),
     family: peerRuntimeFamilyOf(row.provider, row.modelId),
@@ -172,18 +178,19 @@ export interface ApprovedPeerRuntime {
  * Every failure THROWS {@link PeerRuntimeRefusedError} rather than degrading:
  * an unknown id (a typo, or a row the user deleted) must not quietly become an
  * approval card either, or a mistyped id would silently widen what an agent may
- * ask for. The check is exact — this account, this model, this thinking level —
- * and it runs per row at spawn time, because Settings edits take effect on the
- * next start and a roster read may be minutes old.
+ * ask for. The check is exact: this model and thinking level, on the pinned
+ * account or one picked by Automatic. It runs per row at spawn time, because
+ * Settings edits take effect on the next start and a roster read may be minutes old.
  */
 export async function resolveApprovedPeerRuntime(
   profileId: string,
+  options: { requiresEnterprise?: boolean } = {},
 ): Promise<ApprovedPeerRuntime> {
   const wanted = profileId.trim();
   // Discover account/model availability first, then take the roster snapshot.
   // Discovery awaits provider state, so reading Settings before it would let a
   // user edit during that await authorize the runtime from the stale row.
-  const options = await accountModelOptions();
+  let modelOptions = await accountModelOptions();
   const rows = getSettings().peerSpawnRuntimes;
   const row = rows.find((candidate) => candidate.id === wanted);
   if (!row)
@@ -196,14 +203,61 @@ export async function resolveApprovedPeerRuntime(
     throw new PeerRuntimeRefusedError(
       `Approved runtime "${peerRuntimeDisplayName(row)}" is disabled in Settings.`,
     );
-  const reason = peerRuntimeUnavailableReason(row, options);
+  const reason = peerRuntimeUnavailableReason(row, modelOptions);
   if (reason)
     throw new PeerRuntimeRefusedError(
       `Approved runtime "${peerRuntimeDisplayName(row)}" cannot run right now: ${reason}`,
     );
-  const model = options.find(
+  let credentialProfileId = row.credentialProfileId;
+  if (!credentialProfileId) {
+    // The model/effort are authorization, not suggestions for the router.
+    if (!isThinkingLevel(row.thinkingLevel))
+      throw new PeerRuntimeRefusedError(
+        "The approved thinking level is invalid.",
+      );
+    const picked = await pickAccount({
+      model: { provider: row.provider, modelId: row.modelId },
+      thinkingLevel: row.thinkingLevel,
+      requiresEnterprise: options.requiresEnterprise === true,
+    });
+    if (!picked.profileId)
+      throw new PeerRuntimeRefusedError(
+        options.requiresEnterprise
+          ? "This session requires an enterprise account, but no enabled enterprise account is available for this peer runtime."
+          : "No enabled account is available for this peer runtime.",
+      );
+    credentialProfileId = picked.profileId;
+    const models = await modelsForProfile(credentialProfileId);
+    const profile = credentialProfileById(credentialProfileId);
+    modelOptions = profile
+      ? models.map((model) => ({
+          ...model,
+          credentialProfileId: profile.id,
+          accountName: profile.name,
+          ...(profile.enabled ? {} : { accountDisabled: true }),
+        }))
+      : [];
+    // Routing and discovery await provider state. An approval revoked or edited
+    // during either await must not authorize a session from the stale row.
+    const current = getSettings().peerSpawnRuntimes.find(
+      (candidate) => candidate.id === wanted,
+    );
+    if (JSON.stringify(current) !== JSON.stringify(row))
+      throw new PeerRuntimeRefusedError(
+        "The approved peer runtime changed while selecting its account. Read the current roster and try again.",
+      );
+    const pickedReason = peerRuntimeUnavailableReason(
+      { ...row, credentialProfileId },
+      modelOptions,
+    );
+    if (pickedReason)
+      throw new PeerRuntimeRefusedError(
+        `Approved runtime "${peerRuntimeDisplayName(row)}" cannot run right now: ${pickedReason}`,
+      );
+  }
+  const model = modelOptions.find(
     (option) =>
-      option.credentialProfileId === row.credentialProfileId &&
+      option.credentialProfileId === credentialProfileId &&
       option.provider === row.provider &&
       option.id === row.modelId,
   );
@@ -224,7 +278,7 @@ export async function resolveApprovedPeerRuntime(
     provider: row.provider,
     modelId: row.modelId,
     ...(model.name ? { modelName: model.name } : {}),
-    credentialProfileId: row.credentialProfileId,
+    credentialProfileId,
     ...(model.accountName ? { accountName: model.accountName } : {}),
     thinkingLevel: row.thinkingLevel,
     family: peerRuntimeFamilyOf(row.provider, row.modelId),

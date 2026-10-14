@@ -7,13 +7,13 @@
  * Every refusal here is asserted as a REFUSAL rather than as a fallback: a
  * typo, a disabled row, a withdrawn model and a thinking level a model dropped
  * must all fail loudly, because each of the tempting recoveries (nearest model,
- * automatic account, "just propose it instead") silently widens what an agent
+ * unapproved account fallback, "just propose it instead") silently widens what an agent
  * may spend the user's money on.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ModelOption, PeerSpawnRuntime } from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "peer-runtimes-"));
@@ -35,6 +35,10 @@ let piModels: ModelOption[] = [
     contextWindow: 400_000,
   },
 ];
+
+vi.mock("./accountRouter.ts", () => ({
+  pickAccount: vi.fn(async () => ({ profileId: "codex-acct" })),
+}));
 
 vi.mock("./piSdk/models.ts", () => ({
   listModelsForProfile: vi.fn(async () => piModels),
@@ -67,6 +71,7 @@ vi.mock("./credentialProfiles.ts", async (importOriginal) => {
 });
 
 const { getSettings, updateSettings } = await import("./settings.ts");
+const { pickAccount } = await import("./accountRouter.ts");
 const {
   MAX_CONCURRENT_DIRECT_PEER_TURNS,
   PeerRuntimeRefusedError,
@@ -128,9 +133,14 @@ beforeEach(() => {
     },
   ];
   profiles[0]!.enabled = true;
+  vi.mocked(pickAccount)
+    .mockReset()
+    .mockResolvedValue({ profileId: "codex-acct" });
   approve([]);
   resetDirectPeerChildrenForTests();
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 /* ------------------------------- persistence ------------------------------ */
 
@@ -185,7 +195,7 @@ test("a row with no id or no model is dropped, and a duplicate id never wins twi
   expect(rows[0]).toMatchObject({ id: "pr_b", name: "first" });
 });
 
-test("a row missing its provider or account is KEPT and explains itself", async () => {
+test("a missing provider stays broken while an empty account means Automatic", async () => {
   // Only an unaddressable row (no id) or one that approved no model at all may
   // be dropped: a half-written row is a broken APPROVAL the human has to see.
   approve([
@@ -198,10 +208,20 @@ test("a row missing its provider or account is KEPT and explains itself", async 
     "pr_noaccount",
   ]);
   const roster = await peerRuntimeRoster();
-  for (const entry of roster) {
-    expect(entry.available).toBe(false);
-    expect(entry.unavailableReason).toMatch(/no account or provider/i);
-  }
+  expect(roster[0]?.available).toBe(false);
+  expect(roster[0]?.unavailableReason).toMatch(/no provider/i);
+  expect(roster[1]).toMatchObject({
+    available: true,
+    accountName: "Automatic",
+  });
+  expect(getSettings().peerSpawnRuntimes[1]).not.toHaveProperty(
+    "credentialProfileId",
+  );
+  await expect(
+    resolveApprovedPeerRuntime("pr_noaccount"),
+  ).resolves.toMatchObject({
+    credentialProfileId: "codex-acct",
+  });
   await expect(resolveApprovedPeerRuntime("pr_noprovider")).rejects.toThrow(
     /cannot run right now/i,
   );
@@ -445,6 +465,130 @@ test("an approved row resolves to exactly what was approved", async () => {
     description: "Use for implementation and focused fixes.",
   });
 });
+
+test("Automatic rows round-trip without a pin and route the exact model and effort", async () => {
+  const automatic = runtimeRow();
+  delete automatic.credentialProfileId;
+  expect(
+    validateClientMessage({
+      type: "updateSettings",
+      patch: { peerSpawnRuntimes: [automatic] },
+    }).ok,
+  ).toBe(true);
+  approve([automatic]);
+  expect(getSettings().peerSpawnRuntimes[0]).not.toHaveProperty(
+    "credentialProfileId",
+  );
+
+  const [entry] = await peerRuntimeRoster();
+  expect(entry).toMatchObject({ available: true, accountName: "Automatic" });
+  expect(pickAccount).not.toHaveBeenCalled();
+  const resolved = await resolveApprovedPeerRuntime("pr_terra", {
+    requiresEnterprise: true,
+  });
+  expect(pickAccount).toHaveBeenCalledWith({
+    model: { provider: "openai-codex", modelId: "gpt-5.6-terra" },
+    thinkingLevel: "medium",
+    requiresEnterprise: true,
+  });
+  expect(resolved).toMatchObject({
+    credentialProfileId: "codex-acct",
+    accountName: "Work Codex",
+    modelId: "gpt-5.6-terra",
+    thinkingLevel: "medium",
+  });
+});
+
+test("pinned rows never consult Automatic, including when disabled or removed", async () => {
+  approve([runtimeRow()]);
+  await resolveApprovedPeerRuntime("pr_terra");
+  profiles[0]!.enabled = false;
+  await expect(resolveApprovedPeerRuntime("pr_terra")).rejects.toThrow(
+    /disabled/i,
+  );
+  approve([runtimeRow({ credentialProfileId: "removed" })]);
+  await expect(resolveApprovedPeerRuntime("pr_terra")).rejects.toThrow(
+    /removed/i,
+  );
+  expect(pickAccount).not.toHaveBeenCalled();
+});
+
+test.each([false, true])(
+  "Automatic refuses a missing account within enterprise=%s scope",
+  async (requiresEnterprise) => {
+    approve([runtimeRow({ credentialProfileId: "" })]);
+    vi.mocked(pickAccount).mockResolvedValue({
+      profileId: null,
+      degraded: requiresEnterprise
+        ? "no-enterprise-account"
+        : "no-enabled-account",
+    });
+    await expect(
+      resolveApprovedPeerRuntime("pr_terra", { requiresEnterprise }),
+    ).rejects.toThrow(
+      requiresEnterprise ? /enterprise account/i : /no enabled account/i,
+    );
+  },
+);
+
+test("a degraded Automatic pick must still offer the exact approved runtime", async () => {
+  approve([runtimeRow({ credentialProfileId: "" })]);
+  vi.mocked(pickAccount).mockResolvedValue({
+    profileId: "claude-acct",
+    degraded: "no-eligible-account",
+  });
+  await expect(resolveApprovedPeerRuntime("pr_terra")).rejects.toThrow(
+    /no longer offers/i,
+  );
+});
+
+test.each(["disabled-account", "withdrawn-model", "withdrawn-effort"])(
+  "Automatic rechecks the selected account after %s",
+  async (change) => {
+    approve([runtimeRow({ credentialProfileId: "" })]);
+    vi.mocked(pickAccount).mockImplementationOnce(async () => {
+      if (change === "disabled-account") profiles[0]!.enabled = false;
+      if (change === "withdrawn-model") piModels = [];
+      if (change === "withdrawn-effort")
+        piModels = [
+          { ...piModels[0]!, supportedThinkingLevels: ["off", "low"] },
+        ];
+      return { profileId: "codex-acct" };
+    });
+    await expect(resolveApprovedPeerRuntime("pr_terra")).rejects.toThrow(
+      /cannot run right now/i,
+    );
+  },
+);
+
+test.each(["disabled", "deleted", "model", "thinking", "pin"])(
+  "an approval %s during Automatic selection refuses the stale runtime",
+  async (change) => {
+    const automatic = runtimeRow({ credentialProfileId: "" });
+    approve([automatic]);
+    vi.mocked(pickAccount).mockImplementationOnce(async () => {
+      approve(
+        change === "deleted"
+          ? []
+          : [
+              {
+                ...automatic,
+                ...(change === "disabled" ? { enabled: false } : {}),
+                ...(change === "model" ? { modelId: "gpt-other" } : {}),
+                ...(change === "thinking" ? { thinkingLevel: "low" } : {}),
+                ...(change === "pin"
+                  ? { credentialProfileId: "codex-acct" }
+                  : {}),
+              },
+            ],
+      );
+      return { profileId: "codex-acct" };
+    });
+    await expect(resolveApprovedPeerRuntime("pr_terra")).rejects.toThrow(
+      /changed while selecting/i,
+    );
+  },
+);
 
 test.each([
   [

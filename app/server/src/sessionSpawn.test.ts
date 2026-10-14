@@ -1111,6 +1111,149 @@ test.each(
   },
 );
 
+test.each(["claude", "openai-codex"] as const)(
+  "an Automatic %s peer binds and reports the late account pick",
+  async (provider) => {
+    const target = createCredentialProfile({
+      name: `Automatic peer ${provider}`,
+      provider,
+    });
+    const modelProvider = provider === "claude" ? "claude-sdk" : "openai-codex";
+    const modelId = provider === "claude" ? "sonnet" : "gpt-5";
+    approveRuntimes([
+      {
+        id: "pr_auto",
+        provider: modelProvider,
+        modelId,
+        thinkingLevel: "low",
+        enabled: true,
+      },
+    ]);
+    const picker = vi
+      .spyOn(accountRouter, "pickAccount")
+      .mockResolvedValueOnce({ profileId: accountFor(provider) })
+      .mockResolvedValue({ profileId: target.id });
+    try {
+      const roster = textOf(await runSpawnOperation("profiles"));
+      expect(roster).toContain("account Automatic");
+      expect(picker).not.toHaveBeenCalled();
+      const [result] = await spawnApprovedPeers({
+        senderSessionId: SENDER,
+        rows: [{ ...row(), profileId: "pr_auto" }],
+      });
+      expect(result?.error).toBeUndefined();
+      expect(result?.runtime).toMatchObject({
+        provider: modelProvider,
+        modelId,
+        thinkingLevel: "low",
+        accountName: target.name,
+      });
+      expect(picker).toHaveBeenCalledTimes(2);
+      expect(picker).toHaveBeenLastCalledWith({
+        model: { provider: modelProvider, modelId },
+        thinkingLevel: "low",
+        requiresEnterprise: false,
+      });
+      expect(
+        (provider === "claude" ? recorded.claude : recorded.pi)[0],
+      ).toMatchObject({
+        credentialProfileId: target.id,
+        modelId,
+        thinkingLevel: "low",
+      });
+    } finally {
+      setCredentialProfileEnabled(target.id, false);
+    }
+  },
+);
+
+test.each(
+  (["claude", "openai-codex"] as const).flatMap((provider) =>
+    (["coordinator", "user"] as const).map((owner) => ({ provider, owner })),
+  ),
+)(
+  "an enterprise Automatic $provider peer with owner=$owner routes within enterprise scope",
+  async ({ provider, owner }) => {
+    const target = createCredentialProfile({
+      name: `Enterprise peer ${provider}`,
+      provider,
+    });
+    patchCredentialProfile(target.id, { enterprise: true });
+    const sender = `automatic-enterprise-${provider}-${(counter += 1)}`;
+    sessionStore.upsert({
+      id: sender,
+      harness: "pi",
+      agentType: "assistant",
+      requiresEnterprise: true,
+    });
+    // Source tombstones retain the captured security requirement too.
+    sessionStore.remove(sender);
+    const modelProvider = provider === "claude" ? "claude-sdk" : "openai-codex";
+    const modelId = provider === "claude" ? "sonnet" : "gpt-5";
+    approveRuntimes([
+      {
+        id: "pr_auto",
+        provider: modelProvider,
+        modelId,
+        thinkingLevel: "low",
+        enabled: true,
+      },
+    ]);
+    const picker = vi.spyOn(accountRouter, "pickAccount");
+    try {
+      const [result] = await spawnApprovedPeers({
+        senderSessionId: sender,
+        rows: [{ ...row({ owner }), profileId: "pr_auto" }],
+      });
+      expect(result?.error).toBeUndefined();
+      expect(result?.sessionId).toBeTruthy();
+      expect(picker).toHaveBeenCalledTimes(2);
+      for (const [request] of picker.mock.calls)
+        expect(request).toEqual({
+          model: { provider: modelProvider, modelId },
+          thinkingLevel: "low",
+          requiresEnterprise: true,
+        });
+      expect(
+        (provider === "claude" ? recorded.claude : recorded.pi)[0],
+      ).toMatchObject({
+        credentialProfileId: target.id,
+        requiresEnterprise: true,
+      });
+      expect(sessionStore.get(result!.sessionId!)?.requiresEnterprise).toBe(
+        true,
+      );
+    } finally {
+      setCredentialProfileEnabled(target.id, false);
+    }
+  },
+);
+
+test("a peer approval withdrawn during the late Automatic pick creates nothing", async () => {
+  approveRuntimes([
+    {
+      id: "pr_auto",
+      provider: "openai-codex",
+      modelId: "gpt-5",
+      thinkingLevel: "medium",
+      enabled: true,
+    },
+  ]);
+  let calls = 0;
+  vi.spyOn(accountRouter, "pickAccount").mockImplementation(async () => {
+    if (++calls === 2) approveRuntimes([]);
+    return { profileId: accountFor("openai-codex") };
+  });
+  const [result] = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: [{ ...row(), profileId: "pr_auto" }],
+  });
+  expect(result?.error).toMatch(/changed while selecting/i);
+  expect(result?.runtime).toBeUndefined();
+  expect(recorded.pi).toHaveLength(0);
+  expect(recorded.delivered).toHaveLength(0);
+});
+
 test('operation "profiles" lists family and user-authored selection metadata', async () => {
   approveRuntimes();
 

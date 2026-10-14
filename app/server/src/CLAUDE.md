@@ -20,9 +20,10 @@
   (`docs/agent-harnesses.md`). Existing-session decisions (cards, questions,
   handoffs) use `agentHandoffs.ts` for mid-turn queueing.
 - Automatic: `accountRouter.ts`; enterprise propagates, never relaxes; host-side
-  usage; explicit peer/workflow pins. Health/benches/switches require explicit
-  own-subscription runs. Switch after native termination, never for Stop or a
-  degraded pick; markers are display-only (`docs/account-routing.md`).
+  usage; peer/workflow pins stay exact, unpinned peers route.
+  Health/benches/switches require explicit own-subscription runs. Switch after
+  native termination, never for Stop or a degraded pick; markers are
+  display-only (`docs/account-routing.md`).
 - Separate harness/persona axes: branch on shared capabilities, not persona
   keys. Persona creation guards belong in `connection.ts` creation paths.
 - Conditional prompt sections/eager tools and library skill names are frozen at

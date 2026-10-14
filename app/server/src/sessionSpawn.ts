@@ -1240,7 +1240,7 @@ function rowRuntime(
     return () => resolveAgentSpawn(name, undefined, { requiresEnterprise });
   }
   const profileId = row.profileId;
-  return () => resolveApprovedPeerRuntime(profileId);
+  return () => resolveApprovedPeerRuntime(profileId, { requiresEnterprise });
 }
 
 function reportedRuntime(

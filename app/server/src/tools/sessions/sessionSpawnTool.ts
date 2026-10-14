@@ -8,7 +8,8 @@
  *   pre-approved, including their user-set cost and selection hints. Read-only.
  * - `spawn` (Task-595) creates sessions IMMEDIATELY on those exact runtimes.
  *   No model, provider, account or thinking field exists here: the roster row
- *   IS the choice the human already made, and an unknown id is refused rather
+ *   IS the choice the human already made, including Automatic or a pinned
+ *   account, and an unknown id is refused rather
  *   than downgraded to a proposal.
  * - `propose` ([Task-553](pa://task/553)) is the original path for anything
  *   outside the roster: it creates nothing, writes one approval card and ends
@@ -103,7 +104,7 @@ function makeSessionSpawnTool() {
               profileId: {
                 type: "string",
                 description:
-                  'On "spawn", this or agent is required; forbidden for "propose": the id of an approved runtime from `operation: "profiles"`. An unknown, disabled or currently unavailable id is refused — nothing falls back to another runtime or turns into a proposal.',
+                  'On "spawn", this or agent is required; forbidden for "propose": the id of an approved runtime from `operation: "profiles"`. Automatic rows route the account, never the model or effort. An unknown, disabled or unavailable id is refused, never substituted or proposed.',
               },
               agent: {
                 type: "string",

@@ -1,9 +1,10 @@
 /**
  * Approved peer runtimes ([Task-595](pa://task/595)).
  *
- * The user's authority in one small list: each row is one exact account, model
- * and thinking level that an agent may start an ordinary peer session on
- * WITHOUT another approval card. Deliberately no roles, projects or budgets —
+ * The user's authority in one small list: each row fixes the provider, model
+ * and thinking level, with either an exact account pin or Automatic account
+ * selection, that an agent may start WITHOUT another approval card.
+ * Deliberately no roles, projects or budgets —
  * the coordinating agent describes the role in its own prompt, and everything
  * it may choose from is here.
  *
@@ -39,7 +40,15 @@ import {
   type PeerRuntimeRelativeCost,
   type PeerSpawnRuntime,
 } from "@assistant/shared";
-import { AgentModelFields } from "./AgentModelFields.tsx";
+import {
+  AgentModelFields,
+  applyModelSlotChange,
+  type ModelSlotChange,
+} from "./AgentModelFields.tsx";
+import {
+  isAutomaticModelOption,
+  type SlotModelOption,
+} from "../lib/credentialProfiles.ts";
 
 /** Ids are generated here and never reused: an agent addresses a row by id. */
 function newRuntimeId(): string {
@@ -61,7 +70,7 @@ export function PeerRuntimesSettingsSection({
   settings,
   onUpdate,
 }: {
-  models: AccountModelOption[];
+  models: SlotModelOption[];
   settings: AppSettings;
   onUpdate: (patch: Partial<AppSettings>) => void;
 }) {
@@ -75,13 +84,16 @@ export function PeerRuntimesSettingsSection({
   // With no model to name, the row would be added with an empty `modelId` and
   // the server's normalizer drops it on the way in — the same click that
   // leaves nothing behind, one layer down. The button says why instead.
-  const noModels = models.length === 0;
+  const firstAvailable = models.find(
+    (model) => isAutomaticModelOption(model) || !model.accountDisabled,
+  );
+  const noModels = firstAvailable === undefined;
 
   const save = (next: PeerSpawnRuntime[]) =>
     onUpdate({ peerSpawnRuntimes: next });
 
   const addRuntime = () => {
-    const first = models[0];
+    const first = firstAvailable;
     const id = newRuntimeId();
     setAddedId(id);
     save([
@@ -89,7 +101,9 @@ export function PeerRuntimesSettingsSection({
       {
         id,
         relativeCost: "unknown",
-        credentialProfileId: first?.credentialProfileId ?? "",
+        ...(first && !isAutomaticModelOption(first)
+          ? { credentialProfileId: first.credentialProfileId }
+          : {}),
         provider: first?.provider ?? "",
         modelId: first?.id ?? "",
         thinkingLevel: "medium",
@@ -100,6 +114,15 @@ export function PeerRuntimesSettingsSection({
 
   const updateRuntime = (id: string, patch: Partial<PeerSpawnRuntime>) =>
     save(rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+
+  // Replace the whole account choice, but preserve a stored thinking level
+  // when the picker omits it. Only an explicit level pick repairs that value.
+  const updateModel = (id: string, change: ModelSlotChange) =>
+    save(
+      rows.map((row) =>
+        row.id === id ? applyModelSlotChange(row, change) : row,
+      ),
+    );
 
   const removeRuntime = (id: string) =>
     save(rows.filter((row) => row.id !== id));
@@ -143,10 +166,11 @@ export function PeerRuntimesSettingsSection({
       </Card>
 
       <p className="mt-6 text-sm text-muted-foreground">
-        Approving a runtime permits paid sessions on exactly that account, model
-        and thinking level. Anything else still comes to you as an approval
-        card. Spawned sessions appear in your sidebar, where you can read,
-        re-prompt or take over any of them.
+        Approving a runtime permits paid sessions on exactly that provider,
+        model and thinking level. Automatic chooses an enabled account that
+        offers them; choosing an account pins it with no fallback. Anything else
+        still comes to you as an approval card. Spawned sessions appear in your
+        sidebar, where you can read, re-prompt or take over any of them.
       </p>
 
       <Card className="mt-4">
@@ -194,6 +218,7 @@ export function PeerRuntimesSettingsSection({
                   justAdded={row.id === addedId}
                   onRevealed={clearAdded}
                   onChange={updateRuntime}
+                  onModelChange={updateModel}
                   onRemove={removeRuntime}
                 />
               ))}
@@ -211,18 +236,25 @@ function RuntimeRow({
   justAdded,
   onRevealed,
   onChange,
+  onModelChange,
   onRemove,
 }: {
   row: PeerSpawnRuntime;
-  models: AccountModelOption[];
+  models: SlotModelOption[];
   justAdded: boolean;
   onRevealed: () => void;
   onChange: (id: string, patch: Partial<PeerSpawnRuntime>) => void;
+  onModelChange: (id: string, change: ModelSlotChange) => void;
   onRemove: (id: string) => void;
 }) {
   const fieldId = useId();
   const family = peerRuntimeFamilyOf(row.provider, row.modelId);
-  const unavailable = peerRuntimeUnavailableReason(row, models);
+  const unavailable = peerRuntimeUnavailableReason(
+    row,
+    models.filter(
+      (model): model is AccountModelOption => !isAutomaticModelOption(model),
+    ),
+  );
   const nameRef = useRef<HTMLInputElement>(null);
   const revealedRef = useRef(false);
   // Only the row the user just added moves the page, and only once: scrolling
@@ -288,19 +320,8 @@ function RuntimeRow({
           // promising that move would be a lie. The row's own reason line
           // below says what really happens.
           accountFallback={false}
-          onChange={(next) =>
-            onChange(row.id, {
-              provider: next.provider,
-              modelId: next.modelId,
-              // Omitted when only the model changed on a row whose level this
-              // build cannot run: what the row records stays recorded until the
-              // human replaces it deliberately.
-              ...(next.thinkingLevel === undefined
-                ? {}
-                : { thinkingLevel: next.thinkingLevel }),
-              credentialProfileId: next.credentialProfileId ?? "",
-            })
-          }
+          allowAutomatic
+          onChange={(next) => onModelChange(row.id, next)}
         />
       </div>
 

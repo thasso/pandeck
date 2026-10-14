@@ -1203,13 +1203,14 @@ own enters its choices: the start sheet shows the accounts' subscription usage
 for the person picking, and it is never passed to the coordinator — the same
 Task must not plan differently because a meter moved. The host resolves an
 account only after the runtime's model, effort and plan are fixed. Explicit
-workflow role accounts and approved peer runtimes keep their selected account;
-automatic work uses the host's cached-usage picker (`account-routing.md`). Human
-workflow launches are standalone user authorization, not work originating from
-the session on show. The user may select enterprise accounts for the roles; an
-unpinned role uses the router without inheriting a requirement from another
-session. No production caller starts a workflow from an agent session. Account
-selection never changes the plan or supplies usage to the coordinator.
+workflow role accounts and pinned peer runtimes keep their selected account;
+automatic peer runtimes and other automatic work use the host's cached-usage
+picker (`account-routing.md`). Human workflow launches are standalone user
+authorization, not work originating from the session on show. The user may
+select enterprise accounts for the roles; an unpinned role uses the router
+without inheriting a requirement from another session. No production caller
+starts a workflow from an agent session. Account selection never changes the
+plan or supplies usage to the coordinator.
 
 Moving a choice out of the plan is the point of the split, and the same argument
 governs all of them: a decision made before its evidence exists is a commitment

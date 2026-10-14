@@ -775,32 +775,32 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   edits `AppSettings.sessionPeerPromptMaxHops` within the shared 1–200 bounds;
   the default is 50 and the copy explains that a human prompt closes the causal
   chain. The same section owns the [Task-595](pa://task/595) ordered list of
-  exact account/model/thinking rows agents may start ordinary peer sessions on
-  without an approval card. It reuses `AgentModelFields` for the runtime itself
-  — with `accountFallback={false}`, because that component's pinned-account
-  notice promises a degrade to the automatic account which is true of an
-  ordinary settings slot and false here, where the server REFUSES the row, and
-  with the thinking level under `thinkingSelection="exact"`. That mode exists
-  for a surface where the model/level PAIR is the record: a level outside the
-  vocabulary OR outside the selected model's ladder shows as NO selection (the
-  `placeholder`, here "Pick a level") instead of its clamped neighbour, and
-  changing the model carries the level only when the new model really supports
-  it. The default `"clamp"` — every ordinary settings slot, which names a
-  preference the runtime may lower — is unchanged. Both halves matter here:
-  displaying the neighbour would show an approval the human never made beside a
-  warning that the row cannot run, and emitting it on a model change would
-  PERSIST that approval. `AgentModelFields` therefore takes
-  `thinkingLevel: ThinkingLevel | undefined` and omits `thinkingLevel` from its
-  change payload rather than inventing one. It adds a name, user-selectable
-  coarse cost (`low`/`medium`/`high`/`unknown`), a bounded optional description
-  explaining when an agent should select the row, an enable switch and removal:
-  no roles, projects or budgets, because the coordinating agent writes the role
-  in its own prompt. Family comes read-only from `peerRuntimeFamilyOf`; cost and
-  description are persisted with the approval and exposed by `session_spawn`
-  profiles. An enabled row that cannot run says so via
-  `peerRuntimeUnavailableReason` and STAYS in place: repairing or hiding it
-  would hand agents a runtime the user never approved. The copy states plainly
-  that approval permits paid sessions on exactly that runtime.
+  fixed provider/model/thinking rows agents may start ordinary peer sessions on
+  without an approval card. Each row approves Automatic or an exact account pin.
+  It reuses `AgentModelFields` with `allowAutomatic` and
+  `accountFallback={false}`: users may explicitly clear a pin, but an unusable
+  pin never degrades to Automatic. Peer availability stays exact and does not
+  use the ordinary settings-slot account preview, which may lower effort.
+  Thinking uses `thinkingSelection="exact"`. That mode exists for a surface
+  where the model/level PAIR is the record: a level outside the vocabulary OR
+  outside the selected model's ladder shows as NO selection (the `placeholder`,
+  here "Pick a level") instead of its clamped neighbour, and changing the model
+  carries the level only when the new model really supports it. The default
+  `"clamp"` — every ordinary settings slot, which names a preference the runtime
+  may lower — is unchanged. Both halves matter here: displaying the neighbour
+  would show an approval the human never made beside a warning that the row
+  cannot run, and emitting it on a model change would PERSIST that approval.
+  `AgentModelFields` therefore takes `thinkingLevel: ThinkingLevel | undefined`
+  and omits `thinkingLevel` from its change payload rather than inventing one.
+  It adds a name, user-selectable coarse cost (`low`/`medium`/`high`/`unknown`),
+  a bounded optional description explaining when an agent should select the row,
+  an enable switch and removal: no roles, projects or budgets, because the
+  coordinating agent writes the role in its own prompt. Family comes read-only
+  from `peerRuntimeFamilyOf`; cost and description are persisted with the
+  approval and exposed by `session_spawn` profiles. An enabled row that cannot
+  run says so via `peerRuntimeUnavailableReason` and STAYS in place: repairing
+  or hiding it would hand agents a runtime the user never approved. The copy
+  states plainly that approval permits paid sessions on exactly that runtime.
 - `SkillsSettingsSection.tsx` (settings section id `skills`, `docs/skills.md`)
   shows the user-owned library and which of its skills are globally on:
   available skills with name, description, source `SKILL.md` path and a toggle,

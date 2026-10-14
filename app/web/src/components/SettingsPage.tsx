@@ -285,10 +285,9 @@ export function SettingsPage({
   forgejoStatus,
 }: Props) {
   const currentSection = SETTINGS_SECTIONS.find((s) => s.id === section);
-  // Configurable agents choose Automatic or an account/model combination; the
-  // plain global list stays for the account-independent Models section
-  // (visibility/order). Approved peer runtimes name an account explicitly, so
-  // they get the account/model combinations alone.
+  // Configurable agents and approved peer runtimes choose Automatic or an
+  // account/model combination; the plain global list stays for the
+  // account-independent Models section (visibility/order).
   const agentModels = useMemo(
     () => slotModelOptions(accountModels),
     [accountModels],
@@ -398,7 +397,7 @@ export function SettingsPage({
             )}
             {section === "peer-runtimes" && (
               <PeerRuntimesSettingsSection
-                models={accountModels}
+                models={agentModels}
                 settings={settings}
                 onUpdate={onUpdate}
               />
