@@ -664,6 +664,7 @@ export class Connection implements Viewer {
     });
     if (initial.unavailable) this.send(initial.unavailable);
     hub.sendReloadStateTo(this);
+    await hub.sendPermanentAssistantUnreadTo(this);
     await this.deliverInitialPendingAgentRelays();
     await this.maybeStartPostReloadContinuation();
   }
@@ -948,7 +949,18 @@ export class Connection implements Viewer {
       case "loadSession":
         return this.onLoadSession(msg.id, msg.timelineCache);
       case "openPermanentAssistant":
-        return this.onOpenPermanentAssistant();
+        return this.onOpenPermanentAssistant(msg.timelineCache);
+      case "releasePermanentAssistant": {
+        const shown =
+          this.viewing?.sessionId === msg.sessionId &&
+          this.viewing.agentType === "personal-assistant";
+        const pending =
+          this.viewRequestTarget === msg.sessionId &&
+          sessionStore.get(msg.sessionId)?.agentType === "personal-assistant";
+        if (!shown && !pending) return;
+        this.leaveSessionView(msg.sessionId);
+        return;
+      }
       case "loadArchivedSessions":
         return this.onLoadArchivedSessions();
       case "resolveObjectLinks":
@@ -4507,13 +4519,16 @@ export class Connection implements Viewer {
    * navigation, so the address bar follows the switch instead of reloading the
    * previously-viewed session.
    */
-  private async onOpenPermanentAssistant(): Promise<void> {
-    const ticket = this.claimViewRequest();
+  private async onOpenPermanentAssistant(
+    timelineCache?: TimelineCacheDescriptor,
+  ): Promise<void> {
+    const viewableId = permanentAssistantViewableId();
+    // A hidden retained panel can cancel a reopen before its snapshot arrives.
+    const ticket = this.claimViewRequest(viewableId);
     // Reading the singleton is a read: when it already exists as a stored
     // Personal Assistant session, show it from storage instead of waiting for
     // its harness to open (`viewSession.ts`). Only creation and legacy-binding
     // repair take the slow path.
-    const viewableId = permanentAssistantViewableId();
     const view = viewableId
       ? hub.viewById(viewableId)
       : await hub.acquireById(await permanentAssistantSessionId());
@@ -4532,7 +4547,8 @@ export class Connection implements Viewer {
     // this session's state over that session's timeline.
     const sessions = await hub.listSessions();
     if (!this.viewRequestIsCurrent(ticket)) return;
-    this.view(view);
+    this.view(view, timelineCache);
+    this.armReadDwell(view);
     this.send({
       type: "permanentAssistantOpened",
       state: view.state(),
@@ -5173,23 +5189,28 @@ export class Connection implements Viewer {
     sessionId: string,
     reason: "deleted" | "archived",
   ): void {
-    const superseded = this.viewRequestTarget === sessionId;
-    if (superseded) this.claimViewRequest();
-    const shown = this.viewing?.sessionId === sessionId;
-    if (!superseded && !shown) return;
-    if (shown) {
-      for (const threadId of this.heldSubagentThreads) {
-        this.heldSubagentThreads.delete(threadId);
-        hub.releaseSubagentRunTopic(threadId);
-      }
-      this.clearReadDwell();
-      this.detachRuntimeView();
-      this.viewing?.removeViewer(this);
-      this.viewing = undefined;
-    }
+    if (!this.leaveSessionView(sessionId)) return;
     // Told either way: a client whose route names a session it was only
     // still loading would otherwise wait for it forever.
     this.send({ type: "sessionViewCleared", sessionId, reason });
+  }
+
+  /** Leave one addressed view, or unconditionally detach the current view. */
+  private leaveSessionView(sessionId?: string): boolean {
+    const superseded =
+      sessionId !== undefined && this.viewRequestTarget === sessionId;
+    if (superseded) this.claimViewRequest();
+    if (sessionId !== undefined && this.viewing?.sessionId !== sessionId)
+      return superseded;
+    for (const threadId of this.heldSubagentThreads) {
+      this.heldSubagentThreads.delete(threadId);
+      hub.releaseSubagentRunTopic(threadId);
+    }
+    this.clearReadDwell();
+    this.detachRuntimeView();
+    this.viewing?.removeViewer(this);
+    this.viewing = undefined;
+    return true;
   }
 
   /**
@@ -5325,12 +5346,7 @@ export class Connection implements Viewer {
     if (this.viewing === live && !timelineCache) return;
     // Run-detail authorization is tied to the currently viewed parent session;
     // navigation releases held child topics before the new view is attached.
-    for (const threadId of this.heldSubagentThreads) {
-      this.heldSubagentThreads.delete(threadId);
-      hub.releaseSubagentRunTopic(threadId);
-    }
-    this.detachRuntimeView();
-    this.viewing?.removeViewer(this);
+    this.leaveSessionView();
     const runtimeView = this.attachRuntimeView(live, timelineCache);
     this.viewing = live;
     this.runtimeView = runtimeView;
@@ -5569,14 +5585,7 @@ export class Connection implements Viewer {
     this.permanentAssistantOff?.();
     this.permanentAssistantOff = undefined;
     hub.unregister(this);
-    for (const threadId of this.heldSubagentThreads) {
-      this.heldSubagentThreads.delete(threadId);
-      hub.releaseSubagentRunTopic(threadId);
-    }
-    this.clearReadDwell();
-    this.detachRuntimeView();
-    this.viewing?.removeViewer(this);
-    this.viewing = undefined;
+    this.leaveSessionView();
     // Release this connection's worktree watch refcounts.
     for (const worktreeId of this.watchedWorktrees)
       removeWorktreeViewer(worktreeId);

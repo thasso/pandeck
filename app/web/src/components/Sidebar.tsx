@@ -41,6 +41,7 @@ import {
 } from "./worktree/WorktreeFileTree.tsx";
 import { navigableSettingsGroups } from "./settingsSections.tsx";
 import { PRIMARY_NAV_SLOTS } from "./primaryNavSections.tsx";
+import { UnreadIcon } from "./UnreadDot.tsx";
 import {
   NAV_CARD_INSET,
   PrimaryNav,
@@ -117,6 +118,7 @@ interface Props {
   onOpenBackgroundTasks: () => void;
   /** Configured name of the singleton Personal Assistant, used as its slot label. */
   assistantLabel: string;
+  assistantUnread?: boolean;
   /** Mobile (single-pane) layout: the sidebar renders as a full-screen overlay. */
   mobile: boolean;
   /** Hover "+" on task rows: start a session with that task as context. */
@@ -441,6 +443,7 @@ function SidebarImpl({
   onNavAction,
   onOpenBackgroundTasks,
   assistantLabel,
+  assistantUnread = false,
   mobile,
   onStartSessionForProject,
   tasksFresh,
@@ -692,7 +695,17 @@ function SidebarImpl({
     .map((id) => ({
       id,
       ...PRIMARY_NAV_SLOTS[id],
-      ...(id === "assistant" ? { label: assistantLabel } : {}),
+      ...(id === "assistant"
+        ? {
+            label: assistantLabel,
+            icon: (
+              <UnreadIcon
+                icon={PRIMARY_NAV_SLOTS[id].icon}
+                unread={assistantUnread}
+              />
+            ),
+          }
+        : {}),
     }));
 
   return (

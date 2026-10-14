@@ -462,6 +462,7 @@ export interface UIState {
    * it (`App`), once, on arrival.
    */
   viewCleared: { sessionId: string; reason: "deleted" | "archived" } | null;
+  permanentAssistantUnread: boolean;
   jiraStatus: JiraConnectionStatus | null;
   confluenceStatus: ConfluenceConnectionStatus | null;
   tempoStatus: TempoConnectionStatus | null;
@@ -829,6 +830,7 @@ const emptyInitial: UIState = {
   contextInfo: null,
   historySessionId: null,
   viewCleared: null,
+  permanentAssistantUnread: false,
   jiraStatus: null,
   confluenceStatus: null,
   tempoStatus: null,
@@ -5207,6 +5209,10 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           ? { modelsRefreshRequestId: null }
           : {}),
       };
+    case "permanentAssistantUnread":
+      return state.permanentAssistantUnread === msg.unread
+        ? state
+        : { ...state, permanentAssistantUnread: msg.unread };
     case "permanentAssistantOpened": {
       // The Assistant session chat arrived via the transport `snapshot` (from the
       // server's view() switch just before this message); swap in the session
@@ -6149,6 +6155,7 @@ export interface AssistantActions {
   /** View a session addressed by OUR id. */
   loadSession: (id: string) => void;
   openPermanentAssistant: () => void;
+  releasePermanentAssistant: (sessionId: string) => void;
   /** Fetch archived session rows after the archived sidebar section is expanded. */
   loadArchivedSessions: () => void;
   deleteSession: (id: string) => void;
@@ -8088,7 +8095,31 @@ export function useAssistant({
           });
         });
       },
-      openPermanentAssistant: () => send({ type: "openPermanentAssistant" }),
+      openPermanentAssistant: () => {
+        const current = stateRef.current;
+        const sessionId =
+          current.session?.agentType === "personal-assistant"
+            ? current.session.sessionId
+            : undefined;
+        // Reopening a retained panel asks for the delta after its whole loaded
+        // range, not a fresh tail that would discard older history.
+        if (sessionId && current.historySessionId === sessionId) {
+          const descriptor = describeTimelineCache(
+            current.timeline,
+            current.timelineStart,
+          );
+          timelineCacheRef.current.set(sessionId, {
+            version: 2,
+            sessionId,
+            timeline: current.timeline,
+            descriptor,
+            savedAt: Date.now(),
+          });
+          send({ type: "openPermanentAssistant", timelineCache: descriptor });
+        } else send({ type: "openPermanentAssistant" });
+      },
+      releasePermanentAssistant: (sessionId) =>
+        send({ type: "releasePermanentAssistant", sessionId }),
       loadArchivedSessions: () => send({ type: "loadArchivedSessions" }),
       deleteSession: (id) => {
         timelineCacheRef.current.delete(id);

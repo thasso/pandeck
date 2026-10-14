@@ -30,6 +30,7 @@ import { IconButton } from "../common/IconButton.tsx";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PersonalAssistantPanel } from "./PersonalAssistantPanel.tsx";
+import { UnreadIcon } from "../UnreadDot.tsx";
 
 /**
  * @component RightPanelTabs
@@ -124,9 +125,11 @@ const PANEL_DEFINITIONS: PanelDefinition[] = [
 /** One open panel's tab: drag it to reorder, or close it from its own X. */
 function SortablePanelTab({
   id,
+  unread,
   onClose,
 }: {
   id: PanelId;
+  unread: boolean;
   onClose: () => void;
 }) {
   const panel = panelDefinition(id);
@@ -156,7 +159,7 @@ function SortablePanelTab({
         className={isDragging ? "cursor-grabbing" : undefined}
         {...listeners}
       >
-        {panel.icon}
+        <UnreadIcon icon={panel.icon} unread={unread} />
         <span className="max-w-28 truncate">{panel.label}</span>
       </TabsTrigger>
       <IconButton
@@ -176,6 +179,7 @@ export function RightPanelTabs({
   worktree,
   status,
   visible = true,
+  assistantUnread = false,
   openRequest,
   onActivePanelChange,
 }: {
@@ -191,6 +195,7 @@ export function RightPanelTabs({
    * and a tab nobody has looked at yet must not start working in that state.
    */
   visible?: boolean;
+  assistantUnread?: boolean;
   /**
    * Show this panel now, opening its tab if it is closed — an action elsewhere
    * in the app asking for a surface here (a transcript card's "Open in side
@@ -298,11 +303,15 @@ export function RightPanelTabs({
     });
   };
   const showTabs = openTabs.length > 0;
-  // The Personal Assistant is the one surface this host owns outright: it holds
-  // its own connection and has nothing to take from the app around it.
+  // PA retains its connection and transcript, but releases its server view
+  // while hidden so unseen replies are not marked read.
   const panelBodies: Record<PanelId, ReactNode> = {
     inspector,
-    "personal-assistant": <PersonalAssistantPanel />,
+    "personal-assistant": (
+      <PersonalAssistantPanel
+        visible={visible && activeTab === "personal-assistant"}
+      />
+    ),
     knowledge,
     worktree,
     status,
@@ -333,6 +342,11 @@ export function RightPanelTabs({
                     <SortablePanelTab
                       key={id}
                       id={id}
+                      unread={
+                        id === "personal-assistant" &&
+                        assistantUnread &&
+                        !(visible && activeTab === id)
+                      }
                       onClose={() => closePanel(id)}
                     />
                   ))}

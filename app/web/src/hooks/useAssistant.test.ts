@@ -1814,6 +1814,18 @@ describe("useAssistant task reducer", () => {
 });
 
 describe("useAssistant permanent Assistant reducer", () => {
+  it("receives singleton unread without inserting a session-list row", () => {
+    const state = apply({ type: "permanentAssistantUnread", unread: true });
+    expect(state.permanentAssistantUnread).toBe(true);
+    expect(state.sessions).toEqual([]);
+    expect(
+      apply({ type: "permanentAssistantUnread", unread: true }, state),
+    ).toBe(state);
+    expect(
+      apply({ type: "permanentAssistantUnread", unread: false }, state)
+        .permanentAssistantUnread,
+    ).toBe(false);
+  });
   it("permanentAssistantOpened swaps in the session without leaving its dedicated route", () => {
     // Start from a different viewed session so the switch is observable.
     let state = apply({

@@ -906,7 +906,11 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
       ? validateTimelineCache(msg.timelineCache)
       : null;
   },
-  openPermanentAssistant: NONE,
+  openPermanentAssistant: (msg) =>
+    hasOwn(msg, "timelineCache") && msg.timelineCache !== undefined
+      ? validateTimelineCache(msg.timelineCache)
+      : null,
+  releasePermanentAssistant: fields({ sessionId: STRING }),
   loadArchivedSessions: NONE,
   resolveObjectLinks: fields({ requestId: STRING, uris: STRING_ARRAY }),
   deleteSession: fields({ id: STRING }),

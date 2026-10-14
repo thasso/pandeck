@@ -7263,7 +7263,9 @@ export type ClientMessage =
     }
   /** Load (view) a session addressed by OUR session id; the server resolves it via `hub.acquireById(id)`. */
   | { type: "loadSession"; id: string; timelineCache?: TimelineCacheDescriptor }
-  | { type: "openPermanentAssistant" }
+  | { type: "openPermanentAssistant"; timelineCache?: TimelineCacheDescriptor }
+  /** Release a PA view when its route is no longer visible. */
+  | { type: "releasePermanentAssistant"; sessionId: string }
   /** Load archived session rows on demand, when the archived sidebar section is expanded. */
   | { type: "loadArchivedSessions" }
   /** Resolve compact metadata for generic pa:// object links. */
@@ -7970,6 +7972,8 @@ export type ServerMessage =
       state: "queued" | "working" | "completed" | "failed";
       error?: string;
     }
+  /** Singleton unread projection, delivered on connect and session invalidation. */
+  | { type: "permanentAssistantUnread"; unread: boolean }
   /**
    * Server resolved (creating if needed) the singleton Personal Assistant session
    * and switched its view to it. The client swaps in the session and navigates to
