@@ -130,6 +130,7 @@ async function handleDelivery(
       ? `I couldn’t complete that request. Please try again.\n\n_${slackMrkdwn(delivery.error ?? "Unknown error", 500)}_`
       : slackMrkdwn(delivery.response ?? "Done.", 39_000);
   await updatePlaceholderWithRetry(channel, ts, text);
+  delivery.acknowledgeSlackDelivery?.();
 }
 
 async function botApi(

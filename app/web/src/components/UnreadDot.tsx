@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 type UnreadDotPlacement = "toolbar" | "avatar";
 
 const placementClasses: Record<UnreadDotPlacement, string> = {
@@ -12,6 +14,22 @@ const placementClasses: Record<UnreadDotPlacement, string> = {
  * @avoidWhen The exact number, severity, or progress amount is essential to the user's next action; use local text or a richer badge near the content instead.
  * @intent Shared visual language for low-space unread indicators. Toolbar dots sit inside the top-right of a size-8 icon button (`right-1 top-1 size-1.5`); avatar dots sit just outside the avatar with a panel-colored border.
  */
+/** An icon-sized overlay: the marker never participates in slot sizing. */
+export function UnreadIcon({
+  icon,
+  unread,
+}: {
+  icon: ReactNode;
+  unread: boolean;
+}) {
+  return (
+    <span className="relative inline-flex shrink-0">
+      {icon}
+      {unread ? <UnreadDot /> : null}
+    </span>
+  );
+}
+
 export function UnreadDot({
   title = "Unread",
   placement = "toolbar",

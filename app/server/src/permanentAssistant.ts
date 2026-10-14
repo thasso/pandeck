@@ -29,12 +29,18 @@ import { permanentAssistantProfileInstructions } from "./permanentAssistantProfi
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
+import {
+  acknowledgeSlackAssistantTurn,
+  permanentAssistantReadBoundary,
+} from "./permanentAssistantUnread.ts";
 
 export interface PermanentAssistantDelivery {
   item: PermanentAssistantQueueItem;
   state: "queued" | "working" | "completed" | "failed";
   response?: string;
   error?: string;
+  /** Acknowledge only after the Slack response actually reached Slack. */
+  acknowledgeSlackDelivery?: () => void;
 }
 
 type DeliveryListener = (
@@ -112,7 +118,7 @@ export function enqueuePermanentAssistant(
   const stored = permanentAssistantStore.find(input.dedupeKey) !== undefined;
   const item = permanentAssistantStore.enqueue(input);
   if (!stored && options.resumeHold) spendHumanResume(options.resumeHold);
-  emit({
+  void emit({
     item,
     state:
       item.status === "working"
@@ -203,8 +209,10 @@ async function abandonPermanentAssistant(): Promise<void> {
     resetMemorySessionContext(previous);
   }
   // Only the singleton this rotation set out to abandon.
-  if (permanentAssistantStore.sessionId() === previous)
+  if (permanentAssistantStore.sessionId() === previous) {
     permanentAssistantStore.clearSessionId();
+    void hub.broadcastSessions();
+  }
 }
 
 export async function permanentAssistantSessionId(): Promise<string> {
@@ -321,6 +329,7 @@ async function acquireOrCreatePermanentAssistant(
   }
   if (rotated()) return acquirePermanentAssistant();
   permanentAssistantStore.setSessionId(driver.id);
+  void hub.broadcastSessions();
   return driver;
 }
 
@@ -336,12 +345,16 @@ async function drainPermanentAssistantQueue(): Promise<void> {
       const boundId = permanentAssistantStore.sessionId();
       if (boundId && automaticTurnsHeld(boundId)) break;
       permanentAssistantStore.mark(item.id, "working");
-      emit({
+      void emit({
         item: { ...item, status: "working", attempts: item.attempts + 1 },
         state: "working",
       });
       try {
         const driver = await acquirePermanentAssistant();
+        const baseline =
+          item.source === "slack"
+            ? await permanentAssistantReadBoundary()
+            : { updatedAt: 0, unread: false };
         const beforeIds = new Set(
           driver.snapshot().map((message) => message.id),
         );
@@ -353,24 +366,47 @@ async function drainPermanentAssistantQueue(): Promise<void> {
               : `permanent-assistant:${item.id}`,
           origin: { kind: "human" },
         });
-        const response = latestAssistantText(driver.snapshot(), beforeIds);
+        const messages = driver.snapshot();
+        const response = latestAssistantText(messages, beforeIds);
+        const completedAt = sessionStore.get(driver.id)?.updatedAt;
+        // Another prompt delivered during the turn owns unread content too.
+        const onlySlackPrompt =
+          messages.filter(
+            (message) => message.role === "user" && !beforeIds.has(message.id),
+          ).length === 1;
         permanentAssistantStore.mark(item.id, "completed");
-        emit({
+        await emit({
           item: { ...item, status: "completed" },
           state: "completed",
           response,
+          ...(item.source === "slack" &&
+          onlySlackPrompt &&
+          completedAt !== undefined
+            ? {
+                acknowledgeSlackDelivery: () => {
+                  if (
+                    acknowledgeSlackAssistantTurn(
+                      driver.id,
+                      baseline,
+                      completedAt,
+                    )
+                  )
+                    void hub.broadcastSessionUpdated(driver.id);
+                },
+              }
+            : {}),
         });
       } catch (error) {
         // A Stop landed while this item was on its way: nothing reached the
         // session and nothing failed. It goes back in its place.
         if (error instanceof AutomaticTurnsHeldError) {
           permanentAssistantStore.returnToQueue(item.id);
-          emit({ item: { ...item, status: "queued" }, state: "queued" });
+          void emit({ item: { ...item, status: "queued" }, state: "queued" });
           break;
         }
         const message = errorText(error);
         permanentAssistantStore.mark(item.id, "failed", message);
-        emit({
+        void emit({
           item: { ...item, status: "failed", error: message },
           state: "failed",
           error: message,
@@ -407,12 +443,17 @@ function latestAssistantText(
   );
 }
 
-function emit(delivery: PermanentAssistantDelivery): void {
-  for (const listener of listeners)
-    Promise.resolve(listener(delivery)).catch((error) =>
-      console.warn(
-        "[permanent-assistant] delivery listener failed:",
-        errorText(error),
-      ),
-    );
+async function emit(delivery: PermanentAssistantDelivery): Promise<void> {
+  await Promise.all(
+    [...listeners].map(async (listener) => {
+      try {
+        await listener(delivery);
+      } catch (error) {
+        console.warn(
+          "[permanent-assistant] delivery listener failed:",
+          errorText(error),
+        );
+      }
+    }),
+  );
 }

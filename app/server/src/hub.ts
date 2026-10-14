@@ -53,6 +53,7 @@ import {
   setCommentMetadataChangeNotifier,
 } from "./comments/commentChanges.ts";
 import { errorText } from "./errors.ts";
+import { permanentAssistantStore } from "./db/permanentAssistantStore.ts";
 import { setSubagentStateChangeNotifier } from "./db/subagentStore.ts";
 import { setBackgroundWorkStateChangeNotifier } from "./db/backgroundWorkStore.ts";
 import {
@@ -388,6 +389,14 @@ class SessionHub {
       onlyIds: new Set([sessionId]),
     });
     if (!session) return;
+    if (sessionId === permanentAssistantStore.sessionId()) {
+      for (const c of this.connections)
+        c.send({
+          type: "permanentAssistantUnread",
+          unread: Boolean(session.unread),
+        });
+      return;
+    }
     for (const c of this.connections) {
       if (session.archived && !c.wantsArchivedSessions?.()) continue;
       c.send({ type: "sessionUpdated", session });
@@ -427,6 +436,11 @@ class SessionHub {
         this.sessionsBroadcastRequestedDuringFlush = false;
         const sessions = await this.mergedSessions();
         const archivedCount = await archivedSessionCount();
+        const assistantUnread = Boolean(
+          sessions.find(
+            (session) => session.id === permanentAssistantStore.sessionId(),
+          )?.unread,
+        );
         // Most rebuilds during a run change ONE row's volatile state (running,
         // unread, title, updatedAt). Send those as single-row `sessionUpdated`s
         // instead of the whole list (~30 KB) to every connection: the client's
@@ -446,6 +460,7 @@ class SessionHub {
         let sessionsWithArchived: typeof sessions | undefined;
         let archivedDelta: typeof sessions | null | undefined;
         for (const c of this.connections) {
+          c.send({ type: "permanentAssistantUnread", unread: assistantUnread });
           if (c.wantsArchivedSessions?.()) {
             if (sessionsWithArchived === undefined) {
               sessionsWithArchived = await this.mergedSessions({

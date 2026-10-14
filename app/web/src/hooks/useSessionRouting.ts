@@ -592,6 +592,15 @@ export function useSessionRouting({
   // Route → server: load the addressed session by id, or start a fresh one. The
   // settings/tasks/projects routes are pure UI overlays and are left untouched.
   useEffect(() => {
+    // PA releases its reader on leaving, even for a pure UI route. Returning
+    // must open it again rather than trusting the previous applied route.
+    if (
+      route.name !== "permanentAssistant" &&
+      applied.current === "permanentAssistant"
+    ) {
+      applied.current = null;
+      pending.current = null;
+    }
     if (
       !connected ||
       route.name === "settings" ||

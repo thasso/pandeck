@@ -95,6 +95,34 @@ it one way for both. **Renaming it means changing `app/shell/src/usernotify.rs`
 and `app/server/src/apns.ts` together**; a mismatch shows up as a tap that opens
 the app and loses the session.
 
+## Personal Assistant unread
+
+The singleton stays hidden from ordinary session lists. Its unread dot uses the
+ordinary session-list projection, including the live harness timestamps and the
+archive/settlement rules. A small `permanentAssistantUnread` socket message
+carries that boolean to every connected client on connect and session-list
+invalidation, including one-row updates. It is singleton metadata, not a domain
+collection or a second definition of unread.
+
+Both the assistant navigation slot and the right-panel tab use `UnreadDot`. The
+nav marker is an absolute overlay, adds no width or count, and travels with the
+icon into desktop and mobile overflow. The browser hides both dots while
+`/assistant` or the visible Personal Assistant panel is on screen. Opening the
+Assistant arms the same server read dwell as opening any ordinary session; live
+content uses the existing viewer read marks. Leaving `/assistant` releases its
+PA view. A hidden PA panel unmounts its independent connection so a retained but
+unseen tab cannot keep reading incoming content.
+
+A successful Slack-sourced queue turn is acknowledged only after its answer
+reaches Slack. Delivery failure leaves it unread. The acknowledgement advances
+the ordinary read marker through that turn's completion boundary only if there
+was no older unread content, no additional prompt during the turn, no newer
+content during Slack delivery, and the singleton binding is still the same. An
+older unread item remains unless the user read it meanwhile. Web turns and other
+unseen content are never acknowledged by this Slack exception. While a Slack
+answer is still running or awaiting delivery it can be unread; successful
+delivery clears only its own boundary.
+
 ## Setting up APNs
 
 Without a credential the server simply never pushes, and the iOS app falls back

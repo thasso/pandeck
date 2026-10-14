@@ -1276,6 +1276,20 @@ function AppContent() {
   // stays UI state, so navigation rule 2 still holds.
   const browserScreenRoute = isSectionIndexRoute(route);
   const browserScreen = mobileLayout && browserScreenRoute;
+  const assistantViewed =
+    route.name === "permanentAssistant" ||
+    (!mobileLayout &&
+      inspectorOpen &&
+      activeRightPanel === "personal-assistant");
+  const assistantUnread = state.permanentAssistantUnread && !assistantViewed;
+  const permanentAssistantSessionId =
+    state.session?.agentType === "personal-assistant"
+      ? state.session.sessionId
+      : undefined;
+  useEffect(() => {
+    if (route.name !== "permanentAssistant" && permanentAssistantSessionId)
+      actions.releasePermanentAssistant(permanentAssistantSessionId);
+  }, [route.name, permanentAssistantSessionId, actions]);
   const sidebarPanelOpen = mobileLayout ? browserScreen : sidebarOpen;
 
   // Which domain lists this browser is SHOWING (`lib/broadcastTopics.ts`): the
@@ -6356,6 +6370,7 @@ function AppContent() {
         onSelect={openSession}
         onNavAction={runNavAction}
         onOpenBackgroundTasks={openBackgroundTasks}
+        assistantUnread={assistantUnread}
         assistantLabel={
           state.settings.permanentAssistant.name || "Personal Assistant"
         }
@@ -6839,6 +6854,7 @@ function AppContent() {
   const desktopRightPanelContent = (
     <InspectorChromeProvider header={false} desktopTabs>
       <RightPanelTabs
+        assistantUnread={assistantUnread}
         inspector={
           <SessionRowDetailsContext.Provider value={sessionRowDetails}>
             {rightPanelContent}

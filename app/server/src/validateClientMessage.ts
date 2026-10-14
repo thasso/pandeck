@@ -906,6 +906,7 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
       : null;
   },
   openPermanentAssistant: NONE,
+  releasePermanentAssistant: fields({ sessionId: STRING }),
   loadArchivedSessions: NONE,
   resolveObjectLinks: fields({ requestId: STRING, uris: STRING_ARRAY }),
   deleteSession: fields({ id: STRING }),

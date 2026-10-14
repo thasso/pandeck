@@ -21,9 +21,11 @@ type PanelId =
 function RightPanelTabsStory({
   openTabs,
   activeTab,
+  assistantUnread = false,
 }: {
   openTabs: PanelId[];
   activeTab: PanelId | null;
+  assistantUnread?: boolean;
 }) {
   const [seeded, setSeeded] = useState(false);
   useLayoutEffect(() => {
@@ -38,6 +40,7 @@ function RightPanelTabsStory({
     <div className="h-screen w-96">
       <RightPanelTabs
         key={`${openTabs.join()}:${activeTab}`}
+        assistantUnread={assistantUnread}
         inspector={
           <InspectorChromeProvider header={false} desktopTabs>
             <Inspector
@@ -102,6 +105,13 @@ export const InspectorTab: Story = {};
 export const InspectorTabDark: Story = { globals: { theme: "dark" } };
 
 export const WorktreeTab: Story = { args: { activeTab: "worktree" } };
+
+export const AssistantUnread: Story = {
+  args: {
+    openTabs: ["inspector", "personal-assistant"],
+    assistantUnread: true,
+  },
+};
 
 /** Every tab closed: the chooser of panels the app offers. */
 export const PanelHome: Story = { args: { openTabs: [], activeTab: null } };

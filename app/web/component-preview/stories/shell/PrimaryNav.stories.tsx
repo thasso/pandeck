@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { PrimaryNav } from "../../../src/components/shell/PrimaryNav.tsx";
+import { UnreadIcon } from "../../../src/components/UnreadDot.tsx";
 import { PRIMARY_NAV_SLOTS } from "../../../src/components/primaryNavSections.tsx";
 import {
   DEFAULT_NAV_SLOTS,
@@ -20,9 +21,11 @@ const sections = DEFAULT_NAV_SLOTS.map((id) => ({
 function PrimaryNavStory({
   width,
   mobile,
+  assistantUnread = false,
 }: {
   width: number;
   mobile: boolean;
+  assistantUnread?: boolean;
 }) {
   const [active, setActive] = useState<NavSlot>("sessions");
   return (
@@ -31,7 +34,16 @@ function PrimaryNavStory({
       style={{ width }}
     >
       <PrimaryNav
-        sections={sections}
+        sections={sections.map((section) =>
+          section.id === "assistant"
+            ? {
+                ...section,
+                icon: (
+                  <UnreadIcon icon={section.icon} unread={assistantUnread} />
+                ),
+              }
+            : section,
+        )}
         activeId={active}
         onSelect={setActive}
         mobile={mobile}
@@ -61,6 +73,13 @@ export const WithOverflowDark: Story = { globals: { theme: "dark" } };
 
 /** Wide enough for every slot: no More control at all. */
 export const Wide: Story = { args: { width: 640 } };
+
+export const AssistantUnread: Story = {
+  args: { width: 640, assistantUnread: true },
+};
+export const AssistantUnreadOverflow: Story = {
+  args: { width: 160, assistantUnread: true },
+};
 
 export const Phone: Story = {
   args: { width: 390, mobile: true },

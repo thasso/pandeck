@@ -315,6 +315,7 @@ import {
   runPullRequestCardAction,
 } from "./pullRequestActions.ts";
 import { errorText } from "./errors.ts";
+import { permanentAssistantUnread } from "./permanentAssistantUnread.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { resolvePaObjectLinks } from "./objectLinkResolver.ts";
 import {
@@ -708,6 +709,10 @@ export class Connection implements Viewer {
   }
 
   private async deliverInitialPendingAgentRelays(): Promise<void> {
+    this.send({
+      type: "permanentAssistantUnread",
+      unread: await permanentAssistantUnread(),
+    });
     const viewing = this.viewing;
     if (viewing) await this.deliverPendingAgentRelays(viewing.sessionId);
   }
@@ -948,6 +953,19 @@ export class Connection implements Viewer {
         return this.onLoadSession(msg.id, msg.timelineCache);
       case "openPermanentAssistant":
         return this.onOpenPermanentAssistant();
+      case "releasePermanentAssistant": {
+        if (
+          this.viewing?.sessionId !== msg.sessionId ||
+          this.viewing.agentType !== "personal-assistant"
+        )
+          return;
+        if (this.viewRequestTarget === msg.sessionId) this.claimViewRequest();
+        this.clearReadDwell();
+        this.detachRuntimeView();
+        this.viewing.removeViewer(this);
+        this.viewing = undefined;
+        return;
+      }
       case "loadArchivedSessions":
         return this.onLoadArchivedSessions();
       case "resolveObjectLinks":
@@ -4531,6 +4549,7 @@ export class Connection implements Viewer {
     const sessions = await hub.listSessions();
     if (!this.viewRequestIsCurrent(ticket)) return;
     this.view(view);
+    this.armReadDwell(view);
     this.send({
       type: "permanentAssistantOpened",
       state: view.state(),

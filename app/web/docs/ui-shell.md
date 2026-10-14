@@ -165,13 +165,16 @@ The left sidebar has two zones:
   gets the height; the bar sits at the bottom where it is thumb-reachable on a
   phone.
 
-The nav bar carries **no counts, badges, or dots**: they add no decision value
-here, and uniform slot widths are what make the overflow fold exact. The active
-section renders as an icon + label pill, every other slot is icon-only, and
-whatever does not fit at the bar's current width folds away. The bar measures
-itself, so a resizable desktop panel and a full-width mobile browser screen
-share one presentation; the active section is never folded away. Slot order is a
-browser-local user preference edited in Settings → Appearance.
+The nav bar carries **no counts or badges**: uniform slot widths are what make
+the overflow fold exact. The Personal Assistant is the one unread-dot exception:
+its singleton is absent from session lists, so an absolute icon overlay signals
+unseen content without changing slot width. It also appears on the folded icon
+in the overflow menu. `docs/notifications.md` owns its read and Slack rules. The
+active section renders as an icon + label pill, every other slot is icon-only,
+and whatever does not fit at the bar's current width folds away. The bar
+measures itself, so a resizable desktop panel and a full-width mobile browser
+screen share one presentation; the active section is never folded away. Slot
+order is a browser-local user preference edited in Settings → Appearance.
 
 Where the folded slots live differs by viewport, and only there. A wide layout
 puts them behind a trailing **More** popover. A phone has no More control at
