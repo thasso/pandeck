@@ -878,7 +878,11 @@ On small screens the shell does not collapse to overlays; it collapses to
 which one is a function of the route. The header's actions are nav-bar slots and
 its panel toggles never existed here, so nothing was left to hold — and the top
 of a phone screen is the worst place to spend on chrome. The shell owns the top
-safe-area inset in its place, so an installed PWA still clears the notch.
+safe-area inset in its place, so an installed PWA still clears the notch. A
+narrow macOS shell window is the same problem with window controls for a notch:
+the shell puts an empty, draggable 36px title-bar row there instead, styled like
+the wide header, so the first row of the page clears them and the window can
+still be moved.
 
 - A **browser screen** is a section index route (`/sessions`, `/tasks`,
   `/projects`, `/pull-requests`, `/knowledge`, `/settings`): the left sidebar

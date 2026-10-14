@@ -25,6 +25,7 @@ import {
   maxPanelWidth,
   viewportWidth,
 } from "./panelSizing.ts";
+import { usesOverlayTitlebar } from "../../lib/nativeShell.ts";
 import { edgeSwipeParallax } from "./edgeSwipe.ts";
 import {
   EDGE_SWIPE_COMMIT_MS,
@@ -34,6 +35,22 @@ import {
 } from "./useEdgeSwipeBack.ts";
 
 const PANEL_ANIMATION_MS = 140;
+
+/**
+ * The window's title bar when the shell has no header to be it: in the macOS
+ * shell the window controls are drawn over the page, so a headerless (small)
+ * layout would put its first row underneath them and leave nothing to drag the
+ * window by. Same 36px row and chrome as `AppHeaderBar`, the title bar a wide
+ * window has, which the controls are centred on.
+ */
+function TitlebarStrip() {
+  return (
+    <div
+      data-tauri-drag-region
+      className="h-9 shrink-0 border-b border-border bg-background"
+    />
+  );
+}
 
 /** Stable no-op so a shell without a back action does not re-arm the gesture. */
 const NO_BACK = () => {};
@@ -210,6 +227,7 @@ export function AppShell({
   // The right panel's mobile form: a bottom dock (peek + sheet) rather than a
   // full-screen overlay. `open` then means EXPANDED.
   const rightIsDock = mobile && right?.mobilePresentation === "dock";
+  const titlebarStrip = !header && usesOverlayTitlebar();
   const rightDock = dockMode({
     mobile,
     browserScreen:
@@ -383,6 +401,7 @@ export function AppShell({
             transition: edgeSwipeTransition(edgeSwipe.phase),
           }}
         >
+          {titlebarStrip && <TitlebarStrip />}
           <div className="relative flex min-h-0 flex-1 overflow-hidden">
             {left.content}
           </div>
@@ -390,7 +409,8 @@ export function AppShell({
       )}
       {/* With no header, the notch/status bar is the shell's problem: an installed
           standalone PWA draws under it, and every surface below would otherwise
-          have to pad its own top edge. */}
+          have to pad its own top edge. The macOS window controls are the same
+          problem in a narrow native window. */}
       <div
         className={`relative z-10 flex h-full flex-col overflow-hidden bg-background text-foreground ${header ? "" : "pt-[var(--app-safe-area-top)]"}`}
         // Left at `none` at rest, which is every moment but the gesture: a
@@ -407,7 +427,7 @@ export function AppShell({
         }
         ref={edgeSwipe.ref}
       >
-        {header}
+        {header ?? (titlebarStrip && <TitlebarStrip />)}
 
         <div className="relative flex min-h-0 flex-1 overflow-hidden">
           {left && inlineLeft.rendered && (

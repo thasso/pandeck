@@ -6,7 +6,8 @@
   auth token handling stays in one place.
 - The Tauri shell loads this same build: native behavior is an enhancement
   behind `src/lib/nativeShell.ts`, ordinary browsers must work unchanged, and
-  its overlay title bar reuses the desktop top bar and adds no page height.
+  its overlay title bar reuses the desktop top bar and adds no page height
+  (headerless: `AppShell`'s strip).
 - `window.confirm`/`alert`/`prompt` are banned (`nativeDialogAudit.test.ts`):
   the shell's webview never shows them, so the guarded action silently does
   nothing. Ask through `components/common/dialogs.tsx` — `useDialogs()` to ask
