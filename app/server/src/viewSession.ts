@@ -54,6 +54,7 @@ import { promptQueueField } from "./promptQueue.ts";
 import { DetachedSessionError } from "./session/adapters/detached.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { activeSkillsForSession } from "./sessionSkills.ts";
+import { sessionAgentSummary } from "./agents/sessionAgent.ts";
 import {
   findOriginTask,
   listRelatedGlobalTasks,
@@ -151,6 +152,7 @@ export class ViewSession implements HarnessDriver {
       this.id,
     );
     const activeSkillsValue = activeSkillsForSession(this.id, this.kind);
+    const agentValue = sessionAgentSummary(this.id);
     const worktreeIdValue = this.safeWorktreeId();
     const modelValue = this.modelOption();
     const originTaskValue = this.originTask();
@@ -188,6 +190,7 @@ export class ViewSession implements HarnessDriver {
       ...(activeSkillsValue !== undefined
         ? { activeSkills: activeSkillsValue }
         : {}),
+      ...(agentValue !== undefined ? { agent: agentValue } : {}),
       ...(coding ? { artifacts: listSessionArtifacts(this.id) } : {}),
       ...(this.kind === "workshop" &&
       pendingPostReloadContinuationValue !== undefined

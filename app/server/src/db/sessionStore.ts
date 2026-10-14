@@ -3,7 +3,8 @@
  *
  * Everything the app needs to list, route, badge, and bill a session lives here,
  * in SQLite (`session_index` + `session_links` + `session_usage_totals` +
- * `session_prompt_conditions` + `session_skills` + `session_worktree_ack`). The
+ * `session_prompt_conditions` + `session_skills` + `session_agent` +
+ * `session_worktree_ack`). The
  * per-session conversation content stays in its log files (`sessions/<id>/
  * native.jsonl` for pi, `claude-sdk/<id>.json` for the SDK); this store never
  * holds file paths — a session id is the only durable locator, and concrete
@@ -956,6 +957,35 @@ function getSkills(id: string): string | undefined {
   }
 }
 
+/* ------------------------------ session agent ----------------------------- */
+
+/**
+ * Freeze the agent definition a session was spawned from, or return the row
+ * that already won. The payload stays opaque here; `agents/sessionAgent.ts`
+ * owns its shape and validation.
+ */
+function freezeAgent(
+  id: string,
+  definitionJson: string,
+  ts = Date.now(),
+): string | undefined {
+  getDb()
+    .prepare(
+      "INSERT INTO session_agent (session_id, definition_json, created_at_ms) " +
+        "VALUES (?, ?, ?) ON CONFLICT(session_id) DO NOTHING",
+    )
+    .run(id, definitionJson, ts);
+  return getAgent(id);
+}
+
+/** The frozen agent definition JSON for a session, if it was spawned from one. */
+function getAgent(id: string): string | undefined {
+  const row = getDb()
+    .prepare("SELECT definition_json FROM session_agent WHERE session_id = ?")
+    .get(id) as { definition_json: string } | undefined;
+  return row?.definition_json;
+}
+
 /* --------------------------------- reads --------------------------------- */
 
 function get(id: string): SessionMeta | undefined {
@@ -1698,6 +1728,8 @@ export const sessionStore = {
   getPromptConditions,
   freezeSkills,
   getSkills,
+  freezeAgent,
+  getAgent,
   getUsageTotals,
   linkSpawned,
   setSpawnedOwnership,

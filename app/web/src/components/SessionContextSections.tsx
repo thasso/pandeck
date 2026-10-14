@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   Activity,
+  Bot,
   Download,
   FileText,
   Film,
@@ -20,6 +21,7 @@ import type {
   ApprovalGrant,
   BrowserRuntimeInfo,
   PendingPostReloadContinuation,
+  SessionAgentSummary,
   SessionArtifact,
   SessionSkillInvocation,
   SessionToolExposure,
@@ -71,7 +73,7 @@ import {
 /**
  * @component SessionContextSections
  * @purpose The session inspector's feature content: queued post-reload
- * continuation, library skills (loaded /
+ * continuation, the agent definition it was spawned as, library skills (loaded /
  * available / not mounted),
  * deferred-tool exposure (the "Tools" section: loaded/available/unavailable
  * per catalog group + load trail, including the browser tool groups), the
@@ -85,6 +87,8 @@ import {
 interface SessionContextSectionsProps {
   sessionId?: string | undefined;
   toolExposure?: SessionToolExposure | undefined;
+  /** The agent definition the session was spawned as, when it was. */
+  agent?: SessionAgentSummary | undefined;
   /** Frozen library skill names; defined (possibly empty) for coding sessions. */
   activeSkills?: string[] | undefined;
   /** Loads of those skills' bodies, newest last. */
@@ -105,6 +109,7 @@ interface SessionContextSectionsProps {
 export function SessionContextSections({
   sessionId = "current",
   toolExposure,
+  agent,
   activeSkills,
   skillInvocations,
   skillLibrary,
@@ -126,6 +131,8 @@ export function SessionContextSections({
           onCancel={onCancelPostReloadContinuation}
         />
       )}
+
+      {agent && <AgentSection sessionId={sessionId} agent={agent} />}
 
       {activeSkills !== undefined && (
         <ActiveSkillsSection
@@ -185,6 +192,62 @@ function PostReloadContinuationCard({
         </Button>
       </AlertAction>
     </Alert>
+  );
+}
+
+/**
+ * The agent definition this session was spawned as, as it was frozen at spawn:
+ * a later edit to the definition changes new spawns only, so this shows what
+ * THIS session runs as.
+ */
+function AgentSection({
+  sessionId,
+  agent,
+}: {
+  sessionId: string;
+  agent: SessionAgentSummary;
+}) {
+  return (
+    <InspectorSection
+      id="agent"
+      storageScope={`session:${sessionId}`}
+      title="Agent"
+      icon={<Bot size={13} />}
+      summary={agent.name}
+    >
+      {agent.unreadable ? (
+        <ErrorNote message="This session's stored agent definition is unreadable, so it refuses to run." />
+      ) : (
+        <PropertyList size="sm" align="start">
+          <PropertyLabel>Name</PropertyLabel>
+          <PropertyText className="text-foreground">{agent.name}</PropertyText>
+          <PropertyLabel>Model</PropertyLabel>
+          <PropertyText className="text-foreground">
+            {agent.model}, {agent.effort} effort
+          </PropertyText>
+          {agent.denyTools.length > 0 ? (
+            <>
+              <PropertyLabel>Denied tools</PropertyLabel>
+              <PropertyText className="text-foreground">
+                {agent.denyTools.join(", ")}
+              </PropertyText>
+            </>
+          ) : null}
+          {agent.skills.length > 0 ? (
+            <>
+              <PropertyLabel>Skills</PropertyLabel>
+              <PropertyText className="text-foreground">
+                {agent.skills.join(", ")}
+              </PropertyText>
+            </>
+          ) : null}
+          <PropertyLabel>Definition</PropertyLabel>
+          <PropertyText title={`AGENT.md blob ${agent.blob}`}>
+            {agent.blob.slice(0, 12)}
+          </PropertyText>
+        </PropertyList>
+      )}
+    </InspectorSection>
   );
 }
 

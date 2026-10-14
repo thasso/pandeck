@@ -17,6 +17,7 @@
 import type { AgentType, SessionMode } from "@assistant/shared";
 import type { ClientTimelineEntry } from "@assistant/shared/runtime";
 import { AGENT_TYPES } from "../agentTypes.ts";
+import { sessionAgent, withoutDeniedTools } from "../agents/sessionAgent.ts";
 import {
   integrationGatedActiveToolNames,
   catalogSearchHintFor,
@@ -73,6 +74,14 @@ function claudeToolSession(
   };
 }
 
+/** The persona's toolset, narrowed by the session's frozen agent definition. */
+function sessionTools(source: ClaudeToolSessionSource) {
+  return withoutDeniedTools(
+    AGENT_TYPES[source.agentType].tools(),
+    sessionAgent(source.id),
+  );
+}
+
 /**
  * Build the per-session tool server a `claude-sdk` session mounts as `pa`.
  * Integration-gate changes push tools/list_changed (wired inside the generic
@@ -90,9 +99,11 @@ export function createClaudeSessionToolServer(
   return createSessionToolServer({
     sessionId: source.id,
     harness: "claude-sdk",
-    tools: () => AGENT_TYPES[source.agentType].tools(),
+    // A spawned agent definition's denied tools are not this session's at all:
+    // neither listed nor callable (`docs/agent-definitions.md` "Tools").
+    tools: () => sessionTools(source),
     activeToolNames: () => {
-      const tools = AGENT_TYPES[source.agentType].tools();
+      const tools = sessionTools(source);
       const integrationActive = integrationGatedActiveToolNames(
         source.agentType,
         tools,

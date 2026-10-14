@@ -1,9 +1,9 @@
 # Agent definitions
 
 **Status:** design for [Task-780](pa://task/780). The shared library core
-([Task-781](pa://task/781)) and the agent library with its `agent_*` tools
-([Task-782](pa://task/782)) are implemented; spawning by name and the UI are not
-yet.
+([Task-781](pa://task/781)), the agent library with its `agent_*` tools
+([Task-782](pa://task/782)), and spawning by name ([Task-783](pa://task/783))
+are implemented; the UI is not yet.
 
 An agent definition is a user-authored Markdown file that describes a reusable
 agent: which persona it builds on, which model and effort it runs at, which
@@ -113,7 +113,8 @@ the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
 The resolved model decides the provider and therefore the harness. `effort` is
 fitted to the levels the model supports (`clampThinkingLevelForModel`, which
 tries the next level up before the next one down), as spawn already does for
-thinking hints.
+thinking hints. A definition without `effort` runs at `medium`
+(`AGENT_DEFAULT_EFFORT`), fitted the same way.
 
 Validation at write time checks that the model resolves against the accounts
 connected right now. A spawn resolves it again. A model that stopped resolving,
@@ -123,10 +124,11 @@ fallback to another model.
 ### The account
 
 A definition never names an account. A spawn takes the account for the resolved
-provider from ONE function, which calls `automaticProfileIdFor(provider)` today:
-the first enabled account for that provider, in Settings order. Usage-aware
-account routing is out of scope here and will replace that function without
-touching anything else in this design.
+provider from ONE function (`accountFor` in `agents/agentSpawn.ts`), which calls
+`automaticProfileIdFor(provider)` today: the first enabled account for that
+provider, in Settings order. An account that does not offer the resolved model
+refuses the spawn. Usage-aware account routing is out of scope here and will
+replace that function without touching anything else in this design.
 
 ## Tools
 
@@ -134,11 +136,16 @@ touching anything else in this design.
 persona's normal toolset and can never add to it. Entries are:
 
 - **App tools** by their unprefixed name (`worktree_push`, not
-  `mcp__pa__worktree_push`). The session tool server's existing active-tool
-  filter (`activeToolNames` in `mcp/sessionToolServer.ts`) removes them.
+  `mcp__pa__worktree_push`). They leave the session's toolset entirely
+  (`withoutDeniedTools` in `agents/sessionAgent.ts`): Claude's session tool
+  server neither lists nor serves them (`claudeSdk/toolServer.ts`), and pi never
+  registers them (`piSdk/options.ts`).
 - **Native capabilities** by harness-neutral names: `bash`, `edit`, `write`.
-  Each harness maps them to its own tools: Claude's `disallowedTools`, pi's tool
-  policy. Reading stays available to every agent.
+  Claude drops them from `tools:` and therefore lists them in `disallowedTools`
+  (`bash` → `Bash` and `Monitor`, which runs commands too; `edit` → `Edit`,
+  `MultiEdit`, `NotebookEdit`; `write` → `Write`). pi excludes its built-ins of
+  the same names, and `bash` also drops pi's background `bash` and `monitor`
+  tools. Reading stays available to every agent.
 
 An entry naming a tool the persona does not have, or no tool at all, is a
 validation error. A typo would otherwise silently leave a tool enabled.
@@ -197,43 +204,56 @@ approval card (`docs/approvals.md`):
 
 ## Spawning by name
 
-`session_spawn` gains:
+`session_spawn` has:
 
-- `operation: "agents"`, read-only and available in Plan: the valid definitions
-  as name, description, persona, and resolved model and effort. Diagnostics are
-  included so a caller knows why a definition it was told about cannot be used.
-- An `agent` field on a `spawn` row, naming a definition. The row then needs no
-  `profileId` and no `agentType`. Model, effort, and persona come from the
-  definition and the account from the account function. `worktreeId` is still
-  required for a `developer` definition. `title` and `prompt` stay required: the
-  prompt is the target and the task, the definition is the role.
+- `operation: "agents"`, read-only and available in Plan: every definition with
+  its description, persona, and the model, effort and account it would run on
+  now. A definition that cannot be spawned is listed with the reason, so a
+  caller knows why one it was told about cannot be used.
+- An `agent` field on a `spawn` row, naming a definition. The row then takes no
+  `profileId` and no `agentType`; stating either is refused. Model, effort, and
+  persona come from the definition and the account from the account function.
+  `worktreeId` is still required for a `developer` definition. `title` and
+  `prompt` stay required: the prompt is the target and the task, the definition
+  is the role. A `propose` row may not name an agent: the user already approved
+  what a definition runs on.
 
 The opening prompt still carries the coordinator's session id and the
 instruction to report back, as for any spawn.
 
+A spawn reads the definition twice (`resolveAgentSpawn` in
+`agents/agentSpawn.ts`). The first read, with every row's structural check,
+turns an unknown, invalid or unrunnable definition into a tool error with
+nothing created. The second runs immediately before the row's session is
+created, like a roster row's late resolution: a definition edited in between
+runs as edited, one that stopped resolving fails that row, and one whose persona
+changed fails it too, since the row was checked for the old persona.
+
 ### What a spawn freezes
 
-At spawn the server resolves the definition and stores it in an insert-only
-per-session row: name, the `AGENT.md` blob hash, resolved persona, provider,
-model, effort, deny list, mounted skills, and the body text. Like
+The second read is frozen in the insert-only `session_agent` table (migration
+`0079_session_agent.sql`): name, the `AGENT.md` git blob id, persona, provider,
+model, effective effort, deny list, mounted skills, and the body text. Like
 `session_skills`, the first insert wins for the session's life, a fork copies
 the parent's row, and resumes read the row rather than the library. Editing or
-deleting a definition affects new spawns only.
-
-The row needs a migration (`docs/migrations.md`). It adds a table, so existing
-data stays readable.
+deleting a definition affects new spawns only. A row that does not parse fails
+closed: the session refuses to run rather than run without its role and its
+denied tools.
 
 ### How the definition reaches the model
 
-- The body is one more system-prompt layer, appended after the persona's layers.
-  It survives compaction and the coordinator cannot paraphrase it away, which it
+- The body is one more system-prompt layer, `## Agent definition: <name>`,
+  appended after the persona's layers on both harnesses (`agentPromptLayer`). It
+  survives compaction and the coordinator cannot paraphrase it away, which it
   could if the body travelled in the opening prompt.
-- The deny list feeds the active-tool filter and the native-tool mapping above.
-- `skills` joins the globally enabled skills in the session's frozen skill list,
-  so the skills runtime mounts them through the existing path.
+- The deny list removes tools as described in "Tools".
+- `skills` joins the globally enabled skills in the session's frozen skill list
+  (`sessionSkillPreset`), so the skills runtime mounts them through the existing
+  path.
 
-The session inspector shows the agent name with a link to its definition, as it
-shows frozen skills.
+The session inspector's Agent section shows the frozen name, model, effort,
+denied tools, skills and blob id. A link to the definition arrives with the
+Agents page.
 
 ## Shared library core
 

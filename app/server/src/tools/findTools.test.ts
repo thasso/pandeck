@@ -211,6 +211,18 @@ test("canonical session inspection query keeps the default load in one family", 
     assert.match(name, /^session_/, `unrelated tool loaded: ${name}`);
 });
 
+test("asking to spawn a named agent finds session_spawn", async () => {
+  const { host } = makeHost();
+  const payload = await run(host, "spawn a test-reviewer agent");
+  assert.ok(
+    payload.loaded?.includes("session_spawn") ||
+      payload.candidates?.some(
+        (candidate) => candidate.name === "session_spawn",
+      ),
+    JSON.stringify(payload),
+  );
+});
+
 test("an ambiguous broad search returns candidates without activation", async () => {
   const { host, activated } = makeHost();
   const payload = await run(host, "find relevant documents and messages");

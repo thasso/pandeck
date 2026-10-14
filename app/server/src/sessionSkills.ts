@@ -29,16 +29,21 @@ const REAL_DEPS: SessionSkillsDeps = {
  * The names a coding session's first skills freeze would store, resolved ahead
  * so that freeze (`sessionSkills` with them as `preset`) awaits nothing.
  * Undefined when there is nothing to resolve: a non-coding persona, or a
- * session already frozen.
+ * session already frozen. `agentSkills` are the skills a spawned agent
+ * definition mounts: they join the globally enabled ones.
  */
 export async function sessionSkillPreset(
   sessionId: string,
   agentType: AgentType,
   deps: SessionSkillsDeps = REAL_DEPS,
+  agentSkills: readonly string[] = [],
 ): Promise<string[] | undefined> {
   if (!isCodingAgentType(agentType)) return undefined;
   if (deps.getFrozen(sessionId) !== undefined) return undefined;
-  return resolveSessionSkillNames(deps);
+  return normalizePreset([
+    ...(await resolveSessionSkillNames(deps)),
+    ...agentSkills,
+  ]);
 }
 
 /** The current skill names a first freeze stores; a failed resolve freezes none. */

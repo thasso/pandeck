@@ -83,6 +83,12 @@ const { createSession } = await import("./harnesses/create.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const skillResolver = await import("./skills/skillResolver.ts");
+const { agentKind, formatAgentManifest } =
+  await import("./agents/agentLibrary.ts");
+const { setAgentRuntimeSourcesForTests } =
+  await import("./agents/agentRuntime.ts");
+const { setAgentSpawnSourcesForTests } = await import("./agents/agentSpawn.ts");
+const { LibraryStore } = await import("./library/libraryStore.ts");
 
 const spawnTool = sessionSpawnTools()[0]!;
 const SENDER = "spawner-session";
@@ -195,6 +201,7 @@ beforeEach(() => {
         ...(cwd ? { cwd } : {}),
         credentialProfileId: spec.credentialProfileId,
         title: spec.title,
+        ...(spec.agent ? { agent: spec.agent } : {}),
       };
       if (spec.harness === "claude-sdk")
         recorded.claude.push({
@@ -244,6 +251,8 @@ afterEach(() => {
   setSessionSpawnDepsForTests(null);
   updateSettings({ peerSpawnRuntimes: [] });
   resetDirectPeerChildrenForTests();
+  setAgentSpawnSourcesForTests(null);
+  setAgentRuntimeSourcesForTests(null);
   vi.restoreAllMocks();
 });
 
@@ -900,7 +909,7 @@ function textOf(result: { content: unknown[] }): string {
 }
 
 async function runSpawnOperation(
-  operation: "profiles" | "spawn" | "propose",
+  operation: "profiles" | "agents" | "spawn" | "propose",
   sessions?: Array<Record<string, unknown>>,
 ) {
   return await spawnTool.execute(
@@ -1486,4 +1495,198 @@ test("a proposal row may not name an approved runtime", async () => {
   await expect(propose([{ ...row(), profileId: "pr_terra" }])).rejects.toThrow(
     /belongs to operation "spawn"/,
   );
+});
+
+/* ------------------------------ agent rows -------------------------------- */
+
+let agentsRoot = "";
+
+/** Write one definition into the temp agents library. */
+function writeAgent(patch: Record<string, unknown> = {}): void {
+  const definition = {
+    name: "test-reviewer",
+    description: "Checks that new tests fail without the change.",
+    persona: "developer",
+    model: "sonnet",
+    effort: "low",
+    denyTools: ["worktree_push"],
+    skills: [],
+    body: "You are a test reviewer.",
+    ...patch,
+  };
+  const folder = join(agentsRoot, String(definition.name));
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, "AGENT.md"),
+    formatAgentManifest(definition as never),
+  );
+}
+
+/** A temp agents library on the fixture's real accounts and models. */
+async function useAgents(): Promise<void> {
+  agentsRoot = mkdtempSync(join(tmp, "agents-"));
+  const store = new LibraryStore(agentKind, agentsRoot);
+  await store.ensureInitialized();
+  setAgentSpawnSourcesForTests({ library: () => store });
+  setAgentRuntimeSourcesForTests({
+    models: async () => [
+      { ...piModels[0]!, provider: "claude-sdk", id: "sonnet", name: "Sonnet" },
+      piModels[0]!,
+    ],
+    skillNames: async () => [],
+    toolNames: async () => ["worktree_push"],
+  });
+}
+
+const agentRow = (patch: Record<string, unknown> = {}) => ({
+  title: "Reviewer: auth",
+  prompt: "Review the auth refactor and report back.",
+  agent: "test-reviewer",
+  ...patch,
+});
+
+test("an agent row runs as its definition and freezes it for the session", async () => {
+  await useAgents();
+  writeAgent();
+  activeWorktree("wt-agent");
+
+  const text = await spawnDirect([agentRow({ worktreeId: "wt-agent" })]);
+
+  expect(recorded.claude[0]).toMatchObject({
+    modelId: "sonnet",
+    thinkingLevel: "low",
+    agentType: "developer",
+    credentialProfileId: accountFor("claude"),
+  });
+  const id = String(recorded.claude[0]!.id);
+  // Claude creation froze it before the session existed.
+  expect(JSON.parse(sessionStore.getAgent(id)!)).toMatchObject({
+    name: "test-reviewer",
+    persona: "developer",
+    provider: "claude-sdk",
+    model: "sonnet",
+    effort: "low",
+    denyTools: ["worktree_push"],
+    body: "You are a test reviewer.",
+  });
+  expect(text).toContain(`session ${id} on agent test-reviewer`);
+  expect(text).toContain("family claude");
+  expect(text).not.toContain("relative cost");
+  expect(recorded.delivered).toHaveLength(1);
+});
+
+test("an assistant agent on a pi model hands its definition to pi creation", async () => {
+  await useAgents();
+  writeAgent({ name: "researcher", persona: "assistant", model: "gpt-5" });
+
+  await spawnDirect([agentRow({ agent: "researcher" })]);
+
+  expect(recorded.pi[0]).toMatchObject({
+    agentType: "assistant",
+    modelId: "gpt-5",
+    agent: { name: "researcher", persona: "assistant", model: "gpt-5" },
+  });
+});
+
+test("an agent row is validated like any row before anything exists", async () => {
+  await useAgents();
+  writeAgent();
+
+  await expect(spawnDirect([agentRow()])).rejects.toThrow(
+    /must run in a worktree/,
+  );
+  await expect(spawnDirect([agentRow({ agent: "nobody" })])).rejects.toThrow(
+    /no agent definition named "nobody"/,
+  );
+  expect(recorded.claude).toHaveLength(0);
+  expect(recorded.pi).toHaveLength(0);
+});
+
+test.each([
+  [{ profileId: "pr_terra" }, /names an agent and sets profileId/],
+  [{ agentType: "assistant" }, /names an agent and sets agentType/],
+])("an agent row stating %o is refused", async (patch, error) => {
+  await useAgents();
+  writeAgent();
+  await expect(spawnDirect([agentRow(patch)])).rejects.toThrow(error);
+});
+
+test("a proposal may not name an agent, and a row without one needs agentType", async () => {
+  await expect(propose([{ ...row(), agent: "test-reviewer" }])).rejects.toThrow(
+    /names an agent, which belongs to operation "spawn"/,
+  );
+  const { agentType: _omitted, ...withoutPersona } = row();
+  await expect(
+    spawnDirect([{ ...withoutPersona, profileId: "pr_terra" }]),
+  ).rejects.toThrow(/agentType is required unless the row names an agent/);
+});
+
+test("a definition re-pointed to another persona during the spawn is refused", async () => {
+  await useAgents();
+  writeAgent();
+  activeWorktree("wt-agent-race");
+  const real = worktreeResolve.resolveWorktreeRow;
+  let calls = 0;
+  vi.spyOn(worktreeResolve, "resolveWorktreeRow").mockImplementation(
+    async (id: string) => {
+      calls += 1;
+      if (calls === 2) writeAgent({ persona: "assistant" });
+      return await real(id);
+    },
+  );
+
+  const text = await spawnDirect([agentRow({ worktreeId: "wt-agent-race" })]);
+
+  expect(text).toContain("No session was started.");
+  expect(text).toMatch(/changed persona to assistant/);
+  expect(recorded.claude).toHaveLength(0);
+});
+
+test("a definition edited during the spawn runs as the CURRENT one", async () => {
+  await useAgents();
+  writeAgent();
+  activeWorktree("wt-agent-edit");
+  const real = worktreeResolve.resolveWorktreeRow;
+  let calls = 0;
+  vi.spyOn(worktreeResolve, "resolveWorktreeRow").mockImplementation(
+    async (id: string) => {
+      calls += 1;
+      if (calls === 2) writeAgent({ effort: "high", body: "Edited." });
+      return await real(id);
+    },
+  );
+
+  await spawnDirect([agentRow({ worktreeId: "wt-agent-edit" })]);
+
+  expect(recorded.claude[0]).toMatchObject({ thinkingLevel: "high" });
+  const id = String(recorded.claude[0]!.id);
+  expect(JSON.parse(sessionStore.getAgent(id)!)).toMatchObject({
+    effort: "high",
+    body: "Edited.",
+  });
+});
+
+test('operation "agents" lists definitions and stays available in Plan', async () => {
+  await useAgents();
+  writeAgent();
+  writeAgent({ name: "stale", model: "gemini" });
+  sessionStore.upsert({
+    id: SENDER,
+    harness: "pi",
+    agentType: "developer",
+    mode: "plan",
+  });
+
+  const text = textOf(await runSpawnOperation("agents"));
+
+  expect(text).toContain("- test-reviewer: Checks that new tests fail");
+  expect(text).toContain("developer on claude-sdk/sonnet, low effort, account");
+  expect(text).toContain("needs a worktreeId");
+  expect(text).toMatch(/- stale: CANNOT SPAWN — .*gemini/);
+  await expect(
+    spawnTool.execute(
+      { operation: "agents", sessions: [agentRow()] } as never,
+      { session: { sessionId: SENDER } } as never,
+    ),
+  ).rejects.toThrow(/operation "agents" takes no sessions/);
 });

@@ -93,6 +93,22 @@ describe("sessionSkillPreset", () => {
     expect(await frozen).toEqual(["alpha", "zeta"]);
   });
 
+  it("adds a spawned agent's skills to the globally enabled ones", async () => {
+    const deps = fakeDeps();
+    expect(
+      await sessionSkillPreset("session", "developer", deps, ["beta", "zeta"]),
+    ).toEqual(["alpha", "beta", "zeta"]);
+    // Even when the library cannot be resolved, the agent's own still mount.
+    deps.resolve = vi.fn(async () => {
+      throw new Error("library unreadable");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(
+      await sessionSkillPreset("session", "developer", deps, ["beta"]),
+    ).toEqual(["beta"]);
+    warn.mockRestore();
+  });
+
   it("resolves nothing for a non-coding persona or an existing freeze", async () => {
     const deps = fakeDeps('["kept"]');
     expect(await sessionSkillPreset("session", "developer", deps)).toBe(

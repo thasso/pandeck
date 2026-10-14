@@ -38,6 +38,10 @@ export type AgentPersona = (typeof AGENT_PERSONAS)[number];
  * each harness maps them to its own tools at spawn.
  */
 export const AGENT_NATIVE_TOOLS = ["bash", "edit", "write"] as const;
+export type AgentNativeTool = (typeof AGENT_NATIVE_TOOLS)[number];
+
+/** The effort a definition without one runs at, fitted to its model. */
+export const AGENT_DEFAULT_EFFORT = "medium" satisfies ThinkingLevel;
 
 /**
  * The bound on a whole `AGENT.md`. The body becomes a system-prompt layer the

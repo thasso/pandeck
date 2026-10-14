@@ -6764,6 +6764,7 @@ function AppContent() {
         <SessionContextSections
           sessionId={displaySession?.sessionId}
           toolExposure={displaySession?.toolExposure}
+          agent={displaySession?.agent}
           activeSkills={displaySession?.activeSkills}
           skillInvocations={displaySession?.skillInvocations}
           skillLibrary={state.skillLibrary}

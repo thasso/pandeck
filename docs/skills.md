@@ -707,6 +707,9 @@ a pre-upgrade coding session with no row freezes when it is first started by the
 upgraded runtime, before the runtime session exists or a user turn is appended.
 Rendering `SessionState` is read-only and never creates that missing row.
 
+A session spawned from an agent definition freezes the definition's `skills`
+together with the globally enabled ones (`docs/agent-definitions.md`).
+
 A fork first reads (or, for a legacy parent, freezes) the parent's list and
 inserts that exact list for the child. It does not resolve against current
 settings. Concurrent starts are safe because every contender reads back the row

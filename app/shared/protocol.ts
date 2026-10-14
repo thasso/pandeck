@@ -4397,6 +4397,22 @@ export type SessionIdleReason =
   /** A `/pr` card is waiting for the user to pick which Task the PR is for. */
   | "awaiting_task_choice";
 
+/** A session's frozen agent definition, as the inspector shows it. */
+export type SessionAgentSummary =
+  | {
+      name: string;
+      unreadable?: undefined;
+      /** Git blob id of the `AGENT.md` it was spawned from. */
+      blob: string;
+      /** `provider/id` of the model it runs on. */
+      model: string;
+      effort: ThinkingLevel;
+      denyTools: string[];
+      skills: string[];
+    }
+  /** A stored definition this build cannot read: the session refuses to run. */
+  | { name: string; unreadable: true };
+
 export interface SessionState {
   sessionId: string;
   sessionFile?: string;
@@ -4478,6 +4494,11 @@ export interface SessionState {
    * committed transcript. Present exactly when `activeSkills` is.
    */
   skillInvocations?: SessionSkillInvocation[];
+  /**
+   * The agent definition this session was spawned as, frozen at spawn
+   * (`docs/agent-definitions.md`). Absent for a session not spawned from one.
+   */
+  agent?: SessionAgentSummary;
   /** Session-managed screenshots/traces/downloads created by workshop browser tools. */
   artifacts?: SessionArtifact[];
   /** Queued automatic follow-up that will run after the dev server reloads. */

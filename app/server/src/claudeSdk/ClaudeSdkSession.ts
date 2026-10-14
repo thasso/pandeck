@@ -99,6 +99,12 @@ import {
 } from "../promptConditions.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
 import {
+  displayedSessionAgent,
+  sessionAgent,
+  sessionAgentSummary,
+  withoutDeniedTools,
+} from "../agents/sessionAgent.ts";
+import {
   skillInvocationTrail,
   type SkillInvocationToolCall,
   type SkillInvocationTranscript,
@@ -1009,6 +1015,7 @@ export class ClaudeSdkSession implements LiveSession {
       this.id,
     );
     const activeSkillsValue = activeSkillsForSession(this.id, this.agentType);
+    const agentValue = sessionAgentSummary(this.id);
     const worktreeIdValue = this.safeWorktreeId();
     return {
       sessionId: this.id,
@@ -1034,6 +1041,7 @@ export class ClaudeSdkSession implements LiveSession {
             skillInvocations: this.skillInvocations(activeSkillsValue),
           }
         : {}),
+      ...(agentValue !== undefined ? { agent: agentValue } : {}),
       ...(isCodingAgentType(this.agentType)
         ? { artifacts: listSessionArtifacts(this.id) }
         : {}),
@@ -1829,6 +1837,7 @@ export class ClaudeSdkSession implements LiveSession {
             : {}),
           promptConditions: this.promptConditions(),
           frozenSkillNames,
+          agent: sessionAgent(this.id),
           outputPolicySessionId: this.id,
           lifecycleHooks: {
             preToolUse: (input) =>
@@ -2629,7 +2638,10 @@ export class ClaudeSdkSession implements LiveSession {
 
   /** The Tools-inspector projection: catalog universe + CLI tool-search load state. */
   private toolExposure(): SessionToolExposure {
-    const tools = AGENT_TYPES[this.agentType].tools();
+    const tools = withoutDeniedTools(
+      AGENT_TYPES[this.agentType].tools(),
+      displayedSessionAgent(this.id),
+    );
     const integrationActive = integrationGatedActiveToolNames(
       this.agentType,
       tools,
@@ -3045,6 +3057,9 @@ export class ClaudeSdkSession implements LiveSession {
             agentType: this.agentType,
             promptConditions: this.promptConditions(),
             frozenSkillNames: this.frozenSkillNames(),
+            // The same prompt the session's turns carry, or the cached prefix
+            // would move.
+            agent: sessionAgent(this.id),
             ...(this.additionalSystemPrompt
               ? { additionalSystemPrompt: this.additionalSystemPrompt }
               : {}),

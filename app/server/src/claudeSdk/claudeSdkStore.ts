@@ -26,6 +26,7 @@ import { claudeProfileSessionStore } from "./profileSessionStore.ts";
 import { SessionHeldElsewhereError } from "../harness.ts";
 import { defaultClaudeProfileId } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
+import { freezeSessionAgent, sessionAgent } from "../agents/sessionAgent.ts";
 import {
   claudeSdkEntryFigures,
   claudeSdkRecordPresent,
@@ -277,6 +278,9 @@ class ClaudeSdkSessionStore {
     // A legacy parent freezes at this first post-upgrade runtime start. The
     // child receives that exact list even if settings move while it is created.
     const inheritedSkills = await sessionSkills(sourceId, agentType);
+    // A fork continues the parent as the same agent; read now, so an
+    // unreadable parent row refuses the fork before anything is cut.
+    const inheritedAgent = sessionAgent(sourceId);
 
     const seam = await this.seam();
     if (!seam.forkSession)
@@ -327,6 +331,7 @@ class ClaudeSdkSessionStore {
           "Cannot fork: selected message is no longer available.",
         );
       await sessionSkills(id, agentType, inheritedSkills);
+      if (inheritedAgent) freezeSessionAgent(id, inheritedAgent);
 
       const session = new ClaudeSdkSession(id, {
         seam: () => this.seam(),

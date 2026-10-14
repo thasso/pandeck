@@ -12,6 +12,10 @@ import type {
   SessionMode,
   ThinkingLevel,
 } from "@assistant/shared";
+import {
+  freezeSessionAgent,
+  type SessionAgent,
+} from "../agents/sessionAgent.ts";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { linkSessionToWorktree } from "../db/worktreeStore.ts";
@@ -73,6 +77,11 @@ type SessionStart = SessionPlace & {
   promptEvidence?: SessionPromptEvidence | undefined;
   /** The title it starts with; a titled session is never auto-named. */
   title?: string | undefined;
+  /**
+   * The agent definition it is spawned as (`docs/agent-definitions.md`),
+   * frozen before its first query; its skills join the session's frozen ones.
+   */
+  agent?: SessionAgent | undefined;
 };
 
 /** A session to create, with what only its engine takes. */
@@ -106,7 +115,8 @@ export type NewSession =
  * takes its id, so its worktree edge and frozen prompt conditions are in place
  * before the store resolves them; pi mints its id and freezes its prompt
  * conditions inside creation, so its row and edge follow it. Either way its
- * current library skills are frozen before its first query.
+ * current library skills, and the agent definition it is spawned as, are
+ * frozen before its first query.
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
   // Resolved here for both engines alike: Claude's store would read a
@@ -119,12 +129,18 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     // Resolved first: from the ownership check below to the session's
     // registration nothing yields, so no other engine can take the id in
     // between, and a refusal comes before anything is written for it.
-    const skills = await sessionSkillPreset(id, spec.agentType);
+    const skills = await sessionSkillPreset(
+      id,
+      spec.agentType,
+      undefined,
+      spec.agent?.skills,
+    );
     const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
       onDisk: spec.id !== undefined,
     });
     if (holder) throw new SessionIdTakenError(id, holder);
     linkWorktree(id, spec.worktree?.id);
+    if (spec.agent) freezeSessionAgent(id, spec.agent);
     if (spec.promptEvidence)
       sessionPromptConditions(id, spec.agentType, spec.promptEvidence);
     // With the names resolved, the freeze lands right here, before the
@@ -162,6 +178,8 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       ...(spec.promptEvidence !== undefined
         ? { promptEvidence: spec.promptEvidence }
         : {}),
+      // Like the evidence: pi mints the id inside creation, which freezes it.
+      ...(spec.agent !== undefined ? { agent: spec.agent } : {}),
       ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
     },
   );

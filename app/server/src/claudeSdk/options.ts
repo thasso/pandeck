@@ -21,6 +21,15 @@ import {
 import { planModeToolUnavailableMessage } from "../mcp/tool.ts";
 import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
+import {
+  AGENT_NATIVE_TOOLS,
+  type AgentNativeTool,
+} from "../agents/agentLibrary.ts";
+import {
+  agentPromptLayer,
+  deniesNative,
+  type SessionAgent,
+} from "../agents/sessionAgent.ts";
 import type { PromptAssetOptions } from "../promptAssets.ts";
 import type { PromptConditions } from "../promptConditions.ts";
 import type { ClaudeSdkOptions } from "./sdkSeam.ts";
@@ -86,6 +95,19 @@ function planModeNativeRefusal(
   return `${toolName} is unavailable while this session is in Plan mode. Deliver the plan as your reply; the user switches back to Build to implement it.`;
 }
 
+/**
+ * The Claude natives behind each harness-neutral name an agent definition may
+ * deny (`docs/agent-definitions.md` "Tools"). `Monitor` runs shell commands,
+ * so it goes with `bash`.
+ */
+const CLAUDE_NATIVES_FOR_AGENT_DENY: Readonly<
+  Record<AgentNativeTool, readonly string[]>
+> = {
+  bash: ["Bash", "Monitor"],
+  edit: ["Edit", "MultiEdit", "NotebookEdit"],
+  write: ["Write"],
+};
+
 /** All native tools we know about, so the rest can be explicitly disallowed. */
 const KNOWN_CLAUDE_NATIVE_TOOLS = [
   "Bash",
@@ -137,6 +159,11 @@ export interface BuildClaudeSdkQueryOptionsInput {
   agentType?: AgentType;
   /** Optional session-specific instructions appended after the persona prompt. */
   additionalSystemPrompt?: string;
+  /**
+   * The FROZEN agent definition the session was spawned as: its body is the
+   * last system-prompt layer and its denied natives leave `tools:`.
+   */
+  agent?: SessionAgent | undefined;
   /**
    * The session's FROZEN session-start prompt conditions (`promptConditions.ts`).
    * A resumed query resends the whole system prompt, so passing anything
@@ -223,9 +250,14 @@ export function buildClaudeSdkQueryOptions(
   // impose the CLI's own ExitPlanMode protocol. `disableTools` is reserved for
   // CLI-local no-model operations such as compaction, where even
   // Skill/ToolSearch must be absent deliberately.
+  const deniedNative = new Set(
+    AGENT_NATIVE_TOOLS.filter((name) =>
+      deniesNative(input.agent, name),
+    ).flatMap((name) => CLAUDE_NATIVES_FOR_AGENT_DENY[name]),
+  );
   const native = [
     ...(input.disableTools ? [] : (input.nativeTools ?? defaultNative)),
-  ];
+  ].filter((name) => !deniedNative.has(name));
   const allowed = new Set(native);
   if (input.mode && !input.outputPolicySessionId)
     throw new Error(
@@ -342,6 +374,7 @@ export function buildClaudeSdkQueryOptions(
       input.promptConditions
         ? { conditions: input.promptConditions }
         : undefined,
+      input.agent,
     ),
     ...reasoningToThinking(input.thinkingLevel, input.modelId),
     ...(input.providerSessionId ? { resume: input.providerSessionId } : {}),
@@ -369,9 +402,10 @@ export function claudeSdkSystemPrompt(
   agentType: AgentType,
   additional?: string,
   promptAssets?: PromptAssetOptions,
+  agent?: SessionAgent,
 ): NonNullable<ClaudeSdkOptions["systemPrompt"]> {
   const extra = additional?.trim();
-  const prompt = `${AGENT_TYPES[agentType].systemPrompt(promptAssets)}${extra ? `\n\n## Personal profile instructions\n\n${extra}` : ""}`;
+  const prompt = `${AGENT_TYPES[agentType].systemPrompt(promptAssets)}${extra ? `\n\n## Personal profile instructions\n\n${extra}` : ""}${agent ? `\n\n${agentPromptLayer(agent)}` : ""}`;
   // Coding personas (workshop/developer) build on Claude Code's base prompt and
   // append our persona extension; the assistant personas use their own
   // locked-down prompt.

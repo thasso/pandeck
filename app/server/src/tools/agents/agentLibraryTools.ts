@@ -17,6 +17,7 @@ import {
   type ThinkingLevel,
 } from "@assistant/shared";
 import {
+  AGENT_DEFAULT_EFFORT,
   AGENT_PERSONAS,
   agentKind,
   agentLibraryStore,
@@ -235,8 +236,7 @@ function definitionOf(source: string, name: string): AgentManifest {
 const effortProperty = {
   type: "string",
   enum: THINKING_LEVELS,
-  description:
-    "Optional effort (thinking level), fitted to the levels the model supports. Omit for the model's default.",
+  description: `Optional effort (thinking level), fitted to the levels the model supports. Omit to run at ${AGENT_DEFAULT_EFFORT}, fitted the same way.`,
 } as const;
 
 /** The one deferred group registered in `tools/catalog.ts`. */
