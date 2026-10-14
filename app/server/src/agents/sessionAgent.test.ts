@@ -32,6 +32,7 @@ const {
 const { buildClaudeSdkQueryOptions, claudeSdkSystemPrompt } =
   await import("../claudeSdk/options.ts");
 const { buildAgentOptions } = await import("../piSdk/options.ts");
+const { CLAUDE_SDK_MODELS } = await import("../claudeSdk/modelSettings.ts");
 const { createClaudeSessionToolServer } =
   await import("../claudeSdk/toolServer.ts");
 
@@ -180,5 +181,45 @@ test("Claude: a denied app tool is neither listed nor callable", async () => {
   } finally {
     await client.close();
     await server.close();
+  }
+});
+
+test("Claude: a pinned agent runs its version even after the alias moves", () => {
+  const pinned = { ...reviewer, pinnedModel: "claude-opus-5-5" };
+  freezeSessionAgent("claude-pinned", pinned);
+  assert.deepEqual(sessionAgent("claude-pinned"), pinned);
+  const query = (modelId: string) =>
+    buildClaudeSdkQueryOptions({
+      cwd: tmp,
+      abortController: new AbortController(),
+      modelId,
+      thinkingLevel: "high",
+      agentType: "developer",
+      agent: pinned,
+    }).model;
+  const opus = CLAUDE_SDK_MODELS.find((entry) => entry.id === "opus")!;
+  const original = opus.sdkModelId;
+  opus.sdkModelId = "claude-opus-future";
+  try {
+    assert.equal(query("opus"), "claude-opus-5-5");
+    // A model the user switched the session to runs as usual.
+    assert.equal(
+      query("sonnet"),
+      CLAUDE_SDK_MODELS.find((entry) => entry.id === "sonnet")!.sdkModelId,
+    );
+    // An unpinned agent follows its alias.
+    assert.equal(
+      buildClaudeSdkQueryOptions({
+        cwd: tmp,
+        abortController: new AbortController(),
+        modelId: "opus",
+        thinkingLevel: "high",
+        agentType: "developer",
+        agent: reviewer,
+      }).model,
+      "claude-opus-future",
+    );
+  } finally {
+    opus.sdkModelId = original;
   }
 });

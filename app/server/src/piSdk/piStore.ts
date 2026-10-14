@@ -44,7 +44,7 @@ import {
   mergedActiveToolNames,
   type PiToolActivation,
 } from "./toolActivation.ts";
-import { modelRuntimeForProfile } from "./models.ts";
+import { findModelForProfile, modelRuntimeForProfile } from "./models.ts";
 import type { LiveListInfo } from "../sessions.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import {
@@ -108,6 +108,23 @@ interface PiPromptStart {
    * inside creation, where pi mints the id; a reopen reads the stored row.
    */
   agent?: SessionAgent;
+}
+
+/** The model and thinking level a branch last selected, if any. */
+function branchRuntime(sm: SessionManager): {
+  provider?: string;
+  modelId?: string;
+  thinkingLevel?: ThinkingLevel;
+} {
+  let selected: { provider?: string; modelId?: string } = {};
+  let thinkingLevel: ThinkingLevel | undefined;
+  for (const entry of sm.getBranch()) {
+    if (entry.type === "model_change")
+      selected = { provider: entry.provider, modelId: entry.modelId };
+    if (entry.type === "thinking_level_change")
+      thinkingLevel = entry.thinkingLevel as ThinkingLevel;
+  }
+  return { ...selected, ...(thinkingLevel ? { thinkingLevel } : {}) };
 }
 
 function safeSessionId(sm: SessionManager): string | undefined {
@@ -615,11 +632,40 @@ class PiSessionStore {
       : undefined;
     // The agent definition, when it has one: frozen from the start's, else
     // the stored row a reopen reads. Before the skills, which it adds to.
+    if (promptStart?.agent && !sessionId)
+      throw new Error(
+        `Agent "${promptStart.agent.name}" cannot start: pi gave the session no id to freeze it under.`,
+      );
     const agent = !sessionId
       ? undefined
       : promptStart?.agent
         ? freezeSessionAgent(sessionId, promptStart.agent)
         : sessionAgent(sessionId);
+    // pi restores a session's model from its messages; one with none yet (a
+    // fork before the first prompt, a spawn reopened before it ran) would get
+    // pi's default model. An agent session never runs on a model it did not
+    // select: its branch's last selection, else the frozen one, or a refusal.
+    let startModel = model;
+    let startThinkingLevel = thinkingLevel;
+    if (
+      agent &&
+      startModel === undefined &&
+      sm.buildSessionContext().messages.length === 0
+    ) {
+      const selected = branchRuntime(sm);
+      const provider = selected.provider ?? agent.provider;
+      const modelId = selected.modelId ?? agent.model;
+      startModel = await findModelForProfile(
+        credentialProfileId,
+        provider,
+        modelId,
+      );
+      if (!startModel)
+        throw new Error(
+          `Agent "${agent.name}" runs on ${provider}/${modelId}, which its account no longer offers; it does not run on another model.`,
+        );
+      startThinkingLevel ??= selected.thinkingLevel ?? agent.effort;
+    }
     const skillPreset =
       promptStart?.inheritSkills ??
       (sessionId && promptStart?.agent
@@ -758,13 +804,25 @@ class PiSessionStore {
           ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
           customTools,
           excludeTools: opts.excludeTools,
-          ...(model !== undefined ? { model } : {}),
-          ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+          ...(startModel !== undefined ? { model: startModel } : {}),
+          ...(startThinkingLevel !== undefined
+            ? { thinkingLevel: startThinkingLevel }
+            : {}),
         }));
     } catch (err) {
       activation.dispose();
       this.sessionModes.delete(activeSessionId);
       throw err;
+    }
+    // Nor when the model it was on cannot be restored: pi would quietly pick
+    // another one.
+    if (agent && modelFallbackMessage) {
+      activation.dispose();
+      this.sessionModes.delete(activeSessionId);
+      session.dispose();
+      throw new Error(
+        `Agent "${agent.name}" cannot resume: ${modelFallbackMessage}. It does not run on another model.`,
+      );
     }
     this.closeToolRuntime(session.sessionId); // paranoia: never leak a stale activation under the same key
     this.toolRuntimes.set(session.sessionId, activation);

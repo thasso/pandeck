@@ -13,7 +13,10 @@ import { join } from "node:path";
 import type { ModelOption } from "@assistant/shared";
 import { afterEach, beforeEach, test } from "vitest";
 import { agentKind, formatAgentManifest } from "./agentLibrary.ts";
-import { setAgentRuntimeSourcesForTests } from "./agentRuntime.ts";
+import {
+  setAgentRuntimeSourcesForTests,
+  type AgentModelOption,
+} from "./agentRuntime.ts";
 import {
   AgentSpawnRefusedError,
   listSpawnableAgents,
@@ -39,7 +42,7 @@ function model(
 }
 
 let root: string;
-let models: ModelOption[];
+let models: AgentModelOption[];
 let offered: boolean;
 const accounts: string[] = [];
 
@@ -106,6 +109,19 @@ test("a definition resolves to its model, account and the exact bytes it froze",
   assert.equal(runtime.credentialProfileId, "acct-claude-sdk");
   assert.equal(runtime.accountName, "Account acct-claude-sdk");
   assert.deepEqual(accounts, ["claude-sdk"]);
+});
+
+test("a definition naming a concrete version freezes that version", async () => {
+  models = [{ ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" }];
+  write("test-reviewer", reviewer({ model: "claude-opus-5-5" }));
+  const { agent } = await resolveAgentSpawn("test-reviewer");
+  assert.equal(agent.model, "opus");
+  assert.equal(agent.pinnedModel, "claude-opus-5-5");
+  write("test-reviewer", reviewer());
+  assert.equal(
+    (await resolveAgentSpawn("test-reviewer")).agent.pinnedModel,
+    undefined,
+  );
 });
 
 test("no effort runs at the default, fitted to the model", async () => {

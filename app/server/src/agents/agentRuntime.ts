@@ -27,6 +27,12 @@ import {
 /** What a definition runs as, once resolved. */
 export interface AgentRuntime {
   model: ModelOption;
+  /**
+   * The concrete version the definition pinned, when it named one rather than
+   * the alias (`claude-opus-5-5` for `opus`): what the session must run, even
+   * after the alias moves on.
+   */
+  pinnedModel?: string;
   /** The definition's effort, fitted to the levels the model supports. */
   thinkingLevel?: ThinkingLevel;
 }
@@ -101,7 +107,7 @@ export function setAgentRuntimeSourcesForTests(
 export function resolveAgentModel(
   spec: string,
   models: readonly AgentModelOption[],
-): ModelOption {
+): AgentModelOption {
   const wanted = spec.toLowerCase();
   const exact = models.filter(
     (model) =>
@@ -155,8 +161,15 @@ export async function checkAgentRuntime(
   if (options.checkModel !== false) {
     try {
       const model = resolveAgentModel(manifest.model, await sources.models());
+      const { pinnedId, ...option } = model;
+      const pinned =
+        pinnedId !== undefined &&
+        [pinnedId, `${model.provider}/${pinnedId}`].some(
+          (form) => form.toLowerCase() === manifest.model.toLowerCase(),
+        );
       runtime = {
-        model,
+        model: option,
+        ...(pinned ? { pinnedModel: pinnedId } : {}),
         ...(manifest.effort !== undefined
           ? {
               thinkingLevel: clampThinkingLevelForModel(model, manifest.effort),
@@ -168,14 +181,15 @@ export async function checkAgentRuntime(
     }
   }
   if (manifest.denyTools.length > 0) {
+    // Only the coding persona has native tools to deny.
     const known = new Set<string>([
-      ...AGENT_NATIVE_TOOLS,
+      ...(manifest.persona === "developer" ? AGENT_NATIVE_TOOLS : []),
       ...(await sources.toolNames(manifest.persona)),
     ]);
     const unknown = manifest.denyTools.filter((name) => !known.has(name));
     if (unknown.length > 0)
       problems.push(
-        `tools.deny names ${unknown.join(", ")}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push) or ${AGENT_NATIVE_TOOLS.join(", ")}.`,
+        `tools.deny names ${unknown.join(", ")}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push)${manifest.persona === "developer" ? ` or ${AGENT_NATIVE_TOOLS.join(", ")}` : ""}.`,
       );
   }
   if (manifest.skills.length > 0) {

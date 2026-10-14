@@ -73,15 +73,15 @@ tools:
 You are a test reviewer. ...
 ```
 
-| Key           | Required | Meaning                                                                                            |
-| ------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `name`        | yes      | Declared name; same rule as skills (`isSafeEntryName` in `app/shared/library.ts`).                 |
-| `description` | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description. |
-| `persona`     | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                |
-| `model`       | yes      | An alias or an exact model id. See [Model and effort](#model-and-effort).                          |
-| `effort`      | no       | A `ThinkingLevel`. Fitted to the levels the model supports. Defaults to the model's default.       |
-| `tools.deny`  | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).          |
-| `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.      |
+| Key           | Required | Meaning                                                                                                |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `name`        | yes      | Declared name; same rule as skills (`isSafeEntryName` in `app/shared/library.ts`).                     |
+| `description` | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description.     |
+| `persona`     | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                    |
+| `model`       | yes      | An alias or an exact model id. See [Model and effort](#model-and-effort).                              |
+| `effort`      | no       | A `ThinkingLevel`. Fitted to the levels the model supports. Defaults to `medium`, fitted the same way. |
+| `tools.deny`  | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).              |
+| `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.          |
 
 The body is the role instructions. It must be non-empty, and the whole
 `AGENT.md` has a size bound (`maxManifestBytes`, proposed: 16 KiB) so a
@@ -140,12 +140,13 @@ persona's normal toolset and can never add to it. Entries are:
   (`withoutDeniedTools` in `agents/sessionAgent.ts`): Claude's session tool
   server neither lists nor serves them (`claudeSdk/toolServer.ts`), and pi never
   registers them (`piSdk/options.ts`).
-- **Native capabilities** by harness-neutral names: `bash`, `edit`, `write`.
-  Claude drops them from `tools:` and therefore lists them in `disallowedTools`
-  (`bash` → `Bash` and `Monitor`, which runs commands too; `edit` → `Edit`,
-  `MultiEdit`, `NotebookEdit`; `write` → `Write`). pi excludes its built-ins of
-  the same names, and `bash` also drops pi's background `bash` and `monitor`
-  tools. Reading stays available to every agent.
+- **Native capabilities** by harness-neutral names: `bash`, `edit`, `write`, for
+  the `developer` persona (an `assistant` has none). Claude drops them from
+  `tools:` and therefore lists them in `disallowedTools` (`bash` → `Bash` and
+  `Monitor`, which runs commands too; `edit` → `Edit`, `MultiEdit`,
+  `NotebookEdit`; `write` → `Write`). pi excludes its built-ins of the same
+  names, and `bash` also drops pi's background `bash` and `monitor` tools.
+  Reading stays available to every agent.
 
 An entry naming a tool the persona does not have, or no tool at all, is a
 validation error. A typo would otherwise silently leave a tool enabled.
@@ -233,12 +234,25 @@ changed fails it too, since the row was checked for the old persona.
 
 The second read is frozen in the insert-only `session_agent` table (migration
 `0079_session_agent.sql`): name, the `AGENT.md` git blob id, persona, provider,
-model, effective effort, deny list, mounted skills, and the body text. Like
+model, the concrete version a definition pinned (`claude-opus-5-5` rather than
+`opus`), effective effort, deny list, mounted skills, and the body text. Like
 `session_skills`, the first insert wins for the session's life, a fork copies
 the parent's row, and resumes read the row rather than the library. Editing or
 deleting a definition affects new spawns only. A row that does not parse fails
 closed: the session refuses to run rather than run without its role and its
 denied tools.
+
+The session runs the model it was spawned on, never one a harness picks:
+
+- A Claude query of a pinned definition runs the pinned version while the
+  session is on the definition's alias, however the alias is mapped later
+  (`claudeQueryModel` in `claudeSdk/options.ts`). A model the user switched the
+  session to runs as usual.
+- pi restores a session's model from its messages. An agent session without any
+  (a fork before the first prompt, a spawn reopened before it ran) starts on its
+  branch's last selected model, else the frozen one, and refuses when the
+  account no longer offers it. One whose model pi cannot restore refuses to
+  resume rather than fall back to another (`piSdk/piStore.ts`).
 
 ### How the definition reaches the model
 

@@ -133,7 +133,7 @@ export async function resolveAgentSpawn(
       `Agent "${name}" cannot run: ${(error as Error).message}`,
     );
   }
-  const { model } = runtime;
+  const { model, pinnedModel } = runtime;
   const credentialProfileId = sources.accountFor(model.provider);
   if (!(await sources.offers(credentialProfileId, model.provider, model.id)))
     throw new AgentSpawnRefusedError(
@@ -150,6 +150,7 @@ export async function resolveAgentSpawn(
       persona: manifest.persona,
       provider: model.provider,
       model: model.id,
+      ...(pinnedModel ? { pinnedModel } : {}),
       effort: thinkingLevel,
       denyTools: [...manifest.denyTools],
       skills: [...manifest.skills],

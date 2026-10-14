@@ -173,6 +173,24 @@ describe("checkAgentRuntime", () => {
     );
   });
 
+  test("a concrete version is reported as the pin; the alias is not", async () => {
+    const pinnedSources = {
+      ...sources,
+      models: async () => [
+        { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+      ],
+    };
+    const pinned = await checkAgentRuntime(
+      { ...base, model: "claude-opus-5-5" },
+      { sources: pinnedSources },
+    );
+    assert.equal(pinned?.model.id, "opus");
+    assert.equal(pinned?.pinnedModel, "claude-opus-5-5");
+    assert.ok(!("pinnedId" in pinned!.model));
+    const alias = await checkAgentRuntime(base, { sources: pinnedSources });
+    assert.equal(alias?.pinnedModel, undefined);
+  });
+
   test("denied tools must be the persona's own or a native capability", async () => {
     await checkAgentRuntime(
       { ...base, denyTools: ["worktree_push", "bash", "edit", "write"] },
@@ -184,6 +202,14 @@ describe("checkAgentRuntime", () => {
         { sources },
       ),
       /tools\.deny names worktree_push, which the assistant persona does not have/,
+    );
+    // An assistant has no native tools to deny.
+    await assert.rejects(
+      checkAgentRuntime(
+        { ...base, persona: "assistant", denyTools: ["bash"] },
+        { sources },
+      ),
+      /tools\.deny names bash, which the assistant persona does not have; deny only its own tools \(unprefixed, e\.g\. worktree_push\)\./,
     );
   });
 

@@ -20,5 +20,6 @@
   tier (new integration families default to deferred) AND an explicit
   `sideEffects` classification in the catalog; Plan exposes `none` plus the
   deliberate `task_manage` exception for durable Task organization and read-only
-  `session_spawn` profile inspection; `spawn`/`propose` still refuse persisted
-  Plan mode. One needing an external subprocess belongs in `mcp/toolGroups/`.
+  `session_spawn` profile and agent-definition inspection; `spawn`/`propose`
+  still refuse persisted Plan mode. One needing an external subprocess belongs
+  in `mcp/toolGroups/`.

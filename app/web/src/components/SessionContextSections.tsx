@@ -221,7 +221,7 @@ function AgentSection({
         <PropertyList size="sm" align="start">
           <PropertyLabel>Name</PropertyLabel>
           <PropertyText className="text-foreground">{agent.name}</PropertyText>
-          <PropertyLabel>Model</PropertyLabel>
+          <PropertyLabel>Spawned on</PropertyLabel>
           <PropertyText className="text-foreground">
             {agent.model}, {agent.effort} effort
           </PropertyText>

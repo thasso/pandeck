@@ -15,6 +15,7 @@ import {
 import { MCP_SERVER_NAME } from "../mcp/names.ts";
 import {
   CLAUDE_SDK_HARNESS_SETTINGS,
+  claudeSdkModelAlias,
   claudeSdkModelId,
   reasoningToThinking,
 } from "./modelSettings.ts";
@@ -367,7 +368,7 @@ export function buildClaudeSdkQueryOptions(
       mode,
       planRestrictedAppTools,
     ),
-    model: claudeSdkModelId(input.modelId),
+    model: claudeQueryModel(input.modelId, input.agent),
     systemPrompt: claudeSdkSystemPrompt(
       agentType,
       input.additionalSystemPrompt,
@@ -390,6 +391,24 @@ export function buildClaudeSdkQueryOptions(
         }
       : {}),
   };
+}
+
+/**
+ * The SDK model a query runs. A spawned agent that pinned a concrete version
+ * runs exactly that version while the session is still on the agent's alias,
+ * however the alias is mapped by then; a model the user switched to runs as
+ * usual.
+ */
+function claudeQueryModel(
+  modelId: string,
+  agent: SessionAgent | undefined,
+): string {
+  if (
+    agent?.pinnedModel &&
+    claudeSdkModelAlias(modelId) === claudeSdkModelAlias(agent.model)
+  )
+    return agent.pinnedModel;
+  return claudeSdkModelId(modelId);
 }
 
 /**

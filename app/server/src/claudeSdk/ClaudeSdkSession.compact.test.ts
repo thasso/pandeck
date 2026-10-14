@@ -15,6 +15,10 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 import { entriesToDisplayMessages } from "@assistant/shared/display";
+import {
+  agentPromptLayer,
+  freezeSessionAgent,
+} from "../agents/sessionAgent.ts";
 import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./sdkSeam.ts";
 
@@ -314,3 +318,50 @@ test(
   "a standalone Claude compaction bills its own query epoch",
   testCompactionBillsItsOwnEpoch,
 );
+
+test("a spawned agent's compaction carries the same system prompt as its turns", async () => {
+  const agent = {
+    name: "test-reviewer",
+    blob: "0".repeat(40),
+    persona: "developer" as const,
+    provider: "claude-sdk",
+    model: "sonnet",
+    effort: "medium" as const,
+    denyTools: [],
+    skills: [],
+    body: "Review the tests.",
+  };
+  freezeSessionAgent("compaction-agent", agent);
+  const prompts: unknown[] = [];
+  const replay = seamFor([
+    boundaryMessage(),
+    ...replayMessages(),
+    resultMessage(""),
+  ]);
+  const session = new ClaudeSdkSession("compaction-agent", {
+    seam: () =>
+      Promise.resolve({
+        query(params) {
+          prompts.push(
+            (params.options as { systemPrompt?: unknown }).systemPrompt,
+          );
+          return replay.query(params);
+        },
+      }),
+    title: "Compaction agent",
+    providerSessionId: PROVIDER_SESSION,
+    modelId: "sonnet",
+    thinkingLevel: "medium",
+    agentType: "developer",
+  });
+
+  await session.createRuntimeAdapter().prompt("an ordinary turn");
+  session.beginSyntheticTool("/compact", { command: "/compact", rawArgs: "" });
+  await session.compactContext();
+
+  assert.equal(prompts.length, 2);
+  assert.deepEqual(prompts[1], prompts[0], "the cached prefix holds");
+  assert.ok(
+    (prompts[0] as { append: string }).append.endsWith(agentPromptLayer(agent)),
+  );
+});

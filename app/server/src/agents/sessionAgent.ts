@@ -31,6 +31,11 @@ export interface SessionAgent {
   persona: AgentPersona;
   provider: string;
   model: string;
+  /**
+   * The concrete version a definition pinned (`claude-opus-5-5`), run in place
+   * of whatever `model`, the alias, maps to later.
+   */
+  pinnedModel?: string;
   /** The effort it runs at, already fitted to the model. */
   effort: ThinkingLevel;
   denyTools: string[];
@@ -72,6 +77,8 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
     (AGENT_PERSONAS as readonly unknown[]).includes(value.persona) &&
     typeof value.provider === "string" &&
     typeof value.model === "string" &&
+    (value.pinnedModel === undefined ||
+      typeof value.pinnedModel === "string") &&
     (THINKING_LEVELS as readonly unknown[]).includes(value.effort) &&
     isStringList(value.denyTools) &&
     isStringList(value.skills) &&
@@ -83,6 +90,9 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
       persona: value.persona as AgentPersona,
       provider: value.provider,
       model: value.model,
+      ...(typeof value.pinnedModel === "string"
+        ? { pinnedModel: value.pinnedModel }
+        : {}),
       effort: value.effort as ThinkingLevel,
       denyTools: value.denyTools,
       skills: value.skills,
@@ -168,7 +178,9 @@ export function sessionAgentSummary(
   return {
     name: agent.name,
     blob: agent.blob,
-    model: `${agent.provider}/${agent.model}`,
+    model: `${agent.provider}/${agent.model}${
+      agent.pinnedModel ? ` (${agent.pinnedModel})` : ""
+    }`,
     effort: agent.effort,
     denyTools: agent.denyTools,
     skills: agent.skills,

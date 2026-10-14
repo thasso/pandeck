@@ -21,6 +21,12 @@ vi.mock("../sessionSkills.ts", async (importOriginal) => ({
     return mocked.frozenNames;
   },
 }));
+// An agent session at an empty transcript resolves its frozen model first.
+vi.mock("./models.ts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  findModelForProfile: async (_profile: string, provider: string, id: string) =>
+    ({ provider, id }) as never,
+}));
 vi.mock("./options.ts", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   buildAgentOptions: async (...args: unknown[]) => {

@@ -154,15 +154,10 @@ async function propose(
 async function resolvedModelOf(
   definition: AgentManifest,
 ): Promise<{ label: string; thinkingLevel?: ThinkingLevel }> {
-  const { model, thinkingLevel } = (await checkAgentRuntime(definition))!;
-  const pinned = (model as { pinnedId?: string }).pinnedId;
+  const { model, pinnedModel, thinkingLevel } =
+    (await checkAgentRuntime(definition))!;
   const label = `${model.provider}/${model.id}${
-    pinned &&
-    [pinned, `${model.provider}/${pinned}`].some(
-      (form) => form.toLowerCase() === definition.model.toLowerCase(),
-    )
-      ? ` (${pinned})`
-      : ""
+    pinnedModel ? ` (${pinnedModel})` : ""
   }`;
   return { label, ...(thinkingLevel ? { thinkingLevel } : {}) };
 }
