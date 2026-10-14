@@ -19,6 +19,7 @@ import {
 } from "@assistant/shared";
 import { CredentialProfilesContext } from "./AgentModelFields.tsx";
 import { PeerRuntimesSettingsSection } from "./PeerRuntimesSettingsSection.tsx";
+import { slotModelOptions } from "../lib/credentialProfiles.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -78,6 +79,13 @@ const runtime = (patch: Partial<PeerSpawnRuntime> = {}): PeerSpawnRuntime => ({
   ...patch,
 });
 
+const automaticRuntime = (
+  patch: Partial<PeerSpawnRuntime> = {},
+): PeerSpawnRuntime => {
+  const { credentialProfileId: _pin, ...automatic } = runtime(patch);
+  return automatic;
+};
+
 function render(
   rows: PeerSpawnRuntime[],
   onUpdate = vi.fn(),
@@ -95,7 +103,7 @@ function render(
   const tree = (
     <CredentialProfilesContext.Provider value={options.profiles ?? []}>
       <PeerRuntimesSettingsSection
-        models={options.models ?? models}
+        models={slotModelOptions(options.models ?? models)}
         settings={settings}
         onUpdate={onUpdate}
       />
@@ -282,7 +290,11 @@ function selectOpus() {
   act(() => trigger?.click());
   const option = [
     ...document.querySelectorAll<HTMLElement>('[role="option"]'),
-  ].find((node) => node.textContent?.includes("Claude Opus"));
+  ].find(
+    (node) =>
+      node.textContent?.includes("Claude Opus") &&
+      node.closest("[cmdk-group]")?.textContent?.includes("Personal Claude"),
+  );
   expect(option).toBeDefined();
   act(() => option?.click());
 }
@@ -352,14 +364,117 @@ test("adding a runtime saves a new row with a generated id", () => {
   expect(saved).toHaveLength(2);
   expect(saved?.[0]?.id).toBe("pr_1");
   expect(saved?.[1]?.id).not.toBe("pr_1");
+  expect(saved?.[1]).not.toHaveProperty("credentialProfileId");
   expect(saved?.[1]).toMatchObject({
-    credentialProfileId: "acct-claude",
     provider: "claude-sdk",
     modelId: "opus",
     relativeCost: "unknown",
     enabled: true,
   });
 });
+
+const modelTrigger = () =>
+  container!.querySelector<HTMLButtonElement>('button[title="Model"]')!;
+
+function pickModelGroup(group: string) {
+  act(() => modelTrigger().click());
+  const heading = [...document.querySelectorAll("[cmdk-group-heading]")].find(
+    (node) => node.textContent === group,
+  );
+  const option = heading
+    ?.closest("[cmdk-group]")
+    ?.querySelector<HTMLElement>("[cmdk-item]");
+  expect(option).toBeDefined();
+  act(() => option?.click());
+}
+
+test("existing pins remain selected until Automatic is explicitly picked", () => {
+  const original = runtime();
+  const onUpdate = render([original]);
+  expect(modelTrigger().textContent).toContain("Personal Claude");
+  expect(modelTrigger().textContent).not.toContain("Automatic");
+  expect(onUpdate).not.toHaveBeenCalled();
+
+  pickModelGroup("Automatic");
+  const saved = onUpdate.mock.lastCall![0]
+    .peerSpawnRuntimes as PeerSpawnRuntime[];
+  const { credentialProfileId: _pin, ...automatic } = original;
+  expect(saved).toEqual([automatic]);
+  expect(saved[0]).not.toHaveProperty("credentialProfileId");
+  render(saved, onUpdate);
+  expect(modelTrigger().textContent).toContain("Automatic");
+  expect(text()).not.toContain("Unavailable:");
+
+  pickModelGroup("Personal Claude");
+  expect(onUpdate.mock.lastCall![0].peerSpawnRuntimes).toEqual([original]);
+});
+
+test.each([
+  { label: "no catalogs", models: [] },
+  {
+    label: "disabled accounts",
+    models: models.map((model) => ({ ...model, accountDisabled: true })),
+  },
+])("can explicitly clear a pin with $label, without fallback", (options) => {
+  const original = runtime({ thinkingLevel: "maximum" });
+  const onUpdate = render([original], vi.fn(), options);
+  const clear = [...container!.querySelectorAll("button")].find(
+    (node) => node.textContent === "Use Automatic",
+  );
+  expect(clear).toBeDefined();
+  expect(text()).toContain("Unavailable:");
+  expect(text()).not.toContain("this runs on the automatic account");
+  act(() => clear?.click());
+  const saved = onUpdate.mock.lastCall![0]
+    .peerSpawnRuntimes as PeerSpawnRuntime[];
+  const { credentialProfileId: _pin, ...automatic } = original;
+  expect(saved).toEqual([automatic]);
+  render(saved, onUpdate, options);
+  expect(modelTrigger().textContent).toContain("Automatic");
+  expect(text()).toContain("No enabled account offers claude-sdk/opus");
+});
+
+test("Automatic availability requires an enabled account with the exact level", () => {
+  const automatic = automaticRuntime({ thinkingLevel: "xhigh" });
+  const lowAccount: AccountModelOption = {
+    ...models[0]!,
+    supportedThinkingLevels: ["low"],
+  };
+  const highAccount: AccountModelOption = {
+    ...models[0]!,
+    credentialProfileId: "acct-high",
+    accountName: "High account",
+    supportedThinkingLevels: ["xhigh"],
+  };
+  render([automatic], vi.fn(), {
+    models: [lowAccount, { ...highAccount, accountDisabled: true }],
+  });
+  expect(modelTrigger().textContent).toContain("Automatic");
+  expect(thinkingTrigger()?.textContent).toContain("Pick a level");
+  expect(text()).toContain("with xhigh thinking");
+
+  render([automatic], vi.fn(), { models: [lowAccount, highAccount] });
+  expect(thinkingTrigger()?.textContent).toContain("Extra high");
+  expect(text()).not.toContain("Unavailable:");
+});
+
+test.each([false, true])(
+  "editing Automatic thinking omits its pin, legacy empty id=%s",
+  (emptyPin) => {
+    const onUpdate = render([
+      emptyPin ? runtime({ credentialProfileId: "" }) : automaticRuntime(),
+    ]);
+    act(() => thinkingTrigger()?.click());
+    const high = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].find((node) => node.textContent?.startsWith("High"));
+    act(() => high?.click());
+    const saved = onUpdate.mock.lastCall![0]
+      .peerSpawnRuntimes as PeerSpawnRuntime[];
+    expect(saved[0]?.thinkingLevel).toBe("high");
+    expect(saved[0]).not.toHaveProperty("credentialProfileId");
+  },
+);
 
 test("removing a runtime saves the rest of the list", () => {
   const onUpdate = render([runtime(), runtime({ id: "pr_2", name: "Other" })]);
@@ -448,8 +563,14 @@ test("a row that was already there is left where it is", () => {
   }
 });
 
-test("adding is refused, with a reason, while no account offers a model", () => {
-  const onUpdate = render([], vi.fn(), { models: [] });
+test.each([
+  { label: "no catalogs", models: [] },
+  {
+    label: "disabled accounts only",
+    models: models.map((model) => ({ ...model, accountDisabled: true })),
+  },
+])("adding is refused with $label", (options) => {
+  const onUpdate = render([], vi.fn(), options);
   const add = [...(container?.querySelectorAll("button") ?? [])].find((node) =>
     node.textContent?.includes("Add runtime"),
   );

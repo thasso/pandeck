@@ -323,7 +323,37 @@ describe("every Settings slot can return to Automatic", () => {
     );
   }
 
-  it("does not offer pin clearing on explicit-only peer runtimes", () => {
+  it("passes Automatic options to the peer roster and clears its exact pin", async () => {
+    const saved = vi.fn();
+    const model = settingsModels[0]!;
+    const runtime = {
+      id: "pr-pinned",
+      provider: model.provider,
+      modelId: model.id,
+      thinkingLevel: "low" as const,
+      credentialProfileId: model.credentialProfileId,
+      relativeCost: "unknown" as const,
+      enabled: true,
+    };
+    await act(async () =>
+      root!.render(
+        <SettingsPage
+          {...props}
+          settings={{ ...settingsFixture, peerSpawnRuntimes: [runtime] }}
+          section="peer-runtimes"
+          onUpdate={saved}
+        />,
+      ),
+    );
+    expect(trigger().textContent).toContain(model.accountName);
+    act(() => trigger().click());
+    act(() => option("Automatic").click());
+    const { credentialProfileId: _pin, ...automatic } = runtime;
+    expect(saved.mock.lastCall![0].peerSpawnRuntimes).toEqual([automatic]);
+    expect(previews).toEqual([]);
+  });
+
+  it("does not offer pin clearing on explicit-only fields", () => {
     act(() =>
       root!.render(
         <AgentModelFields
@@ -433,6 +463,25 @@ describe("settings slot Automatic preview", () => {
         />,
       ),
     );
+    expect(previews).toEqual([]);
+  });
+
+  it("displays Automatic without a degrading preview for an exact runtime", async () => {
+    await act(async () =>
+      root!.render(
+        <AgentModelFields
+          models={slotModelOptions(accountModels)}
+          provider="claude-sdk"
+          modelId="sonnet"
+          thinkingLevel="low"
+          accountFallback={false}
+          allowAutomatic
+          thinkingSelection="exact"
+          onChange={() => {}}
+        />,
+      ),
+    );
+    expect(trigger().textContent).toContain("Automatic");
     expect(previews).toEqual([]);
   });
 

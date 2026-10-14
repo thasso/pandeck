@@ -36,6 +36,13 @@ const row = (patch: Partial<PeerSpawnRuntime> = {}): PeerSpawnRuntime => ({
   ...patch,
 });
 
+const automaticRow = (
+  patch: Partial<PeerSpawnRuntime> = {},
+): PeerSpawnRuntime => {
+  const { credentialProfileId: _pin, ...automatic } = row(patch);
+  return automatic;
+};
+
 test("only the declared relative-cost labels are accepted", () => {
   expect(isPeerRuntimeRelativeCost("low")).toBe(true);
   expect(isPeerRuntimeRelativeCost("medium")).toBe(true);
@@ -97,6 +104,103 @@ test.each([
   ],
 ])("%s makes a row unavailable", (_label, runtime, options, expected) => {
   expect(peerRuntimeUnavailableReason(runtime, options)).toMatch(expected);
+});
+
+test.each([undefined, ""])(
+  "an unpinned row uses any enabled account offering the exact model and level, pin=%s",
+  (credentialProfileId) => {
+    expect(
+      peerRuntimeUnavailableReason(
+        credentialProfileId === undefined
+          ? automaticRow()
+          : row({ credentialProfileId }),
+        [
+          option({ accountDisabled: true }),
+          option({
+            credentialProfileId: "acct-2",
+            supportedThinkingLevels: ["low"],
+          }),
+          option({
+            credentialProfileId: "acct-3",
+            supportedThinkingLevels: ["medium"],
+          }),
+        ],
+      ),
+    ).toBeUndefined();
+  },
+);
+
+test.each([
+  ["no accounts", [], /No enabled account offers claude-sdk\/opus\./],
+  [
+    "disabled accounts only",
+    [option({ accountDisabled: true })],
+    /No enabled account offers claude-sdk\/opus\./,
+  ],
+  [
+    "another model",
+    [option({ id: "sonnet" })],
+    /No enabled account offers claude-sdk\/opus\./,
+  ],
+  [
+    "another provider",
+    [option({ provider: "anthropic" })],
+    /No enabled account offers claude-sdk\/opus\./,
+  ],
+  [
+    "a lower thinking level",
+    [option({ supportedThinkingLevels: ["low"] })],
+    /with medium thinking/,
+  ],
+  [
+    "the level only on a disabled account",
+    [
+      option({ accountDisabled: true }),
+      option({
+        credentialProfileId: "acct-2",
+        supportedThinkingLevels: ["low"],
+      }),
+    ],
+    /with medium thinking/,
+  ],
+])("Automatic refuses %s", (_label, options, expected) => {
+  expect(peerRuntimeUnavailableReason(automaticRow(), options)).toMatch(
+    expected,
+  );
+});
+
+test.each(["", "maximum"])(
+  "Automatic never repairs an unknown or missing thinking level: %s",
+  (thinkingLevel) => {
+    expect(
+      peerRuntimeUnavailableReason(automaticRow({ thinkingLevel }), [option()]),
+    ).toMatch(/no thinking level|not a thinking level this build knows/);
+  },
+);
+
+test("an exact pin never uses another account's model or thinking support", () => {
+  const alternative = option({ credentialProfileId: "acct-2" });
+  expect(peerRuntimeUnavailableReason(row(), [alternative])).toMatch(
+    /account is disabled, removed/,
+  );
+  expect(
+    peerRuntimeUnavailableReason(row(), [
+      option({ accountDisabled: true }),
+      alternative,
+    ]),
+  ).toMatch(/is disabled/);
+  expect(
+    peerRuntimeUnavailableReason(row(), [
+      option({ id: "sonnet" }),
+      alternative,
+    ]),
+  ).toMatch(/no longer offers/);
+  expect(
+    peerRuntimeUnavailableReason(row(), [
+      option({ supportedThinkingLevels: ["low"] }),
+      alternative,
+    ]),
+  ).toMatch(/does not support medium thinking/);
 });
 
 test("a row without a name describes itself by model and thinking level", () => {

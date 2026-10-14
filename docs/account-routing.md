@@ -186,7 +186,12 @@ use the picker at their fixed model and effort, within enterprise accounts of
 the model's provider when the source requires it, without preferring the
 proposer's account. Named definitions capture scope before library awaits,
 re-resolve immediately before creation, and propagate it to the child. Approved
-peer runtime definitions always name an explicit account and never route.
+peer runtime definitions may approve Automatic or a specific account. Automatic
+resolves at spawn time for the fixed provider, model and thinking level, within
+the source's enterprise requirement. A selected account must still offer that
+exact runtime, including after a degraded router pick. Explicit peer account
+pins never route or degrade to Automatic. Approval edits during account
+selection refuse the stale resolution; a new spawn reads the current approval.
 Tombstoned source rows retain their requirement; a missing source row fails
 closed. Automatic helpers reading its transcript, including naming, retitling,
 status, refinement and commit/PR context, also require enterprise accounts.
@@ -259,17 +264,20 @@ disabled or unhealthy, when it belongs to the child's provider; otherwise
 Automatic picks one within the same enterprise requirement. An
 enterprise-required child still refuses if that bound account is no longer
 tagged enterprise. Restoring an existing session keeps its native account
-affinity, not today's Automatic choice. Explicit session picks, approved peer
-runtimes and workflow role accounts remain explicit. Settings slots keep pins
-saved before Automatic existed until the user changes them in Settings. Slots
-with no pin resolve afresh on every run; an unusable pin degrades under the
-existing background-automation policy: missing, disabled or provider-mismatched
-pins. An enabled, provider-matching pin remains explicit despite login health or
-model/effort availability; failures alert on that account, not a different one.
-`automaticProfileIdFor` remains only a first-enabled hint for non-routing
-login/usage UI, not a routing function. When the saved model has no Automatic
-option, a Settings slot offers **Use Automatic** to clear its pin without
-changing the model or effort.
+affinity, not today's Automatic choice. Explicit session picks, pinned peer
+runtimes and workflow role accounts remain explicit. Existing peer rows keep
+their account until the user selects Automatic. An unpinned peer row stores no
+`credentialProfileId`, and an empty string also means Automatic. The roster
+reports its account policy as Automatic; spawn results name the actual account.
+Settings slots keep pins saved before Automatic existed until the user changes
+them in Settings. Slots with no pin resolve afresh on every run; an unusable pin
+degrades under the existing background-automation policy: missing, disabled or
+provider-mismatched pins. An enabled, provider-matching pin remains explicit
+despite login health or model/effort availability; failures alert on that
+account, not a different one. `automaticProfileIdFor` remains only a
+first-enabled hint for non-routing login/usage UI, not a routing function. When
+the saved model has no Automatic option, a Settings slot offers **Use
+Automatic** to clear its pin without changing the model or effort.
 
 `POST /api/account-router/pick` accepts `AccountPickPreviewRequest` and returns
 `AccountPickPreviewResult`, so a selector can show Automatic's current account

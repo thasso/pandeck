@@ -1,13 +1,14 @@
 /**
  * Approved peer runtimes ([Task-595](pa://task/595)): the small roster of exact
- * account/model/thinking options a human has pre-approved for agents to start
+ * provider/model/thinking options a human has pre-approved for agents to start
  * ordinary peer sessions on, plus the user-owned selection metadata agents may
  * read when choosing between those approved rows.
  *
- * The USER owns the whole roster: every row names one exact enabled account,
- * model and thinking level, a coarse relative-cost label, and an optional short
- * description of when to choose it. Nothing resolves, ranks or substitutes on
- * their behalf. The host infers only the canonical model family, so a
+ * The USER owns the whole roster: every row fixes its provider, model and
+ * thinking level, with either an exact account pin or Automatic account
+ * selection, a coarse relative-cost label, and an optional short description.
+ * Automatic selects an enabled account offering that exact model and level;
+ * a pin never falls back. The host infers the canonical model family, so a
  * coordinator asked for cross-family review can pick from a fact rather than by
  * guessing at model names.
  */
@@ -47,7 +48,8 @@ export interface PeerSpawnRuntime {
   relativeCost: PeerRuntimeRelativeCost;
   /** Optional user hint shown to agents deciding when to select this runtime. */
   description?: string;
-  credentialProfileId: string;
+  /** Missing or empty means Automatic; an exact pin never falls back. */
+  credentialProfileId?: string;
   provider: string;
   modelId: string;
   thinkingLevel: StoredThinkingLevel;
@@ -112,7 +114,7 @@ export function peerRuntimeFamilyOf(
  * Deliberately about runtime FACTS only — the account, the model, the thinking
  * level — so Settings can keep an enabled-but-broken row visible with its reason
  * and a disabled row can read as a deliberate choice rather than a fault. A row
- * that cannot run never migrates to another runtime.
+ * that cannot run never substitutes another model or thinking level.
  */
 export function peerRuntimeUnavailableReason(
   runtime: Pick<
@@ -124,8 +126,30 @@ export function peerRuntimeUnavailableReason(
   // A row can be persisted incomplete — settings keep a broken approval rather
   // than deleting it — so say which half is missing instead of reporting it as
   // a withdrawn model.
-  if (!runtime.credentialProfileId || !runtime.provider)
-    return "This row records no account or provider — pick its account and model again.";
+  if (!runtime.provider)
+    return "This row records no provider — pick its account and model again.";
+  if (!runtime.credentialProfileId) {
+    const models = options.filter(
+      (option) =>
+        !option.accountDisabled &&
+        option.provider === runtime.provider &&
+        option.id === runtime.modelId,
+    );
+    if (models.length === 0)
+      return `No enabled account offers ${runtime.provider}/${runtime.modelId}.`;
+    if (!isThinkingLevel(runtime.thinkingLevel))
+      return runtime.thinkingLevel
+        ? `“${runtime.thinkingLevel}” is not a thinking level this build knows — pick one again.`
+        : "This row records no thinking level — pick one again.";
+    const thinkingLevel = runtime.thinkingLevel;
+    if (
+      !models.some((model) =>
+        supportedThinkingLevelsForModel(model).includes(thinkingLevel),
+      )
+    )
+      return `No enabled account offers ${runtime.provider}/${runtime.modelId} with ${runtime.thinkingLevel} thinking.`;
+    return undefined;
+  }
   const account = options.filter(
     (option) => option.credentialProfileId === runtime.credentialProfileId,
   );

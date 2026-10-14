@@ -479,7 +479,7 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
   }),
   setting("peerSpawnRuntimes", "peer-runtimes", "Approved peer runtimes", {
     kind: "json",
-    shape: `array of at most ${MAX_PEER_SPAWN_RUNTIMES} { id, name?, relativeCost, description?, credentialProfileId, provider, modelId, thinkingLevel, enabled }. Written whole.`,
+    shape: `array of at most ${MAX_PEER_SPAWN_RUNTIMES} { id, name?, relativeCost, description?, credentialProfileId?, provider, modelId, thinkingLevel, enabled }. Missing or empty credentialProfileId means Automatic; explicit pins never fall back. Written whole.`,
   }),
   setting(
     "sessionPeerPromptMaxHops",

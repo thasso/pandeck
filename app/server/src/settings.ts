@@ -351,7 +351,7 @@ function normalizeSessionPeerPromptMaxHops(value: unknown): number {
  * Normalization only ever DROPS a row that cannot be addressed or repaired at
  * all: one with no id (nothing can name it), no model id (nothing was ever
  * approved), or a duplicate id. Everything else is KEPT even when it is broken
- * — a missing provider or account, a model that is gone, a thinking level the
+ * — a missing provider, a model that is gone, a thinking level the
  * model no longer supports or this build does not recognize — because those are
  * exactly the states the Settings surface must show so the human can repair or
  * delete the row. Dropping one makes a broken approval vanish silently.
@@ -390,10 +390,10 @@ function normalizePeerSpawnRuntimes(
         ? row.relativeCost
         : "unknown",
       ...(description ? { description } : {}),
-      credentialProfileId:
-        typeof row?.credentialProfileId === "string"
-          ? row.credentialProfileId.trim()
-          : "",
+      ...(typeof row?.credentialProfileId === "string" &&
+      row.credentialProfileId.trim()
+        ? { credentialProfileId: row.credentialProfileId.trim() }
+        : {}),
       provider,
       modelId,
       thinkingLevel:
@@ -718,9 +718,9 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   // account or one of the wrong provider is never persisted. A pin to a
   // temporarily disabled account survives (resolveSlotAccount degrades it).
   //
-  // Approved peer runtimes are deliberately held OUT of that walk: their
-  // account is not a pin that may degrade to an automatic one, it is part of
-  // what the human approved. A row whose account is unusable must stay visible
+  // Approved peer runtimes are deliberately held OUT of that walk: an explicit
+  // account is part of what the human approved, not a pin that may degrade to
+  // Automatic. A row whose pinned account is unusable must stay visible
   // with its reason rather than lose the field that explains it.
   const { peerSpawnRuntimes: _peerRows, ...slotted } = persisted;
   const out = `${JSON.stringify(

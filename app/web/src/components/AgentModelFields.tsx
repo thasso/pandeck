@@ -77,8 +77,9 @@ export const AccountUsageContext = createContext<UsageIndicator[] | null>(null);
  * That notice states a BEHAVIOUR — an unusable account degrades to the
  * automatic one — which is true of an ordinary settings slot and false of a
  * surface that refuses instead. `accountFallback={false}` is how such a surface
- * says so; it then owns explaining the consequence itself, since a promise the
- * server will not keep is worse than no promise.
+ * says so; it then owns explaining the consequence itself. Such a surface may
+ * still offer Automatic explicitly with `allowAutomatic`, without promising
+ * fallback or showing a preview that might substitute its thinking level.
  */
 export function AgentModelFields({
   models,
@@ -92,6 +93,7 @@ export function AgentModelFields({
   thinkingPlaceholder,
   thinkingSelection = "clamp",
   accountFallback = true,
+  allowAutomatic = accountFallback,
 }: {
   models: SlotModelOption[];
   provider: string;
@@ -122,12 +124,13 @@ export function AgentModelFields({
   thinkingSelection?: "clamp" | "exact";
   /** Whether an unusable pinned account degrades to the automatic one. */
   accountFallback?: boolean;
+  /** Offer and display Automatic even when exact pins must never fall back. */
+  allowAutomatic?: boolean;
 }) {
-  // An unpinned settings slot is Automatic even without a matching offer.
-  // Explicit-only surfaces keep matching the model on any account.
-  // Clearing a saved pin must not depend on today's model catalog or accounts.
+  // Automatic remains selectable even without a matching offer. Clearing a
+  // saved pin must not depend on today's model catalog or accounts.
   const canClearPin =
-    accountFallback &&
+    allowAutomatic &&
     Boolean(credentialProfileId) &&
     !models.some(
       (model) =>
@@ -142,7 +145,7 @@ export function AgentModelFields({
       (credentialProfileId
         ? !isAutomaticModelOption(m) &&
           m.credentialProfileId === credentialProfileId
-        : !accountFallback || isAutomaticModelOption(m)),
+        : !allowAutomatic || isAutomaticModelOption(m)),
   );
   const supported =
     thinkingLevel !== undefined &&
@@ -157,15 +160,15 @@ export function AgentModelFields({
   // one per option. Keyed on the slot's INTENT, not on a matching Automatic
   // option: with every account disabled, or the model offered by none, there
   // is no such option, yet the slot still runs (or fails) and must say how.
-  // Surfaces whose record names an account (`accountFallback={false}`) never
-  // ask.
+  // Exact-runtime surfaces own availability and never ask for this preview,
+  // because the ordinary slot router may substitute a lower thinking level.
   const automaticIntent =
-    accountFallback &&
+    allowAutomatic &&
     !credentialProfileId?.trim() &&
     provider.trim() !== "" &&
     modelId.trim() !== "";
   const preview = useFetchState<AccountPickPreviewResult>(
-    automaticIntent
+    automaticIntent && accountFallback
       ? JSON.stringify([
           provider,
           modelId,
@@ -211,7 +214,7 @@ export function AgentModelFields({
                 id: modelId,
                 ...(credentialProfileId
                   ? { credentialProfileId }
-                  : accountFallback
+                  : allowAutomatic
                     ? { automatic: true as const }
                     : {}),
               }
@@ -266,9 +269,7 @@ export function AgentModelFields({
                 provider,
                 modelId,
                 thinkingLevel: lvl,
-                ...(credentialProfileId !== undefined
-                  ? { credentialProfileId }
-                  : {}),
+                ...(credentialProfileId ? { credentialProfileId } : {}),
               })
             }
           />
