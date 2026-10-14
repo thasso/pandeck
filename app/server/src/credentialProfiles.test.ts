@@ -30,6 +30,7 @@ const {
   migrateLegacyDefaultPiProfile,
   piAgentDir,
   renameCredentialProfile,
+  patchCredentialProfile,
   setCredentialProfileEnabled,
   subscribeCredentialProfileChanges,
   subscribeCredentialProfileDeleted,
@@ -85,6 +86,10 @@ test("keeps profile metadata and provider directories private without exposing a
     true,
   );
   assert.equal(
+    profiles.every((profile) => !profile.enterprise),
+    true,
+  );
+  assert.equal(
     profiles.find((profile) => profile.id === claude.id)?.status,
     "ready",
   );
@@ -115,6 +120,34 @@ test("allows the protected default account to be disabled in favor of a secondar
 
   setCredentialProfileEnabled("default", true);
   assert.equal(defaultOpenAiProfileId(), "default");
+});
+
+test("enterprise metadata is explicit, durable, and change-notified", () => {
+  const profile = createCredentialProfile({
+    name: "Enterprise",
+    provider: "claude",
+  });
+  assert.equal(profile.enterprise, false);
+  let changed = "";
+  const unsubscribe = subscribeCredentialProfileChanges((id) => {
+    changed = id;
+  });
+  const enterprise = patchCredentialProfile(profile.id, { enterprise: true });
+  assert.equal(enterprise.enterprise, true);
+  assert.equal(changed, profile.id);
+  assert.equal(
+    listCredentialProfiles().find((item) => item.id === profile.id)?.enterprise,
+    true,
+  );
+  assert.equal(
+    patchCredentialProfile(profile.id, { enterprise: false }).enterprise,
+    false,
+  );
+  unsubscribe();
+  assert.throws(
+    () => patchCredentialProfile("missing-profile", { enterprise: true }),
+    /not found/i,
+  );
 });
 
 test("the protected Claude default reflects the normal user login without an isolated terminal override", () => {
@@ -238,6 +271,54 @@ test("scrubs ambient Claude credentials and manages non-default profile lifecycl
     /default.*deleted/i,
   );
   assert.doesNotThrow(() => readFileSync(join(root, "profiles.json"), "utf8"));
+});
+
+test("metadata PATCH applies every field together and refuses invalid patches before effects", () => {
+  const profile = createCredentialProfile({
+    name: "Patch fixture",
+    provider: "openai-codex",
+  });
+  const publications: Array<{ enabled: boolean; enterprise: boolean }> = [];
+  const stop = subscribeCredentialProfileChanges((id) => {
+    if (id !== profile.id) return;
+    const current = credentialProfileSummaryById(id)!;
+    publications.push({
+      enabled: current.enabled,
+      enterprise: current.enterprise,
+    });
+  });
+  try {
+    const patched = patchCredentialProfile(profile.id, {
+      name: "  Enterprise  patch ",
+      enabled: false,
+      enterprise: true,
+    });
+    assert.equal(patched.name, "Enterprise patch");
+    assert.equal(patched.enabled, false);
+    assert.equal(patched.enterprise, true);
+    assert.deepEqual(publications, [{ enabled: false, enterprise: true }]);
+    const stored = readFileSync(join(root, "profiles.json"), "utf8");
+    for (const invalid of [
+      { enabled: true, enterprise: "true" },
+      { enabled: "false", enterprise: false },
+      { name: 10, enabled: true, enterprise: false },
+      { name: " ", enabled: true, enterprise: false },
+      {},
+    ]) {
+      assert.throws(() => patchCredentialProfile(profile.id, invalid));
+      assert.equal(readFileSync(join(root, "profiles.json"), "utf8"), stored);
+    }
+    assert.equal(publications.length, 1);
+    const reset = patchCredentialProfile(profile.id, {
+      enabled: true,
+      enterprise: false,
+    });
+    assert.equal(reset.enabled, true);
+    assert.equal(reset.enterprise, false);
+    assert.deepEqual(publications[1], { enabled: true, enterprise: false });
+  } finally {
+    stop();
+  }
 });
 
 test("health follows registry deletion, disabling and completed login without leaking provider credentials", async () => {

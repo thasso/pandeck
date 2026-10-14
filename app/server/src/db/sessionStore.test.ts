@@ -47,6 +47,27 @@ test("SQLite session store preserves an established credential profile", () => {
   assert.equal(sessionStore.get(id)?.credentialProfileId, "openai-one");
 });
 
+test("SQLite session store durably freezes an enterprise account requirement", () => {
+  const id = `enterprise-session-${Date.now()}`;
+  sessionStore.claimScope({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    requiresEnterprise: true,
+  });
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+
+  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    requiresEnterprise: false,
+  });
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+});
+
 test("SQLite session store persists mutable Build/Plan mode", () => {
   const id = `mode-session-${Date.now()}`;
   sessionStore.upsert({

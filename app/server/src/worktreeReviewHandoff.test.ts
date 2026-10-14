@@ -14,6 +14,7 @@ describe("attachComments protocol", () => {
         modelId: "model",
         thinkingLevel: "medium",
         credentialProfileId: "profile-work",
+        requiresEnterprise: true,
         additionalPrompt: "Please prioritize the mobile behavior.",
         attachments: [
           {
@@ -61,6 +62,15 @@ describe("attachComments protocol", () => {
       type: "attachComments",
       threadIds: ["comment-1"],
       session: { kind: "new", harness: "pi", mode: 1 },
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a non-boolean enterprise requirement", () => {
+    const result = validateClientMessage({
+      type: "attachComments",
+      threadIds: ["comment-1"],
+      session: { kind: "new", harness: "pi", requiresEnterprise: "yes" },
     });
     expect(result.ok).toBe(false);
   });

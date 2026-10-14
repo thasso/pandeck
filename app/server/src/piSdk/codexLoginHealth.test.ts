@@ -32,6 +32,7 @@ import {
 import { SessionRuntime } from "../session/runtime/runtime.ts";
 import { subscribeSessionRunCompleted } from "../session/runtime/liveSession.ts";
 import { SessionLogStore } from "../session/log/store.ts";
+import { createCredentialProfile } from "../credentialProfiles.ts";
 
 vi.mock("./oneShot.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./oneShot.ts")>()),
@@ -46,7 +47,10 @@ vi.mock("../accountHealth.ts", async (importOriginal) => {
   };
 });
 
-const id = "codex-stream";
+const id = createCredentialProfile({
+  name: "Codex stream fixture",
+  provider: "openai-codex",
+}).id;
 const model: Model<"openai-codex-responses"> = {
   id: "gpt-test",
   name: "Codex test",
@@ -70,6 +74,7 @@ const rows: CredentialProfileSummary[] = [
     name: "Codex",
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "ready",
     createdAt: 1,
     updatedAt: 1,

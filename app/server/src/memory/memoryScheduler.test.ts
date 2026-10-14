@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, test } from "vitest";
+import { afterAll, beforeEach, test, vi } from "vitest";
 
 const tmp = mkdtempSync(join(tmpdir(), "memory-scheduler-test-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -18,6 +18,7 @@ const svc = await import("./memoryService.ts");
 const { memoryObservationStore } =
   await import("../db/memoryObservationStore.ts");
 const { memoryStore } = await import("../db/memoryStore.ts");
+const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings, getSettings } = await import("../settings.ts");
 const { getDb, closeDb } = await import("../db/index.ts");
 
@@ -51,6 +52,13 @@ beforeEach(() => {
   db.exec("DELETE FROM memory_processor_runs");
   nowMs = 1_700_000_000_000;
   runCalls = 0;
+  for (const id of ["s1", "s-task-derived"])
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "personal-assistant",
+      requiresEnterprise: false,
+    });
   setMode("adaptive");
 });
 
@@ -61,6 +69,82 @@ afterAll(() => {
   svc.resetMemoryClockForTests();
   closeDb();
   rmSync(tmp, { recursive: true, force: true });
+});
+
+test("enterprise sources are excluded before reading observation text, including deleted sources", async () => {
+  sessionStore.upsert({
+    id: "enterprise-capture-source",
+    harness: "pi",
+    agentType: "personal-assistant",
+    requiresEnterprise: true,
+  });
+  setMode("every-turn");
+  for (const deleted of [false, true]) {
+    if (deleted) sessionStore.remove("enterprise-capture-source");
+    let textReads = 0;
+    sched.memoryScheduler.observeTurn({
+      sessionId: "enterprise-capture-source",
+      userTurnId: `turn-${deleted}`,
+      persona: "personal-assistant",
+      get humanText() {
+        textReads += 1;
+        return "Private enterprise transcript";
+      },
+    });
+    assert.equal(textReads, 0);
+  }
+  await settle();
+  assert.equal(memoryObservationStore.pendingCount(), 0);
+  assert.equal(runCalls, 0);
+});
+
+test("a missing source fails closed before observation text acquisition", () => {
+  let textReads = 0;
+  sched.memoryScheduler.observeTurn({
+    sessionId: "missing-source",
+    userTurnId: "turn",
+    persona: "personal-assistant",
+    get humanText() {
+      textReads += 1;
+      return "Retained transcript";
+    },
+  });
+  assert.equal(textReads, 0);
+  assert.equal(memoryObservationStore.pendingCount(), 0);
+});
+
+test("an enterprise queued fixture is discarded before pending transcript acquisition", async () => {
+  sessionStore.upsert({
+    id: "enterprise-queued-source",
+    harness: "pi",
+    agentType: "personal-assistant",
+    requiresEnterprise: true,
+  });
+  const observation = memoryObservationStore.enqueue({
+    sessionId: "enterprise-queued-source",
+    userTurnId: "turn",
+    humanText: "Private enterprise transcript",
+    sourceTimestampMs: nowMs,
+    timezone: "UTC",
+    createdAt: nowMs,
+  });
+  sessionStore.remove("enterprise-queued-source");
+  const pendingRead = vi.spyOn(memoryObservationStore, "pendingForSession");
+  try {
+    await sched.memoryScheduler.flushSession(
+      "enterprise-queued-source",
+      "test",
+    );
+    assert.equal(pendingRead.mock.calls.length, 0);
+    assert.equal(
+      memoryObservationStore.get(observation.id)?.state,
+      "discarded",
+    );
+    assert.equal(memoryObservationStore.get(observation.id)?.humanText, "");
+    assert.equal(runCalls, 0);
+  } finally {
+    pendingRead.mockRestore();
+  }
 });
 
 test("ordinary adaptive turns do not cause a per-turn processor call", async () => {

@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, test } from "vitest";
+import { afterAll, beforeEach, test, vi } from "vitest";
 import type {
   CodeDeliveryWorkflowConfig,
   WorkflowActor,
@@ -59,6 +59,7 @@ const { getWorktree, taskIdsForWorktree, listWorktrees } =
   await import("../db/worktreeStore.ts");
 const { createCredentialProfile, setCredentialProfileEnabled } =
   await import("../credentialProfiles.ts");
+const accountRouter = await import("../accountRouter.ts");
 const { closeDb } = await import("../db/index.ts");
 
 afterAll(() => {
@@ -286,6 +287,77 @@ test("a start provisions the worktree, records the config, and hands over to the
   assert.match(run.lifecycleReason ?? "", /no agent executor is registered/);
 
   assert.deepEqual(phases, ["naming", "creating", "started"]);
+});
+
+test("standalone workflows route every unpinned role at its fixed model and effort", async () => {
+  const picker = vi
+    .spyOn(accountRouter, "pickAccount")
+    .mockResolvedValue({ profileId: claudeProfileTwo.id });
+  const unpin = <T extends { credentialProfileId?: string }>({
+    credentialProfileId: _credentialProfileId,
+    ...role
+  }: T) => role;
+  const unpinnedConfig: CodeDeliveryWorkflowConfig = {
+    coordinator: unpin(config.coordinator),
+    roles: {
+      implementer: config.roles.implementer.map(unpin),
+      reviewer: config.roles.reviewer.map(unpin),
+      fixer: [],
+      verdict: [],
+    },
+  };
+
+  let run: Awaited<ReturnType<typeof startCodeDeliveryRun>>;
+  try {
+    run = await startCodeDeliveryRun({
+      taskId: makeTask("wf-proj"),
+      config: unpinnedConfig,
+      limits: { maxIterations: 3, maxReviewPasses: 1 },
+      actor: USER,
+    });
+    assert.deepEqual(
+      picker.mock.calls
+        .map(([request]) => request)
+        .filter((request) => request.model.provider === "claude-sdk"),
+      [
+        {
+          model: { provider: "claude-sdk", modelId: "haiku" },
+          thinkingLevel: "low",
+        },
+        ...[...config.roles.implementer, ...config.roles.reviewer].map(
+          (role) => ({
+            model: { provider: role.provider, modelId: role.modelId },
+            thinkingLevel: role.thinkingLevel,
+          }),
+        ),
+      ],
+    );
+  } finally {
+    picker.mockRestore();
+  }
+
+  const saved = run.config as Record<string, unknown>;
+  const coordinator = saved.coordinator as Record<string, unknown>;
+  assert.equal(coordinator.credentialProfileId, claudeProfileTwo.id);
+  assert.equal(coordinator.provider, "claude-sdk");
+  assert.equal(coordinator.modelId, "haiku");
+  assert.equal(coordinator.thinkingLevel, "low");
+  const roles = saved.roles as Record<string, Array<Record<string, unknown>>>;
+  assert.deepEqual(
+    roles.implementer?.map(({ credentialProfileId }) => credentialProfileId),
+    [claudeProfileTwo.id, claudeProfileTwo.id],
+  );
+  assert.deepEqual(
+    roles.implementer?.map(({ provider, modelId, thinkingLevel }) => [
+      provider,
+      modelId,
+      thinkingLevel,
+    ]),
+    [
+      ["claude-sdk", "sonnet", "medium"],
+      ["claude-sdk", "opus", "high"],
+    ],
+  );
 });
 
 test("an explicitly selected pushed base is trimmed and passed to worktree creation", async () => {

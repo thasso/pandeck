@@ -53,6 +53,7 @@ test("validation", () => {
     thinkingLevel: "high",
     attachTaskId: "t1",
     projectId: "p1",
+    requiresEnterprise: true,
   });
   assert.equal(
     okOptional.ok,
@@ -83,6 +84,14 @@ test("validation", () => {
     );
   }
   assert.equal(validateClientMessage(wellFormed("pi")).ok, true);
+
+  for (const message of [{ ...wellFormed("pi"), requiresEnterprise: "yes" }]) {
+    assert.equal(
+      validateClientMessage(message).ok,
+      false,
+      "requiresEnterprise must be a boolean when present",
+    );
+  }
 
   // Wrong-kind optional field rejected.
   const badAttachments = validateClientMessage({

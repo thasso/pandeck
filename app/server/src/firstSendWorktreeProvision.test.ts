@@ -63,6 +63,7 @@ sh(repoPath, "commit", "-m", "init");
 
 const { Connection } = await import("./connection.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
+const worktreeNaming = await import("./worktrees/worktreeNaming.ts");
 const { projectStore } = await import("./db/projectStore.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const claudeProfile = createCredentialProfile({
@@ -119,6 +120,7 @@ function makeConnection() {
         text: string;
         attachTaskId?: string;
         clientRequestId?: string;
+        requiresEnterprise?: boolean;
       }) => Promise<ProvisionResult>;
     }
   ).provisionFirstSendWorktree.bind(conn);
@@ -169,6 +171,29 @@ test("provisions the checkout before the session and reports each phase", async 
   const records = listWorktrees();
   assert.equal(records.length, 1, "exactly one worktree was created");
   assert.equal(records[0]?.branch, result.provision.branch);
+});
+
+test("enterprise first-send naming receives the declared requirement before a session exists", async () => {
+  const naming = vi
+    .spyOn(worktreeNaming, "generateWorktreeSuffix")
+    .mockResolvedValue("enterprise-first-send");
+  try {
+    const { provision } = makeConnection();
+    const result = await provision({
+      createWorktreeInProjectId: "prov-proj",
+      text: "Sensitive staged first prompt",
+      requiresEnterprise: true,
+    });
+    assert.ok(result);
+    assert.equal(result.provision.branch, "enterprise-first-send");
+    assert.deepEqual(naming.mock.calls[0]?.[2], { requiresEnterprise: true });
+    assert.match(
+      naming.mock.calls[0]?.[0] ?? "",
+      /Sensitive staged first prompt/,
+    );
+  } finally {
+    naming.mockRestore();
+  }
 });
 
 test("a staged Task is linked and named into the branch", async () => {

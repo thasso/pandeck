@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, test } from "vitest";
+import { afterEach, describe, test, vi } from "vitest";
+import { sessionStore } from "../../db/sessionStore.ts";
 import type { PullRequestCard } from "@assistant/shared";
-import type { CommitWorkflowResult } from "../../commitWorkflow.ts";
+import type {
+  CommitWorkflowOptions,
+  CommitWorkflowResult,
+} from "../../commitWorkflow.ts";
 import type { GitHostingProvider } from "../../gitHosting.ts";
 import type {
   PushWorkflowOptions,
@@ -125,6 +129,41 @@ function operations(
 afterEach(() => {
   setCommitOverrideApprovalOperationsForTests();
 });
+
+test.each(["commit", "pr"] as const)(
+  "managed %s captures the caller requirement before target/git awaits",
+  async (kind) => {
+    const source = vi
+      .spyOn(sessionStore, "getIncludingDeleted")
+      .mockReturnValue({ requiresEnterprise: true } as never);
+    const resolve = async () => {
+      source.mockReturnValue({ requiresEnterprise: false } as never);
+      return row;
+    };
+    try {
+      if (kind === "commit") {
+        const ops = operations({ resolve });
+        await createWorktreeCommitTool(ops).execute(
+          { worktreeId: row.id },
+          context(),
+        );
+        assert.equal(
+          (ops.calls.options as CommitWorkflowOptions).requiresEnterprise,
+          true,
+        );
+      } else {
+        const ops = pullRequestOperations({ resolve });
+        await createWorktreePullRequestTool(ops).execute(
+          { worktreeId: row.id },
+          context(),
+        );
+        assert.equal(ops.calls.beginInput?.requiresEnterprise, true);
+      }
+    } finally {
+      source.mockRestore();
+    }
+  },
+);
 
 describe("worktree_commit", () => {
   test("projects a rich CommitDisplay and caller context without force", async () => {
@@ -509,6 +548,49 @@ describe("worktree_commit", () => {
     );
     assert.match(rejected.outcomePrompt, /REJECTED/);
   });
+
+  test.each(["card", "execution"] as const)(
+    "commit override keeps enterprise captured at %s across awaits",
+    async (capture) => {
+      const source = vi
+        .spyOn(sessionStore, "getIncludingDeleted")
+        .mockReturnValue({ requiresEnterprise: capture === "card" } as never);
+      const resolve = async () => {
+        source.mockReturnValue({ requiresEnterprise: false } as never);
+        return row;
+      };
+      try {
+        const proposed = await createWorktreeCommitTool(
+          operations({
+            resolve,
+            runCommit: async () =>
+              commitResult({
+                status: "blocked",
+                dryRun: true,
+                changeFingerprint: "fp",
+                blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+              }),
+          }),
+        ).execute(
+          { worktreeId: row.id, force: true, reason: "Tested" },
+          context(),
+        );
+        const id = (proposed.details as { approvalId: string }).approvalId;
+        if (capture === "execution")
+          source.mockReturnValue({ requiresEnterprise: true } as never);
+        const exec = operations({ resolve });
+        setCommitOverrideApprovalOperationsForTests(exec);
+        const resolved = await resolveApproval(id, "approved");
+        assert.equal(resolved.card.status, "executed");
+        assert.equal(
+          (exec.calls.options as CommitWorkflowOptions).requiresEnterprise,
+          true,
+        );
+      } finally {
+        source.mockRestore();
+      }
+    },
+  );
 
   test("approval refuses busy, removed, moved and branch-mismatched worktrees and workflow blocks", async () => {
     const proposed = await createWorktreeCommitTool(

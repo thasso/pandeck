@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, test } from "vitest";
+import { afterAll, beforeEach, test, vi } from "vitest";
 import type {
   AdapterEvent,
   AgentRunResult,
@@ -27,6 +27,11 @@ process.env.ASSISTANT_CWD = tmp;
 const svc = await import("./memoryService.ts");
 const rt = await import("./memoryRuntime.ts");
 const { memoryLoadStore } = await import("../db/memoryLoadStore.ts");
+const { memoryObservationStore } =
+  await import("../db/memoryObservationStore.ts");
+const { sessionStore } = await import("../db/sessionStore.ts");
+const { createCredentialProfile, patchCredentialProfile } =
+  await import("../credentialProfiles.ts");
 const { SessionRuntime } = await import("../session/runtime/runtime.ts");
 const { SessionLogStore } = await import("../session/log/store.ts");
 const { promptRuntimeSessionWithRuntime } =
@@ -55,6 +60,71 @@ afterAll(() => {
   rt.resetMemoryRuntimeClockForTests();
   closeDb();
   rmSync(tmp, { recursive: true, force: true });
+});
+
+test("enterprise completed turns do not acquire transcript for memory capture even after source deletion", async () => {
+  const id = "enterprise-runtime-capture";
+  const profile = createCredentialProfile({
+    name: "Memory enterprise",
+    provider: "openai-codex",
+  });
+  patchCredentialProfile(profile.id, { enterprise: true });
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "personal-assistant",
+    credentialProfileId: profile.id,
+    requiresEnterprise: true,
+  });
+  updateSettings({
+    memory: { ...getSettings().memory, learningMode: "every-turn" },
+  });
+  const adapter: PromptableAdapter = {
+    provider: "scripted",
+    capabilities: {
+      fork: "none",
+      compact: false,
+      steer: false,
+      attachments: true,
+    },
+    subscribe: () => () => {},
+    getBinding: () => ({ provider: "scripted", nativeId: id }),
+    prompt: async () => {
+      getDb().prepare("DELETE FROM session_index WHERE id = ?").run(id);
+      return { stopReason: "end" };
+    },
+    abort: () => {},
+    setModel: () => {},
+    setReasoning: () => {},
+    dispose: () => {},
+  };
+  const runtime = new SessionRuntime(new SessionLogStore(true));
+  const live = runtime.createSession(id, adapter);
+  const snapshot = vi.spyOn(live, "getSnapshot");
+  try {
+    await promptRuntimeSessionWithRuntime(
+      runtime,
+      {
+        id,
+        key: id,
+        sessionId: id,
+        harness: "pi",
+        agentType: "personal-assistant",
+        sessionFile: undefined,
+        isRunning: false,
+        canSteer: false,
+        contextInfo: () => ({}) as never,
+        broadcastState: () => {},
+        createRuntimeAdapter: () => adapter,
+      },
+      "Enterprise-only transcript",
+      {},
+    );
+    assert.equal(snapshot.mock.calls.length, 0);
+    assert.equal(memoryObservationStore.pendingCountForSession(id), 0);
+  } finally {
+    snapshot.mockRestore();
+  }
 });
 
 const driver = (

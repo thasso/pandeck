@@ -320,13 +320,14 @@ test("claude-sdk first send refuses a missing credential profile before creating
     id: "c2",
     agentType: "workshop",
     text: "hello",
+    credentialProfileId: "missing-profile",
   });
   assert.equal(promptCalls.length, 0);
   assert.ok(
     sent.some(
       (message) =>
         (message as { type?: string; message?: string }).type === "error" &&
-        /select a claude credential profile/i.test(
+        /bound credential profile no longer exists/i.test(
           (message as { message?: string }).message ?? "",
         ),
     ),

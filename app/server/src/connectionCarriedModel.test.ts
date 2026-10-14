@@ -135,9 +135,9 @@ test("a resident pi session's model resolves on the account it runs on", async (
   expect(carried).toEqual({ model: handle, thinkingLevel: "low" });
 });
 
-test("a stored pi row's model resolves through the global registry", async () => {
+test("a stored pi row's model resolves on its bound account", async () => {
   const handle = { provider: "openai-codex", id: "gpt-5" };
-  vi.mocked(findModel).mockReturnValue(handle as never);
+  vi.mocked(findModelForProfile).mockResolvedValue(handle as never);
   sessionStore.upsert({
     id: "stored-pi",
     harness: "pi",
@@ -150,8 +150,10 @@ test("a stored pi row's model resolves through the global registry", async () =>
 
   const carried = await carriedFrom("stored-pi", new Map());
 
-  expect(vi.mocked(findModel).mock.calls).toEqual([["openai-codex", "gpt-5"]]);
-  expect(vi.mocked(findModelForProfile)).not.toHaveBeenCalled();
+  expect(vi.mocked(findModelForProfile).mock.calls).toEqual([
+    [codexProfile.id, "openai-codex", "gpt-5"],
+  ]);
+  expect(vi.mocked(findModel)).not.toHaveBeenCalled();
   expect(carried).toEqual({ model: handle, thinkingLevel: "medium" });
 });
 

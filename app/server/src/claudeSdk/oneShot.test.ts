@@ -22,9 +22,21 @@ import type {
 import { CLAUDE_SDK_HARNESS_SETTINGS } from "./modelSettings.ts";
 import {
   OUTPUT_LIMIT_FAILURE,
-  runClaudeSdkOneShot,
+  runClaudeSdkOneShot as runClaudeSdkOneShotOnAccount,
   setClaudeSdkOneShotSeam,
+  type RunClaudeSdkOneShotInput,
 } from "./oneShot.ts";
+import { createCredentialProfile } from "../credentialProfiles.ts";
+
+const account = createCredentialProfile({
+  name: "One-shot fixture",
+  provider: "claude",
+});
+const runClaudeSdkOneShot = (input: RunClaudeSdkOneShotInput) =>
+  runClaudeSdkOneShotOnAccount({
+    ...input,
+    credentialProfileId: input.credentialProfileId ?? account.id,
+  });
 
 function fakeSeam(
   messages: ClaudeSdkMessage[],

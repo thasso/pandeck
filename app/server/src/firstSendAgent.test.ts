@@ -46,6 +46,7 @@ const { setAgentRuntimeSourcesForTests } =
   await import("./agents/agentRuntime.ts");
 const { setAgentSpawnSourcesForTests } = await import("./agents/agentSpawn.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
+const accountRouter = await import("./accountRouter.ts");
 const { setLibraryBroadcaster } = await import("./library/libraryPublish.ts");
 const published: Array<{ type: string; library?: string }> = [];
 setLibraryBroadcaster({
@@ -220,6 +221,55 @@ test("a first send naming an agent runs as that definition and freezes it", asyn
   );
   assert.deepEqual(prompts, ["What changed?"]);
 });
+
+test.each([
+  ["claude-sdk", "researcher", "opus", "high"],
+  ["pi", "drafter", "gpt-5", "low"],
+] as const)(
+  "Automatic first send for %s resolves the definition before picking, without preview fields",
+  async (harness, agent, modelId, thinkingLevel) => {
+    const profileId = harness === "claude-sdk" ? claudeProfile.id : "default";
+    const picker = vi
+      .spyOn(accountRouter, "pickAccount")
+      .mockResolvedValue({ profileId });
+    try {
+      const { conn, sent } = makeConnection();
+      await conn.handleFirstSend({
+        harness,
+        id: `automatic-agent-${harness}`,
+        agentType: "assistant",
+        text: "Do the work.",
+        agent,
+      });
+      assert.equal(
+        sent.some((message) => message.type === "error"),
+        false,
+        JSON.stringify(sent),
+      );
+      assert.equal(prompts.length, 1);
+      assert.deepEqual(picker.mock.calls, [
+        [
+          {
+            model: {
+              provider:
+                harness === "claude-sdk" ? "claude-sdk" : "openai-codex",
+              modelId,
+            },
+            thinkingLevel,
+            requiresEnterprise: false,
+          },
+        ],
+      ]);
+      const opts =
+        harness === "claude-sdk"
+          ? acquired[0]!.opts
+          : (piAcquired[0]![3] as Record<string, unknown>);
+      assert.equal(opts.credentialProfileId, profileId);
+    } finally {
+      picker.mockRestore();
+    }
+  },
+);
 
 test("a send staged for another persona or an unknown agent is refused before anything exists", async () => {
   const { conn, sent } = makeConnection();

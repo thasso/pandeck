@@ -24,6 +24,7 @@ const profiles: CredentialProfileSummary[] = [
     name: "Ordering",
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "ready",
     createdAt: 1,
     updatedAt: 1,

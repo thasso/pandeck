@@ -56,6 +56,7 @@ function fixture(
       name: "Private",
       provider,
       enabled: true,
+      enterprise: false,
       createdAt: 1,
       updatedAt: 1,
       status,
