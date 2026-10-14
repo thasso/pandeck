@@ -7,7 +7,7 @@
  */
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import type { AgentType } from "@assistant/shared";
+import { type AgentType, hasNativeTools } from "@assistant/shared";
 import {
   CHAT_SESSION_DIR,
   CWD,
@@ -100,8 +100,8 @@ export interface AgentSessionOptions {
    * pi builtins to activate ON TOP of the four that pi turns on by default
    * (`read`/`bash`/`edit`/`write`). Every builtin DEFINITION is registered by
    * pi regardless; this only decides what is active, and `piStore` unions it
-   * into the built-in half of the active-set merge. Empty for the assistant
-   * personas, which run `noTools: "builtin"`.
+   * into the built-in half of the active-set merge. Empty for personas without
+   * native access, which run `noTools: "builtin"`.
    */
   extraBuiltinToolNames: string[];
   excludeTools: string[];
@@ -207,7 +207,8 @@ async function buildPiOptions(
     case "personal-assistant":
     case "workflow-coordinator": {
       // Clean slate: no AGENTS.md context, no extensions/skills, a minimal prompt,
-      // and only the dedicated integration tools. The permanent singleton
+      // and the persona's dedicated tools. Native access is independent of
+      // project discovery. The permanent singleton
       // (`personal-assistant`) always carries the profile suffix.
       const withProfileSuffix = agentType === "personal-assistant";
       const loader = new DefaultResourceLoader({
@@ -237,12 +238,13 @@ async function buildPiOptions(
       // deferred active set managed by toolActivation.ts.
       return {
         resourceLoader: loader,
-        noTools: "builtin",
+        ...(hasNativeTools(agentType) ? {} : { noTools: "builtin" as const }),
         agentTools,
         eagerToolNames: eagerToolNamesFor(agentType, conditions),
         deferToolLoading: agentType !== "workflow-coordinator",
-        // No builtins at all here — not even the search ones.
-        extraBuiltinToolNames: [],
+        extraBuiltinToolNames: hasNativeTools(agentType)
+          ? [...PI_SEARCH_BUILTIN_TOOLS]
+          : [],
         excludeTools: ["ask_question", ...deniedTools],
       };
     }

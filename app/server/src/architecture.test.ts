@@ -189,11 +189,11 @@ test("the background-work provider-folder guard rejects every import form", () =
     );
 });
 
-test("pi provider-native background tools use the shared coding capability predicate", () => {
+test("pi provider-native background tools use the shared native-tool capability predicate", () => {
   const source = readFileSync(join(SRC_ROOT, "piSdk/piStore.ts"), "utf8");
   assert.match(
     source,
-    /isCodingAgentType\(kind\)[\s\S]{0,120}createPiBackgroundTools/,
+    /hasNativeTools\(kind\)[\s\S]{0,120}createPiBackgroundTools/,
   );
   assert.doesNotMatch(
     source,

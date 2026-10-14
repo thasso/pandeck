@@ -139,6 +139,34 @@ async function main(): Promise<void> {
     "an empty frozen set mounts no plugin",
   );
 
+  const pa = buildClaudeSdkQueryOptions({
+    ...base,
+    agentType: "personal-assistant",
+  });
+  assert.deepEqual(pa.tools, [...CLAUDE_SDK_NATIVE_TOOLS, "ToolSearch"]);
+  assert.deepEqual(pa.settingSources, []);
+  for (const tool of CLAUDE_SDK_NATIVE_TOOLS)
+    assert.equal(
+      (await pa.canUseTool!(tool, {}, {} as never))?.behavior,
+      "allow",
+    );
+  const paPlan = buildClaudeSdkQueryOptions({
+    ...base,
+    agentType: "personal-assistant",
+    mode: () => "plan",
+    outputPolicySessionId: "pa-plan",
+  });
+  assert.deepEqual(paPlan.tools, pa.tools);
+  for (const tool of ["Edit", "Write"])
+    assert.equal(
+      (await paPlan.canUseTool!(tool, {}, {} as never))?.behavior,
+      "deny",
+    );
+  assert.equal(
+    (await paPlan.canUseTool!("Bash", {}, {} as never))?.behavior,
+    "allow",
+  );
+
   // Assistant: no native tools at all.
   const assistant = buildClaudeSdkQueryOptions({
     ...base,
@@ -191,7 +219,12 @@ async function main(): Promise<void> {
     !(coordinator.tools as string[]).includes("Skill"),
     "workflow coordinators must not receive Skill",
   );
+  assert.deepEqual(coordinator.tools, []);
   for (const t of ["Bash", "Read", "Write", "Edit"]) {
+    assert.equal(
+      (await coordinator.canUseTool!(t, {}, {} as never))?.behavior,
+      "deny",
+    );
     assert.ok(
       (assistant.disallowedTools as string[]).includes(t),
       `assistant disallows native ${t}`,

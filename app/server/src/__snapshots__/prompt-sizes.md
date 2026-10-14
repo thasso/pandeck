@@ -17,8 +17,8 @@ sizes only.
 | --- | --- | ---: | ---: | ---: |
 | assistant | pi | 6,208 | 10,082 | 16,290 |
 | assistant | claude | 6,188 | 9,379 | 15,567 |
-| personal-assistant | pi | 5,438 | 10,082 | 15,520 |
-| personal-assistant | claude | 5,418 | 9,379 | 14,797 |
+| personal-assistant | pi | 5,598 | 17,942 | 23,540 |
+| personal-assistant | claude | 5,578 | 9,379 | 14,957 |
 | workshop | pi | 13,145 | 19,860 | 33,005 |
 | workshop | claude | 6,892 | 11,342 | 18,234 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
@@ -85,7 +85,7 @@ sizes only.
 | `pi-tool-list:app-eager` | prompt | yes | 0 |
 | `pi-guidelines:builtin` | prompt | yes | 0 |
 | `pi-guidelines:app-eager` | prompt | yes | 0 |
-| `persona:personal-assistant` | prompt | yes | 1,184 |
+| `persona:personal-assistant` | prompt | yes | 1,344 |
 | `integration:tempo` | prompt | yes | 224 |
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
@@ -95,18 +95,18 @@ sizes only.
 | `profile-suffix` | prompt | yes | 107 |
 | `project-context` | prompt | yes | 0 |
 | `assembly-overhead` | prompt | yes | 48 |
-| `tools:eager:names` | tools | yes | 112 |
-| `tools:eager:descriptions` | tools | yes | 2,038 |
-| `tools:eager:schemas` | tools | yes | 7,932 |
-| `tools:eager:harness-builtin` | tools | yes | 0 |
-| `tools:deferred:universe` | tools | no | 150,392 |
+| `tools:eager:names` | tools | yes | 123 |
+| `tools:eager:descriptions` | tools | yes | 5,160 |
+| `tools:eager:schemas` | tools | yes | 9,076 |
+| `tools:eager:harness-builtin` | tools | yes | 3,583 |
+| `tools:deferred:universe` | tools | no | 152,165 |
 
 ## personal-assistant — claude
 
 | Layer | Section | Counted | Chars |
 | --- | --- | --- | ---: |
 | `harness-base` | prompt | no | 0 |
-| `persona:personal-assistant` | prompt | yes | 1,184 |
+| `persona:personal-assistant` | prompt | yes | 1,344 |
 | `integration:tempo` | prompt | yes | 224 |
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
@@ -120,7 +120,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,666 |
 | `tools:eager:schemas` | tools | yes | 7,539 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 151,346 |
+| `tools:deferred:universe` | tools | no | 153,137 |
 
 ## workshop — pi
 

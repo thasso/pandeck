@@ -31,13 +31,12 @@ import { sessionDirFor } from "./piSdk/options.ts";
 import { PERSONAL_ASSISTANT_SESSION_DIR } from "./config.ts";
 import { assertPromptRules } from "./test/promptRules.ts";
 
-test("personal-assistant is a real persona with the Assistant toolset plus settings", () => {
+test("personal-assistant is a real persona with integrations, settings and coding-start tools", () => {
   const def = AGENT_TYPES["personal-assistant"];
   assert.ok(def, "AGENT_TYPES has a personal-assistant entry");
   assert.equal(def.label, "Personal Assistant");
   assert.equal(def.agentType, "personal-assistant");
-  // The ordinary Assistant's universe, plus the settings tools that only the
-  // user's own assistant gets.
+  // The ordinary Assistant's universe plus settings and coding-start tools.
   const paNames = def
     .tools()
     .map((t) => t.name)
@@ -56,8 +55,10 @@ test("personal-assistant is a real persona with the Assistant toolset plus setti
       "accounts_read",
       "accounts_update",
       "accounts_sign_in",
+      "worktree_create",
+      "worktree_status",
     ].sort(),
-    "personal-assistant is the assistant toolset plus the settings tools",
+    "personal-assistant adds settings and managed worktree startup",
   );
 });
 
@@ -108,7 +109,7 @@ test("pi session store maps personal-assistant to its own dedicated directory", 
   );
 });
 
-test("claude-sdk personal-assistant is locked down like the assistant and always carries the profile suffix", async () => {
+test("claude-sdk personal-assistant has native access and always carries the profile suffix", async () => {
   const base = {
     cwd: "/tmp",
     abortController: new AbortController(),
@@ -120,19 +121,11 @@ test("claude-sdk personal-assistant is locked down like the assistant and always
     agentType: "personal-assistant",
     additionalSystemPrompt: "Call me T.",
   });
-  // No native file/shell tools, only the ToolSearch system tool.
-  assert.deepEqual(
-    pa.tools,
-    ["ToolSearch"],
-    "personal-assistant exposes no native tools, only ToolSearch",
-  );
+  assert.deepEqual(pa.tools, [...CLAUDE_SDK_NATIVE_TOOLS, "ToolSearch"]);
   for (const t of CLAUDE_SDK_NATIVE_TOOLS) {
-    assert.ok(
-      (pa.disallowedTools as string[]).includes(t),
-      `disallows native ${t}`,
-    );
+    assert.ok(!(pa.disallowedTools as string[]).includes(t));
     const verdict = await pa.canUseTool!(t, {}, {} as never);
-    assert.equal(verdict?.behavior, "deny", `denies native ${t}`);
+    assert.equal(verdict?.behavior, "allow", `allows native ${t}`);
   }
   // Locked-down (non-preset) prompt with the profile suffix appended.
   assert.equal(
@@ -153,6 +146,10 @@ test("the personal-assistant prompt states its persona rules", () => {
         // The persona file wraps its lines, so a sentence may span several.
         "continuous-across-days-and-channels": /across[^.]*days[^.]*channels/i,
         "records-people-via-contacts": /contacts_manage/,
+        "project-edits-use-delegation":
+          /worktree_create[\s\S]*session_spawn[\s\S]*developer/,
+        "user-follows-owned-work": /owner: "user"/,
+        "no-direct-checkout-edits": /never direct checkout edits/,
         "enrichment-is-expected": /not optional/i,
         // The shared Memory section forbids secrets too; this is the PA's own rule.
         "enrichment-skips-sensitive-personal-data":

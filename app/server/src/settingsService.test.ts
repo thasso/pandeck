@@ -217,6 +217,53 @@ describe("settingsPatchForWrites", () => {
   });
 });
 
+test("working directory changes validate before persistence and rotate the PA", async () => {
+  const pa = await import("./permanentAssistant.ts");
+  const rotate = vi
+    .spyOn(pa, "rotatePermanentAssistantSession")
+    .mockResolvedValue();
+  const before = getSettings().permanentAssistant;
+  const cwd = join(DATA_DIR, "pa-settings-cwd");
+  mkdirSync(cwd, { recursive: true });
+  try {
+    for (const workingDirectory of ["relative", join(cwd, "missing")]) {
+      await assert.rejects(
+        saveSettings({ permanentAssistant: { ...before, workingDirectory } }),
+        /working directory.*(absolute path|existing directory)/,
+      );
+      assert.equal(
+        getSettings().permanentAssistant.workingDirectory,
+        before.workingDirectory,
+      );
+    }
+    assert.equal(rotate.mock.calls.length, 0);
+    await saveSettings({
+      permanentAssistant: { ...before, workingDirectory: cwd },
+    });
+    assert.equal(getSettings().permanentAssistant.workingDirectory, cwd);
+    assert.equal(rotate.mock.calls.length, 1);
+    await saveSettings({
+      permanentAssistant: getSettings().permanentAssistant,
+    });
+    assert.equal(rotate.mock.calls.length, 1);
+    assert.throws(
+      () =>
+        settingsPatchForWrites([
+          { path: "permanentAssistant.workingDirectory", value: cwd },
+        ]),
+      /Settings UI/,
+    );
+    await saveSettings({
+      permanentAssistant: { ...before, workingDirectory: "" },
+    });
+    assert.equal(getSettings().permanentAssistant.workingDirectory, "");
+    assert.equal(rotate.mock.calls.length, 2);
+  } finally {
+    rotate.mockRestore();
+    rmdirSync(cwd);
+  }
+});
+
 describe("saveSettings", () => {
   const cleanups: Array<() => void> = [];
   afterEach(() => {

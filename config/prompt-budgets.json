@@ -42,8 +42,8 @@
     "personal-assistant": {
       "pi": {
         "prompt": 5600,
-        "eagerTools": 12000,
-        "firstRequest": 16800
+        "eagerTools": 19000,
+        "firstRequest": 24000
       },
       "claude": {
         "prompt": 5600,
@@ -544,6 +544,22 @@
       "task": "pi-sdk-1x",
       "date": "2026-10-11",
       "why": "vendor growth, not ours: pi 1.1's default prompt adds MCP and codemode pointers (+120) to its documentation-paths line, which pi's buildSystemPrompt renders and the app cannot trim without replacing pi's default prompt"
+    },
+    {
+      "budget": "personal-assistant.pi.eagerTools",
+      "from": 12000,
+      "to": 19000,
+      "task": "pa-shell-workdir",
+      "date": "2026-10-14",
+      "why": "the user grants the PA native file and shell access; the measured block now includes pi's file/search builtins and the same bounded Bash/Monitor shadows as developer sessions"
+    },
+    {
+      "budget": "personal-assistant.pi.firstRequest",
+      "from": 16800,
+      "to": 24000,
+      "task": "pa-shell-workdir",
+      "date": "2026-10-14",
+      "why": "carries the native-tool block above while preserving a joint ceiling below prompt plus eagerTools; the short coding-delegation rule fits the existing prompt budget"
     }
   ]
 }

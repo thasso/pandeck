@@ -78,7 +78,7 @@ export const AGENT_TYPES: Record<AgentType, AgentTypeDef> = {
     // acquisition path creates it directly.
     devOnly: false,
     systemPrompt: (opts) => personalAssistantSystemPromptText(opts),
-    // Shares the ordinary Assistant's dedicated integration-tool universe.
+    // Integrations plus bounded worktree creation; native access is separate.
     tools: () => agentToolsFor("personal-assistant"),
   },
   workshop: {

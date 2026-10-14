@@ -179,6 +179,7 @@ export const ASSISTANT_PROFILE_FIELDS = [
   "modelId",
   "thinkingLevel",
   "additionalInstructions",
+  "workingDirectory",
 ] as const;
 
 /**
@@ -327,6 +328,8 @@ export function settingsPatchForWrites(
     const descriptor = settingDescriptor(path);
     if (!descriptor) throw new Error(`Unknown setting: ${path}`);
     const [section = "", ...rest] = path.split(".");
+    if (descriptor.uiOnly)
+      throw new Error(`${path} can only be changed in the Settings UI.`);
     if (descriptor.access === "readonly")
       throw new Error(
         `${path} is read-only${descriptor.hint ? `: ${descriptor.hint}` : "."}`,

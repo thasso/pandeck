@@ -13,7 +13,9 @@ import {
   CredentialProfileCard,
   credentialProfilesForProvider,
   ModelsSection,
+  SettingsPage,
 } from "./SettingsPage.tsx";
+import { settingsFixture } from "../../component-preview/fixtures/settings.ts";
 
 const profiles = [
   {
@@ -38,6 +40,51 @@ const profiles = [
     status: "disconnected",
   },
 ] as CredentialProfileSummary[];
+
+test("PA working directory shows the server default and saves on blur", async () => {
+  const onUpdate = vi.fn();
+  const view = mount(
+    <SettingsPage
+      {...({
+        section: "personal-assistant",
+        models: [],
+        accountModels: [],
+        credentialProfiles: [],
+        projects: [],
+        settings: settingsFixture,
+        onUpdate,
+      } as unknown as Parameters<typeof SettingsPage>[0])}
+    />,
+  );
+  try {
+    const input = view.container.querySelector<HTMLInputElement>(
+      'input[aria-label="Personal Assistant working directory"]',
+    )!;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe(
+      settingsFixture.permanentAssistant.defaultWorkingDirectory,
+    );
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "/tmp/errands");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+    await act(async () =>
+      input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })),
+    );
+    expect(onUpdate).toHaveBeenCalledWith({
+      permanentAssistant: {
+        ...settingsFixture.permanentAssistant,
+        workingDirectory: "/tmp/errands",
+      },
+    });
+  } finally {
+    act(() => view.root.unmount());
+  }
+});
 
 describe("credential profile settings", () => {
   test("keeps Claude and OpenAI profile pages isolated", () => {

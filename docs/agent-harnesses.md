@@ -22,6 +22,23 @@ describes the architecture they produced, and "Status" records the steps.
 - **Model provider**: the provider id a model picker reports (`claude-sdk` for
   Claude models, the pi provider id otherwise).
 
+## Persona capabilities
+
+`hasNativeTools` in `app/shared/protocol.ts` grants native shell and file tools
+to Developer, Workshop and the singleton Personal Assistant on both harnesses.
+Ordinary Assistant and Workflow coordinator receive none. `isCodingAgentType` is
+separate: only Developer and Workshop inherit project context and library skills
+or receive coding delivery and review tools. The PA keeps its dedicated prompt
+without project context, even in a configured project directory.
+
+Plan treats the PA's natives like a developer's: file edits are refused while
+read, search and shell remain available. Pi registers the same Bash/Monitor
+shadows and bounded search builtins; Claude grants Read/Write/Edit/Bash/Monitor/
+Grep/Glob. The PA has only deferred `worktree_create` and `worktree_status` from
+the coding groups, not commit, push, PR, review, removal or base-setting tools.
+Without a session worktree, `worktree_create` requires an explicit `projectId`.
+The configured cwd and fallback contract live in [settings.md](settings.md).
+
 ## Target
 
 ![Target harness architecture](agent-harnesses.svg)

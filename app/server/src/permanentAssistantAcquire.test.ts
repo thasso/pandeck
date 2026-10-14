@@ -32,6 +32,7 @@ const create = await import("./harnesses/create.ts");
 const { permanentAssistantStore } =
   await import("./db/permanentAssistantStore.ts");
 const { getSettings } = await import("./settings.ts");
+const { saveSettings } = await import("./settingsService.ts");
 const { permanentAssistantProfileInstructions } =
   await import("./permanentAssistantProfile.ts");
 const { hub } = await import("./hub.ts");
@@ -92,11 +93,73 @@ test("concurrent callers share one new singleton, and it is the one bound", asyn
     agentType: "personal-assistant",
     credentialProfileId: acquire.mock.calls[0]?.[1]?.credentialProfileId,
     modelId: "sonnet",
+    cwd: join(tmp, "data", "personal-assistant"),
     thinkingLevel: getSettings().permanentAssistant.thinkingLevel,
     additionalSystemPrompt: permanentAssistantProfileInstructions(
       getSettings().permanentAssistant,
     ),
   });
+});
+
+test("creation uses the configured cwd and records a lost-directory fallback in the transcript", async () => {
+  const cwd = join(tmp, "configured-cwd");
+  mkdirSync(cwd);
+  await saveSettings({
+    permanentAssistant: {
+      ...getSettings().permanentAssistant,
+      workingDirectory: cwd,
+    },
+  });
+  const finish = vi.fn();
+  const createSpy = vi.spyOn(create, "createSession").mockResolvedValue({
+    id: "configured",
+    sessionId: "configured",
+    beginSyntheticTool: () => ({ toolId: "notice" }),
+    finishSyntheticTool: finish,
+  } as never);
+  await permanentAssistantSessionId();
+  assert.equal(createSpy.mock.calls[0]?.[0].cwd, cwd);
+  assert.equal(finish.mock.calls.length, 0);
+  await rotatePermanentAssistantSession();
+  rmSync(cwd, { recursive: true });
+  await permanentAssistantSessionId();
+  assert.equal(
+    createSpy.mock.calls[1]?.[0].cwd,
+    join(tmp, "data", "personal-assistant"),
+  );
+  assert.match(
+    finish.mock.calls[0]?.[1],
+    /configured Personal Assistant working directory is unavailable/,
+  );
+  await saveSettings({
+    permanentAssistant: {
+      ...getSettings().permanentAssistant,
+      workingDirectory: "",
+    },
+  });
+});
+
+test("pi singleton creation receives the resolved working directory too", async () => {
+  const before = getSettings().permanentAssistant;
+  const models = await import("./harnesses/models.ts");
+  vi.spyOn(models, "piModelForSlot").mockResolvedValue({ id: "test" } as never);
+  const cwd = join(tmp, "pi-cwd");
+  mkdirSync(cwd);
+  await saveSettings({
+    permanentAssistant: {
+      ...before,
+      provider: "github-copilot",
+      workingDirectory: cwd,
+    },
+  });
+  const createSpy = vi.spyOn(create, "createSession").mockResolvedValue({
+    id: "pi-assistant",
+    sessionId: "pi-assistant",
+  } as never);
+  await permanentAssistantSessionId();
+  assert.equal(createSpy.mock.calls[0]?.[0].harness, "pi");
+  assert.equal(createSpy.mock.calls[0]?.[0].cwd, cwd);
+  await saveSettings({ permanentAssistant: before });
 });
 
 test("a rotation retires a creation under way: the new profile's singleton is bound", async () => {

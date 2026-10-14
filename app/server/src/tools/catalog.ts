@@ -966,7 +966,22 @@ export function toolGroupsFor(agentType: AgentType): ToolGroup[] {
     ...(agentType === "workshop" || agentType === "developer"
       ? codingToolGroups()
       : []),
-    ...(isPersonalAssistantAgentType(agentType) ? [settingsToolGroup()] : []),
+    ...(isPersonalAssistantAgentType(agentType)
+      ? [
+          settingsToolGroup(),
+          {
+            id: "worktree-start",
+            label: "Start coding work",
+            description:
+              "Create and inspect managed worktrees across projects.",
+            loading: "deferred" as const,
+            family: "shared" as const,
+            tools: worktreeTools.filter((tool) =>
+              ["worktree_create", "worktree_status"].includes(tool.name),
+            ),
+          },
+        ]
+      : []),
   ];
   const personaGroups =
     agentType !== "developer"

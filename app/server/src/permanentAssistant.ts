@@ -25,6 +25,7 @@ import {
   type RuntimePromptDriver,
 } from "./session/runtimePrompt.ts";
 import { getSettings } from "./settings.ts";
+import { resolveAssistantWorkingDirectory } from "./permanentAssistantDirectory.ts";
 import { permanentAssistantProfileInstructions } from "./permanentAssistantProfile.ts";
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
@@ -177,7 +178,7 @@ export function stopPermanentAssistant(): void {
  * (`sessionListHiddenProbe`), while `/assistant` always resolves the currently
  * BOUND singleton. Since the caller is a Personal Assistant profile edit
  * (`connection.ts`'s `onUpdateSettings` rotates on any name/provider/model/
- * thinking/instructions change), that means each such edit leaves the previous
+ * thinking/instructions/working-directory change), each edit leaves the previous
  * conversation intact but with no UI path back to it.
  */
 export async function rotatePermanentAssistantSession(): Promise<void> {
@@ -302,6 +303,9 @@ async function acquireOrCreatePermanentAssistant(
 
   const profile = getSettings().permanentAssistant;
   const profileInstructions = permanentAssistantProfileInstructions(profile);
+  const { cwd, notice } = resolveAssistantWorkingDirectory(
+    profile.workingDirectory,
+  );
   const credentialProfileId = accountForSlot(profile);
   let driver: PermanentAssistantDriver;
   if (
@@ -311,6 +315,7 @@ async function acquireOrCreatePermanentAssistant(
     driver = await createSession({
       harness: "claude-sdk",
       agentType: "personal-assistant",
+      cwd,
       modelId: profile.modelId,
       thinkingLevel: profile.thinkingLevel,
       additionalSystemPrompt: profileInstructions,
@@ -325,12 +330,17 @@ async function acquireOrCreatePermanentAssistant(
     driver = await createSession({
       harness: "pi",
       agentType: "personal-assistant",
+      cwd,
       model,
       thinkingLevel: profile.thinkingLevel,
       credentialProfileId,
     });
   }
   if (rotated()) return acquirePermanentAssistant();
+  if (notice) {
+    const { toolId } = driver.beginSyntheticTool("working_directory", {});
+    driver.finishSyntheticTool(toolId, notice);
+  }
   permanentAssistantStore.setSessionId(driver.id);
   void hub.broadcastSessions();
   return driver;

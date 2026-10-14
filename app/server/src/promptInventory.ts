@@ -51,7 +51,7 @@
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_TYPES } from "./agentTypes.ts";
-import type { AgentType } from "@assistant/shared";
+import { hasNativeTools, type AgentType } from "@assistant/shared";
 import {
   claudeSdkSystemPrompt,
   CLAUDE_SDK_NATIVE_TOOLS,
@@ -202,6 +202,8 @@ const CODING_PERSONAS = new Set<AgentType>(["workshop", "developer"]);
 /** Measured with the DEFAULT profile: no user data in a committed baseline. */
 const DEFAULT_PROFILE_INSTRUCTIONS = permanentAssistantProfileInstructions({
   name: "Personal Assistant",
+  workingDirectory: "",
+  defaultWorkingDirectory: "/data/personal-assistant",
   provider: "",
   modelId: "",
   thinkingLevel: "off",
@@ -229,7 +231,7 @@ function toolsByTier(
   for (const group of toolGroupsFor(agentType))
     for (const tool of group.tools)
       (eagerNames.has(tool.name) ? eager : deferred).push(tool);
-  if (harness === "pi" && CODING_PERSONAS.has(agentType))
+  if (harness === "pi" && hasNativeTools(agentType))
     eager.push(...piBackgroundMeasurementTools());
   return { eager, deferred };
 }
@@ -244,7 +246,7 @@ function eagerToolBlockChars(
   const tools = toolGroupsFor(agentType)
     .flatMap((group) => group.tools)
     .filter((tool) => eagerNames.has(tool.name));
-  if (harness === "pi" && CODING_PERSONAS.has(agentType))
+  if (harness === "pi" && hasNativeTools(agentType))
     tools.push(...piBackgroundMeasurementTools());
   return sum(
     tools,
@@ -327,7 +329,7 @@ function builtinToolRow(
   harness: InventoryHarness,
   cwd: string,
 ): InventoryLayer {
-  const isCoding = CODING_PERSONAS.has(agentType);
+  const nativeAccess = hasNativeTools(agentType);
   if (harness === "claude")
     return {
       id: "tools:eager:harness-builtin",
@@ -335,18 +337,18 @@ function builtinToolRow(
       chars: 0,
       source: "vendor (Claude CLI)",
       counted: false,
-      note: isCoding
+      note: nativeAccess
         ? `${CLAUDE_SDK_NATIVE_TOOLS.join(", ")} — definitions live inside the CLI and are NOT measurable in-process`
         : "assistant personas expose no native tools",
     };
-  const builtins = isCoding ? piBuiltinDefinitionChars(cwd) : [];
+  const builtins = nativeAccess ? piBuiltinDefinitionChars(cwd) : [];
   return {
     id: "tools:eager:harness-builtin",
     section: "tools",
     chars: builtins.reduce((n, tool) => n + tool.chars, 0),
     source: "vendor (pi builtin definitions)",
     counted: true,
-    note: isCoding
+    note: nativeAccess
       ? builtins.map((tool) => `${tool.name} ${tool.chars}`).join(", ")
       : 'assistant personas run noTools: "builtin"',
   };
@@ -711,7 +713,9 @@ function personaInventories(
     agentType === "personal-assistant" ? DEFAULT_PROFILE_INSTRUCTIONS : "";
 
   const { eager } = toolsByTier(agentType, "pi");
-  const builtins: PiPromptTool[] = isCoding ? piBuiltinPromptTools(cwd) : [];
+  const builtins: PiPromptTool[] = hasNativeTools(agentType)
+    ? piBuiltinPromptTools(cwd)
+    : [];
   const eagerPromptTools: PiPromptTool[] = [
     ...eager,
     measurementFindTools(agentType),

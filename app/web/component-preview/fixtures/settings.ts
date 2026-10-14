@@ -62,6 +62,8 @@ export const settingsFixture: AppSettings = {
   permanentAssistant: {
     ...agent,
     name: "Personal Assistant",
+    workingDirectory: "",
+    defaultWorkingDirectory: "/srv/pandeck/personal-assistant",
     additionalInstructions:
       "Keep technical answers concise and ask before changing external systems.",
   },

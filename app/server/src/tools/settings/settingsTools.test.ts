@@ -35,6 +35,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test("the PA working directory reads as UI-only and settings_update cannot write it", async () => {
+  const path = "permanentAssistant.workingDirectory";
+  const result = await call(settingsRead, { paths: [path] });
+  assert.equal((result.settings as Entry[])[0]?.access, "readonly");
+  await assert.rejects(
+    call(settingsUpdate, { changes: [{ path, value: "/tmp" }] }),
+    /only be changed in the Settings UI/,
+  );
+});
+
 describe("settings_read", () => {
   test("with no arguments, lists every section", async () => {
     const { sections } = (await call(settingsRead, {})) as {
