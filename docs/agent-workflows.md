@@ -106,13 +106,24 @@ the outcome:
   the user approved (`docs/agent-definitions.md`), and drives the
   review/fix/re-review loop over peer prompts. There is no watchdog, no
   ownership registry, no result contract and no automatic report — the server
-  durably records one `spawned` edge from coordinator to child before delivering
-  the opening prompt, and tells each child which session to answer. Either side
-  exposes that parentage as navigable **Spawned by** / **Spawned sessions** rows
-  in the Session inspector, and the Sessions inbox folds a coordinator and the
-  peers it still owns into ONE card (below). An idle child means nothing;
-  chasing it is the coordinator's job. Choose it for experimentation, where a
-  cheap wrong answer is recoverable.
+  durably records one `spawned` edge from spawner to child before delivering the
+  opening prompt. Each row of `spawn` or `propose` accepts
+  `owner: "coordinator" | "user"`, defaulting to `coordinator`. Use coordinator
+  ownership for helpers whose results the spawner needs. Use user ownership for
+  work the user should own and watch, such as asking the Personal Assistant to
+  start work. The proposal card shows this choice and lets the user change it. A
+  direct coordinator-owned spawn appends a report-back instruction and defaults
+  `responseRequested` to true. A user-owned row gets no reporting suffix, uses
+  the full `MAX_PEER_PROMPT_CHARS` budget and defaults `responseRequested` to
+  false; explicitly requesting a reply with user ownership is an error.
+  Proposals default to no awaited reply as before; choosing user ownership in
+  the card withdraws any proposed reply request. Both owners receive the opening
+  prompt as a peer message from the spawner, retaining transcript provenance.
+  Either side exposes that parentage as navigable **Spawned by** / **Spawned
+  sessions** rows in the Session inspector, and the Sessions inbox folds a
+  coordinator and the peers it still owns into ONE card (below). An idle child
+  means nothing; chasing it is the coordinator's job. Choose it for
+  experimentation, where a cheap wrong answer is recoverable.
 
   That spawn edge also carries WHO OWNS the child ([Task-637](pa://task/637)),
   as `SessionListItem.spawnOwnership`:
@@ -126,14 +137,21 @@ the outcome:
     outcome or notification of its own; the user reads its answer in the peer
     itself or, while the coordinator is present, under its fold (a failure still
     surfaces there).
-  - `taken-over` — the user EXPLICITLY took this child over: the Session
-    inspector's **Take over** action (`setSpawnOwnership`). It records the state
-    and one timestamp; taking over a child already taken over rewrites nothing.
-    **Hand back** returns the child to `coordinator`, and a later Take over
-    stamps afresh — but not to a coordinator that was deleted, since nobody
-    would then run the peer. Only a non-deleted, user-scope session with a spawn
-    edge can be set; anything else is refused. Edges marked before this rule,
-    when any visible human prompt took a child over, keep their state.
+  - `taken-over` — the child belongs to the user, either from creation with
+    `owner: "user"` or through the Session inspector's explicit **Take over**
+    action (`setSpawnOwnership`). A user-owned spawn writes this state
+    atomically with the spawn edge, with `takenOverAt` equal to the child's
+    creation time. It has ordinary top-level unread, outcome attention,
+    notifications and **Settle** behaviour. Taking over a child already taken
+    over rewrites nothing. **Hand back** returns the child to `coordinator`, and
+    a later Take over stamps afresh — but not to a coordinator that was deleted,
+    since nobody would then run the peer. Hand back works the same for a child
+    born user-owned: it restores folding and stop authority, but sends no
+    reporting instruction and creates no awaited reply. Stall detection reads
+    actual outstanding requests, not ownership, so Hand back alone cannot invent
+    a missing report. Only a non-deleted, user-scope session with a spawn edge
+    can be set; anything else is refused. Edges marked before this rule, when
+    any visible human prompt took a child over, keep their state.
   - `unknown` — a spawn edge from before ownership tracking, or metadata that
     cannot be classified. It fails closed: a consumer that folds
     coordinator-owned children under their coordinator must keep an `unknown`

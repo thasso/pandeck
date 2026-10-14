@@ -387,8 +387,8 @@ const REPORT_MARKER = "<!-- pa:direct-peer-reporting -->";
 const REPORT_HEADING = "Reporting back to your coordinator";
 
 /**
- * The return route, appended by the SERVER to every direct child's opening
- * prompt.
+ * The return route, appended by the SERVER to a coordinator-owned direct
+ * child's opening prompt. A child born user-owned receives no return route.
  *
  * A directly spawned session is an ordinary session: nothing watches it, and
  * nothing reports for it. So the one thing it cannot be left to infer is who

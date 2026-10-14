@@ -62,7 +62,7 @@ function makeSessionSpawnTool() {
     name: "session_spawn",
     label: "Spawn Sessions",
     description:
-      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, model and effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each session is an ordinary conversation the user can watch and take over, so use this for work that deserves its own session and stay where you are for anything smaller. YOU own what you start: keep the returned ids, expect each one to answer you with a peer message, follow up yourself when one goes quiet, and use session_control if you need to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
+      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, model and effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Use this for work that deserves its own conversation, not small tasks. Choose owner "user" for work the user should own and watch, such as when they ask you to start work; those sessions go to their inbox and owe you no reply. Default owner "coordinator" is for helpers whose results you need. YOU own those helpers: keep their ids, expect peer replies, chase quiet ones, and use session_control to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
     searchHint:
       "spawn start delegate implementer reviewer parallel helpers approved runtimes profiles cross-family review named role definitions",
     parameters: {
@@ -98,7 +98,7 @@ function makeSessionSpawnTool() {
               },
               prompt: {
                 type: "string",
-                description: `The opening prompt, delivered as a peer message from you. Required: a session begins with its first prompt, so there is no way to create a silent one. Max ${MAX_PEER_PROMPT_CHARS} characters. Make it self-contained — the new session has none of your context — and state its role, its exact target and what a finished result looks like. On "spawn" the server also appends your session id and tells it to report back to you.`,
+                description: `The opening prompt, delivered as a peer message from you. Required: a session begins with its first prompt, so there is no way to create a silent one. Max ${MAX_PEER_PROMPT_CHARS} characters. Make it self-contained — the new session has none of your context — and state its role, its exact target and what a finished result looks like. On coordinator-owned "spawn" the server appends a report-back instruction, reducing the available prompt budget; user-owned rows get the full limit.`,
               },
               profileId: {
                 type: "string",
@@ -125,10 +125,16 @@ function makeSessionSpawnTool() {
                 description:
                   "Task this session works on: it is linked to the Task and the prompt names it.",
               },
+              owner: {
+                type: "string",
+                enum: ["coordinator", "user"],
+                description:
+                  'Who owns this work from creation. Defaults to "coordinator"; "user" keeps provenance but puts the session in the user\'s inbox, without reporting instructions or coordinator stop authority. Available on both spawn and propose.',
+              },
               responseRequested: {
                 type: "boolean",
                 description:
-                  'Record that you are awaiting an answer from this session. Defaults to true on "spawn" (you own its closure) and false on "propose".',
+                  'Record an awaited answer. Defaults to true on coordinator-owned "spawn", false on "propose" and user-owned rows. True with owner "user" is an error.',
               },
               provider: {
                 type: "string",
@@ -278,7 +284,7 @@ async function runDirectSpawn(
   ctx: { session: { sessionId: string } },
 ) {
   const suffixChars = directSpawnReportingSuffix(ctx.session.sessionId).length;
-  const budget = MAX_PEER_PROMPT_CHARS - suffixChars;
+  const coordinatorBudget = MAX_PEER_PROMPT_CHARS - suffixChars;
   // Runtime hints and unknown properties were refused on the RAW row
   // (`checkRawRow`), where a stated value cannot be confused with an omitted
   // one. What is left here is this operation's own requirement.
@@ -287,13 +293,16 @@ async function runDirectSpawn(
       throw new Error(
         `"${row.title}" has no profileId or agent. Call operation "profiles" or "agents" and name one approved runtime or one agent definition per row.`,
       );
+    const budget =
+      row.owner === "user" ? MAX_PEER_PROMPT_CHARS : coordinatorBudget;
     if (row.prompt.length > budget)
       throw new Error(
-        `The opening prompt for "${row.title}" is ${row.prompt.length} characters; on a direct spawn the limit is ${budget} (the server appends your session id and the reporting instructions).`,
+        `The opening prompt for "${row.title}" is ${row.prompt.length} characters; the limit is ${budget}${row.owner === "user" ? "." : " (the server appends your session id and the reporting instructions)."}`,
       );
     return {
       title: row.title,
       prompt: row.prompt,
+      ...(row.owner === undefined ? {} : { owner: row.owner }),
       ...(row.agent
         ? { agent: row.agent }
         : { profileId: row.profileId!, agentType: row.agentType! }),
@@ -340,7 +349,7 @@ function directSpawnText(results: DirectSpawnRowResult[]): string {
         : `profile ${row.profileId}`;
     if (!row.sessionId)
       return `- "${row.title}" NOT started on ${runtime}: ${row.error ?? "unknown error"}`;
-    return `- "${row.title}" → session ${row.sessionId} on ${runtime}${
+    return `- "${row.title}" → session ${row.sessionId} on ${runtime}, owner ${row.owner}${
       row.error ? ` — created, but its opening prompt failed: ${row.error}` : ""
     }`;
   });
@@ -351,10 +360,13 @@ function directSpawnText(results: DirectSpawnRowResult[]): string {
   return [
     head,
     ...lines,
-    ...(started.length > 0
+    ...(started.some((row) => row.owner === "coordinator")
       ? [
-          "They were told to report back to you with session_send_prompt. Keep these ids: nothing else will tell you how they finish, an idle session is not a success, and closing the loop — chasing a quiet one, handing findings back, re-reviewing, or stopping a still-owned child with session_control — is yours.",
+          "Coordinator-owned sessions were told to report back to you with session_send_prompt. Keep these ids: nothing else will tell you how they finish, an idle session is not a success, and closing the loop — chasing a quiet one, handing findings back, re-reviewing, or stopping a still-owned child with session_control — is yours.",
         ]
+      : []),
+    ...(started.some((row) => row.owner === "user")
+      ? ["User-owned sessions are in the user's inbox; they owe you no report."]
       : []),
   ].join("\n");
 }
@@ -445,6 +457,7 @@ const ROW_PROPERTIES = [
   "projectId",
   "taskId",
   "responseRequested",
+  "owner",
   "provider",
   "modelId",
   "thinkingLevel",
@@ -564,6 +577,7 @@ function readRows(
       ...(typeof row.responseRequested === "boolean"
         ? { responseRequested: row.responseRequested }
         : {}),
+      ...optional(row, "owner"),
       ...optional(row, "profileId"),
       ...optional(row, "agent"),
       ...optional(row, "worktreeId"),

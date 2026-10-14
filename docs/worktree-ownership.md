@@ -37,9 +37,13 @@ whether it still lives is the reader's question.
 A session's SPAWN TREE is the session plus every peer it spawned, at any depth,
 along the durable `spawned` edge — whatever the peer's ownership (a peer the
 user took over is still something this session started), archive or settlement.
-The tree OWNS a worktree when one of its sessions created it or runs in it. The
-project's synthetic main checkout is never owned: it is neither a delivery
-target nor a cleanup candidate.
+A child born user-owned through `session_spawn` with `owner: "user"` counts
+exactly like a later takeover. Its provenance edge remains in the spawner's
+worktree tree, even though its inbox card and runtime control belong to the
+user. Hand back changes neither tree membership nor worktree ownership. The tree
+OWNS a worktree when one of its sessions created it or runs in it. The project's
+synthetic main checkout is never owned: it is neither a delivery target nor a
+cleanup candidate.
 
 Membership has ONE authority, the server. Every spawned worktree record carries
 `treeSessionIds` — its holders (creator and the sessions running in it) and

@@ -1110,6 +1110,117 @@ test("the child is told to report back to its coordinator, exactly once", async 
   ).toBe(1);
 });
 
+test("a user-owned direct spawn keeps provenance, full prompt budget and no reporting route", async () => {
+  approveRuntimes();
+  const { MAX_PEER_PROMPT_CHARS } = await import("./peerPrompt.ts");
+  const prompt = "x".repeat(MAX_PEER_PROMPT_CHARS);
+  const text = await spawnDirect([
+    {
+      ...row({ title: "User work", owner: "user", prompt }),
+      profileId: "pr_terra",
+    },
+  ]);
+  const delivered = recorded.delivered[0]!;
+  const childId = String(delivered.targetSessionId);
+  expect(delivered).toMatchObject({
+    senderSessionId: SENDER,
+    prompt,
+    responseRequested: false,
+  });
+  expect(recorded.events).toContain(`deliver:${SENDER}:taken-over`);
+  expect(sessionStore.spawnedParentsByChildIds([childId]).get(childId)).toEqual(
+    {
+      parentSessionId: SENDER,
+      ownership: "taken-over",
+      takenOverAt: sessionStore.get(childId)!.createdAt,
+    },
+  );
+  expect(text).toContain("owner user");
+  expect(text).toContain("owe you no report");
+  expect(text).not.toContain("were told to report back");
+  const { sessionRunOutcomeNeedsUser } =
+    await import("./sessionOutcomePolicy.ts");
+  expect(
+    sessionRunOutcomeNeedsUser(childId, "end", {
+      kind: "agent",
+      agentId: SENDER,
+    }),
+  ).toBe(true);
+});
+
+test.each(["spawn", "propose"] as const)(
+  "%s refuses user ownership with an awaited reply or an invalid owner before effects",
+  async (operation) => {
+    approveRuntimes();
+    for (const patch of [
+      { owner: "user", responseRequested: true },
+      { owner: "someone" },
+      { owner: null },
+    ]) {
+      await expect(
+        runSpawnOperation(operation, [
+          {
+            ...row(patch),
+            ...(operation === "spawn" ? { profileId: "pr_terra" } : {}),
+          },
+        ]),
+      ).rejects.toThrow(/owner/);
+    }
+    expect(recorded.delivered).toHaveLength(0);
+    expect(recorded.pi).toHaveLength(0);
+    expect(recorded.claude).toHaveLength(0);
+  },
+);
+
+test("user-owned proposal approval and ownership edits honour the chosen owner", async () => {
+  const { card } = await propose([
+    row({ owner: "user", prompt: "Start my work." }),
+    row({ title: "Helper", responseRequested: true }),
+  ]);
+  expect(bodyOf(card).items[0]).toMatchObject({
+    owner: "user",
+    responseRequested: false,
+  });
+  await resolveApproval(card.id, "approved", {
+    kind: "sessionSpawn",
+    items: [{ rowId: bodyOf(card).items[1]!.rowId, owner: "user" }],
+  });
+  expect(recorded.delivered).toHaveLength(2);
+  for (const delivered of recorded.delivered) {
+    expect(delivered.responseRequested).toBe(false);
+    expect(delivered.prompt).not.toContain(
+      "Reporting back to your coordinator",
+    );
+    const childId = String(delivered.targetSessionId);
+    expect(
+      sessionStore.spawnedParentsByChildIds([childId]).get(childId)?.ownership,
+    ).toBe("taken-over");
+  }
+  // Hand back changes authority only, not the opening message or reply ledger.
+  const { setSpawnOwnership } = await import("./spawnOwnership.ts");
+  const childId = String(recorded.delivered[0]!.targetSessionId);
+  expect(setSpawnOwnership(childId, "coordinator")).toBe("changed");
+  expect(sessionStore.spawnedParentsByChildIds([childId]).get(childId)).toEqual(
+    { parentSessionId: SENDER, ownership: "coordinator" },
+  );
+  expect(recorded.delivered).toHaveLength(2);
+});
+
+test("approval can hand a proposed user-owned row to the coordinator without creating a reply debt", async () => {
+  const { card } = await propose([row({ owner: "user" })]);
+  await resolveApproval(card.id, "approved", {
+    kind: "sessionSpawn",
+    items: [{ rowId: bodyOf(card).items[0]!.rowId, owner: "coordinator" }],
+  });
+  const delivered = recorded.delivered[0]!;
+  expect(delivered.responseRequested).toBe(false);
+  expect(
+    sessionStore
+      .spawnedParentsByChildIds([String(delivered.targetSessionId)])
+      .get(String(delivered.targetSessionId))?.ownership,
+  ).toBe("coordinator");
+});
+
 test("a direct row awaits an answer unless it explicitly says otherwise", async () => {
   approveRuntimes();
 

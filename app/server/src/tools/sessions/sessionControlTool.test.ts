@@ -147,6 +147,30 @@ describe("session_control tool", () => {
     assert.match(resultText(result), /Cancelled 2 queued prompts first/);
   });
 
+  it("refuses a child born user-owned without clearing its queued work", async () => {
+    const caller = seed("Caller");
+    const child = seed("User work");
+    sessionStore.linkSpawned(caller, child, 123, "taken-over");
+    const waiting = enqueue(caller, child);
+    let aborted = false;
+    setSessionControlRuntimeForTests({
+      isRunning: () => true,
+      abort: () => {
+        aborted = true;
+      },
+    });
+    await assert.rejects(
+      () =>
+        tool().execute(
+          { operation: "stop", targetSessionId: child, clearQueue: true },
+          context(caller),
+        ),
+      /no longer owned/,
+    );
+    assert.equal(aborted, false);
+    assert.equal(peerPromptStore.getById(waiting.id)?.status, "queued");
+  });
+
   it("refuses an unrelated or user-taken-over child", async () => {
     const caller = seed("Caller");
     const unrelated = seed("Unrelated");

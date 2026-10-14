@@ -93,6 +93,7 @@ export interface SpawnRequestRow {
   title: string;
   agentType: SpawnAgentType;
   prompt: string;
+  owner?: "coordinator" | "user";
   responseRequested?: boolean;
   worktreeId?: string;
   projectId?: string;
@@ -351,6 +352,7 @@ interface StructuralRow {
   title: string;
   agentType: SpawnAgentType;
   prompt: string;
+  owner: "coordinator" | "user";
   worktree?: SpawnWorktree;
   projectId?: string;
   projectName?: string;
@@ -366,6 +368,13 @@ interface StructuralRow {
  * whether or not the runtime was pre-approved.
  */
 async function validateStructure(row: SpawnRequestRow): Promise<StructuralRow> {
+  const owner = row.owner ?? "coordinator";
+  if (owner !== "coordinator" && owner !== "user")
+    throw new SpawnProposalError('owner must be "coordinator" or "user".');
+  if (owner === "user" && row.responseRequested === true)
+    throw new SpawnProposalError(
+      'owner "user" cannot request a reply; omit responseRequested or set it to false.',
+    );
   const title = row.title?.trim() ?? "";
   if (!title) throw new SpawnProposalError("Every session needs a title.");
   if (title.length > MAX_SPAWN_TITLE_CHARS)
@@ -415,6 +424,7 @@ async function validateStructure(row: SpawnRequestRow): Promise<StructuralRow> {
     title,
     agentType: row.agentType,
     prompt,
+    owner,
     ...(worktree ? { worktree } : {}),
     ...(project?.id ? { projectId: project.id } : {}),
     ...(project?.name ? { projectName: project.name } : {}),
@@ -493,6 +503,7 @@ function approvalItemOf(
     title: structural.title,
     agentType: structural.agentType,
     prompt: structural.prompt,
+    owner: structural.owner,
     ...(structural.worktree
       ? {
           worktreeId: structural.worktree.id,
@@ -528,6 +539,9 @@ function editedItem(
     credentialProfileId:
       edit.credentialProfileId?.trim() || item.credentialProfileId,
     ...(edit.thinkingLevel ? { thinkingLevel: edit.thinkingLevel } : {}),
+    ...(edit.owner === undefined ? {} : { owner: edit.owner }),
+    // Choosing user ownership also withdraws the proposal's awaited reply.
+    ...(edit.owner === "user" ? { responseRequested: false } : {}),
     ...(edit.skip === undefined ? {} : { skipped: edit.skip }),
   } satisfies SessionSpawnApprovalItem;
 }
@@ -546,6 +560,14 @@ function editedItem(
 async function settledItem(
   item: SessionSpawnApprovalItem,
 ): Promise<SessionSpawnApprovalItem> {
+  if (
+    item.owner !== undefined &&
+    item.owner !== "coordinator" &&
+    item.owner !== "user"
+  )
+    throw new Error('owner must be "coordinator" or "user".');
+  if (item.owner === "user" && item.responseRequested)
+    throw new Error("A user-owned session cannot request a reply.");
   const profile = enabledCredentialProfileById(item.credentialProfileId);
   if (!profile)
     throw new Error(
@@ -797,7 +819,12 @@ async function spawnOne(
     throw new Error(
       `Session ${sessionId} was created but its metadata could not be persisted.`,
     );
-  sessionStore.linkSpawned(senderSessionId, sessionId);
+  sessionStore.linkSpawned(
+    senderSessionId,
+    sessionId,
+    sessionStore.get(sessionId)!.createdAt,
+    item.owner === "user" ? "taken-over" : "coordinator",
+  );
   // A worktree record names its holders' coordinators (`treeSessionIds`), and
   // creation broadcast the child's checkout BEFORE this edge existed: say the
   // list again now, or a coordinator already watching it would hold the peer's
@@ -919,6 +946,7 @@ export type DirectSpawnRequestRow = DirectSpawnRowFields &
 interface DirectSpawnRowFields {
   title: string;
   prompt: string;
+  owner?: "coordinator" | "user";
   responseRequested?: boolean;
   worktreeId?: string;
   projectId?: string;
@@ -928,6 +956,7 @@ interface DirectSpawnRowFields {
 /** What one direct row did, whether or not it worked. */
 export interface DirectSpawnRowResult {
   title: string;
+  owner: "coordinator" | "user";
   /** The approved runtime it named, or the agent definition. */
   profileId?: string;
   agent?: string;
@@ -1020,6 +1049,7 @@ export async function spawnApprovedPeers(input: {
       const structural = structurals[index]!;
       const result: DirectSpawnRowResult = {
         title: structural.title,
+        owner: structural.owner,
         ...(row.agent !== undefined
           ? { agent: row.agent.trim() }
           : { profileId: row.profileId.trim() }),
@@ -1044,10 +1074,12 @@ export async function spawnApprovedPeers(input: {
         ...approvalItemOf(structural),
         // The child is told who to answer by the SERVER, so a coordinator that
         // forgot to say it in its own prompt still gets a result.
-        prompt: withReportingRoute(structural.prompt, input.senderSessionId),
-        // Direct orchestration means the coordinator owns closure, so the default
-        // is that it is waiting; only an explicit false says otherwise.
-        responseRequested: row.responseRequested !== false,
+        prompt:
+          structural.owner === "user"
+            ? structural.prompt
+            : withReportingRoute(structural.prompt, input.senderSessionId),
+        responseRequested:
+          structural.owner === "coordinator" && row.responseRequested !== false,
         provider: runtime.provider,
         modelId: runtime.modelId,
         ...(runtime.modelName ? { modelName: runtime.modelName } : {}),

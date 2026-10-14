@@ -77,6 +77,13 @@ import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
 import {
   Collapsible,
@@ -691,6 +698,7 @@ function ManagedCommitOverrideBody({
 /** One row's pending changes; absent fields keep what the agent proposed. */
 interface SpawnRowEdit {
   skip?: boolean;
+  owner?: "coordinator" | "user";
   model?: AccountModelOption;
   thinkingLevel?: ThinkingLevel;
 }
@@ -712,6 +720,7 @@ function spawnResolutionEdits(
         }
       : {}),
     ...(edit.thinkingLevel ? { thinkingLevel: edit.thinkingLevel } : {}),
+    ...(edit.owner ? { owner: edit.owner } : {}),
   }));
   return items.length > 0 ? { kind: "sessionSpawn", items } : undefined;
 }
@@ -756,6 +765,7 @@ function SpawnRow({
 }) {
   const [showPrompt, setShowPrompt] = useState(false);
   const skipped = edit?.skip ?? item.skipped ?? false;
+  const owner = edit?.owner ?? item.owner ?? "coordinator";
   // What this row will actually run on: the user's pick, or the offered option
   // matching the resolved account/model exactly. Anything less is not this row.
   const selected =
@@ -806,6 +816,23 @@ function SpawnRow({
       <div className="flex basis-full flex-col items-start gap-1">
         {editable && !skipped ? (
           <div className="flex flex-wrap items-center gap-1.5">
+            <Select
+              value={owner}
+              onValueChange={(value) => {
+                if (value === "coordinator" || value === "user")
+                  onEdit({ owner: value });
+              }}
+            >
+              <SelectTrigger size="xs" aria-label={`Owner of ${item.title}`}>
+                <SelectValue>
+                  {owner === "user" ? "User-owned" : "Coordinator-owned"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="coordinator">Coordinator-owned</SelectItem>
+                <SelectItem value="user">User-owned</SelectItem>
+              </SelectContent>
+            </Select>
             <ModelSelect
               models={[...models]}
               value={
@@ -842,6 +869,11 @@ function SpawnRow({
             })}
           </p>
         )}
+        <p className="text-muted-foreground">
+          {owner === "user"
+            ? "User's inbox · No report owed"
+            : "Coordinator's helpers"}
+        </p>
         {warning && (
           <p className="flex items-start gap-1.5 text-warning">
             <AlertTriangle className="mt-0.5 size-3 shrink-0" />
