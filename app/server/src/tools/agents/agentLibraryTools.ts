@@ -293,8 +293,13 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         ...(params.effort !== undefined
           ? { effort: params.effort as ThinkingLevel }
           : {}),
-        ...optionalNameList(params.denyTools, "denyTools"),
-        ...optionalNameList(params.skills, "skills"),
+        // Typed by the tool's schema, checked before `run` (`withCheckedArguments`).
+        ...(params.denyTools !== undefined
+          ? { denyTools: params.denyTools as string[] }
+          : {}),
+        ...(params.skills !== undefined
+          ? { skills: params.skills as string[] }
+          : {}),
         body: params.body as string,
       };
       const source = formatAgentManifest(input);
@@ -409,20 +414,3 @@ registerApprovalExecutor("agentDefinition", {
     };
   },
 });
-
-/**
- * A stated list, or nothing. Not every adapter validates arguments against the
- * schema, and dropping a malformed `denyTools` would propose — and on approval
- * create — an agent with fewer restrictions than were asked for.
- */
-function optionalNameList<K extends "denyTools" | "skills">(
-  value: unknown,
-  field: K,
-): Partial<Record<K, string[]>> {
-  if (value === undefined) return {};
-  if (!Array.isArray(value) || !value.every((item) => typeof item === "string"))
-    throw new EntryValidationError(
-      `${field} must be a list of names, e.g. ["worktree_push"]; nothing was proposed.`,
-    );
-  return { [field]: value as string[] } as Partial<Record<K, string[]>>;
-}

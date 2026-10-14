@@ -287,7 +287,10 @@ five reads are classified `sideEffects: "none"` and the five mutations
   option-shaped input and pass `--end-of-options`; a path scope still works for
   a folder that was deleted, which is how a removed skill stays inspectable.
 
-Every mutation needs a concise reason and may carry a related Task id.
+Every mutation needs a concise reason and may carry a related Task id. Every
+`skill_*` tool checks its arguments against its declared schema before running
+(`withCheckedArguments` in `tools/library/libraryTools.ts`); a wrong shape is
+refused, never coerced.
 
 ### What a mutation guarantees
 

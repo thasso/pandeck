@@ -407,14 +407,17 @@ the pickers; the server checks it against the account. The first send carries
 (`harnesses/firstSend.ts`): the session runs on the definition's model and
 effort and freezes it exactly as a spawn does, read again right before the
 session is created (a worktree provisioned first can take seconds). A runtime
-that moved between the two reads refuses the send. A persona, engine, model or
-effort that no longer matches the definition refuses the send rather than run
-something other than what the pickers showed. The refusal says what the
-definition runs on now and republishes the agents list, so the draft follows it:
-after a model or effort change the next send starts the definition, and after a
-persona change the agent is no longer picked and the next send is a plain
-session of the draft's persona. `appAudit.test.ts` holds `App` to the
-fresh-draft and re-issue helpers.
+that moved between the two reads refuses the send. A Claude send names its own
+id, and an id that already holds a session is refused unless that session was
+created as the same agent (`SessionAgentConflictError`): reusing it would keep
+its own runtime under the definition's name. A persona, engine, model or effort
+that no longer matches the definition refuses the send rather than run something
+other than what the pickers showed. The refusal says what the definition runs on
+now and republishes the agents list, so the draft follows it: after a model or
+effort change the next send starts the definition, and after a persona change
+the agent is no longer picked and the next send is a plain session of the
+draft's persona. `appAudit.test.ts` holds `App` to the fresh-draft and re-issue
+helpers.
 
 ## Out of scope
 

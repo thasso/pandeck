@@ -31,6 +31,7 @@ import type { SessionPromptEvidence } from "../promptConditions.ts";
 import { getSettings } from "../settings.ts";
 import {
   createSession,
+  SessionAgentConflictError,
   SessionIdTakenError,
   sessionIdTakenMessage,
 } from "./create.ts";
@@ -304,7 +305,10 @@ const engines: Record<Harness, FirstSendEngine> = {
             promptEvidence: evidence,
           });
         } catch (err) {
-          if (err instanceof SessionIdTakenError)
+          if (
+            err instanceof SessionIdTakenError ||
+            err instanceof SessionAgentConflictError
+          )
             return { refusal: { message: err.message, onSession: true } };
           throw err;
         }

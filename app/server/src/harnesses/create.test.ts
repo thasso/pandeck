@@ -283,3 +283,53 @@ test("a worktree named without its path runs in its live checkout on both engine
     path,
   );
 });
+
+test("an agent is never grafted onto a Claude session that already exists", async () => {
+  const { SessionAgentConflictError } = await import("./create.ts");
+  const agent = {
+    name: "researcher",
+    blob: "b".repeat(40),
+    persona: "assistant" as const,
+    provider: "claude-sdk",
+    model: "opus",
+    effort: "high" as const,
+    denyTools: [],
+    skills: [],
+    body: "Research carefully.",
+  };
+  const acquire = vi
+    .spyOn(claudeSdkStore, "acquire")
+    .mockImplementation(
+      (id: string) => ({ sessionId: id, setTitle() {} }) as never,
+    );
+  vi.spyOn(claudeSdkStore, "exists").mockReturnValue(true);
+  const start = (id: string, name = "researcher") =>
+    createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: "profile-1",
+      agent: { ...agent, name },
+    });
+
+  // A plain session under the id: it would keep its own runtime.
+  await assert.rejects(start("existing-plain"), SessionAgentConflictError);
+  assert.equal(sessionStore.getAgent("existing-plain"), undefined);
+
+  // A session created as another agent.
+  sessionStore.freezeAgent(
+    "existing-other",
+    JSON.stringify({ ...agent, name: "drafter" }),
+  );
+  await assert.rejects(start("existing-other"), SessionAgentConflictError);
+  assert.equal(
+    JSON.parse(sessionStore.getAgent("existing-other")!).name,
+    "drafter",
+  );
+  assert.equal(acquire.mock.calls.length, 0);
+
+  // A retry of the same creation lands on the session it made.
+  sessionStore.freezeAgent("existing-same", JSON.stringify(agent));
+  await start("existing-same");
+  assert.equal(acquire.mock.calls.length, 1);
+});

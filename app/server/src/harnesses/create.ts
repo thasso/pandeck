@@ -14,6 +14,7 @@ import type {
 } from "@assistant/shared";
 import {
   freezeSessionAgent,
+  sessionAgentSummary,
   type SessionAgent,
 } from "../agents/sessionAgent.ts";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
@@ -43,6 +44,23 @@ export class SessionIdTakenError extends Error {
   ) {
     super(sessionIdTakenMessage(sessionId, holder));
     this.name = "SessionIdTakenError";
+  }
+}
+
+/**
+ * An agent requested for an id that already holds a Claude session. `acquire`
+ * returns that session as it is — its persona, model, effort and account — so
+ * a definition can only be what the session was created as, never grafted on.
+ */
+export class SessionAgentConflictError extends Error {
+  constructor(
+    readonly sessionId: string,
+    agentName: string,
+  ) {
+    super(
+      `Session ${sessionId} already exists and was not created as the "${agentName}" agent; start a new session to run it.`,
+    );
+    this.name = "SessionAgentConflictError";
   }
 }
 
@@ -139,6 +157,13 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       onDisk: spec.id !== undefined,
     });
     if (holder) throw new SessionIdTakenError(id, holder);
+    // Only a retry of the same creation may land on an existing session.
+    if (
+      spec.agent &&
+      claudeSdkStore.exists(id) &&
+      sessionAgentSummary(id)?.name !== spec.agent.name
+    )
+      throw new SessionAgentConflictError(id, spec.agent.name);
     linkWorktree(id, spec.worktree?.id);
     if (spec.agent) freezeSessionAgent(id, spec.agent);
     if (spec.promptEvidence)

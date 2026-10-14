@@ -419,3 +419,26 @@ test("a persona that changes while the session is set up is refused, not run", a
     /runs as the developer persona, not assistant/,
   );
 });
+
+test("an agent first send to an id that already holds a Claude session is refused", async () => {
+  const { conn, sent } = makeConnection();
+  vi.spyOn(claudeSdkStore, "exists").mockImplementation(
+    (id) => id === "agent-existing",
+  );
+
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
+    id: "agent-existing",
+    agentType: "assistant",
+    text: "Go.",
+    agent: "researcher",
+    credentialProfileId: claudeProfile.id,
+  });
+
+  assert.equal(acquired.length, 0);
+  assert.equal(sessionStore.getAgent("agent-existing"), undefined);
+  assert.match(
+    JSON.stringify(sent),
+    /already exists and was not created as the \\"researcher\\" agent/,
+  );
+});
