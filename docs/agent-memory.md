@@ -80,6 +80,16 @@ ordinary Assistant auto-capture; Developer/Workshop load/search memory but do
 not auto-capture ordinary coding turns and write only on explicit user
 authorization.
 
+Sessions with `requiresEnterprise: true` never enter automatic memory capture or
+processing, regardless of persona or learning mode. Sessions with no retained
+metadata row, including purged or legacy sources, are also excluded. Capture
+fails closed when the source requirement cannot be read. The scheduler excludes
+these sessions before reading their transcript or creating observations. This is
+an account-routing boundary, not a privacy tier on memory cards. Explicit memory
+writes and ordinary memory loading keep their existing scope rules. See
+[Account routing](account-routing.md) for the deliberately untracked
+explicit-sharing boundary.
+
 ## Temporal semantics
 
 Cards carry a temporal mode: `persistent`, `window` (`validFrom`/`validUntil`),

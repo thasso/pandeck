@@ -1,10 +1,13 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { useState } from "react";
 import { CredentialProfileCard } from "../../../src/components/SettingsPage.tsx";
 import {
   AgentModelFields,
+  applyModelSlotChange,
   CredentialProfilesContext,
 } from "../../../src/components/AgentModelFields.tsx";
 import { RegistrySettingFields } from "../../../src/components/RegistrySettingFields.tsx";
+import { slotModelOptions } from "../../../src/lib/credentialProfiles.ts";
 import {
   settingsFixture,
   settingsModels,
@@ -20,6 +23,7 @@ const meta = {
     providerLabel: "Claude",
     connectionLabel: "Reconnect",
     onToggle: noop,
+    onToggleEnterprise: noop,
     onConnect: noop,
     onRename: noop,
     onDelete: noop,
@@ -58,6 +62,9 @@ export const AccountError: Story = {
     connectionLabel: "Connect",
   },
 };
+export const AccountEnterprise: Story = {
+  args: { profile: { ...settingsProfiles[0]!, enterprise: true } },
+};
 export const AccountLongName: Story = {
   args: {
     profile: {
@@ -77,6 +84,19 @@ export const AgentModel: Story = {
     </CredentialProfilesContext.Provider>
   ),
 };
+export const AgentModelAutomatic: Story = {
+  render: () => (
+    <CredentialProfilesContext.Provider value={settingsProfiles}>
+      <AgentModelFields
+        models={slotModelOptions(settingsModels)}
+        provider={settingsFixture.commitAgent.provider}
+        modelId={settingsFixture.commitAgent.modelId}
+        thinkingLevel={settingsFixture.commitAgent.thinkingLevel}
+        onChange={noop}
+      />
+    </CredentialProfilesContext.Provider>
+  ),
+};
 export const AgentWithoutModels: Story = {
   render: () => (
     <AgentModelFields
@@ -85,6 +105,22 @@ export const AgentWithoutModels: Story = {
       onChange={noop}
     />
   ),
+};
+export const AgentPinnedWithoutModels: Story = {
+  render: function AgentPinnedWithoutModelsStory() {
+    const [slot, setSlot] = useState(settingsFixture.commitAgent);
+    return (
+      <CredentialProfilesContext.Provider value={settingsProfiles}>
+        <AgentModelFields
+          models={[]}
+          {...slot}
+          onChange={(change) =>
+            setSlot((current) => applyModelSlotChange(current, change))
+          }
+        />
+      </CredentialProfilesContext.Provider>
+    );
+  },
 };
 export const RegistryFields: Story = {
   render: () => (

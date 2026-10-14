@@ -14,9 +14,6 @@ vi.mock("./harnesses/oneShot.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./harnesses/oneShot.ts")>()),
   runOneShot: vi.fn(),
 }));
-vi.mock("./settingsModelSlots.ts", () => ({
-  accountForSlot: () => "profile-1",
-}));
 vi.mock("./tasks.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tasks.ts")>()),
   findOriginTask: vi.fn(),
@@ -175,6 +172,40 @@ test("guidance, current title and origin Task reach the agent; the reference pre
   assert.match(request.prompt, /Task-42 \(doing\): Session rename command/);
   assert.match(request.prompt, /User: add a \/rename command to the composer/);
   assert.equal(request.record?.parentSessionId, sessionId);
+});
+
+test("retitling captures enterprise scope before its first changed callback await", async () => {
+  sessionId = `enterprise-retitle-${counter++}`;
+  sessionStore.upsert({
+    id: sessionId,
+    harness: "claude-sdk",
+    agentType: "developer",
+    requiresEnterprise: true,
+  });
+  const original = sessionStore.get(sessionId)!;
+  writeLog([user("u1", "Enterprise transcript")]);
+  vi.mocked(runOneShot).mockResolvedValue({
+    text: "Enterprise Title",
+    usage: {},
+  });
+  let spy: { mockRestore(): void } | undefined;
+  try {
+    await retitleSession({
+      sessionId,
+      rename: async () => {},
+      changed: async () => {
+        spy ??= vi
+          .spyOn(sessionStore, "get")
+          .mockReturnValue({ ...original, requiresEnterprise: false });
+      },
+    });
+    assert.equal(
+      vi.mocked(runOneShot).mock.calls[0]?.[0].requiresEnterprise,
+      true,
+    );
+  } finally {
+    spy?.mockRestore();
+  }
 });
 
 test("a manual rename during generation wins", async () => {

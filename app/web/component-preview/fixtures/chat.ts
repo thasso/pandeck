@@ -112,8 +112,10 @@ export const chatAccounts: CredentialProfileSummary[] = [
   {
     id: "claude-work",
     name: "Work account",
+    health: { state: "unknown", since: null },
     provider: "claude",
     enabled: true,
+    enterprise: true,
     status: "ready",
     createdAt: 0,
     updatedAt: 0,
@@ -121,8 +123,10 @@ export const chatAccounts: CredentialProfileSummary[] = [
   {
     id: "openai-work",
     name: "OpenAI",
+    health: { state: "unknown", since: null },
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "ready",
     createdAt: 0,
     updatedAt: 0,

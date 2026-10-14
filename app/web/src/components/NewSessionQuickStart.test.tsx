@@ -80,7 +80,8 @@ function render(
     projectsLoaded?: boolean;
     selectedProjectId?: string | null;
     profiles?: CredentialProfileSummary[];
-    selectedProfileId?: string;
+    selectedProfileId?: string | null;
+    requiresEnterprise?: boolean;
     usageIndicators?: UsageIndicator[] | null;
     newWorktreeStaged?: boolean;
     mode?: SessionMode;
@@ -94,8 +95,9 @@ function render(
       credentialProfiles={opts.profiles ?? []}
       credentialProfilesLoaded={opts.profilesLoaded ?? true}
       usageIndicators={opts.usageIndicators ?? null}
-      selectedCredentialProfileId={opts.selectedProfileId}
+      selectedCredentialProfileId={opts.selectedProfileId ?? null}
       onSelectCredentialProfile={() => {}}
+      requiresEnterprise={opts.requiresEnterprise ?? false}
       agentTypes={opts.agentTypes ?? ["assistant"]}
       selectedAgentType={opts.agentType ?? "assistant"}
       onSelectAgentType={() => {}}
@@ -244,7 +246,9 @@ describe("NewSessionQuickStart", () => {
         name: "Primary OpenAI",
         provider: "openai-codex",
         enabled: true,
+        enterprise: false,
         status: "ready",
+        health: { state: "unknown", since: null },
         createdAt: 0,
         updatedAt: 0,
       },
@@ -253,7 +257,9 @@ describe("NewSessionQuickStart", () => {
         name: "Default Claude",
         provider: "claude",
         enabled: true,
+        enterprise: false,
         status: "ready",
+        health: { state: "unknown", since: null },
         createdAt: 1,
         updatedAt: 1,
       },
@@ -262,7 +268,9 @@ describe("NewSessionQuickStart", () => {
         name: "Secondary OpenAI",
         provider: "openai-codex",
         enabled: true,
+        enterprise: false,
         status: "ready",
+        health: { state: "unknown", since: null },
         createdAt: 2,
         updatedAt: 2,
       },
@@ -297,7 +305,9 @@ describe("NewSessionQuickStart", () => {
         name: "Default Claude",
         provider: "claude",
         enabled: true,
+        enterprise: false,
         status: "ready",
+        health: { state: "unknown", since: null },
         createdAt: 0,
         updatedAt: 0,
       },
@@ -306,7 +316,9 @@ describe("NewSessionQuickStart", () => {
         name: "Primary OpenAI",
         provider: "openai-codex",
         enabled: true,
+        enterprise: false,
         status: "ready",
+        health: { state: "unknown", since: null },
         createdAt: 1,
         updatedAt: 1,
       },

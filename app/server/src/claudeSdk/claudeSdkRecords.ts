@@ -67,7 +67,7 @@ export interface ClaudeSdkRecord {
   additionalSystemPrompt?: string;
   /** Where the session executes (its worktree path); absent = app CWD. */
   cwd?: string;
-  /** Immutable isolated Claude credential profile id. */
+  /** Current isolated account, updated only by live failover. */
   credentialProfileId?: string;
   /**
    * Cumulative token/cost usage + last-known context size, so the context meter

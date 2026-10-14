@@ -171,6 +171,7 @@ export class ViewSession implements HarnessDriver {
       ...(modelValue !== undefined ? { model: modelValue } : {}),
       thinkingLevel: (this.meta.thinkingLevel ?? "off") as ThinkingLevel,
       ...(this.meta.mode !== undefined ? { mode: this.meta.mode } : {}),
+      ...(this.meta.requiresEnterprise ? { requiresEnterprise: true } : {}),
       // Steering needs a running turn, which a detached session cannot have.
       canSteer: false,
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),

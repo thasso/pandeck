@@ -11,10 +11,16 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { DATA_DIR } from "./config.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { childProcessEnv } from "./subprocessEnv.ts";
+import {
+  readAccountHealth,
+  reportAccountLoginCompleted,
+  withAccountHealthProfiles,
+} from "./accountHealth.ts";
+import type { AccountHealth } from "@assistant/shared";
 
 /**
  * PA-owned account-profile registry. The JSON registry is deliberately limited
@@ -30,12 +36,14 @@ export interface CredentialProfile {
   name: string;
   provider: CredentialProfileProvider;
   enabled: boolean;
+  enterprise: boolean;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface CredentialProfileSummary extends CredentialProfile {
   status: CredentialProfileStatus;
+  health: AccountHealth;
   /** Safe, user-actionable setup guidance. Never contains a token. */
   setup?: {
     path: string;
@@ -47,7 +55,7 @@ export interface CredentialProfileSummary extends CredentialProfile {
   error?: string;
 }
 
-const DEFAULT_OPENAI_PROFILE_ID = "default";
+export const DEFAULT_OPENAI_PROFILE_ID = "default";
 export const DEFAULT_CLAUDE_PROFILE_ID = "claude-default";
 const ROOT = join(DATA_DIR, "credential-profiles");
 const REGISTRY = join(ROOT, "profiles.json");
@@ -57,8 +65,6 @@ interface TransientCredentialProfileState {
   error?: string;
   verificationUri?: string;
   userCode?: string;
-  /** Non-secret file revision used to notice OAuth persistence before pi's post-login refresh settles. */
-  credentialRevisionAtStart?: string;
 }
 const transient = new Map<string, TransientCredentialProfileState>();
 let credentialProfileDeletedHandler: ((id: string) => void) | undefined;
@@ -150,6 +156,7 @@ function readRegistry(): CredentialProfile[] {
           name: p.name.slice(0, 80),
           provider: p.provider,
           enabled: p.enabled !== false,
+          enterprise: p.enterprise === true,
           createdAt: createdAt as number,
           updatedAt: updatedAt as number,
         },
@@ -221,21 +228,6 @@ export function claudeProfileEnvironment(
     : { ...env, CLAUDE_CONFIG_DIR: claudeConfigDir(profileId) };
 }
 
-function openAiCredentialRevision(id: string): string | undefined {
-  try {
-    const raw = JSON.parse(
-      readFileSync(join(piAgentDir(id), "auth.json"), "utf8"),
-    ) as Record<string, unknown>;
-    const credential = raw["openai-codex"];
-    if (!credential || typeof credential !== "object") return undefined;
-    return createHash("sha256")
-      .update(JSON.stringify(credential))
-      .digest("hex");
-  } catch {
-    return undefined;
-  }
-}
-
 /** Non-secret readiness hint for the profile-local OpenAI credential. */
 export function openAiProfileHasCredential(id: string): boolean {
   try {
@@ -250,20 +242,21 @@ export function openAiProfileHasCredential(id: string): boolean {
   }
 }
 
-/** Whether the active device flow has already replaced this profile's credential. */
-export function openAiProfileLoginCredentialPersisted(id: string): boolean {
-  const pending = transient.get(id);
-  return (
-    pending !== undefined &&
-    openAiProfileHasCredential(id) &&
-    pending.credentialRevisionAtStart !== openAiCredentialRevision(id)
-  );
-}
-
 export function claudeProfileHasCredential(id: string): boolean {
   // Claude owns this format. Presence is enough for a non-secret readiness hint;
   // the SDK remains the final authority when it starts a query.
   return existsSync(join(claudeConfigDir(id), ".credentials.json"));
+}
+
+/** File presence is independent of transient login/setup state. */
+export function credentialProfileHasCredential(id: string): boolean {
+  const profile = credentialProfileById(id);
+  return (
+    !!profile &&
+    (profile.provider === "claude"
+      ? claudeProfileHasCredential(id)
+      : openAiProfileHasCredential(id))
+  );
 }
 
 function summary(profile: CredentialProfile): CredentialProfileSummary {
@@ -272,17 +265,8 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
     profile.provider === "openai-codex"
       ? openAiProfileHasCredential(profile.id)
       : claudeProfileHasCredential(profile.id);
-  // pi persists OAuth before ModelRuntime.login() performs its post-login model
-  // refresh. That refresh has no SDK timeout, so a changed profile-local auth
-  // file is the authoritative completion signal even while the SDK promise is
-  // still settling. An existing credential does not short-circuit reconnect:
-  // its file revision must change before the device-code guidance disappears.
-  const openAiCredentialUpdated =
-    profile.provider === "openai-codex" &&
-    openAiProfileLoginCredentialPersisted(profile.id);
-  const loginStillConnecting =
-    pending?.status === "connecting" &&
-    (profile.provider === "claude" || !openAiCredentialUpdated);
+  // The login owner clears connecting only on its own successful commit.
+  const loginStillConnecting = pending?.status === "connecting";
   const status = loginStillConnecting
     ? "connecting"
     : configured
@@ -295,6 +279,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
     return {
       ...profile,
       status,
+      health: readAccountHealth(profile.id, configured),
       ...(pending?.error ? { error: pending.error } : {}),
       ...(status !== "ready"
         ? {
@@ -316,6 +301,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
   return {
     ...profile,
     status,
+    health: readAccountHealth(profile.id, configured),
     ...(pending?.error ? { error: pending.error } : {}),
     ...(status === "connecting"
       ? {
@@ -396,6 +382,7 @@ export function ensureDefaultPiProfile(): CredentialProfile {
       name: "Default OpenAI",
       provider: "openai-codex",
       enabled: true,
+      enterprise: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -408,6 +395,7 @@ export function ensureDefaultPiProfile(): CredentialProfile {
       name: "Default Claude",
       provider: "claude",
       enabled: true,
+      enterprise: false,
       createdAt: now,
       updatedAt: now,
     });
@@ -428,14 +416,11 @@ function ensureDefaultProfilesOnce(): void {
 }
 
 /**
- * The account automatic (unpinned) work runs on: the first enabled profile of
- * that provider in registry order, else the protected default. `excludeId`
- * answers "where would this move if that account were disabled?".
+ * First-enabled information for non-routing UI (login/usage defaults and
+ * account-management hints), else the protected default. New sessions and
+ * background work use accountRouter instead.
  */
-export function automaticProfileIdFor(
-  provider: CredentialProfileProvider,
-  excludeId?: string,
-): string {
+function automaticProfileIdFor(provider: CredentialProfileProvider): string {
   ensureDefaultProfilesOnce();
   const protectedId =
     provider === "claude"
@@ -443,20 +428,17 @@ export function automaticProfileIdFor(
       : DEFAULT_OPENAI_PROFILE_ID;
   return (
     readRegistry().find(
-      (profile) =>
-        profile.provider === provider &&
-        profile.enabled &&
-        profile.id !== excludeId,
+      (profile) => profile.provider === provider && profile.enabled,
     )?.id ?? protectedId
   );
 }
 
-/** Enabled OpenAI profile used by non-browser session creation paths. */
+/** Default OpenAI account for non-routing login/usage UI. */
 export function defaultOpenAiProfileId(): string {
   return automaticProfileIdFor("openai-codex");
 }
 
-/** Enabled Claude profile used by non-browser session creation paths. */
+/** Default Claude account for non-routing login/usage UI. */
 export function defaultClaudeProfileId(): string {
   return automaticProfileIdFor("claude");
 }
@@ -467,9 +449,11 @@ function isProtectedProfile(id: string): boolean {
 
 export function listCredentialProfiles(): CredentialProfileSummary[] {
   ensureDefaultPiProfile();
-  return readRegistry()
-    .map(summary)
-    .sort((a, b) => a.createdAt - b.createdAt);
+  return withAccountHealthProfiles(() =>
+    readRegistry()
+      .map(summary)
+      .sort((a, b) => a.createdAt - b.createdAt),
+  );
 }
 
 export function createCredentialProfile(input: {
@@ -485,6 +469,7 @@ export function createCredentialProfile(input: {
     name,
     provider: input.provider,
     enabled: true,
+    enterprise: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -496,36 +481,59 @@ export function createCredentialProfile(input: {
   return summary(profile);
 }
 
-export function setCredentialProfileEnabled(
+/** Validate the whole HTTP metadata patch before one write/publication. */
+export function patchCredentialProfile(
   id: string,
-  enabled: boolean,
+  input: { name?: unknown; enabled?: unknown; enterprise?: unknown },
 ): CredentialProfileSummary {
+  const changes: Partial<
+    Pick<CredentialProfile, "name" | "enabled" | "enterprise">
+  > = {};
+  if (input.name !== undefined) {
+    if (typeof input.name !== "string")
+      throw new Error("A profile name must be a string.");
+    if (isProtectedProfile(id))
+      throw new Error("A default profile cannot be renamed.");
+    const name = input.name.trim().replace(/\s+/g, " ").slice(0, 80);
+    if (!name) throw new Error("A profile name is required.");
+    changes.name = name;
+  }
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== "boolean")
+      throw new Error("Enabled must be a boolean.");
+    changes.enabled = input.enabled;
+  }
+  if (input.enterprise !== undefined) {
+    if (typeof input.enterprise !== "boolean")
+      throw new Error("Enterprise must be a boolean.");
+    changes.enterprise = input.enterprise;
+  }
+  if (!Object.keys(changes).length)
+    throw new Error(
+      "A profile name, enabled state or enterprise flag is required.",
+    );
   const profiles = readRegistry();
   const index = profiles.findIndex((profile) => profile.id === id);
   if (index < 0) throw new Error("Credential profile not found.");
-  const profile = { ...profiles[index]!, enabled, updatedAt: Date.now() };
+  const profile = { ...profiles[index]!, ...changes, updatedAt: Date.now() };
   profiles[index] = profile;
   writeRegistry(profiles);
   credentialProfileChanged(id);
   return summary(profile);
 }
 
+export function setCredentialProfileEnabled(
+  id: string,
+  enabled: boolean,
+): CredentialProfileSummary {
+  return patchCredentialProfile(id, { enabled });
+}
+
 export function renameCredentialProfile(
   id: string,
   rawName: string,
 ): CredentialProfileSummary {
-  if (isProtectedProfile(id))
-    throw new Error("A default profile cannot be renamed.");
-  const name = rawName.trim().replace(/\s+/g, " ").slice(0, 80);
-  if (!name) throw new Error("A profile name is required.");
-  const profiles = readRegistry();
-  const index = profiles.findIndex((profile) => profile.id === id);
-  if (index < 0) throw new Error("Credential profile not found.");
-  const profile = { ...profiles[index]!, name, updatedAt: Date.now() };
-  profiles[index] = profile;
-  writeRegistry(profiles);
-  credentialProfileChanged(id);
-  return summary(profile);
+  return patchCredentialProfile(id, { name: rawName });
 }
 
 export function deleteCredentialProfile(id: string): void {
@@ -560,26 +568,21 @@ export function setCredentialProfileLoginState(
     userCode?: string;
   },
 ): void {
-  const current = transient.get(id);
-  const credentialRevisionAtStartValue = openAiCredentialRevision(id);
-  transient.set(id, {
-    ...current,
-    ...state,
-    ...(current?.credentialRevisionAtStart === undefined &&
-    state.status === "connecting"
-      ? {
-          ...(credentialRevisionAtStartValue !== undefined
-            ? { credentialRevisionAtStart: credentialRevisionAtStartValue }
-            : {}),
-        }
-      : {}),
-  });
+  transient.set(id, { ...transient.get(id), ...state });
   credentialProfileChanged(id);
 }
 
-/** Clear terminal login state once provider-owned credentials are on disk. */
+/** Cleanup is not evidence of a successful login: reconnect start/cancel also uses it. */
 export function clearCredentialProfileLoginState(id: string): void {
   transient.delete(id);
+  credentialProfileChanged(id);
+}
+
+/** Called only by a provider-owned flow that completed or replaced its credential. */
+export function completeCredentialProfileLogin(id: string): void {
+  transient.delete(id);
+  if (credentialProfileSummaryById(id)?.status === "ready")
+    reportAccountLoginCompleted(id);
   credentialProfileChanged(id);
 }
 

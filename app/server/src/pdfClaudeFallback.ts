@@ -8,7 +8,6 @@
 import { Buffer } from "node:buffer";
 import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
 import { runOneShot } from "./harnesses/oneShot.ts";
-import { accountForSlot } from "./settingsModelSlots.ts";
 import { PDF_MIME, setPdfClaudeFallback } from "./documentConversion.ts";
 import { getSettings } from "./settings.ts";
 
@@ -31,7 +30,7 @@ export function registerPdfClaudeFallback(): void {
     const { text, failure } = await runOneShot({
       model: { provider: CLAUDE_SDK_PROVIDER, modelId: settings.modelId },
       thinkingLevel: settings.thinkingLevel,
-      credentialProfileId: accountForSlot(settings),
+      credentialProfileId: settings.credentialProfileId,
       systemPrompt: SYSTEM_PROMPT,
       prompt: USER_PROMPT,
       documents: [

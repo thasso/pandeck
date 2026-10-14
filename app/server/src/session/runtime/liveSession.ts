@@ -30,6 +30,7 @@ import type {
   RunFailureFacts,
 } from "../adapters/contract.ts";
 import { isDetachedAdapter } from "../adapters/detached.ts";
+import { analyzeProviderError, runFailureFacts } from "../../providerErrors.ts";
 import { contextInfoFromSnapshot, type StatsOptions } from "./stats.ts";
 import {
   projectForClient,
@@ -81,8 +82,8 @@ export interface RuntimePromptOptions extends PromptOptions {
    */
   onUserEntry?: (entryId: string) => void;
   /**
-   * Called once, synchronously, as the turn this prompt OPENED closes —
-   * whichever end closes it — and before the prompt settles. Never for a steer
+   * Called once before this prompt settles. Account recovery defers it until
+   * continuation decides the admitted turn's outcome. Never for a steer
    * (it joins a run it does not own: {@link subscribeSessionRunEnded}), a
    * duplicate, or a prompt refused before its entry was appended. Not
    * forwarded to the adapter.
@@ -183,20 +184,31 @@ export interface RunFailureReport {
   at: number;
 }
 
+/** Isolated best-effort consumers; durable hook retries never repeat these. */
+const runFailureListeners = new Set<(report: RunFailureReport) => void>();
+
+/** Independent best-effort consumers, notified once even if the durable hook retries. */
+export function subscribeSessionRunFailed(
+  listener: (report: RunFailureReport) => void,
+): () => void {
+  runFailureListeners.add(listener);
+  return () => runFailureListeners.delete(listener);
+}
+
+let runFailureHook: ((report: RunFailureReport) => void) | undefined;
 /**
- * Notified once per failed turn, synchronously and BEFORE anything else learns
- * of it: before the turn's error entry is appended or announced, before the
- * run's closing marker, `runStatus` and {@link subscribeSessionRunCompleted}.
- * A consumer that persists a consequence here therefore never loses it to a
- * crash between the failure and a listener. A hook that THROWS stored nothing
+ * Notified once per terminal failed turn. Recovery defers this hook while it
+ * decides whether continuation replaces the failure; health listeners still see
+ * each native failure immediately. Without recovery it runs synchronously before
+ * the error entry, closing marker, runStatus and completion listeners. A crash
+ * during recovery leaves admitted work for boot interruption recovery.
+ * A hook that THROWS stored nothing
  * anywhere: the runtime keeps the report in memory and retries it at every
  * turn boundary (a process exit loses it). What the hook decided at the
  * failure is the hook's to keep across those retries. An aborted turn, or one
- * an abort was asked of, never reaches
- * it, and neither does a straggler of an earlier provider run. Kept as a seam
- * so the runtime layer does not depend on the peer-prompt engine.
+ * an abort was asked of, never reaches it, nor does an earlier run's straggler.
+ * Kept as a seam so runtime does not depend on the peer-prompt engine.
  */
-let runFailureHook: ((report: RunFailureReport) => void) | undefined;
 export function setRunFailureHook(
   fn: ((report: RunFailureReport) => void) | undefined,
 ): void {
@@ -209,18 +221,57 @@ export function setRunFailureHook(
  * automatic turn. Out-of-band and synthetic observed turns also open here; a
  * later provider completion decides whether the captured boundary matters.
  */
-const runStartedListeners = new Set<(sessionId: string) => void>();
+type RunStartedListener = (
+  sessionId: string,
+  runId: string,
+  modelProvider: string | undefined,
+  modelId?: string,
+) => void;
+const runStartedListeners = new Set<RunStartedListener>();
 export function subscribeSessionRunStarted(
-  listener: (sessionId: string) => void,
+  listener: RunStartedListener,
 ): () => void {
   runStartedListeners.add(listener);
   return () => runStartedListeners.delete(listener);
 }
-
-function emitRunStarted(sessionId: string): void {
+function emitRunStarted(
+  sessionId: string,
+  runId: string,
+  modelProvider: string | undefined,
+  modelId: string | undefined,
+): void {
   for (const listener of runStartedListeners) {
     try {
-      listener(sessionId);
+      listener(sessionId, runId, modelProvider, modelId);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
+/** Cleanup on every closed/disposed turn, including ones with no native completion.
+ * Only a normalized provider completion carries a stop reason as evidence.
+ */
+type TurnClosedListener = (
+  sessionId: string,
+  runId: string,
+  stopReason: AgentStopReason | undefined,
+) => void;
+const turnClosedListeners = new Set<TurnClosedListener>();
+export function subscribeSessionTurnClosed(
+  listener: TurnClosedListener,
+): () => void {
+  turnClosedListeners.add(listener);
+  return () => turnClosedListeners.delete(listener);
+}
+function emitTurnClosed(
+  sessionId: string,
+  runId: string,
+  stopReason?: AgentStopReason,
+): void {
+  for (const listener of turnClosedListeners) {
+    try {
+      listener(sessionId, runId, stopReason);
     } catch {
       /* best-effort */
     }
@@ -297,7 +348,156 @@ function emitToolCompleted(sessionId: string): void {
 /** How many closed runs' outcomes a session keeps for late answers. */
 const RECENT_OUTCOMES_MAX = 8;
 
+export type SessionRunEvent =
+  | { type: "started"; runId: string; modelProvider: string | undefined }
+  | { type: "failed"; report: RunFailureReport }
+  | { type: "ended"; outcome: RunOutcome };
+
+interface DeferredRunSettlement {
+  promise: Promise<{ outcome: RunOutcome; failure?: RunFailureReport }>;
+  resolve: (result: {
+    outcome: RunOutcome;
+    failure?: RunFailureReport;
+  }) => void;
+  nativeOutcome?: RunOutcome;
+  failure?: RunFailureReport;
+  finished: boolean;
+  outcome?: RunOutcome;
+  completion?: { origin: PromptOrigin | undefined };
+  publishCompletion?: boolean;
+  completionPublished?: boolean;
+  finish?: (
+    outcome: RunOutcome,
+    failure?: RunFailureReport,
+    publishCompletion?: boolean,
+  ) => void;
+}
+
 export class LiveRuntimeSession {
+  private readonly deferredSettlements = new Map<
+    string,
+    DeferredRunSettlement
+  >();
+  private readonly runSubscribers = new Set<(event: SessionRunEvent) => void>();
+  private stopEpoch = 0;
+
+  get stopGeneration(): number {
+    return this.stopEpoch;
+  }
+
+  /** Session-local lifecycle observers are released with the runtime, not at boot. */
+  subscribeRuns(listener: (event: SessionRunEvent) => void): () => void {
+    this.runSubscribers.add(listener);
+    return () => this.runSubscribers.delete(listener);
+  }
+
+  private emitRun(event: SessionRunEvent): void {
+    for (const listener of this.runSubscribers) {
+      try {
+        listener(event);
+      } catch {
+        /* Isolated observers never change a run. */
+      }
+    }
+  }
+
+  /** Keep caller/global settlement and failure notices pending while recovery decides. */
+  deferRunSettlement(
+    runId: string,
+  ): (
+    outcome: RunOutcome,
+    failure?: RunFailureReport,
+    publishCompletion?: boolean,
+  ) => void {
+    let resolve!: DeferredRunSettlement["resolve"];
+    const deferred: DeferredRunSettlement = {
+      promise: new Promise((done) => {
+        resolve = done;
+      }),
+      resolve: (result) => resolve(result),
+      finished: false,
+    };
+    this.deferredSettlements.set(runId, deferred);
+    const finish: NonNullable<DeferredRunSettlement["finish"]> = (
+      terminal,
+      failure,
+      publishCompletion = true,
+    ) => {
+      if (deferred.finished) return;
+      deferred.finished = true;
+      const outcome =
+        terminal.runId === runId ? terminal : { ...terminal, runId };
+      // Notify for the logical admission, with the terminal attempt's facts.
+      // Its original provenance lets delegation notices coalesce with the
+      // opener's settlement; intermediate attempts are health evidence only.
+      const terminalFailure = failure ?? deferred.failure;
+      if (
+        publishCompletion &&
+        terminal.stopReason === "error" &&
+        terminalFailure
+      )
+        this.recordFailure({
+          ...terminalFailure,
+          runId,
+          origin: deferred.failure?.origin ?? terminalFailure.origin,
+        });
+      deferred.outcome = outcome;
+      deferred.publishCompletion = publishCompletion;
+      this.recentOutcomes.set(runId, outcome);
+      this.deliverRunOutcome(outcome);
+      this.publishDeferredCompletion(deferred);
+      deferred.resolve({ outcome, ...(failure ? { failure } : {}) });
+      for (const [old, held] of this.deferredSettlements) {
+        if (this.deferredSettlements.size <= RECENT_OUTCOMES_MAX) break;
+        if (held.finished) this.deferredSettlements.delete(old);
+      }
+    };
+    deferred.finish = finish;
+    return finish;
+  }
+
+  private publishDeferredCompletion(deferred: DeferredRunSettlement): void {
+    if (
+      this.tornDown ||
+      !deferred.finished ||
+      !deferred.completion ||
+      !deferred.outcome ||
+      deferred.publishCompletion === false ||
+      deferred.completionPublished
+    )
+      return;
+    deferred.completionPublished = true;
+    emitRunCompleted(
+      this.sessionId,
+      deferred.outcome.stopReason,
+      deferred.completion.origin,
+    );
+  }
+
+  /** Re-offer the idle edge after an asynchronous admission reservation releases. */
+  notifyIdle(): void {
+    if (this.tornDown || this.isRunning) return;
+    try {
+      idleHook?.(this.sessionId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Host-owned display text, kept out of every provider's native context. */
+  appendNotice(message: string): void {
+    if (this.tornDown) return;
+    const raw = this.log.append({
+      type: "provider.notice",
+      severity: "warning",
+      message,
+    } as LogEntryDraft) as ProviderNoticeEntry;
+    this.emit({
+      type: "entryAppended",
+      entry: projectProviderNoticeForClient(raw),
+    });
+  }
+
   private runState: SnapshotRunState = "idle";
   private readonly streaming = new Map<string, StreamingEntry>();
   private readonly subscribers = new Set<RuntimeEventListener>();
@@ -331,10 +531,13 @@ export class LiveRuntimeSession {
    * with a native prompt would reach back into an earlier turn.
    */
   private turnPromptEntryIds = new Set<string>();
+  /** A host continuation owns one native-only prompt at this boundary. */
+  private turnContinuation = false;
   /** Identity of the open turn's durable run bracket, while one is open. */
   private turnRunId: string | undefined;
   /** The run whose failure was last recorded, so one turn records once. */
   private recordedFailureRunId: string | undefined;
+  private notifiedFailureRunId: string | undefined;
   /**
    * Failures the hook could not make durable anywhere (it threw), oldest
    * first. Memory is all that holds them, so they are retried at every turn
@@ -441,7 +644,10 @@ export class LiveRuntimeSession {
    * closer bracket the run, so the ONLY thing boot has to look for is an
    * unmatched open one.
    */
-  private beginTurn(origin: PromptOrigin | undefined): void {
+  private beginTurn(
+    origin: PromptOrigin | undefined,
+    continuation = false,
+  ): void {
     if (this.turnOpen) return;
     // A failure nothing could store yet gets another attempt.
     this.retryUnrecordedFailures();
@@ -450,10 +656,21 @@ export class LiveRuntimeSession {
     this.turnFailed = false;
     this.turnStartSeq = this.log.seqCursor;
     this.turnPromptEntryIds = new Set();
+    this.turnContinuation = continuation;
     this.turnOrigin = origin;
     this.turnOpen = true;
     this.turnRunId = randomUUID();
-    emitRunStarted(this.sessionId);
+    emitRunStarted(
+      this.sessionId,
+      this.turnRunId,
+      this.adapter.modelProvider?.(),
+      this.adapter.modelId?.(),
+    );
+    this.emitRun({
+      type: "started",
+      runId: this.turnRunId,
+      modelProvider: this.adapter.modelProvider?.(),
+    });
     this.log.append({ type: "run.started", runId: this.turnRunId });
   }
 
@@ -481,6 +698,7 @@ export class LiveRuntimeSession {
     stopReason: RunOutcome["stopReason"] = "end",
     only?: string,
     abortRequested = false,
+    nativeStopReason?: AgentStopReason,
   ): void {
     if (!this.turnOpen) return;
     if (only !== undefined && this.turnRunId !== only) return;
@@ -489,21 +707,38 @@ export class LiveRuntimeSession {
     this.turnRunId = undefined;
     if (!runId) return;
     this.retryUnrecordedFailures();
-    this.log.append({
-      type: stopReason === "aborted" ? "run.aborted" : "run.ended",
-      runId,
-    });
     const outcome: RunOutcome = {
       runId,
       stopReason,
       abortRequested:
         !this.turnFailed && (this.abortRequested || abortRequested),
     };
-    this.recentOutcomes.set(runId, outcome);
-    for (const old of this.recentOutcomes.keys()) {
-      if (this.recentOutcomes.size <= RECENT_OUTCOMES_MAX) break;
-      this.recentOutcomes.delete(old);
+    try {
+      this.log.append({
+        type: stopReason === "aborted" ? "run.aborted" : "run.ended",
+        runId,
+      });
+    } finally {
+      // Only a normalized provider completion proves account health success.
+      emitTurnClosed(
+        this.sessionId,
+        runId,
+        outcome.abortRequested ? "aborted" : nativeStopReason,
+      );
+      this.recentOutcomes.set(runId, outcome);
+      for (const old of this.recentOutcomes.keys()) {
+        if (this.recentOutcomes.size <= RECENT_OUTCOMES_MAX) break;
+        this.recentOutcomes.delete(old);
+      }
+      const deferred = this.deferredSettlements.get(runId);
+      if (deferred) deferred.nativeOutcome = outcome;
+      this.emitRun({ type: "ended", outcome });
+      if (!this.deferredSettlements.has(runId)) this.deliverRunOutcome(outcome);
     }
+  }
+
+  private deliverRunOutcome(outcome: RunOutcome): void {
+    const runId = outcome.runId;
     const waiter = this.runEndWaiters.get(runId);
     this.runEndWaiters.delete(runId);
     try {
@@ -555,18 +790,50 @@ export class LiveRuntimeSession {
   ): void {
     if (runId === undefined || this.abortRequested) return;
     if (this.openRunId() === runId) this.turnFailed = true;
-    if (this.recordedFailureRunId === runId) return;
+    if (
+      this.recordedFailureRunId === runId ||
+      this.deferredSettlements.get(runId)?.failure
+    )
+      return;
     this.unrecordedFailures = this.unrecordedFailures.filter(
       (r) => r.runId !== runId,
     );
-    this.recordFailure({
+    const modelProvider = this.adapter.modelProvider?.();
+    const modelId = this.adapter.modelId?.();
+    const report: RunFailureReport = {
       sessionId: this.sessionId,
       runId,
       origin: this.turnOrigin,
       errorMessage,
-      failure,
+      failure:
+        failure ??
+        (errorMessage
+          ? runFailureFacts(
+              analyzeProviderError(errorMessage, {
+                ...(modelProvider !== undefined
+                  ? { provider: modelProvider }
+                  : {}),
+                ...(modelId !== undefined ? { model: modelId } : {}),
+              }),
+            )
+          : undefined),
       at: Date.now(),
-    });
+    };
+    const firstReport = this.notifiedFailureRunId !== runId;
+    if (firstReport) this.emitRun({ type: "failed", report });
+    const deferred = this.deferredSettlements.get(runId);
+    if (deferred) deferred.failure = report;
+    else this.recordFailure(report);
+    if (firstReport) {
+      this.notifiedFailureRunId = runId;
+      for (const listener of runFailureListeners) {
+        try {
+          listener(report);
+        } catch {
+          /* Independent best-effort listeners. */
+        }
+      }
+    }
   }
 
   /**
@@ -825,17 +1092,15 @@ export class LiveRuntimeSession {
     // The durable app log + client projection get ONLY the clean human text;
     // model-only memory and structured context are prepended only to provider
     // input so the visible transcript never presents them as user-authored.
-    this.beginTurn(turnOrigin);
+    this.beginTurn(turnOrigin, options.continuation === true);
     // The run this prompt belongs to. A late result of it must neither fail
     // nor close a turn that opened after it.
     const ownRunId = this.turnRunId;
     let entryId: string;
     try {
-      entryId = this.appendUserEntry(
-        text,
-        options,
-        steering ? "steer" : undefined,
-      );
+      entryId = options.continuation
+        ? ""
+        : this.appendUserEntry(text, options, steering ? "steer" : undefined);
     } catch (error) {
       // The entry may be on disk already — the append persists it before its
       // own bookkeeping — but the provider never got it: this prompt's run
@@ -849,7 +1114,7 @@ export class LiveRuntimeSession {
       }
       throw error;
     }
-    if (onUserEntry) onUserEntry(entryId);
+    if (entryId && onUserEntry) onUserEntry(entryId);
 
     if (steering) {
       // Only a steering prompt the provider TOOK belongs to the running turn:
@@ -876,12 +1141,14 @@ export class LiveRuntimeSession {
 
     // The turn's own prompt. A provider that refuses it throws below and no scan
     // ever arrives for this turn, so claiming it here cannot mis-bind anything.
-    this.turnPromptEntryIds.add(entryId);
+    if (entryId) this.turnPromptEntryIds.add(entryId);
     // Only the prompt that opened the run hears how it ends; a steer joins.
     if (ownRunId && onRunEnded) this.runEndWaiters.set(ownRunId, onRunEnded);
     this.setRunning(true);
     // How this prompt saw its run end; a throw is a failed run.
     let settled: RunOutcome["stopReason"] = "error";
+    let thrown: unknown;
+    let didThrow = false;
     try {
       let result: AgentRunResult;
       try {
@@ -911,13 +1178,16 @@ export class LiveRuntimeSession {
         this.reportRunFailure(
           this.openRunId() === ownRunId ? ownRunId : undefined,
           result.errorMessage,
-          undefined,
+          result.failure,
         );
         throw new RunFailedError(
           result.errorMessage ?? "Unknown provider error",
           result.code,
         );
       }
+    } catch (error) {
+      didThrow = true;
+      thrown = error;
     } finally {
       // A no-op when the completion event already closed the run; otherwise
       // the adapter's own answer is how it ended.
@@ -925,6 +1195,26 @@ export class LiveRuntimeSession {
       // A turn that opened after this one ended is not this prompt's to idle.
       if (!this.turnOpen) this.setRunning(false);
     }
+    const deferred = ownRunId
+      ? this.deferredSettlements.get(ownRunId)
+      : undefined;
+    if (deferred && !options.continuation) {
+      const result = await this.untilTeardown(deferred.promise, {
+        outcome: {
+          runId: ownRunId!,
+          stopReason: "aborted",
+          abortRequested: true,
+        },
+      });
+      this.deferredSettlements.delete(ownRunId!);
+      if (result.outcome.stopReason !== "error") return;
+      if (result.failure && result.failure.runId !== ownRunId)
+        throw new RunFailedError(
+          result.failure.errorMessage ?? "The continuation run failed.",
+        );
+    }
+    if (didThrow)
+      throw thrown instanceof Error ? thrown : new Error(String(thrown));
   }
 
   private appendUserEntry(
@@ -996,6 +1286,7 @@ export class LiveRuntimeSession {
   }
 
   abort(): void | Promise<void> {
+    this.stopEpoch++;
     // A turn already reported failed stays failed: this abort only tears it
     // down, and its outcome must not read as the Stop's doing.
     if (this.turnOpen && !this.turnFailed) this.abortRequested = true;
@@ -1187,6 +1478,7 @@ export class LiveRuntimeSession {
         this.log.bindScannedEntries(event.entries, {
           fromSeq: this.turnStartSeq,
           promptEntryIds: this.turnPromptEntryIds,
+          ...(this.turnContinuation ? { continuation: true } : {}),
         });
         return;
       }
@@ -1229,13 +1521,21 @@ export class LiveRuntimeSession {
         // turns; prompt()'s finally also calls this, so the normal path remains
         // idempotent. This is the only end that knows HOW the run stopped.
         const origin = this.turnOrigin;
+        const completedRunId = this.turnRunId;
         this.endTurn(
           event.stopReason,
           undefined,
           event.abortRequested === true,
+          event.stopReason,
         );
         this.setRunning(false);
-        emitRunCompleted(this.sessionId, event.stopReason, origin);
+        const deferred = completedRunId
+          ? this.deferredSettlements.get(completedRunId)
+          : undefined;
+        if (deferred) {
+          deferred.completion = { origin };
+          this.publishDeferredCompletion(deferred);
+        } else emitRunCompleted(this.sessionId, event.stopReason, origin);
         return;
       }
       case "passthrough": {
@@ -1496,17 +1796,27 @@ export class LiveRuntimeSession {
       this.endTurn(this.turnFailed ? "error" : "aborted", undefined, true);
     }
     this.setRunning(false);
+    const pending = [...this.deferredSettlements].filter(
+      ([, held]) => !held.finished,
+    );
+    const last = pending.at(-1);
+    if (last) {
+      const terminal = last[1].nativeOutcome ?? {
+        runId: last[0],
+        stopReason: "aborted" as const,
+        abortRequested: true,
+      };
+      for (const [index, [, held]] of pending.entries())
+        held.finish?.(terminal, last[1].failure, index === 0);
+    }
     for (const wake of [...this.teardownWaiters]) wake();
     this.teardownWaiters.clear();
   }
 
   /** `work`'s answer, or `onTeardown` if the session is torn down first. */
-  private untilTeardown(
-    work: Promise<AgentRunResult>,
-    onTeardown: AgentRunResult,
-  ): Promise<AgentRunResult> {
+  private untilTeardown<T>(work: Promise<T>, onTeardown: T): Promise<T> {
     let wake: () => void = () => {};
-    const torn = new Promise<AgentRunResult>((resolve) => {
+    const torn = new Promise<T>((resolve) => {
       wake = () => resolve(onTeardown);
     });
     this.teardownWaiters.add(wake);
@@ -1522,6 +1832,7 @@ export class LiveRuntimeSession {
     this.progress.dispose();
     this.unsubscribeAdapter();
     this.subscribers.clear();
+    this.runSubscribers.clear();
     this.streaming.clear();
     return this.adapter.dispose();
   }

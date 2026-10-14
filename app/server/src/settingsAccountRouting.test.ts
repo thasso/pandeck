@@ -22,12 +22,14 @@ const { runPiOneShot, selectPiModelWithFallback } =
   await import("./piSdk/oneShot.ts");
 const {
   createCredentialProfile,
+  patchCredentialProfile,
   ensureDefaultPiProfile,
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
 const { updateSettings } = await import("./settings.ts");
 const { generateCommitMessageJson } = await import("./commitAgent.ts");
 const { refinePromptText } = await import("./promptRefinement.ts");
+const { sessionStore } = await import("./db/sessionStore.ts");
 
 const dataDir = process.env.DATA_DIR;
 const commitJson = JSON.stringify({
@@ -157,6 +159,65 @@ test("an unpinned agent follows the automatic account", async () => {
   assert.equal(
     vi.mocked(runPiOneShot).mock.calls[0]?.[0]?.credentialProfileId,
     "default",
+  );
+});
+
+test("enterprise refinement context overrides explicit false and refuses a personal pin", async () => {
+  const sourceId = "enterprise-refinement-source";
+  sessionStore.upsert({
+    id: sourceId,
+    harness: "claude-sdk",
+    agentType: "developer",
+    requiresEnterprise: true,
+  });
+  const personal = createCredentialProfile({
+    name: "Personal",
+    provider: "claude",
+  });
+  await assert.rejects(
+    refinePromptText({
+      text: "Improve this",
+      context: "Enterprise transcript",
+      sourceSessionId: sourceId,
+      requiresEnterprise: false,
+      settings: {
+        provider: CLAUDE_SDK_PROVIDER,
+        modelId: "sonnet",
+        thinkingLevel: "off",
+        credentialProfileId: personal.id,
+      },
+    }),
+    /explicit account pin is personal/,
+  );
+  assert.equal(vi.mocked(runClaudeSdkOneShot).mock.calls.length, 0);
+});
+
+test("enterprise staged drafts use enterprise pins without a source row", async () => {
+  const enterprise = createCredentialProfile({
+    name: "Work",
+    provider: "claude",
+  });
+  patchCredentialProfile(enterprise.id, { enterprise: true });
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
+    text: "refined",
+    usage: {},
+  });
+  assert.equal(
+    await refinePromptText({
+      text: "Improve this",
+      requiresEnterprise: true,
+      settings: {
+        provider: CLAUDE_SDK_PROVIDER,
+        modelId: "sonnet",
+        thinkingLevel: "off",
+        credentialProfileId: enterprise.id,
+      },
+    }),
+    "refined",
+  );
+  assert.equal(
+    vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0].credentialProfileId,
+    enterprise.id,
   );
 });
 

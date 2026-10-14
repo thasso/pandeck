@@ -6,16 +6,15 @@
  * resolves, or whose account does not offer it, refuses the spawn.
  */
 import {
-  HARNESSES,
-  harnessForModelProvider,
   isSafeEntryName,
   type EntryDiagnostic,
   type ThinkingLevel,
 } from "@assistant/shared";
 import {
-  automaticProfileIdFor,
+  credentialProfileById,
   listCredentialProfiles,
 } from "../credentialProfiles.ts";
+import { pickAccount, type AccountPickRequest } from "../accountRouter.ts";
 import { accountOffersModel } from "../harnesses/models.ts";
 import { assertManifest } from "../library/entryManifest.ts";
 import { resolveEntrySource } from "../library/libraryAuthoring.ts";
@@ -44,7 +43,7 @@ export interface AgentSpawnRuntime {
 export interface AgentSpawnSources {
   library(): LibraryStore;
   /** The ONE place a definition's account is chosen. */
-  accountFor(modelProvider: string): string;
+  accountFor(request: AccountPickRequest): Promise<string> | string;
   offers(
     profileId: string,
     provider: string,
@@ -55,11 +54,16 @@ export interface AgentSpawnSources {
 
 const liveSources: AgentSpawnSources = {
   library: () => agentLibraryStore,
-  // Usage-aware account routing will replace this one function.
-  accountFor: (modelProvider) =>
-    automaticProfileIdFor(
-      HARNESSES[harnessForModelProvider(modelProvider)].accountProvider,
-    ),
+  accountFor: async (request) => {
+    const picked = await pickAccount(request);
+    if (!picked.profileId)
+      throw new AgentSpawnRefusedError(
+        request.requiresEnterprise
+          ? "No enabled enterprise account is available for this agent definition."
+          : "No enabled account is available for this agent definition.",
+      );
+    return picked.profileId;
+  },
   offers: accountOffersModel,
   accountName: (profileId) =>
     listCredentialProfiles().find((profile) => profile.id === profileId)?.name,
@@ -118,7 +122,7 @@ export async function resolveAgentSpawn(
   name: string,
   scanned?: { library: LibraryStore; scan: LibraryScan },
   /** An account the caller picked, in place of the automatic one. */
-  options: { profileId?: string } = {},
+  options: { profileId?: string; requiresEnterprise?: boolean } = {},
 ): Promise<AgentSpawnRuntime> {
   // A name no definition could declare is refused unquoted: it is the
   // caller's own input, of any size.
@@ -154,9 +158,21 @@ export async function resolveAgentSpawn(
       `Agent "${name}" cannot run: ${(error as Error).message}`,
     );
   }
-  const { model, pinnedModel } = runtime;
+  const { model, pinnedModel, thinkingLevel } = runtime;
   const credentialProfileId =
-    options.profileId ?? sources.accountFor(model.provider);
+    options.profileId ??
+    (await sources.accountFor({
+      model: { provider: model.provider, modelId: model.id },
+      thinkingLevel,
+      requiresEnterprise: options.requiresEnterprise === true,
+    }));
+  if (
+    options.requiresEnterprise &&
+    !credentialProfileById(credentialProfileId)?.enterprise
+  )
+    throw new AgentSpawnRefusedError(
+      "This session requires an enterprise account, but the agent definition's selected account is missing or no longer marked as enterprise.",
+    );
   let offered: boolean;
   try {
     offered = await sources.offers(
@@ -175,7 +191,6 @@ export async function resolveAgentSpawn(
     throw new AgentSpawnRefusedError(
       `Agent "${name}" cannot run: the account its ${model.provider} sessions use (${sources.accountName(credentialProfileId) ?? credentialProfileId}) does not offer ${model.provider}/${model.id}.`,
     );
-  const { thinkingLevel } = runtime;
   const accountName = sources.accountName(credentialProfileId);
   // The bytes on disk, not the decoded text: decoding drops a BOM and bad
   // UTF-8, and the id has to name the repository's own blob.

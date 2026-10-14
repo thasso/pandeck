@@ -17,6 +17,7 @@ const { prepareFork } = await import("./fork.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("../piSdk/piStore.ts");
 const worktreeStore = await import("../db/worktreeStore.ts");
+const { sessionStore } = await import("../db/sessionStore.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -81,8 +82,23 @@ test("a Claude fork cuts at the chosen turn and carries the parent's worktree", 
   );
   const fork = vi
     .spyOn(claudeSdkStore, "forkSession")
-    .mockResolvedValue({ sessionId: "child" } as never);
+    .mockImplementation(async (parentId) => {
+      const parent = sessionStore.get(parentId);
+      sessionStore.claimScope({
+        id: "child",
+        harness: "claude-sdk",
+        agentType: "developer",
+        ...(parent?.requiresEnterprise ? { requiresEnterprise: true } : {}),
+      });
+      return { sessionId: "child" } as never;
+    });
 
+  sessionStore.upsert({
+    id: "parent",
+    harness: "claude-sdk",
+    agentType: "developer",
+    requiresEnterprise: true,
+  });
   const prepared = prepareFork("claude-sdk", {
     ...request,
     position: "at",
@@ -92,6 +108,7 @@ test("a Claude fork cuts at the chosen turn and carries the parent's worktree", 
   const child = await prepared.fork();
 
   assert.equal(child.sessionId, "child");
+  assert.equal(sessionStore.get("child")?.requiresEnterprise, true);
   assert.equal(fork.mock.calls[0]?.[0], "parent");
   assert.deepEqual(
     { ...fork.mock.calls[0]?.[1], forkOrigin: undefined },
@@ -103,4 +120,35 @@ test("a Claude fork cuts at the chosen turn and carries the parent's worktree", 
   );
   assert.equal(fork.mock.calls[0]?.[1].forkOrigin.parentEntryId, "entry-2");
   assert.deepEqual(links, ["child->wt-parent"]);
+});
+
+test("a pi engine claims inherited enterprise metadata before returning its fork", async () => {
+  const parentId = "pi-enterprise-parent";
+  const childId = "pi-enterprise-child";
+  sessionStore.upsert({
+    id: parentId,
+    harness: "pi",
+    agentType: "developer",
+    requiresEnterprise: true,
+  });
+  vi.spyOn(piStore, "forkSession").mockImplementation(async () => {
+    const parent = sessionStore.get(parentId);
+    sessionStore.claimScope({
+      id: childId,
+      harness: "pi",
+      agentType: "developer",
+      ...(parent?.requiresEnterprise ? { requiresEnterprise: true } : {}),
+    });
+    return { sessionId: childId } as never;
+  });
+  const prepared = prepareFork("pi", {
+    ...request,
+    id: parentId,
+    file: "/sessions/pi-enterprise-parent.jsonl",
+    position: "before",
+    anchors: { entryFound: true, own: "native-2" },
+  });
+  assert.ok("fork" in prepared);
+  await prepared.fork();
+  assert.equal(sessionStore.get(childId)?.requiresEnterprise, true);
 });

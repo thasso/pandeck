@@ -24,7 +24,6 @@ import { redactCredentials } from "../credentialRedaction.ts";
 import { sessionStore, type SessionMeta } from "../db/sessionStore.ts";
 import { runOneShot } from "../harnesses/oneShot.ts";
 import { getSettings } from "../settings.ts";
-import { accountForSlot } from "../settingsModelSlots.ts";
 import { sessionStatusCardPath } from "../sessionStorage.ts";
 import { buildSessionDigest } from "./digest.ts";
 
@@ -174,14 +173,16 @@ async function writeStatusCard(meta: SessionMeta): Promise<SessionStatusCard> {
   const { text, failure } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
-    credentialProfileId: accountForSlot(settings),
+    credentialProfileId: settings.credentialProfileId,
+    requiresEnterprise: meta.requiresEnterprise === true,
     // The card names the model that wrote it, so a silent fallback to another
     // one would misreport it: an unavailable model is an error the user fixes
     // in Settings.
     modelFallback: "none",
     noModelMessage: `The session status model (${settings.modelId}) is not available on its account.`,
     systemPrompt: STATUS_SYSTEM_PROMPT,
-    prompt: digest,
+    prompt: digest.prompt,
+    sourceSessionIds: digest.sourceSessionIds,
     timeoutMs: STATUS_TIMEOUT_MS,
     timeoutMessage: "Writing the session status timed out.",
     record: {

@@ -111,6 +111,8 @@ export type AdapterEvent =
       entries: {
         role: "user" | "assistant" | "toolResult";
         providerMessageId: string;
+        /** Native-only host continuation prompt, not an app user entry. */
+        continuation?: true;
         /** Tool result: the call it answers. */
         toolCallId?: string;
         /** Assistant message: the calls it declares. */
@@ -235,6 +237,12 @@ export type AdapterEvent =
 export interface RunFailureFacts {
   kind: ProviderErrorKind;
   resetAtMs?: number;
+  /** Named limit scope, only when provider evidence identifies a model cap. */
+  limitModel?: string;
+  /** Narrow dead-login evidence derived from the raw error before display sanitization. */
+  loginDeath?: true;
+  /** OpenAI explicitly rejected opaque reasoning after a cross-account replay. */
+  encryptedReasoningRejected?: true;
 }
 
 /**
@@ -250,6 +258,7 @@ export type ProviderActivityKind = "output" | "response" | "lifecycle";
 export interface AgentRunResult {
   stopReason: "end" | "error" | "aborted";
   errorMessage?: string;
+  failure?: RunFailureFacts;
   code?: string;
   /**
    * Answers a {@link PromptOptions.steerOnly} request: `false` means the turn was
@@ -278,6 +287,8 @@ export interface AgentRunResult {
 }
 
 export interface PromptOptions {
+  /** Retry an existing user turn without a new app-owned user entry. Server-only. */
+  continuation?: boolean;
   clientRequestId?: string;
   /** Hidden prompts (e.g. resume-with-answers) are not echoed as a user bubble by the client. */
   hidden?: boolean;
@@ -345,6 +356,10 @@ interface SessionAdapter {
 
 /** A {@link SessionAdapter} that also owns its conversation and accepts prompts. */
 export interface PromptableAdapter extends SessionAdapter {
+  /** The live model provider at run start, not a persisted session projection. */
+  modelProvider?(): string | undefined;
+  /** The live model id, for model-scoped account evidence. */
+  modelId?(): string | undefined;
   /** Run one prompt to completion. Resolves with the run result (errors resolve, not reject). */
   prompt(text: string, options?: PromptOptions): Promise<AgentRunResult>;
   abort(): void | Promise<void>;

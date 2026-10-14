@@ -42,6 +42,10 @@ import {
 } from "./tasks.ts";
 import { errorText } from "./errors.ts";
 import {
+  sourceRequiresEnterprise,
+  type HelperSourceContext,
+} from "./sessionEnterprise.ts";
+import {
   CREDENTIAL_TOKEN_PATTERNS,
   redactCredentials,
 } from "./credentialRedaction.ts";
@@ -58,7 +62,10 @@ const MAX_LEFTOVER_PATHS = 40;
 /** Porcelain XY codes of an unresolved merge entry. */
 const CONFLICT_STATUS = /^(UU|AA|DD|AU|UD|DU|UA)/;
 
-type CommitMessageGenerator = (prompt: string) => Promise<CommitAgentResult>;
+type CommitMessageGenerator = (
+  prompt: string,
+  source: HelperSourceContext,
+) => Promise<CommitAgentResult>;
 let commitMessageGeneratorForTests: CommitMessageGenerator | undefined;
 
 /** Test seam: production always uses the configured no-tool commit agent. */
@@ -86,6 +93,8 @@ export interface CommitWorkflowOptions {
   sessionManager?: Pick<ToolSessionManager, "getBranch" | "appendCustomEntry">;
   sessionKind?: AgentType;
   sessionId?: string;
+  /** Trusted originating-session requirement captured by a caller before async work. */
+  requiresEnterprise?: boolean;
   /** Working directory whose enclosing git repo should be committed. Defaults to the app CWD. */
   cwd?: string;
   /** When set, this branch identity is revalidated inside the repository lock. */
@@ -1231,6 +1240,15 @@ function appendCustomResult(
 export async function runCommitWorkflow(
   options: CommitWorkflowOptions,
 ): Promise<CommitWorkflowResult> {
+  const sourceSessionId =
+    options.sessionId ?? options.session?.sessionManager.getSessionId?.();
+  const helperSource: HelperSourceContext = {
+    ...(sourceSessionId ? { sourceSessionId } : {}),
+    requiresEnterprise: sourceRequiresEnterprise(
+      sourceSessionId ? [sourceSessionId] : [],
+      options.requiresEnterprise,
+    ),
+  };
   const dryRun = Boolean(options.dryRun);
   const forced = Boolean(options.force);
   const stagedOnly = Boolean(options.stagedOnly);
@@ -1367,8 +1385,12 @@ export async function runCommitWorkflow(
       warnings: diffContext.warnings,
     });
     const agent = commitMessageGeneratorForTests
-      ? await commitMessageGeneratorForTests(agentPrompt)
-      : await generateCommitMessageJson(agentPrompt, getSettings().commitAgent);
+      ? await commitMessageGeneratorForTests(agentPrompt, helperSource)
+      : await generateCommitMessageJson(
+          agentPrompt,
+          getSettings().commitAgent,
+          helperSource,
+        );
     const commitMessage =
       options.approvedChange?.message ?? formatCommitMessage(agent);
     const blockers = [...diffContext.blockers, ...agent.blockers];

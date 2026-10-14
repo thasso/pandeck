@@ -351,11 +351,16 @@ function applicableResetCount(body: unknown): number | null {
   );
 }
 
-function unavailable(reason: string, fetchedAt: number): OpenAiUsageSnapshot {
+function unavailable(
+  reason: string,
+  fetchedAt: number,
+  code: NonNullable<OpenAiUsageSnapshot["unavailableCode"]>,
+): OpenAiUsageSnapshot {
   return {
     fetchedAt,
     available: false,
     unavailableReason: reason,
+    unavailableCode: code,
     planType: null,
     email: null,
     limitReached: false,
@@ -386,12 +391,14 @@ export async function fetchOpenAiUsage(
     return unavailable(
       "Not signed in to this OpenAI profile. Connect it in Settings, then reload.",
       fetchedAt,
+      "not-signed-in",
     );
   }
   if (auth.expires !== null && auth.expires <= fetchedAt) {
     return unavailable(
-      "This OpenAI profile login has expired. Reconnect it in Settings, then reload.",
+      "This OpenAI access token has expired. Run a session to refresh it, then reload.",
       fetchedAt,
+      "expired",
     );
   }
 
@@ -400,12 +407,14 @@ export async function fetchOpenAiUsage(
     return unavailable(
       "OpenAI rejected this profile login token (expired or invalid). Reconnect it in Settings.",
       fetchedAt,
+      "rejected",
     );
   }
   if (status === 403) {
     return unavailable(
       "This OpenAI account cannot access usage data (403).",
       fetchedAt,
+      "forbidden",
     );
   }
   if (status < 200 || status >= 300) {

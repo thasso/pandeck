@@ -47,6 +47,8 @@ import {
 } from "./common/RuntimePicker.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { Card } from "./ui/card.tsx";
+import { Label } from "./ui/label.tsx";
+import { Switch } from "./ui/switch.tsx";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 
 /**
@@ -161,8 +163,11 @@ export function NewSessionQuickStart({
   credentialProfilesLoaded = true,
   credentialProfilesError,
   onRetryCredentialProfiles,
-  selectedCredentialProfileId = "default",
+  selectedCredentialProfileId = null,
   onSelectCredentialProfile = () => {},
+  automaticAccountName,
+  requiresEnterprise = false,
+  onRequiresEnterpriseChange = () => {},
   usageIndicators = null,
   agentTypes,
   selectedAgentType,
@@ -192,8 +197,20 @@ export function NewSessionQuickStart({
   /** A first-load or refresh failure; loaded rows stay mounted underneath it. */
   credentialProfilesError?: string | undefined;
   onRetryCredentialProfiles?: () => void;
-  selectedCredentialProfileId?: string | undefined;
-  onSelectCredentialProfile?: (profileId: string) => void;
+  /** The explicit account, or null for Automatic (the server picks at start). */
+  selectedCredentialProfileId?: string | null;
+  onSelectCredentialProfile?: (profileId: string | null) => void;
+  /**
+   * The account the server's router would pick for Automatic right now, when
+   * it has said; a preview only, the first send picks again.
+   */
+  automaticAccountName?: string | undefined;
+  /**
+   * The session may run only on enterprise accounts — at start and on every
+   * later switch. Only enterprise accounts are offered while it is on.
+   */
+  requiresEnterprise?: boolean;
+  onRequiresEnterpriseChange?: (requiresEnterprise: boolean) => void;
   /**
    * Subscription-usage indicators from the server cache (`docs/usage.md`), or
    * null while the first snapshot has not arrived. Cards render the same slot
@@ -278,6 +295,9 @@ export function NewSessionQuickStart({
   const thinkingLevels = supportedThinkingLevelsForModel(selectedModel);
   const orderedCredentialProfiles =
     orderCredentialProfilesByProvider(credentialProfiles);
+  const offeredCredentialProfiles = requiresEnterprise
+    ? orderedCredentialProfiles.filter((profile) => profile.enterprise)
+    : orderedCredentialProfiles;
 
   const agentPills =
     agentTypes.length > 1 ? (
@@ -533,16 +553,49 @@ export function NewSessionQuickStart({
         ) : (
           <>
             {orderedCredentialProfiles.length > 0 ? (
-              <ProviderAccountRow
-                accounts={orderedCredentialProfiles.map((profile) => ({
-                  id: profile.id,
-                  name: profile.name,
-                  provider: profile.provider,
-                }))}
-                selectedId={selectedCredentialProfileId}
-                usageIndicators={usageIndicators}
-                onSelect={onSelectCredentialProfile}
-              />
+              <div className="flex flex-col gap-2">
+                <ProviderAccountRow
+                  accounts={offeredCredentialProfiles.map((profile) => ({
+                    id: profile.id,
+                    name: profile.name,
+                    provider: profile.provider,
+                  }))}
+                  selectedId={selectedCredentialProfileId ?? undefined}
+                  usageIndicators={usageIndicators}
+                  onSelect={onSelectCredentialProfile}
+                  automatic={{
+                    selected: selectedCredentialProfileId === null,
+                    onSelect: () => onSelectCredentialProfile(null),
+                    detail: automaticAccountName
+                      ? `Now: ${automaticAccountName}`
+                      : requiresEnterprise
+                        ? "Best enterprise account with room"
+                        : "Best account with room",
+                  }}
+                />
+                <div className="flex items-center justify-center gap-2 px-4">
+                  <Switch
+                    id="new-session-requires-enterprise"
+                    size="sm"
+                    checked={requiresEnterprise}
+                    onCheckedChange={onRequiresEnterpriseChange}
+                  />
+                  <Label
+                    htmlFor="new-session-requires-enterprise"
+                    className="text-xs text-muted-foreground"
+                  >
+                    Requires enterprise
+                  </Label>
+                </div>
+                {requiresEnterprise &&
+                offeredCredentialProfiles.length === 0 ? (
+                  <p className="px-4 text-center text-xs text-muted-foreground">
+                    No enabled account is marked Enterprise, so this session
+                    cannot start. Mark one under Settings → Claude SDK or
+                    OpenAI, or turn this off.
+                  </p>
+                ) : null}
+              </div>
             ) : null}
 
             {models.length > 1 ? (

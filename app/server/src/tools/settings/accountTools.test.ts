@@ -6,6 +6,8 @@ import { setAgentHandoffDeliveryStoppedForTests } from "../../agentHandoffs.ts";
 import {
   claudeConfigDir,
   clearCredentialProfileLoginState,
+  completeCredentialProfileLogin,
+  credentialProfileSummaryById,
   setCredentialProfileLoginState,
 } from "../../credentialProfiles.ts";
 import {
@@ -222,7 +224,7 @@ describe("review fixes", () => {
     assert.equal(approvalsForSession("s-ready").length, 0);
   });
 
-  test("an OpenAI login that persists without announcing itself still resolves the card", async () => {
+  test("an OpenAI flow's own credential commit resolves the card before its post-login refresh settles", async () => {
     const { mkdirSync } = await import("node:fs");
     const { piAgentDir } = await import("../../credentialProfiles.ts");
     const { setSignInReconcileIntervalForTests } =
@@ -241,14 +243,20 @@ describe("review fixes", () => {
       const card = approvalsForSession("s-quiet").find(
         (c) => c.status === "pending",
       )!;
-      // The device login starts; its post-login refresh never settles, so the
-      // login state is never cleared. Only the credential file changes.
+      // File mutation alone cannot conclude a connecting flow. Its own commit
+      // signal completes the login while post-login synchronization is pending.
       setCredentialProfileLoginState(created.id, { status: "connecting" });
       mkdirSync(piAgentDir(created.id), { recursive: true });
       writeFileSync(
         join(piAgentDir(created.id), "auth.json"),
         JSON.stringify({ "openai-codex": { type: "oauth" } }),
       );
+      assert.equal(approvalForId(card.id)?.status, "pending");
+      assert.equal(
+        credentialProfileSummaryById(created.id)?.status,
+        "connecting",
+      );
+      completeCredentialProfileLogin(created.id);
       await vi.waitFor(
         () => assert.equal(approvalForId(card.id)?.status, "executed"),
         { timeout: 15_000 },

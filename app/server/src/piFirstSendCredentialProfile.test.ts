@@ -209,7 +209,7 @@ test("pi first send rejects a profile from the wrong provider before acquisition
     sent.some(
       (message) =>
         (message as { type?: string; message?: string }).type === "error" &&
-        /select an openai credential profile/i.test(
+        /select an enabled openai credential profile/i.test(
           (message as { message?: string }).message ?? "",
         ),
     ),

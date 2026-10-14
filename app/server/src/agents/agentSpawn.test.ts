@@ -87,7 +87,7 @@ beforeEach(async () => {
   });
   setAgentSpawnSourcesForTests({
     library: () => store,
-    accountFor: (provider) => {
+    accountFor: ({ model: { provider } }) => {
       accounts.push(provider);
       return `acct-${provider}`;
     },
@@ -198,7 +198,7 @@ test("the frozen blob id is the library repository's own, SHA-256 included", asy
   await store.ensureInitialized();
   setAgentSpawnSourcesForTests({
     library: () => store,
-    accountFor: (provider) => `acct-${provider}`,
+    accountFor: ({ model: { provider } }) => `acct-${provider}`,
     offers: async () => true,
     accountName: () => undefined,
   });

@@ -67,6 +67,7 @@ const { createTask, deleteTask } = await import("./tasks.ts");
 const {
   buildSpawnProposal,
   prepareSpawnApproval,
+  spawnApprovedPeers,
   setSessionSpawnDepsForTests,
   MAX_SPAWN_ROWS,
   MAX_SPAWN_TITLE_CHARS,
@@ -82,7 +83,13 @@ const { sessionSpawnTools, spawnableAgentsText } =
   await import("./tools/sessions/sessionSpawnTool.ts");
 const { shouldAutoNamePiSession } = await import("./piSdk/titleState.ts");
 const { getSettings, updateSettings } = await import("./settings.ts");
-const { listCredentialProfiles } = await import("./credentialProfiles.ts");
+const {
+  listCredentialProfiles,
+  patchCredentialProfile,
+  createCredentialProfile,
+  setCredentialProfileEnabled,
+} = await import("./credentialProfiles.ts");
+const accountRouter = await import("./accountRouter.ts");
 const { resetDirectPeerChildrenForTests } =
   await import("./peerSpawnRuntimes.ts");
 const { createSession } = await import("./harnesses/create.ts");
@@ -208,6 +215,7 @@ beforeEach(() => {
         agentType: spec.agentType,
         ...(cwd ? { cwd } : {}),
         credentialProfileId: spec.credentialProfileId,
+        requiresEnterprise: spec.requiresEnterprise === true,
         title: spec.title,
         ...(spec.agent ? { agent: spec.agent } : {}),
       };
@@ -251,6 +259,7 @@ beforeEach(() => {
     model: "gpt-5",
     thinkingLevel: "high",
     mode: "build",
+    requiresEnterprise: false,
   });
 });
 
@@ -258,6 +267,7 @@ afterEach(() => {
   setApprovalBroadcastForTests(null);
   setSessionSpawnDepsForTests(null);
   updateSettings({ peerSpawnRuntimes: [] });
+  patchCredentialProfile("default", { enterprise: false });
   resetDirectPeerChildrenForTests();
   setAgentSpawnSourcesForTests(null);
   setAgentRuntimeSourcesForTests(null);
@@ -292,6 +302,103 @@ test("an un-hinted row inherits the proposing session's runtime", async () => {
   expect(item?.modelId).toBe("gpt-5");
   expect(item?.thinkingLevel).toBe("high");
   expect(item?.modelWarning).toBeUndefined();
+});
+
+test.each(["coordinator", "user"] as const)(
+  "an unpinned %s-owned proposal routes the inherited plan instead of preferring the proposer's account",
+  async (owner) => {
+    const routed = createCredentialProfile({
+      name: "Routed peer",
+      provider: "openai-codex",
+    });
+    sessionStore.upsert({
+      id: SENDER,
+      harness: "pi",
+      agentType: "developer",
+      credentialProfileId: "default",
+    });
+    const picker = vi
+      .spyOn(accountRouter, "pickAccount")
+      .mockResolvedValue({ profileId: routed.id });
+    try {
+      const body = await buildSpawnProposal({
+        senderSessionId: SENDER,
+        rows: [row({ owner })],
+      });
+      expect(body.items[0]).toMatchObject({
+        owner,
+        provider: "openai-codex",
+        modelId: "gpt-5",
+        thinkingLevel: "high",
+        credentialProfileId: routed.id,
+      });
+      expect(picker).toHaveBeenCalledExactlyOnceWith({
+        model: { provider: "openai-codex", modelId: "gpt-5" },
+        thinkingLevel: "high",
+        requiresEnterprise: false,
+      });
+    } finally {
+      setCredentialProfileEnabled(routed.id, false);
+    }
+  },
+);
+
+test.each(
+  [false, true].flatMap((tombstoned) =>
+    (["coordinator", "user"] as const).map((owner) => ({ tombstoned, owner })),
+  ),
+)(
+  "$owner-owned enterprise proposals survive approval with tombstoned source=$tombstoned",
+  async ({ tombstoned, owner }) => {
+    patchCredentialProfile("default", { enterprise: true });
+    const enterpriseSender = `enterprise-spawn-source-${tombstoned}-${owner}`;
+    sessionStore.upsert({
+      id: enterpriseSender,
+      harness: "pi",
+      agentType: "developer",
+      provider: "openai-codex",
+      model: "gpt-5",
+      thinkingLevel: "high",
+      requiresEnterprise: true,
+    });
+    if (tombstoned) sessionStore.remove(enterpriseSender);
+    const body = await buildSpawnProposal({
+      senderSessionId: enterpriseSender,
+      rows: [row({ owner })],
+    });
+    const card = createApproval({
+      sessionId: enterpriseSender,
+      kind: "sessionSpawn",
+      title: "Start a session",
+      body,
+    });
+    const [item] = bodyOf(card).items;
+    expect(bodyOf(card).requiresEnterprise).toBe(true);
+    expect(item?.provider).toBe("openai-codex");
+    expect(item?.modelId).toBe("gpt-5");
+    expect(item?.thinkingLevel).toBe("high");
+    expect(item?.credentialProfileId).toBe("default");
+
+    await resolveApproval(card.id, "approved");
+    expect(recorded.pi[0]?.requiresEnterprise).toBe(true);
+    const approved = approvalsForSession(enterpriseSender).find(
+      ({ id }) => id === card.id,
+    );
+    const childId = bodyOf(approved!).items[0]?.resultSessionId;
+    expect(childId).toBeTruthy();
+    expect(sessionStore.get(childId!)?.requiresEnterprise).toBe(true);
+  },
+);
+
+test("enterprise approvals refuse an explicit personal-account choice", async () => {
+  const card = pendingCard({}, true);
+
+  await expect(
+    prepareSpawnApproval(card, {
+      kind: "sessionSpawn",
+      items: [{ rowId: "row_1", credentialProfileId: "default" }],
+    }),
+  ).rejects.toThrow(/not marked as enterprise/);
 });
 
 test("a thinking hint the model cannot do is lowered, never raised", async () => {
@@ -412,6 +519,7 @@ test("a developer row carries its worktree, project and Task into the card", asy
 
 const pendingCard = (
   item: Partial<Record<string, unknown>> = {},
+  requiresEnterprise = false,
 ): ApprovalCard =>
   createApproval({
     sessionId: SENDER,
@@ -419,6 +527,7 @@ const pendingCard = (
     title: "Start a session",
     body: {
       kind: "sessionSpawn",
+      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       items: [
         {
           rowId: "row_1",
@@ -973,6 +1082,34 @@ async function runSpawnOperation(
 async function spawnDirect(rows: Array<Record<string, unknown>>) {
   return textOf(await runSpawnOperation("spawn", rows));
 }
+
+test.each(
+  [false, true].flatMap((tombstoned) =>
+    (["coordinator", "user"] as const).map((owner) => ({ tombstoned, owner })),
+  ),
+)(
+  "$owner-owned direct peers refuse a personal runtime with tombstoned enterprise source=$tombstoned",
+  async ({ tombstoned, owner }) => {
+    approveRuntimes();
+    const enterpriseSender = `enterprise-direct-source-${tombstoned}-${owner}`;
+    sessionStore.upsert({
+      id: enterpriseSender,
+      harness: "pi",
+      agentType: "developer",
+      requiresEnterprise: true,
+    });
+
+    if (tombstoned) sessionStore.remove(enterpriseSender);
+    const [result] = await spawnApprovedPeers({
+      senderSessionId: enterpriseSender,
+      rows: [{ ...row({ owner }), profileId: "pr_terra" }],
+    });
+
+    expect(result?.error).toMatch(/requires an enterprise account/i);
+    expect(recorded.pi).toHaveLength(0);
+    expect(recorded.delivered).toHaveLength(0);
+  },
+);
 
 test('operation "profiles" lists family and user-authored selection metadata', async () => {
   approveRuntimes();
@@ -1763,6 +1900,121 @@ test("an agent row runs as its definition and freezes it for the session", async
     /You are a test reviewer\.\n\nThis session does not have these tools, whatever the instructions above say: worktree_push\.$/,
   );
 });
+
+test.each(
+  (["claude", "openai-codex"] as const).flatMap((provider) =>
+    (["coordinator", "user"] as const).map((owner) => ({ provider, owner })),
+  ),
+)(
+  "an enterprise sender spawns a named $provider definition with owner=$owner through the fixed-runtime picker",
+  async ({ provider, owner }) => {
+    await useAgents();
+    writeAgent({
+      persona: "assistant",
+      model: provider === "claude" ? "sonnet" : "gpt-5",
+    });
+    const target = createCredentialProfile({
+      name: `Enterprise definition ${provider}`,
+      provider,
+    });
+    patchCredentialProfile(target.id, { enterprise: true });
+    const sender = `definition-source-${provider}-${(counter += 1)}`;
+    sessionStore.upsert({
+      id: sender,
+      harness: "pi",
+      agentType: "assistant",
+      requiresEnterprise: true,
+      credentialProfileId: "default",
+    });
+    // Deleting the source during library discovery cannot relax this call.
+    const store = new LibraryStore(agentKind, agentsRoot);
+    setAgentSpawnSourcesForTests({
+      library: () => {
+        sessionStore.remove(sender);
+        return store;
+      },
+    });
+    const picker = vi.spyOn(accountRouter, "pickAccount");
+    try {
+      const results = await spawnApprovedPeers({
+        senderSessionId: sender,
+        rows: [
+          {
+            title: "Enterprise named agent",
+            owner,
+            prompt: "Review and report back.",
+            agent: "test-reviewer",
+          },
+        ],
+      });
+      expect(results[0]?.error).toBeUndefined();
+      expect(results[0]?.sessionId).toBeTruthy();
+      expect(picker).toHaveBeenCalledTimes(2);
+      for (const [request] of picker.mock.calls)
+        expect(request).toEqual({
+          model: {
+            provider: provider === "claude" ? "claude-sdk" : "openai-codex",
+            modelId: provider === "claude" ? "sonnet" : "gpt-5",
+          },
+          thinkingLevel: "low",
+          requiresEnterprise: true,
+        });
+      const created =
+        provider === "claude" ? recorded.claude[0] : recorded.pi[0];
+      expect(created).toMatchObject({
+        credentialProfileId: target.id,
+        requiresEnterprise: true,
+      });
+      expect(sessionStore.get(results[0]!.sessionId!)?.requiresEnterprise).toBe(
+        true,
+      );
+    } finally {
+      setCredentialProfileEnabled(target.id, false);
+    }
+  },
+);
+
+test.each(
+  (["claude", "openai-codex"] as const).flatMap((provider) =>
+    (["coordinator", "user"] as const).map((owner) => ({ provider, owner })),
+  ),
+)(
+  "an enterprise named $provider agent with owner=$owner refuses a personal pick without substitution",
+  async ({ provider, owner }) => {
+    await useAgents();
+    writeAgent({
+      persona: "assistant",
+      model: provider === "claude" ? "sonnet" : "gpt-5",
+    });
+    const sender = `definition-personal-refusal-${provider}-${(counter += 1)}`;
+    sessionStore.upsert({
+      id: sender,
+      harness: "pi",
+      agentType: "developer",
+      requiresEnterprise: true,
+    });
+    const picker = vi
+      .spyOn(accountRouter, "pickAccount")
+      .mockResolvedValue({ profileId: accountFor(provider) });
+    await expect(
+      spawnApprovedPeers({
+        senderSessionId: sender,
+        rows: [
+          {
+            title: "Enterprise refusal",
+            owner,
+            prompt: "Review.",
+            agent: "test-reviewer",
+          },
+        ],
+      }),
+    ).rejects.toThrow(/requires an enterprise account/);
+    expect(picker).toHaveBeenCalledTimes(1);
+    expect(recorded.claude).toHaveLength(0);
+    expect(recorded.pi).toHaveLength(0);
+    expect(recorded.delivered).toHaveLength(0);
+  },
+);
 
 test("an assistant agent on a pi model hands its definition to pi creation", async () => {
   await useAgents();

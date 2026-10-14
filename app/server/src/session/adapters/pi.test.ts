@@ -93,6 +93,51 @@ test("entry scanner", () => {
   );
 });
 
+test("scanner identifies only hidden account continuations and never uses them as user anchors", () => {
+  const path = join(tmp, "continuation-scan.jsonl");
+  writeFileSync(
+    path,
+    [
+      {
+        type: "message",
+        id: "original",
+        message: { role: "user", content: "question" },
+      },
+      {
+        type: "custom_message",
+        id: "visible",
+        customType: "account-continuation",
+        display: true,
+      },
+      {
+        type: "custom_message",
+        id: "other",
+        customType: "other-notice",
+        display: false,
+      },
+      {
+        type: "custom_message",
+        id: "continued",
+        customType: "account-continuation",
+        display: false,
+      },
+      {
+        type: "message",
+        id: "answer",
+        message: { role: "assistant", content: [] },
+      },
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n") + "\n",
+  );
+  assert.deepEqual(scanPiEntries(path), [
+    { id: "original", role: "user" },
+    { id: "continued", role: "user", continuation: true },
+    { id: "answer", role: "assistant" },
+  ]);
+  assert.equal(lastUserNativeId(path), "original");
+});
+
 /* --------------------------- fake pi driver ------------------------------ */
 /**
  * One realistic pi turn: the agent runs TWO tool cycles and then answers, so its
@@ -249,6 +294,156 @@ test("adapter: events + binding", async () => {
     driver.sessionFile,
     "binding references the pi session file",
   );
+});
+
+test("ordinary pi steer after continuation tool work preserves terminal fork anchors", async () => {
+  const sessionId = "continued-steered";
+  const file = join(tmp, "continued-steered.jsonl");
+  const events = new NativeAdapterEventSource();
+  const native: unknown[] = [];
+  const append = (...rows: unknown[]) => {
+    native.push(...rows);
+    writeFileSync(
+      file,
+      native.map((row) => JSON.stringify(row)).join("\n") + "\n",
+    );
+  };
+  let finish: (() => void) | undefined;
+  let toolCompleted = false;
+  const driver: PiDriver = {
+    sessionFile: file,
+    subscribeAdapterEvents: events.subscribe.bind(events),
+    prompt(text, _attachments, options) {
+      if (!options?.continuation) {
+        assert.ok(
+          toolCompleted,
+          "ordinary UI steer follows completed continuation tool work",
+        );
+        assert.equal(options?.steerOnly, undefined);
+        append({
+          type: "message",
+          id: "steered-user",
+          message: { role: "user", content: text },
+        });
+        return "steered";
+      }
+      append(
+        {
+          type: "custom_message",
+          id: "native-continuation",
+          customType: "account-continuation",
+          content: text,
+          display: false,
+        },
+        {
+          type: "message",
+          id: "pre-steer-call",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "continued-call",
+                name: "read",
+                arguments: {},
+              },
+            ],
+          },
+        },
+        {
+          type: "message",
+          id: "pre-steer-result",
+          message: {
+            role: "toolResult",
+            toolCallId: "continued-call",
+            content: [{ type: "text", text: "tool output" }],
+          },
+        },
+      );
+      events.messageStarted("continued-stream");
+      events.toolStarted("continued-call", "read", {});
+      events.toolCompleted({
+        type: "toolEnd",
+        sessionId,
+        id: "continued-stream",
+        toolId: "continued-call",
+        output: "tool output",
+        isError: false,
+      });
+      toolCompleted = true;
+      return {
+        outcome: "started",
+        completed: new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+      };
+    },
+    abort() {},
+    setModel() {},
+    setThinkingLevel() {},
+  };
+  const runtime = new SessionRuntime(new SessionLogStore(true));
+  runtime.createSession(sessionId, createPiAdapter(sessionId, driver));
+  try {
+    const continuation = runtime.prompt(
+      sessionId,
+      "Resume the interrupted work",
+      { continuation: true },
+    );
+    await Promise.resolve();
+    assert.equal(runtime.get(sessionId)!.isRunning, true);
+    await runtime.prompt(sessionId, "Also check this", { steer: true });
+    append({
+      type: "message",
+      id: "terminal-answer",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Recovered and steered answer" }],
+      },
+    });
+    events.messageDelta(
+      "continued-stream",
+      "text",
+      "Recovered and steered answer",
+    );
+    events.messageCompleted("continued-stream");
+    finish!();
+    await continuation;
+    const timeline = runtime.get(sessionId)!.clientTimeline();
+    const answer = timeline.find(
+      (entry) => entry.type === "message" && entry.role === "assistant",
+    );
+    const steer = timeline.find(
+      (entry) => entry.type === "message" && entry.role === "user",
+    );
+    const result = timeline.find(
+      (entry) => entry.type === "message" && entry.role === "toolResult",
+    );
+    assert.ok(answer && steer && result);
+    assert.equal(
+      runtime.forkAnchors(sessionId, answer.id).own,
+      "terminal-answer",
+    );
+    assert.equal(
+      runtime.forkAnchors(sessionId, answer.id).ownTurnEnd,
+      "terminal-answer",
+    );
+    assert.equal(runtime.forkAnchors(sessionId, steer.id).own, "steered-user");
+    assert.equal(
+      runtime.forkAnchors(sessionId, result.id).own,
+      "pre-steer-result",
+    );
+    assert.equal(
+      timeline.filter(
+        (entry) => entry.type === "message" && entry.role === "user",
+      ).length,
+      1,
+      "no app continuation prompt was fabricated",
+    );
+  } finally {
+    finish?.();
+    await runtime.dispose();
+  }
 });
 
 /* ---------------- driver completion fallback: no runCompleted ------------ */

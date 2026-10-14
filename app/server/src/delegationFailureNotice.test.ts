@@ -687,7 +687,8 @@ describe("a failed child turn notifies its immediate coordinator", () => {
       (text.match(/The provider or harness failed/g) ?? []).length,
       2,
     );
-    assert.doesNotMatch(text, /not accepted|503|Unavailable/);
+    // Match the status code, not an ISO timestamp's incidental `.503Z`.
+    assert.doesNotMatch(text, /not accepted|\b503\b|Unavailable/);
   });
 
   it("tells a sender that never got its delivery through, when the child cannot start", async () => {

@@ -26,6 +26,7 @@ const { memoryObservationStore } =
   await import("../db/memoryObservationStore.ts");
 const { memoryLoadStore } = await import("../db/memoryLoadStore.ts");
 const { getDb, closeDb } = await import("../db/index.ts");
+const { sessionStore } = await import("../db/sessionStore.ts");
 
 let nowMs = 1_700_000_000_000;
 svc.setMemoryClockForTests(() => nowMs);
@@ -43,6 +44,12 @@ beforeEach(() => {
   db.exec("DELETE FROM memory_observations");
   db.exec("DELETE FROM memory_processor_runs");
   nowMs = 1_700_000_000_000;
+  sessionStore.upsert({
+    id: "s1",
+    harness: "pi",
+    agentType: "personal-assistant",
+    requiresEnterprise: false,
+  });
   proc.resetMemoryProcessorRunnerForTests();
 });
 afterAll(() => {

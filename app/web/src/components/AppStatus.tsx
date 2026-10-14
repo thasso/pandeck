@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, KeyRound } from "lucide-react";
+import type { AccountLoginAlert } from "@assistant/shared";
 
 import {
   appStatus,
@@ -24,8 +25,7 @@ export const RECONNECT_GRACE_MS = 1200;
 /**
  * @component AppStatus
  * @purpose The app status slot: the ONE surface allowed to announce something
- *   globally, and only for app-wide lifecycle state the user cannot act on that
- *   ends by itself — a server restart, and a dropped socket
+ *   globally: lifecycle state and the explicit account-login exception
  *   (`docs/messaging.md`).
  * @useWhen Rendering the slot itself. The placements do NOT share a lifetime:
  *   `floating` is mounted always and gates on the layout, while `bar` exists
@@ -38,7 +38,7 @@ export const RECONNECT_GRACE_MS = 1200;
  *   mounted at once — one of them usually is not.
  * @avoidWhen Anything about an object. A failed load, a refused write or a
  *   blocked session belongs on that object, not here — an announcement in this
- *   slot cannot be acted on and cannot say which thing it was about.
+ *   slot is reserved for lifecycle state and accounts needing login.
  * @intent Two placements because the app has two shells, one derivation because
  *   they must never disagree: inline in the App Header Bar on wide layouts,
  *   where window chrome already lives and no layout moves, and a floating pill
@@ -57,6 +57,8 @@ export interface AppStatusProps {
    * `floating` mounts the narrow-layout pill and gates itself on the layout.
    */
   placement: "bar" | "floating";
+  accountLoginAlerts?: AccountLoginAlert[] | undefined;
+  onNavigate?: ((path: string) => void) | undefined;
 }
 
 export function AppStatus({
@@ -64,6 +66,8 @@ export function AppStatus({
   reloading,
   hydrationSource,
   placement,
+  accountLoginAlerts,
+  onNavigate,
 }: AppStatusProps) {
   const mobile = useMobileLayout();
   // Only the connection waits: a restart is announced the moment it is queued,
@@ -86,37 +90,73 @@ export function AppStatus({
     reloading,
     hydrationSource,
     graceElapsed,
+    accountLoginAlerts,
   });
   if (!status) return null;
   if (placement === "floating") {
     if (!mobile) return null;
     return (
       <div className="pointer-events-none fixed inset-x-0 top-[calc(var(--app-safe-area-top,0px)+0.375rem)] z-50 flex justify-center px-3">
-        <StatusPill status={status} />
+        <StatusPill status={status} onNavigate={onNavigate} />
       </div>
     );
   }
   // `pointer-events-none` is load-bearing in the header bar, not decoration:
   // the native shell's drag handler tests the element a click HIT, so a pill
   // that swallowed the pointer would stop that stretch of the title bar
-  // dragging the window. Nothing here is interactive, so it passes through to
-  // the marked bar underneath.
-  return <StatusPill status={status} className="pointer-events-none min-w-0" />;
+  // dragging the window. Lifecycle pills pass through; only the login link
+  // accepts clicks, which the drag handler recognizes as interactive.
+  return (
+    <StatusPill status={status} className="min-w-0" onNavigate={onNavigate} />
+  );
 }
 
 function StatusPill({
   status,
   className,
+  onNavigate,
 }: {
   status: AppStatusState;
   className?: string;
+  onNavigate?: ((path: string) => void) | undefined;
 }) {
   return (
-    <Badge variant="secondary" role="status" className={className}>
-      {/* Queued is a state (the restart is waiting on sessions), so it is the
-          static icon; everything else is a wait for an answer, so it is the
-          app's spinner. */}
-      {status.busy ? <Spinner size="xs" /> : <RefreshCw />}
+    <Badge
+      variant={status.href ? "destructive" : "secondary"}
+      role={status.href ? undefined : "status"}
+      aria-live={status.href ? "polite" : undefined}
+      render={
+        status.href ? (
+          <a
+            href={status.href}
+            onClick={(event) => {
+              if (
+                !onNavigate ||
+                event.defaultPrevented ||
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return;
+              event.preventDefault();
+              onNavigate(status.href!);
+            }}
+          />
+        ) : undefined
+      }
+      className={`${status.href ? "pointer-events-auto" : "pointer-events-none"} ${className ?? ""}`}
+    >
+      {/* Waits spin; a queued restart or a dead login has a static icon. The
+          login pill keeps native link semantics while announcing changes. */}
+      {status.busy ? (
+        <Spinner size="xs" />
+      ) : status.kind === "needs-login" ? (
+        <KeyRound />
+      ) : (
+        <RefreshCw />
+      )}
       <span className="truncate">{status.label}</span>
     </Badge>
   );

@@ -91,14 +91,14 @@ describe("account page usage", () => {
     name: "Default OpenAI",
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "ready",
+    health: { state: "unknown", since: null },
     usage: {
       pinnedSlots: [
         { key: "commitAgent", label: "Commit agent", section: "commit" },
       ],
       boundSessionCount: 2,
-      automaticForProvider: "openai-codex",
-      automaticFallback: { id: "openai-work", name: "Work OpenAI" },
     },
   } as CredentialProfileSummary;
 
@@ -109,14 +109,13 @@ describe("account page usage", () => {
         providerLabel: "OpenAI",
         connectionLabel: "Reconnect",
         onToggle: () => {},
+        onToggleEnterprise: () => {},
         onConnect: () => {},
       }),
     );
     expect(html).toContain("Used by");
     expect(html).toContain("Commit agent");
     expect(html).toContain("2 bound sessions");
-    expect(html).toContain("Automatic account for unpinned work");
-    expect(html).toContain("Work OpenAI");
   });
 
   test("stays out of the way for an account nothing depends on", () => {
@@ -129,6 +128,7 @@ describe("account page usage", () => {
         providerLabel: "OpenAI",
         connectionLabel: "Reconnect",
         onToggle: () => {},
+        onToggleEnterprise: () => {},
         onConnect: () => {},
       }),
     );

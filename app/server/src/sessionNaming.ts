@@ -4,7 +4,8 @@ import {
   type SessionNamingSettings,
 } from "@assistant/shared";
 import { NoHelperModelError, runOneShot } from "./harnesses/oneShot.ts";
-import { accountForSlot } from "./settingsModelSlots.ts";
+import { EnterpriseAccountRequiredError } from "./settingsModelSlots.ts";
+import { sourceRequiresEnterprise } from "./sessionEnterprise.ts";
 import { deriveTitle } from "./sessions.ts";
 import { taskNamingReference, type TaskNamingReference } from "./taskNaming.ts";
 
@@ -195,10 +196,15 @@ export async function generateSessionTitle(
     priorContext?: string;
     focusPrompt?: string;
     parentSessionId?: string;
+    requiresEnterprise?: boolean;
     attachments?: readonly PromptAttachment[];
   } = {},
 ): Promise<string | undefined> {
   if (!settings.enabled) return undefined;
+  const requiresEnterprise = sourceRequiresEnterprise(
+    options.parentSessionId ? [options.parentSessionId] : [],
+    options.requiresEnterprise,
+  );
 
   const attached = attachmentNamingContext(options.attachments);
   const contextBlock = attached.text
@@ -229,7 +235,8 @@ export async function generateSessionTitle(
     const { text } = await runOneShot({
       model: settings,
       thinkingLevel: settings.thinkingLevel,
-      credentialProfileId: accountForSlot(settings),
+      credentialProfileId: settings.credentialProfileId,
+      requiresEnterprise,
       noModelMessage: "No model is available for session titles.",
       systemPrompt: TITLE_SYSTEM_PROMPT,
       prompt: userPrompt,
@@ -246,7 +253,11 @@ export async function generateSessionTitle(
     const title = sanitizeTitle(text);
     return title ? applyNamingReference(title, attached.reference) : undefined;
   } catch (err) {
-    if (err instanceof NoHelperModelError) return undefined;
+    if (
+      err instanceof NoHelperModelError ||
+      err instanceof EnterpriseAccountRequiredError
+    )
+      return undefined;
     throw err;
   }
 }
@@ -266,6 +277,7 @@ export interface RetitleTranscriptEntry {
 export async function regenerateSessionTitle(
   input: {
     sessionId: string;
+    requiresEnterprise?: boolean;
     currentTitle?: string;
     /** The prompt the session opened with, when `transcript` omits it. */
     opening?: string;
@@ -279,6 +291,10 @@ export async function regenerateSessionTitle(
   },
   settings: SessionNamingSettings,
 ): Promise<string> {
+  const requiresEnterprise = sourceRequiresEnterprise(
+    [input.sessionId],
+    input.requiresEnterprise,
+  );
   const conversation = input.transcript
     .map(
       (entry) => `${entry.role === "user" ? "User" : "Agent"}: ${entry.text}`,
@@ -316,7 +332,8 @@ export async function regenerateSessionTitle(
   const { text, failure } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
-    credentialProfileId: accountForSlot(settings),
+    credentialProfileId: settings.credentialProfileId,
+    requiresEnterprise,
     noModelMessage: "No model is available for session titles.",
     systemPrompt: TITLE_SYSTEM_PROMPT,
     prompt: userPrompt,

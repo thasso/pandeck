@@ -305,6 +305,27 @@ export interface AccountModelOption extends ModelOption {
   accountDisabled?: boolean;
 }
 
+/** Request body for POST /api/account-router/pick; never changes account state. */
+export interface AccountPickPreviewRequest {
+  model: { provider: string; modelId: string };
+  thinkingLevel?: ThinkingLevel;
+  requiresEnterprise?: boolean;
+  /** Preview background fallback policy; this never authorizes session creation. */
+  scope?: "interactive" | "background";
+}
+
+/** Non-binding account-routing preview for an Automatic model choice. */
+export interface AccountPickPreviewResult {
+  profileId: string | null;
+  /** A degraded pick is still on a live bench for the requested model. */
+  limited?: { until: number; model?: string };
+  degraded?:
+    | "no-eligible-account"
+    | "disabled-default"
+    | "no-enabled-account"
+    | "no-enterprise-account";
+}
+
 export function clampThinkingLevelForModel(
   model: ModelOption | undefined,
   level: ThinkingLevel,
@@ -328,15 +349,36 @@ export function clampThinkingLevelForModel(
 export type CredentialProfileProvider = "openai-codex" | "claude";
 export type CredentialProfileStatus =
   "disconnected" | "connecting" | "ready" | "error";
+export interface AccountHealth {
+  state: "ok" | "needs-login" | "limited" | "unknown";
+  since: number | null;
+  /** Process-local revision of all bench scopes; invalidates account previews. */
+  benchRevision?: number;
+  /** Present for limited health, epoch milliseconds. */
+  until?: number;
+  /** Absent for an account-wide limit. */
+  model?: string;
+  /** App-owned wording only. Never provider messages or credentials. */
+  reason?: string;
+}
+
+export interface AccountLoginAlert {
+  profileId: string;
+  name: string;
+  provider: CredentialProfileProvider;
+}
+
 export interface CredentialProfileSummary {
   id: string;
   name: string;
   provider: CredentialProfileProvider;
   /** Disabled profiles remain available to already-bound sessions but are omitted from new-session and Usage account choices. */
   enabled: boolean;
+  enterprise: boolean;
   createdAt: number;
   updatedAt: number;
   status: CredentialProfileStatus;
+  health: AccountHealth;
   error?: string;
   setup?: {
     path: string;
@@ -368,10 +410,6 @@ export interface CredentialProfileUsage {
   pinnedSlots: CredentialProfileSlotUsage[];
   /** Sessions durably bound to this account. */
   boundSessionCount: number;
-  /** Set when this account is the current automatic pick for its provider. */
-  automaticForProvider?: CredentialProfileProvider;
-  /** The account automatic work would move to if this one were disabled. */
-  automaticFallback?: { id: string; name: string };
 }
 
 /** Browser terminal projection for one official Claude CLI login process. */
@@ -528,10 +566,11 @@ export interface AppearanceSettings {
 }
 
 /**
- * The provider account a configured model slot runs on. Unset means automatic:
- * the first enabled account of the slot model's provider, which is also the
- * fallback when the pinned account is disabled or deleted — pinning an account
- * must never be able to break background automation.
+ * The provider account a configured model slot runs on. Unset means Automatic:
+ * the account router (`accountRouter.ts`) picks one on each run. A missing,
+ * disabled or wrong-provider pin degrades to Automatic within the run's
+ * enterprise scope; a run that requires an enterprise account refuses rather
+ * than fall back to a personal one (`docs/account-routing.md`).
  */
 export interface CredentialProfilePin {
   credentialProfileId?: string;
@@ -989,6 +1028,8 @@ export interface ClaudeSdkSettings {
 export interface PromptRefineRequest {
   text: string;
   sessionId?: string;
+  /** Staged drafts can require enterprise before a session row exists. */
+  requiresEnterprise?: boolean;
   /** Which persona/toolset the refinement should tailor itself to. */
   agentType?: AgentType;
   includeContext?: boolean;
@@ -1481,6 +1522,11 @@ export interface AppSettings {
   /** Who the app works for: display name and the timezone local days resolve in. */
   profile: ProfileSettings;
   knowledgeBase: KnowledgeBaseSettings;
+  /** Usage thresholds below which an account remains eligible for automatic routing. */
+  accountRouting: {
+    fiveHourUsedThreshold: number;
+    weeklyUsedThreshold: number;
+  };
 }
 
 /** Slash commands offered by the server. */
@@ -1766,8 +1812,10 @@ export interface SessionListItem {
   model?: { provider: string; id: string; name?: string };
   /** Thinking/reasoning level used by the session, when known. */
   thinkingLevel?: ThinkingLevel;
-  /** Immutable credential profile selected before this session's first prompt. */
+  /** Current account binding; only a live account switch replaces it. */
   credentialProfileId?: string;
+  /** Only enterprise accounts may run this session; absent means no restriction. */
+  requiresEnterprise?: boolean;
   /** True when the user archived the session; hidden from the default sidebar list. */
   archived?: boolean;
   /** The primary Project context this session was started with, if linked. */
@@ -3845,6 +3893,8 @@ export interface SessionSpawnApprovalItem {
  */
 export interface SessionSpawnApprovalBody {
   kind: "sessionSpawn";
+  /** Server-derived source-session requirement, sealed with the pending card. */
+  requiresEnterprise?: boolean;
   items: SessionSpawnApprovalItem[];
 }
 
@@ -4470,6 +4520,8 @@ export interface SessionState {
    * per-turn tool policy the user may flip at any time.
    */
   mode?: SessionMode;
+  /** Only enterprise accounts may run this session; absent means no restriction. */
+  requiresEnterprise?: boolean;
   /** True when this provider can accept a user steering prompt during a running turn. */
   canSteer?: boolean;
   /**
@@ -7630,6 +7682,8 @@ export type ClientMessage =
       /** Start the session in this mode (default `build`). */
       mode?: SessionMode;
       credentialProfileId?: string;
+      /** Restrict account routing for this session to enterprise profiles. */
+      requiresEnterprise?: boolean;
       attachTaskId?: string;
       projectId?: string;
       /** A document staged as context, as its canonical viewer route. */
@@ -7832,6 +7886,7 @@ export type ClientMessage =
              */
             mode?: SessionMode;
             credentialProfileId?: string;
+            requiresEnterprise?: boolean;
             additionalPrompt?: string;
             attachments?: PromptAttachment[];
           };
@@ -8336,6 +8391,10 @@ export type ServerMessage =
       body: string;
       navigatePath: string;
     }
+  /** Authoritative app-wide login state, replayed on connect and broadcast on change, unlike advisory appNotification. */
+  | { type: "accountLoginAlerts"; accounts: AccountLoginAlert[] }
+  /** Invalidate account cards/previews without raising a login alert. */
+  | { type: "accountHealthChanged" }
   /**
    * Dev-only: the server is about to reload to apply a server/shared code edit.
    * `pending` = globally queued and waiting for all active runs plus a short

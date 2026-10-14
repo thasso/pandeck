@@ -357,6 +357,7 @@ const defaultSettings: AppSettings = {
     effectiveTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   },
   knowledgeBase: { enabled: true, path: "", effectivePath: "" },
+  accountRouting: { fiveHourUsedThreshold: 90, weeklyUsedThreshold: 95 },
 };
 
 export interface ForkDraft {
@@ -787,6 +788,10 @@ export interface UIState {
   revealRequest: { requestId: string; target: TimelineAnchorTarget } | null;
   /** Dev-only: server is reloading to apply a code change (see devReload). */
   reloading: DevReloadState | null;
+  accountLoginAlerts: Extract<
+    ServerMessage,
+    { type: "accountLoginAlerts" }
+  >["accounts"];
   /** Compact title/route/existence metadata for resolved pa:// object links. */
   objectLinks: Record<string, PaObjectLinkResolution>;
 }
@@ -926,6 +931,7 @@ const emptyInitial: UIState = {
   messageReveal: null,
   revealRequest: null,
   reloading: null,
+  accountLoginAlerts: [],
   objectLinks: {},
 };
 
@@ -5919,6 +5925,10 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     case "notice":
       // Said at its arrival; what remains is the viewed chat's outcome.
       return { ...state, error: msg.severity === "error" ? msg.message : null };
+    case "accountHealthChanged":
+      return state;
+    case "accountLoginAlerts":
+      return { ...state, accountLoginAlerts: msg.accounts };
     case "devReload":
       return {
         ...state,
@@ -6158,7 +6168,10 @@ export interface HarnessSendInput {
   thinkingLevel?: ThinkingLevel;
   /** Start the session in this {@link SessionMode} (absent = Build). */
   mode?: SessionMode;
+  /** The explicit account; absent means Automatic (the server's router picks). */
   credentialProfileId?: string;
+  /** Only enterprise accounts may run the session, at start and on any switch. */
+  requiresEnterprise?: boolean;
   attachTaskId?: string;
   projectId?: string;
   worktreeId?: string;
@@ -6492,7 +6505,10 @@ export interface AssistantActions {
           thinkingLevel?: ThinkingLevel;
           /** Build/Plan the draft was staged in (absent = Build). */
           mode?: SessionMode;
+          /** The explicit account; absent means Automatic. */
           credentialProfileId?: string;
+          /** Only enterprise accounts may run the session. */
+          requiresEnterprise?: boolean;
           additionalPrompt: string;
           attachments?: PromptAttachment[];
         };
@@ -7315,6 +7331,11 @@ export function useAssistant({
         });
         return;
       }
+      if (msg.type === "accountHealthChanged") {
+        window.dispatchEvent(new Event("credentialProfilesChanged"));
+        window.dispatchEvent(new Event("accountHealthChanged"));
+        return;
+      }
       if (msg.type === "projectSaved") {
         dispatch({
           kind: "projectSaved",
@@ -7699,6 +7720,8 @@ export function useAssistant({
       }
       // Before the dispatch, so what is said is decided by the message and the
       // state it ARRIVED into — never by the state it leaves behind.
+      if (msg.type === "accountLoginAlerts")
+        window.dispatchEvent(new Event("accountHealthChanged"));
       announceArrival(msg, stateRef.current);
       dispatch({
         kind: "server",

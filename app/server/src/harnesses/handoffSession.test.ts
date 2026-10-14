@@ -16,12 +16,10 @@ process.env.DATA_DIR = join(tmp, "data");
 const { handoffEngine } = await import("./handoffSession.ts");
 const create = await import("./create.ts");
 const settings = await import("../settings.ts");
-const {
-  createCredentialProfile,
-  defaultClaudeProfileId,
-  defaultOpenAiProfileId,
-} = await import("../credentialProfiles.ts");
+const { createCredentialProfile, patchCredentialProfile } =
+  await import("../credentialProfiles.ts");
 const models = await import("./models.ts");
+const router = await import("../accountRouter.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -124,7 +122,14 @@ test("a pi handoff is refused on another account or for a model it lacks", async
   assert.equal(created.mock.calls.length, 0);
 });
 
-test("a pi handoff runs on the resolved model, on the account's default when none is named", async () => {
+test("an automatic pi handoff runs on the picked account's exact model", async () => {
+  const picked = createCredentialProfile({
+    name: "Picked OpenAI",
+    provider: "openai-codex",
+  });
+  const selection = vi
+    .spyOn(router, "pickAccount")
+    .mockResolvedValue({ profileId: picked.id });
   const model = { provider: "openai-codex", id: "gpt-test" };
   const lookup = vi
     .spyOn(models, "piModelForAccount")
@@ -141,7 +146,15 @@ test("a pi handoff runs on the resolved model, on the account's default when non
     },
     worktree,
   );
-  const profileId = defaultOpenAiProfileId();
+  const profileId = picked.id;
+  assert.deepEqual(selection.mock.calls, [
+    [
+      {
+        model: { provider: "openai-codex", modelId: "gpt-test" },
+        thinkingLevel: "low",
+      },
+    ],
+  ]);
   assert.deepEqual(lookup.mock.calls[0], [
     profileId,
     "openai-codex",
@@ -158,8 +171,55 @@ test("a pi handoff runs on the resolved model, on the account's default when non
   });
 });
 
-test("a Claude handoff without a named account runs on the default Claude one", async () => {
+test("handoff enterprise choice is passed to routing and durable creation; personal pin is refused", async () => {
   claudeEnabled(true);
+  const profile = createCredentialProfile({
+    name: "Enterprise handoff",
+    provider: "claude",
+  });
+  const created = vi
+    .spyOn(create, "createSession")
+    .mockResolvedValue({ sessionId: "enterprise-handoff" } as never);
+  await assert.rejects(
+    handoffEngine("claude-sdk").create(
+      {
+        agentType: "assistant",
+        credentialProfileId: profile.id,
+        requiresEnterprise: true,
+      },
+      worktree,
+    ),
+    /requires an enterprise account/,
+  );
+  assert.equal(created.mock.calls.length, 0);
+  patchCredentialProfile(profile.id, { enterprise: true });
+  const selection = vi
+    .spyOn(router, "pickAccount")
+    .mockResolvedValue({ profileId: profile.id });
+  await handoffEngine("claude-sdk").create(
+    { agentType: "assistant", modelId: "sonnet", requiresEnterprise: true },
+    worktree,
+  );
+  assert.deepEqual(selection.mock.calls, [
+    [
+      {
+        model: { provider: "claude-sdk", modelId: "sonnet" },
+        requiresEnterprise: true,
+      },
+    ],
+  ]);
+  assert.equal(created.mock.calls[0]?.[0].requiresEnterprise, true);
+});
+
+test("a Claude handoff without a named account uses the account picker", async () => {
+  claudeEnabled(true);
+  const picked = createCredentialProfile({
+    name: "Picked Claude",
+    provider: "claude",
+  });
+  const selection = vi
+    .spyOn(router, "pickAccount")
+    .mockResolvedValue({ profileId: picked.id });
   const created = vi
     .spyOn(create, "createSession")
     .mockResolvedValue({ sessionId: "claude-default" } as never);
@@ -170,6 +230,9 @@ test("a Claude handoff without a named account runs on the default Claude one", 
   assert.equal(
     (created.mock.calls[0]?.[0] as { credentialProfileId?: string } | undefined)
       ?.credentialProfileId,
-    defaultClaudeProfileId(),
+    picked.id,
   );
+  assert.deepEqual(selection.mock.calls, [
+    [{ model: { provider: "claude-sdk", modelId: "sonnet" } }],
+  ]);
 });

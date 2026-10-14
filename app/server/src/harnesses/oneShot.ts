@@ -8,8 +8,10 @@
  * without writing anything throws {@link OneShotError}; a run that failed after
  * writing some text returns that text with {@link OneShotResult.failure} set,
  * and the caller decides whether partial output is usable. A timeout or an
- * engine exception throws a plain `Error`, drops any partial text and is not
- * recorded: the engine never reported what it consumed.
+ * engine exception drops its partial text and reports no new consumption.
+ * Automatic account failures caused by limits or a dead login retry once on a
+ * different account. Each measured attempt is recorded separately; returned
+ * usage sums consumption, including any discarded first-attempt output.
  */
 import {
   CLAUDE_SDK_PROVIDER,
@@ -30,13 +32,31 @@ import {
   type PiRegistryModel,
 } from "../piSdk/oneShot.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import {
+  observeAccountHealth,
+  reportAccountRunWorking,
+  reportAccountRunFailure,
+} from "../accountHealth.ts";
+import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
+import { errorText } from "../errors.ts";
+import {
+  EnterpriseAccountRequiredError,
+  resolveSlotAccount,
+} from "../settingsModelSlots.ts";
+import { credentialProfileById } from "../credentialProfiles.ts";
+import type { RunFailureFacts } from "../session/adapters/contract.ts";
+import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 
 export interface OneShotRequest {
   /** The configured model; its picker provider selects the harness. */
   model: { provider: string; modelId: string };
   thinkingLevel: ThinkingLevel;
-  /** The account the run authenticates as (`accountForSlot`). */
-  credentialProfileId: string;
+  /** Optional explicit slot pin. Unset selects an account for each run. */
+  credentialProfileId?: string | undefined;
+  /** Require an enterprise account for this automatically derived helper run. */
+  requiresEnterprise?: boolean;
+  /** Canonical sources of prompt/context; their true flag overrides caller false. */
+  sourceSessionIds?: readonly string[];
   /**
    * What happens when the account does not offer the configured model.
    * `"helper"` (default) falls back to a cheap helper model; `"none"` refuses
@@ -86,21 +106,170 @@ export class NoHelperModelError extends Error {
 }
 
 interface EngineRun extends OneShotResult {
+  failureStatus?: number;
   harness: Harness;
   /** Provider and model to record the run under. */
   recordedProvider: string;
   recordedModel: string;
 }
 
-/** Run one helper prompt on the engine the request's model belongs to. */
+type ResolvedOneShotRequest = OneShotRequest & { credentialProfileId: string };
+
+type AttemptResult =
+  | { run: EngineRun; failure?: RunFailureFacts }
+  | { error: unknown; failure: RunFailureFacts; policyRejection?: true };
+
+/** Run one helper prompt, retrying an automatic account once after a limit or dead login. */
 export async function runOneShot(
   request: OneShotRequest,
 ): Promise<OneShotResult> {
+  const requiresEnterprise = sourceRequiresEnterprise(
+    [
+      ...(request.sourceSessionIds ?? []),
+      ...(request.record?.parentSessionId
+        ? [request.record.parentSessionId]
+        : []),
+    ],
+    request.requiresEnterprise,
+  );
+  // Freeze provenance before the picker or engine can yield to deletion/demotion.
+  request = { ...request, requiresEnterprise };
+  const { profileId } = await resolveSlotAccount({
+    ...request.model,
+    requiresEnterprise,
+    thinkingLevel: request.thinkingLevel,
+    ...(request.credentialProfileId !== undefined
+      ? { credentialProfileId: request.credentialProfileId }
+      : {}),
+  });
+  let attempt = await runAttempt({
+    ...request,
+    credentialProfileId: profileId,
+  });
+  let previousUsage: AgentUsage | undefined;
+  const failure = attempt.failure;
+  // A failed pin's automatic fallback is still explicit, never a retry license.
+  if (
+    !request.credentialProfileId?.trim() &&
+    (failure?.kind === "quota" ||
+      failure?.kind === "rate_limit" ||
+      failure?.loginDeath)
+  ) {
+    const { pickAccount } = await import("../accountRouter.ts");
+    // Failure to find a replacement must not obscure the original outcome.
+    const next = await pickAccount({
+      model: request.model,
+      thinkingLevel: request.thinkingLevel,
+      excludeProfileIds: [profileId],
+      requiresEnterprise,
+      allowDisabledDefault: !requiresEnterprise,
+    }).catch(() => null);
+    if (
+      next?.profileId &&
+      next.profileId !== profileId &&
+      (!requiresEnterprise || !next.degraded)
+    ) {
+      const replacement = await runAttempt({
+        ...request,
+        credentialProfileId: next.profileId,
+      });
+      // A candidate demoted after selection is unavailable, not a new run failure.
+      if (!("error" in replacement && replacement.policyRejection)) {
+        if ("run" in attempt) previousUsage = attempt.run.usage;
+        attempt = replacement;
+      }
+    }
+  }
+  if ("error" in attempt) {
+    // A replacement's unmeasured exception must not erase billed first-attempt usage.
+    if (previousUsage && Object.keys(previousUsage).length)
+      throw new OneShotError(errorText(attempt.error), previousUsage);
+    throw attempt.error;
+  }
+  const { run } = attempt;
+  const usage = previousUsage
+    ? combinedUsage(previousUsage, run.usage)
+    : run.usage;
+  if (run.failure !== undefined && !run.text.trim())
+    throw new OneShotError(run.failure, usage);
+  return {
+    text: run.text,
+    usage,
+    ...(run.failure !== undefined ? { failure: run.failure } : {}),
+  };
+}
+
+/** Health and accounting belong to each attempt, including discarded partial output. */
+async function runAttempt(
+  request: ResolvedOneShotRequest,
+): Promise<AttemptResult> {
   const startedAt = Date.now();
-  const run =
-    request.model.provider === CLAUDE_SDK_PROVIDER
-      ? await runOnClaude(request)
-      : await runOnPi(request);
+  const observation = observeAccountHealth(request.credentialProfileId);
+  let healthModelProvider = request.model.provider;
+  let healthModelId = request.model.modelId;
+  let run: EngineRun;
+  try {
+    assertCurrentEnterpriseAccount(request);
+    run =
+      request.model.provider === CLAUDE_SDK_PROVIDER
+        ? await runOnClaude(request)
+        : await runOnPi(request, (provider, modelId) => {
+            healthModelProvider = provider;
+            healthModelId = modelId;
+          });
+  } catch (err) {
+    const message = errorText(err);
+    const statusCode =
+      typeof err === "object" &&
+      err !== null &&
+      "status" in err &&
+      typeof err.status === "number"
+        ? err.status
+        : undefined;
+    const failure = runFailureFacts(
+      analyzeProviderError(message, {
+        provider: healthModelProvider,
+        ...(healthModelId ? { model: healthModelId } : {}),
+        ...(statusCode !== undefined ? { statusCode } : {}),
+      }),
+    );
+    if (err instanceof EnterpriseAccountRequiredError)
+      return { error: err, failure, policyRejection: true };
+    reportAccountRunFailure(
+      request.credentialProfileId,
+      failure,
+      healthModelProvider,
+      observation,
+    );
+    return { error: err, failure };
+  }
+  // Classify the engine's status-bearing failure before wrapping it for callers.
+  const failure =
+    run.failure !== undefined
+      ? runFailureFacts(
+          analyzeProviderError(run.failure, {
+            provider: healthModelProvider,
+            ...(healthModelId ? { model: healthModelId } : {}),
+            ...(run.failureStatus !== undefined
+              ? { statusCode: run.failureStatus }
+              : {}),
+          }),
+        )
+      : undefined;
+  if (failure)
+    reportAccountRunFailure(
+      request.credentialProfileId,
+      failure,
+      healthModelProvider,
+      observation,
+    );
+  else
+    reportAccountRunWorking(
+      request.credentialProfileId,
+      healthModelProvider,
+      observation,
+      healthModelId,
+    );
   if (request.record)
     sessionStore.createInternalUsageSession({
       purpose: request.record.purpose,
@@ -109,6 +278,7 @@ export async function runOneShot(
       provider: run.recordedProvider,
       model: run.recordedModel,
       thinkingLevel: request.thinkingLevel,
+      requiresEnterprise: request.requiresEnterprise === true,
       ...(request.record.parentSessionId !== undefined
         ? { parentSessionId: request.record.parentSessionId }
         : {}),
@@ -116,16 +286,12 @@ export async function runOneShot(
       startedAt,
       completedAt: Date.now(),
     });
-  if (run.failure !== undefined && !run.text.trim())
-    throw new OneShotError(run.failure, run.usage);
-  return {
-    text: run.text,
-    usage: run.usage,
-    ...(run.failure !== undefined ? { failure: run.failure } : {}),
-  };
+  return { run, ...(failure ? { failure } : {}) };
 }
 
-async function runOnClaude(request: OneShotRequest): Promise<EngineRun> {
+async function runOnClaude(
+  request: ResolvedOneShotRequest,
+): Promise<EngineRun> {
   const result = await runClaudeSdkOneShot({
     modelId: request.model.modelId,
     thinkingLevel: request.thinkingLevel,
@@ -145,17 +311,25 @@ async function runOnClaude(request: OneShotRequest): Promise<EngineRun> {
     text: result.text,
     usage: agentUsageFromClaude(result.usage),
     ...(result.failure !== undefined ? { failure: result.failure } : {}),
+    ...(result.failureStatus !== undefined
+      ? { failureStatus: result.failureStatus }
+      : {}),
   };
 }
 
-async function runOnPi(request: OneShotRequest): Promise<EngineRun> {
+async function runOnPi(
+  request: ResolvedOneShotRequest,
+  onModel: (provider: string, modelId: string) => void,
+): Promise<EngineRun> {
   if (request.documents?.length)
     throw new Error("Document input needs a Claude model.");
   const model = await piModelFor(request);
+  assertCurrentEnterpriseAccount(request);
   if (!model)
     throw new NoHelperModelError(
       request.noModelMessage ?? "No model is available for this helper run.",
     );
+  onModel(model.provider, model.id);
   const result = await runPiOneShot({
     model,
     credentialProfileId: request.credentialProfileId,
@@ -184,8 +358,16 @@ async function runOnPi(request: OneShotRequest): Promise<EngineRun> {
   };
 }
 
+function assertCurrentEnterpriseAccount(request: ResolvedOneShotRequest): void {
+  if (
+    request.requiresEnterprise &&
+    !credentialProfileById(request.credentialProfileId)?.enterprise
+  )
+    throw new EnterpriseAccountRequiredError();
+}
+
 function piModelFor(
-  request: OneShotRequest,
+  request: ResolvedOneShotRequest,
 ): Promise<PiRegistryModel | undefined> {
   const model = {
     provider: request.model.provider,
@@ -194,6 +376,22 @@ function piModelFor(
   return request.modelFallback === "none"
     ? findPiModelExact(model, request.credentialProfileId)
     : selectPiModelWithFallback(model, request.credentialProfileId);
+}
+
+/** Sum consumption, but keep the final attempt's context snapshots. */
+function combinedUsage(first: AgentUsage, last: AgentUsage): AgentUsage {
+  const usage = { ...last };
+  for (const key of [
+    "inputTokens",
+    "outputTokens",
+    "cacheReadTokens",
+    "cacheCreationTokens",
+    "costUSD",
+  ] as const) {
+    if (first[key] !== undefined || last[key] !== undefined)
+      usage[key] = (first[key] ?? 0) + (last[key] ?? 0);
+  }
+  return usage;
 }
 
 function agentUsageFromClaude(usage: ClaudeUsage): AgentUsage {

@@ -39,7 +39,7 @@ export function useStagedAgentReconcile({
   setPendingStart: Dispatch<SetStateAction<StagedSessionRecord | null>>;
   /** The enabled accounts; undefined until they are read. */
   accounts: ReadonlyArray<{ id: string; provider: string }> | undefined;
-  accountId: string | undefined;
+  accountId: string | null | undefined;
   setAccountId: (id: string) => void;
 }): void {
   useEffect(() => {
@@ -55,7 +55,8 @@ export function useStagedAgentReconcile({
       return;
     }
     const { accountId: draftAccountId, ...runtime } = draft;
-    if (draftAccountId !== accountId) setAccountId(draftAccountId);
+    if (accountId !== null && draftAccountId !== accountId)
+      setAccountId(draftAccountId);
     if (change === "keep") return;
     setPendingStart(
       stagedSessionRecord({

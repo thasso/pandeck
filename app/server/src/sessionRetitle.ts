@@ -6,6 +6,7 @@
  */
 import { existsSync } from "node:fs";
 import { sessionStore } from "./db/sessionStore.ts";
+import { sourceRequiresEnterprise } from "./sessionEnterprise.ts";
 import { getSettings } from "./settings.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import {
@@ -130,6 +131,7 @@ export async function retitleSession(input: {
   changed: () => Promise<void>;
 }): Promise<string | undefined> {
   const { sessionId } = input;
+  const requiresEnterprise = sourceRequiresEnterprise([sessionId]);
   const token = beginSessionRetitle(sessionId);
   await input.changed();
   try {
@@ -147,6 +149,7 @@ export async function retitleSession(input: {
       title = await regenerateSessionTitle(
         {
           sessionId,
+          requiresEnterprise,
           ...(currentTitle ? { currentTitle } : {}),
           ...(transcript.opening ? { opening: transcript.opening } : {}),
           transcript: transcript.recent,

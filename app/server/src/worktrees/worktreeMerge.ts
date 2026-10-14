@@ -398,7 +398,7 @@ async function spawnMergeAgent(
     const { createSession } = await import("../harnesses/create.ts");
     const { promptRuntimeSession } =
       await import("../session/runtimePrompt.ts");
-    const credentialProfileId = accountForSlot(settings);
+    const credentialProfileId = await accountForSlot(settings);
     // Linked ONLY when the agent runs in the worktree (rebase). The
     // in_worktree edge is the durable cwd source of truth, so linking a
     // main-checkout merge/squash agent would reopen it in the wrong directory.

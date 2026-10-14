@@ -152,6 +152,9 @@ export default defineConfig(({ command }) => {
         "@assistant/shared/comments": fileURLToPath(
           new URL("../shared/comments.ts", import.meta.url),
         ),
+        "@assistant/shared/accountHealth": fileURLToPath(
+          new URL("../shared/accountHealth.ts", import.meta.url),
+        ),
         "@assistant/shared/usage": fileURLToPath(
           new URL("../shared/usage.ts", import.meta.url),
         ),

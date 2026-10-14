@@ -144,8 +144,6 @@ export interface Prefs {
    * chats. Stored in `modelKey` form (`provider:id`); undefined until first pick.
    */
   lastModelKey?: string;
-  /** Credential profile selected for the next new session. */
-  credentialProfileId?: string;
   /**
    * Last thinking level the user explicitly selected, remembered as the default
    * for new chats. Undefined until the user first picks one.
@@ -176,7 +174,6 @@ type OptionalPrefKey = {
 const OPTIONAL_PREF_KEYS = {
   worktreeReviewMode: true,
   lastModelKey: true,
-  credentialProfileId: true,
   lastThinkingLevel: true,
   workflowRoleRuntimes: true,
   workflowRunLimits: true,

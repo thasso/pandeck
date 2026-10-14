@@ -269,6 +269,83 @@ test("bindScannedEntries: reconcile ONE completed turn", () => {
   );
 });
 
+test("a continuation binds only its completed native tail, without an app prompt", () => {
+  const log = mem();
+  const historyStart = log.seqCursor;
+  ourToolTurn(log, "original prompt");
+  log.bindScannedEntries(
+    nativeToolTurn("history"),
+    acceptedTurn(log, historyStart),
+  );
+  const existing = bindingsOf(log);
+  const fromSeq = log.seqCursor;
+  const assistant = assistantEntry(log, ["t1", "t2", "t3"]);
+  const results = ["t1", "t2", "t3"].map((id) => resultEntry(log, id));
+  const continuation = nativeToolTurn("continued");
+  continuation[0] = { ...continuation[0]!, continuation: true };
+  log.bindScannedEntries([...nativeToolTurn("history"), ...continuation], {
+    fromSeq,
+    promptEntryIds: new Set(),
+    continuation: true,
+  });
+  const anchors = (bindings: ReturnType<typeof bindingsOf>) =>
+    bindings.map(({ boundEntryId, providerMessageId, providerTurnEndId }) => ({
+      boundEntryId,
+      providerMessageId,
+      ...(providerTurnEndId ? { providerTurnEndId } : {}),
+    }));
+  assert.deepEqual(anchors(bindingsOf(log)), [
+    ...anchors(existing),
+    {
+      boundEntryId: assistant.id,
+      providerMessageId: "continued-a3",
+      providerTurnEndId: "continued-a3",
+    },
+    ...results.map((result, index) => ({
+      boundEntryId: result.id,
+      providerMessageId: `continued-r${index + 1}`,
+    })),
+  ]);
+  assert.equal(
+    log.clientEntries().filter((entry) => entry.role === "user").length,
+    1,
+  );
+});
+
+test("continuation binding requires both flags and refuses an unexplained or incomplete tail", () => {
+  for (const invalid of [
+    "no-boundary-flag",
+    "no-native-flag",
+    "unknown-prompt",
+    "missing-result",
+    "extra-answer",
+  ] as const) {
+    const log = mem();
+    const fromSeq = log.seqCursor;
+    assistantEntry(log, ["t1", "t2", "t3"]);
+    for (const id of ["t1", "t2", "t3"]) resultEntry(log, id);
+    const native = nativeToolTurn("continued");
+    if (invalid !== "no-native-flag")
+      native[0] = { ...native[0]!, continuation: true };
+    if (invalid === "unknown-prompt")
+      native.splice(1, 0, { role: "user", providerMessageId: "unexpected" });
+    if (invalid === "missing-result") native.splice(2, 1);
+    if (invalid === "extra-answer")
+      native.push({
+        role: "assistant",
+        providerMessageId: "unexplained-answer",
+      });
+    log.bindScannedEntries(native, {
+      fromSeq,
+      promptEntryIds: new Set(),
+      ...(invalid !== "no-boundary-flag"
+        ? { continuation: true as const }
+        : {}),
+    });
+    assert.deepEqual(bindingsOf(log), [], invalid);
+  }
+});
+
 /* ---------- an entry anchored mid-turn does not block the rest ------------ */
 test("an entry anchored mid-turn does not block the rest", () => {
   // A harness may anchor the prompt when it accepts it (`promptAccepted`) and

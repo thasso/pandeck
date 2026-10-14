@@ -485,6 +485,7 @@ export async function listSessions(
       ...(row.credentialProfileId
         ? { credentialProfileId: row.credentialProfileId }
         : {}),
+      ...(row.requiresEnterprise ? { requiresEnterprise: true } : {}),
       ...(spawnedParentByChild.has(key)
         ? {
             spawnedBySessionId: spawnedParentByChild.get(key)!.parentSessionId,

@@ -40,6 +40,8 @@ export interface PullRequestCardContext {
   repoRoot: string;
   sessionKind: import("@assistant/shared").AgentType;
   sessionId: string;
+  /** Originating session's helper-account requirement, captured before git/provider awaits. */
+  requiresEnterprise?: boolean;
   headBranch: string;
   baseBranch: string;
   draft: boolean;

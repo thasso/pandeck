@@ -17,6 +17,8 @@ const { harnessRegistry } = await import("./registry.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("../piSdk/piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
+const { createCredentialProfile, patchCredentialProfile } =
+  await import("../credentialProfiles.ts");
 const worktreeStore = await import("../db/worktreeStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 const skillResolver = await import("../skills/skillResolver.ts");
@@ -33,21 +35,41 @@ function libraryHasAlpha() {
 }
 
 const evidence = { hasAttachments: false };
+const ordinaryProfileId = createCredentialProfile({
+  name: "Ordinary",
+  provider: "claude",
+}).id;
+const enterpriseProfileId = createCredentialProfile({
+  name: "Enterprise",
+  provider: "claude",
+}).id;
+patchCredentialProfile(enterpriseProfileId, { enterprise: true });
 
 /** A stand-in Claude store that records what it was asked and what was in place. */
 function claudeStore(order: string[]) {
   return vi
     .spyOn(claudeSdkStore, "acquire")
-    .mockImplementation((id: string) => {
-      order.push(
-        `acquire:conditions=${sessionStore.getPromptConditions(id) !== undefined}` +
-          `:skills=${sessionStore.getSkills(id) ?? "none"}`,
-      );
-      return {
-        sessionId: id,
-        setTitle: (title: string) => order.push(`title:${title}`),
-      } as never;
-    });
+    .mockImplementation(
+      (
+        id: string,
+        opts?: { agentType?: string; requiresEnterprise?: boolean },
+      ) => {
+        sessionStore.claimScope({
+          id,
+          harness: "claude-sdk",
+          agentType: "developer",
+          ...(opts?.requiresEnterprise ? { requiresEnterprise: true } : {}),
+        });
+        order.push(
+          `acquire:conditions=${sessionStore.getPromptConditions(id) !== undefined}` +
+            `:skills=${sessionStore.getSkills(id) ?? "none"}`,
+        );
+        return {
+          sessionId: id,
+          setTitle: (title: string) => order.push(`title:${title}`),
+        } as never;
+      },
+    );
 }
 
 test("a Claude session is linked and frozen before it exists, then titled", async () => {
@@ -66,7 +88,8 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
     thinkingLevel: "high",
     mode: "plan",
     worktree: { id: "wt-1", path: "/work/tree" },
-    credentialProfileId: "profile-1",
+    credentialProfileId: enterpriseProfileId,
+    requiresEnterprise: true,
     promptEvidence: evidence,
     additionalSystemPrompt: "Be brief.",
     title: "Fix the build",
@@ -76,15 +99,86 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
   // Its current skills are frozen before it exists.
   assert.equal(order[1], 'acquire:conditions=true:skills=["alpha"]');
   assert.equal(order[2], "title:Fix the build");
+  assert.equal(sessionStore.get("claude-new")?.requiresEnterprise, true);
   assert.deepEqual(acquire.mock.calls[0]?.[1], {
     agentType: "developer",
-    credentialProfileId: "profile-1",
+    credentialProfileId: enterpriseProfileId,
+    requiresEnterprise: true,
     modelId: "opus",
     thinkingLevel: "high",
     cwd: "/work/tree",
     additionalSystemPrompt: "Be brief.",
     mode: "plan",
   });
+});
+
+test("enterprise sessions refuse missing or ordinary accounts before creating either harness", async () => {
+  const acquireClaude = vi.spyOn(claudeSdkStore, "acquire");
+  const acquirePi = vi.spyOn(piStore, "acquireNew");
+  const link = vi.spyOn(worktreeStore, "linkSessionToWorktree");
+
+  for (const credentialProfileId of ["missing-profile", ordinaryProfileId]) {
+    await assert.rejects(
+      createSession({
+        harness: "pi",
+        agentType: "assistant",
+        credentialProfileId,
+        requiresEnterprise: true,
+      }),
+      /requires an enterprise account/i,
+    );
+  }
+
+  assert.equal(acquireClaude.mock.calls.length, 0);
+  assert.equal(acquirePi.mock.calls.length, 0);
+  assert.equal(link.mock.calls.length, 0);
+});
+
+test("a Claude account changed after lookup is revalidated before creation", async () => {
+  const acquire = vi.spyOn(claudeSdkStore, "acquire");
+  const pending = createSession({
+    harness: "claude-sdk",
+    id: "enterprise-race",
+    agentType: "assistant",
+    credentialProfileId: enterpriseProfileId,
+    requiresEnterprise: true,
+  });
+  patchCredentialProfile(enterpriseProfileId, { enterprise: false });
+  try {
+    await assert.rejects(pending, /requires an enterprise account/i);
+    assert.equal(acquire.mock.calls.length, 0);
+  } finally {
+    patchCredentialProfile(enterpriseProfileId, { enterprise: true });
+  }
+});
+
+test("pi revalidates enterprise metadata after async creation and disposes a refused session", async () => {
+  const disposed = vi.fn();
+  const storeWithCreate = piStore as unknown as {
+    create: (...args: never[]) => Promise<{
+      session: { sessionId: string; dispose: () => void };
+      notices: never[];
+    }>;
+  };
+  vi.spyOn(storeWithCreate, "create").mockImplementation(async () => {
+    await Promise.resolve();
+    return {
+      session: { sessionId: "pi-enterprise-race", dispose: disposed },
+      notices: [],
+    };
+  });
+  const pending = piStore.acquireNew("assistant", undefined, undefined, {
+    credentialProfileId: enterpriseProfileId,
+    requiresEnterprise: true,
+  });
+  patchCredentialProfile(enterpriseProfileId, { enterprise: false });
+  try {
+    await assert.rejects(pending, /requires an enterprise account/i);
+    assert.equal(disposed.mock.calls.length, 1);
+    assert.equal(sessionStore.get("pi-enterprise-race"), undefined);
+  } finally {
+    patchCredentialProfile(enterpriseProfileId, { enterprise: true });
+  }
 });
 
 test("a named Claude id is checked against the disk too; a minted one is not", async () => {
@@ -146,7 +240,13 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
   const order: string[] = [];
   const acquireNew = vi
     .spyOn(piStore, "acquireNew")
-    .mockImplementation(async () => {
+    .mockImplementation(async (kind, _model, _thinkingLevel, opts) => {
+      sessionStore.claimScope({
+        id: "pi-new",
+        harness: "pi",
+        agentType: kind,
+        ...(opts?.requiresEnterprise ? { requiresEnterprise: true } : {}),
+      });
       order.push("create");
       return {
         sessionId: "pi-new",
@@ -165,7 +265,8 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
     thinkingLevel: "low",
     mode: "plan",
     worktree: { id: "wt-1", path: "/work/tree" },
-    credentialProfileId: "profile-2",
+    credentialProfileId: enterpriseProfileId,
+    requiresEnterprise: true,
     promptEvidence: evidence,
     purpose: "draft",
     title: "Plan the release",
@@ -180,7 +281,8 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
     "low",
     {
       cwd: "/work/tree",
-      credentialProfileId: "profile-2",
+      credentialProfileId: enterpriseProfileId,
+      requiresEnterprise: true,
       promptEvidence: evidence,
       mode: "plan",
     },
@@ -189,7 +291,8 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
   assert.equal(row?.harness, "pi");
   assert.equal(row?.purpose, "draft");
   assert.equal(row?.mode, "plan");
-  assert.equal(row?.credentialProfileId, "profile-2");
+  assert.equal(row?.credentialProfileId, enterpriseProfileId);
+  assert.equal(row?.requiresEnterprise, true);
 });
 
 test("a session in a bare directory runs there and is linked to no worktree", async () => {

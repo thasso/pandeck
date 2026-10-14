@@ -4,6 +4,7 @@ import {
   isValidElement,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -59,6 +60,7 @@ import {
   type CredentialProfileProvider,
   type CredentialProfileSummary,
 } from "@assistant/shared";
+import type { UsageIndicator } from "@assistant/shared/usage";
 import { visibleModels } from "../lib/models.ts";
 import {
   Accordion,
@@ -104,13 +106,17 @@ import { settingBounds } from "@assistant/shared/settingsRegistry";
 import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
 import {
   createCredentialProfile,
+  limitedAccountDescription,
   disableAccountImpact,
   deleteCredentialProfile,
   fetchCredentialProfiles,
   openAiProfileConnectionAction,
   renameCredentialProfile,
   setCredentialProfileEnabled,
+  setCredentialProfileEnterprise,
+  slotModelOptions,
   startOpenAiProfileLogin,
+  type SlotModelOption,
 } from "../lib/credentialProfiles.ts";
 import type { Prefs, TextScale } from "../hooks/usePrefs.ts";
 import type { SettingsSection } from "../hooks/useSessionRouting.ts";
@@ -124,7 +130,9 @@ import { useMobileLayout } from "./shell/useMobileLayout.ts";
 import { SETTINGS_SECTIONS } from "./settingsSections.tsx";
 import {
   AgentModelFields,
+  applyModelSlotChange,
   CredentialProfilesContext,
+  AccountUsageContext,
 } from "./AgentModelFields.tsx";
 import { MemorySettingsSection as MemorySection } from "./MemorySettingsSection.tsx";
 import { PeerRuntimesSettingsSection } from "./PeerRuntimesSettingsSection.tsx";
@@ -151,12 +159,14 @@ interface Props {
   accountModels: AccountModelOption[];
   /** Accounts themselves, so a slot pinned to a disabled/removed one can say so. */
   credentialProfiles: CredentialProfileSummary[];
+  /** Usage cache arrivals re-resolve Automatic previews in every agent slot. */
+  usageIndicators?: UsageIndicator[] | null;
   projects: ProjectRecord[];
   settings: AppSettings;
   memory: UseMemory;
   /** The `skills` topic's canonical load state; only the Skills section reads it. */
   skills: LoadState<EntryLibraryList>;
-  /** The `agents` topic's canonical load state; only the Agents section reads it. */
+  /** The agents topic's canonical load state. */
   agents: LoadState<EntryLibraryList>;
   prefs: Prefs;
   /**
@@ -218,12 +228,13 @@ interface Props {
 
 type SectionId = SettingsSection;
 type SectionProps = Pick<Props, "settings" | "onUpdate">;
-type AgentSectionProps = SectionProps & { models: AccountModelOption[] };
+type AgentSectionProps = SectionProps & { models: SlotModelOption[] };
 
 export function SettingsPage({
   models,
   accountModels,
   credentialProfiles,
+  usageIndicators,
   onOpenSection,
   projects,
   settings,
@@ -274,279 +285,288 @@ export function SettingsPage({
   forgejoStatus,
 }: Props) {
   const currentSection = SETTINGS_SECTIONS.find((s) => s.id === section);
-  // Configurable agents choose an account/model combination; the plain global
-  // list stays for the account-independent Models section (visibility/order).
-  const agentModels = accountModels;
+  // Configurable agents choose Automatic or an account/model combination; the
+  // plain global list stays for the account-independent Models section
+  // (visibility/order). Approved peer runtimes name an account explicitly, so
+  // they get the account/model combinations alone.
+  const agentModels = useMemo(
+    () => slotModelOptions(accountModels),
+    [accountModels],
+  );
   return (
-    <CredentialProfilesContext.Provider value={credentialProfiles}>
-      <div className="flex h-full w-full flex-col bg-background text-foreground">
-        <PageHeader
-          back={back}
-          icon={<Settings size={16} />}
-          iconTone="accent"
-          title={currentSection?.label ?? "Settings"}
-        />
+    <AccountUsageContext.Provider value={usageIndicators ?? null}>
+      <CredentialProfilesContext.Provider value={credentialProfiles}>
+        <div className="flex h-full w-full flex-col bg-background text-foreground">
+          <PageHeader
+            back={back}
+            icon={<Settings size={16} />}
+            iconTone="accent"
+            title={currentSection?.label ?? "Settings"}
+          />
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {section === "about" && (
-            <AboutSettingsSection serverBuild={serverBuild} />
-          )}
-          {section === "profile" && (
-            <ProfileSection settings={settings} onUpdate={onUpdate} />
-          )}
-          {section === "appearance" && (
-            <AppearanceSection
-              prefs={prefs}
-              onUpdate={onUpdatePrefs}
-              settings={settings}
-              onUpdateSettings={onUpdate}
-            />
-          )}
-          {section === "models" && (
-            <ModelsSection
-              models={models}
-              settings={settings}
-              onUpdate={onUpdate}
-              onRefresh={onRefreshModels}
-              refreshing={modelsRefreshing}
-            />
-          )}
-          {section === "personal-assistant" && (
-            <PermanentAssistantSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "memory" && (
-            <MemorySection
-              models={agentModels}
-              settings={settings}
-              memory={memory}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "naming" && (
-            <SessionNamingSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "commit" && (
-            <CommitAgentSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "session-status" && (
-            <SessionStatusSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "pull-request" && (
-            <PrAgentSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "worktrees" && (
-            <WorktreesSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "skills" && (
-            <SkillsSettingsSection
-              library={skills}
-              settings={settings}
-              onToggleSkill={onToggleSkill}
-            />
-          )}
-          {section === "agents" && (
-            <AgentsSettingsSection
-              library={agents}
-              // The session inspector links a frozen agent here by name.
-              initialSelected={new URLSearchParams(window.location.search).get(
-                "entry",
-              )}
-            />
-          )}
-          {section === "peer-runtimes" && (
-            <PeerRuntimesSettingsSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "background-processes" && (
-            <BackgroundProcessesSettingsSection
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "port-forwarding" && <PortForwardingSettingsSection />}
-          {section === "refinement" && (
-            <PromptRefinementSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "dictation" && (
-            <DictationSection
-              settings={settings}
-              status={speechToText}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "notifications" && <PushNotificationsSection />}
-          {section === "task-intake" && (
-            <TaskIntakeAgentSection
-              models={agentModels}
-              projects={projects}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "browserTools" && (
-            <BrowserToolsSettingsSection
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "jira" && (
-            <JiraCard
-              settings={settings}
-              status={jiraStatus}
-              onSaveAndTest={onSaveAndTestJira}
-              onTest={onTestJira}
-            />
-          )}
-          {section === "confluence" && (
-            <ConfluenceCard
-              settings={settings}
-              status={confluenceStatus}
-              onSaveAndTest={onSaveAndTestConfluence}
-              onTest={onTestConfluence}
-            />
-          )}
-          {section === "tempo" && (
-            <TempoCard
-              settings={settings}
-              status={tempoStatus}
-              onUpdate={onUpdateTempo}
-              onSaveAndTest={onSaveAndTestTempo}
-              onTest={onTestTempo}
-            />
-          )}
-          {section === "google" && (
-            <GoogleWorkspaceSection
-              settings={settings}
-              status={googleStatus}
-              onUpdateGoogle={onUpdateGoogle}
-              onSaveAndTestGoogle={onSaveAndTestGoogle}
-              onTestGoogle={onTestGoogle}
-            />
-          )}
-          {section === "knowledge-base" && (
-            <KnowledgeBaseSection settings={settings} onUpdate={onUpdate} />
-          )}
-          {section === "pdf-conversion" && (
-            <PdfConversionSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "slack" && (
-            <SlackSection
-              settings={settings}
-              status={slackStatus}
-              onSaveAndTestSlack={onSaveAndTestSlack}
-              onTestSlack={onTestSlack}
-            />
-          )}
-          {section === "openai-compatible" && (
-            <OpenAiCompatibleSection
-              settings={settings}
-              status={openAiCompatibleStatus}
-              onSaveAndTestOpenAiCompatible={onSaveAndTestOpenAiCompatible}
-              onTestOpenAiCompatible={onTestOpenAiCompatible}
-            />
-          )}
-          {section === "web-search" && (
-            <BraveSection
-              settings={settings}
-              status={braveStatus}
-              onSaveAndTestBrave={onSaveAndTestBrave}
-              onTestBrave={onTestBrave}
-            />
-          )}
-          {section === "context7" && (
-            <Context7Section
-              settings={settings}
-              status={context7Status}
-              onSaveAndTestContext7={onSaveAndTestContext7}
-              onTestContext7={onTestContext7}
-            />
-          )}
-          {section === "github" && (
-            <GithubSection
-              settings={settings}
-              status={githubStatus}
-              onSaveAndTestGithub={onSaveAndTestGithub}
-              onTestGithub={onTestGithub}
-            />
-          )}
-          {section === "forgejo" && (
-            <ForgejoSection
-              settings={settings}
-              status={forgejoStatus}
-              onSaveAndTestForgejo={onSaveAndTestForgejo}
-              onTestForgejo={onTestForgejo}
-            />
-          )}
-          {section === "claude-sdk" && (
-            <>
-              <ClaudeSdkSection settings={settings} onUpdate={onUpdate} />
-              <CredentialProfilesSection
-                provider="claude"
-                onOpenSection={onOpenSection}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {section === "about" && (
+              <AboutSettingsSection serverBuild={serverBuild} />
+            )}
+            {section === "profile" && (
+              <ProfileSection settings={settings} onUpdate={onUpdate} />
+            )}
+            {section === "appearance" && (
+              <AppearanceSection
+                prefs={prefs}
+                onUpdate={onUpdatePrefs}
+                settings={settings}
+                onUpdateSettings={onUpdate}
               />
-            </>
-          )}
-          {section === "openai" && (
-            <>
-              <OpenAiSection />
-              <CredentialProfilesSection
-                provider="openai-codex"
-                onOpenSection={onOpenSection}
+            )}
+            {section === "models" && (
+              <>
+                <ModelsSection
+                  models={models}
+                  settings={settings}
+                  onUpdate={onUpdate}
+                  onRefresh={onRefreshModels}
+                  refreshing={modelsRefreshing}
+                />
+                <AccountRoutingCard settings={settings} onUpdate={onUpdate} />
+              </>
+            )}
+            {section === "personal-assistant" && (
+              <PermanentAssistantSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
               />
-            </>
-          )}
-          {/* What the section's own UI does not show, from the registry. */}
-          {currentSection && (
-            <RegistrySettingFields
-              section={currentSection.id}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {/* Index route: the section list is the browser, not this page. */}
-          {!currentSection && (
-            <EmptyBox>
-              Pick a settings section in the Settings browser.
-            </EmptyBox>
-          )}
+            )}
+            {section === "memory" && (
+              <MemorySection
+                models={agentModels}
+                settings={settings}
+                memory={memory}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "naming" && (
+              <SessionNamingSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "commit" && (
+              <CommitAgentSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "session-status" && (
+              <SessionStatusSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "pull-request" && (
+              <PrAgentSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "worktrees" && (
+              <WorktreesSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "skills" && (
+              <SkillsSettingsSection
+                library={skills}
+                settings={settings}
+                onToggleSkill={onToggleSkill}
+              />
+            )}
+            {section === "agents" && (
+              <AgentsSettingsSection
+                library={agents}
+                initialSelected={new URLSearchParams(
+                  window.location.search,
+                ).get("entry")}
+              />
+            )}
+            {section === "peer-runtimes" && (
+              <PeerRuntimesSettingsSection
+                models={accountModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "background-processes" && (
+              <BackgroundProcessesSettingsSection
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "port-forwarding" && <PortForwardingSettingsSection />}
+            {section === "refinement" && (
+              <PromptRefinementSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "dictation" && (
+              <DictationSection
+                settings={settings}
+                status={speechToText}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "notifications" && <PushNotificationsSection />}
+            {section === "task-intake" && (
+              <TaskIntakeAgentSection
+                models={agentModels}
+                projects={projects}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "browserTools" && (
+              <BrowserToolsSettingsSection
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "jira" && (
+              <JiraCard
+                settings={settings}
+                status={jiraStatus}
+                onSaveAndTest={onSaveAndTestJira}
+                onTest={onTestJira}
+              />
+            )}
+            {section === "confluence" && (
+              <ConfluenceCard
+                settings={settings}
+                status={confluenceStatus}
+                onSaveAndTest={onSaveAndTestConfluence}
+                onTest={onTestConfluence}
+              />
+            )}
+            {section === "tempo" && (
+              <TempoCard
+                settings={settings}
+                status={tempoStatus}
+                onUpdate={onUpdateTempo}
+                onSaveAndTest={onSaveAndTestTempo}
+                onTest={onTestTempo}
+              />
+            )}
+            {section === "google" && (
+              <GoogleWorkspaceSection
+                settings={settings}
+                status={googleStatus}
+                onUpdateGoogle={onUpdateGoogle}
+                onSaveAndTestGoogle={onSaveAndTestGoogle}
+                onTestGoogle={onTestGoogle}
+              />
+            )}
+            {section === "knowledge-base" && (
+              <KnowledgeBaseSection settings={settings} onUpdate={onUpdate} />
+            )}
+            {section === "pdf-conversion" && (
+              <PdfConversionSection
+                models={agentModels}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {section === "slack" && (
+              <SlackSection
+                settings={settings}
+                status={slackStatus}
+                onSaveAndTestSlack={onSaveAndTestSlack}
+                onTestSlack={onTestSlack}
+              />
+            )}
+            {section === "openai-compatible" && (
+              <OpenAiCompatibleSection
+                settings={settings}
+                status={openAiCompatibleStatus}
+                onSaveAndTestOpenAiCompatible={onSaveAndTestOpenAiCompatible}
+                onTestOpenAiCompatible={onTestOpenAiCompatible}
+              />
+            )}
+            {section === "web-search" && (
+              <BraveSection
+                settings={settings}
+                status={braveStatus}
+                onSaveAndTestBrave={onSaveAndTestBrave}
+                onTestBrave={onTestBrave}
+              />
+            )}
+            {section === "context7" && (
+              <Context7Section
+                settings={settings}
+                status={context7Status}
+                onSaveAndTestContext7={onSaveAndTestContext7}
+                onTestContext7={onTestContext7}
+              />
+            )}
+            {section === "github" && (
+              <GithubSection
+                settings={settings}
+                status={githubStatus}
+                onSaveAndTestGithub={onSaveAndTestGithub}
+                onTestGithub={onTestGithub}
+              />
+            )}
+            {section === "forgejo" && (
+              <ForgejoSection
+                settings={settings}
+                status={forgejoStatus}
+                onSaveAndTestForgejo={onSaveAndTestForgejo}
+                onTestForgejo={onTestForgejo}
+              />
+            )}
+            {section === "claude-sdk" && (
+              <>
+                <ClaudeSdkSection settings={settings} onUpdate={onUpdate} />
+                <CredentialProfilesSection
+                  provider="claude"
+                  onOpenSection={onOpenSection}
+                />
+              </>
+            )}
+            {section === "openai" && (
+              <>
+                <OpenAiSection />
+                <CredentialProfilesSection
+                  provider="openai-codex"
+                  onOpenSection={onOpenSection}
+                />
+              </>
+            )}
+            {/* What the section's own UI does not show, from the registry. */}
+            {currentSection && (
+              <RegistrySettingFields
+                section={currentSection.id}
+                settings={settings}
+                onUpdate={onUpdate}
+              />
+            )}
+            {/* Index route: the section list is the browser, not this page. */}
+            {!currentSection && (
+              <EmptyBox>
+                Pick a settings section in the Settings browser.
+              </EmptyBox>
+            )}
+          </div>
         </div>
-      </div>
-    </CredentialProfilesContext.Provider>
+      </CredentialProfilesContext.Provider>
+    </AccountUsageContext.Provider>
   );
 }
 
@@ -608,6 +628,7 @@ export function CredentialProfileCard({
   connectionLabel,
   connectionDisabled,
   onToggle,
+  onToggleEnterprise,
   onConnect,
   onRename,
   onDelete,
@@ -618,6 +639,7 @@ export function CredentialProfileCard({
   connectionLabel: string;
   connectionDisabled?: boolean;
   onToggle: () => void;
+  onToggleEnterprise: (enterprise: boolean) => void;
   onConnect: () => void;
   onRename?: () => void;
   onDelete?: () => void;
@@ -635,15 +657,30 @@ export function CredentialProfileCard({
             variant={
               !profile.enabled
                 ? "secondary"
-                : profile.status === "ready"
-                  ? "success"
-                  : profile.status === "error"
-                    ? "destructive"
-                    : "warning"
+                : profile.health.state === "needs-login"
+                  ? "destructive"
+                  : profile.status === "ready"
+                    ? "success"
+                    : profile.status === "error"
+                      ? "destructive"
+                      : "warning"
             }
           >
             {providerLabel} · {profile.enabled ? profile.status : "disabled"}
           </Badge>
+          {profile.enabled &&
+          profile.health.state === "limited" &&
+          limitedAccountDescription(profile.health) ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {limitedAccountDescription(profile.health)}
+            </p>
+          ) : null}
+          {profile.enabled && profile.health.state === "needs-login" ? (
+            <p className="mt-1 text-xs text-destructive">
+              Needs login
+              {profile.health.reason ? ` · ${profile.health.reason}` : ""}
+            </p>
+          ) : null}
         </div>
         {onRename || onDelete ? (
           <div className="flex shrink-0 items-center gap-0.5">
@@ -686,6 +723,15 @@ export function CredentialProfileCard({
           )}
           <span className="truncate">{connectionLabel}</span>
         </Button>
+      </div>
+      <div className="mt-3">
+        <PreferenceToggle
+          label="Enterprise account"
+          description="Sessions started with “Requires enterprise” run only on enterprise accounts. Other work may use this account too."
+          ariaLabel={`Enterprise account: ${profile.name}`}
+          checked={profile.enterprise}
+          onChange={onToggleEnterprise}
+        />
       </div>
       {profile.setup ? (
         <Item variant="muted" className="mt-2">
@@ -740,30 +786,12 @@ function CredentialProfileUsageBlock({
 }) {
   const usage = profile.usage;
   if (!usage) return null;
-  const {
-    pinnedSlots,
-    boundSessionCount,
-    automaticForProvider,
-    automaticFallback,
-  } = usage;
-  if (
-    pinnedSlots.length === 0 &&
-    boundSessionCount === 0 &&
-    !automaticForProvider
-  )
-    return null;
+  const { pinnedSlots, boundSessionCount } = usage;
+  if (pinnedSlots.length === 0 && boundSessionCount === 0) return null;
   return (
     <Item variant="muted" className="mt-2">
       <ItemContent>
         <p className="font-medium text-foreground">Used by</p>
-        {automaticForProvider ? (
-          <p className="mt-1">
-            Automatic account for unpinned work
-            {automaticFallback ? (
-              <> · would move to “{automaticFallback.name}”</>
-            ) : null}
-          </p>
-        ) : null}
         {boundSessionCount > 0 ? (
           <p className="mt-1">
             {boundSessionCount} bound{" "}
@@ -791,6 +819,58 @@ function CredentialProfileUsageBlock({
   );
 }
 
+/**
+ * How much of an account's usage window Automatic may spend before it prefers
+ * another account. One setting for every provider, shown under Models next to
+ * the model list Automatic chooses from.
+ */
+function AccountRoutingCard({ settings, onUpdate }: SectionProps) {
+  const routing = settings.accountRouting;
+  const field = (
+    key: "fiveHourUsedThreshold" | "weeklyUsedThreshold",
+    label: string,
+  ) => {
+    const { min, max } = settingBounds(`accountRouting.${key}`);
+    return (
+      <Field label={label}>
+        <Input
+          type="number"
+          min={min}
+          max={max}
+          value={routing[key]}
+          onChange={(event) => {
+            const parsed = Number(event.target.value);
+            if (!Number.isFinite(parsed)) return;
+            onUpdate({
+              accountRouting: {
+                ...routing,
+                [key]: Math.min(max, Math.max(min, Math.floor(parsed))),
+              },
+            });
+          }}
+        />
+      </Field>
+    );
+  };
+  return (
+    <div className="mx-auto max-w-2xl px-6 pb-6">
+      <SettingsCard>
+        <div>
+          <h3 className="text-sm font-semibold">Automatic account choice</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Automatic prefers other accounts once one has used this much of a
+            usage window.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {field("fiveHourUsedThreshold", "5-hour window used below")}
+          {field("weeklyUsedThreshold", "Weekly window used below")}
+        </div>
+      </SettingsCard>
+    </div>
+  );
+}
+
 function CredentialProfilesSection({
   provider,
   onOpenSection,
@@ -815,6 +895,12 @@ function CredentialProfilesSection({
   };
   useEffect(() => {
     void refresh();
+    // Re-read safe account summaries when runtime health changes while Settings
+    // is already open. The socket state still belongs only to useAssistant.
+    const healthChanged = () => void refresh();
+    window.addEventListener("accountHealthChanged", healthChanged);
+    return () =>
+      window.removeEventListener("accountHealthChanged", healthChanged);
   }, []);
   const providerProfiles = credentialProfilesForProvider(profiles, provider);
   useEffect(() => {
@@ -955,6 +1041,11 @@ function CredentialProfilesSection({
                   connectionLabel={connection.label}
                   connectionDisabled={connection.disabled}
                   onToggle={() => void toggle()}
+                  onToggleEnterprise={(enterprise) =>
+                    void setCredentialProfileEnterprise(profile.id, enterprise)
+                      .then(refresh)
+                      .catch(fail)
+                  }
                   onOpenSection={onOpenSection}
                   onConnect={() => {
                     if (provider === "claude") setClaudeLoginProfile(profile);
@@ -1371,7 +1462,11 @@ function PermanentAssistantSection({
           thinkingLevel={profile.thinkingLevel}
           credentialProfileId={profile.credentialProfileId}
           modelLabel="Assistant model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({
+              permanentAssistant: applyModelSlotChange(profile, change),
+            })
+          }
         />
         <Field label="Working directory">
           <Input
@@ -1454,7 +1549,9 @@ function SessionNamingSection({
           thinkingLevel={naming.thinkingLevel}
           credentialProfileId={naming.credentialProfileId}
           modelLabel="Naming model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({ sessionNaming: applyModelSlotChange(naming, change) })
+          }
         />
 
         {models.length === 0 && <NoModelsNote />}
@@ -1465,9 +1562,6 @@ function SessionNamingSection({
 
 function CommitAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
   const commitAgent = settings.commitAgent;
-
-  const save = (patch: Partial<typeof commitAgent>) =>
-    onUpdate({ commitAgent: { ...commitAgent, ...patch } });
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
@@ -1493,7 +1587,9 @@ function CommitAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
           thinkingLevel={commitAgent.thinkingLevel}
           credentialProfileId={commitAgent.credentialProfileId}
           modelLabel="Commit model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({ commitAgent: applyModelSlotChange(commitAgent, change) })
+          }
         />
 
         <FieldDescription>
@@ -1512,8 +1608,6 @@ function CommitAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
 
 function PrAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
   const prAgent = settings.prAgent;
-  const save = (patch: Partial<typeof prAgent>) =>
-    onUpdate({ prAgent: { ...prAgent, ...patch } });
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
@@ -1536,7 +1630,9 @@ function PrAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
           thinkingLevel={prAgent.thinkingLevel}
           credentialProfileId={prAgent.credentialProfileId}
           modelLabel="Pull request model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({ prAgent: applyModelSlotChange(prAgent, change) })
+          }
         />
 
         {models.length === 0 && <NoModelsNote />}
@@ -1551,8 +1647,6 @@ function SessionStatusSection({
   onUpdate,
 }: AgentSectionProps) {
   const sessionStatus = settings.sessionStatus;
-  const save = (patch: Partial<typeof sessionStatus>) =>
-    onUpdate({ sessionStatus: { ...sessionStatus, ...patch } });
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
@@ -1575,7 +1669,11 @@ function SessionStatusSection({
           thinkingLevel={sessionStatus.thinkingLevel}
           credentialProfileId={sessionStatus.credentialProfileId}
           modelLabel="Status model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({
+              sessionStatus: applyModelSlotChange(sessionStatus, change),
+            })
+          }
         />
 
         {models.length === 0 && <NoModelsNote />}
@@ -1712,8 +1810,10 @@ function WorktreesSection({ models, settings, onUpdate }: AgentSectionProps) {
           thinkingLevel={worktrees.namingAgent.thinkingLevel}
           credentialProfileId={worktrees.namingAgent.credentialProfileId}
           modelLabel="Naming model"
-          onChange={(patch) =>
-            save({ namingAgent: { ...worktrees.namingAgent, ...patch } })
+          onChange={(change) =>
+            save({
+              namingAgent: applyModelSlotChange(worktrees.namingAgent, change),
+            })
           }
         />
       </SettingsCard>
@@ -1731,8 +1831,10 @@ function WorktreesSection({ models, settings, onUpdate }: AgentSectionProps) {
           thinkingLevel={worktrees.mergeAgent.thinkingLevel}
           credentialProfileId={worktrees.mergeAgent.credentialProfileId}
           modelLabel="Merge model"
-          onChange={(patch) =>
-            save({ mergeAgent: { ...worktrees.mergeAgent, ...patch } })
+          onChange={(change) =>
+            save({
+              mergeAgent: applyModelSlotChange(worktrees.mergeAgent, change),
+            })
           }
         />
       </SettingsCard>
@@ -1836,7 +1938,9 @@ function PdfConversionSection({
           thinkingLevel={pdf.thinkingLevel}
           credentialProfileId={pdf.credentialProfileId}
           modelLabel="Fallback model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({ pdfConversion: applyModelSlotChange(pdf, change) })
+          }
         />
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -2211,9 +2315,6 @@ function PromptRefinementSection({
 }: AgentSectionProps) {
   const refinement = settings.promptRefinement;
 
-  const save = (patch: Partial<typeof refinement>) =>
-    onUpdate({ promptRefinement: { ...refinement, ...patch } });
-
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-sm font-semibold">Prompt refinement</h2>
@@ -2238,7 +2339,11 @@ function PromptRefinementSection({
           thinkingLevel={refinement.thinkingLevel}
           credentialProfileId={refinement.credentialProfileId}
           modelLabel="Refinement model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({
+              promptRefinement: applyModelSlotChange(refinement, change),
+            })
+          }
         />
 
         <FieldDescription>
@@ -2259,7 +2364,7 @@ function TaskIntakeAgentSection({
   settings,
   onUpdate,
 }: {
-  models: AccountModelOption[];
+  models: SlotModelOption[];
   projects: ProjectRecord[];
   settings: AppSettings;
   onUpdate: (patch: Partial<AppSettings>) => void;
@@ -2316,7 +2421,9 @@ function TaskIntakeAgentSection({
           thinkingLevel={agent.thinkingLevel}
           credentialProfileId={agent.credentialProfileId}
           modelLabel="Task intake model"
-          onChange={save}
+          onChange={(change) =>
+            onUpdate({ taskIntakeAgent: applyModelSlotChange(agent, change) })
+          }
         />
         <Field label="Additional instructions">
           <Textarea

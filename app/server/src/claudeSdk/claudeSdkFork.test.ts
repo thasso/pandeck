@@ -36,6 +36,15 @@ writeFileSync(
       id: ISOLATED_PROFILE,
       name: "Isolated",
       provider: "claude",
+      enterprise: true,
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    {
+      id: "cp_personal",
+      name: "Personal",
+      provider: "claude",
+      enterprise: false,
       createdAt: 1,
       updatedAt: 1,
     },
@@ -54,7 +63,8 @@ const { claudeSdkStore } = await import("./claudeSdkStore.ts");
 const { readClaudeSdkRecord } = await import("./claudeSdkRecords.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { claudeProfileSessionStore } = await import("./profileSessionStore.ts");
-const { DEFAULT_CLAUDE_PROFILE_ID } = await import("../credentialProfiles.ts");
+const { DEFAULT_CLAUDE_PROFILE_ID, patchCredentialProfile } =
+  await import("../credentialProfiles.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 type ClaudeSdkMessage = import("./sdkSeam.ts").ClaudeSdkMessage;
 type ClaudeSdkSeam = import("./sdkSeam.ts").ClaudeSdkSeam;
@@ -280,7 +290,11 @@ test("an anchor is not carried across turns", async () => {
 async function runtimeParent(
   id: string,
   turns: string[],
-  opts: { cwd?: string; credentialProfileId?: string } = {},
+  opts: {
+    cwd?: string;
+    credentialProfileId?: string;
+    requiresEnterprise?: boolean;
+  } = {},
 ): Promise<{
   parent: import("./ClaudeSdkSession.ts").ClaudeSdkSession;
   forkCalls: Array<{
@@ -296,6 +310,7 @@ async function runtimeParent(
     ...(opts.credentialProfileId
       ? { credentialProfileId: opts.credentialProfileId }
       : {}),
+    ...(opts.requiresEnterprise ? { requiresEnterprise: true } : {}),
   });
   sessionRuntime.createSession(id, parent.createRuntimeAdapter());
   for (const turn of turns) await sessionRuntime.prompt(id, turn);
@@ -315,6 +330,8 @@ const seamCalls = {
   }>,
   deletes: [] as Array<{ sessionId: string; storeRoot?: string }>,
   nextTurn: () => turnMessages(),
+  forkedProviderSessionId: "forked-provider-session",
+  onFork: undefined as (() => void) | undefined,
 };
 
 function installSeam(): void {
@@ -322,6 +339,8 @@ function installSeam(): void {
   seamCalls.fork.length = 0;
   seamCalls.deletes.length = 0;
   seamCalls.nextTurn = () => turnMessages();
+  seamCalls.forkedProviderSessionId = "forked-provider-session";
+  seamCalls.onFork = undefined;
   claudeSdkStore.setSeam(() =>
     Promise.resolve({
       query: (params) => {
@@ -345,7 +364,10 @@ function installSeam(): void {
         // A provider fork REMAPS every uuid it copies, so the child transcript
         // shares no ids with its parent — which is exactly why a copied app-log
         // prefix must not carry the parent's anchors.
-        return Promise.resolve({ sessionId: "forked-provider-session" });
+        seamCalls.onFork?.();
+        return Promise.resolve({
+          sessionId: seamCalls.forkedProviderSessionId,
+        });
       },
       deleteSession: (sessionId, options) => {
         const storeRootValue = (
@@ -525,6 +547,8 @@ test("forking cuts the native transcript, the runtime log and the record alike",
 
 test("a second-generation fork uses the CHILD's own uuid, never the parent's", async () => {
   const { forkCalls } = await runtimeParent("gen1", ["first"]);
+  // Provider ids are unique in persisted metadata, even across this suite's fixtures.
+  seamCalls.forkedProviderSessionId = "gen1-provider-child";
   const gen1Timeline = sessionRuntime.get("gen1")!.clientTimeline();
   const gen1Assistant = gen1Timeline.find(
     (entry) => entry.type === "message" && entry.role === "assistant",
@@ -538,7 +562,7 @@ test("a second-generation fork uses the CHILD's own uuid, never the parent's", a
   // The child runs a turn of its own; its transcript reports ITS uuid.
   sessionRuntime.createSession(child.id, child.createRuntimeAdapter());
   seamCalls.nextTurn = () =>
-    turnMessages("native-child", "forked-provider-session");
+    turnMessages("native-child", "gen1-provider-child");
   await sessionRuntime.prompt(child.id, "carry on");
 
   const childTimeline = sessionRuntime.get(child.id)!.clientTimeline();
@@ -569,7 +593,7 @@ test("a second-generation fork uses the CHILD's own uuid, never the parent's", a
   assert.deepEqual(
     forkCalls.at(-1),
     {
-      sessionId: "forked-provider-session",
+      sessionId: "gen1-provider-child",
       options: {
         upToMessageId: "native-child",
         dir: tmp,
@@ -774,6 +798,177 @@ test("forking a named-profile session cuts inside THAT profile's root", async ()
     claudeProfileSessionStore(DEFAULT_CLAUDE_PROFILE_ID).root,
     "and not to the protected default root, where that transcript is absent",
   );
+});
+
+test("a Claude SDK fork refuses an enterprise-required parent bound to a personal account", async () => {
+  await runtimeParent("fork-enterprise-personal", ["first"], {
+    credentialProfileId: "cp_personal",
+    requiresEnterprise: true,
+  });
+  const timeline = sessionRuntime
+    .get("fork-enterprise-personal")!
+    .clientTimeline();
+  const assistant = timeline.find(
+    (entry) => entry.type === "message" && entry.role === "assistant",
+  )!;
+
+  await assert.rejects(
+    claudeSdkStore.forkSession("fork-enterprise-personal", {
+      anchor: "native-last",
+      keepThroughEntryId: assistant.id,
+      forkOrigin: {
+        harness: "claude-sdk",
+        parentSessionId: "fork-enterprise-personal",
+      },
+    }),
+    /requires an enterprise account/i,
+  );
+  assert.equal(seamCalls.fork.length, 0);
+  assert.equal(
+    sessionStore.get("fork-enterprise-personal")?.requiresEnterprise,
+    true,
+  );
+  assert.ok(sessionRuntime.get("fork-enterprise-personal"));
+});
+
+test("a Claude SDK fork cleans up when its bound profile loses enterprise during the native fork", async () => {
+  patchCredentialProfile(ISOLATED_PROFILE, { enterprise: true });
+  await runtimeParent("fork-enterprise-race", ["first"], {
+    credentialProfileId: ISOLATED_PROFILE,
+    requiresEnterprise: true,
+  });
+  const timeline = sessionRuntime.get("fork-enterprise-race")!.clientTimeline();
+  const assistant = timeline.find(
+    (entry) => entry.type === "message" && entry.role === "assistant",
+  )!;
+  seamCalls.onFork = () =>
+    patchCredentialProfile(ISOLATED_PROFILE, { enterprise: false });
+
+  try {
+    await assert.rejects(
+      claudeSdkStore.forkSession("fork-enterprise-race", {
+        anchor: "native-last",
+        keepThroughEntryId: assistant.id,
+        forkOrigin: {
+          harness: "claude-sdk",
+          parentSessionId: "fork-enterprise-race",
+        },
+      }),
+      /requires an enterprise account/i,
+    );
+  } finally {
+    patchCredentialProfile(ISOLATED_PROFILE, { enterprise: true });
+  }
+
+  assert.equal(seamCalls.fork.length, 1);
+  assert.deepEqual(seamCalls.deletes.at(-1), {
+    sessionId: "forked-provider-session",
+    storeRoot: claudeProfileSessionStore(ISOLATED_PROFILE).root,
+  });
+  assert.equal(
+    sessionStore.get("fork-enterprise-race")?.requiresEnterprise,
+    true,
+  );
+  assert.ok(sessionRuntime.get("fork-enterprise-race"));
+});
+
+test("a Claude SDK fork refuses a personal account for a tombstoned enterprise parent", async () => {
+  await runtimeParent("fork-enterprise-personal", ["first"], {
+    credentialProfileId: "cp_personal",
+    requiresEnterprise: true,
+  });
+  sessionStore.remove("fork-enterprise-personal");
+  const timeline = sessionRuntime
+    .get("fork-enterprise-personal")!
+    .clientTimeline();
+  const assistant = timeline.find(
+    (entry) => entry.type === "message" && entry.role === "assistant",
+  )!;
+
+  await assert.rejects(
+    claudeSdkStore.forkSession("fork-enterprise-personal", {
+      anchor: "native-last",
+      keepThroughEntryId: assistant.id,
+      forkOrigin: {
+        harness: "claude-sdk",
+        parentSessionId: "fork-enterprise-personal",
+      },
+    }),
+    /requires an enterprise account/i,
+  );
+  assert.equal(seamCalls.fork.length, 0);
+  assert.equal(
+    sessionStore.getIncludingDeleted("fork-enterprise-personal")
+      ?.requiresEnterprise,
+    true,
+  );
+  assert.ok(sessionRuntime.get("fork-enterprise-personal"));
+});
+
+test("a Claude SDK fork deletes the child if the account loses enterprise during the native fork", async () => {
+  patchCredentialProfile(ISOLATED_PROFILE, { enterprise: true });
+  await runtimeParent("fork-enterprise-race", ["first"], {
+    credentialProfileId: ISOLATED_PROFILE,
+    requiresEnterprise: true,
+  });
+  const timeline = sessionRuntime.get("fork-enterprise-race")!.clientTimeline();
+  const assistant = timeline.find(
+    (entry) => entry.type === "message" && entry.role === "assistant",
+  )!;
+  const claim = vi.spyOn(sessionStore, "claimScope");
+  seamCalls.onFork = () =>
+    patchCredentialProfile(ISOLATED_PROFILE, { enterprise: false });
+
+  try {
+    await assert.rejects(
+      claudeSdkStore.forkSession("fork-enterprise-race", {
+        anchor: "native-last",
+        keepThroughEntryId: assistant.id,
+        forkOrigin: {
+          harness: "claude-sdk",
+          parentSessionId: "fork-enterprise-race",
+        },
+      }),
+      /requires an enterprise account/i,
+    );
+  } finally {
+    patchCredentialProfile(ISOLATED_PROFILE, { enterprise: true });
+    claim.mockRestore();
+  }
+
+  assert.equal(seamCalls.fork.length, 1);
+  assert.deepEqual(seamCalls.deletes.at(-1), {
+    sessionId: "forked-provider-session",
+    storeRoot: claudeProfileSessionStore(ISOLATED_PROFILE).root,
+  });
+  assert.equal(claim.mock.calls.length, 0);
+  assert.equal(
+    sessionStore.get("fork-enterprise-race")?.requiresEnterprise,
+    true,
+  );
+  assert.ok(sessionRuntime.get("fork-enterprise-race"));
+});
+
+test("a Claude SDK fork claims its enterprise requirement before persisting the child", async () => {
+  await runtimeParent("fork-enterprise", ["first"], {
+    credentialProfileId: ISOLATED_PROFILE,
+    requiresEnterprise: true,
+  });
+  const timeline = sessionRuntime.get("fork-enterprise")!.clientTimeline();
+  const assistant = timeline.find(
+    (entry) => entry.type === "message" && entry.role === "assistant",
+  )!;
+
+  const child = await claudeSdkStore.forkSession("fork-enterprise", {
+    anchor: "native-last",
+    keepThroughEntryId: assistant.id,
+    forkOrigin: {
+      harness: "claude-sdk",
+      parentSessionId: "fork-enterprise",
+    },
+  });
+
+  assert.equal(sessionStore.get(child.id)?.requiresEnterprise, true);
 });
 
 test("deleting a session takes its native transcript with it", async () => {

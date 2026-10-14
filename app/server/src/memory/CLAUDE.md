@@ -2,6 +2,8 @@
 
 Product contract: `docs/agent-memory.md`.
 
+- Enterprise-required sessions never enter automatic memory capture or
+  processing.
 - A mutation on an existing card is revision-checked: never silently overwrite a
   newer card.
 - A correction MUST supersede-then-create atomically — never erase history and

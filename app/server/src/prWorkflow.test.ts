@@ -13,6 +13,7 @@ import {
 } from "./hostSlashCommands.ts";
 import {
   beginPullRequestCard,
+  finalizePullRequestCard,
   orderedPullRequestTaskIds,
   resolveDiffBaseRef,
   runPrWorkflow,
@@ -29,6 +30,7 @@ import { parsePrArgs } from "./slashCommands.ts";
 import type { CommitWorkflowResult } from "./commitWorkflow.ts";
 import type { PushWorkflowResult } from "./pushWorkflow.ts";
 import { createTask } from "./tasks.ts";
+import { sessionStore } from "./db/sessionStore.ts";
 
 const hoisted = vi.hoisted(() => ({
   hostingProviderForRepo:
@@ -464,6 +466,101 @@ test("the PR agent title remains the default with a linked Jira Task", async () 
     assert.equal(card.title, generatedTitle);
     assert.equal(card.linkedTask?.id, task.id);
   } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("the PR command freezes source requirement across commit/push git awaits", async () => {
+  const repo = branchRepo();
+  const source = vi
+    .spyOn(sessionStore, "getIncludingDeleted")
+    .mockReturnValue({ requiresEnterprise: true } as never);
+  try {
+    const result = await runPrWorkflow(
+      {
+        cwd: repo,
+        sessionManager: {},
+        sessionKind: "developer",
+        sessionId: "enterprise-chain",
+        requiresEnterprise: false,
+        args: prArgs,
+        commandText: "/pr",
+        presenter: presenter([]),
+      },
+      {
+        hasChanges: async () => {
+          source.mockReturnValue({ requiresEnterprise: false } as never);
+          return true;
+        },
+        runCommit: async (options) => {
+          assert.equal(options.requiresEnterprise, true);
+          return commit("committed");
+        },
+        needsPush: async () => false,
+        runPush: async () => push("up-to-date"),
+        beginPullRequestCard: async (input) => {
+          assert.equal(input.requiresEnterprise, true);
+          return created;
+        },
+      },
+    );
+    assert.equal(result.status, "created");
+  } finally {
+    source.mockRestore();
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("PR drafting preserves source requirement across provider/git awaits and a delayed card retry", async () => {
+  const repo = branchRepo();
+  const source = vi
+    .spyOn(sessionStore, "getIncludingDeleted")
+    .mockReturnValue({ requiresEnterprise: true } as never);
+  try {
+    execFileSync("git", ["branch", "main", "HEAD"], { cwd: repo });
+    hoisted.generatePullRequestJson.mockResolvedValue({
+      title: "Scoped PR",
+      body: ["Body"],
+      warnings: [],
+    });
+    hoisted.hostingProviderForRepo.mockImplementation(async () => {
+      source.mockReturnValue({ requiresEnterprise: false } as never);
+      return fakeProvider({
+        createPullRequest: async (input) => ({
+          number: 77,
+          url: "https://github.com/acme/repo/pull/77",
+          title: input.title,
+          state: "open",
+        }),
+      });
+    });
+    const result = await beginPullRequestCard({
+      repoRoot: repo,
+      sessionKind: "developer",
+      sessionId: "enterprise-pr",
+      requiresEnterprise: false,
+      args: {
+        ...prArgs,
+        base: "main",
+        additionalContext: "Enterprise transcript context",
+      },
+    });
+    assert.equal(result.status, "created");
+    assert.equal(
+      pullRequestCardRecord(result.cardId)?.context.requiresEnterprise,
+      true,
+    );
+    assert.deepEqual(hoisted.generatePullRequestJson.mock.calls.at(-1)?.[2], {
+      sourceSessionId: "enterprise-pr",
+      requiresEnterprise: true,
+    });
+    await finalizePullRequestCard(result.cardId, null);
+    assert.deepEqual(hoisted.generatePullRequestJson.mock.calls.at(-1)?.[2], {
+      sourceSessionId: "enterprise-pr",
+      requiresEnterprise: true,
+    });
+  } finally {
+    source.mockRestore();
     rmSync(repo, { recursive: true, force: true });
   }
 });

@@ -5,6 +5,7 @@ import type {
   ThinkingLevel,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
+import { Sparkles } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon.tsx";
 import { UsageCycleMeters } from "./UsageCycleMeters.tsx";
 import { THINKING_LABELS } from "./ModelThinkingSelect.tsx";
@@ -51,11 +52,24 @@ export function ProviderAccountRow({
   selectedId,
   usageIndicators,
   onSelect,
+  automatic,
   label = "Provider",
   disabled = false,
 }: {
   accounts: readonly RuntimeAccount[];
   selectedId: string | undefined;
+  /**
+   * Offer Automatic as the first card: no account is named, the server's
+   * account router picks one when the run starts. The web workflow start sheet
+   * deliberately omits it: people compare usage meters and pick each role's
+   * account there. The server still routes unpinned roles from saved configs.
+   */
+  automatic?: {
+    selected: boolean;
+    onSelect: () => void;
+    /** One muted line under the name, in the usage meters' slot. */
+    detail: string;
+  };
   /**
    * Subscription-usage indicators from the server cache (`docs/usage.md`), or
    * null while the first snapshot has not arrived. Cards render the same slot
@@ -78,8 +92,33 @@ export function ProviderAccountRow({
   return (
     <QuickRow
       label={label}
-      scrollKey={`${selectedId ?? ""}:${accounts.length}`}
+      scrollKey={`${automatic?.selected ? "automatic" : (selectedId ?? "")}:${accounts.length}`}
     >
+      {automatic ? (
+        <QuickPill
+          selected={automatic.selected}
+          disabled={disabled}
+          title="Let Pandeck pick the account"
+          onClick={automatic.onSelect}
+          className={`w-52 ${QUICK_CARD}`}
+        >
+          <span className="flex w-full min-w-0 items-center gap-1.5">
+            <Sparkles
+              size={16}
+              aria-hidden
+              className={
+                automatic.selected
+                  ? "shrink-0 text-primary"
+                  : "shrink-0 text-muted-foreground"
+              }
+            />
+            <span className="min-w-0 flex-1 truncate">Automatic</span>
+          </span>
+          <span className="w-full text-xs whitespace-normal text-muted-foreground">
+            {automatic.detail}
+          </span>
+        </QuickPill>
+      ) : null}
       {accounts.map((account) => {
         const selected = account.id === selectedId;
         const providerLabel = PROVIDER_LABEL[account.provider];

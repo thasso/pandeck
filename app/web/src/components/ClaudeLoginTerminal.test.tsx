@@ -12,9 +12,11 @@ const profile = {
   name: "Claude personal",
   provider: "claude" as const,
   enabled: true,
+  enterprise: false,
   createdAt: 0,
   updatedAt: 0,
   status: "ready" as const,
+  health: { state: "unknown" as const, since: null },
 };
 
 describe("ClaudeLoginTerminal", () => {

@@ -4,6 +4,20 @@ import type { SidebarSection } from "../hooks/useSidebarSection.ts";
 /** The routes whose main pane reads a domain list, by name (`useSessionRouting.ts`). */
 type RouteName = string;
 
+/** Settings sections whose agent slots preview Automatic account selection. */
+const MODEL_SLOT_SETTINGS = new Set([
+  "personal-assistant",
+  "memory",
+  "naming",
+  "session-status",
+  "refinement",
+  "worktrees",
+  "commit",
+  "pull-request",
+  "task-intake",
+  "pdf-conversion",
+]);
+
 export interface TopicSurface {
   /** Whether the sidebar's object browser is actually on screen. */
   sidebarVisible: boolean;
@@ -12,6 +26,8 @@ export interface TopicSurface {
   routeName: RouteName;
   /** A staged-session sheet's Task field is expanded and rendering its picker. */
   taskPickerOpen?: boolean;
+  /** Desktop /sessions renders quick-start account cards; mobile is an inbox. */
+  sessionsQuickStartVisible?: boolean;
   /** The workflow start sheet is open and reads usage plus worktree branches. */
   workflowStartOpen?: boolean;
   /** The Projects route has a selected document (the index does not). */
@@ -66,6 +82,7 @@ export function topicsForSurface({
   sidebarSection,
   routeName,
   taskPickerOpen = false,
+  sessionsQuickStartVisible = false,
   workflowStartOpen = false,
   projectSelected = false,
   sessionInspectorVisible = false,
@@ -127,19 +144,25 @@ export function topicsForSurface({
     sessionInspectorVisible
   )
     topics.add("skills");
-  // The Agents section lists the definitions; the new-session page offers
-  // them as a starting point. Not the Sessions inbox route, as for projects
-  // and worktrees: each subscribe resolves every definition.
+  // The Agents section and new-session page offer definitions. Each subscribe
+  // resolves the library, so the Sessions inbox does not hold this topic.
   if (
     (routeName === "settings" && settingsSection === "agents") ||
     routeName === "new"
   )
     topics.add("agents");
-  // Usage rides on the surfaces that show account meters — the new-session
-  // provider cards, the Usage page, and the workflow start sheet's runtime
-  // rows. Subscribing is what makes the server refresh at all
-  // (`docs/usage.md`), so no other surface should carry it.
-  if (routeName === "new" || routeName === "usage" || workflowStartOpen)
+  // Usage supplies account meters and Settings slots' Automatic previews.
+  // Subscribing drives cache refresh (`docs/usage.md`), so hold it only while
+  // those surfaces render, never for the Settings browser or other sections.
+  if (
+    routeName === "new" ||
+    sessionsQuickStartVisible ||
+    routeName === "usage" ||
+    workflowStartOpen ||
+    (routeName === "settings" &&
+      settingsSection !== undefined &&
+      MODEL_SLOT_SETTINGS.has(settingsSection))
+  )
     topics.add("usage");
   // The background registry is held by its OWN route, by the one inspector
   // section that renders rows, and by the composer's ledge while it is OPEN —

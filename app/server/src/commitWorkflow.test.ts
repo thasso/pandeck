@@ -11,16 +11,22 @@ import {
 } from "./commitWorkflow.ts";
 import type { CommitAgentResult } from "./commitAgent.ts";
 import type { AgentSession } from "./piSdk/index.ts";
+import { sessionStore } from "./db/sessionStore.ts";
 
 // Passthrough git seam with one hook: run something after the workflow's
 // unlocked inspection and right before it takes the repository lock.
 const lockHooks = vi.hoisted(() => ({
   beforeLock: undefined as (() => void) | undefined,
+  beforeInspect: undefined as (() => void) | undefined,
 }));
 vi.mock("./gitExec.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./gitExec.ts")>();
   return {
     ...actual,
+    resolveRepoRoot: async (cwd: string) => {
+      lockHooks.beforeInspect?.();
+      return actual.resolveRepoRoot(cwd);
+    },
     withRepoLock: async <T>(key: string, fn: () => Promise<T>) => {
       lockHooks.beforeLock?.();
       return actual.withRepoLock(key, fn);
@@ -74,9 +80,50 @@ function fakeSession(): AgentSession {
 
 afterEach(() => {
   lockHooks.beforeLock = undefined;
+  lockHooks.beforeInspect = undefined;
+  vi.restoreAllMocks();
   setCommitMessageGeneratorForTests(null);
   for (const cwd of repos.splice(0))
     rmSync(cwd, { recursive: true, force: true });
+});
+
+test("commit helper captures transcript source requirement before git awaits", async () => {
+  const cwd = repo();
+  writeFileSync(join(cwd, "file.txt"), "changed\n");
+  const source = vi
+    .spyOn(sessionStore, "getIncludingDeleted")
+    .mockReturnValue({ requiresEnterprise: true } as never);
+  lockHooks.beforeInspect = () =>
+    source.mockReturnValue({ requiresEnterprise: false } as never);
+  setCommitMessageGeneratorForTests(async (prompt, helperSource) => {
+    assert.match(prompt, /Enterprise transcript context/);
+    assert.deepEqual(helperSource, {
+      sourceSessionId: "enterprise-commit",
+      requiresEnterprise: true,
+    });
+    return generated;
+  });
+  const session = fakeSession();
+  session.sessionManager.getBranch = () =>
+    [
+      {
+        id: "user-1",
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Enterprise transcript context" }],
+        },
+      },
+    ] as never;
+  const result = await runCommitWorkflow({
+    source: "slash",
+    cwd,
+    dryRun: true,
+    session,
+    sessionId: "enterprise-commit",
+    requiresEnterprise: false,
+  });
+  assert.equal(result.status, "dry-run");
 });
 
 test("checked workflow commits with a generated message and reports no changes as data", async () => {

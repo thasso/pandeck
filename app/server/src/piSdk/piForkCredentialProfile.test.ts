@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, test, vi } from "vitest";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -9,7 +16,8 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
 const { hub } = await import("../hub.ts");
-const { createCredentialProfile } = await import("../credentialProfiles.ts");
+const { createCredentialProfile, patchCredentialProfile } =
+  await import("../credentialProfiles.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { piStore } = await import("./piStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
@@ -29,14 +37,46 @@ interface StoreInternals {
     _notices: unknown[],
     _cwd: string,
     credentialProfileId: string | undefined,
+    _scope?: string,
+    requiresEnterprise?: boolean,
   ) => { sessionId: string; sessionFile?: string };
 }
 
-test("a pi fork persists its inherited profile and reopens through that runtime", async () => {
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+function writeForkableParent(id: string): { file: string; entryId: string } {
+  const file = canonicalPiSessionPath(id);
+  const entryId = `${id}-entry`;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id,
+        timestamp: new Date().toISOString(),
+        cwd: tmp,
+      }),
+      JSON.stringify({
+        type: "message",
+        id: entryId,
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "fork here", timestamp: Date.now() },
+      }),
+      "",
+    ].join("\n"),
+  );
+  return { file, entryId };
+}
+
+test("a pi fork persists its inherited profile and enterprise requirement", async () => {
   const profile = createCredentialProfile({
     name: "Fork account",
     provider: "openai-codex",
   });
+  patchCredentialProfile(profile.id, { enterprise: true });
   const parentId = "fork-profile-parent";
   const entryId = "fork-profile-entry";
   const parentFile = canonicalPiSessionPath(parentId);
@@ -66,6 +106,7 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
     harness: "pi",
     agentType: "assistant",
     credentialProfileId: profile.id,
+    requiresEnterprise: true,
   });
 
   const internals = piStore as unknown as StoreInternals;
@@ -74,7 +115,6 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
   const originalBroadcastSessions = hub.broadcastSessions;
   let childFile: string | undefined;
   let reopenedProfileId: string | undefined;
-  // The account each registration hands the live session (`PiLiveSession`).
   const trackedProfiles: Array<string | undefined> = [];
 
   internals.create = async (...args: unknown[]) => {
@@ -88,7 +128,22 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
     reopenedProfileId = args[5] as string;
     return { session, notices: [] };
   };
-  internals.track = (_kind, session, _notices, _cwd, credentialProfileId) => {
+  internals.track = (
+    _kind,
+    session,
+    _notices,
+    _cwd,
+    credentialProfileId,
+    _scope,
+    requiresEnterprise,
+  ) => {
+    if (requiresEnterprise)
+      sessionStore.claimScope({
+        id: session.sessionId,
+        harness: "pi",
+        agentType: "assistant",
+        requiresEnterprise: true,
+      });
     trackedProfiles.push(credentialProfileId);
     return {
       sessionId: session.sessionId,
@@ -112,10 +167,9 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
     const childId = forked.sessionId;
     assert.notEqual(childId, parentId);
     assert.equal(sessionStore.get(childId)?.credentialProfileId, profile.id);
+    assert.equal(sessionStore.get(childId)?.requiresEnterprise, true);
     assert.deepEqual(trackedProfiles, [profile.id], "the live fork runs on it");
 
-    // Simulate the first post-fork flush before process restart. The cold-open
-    // path must recover the runtime profile from metadata, not live state.
     childFile = canonicalPiSessionPath(childId);
     mkdirSync(dirname(childFile), { recursive: true });
     writeFileSync(
@@ -168,6 +222,101 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
     (
       hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
     ).broadcastSessions = originalBroadcastSessions;
-    rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test.each([false, true])(
+  "pi refuses a personal fork account with tombstoned enterprise source=%s",
+  async (tombstoned) => {
+    const personal = createCredentialProfile({
+      name: "Personal fork account",
+      provider: "openai-codex",
+    });
+    const parentId = `pi-personal-enterprise-parent-${tombstoned}`;
+    const { file, entryId } = writeForkableParent(parentId);
+    const sourceBytes = readFileSync(file);
+    sessionStore.upsert({
+      id: parentId,
+      harness: "pi",
+      agentType: "assistant",
+      credentialProfileId: personal.id,
+      requiresEnterprise: true,
+    });
+    if (tombstoned) sessionStore.remove(parentId);
+    const internals = piStore as unknown as StoreInternals;
+    const create = vi.spyOn(internals, "create");
+
+    await assert.rejects(
+      piStore.forkSession("assistant", file, entryId, "at", `${parentId}-app`),
+      /requires an enterprise account/i,
+    );
+
+    assert.equal(create.mock.calls.length, 0);
+    assert.deepEqual(readFileSync(file), sourceBytes);
+    assert.equal(
+      sessionStore.getIncludingDeleted(parentId)?.requiresEnterprise,
+      true,
+    );
+  },
+);
+
+test("pi removes a forked child if its enterprise profile is demoted during creation", async () => {
+  const profile = createCredentialProfile({
+    name: "Enterprise race account",
+    provider: "openai-codex",
+  });
+  patchCredentialProfile(profile.id, { enterprise: true });
+  const parentId = "pi-enterprise-race-parent";
+  const { file, entryId } = writeForkableParent(parentId);
+  const sourceBytes = readFileSync(file);
+  sessionStore.upsert({
+    id: parentId,
+    harness: "pi",
+    agentType: "assistant",
+    credentialProfileId: profile.id,
+    requiresEnterprise: true,
+  });
+
+  const internals = piStore as unknown as StoreInternals;
+  const originalCreate = internals.create;
+  const originalTrack = internals.track;
+  const disposed = vi.fn();
+  let childId: string | undefined;
+  let childFile: string | undefined;
+  internals.create = async (...args: unknown[]) => {
+    const manager = args[1] as FakeSessionManager;
+    childId = manager.getSessionId();
+    childFile = manager.getSessionFile();
+    await Promise.resolve();
+    patchCredentialProfile(profile.id, { enterprise: false });
+    return {
+      session: {
+        sessionId: childId,
+        sessionFile: childFile,
+        dispose: disposed,
+      },
+      notices: [],
+    };
+  };
+  const track = vi.spyOn(internals, "track");
+
+  try {
+    await assert.rejects(
+      piStore.forkSession("assistant", file, entryId, "at", `${parentId}-app`),
+      /requires an enterprise account/i,
+    );
+  } finally {
+    patchCredentialProfile(profile.id, { enterprise: true });
+    internals.create = originalCreate;
+    internals.track = originalTrack;
+  }
+
+  assert.ok(childId);
+  assert.ok(childFile);
+  assert.equal(disposed.mock.calls.length, 1);
+  assert.equal(track.mock.calls.length, 0);
+  assert.equal(sessionStore.get(childId)?.requiresEnterprise, undefined);
+  assert.equal(existsSync(childFile), false);
+  assert.deepEqual(readFileSync(file), sourceBytes);
+  assert.equal(sessionStore.get(parentId)?.requiresEnterprise, true);
 });

@@ -16,8 +16,10 @@ export const usageProfiles: CredentialProfileSummary[] = [
   {
     id: "claude-personal",
     name: "Claude personal",
+    health: { state: "unknown", since: null },
     provider: "claude",
     enabled: true,
+    enterprise: false,
     status: "ready",
     createdAt: now - 90 * 86_400_000,
     updatedAt: now,
@@ -25,8 +27,10 @@ export const usageProfiles: CredentialProfileSummary[] = [
   {
     id: "openai-work",
     name: "OpenAI work",
+    health: { state: "unknown", since: null },
     provider: "openai-codex",
     enabled: true,
+    enterprise: true,
     status: "ready",
     createdAt: now - 50 * 86_400_000,
     updatedAt: now,

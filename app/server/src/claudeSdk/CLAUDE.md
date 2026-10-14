@@ -41,6 +41,8 @@
 - `session_state_changed: idle` is the only authoritative turn-over signal;
   `running` is an optional early hint, never a required turn-start contract.
 - A turn's fork anchor is its LAST native uuid; PA owns transcript retention.
+- Failover copies JSONL/subagents after the old query ends; active background
+  work refuses it. The current row binding beats record metadata.
 - The committed timeline is APPEND-ONLY: the store persists only entries past
   its log's extent (`claudeSdkRecords.ts`), so an entry edited or removed in
   place silently diverges from disk.

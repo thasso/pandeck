@@ -23,6 +23,8 @@ export interface ScannedPiEntry {
   /** Pi's native entry id (stable across reload/resume). */
   id: string;
   role: "user" | "assistant" | "toolResult";
+  /** Host continuation prompt, native-only and never paired to an app user row. */
+  continuation?: true;
   /** For tool results, the call they answer (for binding to our toolResult entry). */
   toolCallId?: string;
   /**
@@ -66,10 +68,20 @@ export function scanPiEntries(path: string | undefined): ScannedPiEntry[] {
     const r = row as {
       type?: unknown;
       id?: unknown;
+      customType?: unknown;
+      display?: unknown;
       message?: { role?: unknown; toolCallId?: unknown; content?: unknown };
     };
-    if (r.type !== "message" || typeof r.id !== "string" || !r.message)
+    if (typeof r.id !== "string") continue;
+    if (
+      r.type === "custom_message" &&
+      r.customType === "account-continuation" &&
+      r.display === false
+    ) {
+      out.push({ id: r.id, role: "user", continuation: true });
       continue;
+    }
+    if (r.type !== "message" || !r.message) continue;
     const role = r.message.role;
     if (role !== "user" && role !== "assistant" && role !== "toolResult")
       continue;
@@ -123,7 +135,8 @@ function declaredToolCalls(content: unknown): {
 export function lastUserNativeId(path: string | undefined): string | undefined {
   const entries = scanPiEntries(path);
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i]!.role === "user") return entries[i]!.id;
+    if (entries[i]!.role === "user" && !entries[i]!.continuation)
+      return entries[i]!.id;
   }
   return undefined;
 }

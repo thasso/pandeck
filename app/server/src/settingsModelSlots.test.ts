@@ -1,17 +1,25 @@
 import assert from "node:assert/strict";
-import { beforeEach, test } from "vitest";
+import { beforeEach, test, vi } from "vitest";
+import { pickAccount } from "./accountRouter.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
+import {
+  accountProviderForModelProvider,
+  CLAUDE_SDK_PROVIDER,
+} from "@assistant/shared";
 
 // Settings and the profile registry both resolve DATA_DIR at import time.
 const tmp = mkdtempSync(join(tmpdir(), "settings-model-slots-test-"));
 process.env.HOME = join(tmp, "home");
 process.env.DATA_DIR = join(tmp, "data");
 
+vi.mock("./accountRouter.ts", () => ({ pickAccount: vi.fn() }));
+
 const {
+  credentialProfileSummaryById,
   createCredentialProfile,
+  patchCredentialProfile,
   ensureDefaultPiProfile,
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
@@ -28,6 +36,11 @@ const { clearProfilePins, credentialProfileUsage } =
 const dataDir = process.env.DATA_DIR;
 
 beforeEach(() => {
+  vi.mocked(pickAccount).mockReset();
+  vi.mocked(pickAccount).mockImplementation(async ({ model }) => ({
+    profileId:
+      model.provider === CLAUDE_SDK_PROVIDER ? "claude-default" : "default",
+  }));
   rmSync(join(dataDir, "credential-profiles"), {
     recursive: true,
     force: true,
@@ -77,32 +90,41 @@ test("the slot registry covers every configured model slot in settings", () => {
   }
 });
 
-test("an unpinned slot follows the automatic account for its provider", () => {
-  const openai = accountForSlot({
+test("an unpinned slot delegates model and effort to the router", async () => {
+  const openai = await accountForSlot({
     provider: "github-copilot",
     modelId: "gpt-4.1",
   });
-  const claude = accountForSlot({
+  const claude = await accountForSlot({
     provider: CLAUDE_SDK_PROVIDER,
     modelId: "sonnet",
   });
   assert.equal(openai, "default");
   assert.equal(claude, "claude-default");
 
-  // Automatic selection follows the first ENABLED account of that provider.
+  // The router can select a different account per run, not registry order.
   const second = createCredentialProfile({
     name: "Second OpenAI",
     provider: "openai-codex",
   });
-  setCredentialProfileEnabled("default", false);
+  vi.mocked(pickAccount).mockResolvedValueOnce({ profileId: second.id });
   assert.equal(
-    accountForSlot({ provider: "github-copilot", modelId: "gpt-4.1" }),
+    await accountForSlot({
+      provider: "github-copilot",
+      modelId: "gpt-4.1",
+      thinkingLevel: "low",
+    }),
     second.id,
   );
-  setCredentialProfileEnabled("default", true);
+  assert.deepEqual(vi.mocked(pickAccount).mock.calls.at(-1)?.[0], {
+    model: { provider: "github-copilot", modelId: "gpt-4.1" },
+    thinkingLevel: "low",
+    requiresEnterprise: false,
+    allowDisabledDefault: true,
+  });
 });
 
-test("a pinned account is used, and degrades to automatic when it cannot be", () => {
+test("a pinned account is used, and degrades to automatic when it cannot be", async () => {
   const second = createCredentialProfile({
     name: "Second OpenAI",
     provider: "openai-codex",
@@ -113,17 +135,18 @@ test("a pinned account is used, and degrades to automatic when it cannot be", ()
     credentialProfileId: second.id,
   };
 
-  assert.deepEqual(resolveSlotAccount(pinned), { profileId: second.id });
+  assert.deepEqual(await resolveSlotAccount(pinned), { profileId: second.id });
+  assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
 
   setCredentialProfileEnabled(second.id, false);
-  assert.deepEqual(resolveSlotAccount(pinned), {
+  assert.deepEqual(await resolveSlotAccount(pinned), {
     profileId: "default",
     degraded: "disabled",
     pinnedProfileId: second.id,
   });
 
   assert.deepEqual(
-    resolveSlotAccount({
+    await resolveSlotAccount({
       provider: "github-copilot",
       modelId: "gpt-4.1",
       credentialProfileId: "cp_gone",
@@ -132,7 +155,7 @@ test("a pinned account is used, and degrades to automatic when it cannot be", ()
   );
   // A Claude account cannot run a pi model (or the reverse).
   assert.deepEqual(
-    resolveSlotAccount({
+    await resolveSlotAccount({
       provider: "github-copilot",
       modelId: "gpt-4.1",
       credentialProfileId: "claude-default",
@@ -143,6 +166,143 @@ test("a pinned account is used, and degrades to automatic when it cannot be", ()
       pinnedProfileId: "claude-default",
     },
   );
+});
+
+test("an enabled matching needs-login pin remains explicit instead of spending another account", async () => {
+  const pinned = createCredentialProfile({ name: "Work", provider: "claude" });
+  assert.equal(
+    credentialProfileSummaryById(pinned.id)?.health.state,
+    "needs-login",
+  );
+  assert.deepEqual(
+    await resolveSlotAccount({
+      provider: CLAUDE_SDK_PROVIDER,
+      modelId: "sonnet",
+      thinkingLevel: "high",
+      credentialProfileId: pinned.id,
+    }),
+    { profileId: pinned.id },
+  );
+  assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+});
+
+test("background slots retain disabled-default degradation and refuse an empty scope", async () => {
+  vi.mocked(pickAccount).mockResolvedValueOnce({
+    profileId: "default",
+    degraded: "disabled-default",
+  });
+  assert.deepEqual(
+    await resolveSlotAccount({ provider: "openai-codex", modelId: "gpt-test" }),
+    {
+      profileId: "default",
+      degraded: "disabled-default",
+    },
+  );
+  vi.mocked(pickAccount).mockResolvedValueOnce({
+    profileId: null,
+    degraded: "no-enabled-account",
+  });
+  await assert.rejects(
+    accountForSlot({ provider: "openai-codex", modelId: "gpt-test" }),
+    /No account/,
+  );
+});
+
+test("enterprise helpers refuse personal explicit pins without automatic substitution", async () => {
+  const personal = createCredentialProfile({
+    name: "Personal",
+    provider: "claude",
+  });
+  await assert.rejects(
+    resolveSlotAccount({
+      provider: CLAUDE_SDK_PROVIDER,
+      modelId: "sonnet",
+      credentialProfileId: personal.id,
+      requiresEnterprise: true,
+    }),
+    /explicit account pin is personal/,
+  );
+  assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+});
+
+test("enterprise Automatic refuses exhausted eligibility and disabled defaults", async () => {
+  for (const degraded of [
+    "no-eligible-account",
+    "disabled-default",
+    "no-enterprise-account",
+  ] as const) {
+    vi.mocked(pickAccount).mockResolvedValueOnce({
+      profileId: "claude-default",
+      degraded,
+    });
+    await assert.rejects(
+      resolveSlotAccount({
+        provider: CLAUDE_SDK_PROVIDER,
+        modelId: "sonnet",
+        requiresEnterprise: true,
+      }),
+      /requires an eligible enterprise account/,
+    );
+    assert.deepEqual(vi.mocked(pickAccount).mock.calls.at(-1)?.[0], {
+      model: { provider: CLAUDE_SDK_PROVIDER, modelId: "sonnet" },
+      requiresEnterprise: true,
+      allowDisabledDefault: false,
+    });
+  }
+});
+
+test("an explicit enterprise needs-login pin remains explicit", async () => {
+  const enterprise = createCredentialProfile({
+    name: "Work",
+    provider: "claude",
+  });
+  patchCredentialProfile(enterprise.id, { enterprise: true });
+  assert.deepEqual(
+    await resolveSlotAccount({
+      provider: CLAUDE_SDK_PROVIDER,
+      modelId: "sonnet",
+      credentialProfileId: enterprise.id,
+      requiresEnterprise: true,
+    }),
+    { profileId: enterprise.id },
+  );
+  assert.equal(vi.mocked(pickAccount).mock.calls.length, 0);
+});
+
+test("existing slot pins survive reads and unrelated writes until saved as Automatic", () => {
+  const claude = createCredentialProfile({ name: "Work", provider: "claude" });
+  const openai = createCredentialProfile({
+    name: "Work",
+    provider: "openai-codex",
+  });
+  const pinned = getSettings();
+  for (const { slot } of listSettingsModelSlots(pinned))
+    slot.credentialProfileId =
+      accountProviderForModelProvider(slot.provider) === "claude"
+        ? claude.id
+        : openai.id;
+  updateSettings(pinned);
+  updateSettings({
+    accountRouting: { fiveHourUsedThreshold: 85, weeklyUsedThreshold: 90 },
+  });
+
+  const retained = getSettings();
+  const expected = listSettingsModelSlots(pinned);
+  for (const { key, slot } of listSettingsModelSlots(retained))
+    assert.deepEqual(slot, expected.find((ref) => ref.key === key)!.slot, key);
+
+  const automatic = structuredClone(retained);
+  for (const { slot } of listSettingsModelSlots(automatic))
+    delete slot.credentialProfileId;
+  const saved = updateSettings(automatic);
+  for (const settings of [saved, getSettings()])
+    for (const { key, slot } of listSettingsModelSlots(settings)) {
+      assert.equal(Object.hasOwn(slot, "credentialProfileId"), false, key);
+      const { credentialProfileId: _pin, ...before } = expected.find(
+        (ref) => ref.key === key,
+      )!.slot;
+      assert.deepEqual(slot, before, key);
+    }
 });
 
 test("only valid pins are persisted", () => {
@@ -225,23 +385,7 @@ test("account usage reports pinned slots, and deleting an account clears them", 
     provider: "openai-codex",
   });
   assert.equal(usage.pinnedSlots.length, 2);
-  assert.equal(
-    usage.automaticForProvider,
-    undefined,
-    "the protected default is still the automatic account",
-  );
   assert.equal(usage.boundSessionCount, 0);
-
-  const defaultUsage = credentialProfileUsage({
-    id: "default",
-    provider: "openai-codex",
-  });
-  assert.equal(defaultUsage.automaticForProvider, "openai-codex");
-  assert.equal(
-    defaultUsage.automaticFallback?.id,
-    openai.id,
-    "disabling the default moves unpinned work to the next enabled account",
-  );
 
   const cleared = await clearProfilePins(openai.id);
   assert.deepEqual(cleared.map((slot) => slot.key).sort(), [

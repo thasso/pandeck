@@ -47,6 +47,59 @@ test("SQLite session store preserves an established credential profile", () => {
   assert.equal(sessionStore.get(id)?.credentialProfileId, "openai-one");
 });
 
+test("live failover alone replaces a binding, with a stale/deleted-row fence", () => {
+  const id = `switch-bound-session-${Date.now()}`;
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "first",
+    requiresEnterprise: true,
+  });
+  sessionStore.switchCredentialProfile(id, "first", "second");
+  assert.equal(sessionStore.get(id)?.credentialProfileId, "second");
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "developer",
+    credentialProfileId: "first",
+  });
+  assert.equal(
+    sessionStore.get(id)?.credentialProfileId,
+    "second",
+    "late metadata refresh cannot restore the old login",
+  );
+  assert.throws(() =>
+    sessionStore.switchCredentialProfile(id, "first", "third"),
+  );
+  sessionStore.markDeleted(id);
+  assert.throws(() =>
+    sessionStore.switchCredentialProfile(id, "second", "third"),
+  );
+});
+
+test("SQLite session store durably freezes an enterprise account requirement", () => {
+  const id = `enterprise-session-${Date.now()}`;
+  sessionStore.claimScope({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    requiresEnterprise: true,
+  });
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+
+  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    requiresEnterprise: false,
+  });
+  assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+});
+
 test("SQLite session store persists mutable Build/Plan mode", () => {
   const id = `mode-session-${Date.now()}`;
   sessionStore.upsert({

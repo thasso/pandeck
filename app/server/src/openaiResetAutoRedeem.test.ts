@@ -70,7 +70,9 @@ const profile = (
   name: id,
   provider,
   enabled,
+  enterprise: false,
   status: "ready",
+  health: { state: "unknown", since: null },
   createdAt: 0,
   updatedAt: 0,
 });

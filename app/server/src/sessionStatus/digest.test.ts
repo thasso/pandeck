@@ -109,7 +109,11 @@ describe("buildSessionDigest", () => {
     ]);
     const meta = sessionStore.get(id)!;
 
-    const digest = buildSessionDigest(meta, Date.UTC(2026, 9, 8, 16));
+    const { prompt: digest, sourceSessionIds } = buildSessionDigest(
+      meta,
+      Date.UTC(2026, 9, 8, 16),
+    );
+    assert.deepEqual(sourceSessionIds, [id]);
 
     assert.match(digest, /^# Session digest: STAR-1461: Deploy to test/);
     assert.match(digest, /- Activity: 2 runs on 1 day\(s\)/);
@@ -164,7 +168,10 @@ describe("buildSessionDigest", () => {
       context: {},
     });
 
-    const digest = buildSessionDigest(sessionStore.get(id)!);
+    const { prompt: digest, sourceSessionIds } = buildSessionDigest(
+      sessionStore.get(id)!,
+    );
+    assert.deepEqual(sourceSessionIds, [id, worker]);
 
     assert.match(
       digest,
@@ -210,7 +217,7 @@ describe("buildSessionDigest", () => {
     }
     writeLog(id, rows);
 
-    const digest = buildSessionDigest(sessionStore.get(id)!);
+    const { prompt: digest } = buildSessionDigest(sessionStore.get(id)!);
 
     assert.match(digest, /### Run 1\/60/);
     assert.match(

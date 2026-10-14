@@ -65,6 +65,8 @@ interface Props {
   reloading?: AppReloadState | null;
   hydrationSource?: "empty" | "cache" | "live";
   placement?: "bar" | "floating";
+  accountLoginAlerts?: import("@assistant/shared").AccountLoginAlert[];
+  onNavigate?: (path: string) => void;
 }
 
 function render(props: Props = {}) {
@@ -80,6 +82,8 @@ function update({
   reloading = null,
   hydrationSource = "live",
   placement = "floating",
+  accountLoginAlerts,
+  onNavigate,
 }: Props = {}) {
   act(() =>
     root!.render(
@@ -88,13 +92,15 @@ function update({
         reloading={reloading}
         hydrationSource={hydrationSource}
         placement={placement}
+        accountLoginAlerts={accountLoginAlerts}
+        onNavigate={onNavigate}
       />,
     ),
   );
 }
 
 function slot(): HTMLElement | null {
-  return container!.querySelector("[role='status']");
+  return container!.querySelector("[role='status'], [aria-live='polite']");
 }
 
 function elapse(ms: number) {
@@ -102,6 +108,70 @@ function elapse(ms: number) {
     vi.advanceTimersByTime(ms);
   });
 }
+
+it.each(["bar", "floating"] as const)(
+  "makes only the login pill interactive in %s",
+  (placement) => {
+    render({
+      connected: true,
+      placement,
+      accountLoginAlerts: [
+        { profileId: "a", name: "Claude Private", provider: "claude" },
+      ],
+    });
+    const link = slot()!;
+    expect(link.tagName).toBe("A");
+    expect(link.getAttribute("role")).toBeNull();
+    expect(link.getAttribute("aria-live")).toBe("polite");
+    expect(link.getAttribute("href")).toBe("/settings/claude-sdk");
+    expect(link.textContent).toContain("Claude Private needs login");
+    expect(link.className).toContain("pointer-events-auto");
+    update({ connected: true, placement, reloading: { phase: "reloading" } });
+    expect(slot()!.tagName).toBe("SPAN");
+    expect(slot()!.className).toContain("pointer-events-none");
+  },
+);
+
+it("navigates login links in-app only for unmodified primary clicks", () => {
+  const navigate = vi.fn();
+  render({
+    connected: true,
+    onNavigate: navigate,
+    accountLoginAlerts: [
+      { profileId: "a", name: "Private", provider: "openai-codex" },
+    ],
+  });
+  const link = slot()!;
+  expect(link.getAttribute("href")).toBe("/settings/openai");
+  const click = new MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+  });
+  act(() => {
+    link.dispatchEvent(click);
+  });
+  expect(click.defaultPrevented).toBe(true);
+  expect(navigate).toHaveBeenCalledWith("/settings/openai");
+  for (const modifiers of [
+    { metaKey: true },
+    { ctrlKey: true },
+    { shiftKey: true },
+    { altKey: true },
+    { button: 1 },
+  ]) {
+    const modified = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    });
+    act(() => {
+      link.dispatchEvent(modified);
+    });
+    expect(modified.defaultPrevented).toBe(false);
+  }
+  expect(navigate).toHaveBeenCalledTimes(1);
+});
 
 it("says nothing while the connection is up", () => {
   vi.useFakeTimers();

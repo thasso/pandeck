@@ -41,9 +41,11 @@ import {
 import {
   credentialProfileById,
   enabledCredentialProfileById,
-  automaticProfileIdFor,
+  listCredentialProfiles,
 } from "./credentialProfiles.ts";
+import { pickAccount } from "./accountRouter.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
+import { sourceRequiresEnterprise } from "./sessionEnterprise.ts";
 import { errorText } from "./errors.ts";
 import { getProject } from "./projectRegistry.ts";
 import { piModelForAccount } from "./harnesses/models.ts";
@@ -192,59 +194,94 @@ function runtimeOf(
   };
 }
 
-/** Accounts to try for a provider: the proposer's own first, then automatic. */
-function candidateProfiles(
-  provider: string,
-  preferredProfileId: string | undefined,
-): string[] {
-  const family = accountProviderForModelProvider(provider);
-  const ids: string[] = [];
-  if (
-    preferredProfileId &&
-    enabledCredentialProfileById(preferredProfileId)?.provider === family
-  )
-    ids.push(preferredProfileId);
-  const automatic = automaticProfileIdFor(family);
-  if (!ids.includes(automatic) && enabledCredentialProfileById(automatic))
-    ids.push(automatic);
-  return ids;
-}
-
-/** Any runnable account/model, preferring the proposer's own account. */
+/** Discover a fallback model once per provider, then route that fixed plan. */
 async function firstAvailableRuntime(
-  preferredProfileId: string | undefined,
   level: ThinkingLevel,
+  requiresEnterprise = false,
 ): Promise<ResolvedRuntime | undefined> {
-  const ordered = [
-    ...(preferredProfileId && enabledCredentialProfileById(preferredProfileId)
-      ? [preferredProfileId]
-      : []),
-    automaticProfileIdFor("claude"),
-    automaticProfileIdFor("openai-codex"),
-  ];
-  for (const profileId of new Set(ordered)) {
-    if (!enabledCredentialProfileById(profileId)) continue;
-    const [model] = await modelsForProfile(profileId);
+  const offers = await Promise.all(
+    listCredentialProfiles()
+      .filter(
+        (profile) =>
+          profile.enabled && (!requiresEnterprise || profile.enterprise),
+      )
+      .sort(
+        (a, b) =>
+          Number(a.health.state === "needs-login") -
+          Number(b.health.state === "needs-login"),
+      )
+      .map(async (profile) => ({
+        profile,
+        models: await modelsForProfile(profile.id),
+      })),
+  );
+  // At most one pick per provider, not one per account/model combination.
+  for (const provider of ["claude", "openai-codex"] as const) {
+    const model = offers
+      .filter((offer) => offer.profile.provider === provider)
+      .flatMap((offer) => offer.models)
+      .find(
+        (option) =>
+          !requiresEnterprise ||
+          supportedThinkingLevelsForModel(option).includes(level),
+      );
     if (!model) continue;
-    return runtimeOf(profileId, model, level);
+    const effort = requiresEnterprise ? level : clampThinking(level, model);
+    const runtime = await tryRuntime(
+      model.provider,
+      model.id,
+      effort,
+      requiresEnterprise,
+    );
+    if (runtime) return runtime;
   }
   return undefined;
 }
 
-/** One account/model pair a resolution attempt may land on. */
+/** Every unpinned runtime routes its fixed model and effort through the picker. */
 async function tryRuntime(
   provider: string,
   modelId: string,
   level: ThinkingLevel,
-  preferredProfileId: string | undefined,
+  requiresEnterprise = false,
 ): Promise<ResolvedRuntime | undefined> {
-  for (const profileId of candidateProfiles(provider, preferredProfileId)) {
-    const model = (await modelsForProfile(profileId)).find(
-      (option) => option.provider === provider && option.id === modelId,
-    );
-    if (model) return runtimeOf(profileId, model, level);
+  let effort = level;
+  if (!requiresEnterprise) {
+    const offers = (
+      await Promise.all(
+        listCredentialProfiles()
+          .filter(
+            (profile) =>
+              profile.enabled &&
+              profile.provider === accountProviderForModelProvider(provider),
+          )
+          .map((profile) => modelsForProfile(profile.id)),
+      )
+    )
+      .flat()
+      .filter((model) => model.provider === provider && model.id === modelId);
+    const offered =
+      offers.find((model) =>
+        supportedThinkingLevelsForModel(model).includes(level),
+      ) ?? offers[0];
+    if (!offered) return undefined;
+    effort = clampThinking(level, offered);
   }
-  return undefined;
+  const picked = await pickAccount({
+    model: { provider, modelId },
+    thinkingLevel: effort,
+    requiresEnterprise,
+  });
+  if (!picked.profileId) return undefined;
+  const model = (await modelsForProfile(picked.profileId)).find(
+    (option) => option.provider === provider && option.id === modelId,
+  );
+  if (!model || !supportedThinkingLevelsForModel(model).includes(effort))
+    return undefined;
+  return {
+    ...runtimeOf(picked.profileId, model, effort),
+    thinkingLevel: effort,
+  };
 }
 
 /**
@@ -261,7 +298,7 @@ async function tryRuntime(
 async function resolveRuntime(
   row: SpawnRequestRow,
   fallback: SpawnFallbackRuntime | undefined,
-  preferredProfileId: string | undefined,
+  requiresEnterprise: boolean,
 ): Promise<ResolvedRuntime> {
   const hintedProvider = row.provider?.trim();
   const hintedModelId = row.modelId?.trim();
@@ -276,28 +313,34 @@ async function resolveRuntime(
     hintedProvider || hintedModelId
       ? `${wantedProvider ?? "?"}/${wantedModelId ?? "?"}`
       : undefined;
-  if (wantedProvider && wantedModelId) {
-    const exact = await tryRuntime(
-      wantedProvider,
-      wantedModelId,
-      level,
-      preferredProfileId,
+  if (requiresEnterprise) {
+    const exact =
+      wantedProvider && wantedModelId
+        ? await tryRuntime(wantedProvider, wantedModelId, level, true)
+        : undefined;
+    if (exact) return exact;
+    if (wantedProvider && wantedModelId)
+      throw new SpawnProposalError(
+        `No enabled enterprise account offers ${wantedProvider}/${wantedModelId} at ${level} thinking. Keep the requested runtime or choose an enterprise account that offers it.`,
+      );
+    const available = await firstAvailableRuntime(level, true);
+    if (available) return available;
+    throw new SpawnProposalError(
+      "No enabled enterprise account offers a runnable model right now — enable an enterprise account in Settings first.",
     );
+  }
+
+  if (wantedProvider && wantedModelId) {
+    const exact = await tryRuntime(wantedProvider, wantedModelId, level);
     if (exact) return exact;
   }
 
   const inherited =
     fallback &&
     (fallback.provider !== wantedProvider || fallback.modelId !== wantedModelId)
-      ? await tryRuntime(
-          fallback.provider,
-          fallback.modelId,
-          level,
-          preferredProfileId,
-        )
+      ? await tryRuntime(fallback.provider, fallback.modelId, level)
       : undefined;
-  const fell =
-    inherited ?? (await firstAvailableRuntime(preferredProfileId, level));
+  const fell = inherited ?? (await firstAvailableRuntime(level));
   if (!fell)
     throw new SpawnProposalError(
       "No enabled provider account offers a model right now — enable an account in Settings first.",
@@ -461,17 +504,16 @@ export async function buildSpawnProposal(
 ): Promise<SessionSpawnApprovalBody> {
   assertBatchSize(input.rows);
 
-  const sender = sessionStore.get(input.senderSessionId);
+  // Freeze the transitive requirement before the first structural/model await;
+  // approval can happen after the source session has been removed.
+  const sender = sessionStore.getIncludingDeleted(input.senderSessionId);
+  const requiresEnterprise = sourceRequiresEnterprise([input.senderSessionId]);
   const fallback = fallbackRuntimeOf(sender);
 
   const items: SessionSpawnApprovalItem[] = [];
   for (const row of input.rows) {
     const structural = await validateStructure(row);
-    const runtime = await resolveRuntime(
-      row,
-      fallback,
-      sender?.credentialProfileId,
-    );
+    const runtime = await resolveRuntime(row, fallback, requiresEnterprise);
     items.push({
       ...approvalItemOf(structural),
       responseRequested: row.responseRequested === true,
@@ -484,7 +526,11 @@ export async function buildSpawnProposal(
       ...(runtime.warning ? { modelWarning: runtime.warning } : {}),
     });
   }
-  return { kind: "sessionSpawn", items };
+  return {
+    kind: "sessionSpawn",
+    ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
+    items,
+  };
 }
 
 /** The structural half of a row, in the shape the executor consumes. */
@@ -567,6 +613,7 @@ function editedItem(
  */
 async function settledItem(
   item: SessionSpawnApprovalItem,
+  requiresEnterprise: boolean,
 ): Promise<SessionSpawnApprovalItem> {
   if (
     item.owner !== undefined &&
@@ -580,6 +627,10 @@ async function settledItem(
   if (!profile)
     throw new Error(
       `The account for "${item.title}" is not enabled — pick another one, or skip that row.`,
+    );
+  if (requiresEnterprise && !profile.enterprise)
+    throw new Error(
+      `The account for "${item.title}" is not marked as enterprise — pick an enterprise account, or skip that row.`,
     );
   if (profile.provider !== accountProviderForModelProvider(item.provider))
     throw new Error(
@@ -623,9 +674,17 @@ export async function prepareSpawnApproval(
   const items: SessionSpawnApprovalItem[] = [];
   for (const original of card.body.items) {
     const item = editedItem(original, byRow.get(original.rowId));
-    items.push(item.skipped ? item : await settledItem(item));
+    items.push(
+      item.skipped
+        ? item
+        : await settledItem(item, card.body.requiresEnterprise === true),
+    );
   }
-  return { kind: "sessionSpawn", items };
+  return {
+    kind: "sessionSpawn",
+    ...(card.body.requiresEnterprise ? { requiresEnterprise: true } : {}),
+    items,
+  };
 }
 
 /* -------------------------------- execution ------------------------------- */
@@ -777,10 +836,19 @@ async function spawnOne(
   // What the session starts with, whichever engine runs it: creation links
   // its worktree, freezes its prompt conditions and skills before the first
   // query, and titles it, which also stops it being auto-named.
+  if (
+    options.requiresEnterprise &&
+    !credentialProfileById(item.credentialProfileId)?.enterprise
+  )
+    throw new Error(
+      `The session requires an enterprise account. Select an account marked as enterprise.`,
+    );
+
   const start = {
     agentType: item.agentType,
     thinkingLevel: item.thinkingLevel,
     credentialProfileId: item.credentialProfileId,
+    ...(options.requiresEnterprise ? { requiresEnterprise: true } : {}),
     promptEvidence: evidence,
     title: item.title,
     ...(worktree ? { worktree: { id: worktree.id, path: worktree.path } } : {}),
@@ -806,6 +874,15 @@ async function spawnOne(
       );
     spec = { harness: "pi", model, ...start };
   }
+  // Pi model lookup is asynchronous, so make the enterprise check the final
+  // account read before createSession claims the child row.
+  if (
+    options.requiresEnterprise &&
+    !credentialProfileById(item.credentialProfileId)?.enterprise
+  )
+    throw new Error(
+      "The session requires an enterprise account. Select an account marked as enterprise.",
+    );
   const sessionId = (await deps.create(spec)).sessionId;
   // From here the session is real: claim it on the result row immediately so
   // any later metadata, context, or delivery failure still reports the child.
@@ -822,6 +899,7 @@ async function spawnOne(
       agentType: item.agentType,
       title: item.title,
       credentialProfileId: item.credentialProfileId,
+      ...(options.requiresEnterprise ? { requiresEnterprise: true } : {}),
     })
   )
     throw new Error(
@@ -868,6 +946,7 @@ async function spawnOne(
  * settings does.
  */
 interface SpawnOneOptions {
+  requiresEnterprise?: boolean;
   currentRuntime?: () => Promise<{
     provider: string;
     modelId: string;
@@ -891,7 +970,9 @@ registerApprovalExecutor("sessionSpawn", {
       if (item.skipped) continue;
       delete item.error;
       try {
-        await spawnOne(card.sessionId, item);
+        await spawnOne(card.sessionId, item, {
+          requiresEnterprise: card.body.requiresEnterprise === true,
+        });
       } catch (err) {
         // One row's failure is not the batch's: the others are still worth
         // creating, and the card names which one broke. `spawnOne` may have
@@ -1000,6 +1081,8 @@ export async function spawnApprovedPeers(input: {
   senderSessionId: string;
   rows: DirectSpawnRequestRow[];
 }): Promise<DirectSpawnRowResult[]> {
+  // Capture before structural validation, roster discovery, and other awaits.
+  const requiresEnterprise = sourceRequiresEnterprise([input.senderSessionId]);
   assertBatchSize(input.rows);
   const structurals: StructuralRow[] = [];
   // One scan resolves every agent row; each is resolved again before use.
@@ -1022,7 +1105,9 @@ export async function spawnApprovedPeers(input: {
       agents ??= await scanAgentsForSpawn();
       let early: AgentSpawnRuntime;
       try {
-        early = await resolveAgentSpawn(row.agent.trim(), agents);
+        early = await resolveAgentSpawn(row.agent.trim(), agents, {
+          requiresEnterprise,
+        });
       } catch (err) {
         if (err instanceof AgentSpawnRefusedError)
           throw new SpawnProposalError(`"${label}": ${err.message}`);
@@ -1068,12 +1153,19 @@ export async function spawnApprovedPeers(input: {
       // `currentRuntime` immediately before creating anything, because the
       // awaits in between are exactly where a Settings or definition edit
       // lands.
-      const resolve = rowRuntime(row);
+      const resolve = rowRuntime(row, requiresEnterprise);
       // An agent row was resolved with the batch already; the late read in
       // `spawnOne` is the one that counts.
       let runtime: RowRuntime;
       try {
         runtime = earlyAgents.get(index) ?? (await resolve());
+        if (
+          requiresEnterprise &&
+          !credentialProfileById(runtime.credentialProfileId)?.enterprise
+        )
+          throw new Error(
+            "This session requires an enterprise account. Select an approved runtime using an account marked as enterprise.",
+          );
       } catch (err) {
         result.error = errorText(err);
         continue;
@@ -1098,11 +1190,19 @@ export async function spawnApprovedPeers(input: {
       let finalRuntime: RowRuntime | undefined;
       try {
         await spawnOne(input.senderSessionId, item, {
+          requiresEnterprise,
           currentRuntime: async () => {
             // Throws if the row was disabled, deleted or made unrunnable while
             // this row was being prepared; a row edited to another runtime runs
             // on the CURRENT approval, which is the only one that exists.
             const current = await resolve();
+            if (
+              requiresEnterprise &&
+              !credentialProfileById(current.credentialProfileId)?.enterprise
+            )
+              throw new Error(
+                "This session requires an enterprise account. Select an approved runtime using an account marked as enterprise.",
+              );
             finalRuntime = current;
             return current;
           },
@@ -1131,10 +1231,13 @@ type RowRuntime =
   (ApprovedPeerRuntime & { agent?: undefined }) | AgentSpawnRuntime;
 
 /** A fresh resolution of one row's runtime, every time it is called. */
-function rowRuntime(row: DirectSpawnRequestRow): () => Promise<RowRuntime> {
+function rowRuntime(
+  row: DirectSpawnRequestRow,
+  requiresEnterprise: boolean,
+): () => Promise<RowRuntime> {
   if (row.agent !== undefined) {
     const name = row.agent.trim();
-    return () => resolveAgentSpawn(name);
+    return () => resolveAgentSpawn(name, undefined, { requiresEnterprise });
   }
   const profileId = row.profileId;
   return () => resolveApprovedPeerRuntime(profileId);

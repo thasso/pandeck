@@ -1,7 +1,10 @@
+import type { AccountLoginAlert } from "@assistant/shared";
+import { accountSettingsPath } from "@assistant/shared/accountHealth";
+
 /**
  * @module appStatus
  * @purpose The app's ONE global announcement, as a value: which app-wide
- *   lifecycle state is worth saying out loud right now, and in what words.
+ *   lifecycle or account-login state is worth saying right now, and in what words.
  * @useWhen Rendering the app status slot (`components/AppStatus.tsx`). Nothing
  *   else may announce itself globally — see `docs/messaging.md`.
  * @intent Pure so the ranking and the copy are testable without a DOM. The
@@ -26,6 +29,7 @@ export interface AppStatusInput {
   hydrationSource: "empty" | "cache" | "live";
   /** Whether the connection's grace period has elapsed (see `AppStatus`). */
   graceElapsed: boolean;
+  accountLoginAlerts?: AccountLoginAlert[] | undefined;
 }
 
 /**
@@ -90,7 +94,11 @@ export function resetAppStatusGrace(): void {
 }
 
 type AppStatusKind =
-  "restart-queued" | "restarting" | "connecting" | "reconnecting";
+  | "restart-queued"
+  | "restarting"
+  | "connecting"
+  | "reconnecting"
+  | "needs-login";
 
 export interface AppStatusState {
   kind: AppStatusKind;
@@ -100,12 +108,13 @@ export interface AppStatusState {
    * sitting in (a static icon). Queued is a state; the rest are waits.
    */
   busy: boolean;
+  href?: string;
 }
 
 /**
  * Copy is deliberately short enough for a pill on a phone: this slot has one
- * geometry on narrow layouts and the user cannot act on any of it, so the state
- * and its one number are the whole message. The long sentences this replaced
+ * geometry on narrow layouts. Lifecycle states are not actionable; the account
+ * login state links to provider settings. The long sentences this replaced
  * ("Server changes detected — restart queued until 3 active sessions finish.")
  * could not fit the placement the model gives it.
  */
@@ -127,7 +136,22 @@ export function appStatus(input: AppStatusInput): AppStatusState | null {
     }
     return { kind: "restarting", label: "Restarting…", busy: true };
   }
-  if (connected || !graceElapsed) return null;
+  if (connected) {
+    const accounts = input.accountLoginAlerts ?? [];
+    const first = accounts[0];
+    return first
+      ? {
+          kind: "needs-login",
+          label:
+            accounts.length === 1
+              ? `${first.name} needs login`
+              : `${accounts.length} accounts need login`,
+          busy: false,
+          href: accountSettingsPath(first.provider),
+        }
+      : null;
+  }
+  if (!graceElapsed) return null;
   // A shell restored from cache has never been live: that is a first
   // connection, not a lost one, and calling it a reconnect would describe a
   // drop that never happened.

@@ -109,14 +109,6 @@ export function piModelForAccount(
   return findModelForProfile(credentialProfileId, provider, modelId);
 }
 
-/** The same handle from the shared registry, for a selection with no account. */
-export function piModel(
-  provider: string,
-  modelId: string,
-): ReturnType<typeof findModel> {
-  return findModel(provider, modelId);
-}
-
 /**
  * The pi model a configured slot names on its account, else the helper
  * fallback; undefined when the account can run neither.

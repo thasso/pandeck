@@ -65,6 +65,10 @@ function accountOf(model: ModelOption): AccountModelOption | undefined {
     ? (model as AccountModelOption)
     : undefined;
 }
+// An Automatic slot choice (`lib/credentialProfiles.ts`): no account, the router picks.
+function isAutomatic(model: ModelRef): boolean {
+  return Boolean(model && "automatic" in model && model.automatic === true);
+}
 interface ModelGroup<M extends ModelOption> {
   key: string;
   label: string;
@@ -75,14 +79,19 @@ function groupModels<M extends ModelOption>(models: M[]): ModelGroup<M>[] {
   const groups = new Map<string, ModelGroup<M>>();
   for (const m of models) {
     const account = accountOf(m);
-    const key = account
-      ? `account:${account.credentialProfileId}`
-      : `provider:${m.provider}`;
+    const automatic = isAutomatic(m);
+    const key = automatic
+      ? "automatic"
+      : account
+        ? `account:${account.credentialProfileId}`
+        : `provider:${m.provider}`;
     const group = groups.get(key) ?? {
       key,
-      label: account
-        ? `${account.accountName}${account.accountDisabled ? " · disabled" : ""}`
-        : providerLabel(m.provider, m.providerName),
+      label: automatic
+        ? "Automatic"
+        : account
+          ? `${account.accountName}${account.accountDisabled ? " · disabled" : ""}`
+          : providerLabel(m.provider, m.providerName),
       provider: m.provider,
       models: [],
     };
@@ -92,12 +101,19 @@ function groupModels<M extends ModelOption>(models: M[]): ModelGroup<M>[] {
   return [...groups.values()];
 }
 type ModelRef =
-  | { provider: string; id: string; credentialProfileId?: string }
+  | {
+      provider: string;
+      id: string;
+      credentialProfileId?: string;
+      automatic?: true;
+    }
   | ModelOption
   | undefined;
-// Accounts participate in identity whenever both sides name one.
+// Accounts participate in identity whenever both sides name one, and an
+// Automatic choice is never the same choice as one account's model.
 function sameModel(a: ModelRef, b: ModelRef): boolean {
   if (!a || !b || a.provider !== b.provider || a.id !== b.id) return false;
+  if (isAutomatic(a) !== isAutomatic(b)) return false;
   const selected =
     "credentialProfileId" in a ? a.credentialProfileId : undefined;
   const offered =
@@ -156,7 +172,11 @@ export function ModelSelect<M extends ModelOption>({
         ) : null}
         <span className="min-w-0 flex-1 truncate">
           {selected?.name ?? placeholder}
-          {account ? ` · ${account.accountName}` : ""}
+          {account
+            ? ` · ${account.accountName}`
+            : selected && isAutomatic(selected)
+              ? " · Automatic"
+              : ""}
         </span>
         <ChevronDown />
       </PopoverTrigger>
@@ -173,7 +193,7 @@ export function ModelSelect<M extends ModelOption>({
               <CommandGroup key={group.key} heading={group.label}>
                 {group.models.map((m) => (
                   <CommandItem
-                    key={`${accountOf(m)?.credentialProfileId ?? ""}/${m.provider}/${m.id}`}
+                    key={`${group.key}/${m.provider}/${m.id}`}
                     value={`${group.key}/${m.provider}/${m.id}`}
                     keywords={[m.name, group.label]}
                     disabled={Boolean(isModelDisabled?.(m))}

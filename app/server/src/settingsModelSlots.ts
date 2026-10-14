@@ -5,26 +5,26 @@
  * A slot is any settings field pair `{ provider, modelId }` naming a model for
  * an agent PA runs on the user's behalf (helper one-shots, the permanent
  * assistant…). Each may pin a `credentialProfileId`;
- * unset means automatic — the first enabled account of that model's provider.
+ * unset means automatic, selected by the account router on each run.
  *
- * Deliberately pure: every function takes the settings object, so `settings.ts`
- * can import the write-time sanitizer without an import cycle.
+ * The write-time sanitizers remain synchronous. Runtime resolution loads the
+ * router lazily so settings.ts can import them without an import cycle.
  */
 import {
   accountProviderForModelProvider,
   type AppSettings,
   type CredentialProfilePin,
   type CredentialProfileSlotUsage,
+  type ThinkingLevel,
 } from "@assistant/shared";
-import {
-  automaticProfileIdFor,
-  credentialProfileById,
-} from "./credentialProfiles.ts";
+import { credentialProfileById } from "./credentialProfiles.ts";
 
 /** The model reference carried by every slot. */
 export type SettingsModelSlot = CredentialProfilePin & {
   provider: string;
   modelId: string;
+  thinkingLevel?: ThinkingLevel;
+  requiresEnterprise?: boolean;
 };
 
 /** One enumerated slot: where it lives, what to call it, and its current value. */
@@ -107,46 +107,82 @@ export function listSettingsModelSlots(
   return refs;
 }
 
+/** A transcript helper cannot run without an eligible enterprise account. */
+export class EnterpriseAccountRequiredError extends Error {
+  constructor(
+    message = "This helper requires an eligible enterprise account.",
+  ) {
+    super(message);
+    this.name = "EnterpriseAccountRequiredError";
+  }
+}
+
 /** Why a pinned account could not be used. */
 type SlotAccountDegradation = "missing" | "disabled" | "provider-mismatch";
 
 export interface SlotAccountResolution {
   /** The account the slot actually runs on. */
   profileId: string;
-  /** Set when a pin existed but could not be honored; the resolution fell back to automatic. */
-  degraded?: SlotAccountDegradation;
+  /** Why a pin or the router's preferred eligibility could not be honored. */
+  degraded?: string;
   /** The pin that was not honored, for diagnostics. */
   pinnedProfileId?: string;
 }
 
 /**
- * The account a slot runs on. A pin that cannot be honored NEVER fails the run:
- * it degrades to the automatic account, because disabling or deleting an
- * account must not be able to break background automation.
+ * The account a slot runs on. A missing, disabled or provider-mismatched pin
+ * falls back to Automatic. Refuses when no account can be picked, or when an
+ * enterprise requirement would need a personal or degraded account.
  */
-export function resolveSlotAccount(
+export async function resolveSlotAccount(
   slot: SettingsModelSlot,
-): SlotAccountResolution {
+): Promise<SlotAccountResolution> {
   const wanted = accountProviderForModelProvider(slot.provider);
-  const automatic = () => automaticProfileIdFor(wanted);
   const pinned = slot.credentialProfileId?.trim();
-  if (!pinned) return { profileId: automatic() };
-  const profile = credentialProfileById(pinned);
-  const degraded: SlotAccountDegradation | undefined = !profile
-    ? "missing"
-    : profile.provider !== wanted
-      ? "provider-mismatch"
-      : !profile.enabled
-        ? "disabled"
-        : undefined;
-  return degraded
-    ? { profileId: automatic(), degraded, pinnedProfileId: pinned }
-    : { profileId: pinned };
+  let degraded: SlotAccountDegradation | undefined;
+  if (pinned) {
+    const profile = credentialProfileById(pinned);
+    if (slot.requiresEnterprise && profile && !profile.enterprise)
+      throw new EnterpriseAccountRequiredError(
+        "This helper requires an enterprise account, but its explicit account pin is personal.",
+      );
+    degraded = !profile
+      ? "missing"
+      : profile.provider !== wanted
+        ? "provider-mismatch"
+        : !profile.enabled
+          ? "disabled"
+          : undefined;
+    // Health, model, effort and usage eligibility apply only to Automatic.
+    // An enabled matching pin must fail/alert on that account, not spend another.
+    if (!degraded) return { profileId: pinned };
+  }
+  const { pickAccount } = await import("./accountRouter.ts");
+  const picked = await pickAccount({
+    model: { provider: slot.provider, modelId: slot.modelId },
+    ...(slot.thinkingLevel !== undefined
+      ? { thinkingLevel: slot.thinkingLevel }
+      : {}),
+    requiresEnterprise: slot.requiresEnterprise === true,
+    allowDisabledDefault: slot.requiresEnterprise !== true,
+  });
+  if (slot.requiresEnterprise && (!picked.profileId || picked.degraded))
+    throw new EnterpriseAccountRequiredError();
+  if (!picked.profileId)
+    throw new Error("No account is available for this background model.");
+  return {
+    profileId: picked.profileId,
+    ...(degraded && pinned
+      ? { degraded, pinnedProfileId: pinned }
+      : picked.degraded
+        ? { degraded: picked.degraded }
+        : {}),
+  };
 }
 
-/** Convenience for the many call sites that only need the id. */
-export function accountForSlot(slot: SettingsModelSlot): string {
-  return resolveSlotAccount(slot).profileId;
+/** Convenience for background session creation that only needs the id. */
+export async function accountForSlot(slot: SettingsModelSlot): Promise<string> {
+  return (await resolveSlotAccount(slot)).profileId;
 }
 
 /** Slots explicitly pinned to one account (regardless of whether the pin is currently honorable). */

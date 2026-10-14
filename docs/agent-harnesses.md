@@ -45,6 +45,16 @@ larger record has unknown cwd and is conservatively retired, with history kept,
 rather than parsing a provider timeline on a view path or granting natives in an
 unverified directory.
 
+## Live account changes
+
+`LiveSession.credentialProfileId` is the current binding, not an immutable
+creation hint. A live driver can expose `switchAccount(profileId, admit)`; its
+backend preserves native identity/history and rechecks admission across awaits.
+Selection, reservation, Stop handling and continuation remain in the shared
+prompt/runtime path.
+[Account routing](account-routing.md#live-account-switching) owns the failover
+policy and replay limits.
+
 ## Target
 
 ![Target harness architecture](agent-harnesses.svg)
@@ -145,7 +155,8 @@ Four layers, each depending only on the ones below it:
      projections and the Claude adapter stay cheap: an option by id, the alias a
      model id runs as (`claudeModelAlias`) and the curated ids. The usage port
      (`harnesses/usage.ts`) reads subscription usage per account kind and
-     redeems OpenAI reset credits.
+     redeems OpenAI reset credits. It also resolves run-usage attribution,
+     including the protected default used to reopen a legacy unbound session.
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each
      account's model runtime and the OpenAI account login.

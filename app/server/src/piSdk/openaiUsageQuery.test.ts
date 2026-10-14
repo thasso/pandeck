@@ -169,6 +169,7 @@ test("degrades to available:false when not signed in via pi", async () => {
   });
   assert.equal(snap.available, false);
   assert.match(snap.unavailableReason ?? "", /signed in/i);
+  assert.equal(snap.unavailableCode, "not-signed-in");
 });
 
 test("degrades to available:false on an expired token without hitting the network", async () => {
@@ -187,6 +188,7 @@ test("degrades to available:false on an expired token without hitting the networ
   });
   assert.equal(snap.available, false);
   assert.match(snap.unavailableReason ?? "", /expired/i);
+  assert.equal(snap.unavailableCode, "expired");
   assert.equal(
     fetched,
     false,
@@ -206,6 +208,17 @@ test("degrades to available:false on a 401 from the endpoint", async () => {
   });
   assert.equal(snap.available, false);
   assert.match(snap.unavailableReason ?? "", /reconnect/i);
+  assert.equal(snap.unavailableCode, "rejected");
+});
+
+test("a forbidden usage endpoint has its own non-login-death code", async () => {
+  const snap = await fetchOpenAiUsage({
+    now: () => NOW,
+    readAuth: async () => AUTH,
+    fetchUsage: async () => ({ status: 403, body: "permission denied" }),
+  });
+  assert.equal(snap.available, false);
+  assert.equal(snap.unavailableCode, "forbidden");
 });
 
 test("throws on an unexpected HTTP status so the route can 502", async () => {

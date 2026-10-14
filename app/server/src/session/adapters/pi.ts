@@ -20,6 +20,7 @@ import type {
   MessageDelta,
   PromptableAdapter,
   PromptOptions,
+  RunFailureFacts,
 } from "./contract.ts";
 import type { AdapterEventListener } from "./nativeEvents.ts";
 
@@ -41,11 +42,14 @@ export type PiPromptResponse = PiPromptOutcome | PiPromptResult;
  * `PiLiveSession`), kept as an interface so this module doesn't import it.
  */
 export interface PiDriver {
+  modelProvider?(): string | undefined;
+  modelId?(): string | undefined;
   subscribeAdapterEvents(listener: AdapterEventListener): () => void;
   prompt(
     text: string,
     attachments?: unknown[],
     options?: {
+      continuation?: boolean;
       clientRequestId?: string;
       hidden?: boolean;
       /**
@@ -121,6 +125,14 @@ class PiAdapter implements PromptableAdapter {
     return () => this.listeners.delete(listener);
   }
 
+  modelProvider(): string | undefined {
+    return this.driver.modelProvider?.();
+  }
+
+  modelId(): string | undefined {
+    return this.driver.modelId?.();
+  }
+
   getBinding(): ProviderBinding {
     return {
       provider: PROVIDER,
@@ -143,6 +155,7 @@ class PiAdapter implements PromptableAdapter {
             : {}),
           ...(options.hidden ? { hidden: true } : {}),
           ...(options.steerOnly ? { steerOnly: true } : {}),
+          ...(options.continuation ? { continuation: true } : {}),
         }),
       );
 
@@ -296,7 +309,7 @@ class PiAdapter implements PromptableAdapter {
       this.activeAssistantStreamId = event.streamId;
     } else if (event.type === "runCompleted") {
       this.activeAssistantStreamId = undefined;
-      this.completeRun(event.stopReason, event.errorMessage);
+      this.completeRun(event.stopReason, event.errorMessage, event.failure);
     } else if (event.type === "hostCommandResult") {
       this.activeAssistantStreamId = undefined;
     }
@@ -385,6 +398,7 @@ class PiAdapter implements PromptableAdapter {
   private completeRun(
     stopReason: "end" | "error" | "aborted",
     errorMessage: string | undefined,
+    failure?: RunFailureFacts,
   ): void {
     // Pi has just persisted the turn; scan the file for all conversation entries'
     // native ids (user + assistant + tool result) IN NATIVE ORDER, so the log can
@@ -398,6 +412,7 @@ class PiAdapter implements PromptableAdapter {
         entries: scanned.map((e) => ({
           role: e.role,
           providerMessageId: e.id,
+          ...(e.continuation ? { continuation: true as const } : {}),
           ...(e.toolCallId ? { toolCallId: e.toolCallId } : {}),
           ...(e.toolCallIds ? { toolCallIds: e.toolCallIds } : {}),
           ...(e.unidentifiedToolCalls ? { unidentifiedToolCalls: true } : {}),
@@ -407,7 +422,9 @@ class PiAdapter implements PromptableAdapter {
     const run = this.pendingRun;
     this.pendingRun = undefined;
     run?.resolve(
-      errorMessage ? { stopReason: "error", errorMessage } : { stopReason },
+      errorMessage
+        ? { stopReason: "error", errorMessage, ...(failure ? { failure } : {}) }
+        : { stopReason },
     );
   }
 }

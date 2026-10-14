@@ -26,6 +26,10 @@
  *   events (which lack a tool id) are attributed to the right tool block.
  */
 import { randomUUID } from "node:crypto";
+import {
+  assertAccountRecoveryAdmission,
+  AccountSwitchBlockedError,
+} from "../session/runtime/accountRecoveryAdmission.ts";
 import { chmodSync, lstatSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -165,6 +169,8 @@ import type {
   ClaudeSdkRecordMeta,
   ClaudeSdkUsageRecord,
 } from "./claudeSdkRecords.ts";
+import { sessionStore } from "../db/sessionStore.ts";
+import { assertSessionAccountSwitch } from "../sessionAccount.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
 import {
@@ -226,7 +232,10 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import { buildClaudeSdkQueryOptions, claudeQueryModel } from "./options.ts";
-import { lastSavedCostState } from "./profileSessionStore.ts";
+import {
+  copyClaudeSessionForAccount,
+  lastSavedCostState,
+} from "./profileSessionStore.ts";
 import { prepareClaudeSkillRuntime } from "./skillInjection.ts";
 import {
   claudeSdkModelAlias,
@@ -459,6 +468,7 @@ interface ProviderFailure {
   reason: string;
   /** The wording the provider gave the user; may be empty. */
   text: string;
+  statusCode?: number;
 }
 
 /**
@@ -624,7 +634,11 @@ export class ClaudeSdkSession implements LiveSession {
   private lastContextBroadcastAt = 0;
   private autoNameTried = false;
 
-  readonly credentialProfileId: string | undefined;
+  private profileId: string | undefined;
+
+  get credentialProfileId(): string | undefined {
+    return this.profileId;
+  }
   private readonly seamFactory: () => Promise<ClaudeSdkSeam>;
   private readonly prepareSkillRuntime: (
     frozenSkillNames: readonly string[],
@@ -763,7 +777,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.additionalSystemPrompt =
       deps.additionalSystemPrompt?.trim() || undefined;
     this.cwd = deps.cwd ?? CWD;
-    this.credentialProfileId = deps.credentialProfileId;
+    this.profileId = deps.credentialProfileId;
     this.kind = this.agentType;
     this.key = id;
     this.seamFactory = deps.seam;
@@ -1016,6 +1030,9 @@ export class ClaudeSdkSession implements LiveSession {
     const activeSkillsValue = activeSkillsForSession(this.id, this.agentType);
     const agentValue = sessionAgentSummary(this.id);
     const worktreeIdValue = this.safeWorktreeId();
+    const requiresEnterprise = sessionStore.getIncludingDeleted(
+      this.id,
+    )?.requiresEnterprise;
     return {
       sessionId: this.id,
       ...(this.sessionFile !== undefined
@@ -1026,6 +1043,7 @@ export class ClaudeSdkSession implements LiveSession {
       model: this.modelOption(),
       thinkingLevel: this.thinkingLevel,
       mode: this.mode,
+      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       canSteer: this.canSteer,
       ...(this.forkOrigin ? { forkOrigin: this.forkOrigin } : {}),
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
@@ -1365,10 +1383,83 @@ export class ClaudeSdkSession implements LiveSession {
     this.onChange();
   }
 
+  /** End the old epoch before migrating any native history or changing credentials. */
+  async switchAccount(profileId: string, admit: () => void): Promise<void> {
+    this.assertNotDisposed();
+    const previous = this.profileId;
+    if (!previous || this.running)
+      throw new Error("Cannot switch an unbound or running Claude session.");
+    const providerSessionId = this.providerSessionId;
+    if (!providerSessionId)
+      throw new Error(
+        "Cannot preserve Claude history without a native session id.",
+      );
+    const check = () => {
+      this.assertNotDisposed();
+      admit();
+      if (this.running || this.profileId !== previous)
+        throw new Error(
+          "The Claude session changed during its account switch.",
+        );
+      assertSessionAccountSwitch(this.id, previous, profileId, "claude");
+    };
+    check();
+    const closing = this.queryLoop;
+    const retained = this.retainedEpochKey;
+    if (retained) {
+      const closed = await backgroundWorkSupervisor.closeIdleHost(
+        this.id,
+        retained,
+        "switching the session's account",
+      );
+      if (!closed)
+        throw new AccountSwitchBlockedError(
+          "Background work still holds this session's Claude host. Stop it before switching accounts.",
+        );
+      check();
+    }
+    await this.closeProcess("switching the session's account");
+    if (
+      closing &&
+      !(await settlesWithin(closing, this.processCloseTimeoutMs))
+    ) {
+      this.abortController?.abort();
+      if (!(await settlesWithin(closing, this.processCloseTimeoutMs)))
+        throw new Error(
+          "The old Claude process did not exit before the account switch.",
+        );
+    }
+    check();
+    const transfer = await copyClaudeSessionForAccount(
+      previous,
+      profileId,
+      providerSessionId,
+    );
+    let committed = false;
+    try {
+      check();
+      sessionStore.switchCredentialProfile(this.id, previous, profileId);
+      committed = true;
+      this.profileId = profileId;
+      this.onPersist();
+      this.broadcastState();
+      this.onChange();
+    } finally {
+      // The row is the commit point. Cleanup cannot roll back an admitted move,
+      // but neither success nor an abandoned copy should leave an extra history.
+      await (committed ? transfer.commit() : transfer.rollback()).catch(() => {
+        console.warn(
+          `[claude] Account-switch ${committed ? "source cleanup" : "destination rollback"} failed; session deletion will retry.`,
+        );
+      });
+    }
+  }
+
   /* --------------------------------- prompt -------------------------------- */
 
   createRuntimeAdapter(): PromptableAdapter {
     const driver: ClaudeSdkAdapterDriver = {
+      modelId: () => this.modelId,
       subscribeAdapterEvents: (listener) =>
         this.subscribeAdapterEvents(listener),
       prompt: (text, options) => this.#promptRaw(text, options),
@@ -1387,6 +1478,7 @@ export class ClaudeSdkSession implements LiveSession {
   async #promptRaw(
     text: string,
     options: {
+      continuation?: boolean;
       clientRequestId?: string;
       hidden?: boolean;
       attachments?: PromptAttachment[];
@@ -1424,17 +1516,20 @@ export class ClaudeSdkSession implements LiveSession {
     // Claim the stable unnamed state before the acceptance broadcast. The list
     // must never expose a provider default or prompt-derived guess while the
     // dedicated naming agent is still working.
-    const namingSettings = options.hidden
-      ? undefined
-      : this.beginAutoName(modelPromptText, attachments);
+    const namingSettings =
+      options.hidden || options.continuation
+        ? undefined
+        : this.beginAutoName(modelPromptText, attachments);
 
     // User message. Hidden resume prompts (for example answers submitted from
     // the question panel) are sent to Claude but represented by their UI card,
     // so they must not add a visible user bubble to the transcript.
-    const userEntry = this.appendUserEntry(trimmed, {
-      ...(options.hidden !== undefined ? { hidden: options.hidden } : {}),
-      attachments,
-    });
+    const userEntry = options.continuation
+      ? undefined
+      : this.appendUserEntry(trimmed, {
+          ...(options.hidden !== undefined ? { hidden: options.hidden } : {}),
+          attachments,
+        });
     // Persist + announce at ACCEPTANCE, not only after naming or turn end. A
     // first turn can run for minutes, and zero-message sessions are deliberately
     // absent from the list; without this edge a newly prompted Claude session
@@ -1442,7 +1537,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.updatedAt = Date.now();
     this.onPersist();
     this.onChange();
-    if (!options.hidden) {
+    if (!options.hidden && userEntry) {
       const userMessage = entriesToDisplayMessages([userEntry])[0];
       if (userMessage)
         this.broadcast({
@@ -2019,6 +2114,9 @@ export class ClaudeSdkSession implements LiveSession {
           errorMessage: this.pendingProviderError
             ? providerFailureMessage(this.pendingProviderError)
             : fatalError,
+          ...(this.pendingProviderError?.statusCode !== undefined
+            ? { statusCode: this.pendingProviderError.statusCode }
+            : {}),
         });
       else if (
         this.abortingTurn &&
@@ -2772,12 +2870,16 @@ export class ClaudeSdkSession implements LiveSession {
   private turnOutcome(): {
     stopReason: "end" | "error";
     errorMessage?: string;
+    statusCode?: number;
   } {
     const failure = this.pendingProviderError;
     return failure
       ? {
           stopReason: "error",
           errorMessage: providerFailureMessage(failure),
+          ...(failure.statusCode !== undefined
+            ? { statusCode: failure.statusCode }
+            : {}),
         }
       : { stopReason: "end" };
   }
@@ -2786,17 +2888,26 @@ export class ClaudeSdkSession implements LiveSession {
   private finishTurn(result: {
     stopReason: "end" | "error" | "aborted";
     errorMessage?: string;
+    statusCode?: number;
   }): void {
     if (!this.running && !this.liveTurn) return;
-    // A failed run is recorded before anyone hears of it: the runtime takes
-    // the fact first, then the viewers get the turn's end below.
-    if (result.stopReason === "error" && result.errorMessage)
-      this.adapterEvents.runFailing(
-        result.errorMessage,
-        runFailureFacts(
-          analyzeProviderError(result.errorMessage, { provider: "anthropic" }),
-        ),
-      );
+    const errorMessage =
+      result.stopReason === "error" ? result.errorMessage : undefined;
+    const errorInfo = errorMessage
+      ? analyzeProviderError(errorMessage, {
+          provider: "anthropic",
+          model: this.modelId,
+          ...(result.statusCode !== undefined
+            ? { statusCode: result.statusCode }
+            : {}),
+          // A credential profile is a CLI OAuth login with inherited
+          // credential variables scrubbed; otherwise an API key may answer.
+          authMode: this.credentialProfileId ? "subscription" : "unknown",
+        })
+      : undefined;
+    // The runtime receives the structured failure before viewers see the end.
+    if (errorMessage && errorInfo)
+      this.adapterEvents.runFailing(errorMessage, runFailureFacts(errorInfo));
     // A run that ends — failed, stopped or with a steer the turn never read —
     // took nothing more: whatever is still queued goes back to its sender.
     void this.withdrawPendingSteers();
@@ -2804,20 +2915,6 @@ export class ClaudeSdkSession implements LiveSession {
     const id = this.liveTurnId;
     const turn = this.liveTurn;
     const aborted = result.stopReason === "aborted";
-    const errorMessage =
-      result.stopReason === "error" ? result.errorMessage : undefined;
-    // Classify for the client the way the pi harness does, so a quota/auth/rate
-    // failure reads as that rather than as raw provider prose.
-    const errorInfo = errorMessage
-      ? analyzeProviderError(errorMessage, {
-          provider: "anthropic",
-          model: this.modelId,
-          // A credential profile is a CLI OAuth login with the inherited
-          // credential variables scrubbed; without one an API key in the
-          // environment could still be what answered.
-          authMode: this.credentialProfileId ? "subscription" : "unknown",
-        })
-      : undefined;
     if (turn) {
       turn.streaming = false;
       if (errorMessage) {
@@ -2922,6 +3019,7 @@ export class ClaudeSdkSession implements LiveSession {
     name: string,
     args: unknown,
   ): { assistantId: string; toolId: string } {
+    assertAccountRecoveryAdmission(this.sessionId);
     this.assertNotDisposed();
     if (this.running)
       throw new SessionBusyError(
@@ -3284,7 +3382,12 @@ export class ClaudeSdkSession implements LiveSession {
    * `result` that follows only restates it generically.
    */
   private noteProviderFailure(failure: ProviderFailure): void {
-    if (this.pendingProviderError) return;
+    if (this.pendingProviderError) {
+      // A result can supply the HTTP status omitted by its synthetic assistant.
+      if (failure.statusCode !== undefined)
+        this.pendingProviderError.statusCode ??= failure.statusCode;
+      return;
+    }
     this.pendingProviderError = failure;
   }
 

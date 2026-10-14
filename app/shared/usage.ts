@@ -164,6 +164,8 @@ export interface OpenAiUsageSnapshot {
   available: boolean;
   /** Human-readable reason when `available` is false (e.g. not logged in, token expired). */
   unavailableReason: string | null;
+  /** Structured read-only failure. An expired access token can still refresh on use. */
+  unavailableCode?: "not-signed-in" | "expired" | "rejected" | "forbidden";
   planType: string | null;
   email: string | null;
   /** True when any tracked window is currently exhausted. */

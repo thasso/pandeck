@@ -141,7 +141,8 @@ export type ProviderNoticeEntry = RawEntryBase & {
   type: "provider.notice";
   severity: "warning" | "error";
   message: string;
-  providerError: import("@assistant/shared").ProviderErrorInfo;
+  /** Absent for an app-owned account-switch notice. */
+  providerError?: import("@assistant/shared").ProviderErrorInfo;
   attempt?: number;
   maxAttempts?: number;
   delayMs?: number;

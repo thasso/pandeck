@@ -6,6 +6,7 @@ import {
 } from "../../mcp/tool.ts";
 import { sessionTreeWorktrees } from "@assistant/shared/sessionTreeWorktrees";
 import { sessionStore } from "../../db/sessionStore.ts";
+import { sourceRequiresEnterprise } from "../../sessionEnterprise.ts";
 import { worktreeIdForSession } from "../../db/worktreeStore.ts";
 import { getSettings } from "../../settings.ts";
 import { readTask } from "../../tasks.ts";
@@ -116,6 +117,10 @@ const worktreeCreate = defineAgentTool<{
     "Create and register a managed git worktree, visible in the app and usable as a commit target. The returned path is the new checkout; this does not relink the calling session, but records it as the creator, so worktree_status sessionTree keeps listing it.",
   parameters: createSchema as unknown as Record<string, unknown>,
   async execute(params, ctx) {
+    const helperSource = {
+      sourceSessionId: ctx.session.sessionId,
+      requiresEnterprise: sourceRequiresEnterprise([ctx.session.sessionId]),
+    };
     const projectId = params.projectId ?? (await callingProjectId(ctx.session));
     const requested = params.name
       ? sanitizeWorktreeSuffix(params.name)
@@ -125,6 +130,7 @@ const worktreeCreate = defineAgentTool<{
       (await generateWorktreeSuffix(
         params.name ?? "Agent-created worktree",
         getSettings().worktrees.namingAgent,
+        helperSource,
       ));
     const task = params.taskId ? readTask(params.taskId) : undefined;
     const name = params.taskId

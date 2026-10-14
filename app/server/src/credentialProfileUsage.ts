@@ -11,11 +11,7 @@ import type {
   CredentialProfileSummary,
   CredentialProfileUsage,
 } from "@assistant/shared";
-import {
-  automaticProfileIdFor,
-  credentialProfileById,
-  listCredentialProfiles,
-} from "./credentialProfiles.ts";
+import { listCredentialProfiles } from "./credentialProfiles.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getSettings } from "./settings.ts";
 import { saveSettings } from "./settingsService.ts";
@@ -39,22 +35,9 @@ export function credentialProfileUsage(
   profile: Pick<CredentialProfileSummary, "id" | "provider">,
 ): CredentialProfileUsage {
   const settings = getSettings();
-  const automaticId = automaticProfileIdFor(profile.provider);
-  const usage: CredentialProfileUsage = {
+  return {
     pinnedSlots: pinnedSlotsForProfile(settings, profile.id),
     boundSessionCount: boundSessionCount(profile.id),
-  };
-  if (automaticId !== profile.id) return usage;
-  // This account currently takes all unpinned work; report where that moves.
-  const fallbackId = automaticProfileIdFor(profile.provider, profile.id);
-  const fallback =
-    fallbackId === profile.id ? undefined : credentialProfileById(fallbackId);
-  return {
-    ...usage,
-    automaticForProvider: profile.provider,
-    ...(fallback
-      ? { automaticFallback: { id: fallback.id, name: fallback.name } }
-      : {}),
   };
 }
 

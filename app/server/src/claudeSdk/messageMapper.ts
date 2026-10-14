@@ -208,7 +208,7 @@ export function assistantProviderError(
  */
 export function resultProviderError(
   message: ClaudeResultMessage,
-): { reason: string; text: string } | undefined {
+): { reason: string; text: string; statusCode?: number } | undefined {
   const m = message as {
     subtype?: unknown;
     is_error?: unknown;
@@ -235,7 +235,11 @@ export function resultProviderError(
       : status !== undefined
         ? `HTTP ${status}`
         : "error";
-  return { reason, text: parts.join("\n") };
+  return {
+    reason,
+    text: parts.join("\n"),
+    ...(status !== undefined ? { statusCode: status } : {}),
+  };
 }
 
 /**

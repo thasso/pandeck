@@ -17,6 +17,7 @@
 import assert from "node:assert/strict";
 import { afterAll, test } from "vitest";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -32,8 +33,12 @@ const tmp = mkdtempSync(join(tmpdir(), "claude-profile-store-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
-const { claudeProfileSessionStore, lastSavedCostState } =
-  await import("./profileSessionStore.ts");
+const {
+  claudeProfileSessionStore,
+  copyClaudeSessionForAccount,
+  removeClaudeSessionFromAllProfiles,
+  lastSavedCostState,
+} = await import("./profileSessionStore.ts");
 const sdk = await import("@anthropic-ai/claude-agent-sdk");
 
 const PROFILE = "cp_testprofile";
@@ -245,6 +250,160 @@ test("only a regular file under the transcript's name is read, never a link", as
   writeFileSync(target, costState(linkedSession, 5));
   symlinkSync(target, join(dirname(notAFile), `${linkedSession}.jsonl`));
   assert.equal(await lastSavedCostState(PROFILE, linkedSession), undefined);
+});
+
+test.each([
+  [PROFILE, OTHER_PROFILE],
+  [OTHER_PROFILE, PROFILE],
+])(
+  "account move %s → %s preserves native bytes and the full subagent tree",
+  async (previous, next) => {
+    const session = randomUUID();
+    seedTranscript(previous, session);
+    const relative = join("projects", PROJECT_KEY);
+    const from = join(claudeProfileSessionStore(previous).root, relative);
+    const to = join(claudeProfileSessionStore(next).root, relative);
+    const main = `${session}.jsonl`;
+    const body =
+      readFileSync(join(from, main), "utf8") +
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "thinking",
+              thinking: "signed",
+              signature: "foreign-signature",
+            },
+            {
+              type: "tool_use",
+              id: "tool1",
+              name: "Bash",
+              input: { command: "true" },
+            },
+          ],
+        },
+      }) +
+      "\n";
+    writeFileSync(join(from, main), body);
+    const child = join(session, "subagents", "agent-1.jsonl");
+    mkdirSync(dirname(join(from, child)), { recursive: true });
+    writeFileSync(
+      join(from, child),
+      '{"message":{"role":"tool_result","tool_use_id":"tool1","content":"complete"}}\n',
+    );
+    const transfer = await copyClaudeSessionForAccount(previous, next, session);
+    assert.equal(readFileSync(join(to, main), "utf8"), body);
+    assert.equal(
+      readFileSync(join(to, child), "utf8"),
+      readFileSync(join(from, child), "utf8"),
+    );
+    assert.equal(
+      readFileSync(join(from, main), "utf8"),
+      body,
+      "source stays intact until CAS commits",
+    );
+    await transfer.commit();
+    assert.equal(existsSync(join(from, main)), false);
+    assert.equal(existsSync(join(from, session)), false);
+    // Returning later replaces the old snapshot, not just its main file.
+    writeFileSync(
+      join(to, main),
+      body + '{"type":"user","message":{"content":"later"}}\n',
+    );
+    const returning = await copyClaudeSessionForAccount(
+      next,
+      previous,
+      session,
+    );
+    assert.equal(
+      readFileSync(join(from, main), "utf8"),
+      readFileSync(join(to, main), "utf8"),
+    );
+    await returning.rollback();
+    assert.equal(existsSync(join(from, main)), false);
+    assert.equal(existsSync(join(from, session)), false);
+    assert.ok(existsSync(join(to, main)));
+  },
+);
+
+test("DELETE sweeps crash-staged account copies without deleting another session", async () => {
+  const { createCredentialProfile, setCredentialProfileEnabled } =
+    await import("../credentialProfiles.ts");
+  const profile = createCredentialProfile({
+    name: "Staged disabled account",
+    provider: "claude",
+  });
+  setCredentialProfileEnabled(profile.id, false);
+  const session = randomUUID();
+  const other = randomUUID();
+  const stages: string[] = [];
+  for (const id of [PROFILE, profile.id]) {
+    seedTranscript(id, session);
+    const base = join(
+      claudeProfileSessionStore(id).root,
+      "projects",
+      PROJECT_KEY,
+    );
+    for (const name of [session, other]) {
+      mkdirSync(join(base, name, "subagents"), { recursive: true });
+      writeFileSync(join(base, name, "subagents", "child.jsonl"), "subagent");
+    }
+    const stage = join(base, ".account-switch-crashed");
+    stages.push(stage);
+    for (const name of [session, other]) {
+      mkdirSync(join(stage, name, "subagents"), { recursive: true });
+      writeFileSync(join(stage, `${name}.jsonl`), "staged main");
+      writeFileSync(
+        join(stage, name, "subagents", "child.jsonl"),
+        "staged subagent",
+      );
+    }
+  }
+  await removeClaudeSessionFromAllProfiles(session, PROFILE);
+  for (const stage of stages) {
+    assert.equal(existsSync(join(dirname(stage), `${session}.jsonl`)), false);
+    assert.equal(existsSync(join(dirname(stage), session)), false);
+    assert.equal(existsSync(join(stage, `${session}.jsonl`)), false);
+    assert.equal(existsSync(join(stage, session)), false);
+    assert.equal(
+      readFileSync(join(stage, `${other}.jsonl`), "utf8"),
+      "staged main",
+    );
+    assert.equal(
+      readFileSync(join(stage, other, "subagents", "child.jsonl"), "utf8"),
+      "staged subagent",
+    );
+    assert.ok(
+      existsSync(join(dirname(stage), other, "subagents", "child.jsonl")),
+    );
+  }
+});
+
+test("account copying refuses missing history, unsafe ids and linked subagents", async () => {
+  await assert.rejects(
+    copyClaudeSessionForAccount(PROFILE, OTHER_PROFILE, "../outside"),
+  );
+  await assert.rejects(
+    copyClaudeSessionForAccount(PROFILE, OTHER_PROFILE, randomUUID()),
+    /complete Claude transcript/,
+  );
+  const session = randomUUID();
+  seedTranscript(PROFILE, session);
+  const base = join(
+    claudeProfileSessionStore(PROFILE).root,
+    "projects",
+    PROJECT_KEY,
+    session,
+  );
+  mkdirSync(base);
+  const outside = join(tmp, "not-a-subagent.jsonl");
+  writeFileSync(outside, "not transcript history");
+  symlinkSync(outside, join(base, "linked.jsonl"));
+  await assert.rejects(
+    copyClaudeSessionForAccount(PROFILE, OTHER_PROFILE, session),
+    /regular files/,
+  );
 });
 
 test("a cost-state line split across two read chunks is read whole", async () => {

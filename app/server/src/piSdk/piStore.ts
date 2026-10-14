@@ -22,8 +22,8 @@ import {
   type SessionScope,
   type ThinkingLevel,
 } from "@assistant/shared";
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { CWD } from "../config.ts";
 import {
   planModeToolUnavailableMessage,
@@ -60,6 +60,7 @@ import {
 } from "./sessionOpen.ts";
 import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 import {
   deniesNative,
   freezeSessionAgent,
@@ -72,9 +73,12 @@ import {
   type PromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
-import { PiLiveSession } from "./PiLiveSession.ts";
+import { PiLiveSession, type PiAccountSession } from "./PiLiveSession.ts";
 import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
-import { defaultOpenAiProfileId } from "../credentialProfiles.ts";
+import {
+  credentialProfileById,
+  DEFAULT_OPENAI_PROFILE_ID,
+} from "../credentialProfiles.ts";
 import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
@@ -283,6 +287,7 @@ class PiSessionStore {
       /** The agent definition a spawn starts it as; frozen inside creation. */
       agent?: SessionAgent;
       mode?: SessionMode;
+      requiresEnterprise?: boolean;
       /**
        * Whose session this is. It is persisted before the live registry can
        * observe the session (`track`), so a caller creating anything other than
@@ -294,7 +299,7 @@ class PiSessionStore {
   ): Promise<PiLiveSession> {
     const cwd = opts?.cwd ?? CWD;
     const credentialProfileId =
-      opts?.credentialProfileId ?? defaultOpenAiProfileId();
+      opts?.credentialProfileId ?? DEFAULT_OPENAI_PROFILE_ID;
     const created = await this.create(
       kind,
       SessionManager.create(cwd, sessionDirFor(kind)),
@@ -310,6 +315,15 @@ class PiSessionStore {
         : undefined,
       opts?.mode,
     );
+    if (
+      opts?.requiresEnterprise &&
+      !credentialProfileById(credentialProfileId)?.enterprise
+    ) {
+      this.discardUnregisteredAndFiles(created.session);
+      throw new Error(
+        "This session requires an enterprise account. Select an account marked as enterprise.",
+      );
+    }
     this.canonicalizeCreatedPiSession(created.session);
     return this.track(
       kind,
@@ -318,6 +332,7 @@ class PiSessionStore {
       cwd,
       credentialProfileId,
       opts?.scope,
+      opts?.requiresEnterprise,
     );
   }
 
@@ -522,6 +537,26 @@ class PiSessionStore {
       throw new Error("Cannot fork: selected message is no longer available.");
 
     const parentSessionId = sm.getSessionId();
+    const parentMeta = sessionStore.getIncludingDeleted(parentSessionId);
+    const credentialProfileId = parentMeta?.credentialProfileId ?? "default";
+    const requiresEnterprise = sourceRequiresEnterprise([parentSessionId]);
+    const ensureEnterpriseAccount = () => {
+      if (
+        requiresEnterprise &&
+        !credentialProfileById(credentialProfileId)?.enterprise
+      ) {
+        throw new Error(
+          "This session requires an enterprise account. Select an account marked as enterprise.",
+        );
+      }
+    };
+    ensureEnterpriseAccount();
+    // Read the frozen definition before any native branch is written.
+    const inheritAgent = sessionAgent(parentSessionId);
+    // Freeze a legacy parent before branching, then give the child exactly that
+    // list. Settings changing between parent and child must not move the fork.
+    const inheritSkills = await sessionSkills(parentSessionId, kind);
+    ensureEnterpriseAccount();
 
     if (position === "before") {
       if (entry.type !== "message" || entry.message.role !== "user") {
@@ -551,19 +586,12 @@ class PiSessionStore {
     // worktree link, the parent's header cwd (applied by the open above) wins.
     const cwd =
       worktreeCwdForSession(parentSessionId) ?? sessionManagerCwd(sm) ?? CWD;
-    const parentMeta = sessionStore.get(parentSessionId);
-    const credentialProfileId = parentMeta?.credentialProfileId ?? "default";
     // A fork continues the parent's conversation, so it inherits the parent's
     // frozen prompt conditions rather than recomputing against today's gates.
     const inherit = parsePromptConditions(
       sessionStore.getPromptConditions(parentSessionId),
     );
-    // Freeze a legacy parent before branching, then give the child exactly that
-    // list. Settings changing between parent and child must not move the fork.
-    const inheritSkills = await sessionSkills(parentSessionId, kind);
-    // A fork continues the parent as the same agent, read before the child
-    // exists so an unreadable parent row refuses the fork.
-    const inheritAgent = sessionAgent(parentSessionId);
+
     // A fork continues the parent's conversation in the parent's mode too —
     // Build/Plan travels like model and thinking level do.
     const mode = sessionModeOrDefault(parentMeta?.mode);
@@ -581,6 +609,15 @@ class PiSessionStore {
       },
       mode,
     );
+    if (
+      requiresEnterprise &&
+      !credentialProfileById(credentialProfileId)?.enterprise
+    ) {
+      this.discardUnregisteredAndFiles(created.session, file);
+      throw new Error(
+        "This session requires an enterprise account. Select an account marked as enterprise.",
+      );
+    }
     this.canonicalizeCreatedPiSession(created.session);
     // A fork inherits the parent's SCOPE as well, claimed inside `track` before
     // the child can be listed: branching is not a way for a session outside the
@@ -592,6 +629,7 @@ class PiSessionStore {
       cwd,
       credentialProfileId,
       parentMeta?.scope,
+      requiresEnterprise,
     );
     sessionStore.upsert({
       id: live.sessionId,
@@ -613,10 +651,12 @@ class PiSessionStore {
     credentialProfileId = "default",
     promptStart?: PiPromptStart,
     requestedMode?: SessionMode,
-  ): Promise<{
-    session: AgentSession;
-    notices: Array<{ severity: NoticeSeverity; message: string }>;
-  }> {
+    staged = false,
+  ): Promise<
+    PiAccountSession & {
+      notices: Array<{ severity: NoticeSeverity; message: string }>;
+    }
+  > {
     // Session-START prompt conditions (Task 287). pi rebuilds the system prompt
     // on every active-tool change and on every reopen, so this reads the frozen
     // record whenever the session already has one — creation is the only call
@@ -690,12 +730,13 @@ class PiSessionStore {
     const activeSessionId = sm.getSessionId();
     // A durable server record wins over a caller's requested starting mode.
     // Legacy/unrecorded sessions normalize to Build.
-    this.sessionModes.set(
-      activeSessionId,
-      sessionModeOrDefault(
-        sessionStore.get(activeSessionId)?.mode ?? requestedMode,
-      ),
-    );
+    if (!staged)
+      this.sessionModes.set(
+        activeSessionId,
+        sessionModeOrDefault(
+          sessionStore.get(activeSessionId)?.mode ?? requestedMode,
+        ),
+      );
 
     // Direct tool path: the persona's AgentTools are adapted straight into pi
     // customTools (no MCP hop — the session MCP server serves the Claude
@@ -751,6 +792,7 @@ class PiSessionStore {
       agentTools,
       eagerToolNames,
       deferToolLoading: opts.deferToolLoading,
+      deferRegistration: staged,
       mode: () => this.sessionModes.get(activeSessionId) ?? "build",
       applyActiveToolNames: (activeNames) => {
         // Merge pi's non-bridge tools (built-ins) with the bridge-active names.
@@ -811,21 +853,29 @@ class PiSessionStore {
         }));
     } catch (err) {
       activation.dispose();
-      this.sessionModes.delete(activeSessionId);
+      if (!staged) this.sessionModes.delete(activeSessionId);
       throw err;
     }
     // Nor when the model it was on cannot be restored: pi would quietly pick
     // another one.
-    if (agent && modelFallbackMessage) {
+    if ((agent || staged) && modelFallbackMessage) {
       activation.dispose();
-      this.sessionModes.delete(activeSessionId);
+      if (!staged) this.sessionModes.delete(activeSessionId);
       session.dispose();
       throw new Error(
-        `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`,
+        agent
+          ? `Agent "${agent.name}" cannot run: ${modelFallbackMessage}. It does not run on another model.`
+          : `Cannot switch accounts: ${modelFallbackMessage}. The session must keep its model.`,
       );
     }
-    this.closeToolRuntime(session.sessionId); // paranoia: never leak a stale activation under the same key
-    this.toolRuntimes.set(session.sessionId, activation);
+    const commit = () => {
+      this.closeToolRuntime(session.sessionId);
+      this.toolRuntimes.set(session.sessionId, activation);
+      activation.register();
+      // A staged runtime may have waited across a live Build/Plan change.
+      activation.reapply();
+    };
+    if (!staged) commit();
     installToolPayloadProbe(session);
     installDynamicToolTurnRefresh(session);
     // Initial active set: eager + find_tools + everything the transcript
@@ -845,7 +895,15 @@ class PiSessionStore {
         message: `Extension "${err.path}" failed to load: ${err.error}`,
       });
     }
-    return { session, notices };
+    return {
+      session,
+      notices,
+      commit,
+      dispose: () => {
+        activation.dispose();
+        session.dispose();
+      },
+    };
   }
 
   private track(
@@ -855,6 +913,7 @@ class PiSessionStore {
     cwd: string,
     credentialProfileId: string,
     scope?: SessionScope,
+    requiresEnterprise?: boolean,
   ): PiLiveSession {
     // The scope is claimed BEFORE the live map can hand this session to the
     // session list: a not-yet-persisted live row is treated as the user's
@@ -865,6 +924,7 @@ class PiSessionStore {
       harness: "pi",
       agentType: kind,
       ...(scope ? { scope } : {}),
+      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
     });
     // The injected host inverts the session→hub calls so piSdk never imports hub.ts.
     const ls = new PiLiveSession(
@@ -877,6 +937,38 @@ class PiSessionStore {
       this.sessionModes.get(session.sessionId) ?? "build",
       (mode) => this.applySessionMode(session.sessionId, mode),
       credentialProfileId,
+      async (profileId) => {
+        const file = ls.sessionFile;
+        const selected = ls.modelSelection();
+        if (!file || !selected.model)
+          throw new Error(
+            "The pi session has no transcript or model to reopen.",
+          );
+        const model = await findModelForProfile(
+          profileId,
+          selected.model.provider,
+          selected.model.id,
+        );
+        if (!model)
+          throw new Error(
+            "The replacement account no longer offers this session's model.",
+          );
+        const sm = await openExistingSession(kind, file, {
+          expectedId: ls.id,
+          cwd: ls.cwd,
+        });
+        return this.create(
+          kind,
+          sm,
+          model,
+          selected.thinkingLevel,
+          ls.cwd,
+          profileId,
+          undefined,
+          ls.sessionMode,
+          true,
+        );
+      },
     );
     this.live.set(ls.key, ls);
     // Ownership from the first moment: an acquisition that is never viewed
@@ -920,6 +1012,26 @@ class PiSessionStore {
     this.sessionModes.delete(session.sessionId);
     closeToolGroupSession(session.sessionId);
     session.dispose();
+  }
+
+  /** Dispose a refused, not-yet-registered session and remove only its new file. */
+  private discardUnregisteredAndFiles(
+    session: AgentSession,
+    sourceFile?: string,
+  ): void {
+    const sessionFile = session.sessionFile;
+    this.discardUnregistered(session);
+    sessionStore.deleteSkills(session.sessionId);
+    if (
+      !sessionFile ||
+      (sourceFile && resolve(sessionFile) === resolve(sourceFile))
+    )
+      return;
+    try {
+      unlinkSync(sessionFile);
+    } catch {
+      // Best-effort cleanup must not hide the enterprise refusal.
+    }
   }
 
   /** Remove and dispose a live session (e.g. on delete). */

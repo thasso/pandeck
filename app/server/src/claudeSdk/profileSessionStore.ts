@@ -28,11 +28,22 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { open, readdir, type FileHandle } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  rename,
+  rm,
+  type FileHandle,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   claudeConfigDir,
   DEFAULT_CLAUDE_PROFILE_ID,
+  listCredentialProfiles,
 } from "../credentialProfiles.ts";
 
 /** The SDK's `SessionKey`, minimally typed (we only key on these fields). */
@@ -116,6 +127,152 @@ export function claudeProfileSessionStore(profileId: string | undefined) {
       });
     },
   };
+}
+
+/** Stage full native history; commit removes the source, rollback the destination. */
+export async function copyClaudeSessionForAccount(
+  previous: string,
+  next: string,
+  providerSessionId: string,
+): Promise<{ commit: () => Promise<void>; rollback: () => Promise<void> }> {
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(providerSessionId))
+    throw new Error("The Claude session id cannot name a transcript.");
+  const source = join(claudeConfigDir(previous), "projects");
+  const matches: string[] = [];
+  for (const key of await readdir(source, { withFileTypes: true })) {
+    if (!key.isDirectory()) continue;
+    try {
+      const file = await lstat(
+        join(source, key.name, `${providerSessionId}.jsonl`),
+      );
+      if (!file.isFile())
+        throw new Error("The Claude transcript is not a regular file.");
+      matches.push(key.name);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (matches.length !== 1)
+    throw new Error(
+      "Cannot locate the complete Claude transcript for this account switch.",
+    );
+  const projectKey = matches[0]!;
+  const from = join(source, projectKey);
+  const to = join(claudeConfigDir(next), "projects", projectKey);
+  await mkdir(to, { recursive: true });
+  if (!(await lstat(to)).isDirectory())
+    throw new Error("The destination Claude project is not a directory.");
+  const temporary = await mkdtemp(join(to, ".account-switch-"));
+  const main = `${providerSessionId}.jsonl`;
+  const remove = async (base: string): Promise<void> => {
+    await Promise.all([
+      rm(join(base, main), { force: true }),
+      rm(join(base, providerSessionId), { recursive: true, force: true }),
+    ]);
+  };
+  let installed = false;
+  const copy = (path: string, destination: string) =>
+    cp(path, destination, {
+      recursive: true,
+      filter: async (entry) => {
+        const stat = await lstat(entry);
+        if (!stat.isFile() && !stat.isDirectory())
+          throw new Error(
+            "Claude session copying requires regular files and directories.",
+          );
+        return true;
+      },
+    });
+  try {
+    await copy(join(from, main), join(temporary, main));
+    let subagents = false;
+    try {
+      await lstat(join(from, providerSessionId));
+      subagents = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (subagents)
+      await copy(
+        join(from, providerSessionId),
+        join(temporary, providerSessionId),
+      );
+    await rename(join(temporary, main), join(to, main));
+    installed = true;
+    await rm(join(to, providerSessionId), { recursive: true, force: true });
+    if (subagents)
+      await rename(
+        join(temporary, providerSessionId),
+        join(to, providerSessionId),
+      );
+  } catch (error) {
+    if (installed)
+      await remove(to).catch(() => {
+        console.warn(
+          "[claude] Account-switch destination rollback failed; session deletion will retry.",
+        );
+      });
+    throw error;
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+  return { commit: () => remove(from), rollback: () => remove(to) };
+}
+
+/** DELETE also sweeps leftovers from failed best-effort account moves. */
+export async function removeClaudeSessionFromAllProfiles(
+  providerSessionId: string,
+  boundProfileId?: string,
+): Promise<void> {
+  if (!/^[a-z0-9][a-z0-9_-]*$/i.test(providerSessionId))
+    throw new Error("The Claude session id cannot name a transcript.");
+  const ids = new Set([
+    DEFAULT_CLAUDE_PROFILE_ID,
+    ...listCredentialProfiles()
+      .filter((profile) => profile.provider === "claude")
+      .map((profile) => profile.id),
+    ...(boundProfileId ? [boundProfileId] : []),
+  ]);
+  for (const id of ids) {
+    const root = join(claudeConfigDir(id), "projects");
+    let directories;
+    try {
+      directories = await readdir(root, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        console.warn(
+          "[claude] Could not scan a profile for deleted-session transcript cleanup.",
+        );
+      continue;
+    }
+    const remove = async (base: string) => {
+      const removed = await Promise.allSettled([
+        rm(join(base, `${providerSessionId}.jsonl`), { force: true }),
+        rm(join(base, providerSessionId), { force: true, recursive: true }),
+      ]);
+      if (removed.some((result) => result.status === "rejected"))
+        console.warn(
+          "[claude] Deleted-session transcript cleanup failed in a profile.",
+        );
+    };
+    for (const directory of directories) {
+      if (!directory.isDirectory()) continue;
+      const base = join(root, directory.name);
+      await remove(base);
+      try {
+        const staged = await readdir(base, { withFileTypes: true });
+        for (const stage of staged) {
+          if (stage.isDirectory() && stage.name.startsWith(".account-switch-"))
+            await remove(join(base, stage.name));
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+          console.warn(
+            "[claude] Could not scan staged deleted-session transcripts.",
+          );
+      }
+    }
+  }
 }
 
 /** How far back from a transcript's end a saved `cost-state` is looked for. */

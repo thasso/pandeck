@@ -1,6 +1,9 @@
 import type { PrAgentSettings } from "@assistant/shared";
 import { runOneShot } from "./harnesses/oneShot.ts";
-import { accountForSlot } from "./settingsModelSlots.ts";
+import {
+  sourceRequiresEnterprise,
+  type HelperSourceContext,
+} from "./sessionEnterprise.ts";
 import { MAX_PULL_REQUEST_TITLE_CHARS } from "./pullRequestTitle.ts";
 
 const PR_SYSTEM_PROMPT = `You are a dedicated pull-request writer.
@@ -117,11 +120,21 @@ export function parsePrAgentJson(raw: string): PrAgentResult {
 export async function generatePullRequestJson(
   prompt: string,
   settings: PrAgentSettings,
+  source: HelperSourceContext = {},
 ): Promise<PrAgentResult> {
+  const sourceSessionIds = source.sourceSessionId
+    ? [source.sourceSessionId]
+    : [];
+  const requiresEnterprise = sourceRequiresEnterprise(
+    sourceSessionIds,
+    source.requiresEnterprise,
+  );
   const { text } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
-    credentialProfileId: accountForSlot(settings),
+    credentialProfileId: settings.credentialProfileId,
+    requiresEnterprise,
+    sourceSessionIds,
     noModelMessage: "No model is available for the pull-request agent.",
     systemPrompt: PR_SYSTEM_PROMPT,
     prompt,

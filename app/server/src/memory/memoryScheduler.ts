@@ -23,6 +23,7 @@ import { memoryOperationStore } from "../db/memoryOperationStore.ts";
 import { resolveSessionProject } from "../sessionProjectContext.ts";
 import { expireDueMemories, onMemoryChange } from "./memoryService.ts";
 import { runConsolidation, runMemoryProcessor } from "./memoryProcessor.ts";
+import { sessionStore } from "../db/sessionStore.ts";
 
 /* -------------------------------- config --------------------------------- */
 
@@ -109,6 +110,8 @@ class MemoryScheduler {
    */
   observeTurn(input: ObserveTurnInput): void {
     try {
+      const source = sessionStore.getIncludingDeleted(input.sessionId);
+      if (!source || source.requiresEnterprise) return;
       const settings = getSettings().memory;
       if (settings.learningMode === "off") return;
       if (!isCaptureEligiblePersona(input.persona)) return;
@@ -166,6 +169,11 @@ class MemoryScheduler {
    * one re-flush after the in-flight run completes.
    */
   async flushSession(sessionId: string, trigger: string): Promise<void> {
+    const source = sessionStore.getIncludingDeleted(sessionId);
+    if (!source || source.requiresEnterprise) {
+      memoryObservationStore.discardForSession(sessionId, clock());
+      return;
+    }
     if (this.inFlight.has(sessionId)) {
       this.reflush.add(sessionId);
       return;

@@ -58,8 +58,10 @@ export interface SessionMeta {
   providerSessionId?: string;
   model?: string;
   thinkingLevel?: string;
-  /** Immutable PA-owned credential profile selected before the first prompt. */
+  /** Current account; only live failover may replace an existing binding. */
   credentialProfileId?: string;
+  /** Only enterprise accounts may run this session. Immutable after insertion. */
+  requiresEnterprise?: boolean;
   /** Per-turn Build/Plan tool policy. */
   mode?: SessionMode;
   archivedAt?: number;
@@ -121,6 +123,7 @@ interface SessionUpsert {
   model?: string;
   thinkingLevel?: string;
   credentialProfileId?: string;
+  requiresEnterprise?: boolean;
   mode?: SessionMode;
   forkOrigin?: SessionForkOrigin;
   forkAutoRenamePending?: boolean;
@@ -160,6 +163,7 @@ interface DbSessionRow {
   model: string | null;
   thinking_level: string | null;
   credential_profile_id: string | null;
+  requires_enterprise: number;
   mode: string;
   archived_at_ms: number | null;
   settled_at_ms: number | null;
@@ -200,6 +204,7 @@ function fromRow(row: DbSessionRow): SessionMeta {
     ...(row.credential_profile_id
       ? { credentialProfileId: row.credential_profile_id }
       : {}),
+    ...(row.requires_enterprise ? { requiresEnterprise: true } : {}),
     mode: sessionModeOrDefault(row.mode),
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
     ...(row.settled_at_ms !== null ? { settledAt: row.settled_at_ms } : {}),
@@ -267,7 +272,7 @@ function rawRow(id: string): DbSessionRow | undefined {
 
 const insertColumns =
   "id, scope, purpose, harness, agent_type, title, created_at_ms, updated_at_ms, " +
-  "message_count, provider, provider_session_id, model, thinking_level, credential_profile_id, mode, fork_origin_json, fork_auto_rename_pending";
+  "message_count, provider, provider_session_id, model, thinking_level, credential_profile_id, requires_enterprise, mode, fork_origin_json, fork_auto_rename_pending";
 
 // A full-row write. We compute the merged values in TS (see `upsert`), so ON
 // CONFLICT can set every column unconditionally without ever nulling a field the
@@ -278,7 +283,7 @@ const insertColumns =
 // state.
 const upsertSql = `
   INSERT INTO session_index (${insertColumns})
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     scope = excluded.scope,
     purpose = excluded.purpose,
@@ -293,6 +298,7 @@ const upsertSql = `
     model = excluded.model,
     thinking_level = excluded.thinking_level,
     credential_profile_id = excluded.credential_profile_id,
+    requires_enterprise = excluded.requires_enterprise,
     mode = excluded.mode,
     fork_origin_json = excluded.fork_origin_json,
     fork_auto_rename_pending = excluded.fork_auto_rename_pending
@@ -318,7 +324,7 @@ function upsert(input: SessionUpsert): boolean {
       .prepare(upsertSql)
       .run(
         input.id,
-        // Scope is INSERT-ONLY, like createdAt and the credential profile: the
+        // Scope is INSERT-ONLY, like createdAt: the
         // first stored value owns the row for its life. A later write can never
         // reclassify a session — not by stating a different scope, and not by
         // omitting one — because the access policy built on it (Task-477) would
@@ -345,10 +351,10 @@ function upsert(input: SessionUpsert): boolean {
         input.thinkingLevel !== undefined
           ? input.thinkingLevel
           : (prev?.thinking_level ?? null),
-        // A profile may be filled for a legacy row that predates binding, but it
-        // can never be replaced once persisted. Every runtime reopen must retain
-        // the account selected before this session's first prompt.
+        // Ordinary metadata refreshes cannot change the current binding.
+        // Live failover uses switchCredentialProfile's compare-and-set.
         prev?.credential_profile_id ?? input.credentialProfileId ?? null,
+        prev?.requires_enterprise ?? (input.requiresEnterprise ? 1 : 0),
         sessionModeOrDefault(input.mode ?? prev?.mode),
         forkOriginJson,
         (input.forkAutoRenamePending ?? Boolean(prev?.fork_auto_rename_pending))
@@ -363,6 +369,23 @@ function upsert(input: SessionUpsert): boolean {
     );
     return false;
   }
+}
+
+/** Live failover only: refuse a stale binding or a session deleted during the move. */
+function switchCredentialProfile(
+  id: string,
+  previous: string,
+  next: string,
+): void {
+  const result = getDb()
+    .prepare(
+      "UPDATE session_index SET credential_profile_id = ? WHERE id = ? AND credential_profile_id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(next, id, previous);
+  if (result.changes !== 1)
+    throw new Error(
+      "The session's account changed or the session was deleted during the switch.",
+    );
 }
 
 /**
@@ -945,6 +968,18 @@ function freezeSkills(id: string, namesJson: string, ts = Date.now()): string {
   }
 }
 
+/** Remove a session's frozen library-skill list when its source is removed. */
+function deleteSkills(id: string): void {
+  try {
+    getDb().prepare("DELETE FROM session_skills WHERE session_id = ?").run(id);
+  } catch (err) {
+    console.warn(
+      "sessionStore.deleteSkills failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
 /** The frozen library-skill JSON for a session, if it has one. */
 function getSkills(id: string): string | undefined {
   try {
@@ -1138,6 +1173,7 @@ function claimScope(input: {
   harness: Harness;
   agentType: AgentType;
   scope?: SessionScope;
+  requiresEnterprise?: boolean;
 }): void {
   const scope = input.scope ?? DEFAULT_SESSION_SCOPE;
   const prev = rawRow(input.id);
@@ -1147,14 +1183,19 @@ function claimScope(input: {
       throw new Error(
         `Session ${input.id} is persisted as ${stored} and cannot be registered as ${scope}.`,
       );
+    if (input.requiresEnterprise && !prev.requires_enterprise)
+      throw new Error(
+        `Session ${input.id} is not persisted as requiring an enterprise account.`,
+      );
     return;
   }
-  if (scope === DEFAULT_SESSION_SCOPE) return; // the default needs no claim
+  if (scope === DEFAULT_SESSION_SCOPE && !input.requiresEnterprise) return; // ordinary user sessions need no claim
   const stored = upsert({
     id: input.id,
     harness: input.harness,
     agentType: input.agentType,
     scope,
+    ...(input.requiresEnterprise ? { requiresEnterprise: true } : {}),
   });
   if (!stored)
     throw new Error(
@@ -1565,6 +1606,7 @@ function createInternalUsageSession(input: {
   model?: string;
   thinkingLevel?: string;
   parentSessionId?: string;
+  requiresEnterprise?: boolean;
   label?: string;
   usage?: AgentUsage;
   startedAt?: number;
@@ -1583,6 +1625,12 @@ function createInternalUsageSession(input: {
       createdAt: input.startedAt ?? now,
       updatedAt: input.completedAt ?? now,
       messageCount: 1,
+      requiresEnterprise:
+        input.requiresEnterprise === true ||
+        !!(
+          input.parentSessionId &&
+          getIncludingDeleted(input.parentSessionId)?.requiresEnterprise
+        ),
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.providerSessionId !== undefined
         ? { providerSessionId: input.providerSessionId }
@@ -1711,6 +1759,7 @@ export const sessionStore = {
   claimScope,
   countArchived,
   upsert,
+  switchCredentialProfile,
   markDeleted,
   remove,
   markRead,
@@ -1734,6 +1783,7 @@ export const sessionStore = {
   freezePromptConditions,
   getPromptConditions,
   freezeSkills,
+  deleteSkills,
   getSkills,
   freezeAgent,
   getAgent,

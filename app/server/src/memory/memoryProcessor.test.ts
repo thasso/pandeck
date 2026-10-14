@@ -17,6 +17,7 @@ const proc = await import("./memoryProcessor.ts");
 const { memoryObservationStore } =
   await import("../db/memoryObservationStore.ts");
 const { memoryStore } = await import("../db/memoryStore.ts");
+const { sessionStore } = await import("../db/sessionStore.ts");
 const { getDb, closeDb } = await import("../db/index.ts");
 
 const DAY = 86_400_000;
@@ -46,6 +47,12 @@ function enqueue(
   text: string,
   opts: { turn?: string; persona?: string; tz?: string; ts?: number } = {},
 ) {
+  sessionStore.upsert({
+    id: "s1",
+    harness: "pi",
+    agentType: "personal-assistant",
+    requiresEnterprise: false,
+  });
   return memoryObservationStore.enqueue({
     sessionId: "s1",
     userTurnId: opts.turn ?? `turn-${Math.random()}`,
@@ -77,6 +84,91 @@ afterAll(() => {
   proc.resetMemoryProcessorRunnerForTests();
   closeDb();
   rmSync(tmp, { recursive: true, force: true });
+});
+
+test("enterprise queued observations never enter a mixed processor prompt", async () => {
+  sessionStore.upsert({
+    id: "enterprise-processor-source",
+    harness: "pi",
+    agentType: "personal-assistant",
+    requiresEnterprise: true,
+  });
+  const enterprise = memoryObservationStore.enqueue({
+    sessionId: "enterprise-processor-source",
+    userTurnId: "turn",
+    humanText: "Enterprise-only secret planning context",
+    sourceTimestampMs: nowMs,
+    timezone: "UTC",
+    createdAt: nowMs,
+  });
+  const personal = enqueue("Ordinary personal preference");
+  const batch = claim(enterprise, personal);
+  sessionStore.remove("enterprise-processor-source");
+  let calls = 0;
+  proc.setMemoryProcessorRunnerForTests({
+    run: async (input) => {
+      calls += 1;
+      assert.ok(
+        !input.prompt.includes("Enterprise-only secret planning context"),
+      );
+      assert.ok(input.prompt.includes("Ordinary personal preference"));
+      return { text: JSON.stringify({ operations: [] }) };
+    },
+  });
+  const result = await proc.runMemoryProcessor(batch, { trigger: "test" });
+  assert.equal(result.ran, true);
+  assert.equal(calls, 1);
+  assert.equal(memoryObservationStore.get(enterprise.id)?.state, "discarded");
+  assert.equal(memoryObservationStore.get(enterprise.id)?.humanText, "");
+});
+
+test("a queued transcript with missing source provenance is discarded without processing", async () => {
+  const observation = memoryObservationStore.enqueue({
+    sessionId: "missing-source",
+    userTurnId: "turn",
+    humanText: "Retained transcript",
+    sourceTimestampMs: nowMs,
+    timezone: "UTC",
+    createdAt: nowMs,
+  });
+  proc.setMemoryProcessorRunnerForTests({
+    run: async () => {
+      throw new Error("must not call model");
+    },
+  });
+  const result = await proc.runMemoryProcessor(claim(observation), {
+    trigger: "test",
+  });
+  assert.equal(result.ran, false);
+  assert.equal(memoryObservationStore.get(observation.id)?.state, "discarded");
+  assert.equal(memoryObservationStore.get(observation.id)?.humanText, "");
+});
+
+test("an enterprise-only queued batch makes no processor call", async () => {
+  sessionStore.upsert({
+    id: "enterprise-only-processor-source",
+    harness: "pi",
+    agentType: "personal-assistant",
+    requiresEnterprise: true,
+  });
+  const enterprise = memoryObservationStore.enqueue({
+    sessionId: "enterprise-only-processor-source",
+    userTurnId: "turn",
+    humanText: "Enterprise-only transcript",
+    sourceTimestampMs: nowMs,
+    timezone: "UTC",
+    createdAt: nowMs,
+  });
+  proc.setMemoryProcessorRunnerForTests({
+    run: async () => {
+      throw new Error("must not call model");
+    },
+  });
+  const result = await proc.runMemoryProcessor(claim(enterprise), {
+    trigger: "test",
+  });
+  assert.equal(result.ran, false);
+  assert.equal(result.reason, "no-input");
 });
 
 test("valid create/reinforce/replace/archive/ignore apply atomically", async () => {

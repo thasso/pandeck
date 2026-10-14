@@ -22,9 +22,22 @@ import type {
 import { CLAUDE_SDK_HARNESS_SETTINGS } from "./modelSettings.ts";
 import {
   OUTPUT_LIMIT_FAILURE,
-  runClaudeSdkOneShot,
+  runClaudeSdkOneShot as runClaudeSdkOneShotOnAccount,
   setClaudeSdkOneShotSeam,
+  type RunClaudeSdkOneShotInput,
 } from "./oneShot.ts";
+import { createCredentialProfile } from "../credentialProfiles.ts";
+import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
+
+const account = createCredentialProfile({
+  name: "One-shot fixture",
+  provider: "claude",
+});
+const runClaudeSdkOneShot = (input: RunClaudeSdkOneShotInput) =>
+  runClaudeSdkOneShotOnAccount({
+    ...input,
+    credentialProfileId: input.credentialProfileId ?? account.id,
+  });
 
 function fakeSeam(
   messages: ClaudeSdkMessage[],
@@ -278,6 +291,128 @@ test("an API failure is reported as the failure, never as model text", async () 
   assert.equal(rateLimited.text, "");
   assert.equal(rateLimited.failure, "Claude SDK run ended with: HTTP 429");
 });
+
+test.each([
+  [
+    "The request could not be processed",
+    "opus",
+    "rate_limit",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "API Error: 429 Unauthorized",
+    "opus",
+    "rate_limit",
+    undefined,
+    undefined,
+    undefined,
+  ],
+  [
+    "Opus weekly limit reached ∙ resets Oct 20, 3pm",
+    "opus",
+    "quota",
+    "opus",
+    undefined,
+    429,
+  ],
+  [
+    "You've hit your Opus limit · resets 3pm",
+    "opus",
+    "quota",
+    "opus",
+    undefined,
+    429,
+  ],
+  [
+    "You've hit your Opus limit · resets 3pm",
+    "sonnet",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "Opus weekly limit reached ∙ resets Oct 20, 3pm",
+    "sonnet",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "You've hit your session limit · resets 3pm",
+    "opus",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "You've hit your weekly limit · resets Oct 20, 3pm",
+    "opus",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "Claude AI usage limit reached|1900000000",
+    "opus",
+    "quota",
+    undefined,
+    1900000000000,
+    429,
+  ],
+] as const)(
+  "Claude one-shot retains exact CLI limit evidence: %s on %s",
+  async (text, modelId, kind, limitModel, resetAtMs, status) => {
+    setClaudeSdkOneShotSeam(() =>
+      Promise.resolve(
+        fakeSeam([
+          {
+            type: "assistant",
+            error: "rate_limit",
+            message: {
+              model: "<synthetic>",
+              content: [{ type: "text", text }],
+            },
+          },
+          {
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            ...(status === undefined ? {} : { api_error_status: status }),
+            result: text,
+            session_id: "limit-one-shot",
+          },
+        ] as unknown as ClaudeSdkMessage[]),
+      ),
+    );
+    const run = await runClaudeSdkOneShot({
+      modelId,
+      thinkingLevel: "off",
+      systemPrompt: "x",
+      prompt: "y",
+    });
+    assert.equal(run.text, "");
+    assert.equal(run.failure, text);
+    assert.equal(run.failureStatus, status);
+    const facts = runFailureFacts(
+      analyzeProviderError(run.failure!, {
+        provider: "claude-sdk",
+        model: modelId,
+        ...(run.failureStatus === undefined
+          ? {}
+          : { statusCode: run.failureStatus }),
+      }),
+    );
+    assert.equal(facts.kind, kind);
+    assert.equal(facts.limitModel, limitModel);
+    assert.equal(facts.resetAtMs, resetAtMs);
+  },
+);
 
 test("a reply cut off at the output limit is reported as a failure", async () => {
   setClaudeSdkOneShotSeam(() =>

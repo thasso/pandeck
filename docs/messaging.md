@@ -31,7 +31,8 @@ apart and can be true alongside either.
 3. **Is the user away?** Push is orthogonal to the two questions above and
    applies to both kinds: a condition that blocks the agent on them, and an
    event that delivers a result they were waiting for. Nothing else pushes, and
-   nothing pushes while they are here.
+   nothing pushes while they are here. The explicit account-login exception
+   below also pushes once when runtime evidence proves a login is dead.
 
 **There is no banner channel.** A full-width tinted row that pushes the page
 down is not a message surface. The one app-wide announcement that survives lives
@@ -43,9 +44,9 @@ in the app status slot below.
 | ----------------------------------- | --------------------------------------------------------------------- | -------------------- |
 | In place (`ErrorNote`, card, field) | Conditions, and events whose object is on screen                      | Until resolved       |
 | Toast                               | Traceless receipts, actionable outcomes, events whose surface is gone | Seconds              |
-| App status slot                     | App-wide, self-clearing lifecycle state                               | Until the state ends |
+| App status slot                     | Lifecycle state and accounts needing login                            | Until the state ends |
 | Object state (inbox tier, badge)    | A blocked agent, surfaced where it can be found                       | Until answered       |
-| Push                                | A blocked agent, or an awaited result                                 | The OS owns it       |
+| Push                                | A blocked agent, awaited result, or dead account login                | The OS owns it       |
 
 Toast lifetime has two shared values: `TOAST_BRIEF_MS` for a receipt where there
 is nothing to do, and `TOAST_DWELL_MS` when the reader must finish reading or
@@ -296,22 +297,28 @@ same one, so a completion is always some other item's, and clearing a live
 failure with it is the unrelated traffic a condition on an object exists to
 survive.
 
-One class of condition is about the whole app rather than any object, and it is
-the only thing that may announce itself globally: **app-wide lifecycle or
-connectivity state that the user cannot act on and that ends by itself.** Two
-states qualify — a server restart, queued or under way, and a socket that has
-dropped. Both are about the app rather than anything in it, neither offers the
-user a move, and both clear themselves.
+The app status slot announces app-wide lifecycle and connectivity state: a
+server restart, queued or under way, and a dropped socket. Those states clear
+themselves and are not interactive.
+
+The user's explicit exception is **an enabled account with an observed dead
+login or credentials that disappeared after connection**. Never-connected
+accounts show "Not connected" only on their Settings cards. The eligible alert
+stays visible throughout the app until the login works again or the account is
+disabled or deleted. One account is named, such as "Claude Private needs login";
+several read "2 accounts need login". Only this state is interactive, linking to
+the first affected account's provider settings. Account cards also show "Needs
+login" and the app's short reason. No provider message or credential enters this
+alert. See `account-routing.md` for evidence and transition rules.
 
 That slot has one component and two placements, because the app has two shells:
 inline in the App Header Bar on wide layouts, where window chrome already lives
 and no layout moves; floating at the top centre on narrow ones, which have no
 header bar and where an overlay is also the only thing visible from the sidebar.
-The two states are mutually exclusive and ranked — a restart in progress
-describes the disconnect it causes, so it wins.
-
-Anything object-shaped that reaches for this slot is in the wrong place. The
-slot's name says what it is for, and the audit keeps it that way.
+States are mutually exclusive and ranked: restart first, then connection, then
+account login. The existing connection grace period still applies. Lifecycle
+pills pass pointer events through to native title-bar dragging; only the login
+pill accepts pointer events. No other object condition may use this slot.
 
 ## The agent is blocked on the user
 
@@ -333,8 +340,8 @@ an `approval` target. The server answers with the card's row id
 (`approval-<id>`) and the index of the turn that proposed it, so a windowed
 transcript loads back far enough to show the card.
 
-This is also the one in-app state that qualifies for push, because the work has
-stopped until the user acts.
+This qualifies for push because the work has stopped until the user acts.
+Account login failures are the explicit additional condition below.
 
 ## Push
 
@@ -342,7 +349,15 @@ Push is external and expensive: it reaches the user where they did not ask to be
 reached. It is reserved for two cases — **the agent cannot continue without
 them**, and **a result they were waiting for has arrived**. Anything that
 neither blocks the work nor was being waited on can wait until they next look,
-and is not push.
+and is not push, except for the user's account-login decision.
+
+An enabled account transitioning into `needs-login` due to usage, a session run,
+or a background one-shot sends **one push per transition**, never per failed
+call. Derived credential absence, creating an account without credentials,
+startup replay, disabling and re-enabling it do not push. Successful runtime
+evidence or a completed login clears the state, permitting a later genuinely new
+failure to push. A tap opens that account's provider settings. Delivery uses the
+existing app-notification routes and foreground policy.
 
 That admits an owned turn that finished or failed; CI concluding on a pull
 request the agent opened; a workflow run reaching a merge decision or needing

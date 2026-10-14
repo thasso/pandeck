@@ -34,7 +34,9 @@ const held = vi.hoisted(() => ({
   modelLookups: [] as Array<() => void>,
   lookupArgs: [] as unknown[][],
   prompts: [] as string[],
+  pickAccount: vi.fn(async () => ({ profileId: "default" })),
 }));
+vi.mock("./accountRouter.ts", () => ({ pickAccount: held.pickAccount }));
 vi.mock("./piSdk/models.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./piSdk/models.ts")>()),
   findModelForProfile: (...args: unknown[]) =>
@@ -58,6 +60,7 @@ const { piStore } = await import("./piSdk/piStore.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
+const { sessionStore } = await import("./db/sessionStore.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => {
@@ -65,6 +68,8 @@ afterEach(() => {
   held.modelLookups.length = 0;
   held.lookupArgs.length = 0;
   held.prompts.length = 0;
+  held.pickAccount.mockReset();
+  held.pickAccount.mockResolvedValue({ profileId: "default" });
 });
 
 const codexProfile = createCredentialProfile({
@@ -184,6 +189,35 @@ async function expectCommandsRouteTo(
 }
 
 describe("creating a session against a newer load", () => {
+  test("newSession: a load completing during account selection keeps the view", async () => {
+    const sent: ServerMessage[] = [];
+    const h = harness(sent);
+    let releaseAccount!: (pick: { profileId: string }) => void;
+    held.pickAccount.mockImplementationOnce(
+      () =>
+        new Promise<{ profileId: string }>((resolve) => {
+          releaseAccount = resolve;
+        }),
+    );
+    void h.connection.handle({
+      type: "newSession",
+      agentType: "assistant",
+      model: { provider: "openai-codex", id: "gpt-5" },
+    } as ClientMessage);
+    await settle();
+    expect(held.modelLookups).toHaveLength(0);
+    void h.connection.handle({ type: "loadSession", id: B } as ClientMessage);
+    await h.completeLoad(B);
+    expect(snapshots(sent)).toEqual([B]);
+    releaseAccount({ profileId: "default" });
+    await settle();
+    await h.releaseModelLookup();
+    expect(h.created).toEqual(["created-1"]);
+    expect(snapshots(sent)).toEqual([B]);
+    expect(h.session("created-1").viewers.size).toBe(0);
+    await expectCommandsRouteTo(h.connection, sent, B, "created-1");
+  });
+
   test("newSession: a load completing during the model lookup keeps the view", async () => {
     const sent: ServerMessage[] = [];
     const h = harness(sent);
@@ -302,6 +336,15 @@ describe("creating a session against a newer load", () => {
     id: string,
   ): Promise<void> {
     const session = h.session(id);
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      provider: "openai-codex",
+      model: "gpt-5",
+      thinkingLevel: "low",
+      credentialProfileId: codexProfile.id,
+    });
     Object.defineProperty(session, "credentialProfileId", {
       value: codexProfile.id,
     });

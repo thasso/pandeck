@@ -17,8 +17,9 @@ import type {
   PromptRefineResponse,
   SpeechTranscribeResponse,
   TimelineCacheDescriptor,
+  AccountPickPreviewRequest,
 } from "@assistant/shared";
-import { HARNESSES, normalizeGithubIssueRefs } from "@assistant/shared";
+import { isThinkingLevel, normalizeGithubIssueRefs } from "@assistant/shared";
 import type {
   PortForwardGrantRequest,
   PortForwardGrantRevokeRequest,
@@ -35,18 +36,20 @@ import { verifyRequiredHostTools } from "./hostTools.ts";
 import { Connection } from "./connection.ts";
 import { getGoogleDriveFileTextPreview } from "./tools/google/googleDriveTools.ts";
 import { getGmailThreadTextPreview } from "./tools/google/googleGmailTools.ts";
-import { redeemOpenAiResetCredit } from "./harnesses/usage.ts";
-import { modelsForAccount } from "./harnesses/models.ts";
 import {
-  automaticProfileIdFor,
+  redeemOpenAiResetCredit,
+  usageProfileForSession,
+} from "./harnesses/usage.ts";
+import { modelsForAccount } from "./harnesses/models.ts";
+import { pickAccount } from "./accountRouter.ts";
+import {
   createCredentialProfile,
   credentialProfileById,
   defaultClaudeProfileId,
   defaultOpenAiProfileId,
   deleteCredentialProfile,
   listCredentialProfiles,
-  renameCredentialProfile,
-  setCredentialProfileEnabled,
+  patchCredentialProfile,
 } from "./credentialProfiles.ts";
 import {
   markUsageProfileDirty,
@@ -152,10 +155,8 @@ import {
 import { sweepMainWorktreeCommentRetention } from "./worktrees/worktreeComments.ts";
 import { closeDb } from "./db/index.ts";
 import { sessionStore } from "./db/sessionStore.ts";
-import {
-  buildVisibleConversationContext,
-  refinePromptText,
-} from "./promptRefinement.ts";
+import { refinePromptText } from "./promptRefinement.ts";
+import { refinementSource } from "./promptRefinementSource.ts";
 import {
   attachSpeechSocket,
   finalizeTranscript,
@@ -232,9 +233,13 @@ import {
   setHumanPromptHook,
   setSessionIdleHook,
   subscribeSessionRunCompleted,
+  subscribeSessionRunFailed,
+  subscribeSessionRunStarted,
+  subscribeSessionTurnClosed,
   subscribeSessionToolCompleted,
 } from "./session/runtime/liveSession.ts";
 import { notifySessionTurnCompleted } from "./webPush.ts";
+import { trackSessionRunHealth } from "./accountHealth.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { sessionArtifactDeliveryHeaders } from "./sessionArtifactHttp.ts";
 import {
@@ -795,6 +800,50 @@ async function handleRequest(
     return;
   }
 
+  if (requestUrl.pathname === "/api/account-router/pick") {
+    if (req.method !== "POST") {
+      res.writeHead(405, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    try {
+      const body = await readJsonBody<AccountPickPreviewRequest>(req);
+      if (
+        !body?.model ||
+        typeof body.model.provider !== "string" ||
+        !body.model.provider.trim() ||
+        typeof body.model.modelId !== "string" ||
+        !body.model.modelId.trim() ||
+        (body.thinkingLevel !== undefined &&
+          !isThinkingLevel(body.thinkingLevel)) ||
+        (body.requiresEnterprise !== undefined &&
+          typeof body.requiresEnterprise !== "boolean") ||
+        (body.scope !== undefined &&
+          body.scope !== "interactive" &&
+          body.scope !== "background")
+      )
+        throw new Error("A model and valid account requirements are required.");
+      // A background preview may show its disabled-default fallback, but the
+      // actual creation endpoint independently enforces its own policy.
+      const picked = await pickAccount({
+        model: { provider: body.model.provider, modelId: body.model.modelId },
+        ...(body.thinkingLevel !== undefined
+          ? { thinkingLevel: body.thinkingLevel }
+          : {}),
+        ...(body.requiresEnterprise !== undefined
+          ? { requiresEnterprise: body.requiresEnterprise }
+          : {}),
+        ...(body.scope === "background" ? { allowDisabledDefault: true } : {}),
+      });
+      res.writeHead(200, corsJsonHeaders(req));
+      res.end(JSON.stringify(picked));
+    } catch (err) {
+      res.writeHead(400, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: errorText(err) }));
+    }
+    return;
+  }
+
   if (requestUrl.pathname === "/api/credential-profiles") {
     if (req.method === "GET") {
       const includeUsage = requestUrl.searchParams.get("includeUsage") === "1";
@@ -862,26 +911,14 @@ async function handleRequest(
     const profileId = requestUrl.pathname.split("/")[3] ?? "";
     try {
       if (req.method === "PATCH") {
-        const body = await readJsonBody<{ name?: unknown; enabled?: unknown }>(
-          req,
-        );
-        if (typeof body.enabled === "boolean") {
-          res.writeHead(200, corsJsonHeaders(req));
-          res.end(
-            JSON.stringify({
-              profile: setCredentialProfileEnabled(profileId, body.enabled),
-            }),
-          );
-          return;
-        }
-        if (typeof body.name !== "string")
-          throw new Error("A profile name or enabled state is required.");
+        const body = await readJsonBody<{
+          name?: unknown;
+          enabled?: unknown;
+          enterprise?: unknown;
+        }>(req);
+        const profile = patchCredentialProfile(profileId, body);
         res.writeHead(200, corsJsonHeaders(req));
-        res.end(
-          JSON.stringify({
-            profile: renameCredentialProfile(profileId, body.name),
-          }),
-        );
+        res.end(JSON.stringify({ profile }));
         return;
       }
       if (req.method === "DELETE") {
@@ -1047,17 +1084,20 @@ async function handleRequest(
         return;
       }
 
-      let context = "";
-      if (body.includeContext !== false && body.sessionId) {
-        // Resolve the live session by OUR id (no kind needed); use its snapshot
-        // for the visible-conversation context when it's resident.
-        const snapshot = hub.getLiveById(body.sessionId)?.snapshot();
-        if (snapshot) context = buildVisibleConversationContext(snapshot);
+      if (
+        body.requiresEnterprise !== undefined &&
+        typeof body.requiresEnterprise !== "boolean"
+      ) {
+        res.writeHead(400, corsJsonHeaders(req));
+        res.end(
+          JSON.stringify({ error: "Requires enterprise must be a boolean." }),
+        );
+        return;
       }
-
+      const source = refinementSource(body);
       const refinedText = await refinePromptText({
         text,
-        context,
+        ...source,
         settings: getSettings().promptRefinement,
       });
       const payload: PromptRefineResponse = { refinedText };
@@ -1874,17 +1914,12 @@ server.listen(PORT, HOST, () => {
       console.warn("[package-proxy] start failed:", errorText(err)),
     );
   startMemoryMaintenance();
-  /**
-   * The credential profile whose usage a finished run consumed. Sessions
-   * created before the account was chosen carry no binding, so fall back to the
-   * account automatic work runs on for that harness's provider.
-   */
-  const usageProfileForSession = (sessionId: string): string | null => {
-    const session = sessionStore.get(sessionId);
-    if (!session) return null;
-    if (session.credentialProfileId) return session.credentialProfileId;
-    return automaticProfileIdFor(HARNESSES[session.harness].accountProvider);
-  };
+  trackSessionRunHealth({
+    session: (sessionId) => sessionStore.get(sessionId),
+    subscribeStarted: subscribeSessionRunStarted,
+    subscribeFailed: subscribeSessionRunFailed,
+    subscribeClosed: subscribeSessionTurnClosed,
+  });
   // Declarative Web Push is driven by a real normalized run completion, not a
   // generic idle transition or synthetic host command.
   subscribeSessionRunCompleted((sessionId, stopReason, origin) => {
@@ -1899,7 +1934,7 @@ server.listen(PORT, HOST, () => {
     // A finished run moved this account's usage. The run completion is the only
     // trigger we take (a session's last turn IS one, and the idle hook is a
     // superset that would double-fetch); it only marks the account dirty.
-    const profileId = usageProfileForSession(sessionId);
+    const profileId = usageProfileForSession(sessionStore.get(sessionId));
     if (profileId) markUsageProfileDirty(profileId);
   });
   // Each boot recovery is its own step: one that throws (a corrupt row) must

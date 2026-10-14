@@ -109,6 +109,7 @@ describe("review handoff session target", () => {
   const base = {
     agentType: "developer" as const,
     credentialProfileId: "profile-work",
+    requiresEnterprise: false,
     additionalPrompt: "Look at the mobile behavior.",
     attachments: [],
   };
@@ -145,6 +146,25 @@ describe("review handoff session target", () => {
     expect(target.mode).toBeUndefined();
     expect("attachments" in target).toBe(false);
     expect(target.harness).toBe("claude-sdk");
+  });
+
+  it("leaves the account to the server for Automatic and carries the enterprise requirement", () => {
+    const { credentialProfileId: _explicit, ...automatic } = base;
+    const target = reviewHandoffSessionTarget({
+      ...automatic,
+      requiresEnterprise: true,
+      runtime: newSessionRuntimeDefaults(sonnet, "high"),
+    });
+
+    expect("credentialProfileId" in target).toBe(false);
+    expect(target.requiresEnterprise).toBe(true);
+    expect(
+      "requiresEnterprise" in
+        reviewHandoffSessionTarget({
+          ...base,
+          runtime: newSessionRuntimeDefaults(sonnet, "high"),
+        }),
+    ).toBe(false);
   });
 
   it("passes staged attachments along", () => {

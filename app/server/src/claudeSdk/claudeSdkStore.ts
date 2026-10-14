@@ -21,10 +21,17 @@ import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
 import { buildRealClaudeSdkSeam, type ClaudeSdkSeam } from "./sdkSeam.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import { sessionStore } from "../db/sessionStore.ts";
+import { sourceRequiresEnterprise } from "../sessionEnterprise.ts";
 import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
-import { claudeProfileSessionStore } from "./profileSessionStore.ts";
+import {
+  claudeProfileSessionStore,
+  removeClaudeSessionFromAllProfiles,
+} from "./profileSessionStore.ts";
 import { SessionHeldElsewhereError } from "../harness.ts";
-import { defaultClaudeProfileId } from "../credentialProfiles.ts";
+import {
+  credentialProfileById,
+  DEFAULT_CLAUDE_PROFILE_ID,
+} from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import { freezeSessionAgent, sessionAgent } from "../agents/sessionAgent.ts";
 import {
@@ -147,6 +154,7 @@ class ClaudeSdkSessionStore {
       cwd?: string;
       additionalSystemPrompt?: string;
       credentialProfileId?: string;
+      requiresEnterprise?: boolean;
       /**
        * Whose session this is, declared by the CREATING caller: it is persisted
        * before the session enters the live map, because the session list treats
@@ -206,9 +214,10 @@ class ClaudeSdkSessionStore {
       // record cwd and the caller's cwd are fallbacks (e.g. pre-link creation).
       ...(cwdValue !== undefined ? { cwd: cwdValue } : {}),
       credentialProfileId:
+        sessionStore.get(id)?.credentialProfileId ??
         record?.credentialProfileId ??
         opts.credentialProfileId ??
-        defaultClaudeProfileId(),
+        DEFAULT_CLAUDE_PROFILE_ID,
       ...(record?.usage !== undefined ? { usage: record?.usage } : {}),
     });
     session.onChange = () => this.onChange();
@@ -226,6 +235,7 @@ class ClaudeSdkSessionStore {
       harness: "claude-sdk",
       agentType: record?.agentType ?? opts.agentType ?? "workshop",
       ...(opts.scope ? { scope: opts.scope } : {}),
+      ...(opts.requiresEnterprise ? { requiresEnterprise: true } : {}),
     });
     // Registry sync: record the session's metadata on create (providerSessionId
     // is not known until the first turn ends; persist() fills it in then).
@@ -275,12 +285,29 @@ class ClaudeSdkSessionStore {
       throw new Error("Cannot fork: this session has never run.");
 
     const agentType = record.agentType ?? "workshop";
+    const sourceMeta = sessionStore.getIncludingDeleted(sourceId);
+    const requiresEnterprise = sourceRequiresEnterprise([sourceId]);
+    const credentialProfileId =
+      sourceMeta?.credentialProfileId ?? record.credentialProfileId;
+    const ensureEnterpriseAccount = () => {
+      if (
+        requiresEnterprise &&
+        (!credentialProfileId ||
+          !credentialProfileById(credentialProfileId)?.enterprise)
+      ) {
+        throw new Error(
+          "This session requires an enterprise account. Select an account marked as enterprise.",
+        );
+      }
+    };
+    ensureEnterpriseAccount();
     // A legacy parent freezes at this first post-upgrade runtime start. The
     // child receives that exact list even if settings move while it is created.
     const inheritedSkills = await sessionSkills(sourceId, agentType);
     // A fork continues the parent as the same agent; read now, so an
     // unreadable parent row refuses the fork before anything is cut.
     const inheritedAgent = sessionAgent(sourceId);
+    ensureEnterpriseAccount();
 
     const seam = await this.seam();
     if (!seam.forkSession)
@@ -293,7 +320,7 @@ class ClaudeSdkSessionStore {
     // stale cwd both in its record and on its live instance.
     const cwd =
       worktreeCwdForSession(sourceId) ?? source?.cwd ?? record.cwd ?? CWD;
-    const store = claudeProfileSessionStore(record.credentialProfileId);
+    const store = claudeProfileSessionStore(credentialProfileId);
     // Validate OUR side of the cut before the provider's, because the provider's
     // is not undoable: a native fork that no session ends up referencing is an
     // orphan transcript, and PA pinned retention to a decade, so nothing would
@@ -303,6 +330,7 @@ class ClaudeSdkSessionStore {
     // Then cut the native transcript FIRST of the two creations: if the provider
     // cannot cut it (an expired or deleted `.jsonl`), no session exists yet and
     // the error reaches the user instead of leaving a child bound to nothing.
+    ensureEnterpriseAccount();
     const forked = await seam.forkSession(record.providerSessionId, {
       upToMessageId: opts.anchor,
       dir: cwd,
@@ -315,6 +343,11 @@ class ClaudeSdkSessionStore {
 
     const id = randomUUID();
     try {
+      ensureEnterpriseAccount();
+      // Freeze the inherited skill names before the child can run. This is an
+      // async seam even with a preset, so recheck the bound account after it.
+      await sessionSkills(id, agentType, inheritedSkills);
+      ensureEnterpriseAccount();
       // Seed the child's durable log from the parent's, or it would open on an
       // empty transcript while its provider session holds the whole history. The
       // inherited prefix arrives UNANCHORED: the cut above remapped every uuid,
@@ -330,7 +363,6 @@ class ClaudeSdkSessionStore {
         throw new Error(
           "Cannot fork: selected message is no longer available.",
         );
-      await sessionSkills(id, agentType, inheritedSkills);
       if (inheritedAgent) freezeSessionAgent(id, inheritedAgent);
 
       const session = new ClaudeSdkSession(id, {
@@ -356,9 +388,7 @@ class ClaudeSdkSessionStore {
           ? { additionalSystemPrompt: record.additionalSystemPrompt }
           : {}),
         cwd,
-        ...(record.credentialProfileId !== undefined
-          ? { credentialProfileId: record.credentialProfileId }
-          : {}),
+        ...(credentialProfileId !== undefined ? { credentialProfileId } : {}),
       });
       session.onChange = () => this.onChange();
       session.onPersist = () => this.persist(session);
@@ -372,7 +402,8 @@ class ClaudeSdkSessionStore {
         id,
         harness: "claude-sdk",
         agentType: record.agentType ?? "workshop",
-        scope: sessionStore.get(sourceId)?.scope ?? DEFAULT_SESSION_SCOPE,
+        scope: sourceMeta?.scope ?? DEFAULT_SESSION_SCOPE,
+        ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       });
       this.sessions.set(id, session);
       this.persist(session);
@@ -386,6 +417,8 @@ class ClaudeSdkSessionStore {
       // is gone. The original failure is what the user should see.
       this.sessions.delete(id);
       this.logs.delete(id);
+      await sessionRuntime.disposeSession(id);
+      sessionStore.deleteSkills(id);
       try {
         await seam.deleteSession?.(forked.sessionId, {
           dir: cwd,
@@ -616,13 +649,21 @@ class ClaudeSdkSessionStore {
     if (!record?.providerSessionId) return;
     try {
       const seam = await this.seam();
-      if (!seam.deleteSession) return;
-      await seam.deleteSession(record.providerSessionId, {
+      await seam.deleteSession?.(record.providerSessionId, {
         dir: worktreeCwdForSession(id) ?? record.cwd ?? CWD,
         sessionStore: claudeProfileSessionStore(record.credentialProfileId),
       });
     } catch {
-      // Best-effort: the record and metadata row are already gone.
+      console.warn(
+        "[claude] Native session deletion failed; sweeping profile transcripts directly.",
+      );
+    } finally {
+      await removeClaudeSessionFromAllProfiles(
+        record.providerSessionId,
+        record.credentialProfileId,
+      ).catch(() => {
+        console.warn("[claude] Deleted-session profile sweep failed.");
+      });
     }
   }
 }

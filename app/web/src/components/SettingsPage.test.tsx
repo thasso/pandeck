@@ -21,22 +21,28 @@ const profiles = [
   {
     id: "claude-default",
     name: "Claude",
+    health: { state: "unknown", since: null },
     provider: "claude",
     enabled: true,
+    enterprise: false,
     status: "ready",
   },
   {
     id: "default",
     name: "OpenAI",
+    health: { state: "unknown", since: null },
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "ready",
   },
   {
     id: "openai-work",
     name: "OpenAI work",
+    health: { state: "needs-login", since: null },
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "disconnected",
   },
 ] as CredentialProfileSummary[];
@@ -87,6 +93,51 @@ test("PA working directory shows the server default and saves on blur", async ()
 });
 
 describe("credential profile settings", () => {
+  test("shows limited-until on the account card without a reconnect warning", () => {
+    const html = renderToStaticMarkup(
+      <CredentialProfileCard
+        profile={{
+          ...profiles[0]!,
+          health: {
+            state: "limited",
+            since: Date.now(),
+            until: Date.now() + 60_000,
+            model: "opus",
+          },
+        }}
+        providerLabel="Claude"
+        connectionLabel="Connect"
+        onToggle={() => {}}
+        onToggleEnterprise={() => {}}
+        onConnect={() => {}}
+      />,
+    );
+    expect(html).toContain("Limited until ");
+    expect(html).toContain("for opus");
+    expect(html).not.toContain("Needs login");
+  });
+  test("shows needs-login and its app-owned reason beside setup status", () => {
+    const html = renderToStaticMarkup(
+      <CredentialProfileCard
+        profile={{
+          ...profiles[0]!,
+          health: {
+            state: "needs-login",
+            since: 1,
+            reason: "Reconnect this account.",
+          },
+        }}
+        providerLabel="Claude"
+        connectionLabel="Reconnect"
+        onToggle={() => {}}
+        onToggleEnterprise={() => {}}
+        onConnect={() => {}}
+      />,
+    );
+    expect(html).toContain("Needs login");
+    expect(html).toContain("Reconnect this account.");
+    expect(html).toContain("ready");
+  });
   test("keeps Claude and OpenAI profile pages isolated", () => {
     expect(
       credentialProfilesForProvider(profiles, "claude").map(
@@ -112,6 +163,7 @@ describe("credential profile settings", () => {
         providerLabel: "Claude",
         connectionLabel: "Reconnect",
         onToggle: () => {},
+        onToggleEnterprise: () => {},
         onConnect: () => {},
         onRename: () => {},
         onDelete: () => {},
@@ -144,7 +196,9 @@ const profile = (
   name: "Claude personal",
   provider: "claude",
   enabled: true,
+  enterprise: false,
   status,
+  health: { state: "unknown", since: null },
   createdAt: 0,
   updatedAt: 0,
 });
@@ -156,6 +210,7 @@ function card(status: CredentialProfileSummary["status"]): string {
       providerLabel="Claude"
       connectionLabel={status === "connecting" ? "Continue login" : "Connect"}
       onToggle={() => {}}
+      onToggleEnterprise={() => {}}
       onConnect={() => {}}
     />,
   );

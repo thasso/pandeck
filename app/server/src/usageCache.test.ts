@@ -27,8 +27,27 @@ const {
   setUsageCacheDepsForTests,
   usageIndicators,
 } = await import("./usageCache.ts");
+const { usageProfileForSession } = await import("./harnesses/usage.ts");
 
 const CACHE_DIR = join(process.env.DATA_DIR, "cache", "usage");
+
+describe("run usage attribution", () => {
+  test.each([
+    ["claude-sdk", "claude-default"],
+    ["pi", "default"],
+  ] as const)(
+    "legacy %s sessions dirty their protected default",
+    (harness, expected) => {
+      expect(usageProfileForSession({ harness })).toBe(expected);
+      expect(
+        usageProfileForSession({ harness, credentialProfileId: "bound-work" }),
+      ).toBe("bound-work");
+    },
+  );
+  test("missing session metadata does not guess an account", () => {
+    expect(usageProfileForSession(undefined)).toBeNull();
+  });
+});
 
 function profile(
   id: string,
@@ -40,9 +59,11 @@ function profile(
     name: id,
     provider,
     enabled,
+    enterprise: false,
     createdAt: 0,
     updatedAt: 0,
     status: "ready",
+    health: { state: "unknown", since: null },
   };
 }
 

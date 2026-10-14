@@ -124,12 +124,17 @@ fallback to another model.
 
 ### The account
 
-A definition never names an account. A spawn takes the account for the resolved
-provider from ONE function (`accountFor` in `agents/agentSpawn.ts`), which calls
-`automaticProfileIdFor(provider)` today: the first enabled account for that
-provider, in Settings order. An account that does not offer the resolved model
-refuses the spawn. Usage-aware account routing is out of scope here and will
-replace that function without touching anything else in this design.
+A definition never names an account. `accountFor` in `agents/agentSpawn.ts`
+calls `pickAccount` at the definition's resolved model and effective effort,
+without preferring the proposer's account. Both structural validation and the
+late creation read use that policy. The model and effort never change to suit an
+account. A selected account that does not offer the model refuses the spawn.
+
+The sender's enterprise requirement is captured before library or structural
+awaits. It constrains both picks and is persisted on the child. A personal
+account is refused, never substituted, and no enabled enterprise account means
+no spawn. Explicit approved peer runtimes still use their named accounts; see
+[Account routing](account-routing.md).
 
 ## Tools
 
@@ -405,14 +410,17 @@ runs as another persona is dropped, and one whose model or effort changed is
 restaged, so the pickers show what will run. A persona is never switched under
 the user: it decides which worktree the draft needs, and a draft whose first
 send is held for retry offers no persona or worktree picker. The account a
-definition chose is the draft's, like its model and effort, so it is not saved
-as the default for later sessions (`hooks/useSavedAccount.ts`); the next draft
-in the same tab still opens on it. The pick follows the accounts the same way:
-when its account is disabled the draft moves to another of the definition's
-provider, and with none left the pick is dropped. A staged definition skips the
-composer's model checks, since its model may be one Settings → Models hides from
-the pickers; the server checks it against the account. The first send carries
-`agent`, and the server resolves the definition again on the picked account
+definition suggests does not turn Automatic into a pin. A compatible explicit
+account stays picked; staging a definition on another provider clears that
+incompatible pin to Automatic. Fresh drafts reset account intent, and no account
+choice is saved as a default. Missing, disabled or demoted explicit accounts
+remain selected and are refused rather than replaced. With no enabled account of
+the definition's provider, the definition pick is dropped. A staged definition
+skips the composer's model checks, since its model may be one Settings → Models
+hides from the pickers; the server checks it against the account. The first send
+carries `agent`; an Automatic first send resolves its fixed model and effort
+before picking an account, even without the client's optional runtime preview
+fields. The server then resolves the definition again on that account
 (`harnesses/firstSend.ts`): the session runs on the definition's model and
 effort and freezes it exactly as a spawn does, read again right before the
 session is created (a worktree provisioned first can take seconds). A runtime
@@ -431,8 +439,6 @@ longer picked and the next send is a plain session of the draft's persona.
 
 ## Out of scope
 
-- **Account routing.** One function picks the account. Usage-aware routing is
-  being built separately.
 - **Workflow roles.** The code-delivery recipe could later fill a role from a
   definition. `docs/agent-workflows.md` lists declarative definitions as
   deferred, and this design does not change that.

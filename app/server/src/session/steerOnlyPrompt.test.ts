@@ -29,7 +29,10 @@ process.env.ASSISTANT_CWD = tmp;
 const { SessionRuntime } = await import("./runtime/runtime.ts");
 const { SessionLogStore } = await import("./log/store.ts");
 const { promptRuntimeSessionWithRuntime } = await import("./runtimePrompt.ts");
-const { SteerNotTakenError } = await import("./runtime/errors.ts");
+const { SteerNotTakenError, SessionBusyError } =
+  await import("./runtime/errors.ts");
+const { reserveAccountRecovery, releaseAccountRecovery } =
+  await import("./runtime/accountRecoveryAdmission.ts");
 const { closeDb } = await import("../db/index.ts");
 const { updateSettings, getSettings } = await import("../settings.ts");
 
@@ -124,6 +127,40 @@ async function startTurn(live: {
   await Promise.resolve();
   assert.equal(live.isRunning, true, "the turn has to be live to steer into");
 }
+
+test("a recovery reservation permits live steering but reserves idle admission through settlement", async () => {
+  const { runtime, live, driver, release } = harnessed("recovery-steer", true);
+  await startTurn(live as never);
+  driver.isRunning = true;
+  const ticket = reserveAccountRecovery(driver.id);
+  try {
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(runtime, driver, "new turn"),
+      SessionBusyError,
+    );
+    await promptRuntimeSessionWithRuntime(
+      runtime,
+      driver,
+      "steer the continuation",
+      { steer: true, steerOnly: true },
+    );
+    assert.ok(userTexts(runtime, driver.id).includes("steer the continuation"));
+    release();
+    driver.isRunning = false;
+    await assert.rejects(
+      promptRuntimeSessionWithRuntime(runtime, driver, "late steer", {
+        steer: true,
+        steerOnly: true,
+      }),
+      SessionBusyError,
+    );
+    assert.ok(!userTexts(runtime, driver.id).includes("late steer"));
+  } finally {
+    release();
+    releaseAccountRecovery(driver.id, ticket);
+    await runtime.disposeSession(driver.id);
+  }
+});
 
 test("a taken steer appends its entry and carries the model-only block", async () => {
   const { runtime, live, sent, driver } = harnessed("steer-taken", true);
