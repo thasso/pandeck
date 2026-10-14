@@ -1143,6 +1143,7 @@ export class PiLiveSession implements LiveSession {
       setThinkingLevel: (level) =>
         this.setThinkingLevel(level as ThinkingLevel),
       modelProvider: () => this.session.model?.provider,
+      modelId: () => this.session.model?.id,
       completionMetadata: () => {
         const model = (this.session.model as unknown as PiModel | undefined)
           ?.id;

@@ -43,6 +43,7 @@ export type PiPromptResponse = PiPromptOutcome | PiPromptResult;
  */
 export interface PiDriver {
   modelProvider?(): string | undefined;
+  modelId?(): string | undefined;
   subscribeAdapterEvents(listener: AdapterEventListener): () => void;
   prompt(
     text: string,
@@ -125,6 +126,10 @@ class PiAdapter implements PromptableAdapter {
 
   modelProvider(): string | undefined {
     return this.driver.modelProvider?.();
+  }
+
+  modelId(): string | undefined {
+    return this.driver.modelId?.();
   }
 
   getBinding(): ProviderBinding {

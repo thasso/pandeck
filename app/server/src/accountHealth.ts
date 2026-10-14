@@ -23,6 +23,7 @@ import type {
 } from "@assistant/shared/usage";
 import type { AgentStopReason } from "@assistant/shared/session";
 import { DATA_DIR } from "./config.ts";
+import { AccountBenchStore } from "./accountBench.ts";
 import { analyzeProviderError, runFailureFacts } from "./providerErrors.ts";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
 import type { RunFailureReport } from "./session/runtime/liveSession.ts";
@@ -57,7 +58,8 @@ interface HealthDeps {
 }
 type UsageEvidence =
   | OpenAiUsageSnapshot
-  | Pick<ClaudeUsageSnapshot, "fetchedAt" | "rateLimitsAvailable">;
+  | (Pick<ClaudeUsageSnapshot, "fetchedAt" | "rateLimitsAvailable"> &
+      Partial<ClaudeUsageSnapshot>);
 
 /** Durable login evidence; ordering tickets are process-local. */
 export class AccountHealthStore {
@@ -71,8 +73,17 @@ export class AccountHealthStore {
   private lastProjection = "[]";
   private lastAlerts: AccountLoginAlert[] = [];
   private dirty = false;
+  private readonly benches: AccountBenchStore;
+  private lastHealthProjection = "";
+  private readonly healthListeners = new Set<() => void>();
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private expiryAt: number | undefined;
 
   constructor(private readonly deps: HealthDeps) {
+    this.benches = new AccountBenchStore(
+      `${deps.persistPath.replace(/\.json$/, "")}-benches.json`,
+      deps.now,
+    );
     try {
       const raw: unknown = JSON.parse(readFileSync(deps.persistPath, "utf8"));
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
@@ -107,13 +118,36 @@ export class AccountHealthStore {
   }
 
   read(id: string, configured: boolean): AccountHealth {
-    return configured ? (this.health.get(id) ?? UNKNOWN) : DISCONNECTED;
+    const health = configured ? (this.health.get(id) ?? UNKNOWN) : DISCONNECTED;
+    const bench = this.benches.read(id);
+    const result =
+      health.state !== "needs-login" && bench
+        ? {
+            state: "limited" as const,
+            since: bench.since,
+            until: bench.until,
+            ...(bench.model ? { model: bench.model } : {}),
+          }
+        : health;
+    return this.benches.revision
+      ? { ...result, benchRevision: this.benches.revision }
+      : result;
+  }
+
+  bench(id: string, model: string) {
+    return this.benches.read(id, model);
+  }
+
+  subscribeHealth(listener: () => void): () => void {
+    this.healthListeners.add(listener);
+    return () => this.healthListeners.delete(listener);
   }
 
   /** The single publication point, after the registry has read each credential once. */
   summaries(
     read: () => CredentialProfileSummary[],
   ): CredentialProfileSummary[] {
+    this.benches.expire();
     const profiles = read();
     this.profiles = new Map(profiles.map((profile) => [profile.id, profile]));
     for (const profile of profiles)
@@ -123,9 +157,24 @@ export class AccountHealthStore {
       ...this.health.keys(),
       ...this.clocks.keys(),
       ...this.wasConnected,
+      ...this.benches.ids(),
     ]))
       if (!this.profiles.has(id)) this.remove(id);
     this.persist();
+    this.armExpiry();
+    const healthProjection = JSON.stringify(
+      profiles.map(({ id, health }) => [id, health]),
+    );
+    if (healthProjection !== this.lastHealthProjection) {
+      this.lastHealthProjection = healthProjection;
+      for (const listener of this.healthListeners) {
+        try {
+          listener();
+        } catch {
+          /* Independent invalidation listeners. */
+        }
+      }
+    }
     const accounts = accountLoginAlerts(
       profiles.filter(
         (profile) =>
@@ -146,6 +195,29 @@ export class AccountHealthStore {
       }
     }
     return profiles;
+  }
+
+  dispose(): void {
+    clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
+    this.expiryAt = undefined;
+  }
+
+  private armExpiry(): void {
+    const until = this.benches.nextExpiry();
+    if (until === this.expiryAt) return;
+    this.dispose();
+    if (until === undefined) return;
+    this.expiryAt = until;
+    this.expiryTimer = setTimeout(
+      () => {
+        this.expiryTimer = undefined;
+        this.expiryAt = undefined;
+        this.recordEvidence(() => this.deps.profiles());
+      },
+      Math.max(1, Math.min(until - this.deps.now(), 2_147_483_647)),
+    );
+    this.expiryTimer.unref();
   }
 
   alerts(): AccountLoginAlert[] {
@@ -181,6 +253,19 @@ export class AccountHealthStore {
       if (
         profile &&
         isSubscriptionAccountModel(profile.provider, modelProvider) &&
+        (failure?.kind === "quota" || failure?.kind === "rate_limit")
+      ) {
+        // Failure reports refresh order, never the start ticket's generation.
+        const reported = this.observe(id);
+        if (
+          (observation?.generation ?? reported.generation) ===
+          this.clock(id).generation
+        )
+          this.benches.failure(id, failure, reported.order);
+      }
+      if (
+        profile &&
+        isSubscriptionAccountModel(profile.provider, modelProvider) &&
         failure?.kind === "auth" &&
         failure.loginDeath
       ) {
@@ -197,15 +282,19 @@ export class AccountHealthStore {
     id: string,
     modelProvider: string | undefined,
     observation?: AccountObservation,
+    modelId?: string,
   ): void {
     this.recordEvidence(() => {
       const profile = this.profiles.get(id);
       if (
         profile &&
         isSubscriptionAccountModel(profile.provider, modelProvider)
-      )
-        this.update(id, "ok", observation);
-      else this.deps.profiles();
+      ) {
+        const ticket = observation ?? this.observe(id);
+        if (ticket.generation === this.clock(id).generation)
+          this.benches.working(id, modelId, ticket.order);
+        this.update(id, "ok", ticket);
+      } else this.deps.profiles();
     });
   }
 
@@ -215,19 +304,35 @@ export class AccountHealthStore {
     observation?: AccountObservation,
   ): void {
     this.recordEvidence(() => {
+      const ticket = observation ?? this.observe(id);
+      this.benchUsage(id, snapshot, ticket);
       if (
         "available" in snapshot
           ? snapshot.available
           : snapshot.rateLimitsAvailable === true
       )
-        this.update(id, "ok", observation);
+        this.update(id, "ok", ticket);
       else if (
         "available" in snapshot &&
         snapshot.unavailableCode === "rejected"
       )
-        this.update(id, "needs-login", observation);
+        this.update(id, "needs-login", ticket);
       else this.deps.profiles();
     });
+  }
+
+  private benchUsage(
+    id: string,
+    snapshot: UsageEvidence,
+    ticket: AccountObservation,
+  ): void {
+    const profile = this.profiles.get(id);
+    if (
+      profile &&
+      (profile.provider === "openai-codex") === "available" in snapshot &&
+      ticket.generation === this.clock(id).generation
+    )
+      this.benches.usage(id, snapshot, ticket.order);
   }
 
   usageFailure(
@@ -298,6 +403,7 @@ export class AccountHealthStore {
   }
 
   private remove(id: string): void {
+    this.benches.forget(id);
     if (this.health.delete(id)) this.dirty = true;
     if (this.wasConnected.delete(id)) this.dirty = true;
     this.clocks.delete(id);
@@ -371,6 +477,7 @@ export function initializeAccountHealth(host: {
     push: host.push,
   });
   host.profiles();
+  store.subscribeHealth(() => host.broadcast({ type: "accountHealthChanged" }));
   store.subscribe((accounts) =>
     host.broadcast({ type: "accountLoginAlerts", accounts }),
   );
@@ -388,6 +495,9 @@ export function readAccountHealth(
   configured: boolean,
 ): AccountHealth {
   return configured ? (store?.read(id, true) ?? UNKNOWN) : DISCONNECTED;
+}
+export function readAccountBench(id: string, model: string) {
+  return store?.bench(id, model);
 }
 export function sendAccountLoginAlertsTo(connection: {
   send: (message: ServerMessage) => void;
@@ -409,8 +519,9 @@ export function reportAccountRunWorking(
   id: string,
   modelProvider: string | undefined,
   observation?: AccountObservation,
+  modelId?: string,
 ): void {
-  store?.runWorking(id, modelProvider, observation);
+  store?.runWorking(id, modelProvider, observation, modelId);
 }
 export function reportAccountRunFailure(
   id: string,
@@ -446,6 +557,7 @@ export function trackSessionRunHealth(
         sessionId: string,
         runId: string,
         modelProvider: string | undefined,
+        modelId?: string,
       ) => void,
     ) => () => void;
     subscribeFailed: (
@@ -471,11 +583,12 @@ export function trackSessionRunHealth(
       runId: string;
       profileId: string;
       modelProvider: string | undefined;
+      modelId: string | undefined;
       observation: AccountObservation | undefined;
     }
   >();
   const off = [
-    host.subscribeStarted((sessionId, runId, modelProvider) => {
+    host.subscribeStarted((sessionId, runId, modelProvider, modelId) => {
       runs.delete(sessionId);
       const profileId = host.session(sessionId)?.credentialProfileId;
       if (profileId)
@@ -483,6 +596,7 @@ export function trackSessionRunHealth(
           runId,
           profileId,
           modelProvider,
+          modelId,
           observation: health.observe(profileId),
         });
     }),
@@ -497,7 +611,12 @@ export function trackSessionRunHealth(
       if (run?.runId !== runId) return;
       runs.delete(sessionId);
       if (stopReason === "end")
-        health.working(run.profileId, run.modelProvider, run.observation);
+        health.working(
+          run.profileId,
+          run.modelProvider,
+          run.observation,
+          ...(run.modelId ? [run.modelId] : []),
+        );
     }),
   ];
   return {

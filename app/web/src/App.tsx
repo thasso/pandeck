@@ -215,6 +215,7 @@ import {
   accountModelOptions,
   automaticModels,
   previewAutomaticAccount,
+  limitedAccountDescription,
 } from "./lib/credentialProfiles.ts";
 import {
   credentialProfileProjectionBlockReason,
@@ -4110,7 +4111,7 @@ function AppContent() {
           requiresEnterprise,
           credentialProfiles.map(
             (profile) =>
-              `${profile.id}:${profile.enabled}:${profile.enterprise}:${profile.health.state}`,
+              `${profile.id}:${profile.enabled}:${profile.enterprise}:${JSON.stringify(profile.health)}`,
           ),
           (state.usageIndicators ?? []).map(
             (indicator) => `${indicator.profileId}:${indicator.fetchedAt}`,
@@ -4131,10 +4132,12 @@ function AppContent() {
       ),
   );
   const automaticPreviewName = (() => {
-    const profileId = dataOf(automaticPreviewFetch.state)?.profileId;
-    return profileId
-      ? credentialProfiles.find((profile) => profile.id === profileId)?.name
-      : undefined;
+    const preview = dataOf(automaticPreviewFetch.state);
+    const name = credentialProfiles.find(
+      (profile) => profile.id === preview?.profileId,
+    )?.name;
+    const limited = limitedAccountDescription(preview?.limited);
+    return name && limited ? `${name} · ${limited}` : name;
   })();
   /** This browser's own worktree-provisioning card reports a failed checkout. */
   const provisionFailed =

@@ -218,6 +218,24 @@ describe("Automatic effort levels", () => {
 describe("Automatic preview hint", () => {
   const profiles = [{ id: "work", name: "Work" }] as CredentialProfileSummary[];
 
+  it("shows the limited fallback's time and optional model", () => {
+    const hint = automaticPreviewHint(
+      {
+        profileId: "work",
+        degraded: "no-eligible-account",
+        limited: { until: Date.now() + 60_000, model: "opus" },
+      },
+      profiles,
+      "claude-sdk",
+    );
+    expect(hint).toMatchObject({
+      warning: true,
+      text: expect.stringContaining("Limited until "),
+    });
+    expect(hint?.text).toContain("for opus");
+    expect(hint?.text).toContain("“Work”");
+  });
+
   it("names a clean pick and flags degraded ones", () => {
     expect(
       automaticPreviewHint({ profileId: "work" }, profiles, "claude-sdk"),
@@ -233,7 +251,7 @@ describe("Automatic preview hint", () => {
       ),
     ).toMatchObject({
       warning: true,
-      text: expect.stringContaining("(login or model/effort)"),
+      text: expect.stringContaining("(login, limits or model/effort)"),
     });
     expect(
       automaticPreviewHint(

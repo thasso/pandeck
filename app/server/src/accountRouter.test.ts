@@ -62,6 +62,38 @@ function account(
     },
   };
 }
+test("applicable benches are hard-filtered despite better usage", () => {
+  const benched = {
+    ...account("limited", 0, 0),
+    limited: { until: now + 60_000 },
+  };
+  const available = account("available", 99, 99);
+  for (const candidates of [
+    [benched, available],
+    [available, benched],
+  ])
+    assert.equal(rank(candidates).profileId, "available");
+});
+test("degradation puts login last, then benches, and carries the limit time", () => {
+  const until = now + 60_000;
+  const benched = {
+    ...account("limited", 0, 0),
+    limited: { until, model: "codex" },
+  };
+  const unsupported = {
+    ...account("unsupported", 100, 100),
+    offersModel: false,
+  };
+  const login = account("login", 0, 0);
+  login.profile.health = { state: "needs-login", since: now };
+  assert.equal(rank([benched, unsupported, login]).profileId, "unsupported");
+  assert.deepEqual(rank([login, benched]), {
+    profileId: "limited",
+    degraded: "no-eligible-account",
+    limited: { until, model: "codex" },
+  });
+});
+
 const rank = (
   candidates: AccountCandidate[],
   patch: Partial<AccountPickRequest> = {},
@@ -221,7 +253,7 @@ for (const filter of ["disabled", "login", "model", "bench"] as const) {
     if (filter === "disabled") filtered.profile.enabled = false;
     if (filter === "login") filtered.profile.health.state = "needs-login";
     if (filter === "model") filtered.offersModel = false;
-    if (filter === "bench") filtered.benched = true;
+    if (filter === "bench") filtered.limited = { until: now + 60_000 };
     assert.equal(rank([filtered, account("good")]).profileId, "good");
   });
 }

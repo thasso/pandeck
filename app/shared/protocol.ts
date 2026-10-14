@@ -317,6 +317,8 @@ export interface AccountPickPreviewRequest {
 /** Non-binding account-routing preview for an Automatic model choice. */
 export interface AccountPickPreviewResult {
   profileId: string | null;
+  /** A degraded pick is still on a live bench for the requested model. */
+  limited?: { until: number; model?: string };
   degraded?:
     | "no-eligible-account"
     | "disabled-default"
@@ -348,8 +350,14 @@ export type CredentialProfileProvider = "openai-codex" | "claude";
 export type CredentialProfileStatus =
   "disconnected" | "connecting" | "ready" | "error";
 export interface AccountHealth {
-  state: "ok" | "needs-login" | "unknown";
+  state: "ok" | "needs-login" | "limited" | "unknown";
   since: number | null;
+  /** Process-local revision of all bench scopes; invalidates account previews. */
+  benchRevision?: number;
+  /** Present for limited health, epoch milliseconds. */
+  until?: number;
+  /** Absent for an account-wide limit. */
+  model?: string;
   /** App-owned wording only. Never provider messages or credentials. */
   reason?: string;
 }
@@ -8384,6 +8392,8 @@ export type ServerMessage =
     }
   /** Authoritative app-wide login state, replayed on connect and broadcast on change, unlike advisory appNotification. */
   | { type: "accountLoginAlerts"; accounts: AccountLoginAlert[] }
+  /** Invalidate account cards/previews without raising a login alert. */
+  | { type: "accountHealthChanged" }
   /**
    * Dev-only: the server is about to reload to apply a server/shared code edit.
    * `pending` = globally queued and waiting for all active runs plus a short

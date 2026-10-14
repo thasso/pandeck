@@ -1,5 +1,9 @@
 import type { ProviderErrorInfo, ProviderErrorKind } from "@assistant/shared";
-import { isSubscriptionAccountModel } from "@assistant/shared/accountHealth";
+import {
+  accountLimitModel,
+  accountLimitMatches,
+  isSubscriptionAccountModel,
+} from "@assistant/shared/accountHealth";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
 
 export interface ProviderErrorContext {
@@ -9,6 +13,32 @@ export interface ProviderErrorContext {
   responseId?: string;
   authMode?: "subscription" | "api_key" | "unknown";
   statusCode?: number;
+}
+
+function namedLimitModel(info: ProviderErrorInfo): string | undefined {
+  if (!accountLimitModel(info.model)) return undefined;
+  const generic =
+    /^(?:usage|rate|plan|account|subscription|weekly|monthly|daily|model|your|this|the|organization|org)$/i;
+  const forCap =
+    /\b(?:limit|quota|cap)(?:\s+reached)?\s+(?:for|on)\s+(?:model\s+)?((?:(?:claude|codex|openai|anthropic)\s+)?[a-z0-9._-]+(?:\s+\d+(?:[.-]\d+)*)?)/i.exec(
+      info.rawMessage,
+    )?.[1];
+  const candidates = [
+    forCap,
+    /\b(?:per[- ]model|model[- ]specific)\b/i.test(info.rawMessage)
+      ? info.model
+      : undefined,
+    ...[
+      ...info.rawMessage.matchAll(
+        /\b([a-z0-9._-]+(?:\s+\d+(?:[.-]\d+)*)?)\s+(?:(?:usage|rate|weekly|monthly|daily)\s+)?(?:limit|quota|cap)\b/gi,
+      ),
+    ].map((match) => match[1]),
+  ];
+  const cap = candidates.find(
+    (name) =>
+      !!name && !generic.test(name) && accountLimitMatches(name, info.model),
+  );
+  return accountLimitModel(cap);
 }
 
 interface Classification {
@@ -74,6 +104,9 @@ const CONTENT_POLICY_RE =
   /flagged for possible cybersecurity risk|flagged as potentially violating|violat\w* (our |the )?usage polic|content[_ ]policy|content[_ ]filter|invalid_prompt|cyber_policy/i;
 const QUOTA_RE =
   /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|usage limit|plan limit|subscription limit|subscription.*(expired|inactive|required|quota|limit)|available balance|insufficient[_ -]?quota|out of budget|quota exceeded|credit balance|billing|payment required|spend(ing)? limit|exceeded your current quota/i;
+// Claude Code 2.1.296 renders rejected limits as "You've hit your <name> · resets …".
+const CLAUDE_USAGE_LIMIT_RE =
+  /\b(?:session|weekly|monthly|daily|usage)\s+limit\s+reached\b|\b(?:you['’]ve|you have)\s+hit\s+your\s+[^·∙\n]*\blimit\b/i;
 const RATE_LIMIT_RE = /rate.?limit|too many requests|\b429\b|retry after/i;
 const TIMEOUT_RE =
   /timed? out|timeout|idle timeout|deadline exceeded|aborted due to timeout/i;
@@ -90,6 +123,10 @@ export function analyzeProviderError(
 ): ProviderErrorInfo {
   const raw = rawMessage.trim() || "Unknown provider error";
   const codex = parseCodexError(raw);
+  // This pipe suffix carries epoch seconds, unlike human "resets …" text.
+  const claudeResetAt = numberValue(
+    /\bClaude AI usage limit reached\|(\d+)$/.exec(raw)?.[1],
+  );
   const classification = classify(raw, codex, context);
   const statusCode = context.statusCode ?? responseStatus(raw);
   const providerValue = cleanOptional(context.provider);
@@ -98,6 +135,7 @@ export function analyzeProviderError(
   const responseIdValue = cleanOptional(context.responseId);
   return {
     ...codex,
+    ...(claudeResetAt !== undefined ? { resetAt: claudeResetAt } : {}),
     ...(statusCode !== undefined ? { statusCode } : {}),
     kind: classification.kind,
     title: classification.title,
@@ -127,8 +165,10 @@ export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
     limited && typeof info.resetAt === "number"
       ? info.resetAt * 1000
       : undefined;
+  const limitModel = limited ? namedLimitModel(info) : undefined;
   return {
     kind: info.kind,
+    ...(limitModel ? { limitModel } : {}),
     ...(info.kind === "auth" && isLoginDeath(info.rawMessage, info)
       ? { loginDeath: true }
       : {}),
@@ -180,8 +220,19 @@ function classify(
   context: ProviderErrorContext,
 ): Classification {
   const loginDeath = isLoginDeath(raw, context);
-  const serverStatus = (context.statusCode ?? responseStatus(raw) ?? 0) >= 500;
-  if (!loginDeath && !serverStatus && CONTENT_POLICY_RE.test(raw)) {
+  const status = context.statusCode ?? responseStatus(raw);
+  const serverStatus = (status ?? 0) >= 500;
+  const claudeUsageLimit =
+    (isSubscriptionAccountModel("claude", context.provider) ||
+      context.provider === "anthropic") &&
+    CLAUDE_USAGE_LIMIT_RE.test(raw) &&
+    !/rate.?limit|too many requests/i.test(raw);
+  if (
+    !loginDeath &&
+    !serverStatus &&
+    status !== 429 &&
+    CONTENT_POLICY_RE.test(raw)
+  ) {
     return {
       kind: "content_policy",
       title: "Provider refused the content",
@@ -195,7 +246,7 @@ function classify(
   if (
     !loginDeath &&
     !serverStatus &&
-    (parsed?.kind === "quota" || QUOTA_RE.test(raw))
+    (parsed?.kind === "quota" || QUOTA_RE.test(raw) || claudeUsageLimit)
   ) {
     const reset = parsed?.resetInSeconds
       ? ` Resets ${formatDuration(parsed.resetInSeconds)} from the error timestamp.`
@@ -212,6 +263,7 @@ function classify(
   if (
     loginDeath ||
     (!serverStatus &&
+      status !== 429 &&
       (AUTH_RE.test(raw) ||
         LOGIN_DEATH_RE.test(raw) ||
         REJECTED_CREDENTIAL_RE.test(raw)))
@@ -226,7 +278,7 @@ function classify(
         "Refresh login credentials or choose a model/provider with valid authentication before retrying.",
     };
   }
-  if (!serverStatus && RATE_LIMIT_RE.test(raw)) {
+  if (!serverStatus && (status === 429 || RATE_LIMIT_RE.test(raw))) {
     return {
       kind: "rate_limit",
       title: "Provider rate limit hit",

@@ -235,6 +235,8 @@ export type AdapterEvent =
 export interface RunFailureFacts {
   kind: ProviderErrorKind;
   resetAtMs?: number;
+  /** Named limit scope, only when provider evidence identifies a model cap. */
+  limitModel?: string;
   /** Narrow dead-login evidence derived from the raw error before display sanitization. */
   loginDeath?: true;
 }
@@ -350,6 +352,8 @@ interface SessionAdapter {
 export interface PromptableAdapter extends SessionAdapter {
   /** The live model provider at run start, not a persisted session projection. */
   modelProvider?(): string | undefined;
+  /** The live model id, for model-scoped account evidence. */
+  modelId?(): string | undefined;
   /** Run one prompt to completion. Resolves with the run result (errors resolve, not reject). */
   prompt(text: string, options?: PromptOptions): Promise<AgentRunResult>;
   abort(): void | Promise<void>;

@@ -106,6 +106,7 @@ import { settingBounds } from "@assistant/shared/settingsRegistry";
 import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
 import {
   createCredentialProfile,
+  limitedAccountDescription,
   disableAccountImpact,
   deleteCredentialProfile,
   fetchCredentialProfiles,
@@ -667,6 +668,13 @@ export function CredentialProfileCard({
           >
             {providerLabel} · {profile.enabled ? profile.status : "disabled"}
           </Badge>
+          {profile.enabled &&
+          profile.health.state === "limited" &&
+          limitedAccountDescription(profile.health) ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {limitedAccountDescription(profile.health)}
+            </p>
+          ) : null}
           {profile.enabled && profile.health.state === "needs-login" ? (
             <p className="mt-1 text-xs text-destructive">
               Needs login

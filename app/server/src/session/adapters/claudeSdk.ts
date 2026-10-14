@@ -28,6 +28,7 @@ import type {
 import type { AdapterEventListener } from "./nativeEvents.ts";
 
 export interface ClaudeSdkAdapterDriver {
+  modelId?(): string | undefined;
   subscribeAdapterEvents(listener: AdapterEventListener): () => void;
   prompt(
     text: string,
@@ -114,6 +115,10 @@ class ClaudeSdkAdapter implements PromptableAdapter {
 
   modelProvider(): string {
     return this.provider;
+  }
+
+  modelId(): string | undefined {
+    return this.driver.modelId?.();
   }
 
   getBinding(): ProviderBinding {

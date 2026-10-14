@@ -226,6 +226,18 @@ export async function previewAutomaticAccount(
   );
 }
 
+export function limitedAccountDescription(
+  limited: { until?: number; model?: string } | undefined,
+): string | undefined {
+  if (
+    !limited?.until ||
+    !Number.isFinite(limited.until) ||
+    limited.until <= Date.now()
+  )
+    return undefined;
+  return `Limited until ${new Date(limited.until).toLocaleString()}${limited.model ? ` for ${limited.model}` : ""}`;
+}
+
 /**
  * What a pick preview tells the user about an Automatic choice: the account it
  * resolves to now and, when the router had to degrade, why. `warning` marks an
@@ -244,6 +256,12 @@ export function automaticPreviewHint(
     (profile) => profile.id === preview.profileId,
   )?.name;
   const account = name ? `“${name}”` : "an account";
+  const limited = limitedAccountDescription(preview.limited);
+  if (limited)
+    return {
+      text: `${limited}. Automatic falls back to ${account}.`,
+      warning: true,
+    };
   switch (preview.degraded) {
     case undefined:
       return name
@@ -254,7 +272,7 @@ export function automaticPreviewHint(
         : undefined;
     case "no-eligible-account":
       return {
-        text: `No account can run this model cleanly right now (login or model/effort) — Automatic falls back to ${account}.`,
+        text: `No account can run this model cleanly right now (login, limits or model/effort) — Automatic falls back to ${account}.`,
         warning: true,
       };
     case "disabled-default":

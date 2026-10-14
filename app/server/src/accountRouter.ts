@@ -20,6 +20,7 @@ import {
 import { modelsForAccount } from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
 import { cachedUsageIndicator } from "./usageCache.ts";
+import { readAccountBench } from "./accountHealth.ts";
 
 export interface AccountPickRequest {
   model: { provider: string; modelId: string };
@@ -39,8 +40,7 @@ export interface AccountCandidate {
   profile: RoutingProfile;
   offersModel: boolean;
   usage: UsageIndicator | null;
-  /** Limit benching will supply this fact; the picker owns no bench state. */
-  benched?: boolean;
+  limited?: AccountPickPreviewResult["limited"];
 }
 
 export type AccountPickResult = AccountPickPreviewResult;
@@ -66,7 +66,7 @@ export function rankAccountCandidates(
     (candidate) =>
       candidate.profile.health.state !== "needs-login" &&
       candidate.offersModel &&
-      !candidate.benched,
+      !candidate.limited,
   );
   const pool = eligible.length ? eligible : enabled;
   if (pool.length) {
@@ -74,12 +74,14 @@ export function rankAccountCandidates(
       (a, b) =>
         Number(a.profile.health.state === "needs-login") -
           Number(b.profile.health.state === "needs-login") ||
+        Number(!!a.limited) - Number(!!b.limited) ||
         Number(!a.offersModel) - Number(!b.offersModel) ||
         compareUsage(a, b, thresholds, now),
     )[0]!;
     return {
       profileId: first.profile.id,
       ...(eligible.length ? {} : { degraded: "no-eligible-account" as const }),
+      ...(first.limited ? { limited: first.limited } : {}),
     };
   }
   if (request.allowDisabledDefault) {
@@ -87,7 +89,11 @@ export function rankAccountCandidates(
       ({ profile }) => profile.id === defaultProfileId,
     );
     if (fallback)
-      return { profileId: fallback.profile.id, degraded: "disabled-default" };
+      return {
+        profileId: fallback.profile.id,
+        degraded: "disabled-default",
+        ...(fallback.limited ? { limited: fallback.limited } : {}),
+      };
   }
   return {
     profileId: null,
@@ -175,8 +181,17 @@ export async function pickAccount(
       } catch {
         // A malformed best-effort cache is missing usage, not a failed start.
       }
+      const bench = readAccountBench(profile.id, request.model.modelId);
       return {
         profile,
+        ...(bench
+          ? {
+              limited: {
+                until: bench.until,
+                ...(bench.model ? { model: bench.model } : {}),
+              },
+            }
+          : {}),
         offersModel:
           !!model &&
           (request.thinkingLevel === undefined ||

@@ -19,9 +19,9 @@
   `harnessBoundary.test.ts`'s measurement modules are exempt
   (`docs/agent-harnesses.md`). Existing-session decisions (cards, questions,
   handoffs) use `agentHandoffs.ts` for mid-turn queueing.
-- Route Automatic accounts through `accountRouter.ts`. Enterprise requirements
-  propagate and never relax; usage stays host-side; peer/workflow pins stay
-  explicit (`docs/account-routing.md`).
+- Automatic: `accountRouter.ts`; enterprise propagates, never relaxes; host-side
+  usage; explicit peer/workflow pins. Health/benches: explicit own-subscription
+  runs (`docs/account-routing.md`).
 - Harness and persona are separate axes: branch on the shared capability
   predicates, never on a persona key, and keep persona creation guards in the
   `connection.ts` creation paths, not at call sites.

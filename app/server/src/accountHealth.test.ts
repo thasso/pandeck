@@ -30,6 +30,7 @@ import {
 
 import { NativeAdapterEventSource } from "./session/adapters/nativeEvents.ts";
 import { createPiAdapter } from "./session/adapters/pi.ts";
+import { createClaudeSdkAdapter } from "./session/adapters/claudeSdk.ts";
 import { SessionLogStore } from "./session/log/store.ts";
 import { SessionRuntime } from "./session/runtime/runtime.ts";
 import {
@@ -697,6 +698,150 @@ it("tracks run ids, ignores stale reports, and clears pending entries on all clo
   expect(off).toHaveBeenCalledTimes(3);
 });
 
+it.each([
+  [
+    "claude",
+    "claude-sdk",
+    "claude-mythos-1",
+    "Mythos usage limit reached",
+    "mythos",
+  ],
+  [
+    "openai-codex",
+    "openai-codex",
+    "gpt-5-3-codex-spark",
+    "Spark usage limit reached",
+    "spark",
+  ],
+  [
+    "claude",
+    "claude-sdk",
+    "claude-opus-5-5",
+    "usage limit for requests",
+    undefined,
+  ],
+] as const)(
+  "runtime fallback uses the live model for %s classification: %s/%s",
+  async (accountProvider, modelProvider, modelId, message, cap) => {
+    const f = fixture("ready", accountProvider);
+    const adapter: PromptableAdapter = {
+      provider: "scripted",
+      modelProvider: () => modelProvider,
+      modelId: () => modelId,
+      capabilities: { fork: "none", compact: false, attachments: false },
+      subscribe: () => () => {},
+      getBinding: () => ({ provider: "scripted" }),
+      prompt: async () => {
+        throw new Error(message);
+      },
+      abort: () => {},
+      setModel: () => {},
+      setReasoning: () => {},
+      dispose: () => {},
+    };
+    const runtime = new SessionRuntime(new SessionLogStore(true));
+    runtime.createSession("fallback-model", adapter);
+    const tracker = trackSessionRunHealth(
+      {
+        session: () => ({ credentialProfileId: "acct" }),
+        subscribeStarted: subscribeSessionRunStarted,
+        subscribeFailed: subscribeSessionRunFailed,
+        subscribeClosed: subscribeSessionTurnClosed,
+      },
+      {
+        observe: f.store.observe.bind(f.store),
+        failed: f.store.runFailure.bind(f.store),
+        working: f.store.runWorking.bind(f.store),
+      },
+    );
+    try {
+      await expect(
+        runtime.prompt("fallback-model", "fail without native facts"),
+      ).rejects.toThrow(message);
+      expect(f.store.bench("acct", modelId)).toMatchObject({ source: "quota" });
+      expect(f.store.bench("acct", modelId)?.model).toBe(cap);
+    } finally {
+      tracker.dispose();
+      await runtime.disposeSession("fallback-model");
+      f.store.dispose();
+    }
+  },
+);
+
+it.each(["pi", "claude-sdk"] as const)(
+  "%s runtime failure benches its account and success clears only its live model",
+  async (harness) => {
+    const f = fixture("ready", harness === "pi" ? "openai-codex" : "claude");
+    const native = new NativeAdapterEventSource();
+    const family = harness === "pi" ? "spark" : "opus";
+    const cappedModel =
+      harness === "pi" ? "gpt-5-3-codex-spark" : "claude-opus-5-5";
+    let model = cappedModel;
+    let fail = true;
+    let sequence = 0;
+    const driver = {
+      modelProvider: () => (harness === "pi" ? "openai-codex" : "claude-sdk"),
+      modelId: () => model,
+      steer: async () => "refused" as const,
+      sessionFile: undefined,
+      subscribeAdapterEvents: native.subscribe.bind(native),
+      prompt: () => {
+        const id = `m${++sequence}`;
+        native.messageStarted(id);
+        const failure = { kind: "quota" as const, limitModel: family };
+        if (fail) native.runFailing("Limit reached", failure);
+        native.messageCompleted(
+          id,
+          fail ? { errorMessage: "Limit reached", failure } : {},
+        );
+        return "started" as const;
+      },
+      abort: () => {},
+      setModel: () => {},
+      setThinkingLevel: () => {},
+    };
+    const adapter =
+      harness === "pi"
+        ? createPiAdapter("bench", driver, { resolveModel: (value) => value })
+        : createClaudeSdkAdapter("bench", {
+            ...driver,
+            prompt: async () => {
+              driver.prompt();
+            },
+          });
+    const runtime = new SessionRuntime(new SessionLogStore(true));
+    runtime.createSession("bench", adapter);
+    const tracker = trackSessionRunHealth(
+      {
+        session: () => ({ credentialProfileId: "acct" }),
+        subscribeStarted: subscribeSessionRunStarted,
+        subscribeFailed: subscribeSessionRunFailed,
+        subscribeClosed: subscribeSessionTurnClosed,
+      },
+      {
+        observe: f.store.observe.bind(f.store),
+        failed: f.store.runFailure.bind(f.store),
+        working: f.store.runWorking.bind(f.store),
+      },
+    );
+    try {
+      await expect(runtime.prompt("bench", "limited")).rejects.toThrow();
+      expect(f.store.bench("acct", cappedModel)?.model).toBe(family);
+      fail = false;
+      model = harness === "pi" ? "gpt-6-sol" : "sonnet";
+      await runtime.prompt("bench", "other model");
+      expect(f.store.bench("acct", cappedModel)).toBeDefined();
+      model = cappedModel;
+      await runtime.prompt("bench", "recovered cap");
+      expect(f.store.bench("acct", cappedModel)).toBeUndefined();
+      expect(f.push).not.toHaveBeenCalled();
+    } finally {
+      tracker.dispose();
+      await runtime.disposeSession("bench");
+    }
+  },
+);
+
 it("captures the live Pi provider in both model-switch directions and cannot clear Codex with Copilot success", async () => {
   const f = fixture("ready", "openai-codex");
   const native = new NativeAdapterEventSource();
@@ -956,7 +1101,10 @@ it("broadcasts and replays authoritative alerts without another push", () => {
     accounts: [{ profileId: "acct", name: "Private", provider: "claude" }],
   });
   reportAccountRunFailure("acct", authFailure(), "claude-sdk");
-  expect(broadcast).toHaveBeenCalledTimes(1);
+  expect(broadcast.mock.calls.map(([message]) => message.type)).toEqual([
+    "accountHealthChanged",
+    "accountLoginAlerts",
+  ]);
   expect(f.push).toHaveBeenCalledTimes(1);
   // Credential changes update tabs that are already connected, without registry events.
   reportAccountLoginCompleted("acct");
@@ -969,7 +1117,7 @@ it("broadcasts and replays authoritative alerts without another push", () => {
   });
   f.setHasCredential(true);
   readAccountHealth("acct", true);
-  expect(broadcast).toHaveBeenCalledTimes(1);
+  expect(broadcast).toHaveBeenCalledTimes(2);
   reportAccountUsageSnapshot("acct", unavailable("not-signed-in"));
   expect(broadcast).toHaveBeenLastCalledWith({
     type: "accountLoginAlerts",

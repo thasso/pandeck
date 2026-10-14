@@ -441,7 +441,7 @@ test("one-shots report health for their actual account on success, partial failu
   vi.mocked(runPiOneShot).mockResolvedValue({ text: "ok", usage: {} });
   await runOneShot(request());
   assert.deepEqual(vi.mocked(reportAccountRunWorking).mock.calls, [
-    ["profile-1", "openai-codex", undefined],
+    ["profile-1", "openai-codex", undefined, "fallback-model"],
   ]);
   vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
     text: "partial",
@@ -488,6 +488,7 @@ test.each(["github-copilot", "openai-compatible"])(
       "profile-1",
       provider,
       observation,
+      "fallback-model",
     ]);
     vi.mocked(runPiOneShot).mockRejectedValue(new Error("401 unauthorized"));
     await assert.rejects(() => runOneShot(request()), /401/);
@@ -537,6 +538,189 @@ test("documents reach the Claude engine and tools reach either engine", async ()
   await runOneShot(request({ tools }));
   assert.equal(vi.mocked(runPiOneShot).mock.calls[0]?.[0].tools, tools);
 });
+
+test.each([
+  [
+    "openai-codex",
+    "quota exceeded",
+    "sonnet",
+    "quota",
+    undefined,
+    undefined,
+    undefined,
+  ],
+  [
+    "claude-sdk",
+    "quota exceeded",
+    "sonnet",
+    "quota",
+    undefined,
+    undefined,
+    undefined,
+  ],
+  [
+    "claude-sdk",
+    "The request could not be processed",
+    "opus",
+    "rate_limit",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "claude-sdk",
+    "API Error: 429 Unauthorized",
+    "opus",
+    "rate_limit",
+    undefined,
+    undefined,
+    undefined,
+  ],
+  [
+    "claude-sdk",
+    "Opus weekly limit reached ∙ resets Oct 20, 3pm",
+    "opus",
+    "quota",
+    "opus",
+    undefined,
+    429,
+  ],
+  [
+    "claude-sdk",
+    "You've hit your Opus limit · resets 3pm",
+    "opus",
+    "quota",
+    "opus",
+    undefined,
+    429,
+  ],
+  [
+    "claude-sdk",
+    "Opus weekly limit reached ∙ resets Oct 20, 3pm",
+    "sonnet",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "claude-sdk",
+    "You've hit your Opus limit · resets 3pm",
+    "sonnet",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "claude-sdk",
+    "You've hit your session limit · resets 3pm",
+    "opus",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "claude-sdk",
+    "You've hit your weekly limit · resets Oct 20, 3pm",
+    "opus",
+    "quota",
+    undefined,
+    undefined,
+    429,
+  ],
+  [
+    "claude-sdk",
+    "Claude AI usage limit reached|1900000000",
+    "opus",
+    "quota",
+    undefined,
+    1900000000000,
+    429,
+  ],
+] as const)(
+  "an automatic %s retry benches exact limit evidence before the next pick: %s",
+  async (provider, message, modelId, kind, limitModel, resetAtMs, status) => {
+    const dir = mkdtempSync(join(tmpdir(), "one-shot-bench-"));
+    directories.push(dir);
+    const now = Date.UTC(2025, 0, 1);
+    const profiles = ["automatic-1", "automatic-2"].map((id) => ({
+      id,
+      name: id,
+      provider: provider === "claude-sdk" ? "claude" : "openai-codex",
+      enabled: true,
+      enterprise: false,
+      health: { state: "unknown", since: null },
+    })) as CredentialProfileSummary[];
+    const store = new AccountHealthStore({
+      now: () => now,
+      persistPath: join(dir, "health.json"),
+      push: async () => {},
+      hasCredential: () => true,
+      profiles: () =>
+        store.summaries(() =>
+          profiles.map((profile) => ({
+            ...profile,
+            health: store.read(profile.id, true),
+          })),
+        ),
+    });
+    store.alerts();
+    vi.mocked(observeAccountHealth).mockImplementation(
+      store.observe.bind(store),
+    );
+    vi.mocked(reportAccountRunFailure).mockImplementation(
+      store.runFailure.bind(store),
+    );
+    vi.mocked(reportAccountRunWorking).mockImplementation(
+      store.runWorking.bind(store),
+    );
+    vi.mocked(pickAccount).mockImplementation(async (input) => {
+      assert.deepEqual(input.excludeProfileIds, ["automatic-1"]);
+      const bench = store.bench("automatic-1", modelId);
+      assert.ok(bench);
+      assert.equal(bench.source, kind);
+      assert.equal(bench.model, limitModel);
+      assert.equal(
+        bench.until,
+        resetAtMs ?? now + (kind === "quota" ? 30 * 60_000 : 5 * 60_000),
+      );
+      assert.equal(!!store.bench("automatic-1", "claude-haiku-5"), !limitModel);
+      return { profileId: "automatic-2" };
+    });
+    if (provider === "claude-sdk")
+      vi.mocked(runClaudeSdkOneShot)
+        .mockResolvedValueOnce({
+          text: "partial",
+          usage: {},
+          failure: message,
+          ...(status === undefined ? {} : { failureStatus: status }),
+        })
+        .mockResolvedValueOnce({ text: "complete", usage: {} });
+    else
+      vi.mocked(runPiOneShot)
+        .mockResolvedValueOnce({
+          text: "partial",
+          usage: {},
+          stopReason: "error",
+          errorMessage: message,
+        })
+        .mockResolvedValueOnce({ text: "complete", usage: {} });
+    try {
+      await runOneShot(
+        request({
+          model: { provider, modelId },
+          credentialProfileId: undefined,
+        }),
+      );
+      assert.ok(store.bench("automatic-1", modelId));
+      assert.equal(store.bench("automatic-2", modelId), undefined);
+    } finally {
+      store.dispose();
+    }
+  },
+);
 
 test.each(["quota", "rate_limit"] as const)(
   "an automatic %s failure retries once, records both attempts and sums usage",

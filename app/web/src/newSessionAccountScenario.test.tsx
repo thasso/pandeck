@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppSettings,
+  AccountPickPreviewResult,
   ClientMessage,
   CredentialProfileSummary,
   ModelOption,
@@ -260,7 +261,9 @@ let refines: Array<Record<string, unknown>> = [];
 async function openNewSession(
   profiles: CredentialProfileSummary[],
   /** The server router's preview answer for Automatic. */
-  pick: (request: Record<string, unknown>) => string | null = () => null,
+  pick: (
+    request: Record<string, unknown>,
+  ) => string | null | AccountPickPreviewResult = () => null,
   initial: { path?: string; settings?: Partial<AppSettings> } = {},
 ): Promise<ScenarioSocket> {
   previews = [];
@@ -278,7 +281,10 @@ async function openNewSession(
           unknown
         >;
         previews.push(request);
-        return json({ profileId: pick(request) });
+        const answer = pick(request);
+        return json(
+          answer && typeof answer === "object" ? answer : { profileId: answer },
+        );
       }
       if (String(url).endsWith("/api/pull-requests"))
         return json({ status: "ready", items: [], fetchedAt: 0 });
@@ -571,7 +577,131 @@ describe("Settings Automatic account preview", () => {
   });
 });
 
+describe("live account limit views", () => {
+  it("socket invalidation refreshes the mounted Settings account cards without a loop", async () => {
+    const profiles = [{ ...PERSONAL }, WORK];
+    const socket = await openNewSession(profiles, undefined, {
+      path: "/settings/claude-sdk",
+    });
+    expect(container!.textContent).not.toContain("Limited until ");
+    const until = Date.now() + 60_000;
+    profiles[0]!.health = {
+      state: "limited",
+      since: 1,
+      until,
+      model: "sonnet",
+      benchRevision: 1,
+    };
+    await act(async () => socket.receive({ type: "accountHealthChanged" }));
+    await settle();
+    expect(container!.textContent).toContain(
+      `Limited until ${new Date(until).toLocaleString()} for sonnet`,
+    );
+    const calls = vi.mocked(fetch).mock.calls.length;
+    await settle();
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(calls);
+    profiles[0]!.health = { state: "ok", since: 1, benchRevision: 2 };
+    await act(async () => socket.receive({ type: "accountHealthChanged" }));
+    await settle();
+    expect(container!.textContent).not.toContain("Limited until ");
+  });
+  it.each(["/sessions/create", "/settings/commit"])(
+    "%s preview updates for a shorter scope and early clear beneath an unchanged longest bench",
+    async (path) => {
+      const primaryUntil = Date.now() + 3600_000;
+      const shortUntil = Date.now() + 300_000;
+      const profiles = [
+        {
+          ...PERSONAL,
+          health: {
+            state: "limited" as const,
+            since: 1,
+            until: primaryUntil,
+            model: "opus",
+            benchRevision: 1,
+          },
+        },
+        WORK,
+      ];
+      let capped = false;
+      const socket = await openNewSession(
+        profiles,
+        () => ({
+          profileId: PERSONAL.id,
+          ...(capped
+            ? {
+                degraded: "no-eligible-account" as const,
+                limited: { until: shortUntil, model: "sonnet" },
+              }
+            : {}),
+        }),
+        {
+          path,
+          settings: {
+            ...settingsFixture,
+            commitAgent: {
+              provider: "claude-sdk",
+              modelId: "sonnet",
+              thinkingLevel: "low",
+            },
+          },
+        },
+      );
+      const before = previews.length;
+      const runtime = previews.at(-1);
+      capped = true;
+      profiles[0]!.health = { ...profiles[0]!.health, benchRevision: 2 };
+      await act(async () => socket.receive({ type: "accountHealthChanged" }));
+      await settle();
+      expect(previews).toHaveLength(before + 1);
+      expect(previews.at(-1)).toEqual(runtime);
+      expect(container!.textContent).toContain("Limited until ");
+      expect(container!.textContent).toContain(
+        new Date(shortUntil).toLocaleString(),
+      );
+      capped = false;
+      profiles[0]!.health = { ...profiles[0]!.health, benchRevision: 3 };
+      await act(async () => socket.receive({ type: "accountHealthChanged" }));
+      await settle();
+      expect(previews).toHaveLength(before + 2);
+      expect(previews.at(-1)).toEqual(runtime);
+      expect(container!.textContent).not.toContain("Limited until ");
+    },
+  );
+});
+
 describe("new-session account choice", () => {
+  it("health invalidation refreshes a limited Automatic preview when only its reset changes", async () => {
+    let until = Date.now() + 60_000;
+    const profiles = [
+      {
+        ...PERSONAL,
+        health: { state: "limited" as const, since: 1, until, model: "sonnet" },
+      },
+      WORK,
+    ];
+    const socket = await openNewSession(profiles, () => ({
+      profileId: PERSONAL.id,
+      degraded: "no-eligible-account",
+      limited: { until, model: "sonnet" },
+    }));
+    expect(accountCard("Automatic")?.textContent).toContain("Limited until ");
+    const before = previews.length;
+    until += 60_000;
+    profiles[0]!.health = {
+      state: "limited",
+      since: 1,
+      until,
+      model: "sonnet",
+    };
+    await act(async () => socket.receive({ type: "accountHealthChanged" }));
+    await settle();
+    expect(previews).toHaveLength(before + 1);
+    expect(accountCard("Automatic")?.textContent).toContain(
+      new Date(until).toLocaleString(),
+    );
+    expect(container!.textContent).not.toContain("Needs login");
+  });
   it("starts on Automatic and leaves the account to the server", async () => {
     const socket = await openNewSession([PERSONAL, WORK]);
 

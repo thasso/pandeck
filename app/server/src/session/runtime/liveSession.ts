@@ -224,6 +224,7 @@ type RunStartedListener = (
   sessionId: string,
   runId: string,
   modelProvider: string | undefined,
+  modelId?: string,
 ) => void;
 const runStartedListeners = new Set<RunStartedListener>();
 export function subscribeSessionRunStarted(
@@ -236,10 +237,11 @@ function emitRunStarted(
   sessionId: string,
   runId: string,
   modelProvider: string | undefined,
+  modelId: string | undefined,
 ): void {
   for (const listener of runStartedListeners) {
     try {
-      listener(sessionId, runId, modelProvider);
+      listener(sessionId, runId, modelProvider, modelId);
     } catch {
       /* best-effort */
     }
@@ -506,6 +508,7 @@ export class LiveRuntimeSession {
       this.sessionId,
       this.turnRunId,
       this.adapter.modelProvider?.(),
+      this.adapter.modelId?.(),
     );
     this.log.append({ type: "run.started", runId: this.turnRunId });
   }
@@ -623,6 +626,7 @@ export class LiveRuntimeSession {
       (r) => r.runId !== runId,
     );
     const modelProvider = this.adapter.modelProvider?.();
+    const modelId = this.adapter.modelId?.();
     const report: RunFailureReport = {
       sessionId: this.sessionId,
       runId,
@@ -636,6 +640,7 @@ export class LiveRuntimeSession {
                 ...(modelProvider !== undefined
                   ? { provider: modelProvider }
                   : {}),
+                ...(modelId !== undefined ? { model: modelId } : {}),
               }),
             )
           : undefined),

@@ -5925,6 +5925,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     case "notice":
       // Said at its arrival; what remains is the viewed chat's outcome.
       return { ...state, error: msg.severity === "error" ? msg.message : null };
+    case "accountHealthChanged":
+      return state;
     case "accountLoginAlerts":
       return { ...state, accountLoginAlerts: msg.accounts };
     case "devReload":
@@ -7327,6 +7329,11 @@ export function useAssistant({
           ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
           ...(msg.error ? { error: msg.error } : {}),
         });
+        return;
+      }
+      if (msg.type === "accountHealthChanged") {
+        window.dispatchEvent(new Event("credentialProfilesChanged"));
+        window.dispatchEvent(new Event("accountHealthChanged"));
         return;
       }
       if (msg.type === "projectSaved") {

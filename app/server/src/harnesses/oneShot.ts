@@ -206,14 +206,16 @@ async function runAttempt(
   const startedAt = Date.now();
   const observation = observeAccountHealth(request.credentialProfileId);
   let healthModelProvider = request.model.provider;
+  let healthModelId = request.model.modelId;
   let run: EngineRun;
   try {
     assertCurrentEnterpriseAccount(request);
     run =
       request.model.provider === CLAUDE_SDK_PROVIDER
         ? await runOnClaude(request)
-        : await runOnPi(request, (provider) => {
+        : await runOnPi(request, (provider, modelId) => {
             healthModelProvider = provider;
+            healthModelId = modelId;
           });
   } catch (err) {
     const message = errorText(err);
@@ -227,6 +229,7 @@ async function runAttempt(
     const failure = runFailureFacts(
       analyzeProviderError(message, {
         provider: healthModelProvider,
+        ...(healthModelId ? { model: healthModelId } : {}),
         ...(statusCode !== undefined ? { statusCode } : {}),
       }),
     );
@@ -246,6 +249,7 @@ async function runAttempt(
       ? runFailureFacts(
           analyzeProviderError(run.failure, {
             provider: healthModelProvider,
+            ...(healthModelId ? { model: healthModelId } : {}),
             ...(run.failureStatus !== undefined
               ? { statusCode: run.failureStatus }
               : {}),
@@ -264,6 +268,7 @@ async function runAttempt(
       request.credentialProfileId,
       healthModelProvider,
       observation,
+      healthModelId,
     );
   if (request.record)
     sessionStore.createInternalUsageSession({
@@ -314,7 +319,7 @@ async function runOnClaude(
 
 async function runOnPi(
   request: ResolvedOneShotRequest,
-  onModel: (provider: string) => void,
+  onModel: (provider: string, modelId: string) => void,
 ): Promise<EngineRun> {
   if (request.documents?.length)
     throw new Error("Document input needs a Claude model.");
@@ -324,7 +329,7 @@ async function runOnPi(
     throw new NoHelperModelError(
       request.noModelMessage ?? "No model is available for this helper run.",
     );
-  onModel(model.provider);
+  onModel(model.provider, model.id);
   const result = await runPiOneShot({
     model,
     credentialProfileId: request.credentialProfileId,

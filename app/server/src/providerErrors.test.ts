@@ -80,6 +80,57 @@ test.each([401, 403, 503])(
   },
 );
 
+test.each([
+  "The request could not be processed",
+  "Unauthorized",
+  "OAuth token has expired",
+  "content_policy",
+  "provider server error",
+])("Claude HTTP 429 remains a rate limit despite prose: %s", (text) => {
+  for (const info of [
+    analyzeProviderError(text, { provider: "claude-sdk", statusCode: 429 }),
+    analyzeProviderError(`API Error: 429 ${text}`, { provider: "claude-sdk" }),
+  ]) {
+    assert.deepEqual(runFailureFacts(info), { kind: "rate_limit" });
+  }
+});
+
+test.each([
+  "Opus weekly limit reached ∙ resets Oct 20, 3pm",
+  "You've hit your Opus limit · resets 3pm",
+])("Claude CLI named quota uses only a matching model: %s", (raw) => {
+  for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", undefined]) {
+    const facts = runFailureFacts(
+      analyzeProviderError(raw, {
+        provider: "claude-sdk",
+        ...(model === undefined ? {} : { model }),
+      }),
+    );
+    assert.equal(facts.kind, "quota");
+    assert.equal(
+      facts.limitModel,
+      model === "claude-opus-5-5" ? "opus" : undefined,
+    );
+    assert.equal(
+      facts.resetAtMs,
+      undefined,
+      "human reset text is never parsed",
+    );
+  }
+});
+
+test("Claude's legacy pipe reset is epoch seconds, not a fallback or human date", () => {
+  assert.deepEqual(
+    runFailureFacts(
+      analyzeProviderError("Claude AI usage limit reached|1900000000", {
+        provider: "claude-sdk",
+        model: "claude-opus-5-5",
+      }),
+    ),
+    { kind: "quota", resetAtMs: 1900000000000 },
+  );
+});
+
 describe("content policy refusals", () => {
   test("a Codex cybersecurity flag is a non-retryable refusal, not unknown", () => {
     const info = analyzeProviderError(

@@ -172,7 +172,7 @@ export function AgentModelFields({
           shownLevel ?? null,
           profiles.map(
             (profile) =>
-              `${profile.id}:${profile.enabled}:${profile.health.state}`,
+              `${profile.id}:${profile.enabled}:${JSON.stringify(profile.health)}`,
           ),
           (usageIndicators ?? []).map(
             (indicator) => `${indicator.profileId}:${indicator.fetchedAt}`,

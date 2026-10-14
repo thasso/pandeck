@@ -1,15 +1,18 @@
 # Account routing
 
 Credential profiles are accounts. Claude and OpenAI accounts never mix. This
-contract ships health, login alerts and account selection at session/run start.
-Benching and live switching follow in later parts.
+contract ships health, login alerts, temporary limit benches and account
+selection at session/run start. Live switching remains separate.
 
 ## Health and login evidence
 
-`CredentialProfileSummary.health` is `AccountHealth`: state `ok`, `needs-login`
-or `unknown`, `since` as epoch milliseconds or null when not observed, and an
-optional short app-owned reason. Never persist provider messages or tokens in
-health. The union can grow a limit state when benching ships.
+`CredentialProfileSummary.health` is `AccountHealth`: state `ok`, `needs-login`,
+`limited` or `unknown`, `since` as epoch milliseconds or null when not observed,
+and an optional short app-owned reason. `limited` carries `until` and optionally
+`model`. The process-local `benchRevision` invalidates previews for changes to
+any scope, including a shorter cap hidden by the card's primary bench. Missing
+credentials and login rejection take precedence over limits. Never persist
+provider messages or tokens in health.
 
 `app/server/src/accountHealth.ts` owns health in memory and persists best-effort
 to `DATA_DIR/cache/account-health.json`, using a private `0600` temporary file
@@ -150,8 +153,8 @@ object-only messaging rule, documented in `messaging.md`.
 account summaries, the official per-account model snapshots through the harness
 models port, and `usageCache.ts`'s cached indicators. It never fetches usage or
 changes the model, effort, workflow plan or provider. The ranking function is
-pure; limit benching can supply its candidate fact later without adding bench
-state here.
+pure; the health owner's bench store supplies the candidate fact without owning
+bench state here.
 
 Accounts carry `enterprise: boolean`, default false in the registry and wire
 summary. Settings changes it with `PATCH /api/credential-profiles/:id`
@@ -194,8 +197,8 @@ enterprise if any input session does. If no eligible enterprise account is
 available, skip that helper and keep its existing fallback, such as leaving the
 title unchanged. Source requirements cannot be cleared by omitting a child flag
 or passing false. Enterprise transcript helpers do not use degraded or
-disabled-default fallbacks; usage exhaustion remains a ranking preference, not a
-new hard eligibility rule.
+disabled-default fallbacks. Below 100%, usage remains a ranking preference;
+exhausted windows with a future reset are hard-filtered as benches.
 
 Enterprise-required sessions are excluded from memory capture entirely. Their
 transcripts produce no memory observations and never enter memory processing.
@@ -236,15 +239,16 @@ defaults to 90 and `weeklyUsedThreshold` to 95. Room means strictly below both.
 Settings exposes these under Models; storage normalizes each to 0–100.
 
 If health/model/effort/bench filters leave none, prefer remaining enabled
-accounts without `needs-login`, then accounts offering the fixed model and
-effort, before comparing usage. Provider and enterprise scope still apply. Mark
-the result `no-eligible-account`. Needs-login accounts are the last resort even
-when their cached usage looks better or every model snapshot failed. Background
-automation alone may finally use that provider's protected default, even
-disabled, marked `disabled-default`. Exclusions and enterprise constraints still
-apply to that fallback. Interactive creation with no enabled account fails
-clearly, including the no-enterprise-account case. The pick result carries the
-degradation; it never silently crosses provider or enterprise boundaries.
+accounts without `needs-login`, then unbenched accounts, then accounts offering
+the fixed model and effort, before comparing usage. Provider and enterprise
+scope still apply. Mark the result `no-eligible-account`. Needs-login accounts
+are the last resort even when their cached usage looks better or every model
+snapshot failed. Background automation alone may finally use that provider's
+protected default, even disabled, marked `disabled-default`. Exclusions and
+enterprise constraints still apply to that fallback. Interactive creation with
+no enabled account fails clearly, including the no-enterprise-account case. The
+pick result carries the degradation; it never silently crosses provider or
+enterprise boundaries.
 
 New-session and settings-slot selectors default to Automatic. At creation,
 Automatic applies only when no account is already bound or explicitly selected.
@@ -280,12 +284,95 @@ or a structured `loginDeath` retries once on another picked account, excluding
 the failed account. Plain auth classification is not sufficient. A slot that
 names an explicit pin never retries across accounts, even if that pin had to
 degrade. Both attempts' reported consumption is recorded. If no replacement can
-be picked, the original outcome is preserved. This does not remember a bench and
-does not switch interactive sessions; those remain later parts.
+be picked, the original outcome is preserved. Each attributed limit failure also
+benches its failed account, including pinned runs. Interactive sessions do not
+switch accounts.
 
 ## Limit benching
 
-Pending. Provider-stated reset times will bench accounts and survive restart.
+`accountHealth.ts` owns `accountBench.ts`. An explicitly attributed session turn
+or background attempt on the account's own subscription provider benches on
+`quota` or `rate_limit`. Other model providers, missing/deleted bindings, aborts
+and unrelated errors supply no limit evidence. A future provider `resetAtMs`
+wins; without one, `QUOTA_BENCH_MS` is 30 minutes and `RATE_LIMIT_BENCH_MS` is 5
+minutes. A past stated reset never creates a live bench. A later limit error
+does not shorten an already active bench of the same scope.
+
+Only evidence that identifies a named model cap supplies `limitModel`. The run's
+model id alone does not imply a per-model cap. Named caps bench account+model;
+otherwise the whole account is benched. There is no invented JSON field or fixed
+family inventory: explicit model-cap wording supplies the name, whose normalized
+words must be a subset of the executing model id's words in every parsing branch
+(provider branding is ignored). Without a model id, no model scope is inferred.
+Generic session, request and API limits remain whole-account benches;
+capitalization and digit-only normalized caps are not model evidence. Runtime
+fallback classification supplies the adapter's live model id. Successful turns
+carry the adapter's live model id; a success clears its whole-account bench and
+matching model cap, not other model caps. A successful login alone is not proof
+of quota room.
+
+Claude HTTP 429, whether structured or in an explicit `API Error: 429` wrapper,
+classifies as a limit even when the wording omits rate-limit terms. Its CLI
+quota wording, including `Opus weekly limit reached ∙ resets Oct 20, 3pm` and
+`You've hit your Opus limit · resets 3pm`, classifies as quota; a named cap
+still requires a matching executing model. Human reset text uses the fallback
+duration. The pipe suffix in `Claude AI usage limit reached|1900000000` is an
+explicit epoch seconds field, forwarded as `resetAtMs: 1900000000000`.
+
+The installed `@anthropic-ai/claude-agent-sdk` 0.3.296 manifest identifies CLI
+2.1.296, commit `fdb6c17a97b6e0e3cf15e3566663fca58e7c43a9`. Its bundled
+`@anthropic-ai/claude-agent-sdk-linux-x64/claude` constructs
+`You've hit your ${name} · resets ${time}`, where the name is a session, weekly,
+Opus or Sonnet limit. The exact pipe-form literal is not present in that build;
+it is covered separately as provider error input.
+
+Freshly fetched OpenAI/Claude windows at or above 100% with a future reset also
+bench. Cold cached snapshots never hydrate bench state. Generic windows and
+OpenAI spend control affect the whole account. OpenAI's missing-label mapper
+fallback `Model limit`, generic counter titles and numeric-only labels also
+affect the whole account. Counter words and units are removed before normalizing
+named windows, so `Codex Spark weekly limit` still names Spark. Named windows
+and active named Claude limits affect only that model. Multiple exhausted
+windows of one scope use the latest reset. Missing percentages or resets cannot
+create a usage bench. This consumes existing fetch results; it adds no fetching.
+Each bench records its source: `usage`, `quota` or `rate_limit`. Fresh usage
+clears only a usage-sourced scope, and only when all its present windows show
+valid room below 100%, not when a cap disappears or data is unavailable. Usage
+cannot clear, re-label or replace an active failure-sourced bench, even at
+98–99% usage; those benches end at their reset or on a later successful
+own-provider run on that account/model. A failure upgrades a usage bench's
+source even if its reset is unchanged. Absent generic Claude windows are not
+fabricated as unknown windows.
+
+Failures refresh their order at report time while retaining the run-start
+credential generation check, just like login-death reports. Success and usage
+retain their operation-start order. A concurrently running success that started
+before a quota report cannot hide that report, even if it completes later.
+Positive evidence and per-scope ordering stay process-local; stale positive
+evidence cannot clear or resurrect a newer decision.
+
+One unref'd timer publishes at the earliest live reset, removes expired benches
+and reschedules for the next reset, so open cards and previews refresh without
+another user action. Reads also ignore expired benches. Persistence in
+`DATA_DIR/cache/account-health-benches.json` is best-effort, private `0600`
+tmp+rename under the private cache directory, and writes only when live bench
+state changes. Bench sources are persisted privately and retained across
+restart; health/card summaries project only the safe limit time and model. Only
+live benches are persisted: no cleared records, hydration fences, ordering
+tickets or provider text. Expired benches are not restored; deleted accounts are
+forgotten.
+
+Automatic hard-filters applicable benches before normal ranking, within the same
+provider/enterprise scope. If no eligible account remains, its existing degraded
+policy ranks needs-login last, then benches, then model/effort and usage.
+Explicit pins remain exact and do not reroute or interrupt admitted work.
+`limited` is a card/preview state: “Limited until <time>”, optionally naming the
+model. A live whole-account bench takes card precedence over longer model caps.
+Every scope change increments `benchRevision` and publishes
+`accountHealthChanged`, even if the primary card bench stays unchanged. Its
+socket event refreshes both account projections and mounted Settings cards;
+preview keys include the revision. Limits never enter the app-wide login alert
+or push notification projection.
 
 ## Live account switching
 

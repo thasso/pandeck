@@ -93,6 +93,29 @@ test("PA working directory shows the server default and saves on blur", async ()
 });
 
 describe("credential profile settings", () => {
+  test("shows limited-until on the account card without a reconnect warning", () => {
+    const html = renderToStaticMarkup(
+      <CredentialProfileCard
+        profile={{
+          ...profiles[0]!,
+          health: {
+            state: "limited",
+            since: Date.now(),
+            until: Date.now() + 60_000,
+            model: "opus",
+          },
+        }}
+        providerLabel="Claude"
+        connectionLabel="Connect"
+        onToggle={() => {}}
+        onToggleEnterprise={() => {}}
+        onConnect={() => {}}
+      />,
+    );
+    expect(html).toContain("Limited until ");
+    expect(html).toContain("for opus");
+    expect(html).not.toContain("Needs login");
+  });
   test("shows needs-login and its app-owned reason beside setup status", () => {
     const html = renderToStaticMarkup(
       <CredentialProfileCard
