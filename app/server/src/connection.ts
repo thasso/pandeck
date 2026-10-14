@@ -4248,9 +4248,9 @@ export class Connection implements Viewer {
    * user cannot act on, one with no spawn edge, any store failure, including
    * the first read — is an error targeted at the session, so the browser
    * recovers its optimistic change; a request that changes nothing broadcasts
-   * nothing. It changes metadata only and never starts the agent, so the
-   * harness/persona availability guard of run-starting commands does not
-   * apply: a disabled harness must not stop the user taking a peer over.
+   * nothing. The metadata change does not require a runnable harness: a disabled
+   * harness must not stop the user taking a peer over. A changed Hand back also
+   * tells the coordinator through the durable handoff queue.
    */
   private async onSetSpawnOwnership(
     id: string,
@@ -4283,6 +4283,28 @@ export class Connection implements Viewer {
       return;
     }
     if (result === "unchanged") return;
+    if (ownership === "coordinator") {
+      try {
+        const spawn = sessionStore.spawnedParentsByChildIds([id]).get(id)!;
+        const title = sessionStore.get(id)?.title ?? id;
+        await deliverAgentHandoff({
+          sessionId: spawn.parentSessionId,
+          text: `Session ${id} (${title}) was handed back to you by the user. You now own it. Hand back adds no reporting instruction or awaited reply; send it a peer prompt if you need its results.`,
+          origin: { kind: "system", source: "spawn-hand-back" },
+        });
+      } catch (err) {
+        console.warn(
+          `[spawn] failed to notify coordinator for ${id}:`,
+          errorText(err),
+        );
+        this.send({
+          type: "error",
+          message:
+            "Session handed back, but its coordinator could not be notified. Send it a message if you need it to continue.",
+          target,
+        });
+      }
+    }
     await hub.broadcastSessions();
   }
 

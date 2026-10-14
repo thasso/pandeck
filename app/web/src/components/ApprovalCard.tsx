@@ -874,6 +874,9 @@ function SpawnRow({
             ? "User's inbox · No report owed"
             : "Coordinator's helpers"}
         </p>
+        {item.responseRequestWithdrawn && (
+          <p className="text-muted-foreground">Awaited reply withdrawn</p>
+        )}
         {warning && (
           <p className="flex items-start gap-1.5 text-warning">
             <AlertTriangle className="mt-0.5 size-3 shrink-0" />

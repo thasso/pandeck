@@ -524,6 +524,9 @@ function editedItem(
   item: SessionSpawnApprovalItem,
   edit: SessionSpawnResolutionEdits["items"][number] | undefined,
 ): SessionSpawnApprovalItem {
+  const owner = edit?.owner === undefined ? item.owner : edit.owner;
+  if (owner !== undefined && owner !== "coordinator" && owner !== "user")
+    throw new Error('owner must be "coordinator" or "user".');
   if (!edit) return item;
   // The user has now chosen deliberately, so the proposal's warning about a
   // hint that did not survive is spent and must not outlive their pick.
@@ -541,7 +544,12 @@ function editedItem(
     ...(edit.thinkingLevel ? { thinkingLevel: edit.thinkingLevel } : {}),
     ...(edit.owner === undefined ? {} : { owner: edit.owner }),
     // Choosing user ownership also withdraws the proposal's awaited reply.
-    ...(edit.owner === "user" ? { responseRequested: false } : {}),
+    ...(edit.owner === "user"
+      ? {
+          responseRequested: false,
+          ...(item.responseRequested ? { responseRequestWithdrawn: true } : {}),
+        }
+      : {}),
     ...(edit.skip === undefined ? {} : { skipped: edit.skip }),
   } satisfies SessionSpawnApprovalItem;
 }
@@ -910,7 +918,7 @@ registerApprovalExecutor("sessionSpawn", {
     const named = created
       .map(
         (item) =>
-          `"${item.title}" (${item.resultSessionId})${
+          `"${item.title}" (${item.resultSessionId}, owner ${item.owner ?? "coordinator"}${item.responseRequestWithdrawn ? ", awaited reply withdrawn" : ""})${
             item.error ? " — created, but its opening prompt failed" : ""
           }`,
       )

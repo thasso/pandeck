@@ -62,7 +62,7 @@ function makeSessionSpawnTool() {
     name: "session_spawn",
     label: "Spawn Sessions",
     description:
-      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, model and effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Use this for work that deserves its own conversation, not small tasks. Choose owner "user" for work the user should own and watch, such as when they ask you to start work; those sessions go to their inbox and owe you no reply. Default owner "coordinator" is for helpers whose results you need. YOU own those helpers: keep their ids, expect peer replies, chase quiet ones, and use session_control to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
+      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, model and effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each child is an ordinary conversation the user can watch and take over. Use this for work that deserves its own session, not small tasks. Choose owner "user" for work the user will run or follow themselves; those sessions go to their inbox and owe you no reply. Default owner "coordinator" is for helpers whose results you need to continue, such as your implementer and reviewer. YOU own those helpers: keep their ids, expect peer replies, chase quiet ones, and use session_control to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
     searchHint:
       "spawn start delegate implementer reviewer parallel helpers approved runtimes profiles cross-family review named role definitions",
     parameters: {
@@ -129,12 +129,12 @@ function makeSessionSpawnTool() {
                 type: "string",
                 enum: ["coordinator", "user"],
                 description:
-                  'Who owns this work from creation. Defaults to "coordinator"; "user" keeps provenance but puts the session in the user\'s inbox, without reporting instructions or coordinator stop authority. Available on both spawn and propose.',
+                  'Who owns this work from creation. Defaults to "coordinator"; "user" keeps provenance without reporting instructions or coordinator stop authority.',
               },
               responseRequested: {
                 type: "boolean",
                 description:
-                  'Record an awaited answer. Defaults to true on coordinator-owned "spawn", false on "propose" and user-owned rows. True with owner "user" is an error.',
+                  'Record an awaited answer. Defaults to true on coordinator-owned "spawn", false on "propose" and user-owned rows.',
               },
               provider: {
                 type: "string",

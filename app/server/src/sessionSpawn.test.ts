@@ -481,6 +481,42 @@ test("an UNTOUCHED row is revalidated too, and a stale one blocks approval", asy
   );
 });
 
+test.each(["someone", null, 7, true, {}, []])(
+  "invalid owner %j is refused at the wire and on a skipped approval row",
+  async (owner) => {
+    const { validateClientMessage } =
+      await import("./validateClientMessage.ts");
+    const edits = {
+      kind: "sessionSpawn" as const,
+      items: [{ rowId: "row_1", skip: true, owner }],
+    };
+    expect(
+      validateClientMessage({
+        type: "resolveApproval",
+        approvalId: "appr_1",
+        decision: "approved",
+        edits,
+      }).ok,
+    ).toBe(false);
+    await expect(
+      prepareSpawnApproval(pendingCard(), edits as never),
+    ).rejects.toThrow(/owner/);
+  },
+);
+
+test("valid owner choices are accepted at the approval wire boundary", async () => {
+  const { validateClientMessage } = await import("./validateClientMessage.ts");
+  for (const owner of [undefined, "coordinator", "user"])
+    expect(
+      validateClientMessage({
+        type: "resolveApproval",
+        approvalId: "appr_1",
+        decision: "approved",
+        edits: { kind: "sessionSpawn", items: [{ rowId: "row_1", owner }] },
+      }).ok,
+    ).toBe(true);
+});
+
 test("a skipped row is not revalidated: skipping a broken row is the way out", async () => {
   const card = pendingCard({ modelId: "gpt-4-retired" });
 
@@ -1181,10 +1217,19 @@ test("user-owned proposal approval and ownership edits honour the chosen owner",
     owner: "user",
     responseRequested: false,
   });
-  await resolveApproval(card.id, "approved", {
-    kind: "sessionSpawn",
-    items: [{ rowId: bodyOf(card).items[1]!.rowId, owner: "user" }],
-  });
+  const { card: done, outcomePrompt } = await resolveApproval(
+    card.id,
+    "approved",
+    {
+      kind: "sessionSpawn",
+      items: [{ rowId: bodyOf(card).items[1]!.rowId, owner: "user" }],
+    },
+  );
+  expect(done.resultSummary).toContain(
+    `"Helper" (${bodyOf(done).items[1]!.resultSessionId}, owner user, awaited reply withdrawn)`,
+  );
+  expect(outcomePrompt).toContain("owner user, awaited reply withdrawn");
+  expect(bodyOf(done).items[1]?.responseRequestWithdrawn).toBe(true);
   expect(recorded.delivered).toHaveLength(2);
   for (const delivered of recorded.delivered) {
     expect(delivered.responseRequested).toBe(false);
@@ -1208,10 +1253,19 @@ test("user-owned proposal approval and ownership edits honour the chosen owner",
 
 test("approval can hand a proposed user-owned row to the coordinator without creating a reply debt", async () => {
   const { card } = await propose([row({ owner: "user" })]);
-  await resolveApproval(card.id, "approved", {
-    kind: "sessionSpawn",
-    items: [{ rowId: bodyOf(card).items[0]!.rowId, owner: "coordinator" }],
-  });
+  const { card: done, outcomePrompt } = await resolveApproval(
+    card.id,
+    "approved",
+    {
+      kind: "sessionSpawn",
+      items: [{ rowId: bodyOf(card).items[0]!.rowId, owner: "coordinator" }],
+    },
+  );
+  expect(done.resultSummary).toContain(
+    `(${bodyOf(done).items[0]!.resultSessionId}, owner coordinator)`,
+  );
+  expect(outcomePrompt).toContain("owner coordinator");
+  expect(outcomePrompt).not.toContain("awaited reply withdrawn");
   const delivered = recorded.delivered[0]!;
   expect(delivered.responseRequested).toBe(false);
   expect(

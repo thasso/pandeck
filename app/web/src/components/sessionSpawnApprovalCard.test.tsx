@@ -166,9 +166,13 @@ test("the ownership choice rides along with approval without mutating the propos
 
 test("a resolved user-owned proposal shows ownership without offering a picker", () => {
   const data = card({ status: "executed" });
-  if (data.body.kind === "sessionSpawn") data.body.items[0]!.owner = "user";
+  if (data.body.kind === "sessionSpawn") {
+    data.body.items[0]!.owner = "user";
+    data.body.items[0]!.responseRequestWithdrawn = true;
+  }
   render(data);
   expect(host.textContent).toContain("User's inbox · No report owed");
+  expect(host.textContent).toContain("Awaited reply withdrawn");
   expect(
     host.querySelector('[aria-label="Owner of Reviewer: auth"]'),
   ).toBeNull();

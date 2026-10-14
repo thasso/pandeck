@@ -5,7 +5,7 @@
  *   pnpm --filter @assistant/server test src/spawnOwnershipCommand.test.ts
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterEach, beforeEach, test } from "vitest";
 import type {
   ClientMessage,
   ServerMessage,
@@ -15,6 +15,12 @@ import { Connection } from "./connection.ts";
 import { hub } from "./hub.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
+import { setAgentHandoffDeliveryStoppedForTests } from "./agentHandoffs.ts";
+import { agentHandoffStore } from "./db/agentHandoffStore.ts";
+
+// Exercise the real durable handoff seam without starting a provider turn.
+beforeEach(() => setAgentHandoffDeliveryStoppedForTests(true));
+afterEach(() => setAgentHandoffDeliveryStoppedForTests(false));
 
 /** Minimal open socket: `Connection` only reads `readyState`/`OPEN` and sends. */
 function fakeSocket(sent: ServerMessage[]) {
@@ -76,6 +82,13 @@ test("taking over and handing back move ownership and reach every tab", async ()
     await send(peer, "coordinator");
     await hub.flushPendingBroadcastsForTests();
     assert.equal(rowFor(otherTab, peer)?.spawnOwnership, "coordinator");
+    const [notice] = agentHandoffStore.listForSession(coordinator);
+    assert.ok(notice?.prompt.includes(peer));
+    assert.ok(notice?.prompt.includes("handed back to you by the user"));
+    assert.deepEqual(notice?.origin, {
+      kind: "system",
+      source: "spawn-hand-back",
+    });
 
     // Repeating the current ownership changes nothing, so it broadcasts
     // nothing.
@@ -83,6 +96,11 @@ test("taking over and handing back move ownership and reach every tab", async ()
     await send(peer, "coordinator");
     await hub.flushPendingBroadcastsForTests();
     assert.equal(rowFor(otherTab, peer), undefined);
+    assert.equal(
+      agentHandoffStore.listForSession(coordinator).length,
+      1,
+      "repeating Hand back sends no duplicate notice",
+    );
     assert.equal(
       clicked.some((message) => message.type === "error"),
       false,
@@ -100,7 +118,60 @@ test("taking over and handing back move ownership and reach every tab", async ()
   } finally {
     hub.unregister(viewer as never);
     connection.dispose();
+    for (const notice of agentHandoffStore.listForSession(coordinator))
+      agentHandoffStore.remove(notice.id);
     for (const id of [coordinator, peer, plain]) sessionStore.remove(id);
+  }
+});
+
+test("handing back a child born user-owned durably notifies its coordinator", async () => {
+  const stamp = Date.now();
+  const coordinator = `born-handback-root-${stamp}`;
+  const peer = `born-handback-peer-${stamp}`;
+  sessionStore.upsert({
+    id: coordinator,
+    harness: "pi",
+    agentType: "assistant",
+  });
+  sessionStore.upsert({
+    id: peer,
+    harness: "pi",
+    agentType: "assistant",
+    title: "User work",
+  });
+  sessionStore.linkSpawned(coordinator, peer, 123, "taken-over");
+  const messages: ServerMessage[] = [];
+  const connection = new Connection(fakeSocket(messages));
+  try {
+    await connection.handle({
+      type: "setSpawnOwnership",
+      id: peer,
+      ownership: "coordinator",
+    });
+    const [notice] = agentHandoffStore.listForSession(coordinator);
+    assert.ok(notice?.prompt.includes(`Session ${peer} (User work)`));
+    assert.ok(
+      notice?.prompt.includes(
+        "Hand back adds no reporting instruction or awaited reply",
+      ),
+    );
+    assert.ok(
+      notice?.prompt.includes("send it a peer prompt if you need its results"),
+    );
+    assert.equal(
+      sessionStore.spawnedParentsByChildIds([peer]).get(peer)?.ownership,
+      "coordinator",
+    );
+    assert.equal(
+      messages.some((message) => message.type === "error"),
+      false,
+    );
+  } finally {
+    connection.dispose();
+    for (const notice of agentHandoffStore.listForSession(coordinator))
+      agentHandoffStore.remove(notice.id);
+    sessionStore.remove(peer);
+    sessionStore.remove(coordinator);
   }
 });
 

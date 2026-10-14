@@ -110,14 +110,18 @@ the outcome:
   opening prompt. Each row of `spawn` or `propose` accepts
   `owner: "coordinator" | "user"`, defaulting to `coordinator`. Use coordinator
   ownership for helpers whose results the spawner needs. Use user ownership for
-  work the user should own and watch, such as asking the Personal Assistant to
-  start work. The proposal card shows this choice and lets the user change it. A
-  direct coordinator-owned spawn appends a report-back instruction and defaults
+  work the user will run or follow themselves, such as asking the Personal
+  Assistant to start a session they will watch. A coordinator's implementer and
+  reviewer remain coordinator-owned because their results drive its next step.
+  The proposal card shows this choice and lets the user change it. A direct
+  coordinator-owned spawn appends a report-back instruction and defaults
   `responseRequested` to true. A user-owned row gets no reporting suffix, uses
   the full `MAX_PEER_PROMPT_CHARS` budget and defaults `responseRequested` to
   false; explicitly requesting a reply with user ownership is an error.
   Proposals default to no awaited reply as before; choosing user ownership in
-  the card withdraws any proposed reply request. Both owners receive the opening
+  the card withdraws any proposed reply request. The approval result tells the
+  proposer each row's final owner and whether its awaited reply was withdrawn;
+  the resolved card also records the withdrawal. Both owners receive the opening
   prompt as a peer message from the spawner, retaining transcript provenance.
   Either side exposes that parentage as navigable **Spawned by** / **Spawned
   sessions** rows in the Session inspector, and the Sessions inbox folds a
@@ -147,11 +151,17 @@ the outcome:
     a later Take over stamps afresh — but not to a coordinator that was deleted,
     since nobody would then run the peer. Hand back works the same for a child
     born user-owned: it restores folding and stop authority, but sends no
-    reporting instruction and creates no awaited reply. Stall detection reads
-    actual outstanding requests, not ownership, so Hand back alone cannot invent
-    a missing report. Only a non-deleted, user-scope session with a spawn edge
-    can be set; anything else is refused. Edges marked before this rule, when
-    any visible human prompt took a child over, keep their state.
+    reporting instruction to the child and creates no awaited reply. Every
+    actual Hand back notifies the coordinator through `agentHandoffs.ts`, naming
+    the session and reminding it to send a peer prompt if it needs results. The
+    notice queues durably when the coordinator cannot take it now. Repeating
+    Hand back in the same ownership state sends no duplicate. This applies to
+    all children, so it needs no separate birth-ownership marker. Stall
+    detection reads actual outstanding requests, not ownership, so Hand back
+    alone cannot invent a missing report. Only a non-deleted, user-scope session
+    with a spawn edge can be set; anything else is refused. Edges marked before
+    this rule, when any visible human prompt took a child over, keep their
+    state.
   - `unknown` — a spawn edge from before ownership tracking, or metadata that
     cannot be classified. It fails closed: a consumer that folds
     coordinator-owned children under their coordinator must keep an `unknown`

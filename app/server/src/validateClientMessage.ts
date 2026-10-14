@@ -203,12 +203,19 @@ function validateResolveApproval(msg: Record<string, unknown>): string | null {
     if (rowId) return rowId;
     const optional = checkOptionalFields(item, {
       skip: BOOLEAN,
+      owner: STRING,
       provider: STRING,
       modelId: STRING,
       credentialProfileId: STRING,
       thinkingLevel: STRING,
     });
     if (optional) return optional;
+    if (
+      item.owner !== undefined &&
+      item.owner !== "coordinator" &&
+      item.owner !== "user"
+    )
+      return 'edits.items owner must be "coordinator" or "user"';
   }
   return null;
 }
