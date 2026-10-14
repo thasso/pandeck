@@ -380,18 +380,26 @@ a turn that fails, is stopped or is cut off leaves it for the user
   checked again after the harness acquisition, and once more inside the facade's
   `admit`, after its last await and before the claim (the run door also rechecks
   the hold); a refusal at any of these leaves the facts interrupted under the
-  attempt the user was shown, never owed. Its turn carries a bounded model-only
-  reference: each task id (never cut), the revision it was owed under, label,
-  state, output file, link, the earlier entry and how that attempt ended, and
-  how many are left. The earlier block was model-only and may be gone from the
-  provider's context, so the reference tells the agent to read each fact with
-  `background_tasks` status and its output file, from the durable row and
-  artifact. It never carries the original block or prompt again and reruns no
-  job, tool or turn. Its claim is a compare-and-set on each fact's interrupted
-  attempt, so a second Recover or a Dismiss racing it takes nothing. That turn's
-  clean end retires its rows; any other end interrupts them again under the
-  recovery's attempt. Nothing promises that the agent's side effects happen
-  exactly once, or that the job's purpose was achieved.
+  attempt the user was shown, never owed. So does a Recover refused after its
+  claim but before the provider had it (a runtime that became busy, a released
+  harness, an entry write that failed): each row of the claim goes back to the
+  attempt, run and entry it was interrupted under (kept in `prior_*` while
+  claimed, migration 0082), so the user's saved Recover and Dismiss identities
+  and the next Recover's earlier entry are unchanged. The rollback is fenced by
+  the Recover's own attempt, so it never overwrites a newer one; a Recover the
+  provider may have had is interrupted under its own attempt instead, keeping
+  the earlier entry as its transcript locator. Its turn carries a bounded
+  model-only reference: each task id (never cut), the revision it was owed
+  under, label, state, output file, link, the earlier entry and how that attempt
+  ended, and how many are left. The earlier block was model-only and may be gone
+  from the provider's context, so the reference tells the agent to read each
+  fact with `background_tasks` status and its output file, from the durable row
+  and artifact. It never carries the original block or prompt again and reruns
+  no job, tool or turn. Its claim is a compare-and-set on each fact's
+  interrupted attempt, so a second Recover or a Dismiss racing it takes nothing.
+  That turn's clean end retires its rows; any other end interrupts them again
+  under the recovery's attempt. Nothing promises that the agent's side effects
+  happen exactly once, or that the job's purpose was achieved.
 - **What the user sees.** `SessionState.unhandledBackgroundUpdates` and
   `unhandledBackgroundBatch` (sent with `backgroundUpdateQueue`) put a row on
   `PromptQueueLedge`: "N background updates were given to a turn that did not
@@ -420,16 +428,20 @@ a turn that fails, is stopped or is cut off leaves it for the user
   recoverable like any other if that turn does not finish. Logs name a category
   or an error class, never a provider message.
 - **Limits.** A claim or binding cut off by a process death or power loss is
-  read as `restart`, since the provider may have taken it; a clean end whose
-  retirement write never landed is read the same way, so the user may be asked
-  to recover a fact a clean turn did handle. A wake or deferred block the prompt
-  cap cannot carry whole takes the oldest updates and leaves the rest owed for
-  the next turn. The cap never goes below 1,200 characters, so a single update
-  trimmed to its identity (task id, kind, state) always fits: a fact is carried
-  by an identity the model can look up or not at all, never as a count, and
-  nothing is offered when nothing fits. The bounded queue's overflow still drops
-  never-exposed facts as before (oldest deferred, newest wake),. The table lives
-  in one database: two servers on one data directory are not supported.
+  read as `restart`, since the provider may have taken it; a Recover's claim cut
+  off that way, or whose rollback write is refused, keeps the earlier entry as
+  its locator but stands under the Recover's attempt, so identities the user
+  saved before it no longer match and the refreshed list carries the new ones; a
+  clean end whose retirement write never landed is read the same way, so the
+  user may be asked to recover a fact a clean turn did handle. A wake or
+  deferred block the prompt cap cannot carry whole takes the oldest updates and
+  leaves the rest owed for the next turn. The cap never goes below 1,200
+  characters, so a single update trimmed to its identity (task id, kind, state)
+  always fits: a fact is carried by an identity the model can look up or not at
+  all, never as a count, and nothing is offered when nothing fits. The bounded
+  queue's overflow still drops never-exposed facts as before (oldest deferred,
+  newest wake),. The table lives in one database: two servers on one data
+  directory are not supported.
 
 ### Composer
 

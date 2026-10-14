@@ -171,10 +171,10 @@ export const backgroundDeliveryOutboxStore = {
       withDbTransaction(() => {
         const db = getDb();
         const claim = db.prepare(
-          "UPDATE background_delivery_outbox SET phase='reserved', attempt_id=?, run_id=NULL, entry_id=NULL, phase_at_ms=? WHERE session_id=? AND item_id=? AND revision=? AND phase=?",
+          "UPDATE background_delivery_outbox SET prior_attempt_id=CASE WHEN phase='interrupted' THEN attempt_id END, prior_run_id=CASE WHEN phase='interrupted' THEN run_id END, prior_entry_id=CASE WHEN phase='interrupted' THEN entry_id END, phase='reserved', attempt_id=?, run_id=NULL, entry_id=NULL, phase_at_ms=? WHERE session_id=? AND item_id=? AND revision=? AND phase=?",
         );
         const reclaim = db.prepare(
-          "UPDATE background_delivery_outbox SET phase='reserved', attempt_id=?, run_id=NULL, entry_id=NULL, phase_at_ms=? WHERE session_id=? AND item_id=? AND revision=? AND phase='interrupted' AND attempt_id IS ?",
+          "UPDATE background_delivery_outbox SET prior_attempt_id=CASE WHEN phase='interrupted' THEN attempt_id END, prior_run_id=CASE WHEN phase='interrupted' THEN run_id END, prior_entry_id=CASE WHEN phase='interrupted' THEN entry_id END, phase='reserved', attempt_id=?, run_id=NULL, entry_id=NULL, phase_at_ms=? WHERE session_id=? AND item_id=? AND revision=? AND phase='interrupted' AND attempt_id IS ?",
         );
         const standing = db.prepare(
           "SELECT 1 FROM background_delivery_outbox WHERE session_id=? AND item_id=?",
@@ -249,14 +249,17 @@ export const backgroundDeliveryOutboxStore = {
   /**
    * Nothing of the attempt reached the model: each row goes back to where the
    * attempt took it from — `owed`, or `interrupted` with the interruption it
-   * already had (a Recover that never ran). A row already bound to a run the
-   * provider then refused to join comes back too, unbound.
+   * already had and under the attempt, run and entry it was interrupted in (a
+   * Recover that never ran), so the receipt the user was shown and its
+   * transcript locator are exactly as before. A row already bound to a run the
+   * provider then refused to join comes back too, unbound. Fenced by the
+   * attempt: a newer one's claim is untouched.
    */
   release(sessionId: string, attemptId: string): number {
     return Number(
       getDb()
         .prepare(
-          "UPDATE background_delivery_outbox SET phase=CASE WHEN interruption IS NULL THEN 'owed' ELSE 'interrupted' END, attempt_id=NULL, run_id=NULL, entry_id=NULL, phase_at_ms=? WHERE session_id=? AND attempt_id=? AND phase IN ('reserved','handling')",
+          "UPDATE background_delivery_outbox SET phase=CASE WHEN interruption IS NULL THEN 'owed' ELSE 'interrupted' END, attempt_id=prior_attempt_id, run_id=prior_run_id, entry_id=prior_entry_id, prior_attempt_id=NULL, prior_run_id=NULL, prior_entry_id=NULL, phase_at_ms=? WHERE session_id=? AND attempt_id=? AND phase IN ('reserved','handling')",
         )
         .run(Date.now(), sessionId, attemptId).changes,
     );
@@ -290,7 +293,7 @@ export const backgroundDeliveryOutboxStore = {
       else
         getDb()
           .prepare(
-            "UPDATE background_delivery_outbox SET phase='interrupted', interruption=?, phase_at_ms=? WHERE session_id=? AND run_id=? AND phase='handling'",
+            "UPDATE background_delivery_outbox SET phase='interrupted', interruption=?, entry_id=COALESCE(entry_id, prior_entry_id), prior_attempt_id=NULL, prior_run_id=NULL, prior_entry_id=NULL, phase_at_ms=? WHERE session_id=? AND run_id=? AND phase='handling'",
           )
           .run(interruption, Date.now(), sessionId, runId);
       return rows;
@@ -317,7 +320,7 @@ export const backgroundDeliveryOutboxStore = {
             .run(sessionId, attemptId).changes
         : db
             .prepare(
-              "UPDATE background_delivery_outbox SET phase='interrupted', interruption=?, phase_at_ms=? WHERE session_id=? AND attempt_id=? AND phase IN ('reserved','handling')",
+              "UPDATE background_delivery_outbox SET phase='interrupted', interruption=?, entry_id=COALESCE(entry_id, prior_entry_id), prior_attempt_id=NULL, prior_run_id=NULL, prior_entry_id=NULL, phase_at_ms=? WHERE session_id=? AND attempt_id=? AND phase IN ('reserved','handling')",
             )
             .run(interruption, Date.now(), sessionId, attemptId).changes,
     );
@@ -339,7 +342,7 @@ export const backgroundDeliveryOutboxStore = {
       ).map((r) => r.session_id);
       getDb()
         .prepare(
-          "UPDATE background_delivery_outbox SET phase='interrupted', interruption='restart', phase_at_ms=? WHERE phase IN ('reserved','handling')",
+          "UPDATE background_delivery_outbox SET phase='interrupted', interruption='restart', entry_id=COALESCE(entry_id, prior_entry_id), prior_attempt_id=NULL, prior_run_id=NULL, prior_entry_id=NULL, phase_at_ms=? WHERE phase IN ('reserved','handling')",
         )
         .run(Date.now());
       return sessions;

@@ -138,6 +138,8 @@ function driverOf(sessionId: string, adapter: PromptableAdapter) {
       return sessionRuntime.get(sessionId)?.isRunning ?? false;
     },
     canSteer: true,
+    /** Set to stand for a harness its store released meanwhile. */
+    released: false,
     contextInfo: () => ({}) as never,
     broadcastState: () => {},
     createRuntimeAdapter: () => adapter,
@@ -1526,4 +1528,178 @@ test("Recover refused by an archive, a delete or a Stop landing during the facad
     );
     if (race === "hold") hold.resumeAutomaticTurns(id);
   }
+});
+
+/* --------- a Recover that provably never ran keeps the shown receipt --------- */
+
+type Receipt = { attempt_id: string | null; entry_id: string | null };
+
+/** The attempt and transcript locator a row stands under. */
+function receipt(sessionId: string, itemId: string): Receipt {
+  const row = getDb()
+    .prepare(
+      "SELECT attempt_id, entry_id FROM background_delivery_outbox WHERE session_id=? AND item_id=?",
+    )
+    .get(sessionId, itemId) as Receipt | undefined;
+  return {
+    attempt_id: row?.attempt_id ?? null,
+    entry_id: row?.entry_id ?? null,
+  };
+}
+
+/** A session whose delivery of `count` facts failed in one turn. */
+async function failedBatch(count = 1) {
+  const { id, provider } = session();
+  const w = wire();
+  hold.holdAutomaticTurns(id);
+  const items = Array.from({ length: count }, () => finished(id));
+  for (const item of items) w.owe(id, item);
+  provider.mode = "error";
+  hold.resumeAutomaticTurns(id);
+  await w.delivery.requestDrain(id);
+  await settle();
+  const refs = notices.unhandledBackgroundBatch(id);
+  assert.equal(refs.length, count);
+  const before = items.map((item) => receipt(id, item.id));
+  for (const r of before) {
+    assert.ok(r.attempt_id, "interrupted under the failed attempt");
+    assert.ok(r.entry_id, "with the entry that carried it");
+  }
+  return { id, provider, w, items, refs, before };
+}
+
+test("a Recover refused after its claim by a busy runtime or a released harness keeps the failed receipt, its refs and its transcript locator", async () => {
+  for (const race of ["busy", "released"] as const) {
+    const { id, provider, w, items, refs, before } = await failedBatch(3);
+    const prompts = provider.texts.length;
+    const result = await notices.recoverBackgroundHandling(
+      w.delivery,
+      id,
+      async (sessionId) => {
+        // After Recover's own checks, while the facade awaits its last await:
+        // the provider starts a turn of its own, or the harness is released.
+        queueMicrotask(() =>
+          queueMicrotask(() => {
+            if (race === "busy")
+              provider.emit({
+                type: "messageStarted",
+                streamId: `native-${sessionId}`,
+              });
+            else drivers.get(sessionId)!.released = true;
+          }),
+        );
+        return drivers.get(sessionId);
+      },
+      refs,
+    );
+    if ("done" in result) await result.done;
+    await settle();
+    assert.equal(provider.texts.length, prompts, `${race}: never sent`);
+    assert.deepEqual(
+      items.map((item) => receipt(id, item.id)),
+      before,
+      `${race}: every row of the claim is back under its failed attempt`,
+    );
+    assert.deepEqual(
+      rows(id).map((r) => r.interruption),
+      ["failed", "failed", "failed"],
+    );
+    assert.deepEqual(
+      notices.unhandledBackgroundBatch(id),
+      refs,
+      `${race}: the refs the user saved still match`,
+    );
+
+    // Those saved refs still work, and the next Recover still points at the
+    // entry that carried the facts the first time.
+    if (race === "busy")
+      provider.emit({ type: "runCompleted", stopReason: "end" });
+    drivers.get(id)!.released = false;
+    await settle();
+    provider.mode = "manual";
+    const again = await w.recover(id, refs);
+    assert.ok("done" in again, `${race}: the saved refs recover`);
+    await settle();
+    const sent = provider.texts.at(-1)!;
+    for (const r of before)
+      assert.ok(sent.includes(`"earlierEntryId":"${r.entry_id}"`), race);
+    provider.open.shift()!({ stopReason: "end" });
+    await again.done;
+    assert.deepEqual(rows(id), []);
+  }
+});
+
+test("a Recover whose entry write fails before the provider is called keeps the failed receipt; Dismiss by the saved refs then works", async () => {
+  const { id, provider, w, items, refs, before } = await failedBatch(2);
+  const prompts = provider.texts.length;
+  failNextUserAppend(id, true);
+  provider.mode = "end";
+  const result = await w.recover(id, refs);
+  if ("done" in result) await result.done;
+  await settle();
+  assert.equal(provider.texts.length, prompts, "the provider never had it");
+  assert.deepEqual(
+    items.map((item) => receipt(id, item.id)),
+    before,
+  );
+  assert.equal(notices.dismissBackgroundHandling(id, refs), 2);
+  assert.deepEqual(rows(id), []);
+});
+
+test("an older attempt's rollback cannot overwrite a newer exposed attempt, and a restart keeps the transcript locator", () => {
+  const { id } = session();
+  backgroundDeliveryOutboxStore.save({
+    sessionId: id,
+    itemId: "item-rollback",
+    revision: 1,
+    disposition: "wake",
+    retained: false,
+  });
+  const claim = (
+    attempt: string,
+    from: "owed" | "interrupted",
+    prior?: string,
+  ) =>
+    backgroundDeliveryOutboxStore.reserve(
+      id,
+      attempt,
+      [
+        {
+          itemId: "item-rollback",
+          revision: 1,
+          ...(prior !== undefined ? { attemptId: prior } : {}),
+        },
+      ],
+      from,
+    );
+  assert.ok(claim("attempt-1", "owed"));
+  backgroundDeliveryOutboxStore.bind(id, "attempt-1", "run-1", "entry-1");
+  backgroundDeliveryOutboxStore.settleRun(id, "run-1", "failed");
+  // A Recover whose outcome is unknown: interrupted under its own attempt,
+  // still pointing at the entry that carried the fact.
+  assert.ok(claim("recover-2", "interrupted", "attempt-1"));
+  backgroundDeliveryOutboxStore.settleAttempt(id, "recover-2", "unknown");
+  assert.deepEqual(receipt(id, "item-rollback"), {
+    attempt_id: "recover-2",
+    entry_id: "entry-1",
+  });
+  // A newer Recover reaches its run; the older one's late rollback is fenced.
+  assert.ok(claim("recover-3", "interrupted", "recover-2"));
+  backgroundDeliveryOutboxStore.bind(id, "recover-3", "run-3", "entry-3");
+  assert.equal(backgroundDeliveryOutboxStore.release(id, "recover-2"), 0);
+  assert.equal(rows(id)[0]?.phase, "handling");
+  assert.deepEqual(receipt(id, "item-rollback"), {
+    attempt_id: "recover-3",
+    entry_id: "entry-3",
+  });
+  // Cut off by a restart while a Recover held it unbound: the earlier entry
+  // stays its locator.
+  backgroundDeliveryOutboxStore.settleRun(id, "run-3", "failed");
+  assert.ok(claim("recover-4", "interrupted", "recover-3"));
+  backgroundDeliveryOutboxStore.interruptUnfinished();
+  assert.deepEqual(receipt(id, "item-rollback"), {
+    attempt_id: "recover-4",
+    entry_id: "entry-3",
+  });
+  assert.equal(rows(id)[0]?.interruption, "restart");
 });
