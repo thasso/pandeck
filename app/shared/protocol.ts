@@ -3504,9 +3504,9 @@ export interface SettingsInputApprovalBody {
 }
 
 /**
- * An agent asking to create an agent definition, or to change one's `model` or
- * `effort` (`docs/agent-definitions.md`): what spawned sessions of it RUN on is
- * the user's call. Nothing is written until approval; `resultCommit` records
+ * An agent asking to create an agent definition, or to change one's `persona`,
+ * `model` or `effort` (`docs/agent-definitions.md`): what spawned sessions of
+ * it run AS and ON is the user's call. Nothing is written until approval; `resultCommit` records
  * the commit execution made.
  */
 export interface AgentDefinitionApprovalBody {

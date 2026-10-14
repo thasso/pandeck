@@ -1,7 +1,7 @@
 /**
  * The `agent_*` tools (`docs/agent-definitions.md` "Authoring tools"): what a
- * definition runs on is the user's call, so a create and an edit that changes
- * `model` or `effort` become approval cards and write nothing until approved;
+ * definition runs as and on is the user's call, so a create and an edit that
+ * changes `persona`, `model` or `effort` become approval cards and write nothing until approved;
  * every other edit commits directly after the same runtime check, judged in
  * the locked write.
  *
@@ -194,6 +194,48 @@ describe("agent_create", () => {
       );
     }
     assert.equal(readFileSync(manifest(), "utf8"), before);
+  });
+
+  test("a definition may not deny the tool a spawned agent reports back with", async () => {
+    await assert.rejects(
+      tool("agent_create").execute(
+        { ...definition, denyTools: ["session_send_prompt"] },
+        ctx(),
+      ),
+      /session_send_prompt, which a spawned agent needs to report back/,
+    );
+  });
+
+  test("a stopped create or runtime edit leaves no card", async () => {
+    await createApproved();
+    const cards = approvalsForSession(sessionId).length;
+    for (const [name, params] of [
+      ["agent_create", { ...definition, name: "late-reviewer" }],
+      [
+        "agent_edit",
+        {
+          name: "test-reviewer",
+          edits: [{ oldText: "effort: medium", newText: "effort: high" }],
+          reason: "Raise effort",
+        },
+      ],
+    ] as const) {
+      const stop = new AbortController();
+      // Stopped while the runtime is being resolved.
+      setAgentRuntimeSourcesForTests({
+        models: async () => {
+          stop.abort();
+          return [model("claude-sdk", "opus"), model("claude-sdk", "sonnet")];
+        },
+        skillNames: async () => [],
+        toolNames: async () => ["worktree_push", "worktree_commit"],
+      });
+      await assert.rejects(
+        tool(name).execute(params as never, { ...ctx(), signal: stop.signal }),
+        /aborted/,
+      );
+    }
+    assert.equal(approvalsForSession(sessionId).length, cards);
   });
 
   test("the card shows the effort the model will actually run at", async () => {

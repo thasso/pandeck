@@ -153,7 +153,10 @@ persona's normal toolset and can never add to it. Entries are:
   Reading stays available to every agent.
 
 An entry naming a tool the persona does not have, or no tool at all, is a
-validation error. A typo would otherwise silently leave a tool enabled.
+validation error. A typo would otherwise silently leave a tool enabled. Names
+are at most 64 characters, and a refusal quotes a few unknown ones plus a count.
+`session_send_prompt` cannot be denied: a spawned agent reports back with it,
+and its coordinator, which has no watchdog, would otherwise wait on silence.
 
 Removing a deny entry gives back a tool the persona has anyway, so it is not an
 escalation. Approvals, Plan mode, and every other gate apply to the spawned
@@ -189,7 +192,9 @@ spawned sessions cost. A definition that names its own model moves that control
 into the file. A hand edit is the user's own choice. An agent-tool mutation that
 sets what a definition runs as or on therefore goes through an `agentDefinition`
 approval card (`docs/approvals.md`). The persona counts: it decides the tools,
-and a developer has native Bash, Edit and Write an assistant does not.
+and a developer has native Bash, Edit and Write an assistant does not. The
+session grant for these cards is labelled to say so. A create or edit stopped
+before its card exists leaves none, so no grant can execute it later.
 
 - **Create** always sets a model, so every `agent_create` is a card. It shows
   the persona, the model as written and the connected model it resolved to, the

@@ -148,6 +148,9 @@ export function resolveAgentModel(
   );
 }
 
+/** Tools a definition may not deny: every spawn depends on them. */
+const AGENT_REQUIRED_TOOLS = ["session_send_prompt"] as const;
+
 /**
  * Check everything about a definition that its file alone cannot prove, and
  * throw ONE refusal naming every problem. `checkModel: false` skips the model
@@ -193,10 +196,21 @@ export async function checkAgentRuntime(
       ...(await sources.toolNames(manifest.persona)),
     ]);
     const unknown = manifest.denyTools.filter((name) => !known.has(name));
-    if (unknown.length > 0)
+    if (unknown.length > 0) {
+      // Quoted a few at a time: the list is the file's, up to 64 names.
+      const quoted = unknown.slice(0, 5).join(", ");
+      const more = unknown.length > 5 ? ` and ${unknown.length - 5} more` : "";
       problems.push(
-        `tools.deny names ${unknown.join(", ")}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push)${coding ? ` or ${AGENT_NATIVE_TOOLS.join(", ")}` : ""}.`,
+        `tools.deny names ${quoted}${more}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push)${coding ? ` or ${AGENT_NATIVE_TOOLS.join(", ")}` : ""}.`,
       );
+    }
+    // A spawned agent reports back with it; denied, its coordinator — which
+    // has no watchdog — would wait on silence.
+    for (const name of AGENT_REQUIRED_TOOLS)
+      if (manifest.denyTools.includes(name))
+        problems.push(
+          `tools.deny names ${name}, which a spawned agent needs to report back to the session that started it.`,
+        );
   }
   if (manifest.skills.length > 0) {
     const valid = new Set(await sources.skillNames());

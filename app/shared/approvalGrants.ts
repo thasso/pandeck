@@ -161,8 +161,8 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   ),
   op(
     "agentDefinition",
-    "Agents: set model or effort",
-    "Create agent definitions and change the model or effort they run on.",
+    "Agents: create, or change persona, model or effort",
+    "Create agent definitions and change the persona they run as (a developer gets Bash, Edit and Write) or the model and effort they run on.",
   ),
   op(
     "gmailArchive",

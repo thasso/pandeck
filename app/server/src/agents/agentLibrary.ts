@@ -55,7 +55,7 @@ export const MAX_AGENT_MANIFEST_BYTES = 16 * 1024;
 const MAX_MODEL_CHARS = 128;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 /** A denied tool: an unprefixed app tool name or a native capability. */
-const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
+const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_LISTED = 64;
 
 const KNOWN_KEYS = new Set([
@@ -186,7 +186,7 @@ function parseList(
   ) {
     issues.push({
       code: "invalid-field",
-      error: `Frontmatter ${field} must be a list of at most ${MAX_LISTED} names.`,
+      error: `Frontmatter ${field} must be a list of at most ${MAX_LISTED} names of at most 64 characters.`,
     });
     return [];
   }

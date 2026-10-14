@@ -4,8 +4,8 @@
  * would run on right now under its description, or why it cannot start.
  *
  * Nothing here writes. Agents author definitions through the `agent_*` tools,
- * with an approval card for anything that sets the model or effort, and the
- * user owns the files and their Git history.
+ * with an approval card for a create and for anything that changes the
+ * persona, model or effort, and the user owns the files and their Git history.
  */
 import { TriangleAlert } from "lucide-react";
 import { agentRuntimeOf, type EntryLibraryList } from "@assistant/shared";
@@ -26,9 +26,9 @@ const AGENTS_COPY: LibraryPageCopy = {
       Named agents a session can start by name: “spawn a test-reviewer agent”.
       Each agent is a folder with an <code>AGENT.md</code> whose frontmatter
       declares its persona, model, effort and the tools it must not use; the
-      body is its role. Agents write them with the agent tools, and a change to
-      the model or effort asks you first. You own the files and their Git
-      history.
+      body is its role. Agents write them with the agent tools, and a new agent
+      or a change to its persona, model or effort asks you first. You own the
+      files and their Git history.
     </>
   ),
   listTitle: "Available agents",

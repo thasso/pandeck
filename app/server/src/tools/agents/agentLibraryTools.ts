@@ -2,9 +2,9 @@
  * The agent definitions library's `agent_*` tool group
  * (`docs/agent-definitions.md` "Authoring tools"): the shared library tool
  * factory with the agent kind's create fields, and one rule on top of it —
- * WHAT a definition runs on is the user's call. A create always sets a model,
- * so it always becomes an approval card; an edit that changes `model` or
- * `effort` becomes one too. Every other edit commits directly, after the same
+ * what a definition runs AS and ON is the user's call. A create always sets a
+ * model, so it always becomes an approval card; an edit that changes
+ * `persona`, `model` or `effort` becomes one too. Every other edit commits directly, after the same
  * runtime check, judged inside the locked write.
  */
 import { Buffer } from "node:buffer";
@@ -103,6 +103,9 @@ async function propose(
 ): Promise<PendingApproval> {
   const resolved = await resolvedModelOf(after);
   const resolvedModel = resolved.label;
+  // Every read is done: a call stopped meanwhile must not leave a card — one
+  // an existing grant would then execute.
+  if (ctx.signal?.aborted) throw new Error("Operation aborted");
   const body: AgentDefinitionApprovalBody = {
     kind: "agentDefinition",
     action,
@@ -296,6 +299,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
     },
     required: ["name", "description", "persona", "model", "body"],
     async run(params, meta, library, _options, ctx) {
+      if (ctx.signal?.aborted) throw new Error("Operation aborted");
       const input: AgentDefinitionInput = {
         name: params.name as string,
         description: params.description as string,
@@ -323,6 +327,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
   edit: {
     note: "An edit that changes persona, model or effort is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
     async run(input, meta, library, options, ctx) {
+      if (ctx.signal?.aborted) throw new Error("Operation aborted");
       const current = await readEntrySource(input.name, library);
       if (!current)
         throw new EntryValidationError(

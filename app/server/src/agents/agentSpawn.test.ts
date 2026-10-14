@@ -283,3 +283,22 @@ test("a name no definition could declare is refused without being quoted", async
     return true;
   });
 });
+
+test("tools.deny names are bounded, and a refusal quotes only a few of them", async () => {
+  write(
+    "long-deny",
+    reviewer({ name: "long-deny", denyTools: [`t${"x".repeat(64)}`] }),
+  );
+  const unknown = Array.from({ length: 20 }, (_, at) => `missing_tool_${at}`);
+  write("many-deny", reviewer({ name: "many-deny", denyTools: unknown }));
+
+  await assert.rejects(
+    resolveAgentSpawn("long-deny"),
+    /names of at most 64 characters/,
+  );
+  await assert.rejects(resolveAgentSpawn("many-deny"), (error: Error) => {
+    assert.match(error.message, /missing_tool_4 and 15 more/);
+    assert.doesNotMatch(error.message, /missing_tool_19/);
+    return true;
+  });
+});
