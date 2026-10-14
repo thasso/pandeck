@@ -1703,3 +1703,115 @@ test("an older attempt's rollback cannot overwrite a newer exposed attempt, and 
   });
   assert.equal(rows(id)[0]?.interruption, "restart");
 });
+
+/* ------- user-owned and coordinator-owned spawned sessions (#125) ------- */
+
+test("unhandled updates of a coordinator-owned, a born-user-owned and a handed-back child: listed, block Settle and auto-archive, and survive ownership changes", async () => {
+  const { listSessions } = await import("./sessions.ts");
+  const { settleBlockedReason } = await import("@assistant/shared");
+  const { selectSettledArchiveCandidates, SESSION_AUTO_ARCHIVE_AFTER_MS } =
+    await import("./sessionRetention.ts");
+  const coordinator = session();
+  for (const ownership of [
+    "coordinator",
+    "born-user-owned",
+    "handed-back",
+  ] as const) {
+    const { id, provider, w, refs, before, items } = await failedBatch(1);
+    if (ownership === "born-user-owned")
+      sessionStore.linkSpawned(
+        coordinator.id,
+        id,
+        sessionStore.get(id)!.createdAt,
+        "taken-over",
+      );
+    else sessionStore.linkSpawned(coordinator.id, id);
+    if (ownership === "handed-back") {
+      sessionStore.setSpawnedOwnership(id, "taken-over");
+      sessionStore.setSpawnedOwnership(id, "coordinator");
+    }
+    // Ownership is the coordinator's relation to the child; the debt is the
+    // child's own and does not move with it.
+    assert.deepEqual(receipt(id, items[0]!.id), before[0], ownership);
+
+    const settledLongAgo = Date.now() - SESSION_AUTO_ARCHIVE_AFTER_MS - 60_000;
+    sessionStore.setSettled(id, true, settledLongAgo);
+    const [row] = await listSessions([], () => 0, {
+      includeArchived: true,
+      onlyIds: new Set([id]),
+    });
+    assert.ok(row, ownership);
+    assert.equal(row.unhandledBackgroundUpdates, 1, ownership);
+    assert.equal(
+      settleBlockedReason(row),
+      "background updates it was given were not handled.",
+      ownership,
+    );
+    assert.deepEqual(
+      selectSettledArchiveCandidates([{ ...row, settledAt: settledLongAgo }], {
+        now: Date.now(),
+        viewed: new Set(),
+        runOwned: new Set(),
+      }),
+      [],
+      `${ownership}: auto-archive keeps it`,
+    );
+
+    // Recover works on the child itself, whoever owns it; while its turn
+    // runs the row reports the handling count, which also holds Settle.
+    provider.mode = "manual";
+    const recovering = await w.recover(id, refs);
+    assert.ok("done" in recovering, ownership);
+    await settle();
+    const [running] = await listSessions([], () => 0, {
+      includeArchived: true,
+      onlyIds: new Set([id]),
+    });
+    assert.equal(running?.handlingBackgroundUpdates, 1, ownership);
+    assert.equal(running?.unhandledBackgroundUpdates, undefined, ownership);
+    provider.open.shift()!({ stopReason: "end" });
+    await recovering.done;
+    const [done] = await listSessions([], () => 0, {
+      includeArchived: true,
+      onlyIds: new Set([id]),
+    });
+    assert.equal(done?.unhandledBackgroundUpdates, undefined, ownership);
+    assert.equal(done?.handlingBackgroundUpdates, undefined, ownership);
+  }
+});
+
+test("Recover and Dismiss identities pass client validation only when complete and bounded", async () => {
+  const { validateClientMessage } = await import("./validateClientMessage.ts");
+  const ref = { itemId: "bgw_1", revision: 2, attemptId: "attempt-1" };
+  for (const type of ["recoverBackgroundUpdates", "dismissBackgroundUpdates"]) {
+    assert.equal(
+      validateClientMessage({ type, sessionId: "s", items: [ref] }).ok,
+      true,
+      type,
+    );
+    assert.equal(
+      validateClientMessage({
+        type,
+        sessionId: "s",
+        items: [{ ...ref, attemptId: null }],
+      }).ok,
+      true,
+      `${type}: a row interrupted under no attempt`,
+    );
+    for (const items of [
+      [],
+      Array.from({ length: 21 }, () => ref),
+      [{ ...ref, revision: -1 }],
+      [{ ...ref, revision: 1.5 }],
+      [{ ...ref, attemptId: "" }],
+      [{ ...ref, itemId: "" }],
+      [{ itemId: "bgw_1", revision: 2 }],
+    ])
+      assert.equal(
+        validateClientMessage({ type, sessionId: "s", items }).ok,
+        false,
+        `${type}: ${JSON.stringify(items).slice(0, 60)}`,
+      );
+    assert.equal(validateClientMessage({ type, sessionId: "s" }).ok, false);
+  }
+});
