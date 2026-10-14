@@ -108,3 +108,51 @@ it("runs the current object's action when its menu shape matches the previous ob
 
   expect(runs).toEqual(["task-615"]);
 });
+
+it("gives a headerless macOS shell window a title-bar strip to drag and clear the window controls", async () => {
+  document.documentElement.setAttribute("data-native-shell", "macos");
+  try {
+    await act(async () => {
+      root.render(
+        <AppShell mobile>
+          <PageHeader title="Object" />
+        </AppShell>,
+      );
+    });
+    const strip = container.querySelector("[data-tauri-drag-region]");
+    expect(strip).toBeTruthy();
+    // Above the page, so its first row starts below the window controls.
+    expect(
+      strip?.compareDocumentPosition(container.querySelector("header")!),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    // A header is the title bar itself, and a browser has no window controls.
+    await act(async () => {
+      root.render(
+        <AppShell mobile={false} header={<header />}>
+          <PageHeader title="Object" />
+        </AppShell>,
+      );
+    });
+    expect(container.querySelector("[data-tauri-drag-region]")).toBeNull();
+  } finally {
+    document.documentElement.removeAttribute("data-native-shell");
+  }
+  // Neither a browser nor the iOS shell draws window controls over the page.
+  for (const platform of [null, "ios"]) {
+    if (platform)
+      document.documentElement.setAttribute("data-native-shell", platform);
+    try {
+      await act(async () => {
+        root.render(
+          <AppShell mobile>
+            <PageHeader title="Object" />
+          </AppShell>,
+        );
+      });
+      expect(container.querySelector("[data-tauri-drag-region]")).toBeNull();
+    } finally {
+      document.documentElement.removeAttribute("data-native-shell");
+    }
+  }
+});

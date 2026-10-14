@@ -32,8 +32,9 @@ bootstrap page — never product UI.
   Keep targets opaque under `TARGET_KEY`.
 - The init script stamps `data-native-shell` and the chrome insets before first
   paint; the page detects the shell only through `lib/nativeShell.ts`, never an
-  awaited path. On macOS the top bar IS the title bar: no page height for it,
-  and `data-tauri-drag-region` on whatever covers it, never its children.
+  awaited path. On macOS the top bar IS the title bar: no page height for it
+  (headerless: a strip), and `data-tauri-drag-region` on whatever covers it,
+  never its children.
 - Foreign links leave via opener; same-origin files use only the validated
   `open_served_file` command with token-free scoped grants. Init re-issues
   dropped `_blank` clicks. `on_new_window` answers `Create`, never `Allow`, with

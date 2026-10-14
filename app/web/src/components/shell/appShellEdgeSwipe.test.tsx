@@ -299,6 +299,26 @@ describe("AppShell edge-swipe back", () => {
     expect(destination()).toBeNull();
   });
 
+  it("frames the destination with the same macOS title-bar strip as the leaving screen", () => {
+    document.documentElement.setAttribute("data-native-shell", "macos");
+    try {
+      renderShell({ enabled: true, onBack: () => {} });
+      drag(500);
+      // Without it the destination would step up 36px the frame the route lands.
+      const layers = [
+        shellFrame(),
+        destination()!.parentElement!.parentElement!,
+      ];
+      for (const layer of layers) {
+        expect(
+          layer.firstElementChild?.hasAttribute("data-tauri-drag-region"),
+        ).toBe(true);
+      }
+    } finally {
+      document.documentElement.removeAttribute("data-native-shell");
+    }
+  });
+
   it("ignores a pull that starts away from the edge", () => {
     let backs = 0;
     renderShell({ enabled: true, onBack: () => (backs += 1) });
