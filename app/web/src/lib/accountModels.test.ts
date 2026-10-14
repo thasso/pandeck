@@ -12,6 +12,7 @@ const profiles = [
     name: "Default Claude",
     provider: "claude",
     enabled: true,
+    enterprise: false,
     status: "ready",
   },
   {
@@ -19,6 +20,7 @@ const profiles = [
     name: "Default OpenAI",
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "ready",
   },
   {
@@ -26,6 +28,7 @@ const profiles = [
     name: "Work OpenAI",
     provider: "openai-codex",
     enabled: false,
+    enterprise: false,
     status: "ready",
   },
 ] as CredentialProfileSummary[];
@@ -78,32 +81,19 @@ describe("settings account/model combinations", () => {
 });
 
 describe("degraded account pins", () => {
-  it("explains a disabled or deleted pin and names the account that runs instead", () => {
+  it("explains a disabled or deleted pin and leaves the replacement to Automatic", () => {
     expect(
-      accountPinWarning(profiles, {
-        provider: "github-copilot",
-        credentialProfileId: "openai-work",
-      }),
-    ).toBe("“Work OpenAI” is disabled — this runs on “Default OpenAI”.");
-    expect(
-      accountPinWarning(profiles, {
-        provider: "claude-sdk",
-        credentialProfileId: "gone",
-      }),
-    ).toBe(
-      "The pinned account no longer exists — this runs on “Default Claude”.",
+      accountPinWarning(profiles, { credentialProfileId: "openai-work" }),
+    ).toBe("“Work OpenAI” is disabled — this runs on the automatic account.");
+    expect(accountPinWarning(profiles, { credentialProfileId: "gone" })).toBe(
+      "The pinned account no longer exists — this runs on the automatic account.",
     );
   });
 
   it("stays silent for an unpinned or healthy slot", () => {
+    expect(accountPinWarning(profiles, {})).toBeUndefined();
     expect(
-      accountPinWarning(profiles, { provider: "github-copilot" }),
-    ).toBeUndefined();
-    expect(
-      accountPinWarning(profiles, {
-        provider: "github-copilot",
-        credentialProfileId: "default",
-      }),
+      accountPinWarning(profiles, { credentialProfileId: "default" }),
     ).toBeUndefined();
   });
 });
@@ -117,14 +107,12 @@ describe("disable impact", () => {
           { key: "commitAgent", label: "Commit agent", section: "commit" },
         ],
         boundSessionCount: 3,
-        automaticForProvider: "openai-codex",
-        automaticFallback: { id: "openai-work", name: "Work OpenAI" },
       },
     });
     expect(lines[0]).toContain("1 settings slot pinned to it falls back");
     expect(lines[0]).toContain("Commit agent");
-    expect(lines[1]).toContain("moves to “Work OpenAI”");
-    expect(lines[2]).toContain("3 existing sessions keep running on it");
+    expect(lines[1]).toContain("3 existing sessions keep running on it");
+    expect(lines).toHaveLength(2);
   });
 
   it("reports nothing when disabling changes nothing", () => {

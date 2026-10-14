@@ -161,6 +161,7 @@ describe("workflow role-set start interaction", () => {
   it("starts with required sets and empty fallback sets", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "req-1" });
     const harness = renderSheet();
+    expect(document.body.textContent).not.toContain("Automatic");
     act(() => button("Start run").click());
 
     expect(harness.started[0]?.config.roles).toEqual({
@@ -168,12 +169,14 @@ describe("workflow role-set start interaction", () => {
         expect.objectContaining({
           modelId: "claude-sonnet-5",
           family: "claude",
+          credentialProfileId: "acc-1",
         }),
       ],
       reviewer: [
         expect.objectContaining({
           modelId: "claude-sonnet-5",
           family: "claude",
+          credentialProfileId: "acc-1",
         }),
       ],
       fixer: [],

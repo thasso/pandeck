@@ -19,6 +19,9 @@ import {
 function QuickStartPreview({
   state,
   frameWidth,
+  initialAccount = null,
+  initialRequiresEnterprise = false,
+  accounts = chatAccounts,
 }: {
   state:
     | "default"
@@ -30,12 +33,19 @@ function QuickStartPreview({
     | "agentsRefreshing"
     | "agentsError";
   frameWidth: number;
+  /** Start on Automatic (null) or an explicit account. */
+  initialAccount?: string | null;
+  initialRequiresEnterprise?: boolean;
+  accounts?: typeof chatAccounts;
 }) {
   const [agent, setAgent] = useState<AgentType>("developer");
   const [project, setProject] = useState<string | null>("pandeck");
   const [worktree, setWorktree] = useState<string | null>(null);
   const [newWorktree, setNewWorktree] = useState(false);
-  const [account, setAccount] = useState("claude-work");
+  const [account, setAccount] = useState<string | null>(initialAccount);
+  const [requiresEnterprise, setRequiresEnterprise] = useState(
+    initialRequiresEnterprise,
+  );
   const [model, setModel] = useState(chatModels[0]);
   const [thinking, setThinking] = useState<ThinkingLevel>("high");
   const [stagedAgent, setStagedAgent] = useState<string | null>(
@@ -47,7 +57,7 @@ function QuickStartPreview({
       className="flex justify-center bg-background pb-6"
     >
       <NewSessionQuickStart
-        credentialProfiles={chatAccounts}
+        credentialProfiles={accounts}
         credentialProfilesLoaded={state !== "loading"}
         credentialProfilesError={
           state === "error"
@@ -57,6 +67,8 @@ function QuickStartPreview({
         onRetryCredentialProfiles={noop}
         selectedCredentialProfileId={account}
         onSelectCredentialProfile={setAccount}
+        requiresEnterprise={requiresEnterprise}
+        onRequiresEnterpriseChange={setRequiresEnterprise}
         agentTypes={["developer", "workshop", "assistant"]}
         selectedAgentType={agent}
         onSelectAgentType={setAgent}
@@ -102,6 +114,21 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 export const Default = {} satisfies Story;
 export const WithWorktrees = { args: { state: "worktrees" } } satisfies Story;
+export const ExplicitAccount = {
+  args: { initialAccount: "claude-work" },
+} satisfies Story;
+export const RequiresEnterprise = {
+  args: { initialRequiresEnterprise: true },
+} satisfies Story;
+export const RequiresEnterpriseWithoutEnterpriseAccount = {
+  args: {
+    initialRequiresEnterprise: true,
+    accounts: chatAccounts.map((account) => ({
+      ...account,
+      enterprise: false,
+    })),
+  },
+} satisfies Story;
 export const Loading = { args: { state: "loading" } } satisfies Story;
 export const RefreshError = { args: { state: "error" } } satisfies Story;
 /** Agent definitions offered as a starting point; one cannot start. */

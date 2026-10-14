@@ -1107,6 +1107,10 @@ export const Composer = memo(function Composer({
         ...(session?.agentType !== undefined
           ? { agentType: session?.agentType }
           : {}),
+        // The session's enterprise requirement — the server's record for a
+        // running session, the "Requires enterprise" switch for a staged one —
+        // also binds who may refine its draft.
+        ...(session?.requiresEnterprise ? { requiresEnterprise: true } : {}),
         includeContext: true,
       });
       if (commentMode) setCommentBody(refined);

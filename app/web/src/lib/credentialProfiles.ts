@@ -1,12 +1,19 @@
 import type {
   AccountModelOption,
+  AccountPickPreviewRequest,
+  AccountPickPreviewResult,
   CredentialProfileProvider,
   CredentialProfileSlotUsage,
   CredentialProfileStatus,
   CredentialProfileSummary,
   ModelOption,
+  ThinkingLevel,
 } from "@assistant/shared";
-import { accountProviderForModelProvider } from "@assistant/shared";
+import {
+  supportedThinkingLevelsForModel,
+  accountProviderForModelProvider,
+  THINKING_LEVELS,
+} from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
 
 /**
@@ -33,34 +40,119 @@ export function accountModelOptions(
 }
 
 /**
+ * A model offered with no account: the account router picks one per run, among
+ * the enabled accounts of the model's provider that offer it. A settings slot
+ * picked from these saves no `credentialProfileId`.
+ */
+export interface AutomaticModelOption extends ModelOption {
+  automatic: true;
+}
+
+/** What a settings slot's model picker offers: Automatic, or one account's model. */
+export type SlotModelOption = AutomaticModelOption | AccountModelOption;
+
+export function isAutomaticModelOption(
+  model: ModelOption,
+): model is AutomaticModelOption {
+  return "automatic" in model && model.automatic === true;
+}
+
+/**
+ * The models Automatic can run: every model at least one eligible account
+ * offers, once each, in account order. This is a set union, never a ranking —
+ * which account runs a model is the server's choice at start. A session that
+ * requires enterprise may only land on an enterprise account, so only those
+ * accounts contribute.
+ */
+export function automaticModels(
+  profiles: CredentialProfileSummary[],
+  modelsByProfile: Record<string, ModelOption[]>,
+  options: { requiresEnterprise?: boolean } = {},
+): ModelOption[] {
+  return mergeModelOffers(
+    orderCredentialProfilesByProvider(profiles)
+      .filter(
+        (profile) =>
+          profile.enabled &&
+          (!options.requiresEnterprise || profile.enterprise),
+      )
+      .flatMap((profile) => modelsByProfile[profile.id] ?? []),
+  );
+}
+
+/**
+ * One option per provider+model, in first-offer order. Automatic may run any
+ * contributing account, so the option offers every thinking level at least one
+ * of them accepts — the first account's catalog alone could hide an effort
+ * another account can run.
+ */
+function mergeModelOffers<M extends ModelOption>(offers: readonly M[]): M[] {
+  const merged = new Map<string, { model: M; levels: Set<ThinkingLevel> }>();
+  for (const offer of offers) {
+    const key = `${offer.provider}:${offer.id}`;
+    const entry = merged.get(key) ?? { model: offer, levels: new Set() };
+    for (const level of supportedThinkingLevelsForModel(offer))
+      entry.levels.add(level);
+    if (offer.reasoning && !entry.model.reasoning)
+      entry.model = { ...entry.model, reasoning: true };
+    merged.set(key, entry);
+  }
+  return [...merged.values()].map(({ model, levels }) => ({
+    ...model,
+    supportedThinkingLevels: THINKING_LEVELS.filter((level) =>
+      levels.has(level),
+    ),
+  }));
+}
+
+/**
+ * A settings slot's choices: Automatic first (the models any enabled account
+ * offers), then the explicit account/model combinations.
+ */
+export function slotModelOptions(
+  accountModels: AccountModelOption[],
+): SlotModelOption[] {
+  const automatic = mergeModelOffers(
+    accountModels
+      .filter((option) => !option.accountDisabled)
+      .map(
+        ({
+          credentialProfileId: _account,
+          accountName: _name,
+          accountDisabled: _disabled,
+          ...model
+        }): ModelOption => model,
+      ),
+  ).map((model): AutomaticModelOption => ({ ...model, automatic: true }));
+  return [...automatic, ...accountModels];
+}
+
+/**
  * Why a pinned account is not currently the one that would run: it was deleted,
  * or it is disabled. Mirrors the server's `resolveSlotAccount` degradation —
  * such a slot silently falls back to the automatic account rather than failing.
+ * Which account Automatic lands on is the router's call, so it is not named.
  */
 export function accountPinWarning(
   profiles: CredentialProfileSummary[],
-  slot: { provider: string; credentialProfileId?: string },
+  slot: { credentialProfileId?: string },
 ): string | undefined {
   const pinned = slot.credentialProfileId;
   if (!pinned) return undefined;
   const profile = profiles.find((item) => item.id === pinned);
-  const wanted = accountProviderForModelProvider(slot.provider);
-  const fallback = profiles.find(
-    (item) => item.provider === wanted && item.enabled,
-  );
-  const runsOn = fallback ? `“${fallback.name}”` : "the automatic account";
   if (!profile)
-    return `The pinned account no longer exists — this runs on ${runsOn}.`;
+    return "The pinned account no longer exists — this runs on the automatic account.";
   if (!profile.enabled)
-    return `“${profile.name}” is disabled — this runs on ${runsOn}.`;
+    return `“${profile.name}” is disabled — this runs on the automatic account.`;
   return undefined;
 }
 
 /**
  * What actually happens when this account is disabled, in the order it matters:
- * what MOVES (pinned settings slots, and unpinned work if this is the automatic
- * account) and what KEEPS RUNNING on it (bound sessions, including their forks,
- * `/clear` and drafts). Empty when disabling changes nothing.
+ * what MOVES (pinned settings slots) and what KEEPS RUNNING on it (bound
+ * sessions, including their forks, `/clear` and drafts). Automatic work needs no
+ * line: the router simply stops picking a disabled account. Empty when
+ * disabling changes nothing.
  */
 export function disableAccountImpact(
   profile: CredentialProfileSummary,
@@ -68,18 +160,10 @@ export function disableAccountImpact(
   const usage = profile.usage;
   if (!usage) return [];
   const lines: string[] = [];
-  const target = usage.automaticFallback
-    ? `“${usage.automaticFallback.name}”`
-    : "the protected default account";
   if (usage.pinnedSlots.length > 0) {
     const one = usage.pinnedSlots.length === 1;
     lines.push(
       `${usage.pinnedSlots.length} settings ${one ? "slot" : "slots"} pinned to it ${one ? "falls" : "fall"} back to the automatic account: ${usage.pinnedSlots.map((slot) => slot.label).join(", ")}.`,
-    );
-  }
-  if (usage.automaticForProvider) {
-    lines.push(
-      `It is the automatic account for new and unpinned work — that moves to ${target}.`,
     );
   }
   if (usage.boundSessionCount > 0) {
@@ -121,6 +205,75 @@ export async function fetchCredentialProfiles(options?: {
     }),
   );
   return result.profiles;
+}
+
+/**
+ * Which account Automatic would pick right now for this model — the server's
+ * router answers, so the browser never ranks accounts itself. Non-binding: the
+ * first send picks again.
+ */
+export async function previewAutomaticAccount(
+  request: AccountPickPreviewRequest,
+  signal?: AbortSignal,
+): Promise<AccountPickPreviewResult> {
+  return body<AccountPickPreviewResult>(
+    await fetch(`${serverHttpOrigin()}/api/account-router/pick`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      ...(signal ? { signal } : {}),
+    }),
+  );
+}
+
+/**
+ * What a pick preview tells the user about an Automatic choice: the account it
+ * resolves to now and, when the router had to degrade, why. `warning` marks an
+ * answer that is not a clean pick.
+ */
+export function automaticPreviewHint(
+  preview: AccountPickPreviewResult,
+  profiles: CredentialProfileSummary[],
+  modelProvider: string,
+): { text: string; warning: boolean } | undefined {
+  const provider =
+    accountProviderForModelProvider(modelProvider) === "claude"
+      ? "Claude"
+      : "OpenAI";
+  const name = profiles.find(
+    (profile) => profile.id === preview.profileId,
+  )?.name;
+  const account = name ? `“${name}”` : "an account";
+  switch (preview.degraded) {
+    case undefined:
+      return name
+        ? {
+            text: `Automatic runs this on ${account} right now.`,
+            warning: false,
+          }
+        : undefined;
+    case "no-eligible-account":
+      return {
+        text: `No account can run this model cleanly right now (login or model/effort) — Automatic falls back to ${account}.`,
+        warning: true,
+      };
+    case "disabled-default":
+      return {
+        text: `Every account is disabled — background work falls back to ${account}.`,
+        warning: true,
+      };
+    case "no-enabled-account":
+      return {
+        text: `No enabled ${provider} account.`,
+        warning: true,
+      };
+    case "no-enterprise-account":
+      return {
+        text: `No enabled enterprise ${provider} account.`,
+        warning: true,
+      };
+  }
+  return undefined;
 }
 
 export interface CredentialProfileProjection {
@@ -171,7 +324,7 @@ export async function createCredentialProfile(
 
 async function patchCredentialProfile(
   id: string,
-  patch: { name?: string; enabled?: boolean },
+  patch: { name?: string; enabled?: boolean; enterprise?: boolean },
 ): Promise<CredentialProfileSummary> {
   const res = await fetch(
     `${serverHttpOrigin()}/api/credential-profiles/${encodeURIComponent(id)}`,
@@ -202,6 +355,17 @@ export function setCredentialProfileEnabled(
   enabled: boolean,
 ): Promise<CredentialProfileSummary> {
   return patchCredentialProfile(id, { enabled });
+}
+
+/**
+ * Marks the account as an enterprise account. Metadata only: it changes which
+ * sessions may run on it ("requires enterprise"), never how it signs in.
+ */
+export function setCredentialProfileEnterprise(
+  id: string,
+  enterprise: boolean,
+): Promise<CredentialProfileSummary> {
+  return patchCredentialProfile(id, { enterprise });
 }
 
 /** Deletes the account and reports the settings slots whose pin was dropped with it. */

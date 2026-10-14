@@ -17,7 +17,6 @@ import {
   X,
 } from "lucide-react";
 import type {
-  AccountModelOption,
   AgentType,
   AppSettings,
   MemoryCard,
@@ -43,7 +42,8 @@ import {
   utcMsToZonedWallTimeValue,
   zonedWallTimeToUtcMs,
 } from "../lib/timezone.ts";
-import { AgentModelFields } from "./AgentModelFields.tsx";
+import { AgentModelFields, applyModelSlotChange } from "./AgentModelFields.tsx";
+import type { SlotModelOption } from "../lib/credentialProfiles.ts";
 import { provenanceLabel, scopeLabel } from "./LoadedMemorySection.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -119,7 +119,7 @@ export function MemorySettingsSection({
   memory,
   onUpdate,
 }: {
-  models: AccountModelOption[];
+  models: SlotModelOption[];
   settings: AppSettings;
   memory: UseMemory;
   onUpdate: (patch: Partial<AppSettings>) => void;
@@ -229,11 +229,11 @@ export function MemorySettingsSection({
               // keeping the current value makes that explicit rather than implied.
               onChange={(next) =>
                 save({
-                  processor: {
+                  processor: applyModelSlotChange(m.processor, {
                     ...next,
                     thinkingLevel:
                       next.thinkingLevel ?? m.processor.thinkingLevel,
-                  },
+                  }),
                 })
               }
             />

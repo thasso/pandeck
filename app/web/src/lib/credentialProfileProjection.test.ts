@@ -12,6 +12,7 @@ const profile: CredentialProfileSummary = {
   name: "Claude work",
   provider: "claude",
   enabled: true,
+  enterprise: false,
   status: "ready",
   health: { state: "unknown", since: null },
   createdAt: 1,
@@ -28,9 +29,19 @@ const model: ModelOption = {
 
 function projection(
   models: ModelOption[] = [model],
+  profiles: CredentialProfileSummary[] = [profile],
 ): CredentialProfileProjection {
-  return { profiles: [profile], modelsByProfile: { [profile.id]: models } };
+  return {
+    profiles,
+    modelsByProfile: Object.fromEntries(profiles.map((p) => [p.id, models])),
+  };
 }
+
+const explicit = (profileId: string) => ({
+  profileId,
+  requiresEnterprise: false,
+});
+const automatic = { profileId: null, requiresEnterprise: false };
 
 describe("credential profile projection admission", () => {
   it("blocks quietly until data exists because the quick start owns narration", () => {
@@ -39,7 +50,11 @@ describe("credential profile projection admission", () => {
       credentialProfileProjectionBlocksSend(failed("network failed")),
     ).toBe(true);
     expect(
-      credentialProfileProjectionBlockReason(loading(), profile.id, undefined),
+      credentialProfileProjectionBlockReason(
+        loading(),
+        explicit(profile.id),
+        undefined,
+      ),
     ).toBeUndefined();
   });
 
@@ -47,7 +62,12 @@ describe("credential profile projection admission", () => {
     const load = failed("network failed", projection());
     expect(credentialProfileProjectionBlocksSend(load)).toBe(false);
     expect(
-      credentialProfileProjectionBlockReason(load, profile.id, [model], model),
+      credentialProfileProjectionBlockReason(
+        load,
+        explicit(profile.id),
+        [model],
+        model,
+      ),
     ).toBeUndefined();
   });
 
@@ -55,21 +75,21 @@ describe("credential profile projection admission", () => {
     expect(
       credentialProfileProjectionBlockReason(
         ready(projection()),
-        "missing",
+        explicit("missing"),
         undefined,
       ),
-    ).toMatch(/select/i);
+    ).toMatch(/no longer exists.*choose another account or automatic/i);
     expect(
       credentialProfileProjectionBlockReason(
         ready(projection([])),
-        profile.id,
+        explicit(profile.id),
         [],
       ),
     ).toMatch(/no visible models/i);
     expect(
       credentialProfileProjectionBlockReason(
         ready(projection()),
-        profile.id,
+        explicit(profile.id),
         [model],
         model,
       ),
@@ -77,7 +97,7 @@ describe("credential profile projection admission", () => {
     expect(
       credentialProfileProjectionBlockReason(
         ready(projection()),
-        profile.id,
+        explicit(profile.id),
         [model],
         { provider: "openai-codex", id: "other" },
       ),
@@ -89,7 +109,7 @@ describe("credential profile projection admission", () => {
     expect(
       credentialProfileProjectionBlockReason(
         ready(projection()),
-        profile.id,
+        explicit(profile.id),
         [model],
         hidden,
         true,
@@ -98,7 +118,7 @@ describe("credential profile projection admission", () => {
     expect(
       credentialProfileProjectionBlockReason(
         ready(projection([])),
-        profile.id,
+        explicit(profile.id),
         [],
         hidden,
         true,
@@ -108,11 +128,81 @@ describe("credential profile projection admission", () => {
     expect(
       credentialProfileProjectionBlockReason(
         ready(projection()),
-        "missing",
+        explicit("missing"),
         [model],
         hidden,
         true,
       ),
-    ).toMatch(/select a credential profile/i);
+    ).toMatch(/no longer exists/i);
+  });
+
+  it("lets Automatic start with no account picked while any account is enabled", () => {
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection()),
+        automatic,
+        [model],
+        model,
+      ),
+    ).toBeUndefined();
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection([model], [{ ...profile, enabled: false }])),
+        automatic,
+        [],
+      ),
+    ).toMatch(/no provider account is enabled/i);
+  });
+
+  it("never lets a session that requires enterprise start without an enterprise account", () => {
+    const required = { profileId: null, requiresEnterprise: true };
+    // A regular account is enabled and offers the model, but it cannot run an
+    // enterprise-only session: the send is blocked with a reason, not rerouted.
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection()),
+        required,
+        [model],
+        model,
+      ),
+    ).toMatch(/no enabled account is marked enterprise/i);
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection()),
+        { profileId: profile.id, requiresEnterprise: true },
+        [model],
+        model,
+      ),
+    ).toMatch(/no enabled account is marked enterprise/i);
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection([model], [{ ...profile, enterprise: true }])),
+        required,
+        [model],
+        model,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses an explicit pick that stopped being usable instead of swapping it", () => {
+    const work = { ...profile, id: "work", name: "Work", enterprise: true };
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection([model], [{ ...profile, enabled: false }, work])),
+        explicit(profile.id),
+        [model],
+        model,
+      ),
+    ).toBe("“Claude work” is disabled. Choose another account or Automatic.");
+    expect(
+      credentialProfileProjectionBlockReason(
+        ready(projection([model], [profile, work])),
+        { profileId: profile.id, requiresEnterprise: true },
+        [model],
+        model,
+      ),
+    ).toBe(
+      "“Claude work” is not an enterprise account. Choose an enterprise account or Automatic.",
+    );
   });
 });

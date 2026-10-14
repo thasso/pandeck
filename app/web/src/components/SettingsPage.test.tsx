@@ -24,6 +24,7 @@ const profiles = [
     health: { state: "unknown", since: null },
     provider: "claude",
     enabled: true,
+    enterprise: false,
     status: "ready",
   },
   {
@@ -32,6 +33,7 @@ const profiles = [
     health: { state: "unknown", since: null },
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "ready",
   },
   {
@@ -40,6 +42,7 @@ const profiles = [
     health: { state: "needs-login", since: null },
     provider: "openai-codex",
     enabled: true,
+    enterprise: false,
     status: "disconnected",
   },
 ] as CredentialProfileSummary[];
@@ -104,6 +107,7 @@ describe("credential profile settings", () => {
         providerLabel="Claude"
         connectionLabel="Reconnect"
         onToggle={() => {}}
+        onToggleEnterprise={() => {}}
         onConnect={() => {}}
       />,
     );
@@ -136,6 +140,7 @@ describe("credential profile settings", () => {
         providerLabel: "Claude",
         connectionLabel: "Reconnect",
         onToggle: () => {},
+        onToggleEnterprise: () => {},
         onConnect: () => {},
         onRename: () => {},
         onDelete: () => {},
@@ -168,6 +173,7 @@ const profile = (
   name: "Claude personal",
   provider: "claude",
   enabled: true,
+  enterprise: false,
   status,
   health: { state: "unknown", since: null },
   createdAt: 0,
@@ -181,6 +187,7 @@ function card(status: CredentialProfileSummary["status"]): string {
       providerLabel="Claude"
       connectionLabel={status === "connecting" ? "Continue login" : "Connect"}
       onToggle={() => {}}
+      onToggleEnterprise={() => {}}
       onConnect={() => {}}
     />,
   );

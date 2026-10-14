@@ -25,6 +25,7 @@ import {
 import {
   accountProviderForModelProvider,
   type AgentQuestionResponse,
+  type AccountPickPreviewResult,
   type AgentType,
   clampThinkingLevelForModel,
   claudeSdkModelOption,
@@ -210,7 +211,11 @@ import { showToast, TOAST_DWELL_MS } from "./lib/toast.ts";
 import { failureOnViewedSession } from "./lib/messageAnnounce.ts";
 import { setFailureHomes } from "./lib/messageArrival.ts";
 import { visibleModels } from "./lib/models.ts";
-import { accountModelOptions } from "./lib/credentialProfiles.ts";
+import {
+  accountModelOptions,
+  automaticModels,
+  previewAutomaticAccount,
+} from "./lib/credentialProfiles.ts";
 import {
   credentialProfileProjectionBlockReason,
   credentialProfileProjectionBlocksSend,
@@ -243,7 +248,6 @@ import { useWorkflowIndicators } from "./hooks/useWorkflowIndicators.ts";
 import { useWorktreeWatches } from "./hooks/useWorktreeWatches.ts";
 import { useApnsRegistration } from "./hooks/useApnsRegistration.ts";
 import { useStagedAgentReconcile } from "./hooks/useStagedAgentReconcile.ts";
-import { useSavedAccount } from "./hooks/useSavedAccount.ts";
 import { taskStartSession, taskWorktreeIds } from "./lib/taskActivity.ts";
 import {
   acceptStatusSuggestionSave,
@@ -913,37 +917,63 @@ function AppContent() {
     [credentialProfiles, credentialProfileModels],
   );
 
-  const [credentialProfileId, setCredentialProfileId] = useState(
-    prefs.credentialProfileId ?? "default",
+  // The new session's account: null is Automatic (the server's account router
+  // picks one at the first send), a string an explicit pick. Both it and
+  // "requires enterprise" belong to the ONE session being staged, so every fresh
+  // entry point resets them (`resetStagedAccount`) and neither is remembered.
+  const [credentialProfileId, setCredentialProfileId] = useState<string | null>(
+    null,
   );
+  const [requiresEnterprise, setRequiresEnterprise] = useState(false);
   // A new-session profile picker change also picks that family’s first model.
   // Carry its explicit account through the same event instead of consulting a
   // stale render closure in the model handler.
   const explicitProfileForNextModel = useRef<string | null>(null);
-  useEffect(() => {
-    if (!credentialProfileProjection) return;
-    setCredentialProfileId((current) =>
-      activeCredentialProfiles.some((profile) => profile.id === current)
-        ? current
-        : (activeCredentialProfiles[0]?.id ?? ""),
-    );
-  }, [credentialProfileProjection, activeCredentialProfiles]);
-  const saveAccount = useCallback(
-    (id: string) => update({ credentialProfileId: id }),
-    [update],
+  const resetStagedAccount = useCallback(() => {
+    explicitProfileForNextModel.current = null;
+    setCredentialProfileId(null);
+    setRequiresEnterprise(false);
+  }, []);
+  // An explicit pick that stops being usable while staged (disabled, deleted,
+  // or not an enterprise account under the requirement) is NOT converted to
+  // Automatic behind the user's back: it stays selected and the first send is
+  // refused with a reason (`credentialProfileProjectionBlockReason`) until the
+  // user chooses again. Only a fresh entry point resets it.
+  // Models the new session can run: the explicit account's own, or for
+  // Automatic every model an eligible account offers (`automaticModels`).
+  const newSessionAccountModels = useMemo(
+    () =>
+      credentialProfileId === null
+        ? credentialProfileProjection
+          ? automaticModels(credentialProfiles, credentialProfileModels, {
+              requiresEnterprise,
+            })
+          : undefined
+        : credentialProfileModels[credentialProfileId],
+    [
+      credentialProfileId,
+      credentialProfileProjection,
+      credentialProfiles,
+      credentialProfileModels,
+      requiresEnterprise,
+    ],
   );
-  const { markAgentAccount, clearAgentAccount } = useSavedAccount({
-    accountId: credentialProfileId,
-    savedAccountId: prefs.credentialProfileId,
-    save: saveAccount,
-  });
-  /** An account an agent definition chose: the draft's, never saved. */
+  // A definition's suggested account never turns Automatic into an implicit pin.
   const setAgentAccount = useCallback(
     (id: string) => {
-      markAgentAccount(id);
-      setCredentialProfileId(id);
+      const suggested = credentialProfiles.find((profile) => profile.id === id);
+      setCredentialProfileId((current) => {
+        const selected = credentialProfiles.find(
+          (profile) => profile.id === current,
+        );
+        // Only a definition changing providers clears a compatible draft pin.
+        // Missing, disabled, or demoted pins remain visible and are refused.
+        return selected && suggested && selected.provider !== suggested.provider
+          ? null
+          : current;
+      });
     },
-    [markAgentAccount],
+    [credentialProfiles],
   );
   const memory = useMemory(socket);
   const [sidebarOpen, setSidebarOpen] = useSessionStorageState(
@@ -1356,6 +1386,7 @@ function AppContent() {
         sidebarVisible: sidebarPanelOpen,
         sidebarSection,
         routeName: route.name,
+        sessionsQuickStartVisible: route.name === "sessions" && !mobileLayout,
         // The workflow start sheet meters accounts and offers Project branches.
         workflowStartOpen: workflowStartTaskId !== null,
         projectSelected: route.name === "projects" && Boolean(route.id),
@@ -1582,7 +1613,7 @@ function AppContent() {
   );
   const workflowIndicators = useWorkflowIndicators(state.workflowRuns ?? []);
 
-  // Usage heartbeat: while a meter-showing page is mounted AND this tab is
+  // Usage heartbeat: while meters or a Settings slot preview render AND this tab is
   // visible, nudge the server to revalidate anything no longer fresh. A hidden
   // tab stops, and the nudge costs nothing while the cache is fresh — the
   // server owns freshness, min interval and backoff (`docs/usage.md`).
@@ -1841,16 +1872,10 @@ function AppContent() {
     if (route.name === "session")
       return visibleModels(state.models, state.settings);
     return visibleModels(
-      credentialProfileModels[credentialProfileId] ?? state.models,
+      newSessionAccountModels ?? state.models,
       state.settings,
     );
-  }, [
-    state.models,
-    state.settings,
-    credentialProfileModels,
-    credentialProfileId,
-    route.name,
-  ]);
+  }, [state.models, state.settings, newSessionAccountModels, route.name]);
   const messageModels = useMemo(
     () => visibleModels(state.models, state.settings),
     [state.models, state.settings],
@@ -1949,6 +1974,10 @@ function AppContent() {
           ...(optimisticModel !== undefined ? { model: optimisticModel } : {}),
           thinkingLevel: stagedStart.thinkingLevel,
           ...(stagedStart.mode !== undefined ? { mode: stagedStart.mode } : {}),
+          // The staged "Requires enterprise" switch, shown on the session the
+          // way the server's record carries it once the session exists, so
+          // what reads the session (prompt refinement) honours it before then.
+          ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
         }
       : null;
   const routeIdentity = routeIdentityOf(route);
@@ -2036,6 +2065,11 @@ function AppContent() {
       stagedSend?.knownSessionIds,
     ],
   );
+  // Account intent belongs to this draft only. The held send owns retries;
+  // once its real transcript takes over, the next fresh start is unrestricted.
+  useEffect(() => {
+    if (staged.adopted) resetStagedAccount();
+  }, [staged.adopted, resetStagedAccount]);
   // The staged phase is over the moment the created session's transcript takes
   // the prompt over, one commit before the route follows it there: the identity
   // the shell shows switches with the rows, so nothing remounts on the advance.
@@ -3043,11 +3077,14 @@ function AppContent() {
     setSessionReviewDraft(null);
     setPendingStart(null);
     beginFreshDraft();
+    resetStagedAccount();
     navigate(SESSIONS_CREATE_PATH);
     setComposerFocusToken((token) => token + 1);
-  }, [beginFreshDraft, navigate]);
+  }, [beginFreshDraft, navigate, resetStagedAccount]);
 
-  // Stage a fresh session optimistically. No server session is created and the
+  // Stage or restage a session optimistically. Fresh entry points reset account
+  // intent before calling this; same-draft model/persona/effort changes keep it.
+  // No server session is created and the
   // URL is NOT changed yet; the real session is established by the first prompt's
   // harnessSend. For pi the server mints the final id, while non-pi keeps the
   // staged client id.
@@ -3105,6 +3142,7 @@ function AppContent() {
         fresh?: boolean;
       },
     ) => {
+      if (opts?.fresh) resetStagedAccount();
       const current = opts?.fresh ? undefined : (pendingStart ?? stagedStart);
       // Off the new-session route there is no staged record yet (the route
       // fallback below only exists on `new`/`sessions`), so a persona switch
@@ -3141,6 +3179,7 @@ function AppContent() {
     [
       pendingStart,
       stagedStart,
+      resetStagedAccount,
       startStagedSession,
       defaultNewSessionModel,
       defaultNewSessionThinking,
@@ -3315,6 +3354,7 @@ function AppContent() {
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
       setPendingStart(null);
+      resetStagedAccount();
       setPendingTaskAttach({ taskId, title });
       // Derive the Task's Project (same as stageTaskContext) so worktrees/tasks
       // narrow to it; a Task with no project leaves the scope global.
@@ -3334,6 +3374,7 @@ function AppContent() {
       projectIdForTask,
       worktreeIdForTask,
       stageWorktreeContext,
+      resetStagedAccount,
       navigate,
       revealNewSessionSurface,
     ],
@@ -3347,6 +3388,7 @@ function AppContent() {
       setPendingTaskAttach(null);
       setPendingFileContext(null);
       setPendingStart(null);
+      resetStagedAccount();
       setPendingWorktreeContext(null);
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
@@ -3354,7 +3396,7 @@ function AppContent() {
       navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
     },
-    [beginFreshDraft, navigate, revealNewSessionSurface],
+    [beginFreshDraft, navigate, revealNewSessionSurface, resetStagedAccount],
   );
 
   // Start a fresh session with a document staged as initial context (the
@@ -3369,11 +3411,12 @@ function AppContent() {
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
       setPendingStart(null);
+      resetStagedAccount();
       setPendingFileContext({ href, title });
       navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
     },
-    [beginFreshDraft, navigate, revealNewSessionSurface],
+    [beginFreshDraft, navigate, revealNewSessionSurface, resetStagedAccount],
   );
 
   // Following a comment link from the worktree panel's roster: the panel is the
@@ -3469,6 +3512,7 @@ function AppContent() {
   const startSessionInWorktree = useCallback(
     (worktreeId: string) => {
       beginFreshDraft();
+      resetStagedAccount();
       const context = sessionContextForWorktree(
         worktreeId,
         state.worktrees,
@@ -3500,6 +3544,7 @@ function AppContent() {
       navigate,
       mobileLayout,
       setInspectorOpen,
+      resetStagedAccount,
       startStagedSession,
       defaultNewSessionModel,
       defaultNewSessionThinking,
@@ -3523,6 +3568,7 @@ function AppContent() {
       outcome: PullRequestCheckoutOutcome,
     ) => {
       beginFreshDraft();
+      resetStagedAccount();
       // WHICH Task is decided by server ids only — the checkout's own edges
       // from this very answer, then the pull request's links — so a cold or
       // stale browser list can never be read as "there is no Task". The lists
@@ -3573,6 +3619,7 @@ function AppContent() {
       navigate,
       mobileLayout,
       setInspectorOpen,
+      resetStagedAccount,
       startStagedSession,
       defaultNewSessionModel,
       defaultNewSessionThinking,
@@ -3586,6 +3633,7 @@ function AppContent() {
   const startWorktreeReviewDraft = useCallback(
     (worktreeId: string, commentIds: string[]) => {
       beginFreshDraft();
+      resetStagedAccount();
       // Shared context-derivation rule (lib/sessionHandoff.ts, also behind
       // /review and a plain start in a worktree): the draft inherits the
       // worktree's project AND its single implementing Task, so the review
@@ -3658,6 +3706,7 @@ function AppContent() {
       navigate,
       mobileLayout,
       setInspectorOpen,
+      resetStagedAccount,
       startStagedSession,
       defaultNewSessionModel,
       defaultNewSessionThinking,
@@ -3683,6 +3732,7 @@ function AppContent() {
       // Only once a draft does start: a refused review leaves a held first
       // send, and its Retry, where they were.
       beginFreshDraft();
+      resetStagedAccount();
       const context = reviewContextForSession(
         {
           sessionId: sourceId,
@@ -3730,6 +3780,7 @@ function AppContent() {
       displaySession?.worktreeId,
       displaySession?.originTask,
       displaySessionListItem?.projectId,
+      resetStagedAccount,
       state.worktrees,
       backlogTasks,
       navigate,
@@ -3801,9 +3852,9 @@ function AppContent() {
         navigate(sessionPath(target.sessionId));
         return null;
       }
-      // A tray beside the new-session page lands on the SAME route, so no
-      // route change retires a first send held there: a failed draft is not
-      // the session these comments start, so they start a fresh one.
+      resetStagedAccount();
+      setPendingStart(null);
+      // Retire a failed first send even when the new draft keeps the same route.
       if (stagedSend) startNewChat();
       else navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
@@ -3812,6 +3863,7 @@ function AppContent() {
     [
       mobileLayout,
       navigate,
+      resetStagedAccount,
       revealNewSessionSurface,
       setInspectorOpen,
       stagedSend,
@@ -4039,6 +4091,51 @@ function AppContent() {
   // disappears once the session actually has messages (i.e. after the first
   // prompt, which also navigates to /sessions/<id> off this route).
   const isNewChatRoute = route.name === "new" || route.name === "sessions";
+  // The account Automatic would land on for the staged model, as the server's
+  // router sees it now (`previewAutomaticAccount`). Refetched when the model,
+  // effort, enterprise requirement, accounts or their usage change.
+  const automaticPreviewModel =
+    isNewChatRoute &&
+    credentialProfileId === null &&
+    credentialProfileProjection &&
+    displaySession?.model
+      ? displaySession.model
+      : undefined;
+  const automaticPreviewFetch = useFetchState<AccountPickPreviewResult>(
+    automaticPreviewModel
+      ? JSON.stringify([
+          automaticPreviewModel.provider,
+          automaticPreviewModel.id,
+          currentThinkingLevel,
+          requiresEnterprise,
+          credentialProfiles.map(
+            (profile) =>
+              `${profile.id}:${profile.enabled}:${profile.enterprise}:${profile.health.state}`,
+          ),
+          (state.usageIndicators ?? []).map(
+            (indicator) => `${indicator.profileId}:${indicator.fetchedAt}`,
+          ),
+        ])
+      : null,
+    (_key, signal) =>
+      previewAutomaticAccount(
+        {
+          model: {
+            provider: automaticPreviewModel!.provider,
+            modelId: automaticPreviewModel!.id,
+          },
+          thinkingLevel: currentThinkingLevel,
+          requiresEnterprise,
+        },
+        signal,
+      ),
+  );
+  const automaticPreviewName = (() => {
+    const profileId = dataOf(automaticPreviewFetch.state)?.profileId;
+    return profileId
+      ? credentialProfiles.find((profile) => profile.id === profileId)?.name
+      : undefined;
+  })();
   /** This browser's own worktree-provisioning card reports a failed checkout. */
   const provisionFailed =
     provisionCardOwned && state.worktreeProvision?.state === "failed";
@@ -4070,10 +4167,8 @@ function AppContent() {
     isNewChatRoute && !displayHasUserPrompt && !sendInFlight
       ? credentialProfileProjectionBlockReason(
           credentialProfileFetch.state,
-          credentialProfileId,
-          Object.hasOwn(credentialProfileModels, credentialProfileId)
-            ? pickerModels
-            : undefined,
+          { profileId: credentialProfileId, requiresEnterprise },
+          newSessionAccountModels !== undefined ? pickerModels : undefined,
           displaySession?.model,
           (pendingStart ?? stagedStart)?.agent !== undefined,
         )
@@ -4361,32 +4456,27 @@ function AppContent() {
     () => ({
       ...actions,
       setModel: (provider, id) => {
-        // Keep the new-session profile aligned even when this was an existing
-        // session's model picker: otherwise lastModelKey can point at a model
-        // the separately remembered profile filters out on the next new chat.
+        // Keep the new-session account aligned even when this was an existing
+        // session's model picker: an explicit account of another provider cannot
+        // run this model, so the staged choice goes back to Automatic. An
+        // account picked in this same event was already set by its handler
+        // (this closure may still hold the previous one).
         const profileProvider = accountProviderForModelProvider(provider);
         const explicitProfileId = explicitProfileForNextModel.current;
         explicitProfileForNextModel.current = null;
-        const selectedProfile =
-          activeCredentialProfiles.find(
-            (profile) =>
-              profile.id === explicitProfileId &&
-              profile.provider === profileProvider,
-          ) ??
-          activeCredentialProfiles.find(
+        if (
+          explicitProfileId === null &&
+          credentialProfileId !== null &&
+          !activeCredentialProfiles.some(
             (profile) =>
               profile.id === credentialProfileId &&
               profile.provider === profileProvider,
-          ) ??
-          activeCredentialProfiles.find(
-            (profile) => profile.provider === profileProvider,
-          );
-        if (selectedProfile) {
-          clearAgentAccount();
-          setCredentialProfileId(selectedProfile.id);
-        }
-        // Remember this explicit pick as the default for future new chats. The
-        // profile sync effect is the sole persistence writer for its selection.
+          )
+        )
+          setCredentialProfileId(null);
+        // Remember this explicit model pick as the default for future new
+        // chats. The account is not remembered: each new session starts on
+        // Automatic.
         update({ lastModelKey: modelKey({ provider, id }) });
         // Provider implies the harness. The agentType comes from the top-left
         // agent picker, applied to every harness.
@@ -4476,7 +4566,6 @@ function AppContent() {
       },
     }),
     [
-      clearAgentAccount,
       actions,
       isNewChatRoute,
       runtimeHasStarted,
@@ -4551,7 +4640,7 @@ function AppContent() {
       : {}),
     ...firstPromptRuntimeSelection(displaySession),
     agentType: displayAgentType,
-    credentialProfileId,
+    ...(credentialProfileId !== null ? { credentialProfileId } : {}),
     agent: (pendingStart ?? stagedStart)?.agent,
   };
   const draftRuntimeRef = useRef(draftRuntime);
@@ -4571,6 +4660,58 @@ function AppContent() {
   const displayCredentialProfile = credentialProfiles.find(
     (item) => item.id === displayCredentialProfileId,
   );
+  // A staged Automatic session has no account until the server picks one at the
+  // first send; the composer's runtime line says so instead of naming none.
+  const displayAccountName =
+    displayCredentialProfile?.name ??
+    (displayCredentialProfileId === null
+      ? requiresEnterprise
+        ? "Automatic · enterprise"
+        : "Automatic"
+      : undefined);
+  // Stage WHO runs the new session: an explicit account or Automatic (null),
+  // and whether only enterprise accounts may run it. Switching keeps WHAT runs
+  // it as far as the new choice allows, instead of snapping back to its first
+  // model at "off" thinking.
+  const selectNewSessionAccount = (id: string | null, enterprise: boolean) => {
+    const profile =
+      id === null
+        ? undefined
+        : activeCredentialProfiles.find((item) => item.id === id);
+    const { model } = carryOverRuntimeSelection({
+      model: displaySession?.model,
+      thinkingLevel: currentThinkingLevel,
+      fromModels: pickerModels,
+      toModels: visibleModels(
+        (id === null
+          ? automaticModels(credentialProfiles, credentialProfileModels, {
+              requiresEnterprise: enterprise,
+            })
+          : credentialProfileModels[id]) ?? [],
+        state.settings,
+      ),
+    });
+    explicitProfileForNextModel.current = id;
+    // Before staging, so the flushSync in `startStagedSession` commits the new
+    // account and its models together — otherwise the carried model is
+    // momentarily absent from `pickerModels` and the rows render it stripped of
+    // its capabilities.
+    setCredentialProfileId(id);
+    setRequiresEnterprise(enterprise);
+    if (model) {
+      // The carried thinking level is not passed on: `setModel` clamps the
+      // current level against this very model, which is the same mapping.
+      runtimeActions.setModel(model.provider, model.id);
+    } else if (profile && isNewChatRoute && !runtimeHasStarted) {
+      startStagedSession({
+        harness: harnessForAccountProvider(profile.provider),
+        agentType: agentTypeForPicker,
+        thinkingLevel: "off",
+        // Restage: switching WHO runs the session keeps its mode.
+        mode: (pendingStart ?? stagedStart)?.mode,
+      });
+    }
+  };
   // Claude SDK models belong only to Claude-driven sessions; disable them in a
   // started pi session. Non-pi sessions are exempt from this restriction.
   const isModelDisabled = useCallback(
@@ -4880,7 +5021,8 @@ function AppContent() {
         target: reviewHandoffSessionTarget({
           runtime,
           agentType: displayAgentType,
-          credentialProfileId,
+          ...(credentialProfileId !== null ? { credentialProfileId } : {}),
+          requiresEnterprise,
           additionalPrompt: sentText,
           attachments: allAttachments,
         }),
@@ -4938,9 +5080,9 @@ function AppContent() {
                 ? { thinkingLevel: runtime.thinkingLevel }
                 : {}),
               ...(runtime.mode !== undefined ? { mode: runtime.mode } : {}),
-              ...(credentialProfileId !== undefined
-                ? { credentialProfileId }
-                : {}),
+              // Automatic sends no account: the server's router picks one.
+              ...(credentialProfileId !== null ? { credentialProfileId } : {}),
+              ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
               ...(attachTaskId !== undefined ? { attachTaskId } : {}),
               ...(projectId !== undefined ? { projectId } : {}),
               ...(worktreeId !== undefined ? { worktreeId } : {}),
@@ -6270,7 +6412,7 @@ function AppContent() {
           isModelDisabled={isModelDisabled}
           modelLocked={modelLocked}
           thinkingLocked={thinkingLocked}
-          accountName={displayCredentialProfile?.name}
+          accountName={displayAccountName}
           hideRuntimeControls={route.name === "permanentAssistant"}
           ledge={composerLedge}
           selectedAgentType={
@@ -6426,44 +6568,25 @@ function AppContent() {
               onRetryCredentialProfiles={credentialProfileFetch.reload}
               usageIndicators={state.usageIndicators}
               selectedCredentialProfileId={credentialProfileId}
-              onSelectCredentialProfile={(id) => {
-                const profile = activeCredentialProfiles.find(
-                  (item) => item.id === id,
-                );
-                // Switching WHO runs the session keeps WHAT runs it as far as
-                // the new account allows, instead of snapping back to its
-                // first model at "off" thinking.
-                const { model } = carryOverRuntimeSelection({
-                  model: displaySession?.model,
-                  thinkingLevel: currentThinkingLevel,
-                  fromModels: pickerModels,
-                  toModels: visibleModels(
-                    credentialProfileModels[id] ?? [],
-                    state.settings,
-                  ),
-                });
-                explicitProfileForNextModel.current = id;
-                clearAgentAccount();
-                // Before staging, so the flushSync in `startStagedSession`
-                // commits the new account and its models together — otherwise
-                // the carried model is momentarily absent from `pickerModels`
-                // and the rows render it stripped of its capabilities.
-                setCredentialProfileId(id);
-                if (model) {
-                  // The carried thinking level is not passed on: `setModel`
-                  // clamps the current level against this very model, which
-                  // is the same mapping.
-                  runtimeActions.setModel(model.provider, model.id);
-                } else if (profile && isNewChatRoute && !runtimeHasStarted) {
-                  startStagedSession({
-                    harness: harnessForAccountProvider(profile.provider),
-                    agentType: agentTypeForPicker,
-                    thinkingLevel: "off",
-                    // Restage: switching WHO runs the session keeps its mode.
-                    mode: (pendingStart ?? stagedStart)?.mode,
-                  });
-                }
-              }}
+              automaticAccountName={automaticPreviewName}
+              requiresEnterprise={requiresEnterprise}
+              onRequiresEnterpriseChange={(enterprise) =>
+                selectNewSessionAccount(
+                  // An explicit account the requirement excludes falls back to
+                  // Automatic rather than silently running elsewhere.
+                  enterprise &&
+                    !activeCredentialProfiles.some(
+                      (item) =>
+                        item.id === credentialProfileId && item.enterprise,
+                    )
+                    ? null
+                    : credentialProfileId,
+                  enterprise,
+                )
+              }
+              onSelectCredentialProfile={(id) =>
+                selectNewSessionAccount(id, requiresEnterprise)
+              }
               agentTypes={availableAgentTypes}
               selectedAgentType={agentTypeForPicker}
               onSelectAgentType={switchStagedAgentType}
@@ -7424,6 +7547,7 @@ function AppContent() {
                       models={state.models}
                       accountModels={settingsAccountModels}
                       credentialProfiles={credentialProfiles}
+                      usageIndicators={state.usageIndicators}
                       onOpenSection={(section) =>
                         navigate(settingsPath(section))
                       }

@@ -18,6 +18,7 @@ export const settingsProfiles: CredentialProfileSummary[] = [
     health: { state: "unknown", since: null },
     provider: "claude",
     enabled: true,
+    enterprise: false,
     status: "ready",
     createdAt: 0,
     updatedAt: 0,
@@ -28,6 +29,7 @@ export const settingsProfiles: CredentialProfileSummary[] = [
     health: { state: "unknown", since: null },
     provider: "openai-codex",
     enabled: true,
+    enterprise: true,
     status: "ready",
     createdAt: 0,
     updatedAt: 0,
@@ -206,6 +208,7 @@ export const settingsFixture: AppSettings = {
     path: "",
     effectivePath: "/home/alex/assistant/knowledge",
   },
+  accountRouting: { fiveHourUsedThreshold: 90, weeklyUsedThreshold: 95 },
 };
 export const settingsPrefs: Prefs = {
   theme: "light",

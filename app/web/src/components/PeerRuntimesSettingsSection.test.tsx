@@ -112,6 +112,7 @@ const disabledAccount: CredentialProfileSummary = {
   name: "Personal Claude",
   provider: "claude",
   enabled: false,
+  enterprise: false,
   createdAt: 0,
   updatedAt: 0,
   status: "ready",

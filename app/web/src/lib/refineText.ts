@@ -1,12 +1,16 @@
-import type { AgentType, PromptRefineResponse } from "@assistant/shared";
+import type {
+  PromptRefineRequest,
+  PromptRefineResponse,
+} from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
 
-/** Optional session context the refinement endpoint may use. */
-export interface RefineTextOptions {
-  sessionId?: string;
-  agentType?: AgentType;
-  includeContext?: boolean;
-}
+/**
+ * Optional context the refinement endpoint may use: the source session, its
+ * persona, whether to read its context, and `requiresEnterprise` — a draft for
+ * an enterprise-only session (staged or running) may only be refined on an
+ * enterprise account.
+ */
+export type RefineTextOptions = Omit<PromptRefineRequest, "text">;
 
 /**
  * Refine arbitrary draft text through the server's shared refinement endpoint.

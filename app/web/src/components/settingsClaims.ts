@@ -23,6 +23,8 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   // models
   "models.hidden",
   "models.order",
+  "accountRouting.fiveHourUsedThreshold",
+  "accountRouting.weeklyUsedThreshold",
   // claude-sdk
   "claudeSdk.enabled",
   // openai-compatible

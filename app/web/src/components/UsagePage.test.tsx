@@ -68,6 +68,7 @@ const profile = (
   name: provider === "claude" ? "Claude personal" : "OpenAI work",
   provider,
   enabled: true,
+  enterprise: false,
   status: "ready",
   health: { state: "unknown", since: null },
   createdAt: 0,

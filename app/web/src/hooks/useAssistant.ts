@@ -357,6 +357,7 @@ const defaultSettings: AppSettings = {
     effectiveTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   },
   knowledgeBase: { enabled: true, path: "", effectivePath: "" },
+  accountRouting: { fiveHourUsedThreshold: 90, weeklyUsedThreshold: 95 },
 };
 
 export interface ForkDraft {
@@ -6165,7 +6166,10 @@ export interface HarnessSendInput {
   thinkingLevel?: ThinkingLevel;
   /** Start the session in this {@link SessionMode} (absent = Build). */
   mode?: SessionMode;
+  /** The explicit account; absent means Automatic (the server's router picks). */
   credentialProfileId?: string;
+  /** Only enterprise accounts may run the session, at start and on any switch. */
+  requiresEnterprise?: boolean;
   attachTaskId?: string;
   projectId?: string;
   worktreeId?: string;
@@ -6499,7 +6503,10 @@ export interface AssistantActions {
           thinkingLevel?: ThinkingLevel;
           /** Build/Plan the draft was staged in (absent = Build). */
           mode?: SessionMode;
+          /** The explicit account; absent means Automatic. */
           credentialProfileId?: string;
+          /** Only enterprise accounts may run the session. */
+          requiresEnterprise?: boolean;
           additionalPrompt: string;
           attachments?: PromptAttachment[];
         };

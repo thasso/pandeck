@@ -9,6 +9,7 @@ const profile: CredentialProfileSummary = {
   name: "Claude work",
   provider: "claude",
   enabled: true,
+  enterprise: false,
   status: "ready",
   health: { state: "unknown", since: null },
   createdAt: 1,

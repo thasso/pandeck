@@ -42,6 +42,20 @@ describe("refineText", () => {
     );
   });
 
+  it("passes an enterprise requirement through and omits it otherwise", async () => {
+    const fetch = vi.fn(async () => Response.json({ refinedText: "ok" }));
+    vi.stubGlobal("fetch", fetch);
+
+    await refineText("draft", { requiresEnterprise: true });
+    await refineText("draft");
+
+    const bodies = (fetch.mock.calls as unknown as [string, RequestInit][]).map(
+      ([, init]) => JSON.parse(String(init.body)) as Record<string, unknown>,
+    );
+    expect(bodies[0]).toEqual({ text: "draft", requiresEnterprise: true });
+    expect(bodies[1]).toEqual({ text: "draft" });
+  });
+
   it("uses the server's error when refinement is refused", async () => {
     vi.stubGlobal(
       "fetch",

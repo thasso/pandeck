@@ -11,7 +11,6 @@ describe("normalizeStoredPrefs", () => {
     const optional = {
       worktreeReviewMode: "by-file",
       lastModelKey: "provider:model",
-      credentialProfileId: "account",
       lastThinkingLevel: "high",
       workflowRoleRuntimes: {
         coordinator: { modelKey: "provider:model", thinkingLevel: "high" },
@@ -41,6 +40,15 @@ describe("normalizeStoredPrefs", () => {
     expect(Object.keys(prefs).some((key) => key.startsWith("calendar"))).toBe(
       false,
     );
+  });
+
+  test("drops the retired remembered new-session account: every new session starts on Automatic", () => {
+    const prefs = normalizeStoredPrefs({
+      lastModelKey: "provider:model",
+      credentialProfileId: "work",
+    } as unknown as Parameters<typeof normalizeStoredPrefs>[0]);
+    expect(prefs.lastModelKey).toBe("provider:model");
+    expect(Object.hasOwn(prefs, "credentialProfileId")).toBe(false);
   });
 });
 

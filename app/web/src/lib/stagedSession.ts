@@ -171,7 +171,7 @@ export function agentDraft(
   list: EntryLibraryList | undefined,
   name: string,
   accounts: ReadonlyArray<{ id: string; provider: string }>,
-  pickedAccountId: string | undefined,
+  pickedAccountId: string | null | undefined,
 ):
   | (Omit<StagedSessionInput, "id" | "mode"> & {
       agent: string;

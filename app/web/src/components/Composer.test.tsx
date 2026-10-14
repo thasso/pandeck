@@ -1586,3 +1586,104 @@ describe("Composer send", () => {
     expect(window.localStorage.getItem(NEW_KEY)).toBeNull();
   });
 });
+
+describe("draft refinement account scope", () => {
+  let container: HTMLElement;
+  let root: Root | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    vi.unstubAllGlobals();
+  });
+
+  function renderSession(session: Record<string, unknown>) {
+    ({ container, root } = mount());
+    act(() =>
+      root!.render(
+        <Composer
+          onSend={() => {}}
+          onAbort={() => {}}
+          streaming={false}
+          disabled={false}
+          contextInfo={null}
+          session={session as never}
+          models={[]}
+          slashCommands={[]}
+          actions={{} as AssistantActions}
+        />,
+      ),
+    );
+  }
+
+  async function refine(text: string): Promise<void> {
+    const field = container.querySelector("textarea")!;
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    act(() => {
+      setValue.call(field, text);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () =>
+      container
+        .querySelector<HTMLElement>('button[aria-label="Refine draft prompt"]')!
+        .click(),
+    );
+  }
+
+  function refineBody(fetchMock: ReturnType<typeof vi.fn>) {
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    return JSON.parse(String(init.body)) as Record<string, unknown>;
+  }
+
+  it("refines an enterprise-only session's draft under its requirement, keeping its context", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({ refinedText: "refined" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderSession({
+      sessionId: "s-enterprise",
+      agentType: "developer",
+      harness: "pi",
+      requiresEnterprise: true,
+    });
+
+    await refine("rough draft");
+
+    expect(refineBody(fetchMock)).toEqual({
+      text: "rough draft",
+      sessionId: "s-enterprise",
+      agentType: "developer",
+      requiresEnterprise: true,
+      includeContext: true,
+    });
+    expect(container.querySelector("textarea")!.value).toBe("refined");
+  });
+
+  it("leaves the draft untouched when an enterprise-scoped refinement is refused", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: "No enterprise account can refine this." },
+          { status: 409 },
+        ),
+      ),
+    );
+    renderSession({
+      sessionId: "s-enterprise",
+      agentType: "developer",
+      harness: "pi",
+      requiresEnterprise: true,
+    });
+
+    await refine("rough draft");
+
+    expect(container.querySelector("textarea")!.value).toBe("rough draft");
+    expect(container.textContent).toContain(
+      "No enterprise account can refine this.",
+    );
+  });
+});

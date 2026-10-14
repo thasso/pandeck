@@ -1,0 +1,790 @@
+// @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  AppSettings,
+  ClientMessage,
+  CredentialProfileSummary,
+  ModelOption,
+  PullRequestInventoryItem,
+  PullRequestCheckoutOutcome,
+  ServerMessage,
+} from "@assistant/shared";
+import type { UsageIndicator } from "@assistant/shared/usage";
+import {
+  settingsAgents,
+  settingsFixture,
+} from "../component-preview/fixtures/settings.ts";
+
+/**
+ * WHO runs a new session (Task-787): Automatic unless the user picks an
+ * account, optionally restricted to enterprise accounts. The first send states
+ * exactly that — no account for Automatic, so the server's router picks one,
+ * and `requiresEnterprise` whenever the restriction is on.
+ */
+
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.setConfig({ testTimeout: 20_000 });
+
+class ScenarioSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static instances: ScenarioSocket[] = [];
+  readyState = ScenarioSocket.CONNECTING;
+  sent: ClientMessage[] = [];
+  subscribedTopics = new Set<string>();
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor(readonly url: string) {
+    ScenarioSocket.instances.push(this);
+  }
+  open(): void {
+    this.readyState = ScenarioSocket.OPEN;
+    this.onopen?.();
+  }
+  receive(message: ServerMessage): void {
+    if (
+      message.type === "usageIndicators" &&
+      !this.subscribedTopics.has("usage")
+    )
+      throw new Error("The server only sends usage to subscribers.");
+    this.onmessage?.({ data: JSON.stringify(message) });
+  }
+  send(source: string): void {
+    const message = JSON.parse(source) as ClientMessage;
+    this.sent.push(message);
+    if (message.type === "subscribe")
+      for (const topic of message.topics) this.subscribedTopics.add(topic);
+    if (message.type === "unsubscribe")
+      for (const topic of message.topics) this.subscribedTopics.delete(topic);
+  }
+  close(): void {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+}
+
+class NoopObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): [] {
+    return [];
+  }
+}
+
+// Keep the App's real fresh-start handlers while replacing the heavy object
+// inspectors with buttons that exercise their public callback seam.
+vi.mock("./components/objectInspectors.tsx", async (importOriginal) => {
+  const real =
+    await importOriginal<typeof import("./components/objectInspectors.tsx")>();
+  return {
+    ...real,
+    WorktreeInspector: ({
+      onStartSession,
+    }: {
+      onStartSession: (id: string) => void;
+    }) => (
+      <button
+        data-testid="fresh-worktree"
+        onClick={() => onStartSession("wt-reset")}
+      >
+        Start in worktree
+      </button>
+    ),
+    PullRequestInspector: ({
+      onReview,
+    }: {
+      onReview: (
+        item: PullRequestInventoryItem,
+        id: string,
+        outcome: PullRequestCheckoutOutcome,
+      ) => void;
+    }) => (
+      <button
+        data-testid="fresh-pr-review"
+        onClick={() =>
+          onReview(reviewFixture, "wt-reset", {
+            status: "already-current",
+            worktreeId: "wt-reset",
+            branch: "feature",
+            head: "test-head",
+            base: {
+              branch: "main",
+              pullRequestBase: "main",
+              matchesPullRequestBase: true,
+            },
+            taskIds: [],
+          })
+        }
+      >
+        Review pull request
+      </button>
+    ),
+  };
+});
+
+await import("./components/MessageList.tsx");
+const App = (await import("./App.tsx")).default;
+const { ShortcutsProvider } = await import("./components/common/shortcuts.tsx");
+
+const FRAME_MS = 25;
+let root: Root | null = null;
+let container: HTMLDivElement | null = null;
+
+async function settle(frames = 4): Promise<void> {
+  for (let i = 0; i < frames; i++)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, FRAME_MS));
+    });
+}
+
+function account(
+  id: string,
+  name: string,
+  enterprise: boolean,
+): CredentialProfileSummary {
+  return {
+    id,
+    name,
+    provider: "claude",
+    enabled: true,
+    enterprise,
+    status: "ready",
+    health: { state: "ok", since: null },
+    createdAt: 0,
+    updatedAt: 0,
+  } as CredentialProfileSummary;
+}
+
+const sonnet: ModelOption = {
+  provider: "claude-sdk",
+  id: "sonnet",
+  name: "Claude Sonnet",
+  reasoning: true,
+  supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
+  contextWindow: 200_000,
+};
+
+const PERSONAL = account("claude-personal", "Personal Max", false);
+const WORK = account("claude-work", "Work Enterprise", true);
+const reviewFixture = {
+  projectId: "reset-project",
+  provider: "github",
+  repositoryKey: "owner/repo",
+  number: 1,
+  title: "Fresh review",
+  url: "https://example.test/owner/repo/pull/1",
+  taskIds: [],
+  headBranch: "feature",
+  baseBranch: "main",
+} as unknown as PullRequestInventoryItem;
+const { pullRequestPath } = await import("./hooks/useSessionRouting.ts");
+
+function projection(profiles: CredentialProfileSummary[]) {
+  return {
+    profiles,
+    modelsByProfile: Object.fromEntries(
+      profiles.map((profile) => [profile.id, [sonnet]]),
+    ),
+  };
+}
+
+function readyMessage(settings: Partial<AppSettings> = {}): ServerMessage {
+  return {
+    type: "ready",
+    serverBuild: { version: "0.0.0-test" },
+    state: null,
+    models: [sonnet],
+    agents: [],
+    sessions: [],
+    settings,
+    speechToText: {
+      configured: false,
+      availableModelIds: [],
+      maxUtteranceSeconds: 120,
+    },
+    slashCommands: [],
+    contextInfo: null,
+  } as unknown as ServerMessage;
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  ScenarioSocket.instances = [];
+  vi.stubGlobal("WebSocket", ScenarioSocket);
+  vi.stubGlobal("ResizeObserver", NoopObserver);
+  vi.stubGlobal("IntersectionObserver", NoopObserver);
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("min-width"),
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    onchange: null,
+    dispatchEvent: () => false,
+  }));
+  Element.prototype.scrollIntoView = () => {};
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  root = null;
+  container?.remove();
+  container = null;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+const json = (value: unknown) =>
+  new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+/** Pick-preview requests the page made, as sent. */
+let previews: Array<Record<string, unknown>> = [];
+/** Prompt-refinement requests the page made, as sent. */
+let refines: Array<Record<string, unknown>> = [];
+
+async function openNewSession(
+  profiles: CredentialProfileSummary[],
+  /** The server router's preview answer for Automatic. */
+  pick: (request: Record<string, unknown>) => string | null = () => null,
+  initial: { path?: string; settings?: Partial<AppSettings> } = {},
+): Promise<ScenarioSocket> {
+  previews = [];
+  refines = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/api/prompt/refine")) {
+        refines.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json({ refinedText: "refined draft" });
+      }
+      if (String(url).endsWith("/api/account-router/pick")) {
+        const request = JSON.parse(String(init?.body)) as Record<
+          string,
+          unknown
+        >;
+        previews.push(request);
+        return json({ profileId: pick(request) });
+      }
+      if (String(url).endsWith("/api/pull-requests"))
+        return json({ status: "ready", items: [], fetchedAt: 0 });
+      return json(projection(profiles));
+    }),
+  );
+  window.history.replaceState(null, "", initial.path ?? "/sessions/create");
+  await act(async () => {
+    root!.render(
+      <ShortcutsProvider>
+        <App />
+      </ShortcutsProvider>,
+    );
+  });
+  const socket = ScenarioSocket.instances[0]!;
+  await act(async () => {
+    socket.open();
+    socket.receive(readyMessage(initial.settings));
+  });
+  await settle();
+  return socket;
+}
+
+/** The provider-account row's cards, by visible name. */
+function accountCard(name: string): HTMLElement | undefined {
+  return [...container!.querySelectorAll<HTMLElement>('[role="option"]')].find(
+    (node) => node.textContent?.startsWith(name),
+  );
+}
+
+async function click(node: HTMLElement | undefined | null): Promise<void> {
+  expect(node).toBeTruthy();
+  await act(async () => node!.click());
+  await settle(2);
+}
+
+async function typeDraft(text: string): Promise<void> {
+  const textarea = container!.querySelector("textarea")!;
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    "value",
+  )!.set!;
+  await act(async () => {
+    setValue.call(textarea, text);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function refineDraft(text: string): Promise<void> {
+  await typeDraft(text);
+  await click(
+    container!.querySelector<HTMLElement>(
+      'button[aria-label="Refine draft prompt"]',
+    ),
+  );
+}
+
+async function sendPrompt(text: string): Promise<void> {
+  const textarea = container!.querySelector("textarea")!;
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    "value",
+  )!.set!;
+  await act(async () => {
+    setValue.call(textarea, text);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click(
+    container!.querySelector<HTMLElement>('button[aria-label="Send message"]'),
+  );
+}
+
+function firstSend(
+  socket: ScenarioSocket,
+): Extract<ClientMessage, { type: "harnessSend" }> | undefined {
+  return socket.sent.find(
+    (message): message is Extract<ClientMessage, { type: "harnessSend" }> =>
+      message.type === "harnessSend",
+  );
+}
+
+function requiresEnterpriseSwitch(): HTMLElement | null {
+  const label = [...container!.querySelectorAll("label")].find(
+    (node) => node.textContent === "Requires enterprise",
+  );
+  return label
+    ? container!.querySelector<HTMLElement>(`#${label.htmlFor}`)
+    : null;
+}
+
+describe("named definitions keep account intent", () => {
+  it.each([
+    [null, false],
+    [PERSONAL.id, false],
+    [WORK.id, true],
+  ] as const)(
+    "staging a definition keeps pin=%s and enterprise=%s",
+    async (pin, enterprise) => {
+      const socket = await openNewSession([PERSONAL, WORK]);
+      if (enterprise) await click(requiresEnterpriseSwitch());
+      if (pin !== null)
+        await click(accountCard(pin === WORK.id ? WORK.name : PERSONAL.name));
+      await act(async () =>
+        socket.receive({
+          type: "libraryList",
+          library: "agents",
+          list: {
+            ...settingsAgents,
+            entries: settingsAgents.entries.filter(
+              (entry) => entry.name === "release-scribe",
+            ),
+            diagnostics: [],
+            agentRuntimes: {
+              "release-scribe": {
+                persona: "assistant",
+                provider: "claude-sdk",
+                modelId: "sonnet",
+                thinkingLevel: "low",
+              },
+            },
+          },
+        }),
+      );
+      await settle();
+      await click(
+        container!.querySelector<HTMLElement>(
+          'button[title^="Start as release-scribe:"]',
+        ),
+      );
+      expect(
+        accountCard(
+          pin === null
+            ? "Automatic"
+            : pin === WORK.id
+              ? WORK.name
+              : PERSONAL.name,
+        )?.getAttribute("aria-selected"),
+      ).toBe("true");
+      await sendPrompt("Draft notes.");
+      const sent = firstSend(socket)!;
+      expect(sent).toMatchObject({
+        agent: "release-scribe",
+        modelProvider: "claude-sdk",
+        modelId: "sonnet",
+        thinkingLevel: "low",
+      });
+      if (pin === null) expect("credentialProfileId" in sent).toBe(false);
+      else expect(sent.credentialProfileId).toBe(pin);
+      if (enterprise) expect(sent.requiresEnterprise).toBe(true);
+      else expect("requiresEnterprise" in sent).toBe(false);
+    },
+  );
+});
+
+describe("desktop Sessions quick-start usage", () => {
+  it("subscribes on a cold /sessions load, updates meters and Automatic, and unsubscribes away", async () => {
+    let picked = PERSONAL.id;
+    const socket = await openNewSession([PERSONAL, WORK], () => picked, {
+      path: "/sessions",
+    });
+    expect(socket.subscribedTopics.has("usage")).toBe(true);
+    expect(accountCard("Automatic")?.textContent).toContain(
+      "Now: Personal Max",
+    );
+    const beforeUsage = previews.length;
+    const indicator: UsageIndicator = {
+      profileId: PERSONAL.id,
+      provider: "claude",
+      refreshing: false,
+      fetchedAt: Date.now(),
+      limitsAvailable: true,
+      short: { usedPct: 20, resetsAt: null },
+      long: { usedPct: 30, resetsAt: null },
+    };
+    await act(async () =>
+      socket.receive({ type: "usageIndicators", indicators: [indicator] }),
+    );
+    await settle();
+    expect(accountCard("Personal Max")?.textContent).toContain("20%");
+    expect(previews).toHaveLength(beforeUsage + 1);
+    const intent = previews.at(-1);
+    expect(intent).toMatchObject({
+      model: { provider: sonnet.provider, modelId: sonnet.id },
+      requiresEnterprise: false,
+    });
+    picked = WORK.id;
+    await act(async () =>
+      socket.receive({
+        type: "usageIndicators",
+        indicators: [{ ...indicator, refreshing: true }],
+      }),
+    );
+    await settle();
+    expect(previews).toHaveLength(beforeUsage + 1);
+    await act(async () =>
+      socket.receive({
+        type: "usageIndicators",
+        indicators: [
+          {
+            ...indicator,
+            fetchedAt: indicator.fetchedAt! + 1,
+            short: { usedPct: 95, resetsAt: null },
+          },
+        ],
+      }),
+    );
+    await settle();
+    expect(accountCard("Personal Max")?.textContent).toContain("95%");
+    expect(accountCard("Automatic")?.textContent).toContain(
+      "Now: Work Enterprise",
+    );
+    expect(previews).toHaveLength(beforeUsage + 2);
+    expect(previews.at(-1)).toEqual(intent);
+    await act(async () => {
+      window.history.pushState(null, "", "/settings/appearance");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await settle();
+    expect(socket.subscribedTopics.has("usage")).toBe(false);
+    expect(() =>
+      socket.receive({ type: "usageIndicators", indicators: [indicator] }),
+    ).toThrow("The server only sends usage to subscribers.");
+  });
+});
+
+describe("Settings Automatic account preview", () => {
+  it("subscribes on a cold Settings load and re-resolves through socket usage state", async () => {
+    await import("./components/SettingsPage.tsx");
+    let picked = PERSONAL.id;
+    const socket = await openNewSession([PERSONAL, WORK], () => picked, {
+      path: "/settings/commit",
+      settings: {
+        ...settingsFixture,
+        commitAgent: {
+          provider: "claude-sdk",
+          modelId: "sonnet",
+          thinkingLevel: "low",
+        },
+      },
+    });
+    expect(socket.subscribedTopics.has("usage")).toBe(true);
+    const beforeUsage = previews.length;
+    expect(beforeUsage).toBeGreaterThan(0);
+    const indicator: UsageIndicator = {
+      profileId: PERSONAL.id,
+      provider: "claude",
+      refreshing: false,
+      fetchedAt: 1,
+      limitsAvailable: true,
+      short: { usedPct: 20, resetsAt: null },
+      long: { usedPct: 30, resetsAt: null },
+    };
+    async function receiveUsage(usage: UsageIndicator) {
+      await act(async () =>
+        socket.receive({ type: "usageIndicators", indicators: [usage] }),
+      );
+      await settle();
+    }
+    await receiveUsage(indicator);
+    expect(previews).toHaveLength(beforeUsage + 1);
+    expect(previews.at(-1)).toEqual({
+      model: { provider: "claude-sdk", modelId: "sonnet" },
+      thinkingLevel: "low",
+      scope: "background",
+    });
+    expect(container!.textContent).toContain(
+      "Automatic runs this on “Personal Max” right now.",
+    );
+
+    picked = WORK.id;
+    await receiveUsage({ ...indicator, refreshing: true });
+    expect(previews).toHaveLength(beforeUsage + 1);
+    await receiveUsage({
+      ...indicator,
+      fetchedAt: 2,
+      short: { usedPct: 95, resetsAt: null },
+    });
+    expect(previews).toHaveLength(beforeUsage + 2);
+    expect(previews.at(-1)).toEqual(previews.at(-2));
+    expect(container!.textContent).toContain(
+      "Automatic runs this on “Work Enterprise” right now.",
+    );
+
+    await act(async () => {
+      window.history.pushState(null, "", "/settings/appearance");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await settle();
+    expect(socket.subscribedTopics.has("usage")).toBe(false);
+  });
+});
+
+describe("new-session account choice", () => {
+  it("starts on Automatic and leaves the account to the server", async () => {
+    const socket = await openNewSession([PERSONAL, WORK]);
+
+    expect(accountCard("Automatic")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(accountCard("Personal Max")?.getAttribute("aria-selected")).toBe(
+      "false",
+    );
+
+    await sendPrompt("hello");
+    const sent = firstSend(socket);
+    expect(sent).toBeDefined();
+    expect(sent).toMatchObject({ modelId: sonnet.id });
+    expect(sent && "credentialProfileId" in sent).toBe(false);
+    expect(sent && "requiresEnterprise" in sent).toBe(false);
+  });
+
+  it("shows the account the server's router would pick for Automatic", async () => {
+    await openNewSession([PERSONAL, WORK], (request) =>
+      request.requiresEnterprise ? WORK.id : PERSONAL.id,
+    );
+
+    expect(accountCard("Automatic")?.textContent).toContain(
+      "Now: Personal Max",
+    );
+    expect(previews.at(-1)).toMatchObject({
+      model: { provider: sonnet.provider, modelId: sonnet.id },
+      requiresEnterprise: false,
+    });
+
+    await click(requiresEnterpriseSwitch());
+    expect(previews.at(-1)).toMatchObject({ requiresEnterprise: true });
+    expect(accountCard("Automatic")?.textContent).toContain(
+      "Now: Work Enterprise",
+    );
+  });
+
+  it("sends an explicitly picked account", async () => {
+    const socket = await openNewSession([PERSONAL, WORK]);
+
+    await click(accountCard("Personal Max"));
+    expect(accountCard("Personal Max")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+
+    await sendPrompt("hello");
+    expect(firstSend(socket)).toMatchObject({
+      credentialProfileId: PERSONAL.id,
+    });
+  });
+
+  it("offers only enterprise accounts once enterprise is required, and says so on the send", async () => {
+    const socket = await openNewSession([PERSONAL, WORK]);
+
+    // An explicit regular account cannot survive the restriction: it falls
+    // back to Automatic instead of silently running a non-enterprise session.
+    await click(accountCard("Personal Max"));
+    await click(requiresEnterpriseSwitch());
+
+    expect(accountCard("Personal Max")).toBeUndefined();
+    expect(accountCard("Work Enterprise")).toBeDefined();
+    expect(accountCard("Automatic")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+
+    await sendPrompt("hello");
+    const sent = firstSend(socket);
+    expect(sent).toMatchObject({ requiresEnterprise: true });
+    expect(sent && "credentialProfileId" in sent).toBe(false);
+  });
+
+  it.each(["worktree", "pr-review"] as const)(
+    "an explicit enterprise start does not leak into a fresh %s session",
+    async (entry) => {
+      const socket = await openNewSession([PERSONAL, WORK]);
+      await click(requiresEnterpriseSwitch());
+      await click(accountCard("Work Enterprise"));
+      await sendPrompt("Enterprise start");
+      expect(firstSend(socket)).toMatchObject({
+        credentialProfileId: WORK.id,
+        requiresEnterprise: true,
+      });
+      await act(async () => {
+        window.history.pushState(
+          null,
+          "",
+          entry === "worktree"
+            ? "/worktrees/wt-reset"
+            : pullRequestPath(reviewFixture),
+        );
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      });
+      await settle();
+      await click(
+        container!.querySelector<HTMLElement>(`[data-testid="fresh-${entry}"]`),
+      );
+      expect(accountCard("Automatic")?.getAttribute("aria-selected")).toBe(
+        "true",
+      );
+      expect(accountCard("Personal Max")).toBeDefined();
+      expect(previews.at(-1)).toMatchObject({ requiresEnterprise: false });
+      await sendPrompt("Unrelated fresh work");
+      const sends = socket.sent.filter(
+        (message): message is Extract<ClientMessage, { type: "harnessSend" }> =>
+          message.type === "harnessSend",
+      );
+      expect(sends).toHaveLength(2);
+      expect("credentialProfileId" in sends[1]!).toBe(false);
+      expect("requiresEnterprise" in sends[1]!).toBe(false);
+    },
+  );
+
+  it("explains, and refuses to start, when enterprise is required but no account is one", async () => {
+    const socket = await openNewSession([PERSONAL]);
+
+    await click(requiresEnterpriseSwitch());
+
+    expect(container!.textContent).toMatch(
+      /no enabled account is marked enterprise/i,
+    );
+    await sendPrompt("hello");
+    expect(firstSend(socket)).toBeUndefined();
+  });
+
+  it("keeps the pin and the enterprise requirement on the retry of a rejected first send", async () => {
+    const socket = await openNewSession([PERSONAL, WORK]);
+    await click(requiresEnterpriseSwitch());
+    await click(accountCard("Work Enterprise"));
+
+    await sendPrompt("hello");
+    const first = firstSend(socket)!;
+    expect(first).toMatchObject({
+      credentialProfileId: WORK.id,
+      requiresEnterprise: true,
+    });
+
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        message: "engine did not start",
+        failedPromptClientRequestId: first.clientRequestId!,
+      } as ServerMessage),
+    );
+    await settle(2);
+    const retry = [
+      ...container!.querySelectorAll<HTMLElement>("[role=alert] button"),
+    ].find((node) => node.textContent === "Retry send");
+    await click(retry);
+
+    const sends = socket.sent.filter(
+      (message): message is Extract<ClientMessage, { type: "harnessSend" }> =>
+        message.type === "harnessSend",
+    );
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toMatchObject({
+      credentialProfileId: WORK.id,
+      requiresEnterprise: true,
+      clientRequestId: first.clientRequestId,
+    });
+  });
+
+  it("refuses, rather than reroutes, an explicit pick disabled while staged", async () => {
+    const socket = await openNewSession([PERSONAL, WORK]);
+    await click(accountCard("Personal Max"));
+
+    // The account is disabled elsewhere; the projection refreshes.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/api/account-router/pick")
+          ? json({ profileId: null })
+          : json(projection([{ ...PERSONAL, enabled: false }, WORK])),
+      ),
+    );
+    await act(async () => {
+      window.dispatchEvent(new Event("credentialProfilesChanged"));
+    });
+    await settle();
+
+    expect(accountCard("Automatic")?.getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    expect(container!.textContent).toContain(
+      "“Personal Max” is disabled. Choose another account or Automatic.",
+    );
+    await sendPrompt("hello");
+    expect(firstSend(socket)).toBeUndefined();
+  });
+
+  it("refines a staged enterprise-only draft only under the enterprise requirement", async () => {
+    const socket = await openNewSession([PERSONAL, WORK]);
+    await click(requiresEnterpriseSwitch());
+
+    await refineDraft("tidy this up");
+
+    expect(refines).toHaveLength(1);
+    expect(refines[0]).toMatchObject({
+      text: "tidy this up",
+      requiresEnterprise: true,
+    });
+    expect(container!.querySelector("textarea")?.value).toBe("refined draft");
+    // Refining is not a send: no session exists yet.
+    expect(firstSend(socket)).toBeUndefined();
+  });
+
+  it("leaves an ordinary draft's refinement unrestricted", async () => {
+    await openNewSession([PERSONAL, WORK]);
+
+    await refineDraft("tidy this up");
+
+    expect(refines).toHaveLength(1);
+    expect(refines[0]).toMatchObject({ text: "tidy this up" });
+    expect("requiresEnterprise" in refines[0]!).toBe(false);
+  });
+});

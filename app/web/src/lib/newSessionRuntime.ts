@@ -185,7 +185,10 @@ export function reviewHandoffSessionTarget(input: {
   /** The runtime the composer displays (`firstPromptRuntimeSelection`). */
   runtime: NewSessionRuntimeDefaults;
   agentType: AgentType;
-  credentialProfileId: string;
+  /** The explicit account; absent means Automatic (the server picks). */
+  credentialProfileId?: string;
+  /** Only enterprise accounts may run the session, now and on any switch. */
+  requiresEnterprise: boolean;
   /** The user's own prompt; the comment bundle rides along as context. */
   additionalPrompt: string;
   attachments: readonly PromptAttachment[];
@@ -197,7 +200,8 @@ export function reviewHandoffSessionTarget(input: {
   modelId?: string;
   thinkingLevel: ThinkingLevel;
   mode?: SessionMode;
-  credentialProfileId: string;
+  credentialProfileId?: string;
+  requiresEnterprise?: boolean;
   additionalPrompt: string;
   attachments?: PromptAttachment[];
 } {
@@ -210,7 +214,10 @@ export function reviewHandoffSessionTarget(input: {
     ...(runtime.modelId ? { modelId: runtime.modelId } : {}),
     thinkingLevel: runtime.thinkingLevel,
     ...(runtime.mode !== undefined ? { mode: runtime.mode } : {}),
-    credentialProfileId: input.credentialProfileId,
+    ...(input.credentialProfileId !== undefined
+      ? { credentialProfileId: input.credentialProfileId }
+      : {}),
+    ...(input.requiresEnterprise ? { requiresEnterprise: true } : {}),
     additionalPrompt: input.additionalPrompt,
     ...(input.attachments.length
       ? { attachments: [...input.attachments] }

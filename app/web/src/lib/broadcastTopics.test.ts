@@ -5,6 +5,43 @@ import {
 } from "./broadcastTopics.ts";
 
 describe("topicsForSurface", () => {
+  it.each([
+    "personal-assistant",
+    "memory",
+    "naming",
+    "session-status",
+    "refinement",
+    "worktrees",
+    "commit",
+    "pull-request",
+    "task-intake",
+    "pdf-conversion",
+  ])("holds usage for the %s Settings slot preview", (settingsSection) => {
+    const surface = {
+      sidebarVisible: false,
+      sidebarSection: "settings" as const,
+      routeName: "settings",
+      settingsSection,
+    };
+    expect(topicsForSurface(surface)).toEqual(["usage"]);
+    expect(
+      topicsForSurface({ ...surface, routeName: "session" }),
+    ).not.toContain("usage");
+  });
+
+  it.each([undefined, "appearance", "models", "peer-runtimes", "skills"])(
+    "does not hold usage for the %s Settings section",
+    (settingsSection) => {
+      expect(
+        topicsForSurface({
+          sidebarVisible: true,
+          sidebarSection: "settings",
+          routeName: "settings",
+          settingsSection,
+        }),
+      ).not.toContain("usage");
+    },
+  );
   it("subscribes for a visible browser's section", () => {
     expect(
       topicsForSurface({
@@ -282,6 +319,23 @@ describe("topicsForSurface", () => {
     ]);
   });
 
+  it("holds usage for desktop Sessions quick-start but not the mobile inbox", () => {
+    const surface = {
+      sidebarVisible: false,
+      sidebarSection: "sessions" as const,
+      routeName: "sessions",
+    };
+    expect(
+      topicsForSurface({ ...surface, sessionsQuickStartVisible: true }),
+    ).toEqual(["usage"]);
+    expect(
+      topicsForSurface({ ...surface, sessionsQuickStartVisible: false }),
+    ).toEqual([]);
+    expect(
+      topicsForSurface({ ...surface, routeName: "session" }),
+    ).not.toContain("usage");
+  });
+
   it("carries usage only on the surfaces that meter accounts", () => {
     expect(
       topicsForSurface({
@@ -357,8 +411,8 @@ describe("topicsForSurface", () => {
         settingsSection: "skills",
       }),
     ).toEqual(["skills"]);
-    // Another section, the settings index, and a settings browser listing the
-    // entry all read nothing: a subscribe rescans the library on the server.
+    // Other sections, the index and the browser do not read the skills library:
+    // subscribing rescans it. Worktree settings holds usage for its model slots.
     expect(
       topicsForSurface({
         sidebarVisible: true,
@@ -366,7 +420,7 @@ describe("topicsForSurface", () => {
         routeName: "settings",
         settingsSection: "worktrees",
       }),
-    ).toEqual([]);
+    ).toEqual(["usage"]);
     expect(
       topicsForSurface({
         sidebarVisible: true,
