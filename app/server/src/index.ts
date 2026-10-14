@@ -115,6 +115,8 @@ import {
   installBackgroundUpdateQueue,
 } from "./backgroundUpdateQueue.ts";
 import { backgroundWorkSupervisor } from "./backgroundWork/supervisor.ts";
+import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
+import { setArtifactRetentionGuard } from "./mcp/toolGroups/packRuntime.ts";
 import {
   BackgroundCompletionDelivery,
   backgroundCompletionTurns,
@@ -126,20 +128,21 @@ import {
   completionDisposition,
   enqueueCompletionNotice,
   restoreOwedBackgroundDelivery,
+  offerBackgroundCompletion,
+  recoverBackgroundHandling,
+  setBackgroundHandlingHost,
+  setBackgroundRecovery,
+  settleBackgroundHandling,
+  unhandledBackground,
 } from "./backgroundCompletionNotices.ts";
 import {
   removeBackgroundDeliveryOutput,
   writeBackgroundDeliveryOutput,
 } from "./backgroundWork/deliveryOutput.ts";
 import {
-  promptRuntimeSession,
   setDeferredBackgroundContextProvider,
   type RuntimePromptDriver,
 } from "./session/runtimePrompt.ts";
-import {
-  SessionBusyError,
-  SteerNotTakenError,
-} from "./session/runtime/errors.ts";
 import {
   startTaskAutoArchiveSweep,
   stopTaskAutoArchiveSweep,
@@ -234,6 +237,7 @@ import {
   setHumanPromptHook,
   setSessionIdleHook,
   subscribeSessionRunCompleted,
+  subscribeSessionRunEnded,
   subscribeSessionRunFailed,
   subscribeSessionRunStarted,
   subscribeSessionTurnClosed,
@@ -307,75 +311,28 @@ function isPromptQueueDriver(
   );
 }
 
+/**
+ * The session's prompt driver, acquiring its harness when it is not live; a
+ * placeholder without a runtime answers undefined. Callers check the Stop hold
+ * BEFORE calling this, so a held session is never cold-acquired.
+ */
+async function acquirePromptDriver(
+  sessionId: string,
+): Promise<RuntimePromptDriver | undefined> {
+  const candidate =
+    hub.getLiveById(sessionId) ?? (await hub.acquireById(sessionId));
+  return candidate &&
+    "createRuntimeAdapter" in candidate &&
+    "canSteer" in candidate
+    ? (candidate as RuntimePromptDriver)
+    : undefined;
+}
+
 const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
   drainPeers: (sessionId) => drainRecipient(sessionId),
   queueChanged: (sessionId) => backgroundUpdateQueueChanged(sessionId),
   held: (sessionId) => automaticTurnsHeld(sessionId),
-  offer: async (sessionId, signal, clientRequestId) => {
-    // The drain read the hold after the peer phase; a Stop since then must not
-    // cost a cold acquisition the run door would refuse anyway.
-    if (automaticTurnsHeld(sessionId)) return "busy";
-    const candidate =
-      hub.getLiveById(sessionId) ?? (await hub.acquireById(sessionId));
-    if (
-      !candidate ||
-      !("createRuntimeAdapter" in candidate) ||
-      !("canSteer" in candidate)
-    )
-      return "unavailable";
-    const driver = candidate as RuntimePromptDriver;
-    const origin = {
-      kind: "system" as const,
-      source: "background-completion" as const,
-      presentation: signal.presentation,
-    };
-    // A running turn is an opportunity, not an obstacle, when the driver can
-    // take mid-turn input: joining it delivers the same fact for the cost of a
-    // message instead of a whole turn — pi's equivalent of the notification the
-    // Claude CLI injects for itself. `steerOnly` means the driver decides, so a
-    // turn that ended in the meantime yields `SteerNotTakenError` and this falls
-    // back to "busy", which retains the batch for the next idle drain.
-    if (driver.isRunning) {
-      if (!driver.canSteer) return "busy";
-      try {
-        await promptRuntimeSession(driver, signal.visibleText, {
-          origin,
-          contextBlock: signal.contextBlock,
-          // A DISTINCT identity from the fallback's. The steer registers this id
-          // with the runtime and the pi driver before pi can reject it
-          // asynchronously; sharing the key would let a failed steer answer the
-          // later ordinary delivery "already handled" and drop the batch.
-          clientRequestId: `${clientRequestId}:steer`,
-          steer: true,
-          steerOnly: true,
-        });
-        return "delivered";
-      } catch (error) {
-        if (
-          error instanceof SteerNotTakenError ||
-          error instanceof SessionBusyError
-        )
-          return "busy";
-        console.warn("[background] completion steer failed:", error);
-        return "busy";
-      }
-    }
-    try {
-      await backgroundCompletionTurns.run(sessionId, (accepted) =>
-        promptRuntimeSession(driver, signal.visibleText, {
-          origin,
-          contextBlock: signal.contextBlock,
-          clientRequestId,
-          onUserEntry: () => accepted(),
-        }),
-      );
-      return "delivered";
-    } catch (error) {
-      if (error instanceof SessionBusyError) return "busy";
-      console.warn("[background] completion delivery failed:", error);
-      return "unavailable";
-    }
-  },
+  offer: offerBackgroundCompletion(acquirePromptDriver),
   discard: (entry) => {
     const cleanupPath = entry.notice.output?.cleanupPath;
     if (cleanupPath) removeBackgroundDeliveryOutput(cleanupPath);
@@ -384,16 +341,42 @@ const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
   outbox: backgroundDeliveryOutbox,
 });
 
+// A delivered fact is handled only by its run's clean end.
+subscribeSessionRunEnded((sessionId, outcome) =>
+  settleBackgroundHandling(sessionId, outcome),
+);
+setBackgroundRecovery((sessionId, refs) =>
+  recoverBackgroundHandling(
+    backgroundCompletionDelivery,
+    sessionId,
+    acquirePromptDriver,
+    refs,
+  ),
+);
+// The cap on a session's artifacts never evicts the output of a fact it is
+// still owed or has not finished handling.
+setArtifactRetentionGuard((sessionId) =>
+  backgroundDeliveryOutboxStore.owedArtifactIds(sessionId),
+);
+setBackgroundHandlingHost({
+  changed: (sessionId) => {
+    backgroundUpdateQueueChanged(sessionId);
+    void hub.broadcastSessions();
+  },
+});
+
 // What waits for each session, beside its peer queue: read only, never a turn.
 installBackgroundUpdateQueue({
   count: (sessionId) => backgroundCompletionDelivery.queuedCount(sessionId),
-  publish: (sessionId, count) =>
-    hub.broadcastBackgroundUpdateQueue(sessionId, count),
+  unhandled: (sessionId) => unhandledBackground(sessionId),
+  publish: (sessionId, count, unhandled) =>
+    hub.broadcastBackgroundUpdateQueue(sessionId, count, unhandled),
 });
 
-// Deferred facts ride the next turn the session takes for any other reason.
+// Deferred facts ride the next turn the session takes for any other reason,
+// claimed by it right before its append.
 setDeferredBackgroundContextProvider((sessionId) =>
-  backgroundCompletionDelivery.peekDeferredContext(sessionId),
+  backgroundCompletionDelivery.claimDeferredContext(sessionId),
 );
 
 // Background work shares the existing reload/SIGTERM authority. It never joins
@@ -2091,11 +2074,13 @@ server.listen(PORT, HOST, () => {
     // After reconciliation (each notice reads its row as it ended) and after
     // the idle chain is wired: a fact released before the restart is offered
     // through the usual peer-first drain. What a Stop touched comes back until
-    // it is delivered; nothing else does.
+    // it is delivered; nothing else does. Still inside the synchronous listen
+    // callback, before anything this process prompts: every claimed or bound
+    // row it finds belongs to a process that is gone.
     const outbox = restoreOwedBackgroundDelivery(backgroundCompletionDelivery);
-    if (outbox.restored > 0 || outbox.forgotten > 0)
+    if (outbox.restored > 0 || outbox.forgotten > 0 || outbox.interrupted > 0)
       console.log(
-        `[background] restored ${outbox.restored} owed completion(s) of stopped sessions; forgot ${outbox.forgotten}`,
+        `[background] restored ${outbox.restored} owed completion(s) of stopped sessions; forgot ${outbox.forgotten}; ${outbox.interrupted} session(s) have handling cut off by the restart`,
       );
   });
   // Offered in the same order as the idle edge, though only offered: both

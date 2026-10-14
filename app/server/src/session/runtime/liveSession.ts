@@ -78,9 +78,12 @@ export interface RuntimePromptOptions extends PromptOptions {
   /**
    * Called once with the durable user entry id right after it is appended, so the
    * memory runtime can key its per-turn effective-load audit to the accepted
-   * turn (the identity shared with Task 96/99). Not forwarded to the adapter.
+   * turn (the identity shared with Task 96/99). `runId` is the durable run the
+   * entry belongs to — the run it opened, or the one a steer joined — whose
+   * {@link RunOutcome} says how the turn carrying it ended; undefined only when
+   * no run was open to join. Not forwarded to the adapter.
    */
-  onUserEntry?: (entryId: string) => void;
+  onUserEntry?: (entryId: string, runId: string | undefined) => void;
   /**
    * Called once before this prompt settles. Account recovery defers it until
    * continuation decides the admitted turn's outcome. Never for a steer
@@ -89,6 +92,20 @@ export interface RuntimePromptOptions extends PromptOptions {
    * forwarded to the adapter.
    */
   onRunEnded?: (outcome: RunOutcome) => void;
+  /**
+   * Called synchronously right before the adapter is handed this prompt, with
+   * the run open at that moment: the first point the provider can see it.
+   * Nothing calls it for a prompt refused earlier, so its absence is the
+   * runtime's word that the provider never had the prompt. Not forwarded.
+   */
+  onProviderCall?: (openRunId: string | undefined) => void;
+  /**
+   * Called when the adapter answered that it took NOTHING of a prompt it was
+   * handed: a steer-only refusal (`steered: false`), a deferred steer it never
+   * sent or dropped unread, or an ordinary steer it rejected. Anything else
+   * after {@link onProviderCall} may have reached the provider. Not forwarded.
+   */
+  onProviderDeclined?: () => void;
   /** Sanitized peer-prompt card recorded on the durable user entry for rendering. */
   peerPrompt?: import("@assistant/shared").PeerPromptCard;
   /** Durable admission keys for every peer message combined into this entry (server-only). */
@@ -913,6 +930,8 @@ export class LiveRuntimeSession {
       contextBlock,
       onUserEntry,
       onRunEnded,
+      onProviderCall,
+      onProviderDeclined,
       peerPrompt: _peerPrompt,
       peerMessageIds: _peerMessageIds,
       ...adapterOpts
@@ -957,6 +976,7 @@ export class LiveRuntimeSession {
       };
       let result: AgentRunResult;
       try {
+        onProviderCall?.(this.openRunId());
         result = await this.adapter.prompt(modelText, {
           ...(clientRequestId !== undefined ? { clientRequestId } : {}),
           ...adapterOpts,
@@ -976,11 +996,13 @@ export class LiveRuntimeSession {
       }
       if (result.steered !== true) {
         releaseKey();
+        // The driver's own answer: nothing was sent.
+        onProviderDeclined?.();
         throw new SteerNotTakenError(this.sessionId);
       }
       this.beginTurn(turnOrigin);
       const steeredEntryId = this.appendUserEntry(text, options, "steer");
-      if (onUserEntry) onUserEntry(steeredEntryId);
+      if (onUserEntry) onUserEntry(steeredEntryId, this.openRunId());
       this.turnPromptEntryIds.add(steeredEntryId);
       return;
     }
@@ -1023,13 +1045,14 @@ export class LiveRuntimeSession {
           entryFailed = true;
           throw error;
         }
-        if (onUserEntry) onUserEntry(entryId);
+        if (onUserEntry) onUserEntry(entryId, this.openRunId());
         if (this.turnOpen) this.turnPromptEntryIds.add(entryId);
       };
       let result: AgentRunResult;
       try {
         // A teardown ends the wait: whatever became of the message is no
         // longer known, so it reads as possibly read and is never re-sent.
+        onProviderCall?.(aimedRun);
         result = await this.untilTeardown(
           this.adapter.prompt(modelText, {
             ...(clientRequestId !== undefined ? { clientRequestId } : {}),
@@ -1078,6 +1101,12 @@ export class LiveRuntimeSession {
       // lets a handoff fall back to its queue instead of losing the decision.
       if (!recorded) {
         releaseKey();
+        // Never sent, or dropped unread on the provider's own word.
+        if (
+          !acceptedLate &&
+          (!result.steerWithdrawn || result.steerUncertain !== true)
+        )
+          onProviderDeclined?.();
         throw result.steerWithdrawn || acceptedLate
           ? new SteerWithdrawnError(
               this.sessionId,
@@ -1114,7 +1143,8 @@ export class LiveRuntimeSession {
       }
       throw error;
     }
-    if (entryId && onUserEntry) onUserEntry(entryId);
+    if (entryId && onUserEntry)
+      onUserEntry(entryId, steering ? this.openRunId() : ownRunId);
 
     if (steering) {
       // Only a steering prompt the provider TOOK belongs to the running turn:
@@ -1122,19 +1152,29 @@ export class LiveRuntimeSession {
       // entry then stays out of the turn's prompt set so no post-turn scan can
       // pair it with a native prompt that belongs to an earlier turn.
       // Already in the log; a teardown closed its run, which says how it went.
-      const result = await this.untilTeardown(
-        this.adapter.prompt(modelText, {
-          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-          ...adapterOpts,
-          steer: true,
-        }),
-        { stopReason: "end" },
-      );
-      if (result.stopReason === "error")
+      onProviderCall?.(this.openRunId());
+      let result: AgentRunResult;
+      try {
+        result = await this.untilTeardown(
+          this.adapter.prompt(modelText, {
+            ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+            ...adapterOpts,
+            steer: true,
+          }),
+          { stopReason: "end" },
+        );
+      } catch (error) {
+        // A steer the provider did not take rejects (see above).
+        onProviderDeclined?.();
+        throw error;
+      }
+      if (result.stopReason === "error") {
+        onProviderDeclined?.();
         throw new RunFailedError(
           result.errorMessage ?? "Unknown provider error",
           result.code,
         );
+      }
       this.turnPromptEntryIds.add(entryId);
       return;
     }
@@ -1155,6 +1195,7 @@ export class LiveRuntimeSession {
         // A teardown ends the wait: the run is closed (`endForTeardown`) and
         // whatever the provider answers afterwards — a default clean end
         // included — is no evidence of how it went.
+        onProviderCall?.(ownRunId);
         result = await this.untilTeardown(
           this.adapter.prompt(modelText, {
             ...(clientRequestId !== undefined ? { clientRequestId } : {}),

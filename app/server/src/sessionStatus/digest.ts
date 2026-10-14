@@ -362,6 +362,13 @@ function userLine(entry: Json, limit: number): string {
       .join("; ");
     return `**System:** background job finished — ${oneLine(desc, 300)}`;
   }
+  if (source === "background-recovery") {
+    const updates = asJson(o.presentation).updates;
+    const desc = (Array.isArray(updates) ? updates : [])
+      .map((u: Json) => String(u.label ?? ""))
+      .join("; ");
+    return `**User asked to recover background updates:** ${oneLine(desc, 300)}`;
+  }
   if (source === "agent-question-response")
     return `**User answered questions:** ${questionAnswers(textOf(entry.content), Math.max(limit, 600))}`;
   if (source === "approval-decision") {

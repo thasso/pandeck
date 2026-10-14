@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3600 reason="eleven dense contracts. The newest is teardown: a store that disposed its harness before closing the runtime run lost a mid-turn outcome, and the provider's default clean end then marked stopped peer work completed. Residency before it: a harness idle eviction that disposed its runtime session instead of releasing it would kill a reader's detached view." task=peer-turn-interruptions date=2026-10-13 -->
+<!-- instruction-budget: bytes=3950 reason="twelve dense contracts. The newest is exposure evidence: background facts were retired, or re-offered, from whether a prompt resolved or which error it threw, when only the runtime knows if the provider ever had it. Teardown before it: a store that disposed its harness before closing the runtime run lost a mid-turn outcome, and the default clean end marked stopped peer work completed." task=completion-recovery date=2026-10-14 -->
 
 # Session subsystem
 
@@ -41,6 +41,9 @@
   turn that just completed, matched from the END by turn structure and call ids
   — never positionally, never the history — all-or-nothing, and fork at its
   TERMINAL native id.
+- `onProviderCall` fires right before EVERY adapter `prompt`, and
+  `onProviderDeclined` only on the adapter's own took-nothing answer; callers
+  read exposure from these, never from a prompt's error type or resolution.
 - Aborted turns are lossless everywhere: persist partial assistant content with
   `stopReason: "aborted"` and completed tool results before the aborted run
   completion, and mirror a live `toolEnd` into the transient stream so a

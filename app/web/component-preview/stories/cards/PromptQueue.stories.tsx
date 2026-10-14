@@ -8,7 +8,8 @@ import { Composer } from "../../../src/components/Composer.tsx";
 import { PromptQueueLedge } from "../../../src/components/PromptQueueLedge.tsx";
 import type { AssistantActions } from "../../../src/hooks/useAssistant.ts";
 
-export type PromptQueueScenario = "running" | "paused" | "stopped";
+export type PromptQueueScenario =
+  "running" | "paused" | "stopped" | "unhandled";
 
 export interface PromptQueueStoryProps {
   frameWidth: number;
@@ -27,6 +28,8 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
   // A Stop with nothing of the user's queued: only the hold, and its Resume.
   if (scenario === "stopped")
     return { paused: false, items: [], automaticTurnsHeld: true };
+  // Idle, with updates a failed turn was given: only Recover and Dismiss.
+  if (scenario === "unhandled") return { paused: false, items: [] };
   return {
     paused: scenario === "paused",
     items: [
@@ -63,7 +66,7 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
 
 /** What other sessions sent, waiting behind the drafts; one is mid-steer. */
 function peersFor(scenario: PromptQueueScenario): QueuedPeerPrompt[] {
-  if (scenario === "stopped") return [];
+  if (scenario === "stopped" || scenario === "unhandled") return [];
   return [
     {
       id: "p1",
@@ -121,6 +124,11 @@ export function PromptQueueStory({
               queue={queueFor(scenario)}
               peers={peersFor(scenario)}
               backgroundUpdates={scenario === "stopped" ? 2 : 0}
+              unhandledBackgroundUpdates={
+                scenario === "unhandled" ? 3 : scenario === "stopped" ? 1 : 0
+              }
+              onRecoverBackground={() => {}}
+              onDismissBackground={() => {}}
               running={running}
               canSteer
               onRemove={() => {}}
@@ -144,7 +152,10 @@ const meta = {
   parameters: { layout: "fullscreen" },
   argTypes: {
     frameWidth: { control: { type: "range", min: 360, max: 960, step: 1 } },
-    scenario: { control: "radio", options: ["running", "paused", "stopped"] },
+    scenario: {
+      control: "radio",
+      options: ["running", "paused", "stopped", "unhandled"],
+    },
   },
 } satisfies Meta<typeof PromptQueueStory>;
 
@@ -161,6 +172,10 @@ export const Paused: Story = {
 
 export const Stopped: Story = {
   args: { frameWidth: 720, scenario: "stopped" },
+};
+
+export const Unhandled: Story = {
+  args: { frameWidth: 720, scenario: "unhandled" },
 };
 
 export const Phone: Story = {

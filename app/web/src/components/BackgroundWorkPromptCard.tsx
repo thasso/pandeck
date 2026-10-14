@@ -157,7 +157,9 @@ function BackgroundWorkPromptRow({
  * exit 0" — the state IS the exit code for a PA-supervised process, and a
  * Claude-query job has no exit code at all.
  * @intent The card is a record of ONE delivery: it never updates afterwards, so
- * nothing here polls, and the top line does not move when the body opens.
+ * nothing here polls, and the top line does not move when the body opens. A
+ * Recover the user asked for says so above its rows: the same updates came
+ * before, in a turn that did not finish.
  * @related BackgroundWorkCommand, BackgroundWorkOutput, BackgroundWorkRow
  */
 export function BackgroundWorkPromptCard({
@@ -171,6 +173,13 @@ export function BackgroundWorkPromptCard({
 }) {
   return (
     <div className="min-w-0 w-full">
+      {presentation.recovery ? (
+        <p className="pl-5 text-xs text-muted-foreground">
+          Recovery: an earlier turn was given{" "}
+          {presentation.updates.length === 1 ? "this update" : "these updates"}{" "}
+          and did not finish
+        </p>
+      ) : null}
       <ul className="min-w-0">
         {presentation.updates.map((update, index) => (
           <BackgroundWorkPromptRow

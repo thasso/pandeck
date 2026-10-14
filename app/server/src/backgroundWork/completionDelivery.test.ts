@@ -3,7 +3,9 @@ import { test } from "vitest";
 import {
   BackgroundCompletionDelivery,
   BackgroundCompletionTurnTracker,
+  type BackgroundCompletionDeliveryOptions,
   type BackgroundCompletionOffer,
+  type BackgroundDeliveryOutbox,
 } from "./completionDelivery.ts";
 
 function notice(id: string) {
@@ -19,6 +21,14 @@ function notice(id: string) {
     stopRequested: false,
     ownerTurnRunning: false,
   };
+}
+
+/** The task ids an offer carries, in order: what reached the model. */
+function carried(offer: BackgroundCompletionOffer): string[] {
+  const json = JSON.parse(offer.contextBlock.split("\n")[1]!) as {
+    updates: { taskId: string }[];
+  };
+  return json.updates.map((u) => u.taskId);
 }
 
 async function flush(): Promise<void> {
@@ -102,12 +112,16 @@ test("activity is externalized and carries bounded-buffer drops", async () => {
   assert.equal(offered.visibleText, "Background work updated.");
 });
 
-test("prompt caps omit whole updates and keep valid structured data", async () => {
+test("prompt caps omit whole updates, keep valid structured data, and owe the rest oldest first", async () => {
   let offered: BackgroundCompletionOffer | undefined;
+  const all: string[][] = [];
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
-    offer: (_sessionId, signal) => {
-      offered = signal;
+    offer: (_sessionId, signal, _key, attempt) => {
+      offered ??= signal;
+      all.push(carried(signal));
+      attempt.reserve();
+      attempt.exposed("entry", "run");
       return Promise.resolve("delivered");
     },
     maxPromptChars: 300,
@@ -125,9 +139,14 @@ test("prompt caps omit whole updates and keep valid structured data", async () =
     omittedCount?: number;
   };
   assert.equal(json.updates.length, 1);
-  assert.equal(json.updates[0]?.taskId, "second");
+  // The oldest goes first, trimmed to fit; the newer one is not dropped, it
+  // was not told, so it stays owed and leads the next turn.
+  assert.equal(json.updates[0]?.taskId, "first");
   assert.equal(json.omittedCount, 1);
   assert.equal(offered.presentation.omittedCount, 1);
+  for (let i = 0; i < 20 && all.length < 2; i += 1) await flush();
+  assert.deepEqual(all, [["first"], ["second"]]);
+  assert.equal(delivery.queuedCount("owner-truncated"), 0);
 });
 
 test("completion replaces final activity when its artifact contains the output", async () => {
@@ -352,7 +371,7 @@ test("a deferred completion offers no turn and rides the next prompt", async () 
   await delivery.drain("owner-quiet");
   assert.equal(offers, 0, "a deferred fact never starts a turn");
 
-  const pending = delivery.peekDeferredContext("owner-quiet");
+  const pending = delivery.claimDeferredContext("owner-quiet");
   assert.ok(pending, "the fact is held for the next turn");
   assert.match(pending.block, /"taskId":"quiet-1"/);
   assert.match(
@@ -362,7 +381,7 @@ test("a deferred completion offers no turn and rides the next prompt", async () 
   );
 });
 
-test("peeking is non-destructive until the turn is accepted", async () => {
+test("a claim refused before its append gives the fact back; an appended one keeps it from every other prompt", async () => {
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
     offer: () => Promise.resolve("delivered"),
@@ -371,21 +390,22 @@ test("peeking is non-destructive until the turn is accepted", async () => {
   delivery.enqueue("owner-peek", notice("held"));
   await flush();
 
-  const refused = delivery.peekDeferredContext("owner-peek");
+  const refused = delivery.claimDeferredContext("owner-peek");
   assert.ok(refused);
-  // The turn was refused: nothing committed, so the fact survives for the next one.
-  assert.ok(
-    delivery.peekDeferredContext("owner-peek"),
-    "a refused turn must not consume the only copy",
+  assert.equal(
+    delivery.claimDeferredContext("owner-peek"),
+    undefined,
+    "claimed: no other prompt carries it meanwhile",
   );
-
-  const accepted = delivery.peekDeferredContext("owner-peek");
-  assert.ok(accepted);
-  accepted.commit();
-  assert.equal(delivery.peekDeferredContext("owner-peek"), undefined);
+  refused.finished(new Error("busy"));
+  const accepted = delivery.claimDeferredContext("owner-peek");
+  assert.ok(accepted, "a refused turn must not consume the only copy");
+  accepted.hooks.onUserEntry?.("entry", "run");
+  accepted.finished(undefined);
+  assert.equal(delivery.claimDeferredContext("owner-peek"), undefined);
 });
 
-test("a fact deferred between peek and commit is not dropped with the batch", async () => {
+test("a fact deferred after a claim is not taken with the claimed batch", async () => {
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
     offer: () => Promise.resolve("delivered"),
@@ -394,20 +414,47 @@ test("a fact deferred between peek and commit is not dropped with the batch", as
   delivery.enqueue("owner-race", notice("first"));
   await flush();
 
-  const pending = delivery.peekDeferredContext("owner-race");
+  const pending = delivery.claimDeferredContext("owner-race");
   assert.ok(pending);
   assert.match(pending.block, /"taskId":"first"/);
   // Arrives after the block was built, so it was never sent.
   delivery.enqueue("owner-race", notice("second"));
-  pending.commit();
+  pending.hooks.onUserEntry?.("entry", "run");
+  pending.finished(undefined);
 
-  const remaining = delivery.peekDeferredContext("owner-race");
+  const remaining = delivery.claimDeferredContext("owner-race");
   assert.ok(remaining, "the later fact still has to reach a turn");
   assert.match(remaining.block, /"taskId":"second"/);
   assert.doesNotMatch(remaining.block, /"taskId":"first"/);
 });
 
-test("deferred output files are cleaned up once their block is committed", async () => {
+test("a refused claim leaves the deferred fact where it was, in order", async () => {
+  const { outbox } = fakeOutbox();
+  let refuse = true;
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    offer: () => Promise.resolve("delivered"),
+    disposition: () => "defer",
+    outbox: {
+      ...outbox,
+      reserve: (...args) => (refuse ? false : outbox.reserve(...args)),
+    },
+  });
+  delivery.enqueue("owner-refused", notice("a"));
+  delivery.enqueue("owner-refused", notice("b"));
+  assert.equal(
+    delivery.claimDeferredContext("owner-refused"),
+    undefined,
+    "nothing is carried without its receipt",
+  );
+  assert.equal(delivery.queuedCount("owner-refused"), 2);
+  refuse = false;
+  const claimed = delivery.claimDeferredContext("owner-refused");
+  assert.ok(claimed);
+  assert.match(claimed.block, /"taskId":"a".*"taskId":"b"/);
+});
+
+test("deferred output files are cleaned up once their block is exposed", async () => {
   const discarded: string[] = [];
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
@@ -425,9 +472,10 @@ test("deferred output files are cleaned up once their block is committed", async
   await flush();
   assert.deepEqual(discarded, []);
 
-  const pending = delivery.peekDeferredContext("owner-files");
+  const pending = delivery.claimDeferredContext("owner-files");
   assert.ok(pending);
-  pending.commit();
+  pending.hooks.onUserEntry?.("entry", "run");
+  pending.finished(undefined);
   assert.deepEqual(discarded, ["/tmp/turn-scoped"]);
 });
 
@@ -449,7 +497,7 @@ test("stop() discards deferred facts as well as queued ones", async () => {
   await flush();
   delivery.stop();
   assert.deepEqual(discarded, ["/tmp/held"]);
-  assert.equal(delivery.peekDeferredContext("owner-drain"), undefined);
+  assert.equal(delivery.claimDeferredContext("owner-drain"), undefined);
 });
 
 test("a drain requested while one is in flight runs again after it", async () => {
@@ -482,8 +530,8 @@ test("a Stop's hold keeps a completion pending, unoffered and unconsumed, until 
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
     held: () => held,
-    offer: (_sessionId, _offer, key) => {
-      offered.push(key);
+    offer: (_sessionId, offer) => {
+      offered.push(carried(offer).join(","));
       return Promise.resolve("delivered");
     },
     discard: (entry) => discarded.push(entry.notice.itemId),
@@ -500,7 +548,7 @@ test("a Stop's hold keeps a completion pending, unoffered and unconsumed, until 
   held = false;
   await delivery.requestDrain("owner-held");
   await delivery.requestDrain("owner-held");
-  assert.deepEqual(offered, ["background-completion:item-held:1"], "once");
+  assert.deepEqual(offered, ["item-held"], "once");
   assert.deepEqual(discarded, ["item-held"]);
 });
 
@@ -510,8 +558,8 @@ test("a Stop racing an offer leaves the completion for Resume instead of consumi
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
     held: () => held,
-    offer: (_sessionId, _offer, key) => {
-      offered.push(key);
+    offer: (_sessionId, offer) => {
+      offered.push(carried(offer).join(","));
       // The Stop lands while the offer awaits the session: the run door
       // refuses the turn, which the offer answers as busy.
       if (offered.length === 1) {
@@ -530,42 +578,118 @@ test("a Stop racing an offer leaves the completion for Resume instead of consumi
 
   held = false;
   await delivery.requestDrain("owner-race-stop");
-  assert.deepEqual(offered, [
-    "background-completion:item-race:1",
-    "background-completion:item-race:1",
-  ]);
+  assert.deepEqual(offered, ["item-race", "item-race"]);
   await delivery.requestDrain("owner-race-stop");
   assert.equal(offered.length, 2, "delivered once, then gone");
 });
 
-/** An in-memory stand-in for the durable outbox, keyed like the table. */
+/**
+ * An in-memory stand-in for the durable outbox, keyed like the table: each row
+ * carries its phase and the attempt and run holding it, with the same
+ * compare-and-set transitions (`backgroundDeliveryOutboxStore.ts`).
+ */
 function fakeOutbox() {
   const rows = new Map<string, "wake" | "defer">();
+  const phases = new Map<
+    string,
+    {
+      phase: "owed" | "reserved" | "handling" | "interrupted";
+      attemptId?: string;
+      runId?: string;
+      interruption?: string;
+    }
+  >();
   const key = (sessionId: string, n: { itemId: string; revision: number }) =>
     `${sessionId}|${n.itemId}:${n.revision}`;
-  return {
-    rows,
-    outbox: {
-      save: (
-        sessionId: string,
-        n: { itemId: string; revision: number },
-        d: "wake" | "defer",
-      ) => void rows.set(key(sessionId, n), d),
-      remove: (sessionId: string, n: { itemId: string; revision: number }) =>
-        void rows.delete(key(sessionId, n)),
+  const ofAttempt = (attemptId: string) =>
+    [...phases].filter(([, p]) => p.attemptId === attemptId);
+  const outbox: BackgroundDeliveryOutbox = {
+    save: (sessionId, n, d) => {
+      const k = key(sessionId, n);
+      if (phases.has(k)) return true;
+      rows.set(k, d);
+      phases.set(k, { phase: "owed" });
+      return true;
     },
+    remove: (sessionId, n) => {
+      const k = key(sessionId, n);
+      if (phases.get(k)?.phase !== "owed") return;
+      rows.delete(k);
+      phases.delete(k);
+    },
+    reserve: (sessionId, attemptId, items, from) => {
+      const keys = items.map((n) => key(sessionId, n));
+      const recordable = (k: string, i: number) =>
+        !phases.has(k) && from === "owed" && items[i]!.unrecorded === true;
+      if (
+        keys.some((k, i) => !recordable(k, i) && phases.get(k)?.phase !== from)
+      )
+        return false;
+      for (const k of keys) {
+        if (!rows.has(k)) rows.set(k, "wake");
+        phases.set(k, { ...phases.get(k), phase: "reserved", attemptId });
+      }
+      return true;
+    },
+    bind: (_sessionId, attemptId, runId) => {
+      for (const [k, p] of ofAttempt(attemptId))
+        if (p.phase === "reserved")
+          phases.set(k, { ...p, phase: "handling", runId });
+    },
+    release: (_sessionId, attemptId) => {
+      for (const [k, p] of ofAttempt(attemptId))
+        if (p.phase === "reserved")
+          phases.set(k, {
+            phase: p.interruption ? "interrupted" : "owed",
+            ...(p.interruption ? { interruption: p.interruption } : {}),
+          });
+    },
+    interrupt: (_sessionId, attemptId, interruption) => {
+      for (const [k, p] of ofAttempt(attemptId))
+        if (p.phase === "reserved" || p.phase === "handling")
+          phases.set(k, { ...p, phase: "interrupted", interruption });
+    },
+  };
+  /** How a run ended: a clean end retires its rows, anything else interrupts. */
+  const settleRun = (runId: string, interruption?: string) => {
+    for (const [k, p] of [...phases])
+      if (p.phase === "handling" && p.runId === runId) {
+        if (interruption === undefined) {
+          phases.delete(k);
+          rows.delete(k);
+        } else phases.set(k, { ...p, phase: "interrupted", interruption });
+      }
+  };
+  const phaseOf = (k: string) => phases.get(k)?.phase;
+  return { rows, outbox, settleRun, phaseOf };
+}
+
+/**
+ * An offer that reaches the model the way the facade does: claimed in
+ * `admit`, appended into `runId`, then over.
+ */
+function exposingOffer(
+  runId: string,
+  log: string[] = [],
+): BackgroundCompletionDeliveryOptions["offer"] {
+  return (_sessionId, offer, _key, attempt) => {
+    log.push(carried(offer).join(","));
+    attempt.reserve();
+    attempt.exposed(`entry-${runId}`, runId);
+    attempt.finished(undefined);
+    return Promise.resolve("delivered");
   };
 }
 
-test("the outbox keeps an owed completion until it is delivered, and a shutdown keeps it", async () => {
+test("the outbox keeps an owed completion until the run it reached ends cleanly, and a shutdown keeps it", async () => {
   let held = true;
-  const { rows, outbox } = fakeOutbox();
+  const { rows, outbox, settleRun, phaseOf } = fakeOutbox();
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
     held: () => held,
     outbox,
     disposition: (n) => (n.stopRequested ? "defer" : "wake"),
-    offer: () => Promise.resolve("delivered"),
+    offer: exposingOffer("run-wake"),
   });
   delivery.enqueue("owner-outbox", notice("woken"));
   delivery.enqueue("owner-outbox", {
@@ -583,9 +707,22 @@ test("the outbox keeps an owed completion until it is delivered, and a shutdown 
 
   held = false;
   await delivery.requestDrain("owner-outbox");
+  assert.equal(
+    phaseOf("owner-outbox|woken:1"),
+    "handling",
+    "delivered is not handled: it waits for its run",
+  );
+  settleRun("run-wake");
   assert.deepEqual([...rows.keys()], ["owner-outbox|deferred:1"]);
-  delivery.peekDeferredContext("owner-outbox")!.commit();
-  assert.deepEqual([...rows.keys()], [], "consumed facts leave the outbox");
+
+  const carrier = delivery.claimDeferredContext("owner-outbox")!;
+  assert.equal(phaseOf("owner-outbox|deferred:1"), "reserved");
+  assert.equal(delivery.queuedCount("owner-outbox"), 0, "claimed, not queued");
+  carrier.hooks.onUserEntry?.("entry-human", "run-human");
+  carrier.finished(undefined);
+  assert.equal(phaseOf("owner-outbox|deferred:1"), "handling");
+  settleRun("run-human");
+  assert.deepEqual([...rows.keys()], [], "handled facts leave the outbox");
 
   const other = fakeOutbox();
   const stopping = new BackgroundCompletionDelivery({
@@ -607,32 +744,36 @@ test("a restored completion is not offered until a drain finds the session unhel
   let held = true;
   const offered: string[] = [];
   const saved: string[] = [];
+  const { outbox } = fakeOutbox();
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: () => Promise.resolve(),
     held: () => held,
     outbox: {
-      save: (_s, n) => void saved.push(n.itemId),
-      remove: () => {},
+      ...outbox,
+      save: (_s, n) => {
+        saved.push(n.itemId);
+        return true;
+      },
     },
-    offer: (_s, _o, key) => {
-      offered.push(key);
-      return Promise.resolve("delivered");
-    },
+    offer: exposingOffer("run-restored", offered),
   });
+  // Boot restores rows the table already holds.
+  outbox.save("owner-restored", notice("from-before"), "wake");
+  outbox.save("owner-restored", notice("deferred-before"), "defer");
   delivery.restore("owner-restored", notice("from-before"), "wake");
   delivery.restore("owner-restored", notice("deferred-before"), "defer");
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(offered, [], "restore offers nothing by itself");
   held = false;
   await delivery.requestDrain("owner-restored");
-  assert.deepEqual(offered, ["background-completion:from-before:1"]);
-  assert.ok(delivery.peekDeferredContext("owner-restored"));
+  assert.deepEqual(offered, ["from-before"]);
+  assert.ok(delivery.claimDeferredContext("owner-restored"));
   assert.deepEqual(saved, [], "already in the outbox");
 });
 
-test("an offer that fails or finds the session unavailable never retires the owed fact", async () => {
+test("an offer that fails or finds the session unavailable before exposure never retires the owed fact", async () => {
   for (const outcome of ["unavailable", "throws"] as const) {
-    const { rows, outbox } = fakeOutbox();
+    const { rows, outbox, phaseOf } = fakeOutbox();
     const discarded: string[] = [];
     const delivery = new BackgroundCompletionDelivery({
       drainPeers: () => Promise.resolve(),
@@ -650,7 +791,19 @@ test("an offer that fails or finds the session unavailable never retires the owe
       [`owner-failed|failed-${outcome}:1`],
       `${outcome}: still owed in the outbox`,
     );
-    assert.deepEqual(discarded, [`failed-${outcome}`], "its file is released");
+    assert.equal(phaseOf(`owner-failed|failed-${outcome}:1`), "owed");
+    if (outcome === "unavailable")
+      assert.deepEqual(
+        discarded,
+        [`failed-${outcome}`],
+        "its file is released",
+      );
+    else
+      assert.equal(
+        delivery.queuedCount("owner-failed"),
+        1,
+        "never claimed, so still queued",
+      );
   }
 });
 
@@ -686,7 +839,9 @@ test("the queued count follows real queued work and announces every change", asy
   answer = "delivered";
   await delivery.drain("owner-count");
   assert.equal(delivery.queuedCount("owner-count"), 1);
-  delivery.peekDeferredContext("owner-count")!.commit();
+  const carrier = delivery.claimDeferredContext("owner-count")!;
+  carrier.hooks.onUserEntry?.("entry", "run");
+  carrier.finished(undefined);
   assert.equal(delivery.queuedCount("owner-count"), 0);
   assert.equal(changes.at(-1), 0);
   assert.equal(delivery.queuedCount("another-session"), 0);

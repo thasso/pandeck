@@ -160,8 +160,10 @@ shows.
   already received live.
 - Background updates: `SessionState.queuedBackgroundUpdates`, the count
   `BackgroundCompletionDelivery.queuedCount` holds (wake and deferred notices; a
-  batch being offered is no longer counted). It is a map lookup, and a change
-  reaches the session's viewers once per microtask as `backgroundUpdateQueue`.
-  While a Stop holds the session, the queue ledge states this count with its
-  Resume. That is the place for a held session, and the progress line never
-  stands in for it.
+  batch being offered or claimed is no longer counted). It is a map lookup, and
+  a change reaches the session's viewers once per microtask as
+  `backgroundUpdateQueue`, which also carries `unhandled`: updates a turn was
+  given and did not finish (`steering-and-queueing.md`, "Delivered is not
+  handled"), a separate count the progress line never adds in. While a Stop
+  holds the session, the queue ledge states this count with its Resume. That is
+  the place for a held session, and the progress line never stands in for it.

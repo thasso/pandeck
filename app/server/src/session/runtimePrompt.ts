@@ -365,30 +365,51 @@ function withHumanResume(
   return {
     ...rest,
     // Runs inside the runtime's append; nothing here may throw.
-    onUserEntry: (entryId) => {
+    onUserEntry: (entryId, runId) => {
       try {
         spendHumanResume(resumeHold);
       } catch (err) {
         console.warn("[stop-hold] could not lift a hold:", err);
       }
-      options.onUserEntry?.(entryId);
+      options.onUserEntry?.(entryId, runId);
     },
   };
 }
 
 /**
- * Supplies background-work facts that were recorded while the session was NOT
- * running and that did not warrant a turn of their own (`deliveryPolicy.ts`).
+ * Background-work facts that did not warrant a turn of their own
+ * (`deliveryPolicy.ts`), already CLAIMED for the prompt about to carry them.
+ * The claim is what makes them this prompt's: no other prompt can carry them
+ * meanwhile, and the outbox knows an attempt may expose them.
+ */
+export interface DeferredBackgroundContext {
+  block: string;
+  /**
+   * The runtime's word on how far the carrying prompt got, merged into its
+   * options: the append binds the facts to its run (whose `RunOutcome` alone
+   * settles them); the provider call and an explicit decline say whether the
+   * provider ever had them. Each runs inside the runtime and never throws.
+   */
+  hooks: Pick<
+    RuntimePromptOptions,
+    "onUserEntry" | "onProviderCall" | "onProviderDeclined"
+  >;
+  /** The carrying prompt is over: what it threw, undefined when it resolved. */
+  finished(thrown: unknown): void;
+}
+
+/**
+ * Supplies and claims deferred background context for a turn about to start.
  * A seam rather than an import so the session layer keeps knowing nothing about
  * the background-work service; `index.ts` registers the real provider at boot.
+ * Called synchronously, after the facade's last await and right before the
+ * runtime appends: undefined when nothing is waiting or the claim was refused.
  */
 let deferredBackgroundContext:
-  | ((sessionId: string) => { block: string; commit: () => void } | undefined)
-  | undefined;
+  ((sessionId: string) => DeferredBackgroundContext | undefined) | undefined;
 export function setDeferredBackgroundContextProvider(
   fn:
-    | ((sessionId: string) => { block: string; commit: () => void } | undefined)
-    | undefined,
+    ((sessionId: string) => DeferredBackgroundContext | undefined) | undefined,
 ): void {
   deferredBackgroundContext = fn;
 }
@@ -411,35 +432,42 @@ export function setDeferredBackgroundContextProvider(
  * them let a session act without a fact that had been deferred precisely so it
  * would arrive before the next action.
  *
- * Consuming the block takes BOTH halves of "the model got it": a durable entry
- * was appended, and the prompt then resolved. `onUserEntry` alone fires before
- * the adapter is called, so a provider that refuses would consume a fact it
- * never saw; resolution alone is satisfied by a deduplicated prompt, which
- * returns successfully having sent nothing.
+ * Neither the append nor the prompt resolving HANDLES the facts: a Stop
+ * resolves a prompt like a finished turn. The append binds them to the run it
+ * belongs to, and only that run's clean end retires them (`index.ts` settles
+ * from `RunOutcome`); a prompt refused before its append gives them back.
  */
 function withDeferredBackgroundContext(
   driver: RuntimePromptDriver,
   options: RuntimePromptFacadeOptions,
-): { options: RuntimePromptFacadeOptions; commitIfDelivered: () => void } {
-  if (options.continuation) return { options, commitIfDelivered: () => {} };
+): {
+  options: RuntimePromptFacadeOptions;
+  finished: (thrown: unknown) => void;
+} {
+  if (options.continuation) return { options, finished: () => {} };
   const pending = deferredBackgroundContext?.(driver.sessionId);
-  if (!pending) return { options, commitIfDelivered: () => {} };
+  if (!pending) return { options, finished: () => {} };
   const contextBlock = options.contextBlock
     ? `${options.contextBlock}\n\n${pending.block}`
     : pending.block;
-  let appended = false;
   return {
     options: {
       ...options,
       contextBlock,
-      onUserEntry: (entryId) => {
-        appended = true;
-        options.onUserEntry?.(entryId);
+      onUserEntry: (entryId, runId) => {
+        pending.hooks.onUserEntry?.(entryId, runId);
+        options.onUserEntry?.(entryId, runId);
+      },
+      onProviderCall: (openRunId) => {
+        pending.hooks.onProviderCall?.(openRunId);
+        options.onProviderCall?.(openRunId);
+      },
+      onProviderDeclined: () => {
+        pending.hooks.onProviderDeclined?.();
+        options.onProviderDeclined?.();
       },
     },
-    commitIfDelivered: () => {
-      if (appended) pending.commit();
-    },
+    finished: (thrown) => pending.finished(thrown),
   };
 }
 
@@ -461,9 +489,9 @@ function withPlanTurnHint(
   return {
     ...options,
     contextBlock,
-    onUserEntry: (entryId) => {
+    onUserEntry: (entryId, runId) => {
       hint.commit();
-      options.onUserEntry?.(entryId);
+      options.onUserEntry?.(entryId, runId);
     },
   };
 }
@@ -482,16 +510,26 @@ async function runPromptWithRuntime(
   // seam, so it stays out of the durable log and the client projection. It is
   // applied before the memory branch below so both paths carry it.
   const deferred = withDeferredBackgroundContext(driver, rawOptions);
-  const options = withPlanTurnHint(driver, deferred.options);
+  let options: RuntimePromptFacadeOptions;
+  try {
+    options = withPlanTurnHint(driver, deferred.options);
+  } catch (error) {
+    deferred.finished(error);
+    throw error;
+  }
 
-  // A deferred background fact is consumed only once the prompt carrying it was
-  // appended AND resolved. Every return path below goes through `runPrompt`, so
-  // a refusal, a duplicate or a throw leaves the fact queued for the next turn.
+  // Every return path below goes through `runPrompt`, so a deferred block is
+  // told how its carrying prompt ended exactly once, refusals included.
   const runPrompt = async (
     prompt: RuntimePromptFacadeOptions,
   ): Promise<void> => {
-    await runtime.prompt(driver.id, text, prompt);
-    deferred.commitIfDelivered();
+    try {
+      await runtime.prompt(driver.id, text, prompt);
+    } catch (error) {
+      deferred.finished(error);
+      throw error;
+    }
+    deferred.finished(undefined);
   };
 
   // Memory enrichment (Task 96): only top-level human turns are eligible. Hidden
@@ -522,10 +560,10 @@ async function runPromptWithRuntime(
   const enriched: RuntimePromptFacadeOptions = {
     ...options,
     ...(decision?.memoryBlock ? { memoryBlock: decision.memoryBlock } : {}),
-    onUserEntry: (entryId) => {
+    onUserEntry: (entryId, runId) => {
       capturedTurnId = entryId;
       capturedAtMs = Date.now();
-      options.onUserEntry?.(entryId);
+      options.onUserEntry?.(entryId, runId);
     },
   };
 

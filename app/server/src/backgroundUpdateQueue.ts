@@ -9,9 +9,20 @@
  * A change reaches the session's viewers once per microtask, however many
  * notices one drain moved.
  */
+import type { BackgroundHandlingRef } from "@assistant/shared";
+
 interface BackgroundUpdateQueueSource {
   count(sessionId: string): number;
-  publish(sessionId: string, count: number): void;
+  /** Delivered into a turn that did not finish (`backgroundCompletionNotices.ts`). */
+  unhandled(sessionId: string): {
+    count: number;
+    batch: BackgroundHandlingRef[];
+  };
+  publish(
+    sessionId: string,
+    count: number,
+    unhandled: { count: number; batch: BackgroundHandlingRef[] },
+  ): void;
 }
 
 let source: BackgroundUpdateQueueSource | undefined;
@@ -24,12 +35,23 @@ export function installBackgroundUpdateQueue(
   due.clear();
 }
 
-/** The session state's field; absent when nothing waits. */
+/** The session state's fields; each absent when nothing is there. */
 export function backgroundUpdateQueueField(sessionId: string): {
   queuedBackgroundUpdates?: number;
+  unhandledBackgroundUpdates?: number;
+  unhandledBackgroundBatch?: BackgroundHandlingRef[];
 } {
   const count = source?.count(sessionId) ?? 0;
-  return count > 0 ? { queuedBackgroundUpdates: count } : {};
+  const unhandled = source?.unhandled(sessionId) ?? { count: 0, batch: [] };
+  return {
+    ...(count > 0 ? { queuedBackgroundUpdates: count } : {}),
+    ...(unhandled.count > 0
+      ? {
+          unhandledBackgroundUpdates: unhandled.count,
+          unhandledBackgroundBatch: unhandled.batch,
+        }
+      : {}),
+  };
 }
 
 /** The delivery queue for this session changed; its viewers hear the new count. */
@@ -39,7 +61,11 @@ export function backgroundUpdateQueueChanged(sessionId: string): void {
   queueMicrotask(() => {
     if (!due.delete(sessionId) || !source) return;
     try {
-      source.publish(sessionId, source.count(sessionId));
+      source.publish(
+        sessionId,
+        source.count(sessionId),
+        source.unhandled(sessionId),
+      );
     } catch {
       /* best-effort: the next state frame carries the same count */
     }

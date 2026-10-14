@@ -25,10 +25,11 @@ const url = (path: string) => new URL(path, import.meta.url).href;
  *  busy      Stopped, resumed; the offer found the session busy.
  *  gone      Stopped, resumed; the offer found it unavailable.
  *  failed    Stopped, resumed; the offer threw.
- *  peeked    Stopped, owed a deferred fact, resumed; a human prompt carried
- *            it (peeked) but was cut off before it committed.
+ *  peeked    Stopped, owed a deferred fact, resumed; a human prompt claimed
+ *            it and the process died before that prompt's run ended.
  *  held      Stopped and still held at the restart.
- *  delivered Stopped, resumed, delivered and committed before the restart.
+ *  delivered Stopped, resumed, delivered, and its runs ended cleanly before
+ *            the restart.
  *  never     Never stopped; busy at the restart.
  *  before    Owed (busy) BEFORE a Stop landed; then stopped and resumed.
  */
@@ -48,13 +49,27 @@ const script = `
     held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,
-    offer: async (sessionId, _offer, key) => {
-      offered.push(sessionId + "=" + key);
+    offer: async (sessionId, offer, _key, attempt) => {
+      offered.push(sessionId + "=" + offer.contextBlock);
       const result = answer[sessionId] ?? "delivered";
       if (result === "throw") throw new Error("provider exploded");
+      if (result === "delivered") handled(sessionId, attempt);
       return result;
     },
   });
+  // A turn as the facade runs it: claimed, appended into a run, and that run
+  // ended cleanly — the one thing that retires a fact.
+  let runs = 0;
+  const handled = (sessionId, attempt) => {
+    runs += 1;
+    const runId = phase + "-run-" + runs;
+    // An offer's attempt claims in its \`admit\`; a deferred carrier is claimed already.
+    const hooks = typeof attempt.hooks === "function" ? attempt.hooks() : attempt.hooks;
+    hooks.admit?.();
+    hooks.onUserEntry("entry-" + runs, runId);
+    attempt.finished(undefined);
+    notices.settleBackgroundHandling(sessionId, { runId, stopReason: "end", abortRequested: false });
+  };
   const finished = (owner, label, stop) => {
     const item = backgroundWorkStore.reserveItem({
       ownerSessionId: owner, backend: "host-process", kind: "shell", label,
@@ -97,9 +112,10 @@ const script = `
       hold.resumeAutomaticTurns(owner);
     for (const owner of ["busy", "gone", "failed", "delivered"])
       await delivery.requestDrain(owner).catch(() => {});
-    // A prompt that carried the deferred fact but never finished: peeked only.
-    out.peeked = Boolean(delivery.peekDeferredContext("peeked"));
-    delivery.peekDeferredContext("delivered")?.commit();
+    // A prompt claimed the deferred fact; the process dies before its run ends.
+    out.peeked = Boolean(delivery.claimDeferredContext("peeked"));
+    const carried = delivery.claimDeferredContext("delivered");
+    if (carried) handled("delivered", carried);
   } else {
     reconcileBackgroundWorkOnBoot();
     if (phase === "reboot") for (const owner of owners) hold.holdAutomaticTurns(owner);
@@ -110,12 +126,16 @@ const script = `
     for (const owner of owners) await delivery.requestDrain(owner);
     out.deferred = {};
     for (const owner of owners) {
-      const pending = delivery.peekDeferredContext(owner);
+      const pending = delivery.claimDeferredContext(owner);
       if (pending) {
         out.deferred[owner] = pending.block;
-        pending.commit();
+        handled(owner, pending);
       }
     }
+    const { backgroundDeliveryOutboxStore } = await import(${JSON.stringify(url("./db/backgroundDeliveryOutboxStore.ts"))});
+    out.unhandled = Object.fromEntries(
+      owners.map((o) => [o, backgroundDeliveryOutboxStore.interruptedCount(o)]).filter(([, n]) => n > 0),
+    );
   }
   out.offered = offered;
   console.log("RESULT " + JSON.stringify(out));
@@ -144,7 +164,7 @@ const ownersOf = (offered: string[]) => offered.map((o) => o.split("=")[0]);
 
 test("a fact a Stop touched is delivered after a restart unless it already was, a Resume notwithstanding", async () => {
   const seed = await runPhase("seed");
-  assert.equal(seed.peeked, true, "the cut-off prompt did carry it");
+  assert.equal(seed.peeked, true, "the cut-off prompt did claim it");
   // Offered before the restart: never the released-but-undrained owner, nor
   // the ones still held or holding only a deferred fact (a busy one is
   // offered on every drain).
@@ -160,8 +180,13 @@ test("a fact a Stop touched is delivered after a restart unless it already was, 
   const boot = await runPhase("boot");
   assert.deepEqual(
     boot.restore,
-    { restored: 9, forgotten: 1 },
-    "every undelivered fact a Stop touched comes back; the never-stopped one is forgotten",
+    { restored: 8, forgotten: 1, interrupted: 1 },
+    "every unexposed fact a Stop touched comes back; the never-stopped one is forgotten; the claimed one is interrupted",
+  );
+  assert.deepEqual(
+    boot.unhandled,
+    { peeked: 1 },
+    "possibly exposed before the restart: never offered again on its own",
   );
   // Released before the restart: offered at boot, held or not by then. Each
   // exactly once; neither the delivered nor the never-stopped owner again.
@@ -179,23 +204,26 @@ test("a fact a Stop touched is delivered after a restart unless it already was, 
   );
   for (const owner of ["before", "busy", "failed", "gone", "release", "held"]) {
     const key = boot.offered.find((o: string) => o.startsWith(owner + "="));
+    assert.ok(key, owner);
     assert.ok(key.includes(seed.items[`${owner}:wake`]), owner);
   }
-  assert.deepEqual(Object.keys(boot.deferred).sort(), [
-    "held",
-    "peeked",
-    "release",
-  ]);
-  for (const owner of ["held", "peeked", "release"])
+  assert.deepEqual(Object.keys(boot.deferred).sort(), ["held", "release"]);
+  for (const owner of ["held", "release"])
     assert.ok(
       boot.deferred[owner].includes(seed.items[`${owner}:deferred`]),
       `${owner}: its deferred fact rides the next turn`,
     );
 
-  // Everything was delivered or committed, and every owner is stopped again
-  // before this restart: nothing is left to repeat.
+  // Everything was handled, and every owner is stopped again before this
+  // restart: nothing is left to repeat, and the interrupted fact still waits
+  // for the user — through a second restart too.
   const reboot = await runPhase("reboot");
-  assert.deepEqual(reboot.restore, { restored: 0, forgotten: 0 });
+  assert.deepEqual(reboot.restore, {
+    restored: 0,
+    forgotten: 0,
+    interrupted: 0,
+  });
   assert.deepEqual(reboot.offered, []);
   assert.deepEqual(reboot.deferred, {});
+  assert.deepEqual(reboot.unhandled, { peeked: 1 });
 }, 180_000);

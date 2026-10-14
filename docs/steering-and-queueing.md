@@ -266,32 +266,26 @@ unheld.
   their pending batch. The refusal is a `SessionBusyError`, which every caller
   answers by waiting for a later edge rather than retrying or dropping.
 - **Background facts survive a restart.** Completions owed to a session are
-  recorded in `background_delivery_outbox` (identities only; the notice is
-  rebuilt from its background-work row) and leave it once delivered or dropped
-  by the bounded queue, never on a failed offer or a shutdown. A row a Stop
-  touched — saved while its session was held, or owed when a Stop landed — is
-  `retained`, and so is every frozen-deadline Stop's fact, whose receipt the
-  store writes in the same transaction as the terminal row (nothing else would
-  tell the owner its work ended, so no crash after that commit may lose it).
-  Boot restores every retained row with its original wake or defer decision
-  until it is delivered, held or not: a Resume authorizes delivery, it does not
-  perform it, so a fact released and then cut off by the restart, refused as
-  busy or unavailable, or carried by a prompt that never committed comes back. A
+  recorded in `background_delivery_outbox` (identities and categories only; the
+  notice is rebuilt from its background-work row). A row a Stop touched — saved
+  while its session was held, or owed when a Stop landed — is `retained`, and so
+  is every frozen-deadline Stop's fact, whose receipt the store writes in the
+  same transaction as the terminal row (nothing else would tell the owner its
+  work ended, so no crash after that commit may lose it). Boot restores every
+  retained row that was never exposed, with its original wake or defer decision:
+  a Resume authorizes delivery, it does not perform it, so a fact released and
+  then cut off by the restart, or refused as busy or unavailable, comes back. A
   session no longer held is offered its restored wake facts at boot through the
   usual peer-first drain; one still held waits for Resume; a deferred fact rides
-  the next turn. Any other row is forgotten at boot, as pending delivery always
-  was, so no past job is announced again. Delivery is at-least-once: a fact is
-  retired only after its turn resolved (a deferred fact, after its carrying
-  prompt was appended and resolved), so a restart inside an admitted turn
-  delivers it again. What is guaranteed not to be lost before admission is a
-  retained row: a deadline fact from its terminal commit on, any other fact from
-  the moment its session is held. Not covered: an unretained fact, which boot
-  forgets by design; a deadline Stop still unacknowledged at the crash, which
-  never reached a terminal row, ends `lost` at boot and announces nothing; and a
-  deadline receipt the database refuses, which rolls back the terminal
-  transition with it, so the row stays running until the work's real end is
-  reported or boot marks it `lost`. Monitor activity stays the lossy in-memory
-  stream it always was.
+  the next turn. Any other unexposed row is forgotten at boot, as pending
+  delivery always was, so no past job is announced again. Not covered: an
+  unretained fact, which boot forgets by design; a deadline Stop still
+  unacknowledged at the crash, which never reached a terminal row, ends `lost`
+  at boot and announces nothing; and a deadline receipt the database refuses,
+  which rolls back the terminal transition with it, so the row stays running
+  until the work's real end is reported or boot marks it `lost`. Monitor
+  activity stays the lossy in-memory stream it always was. Exposed facts follow
+  the next section instead.
 - **What lifts it.** The user, and only under the Stop that stood when they
   acted. Every Stop starts a new generation, also on a held session; the
   authority a message captures as it is sent names that generation, so a newer
@@ -312,6 +306,116 @@ unheld.
   the composer ledge stays with its Resume ("Stopped"). The permanent Assistant
   shows no drafts, but `/assistant` gets the same Resume alone; it is the one
   queue command the server accepts for that session.
+
+### Delivered is not handled
+
+A background fact that reached the model has been DELIVERED; it has been HANDLED
+only when the turn it reached ends cleanly. Until then its outbox row stays, and
+a turn that fails, is stopped or is cut off leaves it for the user
+(`completionDelivery.ts`, `backgroundCompletionNotices.ts`).
+
+- **Phases.** A row is `owed` until a prompt carries it. One attempt claims the
+  whole batch right before that prompt's append, after its last await: the
+  facade's `admit` does it for a wake, the deferred claim for a fact riding
+  another turn. The claim is `reserved`, all or nothing, a compare-and-set. A
+  claim the store refuses or cannot write exposes nothing, and the fact waits as
+  if the session were busy. The append binds the batch to the run it opened or
+  joined (`handling`, with the run and entry ids). Only that run's `RunOutcome`
+  settles it: a clean end nobody aborted retires exactly the rows bound to it;
+  an abort somebody asked for (a Stop, a stand-down, a teardown) makes them
+  `interrupted` as `stopped`, and any other end as `failed`. The runtime decides
+  which end came first, so a failure reported before a Stop stays a failure.
+  Whether the prompt resolved or threw, an idle edge, output, a viewer, or
+  another run ending cleanly settles nothing, and a stale, duplicate or foreign
+  callback finds no row to move.
+- **Exposure comes from the runtime, never from an error.** The runtime calls
+  `onProviderCall` right before it hands the adapter any prompt, with the run
+  open then, and `onProviderDeclined` only when the adapter answered that it
+  took nothing: a steer-only `steered: false`, a deferred steer never sent or
+  dropped unread on the provider's word, an ordinary steer the provider
+  rejected. A claimed batch goes back to where it was (owed and queued in order,
+  or interrupted as it was for a Recover) only when the provider never had the
+  prompt or declined it. Everything else after the claim is interrupted as
+  `unknown` and never offered again: a steer the provider took whose entry then
+  failed to write, a deferred acceptance that arrives after its run closed (a
+  teardown, a Stop), a provider that threw mid-call, and a steer whose run
+  closed before the app recorded it (the entry would open another run, so which
+  run read it, and how that run ended, cannot be told). An entry written and
+  then failing its own bookkeeping before the provider was called is not
+  exposure: the model never read it. A claim always has its receipt: a fact
+  whose save was refused is recorded by the claim itself, while a row that is
+  simply absent was retired and stays so. One item is one debt: a later revision
+  of the terminal row (a retained host re-stamping its children) neither adds a
+  row nor reopens one.
+- **Settlement that cannot be written.** A binding the store refuses leaves the
+  batch claimed under its attempt, which the run's outcome then settles by
+  attempt. A settlement the store refuses is kept in memory and retried at the
+  next run end of any session; the runtime's emitter swallows a listener's
+  exception, so nothing here throws. A process that dies first leaves those rows
+  claimed or bound, and boot interrupts them.
+- **Restart.** No run survives a process. Boot first marks every `reserved` or
+  `handling` row `interrupted` as `restart`, then restores owed rows as above.
+  It runs inside the synchronous listen callback, before anything this process
+  prompts. Interrupted rows outlive every later restart, retained or not, and
+  are never offered on their own.
+- **Recover and Dismiss.** Only the user moves an interrupted fact, and only the
+  ones they were shown: the session state carries the oldest 20 as identities
+  (`unhandledBackgroundBatch`: job, owed revision, the attempt it was
+  interrupted in), and both commands name them. A fact interrupted after the
+  user looked, a newer attempt of the same fact, or one a Recover is carrying
+  matches nothing. Recover hands the matching facts to one NEW turn; Dismiss
+  cancels their receipts. Dismiss is not handling: the job, its output and the
+  Stop hold are untouched, and nothing records the facts as handled. Resume, a
+  later turn of the user's or an agent's, an idle edge, a boot and a notice
+  recover nothing. Recover is refused while the session is stopped (resume
+  first; a held session is not even acquired), archived, deleted or running,
+  checked again after the harness acquisition, and the run door rechecks the
+  hold and the worktree after its last await; a refusal there leaves the facts
+  interrupted as they were, never owed. Its turn carries a bounded model-only
+  reference: each task id (never cut), the revision it was owed under, label,
+  state, output file, link, the earlier entry and how that attempt ended, and
+  how many are left. The earlier block was model-only and may be gone from the
+  provider's context, so the reference tells the agent to read each fact with
+  `background_tasks` status and its output file, from the durable row and
+  artifact. It never carries the original block or prompt again and reruns no
+  job, tool or turn. Its claim is a compare-and-set on each fact's interrupted
+  attempt, so a second Recover or a Dismiss racing it takes nothing. That turn's
+  clean end retires its rows; any other end interrupts them again under the
+  recovery's attempt. Nothing promises that the agent's side effects happen
+  exactly once, or that the job's purpose was achieved.
+- **What the user sees.** `SessionState.unhandledBackgroundUpdates` and
+  `unhandledBackgroundBatch` (sent with `backgroundUpdateQueue`) put a row on
+  `PromptQueueLedge`: "N background updates were given to a turn that did not
+  finish", with Recover (disabled with its reason while stopped or running) and
+  Dismiss; the permanent Assistant gets the same row. A recovery turn's card
+  says it is one. Session inspection reports
+  `queuedWork.unhandledBackgroundUpdates`. The session list carries
+  `unhandledBackgroundUpdates` and `handlingBackgroundUpdates` (claimed or bound
+  rows whose outcome is not recorded), and either holds settlement and automatic
+  archival (`settleBlockedReason`), so the only place to recover them never
+  disappears.
+- **Sources stay readable.** The per-session artifact cap (80) never evicts the
+  output artifact of a fact with an outbox row in any phase; everything else
+  keeps the cap. A guard that cannot answer evicts nothing that time.
+  Background-work rows have no retention of their own.
+- **What it cannot see.** The Claude CLI injects its own `<task-notification>`
+  into a running turn and may wake itself for its own task through a turn with
+  no PA entry. Neither is bound to a PA receipt, so neither handles one, clean
+  or failed: the delivery policy keeps deferring a `claude-query` fact that
+  settled in a live turn, and PA's receipt is retired only by a later turn PA's
+  own prompt reached. Whether the model acted on the CLI's own notification is
+  not observable; the PA fact stays owed for the next PA turn, and is
+  recoverable like any other if that turn does not finish. Logs name a category
+  or an error class, never a provider message.
+- **Limits.** A claim or binding cut off by a process death or power loss is
+  read as `restart`, since the provider may have taken it; a clean end whose
+  retirement write never landed is read the same way, so the user may be asked
+  to recover a fact a clean turn did handle. A wake or deferred block the prompt
+  cap cannot carry whole takes the oldest updates and leaves the rest owed for
+  the next turn. The bounded queue's overflow still drops never-exposed facts as
+  before (oldest deferred, newest wake), and a single update too large for the
+  prompt cap even when trimmed is carried as a count. The table lives in one
+  database: two servers on one data directory are not supported.
 
 ### Composer
 

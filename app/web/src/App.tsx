@@ -419,6 +419,8 @@ const EMPTY_PROMPT_QUEUE: import("@assistant/shared").PromptQueueState = {
   items: [],
   paused: false,
 };
+const EMPTY_UNHANDLED_BATCH: import("@assistant/shared").BackgroundHandlingRef[] =
+  [];
 /** The permanent Assistant's ledge after a Stop: its hold, and no drafts. */
 const HELD_ASSISTANT_QUEUE: import("@assistant/shared").PromptQueueState = {
   items: [],
@@ -5670,20 +5672,46 @@ function AppContent() {
     ? displaySession?.queuedPeerPrompts
     : undefined;
   const sessionCanSteer = Boolean(displaySession?.canSteer);
+  const shownBackgroundUpdates = displaySession?.queuedBackgroundUpdates ?? 0;
+  const shownUnhandledBackground =
+    displaySession?.unhandledBackgroundUpdates ?? 0;
+  // The exact updates Recover and Dismiss act on: what the user was shown.
+  const shownUnhandledBatch =
+    displaySession?.unhandledBackgroundBatch ?? EMPTY_UNHANDLED_BATCH;
+  const unhandledSessionId =
+    shownUnhandledBackground > 0 ? displaySession?.sessionId : undefined;
   // The permanent Assistant queues its intake on its own and shows no drafts,
-  // but a Stop holds it like any session: it gets the hold's Resume alone.
+  // but a Stop holds it like any session: it gets the hold's Resume alone, and
+  // the Recover of updates a turn did not finish.
+  const assistantHeld = Boolean(
+    displaySession?.promptQueue?.automaticTurnsHeld,
+  );
   const heldAssistantSessionId =
     route.name === "permanentAssistant" &&
-    displaySession?.promptQueue?.automaticTurnsHeld
-      ? displaySession.sessionId
+    (assistantHeld || shownUnhandledBackground > 0)
+      ? displaySession?.sessionId
       : undefined;
-  const shownBackgroundUpdates = displaySession?.queuedBackgroundUpdates ?? 0;
   const promptQueueLedge = useMemo(
     () =>
       heldAssistantSessionId ? (
         <PromptQueueLedge
-          queue={HELD_ASSISTANT_QUEUE}
+          queue={assistantHeld ? HELD_ASSISTANT_QUEUE : EMPTY_PROMPT_QUEUE}
           backgroundUpdates={shownBackgroundUpdates}
+          unhandledBackgroundUpdates={shownUnhandledBackground}
+          onRecoverBackground={() =>
+            sendPromptQueue({
+              type: "recoverBackgroundUpdates",
+              sessionId: heldAssistantSessionId,
+              items: shownUnhandledBatch,
+            })
+          }
+          onDismissBackground={() =>
+            sendPromptQueue({
+              type: "dismissBackgroundUpdates",
+              sessionId: heldAssistantSessionId,
+              items: shownUnhandledBatch,
+            })
+          }
           running={displayStreaming}
           canSteer={false}
           onRemove={noop}
@@ -5697,13 +5725,29 @@ function AppContent() {
         />
       ) : (shownPromptQueue ||
           shownQueuingLocally.length > 0 ||
-          (shownQueuedPeers?.length ?? 0) > 0) &&
+          (shownQueuedPeers?.length ?? 0) > 0 ||
+          unhandledSessionId) &&
         queueSessionId ? (
         <PromptQueueLedge
           queue={shownPromptQueue ?? EMPTY_PROMPT_QUEUE}
           queuing={shownQueuingLocally}
           peers={shownQueuedPeers}
           backgroundUpdates={shownBackgroundUpdates}
+          unhandledBackgroundUpdates={shownUnhandledBackground}
+          onRecoverBackground={() =>
+            sendPromptQueue({
+              type: "recoverBackgroundUpdates",
+              sessionId: queueSessionId,
+              items: shownUnhandledBatch,
+            })
+          }
+          onDismissBackground={() =>
+            sendPromptQueue({
+              type: "dismissBackgroundUpdates",
+              sessionId: queueSessionId,
+              items: shownUnhandledBatch,
+            })
+          }
           running={displayStreaming}
           canSteer={sessionCanSteer}
           onRemove={(id) =>
@@ -5745,10 +5789,14 @@ function AppContent() {
       ) : undefined,
     [
       heldAssistantSessionId,
+      assistantHeld,
       shownPromptQueue,
       shownQueuingLocally,
       shownQueuedPeers,
       shownBackgroundUpdates,
+      shownUnhandledBackground,
+      shownUnhandledBatch,
+      unhandledSessionId,
       openSession,
       queueSessionId,
       displayStreaming,

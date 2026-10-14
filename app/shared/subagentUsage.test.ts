@@ -107,4 +107,20 @@ describe("subagent usage and delegation projections", () => {
       } satisfies SessionListItem),
     ).toBe("it still has active delegated work.");
   });
+
+  it("holds settlement while background updates it was given are unhandled", () => {
+    const row = {
+      id: "owner",
+      harness: "pi",
+      agentType: "developer",
+      title: "Owner",
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 1,
+    } satisfies SessionListItem;
+    expect(settleBlockedReason(row)).toBeUndefined();
+    expect(settleBlockedReason({ ...row, unhandledBackgroundUpdates: 2 })).toBe(
+      "background updates it was given were not handled.",
+    );
+  });
 });

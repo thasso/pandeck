@@ -146,14 +146,28 @@ function harness() {
       outbox: notices.backgroundDeliveryOutbox,
       queueChanged: (sessionId) =>
         queueCounts.push([sessionId, delivery.queuedCount(sessionId)]),
-      offer: async (sessionId, offer) => {
+      offer: async (sessionId, offer, _key, attempt) => {
         duringOffer?.(sessionId);
         // The run door refuses a held session as busy (`runtimePrompt.ts`).
         const answer = hold.automaticTurnsHeld(sessionId)
           ? "busy"
           : (answers.get(sessionId) ?? "delivered");
         events.push(`offer:${sessionId}:${answer}`);
-        if (answer === "delivered") offers.push({ sessionId, offer });
+        if (answer === "delivered") {
+          offers.push({ sessionId, offer });
+          // The turn as the facade runs it: claimed, appended into a run, and
+          // settled by that run's clean end.
+          serial += 1;
+          const runId = `run-${serial}`;
+          attempt.reserve();
+          attempt.exposed(`entry-${serial}`, runId);
+          attempt.finished(undefined);
+          notices.settleBackgroundHandling(sessionId, {
+            runId,
+            stopReason: "end",
+            abortRequested: false,
+          });
+        }
         return answer;
       },
     });
@@ -288,10 +302,16 @@ test("an explicit Stop keeps its deferral and is not retained across restart", a
     owed(session).map((row) => [row.disposition, row.retained]),
     [["defer", false]],
   );
-  const carried = h.delivery.peekDeferredContext(session)!;
+  const carried = h.delivery.claimDeferredContext(session)!;
   assert.match(carried.block, new RegExp(item.id));
   assert.doesNotMatch(carried.block, /frozen deadline/);
-  carried.commit();
+  carried.hooks.onUserEntry?.("entry-explicit", "run-explicit");
+  carried.finished(undefined);
+  notices.settleBackgroundHandling(session, {
+    runId: "run-explicit",
+    stopReason: "end",
+    abortRequested: false,
+  });
   assert.deepEqual(owed(session), []);
 });
 
@@ -415,6 +435,7 @@ test("a later metadata revision on the terminal row neither orphans nor duplicat
   assert.deepEqual(notices.restoreOwedBackgroundDelivery(after.delivery), {
     restored: 1,
     forgotten: 0,
+    interrupted: 0,
   });
   hold.resumeAutomaticTurns(session);
   await after.delivery.requestDrain(session);
@@ -426,5 +447,6 @@ test("a later metadata revision on the terminal row neither orphans nor duplicat
   assert.deepEqual(notices.restoreOwedBackgroundDelivery(harness().delivery), {
     restored: 0,
     forgotten: 0,
+    interrupted: 0,
   });
 });

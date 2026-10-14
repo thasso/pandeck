@@ -33,6 +33,14 @@ export interface PromptQueueLedgeProps {
    * content is model context. Said only while a Stop holds them.
    */
   backgroundUpdates?: number;
+  /**
+   * Background updates given to a turn that did not finish
+   * (`SessionState.unhandledBackgroundUpdates`). Never sent again on their
+   * own: Recover hands them to a new turn, Dismiss lets them go.
+   */
+  unhandledBackgroundUpdates?: number;
+  onRecoverBackground?: (() => void) | undefined;
+  onDismissBackground?: (() => void) | undefined;
   /** A turn is running, so a queued message can be steered into it. */
   running: boolean;
   /** The provider takes a steer at all. */
@@ -90,6 +98,9 @@ export function PromptQueueLedge({
   queuing = [],
   peers = [],
   backgroundUpdates = 0,
+  unhandledBackgroundUpdates = 0,
+  onRecoverBackground,
+  onDismissBackground,
   running,
   canSteer,
   onRemove,
@@ -138,7 +149,8 @@ export function PromptQueueLedge({
   // A Stop holds what agents and background work queued for the session even
   // when the user has nothing queued: the strip stays for its Resume.
   const held = queue.paused || Boolean(queue.automaticTurnsHeld);
-  if (count === 0 && !held) return null;
+  const unhandled = unhandledBackgroundUpdates;
+  if (count === 0 && !held && unhandled === 0) return null;
   const steering = running && canSteer;
   const Chevron = open ? ChevronDown : ChevronRight;
   const sendNow = (id: string) => {
@@ -162,7 +174,9 @@ export function PromptQueueLedge({
             ? count > 0
               ? `Queue paused · ${count}`
               : "Stopped"
-            : `${count} queued`}
+            : count > 0
+              ? `${count} queued`
+              : `${unhandled} background ${unhandled === 1 ? "update" : "updates"} not handled`}
         </span>
         <Chevron aria-hidden="true" />
       </Button>
@@ -207,6 +221,20 @@ export function PromptQueueLedge({
               />
             ))}
           </ul>
+          {unhandled > 0 ? (
+            <UnhandledBackgroundRow
+              count={unhandled}
+              blocked={
+                held
+                  ? "Resume the session first."
+                  : running
+                    ? "Recover once the running turn ends."
+                    : undefined
+              }
+              onRecover={onRecoverBackground}
+              onDismiss={onDismissBackground}
+            />
+          ) : null}
           {held ? (
             <div className="flex h-7 items-center justify-end gap-1.5 pr-1.5 pl-2.5">
               <span>{heldSentence(count, backgroundUpdates)}</span>
@@ -216,6 +244,54 @@ export function PromptQueueLedge({
             </div>
           ) : null}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Background updates a turn was given and did not finish handling. Nothing
+ * sends them again by itself — not Resume, not the next message — so the row
+ * carries the user's two answers: Recover (a new turn picks them up from the
+ * conversation) or Dismiss (let them go).
+ */
+function UnhandledBackgroundRow({
+  count,
+  blocked,
+  onRecover,
+  onDismiss,
+}: {
+  count: number;
+  /** Why Recover cannot run now, if it cannot. */
+  blocked: string | undefined;
+  onRecover: (() => void) | undefined;
+  onDismiss: (() => void) | undefined;
+}) {
+  return (
+    <div
+      data-unhandled-background
+      className="flex min-h-7 items-center justify-end gap-1.5 py-0.5 pr-1.5 pl-2.5"
+    >
+      <span className="min-w-0 flex-1">
+        {count === 1
+          ? "1 background update was given to a turn that did not finish."
+          : `${count} background updates were given to a turn that did not finish.`}
+      </span>
+      {onDismiss ? (
+        <Button variant="ghost" size="xs" onClick={onDismiss}>
+          Dismiss
+        </Button>
+      ) : null}
+      {onRecover ? (
+        <Button
+          variant="secondary"
+          size="xs"
+          disabled={blocked !== undefined}
+          title={blocked}
+          onClick={onRecover}
+        >
+          Recover
+        </Button>
       ) : null}
     </div>
   );

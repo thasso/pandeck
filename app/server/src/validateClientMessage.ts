@@ -85,6 +85,31 @@ const STRING_ARRAY: FieldSpec = {
 const ARRAY: FieldSpec = { check: Array.isArray, kind: "an array" };
 const OBJECT: FieldSpec = { check: isPlainObject, kind: "an object" };
 
+/**
+ * The background updates a Recover or Dismiss names: one Recover's worth at
+ * most (`BACKGROUND_RECOVERY_BATCH`), each a bounded safe identity.
+ */
+const BACKGROUND_REFS: FieldSpec = {
+  check: (value: unknown) =>
+    Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= 20 &&
+    value.every(
+      (ref) =>
+        isPlainObject(ref) &&
+        isString(ref.itemId) &&
+        ref.itemId.length > 0 &&
+        ref.itemId.length <= 200 &&
+        Number.isSafeInteger(ref.revision) &&
+        (ref.revision as number) >= 0 &&
+        (ref.attemptId === null ||
+          (isString(ref.attemptId) &&
+            ref.attemptId.length > 0 &&
+            ref.attemptId.length <= 200)),
+    ),
+  kind: "1 to 20 background update identities",
+};
+
 type FieldSpecMap = Record<string, FieldSpec>;
 
 /** Each present field must be the right kind. Absent fields are allowed. */
@@ -889,6 +914,14 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   resumePromptQueue: fields({ sessionId: STRING }),
   sendQueuedPeerPromptNow: fields({ sessionId: STRING, id: STRING }),
   withdrawQueuedPeerPrompt: fields({ sessionId: STRING, id: STRING }),
+  recoverBackgroundUpdates: fields({
+    sessionId: STRING,
+    items: BACKGROUND_REFS,
+  }),
+  dismissBackgroundUpdates: fields({
+    sessionId: STRING,
+    items: BACKGROUND_REFS,
+  }),
   acceptCommitDryRun: fields({ entryId: STRING }),
   respondToQuestion: fields({ response: OBJECT }),
   abort: NONE,

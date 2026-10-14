@@ -311,11 +311,13 @@ the global rules already forbid those packages outside their own folders.
   `withDeferredBackgroundContext` folds it into the next eligible turn's
   `contextBlock` — beside the Plan hint, excluded from the durable log and the
   client projection — so the fact reaches the session before it acts again at no
-  turn cost. Steering follow-ups and hidden rebuild/fork prompts are excluded:
-  neither is a turn the agent reasons in. Reading is non-destructive and
-  `commit` rides `onUserEntry`, so a refused or deduplicated turn cannot consume
-  the only copy, and the committed set is snapshotted at peek time so a notice
-  deferred in between is not dropped unsent. The deferred preamble states that
+  turn cost. Every prompt carries it, hidden and steering ones included. The
+  carrying prompt CLAIMS the block right before its append
+  (`claimDeferredContext`), the append binds it to the run it joined, and only
+  that run's clean end retires it; a prompt refused before its append gives it
+  back, and any other end leaves it interrupted for the user's Recover
+  (`../../steering-and-queueing.md`, "Delivered is not handled"). A notice
+  deferred after the claim is not part of it. The deferred preamble states that
   it is context rather than a request and makes NO claim about the turn carrying
   it — the failure it avoids is one this system produced: a provider
   notification prepended to a human turn under the assertion "no human input has

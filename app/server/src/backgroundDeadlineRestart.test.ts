@@ -54,12 +54,25 @@ const script = `
     held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,
-    offer: async (sessionId, offer) => {
+    offer: async (sessionId, offer, _key, attempt) => {
       const result = answer[sessionId] ?? "delivered";
       offered.push({ sessionId, result, block: offer.contextBlock });
+      if (result === "delivered") handled(sessionId, attempt);
       return result;
     },
   });
+  // A turn as the facade runs it: claimed, appended into a run, and that run
+  // ended cleanly — the one thing that retires a fact.
+  let runs = 0;
+  const handled = (sessionId, attempt) => {
+    runs += 1;
+    const runId = "run-" + process.pid + "-" + runs;
+    attempt.reserve();
+    attempt.exposed("entry-" + runs, runId);
+    attempt.finished(undefined);
+    notices.settleBackgroundHandling(sessionId, { runId, stopReason: "end", abortRequested: false });
+  };
+
   let launches = 0;
   const stops = [];
   let now = 1000;
@@ -170,7 +183,7 @@ const script = `
     for (const id of owners) hold.resumeAutomaticTurns(id);
     for (const id of owners) await delivery.requestDrain(id);
     out.blocks = Object.fromEntries(offered.map((o) => [o.sessionId, o.block]));
-    out.deferred = owners.filter((id) => delivery.peekDeferredContext(id));
+    out.deferred = owners.filter((id) => delivery.queuedCount(id) > 0);
     out.inflight = backgroundWorkStore.getItem(process.argv[2]);
   }
   out.offered = offered.map((o) => o.sessionId + ":" + o.result);
@@ -246,7 +259,7 @@ test("a deadline fact survives a restart until delivered, and nothing older is a
   const boot = await runPhase("boot", seed.items.inflight);
   assert.deepEqual(
     boot.restore,
-    { restored: 4, forgotten: 2 },
+    { restored: 4, forgotten: 2, interrupted: 0 },
     "the explicit and legacy rows are forgotten as before",
   );
   assert.deepEqual(
@@ -274,7 +287,11 @@ test("a deadline fact survives a restart until delivered, and nothing older is a
   assert.equal(boot.stops, 0);
 
   const reboot = await runPhase("reboot", seed.items.inflight);
-  assert.deepEqual(reboot.restore, { restored: 0, forgotten: 0 });
+  assert.deepEqual(reboot.restore, {
+    restored: 0,
+    forgotten: 0,
+    interrupted: 0,
+  });
   assert.deepEqual(reboot.offered, []);
   assert.deepEqual(reboot.deferred, []);
 }, 180_000);
