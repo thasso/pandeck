@@ -158,6 +158,20 @@ describe("re-issuing a failed first send", () => {
       ).agent,
     ).toBe("test-reviewer");
   });
+
+  it("lands on the draft's own id when a restage gave it a new one", () => {
+    const draft = {
+      harness: "claude-sdk" as const,
+      agentType: "developer" as const,
+      provider: "claude-sdk",
+      modelId: "opus",
+    };
+    expect(
+      reissuedFirstSend(held, { ...draft, id: "restaged" }, { text: "again" })
+        .id,
+    ).toBe("restaged");
+    expect(reissuedFirstSend(held, draft, { text: "again" }).id).toBe("draft");
+  });
 });
 
 describe("staging an agent definition", () => {
@@ -196,6 +210,11 @@ describe("staging an agent definition", () => {
       agentDraft(list, "test-reviewer", accounts, "openai-1")?.accountId,
     ).toBe("claude-1");
     expect(agentDraft(list, "stale", accounts, "claude-1")).toBeUndefined();
+    // No account of its provider (or none read yet): nothing is staged.
+    expect(agentDraft(list, "test-reviewer", [], undefined)).toBeUndefined();
+    expect(
+      agentDraft(list, "test-reviewer", [accounts[0]!], "openai-1"),
+    ).toBeUndefined();
     expect(agentDraft(list, "nobody", accounts, "claude-1")).toBeUndefined();
   });
 

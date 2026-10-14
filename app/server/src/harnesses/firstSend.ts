@@ -14,6 +14,7 @@ import {
   type Harness,
   type TaskSessionRef,
 } from "@assistant/shared";
+import { publishAgentLibrary } from "../agents/agentLibraryList.ts";
 import {
   AgentSpawnRefusedError,
   resolveAgentSpawn,
@@ -101,6 +102,19 @@ async function firstSendAgent(
   req: FirstSendRequest,
   profileId: string,
 ): Promise<{ refusal: FirstSendRefusal } | { agent?: AgentSpawnRuntime }> {
+  const resolved = await resolveFirstSendAgent(req, profileId);
+  // The browser picked from the `agents` list it holds. A refusal means that
+  // list no longer matches the library (a hand edit, a model or account
+  // change), so it is published again: the draft then follows it, and the
+  // next send runs what the pickers show rather than being refused again.
+  if ("refusal" in resolved) void publishAgentLibrary().catch(() => undefined);
+  return resolved;
+}
+
+async function resolveFirstSendAgent(
+  req: FirstSendRequest,
+  profileId: string,
+): Promise<{ refusal: FirstSendRefusal } | { agent?: AgentSpawnRuntime }> {
   if (req.agent === undefined) return {};
   let agent: AgentSpawnRuntime;
   try {
@@ -126,11 +140,11 @@ async function firstSendAgent(
   // definition changed since, running its new one would differ from what the
   // user saw; say so instead of running it silently.
   const staged = [req.modelProvider, req.modelId, req.thinkingLevel];
-  const resolved = [agent.provider, agent.modelId, agent.thinkingLevel];
-  if (staged.some((value, at) => value !== undefined && value !== resolved[at]))
+  const current = [agent.provider, agent.modelId, agent.thinkingLevel];
+  if (staged.some((value, at) => value !== undefined && value !== current[at]))
     return {
       refusal: {
-        message: `Agent "${agent.agent.name}" now runs on ${agent.provider}/${agent.modelId} at ${agent.thinkingLevel} effort, not what was picked. Pick it again to start it.`,
+        message: `Agent "${agent.agent.name}" changed since it was picked: it now runs on ${agent.provider}/${agent.modelId} at ${agent.thinkingLevel} effort. The pickers now show its current runtime; send again to start it.`,
       },
     };
   return { agent };

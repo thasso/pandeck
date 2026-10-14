@@ -94,6 +94,8 @@ export function leftNewSessionPage(
 
 /** What the pickers show for the draft right now. */
 export interface DraftRuntime {
+  /** The staged session's id, when the draft has one of its own. */
+  id?: string | undefined;
   harness: Harness;
   agentType: AgentType;
   /** The account picked for it. */
@@ -110,7 +112,9 @@ export interface DraftRuntime {
  * consumed context (the Task, the worktree, the project to provision in) and
  * request identity are the held send's; what RUNS it is what the pickers show
  * now — engine, persona, account, model, effort and agent — so a pick made
- * after the failure is the one sent, and a dropped agent stays dropped.
+ * after the failure is the one sent, and a dropped agent stays dropped. A pick
+ * that restaged the draft gave it a new id, which the send takes too, so it
+ * lands on the session the page shows.
  */
 export function reissuedFirstSend(
   held: HarnessSendInput,
@@ -129,6 +133,7 @@ export function reissuedFirstSend(
   } = held;
   return {
     ...context,
+    id: draft.id ?? held.id,
     harness: draft.harness,
     agentType: draft.agentType,
     ...(draft.credentialProfileId !== undefined
@@ -159,7 +164,8 @@ export function withoutAgent(record: StagedSessionRecord): StagedSessionRecord {
  * What staging the definition `name` sets: its persona, engine, model and
  * effort, and the account to run it on — the picked one when it is of the
  * model's provider, else the first of that provider. Undefined when the
- * definition cannot start (unknown, or with a problem).
+ * definition cannot start (unknown, with a problem, or with no account of its
+ * provider), so a pick is never staged on another provider's account.
  */
 export function agentDraft(
   list: EntryLibraryList | undefined,
@@ -169,7 +175,7 @@ export function agentDraft(
 ):
   | (Omit<StagedSessionInput, "id" | "mode"> & {
       agent: string;
-      accountId?: string;
+      accountId: string;
     })
   | undefined {
   const runtime = agentRuntimeOf(list, name);
@@ -181,6 +187,7 @@ export function agentDraft(
         candidate.id === pickedAccountId &&
         candidate.provider === accountProvider,
     ) ?? accounts.find((candidate) => candidate.provider === accountProvider);
+  if (!account) return undefined;
   return {
     harness: harnessForModelProvider(runtime.provider),
     agentType: runtime.persona,
@@ -188,7 +195,7 @@ export function agentDraft(
     modelId: runtime.modelId,
     thinkingLevel: runtime.thinkingLevel,
     agent: name,
-    ...(account ? { accountId: account.id } : {}),
+    accountId: account.id,
   };
 }
 

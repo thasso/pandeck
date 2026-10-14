@@ -86,11 +86,13 @@ function render(
     mode?: SessionMode;
     agents?: LoadState<EntryLibraryList>;
     selectedAgent?: string | null;
+    profilesLoaded?: boolean;
   } = {},
 ): string {
   return renderToStaticMarkup(
     <NewSessionQuickStart
       credentialProfiles={opts.profiles ?? []}
+      credentialProfilesLoaded={opts.profilesLoaded ?? true}
       usageIndicators={opts.usageIndicators ?? null}
       selectedCredentialProfileId={opts.selectedProfileId}
       onSelectCredentialProfile={() => {}}
@@ -516,6 +518,15 @@ describe("NewSessionQuickStart", () => {
 });
 
 describe("agent definitions row", () => {
+  const claudeAccount = {
+    id: "claude-default",
+    name: "Default Claude",
+    provider: "claude",
+    enabled: true,
+    status: "ready",
+    createdAt: 1,
+    updatedAt: 1,
+  } as CredentialProfileSummary;
   const agents: EntryLibraryList = {
     libraryPath: "/data/agents",
     entries: [
@@ -542,6 +553,7 @@ describe("agent definitions row", () => {
     const html = render([], {
       agents: ready(agents),
       selectedAgent: "test-reviewer",
+      profiles: [claudeAccount],
     });
     expect(html).toContain("Agent definition");
     expect(html).toContain("test-reviewer");
@@ -554,6 +566,21 @@ describe("agent definitions row", () => {
     );
     expect(html).toContain(
       "<li>No enabled account offers a model &quot;gemini&quot;.</li>",
+    );
+  });
+
+  it("offers nothing before the accounts are read, nor without an account of its provider", () => {
+    const unread = render([], {
+      agents: ready(agents),
+      profilesLoaded: false,
+    });
+    expect(unread).toMatch(
+      /<button[^>]*\sdisabled=""[^>]*title="Start as test-reviewer: Reviews tests\."|<button[^>]*title="Start as test-reviewer: Reviews tests\."[^>]*\sdisabled=""/,
+    );
+
+    const noClaude = render([], { agents: ready(agents), profiles: [] });
+    expect(noClaude).toContain(
+      "<li>No enabled account runs claude-sdk models.</li>",
     );
   });
 
@@ -587,6 +614,10 @@ describe("agent definitions row", () => {
     const html = render([], { agents: loading() });
     expect(html).toContain("Agent definition");
     expect(html).toContain('aria-busy="true"');
+    // R6: the placeholder is a labelled status region, not just a busy list.
+    expect(html).toMatch(
+      /role="status" aria-label="Loading agent definitions"/,
+    );
     expect(html).not.toContain("test-reviewer");
   });
 

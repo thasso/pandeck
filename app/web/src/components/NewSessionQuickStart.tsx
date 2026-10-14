@@ -15,6 +15,7 @@ import {
   type ThinkingLevel,
   type WorktreeRecord,
   type CredentialProfileSummary,
+  accountProviderForModelProvider,
   agentRuntimeOf,
   type EntryLibraryList,
 } from "@assistant/shared";
@@ -464,6 +465,7 @@ export function NewSessionQuickStart({
 
         <AgentDefinitionRow
           state={agents}
+          accounts={credentialProfilesLoaded ? credentialProfiles : undefined}
           selectedAgent={selectedAgent}
           onSelectAgent={onSelectAgent}
         />
@@ -583,10 +585,16 @@ export function NewSessionQuickStart({
  */
 function AgentDefinitionRow({
   state,
+  accounts,
   selectedAgent,
   onSelectAgent,
 }: {
   state: LoadState<EntryLibraryList> | undefined;
+  /**
+   * The enabled accounts, once known. A definition is staged on an account of
+   * its model's provider, so none is offered before the accounts are read.
+   */
+  accounts: ReadonlyArray<{ provider: string }> | undefined;
   selectedAgent: string | null;
   onSelectAgent: (name: string | null) => void;
 }) {
@@ -596,9 +604,15 @@ function AgentDefinitionRow({
   if (isInitialLoad(state))
     return (
       <QuickRow label="Agent definition" busy>
-        {[0, 1].map((i) => (
-          <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
-        ))}
+        <div
+          role="status"
+          aria-label="Loading agent definitions"
+          className="flex gap-2"
+        >
+          {[0, 1].map((i) => (
+            <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
+          ))}
+        </div>
       </QuickRow>
     );
   if (!agents)
@@ -609,6 +623,19 @@ function AgentDefinitionRow({
     ) : null;
   // An authoritatively empty library has nothing to offer: no row.
   if (agents.entries.length === 0 && !error) return null;
+  // Why each definition cannot start here, if it cannot: the server's reason,
+  // or no enabled account of its model's provider.
+  const problemOf = (name: string): string | undefined => {
+    const runtime = agentRuntimeOf(agents, name);
+    if (runtime?.problem !== undefined) return runtime.problem;
+    if (runtime && accounts && !hasAccountFor(accounts, runtime.provider))
+      return `No enabled account runs ${runtime.provider} models.`;
+    return undefined;
+  };
+  const problems = agents.entries.flatMap((agent) => {
+    const problem = problemOf(agent.name);
+    return problem === undefined ? [] : [{ name: agent.name, problem }];
+  });
   return (
     <>
       <QuickRow
@@ -617,7 +644,7 @@ function AgentDefinitionRow({
       >
         {agents.entries.map((agent) => {
           const runtime = agentRuntimeOf(agents, agent.name);
-          const problem = runtime?.problem;
+          const problem = problemOf(agent.name);
           const selected = agent.name === selectedAgent;
           return (
             <QuickPill
@@ -626,7 +653,10 @@ function AgentDefinitionRow({
               // A definition that cannot start is not offered; the picked one
               // stays clickable so it can always be unpicked.
               disabled={
-                !selected && (problem !== undefined || runtime === undefined)
+                !selected &&
+                (problem !== undefined ||
+                  runtime === undefined ||
+                  accounts === undefined)
               }
               title={
                 problem ??
@@ -647,16 +677,11 @@ function AgentDefinitionRow({
       </QuickRow>
       {/* Why a definition cannot start, where touch and keyboard users see
           it too: a disabled pill's title never shows. */}
-      {agents.entries.some(
-        (agent) => agentRuntimeOf(agents, agent.name)?.problem !== undefined,
-      ) ? (
+      {problems.length > 0 ? (
         <ul className="px-4 text-sm text-muted-foreground">
-          {agents.entries.map((agent) => {
-            const problem = agentRuntimeOf(agents, agent.name)?.problem;
-            return problem !== undefined ? (
-              <li key={agent.name}>{problem}</li>
-            ) : null;
-          })}
+          {problems.map(({ name, problem }) => (
+            <li key={name}>{problem}</li>
+          ))}
         </ul>
       ) : null}
       {error ? (
@@ -666,4 +691,13 @@ function AgentDefinitionRow({
       ) : null}
     </>
   );
+}
+
+/** Whether an enabled account can run a model of this provider. */
+function hasAccountFor(
+  accounts: ReadonlyArray<{ provider: string }>,
+  modelProvider: string,
+): boolean {
+  const provider = accountProviderForModelProvider(modelProvider);
+  return accounts.some((account) => account.provider === provider);
 }

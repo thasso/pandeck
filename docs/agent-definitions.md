@@ -362,25 +362,29 @@ The new-session page offers the definitions as an "Agent definition" row
 (`NewSessionQuickStart`): it reserves its place while the first read is out,
 keeps its pills with an indicator through a rescan, says a failed read in place,
 and has no row for an empty library. Picking one stages its persona, model and
-effort, on an account of the model's provider. The pick lives on the staged
-session record (`lib/stagedSession.ts`), so a model, effort, account or persona
-pick from any picker drops it, as do a fresh start and leaving the page; staging
-a worktree for the same persona keeps it. A first send retried after a failure,
-from the composer or a Retry button, runs what the pickers show then: engine,
-persona, account, model, effort and agent (`reissuedFirstSend`). A
-comment-review draft offers no definitions: its handoff creates the session
-without a first send. The row and the pick belong to `/sessions/create`, where
-the `agents` topic is held; the Sessions list route shows the draft without
-them, so a pick is dropped there. Every fresh draft (a new session, one for a
-Task, project, file, pull request or review) also retires a first send held for
-retry. The pick follows the agents list (`reconcileStagedAgent`): a definition
-that is gone or cannot start any more is dropped, and one whose runtime changed
-is restaged, so the pickers show what will run. The first send carries `agent`,
-and the server resolves the definition again on the picked account
-(`harnesses/firstSend.ts`): the session runs on the definition's model and
-effort and freezes it exactly as a spawn does. A persona, engine, model or
-effort that no longer matches the definition refuses the send rather than run
-something other than what the pickers showed.
+effort, on an account of the model's provider; a definition is offered only once
+the accounts are read and one of that provider is enabled. The pick lives on the
+staged session record (`lib/stagedSession.ts`), so a model, effort, account or
+persona pick from any picker drops it, as do a fresh start and leaving the page;
+staging a worktree for the same persona keeps it. A first send retried after a
+failure, from the composer or a Retry button, runs what the pickers show then:
+engine, persona, account, model, effort and agent (`reissuedFirstSend`), on the
+draft's own session id. A comment-review draft offers no definitions: its
+handoff creates the session without a first send. The row and the pick belong to
+`/sessions/create`, where the `agents` topic is held; the Sessions list route
+shows the draft without them, so a pick is dropped there. Every fresh draft (a
+new session, one for a Task, project, file or worktree, a pull request or
+review) also retires a first send held for retry. The pick follows the agents
+list (`reconcileStagedAgent`): a definition that is gone or cannot start any
+more is dropped, and one whose runtime changed is restaged, so the pickers show
+what will run. The first send carries `agent`, and the server resolves the
+definition again on the picked account (`harnesses/firstSend.ts`): the session
+runs on the definition's model and effort and freezes it exactly as a spawn
+does. A persona, engine, model or effort that no longer matches the definition
+refuses the send rather than run something other than what the pickers showed.
+The refusal says what the definition runs on now and republishes the agents
+list, so the draft follows it and the next send starts the definition.
+`appAudit.test.ts` holds `App` to the fresh-draft and re-issue helpers.
 
 ## Out of scope
 

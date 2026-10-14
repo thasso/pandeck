@@ -1138,6 +1138,14 @@ function AppContent() {
    * the one thing `stagedTranscript` promises never to do.
    */
   const [stagedSend, setStagedSend] = useState<StagedFirstSend | null>(null);
+  /**
+   * What every fresh-draft starter does first (`startNewChat`, the
+   * `startSessionFor*`/`In*` and review-draft starters; `appAudit.test.ts`
+   * holds them to it): a first send held for retry belongs to the draft being
+   * left, and re-issuing it would carry that draft's Task, worktree and
+   * project into the new one.
+   */
+  const beginFreshDraft = useCallback(() => setStagedSend(null), []);
   /** Structured review threads staged for the new-session composer; the first send performs the handoff. */
   const [pendingWorktreeReview, setPendingWorktreeReview] =
     useState<PendingWorktreeReview | null>(null);
@@ -2996,12 +3004,10 @@ function AppContent() {
     setPendingWorktreeReview(null);
     setSessionReviewDraft(null);
     setPendingStart(null);
-    // A failed first send held for retry belongs to the draft being thrown
-    // away; a fresh start must not re-issue it.
-    setStagedSend(null);
+    beginFreshDraft();
     navigate(SESSIONS_CREATE_PATH);
     setComposerFocusToken((token) => token + 1);
-  }, [navigate]);
+  }, [beginFreshDraft, navigate]);
 
   // Stage a fresh session optimistically. No server session is created and the
   // URL is NOT changed yet; the real session is established by the first prompt's
@@ -3266,8 +3272,7 @@ function AppContent() {
   // Worktree row scopes to it), then land on the new-session page.
   const startSessionForTask = useCallback(
     (taskId: string, title: string) => {
-      // A fresh draft: a first send held for retry belongs to the one left.
-      setStagedSend(null);
+      beginFreshDraft();
       setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
@@ -3287,6 +3292,7 @@ function AppContent() {
       revealNewSessionSurface();
     },
     [
+      beginFreshDraft,
       projectIdForTask,
       worktreeIdForTask,
       stageWorktreeContext,
@@ -3299,8 +3305,7 @@ function AppContent() {
   // first prompt (the composer shows it as removable staged context).
   const startSessionForProject = useCallback(
     (projectId: string) => {
-      // A fresh draft: a first send held for retry belongs to the one left.
-      setStagedSend(null);
+      beginFreshDraft();
       setPendingTaskAttach(null);
       setPendingFileContext(null);
       setPendingStart(null);
@@ -3311,7 +3316,7 @@ function AppContent() {
       navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
     },
-    [navigate, revealNewSessionSurface],
+    [beginFreshDraft, navigate, revealNewSessionSurface],
   );
 
   // Start a fresh session with a document staged as initial context (the
@@ -3319,8 +3324,7 @@ function AppContent() {
   // this file" routes here). `href` is the document's canonical viewer route.
   const startSessionForFile = useCallback(
     (href: string, title: string) => {
-      // A fresh draft: a first send held for retry belongs to the one left.
-      setStagedSend(null);
+      beginFreshDraft();
       setPendingTaskAttach(null);
       setPendingProjectContext(null);
       setPendingWorktreeContext(null);
@@ -3331,7 +3335,7 @@ function AppContent() {
       navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
     },
-    [navigate, revealNewSessionSurface],
+    [beginFreshDraft, navigate, revealNewSessionSurface],
   );
 
   // Following a comment link from the worktree panel's roster: the panel is the
@@ -3426,6 +3430,7 @@ function AppContent() {
   // same context the work already has instead of a bare worktree.
   const startSessionInWorktree = useCallback(
     (worktreeId: string) => {
+      beginFreshDraft();
       const context = sessionContextForWorktree(
         worktreeId,
         state.worktrees,
@@ -3451,6 +3456,7 @@ function AppContent() {
       });
     },
     [
+      beginFreshDraft,
       state.worktrees,
       backlogTasks,
       navigate,
@@ -3478,8 +3484,7 @@ function AppContent() {
       worktreeId: string,
       outcome: PullRequestCheckoutOutcome,
     ) => {
-      // A fresh draft: a first send held for retry belongs to the one left.
-      setStagedSend(null);
+      beginFreshDraft();
       // WHICH Task is decided by server ids only — the checkout's own edges
       // from this very answer, then the pull request's links — so a cold or
       // stale browser list can never be read as "there is no Task". The lists
@@ -3523,6 +3528,7 @@ function AppContent() {
       });
     },
     [
+      beginFreshDraft,
       backlogTasks,
       state.sessionListFresh,
       state.taskListFresh,
@@ -3541,8 +3547,7 @@ function AppContent() {
   // the worktree while the standard landing owns model/thinking/persona choice.
   const startWorktreeReviewDraft = useCallback(
     (worktreeId: string, commentIds: string[]) => {
-      // A fresh draft: a first send held for retry belongs to the one left.
-      setStagedSend(null);
+      beginFreshDraft();
       // Shared context-derivation rule (lib/sessionHandoff.ts, also behind
       // /review and a plain start in a worktree): the draft inherits the
       // worktree's project AND its single implementing Task, so the review
@@ -3608,6 +3613,7 @@ function AppContent() {
       });
     },
     [
+      beginFreshDraft,
       state.worktrees,
       state.worktreeComments,
       backlogTasks,
@@ -3633,8 +3639,7 @@ function AppContent() {
    */
   const startReviewSessionForSession = useCallback(
     (extraText = ""): string | null => {
-      // A fresh draft: a first send held for retry belongs to the one left.
-      setStagedSend(null);
+      beginFreshDraft();
       const sourceId = displayCurrentId;
       if (!sourceId || !displayHasUserPrompt)
         return "Nothing to review yet — this session has no work to look at.";
@@ -3679,6 +3684,7 @@ function AppContent() {
       return null;
     },
     [
+      beginFreshDraft,
       displayCurrentId,
       displayHasUserPrompt,
       displaySession?.worktreeId,
@@ -4456,7 +4462,7 @@ function AppContent() {
     );
     if (!draft) return;
     const { accountId, ...runtime } = draft;
-    if (accountId) setCredentialProfileId(accountId);
+    setCredentialProfileId(accountId);
     const current = pendingStart ?? stagedStart;
     startStagedSession({
       ...(current?.id !== undefined && current.id !== "pending-pi-session"
@@ -4468,14 +4474,50 @@ function AppContent() {
   };
   // The staged agent follows the library: a definition deleted, renamed or
   // made unrunnable is dropped, and one whose runtime changed is restaged, so
-  // the pickers keep showing what the first send will run.
-  const stageAgentRef = useRef(stageAgent);
-  stageAgentRef.current = stageAgent;
+  // the pickers keep showing what the first send will run. Written straight to
+  // the record: a passive effect must neither flushSync nor pull focus to the
+  // composer the way a click's restage does.
+  useEffect(() => {
+    const list = dataOf(state.agentLibrary);
+    const change = reconcileStagedAgent(pendingStart, list);
+    if (change === "keep" || !pendingStart?.agent) return;
+    const draft =
+      change === "restage"
+        ? agentDraft(
+            list,
+            pendingStart.agent,
+            activeCredentialProfiles,
+            credentialProfileId,
+          )
+        : undefined;
+    if (!draft) {
+      setPendingStart(withoutAgent(pendingStart));
+      return;
+    }
+    const { accountId, ...runtime } = draft;
+    setCredentialProfileId(accountId);
+    setPendingStart(
+      stagedSessionRecord({
+        ...runtime,
+        id: pendingStart.id,
+        mode: pendingStart.mode,
+      }),
+    );
+  }, [
+    state.agentLibrary,
+    pendingStart,
+    activeCredentialProfiles,
+    credentialProfileId,
+  ]);
   /**
    * The draft as the pickers show it this render: what a re-issued first send
    * runs (`reissuedFirstSend`), whichever control re-issues it.
    */
+  const draftId = (pendingStart ?? stagedStart)?.id;
   const draftRuntime: DraftRuntime = {
+    ...(draftId !== undefined && draftId !== "pending-pi-session"
+      ? { id: draftId }
+      : {}),
     ...firstPromptRuntimeSelection(displaySession),
     agentType: displayAgentType,
     credentialProfileId,
@@ -4483,16 +4525,6 @@ function AppContent() {
   };
   const draftRuntimeRef = useRef(draftRuntime);
   draftRuntimeRef.current = draftRuntime;
-  useEffect(() => {
-    const change = reconcileStagedAgent(
-      pendingStart,
-      dataOf(state.agentLibrary),
-    );
-    if (change === "drop")
-      setPendingStart((record) => record && withoutAgent(record));
-    else if (change === "restage" && pendingStart?.agent)
-      stageAgentRef.current(pendingStart.agent);
-  }, [state.agentLibrary, pendingStart]);
   // Capability-driven picker locking: non-pi harnesses pin model/thinking after
   // their first turn (see lib/sessionCapabilities.locksModelAfterStart).
   const modelLocked = displaySession

@@ -46,6 +46,11 @@ const { setAgentRuntimeSourcesForTests } =
   await import("./agents/agentRuntime.ts");
 const { setAgentSpawnSourcesForTests } = await import("./agents/agentSpawn.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
+const { setLibraryBroadcaster } = await import("./library/libraryPublish.ts");
+const published: Array<{ type: string; library?: string }> = [];
+setLibraryBroadcaster({
+  broadcast: (message) => published.push(message as never),
+});
 const claudeProfile = createCredentialProfile({
   name: "Test Claude",
   provider: "claude",
@@ -301,6 +306,15 @@ test("a definition whose runtime changed since it was picked is refused, not run
   assert.equal(prompts.length, 0);
   assert.match(
     JSON.stringify(sent),
-    /Agent \\"researcher\\" now runs on claude-sdk\/opus at high effort, not what was picked/,
+    /Agent \\"researcher\\" changed since it was picked: it now runs on claude-sdk\/opus at high effort/,
+  );
+  // The browser's stale list is published again, so its draft follows it.
+  await vi.waitFor(() =>
+    assert.ok(
+      published.some(
+        (message) =>
+          message.type === "libraryList" && message.library === "agents",
+      ),
+    ),
   );
 });
