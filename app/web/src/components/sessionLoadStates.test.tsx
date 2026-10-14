@@ -6,7 +6,7 @@ import type {
   DisplayMessage,
   SessionArtifact,
   SessionState,
-  SkillLibraryList,
+  EntryLibraryList,
 } from "@assistant/shared";
 import {
   previewForSessionRoute,
@@ -348,9 +348,9 @@ it("shows a mounted skill as available, not loaded, until the agent invokes it",
 });
 
 it("orders loaded, then available, then unmounted skills, alphabetically within each", async () => {
-  const library: SkillLibraryList = {
+  const library: EntryLibraryList = {
     libraryPath: "/data/skills",
-    skills: [
+    entries: [
       { name: "zebra", description: "", path: "zebra/SKILL.md" },
       {
         name: "commit-helper",

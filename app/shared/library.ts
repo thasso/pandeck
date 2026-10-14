@@ -20,6 +20,58 @@
  * which names exist.
  */
 
+import type { ThinkingLevel } from "./thinkingLevels.ts";
+
+/**
+ * The libraries a browser reads. Each is its own broadcast topic, named like
+ * the library, and its own read surface under `/api/<library>/`.
+ */
+export type LibraryTopic = "skills" | "agents";
+
+/**
+ * A library topic's whole read model: one fresh scan, both halves.
+ *
+ * `libraryPath` is the absolute library root. The user owns that Git
+ * repository, so the browser states where to author and maintain it; it is a
+ * local path, never a URL the client fetches.
+ */
+export interface EntryLibraryList {
+  libraryPath: string;
+  entries: EntrySummary[];
+  diagnostics: EntryDiagnostic[];
+  /**
+   * Agents only: what each valid definition would run on right now, by name,
+   * or why it cannot be started (`docs/agent-definitions.md`).
+   */
+  agentRuntimes?: Record<string, AgentRuntimeSummary>;
+}
+
+/** What one agent definition runs on now, as the browser shows and preselects it. */
+export type AgentRuntimeSummary =
+  | {
+      persona: "developer" | "assistant";
+      provider: string;
+      modelId: string;
+      /** The concrete version a definition pins, when it names one. */
+      pinnedModel?: string;
+      thinkingLevel: ThinkingLevel;
+      problem?: never;
+    }
+  | { problem: string; persona?: never };
+
+/** One entry folder's recent commits, newest first (`/api/<library>/history`). */
+export interface EntryHistory {
+  commits: Array<{
+    shortCommit: string;
+    author: string;
+    /** ISO-8601 author date. */
+    date: string;
+    subject: string;
+  }>;
+  /** Older commits exist than the ones listed. */
+  truncated: boolean;
+}
+
 /** Bound on a declared entry name, shared by the scanner and the toggle map. */
 export const MAX_ENTRY_NAME_CHARS = 64;
 

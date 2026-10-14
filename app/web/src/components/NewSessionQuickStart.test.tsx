@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AgentType,
   CredentialProfileSummary,
+  EntryLibraryList,
   ModelOption,
   ProjectRecord,
   SessionMode,
@@ -75,6 +76,8 @@ function render(
     usageIndicators?: UsageIndicator[] | null;
     newWorktreeStaged?: boolean;
     mode?: SessionMode;
+    agents?: EntryLibraryList;
+    selectedAgent?: string | null;
   } = {},
 ): string {
   return renderToStaticMarkup(
@@ -101,6 +104,8 @@ function render(
       onSelectModel={() => {}}
       thinkingLevel={opts.thinkingLevel ?? "medium"}
       onSelectThinking={() => {}}
+      agents={opts.agents}
+      selectedAgent={opts.selectedAgent ?? null}
     />,
   );
 }
@@ -499,5 +504,49 @@ describe("NewSessionQuickStart", () => {
     expect(html).toContain("feature/thing");
     expect(html).not.toContain("GPT Test");
     expect(html).not.toContain("Thinking");
+  });
+});
+
+describe("agent definitions row", () => {
+  const agents: EntryLibraryList = {
+    libraryPath: "/data/agents",
+    entries: [
+      {
+        name: "test-reviewer",
+        description: "Reviews tests.",
+        path: "test-reviewer/AGENT.md",
+      },
+      { name: "stale", description: "Old.", path: "stale/AGENT.md" },
+    ],
+    diagnostics: [],
+    agentRuntimes: {
+      "test-reviewer": {
+        persona: "developer",
+        provider: "claude-sdk",
+        modelId: "opus",
+        thinkingLevel: "high",
+      },
+      stale: { problem: 'No enabled account offers a model "gemini".' },
+    },
+  };
+
+  it("offers each definition, and one that cannot start says why", () => {
+    const html = render([], { agents, selectedAgent: "test-reviewer" });
+    expect(html).toContain("Agent definition");
+    expect(html).toContain("test-reviewer");
+    expect(html).toContain(
+      'title="Start as a plain session instead of test-reviewer"',
+    );
+    // The unusable one is shown, disabled, with its reason as the title.
+    expect(html).toMatch(
+      /title="No enabled account offers a model &quot;gemini&quot;\."[^>]*disabled|disabled[^>]*title="No enabled account offers a model &quot;gemini&quot;\."/,
+    );
+  });
+
+  it("shows no row without definitions", () => {
+    expect(render([], {})).not.toContain("Agent definition");
+    expect(
+      render([], { agents: { ...agents, entries: [], agentRuntimes: {} } }),
+    ).not.toContain("Agent definition");
   });
 });

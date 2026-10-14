@@ -184,6 +184,7 @@ import {
   type SessionContextRequest,
 } from "./sessionContext.ts";
 import { publishSkillLibrary } from "./skills/skillLibrary.ts";
+import { publishAgentLibrary } from "./agents/agentLibraryList.ts";
 import { projectStore } from "./db/projectStore.ts";
 import { findSlashCommand, slashCommands } from "./slashCommands.ts";
 import { retitleSession } from "./sessionRetitle.ts";
@@ -1757,12 +1758,13 @@ export class Connection implements Viewer {
         });
       }
       if (topic === "worktrees") void this.onListWorktrees();
-      // The skills library is hand-authored on disk, so a subscribe is a fresh
+      // A library (skills, agents) is hand-authored on disk, so a subscribe is a fresh
       // SCAN, never a cached index. It answers through the topic broadcast: the
       // scan is authoritative for everyone already showing the library too, and
       // a second shape addressed at this one connection is exactly how browse
       // and injection start disagreeing.
       if (topic === "skills") void publishSkillLibrary();
+      if (topic === "agents") void publishAgentLibrary();
       if (topic === "workflow") this.send(workflowRunListMessage());
       if (topic === "usage") {
         // Page open = subscribe: the cached numbers render immediately and a

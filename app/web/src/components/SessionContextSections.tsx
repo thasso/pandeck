@@ -25,7 +25,7 @@ import type {
   SessionArtifact,
   SessionSkillInvocation,
   SessionToolExposure,
-  SkillLibraryList,
+  EntryLibraryList,
 } from "@assistant/shared";
 import { relativeTime } from "../lib/sessionRows.ts";
 import { artifactHttpUrl } from "../lib/serverOrigin.ts";
@@ -89,12 +89,14 @@ interface SessionContextSectionsProps {
   toolExposure?: SessionToolExposure | undefined;
   /** The agent definition the session was spawned as, when it was. */
   agent?: SessionAgentSummary | undefined;
+  /** Open an agent definition on the Agents settings page. */
+  onOpenAgent?: ((name: string) => void) | undefined;
   /** Frozen library skill names; defined (possibly empty) for coding sessions. */
   activeSkills?: string[] | undefined;
   /** Loads of those skills' bodies, newest last. */
   skillInvocations?: SessionSkillInvocation[] | undefined;
   /** Current skills-library scan, used to show mounted and unmounted skills. */
-  skillLibrary?: LoadState<SkillLibraryList> | undefined;
+  skillLibrary?: LoadState<EntryLibraryList> | undefined;
   artifacts?: SessionArtifact[];
   pendingPostReloadContinuation?: PendingPostReloadContinuation | undefined;
   browserRuntimes?: BrowserRuntimeInfo[];
@@ -110,6 +112,7 @@ export function SessionContextSections({
   sessionId = "current",
   toolExposure,
   agent,
+  onOpenAgent,
   activeSkills,
   skillInvocations,
   skillLibrary,
@@ -132,7 +135,13 @@ export function SessionContextSections({
         />
       )}
 
-      {agent && <AgentSection sessionId={sessionId} agent={agent} />}
+      {agent && (
+        <AgentSection
+          sessionId={sessionId}
+          agent={agent}
+          onOpenAgent={onOpenAgent}
+        />
+      )}
 
       {activeSkills !== undefined && (
         <ActiveSkillsSection
@@ -203,9 +212,11 @@ function PostReloadContinuationCard({
 function AgentSection({
   sessionId,
   agent,
+  onOpenAgent,
 }: {
   sessionId: string;
   agent: SessionAgentSummary;
+  onOpenAgent?: ((name: string) => void) | undefined;
 }) {
   return (
     <InspectorSection
@@ -220,7 +231,22 @@ function AgentSection({
       ) : (
         <PropertyList size="sm" align="start">
           <PropertyLabel>Name</PropertyLabel>
-          <PropertyText className="text-foreground">{agent.name}</PropertyText>
+          {onOpenAgent ? (
+            // The definition as the library holds it NOW, which may have
+            // changed since this session froze it.
+            <Button
+              variant="link"
+              size="xs"
+              className="justify-self-start"
+              onClick={() => onOpenAgent(agent.name)}
+            >
+              {agent.name}
+            </Button>
+          ) : (
+            <PropertyText className="text-foreground">
+              {agent.name}
+            </PropertyText>
+          )}
           <PropertyLabel>Spawned on</PropertyLabel>
           <PropertyText className="text-foreground">
             {agent.model}, {agent.effort} effort
@@ -268,7 +294,7 @@ export function ActiveSkillsSection({
   /** Newest-last loads of those skills' bodies. */
   skillInvocations?: SessionSkillInvocation[] | undefined;
   /** Current library scan, used to show mounted and unmounted skills. */
-  skillLibrary?: LoadState<SkillLibraryList> | undefined;
+  skillLibrary?: LoadState<EntryLibraryList> | undefined;
 }) {
   const library = skillLibrary ? dataOf(skillLibrary) : undefined;
   const libraryError = skillLibrary ? errorOf(skillLibrary) : undefined;
@@ -292,7 +318,7 @@ export function ActiveSkillsSection({
   }, [skillInvocations]);
   const skills = useMemo(() => {
     const names = new Set([
-      ...(library?.skills.map((skill) => skill.name) ?? []),
+      ...(library?.entries.map((skill) => skill.name) ?? []),
       ...activeSkills,
     ]);
     const rank = (name: string) =>

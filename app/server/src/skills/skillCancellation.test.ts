@@ -70,7 +70,7 @@ const { git } = await import("../gitExec.ts");
 const { createSkill } = await import("./createSkill.ts");
 const { deleteEntry, renameEntry } =
   await import("../library/libraryAuthoring.ts");
-const { setSkillLibraryBroadcaster } = await import("./skillLibraryEvents.ts");
+const { setLibraryBroadcaster } = await import("../library/libraryPublish.ts");
 const { LibraryStore } = await import("../library/libraryStore.ts");
 const { skillKind } = await import("./skillLibrary.ts");
 
@@ -105,7 +105,7 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skills-cancel-test-"));
   library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   await createSkill(
     {
       name: "release-notes",
@@ -127,7 +127,7 @@ afterEach(() => {
   hashChunks = 0;
   stopOnHashChunk = undefined;
   stopOnUnlink = undefined;
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
 });
 

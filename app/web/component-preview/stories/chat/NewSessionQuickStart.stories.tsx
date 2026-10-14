@@ -9,11 +9,12 @@ import {
   chatWorktrees,
   noop,
 } from "../../fixtures/chat.ts";
+import { settingsAgents } from "../../fixtures/settings.ts";
 function QuickStartPreview({
   state,
   frameWidth,
 }: {
-  state: "default" | "worktrees" | "loading" | "error";
+  state: "default" | "worktrees" | "loading" | "error" | "agents";
   frameWidth: number;
 }) {
   const [agent, setAgent] = useState<AgentType>("developer");
@@ -23,6 +24,9 @@ function QuickStartPreview({
   const [account, setAccount] = useState("claude-work");
   const [model, setModel] = useState(chatModels[0]);
   const [thinking, setThinking] = useState<ThinkingLevel>("high");
+  const [stagedAgent, setStagedAgent] = useState<string | null>(
+    state === "agents" ? "test-reviewer" : null,
+  );
   return (
     <div
       style={{ width: frameWidth, maxWidth: "100%" }}
@@ -57,6 +61,9 @@ function QuickStartPreview({
         onSelectModel={setModel}
         thinkingLevel={thinking}
         onSelectThinking={setThinking}
+        agents={state === "agents" ? settingsAgents : undefined}
+        selectedAgent={stagedAgent}
+        onSelectAgent={setStagedAgent}
       />
     </div>
   );
@@ -73,6 +80,10 @@ export const Default = {} satisfies Story;
 export const WithWorktrees = { args: { state: "worktrees" } } satisfies Story;
 export const Loading = { args: { state: "loading" } } satisfies Story;
 export const RefreshError = { args: { state: "error" } } satisfies Story;
+/** Agent definitions offered as a starting point; one cannot start. */
+export const WithAgentDefinitions = {
+  args: { state: "agents" },
+} satisfies Story;
 export const Phone = {
   args: { state: "worktrees", frameWidth: 390 },
   globals: { viewport: { value: "paPhone", isRotated: false } },

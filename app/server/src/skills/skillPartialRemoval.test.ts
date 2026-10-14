@@ -46,7 +46,7 @@ const { git } = await import("../gitExec.ts");
 const { createSkill } = await import("./createSkill.ts");
 const { deleteEntry, manageEntryFiles } =
   await import("../library/libraryAuthoring.ts");
-const { setSkillLibraryBroadcaster } = await import("./skillLibraryEvents.ts");
+const { setLibraryBroadcaster } = await import("../library/libraryPublish.ts");
 const { LibraryStore } = await import("../library/libraryStore.ts");
 const { skillKind } = await import("./skillLibrary.ts");
 
@@ -64,7 +64,7 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skills-partial-test-"));
   library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   await createSkill(
     {
       name: "release-notes",
@@ -89,7 +89,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   unlinksBeforeFailure = Number.POSITIVE_INFINITY;
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
 });
 

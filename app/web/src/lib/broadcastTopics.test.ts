@@ -223,7 +223,7 @@ describe("topicsForSurface", () => {
         sidebarSection: "sessions",
         routeName: "new",
       }).sort(),
-    ).toEqual(["projects", "usage", "workflow", "worktrees"]);
+    ).toEqual(["agents", "projects", "usage", "workflow", "worktrees"]);
     expect(
       topicsForSurface({
         sidebarVisible: false,
@@ -241,7 +241,14 @@ describe("topicsForSurface", () => {
         routeName: "new",
         taskPickerOpen: true,
       }).sort(),
-    ).toEqual(["projects", "tasks", "usage", "workflow", "worktrees"]);
+    ).toEqual([
+      "agents",
+      "projects",
+      "tasks",
+      "usage",
+      "workflow",
+      "worktrees",
+    ]);
     expect(
       topicsForSurface({
         sidebarVisible: false,
@@ -265,7 +272,14 @@ describe("topicsForSurface", () => {
         routeName: "new",
         taskPickerOpen: false,
       }).sort(),
-    ).toEqual(["projects", "tasks", "usage", "workflow", "worktrees"]);
+    ).toEqual([
+      "agents",
+      "projects",
+      "tasks",
+      "usage",
+      "workflow",
+      "worktrees",
+    ]);
   });
 
   it("carries usage only on the surfaces that meter accounts", () => {
@@ -313,6 +327,25 @@ describe("topicsForSurface", () => {
         workflowStartOpen: false,
       }),
     ).toEqual(["projects"]);
+  });
+
+  it("subscribes to agents on its settings section and the new-session page", () => {
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "sessions",
+        routeName: "settings",
+        settingsSection: "agents",
+      }),
+    ).toEqual(["agents"]);
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "sessions",
+        routeName: "settings",
+        settingsSection: "skills",
+      }),
+    ).not.toContain("agents");
   });
 
   it("subscribes to skills only while that settings section renders", () => {

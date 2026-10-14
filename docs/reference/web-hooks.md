@@ -726,17 +726,19 @@ backlog/task interaction and drag/reorder behavior.
   cannot leak into another chat. `harnessSend` takes one `HarnessSendInput` and
   returns the `clientRequestId` it used; re-sending under the same id replaces
   the optimistic echo instead of appending a second one.
-- The skills library is ONE canonical slot, `state.skillLibrary`, a
-  `LoadState<SkillLibraryList>` rather than a nullable list — the `skills`
-  subscribe makes the server RESCAN the working tree, so the difference between
-  "not asked yet", "rescanning what you can see", "authoritatively empty" and
-  "the read failed" is the whole contract (`docs/skills.md`). `setTopics`
-  dispatches `skillLibraryLoad` when the topic is added, and the reconnect
-  re-declaration does the same, so the pane is pending from the moment the
-  request goes out; `beginLoad` keeps rows on screen for the same query, and a
-  `skillList` carrying `error` records the failure against the last good list
-  instead of replacing it with an empty library. Only Settings → Skills reads
-  the slot, and only its rendered section subscribes. Which of those skills is
+- Each library is ONE canonical slot, `state.skillLibrary` and
+  `state.agentLibrary`, a `LoadState<EntryLibraryList>` rather than a nullable
+  list (`LIBRARY_STATE_FIELD` maps a `libraryList` message's `library` to its
+  slot) — the `skills` subscribe makes the server RESCAN the working tree, so
+  the difference between "not asked yet", "rescanning what you can see",
+  "authoritatively empty" and "the read failed" is the whole contract
+  (`docs/skills.md`). `setTopics` dispatches `libraryLoad` when a library topic
+  is added, and the reconnect re-declaration does the same, so the pane is
+  pending from the moment the request goes out; `beginLoad` keeps rows on screen
+  for the same query, and a `libraryList` carrying `error` records the failure
+  against the last good list instead of replacing it with an empty library.
+  Settings → Skills (and the session inspector) read the skills slot; Settings →
+  Agents and the new-session page read the agents slot. Which of those skills is
   ON is NOT in that slot: it is `state.settings.skills`
   ([Task-613](pa://task/613)). `defaultSettings` carries an empty map so an
   unfetched read answers "off" for every skill rather than leaving the section

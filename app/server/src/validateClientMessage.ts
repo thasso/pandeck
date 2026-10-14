@@ -579,6 +579,7 @@ const validateHarnessSend: Validator = (msg) => {
     fileContext: STRING,
     worktreeId: STRING,
     createWorktreeInProjectId: STRING,
+    agent: STRING,
     clientRequestId: STRING,
   });
 };

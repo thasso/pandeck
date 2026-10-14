@@ -172,7 +172,9 @@ import { validateClientMessage } from "./validateClientMessage.ts";
 import { handleWorktreeApi } from "./worktrees/worktreeHttp.ts";
 import { handlePullRequestApi } from "./pullRequestHttp.ts";
 import { handleSessionStatusApi } from "./sessionStatus/sessionStatusHttp.ts";
-import { handleSkillsApi } from "./skills/skillsHttp.ts";
+import { handleLibraryApi } from "./library/libraryHttp.ts";
+import { skillLibraryStore } from "./skills/skillLibrary.ts";
+import { agentLibraryStore } from "./agents/agentLibrary.ts";
 import { handleApnsApi } from "./apnsHttp.ts";
 import { handleWebPushApi } from "./webPushHttp.ts";
 import { errorText } from "./errors.ts";
@@ -688,10 +690,11 @@ async function handleRequest(
     return;
   }
 
-  if (requestUrl.pathname.startsWith("/api/skills/")) {
-    await handleSkillsApi(req, res, requestUrl, corsJsonHeaders);
-    return;
-  }
+  for (const library of [skillLibraryStore, agentLibraryStore])
+    if (requestUrl.pathname.startsWith(`/api/${library.kind.plural}/`)) {
+      await handleLibraryApi(req, res, requestUrl, corsJsonHeaders, library);
+      return;
+    }
 
   if (requestUrl.pathname.startsWith("/api/web-push/")) {
     await handleWebPushApi(

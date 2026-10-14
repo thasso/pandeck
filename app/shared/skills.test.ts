@@ -7,7 +7,7 @@ import {
   type BroadcastTopic,
   type ServerMessage,
   type EntryDiagnostic,
-  type SkillLibraryList,
+  type EntryLibraryList,
 } from "./protocol.ts";
 
 /**
@@ -16,16 +16,16 @@ import {
  * and a list shape that can say "empty" and "failed" at once teaches a client
  * to draw an empty library over a read that never happened.
  */
-describe("skills topic contract", () => {
-  test("`skills` is a subscribable topic", () => {
-    const topic: BroadcastTopic = "skills";
-    expect(BROADCAST_TOPICS).toContain(topic);
+describe("library topic contract", () => {
+  test("`skills` and `agents` are subscribable topics", () => {
+    for (const topic of ["skills", "agents"] satisfies BroadcastTopic[])
+      expect(BROADCAST_TOPICS).toContain(topic);
   });
 
   test("a successful list carries summaries and diagnostics together", () => {
-    const list: SkillLibraryList = {
+    const list: EntryLibraryList = {
       libraryPath: "/data/skills",
-      skills: [
+      entries: [
         { name: "notes", description: "Take notes.", path: "notes/SKILL.md" },
       ],
       diagnostics: [
@@ -38,9 +38,13 @@ describe("skills topic contract", () => {
         },
       ],
     };
-    const message: ServerMessage = { type: "skillList", list };
+    const message: ServerMessage = {
+      type: "libraryList",
+      library: "skills",
+      list,
+    };
 
-    expect(message).toEqual({ type: "skillList", list });
+    expect(message).toEqual({ type: "libraryList", library: "skills", list });
     // The malformed folder is identified by its SOURCE folder, which is
     // independent of any name it declares.
     const [diagnostic] = list.diagnostics as [EntryDiagnostic];
@@ -50,25 +54,30 @@ describe("skills topic contract", () => {
 
   test("a failed scan carries an error instead of an empty library", () => {
     const message: ServerMessage = {
-      type: "skillList",
+      type: "libraryList",
+      library: "skills",
       error: "Failed to read the skills library: EACCES",
     };
 
-    expect(message.type === "skillList" && message.list).toBeUndefined();
+    expect(message.type === "libraryList" && message.list).toBeUndefined();
   });
 
-  test("the skill list message requires exactly one outcome", () => {
-    // @ts-expect-error A skill-list message must carry a list or an error.
-    const missingOutcome: ServerMessage = { type: "skillList" };
+  test("the library list message requires exactly one outcome", () => {
+    // @ts-expect-error A library-list message must carry a list or an error.
+    const missingOutcome: ServerMessage = {
+      type: "libraryList",
+      library: "agents",
+    };
     const ambiguousOutcome: ServerMessage = {
-      type: "skillList",
-      list: { libraryPath: "/data/skills", skills: [], diagnostics: [] },
-      // @ts-expect-error A skill-list message cannot carry both outcomes.
+      type: "libraryList",
+      library: "skills",
+      list: { libraryPath: "/data/skills", entries: [], diagnostics: [] },
+      // @ts-expect-error A library-list message cannot carry both outcomes.
       error: "scan failed",
     };
 
-    expect(missingOutcome.type).toBe("skillList");
-    expect(ambiguousOutcome.type).toBe("skillList");
+    expect(missingOutcome.type).toBe("libraryList");
+    expect(ambiguousOutcome.type).toBe("libraryList");
   });
 });
 

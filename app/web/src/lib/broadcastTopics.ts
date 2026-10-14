@@ -127,6 +127,13 @@ export function topicsForSurface({
     sessionInspectorVisible
   )
     topics.add("skills");
+  // The Agents section lists the definitions; the new-session page offers
+  // them as a starting point.
+  if (
+    (routeName === "settings" && settingsSection === "agents") ||
+    routeName === "new"
+  )
+    topics.add("agents");
   // Usage rides on the surfaces that show account meters — the new-session
   // provider cards, the Usage page, and the workflow start sheet's runtime
   // rows. Subscribing is what makes the server refresh at all

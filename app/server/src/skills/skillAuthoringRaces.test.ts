@@ -54,7 +54,7 @@ import {
   setMaxPlacedEntriesForTests,
 } from "../library/libraryAuthoring.ts";
 import { LibraryStore } from "../library/libraryStore.ts";
-import { setSkillLibraryBroadcaster } from "./skillLibraryEvents.ts";
+import { setLibraryBroadcaster } from "../library/libraryPublish.ts";
 import { skillKind } from "./skillLibrary.ts";
 
 /** How many directory entries the source seam has handed out since the reset. */
@@ -145,7 +145,7 @@ beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skills-race-test-"));
   library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   await createSkill(
     {
       name: "release-notes",
@@ -162,7 +162,7 @@ afterEach(() => {
   afterReservation = undefined;
   beforeChildLink = undefined;
   beforeTreeRemoval = undefined;
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
 });
 

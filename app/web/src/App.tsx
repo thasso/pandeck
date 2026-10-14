@@ -1063,6 +1063,13 @@ function AppContent() {
   const [pendingProjectContext, setPendingProjectContext] = useState<
     string | null
   >(null);
+  /**
+   * An agent definition the next fresh session starts as
+   * (`docs/agent-definitions.md` "UI"). Picking it stages its runtime; picking
+   * a persona, model, effort or account by hand drops it again, so the staged
+   * runtime is never claimed to be the definition's when it no longer is.
+   */
+  const [pendingAgent, setPendingAgent] = useState<string | null>(null);
   /** A document staged as context on the next fresh session (its viewer route). */
   const [pendingFileContext, setPendingFileContext] = useState<{
     href: string;
@@ -4415,6 +4422,42 @@ function AppContent() {
       update,
     ],
   );
+
+  /**
+   * Stage a fresh session as the agent definition `name` (or drop it): its
+   * persona, model and effort in one restage, on an account of its provider.
+   * The server resolves the definition again when the first prompt creates
+   * the session, so this is a preview of what it will run, not a promise.
+   */
+  const stageAgent = (name: string | null) => {
+    setPendingAgent(name);
+    if (name === null || !isNewChatRoute || runtimeHasStarted) return;
+    const runtime = dataOf(state.agentLibrary)?.agentRuntimes?.[name];
+    if (!runtime || runtime.problem !== undefined) return;
+    const accountProvider = accountProviderForModelProvider(runtime.provider);
+    const account =
+      activeCredentialProfiles.find(
+        (profile) =>
+          profile.id === credentialProfileId &&
+          profile.provider === accountProvider,
+      ) ??
+      activeCredentialProfiles.find(
+        (profile) => profile.provider === accountProvider,
+      );
+    if (account) setCredentialProfileId(account.id);
+    const current = pendingStart ?? stagedStart;
+    startStagedSession({
+      ...(current?.id !== undefined && current.id !== "pending-pi-session"
+        ? { id: current.id }
+        : {}),
+      harness: harnessForModelProvider(runtime.provider),
+      agentType: runtime.persona,
+      provider: runtime.provider,
+      modelId: runtime.modelId,
+      thinkingLevel: runtime.thinkingLevel,
+      mode: current?.mode,
+    });
+  };
   // Capability-driven picker locking: non-pi harnesses pin model/thinking after
   // their first turn (see lib/sessionCapabilities.locksModelAfterStart).
   const modelLocked = displaySession
@@ -4806,8 +4849,10 @@ function AppContent() {
                 ? { createWorktreeInProjectId }
                 : {}),
               ...(fileContext !== undefined ? { fileContext } : {}),
+              ...(pendingAgent !== null ? { agent: pendingAgent } : {}),
             };
       const clientRequestId = actions.harnessSend(input);
+      if (input.agent !== undefined) setPendingAgent(null);
       // Hold the send verbatim for the whole bootstrap: it is what the shell
       // renders the staged identity from, and if it fails there is no session
       // and no turn — the card's Retry, the bootstrap narration's and the next
@@ -6267,6 +6312,7 @@ function AppContent() {
               usageIndicators={state.usageIndicators}
               selectedCredentialProfileId={credentialProfileId}
               onSelectCredentialProfile={(id) => {
+                setPendingAgent(null);
                 const profile = activeCredentialProfiles.find(
                   (item) => item.id === id,
                 );
@@ -6305,7 +6351,10 @@ function AppContent() {
               }}
               agentTypes={availableAgentTypes}
               selectedAgentType={agentTypeForPicker}
-              onSelectAgentType={switchStagedAgentType}
+              onSelectAgentType={(agentType) => {
+                setPendingAgent(null);
+                switchStagedAgentType(agentType);
+              }}
               worktrees={orderedWorktrees}
               worktreesLoaded={state.worktrees !== null}
               projects={orderedPickerProjects}
@@ -6318,11 +6367,18 @@ function AppContent() {
               onSelectNewWorktree={stageNewWorktree}
               models={pickerModels}
               selectedModel={displaySession?.model}
-              onSelectModel={(m) => runtimeActions.setModel(m.provider, m.id)}
+              onSelectModel={(m) => {
+                setPendingAgent(null);
+                runtimeActions.setModel(m.provider, m.id);
+              }}
               thinkingLevel={currentThinkingLevel}
-              onSelectThinking={(level) =>
-                runtimeActions.setThinkingLevel(level)
-              }
+              onSelectThinking={(level) => {
+                setPendingAgent(null);
+                runtimeActions.setThinkingLevel(level);
+              }}
+              agents={dataOf(state.agentLibrary)}
+              selectedAgent={pendingAgent}
+              onSelectAgent={stageAgent}
             />
           ) : null}
         </div>
@@ -6765,6 +6821,11 @@ function AppContent() {
           sessionId={displaySession?.sessionId}
           toolExposure={displaySession?.toolExposure}
           agent={displaySession?.agent}
+          onOpenAgent={(name) =>
+            navigateFromInspector(
+              `${settingsPath("agents")}?entry=${encodeURIComponent(name)}`,
+            )
+          }
           activeSkills={displaySession?.activeSkills}
           skillInvocations={displaySession?.skillInvocations}
           skillLibrary={state.skillLibrary}
@@ -7250,6 +7311,7 @@ function AppContent() {
                       settings={state.settings}
                       memory={memory}
                       skills={state.skillLibrary}
+                      agents={state.agentLibrary}
                       prefs={prefs}
                       speechToText={state.speechToText}
                       serverBuild={state.serverBuild}

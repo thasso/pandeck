@@ -101,6 +101,8 @@ function notFoundReason(name: string, diagnostics: EntryDiagnostic[]): string {
 export async function resolveAgentSpawn(
   name: string,
   scanned?: { library: LibraryStore; scan: LibraryScan },
+  /** An account the caller picked, in place of the automatic one. */
+  options: { profileId?: string } = {},
 ): Promise<AgentSpawnRuntime> {
   const { library, scan } = scanned ?? (await scanAgentsForSpawn());
   let read;
@@ -131,8 +133,23 @@ export async function resolveAgentSpawn(
     );
   }
   const { model, pinnedModel } = runtime;
-  const credentialProfileId = sources.accountFor(model.provider);
-  if (!(await sources.offers(credentialProfileId, model.provider, model.id)))
+  const credentialProfileId =
+    options.profileId ?? sources.accountFor(model.provider);
+  let offered: boolean;
+  try {
+    offered = await sources.offers(
+      credentialProfileId,
+      model.provider,
+      model.id,
+    );
+  } catch (error) {
+    // An account whose models cannot be read refuses this definition, not
+    // every other one listed beside it.
+    throw new AgentSpawnRefusedError(
+      `Agent "${name}" cannot run: the models of its ${model.provider} account could not be read: ${(error as Error).message}`,
+    );
+  }
+  if (!offered)
     throw new AgentSpawnRefusedError(
       `Agent "${name}" cannot run: the account its ${model.provider} sessions use (${sources.accountName(credentialProfileId) ?? credentialProfileId}) does not offer ${model.provider}/${model.id}.`,
     );
@@ -170,8 +187,11 @@ export type SpawnableAgent =
  * Every definition and whether it can be spawned now: the valid ones with
  * what they would run on, the rest with the reason they cannot.
  */
-export async function listSpawnableAgents(): Promise<SpawnableAgent[]> {
-  const scanned = await scanAgentsForSpawn();
+export async function listSpawnableAgents(scanned?: {
+  library: LibraryStore;
+  scan: LibraryScan;
+}): Promise<SpawnableAgent[]> {
+  scanned ??= await scanAgentsForSpawn();
   const rows: SpawnableAgent[] = [];
   for (const entry of scanned.scan.entries) {
     try {

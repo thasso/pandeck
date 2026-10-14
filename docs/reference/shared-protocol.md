@@ -580,16 +580,17 @@ vocabulary, display projection, and normalized session model types.
 - `skills.ts` owns the user-owned skills library wire model
   ([Task-531](pa://task/531), `docs/skills.md`): `EntrySummary` (declared name,
   description, library-relative `SKILL.md` path), `EntryDiagnostic` with its
-  `EntryDiagnosticCode` vocabulary, and the `SkillLibraryList` read model that
-  carries both halves plus the absolute `libraryPath` the user maintains by
-  hand. Summaries stay compact because the list view shows all of them at once,
-  and diagnostics travel WITH them because a malformed folder is what a
-  hand-authored library actually produces — it is listed with its reason rather
-  than dropped. A diagnostic identifies its SOURCE FOLDER, which is independent
-  of any name that folder declares. The server scanner builds these types
-  directly (`library/libraryScanner.ts`), so browse and injection cannot read
-  two different shapes. It is re-exported from `protocol.ts`, which adds the
-  `skills` broadcast topic and the single `skillList` message: exactly one of
+  `EntryDiagnosticCode` vocabulary (now in `library.ts`), and the
+  `EntryLibraryList` read model that carries both halves plus the absolute
+  `libraryPath` the user maintains by hand. Summaries stay compact because the
+  list view shows all of them at once, and diagnostics travel WITH them because
+  a malformed folder is what a hand-authored library actually produces — it is
+  listed with its reason rather than dropped. A diagnostic identifies its SOURCE
+  FOLDER, which is independent of any name that folder declares. The server
+  scanner builds these types directly (`library/libraryScanner.ts`), so browse
+  and injection cannot read two different shapes. It is re-exported from
+  `protocol.ts`, which adds the `skills` and `agents` broadcast topics and the
+  single `libraryList` message (named by `library`): exactly one of
   `list`/`error` is set, and a failed scan is an `error` rather than an empty
   library. It also owns the two rules the library and its settings must agree on
   ([Task-613](pa://task/613)): `isSafeEntryName` (with `MAX_ENTRY_NAME_CHARS`),

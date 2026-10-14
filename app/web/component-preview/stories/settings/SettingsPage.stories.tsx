@@ -9,6 +9,7 @@ import {
   settingsModels,
   settingsPrefs,
   settingsProfiles,
+  settingsAgents,
   settingsSkills,
 } from "../../fixtures/settings.ts";
 import { ready, loading, failFrom } from "../../../src/lib/loadState.ts";
@@ -24,6 +25,7 @@ const baseArgs = {
   projects: [],
   memory: settingsMemory,
   skills: ready(settingsSkills),
+  agents: ready(settingsAgents),
   serverBuild: { version: "1.4.0", commit: "abc1234", dirty: false },
   speechToText: {
     configured: true,
@@ -192,6 +194,25 @@ export const SkillsError: Story = {
     skills: failFrom(
       ready(settingsSkills),
       "The skills folder could not be read.",
+    ),
+  },
+};
+export const Agents: Story = { args: { section: "agents" } };
+export const AgentsEmpty: Story = {
+  args: {
+    section: "agents",
+    agents: ready({ ...settingsAgents, entries: [], diagnostics: [] }),
+  },
+};
+export const AgentsLoading: Story = {
+  args: { section: "agents", agents: loading() },
+};
+export const AgentsError: Story = {
+  args: {
+    section: "agents",
+    agents: failFrom(
+      ready(settingsAgents),
+      "The agents folder could not be read.",
     ),
   },
 };

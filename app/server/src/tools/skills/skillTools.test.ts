@@ -8,7 +8,7 @@ import type { AgentTool, ToolCallContext } from "../../mcp/tool.ts";
 import { git } from "../../gitExec.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
 import { LibraryStore } from "../../library/libraryStore.ts";
-import { setSkillLibraryBroadcaster } from "../../skills/skillLibraryEvents.ts";
+import { setLibraryBroadcaster } from "../../library/libraryPublish.ts";
 import {
   skillLibraryTools,
   setSkillToolLibraryForTests,
@@ -60,12 +60,12 @@ beforeEach(async () => {
   store = new LibraryStore(skillKind, root);
   await store.ensureInitialized();
   setSkillToolLibraryForTests(() => store);
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
 });
 
 afterEach(() => {
   setSkillToolLibraryForTests(null);
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
 });
 

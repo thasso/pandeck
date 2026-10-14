@@ -1,14 +1,17 @@
 /**
- * The browser-facing read surface for one skill, dispatched from `index.ts`
- * under `/api/skills/*` and therefore behind the same token/origin gate as the
- * rest of `/api/` ([Task-614](pa://task/614), `docs/skills.md`).
+ * The browser-facing read surface for one library entry, dispatched from
+ * `index.ts` under `/api/<library>/*` (`/api/skills/*`, `/api/agents/*`) and
+ * therefore behind the same token/origin gate as the rest of `/api/`
+ * ([Task-614](pa://task/614), `docs/skills.md`, `docs/agent-definitions.md`).
  *
- * - `GET /api/skills/detail?name=<declared-name>` — compact metadata, bounded
- *   `SKILL.md` body, and bounded recursive supporting-file tree.
- * - `GET /api/skills/file?name=<declared-name>&path=<skill-relative-path>` —
+ * - `GET /api/<library>/detail?name=<declared-name>` — compact metadata,
+ *   bounded manifest body, and bounded recursive supporting-file tree.
+ * - `GET /api/<library>/file?name=<declared-name>&path=<entry-relative-path>` —
  *   bounded raw bytes, or a bounded JSON text preview with `preview=text`.
+ * - `GET /api/<library>/history?name=<declared-name>` — the entry folder's
+ *   recent commits, newest first.
  *
- * The library LIST stays on the `skills` topic: it is a subscription whose
+ * The library LIST stays on the library's topic: it is a subscription whose
  * answer is a rescan, and a second read surface for it would be a second thing
  * to keep in step. Only the body — too large for a list, wanted for exactly one
  * row at a time — is fetched here.
@@ -19,26 +22,34 @@
  * have this skill".
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isSafeEntryName } from "@assistant/shared";
+import { dirname } from "node:path";
+import { isSafeEntryName, type EntryHistory } from "@assistant/shared";
 import { errorText } from "../errors.ts";
-import { readEntryDetail } from "../library/entryDetail.ts";
+import { readEntryDetail } from "./entryDetail.ts";
 import {
   InvalidEntryFilePathError,
   readEntryFilePreview,
   readEntryRawFile,
   EntryFileNotFoundError,
   EntryFileTooLargeError,
-} from "../library/entryFiles.ts";
-import { skillLibraryStore } from "./skillLibrary.ts";
+} from "./entryFiles.ts";
+import { scanLibrary } from "./libraryScanner.ts";
+import type { LibraryStore } from "./libraryStore.ts";
 
 type Headers = Record<string, string>;
 
-export async function handleSkillsApi(
+/** How many commits one history read returns. */
+const ENTRY_HISTORY_LIMIT = 20;
+
+export async function handleLibraryApi(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
   corsJsonHeaders: (req: IncomingMessage) => Headers,
+  library: LibraryStore,
 ): Promise<void> {
+  const { noun, plural } = library.kind;
+  const prefix = `/api/${plural}`;
   const headers = corsJsonHeaders(req);
   const respond = (status: number, payload: unknown) => {
     res.writeHead(status, headers);
@@ -52,41 +63,63 @@ export async function handleSkillsApi(
 
   try {
     switch (url.pathname) {
-      case "/api/skills/detail": {
-        const name = requiredSkillName(url, respond);
+      case `${prefix}/detail`: {
+        const name = requiredEntryName(url, noun, respond);
         if (!name) return;
-        const detail = await readEntryDetail(name, skillLibraryStore);
+        const detail = await readEntryDetail(name, library);
         if (!detail) {
-          respond(404, { error: `No skill named "${name}" in the library.` });
+          respond(404, { error: `No ${noun} named "${name}" in the library.` });
           return;
         }
         respond(200, detail);
         return;
       }
-      case "/api/skills/file": {
-        const name = requiredSkillName(url, respond);
+      case `${prefix}/history`: {
+        const name = requiredEntryName(url, noun, respond);
+        if (!name) return;
+        await library.ensureInitialized();
+        const scan = await scanLibrary(library.kind, library.root);
+        const entry = scan.entries.find((candidate) => candidate.name === name);
+        if (!entry) {
+          respond(404, { error: `No ${noun} named "${name}" in the library.` });
+          return;
+        }
+        const history = await library.history({
+          path: dirname(entry.path),
+          limit: ENTRY_HISTORY_LIMIT,
+        });
+        const answer: EntryHistory = {
+          commits: history.entries.map((commit) => ({
+            shortCommit: commit.shortCommit,
+            author: commit.author,
+            date: commit.date,
+            subject: commit.subject,
+          })),
+          truncated: history.truncated,
+        };
+        respond(200, answer);
+        return;
+      }
+      case `${prefix}/file`: {
+        const name = requiredEntryName(url, noun, respond);
         if (!name) return;
         const path = url.searchParams.get("path") ?? "";
         if (!path) {
-          respond(400, { error: "A skill-relative path is required." });
+          respond(400, { error: `A ${noun}-relative path is required.` });
           return;
         }
         if (url.searchParams.get("preview") === "text") {
-          const preview = await readEntryFilePreview(
-            name,
-            path,
-            skillLibraryStore,
-          );
+          const preview = await readEntryFilePreview(name, path, library);
           if (!preview) {
-            respond(404, { error: `No readable skill named "${name}".` });
+            respond(404, { error: `No readable ${noun} named "${name}".` });
             return;
           }
           respond(200, preview);
           return;
         }
-        const file = await readEntryRawFile(name, path, skillLibraryStore);
+        const file = await readEntryRawFile(name, path, library);
         if (!file) {
-          respond(404, { error: `No readable skill named "${name}".` });
+          respond(404, { error: `No readable ${noun} named "${name}".` });
           return;
         }
         res.writeHead(200, {
@@ -121,17 +154,18 @@ export async function handleSkillsApi(
   }
 }
 
-function requiredSkillName(
+function requiredEntryName(
   url: URL,
+  noun: string,
   respond: (status: number, payload: unknown) => void,
 ): string | null {
   const name = url.searchParams.get("name")?.trim() ?? "";
   if (!name) {
-    respond(400, { error: "A skill name is required." });
+    respond(400, { error: `A ${noun} name is required.` });
     return null;
   }
   if (!isSafeEntryName(name)) {
-    respond(400, { error: "Invalid skill name." });
+    respond(400, { error: `Invalid ${noun} name.` });
     return null;
   }
   return name;

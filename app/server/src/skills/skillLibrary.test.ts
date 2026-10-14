@@ -5,15 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
+import { publishSkillLibrary, skillKind } from "./skillLibrary.ts";
 import {
-  publishSkillLibrary,
-  skillKind,
-  skillLibraryListMessage,
-} from "./skillLibrary.ts";
-import {
-  setSkillLibraryBroadcaster,
-  skillLibraryBroadcaster,
-} from "./skillLibraryEvents.ts";
+  libraryBroadcaster,
+  libraryListMessage,
+  setLibraryBroadcaster,
+} from "../library/libraryPublish.ts";
 import { LibraryStore } from "../library/libraryStore.ts";
 
 let tempRoot: string;
@@ -25,7 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setSkillLibraryBroadcaster({ broadcast: () => {} });
+  setLibraryBroadcaster({ broadcast: () => {} });
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -45,12 +42,12 @@ async function writeSkill(
 /** Collect what the single topic seam actually delivered. */
 function captureBroadcasts(): ServerMessage[] {
   const sent: ServerMessage[] = [];
-  setSkillLibraryBroadcaster({ broadcast: (message) => sent.push(message) });
+  setLibraryBroadcaster({ broadcast: (message) => sent.push(message) });
   return sent;
 }
 
 function listOf(message: ServerMessage | undefined) {
-  assert.ok(message && message.type === "skillList");
+  assert.ok(message && message.type === "libraryList");
   assert.equal(message.error, undefined);
   assert.ok(message.list);
   return message.list;
@@ -71,7 +68,7 @@ describe("skills library read model", () => {
     assert.equal(sent.length, 1, "exactly one list message per publish");
     const list = listOf(sent[0]);
     assert.equal(list.libraryPath, libraryRoot);
-    assert.deepEqual(list.skills, [
+    assert.deepEqual(list.entries, [
       {
         name: "release-notes",
         description: "Draft release notes.",
@@ -92,10 +89,10 @@ describe("skills library read model", () => {
     assert.ok(!existsSync(libraryRoot));
     const store = new LibraryStore(skillKind, libraryRoot);
 
-    const list = listOf(await skillLibraryListMessage(store));
+    const list = listOf(await libraryListMessage("skills", store));
 
     assert.ok(existsSync(join(libraryRoot, ".git")));
-    assert.deepEqual(list.skills, []);
+    assert.deepEqual(list.entries, []);
     assert.deepEqual(list.diagnostics, []);
   });
 
@@ -113,7 +110,7 @@ describe("skills library read model", () => {
       }
     }
     const sent = captureBroadcasts();
-    setSkillLibraryBroadcaster({
+    setLibraryBroadcaster({
       broadcast: (message) => {
         sent.push(message);
         if (sent.length === 1) {
@@ -138,7 +135,7 @@ describe("skills library read model", () => {
 
     assert.equal(readsBeforeRelease, 1);
     assert.deepEqual(
-      sent.map((message) => listOf(message).skills[0]?.description),
+      sent.map((message) => listOf(message).entries[0]?.description),
       ["First.", "Second."],
     );
   });
@@ -159,19 +156,19 @@ describe("skills library read model", () => {
 
     assert.equal(sent.length, 3);
     assert.deepEqual(
-      listOf(sent[0]).skills.map(
+      listOf(sent[0]).entries.map(
         (skill) => `${skill.name}:${skill.description}`,
       ),
       ["notes:First."],
     );
     assert.deepEqual(
-      listOf(sent[1]).skills.map(
+      listOf(sent[1]).entries.map(
         (skill) => `${skill.name}:${skill.description}`,
       ),
       ["extra:Added.", "notes:Second."],
     );
     assert.deepEqual(
-      listOf(sent[2]).skills.map(
+      listOf(sent[2]).entries.map(
         (skill) => `${skill.name}:${skill.description}`,
       ),
       ["notes:Second."],
@@ -183,9 +180,9 @@ describe("skills library read model", () => {
     await writeFile(libraryRoot, "not a directory\n", "utf8");
     const store = new LibraryStore(skillKind, libraryRoot);
 
-    const message = await skillLibraryListMessage(store);
+    const message = await libraryListMessage("skills", store);
 
-    assert.ok(message.type === "skillList");
+    assert.ok(message.type === "libraryList");
     assert.equal(message.list, undefined);
     assert.match(message.error ?? "", /Failed to read the skills library/);
   });
@@ -198,6 +195,6 @@ describe("skills library read model", () => {
     await assert.doesNotReject(
       publishSkillLibrary(new LibraryStore(skillKind, libraryRoot)),
     );
-    assert.equal(typeof skillLibraryBroadcaster().broadcast, "function");
+    assert.equal(typeof libraryBroadcaster().broadcast, "function");
   });
 });

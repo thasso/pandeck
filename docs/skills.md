@@ -121,14 +121,16 @@ the `skills` topic only while that section renders, and the server answers each
 subscribe with a fresh working-tree scan rather than a cached result, so
 reopening the view always shows current source.
 
-The topic has exactly one list shape, the `skillList` message, and one server
-seam that sends it. Its `list` carries the whole read model — valid summaries,
-every scan diagnostic, and the `libraryPath` the user maintains by hand — while
-a scan that could not run at all sets `error` instead. An error never arrives as
-an empty library: "no skills" is a claim about authored content, and a failed
-read is not entitled to make it. A subscribe answers on the topic rather than
-privately to the asking connection, so a second window opening the library also
-refreshes the first with the same authoritative scan.
+The topic has exactly one list shape, the `libraryList` message with
+`library: "skills"`, and one server seam that sends it
+(`library/libraryPublish.ts`, shared with the agents library). Its `list`
+carries the whole read model — valid summaries, every scan diagnostic, and the
+`libraryPath` the user maintains by hand — while a scan that could not run at
+all sets `error` instead. An error never arrives as an empty library: "no
+skills" is a claim about authored content, and a failed read is not entitled to
+make it. A subscribe answers on the topic rather than privately to the asking
+connection, so a second window opening the library also refreshes the first with
+the same authoritative scan.
 
 The browser holds one canonical skills load state in `useAssistant`. A first
 open loads, a re-open keeps the rows on screen while the rescan runs, an
@@ -137,7 +139,11 @@ failed scan adds its error beside whatever was last read. Diagnostics render
 next to the list, never dropped: a malformed or duplicate folder is visible with
 its source folder and reason even though it cannot be injected. The browser is a
 read-only view: there is no authoring UI, and a committed agent mutation reaches
-it as one ordinary authoritative `skillList` publish.
+it as one ordinary authoritative `libraryList` publish.
+
+The page is the shared library page (`LibrarySettingsSection`), which the Agents
+page uses too; the skills page adds the on/off switch to each row. Opening a
+skill also shows its folder's recent commits (`GET /api/skills/history`).
 
 ## Reading one skill
 
@@ -291,7 +297,7 @@ is no second Git path. Under the canonical repository lock
 initializes, verifies the repository is ENTIRELY clean and that Git can take the
 index lock, resolves and validates every target and path, applies the complete
 operation, re-scans, stages only the paths it registered, commits, and publishes
-one fresh `skillList` — all before the lock is released, so no publish can
+one fresh `libraryList` — all before the lock is released, so no publish can
 describe the NEXT mutation's half-written files, and a failed publish never
 unmakes a commit that is already made. Any failure restores every touched path
 in the index and the working tree and emits no success broadcast.

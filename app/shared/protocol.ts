@@ -38,7 +38,8 @@ import {
   isTerminalWorkflowRunLifecycle,
   pendingWorkflowRunAttention,
 } from "./workflow.ts";
-import type { SkillLibraryList, SkillToggles } from "./skills.ts";
+import type { EntryLibraryList, LibraryTopic } from "./library.ts";
+import type { SkillToggles } from "./skills.ts";
 import type { PeerSpawnRuntime } from "./peerRuntimes.ts";
 import type { SettingsSectionId } from "./settingsRegistry.ts";
 import {
@@ -5969,7 +5970,9 @@ export type BroadcastTopic =
   | "usage"
   | "workflow"
   /** The user-owned skills library, rescanned on every subscribe. */
-  | "skills";
+  | "skills"
+  /** The user-owned agent definitions library, rescanned on every subscribe. */
+  | "agents";
 
 export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "tasks",
@@ -5980,6 +5983,7 @@ export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "usage",
   "workflow",
   "skills",
+  "agents",
 ];
 
 /** Cumulative finalized provider usage; live estimates never travel here. */
@@ -7600,6 +7604,13 @@ export type ClientMessage =
        * and, on failure, creates no session and runs no turn.
        */
       createWorktreeInProjectId?: string;
+      /**
+       * Start the session as this agent definition (`docs/agent-definitions.md`
+       * "UI"): its persona, model and effort are the definition's, resolved
+       * again here, and `agentType`/`harness` must match them. The account is
+       * the one picked, as for any new session.
+       */
+      agent?: string;
       clientRequestId?: string;
     }
   /** List worktrees (all projects, or one). Response: `worktreeList`. */
@@ -8372,18 +8383,24 @@ export type ServerMessage =
       updatedAt: number;
     }
   /**
-   * The `skills` topic's ONE list shape: a fresh working-tree scan of the
-   * user-owned library, answering a subscribe and carrying every later change.
+   * A library topic's ONE list shape (`skills`, `agents`; named by `library`):
+   * a fresh working-tree scan of that user-owned library, answering a
+   * subscribe and carrying every later change.
    *
    * Exactly one of `list`/`error` is set. A scan that could not run at all is
-   * an `error` rather than an empty library, because "no skills" is a claim
+   * an `error` rather than an empty library, because "no entries" is a claim
    * about authored content and a failed read is not entitled to make it; a
    * client keeps whatever it already had beside that message. Per-folder
    * failures are NOT this error — they travel inside `list.diagnostics`, which
    * is how a malformed folder stays visible with its reason.
    */
-  | { type: "skillList"; list: SkillLibraryList; error?: never }
-  | { type: "skillList"; list?: never; error: string }
+  | {
+      type: "libraryList";
+      library: LibraryTopic;
+      list: EntryLibraryList;
+      error?: never;
+    }
+  | { type: "libraryList"; library: LibraryTopic; list?: never; error: string }
   /**
    * Progress and outcome of a `startWorkflowRun` request, keyed to it by
    * `requestId`. `runId` is present from the first message on — the run row is

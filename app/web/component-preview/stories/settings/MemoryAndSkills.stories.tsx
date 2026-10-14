@@ -7,7 +7,7 @@ import {
   type MemoryCard,
   type MemoryLoadBatch,
   type EntryDetailResponse,
-  type SkillLibraryList,
+  type EntryLibraryList,
   type SkillToggles,
 } from "@assistant/shared";
 import type {
@@ -191,9 +191,9 @@ function loaded(
   );
 }
 
-const library: SkillLibraryList = {
+const library: EntryLibraryList = {
   libraryPath: "/home/alex/assistant/skills",
-  skills: [
+  entries: [
     {
       name: "release-notes",
       description:
@@ -226,7 +226,7 @@ const library: SkillLibraryList = {
 const releaseNotes: EntryDetailResponse = {
   kind: "entry",
   name: "release-notes",
-  description: library.skills[0]!.description,
+  description: library.entries[0]!.description,
   folder: "release-notes",
   path: "release-notes/SKILL.md",
   markdown:
@@ -272,7 +272,8 @@ const json = (body: unknown, status = 200) =>
   });
 
 /**
- * Serves ONLY the skill-detail read (`GET /api/skills/detail`) locally;
+ * Serves ONLY the skill-detail and history reads (`GET /api/skills/detail`,
+ * `/api/skills/history`) locally;
  * previews never call the app, so every other route answers 405. `release-notes`
  * reads as a skill and any other name as an `invalid` answer, unless `detail`
  * holds the read in flight or fails it.
@@ -282,7 +283,7 @@ function SkillsPreview({
   skills = {},
   detail = "answer",
 }: {
-  state: LoadState<SkillLibraryList>;
+  state: LoadState<EntryLibraryList>;
   skills?: SkillToggles;
   detail?: "answer" | "loading" | "error";
 }) {
@@ -293,6 +294,18 @@ function SkillsPreview({
       const request = input instanceof Request ? input : null;
       const url = new URL(request?.url ?? String(input), window.location.href);
       const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+      if (method === "GET" && url.pathname === "/api/skills/history")
+        return json({
+          commits: [
+            {
+              shortCommit: "4f2a9c1",
+              author: "Alex",
+              date: new Date(now - 2 * DAY).toISOString(),
+              subject: "Add release-notes skill",
+            },
+          ],
+          truncated: false,
+        });
       if (method !== "GET" || url.pathname !== "/api/skills/detail")
         return json(
           { error: "Network actions are disabled in previews." },
@@ -456,11 +469,13 @@ export const SkillsLoading: Story = {
 };
 export const SkillsEmpty: Story = {
   render: () => (
-    <SkillsPreview state={ready({ ...library, skills: [], diagnostics: [] })} />
+    <SkillsPreview
+      state={ready({ ...library, entries: [], diagnostics: [] })}
+    />
   ),
 };
 export const SkillsOnlyBroken: Story = {
-  render: () => <SkillsPreview state={ready({ ...library, skills: [] })} />,
+  render: () => <SkillsPreview state={ready({ ...library, entries: [] })} />,
 };
 export const SkillsRescanFailed: Story = {
   render: () => (

@@ -7,7 +7,7 @@ import type {
   EntryDetail,
   EntryDetailResponse,
   EntryFilePreviewResponse,
-  SkillLibraryList,
+  EntryLibraryList,
 } from "@assistant/shared";
 import { ready, type LoadState } from "../lib/loadState.ts";
 import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
@@ -41,21 +41,25 @@ const fileRequests: Array<{
   reject: (error: unknown) => void;
 }> = [];
 
-vi.mock("../lib/skillsApi.ts", () => ({
-  fetchSkillDetail: (name: string) =>
+// One api object, as `libraryApi` hands out, so `useFetchState` sees stable
+// fetchers. History is not what this file is about: it answers empty.
+const skillsApi = {
+  detail: (name: string) =>
     new Promise<EntryDetailResponse>((resolve, reject) => {
       requests.push({ name, resolve, reject });
     }),
-  fetchSkillFilePreview: (key: string) =>
+  filePreview: (key: string) =>
     new Promise<EntryFilePreviewResponse>((resolve, reject) => {
       fileRequests.push({ key, resolve, reject });
     }),
-  skillFileUrl: (name: string, path: string) => `skill:${name}/${path}`,
-}));
+  history: async () => ({ commits: [], truncated: false }),
+  fileUrl: (name: string, path: string) => `skill:${name}/${path}`,
+};
+vi.mock("../lib/libraryApi.ts", () => ({ libraryApi: () => skillsApi }));
 
-const LIST: SkillLibraryList = {
+const LIST: EntryLibraryList = {
   libraryPath: "/data/skills",
-  skills: [
+  entries: [
     {
       name: "release-notes",
       description: "Draft release notes.",
@@ -122,7 +126,7 @@ afterEach(() => {
   container = null;
 });
 
-function show(library: LoadState<SkillLibraryList> = ready(LIST)): void {
+function show(library: LoadState<EntryLibraryList> = ready(LIST)): void {
   act(() => {
     root!.render(
       <SkillsSettingsSection

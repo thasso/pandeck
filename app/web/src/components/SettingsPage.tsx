@@ -45,7 +45,7 @@ import {
   type JiraSettingsPatch,
   type ModelOption,
   type ProjectRecord,
-  type SkillLibraryList,
+  type EntryLibraryList,
   type SlackConnectionStatus,
   type SlackSettingsPatch,
   type SpeechToTextStatus,
@@ -131,6 +131,7 @@ import { PeerRuntimesSettingsSection } from "./PeerRuntimesSettingsSection.tsx";
 import { BackgroundProcessesSettingsSection } from "./BackgroundProcessesSettingsSection.tsx";
 import { PortForwardingSettingsSection } from "./PortForwardingSettingsSection.tsx";
 import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
+import { AgentsSettingsSection } from "./AgentsSettingsSection.tsx";
 import { AboutSettingsSection } from "./AboutSettingsSection.tsx";
 import { PushNotificationsSection } from "./PushNotificationsSection.tsx";
 import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
@@ -154,7 +155,9 @@ interface Props {
   settings: AppSettings;
   memory: UseMemory;
   /** The `skills` topic's canonical load state; only the Skills section reads it. */
-  skills: LoadState<SkillLibraryList>;
+  skills: LoadState<EntryLibraryList>;
+  /** The `agents` topic's canonical load state; only the Agents section reads it. */
+  agents: LoadState<EntryLibraryList>;
   prefs: Prefs;
   /**
    * The section to render. Absent on the `/settings` index route, where the
@@ -226,6 +229,7 @@ export function SettingsPage({
   settings,
   memory,
   skills,
+  agents,
   prefs,
   section,
   back,
@@ -362,6 +366,15 @@ export function SettingsPage({
               library={skills}
               settings={settings}
               onToggleSkill={onToggleSkill}
+            />
+          )}
+          {section === "agents" && (
+            <AgentsSettingsSection
+              library={agents}
+              // The session inspector links a frozen agent here by name.
+              initialSelected={new URLSearchParams(window.location.search).get(
+                "entry",
+              )}
             />
           )}
           {section === "peer-runtimes" && (

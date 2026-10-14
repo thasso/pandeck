@@ -1,4 +1,10 @@
-import { FolderKanban, GitBranch, House, Plus } from "lucide-react";
+import {
+  FolderKanban,
+  GitBranch,
+  House,
+  Plus,
+  UserRoundCog,
+} from "lucide-react";
 import {
   supportedThinkingLevelsForModel,
   type ModelOption,
@@ -9,6 +15,7 @@ import {
   type ThinkingLevel,
   type WorktreeRecord,
   type CredentialProfileSummary,
+  type EntryLibraryList,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { projectColor } from "../lib/projectDisplay.ts";
@@ -161,6 +168,9 @@ export function NewSessionQuickStart({
   onSelectModel,
   thinkingLevel,
   onSelectThinking,
+  agents,
+  selectedAgent = null,
+  onSelectAgent = () => {},
 }: {
   credentialProfiles?: CredentialProfileSummary[];
   /** Whether the account/model projection has data (including shell-cached data). */
@@ -215,6 +225,14 @@ export function NewSessionQuickStart({
   onSelectModel: (model: ModelOption) => void;
   thinkingLevel: ThinkingLevel;
   onSelectThinking: (level: ThinkingLevel) => void;
+  /**
+   * The agent definitions library (`docs/agent-definitions.md`), when it has
+   * been read: picking one stages its persona, model and effort, and the
+   * session starts as that agent.
+   */
+  agents?: EntryLibraryList | undefined;
+  selectedAgent?: string | null;
+  onSelectAgent?: (name: string | null) => void;
 }) {
   // The row is the whole choice (no "More…" picker behind it): every active
   // worktree, narrowed to the staged project once one is picked — beside that
@@ -429,6 +447,37 @@ export function NewSessionQuickStart({
         {/* Runtime block (who runs it and how) below the context rows, visually
           separated from the project/worktree staging above. */}
         <hr className="mx-4 border-border" />
+
+        {agents && agents.entries.length > 0 ? (
+          <QuickRow
+            label="Agent definition"
+            scrollKey={`${selectedAgent ?? ""}:${agents.entries.length}`}
+          >
+            {agents.entries.map((agent) => {
+              const runtime = agents.agentRuntimes?.[agent.name];
+              const problem = runtime?.problem;
+              const selected = agent.name === selectedAgent;
+              return (
+                <QuickPill
+                  key={agent.name}
+                  selected={selected}
+                  // A definition that cannot start says why instead.
+                  disabled={problem !== undefined || runtime === undefined}
+                  title={
+                    problem ??
+                    (selected
+                      ? `Start as a plain session instead of ${agent.name}`
+                      : `Start as ${agent.name}: ${agent.description}`)
+                  }
+                  onClick={() => onSelectAgent(selected ? null : agent.name)}
+                >
+                  <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
+                  <span className="min-w-0 truncate">{agent.name}</span>
+                </QuickPill>
+              );
+            })}
+          </QuickRow>
+        ) : null}
 
         {/* Build/Plan is the composer's Plan switch, not a row here. */}
         {agentPills ? (

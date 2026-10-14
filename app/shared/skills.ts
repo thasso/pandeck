@@ -1,23 +1,9 @@
 /**
  * Shared wire model for the user-owned skills library (`docs/skills.md`,
- * [Task-531](pa://task/531)): the `skills` topic list and the global on/off
- * state. The scan summaries, diagnostics, file trees and detail reads it
- * carries are the library-generic shapes in `library.ts`.
+ * [Task-531](pa://task/531)): the global on/off state. The `skills` topic list,
+ * scan summaries, diagnostics, file trees and detail reads are the
+ * library-generic shapes in `library.ts`.
  */
-import type { EntryDiagnostic, EntrySummary } from "./library.ts";
-
-/**
- * The whole `skills` topic read model: one fresh scan, both halves.
- *
- * `libraryPath` is the absolute library root. The user owns that Git
- * repository, so the browser states where to author and maintain it; it is a
- * local path, never a URL the client fetches.
- */
-export interface SkillLibraryList {
-  libraryPath: string;
-  skills: EntrySummary[];
-  diagnostics: EntryDiagnostic[];
-}
 
 /**
  * The stored global state of one skill. There is no third value: a skill is

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type {
   AppSettings,
-  SkillLibraryList,
+  EntryLibraryList,
   SkillToggles,
 } from "@assistant/shared";
 import {
@@ -33,9 +33,9 @@ import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const LIST: SkillLibraryList = {
+const LIST: EntryLibraryList = {
   libraryPath: "/data/skills",
-  skills: [
+  entries: [
     {
       name: "release-notes",
       description: "Draft release notes from merged pull requests.",
@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 function show(
-  library: LoadState<SkillLibraryList>,
+  library: LoadState<EntryLibraryList>,
   skills: SkillToggles = {},
 ): void {
   act(() => {
@@ -105,7 +105,7 @@ it("waits for the scan before claiming the library is empty", () => {
   expect(text()).toContain("Scanning the skills library…");
   expect(text()).not.toContain("No skills yet");
 
-  show(ready({ libraryPath: "/data/skills", skills: [], diagnostics: [] }));
+  show(ready({ libraryPath: "/data/skills", entries: [], diagnostics: [] }));
   expect(text()).toContain("No skills yet");
 });
 
@@ -125,7 +125,7 @@ it("says the library is unusable when only broken folders were found", () => {
   show(
     ready({
       libraryPath: "/data/skills",
-      skills: [],
+      entries: [],
       diagnostics: LIST.diagnostics,
     }),
   );
@@ -163,7 +163,7 @@ it("gives a broken folder no way to be turned on", () => {
   show(
     ready({
       libraryPath: "/data/skills",
-      skills: [],
+      entries: [],
       diagnostics: LIST.diagnostics,
     }),
   );

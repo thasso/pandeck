@@ -8,7 +8,7 @@ import type {
   ServerMessage,
   SessionListItem,
   SessionState,
-  SkillLibraryList,
+  EntryLibraryList,
   TaskListResponse,
 } from "@assistant/shared";
 import { describe, expect, it } from "vitest";
@@ -531,9 +531,9 @@ describe("cached domain-list freshness", () => {
 });
 
 describe("skills library reducer", () => {
-  const list: SkillLibraryList = {
+  const list: EntryLibraryList = {
     libraryPath: "/data/skills",
-    skills: [
+    entries: [
       { name: "notes", description: "Take notes.", path: "notes/SKILL.md" },
     ],
     diagnostics: [
@@ -551,34 +551,73 @@ describe("skills library reducer", () => {
     let state = createInitialState();
     expect(state.skillLibrary.status).toBe("idle");
 
-    state = reduceAssistantState(state, { kind: "skillLibraryLoad" });
+    state = reduceAssistantState(state, {
+      kind: "libraryLoad",
+      library: "skills",
+    });
     expect(state.skillLibrary.status).toBe("loading");
 
-    state = apply({ type: "skillList", list }, state);
+    state = apply({ type: "libraryList", library: "skills", list }, state);
     expect(state.skillLibrary).toEqual(ready(list));
     // Diagnostics ride along with the summaries; nothing narrows them away.
     expect(dataOf(state.skillLibrary)?.diagnostics).toHaveLength(1);
   });
 
   it("refreshes without blanking, and a failed rescan keeps the last good list", () => {
-    let state = apply({ type: "skillList", list });
+    let state = apply({ type: "libraryList", library: "skills", list });
 
     // Reopening the section rescans the same library: the rows stay.
-    state = reduceAssistantState(state, { kind: "skillLibraryLoad" });
+    state = reduceAssistantState(state, {
+      kind: "libraryLoad",
+      library: "skills",
+    });
     expect(state.skillLibrary.status).toBe("refreshing");
     expect(dataOf(state.skillLibrary)).toBe(list);
 
     state = apply(
-      { type: "skillList", error: "Failed to read the skills library: EACCES" },
+      {
+        type: "libraryList",
+        library: "skills",
+        error: "Failed to read the skills library: EACCES",
+      },
       state,
     );
     expect(state.skillLibrary.status).toBe("error");
     expect(dataOf(state.skillLibrary)).toBe(list);
   });
 
+  it("keeps each library in its own state: an agents list never lands on skills", () => {
+    let state = reduceAssistantState(createInitialState(), {
+      kind: "libraryLoad",
+      library: "agents",
+    });
+    expect(state.agentLibrary.status).toBe("loading");
+    expect(state.skillLibrary.status).toBe("idle");
+
+    const agents: EntryLibraryList = {
+      libraryPath: "/data/agents",
+      entries: [
+        {
+          name: "reviewer",
+          description: "Reviews.",
+          path: "reviewer/AGENT.md",
+        },
+      ],
+      diagnostics: [],
+      agentRuntimes: { reviewer: { problem: "No model." } },
+    };
+    state = apply(
+      { type: "libraryList", library: "agents", list: agents },
+      state,
+    );
+    expect(state.agentLibrary).toEqual(ready(agents));
+    expect(state.skillLibrary.status).toBe("idle");
+  });
+
   it("never turns a failed first scan into an empty library", () => {
     const state = apply({
-      type: "skillList",
+      type: "libraryList",
+      library: "skills",
       error: "Failed to read the skills library: EACCES",
     });
 

@@ -1,9 +1,9 @@
 # Agent definitions
 
-**Status:** design for [Task-780](pa://task/780). The shared library core
+**Status:** implemented by [Task-780](pa://task/780): the shared library core
 ([Task-781](pa://task/781)), the agent library with its `agent_*` tools
-([Task-782](pa://task/782)), and spawning by name ([Task-783](pa://task/783))
-are implemented; the UI is not yet.
+([Task-782](pa://task/782)), spawning by name ([Task-783](pa://task/783)), and
+the UI ([Task-784](pa://task/784)).
 
 An agent definition is a user-authored Markdown file that describes a reusable
 agent: which persona it builds on, which model and effort it runs at, which
@@ -272,8 +272,8 @@ The session runs the model it was spawned on, never one a harness picks:
   path.
 
 The session inspector's Agent section shows the frozen name, model, effort,
-denied tools, skills and blob id. A link to the definition arrives with the
-Agents page.
+denied tools, skills and blob id; the name opens the definition on the Agents
+page (`/settings/agents?entry=<name>`), as the library holds it now.
 
 ## Shared library core
 
@@ -304,9 +304,10 @@ schemas.
 These stay skills-only: the global on/off map, session freezing
 (`sessionSkills.ts`), the runtime materializer, and invocation tracking. Agents
 have their own freeze (above) and no on/off map: a definition the user does not
-want is deleted or renamed. The skills browser topic and HTTP reads are still
-skill-specific; they become per-kind when the Agents page needs them
-([Task-784](pa://task/784)).
+want is deleted or renamed. The browser reads are per library too: one topic and
+list message (`library/libraryPublish.ts`), one HTTP surface
+(`library/libraryHttp.ts`) and one settings page (`LibrarySettingsSection`)
+serve both (see "UI").
 
 The core's wire and message vocabulary is kind-neutral where a kind name would
 be wrong for another kind: the file-level diagnostic codes are
@@ -341,11 +342,30 @@ a kind descriptor, a create renderer, and nothing else.
 
 ## UI
 
-Settings gets an Agents page next to Skills, built from the same components: the
-list, diagnostics, the file viewer, and history. The new-session picker can
-start a session from a definition, with the definition's persona, model, and
-effort preselected. This comes last. Agent-driven spawning does not depend on
-it.
+Settings → Agents (`/settings/agents`) is the shared library page
+(`LibrarySettingsSection`), the one Settings → Skills uses: the list, the
+folders that need a fix with their reason, one entry's files, and its recent
+commits. Each row adds what the definition would run on right now (persona,
+model, pinned version, effort), or why it cannot start. Nothing on the page
+writes; definitions change through the `agent_*` tools or by hand.
+
+Both pages read through the same server pieces, one per library:
+
+- **Topic.** `skills` and `agents` each answer a subscribe with one
+  `libraryList` message (`library/libraryPublish.ts`). The agents list also
+  carries `agentRuntimes`, each definition's resolved runtime or problem
+  (`agents/agentLibraryList.ts`), and is republished after every agent mutation.
+- **HTTP.** `/api/<library>/detail`, `/file` and `/history`
+  (`library/libraryHttp.ts`).
+
+The new-session page offers the definitions as an "Agent definition" row
+(`NewSessionQuickStart`). Picking one stages its persona, model and effort, on
+an account of the model's provider; picking a persona, model, effort or account
+by hand drops it again. The first send carries `agent`, and the server resolves
+the definition again on the picked account (`harnesses/firstSend.ts`): the
+session runs on the definition's model and effort and freezes it exactly as a
+spawn does. A persona or engine that no longer matches the definition refuses
+the send.
 
 ## Out of scope
 

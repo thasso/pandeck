@@ -924,16 +924,17 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   canonical, always-valid frontmatter skeleton (enums/schema literal derived
   from the constants so agent guidance cannot drift from validation) surfaced in
   the KB write/edit tool schemas and guidance.
-- `skills/skillLibrary.ts` owns the browser-facing read of the library: it
-  bootstraps the store, scans the working tree, and builds the `skills` topic's
-  one `skillList` message (`libraryPath` + summaries + diagnostics), answering a
-  read that could not run at all with `error` rather than an empty library.
-  `publishSkillLibrary` pushes that message through the topic seam, which is
-  what a `skills` subscribe calls in `connection.ts`: the subscribe IS the
-  authoritative rescan, and its result reaches every subscriber rather than the
-  asking connection alone, so two open windows cannot disagree. Nothing here
-  caches — a cached index would let Settings show a skill that no longer matches
-  the file a session injects.
+- `library/libraryPublish.ts` owns the browser-facing read of every library: it
+  bootstraps the store, scans the working tree, and builds the library topic's
+  one `libraryList` message (`libraryPath` + summaries + diagnostics, plus
+  `agentRuntimes` for agents via `agents/agentLibraryList.ts`), answering a read
+  that could not run at all with `error` rather than an empty library.
+  `publishSkillLibrary` (`skills/skillLibrary.ts`) and `publishAgentLibrary`
+  push that message through the topic seam, which is what a `skills` subscribe
+  calls in `connection.ts`: the subscribe IS the authoritative rescan, and its
+  result reaches every subscriber rather than the asking connection alone, so
+  two open windows cannot disagree. Nothing here caches — a cached index would
+  let Settings show a skill that no longer matches the file a session injects.
 - `library/entryDetail.ts` owns the bounded read of ONE skill
   ([Task-614](pa://task/614)). `readEntryDetail(name)` accepts a DECLARED name
   only — `isSafeEntryName` first, then a fresh scan, then the file that scan
@@ -982,18 +983,21 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   U+FEFF, since a window that disagrees with the bytes on disk is not verbatim.
   The prefix's last line is dropped when the file runs past the 256 KiB read
   bound, because half a line is not a line an edit can be copied out of.
-- `skills/skillsHttp.ts` owns `/api/skills/*`, dispatched from `index.ts` and
-  therefore behind the same token/origin gate as the rest of the API surface.
-  `GET /api/skills/detail?name=<declared-name>` serves bounded instructions plus
-  the recursive tree. `GET /api/skills/file?name=…&path=…` serves bounded raw
-  bytes; `preview=text` returns the shared bounded preview union. Missing/unsafe
-  names and paths are 400, unknown/deleted files are 404, and oversized raw
-  files are 413. Raw responses carry fixed MIME, no-sniff, sandbox CSP,
-  no-store, and safe disposition headers. The library LIST deliberately stays on
-  the `skills` topic.
-- `skills/skillLibraryEvents.ts` is the domain's ONE broadcaster seam, installed
-  by `hub.ts` as `broadcastTopic("skills", …)`. The default no-op keeps unit
-  tests and one-shot callers hubless; the domain never broadcasts app-wide.
+- `library/libraryHttp.ts` owns `/api/<library>/*` (`skills`, `agents`),
+  dispatched from `index.ts` per store and therefore behind the same
+  token/origin gate as the rest of the API surface.
+  `GET /api/<library>/detail?name=<declared-name>` serves bounded instructions
+  plus the recursive tree. `GET /api/<library>/file?name=…&path=…` serves
+  bounded raw bytes; `preview=text` returns the shared bounded preview union.
+  `GET /api/<library>/history?name=…` lists the entry folder's recent commits.
+  Missing/unsafe names and paths are 400, unknown/deleted files are 404, and
+  oversized raw files are 413. Raw responses carry fixed MIME, no-sniff, sandbox
+  CSP, no-store, and safe disposition headers. The library LIST deliberately
+  stays on the library's topic.
+- `library/libraryPublish.ts` is also the libraries' ONE broadcaster seam,
+  installed by `hub.ts` as `broadcastTopic(topic, …)` for the library's own
+  topic. The default no-op keeps unit tests and one-shot callers hubless; a
+  library never broadcasts app-wide.
 - `library/entrySource.ts` owns the ONE way library bytes are reached and now
   written, shared by the scan, the single-skill read, and the authoring tools.
   It opens the library root, then each component below it relative to that
@@ -2650,11 +2654,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `hub.broadcastTopic(topic, msg)` sends only to connections whose
   `Viewer.wantsTopic(topic)` is true (`BroadcastTopic` in `@assistant/shared`:
   `tasks`, `projects`, `worktrees`, `skills`, …), and every domain broadcaster
-  seam (`taskEvents`/`worktreeEvents`/`skills/skillLibraryEvents`) exposes
-  exactly one `broadcast` the hub binds to its topic; migrated Projects instead
-  expose notify-with-touched-ids from `projectRegistry.ts`, which the hub
-  projects into that same topic. A `broadcastAll` seam would let a domain
-  quietly opt out of addressing. `connection.ts` owns the `topics` set behind
+  seam (`taskEvents`/`worktreeEvents`/`library/libraryPublish`) exposes exactly
+  one `broadcast` the hub binds to its topic; migrated Projects instead expose
+  notify-with-touched-ids from `projectRegistry.ts`, which the hub projects into
+  that same topic. A `broadcastAll` seam would let a domain quietly opt out of
+  addressing. `connection.ts` owns the `topics` set behind
   `subscribe`/`unsubscribe`, and subscribing is ALSO the authoritative read for
   every stateful list: cold `tasks`/`projects` and the complete app-level
   `worktrees` list answer with their current snapshot; warm migrated domains

@@ -3,7 +3,7 @@ import {
   type AccountModelOption,
   type AppSettings,
   type CredentialProfileSummary,
-  type SkillLibraryList,
+  type EntryLibraryList,
 } from "@assistant/shared";
 import type { UseMemory } from "../../src/hooks/useMemory.ts";
 import type { Prefs } from "../../src/hooks/usePrefs.ts";
@@ -245,8 +245,59 @@ export const settingsMemory: UseMemory = {
   fetchLoads: () => {},
   fetchStatus: () => {},
 };
-export const settingsSkills: SkillLibraryList = {
+export const settingsSkills: EntryLibraryList = {
   libraryPath: "/home/alex/assistant/skills",
-  skills: [],
+  entries: [],
   diagnostics: [],
+};
+
+/** Two runnable agents and one whose model no longer resolves. */
+export const settingsAgents: EntryLibraryList = {
+  libraryPath: "/home/alex/assistant/agents",
+  entries: [
+    {
+      name: "test-reviewer",
+      description:
+        "Checks that every new test fails without the change it tests.",
+      path: "test-reviewer/AGENT.md",
+    },
+    {
+      name: "release-scribe",
+      description: "Drafts release notes from merged pull requests.",
+      path: "release-scribe/AGENT.md",
+    },
+    {
+      name: "legacy-auditor",
+      description: "Audits a dependency upgrade.",
+      path: "legacy-auditor/AGENT.md",
+    },
+  ],
+  diagnostics: [
+    {
+      code: "invalid-field",
+      folder: "half-written",
+      path: "half-written/AGENT.md",
+      declaredName: "half-written",
+      error: 'persona must be "developer" or "assistant".',
+    },
+  ],
+  agentRuntimes: {
+    "test-reviewer": {
+      persona: "developer",
+      provider: "claude-sdk",
+      modelId: "opus",
+      pinnedModel: "claude-opus-5-5",
+      thinkingLevel: "high",
+    },
+    "release-scribe": {
+      persona: "assistant",
+      provider: "openai-codex",
+      modelId: "gpt-6.1-sol",
+      thinkingLevel: "medium",
+    },
+    "legacy-auditor": {
+      problem:
+        'Agent "legacy-auditor" cannot run: No enabled account offers a model "gemini".',
+    },
+  },
 };

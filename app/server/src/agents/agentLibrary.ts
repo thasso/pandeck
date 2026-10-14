@@ -207,9 +207,11 @@ export const agentKind: LibraryKind<AgentManifest> = {
   trailerPrefix: "Agent",
   parseManifest: parseAgentManifest,
   maxManifestBytes: MAX_AGENT_MANIFEST_BYTES,
-  // The Agents page and its topic arrive with the UI (Task-784); until then no
-  // browser shows the library, so there is nothing to refresh.
-  publish: async () => undefined,
+  // Imported when first used: the list module resolves runtimes through the
+  // spawn path, which reaches this module, so a static import would close a
+  // cycle.
+  publish: async (library) =>
+    (await import("./agentLibraryList.ts")).publishAgentLibrary(library),
 };
 
 /** The process-wide agents store: one bootstrap, one mutation lock chain. */

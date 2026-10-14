@@ -39,7 +39,7 @@ import {
   type LibraryMutationContext,
   LibraryStore,
 } from "../library/libraryStore.ts";
-import { setSkillLibraryBroadcaster } from "./skillLibraryEvents.ts";
+import { setLibraryBroadcaster } from "../library/libraryPublish.ts";
 
 let root: string;
 let outsideRoot: string;
@@ -60,13 +60,13 @@ beforeEach(async () => {
   library = new LibraryStore(skillKind, root);
   await library.ensureInitialized();
   broadcasts = [];
-  setSkillLibraryBroadcaster({
+  setLibraryBroadcaster({
     broadcast: (message) => broadcasts.push(message),
   });
 });
 
 afterEach(() => {
-  setSkillLibraryBroadcaster({ broadcast: () => undefined });
+  setLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
   rmSync(outsideRoot, { recursive: true, force: true });
 });
@@ -253,9 +253,11 @@ describe("skill authoring: create", () => {
 
     assert.equal(broadcasts.length, 1);
     const [message] = broadcasts;
-    assert.equal(message?.type, "skillList");
+    assert.equal(message?.type, "libraryList");
     assert.equal(
-      message?.type === "skillList" ? message.list?.skills[0]?.name : undefined,
+      message?.type === "libraryList"
+        ? message.list?.entries[0]?.name
+        : undefined,
       "release-notes",
     );
   });
@@ -1550,11 +1552,11 @@ describe("skill authoring: the publish describes the committed state", () => {
   test("each mutation's broadcast is its own commit, never the next one's writes", async () => {
     await seedSkill();
     const seen: string[][] = [];
-    setSkillLibraryBroadcaster({
+    setLibraryBroadcaster({
       broadcast: (message) => {
         broadcasts.push(message);
-        if (message.type === "skillList" && message.list) {
-          seen.push(message.list.skills.map((skill) => skill.name));
+        if (message.type === "libraryList" && message.list) {
+          seen.push(message.list.entries.map((skill) => skill.name));
         }
       },
     });
@@ -1585,7 +1587,7 @@ describe("skill authoring: the publish describes the committed state", () => {
   });
 
   test("a broadcaster failure does not turn a committed mutation into an error", async () => {
-    setSkillLibraryBroadcaster({
+    setLibraryBroadcaster({
       broadcast: () => {
         throw new Error("no listener");
       },

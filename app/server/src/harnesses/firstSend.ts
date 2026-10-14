@@ -8,7 +8,17 @@
  * persona gate applies, the account, what it resolves before a worktree can be
  * provisioned, and what its session is created with (`create.ts` knows how).
  */
-import type { ClientMessage, Harness, TaskSessionRef } from "@assistant/shared";
+import {
+  harnessForModelProvider,
+  type ClientMessage,
+  type Harness,
+  type TaskSessionRef,
+} from "@assistant/shared";
+import {
+  AgentSpawnRefusedError,
+  resolveAgentSpawn,
+  type AgentSpawnRuntime,
+} from "../agents/agentSpawn.ts";
 import {
   defaultOpenAiProfileId,
   enabledCredentialProfileById,
@@ -82,6 +92,39 @@ interface FirstSendEngine {
   >;
 }
 
+/**
+ * The definition a send starts its session as, resolved now on the picked
+ * account: it decides the model and effort, and the persona and engine the
+ * client staged must be its own.
+ */
+async function firstSendAgent(
+  req: FirstSendRequest,
+  profileId: string,
+): Promise<{ refusal: FirstSendRefusal } | { agent?: AgentSpawnRuntime }> {
+  if (req.agent === undefined) return {};
+  let agent: AgentSpawnRuntime;
+  try {
+    agent = await resolveAgentSpawn(req.agent, undefined, { profileId });
+  } catch (error) {
+    if (error instanceof AgentSpawnRefusedError)
+      return { refusal: { message: error.message } };
+    throw error;
+  }
+  if (agent.agent.persona !== req.agentType)
+    return {
+      refusal: {
+        message: `Agent "${agent.agent.name}" runs as the ${agent.agent.persona} persona, not ${req.agentType}.`,
+      },
+    };
+  if (harnessForModelProvider(agent.provider) !== req.harness)
+    return {
+      refusal: {
+        message: `Agent "${agent.agent.name}" runs on ${agent.provider}/${agent.modelId}, which this engine does not run.`,
+      },
+    };
+  return { agent };
+}
+
 /** A Claude send names its id, so one another engine holds is refused. */
 function claudeOwnershipRefusal(id: string): FirstSendRefusal | undefined {
   const holder = harnessRegistry.otherHolder(id, "claude-sdk");
@@ -111,19 +154,20 @@ const engines: Record<Harness, FirstSendEngine> = {
       return { profileId };
     },
     async prepare(req, profileId) {
+      const started = await firstSendAgent(req, profileId);
+      if ("refusal" in started) return started;
+      const { agent } = started;
       // A model the account does not offer ends the send before a worktree is
-      // provisioned for it.
+      // provisioned for it. An agent's is its definition's.
+      const provider = agent?.provider ?? req.modelProvider;
+      const modelId = agent?.modelId ?? req.modelId;
       let model: Awaited<ReturnType<typeof findModelForProfile>>;
-      if (req.modelProvider && req.modelId) {
-        model = await findModelForProfile(
-          profileId,
-          req.modelProvider,
-          req.modelId,
-        );
+      if (provider && modelId) {
+        model = await findModelForProfile(profileId, provider, modelId);
         if (!model)
           return {
             refusal: {
-              message: `Model ${req.modelProvider}/${req.modelId} is not available.`,
+              message: `Model ${provider}/${modelId} is not available.`,
             },
           };
       }
@@ -132,7 +176,8 @@ const engines: Record<Harness, FirstSendEngine> = {
           harness: "pi",
           agentType: req.agentType,
           model,
-          thinkingLevel: req.thinkingLevel,
+          thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
+          ...(agent ? { agent: agent.agent } : {}),
           mode: req.mode,
           ...(worktree ? { worktree } : {}),
           credentialProfileId: profileId,
@@ -173,6 +218,9 @@ const engines: Record<Harness, FirstSendEngine> = {
       return { profileId };
     },
     async prepare(req, profileId) {
+      const started = await firstSendAgent(req, profileId);
+      if ("refusal" in started) return started;
+      const { agent } = started;
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
         let live: LiveSession;
         try {
@@ -182,8 +230,9 @@ const engines: Record<Harness, FirstSendEngine> = {
             // session registers.
             id: req.id,
             agentType: req.agentType,
-            modelId: req.modelId,
-            thinkingLevel: req.thinkingLevel,
+            modelId: agent?.modelId ?? req.modelId,
+            thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
+            ...(agent ? { agent: agent.agent } : {}),
             mode: req.mode,
             ...(worktree ? { worktree } : {}),
             credentialProfileId: profileId,
