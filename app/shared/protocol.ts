@@ -3520,9 +3520,10 @@ export interface AgentDefinitionApprovalBody {
   /** The connected model `after` resolved to when proposed: `provider/id`. */
   resolvedModel: string;
   /**
-   * Effort before (edit only) and after; absent means the model's default.
-   * `effective` is the level the model will actually run at, present when it
-   * fits `after` to the levels it supports.
+   * Effort before (edit only) and after; absent means the definition default
+   * (`medium`). `effective` is the level the model will actually run at,
+   * present when it differs from `after`: a default, or a level fitted to the
+   * ones the model supports.
    */
   effort: {
     before?: ThinkingLevel;

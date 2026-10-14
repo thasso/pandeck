@@ -167,9 +167,23 @@ describe("checkAgentRuntime", () => {
     );
     assert.equal(runtime?.model.id, "gpt-6.1-sol");
     assert.equal(runtime?.thinkingLevel, "low");
+    // No effort runs at the default, fitted the same way.
     assert.equal(
       (await checkAgentRuntime(base, { sources }))?.thinkingLevel,
-      undefined,
+      "medium",
+    );
+    assert.equal(
+      (await checkAgentRuntime({ ...base, model: "sol" }, { sources }))
+        ?.thinkingLevel,
+      "medium",
+    );
+    const highOnly = {
+      ...sources,
+      models: async () => [model("claude-sdk", "opus", ["off", "high"])],
+    };
+    assert.equal(
+      (await checkAgentRuntime(base, { sources: highOnly }))?.thinkingLevel,
+      "high",
     );
   });
 

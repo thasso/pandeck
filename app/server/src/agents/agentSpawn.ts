@@ -6,7 +6,6 @@
  * resolves, or whose account does not offer it, refuses the spawn.
  */
 import {
-  clampThinkingLevelForModel,
   HARNESSES,
   harnessForModelProvider,
   type EntryDiagnostic,
@@ -21,11 +20,7 @@ import { assertManifest } from "../library/entryManifest.ts";
 import { resolveEntrySource } from "../library/libraryAuthoring.ts";
 import { scanLibrary, type LibraryScan } from "../library/libraryScanner.ts";
 import type { LibraryStore } from "../library/libraryStore.ts";
-import {
-  AGENT_DEFAULT_EFFORT,
-  agentKind,
-  agentLibraryStore,
-} from "./agentLibrary.ts";
+import { agentKind, agentLibraryStore } from "./agentLibrary.ts";
 import { checkAgentRuntime } from "./agentRuntime.ts";
 import { gitBlobId, type SessionAgent } from "./sessionAgent.ts";
 
@@ -141,9 +136,7 @@ export async function resolveAgentSpawn(
     throw new AgentSpawnRefusedError(
       `Agent "${name}" cannot run: the account its ${model.provider} sessions use (${sources.accountName(credentialProfileId) ?? credentialProfileId}) does not offer ${model.provider}/${model.id}.`,
     );
-  const thinkingLevel =
-    runtime.thinkingLevel ??
-    clampThinkingLevelForModel(model, AGENT_DEFAULT_EFFORT);
+  const { thinkingLevel } = runtime;
   const accountName = sources.accountName(credentialProfileId);
   return {
     agent: {

@@ -1629,6 +1629,10 @@ test("an agent row is validated like any row before anything exists", async () =
 test.each([
   [{ profileId: "pr_terra" }, /names an agent and sets profileId/],
   [{ agentType: "assistant" }, /names an agent and sets agentType/],
+  [
+    { modelId: "opus" },
+    /which an agent row does not accept: the agent definition decides/,
+  ],
 ])("an agent row stating %o is refused", async (patch, error) => {
   await useAgents();
   writeAgent();

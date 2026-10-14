@@ -111,9 +111,9 @@ async function propose(
     effort: {
       ...(before?.effort ? { before: before.effort } : {}),
       ...(after.effort ? { after: after.effort } : {}),
-      // What the model will actually use, when it fits the requested level
-      // to the ones it supports.
-      ...(resolved.thinkingLevel && resolved.thinkingLevel !== after.effort
+      // What the model will actually use: the requested level, or the
+      // default for none, fitted to the ones it supports.
+      ...(resolved.thinkingLevel !== after.effort
         ? { effective: resolved.thinkingLevel }
         : {}),
     },
@@ -153,13 +153,13 @@ async function propose(
  */
 async function resolvedModelOf(
   definition: AgentManifest,
-): Promise<{ label: string; thinkingLevel?: ThinkingLevel }> {
+): Promise<{ label: string; thinkingLevel: ThinkingLevel }> {
   const { model, pinnedModel, thinkingLevel } =
     (await checkAgentRuntime(definition))!;
   const label = `${model.provider}/${model.id}${
     pinnedModel ? ` (${pinnedModel})` : ""
   }`;
-  return { label, ...(thinkingLevel ? { thinkingLevel } : {}) };
+  return { label, thinkingLevel };
 }
 
 /** Refuse an approval whose model no longer resolves to what the card showed. */
@@ -178,7 +178,7 @@ async function assertStillResolves(
   const shown = body.effort.effective ?? body.effort.after;
   if (now.thinkingLevel !== shown)
     throw new EntryValidationError(
-      `${now.label} would now run "${definition.name}" at effort ${now.thinkingLevel ?? "default"}, not the ${shown ?? "default"} this card showed. Nothing was written; propose it again.`,
+      `${now.label} would now run "${definition.name}" at effort ${now.thinkingLevel}, not the ${shown ?? "default"} this card showed. Nothing was written; propose it again.`,
     );
 }
 

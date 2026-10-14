@@ -114,7 +114,8 @@ The resolved model decides the provider and therefore the harness. `effort` is
 fitted to the levels the model supports (`clampThinkingLevelForModel`, which
 tries the next level up before the next one down), as spawn already does for
 thinking hints. A definition without `effort` runs at `medium`
-(`AGENT_DEFAULT_EFFORT`), fitted the same way.
+(`AGENT_DEFAULT_EFFORT`), fitted the same way. The card shows that level, and
+approval checks it like an explicit one (`checkAgentRuntime`).
 
 Validation at write time checks that the model resolves against the accounts
 connected right now. A spawn resolves it again. A model that stopped resolving,
@@ -238,12 +239,12 @@ changed fails it too, since the row was checked for the old persona.
 The second read is frozen in the insert-only `session_agent` table (migration
 `0079_session_agent.sql`): name, the `AGENT.md` git blob id, persona, provider,
 model, the concrete version a definition pinned (`claude-opus-5-5` rather than
-`opus`), effective effort, deny list, mounted skills, and the body text. Like
-`session_skills`, the first insert wins for the session's life, a fork copies
-the parent's row, and resumes read the row rather than the library. Editing or
-deleting a definition affects new spawns only. A row that does not parse fails
-closed: the session refuses to run rather than run without its role and its
-denied tools.
+`opus`), effective effort, deny list, the definition's own skills, and the body
+text. Like `session_skills`, the first insert wins for the session's life, a
+fork copies the parent's row, and resumes read the row rather than the library.
+Editing or deleting a definition affects new spawns only. A row that does not
+parse fails closed: the session refuses to run rather than run without its role
+and its denied tools.
 
 The session runs the model it was spawned on, never one a harness picks:
 

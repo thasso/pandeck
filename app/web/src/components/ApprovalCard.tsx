@@ -955,7 +955,7 @@ function Change({
 }
 
 function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
-  const effort = (level: ThinkingLevel | undefined) => level ?? "model default";
+  const effort = (level: ThinkingLevel | undefined) => level ?? "default";
   return (
     <>
       <Row label="Agent">

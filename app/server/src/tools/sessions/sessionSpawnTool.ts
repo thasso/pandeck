@@ -468,7 +468,9 @@ function checkRawRow(
     for (const key of RUNTIME_HINTS)
       if (stated(row, key))
         throw new Error(
-          `${where} sets ${key}, which operation "spawn" does not accept: the approved runtime named by profileId decides the account, model and thinking level. Use operation "propose" to ask the user for a different runtime.`,
+          stated(row, "agent")
+            ? `${where} sets ${key}, which an agent row does not accept: the agent definition decides the model and effort, and the account follows from the model.`
+            : `${where} sets ${key}, which operation "spawn" does not accept: the approved runtime named by profileId decides the account, model and thinking level. Use operation "propose" to ask the user for a different runtime.`,
         );
     if (stated(row, "agent"))
       for (const key of ["profileId", "agentType"] as const)

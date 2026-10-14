@@ -166,6 +166,36 @@ describe("agent_create", () => {
     assert.equal(existsSync(manifest()), false);
   });
 
+  test("a definition without effort shows, and approval checks, the default it runs at", async () => {
+    const { effort: _omitted, ...noEffort } = definition;
+    await call("agent_create", noEffort);
+    const createCard = latestCard();
+    assert.equal(createCard.body.kind, "agentDefinition");
+    if (createCard.body.kind !== "agentDefinition") return;
+    assert.equal(createCard.body.effort.after, undefined);
+    assert.equal(createCard.body.effort.effective, "medium");
+    // The model stops supporting medium while the card waits: the default
+    // would now be fitted to another level than the card showed.
+    setAgentRuntimeSourcesForTests({
+      models: async () => [
+        model("claude-sdk", "opus"),
+        {
+          ...model("claude-sdk", "sonnet"),
+          supportedThinkingLevels: ["off", "high"],
+        },
+      ],
+      skillNames: async () => [],
+      toolNames: async () => ["worktree_push", "worktree_commit"],
+    });
+    const { card } = await resolveApproval(createCard.id, "approved");
+    assert.equal(card.status, "failed");
+    assert.match(
+      card.error ?? "",
+      /would now run "test-reviewer" at effort high, not the medium this card showed/,
+    );
+    assert.equal(existsSync(manifest()), false);
+  });
+
   test("approval writes exactly the proposed definition as one commit", async () => {
     await call("agent_create", definition);
     const proposed = latestCard();

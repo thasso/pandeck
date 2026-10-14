@@ -19,6 +19,7 @@ import { modelsForAccount, pinnedModelIdsFor } from "../harnesses/models.ts";
 import { EntryValidationError } from "../library/entryManifest.ts";
 import { scanSkillLibrary, skillLibraryStore } from "../skills/skillLibrary.ts";
 import {
+  AGENT_DEFAULT_EFFORT,
   AGENT_NATIVE_TOOLS,
   type AgentManifest,
   type AgentPersona,
@@ -33,8 +34,12 @@ export interface AgentRuntime {
    * after the alias moves on.
    */
   pinnedModel?: string;
-  /** The definition's effort, fitted to the levels the model supports. */
-  thinkingLevel?: ThinkingLevel;
+  /**
+   * The effort it runs at: the definition's, or the default when it names
+   * none, fitted to the levels the model supports. The one value a card shows,
+   * an approval checks and a spawn freezes.
+   */
+  thinkingLevel: ThinkingLevel;
 }
 
 /** The outside state a runtime check reads; injectable for tests. */
@@ -170,11 +175,10 @@ export async function checkAgentRuntime(
       runtime = {
         model: option,
         ...(pinned ? { pinnedModel: pinnedId } : {}),
-        ...(manifest.effort !== undefined
-          ? {
-              thinkingLevel: clampThinkingLevelForModel(model, manifest.effort),
-            }
-          : {}),
+        thinkingLevel: clampThinkingLevelForModel(
+          option,
+          manifest.effort ?? AGENT_DEFAULT_EFFORT,
+        ),
       };
     } catch (error) {
       problems.push((error as Error).message);
