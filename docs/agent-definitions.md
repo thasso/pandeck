@@ -220,9 +220,10 @@ approval card (`docs/approvals.md`):
 - `operation: "agents"`, read-only and available in Plan: every definition with
   its description, persona, and the model, effort and account it would run on
   now. A definition that cannot be spawned is listed with the reason, so a
-  caller knows why one it was told about cannot be used. Like `agent_list` the
-  answer is bounded (200 rows, descriptions cut at 300 characters) and states
-  the true total; a definition left out can still be spawned by name.
+  caller knows why one it was told about cannot be used. The answer is bounded
+  like `agent_list` (200 rows, the true total stated), with descriptions and
+  reasons cut at 300 characters; a definition left out can still be spawned by
+  name.
 - An `agent` field on a `spawn` row, naming a definition. The row then takes no
   `profileId` and no `agentType`; stating either is refused. Model, effort, and
   persona come from the definition and the account from the account function.
@@ -408,16 +409,18 @@ the pickers; the server checks it against the account. The first send carries
 effort and freezes it exactly as a spawn does, read again right before the
 session is created (a worktree provisioned first can take seconds). A runtime
 that moved between the two reads refuses the send. A Claude send names its own
-id, and an id that already holds a session is refused unless that session was
-created as the same agent (`SessionAgentConflictError`): reusing it would keep
-its own runtime under the definition's name. A persona, engine, model or effort
-that no longer matches the definition refuses the send rather than run something
-other than what the pickers showed. The refusal says what the definition runs on
-now and republishes the agents list, so the draft follows it: after a model or
-effort change the next send starts the definition, and after a persona change
-the agent is no longer picked and the next send is a plain session of the
-draft's persona. `appAudit.test.ts` holds `App` to the fresh-draft and re-issue
-helpers.
+id, so only a retry of the same creation may reuse one: an agent row already
+stored for the id must be byte-for-byte what this send would freeze, whether or
+not the session was created after it (the row is written first), and an agent
+never lands on a plain session that exists (`SessionAgentConflictError`).
+Otherwise a definition would describe a session that runs something else. A
+persona, engine, model or effort that no longer matches the definition refuses
+the send rather than run something other than what the pickers showed. The
+refusal says what the definition runs on now and republishes the agents list, so
+the draft follows it: after a model or effort change the next send starts the
+definition, and after a persona change the agent is no longer picked and the
+next send is a plain session of the draft's persona. `appAudit.test.ts` holds
+`App` to the fresh-draft and re-issue helpers.
 
 ## Out of scope
 

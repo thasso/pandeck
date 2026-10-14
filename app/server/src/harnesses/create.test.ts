@@ -333,3 +333,55 @@ test("an agent is never grafted onto a Claude session that already exists", asyn
   await start("existing-same");
   assert.equal(acquire.mock.calls.length, 1);
 });
+
+test("an agent row left by a creation that never finished binds its id", async () => {
+  const { SessionAgentConflictError } = await import("./create.ts");
+  const agent = {
+    name: "reviewer",
+    blob: "c".repeat(40),
+    persona: "assistant" as const,
+    provider: "claude-sdk",
+    model: "opus",
+    effort: "high" as const,
+    denyTools: ["worktree_push"],
+    skills: [],
+    body: "Review only.",
+  };
+  const acquire = vi
+    .spyOn(claudeSdkStore, "acquire")
+    .mockImplementation(
+      (id: string) => ({ sessionId: id, setTitle() {} }) as never,
+    );
+  // No Claude session exists: only the row the failed creation wrote first.
+  vi.spyOn(claudeSdkStore, "exists").mockReturnValue(false);
+  const start = (id: string, spec: Partial<typeof agent> | undefined) =>
+    createSession({
+      harness: "claude-sdk",
+      id,
+      agentType: "assistant",
+      credentialProfileId: "profile-1",
+      ...(spec ? { agent: { ...agent, ...spec } } : {}),
+    });
+  for (const id of ["abandoned-other", "abandoned-plain", "abandoned-edited"])
+    sessionStore.freezeAgent(id, JSON.stringify(agent));
+
+  await assert.rejects(
+    start("abandoned-other", { name: "drafter", model: "sonnet" }),
+    SessionAgentConflictError,
+  );
+  await assert.rejects(
+    start("abandoned-plain", undefined),
+    SessionAgentConflictError,
+  );
+  // Same name, but the definition changed since: the row would not describe it.
+  await assert.rejects(
+    start("abandoned-edited", { denyTools: [] }),
+    SessionAgentConflictError,
+  );
+  assert.equal(acquire.mock.calls.length, 0);
+
+  // The same creation retried finishes it.
+  sessionStore.freezeAgent("abandoned-same", JSON.stringify(agent));
+  await start("abandoned-same", {});
+  assert.equal(acquire.mock.calls.length, 1);
+});

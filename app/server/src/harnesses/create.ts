@@ -14,7 +14,6 @@ import type {
 } from "@assistant/shared";
 import {
   freezeSessionAgent,
-  sessionAgentSummary,
   type SessionAgent,
 } from "../agents/sessionAgent.ts";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
@@ -48,17 +47,21 @@ export class SessionIdTakenError extends Error {
 }
 
 /**
- * An agent requested for an id that already holds a Claude session. `acquire`
- * returns that session as it is — its persona, model, effort and account — so
- * a definition can only be what the session was created as, never grafted on.
+ * A Claude id already bound to something other than what this creation would
+ * freeze. `acquire` returns an existing session as it is — its persona, model,
+ * effort and account — and the agent row is insert-only, written before the
+ * session: either way a definition could end up describing a session it does
+ * not run as, so the creation is refused instead.
  */
 export class SessionAgentConflictError extends Error {
   constructor(
     readonly sessionId: string,
-    agentName: string,
+    agentName: string | undefined,
   ) {
     super(
-      `Session ${sessionId} already exists and was not created as the "${agentName}" agent; start a new session to run it.`,
+      agentName === undefined
+        ? `Session ${sessionId} is bound to an agent definition; start a new session.`
+        : `Session ${sessionId} already exists and was not created as the "${agentName}" agent; start a new session to run it.`,
     );
     this.name = "SessionAgentConflictError";
   }
@@ -157,13 +160,17 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       onDisk: spec.id !== undefined,
     });
     if (holder) throw new SessionIdTakenError(id, holder);
-    // Only a retry of the same creation may land on an existing session.
+    // Only a retry of the same creation may reuse the id: its agent row, if
+    // any, holds exactly what this one would freeze — whether or not the
+    // session itself got created after it (the row is written first) — and an
+    // agent never lands on a plain session that exists.
+    const frozen = sessionStore.getAgent(id);
+    const wanted = spec.agent ? JSON.stringify(spec.agent) : undefined;
     if (
-      spec.agent &&
-      claudeSdkStore.exists(id) &&
-      sessionAgentSummary(id)?.name !== spec.agent.name
+      frozen !== wanted &&
+      (frozen !== undefined || claudeSdkStore.exists(id))
     )
-      throw new SessionAgentConflictError(id, spec.agent.name);
+      throw new SessionAgentConflictError(id, spec.agent?.name);
     linkWorktree(id, spec.worktree?.id);
     if (spec.agent) freezeSessionAgent(id, spec.agent);
     if (spec.promptEvidence)
