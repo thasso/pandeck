@@ -841,6 +841,36 @@ describe("agent tool races and pins", () => {
     assert.equal(readFileSync(manifest(), "utf8"), before);
   });
 
+  test("a manifest with many problems is refused in a few lines, not one per problem", async () => {
+    await createApproved();
+    const keys = Array.from({ length: 1500 }, (_, at) => `k${at}: 1`).join(
+      "\n",
+    );
+    await assert.rejects(
+      tool("agent_edit").execute(
+        {
+          name: "test-reviewer",
+          edits: [
+            {
+              oldText: "persona: developer",
+              newText: `persona: developer\n${keys}`,
+            },
+          ],
+          reason: "Add keys",
+        },
+        ctx(),
+      ),
+      (error: Error) => {
+        assert.match(
+          error.message,
+          /And \d+ more problems in test-reviewer\/AGENT\.md\./,
+        );
+        assert.ok(error.message.length < 4_000, String(error.message.length));
+        return true;
+      },
+    );
+  });
+
   test("a hard link made while the locked check awaits is refused before anything is rewritten", async () => {
     await createApproved();
     const before = readFileSync(manifest(), "utf8");

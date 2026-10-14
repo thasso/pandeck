@@ -262,11 +262,8 @@ function EntryList({
           </CardHeader>
           <CardContent>
             <ItemGroup className="gap-2">
-              {list.diagnostics.map((diagnostic) => (
-                <DiagnosticRow
-                  key={`${diagnostic.path}:${diagnostic.code}`}
-                  diagnostic={diagnostic}
-                />
+              {diagnosticKeys(list.diagnostics).map(([key, diagnostic]) => (
+                <DiagnosticRow key={key} diagnostic={diagnostic} />
               ))}
             </ItemGroup>
           </CardContent>
@@ -274,6 +271,23 @@ function EntryList({
       ) : null}
     </>
   );
+}
+
+/**
+ * A key per diagnostic row. One file can carry several diagnostics of one
+ * code (an agent's unknown keys), so the key counts them: a path and code
+ * alone would let a rescan keep a row the server no longer reports.
+ */
+function diagnosticKeys(
+  diagnostics: readonly EntryDiagnostic[],
+): [string, EntryDiagnostic][] {
+  const seen = new Map<string, number>();
+  return diagnostics.map((diagnostic) => {
+    const base = `${diagnostic.path}:${diagnostic.code}`;
+    const at = seen.get(base) ?? 0;
+    seen.set(base, at + 1);
+    return [`${base}:${at}`, diagnostic];
+  });
 }
 
 /**

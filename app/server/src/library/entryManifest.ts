@@ -154,10 +154,47 @@ export function parseManifestWith<E extends object>(
   };
 }
 
+/** How many of a manifest's problems a reader is told; the last says how many more. */
+const MAX_ISSUES_SHOWN = 5;
+/** How long one problem's text may be; it may quote the manifest. */
+const MAX_ISSUE_CHARS = 500;
+
+/**
+ * `text` cut at {@link MAX_ISSUE_CHARS}, marked, and never inside a UTF-16
+ * surrogate pair.
+ */
+export function clipIssueText(text: string): string {
+  if (text.length <= MAX_ISSUE_CHARS) return text;
+  let end = MAX_ISSUE_CHARS;
+  const code = text.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}… (cut)`;
+}
+
+/**
+ * A manifest's problems as anyone is told them — a scan's diagnostics, a
+ * mutation's refusal: a manifest can hold thousands (every unknown key is one)
+ * and each may quote it, so a few, each clipped, the last saying how many more.
+ */
+export function boundedIssues(
+  issues: readonly ManifestIssue[],
+  path: string,
+): ManifestIssue[] {
+  const kept = issues.slice(0, MAX_ISSUES_SHOWN);
+  const more = issues.length - kept.length;
+  return kept.map((issue, at) => ({
+    ...issue,
+    error:
+      at === kept.length - 1 && more > 0
+        ? `${clipIssueText(issue.error)} And ${more} more problems in ${path}.`
+        : clipIssueText(issue.error),
+  }));
+}
+
 /**
  * Validate source a mutation is about to write, or has just written, against
- * the kind's whole rule, and throw one actionable message listing every
- * problem at once.
+ * the kind's whole rule, and throw one actionable message listing its
+ * problems at once (bounded: {@link boundedIssues}).
  */
 export function assertManifest<M extends EntryManifest>(
   kind: LibraryKind<M>,
@@ -167,7 +204,9 @@ export function assertManifest<M extends EntryManifest>(
   const result = kind.parseManifest(content, path);
   if (result.ok) return result.manifest;
   throw new EntryValidationError(
-    `Invalid ${path}: ${result.issues.map((issue) => issue.error).join(" ")}`,
+    `Invalid ${path}: ${boundedIssues(result.issues, path)
+      .map((issue) => issue.error)
+      .join(" ")}`,
   );
 }
 

@@ -6,7 +6,12 @@ import type {
   EntryDiagnosticCode,
   EntrySummary,
 } from "@assistant/shared";
-import { manifestSizeIssue, readManifestHandle } from "./entryManifest.ts";
+import {
+  boundedIssues,
+  clipIssueText,
+  manifestSizeIssue,
+  readManifestHandle,
+} from "./entryManifest.ts";
 import type { LibraryKind } from "./libraryKind.ts";
 import {
   SymlinkedEntrySourceError,
@@ -250,39 +255,9 @@ async function scanEntryFolder(
   const all = tooLarge ? [tooLarge, ...issues] : issues;
   // A manifest can hold thousands of problems (every unknown key is one), and
   // each may quote it: a folder keeps a few, the last saying how many more.
-  const kept = all.slice(0, MAX_DIAGNOSTICS_PER_FOLDER);
-  const more = all.length - kept.length;
-  kept.forEach((issue, at) => {
-    const last = at === kept.length - 1 && more > 0;
-    candidate.diagnostics.push(
-      diagnostic(
-        candidate,
-        issue.code,
-        last
-          ? `${clipDiagnostic(issue.error)} And ${more} more problems in ${path}.`
-          : clipDiagnostic(issue.error),
-      ),
-    );
-  });
+  for (const issue of boundedIssues(all, path))
+    candidate.diagnostics.push(diagnostic(candidate, issue.code, issue.error));
   return candidate;
-}
-
-/** How many diagnostics one folder keeps; the last says how many it left out. */
-const MAX_DIAGNOSTICS_PER_FOLDER = 5;
-/** How long one diagnostic's text may be; it may quote the folder's content. */
-const MAX_DIAGNOSTIC_CHARS = 500;
-
-/**
- * `text` cut at {@link MAX_DIAGNOSTIC_CHARS}, marked, and never inside a
- * UTF-16 surrogate pair. Every diagnostic is bounded where it is made, so no
- * reader of a scan — a tool result, a refusal, the browser — has to bound it.
- */
-function clipDiagnostic(text: string): string {
-  if (text.length <= MAX_DIAGNOSTIC_CHARS) return text;
-  let end = MAX_DIAGNOSTIC_CHARS;
-  const code = text.charCodeAt(end - 1);
-  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
-  return `${text.slice(0, end)}… (cut)`;
 }
 
 /** How many folders a duplicate-name diagnostic names before "and N more". */
@@ -316,7 +291,7 @@ function addDuplicateDiagnostics(
         folder: candidate.folder,
         path: candidate.path,
         declaredName: name,
-        error: clipDiagnostic(
+        error: clipIssueText(
           `Duplicate declared ${kind.noun} name "${name}" in folders: ${listed}.`,
         ),
       });

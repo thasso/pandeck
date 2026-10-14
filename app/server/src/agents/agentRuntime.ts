@@ -148,6 +148,12 @@ export function resolveAgentModel(
   );
 }
 
+/** A file's list of names, quoted a few at a time: it holds up to 64. */
+function quoteFew(names: readonly string[]): string {
+  const more = names.length > 5 ? ` and ${names.length - 5} more` : "";
+  return `${names.slice(0, 5).join(", ")}${more}`;
+}
+
 /** Tools a definition may not deny: every spawn depends on them. */
 const AGENT_REQUIRED_TOOLS = ["session_send_prompt"] as const;
 
@@ -197,11 +203,8 @@ export async function checkAgentRuntime(
     ]);
     const unknown = manifest.denyTools.filter((name) => !known.has(name));
     if (unknown.length > 0) {
-      // Quoted a few at a time: the list is the file's, up to 64 names.
-      const quoted = unknown.slice(0, 5).join(", ");
-      const more = unknown.length > 5 ? ` and ${unknown.length - 5} more` : "";
       problems.push(
-        `tools.deny names ${quoted}${more}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push)${coding ? ` or ${AGENT_NATIVE_TOOLS.join(", ")}` : ""}.`,
+        `tools.deny names ${quoteFew(unknown)}, which the ${manifest.persona} persona does not have; deny only its own tools (unprefixed, e.g. worktree_push)${coding ? ` or ${AGENT_NATIVE_TOOLS.join(", ")}` : ""}.`,
       );
     }
     // A spawned agent reports back with it; denied, its coordinator — which
@@ -217,7 +220,7 @@ export async function checkAgentRuntime(
     const missing = manifest.skills.filter((name) => !valid.has(name));
     if (missing.length > 0)
       problems.push(
-        `skills names ${missing.join(", ")}, which the skills library does not declare as valid.`,
+        `skills names ${quoteFew(missing)}, which the skills library does not declare as valid.`,
       );
   }
   if (problems.length > 0) throw new EntryValidationError(problems.join(" "));

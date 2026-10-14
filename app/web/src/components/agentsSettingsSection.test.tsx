@@ -171,3 +171,46 @@ it("keeps the history on screen while a rescan rereads it", async () => {
   holdHistory = false;
   await act(async () => release());
 });
+
+it("drops a diagnostic a rescan no longer reports, among several of one code", () => {
+  const diagnostic = (
+    code: "invalid-field" | "missing-description",
+    error: string,
+  ) => ({
+    code,
+    folder: "noisy",
+    path: "noisy/AGENT.md",
+    error,
+  });
+  const withDiagnostics = (diagnostics: ReturnType<typeof diagnostic>[]) =>
+    ready({ ...LIST, diagnostics } as EntryLibraryList);
+  act(() =>
+    root!.render(
+      <AgentsSettingsSection
+        library={withDiagnostics([
+          diagnostic("invalid-field", "Unknown key foo."),
+          diagnostic("invalid-field", "Unknown key bar."),
+        ])}
+      />,
+    ),
+  );
+  expect(container!.textContent).toContain("Unknown key foo.");
+
+  // A new problem lands first; the old ones are gone.
+  act(() =>
+    root!.render(
+      <AgentsSettingsSection
+        library={withDiagnostics([
+          diagnostic("missing-description", "Description is empty."),
+          diagnostic("invalid-field", "Unknown key baz."),
+          diagnostic("invalid-field", "Unknown key qux."),
+        ])}
+      />,
+    ),
+  );
+  const text = container!.textContent ?? "";
+  expect(text).not.toContain("Unknown key foo.");
+  expect(text).not.toContain("Unknown key bar.");
+  expect(text).toContain("Description is empty.");
+  expect(text).toContain("Unknown key qux.");
+});
