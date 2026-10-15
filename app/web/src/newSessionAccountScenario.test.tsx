@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -82,6 +82,43 @@ class NoopObserver {
   }
 }
 
+/**
+ * The review hand-off the App gives the pull request's actions provider, which
+ * owns it for the panel and the page alike; the inspector stand-in calls it.
+ */
+const reviewSeam = vi.hoisted(() => ({
+  onReview: undefined as
+    | ((
+        item: PullRequestInventoryItem,
+        id: string,
+        outcome: PullRequestCheckoutOutcome,
+      ) => void)
+    | undefined,
+}));
+
+vi.mock(
+  "./components/pullRequest/PullRequestActions.tsx",
+  async (importOriginal) => {
+    const real =
+      await importOriginal<
+        typeof import("./components/pullRequest/PullRequestActions.tsx")
+      >();
+    return {
+      ...real,
+      PullRequestActionsProvider: ({
+        onReview,
+        children,
+      }: {
+        onReview: NonNullable<typeof reviewSeam.onReview>;
+        children: ReactNode;
+      }) => {
+        reviewSeam.onReview = onReview;
+        return children;
+      },
+    };
+  },
+);
+
 // Keep the App's real fresh-start handlers while replacing the heavy object
 // inspectors with buttons that exercise their public callback seam.
 vi.mock("./components/objectInspectors.tsx", async (importOriginal) => {
@@ -113,19 +150,11 @@ vi.mock("./components/objectInspectors.tsx", async (importOriginal) => {
         Start in worktree
       </button>
     ),
-    PullRequestInspector: ({
-      onReview,
-    }: {
-      onReview: (
-        item: PullRequestInventoryItem,
-        id: string,
-        outcome: PullRequestCheckoutOutcome,
-      ) => void;
-    }) => (
+    PullRequestInspector: () => (
       <button
         data-testid="fresh-pr-review"
         onClick={() =>
-          onReview(reviewFixture, "wt-reset", {
+          reviewSeam.onReview?.(reviewFixture, "wt-reset", {
             status: "already-current",
             worktreeId: "wt-reset",
             branch: "feature",

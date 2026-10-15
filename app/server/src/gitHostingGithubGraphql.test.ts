@@ -666,7 +666,7 @@ test("the open list marks your assignments and your teams' review requests", asy
         },
   );
 
-  const [pull] = await githubProvider(ref, config).listOpenPullRequests();
+  const pull = (await githubProvider(ref, config).listOpenPullRequests())?.[0];
 
   assert.equal(pull?.mine, false);
   assert.equal(pull?.assignedToMe, true);
