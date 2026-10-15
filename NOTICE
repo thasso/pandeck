@@ -1,2 +1,12 @@
 Pandeck
 Copyright 2026 Thasso Griebel
+
+This product includes third-party software:
+
+elkjs 0.12.0 (https://github.com/kieler/elkjs)
+Copyright (c) 2017 Kiel University and others.
+Copyright (c) 2021 Kiel University and others.
+Included unmodified in the packaged server's Initiative layout worker. elkjs is
+offered under EPL-2.0 OR GPL-3.0-or-later; Pandeck distributes it under the
+Eclipse Public License 2.0. Its license text, copyright notices and source
+location ship in workers/licenses/elkjs/ beside the worker.

@@ -16,6 +16,7 @@ import {
   BUN_PRAGMA,
   SERVER_BUNDLE_DEFINE,
   bundle,
+  directDependencyRoot,
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
 import * as childProcessShim from "./bun-shims/node-child-process.mjs";
@@ -812,6 +813,53 @@ const AMBIENT_PROXY_VARIABLES = [
   "no_proxy",
 ];
 
+/**
+ * elkjs ships in the layout worker under the EPL-2.0 (NOTICE): its license
+ * text exactly as the package has it, its copyright lines, and its source,
+ * beside the worker and at the end of it.
+ */
+function checkElkjsNotices() {
+  const elkjs = directDependencyRoot("elkjs");
+  const { version } = JSON.parse(
+    readFileSync(join(elkjs, "package.json"), "utf8"),
+  );
+  const notices = join(runtimeRoot, "workers", "licenses", "elkjs");
+  assert(
+    readFileSync(join(notices, "LICENSE.md"), "utf8") ===
+      readFileSync(join(elkjs, "LICENSE.md"), "utf8"),
+    "The packaged elkjs LICENSE.md is not elkjs's own license text.",
+  );
+  const notice = readFileSync(join(notices, "NOTICE.md"), "utf8");
+  for (const expected of [
+    `# elkjs ${version}`,
+    "Copyright (c) 2017 Kiel University and others.",
+    "Copyright (c) 2021 Kiel University and others.",
+    "Eclipse Public License 2.0",
+    `https://github.com/kieler/elkjs/tree/${version}`,
+    `https://registry.npmjs.org/elkjs/-/elkjs-${version}.tgz (sha512-`,
+  ])
+    assert(
+      notice.includes(expected),
+      `The packaged elkjs NOTICE.md lacks ${JSON.stringify(expected)}.`,
+    );
+  const worker = readFileSync(
+    join(runtimeRoot, "workers", "initiative-layout-worker.js"),
+    "utf8",
+  );
+  assert(
+    worker.endsWith(
+      `| EPL-2.0 | license and source: workers/licenses/elkjs/ */\n`,
+    ) && worker.includes(`/*! elkjs ${version} | Copyright (c) 2017`),
+    "The layout worker no longer ends with elkjs's notice.",
+  );
+  assert(
+    readFileSync(join(runtimeRoot, "NOTICE"), "utf8").includes(
+      `elkjs ${version}`,
+    ),
+    "The package NOTICE does not name elkjs.",
+  );
+}
+
 /** Bun loads a bundle as it stands only under its pragma: see bun-bundle.mjs. */
 async function checkBunPragma() {
   for (const [bundled, pragma] of [
@@ -1322,6 +1370,8 @@ try {
     "personal-assistant-server",
     "web/index.html",
     "workers/initiative-layout-worker.js",
+    "workers/licenses/elkjs/LICENSE.md",
+    "workers/licenses/elkjs/NOTICE.md",
     "workers/xhr-sync-worker.js",
   ])
     assert(
@@ -1335,6 +1385,8 @@ try {
   for (const bundled of [
     "server.js",
     "workers/initiative-layout-worker.js",
+    "workers/licenses/elkjs/LICENSE.md",
+    "workers/licenses/elkjs/NOTICE.md",
     "workers/xhr-sync-worker.js",
   ])
     assert(
@@ -1344,6 +1396,7 @@ try {
       `${bundled} calls Bun.spawnSync, which leaks the start-up environment.`,
     );
 
+  checkElkjsNotices();
   await checkBunPragma();
   await checkParseLinkMemory();
   await checkNativeAssets();

@@ -84,15 +84,18 @@ WASM, a bundled JSDOM sync-XHR worker, the bundled Initiative layout worker
 (elkjs, which `server.js` does not contain), the Claude CLI, and `browser-mcp/`
 with the pinned Playwright MCP CLI and its `playwright-core` package. It does
 not contain Node, tsx, workspace sources, or a `node_modules` tree. The wrapper
-sets `ASSISTANT_RUNTIME_DIR` to this asset root. `runtimeAssets.ts` captures it
-once at module load and is the single server-side resolver for these files, so
-the bundled module never uses its own location to infer installed asset paths.
-The variable is then scrubbed before any agent starts: a worktree dev server
-must not inherit production assets or identify its checkout as a packaged build.
-The optional `ASSISTANT_CLAUDE_CLI_BIN` override is captured and scrubbed for
-the same reason. Lazy Photon and JSDOM loaders consume the captured paths rather
-than rereading the scrubbed environment. Starting the packaged bundle without
-`ASSISTANT_RUNTIME_DIR` fails immediately with a named packaged-server error.
+sets `ASSISTANT_RUNTIME_DIR` to this asset root. elkjs ships under the EPL-2.0
+(`NOTICE`), its license text, copyright notices and source location in
+`workers/licenses/elkjs/`, which the install check requires. `runtimeAssets.ts`
+captures it once at module load and is the single server-side resolver for these
+files, so the bundled module never uses its own location to infer installed
+asset paths. The variable is then scrubbed before any agent starts: a worktree
+dev server must not inherit production assets or identify its checkout as a
+packaged build. The optional `ASSISTANT_CLAUDE_CLI_BIN` override is captured and
+scrubbed for the same reason. Lazy Photon and JSDOM loaders consume the captured
+paths rather than rereading the scrubbed environment. Starting the packaged
+bundle without `ASSISTANT_RUNTIME_DIR` fails immediately with a named
+packaged-server error.
 
 `scripts/bun-bundle.mjs` owns the esbuild call and its plugins, so the install
 check bundles its runtime probe exactly as the builder bundles `server.js`.

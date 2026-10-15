@@ -47,6 +47,8 @@ function platformArch() {
 }
 
 const arch = platformArch();
+/** Where elkjs's license text and notice ship, relative to the package root. */
+const ELKJS_NOTICE_DIR = "workers/licenses/elkjs";
 const watcherPackage = `@parcel/watcher-linux-${arch}-glibc`;
 const watcherAddon = join(
   dependencyRoot("@parcel/watcher", watcherPackage),
@@ -106,6 +108,56 @@ const xhrWorkerSource = join(
   "lib/jsdom/living/xhr/xhr-sync-worker.js",
 );
 
+/**
+ * What the package says about elkjs, read from the installed package and the
+ * lockfile so it names exactly the code that is bundled: the license text as
+ * shipped, the copyright lines of the bundled file, and where its source is.
+ */
+function elkjsDistribution() {
+  const root = directDependencyRoot("elkjs");
+  const { version, license } = JSON.parse(
+    readFileSync(join(root, "package.json"), "utf8"),
+  );
+  if (license !== "EPL-2.0 OR GPL-3.0-or-later")
+    throw new Error(`elkjs changed its license offer to ${license}.`);
+  const copyrights = [
+    ...new Set(
+      readFileSync(join(root, "lib/elk.bundled.js"), "utf8").match(
+        /Copyright \(c\) \d{4} [^\n*]+/g,
+      ) ?? [],
+    ),
+  ].map((line) => line.trim());
+  if (copyrights.length === 0)
+    throw new Error("elkjs's bundled file names no copyright holder.");
+  const integrity = new RegExp(
+    `\\n  elkjs@${version.replaceAll(".", "\\.")}:\\n    resolution: \\{integrity: (\\S+)\\}`,
+  ).exec(readFileSync(join(repoRoot, "pnpm-lock.yaml"), "utf8"))?.[1];
+  if (!integrity)
+    throw new Error(`pnpm-lock.yaml does not pin elkjs ${version}.`);
+  const notice = [
+    `# elkjs ${version}`,
+    "",
+    "`workers/initiative-layout-worker.js` contains elkjs, unmodified.",
+    "",
+    ...copyrights.map((line) => `- ${line}`),
+    "",
+    "elkjs is offered under EPL-2.0 OR GPL-3.0-or-later. Pandeck distributes it",
+    "under the Eclipse Public License 2.0, whose text is LICENSE.md beside this file.",
+    "",
+    "Source code:",
+    "",
+    `- https://github.com/kieler/elkjs/tree/${version}`,
+    `- https://registry.npmjs.org/elkjs/-/elkjs-${version}.tgz (${integrity})`,
+    "",
+  ].join("\n");
+  return {
+    version,
+    licenseFile: join(root, "LICENSE.md"),
+    notice,
+    trailer: `\n/*! elkjs ${version} | ${copyrights.join(" | ")} | EPL-2.0 | license and source: ${ELKJS_NOTICE_DIR}/ */\n`,
+  };
+}
+
 rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
 
@@ -120,6 +172,7 @@ const layoutWorkerBundle = await bundle(
   join(repoRoot, "app/server/src/initiativeLayoutWorker.ts"),
   { plugins },
 );
+const elkjs = elkjsDistribution();
 const watcherWrapperBundle = await bundle(watcherWrapperSource, {
   format: "cjs",
 });
@@ -129,10 +182,16 @@ mkdirSync(join(outputDir, "native"), { recursive: true });
 copy(process.execPath, "personal-assistant-server", 0o755);
 await write(join(outputDir, "server.js"), serverBundle);
 await write(join(outputDir, "workers", "xhr-sync-worker.js"), workerBundle);
+// elkjs ships inside the layout worker, unmodified and under the EPL-2.0
+// (NOTICE). Minifying drops its file headers, so the bundle ends with its
+// copyright and points to the license text and source beside it.
 await write(
   join(outputDir, "workers", "initiative-layout-worker.js"),
-  layoutWorkerBundle,
+  Buffer.concat([layoutWorkerBundle, Buffer.from(elkjs.trailer)]),
 );
+mkdirSync(join(outputDir, ELKJS_NOTICE_DIR), { recursive: true });
+copy(elkjs.licenseFile, join(ELKJS_NOTICE_DIR, "LICENSE.md"));
+await write(join(outputDir, ELKJS_NOTICE_DIR, "NOTICE.md"), elkjs.notice);
 await write(
   join(outputDir, "native", "watcher-wrapper.js"),
   watcherWrapperBundle,
