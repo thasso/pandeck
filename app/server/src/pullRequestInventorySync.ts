@@ -229,6 +229,34 @@ export function invalidatePullRequestInventorySnapshot(): void {
 }
 
 /**
+ * A checkout was removed. Forget what the snapshot joined to it NOW, with no
+ * provider read: a merged or closed pull request was listed only for that
+ * checkout and leaves the list, and an open one loses its local join. Then
+ * rebuild as usual — the epoch bump keeps a build that started before the
+ * removal from writing the checkout back.
+ */
+export function forgetWorktreeInPullRequestInventory(worktreeId: string): void {
+  const snapshot = operations.read();
+  if (snapshot) {
+    let changed = false;
+    const projects = Object.fromEntries(
+      Object.entries(snapshot.projects).map(([projectId, project]) => {
+        const items = project.items.flatMap((item) => {
+          if (item.worktreeId !== worktreeId) return [item];
+          changed = true;
+          if (item.state !== "open") return [];
+          const { worktreeId: _removed, ...rest } = item;
+          return [rest];
+        });
+        return [projectId, { ...project, items }];
+      }),
+    );
+    if (changed) operations.write({ ...snapshot, projects });
+  }
+  invalidatePullRequestInventorySnapshot();
+}
+
+/**
  * A GitHub pull-request write that bypassed the provider seam (the generic PR
  * tools: create, review, reviewer/assignee changes). Forget what the open list,
  * its annotations and the per-pull-request reads hold for that repository and

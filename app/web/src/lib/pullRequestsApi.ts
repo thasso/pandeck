@@ -1,6 +1,8 @@
 /**
- * The Pull Requests view's ONE read — `GET /api/pull-requests` — and its
- * writes: `POST /api/pull-requests/merge` and `POST /api/pull-requests/checkout`.
+ * The Pull Requests view's reads — `GET /api/pull-requests`, the inventory, and
+ * `GET /api/pull-requests/conversation`, one pull request's description,
+ * conversation and checks for its detail page — and its writes:
+ * `POST /api/pull-requests/merge` and `POST /api/pull-requests/checkout`.
  *
  * Not worktree endpoints, so they do not live in `worktrees.ts`. The server
  * builds the whole inventory — selection, CI, review, mergeability and the
@@ -11,6 +13,7 @@
  * by the four-component identity, with everything else re-derived server-side.
  */
 import type {
+  PullRequestConversationResponse,
   PullRequestInventoryResponse,
   PullRequestViewCheckRequest,
   PullRequestViewCheckResponse,
@@ -29,6 +32,33 @@ export async function fetchPullRequestInventory(
       headers: { ...authHeaders() },
       ...(signal ? { signal } : {}),
     }),
+  );
+}
+
+/**
+ * One pull request's description, conversation, review threads and head checks,
+ * read live by the server (briefly cached there). `fresh` skips that cache, for
+ * an explicit refresh.
+ */
+export async function fetchPullRequestConversation(
+  target: PullRequestViewCheckRequest,
+  options: { fresh?: boolean; signal?: AbortSignal } = {},
+): Promise<PullRequestConversationResponse> {
+  const query = new URLSearchParams({
+    projectId: target.projectId,
+    provider: target.provider,
+    repositoryKey: target.repositoryKey,
+    number: String(target.number),
+    ...(options.fresh ? { fresh: "1" } : {}),
+  });
+  return json(
+    await fetch(
+      `${serverHttpOrigin()}/api/pull-requests/conversation?${query}`,
+      {
+        headers: { ...authHeaders() },
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    ),
   );
 }
 

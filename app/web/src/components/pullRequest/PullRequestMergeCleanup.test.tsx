@@ -69,6 +69,7 @@ vi.mock("../../lib/pullRequestsApi.ts", async (importOriginal) => ({
 }));
 
 const { PullRequestInspector } = await import("../objectInspectors.tsx");
+const { PullRequestActionsProvider } = await import("./PullRequestActions.tsx");
 const { PullRequestApiError } = await import("../../lib/pullRequestsApi.ts");
 const { ready } = await import("../../lib/loadState.ts");
 
@@ -154,28 +155,35 @@ afterEach(() => {
 });
 
 async function render(item: PullRequestInventoryItem): Promise<void> {
+  const onReload = () => {
+    reloads += 1;
+  };
   const element = (
-    <PullRequestInspector
-      state={ready(item)}
-      projects={[]}
-      joins={{
-        worktrees: { rows: [] as WorktreeRecord[], fresh: true },
-        sessions: { rows: [] as SessionListItem[], fresh: true },
-        tasks: { rows: [] as TaskSummary[], fresh: true },
-      }}
-      openers={{
-        onOpenTask: () => {},
-        onOpenProject: () => {},
-        onOpenSession: () => {},
-        onOpenWorktree: () => {},
-        onOpenKnowledge: () => {},
-      }}
+    <PullRequestActionsProvider
+      item={item}
+      onReload={onReload}
       onStartSession={() => {}}
       onReview={() => {}}
-      onReload={() => {
-        reloads += 1;
-      }}
-    />
+    >
+      <PullRequestInspector
+        state={ready(item)}
+        projects={[]}
+        joins={{
+          worktrees: { rows: [] as WorktreeRecord[], fresh: true },
+          sessions: { rows: [] as SessionListItem[], fresh: true },
+          tasks: { rows: [] as TaskSummary[], fresh: true },
+        }}
+        openers={{
+          onOpenTask: () => {},
+          onOpenProject: () => {},
+          onOpenSession: () => {},
+          onOpenWorktree: () => {},
+          onOpenKnowledge: () => {},
+        }}
+        onStartSession={() => {}}
+        onReload={onReload}
+      />
+    </PullRequestActionsProvider>
   );
   await act(async () => {
     if (root) root.render(element);

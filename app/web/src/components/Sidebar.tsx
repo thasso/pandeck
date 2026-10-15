@@ -21,6 +21,7 @@ import type {
 import { KNOWLEDGE_WORKTREE_ID, isShelvedSession } from "@assistant/shared";
 import {
   PullRequestBrowser,
+  PullRequestListToolbar,
   type IdleWorktreesProps,
 } from "./PullRequestBrowser.tsx";
 import { Badge } from "@/components/ui/badge";
@@ -31,7 +32,10 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
-import type { PullRequestTarget } from "../lib/pullRequestInbox.ts";
+import type {
+  PullRequestListView,
+  PullRequestTarget,
+} from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
@@ -690,6 +694,40 @@ function SidebarImpl({
 
   // Sections and actions are one flat, user-ordered row: same slot width, same
   // treatment. Only the handler differs, and only the assistant's label is dynamic.
+  // The Pull Requests list's grouping and filters, browser-local like the
+  // Backlog's: the bar above the list writes them, the list reads them.
+  const pullRequestListView = useMemo<PullRequestListView>(
+    () => ({
+      groupBy: prefs.pullRequestGroupBy,
+      projectId: prefs.pullRequestProjectFilter,
+      reasons: prefs.pullRequestReasonFilter,
+      hideDrafts: prefs.pullRequestHideDrafts,
+    }),
+    [
+      prefs.pullRequestGroupBy,
+      prefs.pullRequestProjectFilter,
+      prefs.pullRequestReasonFilter,
+      prefs.pullRequestHideDrafts,
+    ],
+  );
+  const setPullRequestListView = useCallback(
+    (patch: Partial<PullRequestListView>) =>
+      onUpdatePrefs({
+        ...(patch.groupBy !== undefined
+          ? { pullRequestGroupBy: patch.groupBy }
+          : {}),
+        ...(patch.projectId !== undefined
+          ? { pullRequestProjectFilter: patch.projectId }
+          : {}),
+        ...(patch.reasons !== undefined
+          ? { pullRequestReasonFilter: [...patch.reasons] }
+          : {}),
+        ...(patch.hideDrafts !== undefined
+          ? { pullRequestHideDrafts: patch.hideDrafts }
+          : {}),
+      }),
+    [onUpdatePrefs],
+  );
   const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots
     .filter((id) => id !== "knowledge" || knowledgeEnabled)
     .map((id) => ({
@@ -726,6 +764,15 @@ function SidebarImpl({
             onOpenBackgroundTasks={onOpenBackgroundTasks}
           />
         </div>
+      ) : section === "pull-requests" ? (
+        <div className="shrink-0">
+          <PullRequestListToolbar
+            view={pullRequestListView}
+            onChange={setPullRequestListView}
+            inventory={pullRequestInventory}
+            projects={projects}
+          />
+        </div>
       ) : section === "tasks" ? (
         <div className="shrink-0">
           <BacklogListToolbar
@@ -747,9 +794,17 @@ function SidebarImpl({
         className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
           section === "sessions"
             ? ""
-            : section === "tasks" || section === "projects"
-              ? "pt-1"
-              : "px-1 pt-2 sm:px-2"
+            : section === "pull-requests" ||
+                (section === "tasks" &&
+                  (prefs.backlogView === "focus" ||
+                    (prefs.backlogView === "backlog" &&
+                      prefs.backlogViewMode === "project")))
+              ? // Flush under its bar: a group band meets the bar's hairline
+                // the way a row meets the one above it.
+                ""
+              : section === "tasks" || section === "projects"
+                ? "pt-1"
+                : "px-1 pt-2 sm:px-2"
         }`}
         style={mobile ? { paddingBottom: NAV_CARD_INSET } : undefined}
       >
@@ -815,6 +870,7 @@ function SidebarImpl({
             // thumb-sized rows, the rail keeps its tight ones.
             density={mobile ? "comfortable" : "tight"}
             idle={idleWorktrees}
+            listView={pullRequestListView}
           />
         ) : section === "knowledge" && !knowledgeEnabled ? (
           <p className="px-2.5 py-2 text-sm text-muted-foreground">

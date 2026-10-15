@@ -18,6 +18,11 @@
   --color-warning-soft: var(--warning-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+  --color-info: var(--info);
+  --color-band: var(--band);
+  --color-band-foreground: var(--band-foreground);
+  --color-band-hover: var(--band-hover);
+  --color-band-active: var(--band-active);
 
   /* The composer card's corners: deliberately rounder than the theme radius
      and independent of it — the composer is the one object on the page meant
@@ -116,6 +121,16 @@
   --warning-soft: color-mix(in oklab, var(--warning) 14%, transparent);
   --success: oklch(0.627 0.194 149.214);
   --success-soft: color-mix(in oklab, var(--success) 12%, transparent);
+  /* A neutral, non-alarming hue for a fact that is just yours (a pull
+     request you opened): green, amber and red already mean something. */
+  --info: var(--ansi-blue);
+  /* The group band that separates a sidebar list into sections
+     (`ListGroupSection`, `Tree`'s band rows): the same dark teal in both
+     themes, so it reads as a divider on either sidebar. */
+  --band: var(--chart-3);
+  --band-foreground: oklch(1 0 0);
+  --band-hover: color-mix(in oklab, var(--band) 90%, white);
+  --band-active: color-mix(in oklab, var(--band) 85%, white);
   /* ANSI terminal palette (Catppuccin Latte) for colored tool output. */
   --ansi-black: #5c5f77;
   --ansi-red: #d20f39;
@@ -372,7 +387,8 @@ body {
    the fit measures mid-animation widths: it read a half-grown label as fitting,
    let it grow, saw it wrap, and flickered at the edge. Colours still ease;
    sizes change at once. */
-.session-card-status-line .group\/badge {
+.session-card-status-line .group\/badge,
+.list-card-signals .group\/badge {
   transition-property: color, background-color, border-color, box-shadow;
 }
 

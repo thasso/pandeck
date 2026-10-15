@@ -4,29 +4,41 @@
  * it, and what it is joined to on this machine.
  * @useWhen The route is `/pull-requests/:projectId/:number`.
  * @avoidWhen Listing pull requests — that is `PullRequestBrowser`, the
- * section's sidebar browser. Acting on one — the acts (review, create the
- * checkout, merge & clean up, open on the provider) are the object panel's
- * (`PullRequestInspector`), in the one Actions list every object type has.
+ * section's sidebar browser.
  * @intent The page a decision is made on, so every claim it makes is sourced
  * and an unknown is shown as unknown: absence on the wire means the provider
  * was not reached, and `mergeable: null` means "ask again", never "conflicts".
- * It performs no fetch of its own — the app polls one inventory
- * (`hooks/usePullRequestInventory.ts`) and this page reads the same projection,
- * so the list and the page can never disagree about the same pull request.
- * @related PullRequestBrowser, PullRequestInspector, pullRequestInbox (lib),
- * WorktreeDetailPage
+ * It says why the pull request is in your list, and offers each act WHERE it
+ * states what the act would change — Create worktree beside "no worktree",
+ * Clean up beside a merged pull request's leftover checkout — through the same
+ * `PullRequestActionsProvider` the object panel reads, so the two never hold
+ * two busy states or two dialogs. Its facts come from the app's one inventory
+ * (`hooks/usePullRequestInventory.ts`), so the list and the page cannot
+ * disagree; the description, conversation and individual checks are a second,
+ * on-demand read (`conversation`), each block with its own load state.
+ * @related PullRequestBrowser, PullRequestInspector, PullRequestActions,
+ * PullRequestConversation, pullRequestInbox (lib), WorktreeDetailPage
  */
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   CircleDot,
-  GitBranch,
-  GitPullRequest,
   ClipboardList,
-  MessagesSquare,
+  ExternalLink,
+  FolderKanban,
+  Eye,
+  GitBranch,
+  GitBranchPlus,
+  GitMerge,
+  GitPullRequest,
+  Info,
+  MessageSquarePlus,
 } from "lucide-react";
 import type {
   ProjectRecord,
+  PullRequestConversationResponse,
   PullRequestInventoryItem,
+  PullRequestTimelineEntry,
+  SessionListItem,
   WorktreeGitStatus,
 } from "@assistant/shared";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
@@ -41,10 +53,12 @@ import {
   type JoinRowState,
   type JoinSource,
   type PullRequestJoinSources,
+  type PullRequestMergeabilityTone,
+  hostingProviderLabel,
   pullRequestCiState,
   pullRequestMergeability,
   pullRequestMergeBlockedReason,
-  pullRequestReviewState,
+  pullRequestSessionTree,
   pullRequestStateLabel,
   type PullRequestTarget,
 } from "../../lib/pullRequestInbox.ts";
@@ -55,7 +69,33 @@ import {
   type LoadState,
 } from "../../lib/loadState.ts";
 import { projectDisplayKey } from "../../lib/projectDisplay.ts";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.tsx";
+import { Button } from "../ui/button.tsx";
+import { usePullRequestConversation } from "../../hooks/usePullRequestConversation.ts";
+import { reviewStatusOf } from "../../lib/pullRequestConversation.ts";
+import { usePullRequestActions } from "./PullRequestActions.tsx";
+import { SpawnedSessionLedgeRow } from "../SpawnedSessionsLedge.tsx";
+import { useElapsedNow } from "../useElapsedNow.ts";
+import {
+  classifySessionStatus,
+  tierForStatus,
+  type SessionInboxCard,
+} from "../../lib/sessionInbox.ts";
+import { ActionRow } from "../common/ActionRow.tsx";
+import {
+  DateProperty,
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "../common/PropertyList.tsx";
+import { AppCard } from "../common/AppCard.tsx";
+import {
+  Block,
+  BlockSkeleton,
+  ChecksBlock,
+  ProviderMarkdown,
+  ThreadsBlock,
+  TimelineBlock,
+} from "./PullRequestConversation.tsx";
 import {
   Item,
   ItemContent,
@@ -86,43 +126,230 @@ interface Props {
   joins: PullRequestJoinSources;
   /** LIVE git status for the joined worktree; the page states dirt and drift. */
   status?: WorktreeGitStatus | undefined;
+  /**
+   * The on-demand read of description, conversation, threads and checks. Its
+   * failure is its own: the inventory's facts above stay readable.
+   */
+  conversation: LoadState<PullRequestConversationResponse>;
+  onReloadConversation: () => void;
   onOpenWorktree: (worktreeId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onOpenTask: (taskId: string) => void;
 }
 
-function Block({
+/** Mergeability as the answer to "can it be merged?". */
+const MERGEABLE_ANSWER: Record<PullRequestMergeabilityTone, string> = {
+  mergeable: "Yes",
+  conflicts: "No — conflicts with the base branch",
+  checking: "Checking…",
+  unknown: "Unknown",
+  "not-applicable": "—",
+};
+
+/**
+ * The Review fact: where review STANDS — changes requested, approved, or
+ * unreviewed — from the conversation's verdicts once it is read
+ * (`reviewStatusOf`), and from the inventory's summary until then. Unresolved
+ * threads are added when the provider counted any.
+ */
+function reviewStatusText(
+  timeline: PullRequestTimelineEntry[] | undefined,
+  review: PullRequestInventoryItem["review"],
+  reviewRequested: boolean,
+): { text: string; className: string } {
+  const threads = review?.unresolvedThreads ?? 0;
+  const suffix =
+    threads > 0
+      ? ` · ${threads} unresolved ${threads === 1 ? "thread" : "threads"}`
+      : "";
+  if (timeline) {
+    const status = reviewStatusOf(timeline);
+    if (status.kind === "changes-requested")
+      return {
+        text: `Changes requested by ${status.by.join(", ")}${suffix}`,
+        className: "text-destructive",
+      };
+    if (status.kind === "approved")
+      return {
+        text: `Approved by ${status.by.join(", ")}${suffix}`,
+        className: "text-success",
+      };
+    return {
+      text: `${reviewRequested ? "Unreviewed — your review is requested" : "Unreviewed"}${suffix}`,
+      className: "",
+    };
+  }
+  if (review?.changesRequested)
+    return {
+      text: `Changes requested${suffix}`,
+      className: "text-destructive",
+    };
+  return { text: review ? `Not yet known${suffix}` : "Unknown", className: "" };
+}
+
+/** A part of "On this machine": its name, and the acts that add to it. */
+function SubHeading({
   title,
-  icon,
-  children,
+  actions,
+  first = false,
 }: {
   title: string;
-  icon: ReactNode;
-  children: ReactNode;
+  actions?: ReactNode;
+  first?: boolean;
 }) {
   return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle>
-          <h2 className="flex items-center gap-1.5">
-            <span aria-hidden>{icon}</span>
-            {title}
-          </h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
+    <div
+      className={`mb-1 flex min-h-6 items-center gap-2 ${first ? "" : "mt-3"}`}
+    >
+      <h3 className="flex-1 text-xs font-medium text-muted-foreground">
+        {title}
+      </h3>
+      {actions ? (
+        <span className="flex shrink-0 items-center gap-3">{actions}</span>
+      ) : null}
+    </div>
   );
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
+/** An act inline in a heading: a link-weight control, not a button block. */
+function InlineAction({
+  icon,
+  label,
+  busy = false,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  busy?: boolean;
+  onClick: () => void;
+}) {
   return (
-    <div className="flex min-w-0 items-baseline gap-2 py-0.5">
-      <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 text-sm text-foreground">{children}</span>
-    </div>
+    <Button
+      variant="link"
+      size="xs"
+      // The page's quiet act colour — the same as Merge & clean up's — so
+      // every act on the page reads alike: muted until pointed at.
+      className="h-auto px-0 text-xs text-muted-foreground hover:text-foreground"
+      busy={busy}
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+    </Button>
+  );
+}
+
+/** Rows of the session tree shown before "Show N more". */
+const SESSIONS_SHOWN = 5;
+
+/**
+ * The pull request's sessions as the app lists sessions elsewhere: the
+ * inspector's expandable rows (`SpawnedSessionLedgeRow` — agent, model,
+ * worktree, age and Open under the chevron), each linked session inside its
+ * whole spawn tree (`pullRequestSessionTree`), so the coordinator and the
+ * peers around it are there too. A long tree shows its first rows and the
+ * rest behind "Show N more".
+ *
+ * The join's answers still hold: no ids is the only "none", an id the list
+ * has not answered for reserves a row, and only a FRESH list may say an id is
+ * not in it (an archived session).
+ */
+function SessionTreeGroup({
+  ids,
+  source,
+  actions,
+  onOpenSession,
+}: {
+  ids: string[];
+  source: JoinSource<SessionListItem>;
+  actions?: ReactNode;
+  onOpenSession: (id: string) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const joined = resolveJoinRows(ids, source, (row) => row.id);
+  const pending = joined.filter((row) => row.kind === "pending");
+  const absent = joined.filter((row) => row.kind === "absent");
+  const sessions = source.rows;
+  const cards = useMemo(
+    () =>
+      sessions
+        ? pullRequestSessionTree(sessions, ids).map((row) => {
+            const status = classifySessionStatus(row.session);
+            const card: SessionInboxCard = {
+              session: row.session,
+              status,
+              tier: tierForStatus(status),
+              depth: row.depth,
+            };
+            return {
+              card,
+              facts: row.linked
+                ? [{ label: "Pull request", value: "Linked to this one" }]
+                : undefined,
+            };
+          })
+        : [],
+    [sessions, ids],
+  );
+  const now = useElapsedNow(
+    cards.some(({ card }) => card.status === "running"),
+  );
+  const shown = showAll ? cards : cards.slice(0, SESSIONS_SHOWN);
+  const hidden = cards.length - shown.length;
+  return (
+    <>
+      <SubHeading title="Sessions" actions={actions} />
+      {ids.length > 0 && source.error ? (
+        <ErrorNote className="mb-1" message={source.error} />
+      ) : null}
+      {ids.length === 0 ? (
+        <p className="py-1 text-sm text-muted-foreground">
+          No sessions are linked to it.
+        </p>
+      ) : (
+        <>
+          {shown.length > 0 ? (
+            <ul className="divide-y border-y border-border/60">
+              {shown.map(({ card, facts }) => (
+                <SpawnedSessionLedgeRow
+                  key={card.session.id}
+                  card={card}
+                  facts={facts}
+                  now={now}
+                  onOpen={onOpenSession}
+                />
+              ))}
+            </ul>
+          ) : null}
+          {absent.map((row) => (
+            <p key={row.id} className="py-1 text-sm text-muted-foreground">
+              {row.id} — {NOT_IN_LIST}
+            </p>
+          ))}
+          {pending.length > 0 ? (
+            <div
+              role="status"
+              aria-label="Loading sessions"
+              className="flex flex-col gap-px"
+            >
+              {pending.map((row) => (
+                <Skeleton key={row.id} className="h-8" />
+              ))}
+            </div>
+          ) : null}
+          {hidden > 0 || showAll ? (
+            <Button
+              variant="link"
+              size="xs"
+              className="mt-1 h-auto px-0 text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setShowAll((value) => !value)}
+            >
+              {showAll ? "Show fewer" : `Show ${hidden} more`}
+            </Button>
+          ) : null}
+        </>
+      )}
+    </>
   );
 }
 
@@ -184,7 +411,10 @@ function JoinGroup<T>({
   emptyLabel,
   render,
   onOpen,
+  actions,
 }: {
+  /** The acts that add to this group, inline at the heading's right. */
+  actions?: ReactNode;
   title: string;
   ids: string[];
   source: JoinSource<T>;
@@ -198,15 +428,13 @@ function JoinGroup<T>({
   const pending = rows.filter((row) => row.kind === "pending");
   return (
     <>
-      <h3 className="mb-1 mt-3 text-xs uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h3>
+      <SubHeading title={title} actions={actions} />
       {/* R2: the retained rows below stay, and the failure sits beside them. */}
       {ids.length > 0 && source.error ? (
         <ErrorNote className="mb-1" message={source.error} />
       ) : null}
       {ids.length === 0 ? (
-        <EmptyBox variant="inline">{emptyLabel}</EmptyBox>
+        <p className="py-1 text-sm text-muted-foreground">{emptyLabel}</p>
       ) : (
         <>
           {rows.map((row) =>
@@ -279,12 +507,15 @@ export function PullRequestDetailPage({
   projects,
   joins,
   status,
+  conversation,
+  onReloadConversation,
   onOpenWorktree,
   onOpenSession,
   onOpenTask,
 }: Props) {
   const item = dataOf(state) ?? null;
   const error = errorOf(state);
+  const acts = usePullRequestActions(item);
 
   // R1/R4: nothing has answered yet, so reserve the page rather than claiming
   // this pull request does not exist.
@@ -311,9 +542,9 @@ export function PullRequestDetailPage({
         {error ? <ErrorNote message={error} onRetry={onReload} /> : null}
         {!error ? (
           <EmptyBox>
-            This pull request is not in your inventory. It is listed while it is
-            yours, while your review is requested, or while a local worktree
-            still holds its branch.
+            This pull request is not in your inventory. It is listed while you
+            opened it, are assigned, or are asked to review it (yourself or
+            through a team), or while a local worktree still holds its branch.
           </EmptyBox>
         ) : null}
       </Shell>
@@ -322,10 +553,11 @@ export function PullRequestDetailPage({
 
   const project = projects.find((candidate) => candidate.id === item.projectId);
   const ci = pullRequestCiState(item);
-  const review = pullRequestReviewState(item);
   const mergeability = pullRequestMergeability(item);
   const pullRequestState = pullRequestStateLabel(item);
   const mergeBlocked = pullRequestMergeBlockedReason(item);
+  const open = item.state === "open";
+  const providerLabel = hostingProviderLabel(item.provider);
   // The worktree join runs through the SAME three answers as the groups below,
   // so a stale list cannot report a checkout gone.
   const [worktreeRow] = resolveJoinRows(
@@ -333,85 +565,307 @@ export function PullRequestDetailPage({
     joins.worktrees,
     (row) => row.id,
   );
+  const talk = dataOf(conversation);
+  const talkPending = talk === undefined && !errorOf(conversation);
+  const talkError = errorOf(conversation);
+
+  /** The Task page's quiet action-row button: ghost, small, muted. */
+  const quiet = "text-muted-foreground";
+  const mergeLabel = acts?.merge.suspended
+    ? "Check again"
+    : open
+      ? "Merge & clean up…"
+      : "Clean up…";
+  const mergeAvailable = Boolean(acts && (open || item.worktreeId));
+  const mergeDisabled = Boolean(mergeBlocked) && !acts?.merge.suspended;
+  const worktreeActions =
+    acts && open && !item.worktreeId ? (
+      <InlineAction
+        icon={<GitBranchPlus />}
+        label="Create worktree"
+        busy={acts.checkout.busy}
+        onClick={acts.checkout.start}
+      />
+    ) : null;
+  const sessionActions =
+    acts && (item.worktreeId || open) ? (
+      <>
+        {item.worktreeId ? (
+          <InlineAction
+            icon={<MessageSquarePlus />}
+            label="Start session"
+            onClick={() => acts.startSession(item.worktreeId!)}
+          />
+        ) : null}
+        {open ? (
+          <InlineAction
+            icon={<Eye />}
+            label="Review in a session"
+            busy={acts.review.busy}
+            onClick={acts.review.start}
+          />
+        ) : null}
+      </>
+    ) : null;
+
+  const ciClass =
+    ci.tone === "success"
+      ? "text-success"
+      : ci.tone === "failure" || ci.tone === "error"
+        ? "text-destructive"
+        : ci.tone === "pending"
+          ? "text-primary"
+          : "";
+  const reviewStatus = reviewStatusText(
+    talk?.timeline,
+    item.review,
+    item.reviewRequested,
+  );
+  const reviewers = talk?.requestedReviewers
+    ? [
+        ...talk.requestedReviewers.users,
+        ...talk.requestedReviewers.teams.map((team) => `@${team}`),
+      ]
+    : [];
 
   return (
     <Shell
       back={back}
-      title={item.title}
-      subtitle={
-        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-          <span className="font-mono tabular-nums">#{item.number}</span>
-          <span aria-hidden>·</span>
-          <span>{pullRequestState.label}</span>
-          {project ? (
-            <>
-              <span aria-hidden>·</span>
-              <span title={project.name}>{projectDisplayKey(project)}</span>
-            </>
-          ) : null}
-          <span aria-hidden>·</span>
-          <span className="min-w-0 truncate font-mono">
-            {item.baseBranch} ← {item.headBranch}
-          </span>
+      title={
+        <span className="min-w-0 truncate font-mono text-sm text-muted-foreground">
+          {item.repositoryKey}#{item.number}
         </span>
       }
       actions={
-        // R2: a poll keeps the page and marks it, never blanks it.
-        isPending(state) ? (
-          <RefreshIndicator label="Refreshing pull request" />
-        ) : null
+        <>
+          {/* R2: a poll keeps the page and marks it, never blanks it. */}
+          {isPending(state) ? (
+            <RefreshIndicator label="Refreshing pull request" />
+          ) : null}
+        </>
       }
     >
       {/* R2: a refresh that failed keeps everything below and adds this. */}
       {error ? <ErrorNote message={error} onRetry={onReload} /> : null}
 
-      <Block title="Status" icon={<CircleDot size={13} />}>
-        <Fact label="Checks">
-          <span className="flex items-center gap-1.5">
-            <CircleDot
-              size={12}
-              aria-hidden
-              className="text-muted-foreground"
-            />
-            {ci.label}
-            {item.ci?.url ? (
-              <a
-                href={item.ci.url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary underline underline-offset-2"
-              >
-                inspect
-              </a>
-            ) : null}
+      {/* Identity, as the Task page has it: the full title, then ONE line of
+          essentials — where it stands, where it lives, whether CI is green,
+          and the way to the provider. The rest is the Details list below. */}
+      <div className="flex flex-col gap-1.5">
+        <h1 className="text-lg font-semibold text-foreground">{item.title}</h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <GitPullRequest size={14} aria-hidden />
+            {pullRequestState.label}
           </span>
-        </Fact>
-        <Fact label="Review">{review.label}</Fact>
-        <Fact label="Mergeable">{mergeability.label}</Fact>
-        <Fact label="Head">
-          <span className="font-mono">
-            {item.headSha ? item.headSha.slice(0, 12) : "unknown"}
-          </span>
-        </Fact>
-        {item.author ? <Fact label="Author">{item.author}</Fact> : null}
-        {/* Why the panel's Merge is disabled, as TEXT on the page: a disabled
-            menu row's tooltip reaches neither a keyboard nor a phone. */}
-        {mergeBlocked ? (
-          <p className="mt-1 text-sm text-warning">{mergeBlocked}</p>
+          {project ? (
+            <span
+              className="inline-flex items-center gap-1.5"
+              title={project.name}
+            >
+              <FolderKanban size={14} aria-hidden />
+              {projectDisplayKey(project)}
+            </span>
+          ) : null}
+          {open ? (
+            <span className={`inline-flex items-center gap-1.5 ${ciClass}`}>
+              <CircleDot size={14} aria-hidden />
+              {ci.label}
+            </span>
+          ) : null}
+          {/* The way to the provider, read as a fact like a Task's ticket:
+              most of what is not on this page is one click away there. */}
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex items-center gap-1.5 text-foreground underline underline-offset-3 hover:text-primary"
+          >
+            <ExternalLink size={14} aria-hidden />
+            {providerLabel}
+          </a>
+        </div>
+        {/* Why Merge is disabled, as TEXT on the page: a disabled control's
+            tooltip reaches neither a keyboard nor a phone. */}
+        {open && mergeBlocked ? (
+          <p className="text-sm text-warning">{mergeBlocked}</p>
         ) : null}
+      </div>
+
+      {/* A finished pull request is listed for ONE reason — its checkout —
+          so the way to end that is a decision card, as the Task page asks
+          for its decisions. */}
+      {!open && item.worktreeId ? (
+        <AppCard
+          role="status"
+          tone="info"
+          icon={<GitMerge />}
+          label="Cleanup"
+          actions={
+            mergeAvailable && acts ? (
+              <Button
+                size="xs"
+                busy={acts.merge.busy}
+                disabled={mergeDisabled}
+                onClick={acts.merge.open}
+              >
+                <GitMerge />
+                {mergeLabel}
+              </Button>
+            ) : null
+          }
+        >
+          <p>
+            {item.state === "merged" ? "Merged" : "Closed without merging"}. The
+            local worktree on{" "}
+            <span className="font-mono">{item.headBranch}</span> is all that
+            keeps it in your list.
+          </p>
+        </AppCard>
+      ) : null}
+
+      {/* The description IS the page's body, as on a Task: no heading. */}
+      <section aria-label="Description">
+        {talk?.errors?.conversation ? (
+          <ErrorNote
+            message={talk.errors.conversation}
+            onRetry={onReloadConversation}
+          />
+        ) : null}
+        {talkError ? (
+          <ErrorNote
+            message={`The description and conversation could not be read: ${talkError}`}
+            onRetry={onReloadConversation}
+          />
+        ) : null}
+        <div className="min-h-16 py-1">
+          {talk?.body === undefined ? (
+            talkPending ? (
+              <BlockSkeleton label="Loading the description" />
+            ) : null
+          ) : talk.body.trim() ? (
+            <ProviderMarkdown text={talk.body} />
+          ) : (
+            <span className="text-sm text-muted-foreground">
+              No description provided.
+            </span>
+          )}
+        </div>
+        {open && mergeAvailable && acts ? (
+          <ActionRow>
+            <Button
+              variant="ghost"
+              size="xs"
+              className={quiet}
+              busy={acts.merge.busy}
+              // Asking what happened is never the blocked thing.
+              disabled={mergeDisabled}
+              onClick={acts.merge.open}
+            >
+              <GitMerge />
+              {mergeLabel}
+            </Button>
+          </ActionRow>
+        ) : null}
+      </section>
+
+      <Block
+        title="Details"
+        icon={<Info size={13} />}
+        // The description's action row above already draws the line.
+        rule={!(open && mergeAvailable)}
+      >
+        <PropertyList align="start">
+          <PropertyLabel>Branches</PropertyLabel>
+          <PropertyText className="font-mono text-xs">
+            {item.baseBranch} ← {item.headBranch}
+          </PropertyText>
+          {item.author ? (
+            <>
+              <PropertyLabel>Author</PropertyLabel>
+              <PropertyText>{item.author}</PropertyText>
+            </>
+          ) : null}
+          {talk?.assignees?.length ? (
+            <>
+              <PropertyLabel>Assignees</PropertyLabel>
+              <PropertyText>{talk.assignees.join(", ")}</PropertyText>
+            </>
+          ) : null}
+          {reviewers.length > 0 ? (
+            <>
+              <PropertyLabel>Reviewers</PropertyLabel>
+              <PropertyText>{reviewers.join(", ")}</PropertyText>
+            </>
+          ) : null}
+          {open ? (
+            <>
+              <PropertyLabel>Checks</PropertyLabel>
+              <PropertyText className={ciClass}>
+                {ci.label}
+                {item.ci?.url ? (
+                  <>
+                    {" · "}
+                    <a
+                      href={item.ci.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-muted-foreground underline underline-offset-3 hover:text-primary"
+                    >
+                      inspect
+                    </a>
+                  </>
+                ) : null}
+              </PropertyText>
+              <PropertyLabel>Review</PropertyLabel>
+              <PropertyText className={reviewStatus.className}>
+                {reviewStatus.text}
+              </PropertyText>
+              <PropertyLabel>Mergeable</PropertyLabel>
+              <PropertyText
+                className={
+                  mergeability.tone === "conflicts" ? "text-destructive" : ""
+                }
+              >
+                {MERGEABLE_ANSWER[mergeability.tone]}
+              </PropertyText>
+            </>
+          ) : null}
+          {item.headSha ? (
+            <>
+              <PropertyLabel>Head</PropertyLabel>
+              <PropertyText className="font-mono text-xs" title={item.headSha}>
+                {item.headSha.slice(0, 12)}
+              </PropertyText>
+            </>
+          ) : null}
+          {talk?.createdAt ? (
+            <>
+              <PropertyLabel>Opened</PropertyLabel>
+              <DateProperty date={{ ms: talk.createdAt, dateOnly: false }} />
+            </>
+          ) : null}
+          {item.updatedAt ? (
+            <>
+              <PropertyLabel>Updated</PropertyLabel>
+              <DateProperty date={{ ms: item.updatedAt, dateOnly: false }} />
+            </>
+          ) : null}
+        </PropertyList>
       </Block>
 
       <Block title="On this machine" icon={<GitBranch size={13} />}>
         {/* The worktree join, on the same answers as the groups below: no id
             at all is the authoritative none, an id whose list is cold, stale or
             failed reserves, and only a FRESH list may say it is not there. */}
+        <SubHeading title="Worktree" actions={worktreeActions} first />
         {joins.worktrees.error && item.worktreeId ? (
           <ErrorNote className="mb-1" message={joins.worktrees.error} />
         ) : null}
         {!worktreeRow ? (
-          <EmptyBox variant="inline">
+          <p className="py-1 text-sm text-muted-foreground">
             No local worktree holds {item.headBranch}.
-          </EmptyBox>
+          </p>
         ) : worktreeRow.kind === "pending" ? (
           <div role="status" aria-label="Loading the local worktree">
             <Skeleton className="h-8" />
@@ -433,18 +887,11 @@ export function PullRequestDetailPage({
           />
         )}
 
-        <JoinGroup
-          title="Sessions"
+        <SessionTreeGroup
           ids={item.sessionIds}
           source={joins.sessions}
-          identify={(session) => session.id}
-          icon={<MessagesSquare size={13} />}
-          emptyLabel="No sessions are linked to it."
-          render={(session) => ({
-            label: session.title || "Unlabeled Session",
-            ...(session.isStreaming ? { detail: "running" } : {}),
-          })}
-          onOpen={onOpenSession}
+          actions={sessionActions}
+          onOpenSession={onOpenSession}
         />
 
         <JoinGroup
@@ -458,7 +905,47 @@ export function PullRequestDetailPage({
           onOpen={onOpenTask}
         />
       </Block>
+
+      <ChecksBlock
+        checks={talk?.checks}
+        error={talk?.errors?.checks}
+        pending={talkPending}
+        onRetry={onReloadConversation}
+      />
+      <TimelineBlock
+        timeline={talk?.timeline}
+        truncated={talk?.timelineTruncated === true}
+        pending={talkPending}
+        url={item.url}
+      />
+      <ThreadsBlock
+        threads={talk?.threads}
+        total={talk?.threadsTotal}
+        pending={talkPending}
+        url={item.url}
+      />
     </Shell>
+  );
+}
+
+/**
+ * The route's page: the page above plus its own conversation read, which only
+ * a mounted detail page performs. Stories render `PullRequestDetailPage` with
+ * a fixture instead.
+ */
+export function PullRequestDetailRoute(
+  props: Omit<Props, "conversation" | "onReloadConversation">,
+) {
+  const conversation = usePullRequestConversation(
+    props.target,
+    dataOf(props.state) ?? null,
+  );
+  return (
+    <PullRequestDetailPage
+      {...props}
+      conversation={conversation.state}
+      onReloadConversation={conversation.reload}
+    />
   );
 }
 
@@ -479,13 +966,16 @@ function Shell({
     <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         back={back}
+        density="compact"
         icon={<GitPullRequest size={16} />}
         title={title}
         subtitle={subtitle}
         actions={actions}
       />
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-        {children}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-5 py-6">
+          {children}
+        </div>
       </div>
     </div>
   );

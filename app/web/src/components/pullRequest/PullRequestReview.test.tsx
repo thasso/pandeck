@@ -79,7 +79,9 @@ vi.mock("../../lib/pullRequestsApi.ts", async (importOriginal) => ({
 }));
 
 const { PullRequestInspector } = await import("../objectInspectors.tsx");
-const { failed, loading, ready } = await import("../../lib/loadState.ts");
+const { PullRequestActionsProvider } = await import("./PullRequestActions.tsx");
+const { dataOf, failed, loading, ready } =
+  await import("../../lib/loadState.ts");
 
 function pr(
   patch: Partial<PullRequestInventoryItem> = {},
@@ -202,30 +204,38 @@ afterEach(() => {
 async function render(
   item: PullRequestInventoryItem | LoadState<PullRequestInventoryItem | null>,
 ): Promise<void> {
+  const state = "status" in item ? item : ready(item);
+  const onReload = () => {
+    reloads += 1;
+  };
   const element = (
-    <PullRequestInspector
-      state={"status" in item ? item : ready(item)}
-      projects={[]}
-      joins={{
-        worktrees: { rows: [] as WorktreeRecord[], fresh: true },
-        sessions: { rows: [] as SessionListItem[], fresh: true },
-        tasks: { rows: [] as TaskSummary[], fresh: true },
-      }}
-      openers={{
-        onOpenTask: () => {},
-        onOpenProject: () => {},
-        onOpenSession: () => {},
-        onOpenWorktree: () => {},
-        onOpenKnowledge: () => {},
-      }}
+    <PullRequestActionsProvider
+      item={dataOf(state) ?? null}
+      onReload={onReload}
       onStartSession={(worktreeId) => sessions.push(worktreeId)}
       onReview={(handed, worktreeId, outcome) =>
         handoffs.push({ number: handed.number, worktreeId, outcome })
       }
-      onReload={() => {
-        reloads += 1;
-      }}
-    />
+    >
+      <PullRequestInspector
+        state={state}
+        projects={[]}
+        joins={{
+          worktrees: { rows: [] as WorktreeRecord[], fresh: true },
+          sessions: { rows: [] as SessionListItem[], fresh: true },
+          tasks: { rows: [] as TaskSummary[], fresh: true },
+        }}
+        openers={{
+          onOpenTask: () => {},
+          onOpenProject: () => {},
+          onOpenSession: () => {},
+          onOpenWorktree: () => {},
+          onOpenKnowledge: () => {},
+        }}
+        onStartSession={(worktreeId) => sessions.push(worktreeId)}
+        onReload={onReload}
+      />
+    </PullRequestActionsProvider>
   );
   await act(async () => {
     root?.render(element);

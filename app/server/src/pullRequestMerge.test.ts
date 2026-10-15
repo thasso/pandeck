@@ -62,6 +62,9 @@ function fakeProvider(
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
     pullRequestReview: async () => null,
+    pullRequestConversation: async () => {
+      throw new Error("not used");
+    },
     pullRequestDetail: async () => null,
     closePullRequest: async () => {
       throw new Error("not used");

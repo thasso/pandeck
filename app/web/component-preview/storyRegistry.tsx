@@ -63,6 +63,19 @@ import {
   FrontmatterDark as MarkdownFrontmatterDark,
   MarkdownFileStory,
 } from "./stories/worktree/MarkdownFile.stories.tsx";
+import {
+  Browser as PullRequestsBrowser,
+  BrowserPhone as PullRequestsBrowserPhone,
+  BrowserReal as PullRequestsBrowserReal,
+  Detail as PullRequestsDetail,
+  DetailMerged as PullRequestsDetailMerged,
+  DetailMergedPhone as PullRequestsDetailMergedPhone,
+  DetailPhone as PullRequestsDetailPhone,
+  DetailReal as PullRequestsDetailReal,
+  DetailReview as PullRequestsDetailReview,
+  PullRequestStory,
+  type PullRequestStoryProps,
+} from "./stories/worktree/PullRequests.stories.tsx";
 import type { StoryPreviewId } from "./storyCatalog.ts";
 
 function argsOf(story: {
@@ -98,7 +111,47 @@ function queueArgsOf(story: {
   return { frameWidth, scenario };
 }
 
+const pullRequestStoryDefaults: PullRequestStoryProps = {
+  frameWidth: 320,
+  surface: "browser",
+  browserState: "populated",
+  detailState: "open",
+};
+
+function pullRequestArgsOf(story: {
+  args?: Partial<PullRequestStoryProps>;
+}): PullRequestStoryProps {
+  return { ...pullRequestStoryDefaults, ...story.args };
+}
+
 const storyRenderers: Record<StoryPreviewId, () => ReactElement> = {
+  "pull-requests--browser": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsBrowser)} />
+  ),
+  "pull-requests--browser-real": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsBrowserReal)} />
+  ),
+  "pull-requests--browser-phone": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsBrowserPhone)} />
+  ),
+  "pull-requests--detail": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsDetail)} />
+  ),
+  "pull-requests--detail-review": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsDetailReview)} />
+  ),
+  "pull-requests--detail-merged": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsDetailMerged)} />
+  ),
+  "pull-requests--detail-real": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsDetailReal)} />
+  ),
+  "pull-requests--detail-phone": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsDetailPhone)} />
+  ),
+  "pull-requests--detail-merged-phone": () => (
+    <PullRequestStory {...pullRequestArgsOf(PullRequestsDetailMergedPhone)} />
+  ),
   "chat-activity-transcript--narrow-large-text": () => (
     <ChatActivityTranscript {...TranscriptNarrowLargeText.args} />
   ),

@@ -5255,6 +5255,13 @@ export interface HostedPullRequest {
   mine: boolean;
   /** The authenticated user's review was requested. */
   reviewRequested: boolean;
+  /** The authenticated user is one of its assignees. */
+  assignedToMe?: boolean;
+  /**
+   * Requested reviewer TEAMS the authenticated user belongs to, by name. Absent
+   * = unknown (team membership could not be read), never "none requested".
+   */
+  teamReviewRequests?: string[];
   draft?: boolean;
   updatedAt?: number;
 }
@@ -5313,8 +5320,18 @@ export interface PullRequestInventoryItem {
    * than from the open-PR list, so it can no longer state this either.
    */
   mine: boolean;
-  /** The authenticated user's review was requested (open pull requests only). */
+  /**
+   * The authenticated user's review was requested DIRECTLY (open pull requests
+   * only). A request to one of your teams is {@link teamReviewRequests}.
+   */
   reviewRequested: boolean;
+  /** You are an assignee (open pull requests only). */
+  assignedToMe?: boolean;
+  /**
+   * Your teams whose review was requested (open pull requests only). Absent =
+   * unknown: team membership could not be read, which is not "no team".
+   */
+  teamReviewRequests?: string[];
   draft?: boolean;
   updatedAt?: number;
   /**
@@ -5519,6 +5536,102 @@ export interface PullRequestViewCheckRequest {
   /** `owner/repo`, lowercased — the same identity the merge request carries. */
   repositoryKey: string;
   number: number;
+}
+
+/**
+ * GET /api/pull-requests/conversation — what the provider says ON one pull
+ * request: its description, conversation, inline review threads and the head's
+ * individual checks. Read live (briefly cached) for the detail page only; the
+ * inventory never carries it, because a list poll has no use for bodies.
+ *
+ * Addressed by the same four components as the actions, as query parameters.
+ * Each section is optional on its own: absent = that read failed or was not
+ * possible (see `errors`), never "there is none". An EMPTY array is the
+ * provider's answer that there is none.
+ */
+export interface PullRequestConversationResponse {
+  number: number;
+  /** When the server read it, for "as of" display. */
+  fetchedAt: number;
+  /** The description as Markdown; `""` = the author wrote none. */
+  body?: string;
+  author?: string;
+  createdAt?: number;
+  /** Everyone assigned, by login. */
+  assignees?: string[];
+  /** Pending review requests: users by login, teams by name. */
+  requestedReviewers?: { users: string[]; teams: string[] };
+  /** Comments and submitted reviews, oldest first. */
+  timeline?: PullRequestTimelineEntry[];
+  /** The provider holds more timeline entries than were read. */
+  timelineTruncated?: boolean;
+  threads?: PullRequestReviewThread[];
+  /** Provider-reported thread count when it exceeds `threads.length`. */
+  threadsTotal?: number;
+  /** The head commit's individual checks. */
+  checks?: PullRequestChecks;
+  /** Per-section read failures, in the server's words. */
+  errors?: { conversation?: string; checks?: string };
+}
+
+export interface PullRequestConversationComment {
+  id: string;
+  author?: string;
+  /** Markdown, as written on the provider. */
+  body: string;
+  createdAt?: number;
+  url?: string;
+}
+
+export type PullRequestReviewVerdict =
+  "approved" | "changes-requested" | "commented" | "dismissed";
+
+export type PullRequestTimelineEntry =
+  | ({ kind: "comment" } & PullRequestConversationComment)
+  | ({
+      kind: "review";
+      verdict: PullRequestReviewVerdict;
+      /** Inline comments this review added, when the provider counts them. */
+      threadComments?: number;
+    } & PullRequestConversationComment);
+
+export interface PullRequestReviewThread {
+  id: string;
+  path: string;
+  /** Line on the post-change side, else the original line. */
+  line?: number;
+  /** Only when the provider tracks it; absent = not known. */
+  resolved?: boolean;
+  /** The code it was written against has since changed. */
+  outdated?: boolean;
+  /** The few diff lines the thread hangs off, bounded by the server. */
+  diffHunk?: string;
+  url?: string;
+  comments: PullRequestConversationComment[];
+  /** More replies exist than `comments` holds. */
+  truncated?: boolean;
+}
+
+export type PullRequestCheckTone =
+  "success" | "failure" | "pending" | "skipped" | "neutral";
+
+export interface PullRequestCheck {
+  name: string;
+  tone: PullRequestCheckTone;
+  /** The provider's own status word ("in_progress", "timed_out", …). */
+  status: string;
+  /** One line from the check's output or description. */
+  summary?: string;
+  url?: string;
+}
+
+export interface PullRequestChecks {
+  /** The head these checks ran on. */
+  headSha: string;
+  state: "success" | "failure" | "pending" | "none";
+  items: PullRequestCheck[];
+  /** Provider-reported total when it exceeds `items.length`. */
+  total?: number;
 }
 
 /**

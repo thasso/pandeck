@@ -99,8 +99,8 @@ describe("IdleWorktreesSection", () => {
       ready([item("a", "delivered"), item("b", "uncommitted")]),
     );
     expect(el.querySelectorAll("[data-idle-worktree-row]")).toHaveLength(2);
-    expect(el.textContent).toContain("Idle worktrees (2)");
-    expect(el.textContent).toContain("Retire 1…");
+    expect(el.textContent).toContain("Idle worktrees2");
+    expect(el.textContent).toContain("Retire 1 with nothing unmerged…");
     expect(render(ready([item("b", "uncommitted")])).textContent).not.toContain(
       "Retire",
     );
@@ -121,7 +121,7 @@ describe("IdleWorktreesSection", () => {
       onRetired,
     );
     const open = [...el.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Retire 2…"),
+      button.textContent?.includes("Retire 2 with nothing unmerged…"),
     )!;
     act(() => open.click());
     const confirm = [...document.querySelectorAll("button")].find(
@@ -163,7 +163,7 @@ describe("IdleWorktreesSection bulk dialog", () => {
     // The refusal is what moves the checkout out: the refetch answers empty.
     const onRetired = vi.fn(() => render(ready([])));
     const el = render(ready([item("a", "delivered")]), onRetired);
-    open(el, "Retire 1…");
+    open(el, "Retire 1 with nothing unmerged…");
     await act(async () => {
       confirm("Retire 1").click();
     });
@@ -181,7 +181,7 @@ describe("IdleWorktreesSection bulk dialog", () => {
       () => new Promise((resolve) => (settle = resolve)),
     );
     const el = render(ready([item("a", "delivered")]));
-    open(el, "Retire 1…");
+    open(el, "Retire 1 with nothing unmerged…");
     act(() => confirm("Retire 1").click());
     // A poll lands mid-run with an empty answer.
     render(ready([]));

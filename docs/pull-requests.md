@@ -1067,11 +1067,21 @@ local objects the client cannot join itself.
 
 Selection has two halves, and they come from different reads:
 
-- An OPEN pull request is inventoried when it is YOURS or when your review was
-  requested. It comes from the per-project open-PR list (`projectPullRequests`,
-  60 s cache) that the Project page already fills. Everything else open on the
-  repository belongs to that page, not to this view. A draft of yours is listed
-  and flagged, never hidden.
+- An OPEN pull request is inventoried when it is YOURS, when you are ASSIGNED,
+  or when a review was requested of you or of a TEAM you are in. It comes from
+  the per-project open-PR list (`projectPullRequests`, 60 s cache) that the
+  Project page already fills. Everything else open on the repository belongs to
+  that page, not to this view. A draft is listed and flagged, never hidden. Each
+  item says which of these hold (`mine`, `reviewRequested`, `assignedToMe`,
+  `teamReviewRequests`), because the view states every reason, not only the
+  strongest.
+- Team membership is one REST read per provider token (GitHub `/user/teams`,
+  Forgejo `/user/teams`), cached 15 minutes and shared by every repository. It
+  is REST because GitHub's GraphQL `Team.organization` needs the `read:org`
+  scope, and one unreadable field fails the whole list query; the list reads
+  only each team's `slug`/`combinedSlug` and matches those against the
+  membership. Unknown membership leaves `teamReviewRequests` ABSENT, never
+  empty.
 - A MERGED or CLOSED pull request is inventoried while a local active worktree
   still holds its head branch. That is the cleanup queue: the checkout is the
   thing left to deal with, and this is what keeps a merged pull request visible
@@ -1150,6 +1160,16 @@ old-version file is a cold cache. A project whose provider read failed retains
 its older items and timestamp; a successful empty answer removes them. Projects
 with no registered worktrees are swept. A mutation bumps the snapshot epoch, so
 a build that started before it cannot overwrite the newer state and runs again.
+Removing a worktree — every path: the panel's Remove, an agent's
+`worktree_remove`, a retirement, a run's cleanup — calls
+`forgetWorktreeInPullRequestInventory` once the removal succeeded
+(`worktreeRemoval.ts`). It rewrites the snapshot at once, with no provider read:
+a merged or closed item listed for that checkout is dropped, an open one loses
+its `worktreeId`. It then bumps the epoch and requests a rebuild, so a build
+that started before the removal cannot write the checkout back. Without this a
+cleaned-up pull request stayed in Needs cleanup until the next five-minute
+build.
+
 `GET /api/pull-requests` reads only this local snapshot. With a cold cache it
 answers `status: "cold"`; the client keeps the surface in its loading state
 until one provider-backed build lands rather than rendering an error or claiming
@@ -1216,13 +1236,18 @@ the server refresh continues. Moving between the index and a detail route keeps
 ONE fetch key, so that navigation never blanks the surface.
 
 **Grouping, ordering and the row vocabulary are pure**
-(`lib/pullRequestInbox.ts`) because every rule in them fails invisibly. Three
-groups — **Needs your review**, **Yours**, **Needs cleanup** — with a review
-request outranking your own authorship (someone is blocked on it) and a terminal
-pull request always filed under cleanup (the checkout is its whole reason for
-being listed). Within a group: most recently updated first, an absent
-`updatedAt` LAST rather than first, and a tie broken by the row's identity,
-which makes the order total.
+(`lib/pullRequestInbox.ts`) because every rule in them fails invisibly. By
+reason, a row is filed under its STRONGEST reason — **Needs your review**,
+**Yours**, **Assigned to you**, **Team review requests**, **Needs cleanup** —
+with a review request outranking your own authorship (someone is blocked on it),
+a team request the weakest claim, and a terminal pull request always filed under
+cleanup (the checkout is its whole reason for being listed). The row's badges
+state every other reason. The team group starts folded: a CODEOWNERS rule can
+request a team on every pull request of a repository. The list can also be
+grouped by project or by date of the last update, and filtered by project, by
+reason and by hiding drafts; those choices are browser-local preferences. Within
+a group: most recently updated first, an absent `updatedAt` LAST rather than
+first, and a tie broken by the row's identity, which makes the order total.
 
 That identity is `projectId#provider#repositoryKey#number` — the client's whole
 copy of the server's `pullRequestIdentity.ts` key, over the `repositoryKey`
@@ -1284,6 +1309,32 @@ rows belonging to the previous episode. So the flag is set in the `ready` step
 that installs `msg.sessions` and nowhere else, cleared on disconnect, and stays
 false across a transport reconnect until the next `ready`
 (`hooks/useAssistant.test.ts` pins the whole transition).
+
+### The conversation read
+
+The detail page has a SECOND read the list never triggers:
+`GET /api/pull-requests/conversation?projectId&provider&repositoryKey&number`
+(`pullRequestConversation.ts`), answering one `PullRequestConversationResponse`
+— the description, author, assignees, requested reviewers (users and teams), the
+timeline of comments and reviews, the inline review threads, and the head's
+individual checks. It is per pull request and live, through the provider seam
+(`pullRequestConversation` in `gitHosting.ts`, then `refChecks` for the head):
+GitHub answers the conversation in one GraphQL query, Forgejo in REST reads of
+the pull request, its issue comments, its reviews and each review's comments
+(grouped into threads by path and line, resolved when a resolver is set).
+
+The answer is bounded: the last 50 comments and reviews, the last 50 threads
+with their first 20 comments, a body cut at 20k characters and a diff hunk at
+600, each truncation flagged rather than hidden. A `commented` review with an
+empty body is only the envelope of inline replies, which the threads already
+show, so it is left out; every verdict stays. Errors are per section
+(`errors.conversation`, `errors.checks`): a failed check read never hides the
+conversation, and the other way round.
+
+Reads are cached 30 s and concurrent ones coalesce; `&fresh=1` skips the cache.
+The client (`hooks/usePullRequestConversation.ts`) reads again, fresh, when the
+inventory reports a new head, a newer `updatedAt` or a different CI summary —
+the last because a check finishing does not move the pull request's `updatedAt`.
 
 ### Merge & clean up
 

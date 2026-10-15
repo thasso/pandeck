@@ -436,6 +436,9 @@ export function BacklogTreePane({
       getRowAlign={(node) =>
         tight || node.data.kind === "project" ? "center" : "stretch"
       }
+      // Flush (the sidebar), a Project header is the rail's group band — the
+      // same one the Focus view and the Pull Requests rail draw.
+      getRowBand={flush ? (node) => node.data.kind === "project" : undefined}
       showGuides
       aria-label="Backlog"
       expandedIds={expandedIds}
@@ -653,18 +656,18 @@ function BacklogRowContent({
             Project the registry no longer knows. */}
         <FolderKanban
           size={14}
-          className={`shrink-0 ${data.dot ? "" : "text-muted-foreground"}`}
+          className={`shrink-0 ${data.dot ? "" : "opacity-70"}`}
           style={data.dot ? { color: data.dot } : undefined}
           aria-hidden
         />
+        {/* No colour of its own: the row says it — the foreground on a page,
+            white on the sidebar's band — and an unknown Project is dimmed. */}
         <span
-          className={`min-w-0 flex-1 truncate text-sm font-semibold ${data.known || data.projectId === null ? "text-foreground" : "text-muted-foreground"}`}
+          className={`min-w-0 flex-1 truncate text-sm font-semibold ${data.known || data.projectId === null ? "" : "opacity-70"}`}
         >
           {data.label}
         </span>
-        <span className="shrink-0 text-sm text-muted-foreground">
-          {data.taskCount}
-        </span>
+        <span className="shrink-0 text-sm opacity-70">{data.taskCount}</span>
       </div>
     );
   }

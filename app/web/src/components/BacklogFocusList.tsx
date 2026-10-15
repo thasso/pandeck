@@ -1,7 +1,19 @@
 import { useMemo, type ReactNode } from "react";
 import { IconButton } from "./common/IconButton.tsx";
 import { Item } from "./ui/item.tsx";
-import { Check, Undo2, X } from "lucide-react";
+import {
+  CalendarCheck,
+  CalendarClock,
+  CalendarDays,
+  CalendarOff,
+  CalendarRange,
+  Check,
+  CircleAlert,
+  Lightbulb,
+  Undo2,
+  X,
+} from "lucide-react";
+import { ListGroupSection } from "./ListGroupSection.tsx";
 import type { ProjectRecord, SessionListItem } from "@assistant/shared";
 import {
   TaskStatusIcon as StatusIcon,
@@ -130,20 +142,8 @@ export function BacklogFocusList({
       data-flush-list={flush || undefined}
       className={`flex flex-col ${flush ? "" : "gap-3"}`}
     >
-      {buckets.map((bucket) => (
-        <section key={bucket.id} aria-label={bucket.label}>
-          <h3
-            // Flush, a heading is a strip over its rows, as the composer
-            // shelf's labels: small caps on the sidebar's own inset, the
-            // hairline under it starting the list's.
-            className={`font-medium uppercase tracking-wide ${
-              flush
-                ? "border-b border-border/60 px-2 pt-3 pb-1 text-xs"
-                : `px-1 pb-1 ${tight ? "text-xs" : "text-sm"}`
-            } ${BUCKET_TONE[bucket.id]}`}
-          >
-            {bucket.label}
-          </h3>
+      {buckets.map((bucket) => {
+        const rows = (
           <ul className="flex flex-col">
             {bucket.tasks.map((task) => (
               <FocusRow
@@ -162,10 +162,71 @@ export function BacklogFocusList({
               />
             ))}
           </ul>
-        </section>
-      ))}
+        );
+        // Flush (the sidebar), a bucket is a band over its rows — the same
+        // folding group the Pull Requests rail uses — so the rail's groups
+        // read alike wherever they are. The act-now tone moves to the icon.
+        if (flush)
+          return (
+            <ListGroupSection
+              key={bucket.id}
+              id={`focus:${bucket.id}`}
+              title={bucket.label}
+              count={bucket.tasks.length}
+              emphasis={BUCKET_EMPHASIS.has(bucket.id)}
+              icon={<BucketIcon id={bucket.id} />}
+              containsSelected={bucket.tasks.some(
+                (task) => task.id === selectedId,
+              )}
+            >
+              {rows}
+            </ListGroupSection>
+          );
+        return (
+          <section key={bucket.id} aria-label={bucket.label}>
+            <h3
+              className={`px-1 pb-1 font-medium uppercase tracking-wide ${tight ? "text-xs" : "text-sm"} ${BUCKET_TONE[bucket.id]}`}
+            >
+              {bucket.label}
+            </h3>
+            {rows}
+          </section>
+        );
+      })}
     </div>
   );
+}
+
+/** The buckets that mean "act now": their band title is set bolder. */
+const BUCKET_EMPHASIS: ReadonlySet<FocusBucketId> = new Set([
+  "review",
+  "overdue",
+  "today",
+]);
+
+const BUCKET_ICON: Record<FocusBucketId, typeof CalendarDays> = {
+  review: Lightbulb,
+  overdue: CircleAlert,
+  today: CalendarCheck,
+  tomorrow: CalendarDays,
+  week: CalendarRange,
+  later: CalendarClock,
+  unscheduled: CalendarOff,
+};
+
+/**
+ * A bucket's glyph on its band, carrying the act-now tone the page heading
+ * carries in its text — coloured text on the band's grey would not read.
+ */
+function BucketIcon({ id }: { id: FocusBucketId }) {
+  const Icon = BUCKET_ICON[id];
+  const tone =
+    id === "review"
+      ? "text-warning"
+      : id === "overdue"
+        ? "text-destructive"
+        : "";
+  return <Icon size={14} className={`shrink-0 ${tone}`} aria-hidden />;
 }
 
 /**

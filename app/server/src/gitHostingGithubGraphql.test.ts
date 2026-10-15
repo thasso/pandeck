@@ -386,7 +386,12 @@ test("the open list reads ownership, review requests and annotations in one quer
 
   const pulls = await provider.listOpenPullRequests();
 
-  assert.equal(calls.length, 1);
+  // One query for the list; the viewer's teams are one REST read, cached
+  // across repositories (here it answers no list, so membership is unknown).
+  assert.deepEqual(
+    calls.map((call) => call.path),
+    ["/graphql", "/user/teams"],
+  );
   assert.deepEqual(pulls, [
     {
       number: 7,
@@ -552,7 +557,8 @@ test("review requests beyond the first page are settled by the paged REST list",
   const original = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = new URL(String(input));
-    calls.push(`${url.pathname}${url.search}`);
+    if (url.pathname !== "/user/teams")
+      calls.push(`${url.pathname}${url.search}`);
     const body =
       url.pathname === "/graphql"
         ? answer
@@ -607,4 +613,211 @@ test("a branch page without page information is unknown", async () => {
     ]),
     /without page information/,
   );
+});
+
+test("the open list marks your assignments and your teams' review requests", async () => {
+  stubFetch((request) =>
+    request.path === "/user/teams"
+      ? [
+          { slug: "core", organization: { login: "acme" } },
+          { slug: "web", organization: { login: "other" } },
+        ]
+      : {
+          data: {
+            viewer: { login: "me" },
+            repository: {
+              pullRequests: {
+                nodes: [
+                  {
+                    number: 9,
+                    title: "for the team",
+                    url: "https://github.com/acme/repo/pull/9",
+                    headRefName: "team",
+                    headRefOid: sha("d"),
+                    baseRefName: "main",
+                    author: { login: "someone" },
+                    assignees: { nodes: [{ login: "me" }] },
+                    reviewRequests: {
+                      nodes: [
+                        {
+                          requestedReviewer: {
+                            __typename: "Team",
+                            slug: "core",
+                            combinedSlug: "acme/core",
+                          },
+                        },
+                        {
+                          // Same slug, another organization: not yours.
+                          requestedReviewer: {
+                            __typename: "Team",
+                            slug: "web",
+                            combinedSlug: "acme/web",
+                          },
+                        },
+                      ],
+                    },
+                    latestOpinionatedReviews: { nodes: [] },
+                    commits: { nodes: [] },
+                  },
+                ],
+              },
+            },
+          },
+        },
+  );
+
+  const pull = (await githubProvider(ref, config).listOpenPullRequests())?.[0];
+
+  assert.equal(pull?.mine, false);
+  assert.equal(pull?.assignedToMe, true);
+  assert.deepEqual(pull?.teamReviewRequests, ["core"]);
+});
+
+test("unknown team membership leaves team requests unknown, not empty", async () => {
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    if (new URL(String(input)).pathname === "/user/teams")
+      return new Response("{}", { status: 403 });
+    return new Response(JSON.stringify(openListAnswer()), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const pulls = await githubProvider(ref, config).listOpenPullRequests();
+
+  for (const pull of pulls ?? [])
+    assert.equal("teamReviewRequests" in pull, false);
+});
+
+test("the conversation reads comments, verdicts and threads in one query", async () => {
+  const calls = stubFetch(() => ({
+    data: {
+      repository: {
+        pullRequest: {
+          body: "The description",
+          createdAt: "2026-09-01T00:00:00Z",
+          headRefOid: sha("a"),
+          author: { login: "author" },
+          assignees: { nodes: [{ login: "me" }] },
+          reviewRequests: {
+            nodes: [
+              { requestedReviewer: { __typename: "User", login: "ada" } },
+              { requestedReviewer: { __typename: "Team", slug: "core" } },
+            ],
+          },
+          comments: {
+            totalCount: 1,
+            nodes: [
+              {
+                databaseId: 1,
+                author: { login: "ada" },
+                body: "Looks close",
+                createdAt: "2026-09-02T00:00:00Z",
+                url: "https://github.com/acme/repo/pull/7#issuecomment-1",
+              },
+            ],
+          },
+          reviews: {
+            totalCount: 3,
+            nodes: [
+              {
+                databaseId: 2,
+                author: { login: "bob" },
+                state: "CHANGES_REQUESTED",
+                body: "",
+                submittedAt: "2026-09-01T12:00:00Z",
+                comments: { totalCount: 1 },
+              },
+              {
+                // Only the envelope of an inline reply: the thread shows it.
+                databaseId: 3,
+                author: { login: "bob" },
+                state: "COMMENTED",
+                body: "",
+                submittedAt: "2026-09-03T00:00:00Z",
+              },
+              {
+                databaseId: 4,
+                author: { login: "bob" },
+                state: "PENDING",
+                body: "draft",
+              },
+            ],
+          },
+          reviewThreads: {
+            totalCount: 1,
+            nodes: [
+              {
+                id: "T1",
+                isResolved: false,
+                isOutdated: true,
+                path: "src/a.ts",
+                line: null,
+                originalLine: 12,
+                comments: {
+                  totalCount: 1,
+                  nodes: [
+                    {
+                      databaseId: 5,
+                      author: { login: "bob" },
+                      body: "Why?",
+                      createdAt: "2026-09-01T12:00:00Z",
+                      url: "https://github.com/acme/repo/pull/7#discussion_r5",
+                      diffHunk: "@@ -1 +1 @@\n-a\n+b",
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  }));
+
+  const conversation = await githubProvider(
+    ref,
+    config,
+  ).pullRequestConversation(7);
+
+  assert.equal(calls.length, 1);
+  assert.equal(conversation.body, "The description");
+  assert.equal(conversation.headSha, sha("a"));
+  assert.deepEqual(conversation.assignees, ["me"]);
+  assert.deepEqual(conversation.requestedReviewers, {
+    users: ["ada"],
+    teams: ["core"],
+  });
+  // Oldest first; the empty "commented" envelope and the pending draft are out.
+  assert.deepEqual(
+    conversation.timeline?.map((entry) => [
+      entry.kind,
+      entry.author,
+      entry.kind === "review" ? entry.verdict : undefined,
+    ]),
+    [
+      ["review", "bob", "changes-requested"],
+      ["comment", "ada", undefined],
+    ],
+  );
+  assert.deepEqual(conversation.threads, [
+    {
+      id: "T1",
+      path: "src/a.ts",
+      line: 12,
+      resolved: false,
+      outdated: true,
+      diffHunk: "@@ -1 +1 @@\n-a\n+b",
+      url: "https://github.com/acme/repo/pull/7#discussion_r5",
+      comments: [
+        {
+          id: "5",
+          author: "bob",
+          body: "Why?",
+          createdAt: Date.parse("2026-09-01T12:00:00Z"),
+          url: "https://github.com/acme/repo/pull/7#discussion_r5",
+        },
+      ],
+    },
+  ]);
 });

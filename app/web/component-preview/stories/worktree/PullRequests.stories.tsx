@@ -1,7 +1,13 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { IdleWorktree, PullRequestInventoryItem } from "@assistant/shared";
+import type {
+  IdleWorktree,
+  ProjectRecord,
+  PullRequestConversationResponse,
+  PullRequestInventoryItem,
+} from "@assistant/shared";
 import { PullRequestBrowser } from "../../../src/components/PullRequestBrowser.tsx";
+import { PullRequestActionsProvider } from "../../../src/components/pullRequest/PullRequestActions.tsx";
 import { PullRequestDetailPage } from "../../../src/components/pullRequest/PullRequestDetailPage.tsx";
 import {
   pullRequestTargetOf,
@@ -18,12 +24,37 @@ import {
   dirtyStatus,
   featureWorktree,
   NOW,
-  pullRequest,
   pullRequestInventory,
   worktreeProject,
 } from "../../fixtures/worktree.ts";
+import {
+  pandeck120,
+  pandeck120Conversation,
+  pandeck121,
+  pandeck121Conversation,
+  reviewConversation,
+  reviewRequestedItem,
+} from "../../fixtures/pullRequests.ts";
 
-type BrowserState = "populated" | "loading" | "empty" | "error";
+/**
+ * Real data from other repositories, present only on the machine that pulled
+ * it (`fixtures/local/` is git-ignored). Absent, the "real" cases fall back to
+ * the committed fixtures, so the catalog builds anywhere.
+ */
+const local = import.meta.glob<unknown>("../../fixtures/local/*.json", {
+  eager: true,
+  import: "default",
+});
+const localInventory = local["../../fixtures/local/inventory.json"] as
+  { items: PullRequestInventoryItem[]; projects: ProjectRecord[] } | undefined;
+const localDetails = local["../../fixtures/local/details.json"] as
+  | Array<{
+      item: PullRequestInventoryItem;
+      conversation: PullRequestConversationResponse;
+    }>
+  | undefined;
+
+type BrowserState = "populated" | "real" | "loading" | "empty" | "error";
 
 /**
  * The cleanup queue's worktree half under the populated browser: what an idle
@@ -55,15 +86,18 @@ function idleWorktrees(): IdleWorktree[] {
       pushed: false,
       lastActivityAt: NOW - 4 * day,
     },
-    {
-      worktree: at("pd-idle-dirty", "pd-onboarding-copy"),
-      kind: "uncommitted",
-      changedFiles: 6,
-      lastActivityAt: NOW - 2 * day,
-    },
   ];
 }
-type DetailState = "open" | "merged" | "loading" | "joins-loading";
+
+type DetailState =
+  | "open"
+  | "review"
+  | "merged"
+  | "real"
+  | "loading"
+  | "joins-loading"
+  | "conversation-loading"
+  | "conversation-error";
 
 export interface PullRequestStoryProps {
   frameWidth: number;
@@ -78,6 +112,8 @@ function inventoryState(
   switch (state) {
     case "populated":
       return ready(pullRequestInventory);
+    case "real":
+      return ready(localInventory?.items ?? pullRequestInventory);
     case "loading":
       return loading();
     case "empty":
@@ -95,7 +131,7 @@ const freshJoins: PullRequestJoinSources = {
         id: "s-impl",
         harness: "pi",
         agentType: "developer",
-        title: "Implement retry backoff",
+        title: "Record interrupted peer turns",
         createdAt: NOW - 5 * 3_600_000,
         updatedAt: NOW - 120_000,
         messageCount: 42,
@@ -105,7 +141,7 @@ const freshJoins: PullRequestJoinSources = {
         id: "s-review",
         harness: "pi",
         agentType: "developer",
-        title: "Review the retry change",
+        title: "Review the peer turn change",
         createdAt: NOW - 3_600_000,
         updatedAt: NOW - 600_000,
         messageCount: 12,
@@ -136,9 +172,44 @@ const coldJoins: PullRequestJoinSources = {
   tasks: { rows: null, fresh: false },
 };
 
+function detailCase(state: DetailState): {
+  item: PullRequestInventoryItem;
+  conversation: LoadState<PullRequestConversationResponse>;
+} {
+  switch (state) {
+    case "review":
+      return {
+        item: reviewRequestedItem,
+        conversation: ready(reviewConversation),
+      };
+    case "merged":
+      return { item: pandeck121, conversation: ready(pandeck121Conversation) };
+    case "real": {
+      const real = localDetails?.[0];
+      return real
+        ? { item: real.item, conversation: ready(real.conversation) }
+        : {
+            item: reviewRequestedItem,
+            conversation: ready(reviewConversation),
+          };
+    }
+    case "conversation-loading":
+      return { item: pandeck120, conversation: loading() };
+    case "conversation-error":
+      return {
+        item: pandeck120,
+        conversation: failed("GitHub answered 502 Bad Gateway."),
+      };
+    default:
+      return { item: pandeck120, conversation: ready(pandeck120Conversation) };
+  }
+}
+
 /**
  * The Pull Requests section: the sidebar browser over the inventory, and the
- * detail page one row opens, each in its load states.
+ * detail page one row opens, each in its load states. The detail page sits
+ * under the real `PullRequestActionsProvider`, so its inline buttons are the
+ * ones the app renders; nothing here reaches a server until one is clicked.
  */
 export function PullRequestStory({
   frameWidth,
@@ -147,10 +218,11 @@ export function PullRequestStory({
   detailState,
 }: PullRequestStoryProps) {
   const [selected, setSelected] = useState<PullRequestTarget | null>(null);
-  const item =
-    detailState === "merged"
-      ? pullRequest({ state: "merged", mergeable: undefined })
-      : pullRequest();
+  const { item, conversation } = detailCase(detailState);
+  const projects =
+    browserState === "real" && localInventory
+      ? localInventory.projects
+      : [worktreeProject];
   return (
     <div className="h-screen bg-background p-2">
       <div className="h-full" style={{ width: frameWidth }}>
@@ -158,7 +230,7 @@ export function PullRequestStory({
           <PullRequestBrowser
             inventory={inventoryState(browserState)}
             onReload={() => {}}
-            projects={[worktreeProject]}
+            projects={projects}
             selected={selected}
             onOpen={setSelected}
             density="comfortable"
@@ -175,17 +247,26 @@ export function PullRequestStory({
             }
           />
         ) : (
-          <PullRequestDetailPage
-            target={pullRequestTargetOf(item)}
-            state={detailState === "loading" ? loading() : ready(item)}
+          <PullRequestActionsProvider
+            item={item}
             onReload={() => {}}
-            projects={[worktreeProject]}
-            joins={detailState === "joins-loading" ? coldJoins : freshJoins}
-            status={dirtyStatus}
-            onOpenWorktree={() => {}}
-            onOpenSession={() => {}}
-            onOpenTask={() => {}}
-          />
+            onStartSession={() => {}}
+            onReview={() => {}}
+          >
+            <PullRequestDetailPage
+              target={pullRequestTargetOf(item)}
+              state={detailState === "loading" ? loading() : ready(item)}
+              onReload={() => {}}
+              projects={[worktreeProject]}
+              joins={detailState === "joins-loading" ? coldJoins : freshJoins}
+              status={dirtyStatus}
+              conversation={conversation}
+              onReloadConversation={() => {}}
+              onOpenWorktree={() => {}}
+              onOpenSession={() => {}}
+              onOpenTask={() => {}}
+            />
+          </PullRequestActionsProvider>
         )}
       </div>
     </div>
@@ -209,11 +290,20 @@ const meta = {
     surface: { control: "inline-radio", options: ["browser", "detail"] },
     browserState: {
       control: "inline-radio",
-      options: ["populated", "loading", "empty", "error"],
+      options: ["populated", "real", "loading", "empty", "error"],
     },
     detailState: {
       control: "inline-radio",
-      options: ["open", "merged", "loading", "joins-loading"],
+      options: [
+        "open",
+        "review",
+        "merged",
+        "real",
+        "loading",
+        "joins-loading",
+        "conversation-loading",
+        "conversation-error",
+      ],
     },
   },
 } satisfies Meta<typeof PullRequestStory>;
@@ -221,8 +311,17 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+const phone = {
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+} as const;
+
 export const Browser: Story = {};
 export const BrowserDark: Story = { globals: { theme: "dark" } };
+export const BrowserReal: Story = { args: { browserState: "real" } };
+export const BrowserPhone: Story = {
+  args: { frameWidth: 390, browserState: "real" },
+  ...phone,
+};
 export const BrowserLoading: Story = { args: { browserState: "loading" } };
 export const BrowserEmpty: Story = { args: { browserState: "empty" } };
 export const BrowserError: Story = { args: { browserState: "error" } };
@@ -233,11 +332,39 @@ export const DetailDark: Story = {
   args: { surface: "detail", frameWidth: 760 },
   globals: { theme: "dark" },
 };
+export const DetailReview: Story = {
+  args: { surface: "detail", frameWidth: 760, detailState: "review" },
+};
 export const DetailMerged: Story = {
   args: { surface: "detail", frameWidth: 760, detailState: "merged" },
 };
+export const DetailReal: Story = {
+  args: { surface: "detail", frameWidth: 760, detailState: "real" },
+};
+export const DetailPhone: Story = {
+  args: { surface: "detail", frameWidth: 390, detailState: "review" },
+  ...phone,
+};
+export const DetailMergedPhone: Story = {
+  args: { surface: "detail", frameWidth: 390, detailState: "merged" },
+  ...phone,
+};
 export const DetailJoinsLoading: Story = {
   args: { surface: "detail", frameWidth: 760, detailState: "joins-loading" },
+};
+export const DetailConversationLoading: Story = {
+  args: {
+    surface: "detail",
+    frameWidth: 760,
+    detailState: "conversation-loading",
+  },
+};
+export const DetailConversationError: Story = {
+  args: {
+    surface: "detail",
+    frameWidth: 760,
+    detailState: "conversation-error",
+  },
 };
 export const DetailLoading: Story = {
   args: { surface: "detail", frameWidth: 760, detailState: "loading" },
