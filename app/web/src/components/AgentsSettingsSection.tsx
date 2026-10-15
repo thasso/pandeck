@@ -92,13 +92,32 @@ export function AgentsSettingsSection({
         const runtime = agentRuntimeOf(list, agent.name);
         if (!runtime) return null;
         const label = agentRuntimeLabel(runtime);
-        return label ? (
-          <ItemDescription>{label}</ItemDescription>
-        ) : (
-          <ItemDescription className="flex items-start gap-1.5">
-            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-            <span>Cannot start: {runtime.problem}</span>
-          </ItemDescription>
+        if (label) return <ItemDescription>{label}</ItemDescription>;
+        // A default that cannot run leaves the other listed models usable.
+        const runnable = (runtime.models ?? []).flatMap((listed) =>
+          listed.problem === undefined
+            ? [
+                `${listed.provider}/${listed.modelId} at ${listed.thinkingLevel}`,
+              ]
+            : [],
+        );
+        return (
+          <>
+            <ItemDescription className="flex items-start gap-1.5">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                {runnable.length > 0
+                  ? "Default model cannot start"
+                  : "Cannot start"}
+                : {runtime.problem}
+              </span>
+            </ItemDescription>
+            {runnable.length > 0 ? (
+              <ItemDescription>
+                Can run on {runnable.join(", ")}
+              </ItemDescription>
+            ) : null}
+          </>
         );
       }}
     />

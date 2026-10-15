@@ -223,6 +223,32 @@ test("a name matching two listed models is refused as ambiguous", async () => {
   assert.equal(pinned.agent.pinnedModel, "claude-opus-5-5");
 });
 
+test("a listing keeps every listed model when only the default cannot run", async () => {
+  write(
+    "test-reviewer",
+    reviewer({ model: undefined, models: ["gemini", "sol"] }),
+  );
+  const [row] = await listSpawnableAgents();
+  assert.ok(row && "problem" in row);
+  assert.match(row.problem, /cannot run on its default model "gemini"/);
+  assert.deepEqual(
+    row.listed?.map((choice) => [choice.spec, choice.runtime?.model.id]),
+    [
+      ["gemini", undefined],
+      ["sol", "gpt-6.1-sol"],
+    ],
+  );
+  // An account refusing the default carries the listed models too.
+  write(
+    "test-reviewer",
+    reviewer({ model: undefined, models: ["opus", "sol"] }),
+  );
+  offered = false;
+  const [refused] = await listSpawnableAgents();
+  assert.ok(refused && "problem" in refused);
+  assert.equal(refused.listed?.length, 2);
+});
+
 test("a model that stopped resolving refuses; nothing falls back", async () => {
   write("test-reviewer", reviewer());
   models = [model("openai-codex", "gpt-6.1-sol")];

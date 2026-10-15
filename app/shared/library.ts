@@ -61,10 +61,18 @@ export type AgentRuntimeSummary =
       models: AgentListedModelSummary[];
       problem?: never;
     }
-  | { problem: string; persona?: never };
+  | {
+      problem: string;
+      /**
+       * Every model it lists, when the definition could be read: its default
+       * may be the one that cannot run.
+       */
+      models?: AgentListedModelSummary[];
+      persona?: never;
+    };
 
 /** One model a definition lists, as it resolves now, or why it cannot run. */
-type AgentListedModelSummary =
+export type AgentListedModelSummary =
   | {
       /** As written in the definition. */
       spec: string;

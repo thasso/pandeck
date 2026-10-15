@@ -117,6 +117,8 @@ interface Recorded {
 }
 let recorded: Recorded;
 let createFails: string | undefined;
+/** Runs inside the pi model lookup: the last await before creation. */
+let duringPiLookup: (() => void) | undefined;
 let deliverFails = false;
 
 function activeWorktree(id: string, projectId = "spawn-proj") {
@@ -195,6 +197,7 @@ beforeEach(() => {
   recorded = { claude: [], pi: [], delivered: [], events: [] };
   createFails = undefined;
   deliverFails = false;
+  duringPiLookup = undefined;
   const standIn = (sessionId: string) =>
     ({ sessionId, setTitle() {}, rename() {} }) as never;
   vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id: string) =>
@@ -205,8 +208,10 @@ beforeEach(() => {
   );
   setSessionSpawnDepsForTests({
     newSessionId: () => `claude-session-${(counter += 1)}`,
-    findPiModel: async (_profile, provider, modelId) =>
-      ({ provider, id: modelId }) as never,
+    findPiModel: async (_profile, provider, modelId) => {
+      duringPiLookup?.();
+      return { provider, id: modelId } as never;
+    },
     create: async (spec) => {
       if (createFails === spec.title) throw new Error("creation exploded");
       const cwd = spec.worktree?.path ?? spec.cwd;
@@ -2319,6 +2324,59 @@ test("a card for an agent whose persona changed while it waited stays pending", 
   expect(recorded.claude).toHaveLength(0);
 });
 
+test.each([
+  [
+    "deleted",
+    () => rmSync(join(agentsRoot, "test-reviewer"), { recursive: true }),
+  ],
+  [
+    "re-pointed to another persona",
+    () => writeAgent({ persona: "assistant", models: ["sonnet", "gpt-5"] }),
+  ],
+  ["dropping the chosen model", () => writeAgent({ models: ["sonnet"] })],
+])(
+  "a direct agent row whose definition is %s during the pi lookup is not created",
+  async (label, mutate) => {
+    await useAgents();
+    writeAgent({ models: ["sonnet", "gpt-5"] });
+    const worktreeId = `wt-agent-pi-race-${label.replaceAll(" ", "-")}`;
+    activeWorktree(worktreeId);
+    duringPiLookup = mutate;
+
+    const text = await spawnDirect([
+      agentRow({ worktreeId, modelId: "gpt-5" }),
+    ]);
+
+    expect(text).toContain("No session was started.");
+    expect(text).toMatch(/nothing was created|Nothing was created/);
+    expect(recorded.pi).toHaveLength(0);
+  },
+);
+
+test("a card-approved agent is read after the pi lookup, not before it", async () => {
+  await useAgents();
+  writeAgent({ name: "researcher", persona: "assistant", model: "sonnet" });
+  const { agentType: _persona, ...withoutPersona } = row();
+  const { card } = await propose([
+    {
+      ...withoutPersona,
+      agent: "researcher",
+      provider: "openai-codex",
+      modelId: "gpt-5",
+    },
+  ]);
+  duringPiLookup = () =>
+    writeAgent({ name: "researcher", persona: "developer", model: "sonnet" });
+
+  const { card: done } = await resolveApproval(card.id, "approved");
+
+  expect(done.status).toBe("failed");
+  expect(bodyOf(done).items[0]?.error).toMatch(
+    /now runs as the developer persona, not the assistant this card was proposed for/,
+  );
+  expect(recorded.pi).toHaveLength(0);
+});
+
 test("a row without an agent needs agentType", async () => {
   const { agentType: _omitted, ...withoutPersona } = row();
   await expect(
@@ -2392,6 +2450,11 @@ test('operation "agents" lists definitions and stays available in Plan', async (
   await useAgents();
   writeAgent();
   writeAgent({ name: "stale", model: "gemini" });
+  writeAgent({
+    name: "fallback",
+    persona: "assistant",
+    models: ["gemini", "gpt-5"],
+  });
   sessionStore.upsert({
     id: SENDER,
     harness: "pi",
@@ -2405,6 +2468,10 @@ test('operation "agents" lists definitions and stays available in Plan', async (
   expect(text).toContain("developer on claude-sdk/sonnet, low effort, account");
   expect(text).toContain("needs a worktreeId");
   expect(text).toMatch(/- stale: CANNOT SPAWN — .*gemini/);
+  // A default that cannot run still leaves the listed models that can.
+  expect(text).toMatch(
+    /- fallback: Checks that new tests fail[^\n]*\n {2}its default model cannot run — [^\n]*"gemini"[^\n]*\n {2}runs on, named as modelId: gpt-5 \(openai-codex\/gpt-5, low effort\)/,
+  );
   await expect(
     spawnTool.execute(
       { operation: "agents", sessions: [agentRow()] } as never,

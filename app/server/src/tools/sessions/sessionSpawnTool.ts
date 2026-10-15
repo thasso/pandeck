@@ -24,6 +24,7 @@
  * What either path creates is an ordinary session the user can read, re-prompt
  * and take over — never a subagent, and nothing here reaches that registry.
  */
+import type { AgentModelChoice } from "../../agents/agentRuntime.ts";
 import {
   listSpawnableAgents,
   type SpawnableAgent,
@@ -247,17 +248,20 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
     return "No agent definitions exist. The user, or agent_create with their approval, can add one.";
   const shown = agents.slice(0, MAX_LISTED_ENTRIES);
   const lines = shown.map((agent) => {
-    if ("problem" in agent)
-      return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem, "spawning it refuses with the whole reason")}`;
+    if ("problem" in agent) {
+      // A default that cannot run leaves the other listed models usable.
+      const runnable = (agent.listed ?? []).filter((choice) => choice.runtime);
+      if (runnable.length === 0)
+        return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem, "spawning it refuses with the whole reason")}`;
+      return [
+        `- ${agent.name}: ${clip(agent.description ?? "", "agent_get reads it whole")}`,
+        `  its default model cannot run — ${clip(agent.problem, "spawning it refuses with the whole reason")}`,
+        `  runs on, named as modelId: ${runnable.map(listedText).join("; ")}`,
+      ].join("\n");
+    }
     const { runtime } = agent;
     // The other listed models, as a caller names them in modelId.
-    const others = runtime.listed
-      .slice(1)
-      .map((choice) =>
-        choice.runtime
-          ? `${choice.spec} (${choice.runtime.model.provider}/${choice.runtime.model.id}, ${choice.runtime.thinkingLevel} effort)`
-          : `${choice.spec} (cannot run: ${clip(choice.problem, "spawning on it refuses with the whole reason")})`,
-      );
+    const others = runtime.listed.slice(1).map(listedText);
     return [
       `- ${agent.name}: ${clip(agent.description, "agent_get reads it whole")}`,
       `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
@@ -280,6 +284,13 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
         ]
       : []),
   ].join("\n");
+}
+
+/** One listed model as a caller names it in modelId, or why it cannot run. */
+function listedText(choice: AgentModelChoice): string {
+  return choice.runtime
+    ? `${choice.spec} (${choice.runtime.model.provider}/${choice.runtime.model.id}, ${choice.runtime.thinkingLevel} effort)`
+    : `${choice.spec} (cannot run: ${clip(choice.problem, "spawning on it refuses with the whole reason")})`;
 }
 
 /** `text`, cut with a pointer to where the rest is. */

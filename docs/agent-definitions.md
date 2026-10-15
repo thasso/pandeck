@@ -245,7 +245,9 @@ before its card exists leaves none, so no grant can execute it later.
 - `operation: "agents"`, read-only and available in Plan: every definition with
   its description, persona, and the model, effort and account it would run on
   now. A definition that cannot be spawned is listed with the reason, so a
-  caller knows why one it was told about cannot be used. The answer is bounded
+  caller knows why one it was told about cannot be used. One whose default model
+  cannot run still lists the models that can, to name as `modelId`; the agents
+  topic carries them as `models` beside the `problem`. The answer is bounded
   like `agent_list` (200 rows, the true total stated), with descriptions and
   reasons cut at 300 characters; a definition left out can still be spawned by
   name. Spawning an invalid one is refused with at most three of its distinct
@@ -275,7 +277,11 @@ turns an unknown, invalid or unrunnable definition into a tool error with
 nothing created. The second runs immediately before the row's session is
 created, like a roster row's late resolution: a definition edited in between
 runs as edited, one that stopped resolving fails that row, and one whose persona
-changed fails it too, since the row was checked for the old persona.
+changed fails it too, since the row was checked for the old persona. A pi row
+looks its model up after that read, so the definition is read once more after
+the lookup and the row fails unless it is byte-for-byte the one resolved
+(`assertAgentUnchanged`). A card-approved row reads its role only after the
+lookup.
 
 ### What a spawn freezes
 

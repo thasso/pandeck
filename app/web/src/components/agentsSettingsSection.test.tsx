@@ -83,6 +83,7 @@ const LIST: EntryLibraryList = {
       path: "test-reviewer/AGENT.md",
     },
     { name: "stale", description: "Old.", path: "stale/AGENT.md" },
+    { name: "fallback", description: "Falls back.", path: "fallback/AGENT.md" },
   ],
   diagnostics: [],
   agentRuntimes: {
@@ -110,6 +111,18 @@ const LIST: EntryLibraryList = {
       ],
     },
     stale: { problem: 'No enabled account offers a model "gemini".' },
+    fallback: {
+      problem: 'Agent "fallback" cannot run on its default model "gemini".',
+      models: [
+        { spec: "gemini", problem: "No enabled account offers it." },
+        {
+          spec: "sol",
+          provider: "openai-codex",
+          modelId: "gpt-6.1-sol",
+          thinkingLevel: "high",
+        },
+      ],
+    },
   },
 };
 
@@ -139,6 +152,10 @@ it("shows what each definition runs on, or why it cannot start", () => {
   expect(text).toContain(
     'Cannot start: No enabled account offers a model "gemini".',
   );
+  expect(text).toContain(
+    'Default model cannot start: Agent "fallback" cannot run on its default model "gemini".',
+  );
+  expect(text).toContain("Can run on openai-codex/gpt-6.1-sol at high");
   expect(asked).toEqual([]);
 });
 

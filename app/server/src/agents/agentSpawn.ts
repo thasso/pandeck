@@ -34,8 +34,14 @@ import {
 } from "./agentRuntime.ts";
 import type { SessionAgent } from "./sessionAgent.ts";
 
-/** A definition that cannot be spawned right now; the reason is the message. */
-export class AgentSpawnRefusedError extends Error {}
+/**
+ * A definition that cannot be spawned right now; the reason is the message.
+ * `listed` is every model it lists, as each resolves now, when the definition
+ * itself could be read: a listing still shows the ones that can run.
+ */
+export class AgentSpawnRefusedError extends Error {
+  listed?: AgentModelChoice[];
+}
 
 /** Everything a spawn needs from one definition. */
 export interface AgentSpawnRuntime {
@@ -287,6 +293,20 @@ export async function resolveAgentSpawn(
   } = {},
 ): Promise<AgentSpawnRuntime> {
   const read = await readAgentDefinition(name, scanned);
+  try {
+    return await spawnRuntimeOf(read, name, options);
+  } catch (error) {
+    if (error instanceof AgentSpawnRefusedError) error.listed ??= read.listed;
+    throw error;
+  }
+}
+
+/** The chosen listed model of a read definition, on its account. */
+async function spawnRuntimeOf(
+  read: AgentDefinitionRead,
+  name: string,
+  options: Parameters<typeof resolveAgentSpawn>[2] & {},
+): Promise<AgentSpawnRuntime> {
   const { manifest, listed } = read;
   const { model, pinnedModel, thinkingLevel } = chosenModel(
     name,
@@ -346,10 +366,19 @@ export async function resolveAgentSpawn(
   };
 }
 
-/** One row of `session_spawn` operation "agents". */
+/**
+ * One row of `session_spawn` operation "agents". A definition whose default
+ * cannot run still carries every model it lists, so the ones that can run
+ * stay visible.
+ */
 export type SpawnableAgent =
   | { name: string; description: string; runtime: AgentSpawnRuntime }
-  | { name: string; description?: string; problem: string };
+  | {
+      name: string;
+      description?: string;
+      problem: string;
+      listed?: AgentModelChoice[];
+    };
 
 /**
  * Every definition and whether it can be spawned now: the valid ones with
@@ -374,6 +403,7 @@ export async function listSpawnableAgents(scanned?: {
         name: entry.name,
         description: entry.description,
         problem: error.message,
+        ...(error.listed ? { listed: error.listed } : {}),
       });
     }
   }

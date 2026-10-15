@@ -859,11 +859,9 @@ async function spawnOne(
   // disabled, deleted or re-pointed the approved row — so a runtime resolved
   // before those awaits is a claim about the past. A caller whose runtime comes
   // from live settings re-resolves here and the row runs on THAT, or not at
-  // all; nothing between this call and `deps.create*` yields to the event loop.
+  // all. The only await left before `deps.create*` is a pi model lookup, and an
+  // agent's definition is read again after it (below).
   let agent: SessionAgent | undefined;
-  // A card-approved row: the role read now, on the runtime the user approved.
-  if (!options.currentRuntime && item.agent !== undefined)
-    agent = await approvedAgentOf(item);
   if (options.currentRuntime) {
     const runtime = await options.currentRuntime();
     // The row was validated for the persona the definition had then; one
@@ -921,7 +919,13 @@ async function spawnOne(
         `${item.provider}/${item.modelId} is no longer available on this account.`,
       );
     spec = { harness: "pi", model, ...start };
+    // A definition deleted, re-pointed or edited during that lookup must not
+    // start as it was read before it.
+    if (agent) await assertAgentUnchanged(agent, item.title);
   }
+  // A card-approved row: the role read last, on the runtime the user approved.
+  if (!options.currentRuntime && item.agent !== undefined)
+    spec = { ...spec, agent: await approvedAgentOf(item) };
   // Pi model lookup is asynchronous, so make the enterprise check the final
   // account read before createSession claims the child row.
   if (
@@ -1015,6 +1019,29 @@ async function approvedAgentOf(
     effort: item.thinkingLevel,
     runtimeSource: "approval",
   };
+}
+
+/**
+ * Refuse a direct agent row whose definition changed since its runtime was
+ * resolved: the blob covers its persona, models, denied tools, skills and
+ * body, so an unchanged one still lists the model the row runs on.
+ */
+async function assertAgentUnchanged(
+  agent: SessionAgent,
+  title: string,
+): Promise<void> {
+  let role: AgentRole;
+  try {
+    ({ role } = await resolveAgentRole(agent.name));
+  } catch (err) {
+    if (err instanceof AgentSpawnRefusedError)
+      throw new Error(`"${title}": ${err.message} Nothing was created.`);
+    throw err;
+  }
+  if (role.blob !== agent.blob)
+    throw new Error(
+      `Agent definition "${agent.name}" changed while "${title}" was being started; nothing was created. Spawn it again to run the current definition.`,
+    );
 }
 
 /**
