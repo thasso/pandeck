@@ -349,11 +349,12 @@ tasks/projects and browser-side helpers.
   test run.
 - Text size is a browser-local preference (`usePrefs.ts` `textScale` ∈
   100/110/120/130, default 100, normalized via `normalizeTextScale`), persisted
-  in `localStorage["assistant.prefs"]`, applied as the root `data-text-scale`
-  attribute before first paint (bootstrap in `index.html`) and on change
-  (Settings → Appearance). It scales typography ONLY — not spacing, geometry, or
-  persisted pane widths — and has no cross-tab `storage` listener (other tabs
-  adopt it on reload).
+  in the persistent store under `assistant.prefs` with the theme and scale
+  mirrored to `localStorage["assistant.prefs.paint"]`, applied as the root
+  `data-text-scale` attribute before first paint (bootstrap in `index.html`) and
+  on change (Settings → Appearance). It scales typography ONLY — not spacing,
+  geometry, or persisted pane widths — and has no cross-tab `storage` listener
+  (other tabs adopt it on reload).
 - The sidebar's nav-bar order is a browser-local preference (`usePrefs.ts`
   `navSlots`, defaulting to `DEFAULT_NAV_SLOTS` and normalized on read by
   `normalizeNavSlots`: unknown ids drop, and a slot the user has never seen is

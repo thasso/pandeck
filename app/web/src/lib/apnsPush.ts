@@ -22,6 +22,7 @@ import type {
   ApnsDeviceInput,
 } from "@assistant/shared";
 import { createClientId } from "./clientId.ts";
+import { localStore } from "./localStore.ts";
 import { notificationsNeedNativeShell } from "./nativeShell.ts";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
 
@@ -70,10 +71,10 @@ export function shouldRaiseAppNotification(): boolean {
  */
 export function apnsInstallId(): string {
   try {
-    const existing = window.localStorage.getItem(INSTALL_ID_KEY);
+    const existing = localStore.getItem(INSTALL_ID_KEY);
     if (existing) return existing;
     const created = createClientId();
-    window.localStorage.setItem(INSTALL_ID_KEY, created);
+    localStore.setItem(INSTALL_ID_KEY, created);
     return created;
   } catch {
     return createClientId();

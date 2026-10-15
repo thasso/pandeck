@@ -19,6 +19,7 @@ import {
   type IdleWriter,
   type IdleWriterEnv,
 } from "./idleWriter.ts";
+import { persistentStore } from "./persistentStore.ts";
 
 /** How close to the end still counts as "at the bottom". */
 const NEAR_BOTTOM_PX = 80;
@@ -425,7 +426,7 @@ export function transcriptScrollMemory(): TranscriptScrollMemory {
   if (sharedMemory) return sharedMemory;
   let storage: TranscriptScrollStorage | null = null;
   try {
-    storage = typeof window === "undefined" ? null : window.localStorage;
+    storage = typeof window === "undefined" ? null : persistentStore();
   } catch {
     // Private-mode/blocked storage: the position then lives for this page only.
     storage = null;

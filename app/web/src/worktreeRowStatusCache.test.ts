@@ -3,6 +3,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { WorktreeGitStatus, WorktreeRecord } from "@assistant/shared";
 import { createInitialState } from "./hooks/useAssistant.ts";
 import { rowWorktreeStatus } from "./lib/worktreeRowStatuses.ts";
+import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 
 beforeEach(() => window.localStorage.clear());
 
@@ -40,22 +41,19 @@ const status: WorktreeGitStatus = {
 
 function writeCache(worktreeStatuses: unknown): void {
   const defaults = createInitialState();
-  window.localStorage.setItem(
-    "assistant.appShellCache.v1",
-    JSON.stringify({
-      version: 1,
-      savedAt: Date.now(),
-      models: [],
-      agents: [],
-      sessions: [],
-      settings: defaults.settings,
-      slashCommands: [],
-      taskList: null,
-      projectList: null,
-      worktrees: [worktree],
-      worktreeStatuses,
-    }),
-  );
+  writeAppShellCacheRecord({
+    version: 1,
+    savedAt: Date.now(),
+    models: [],
+    agents: [],
+    sessions: [],
+    settings: defaults.settings,
+    slashCommands: [],
+    taskList: null,
+    projectList: null,
+    worktrees: [worktree],
+    worktreeStatuses,
+  });
 }
 
 it("paints a cold worktree row from the last known status", () => {

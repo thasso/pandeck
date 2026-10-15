@@ -8,6 +8,7 @@ import {
   type AssistantActions,
   type UIState,
 } from "./hooks/useAssistant.ts";
+import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -80,24 +81,21 @@ beforeEach(() => {
   ScenarioSocket.instances = [];
   vi.stubGlobal("WebSocket", ScenarioSocket);
   window.localStorage.clear();
-  window.localStorage.setItem(
-    "assistant.appShellCache.v1",
-    JSON.stringify({
-      version: 1,
-      savedAt: Date.now(),
-      models: [],
-      agents: [],
-      sessions: [],
-      settings: {},
-      slashCommands: [],
-      projectList: {
-        request: { includeArchived: true },
-        projects: [{ id: "a", name: "Alpha", key: "AA" }],
-        updatedAt: 1,
-      },
-      projectRevisions: { a: 1 },
-    }),
-  );
+  writeAppShellCacheRecord({
+    version: 1,
+    savedAt: Date.now(),
+    models: [],
+    agents: [],
+    sessions: [],
+    settings: {},
+    slashCommands: [],
+    projectList: {
+      request: { includeArchived: true },
+      projects: [{ id: "a", name: "Alpha", key: "AA" }],
+      updatedAt: 1,
+    },
+    projectRevisions: { a: 1 },
+  });
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

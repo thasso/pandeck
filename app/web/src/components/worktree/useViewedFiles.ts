@@ -6,12 +6,13 @@
  *
  * The marks live in a MODULE store rather than in each hook's state: one
  * worktree can be read by two mounted surfaces at once (its route page and the
- * right panel's Worktree tab), they share the one localStorage key, and
- * `storage` does not fire in the document that wrote it. Per-instance state
+ * right panel's Worktree tab), they share the one stored key, and a
+ * store write does not notify the document that made it. Per-instance state
  * would let the two disagree, and the stale one's next toggle would write its
  * whole set back over the other's marks.
  */
 import { useCallback, useSyncExternalStore } from "react";
+import { persistentStore } from "../../lib/persistentStore.ts";
 
 const KEY_PREFIX = "assistant.worktreeViewed";
 
@@ -21,7 +22,7 @@ function storageKey(worktreeId: string, scopeKey: string): string {
 
 function load(key: string): ReadonlySet<string> {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = persistentStore().getItem(key);
     if (!raw) return new Set();
     const parsed: unknown = JSON.parse(raw);
     return new Set(
@@ -66,7 +67,7 @@ function toggle(key: string, path: string): void {
   else next.add(path);
   sets.set(key, next);
   try {
-    localStorage.setItem(key, JSON.stringify([...next]));
+    persistentStore().setItem(key, JSON.stringify([...next]));
   } catch {
     // Quota/serialization failures degrade to session-only tracking.
   }

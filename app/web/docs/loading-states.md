@@ -353,11 +353,12 @@ decisions.
 **Two caches, two jobs, and neither is a source of truth.** The server's
 snapshot is.
 
-- `lib/sessionPreviewStore.ts` (localStorage, 8 sessions × the last 60 sanitized
-  `DisplayMessage`s plus the session shell and `contextInfo`) exists to be
-  SYNCHRONOUS. It is read once, for the boot route, because that is the only
-  read that can beat the first paint — and it is a projection of what the stage
-  draws, not of the wire.
+- `lib/sessionPreviewStore.ts` (`persistentStore`, 8 sessions × the last 60
+  sanitized `DisplayMessage`s plus the session shell and `contextInfo`) exists
+  to be SYNCHRONOUS. It is read once, for the boot route, because that is the
+  only read that can beat the first paint — and it is a projection of what the
+  stage draws, not of the wire. Each session is its own entry, and an unchanged
+  transcript is not rewritten (§ Browser storage).
 - `lib/sessionTimelineCache.ts` (IndexedDB, 8 sessions × the full append-only
   `ClientTimelineEntry` prefix) exists to make the ANSWER small: its descriptor
   travels on the connection URL and on every `loadSession`, and the server
@@ -376,6 +377,40 @@ read starts during the first render (so it runs alongside hydration instead of
 after it) and a tap on a session row warms the read for the session it opens, so
 the `loadSession` that follows the navigation finds it in memory. Both go
 through one in-flight map, so a warm and a load read once.
+
+## Browser storage
+
+Everything the app keeps in the browser and reads while drawing — the shell
+cache, the boot transcript, drafts, remembered scroll positions, tree state,
+prefs — lives in `lib/persistentStore.ts`: IndexedDB underneath, read once into
+memory by `main.tsx` before the first render, so every read during render is
+synchronous. Writes land in memory at once, reach IndexedDB after a 250 ms
+coalescing delay (immediately while the page is hidden), and reach other windows
+over a `BroadcastChannel`. The pre-render read is bounded at 300 ms; a slower
+database renders as a fresh profile would, and its entries merge in when the
+read lands (a key this page already wrote keeps its newer value).
+
+**Why not `localStorage`.** WebKit (macOS/iOS 26, so the Tauri shell and Safari)
+keeps `localStorage` in SQLite in WAL mode, and since mid-2025
+`SQLiteStorageArea` leaves its cached read statement un-reset after reading a
+value over 1 KB. Overwriting or removing such a value reads it first, so the
+first such write pins a read transaction: no checkpoint completes, and the WAL
+grows by every byte written until the networking process exits — which on quit
+is an exit without `sqlite3_close`, so the file survives until the next launch
+opens the database. With the shell cache and session previews rewriting ~4 MB at
+a time it reached 41 GB in a week. IndexedDB resets its statements and truncates
+its WAL.
+
+What stays in `localStorage` goes through `lib/localStore.ts` and stays under
+512 chars: the pre-paint slice of prefs (`assistant.prefs.paint`, read by
+`index.html` before any module runs), section open/closed flags, the build id,
+and the push install id. `lib/pendingCommentStore.ts` is the one exception — it
+relies on the cross-tab `storage` event — and its records are written once per
+comment. `src/localStorageAudit.test.ts` enforces the gateway.
+
+Write only what moved: one entry per entity (a session's preview, a slice of the
+shell cache — `lib/appShellCacheStore.ts`), never a whole collection rewritten
+to change one item, and no write when the serialized value is unchanged.
 
 ## Staleness beyond loading
 

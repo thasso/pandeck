@@ -50,7 +50,7 @@
       // supported values (100/110/120/130); anything else falls back to 100.
       try {
         const prefs = JSON.parse(
-          localStorage.getItem("assistant.prefs") || "{}",
+          localStorage.getItem("assistant.prefs.paint") || "{}",
         );
         document.documentElement.classList.toggle(
           "dark",

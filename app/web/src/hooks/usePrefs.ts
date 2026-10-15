@@ -12,6 +12,8 @@ import {
   type BacklogView,
   type BacklogViewMode,
 } from "../lib/backlogTreeModel.ts";
+import { localStore } from "../lib/localStore.ts";
+import { persistentStore } from "../lib/persistentStore.ts";
 import {
   DEFAULT_NAV_SLOTS,
   normalizeNavSlots,
@@ -180,6 +182,13 @@ const OPTIONAL_PREF_KEYS = {
 } satisfies Record<OptionalPrefKey, true>;
 
 const KEY = "assistant.prefs";
+/**
+ * The slice `index.html` applies before any module runs, so neither the theme
+ * nor the text scale flashes. It stays in `localStorage` (the only storage a
+ * synchronous inline script can read) and stays tiny; everything else lives in
+ * `persistentStore` under `KEY`.
+ */
+const PAINT_KEY = "assistant.prefs.paint";
 
 const defaults: Prefs = {
   theme: "dark",
@@ -237,7 +246,7 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
  */
 export function loadPrefs(): Prefs {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = persistentStore().getItem(KEY);
     if (!raw) return defaults;
     return normalizeStoredPrefs(JSON.parse(raw) as Partial<Prefs>);
   } catch {
@@ -256,7 +265,17 @@ export function usePrefs() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
 
   useEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(prefs));
+    try {
+      persistentStore().setItem(KEY, JSON.stringify(prefs));
+      const paint = JSON.stringify({
+        theme: prefs.theme,
+        textScale: prefs.textScale,
+      });
+      if (localStore.getItem(PAINT_KEY) !== paint)
+        localStore.setItem(PAINT_KEY, paint);
+    } catch {
+      // Best-effort; the prefs still apply to this page.
+    }
     const root = document.documentElement;
     root.classList.toggle("dark", prefs.theme === "dark");
     applyTextScale(prefs.textScale);

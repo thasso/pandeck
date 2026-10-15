@@ -7,7 +7,7 @@
  * the Settings editor can show you what the recognizer really wrote instead of
  * asking you to remember it.
  *
- * Deliberately `localStorage` and nothing more: the server persists no
+ * Deliberately browser-local (`persistentStore`) and nothing more: the server persists no
  * transcripts, and this must not quietly change that. The text is already in
  * your draft on the same device, entries are length- and count-capped, and the
  * editor offers a Clear action. Per-device by design — merging phone and laptop
@@ -18,6 +18,9 @@
  * a DOM (this package's tests run DOM-free); the storage wrapper around them is
  * deliberately trivial.
  */
+
+import type { KeyValueStorage } from "./localStore.ts";
+import { persistentStore } from "./persistentStore.ts";
 
 const STORAGE_KEY = "assistant.dictation.recent";
 /** Enough to spot a pattern; short enough to scan. */
@@ -80,9 +83,9 @@ export function transcriptAge(at: number, now: number = Date.now()): string {
 
 /* ------------------------------ browser storage ----------------------------- */
 
-function storage(): Storage | undefined {
+function storage(): KeyValueStorage | undefined {
   try {
-    return typeof window === "undefined" ? undefined : window.localStorage;
+    return typeof window === "undefined" ? undefined : persistentStore();
   } catch {
     // Blocked storage (private mode, embedded contexts) is not an error here.
     return undefined;

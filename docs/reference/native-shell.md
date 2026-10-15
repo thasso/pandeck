@@ -84,8 +84,8 @@ also why `speechCapture.ts` skips its stream-parking here
   `File → New Window`, paid a spinner, an HTTP round trip and a second full
   document load before the app could begin. Worse, a failed probe refused to
   navigate at all, which denied the app the one situation its service worker and
-  `localStorage` shell cache exist for. Nothing on the web side got faster here:
-  `createInitialState` already hydrates from `assistant.appShellCache.v1`
+  browser-local shell cache exist for. Nothing on the web side got faster here:
+  `createInitialState` already hydrates from the browser-local shell cache
   synchronously, and the hop in front of it was the whole cost.
 - `WebviewUrl::External` is what makes the direct load possible, and the ACL
   follows the URL rather than the label: `capabilities/remote.json` is a runtime
@@ -160,12 +160,14 @@ also why `speechCapture.ts` skips its stream-parking here
     since the shell and the hosted app ship independently. Anything the shell
     depends on for a window's fate has to come from the shell's own script.
   - Timing: `SHOW_GRACE` (350ms after DOM-ready) is the gap in which a current
-    build's `window_ready` wins the race — it hydrates from `localStorage`
-    synchronously, so it arrives within tens of ms — and is all an older build
-    costs the user. `SHOW_DEADLINE` (1.2s) is the absolute backstop for a page
-    that never reaches DOM-ready at all. `RECOVER_DEADLINE` (6s) is deliberately
-    longer than the 5s `probe_server` timeout the bootstrap page allows, so
-    nothing which used to load in time is now pulled out from under itself.
+    build's `window_ready` wins the race — it hydrates synchronously from the
+    persistent store, whose IndexedDB read `main.tsx` awaits for at most 300ms
+    before the first render, so it normally arrives well inside the grace — and
+    is all an older build costs the user. `SHOW_DEADLINE` (1.2s) is the absolute
+    backstop for a page that never reaches DOM-ready at all. `RECOVER_DEADLINE`
+    (6s) is deliberately longer than the 5s `probe_server` timeout the bootstrap
+    page allows, so nothing which used to load in time is now pulled out from
+    under itself.
   - Recovery is a NAVIGATION to `tauri://localhost` rather than a new window, so
     it lands where the user was already looking. The constant is spelled out
     because Tauri's own resolution of `WebviewUrl::App` is not reachable once a

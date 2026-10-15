@@ -44,6 +44,7 @@ import {
 import { Progress, ProgressLabel } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
+import { persistentStore } from "../lib/persistentStore.ts";
 
 const QUESTION_DRAFT_STORAGE_PREFIX = "assistant.agentQuestionDraft.";
 const QUESTION_DRAFT_STORAGE_VERSION = 1;
@@ -275,7 +276,7 @@ function readStoredQuestionPanelState(
   request: AgentQuestionRequest,
 ): Pick<StoredQuestionPanelState, "index" | "drafts"> | null {
   try {
-    const raw = window.localStorage.getItem(questionDraftStorageKey(request));
+    const raw = persistentStore().getItem(questionDraftStorageKey(request));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredQuestionPanelState>;
     if (
@@ -304,7 +305,7 @@ function writeStoredQuestionPanelState(
       drafts: sanitizeStoredDrafts(request.questions, state.drafts),
       updatedAt: Date.now(),
     };
-    window.localStorage.setItem(
+    persistentStore().setItem(
       questionDraftStorageKey(request),
       JSON.stringify(payload),
     );
@@ -315,7 +316,7 @@ function writeStoredQuestionPanelState(
 
 function clearStoredQuestionPanelState(request: AgentQuestionRequest): void {
   try {
-    window.localStorage.removeItem(questionDraftStorageKey(request));
+    persistentStore().removeItem(questionDraftStorageKey(request));
   } catch {
     // Best-effort browser-local convenience only.
   }

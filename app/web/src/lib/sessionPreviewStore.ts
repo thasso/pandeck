@@ -5,20 +5,22 @@ import type {
   SessionState,
 } from "@assistant/shared";
 import { displayEntryId } from "@assistant/shared/cardPlacement";
+import { persistentStore } from "./persistentStore.ts";
 import { isTransientMessageId } from "./sessionPreview.ts";
 import { sessionIdFromPathname } from "./sessionRoutes.ts";
 
 /**
  * The chat surface's BOOT cache: the last transcript this browser had on screen
- * for a session, in `localStorage`, so a reload or a deep link onto that
+ * for a session, in `persistentStore`, so a reload or a deep link onto that
  * session's URL paints it in the first frame instead of a spinner.
  *
  * It is one of the two client transcript caches and the SMALLER one — the other
  * is `lib/sessionTimelineCache.ts` (IndexedDB), which holds the append-only
  * `ClientTimelineEntry` prefix the server's tail-only delta is computed
  * against. Their roles are documented in `app/web/docs/loading-states.md`; the
- * short version is that this one exists because it is SYNCHRONOUS (an
- * IndexedDB read cannot answer before the first paint) and because it carries
+ * short version is that this one is read SYNCHRONOUSLY (the persistent store
+ * is loaded before the first render; a per-session IndexedDB read is not) and
+ * because it carries
  * the projected `DisplayMessage`s plus the session shell the stage needs to
  * draw, which the timeline prefix alone does not.
  *
@@ -26,7 +28,13 @@ import { sessionIdFromPathname } from "./sessionRoutes.ts";
  * `previewForSessionRoute` is the one place that rule lives.
  */
 
-const SESSION_PREVIEW_KEY = "assistant.sessionPreview.v1";
+/**
+ * One `persistentStore` entry per session plus a small index, so a save
+ * rewrites only the session that changed — a single entry for all eight made
+ * every save a ~3 MB rewrite.
+ */
+const SESSION_PREVIEW_PREFIX = "assistant.sessionPreview.v2.";
+const SESSION_PREVIEW_INDEX_KEY = "assistant.sessionPreview.v2";
 const SESSION_PREVIEW_LIMIT = 8;
 
 export interface SessionPreview {
@@ -37,10 +45,11 @@ export interface SessionPreview {
   savedAt: number;
 }
 
-interface SessionPreviewStore {
-  version: 1;
-  previews: Record<string, SessionPreview>;
-}
+/** `savedAt` per stored session: the eviction order, kept out of the records. */
+type SessionPreviewIndex = Record<string, number>;
+
+/** The stored record: everything but `savedAt`, so an unchanged one compares equal. */
+type StoredSessionPreview = Omit<SessionPreview, "savedAt">;
 
 /**
  * The boot route's identity, SPENT by the first navigation away from it.
@@ -119,30 +128,23 @@ function sanitizeMessages(messages: DisplayMessage[]): DisplayMessage[] {
     }));
 }
 
-function parseSessionPreviewStore(raw: string | null): SessionPreviewStore {
-  if (!raw) return { version: 1, previews: {} };
-  const parsed = JSON.parse(raw) as
-    Partial<SessionPreviewStore> | SessionPreview | null;
-  if (!parsed || typeof parsed !== "object")
-    return { version: 1, previews: {} };
-  if (
-    "previews" in parsed &&
-    parsed.previews &&
-    typeof parsed.previews === "object"
-  ) {
-    return {
-      version: 1,
-      previews: parsed.previews as Record<string, SessionPreview>,
-    };
-  }
-  return { version: 1, previews: {} };
-}
+const store = persistentStore;
 
-function loadSessionPreviewStore(): SessionPreviewStore {
+const previewKey = (sessionId: string) =>
+  `${SESSION_PREVIEW_PREFIX}${sessionId}`;
+
+function loadSessionPreviewIndex(): SessionPreviewIndex {
   try {
-    return parseSessionPreviewStore(localStorage.getItem(SESSION_PREVIEW_KEY));
+    const raw = store().getItem(SESSION_PREVIEW_INDEX_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    if (!parsed || typeof parsed !== "object") return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, number] => typeof entry[1] === "number",
+      ),
+    );
   } catch {
-    return { version: 1, previews: {} };
+    return {};
   }
 }
 
@@ -153,28 +155,61 @@ export function loadBootSessionPreview(
   if (typeof window === "undefined") return null;
   const id = sessionIdFromPathname(pathname);
   if (!id) return null;
-  return loadSessionPreviewStore().previews[id] ?? null;
+  try {
+    const raw = store().getItem(previewKey(id));
+    if (!raw) return null;
+    const stored = JSON.parse(raw) as StoredSessionPreview | null;
+    if (!stored || typeof stored !== "object" || stored.sessionId !== id)
+      return null;
+    return { ...stored, savedAt: loadSessionPreviewIndex()[id] ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
+let staleKeysSwept = false;
+
+/**
+ * Once per app run: drop any record the index does not list (a save
+ * interrupted between the record and the index).
+ */
+function sweepStaleKeys(index: SessionPreviewIndex): void {
+  if (staleKeysSwept) return;
+  staleKeysSwept = true;
+  for (const key of store().keys())
+    if (
+      key.startsWith(SESSION_PREVIEW_PREFIX) &&
+      !(key.slice(SESSION_PREVIEW_PREFIX.length) in index)
+    )
+      store().removeItem(key);
 }
 
 export function saveSessionPreview(preview: SessionPreview): void {
   try {
-    const store = loadSessionPreviewStore();
-    const sanitized: SessionPreview = {
-      ...preview,
+    const { savedAt, ...rest } = preview;
+    const stored: StoredSessionPreview = {
+      ...rest,
       messages: sanitizeMessages(preview.messages),
     };
-    const previews = { ...store.previews, [preview.sessionId]: sanitized };
-    const trimmed = Object.fromEntries(
-      Object.entries(previews)
-        .sort((a, b) => b[1].savedAt - a[1].savedAt)
-        .slice(0, SESSION_PREVIEW_LIMIT),
-    );
-    localStorage.setItem(
-      SESSION_PREVIEW_KEY,
-      JSON.stringify({
-        version: 1,
-        previews: trimmed,
-      } satisfies SessionPreviewStore),
+    const serialized = JSON.stringify(stored);
+    const key = previewKey(preview.sessionId);
+    const index = loadSessionPreviewIndex();
+    sweepStaleKeys(index);
+    // An unchanged transcript (a session-shell rerender, a reconnect) costs no
+    // write at all, not even a fresher `savedAt`.
+    if (store().getItem(key) === serialized) return;
+    store().setItem(key, serialized);
+    const ranked = Object.entries({
+      ...index,
+      [preview.sessionId]: savedAt,
+    }).sort((a, b) => b[1] - a[1]);
+    for (const [evicted] of ranked.slice(SESSION_PREVIEW_LIMIT))
+      store().removeItem(previewKey(evicted));
+    store().setItem(
+      SESSION_PREVIEW_INDEX_KEY,
+      JSON.stringify(
+        Object.fromEntries(ranked.slice(0, SESSION_PREVIEW_LIMIT)),
+      ),
     );
   } catch {
     // Best-effort cache only; quota/private-mode failures should not affect chat.

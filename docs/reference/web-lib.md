@@ -836,16 +836,31 @@ capability logic.
   transcript cannot become durable and re-poison every reopen. Only a SPLICE is
   refused: a window is the server's authoritative answer and rendering it is the
   end of the round trip, which is what bounds the repair to one retry.
-- `sessionPreviewStore.ts` owns the OTHER transcript cache: the localStorage
-  copy of the last painted `DisplayMessage`s (plus session shell and
-  `contextInfo`) for the eight most recent sessions. It exists because it is
-  synchronous — an IndexedDB read cannot beat the first paint — and it is read
-  for the BOOT route only: `spendBootRouteIdentity` (a one-way latch burned by
-  the first navigation away from that route) and `previewForSessionRoute` are
-  together where "a cached transcript may only be painted where nothing else
-  could be on screen" lives, so an in-app switch — including a return to the
-  session the app booted on — has no cached paint to hide behind
-  (`app/web/docs/loading-states.md` § The chat stage).
+- `sessionPreviewStore.ts` owns the OTHER transcript cache: the
+  `persistentStore` copy of the last painted `DisplayMessage`s (plus session
+  shell and `contextInfo`) for the eight most recent sessions. It exists because
+  it is read synchronously — the store is loaded before the first render, a
+  per-session IndexedDB read is not — and it is read for the BOOT route only:
+  `spendBootRouteIdentity` (a one-way latch burned by the first navigation away
+  from that route) and `previewForSessionRoute` are together where "a cached
+  transcript may only be painted where nothing else could be on screen" lives,
+  so an in-app switch — including a return to the session the app booted on —
+  has no cached paint to hide behind (`app/web/docs/loading-states.md` § The
+  chat stage). Each session is its own entry under a small `savedAt` index, and
+  an unchanged transcript is not rewritten.
+- `appShellCacheStore.ts` owns the app shell cache's storage layout: one
+  `persistentStore` entry per slice (`meta` last, as the commit marker), each
+  rewritten only when its serialization changed. `hooks/useAssistant.ts` owns
+  the record's shape.
+- `persistentStore.ts` owns browser-local state: IndexedDB with `localStorage`'s
+  synchronous shape, loaded into memory before the first render (`main.tsx`,
+  bounded at 300 ms), written behind on a coalescing delay, mirrored to other
+  windows over a `BroadcastChannel`, and migrating the keys it took over from
+  `localStorage` on first load. `createPersistentStore` takes the backend,
+  legacy storage, channel and timer as inputs so its rules are tested without
+  IndexedDB; without IndexedDB it passes through to `localStorage`.
+- `localStore.ts` is the one door to `localStorage`, for values under 512 chars
+  that must stay there (`app/web/docs/loading-states.md` § Browser storage).
 - `newSessionRuntime.ts` owns new-session model/harness defaults and the
   invariant that first-prompt runtime settings match the optimistic session
   shown in the composer. The harness travels with the model: both the defaults
@@ -1113,14 +1128,14 @@ capability logic.
 - `recentTranscripts.ts` owns a browser-local, count- and length-capped history
   of delivered transcripts, so Settings → Dictation can show what the recognizer
   ACTUALLY wrote — the phrase a vocabulary rule must match is otherwise gone the
-  moment you fix the word in your draft. It is `localStorage` and nothing more,
-  deliberately: the server persists no transcripts and this must not quietly
-  change that, so it is per-device (merging phone and laptop would mean durable
-  server-side storage of dictated text) and the editor offers a Clear action.
-  The list transforms (`parseStoredTranscripts`, `appendTranscript`,
-  `transcriptAge`) are exported as pure functions because this package's tests
-  run DOM-free; keep the storage wrapper around them trivial rather than adding
-  a jsdom environment.
+  moment you fix the word in your draft. It is browser-local (`persistentStore`)
+  and nothing more, deliberately: the server persists no transcripts and this
+  must not quietly change that, so it is per-device (merging phone and laptop
+  would mean durable server-side storage of dictated text) and the editor offers
+  a Clear action. The list transforms (`parseStoredTranscripts`,
+  `appendTranscript`, `transcriptAge`) are exported as pure functions because
+  this package's tests run DOM-free; keep the storage wrapper around them
+  trivial rather than adding a jsdom environment.
 - `waveform.ts` owns the dictation display envelope: `framePeaks` (peak
   magnitude per bucket of one PCM frame) and `PeakRing` (fixed-capacity ring,
   oldest-first, with a `version` counter so a canvas can skip redundant

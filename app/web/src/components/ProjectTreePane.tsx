@@ -29,6 +29,7 @@ import {
   loadExpandedWorktreeIds,
   persistExpandedWorktreeIds,
 } from "./worktreeRowParts.tsx";
+import { persistentStore } from "../lib/persistentStore.ts";
 
 const INDENT_WIDTH = 12;
 const COLLAPSE_STORAGE_KEY = "assistant.sidebarProjects.collapsed.v1";
@@ -773,7 +774,7 @@ function useCoarseNow(intervalMs: number, active: boolean): number {
 
 function loadCollapsedIds(): Set<string> {
   try {
-    const raw = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
+    const raw = persistentStore().getItem(COLLAPSE_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(
       Array.isArray(parsed)
@@ -787,7 +788,7 @@ function loadCollapsedIds(): Set<string> {
 
 function persistCollapsedIds(ids: Set<string>): void {
   try {
-    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify([...ids]));
+    persistentStore().setItem(COLLAPSE_STORAGE_KEY, JSON.stringify([...ids]));
   } catch {
     // Best-effort only.
   }

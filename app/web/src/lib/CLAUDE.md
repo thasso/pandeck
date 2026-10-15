@@ -12,8 +12,10 @@
   `apnsPush.shouldRaiseAppNotification` is the only answer: two buzz twice, none
   is silence (`docs/notifications.md`).
 - Dictated audio and transcripts stay client-side: `recentTranscripts.ts` is
-  `localStorage` and per-device, and the server persists no transcripts. Moving
+  browser-local and per-device, and the server persists no transcripts. Moving
   either server-side changes where dictated text lives.
+- Browser state goes in `persistentStore.ts`, not `localStorage`
+  (`localStorageAudit`).
 - `pcm16Worklet.js` runs on the audio thread and must stay allocation-light: it
   frames ~200 ms per message and decimates to 16 kHz only by an exact integer
   factor, passing other rates through for the server to resample. Never resample
