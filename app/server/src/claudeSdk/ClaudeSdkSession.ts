@@ -174,6 +174,11 @@ import { assertSessionAccountSwitch } from "../sessionAccount.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
 import {
+  findOriginTask,
+  listRelatedGlobalTasks,
+  listSessionTasks,
+} from "../tasks.ts";
+import {
   approvalsForSession,
   hasPendingApproval,
   subscribePendingApprovalChanges,
@@ -1032,6 +1037,7 @@ export class ClaudeSdkSession implements LiveSession {
     const activeSkillsValue = activeSkillsForSession(this.id, this.agentType);
     const agentValue = sessionAgentSummary(this.id);
     const worktreeIdValue = this.safeWorktreeId();
+    const originTaskValue = this.safeOriginTask();
     const requiresEnterprise = sessionStore.getIncludingDeleted(
       this.id,
     )?.requiresEnterprise;
@@ -1053,6 +1059,9 @@ export class ClaudeSdkSession implements LiveSession {
         ? { pendingQuestion: pendingQuestionValue }
         : {}),
       answeredQuestions: getAnsweredAgentQuestions(this.sessionId),
+      tasks: this.safeSessionTasks(),
+      relatedGlobalTasks: this.safeRelatedGlobalTasks(),
+      ...(originTaskValue !== undefined ? { originTask: originTaskValue } : {}),
       toolExposure: this.toolExposure(),
       ...(activeSkillsValue !== undefined
         ? {
@@ -1086,6 +1095,33 @@ export class ClaudeSdkSession implements LiveSession {
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
     };
+  }
+
+  private safeSessionTasks(): ReturnType<typeof listSessionTasks> {
+    try {
+      return listSessionTasks(this.agentType, this.id);
+    } catch (error) {
+      console.warn("Failed to read Session Tasks:", error);
+      return [];
+    }
+  }
+
+  private safeRelatedGlobalTasks(): ReturnType<typeof listRelatedGlobalTasks> {
+    try {
+      return listRelatedGlobalTasks(this.agentType, this.id);
+    } catch (error) {
+      console.warn("Failed to read related Tasks:", error);
+      return [];
+    }
+  }
+
+  private safeOriginTask(): ReturnType<typeof findOriginTask> {
+    try {
+      return findOriginTask(this.id);
+    } catch (error) {
+      console.warn("Failed to read origin Task:", error);
+      return undefined;
+    }
   }
 
   private safeWorktreeId(): string | undefined {
