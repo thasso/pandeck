@@ -27,6 +27,7 @@ import {
   spawnClusterForest,
   spawnClusterMembers,
   spawnClusterSettleBlockedReason,
+  type ServerExitCause,
   type SessionListItem,
   type SessionOutcomeKind,
   type WorkflowRunCard,
@@ -42,6 +43,8 @@ import {
   subscribeSessionRunStarted,
 } from "./session/runtime/liveSession.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { errorText } from "./errors.ts";
+import type { InterruptedTurnEvidence } from "./interruptedTurnEvidence.ts";
 import { sessionRunOutcomeDisposition } from "./sessionOutcomePolicy.ts";
 import {
   listRuns,
@@ -457,15 +460,40 @@ export async function settleCompletedWorkflowRunSessionsOnBoot(): Promise<void> 
  * since", the same conjunction the list projects. The interrupted run itself
  * raises no attention: it produced no outcome, and inventing one would announce
  * a result that never happened.
+ *
+ * Each mark also says what the user should DO: `cause` is the previous
+ * process's own last words (`serverExitRecord.ts`), and `turnEvidence` asks the
+ * session's harness whether the cut turn's prompt is in the agent's history —
+ * kept, "continue" resumes it; lost, it must be sent again.
  */
-export function markInterruptedRunsOnBoot(): number {
+export function markInterruptedRunsOnBoot({
+  cause,
+  turnEvidence,
+}: {
+  cause?: ServerExitCause | undefined;
+  turnEvidence?: (
+    sessionId: string,
+    since: number,
+  ) => InterruptedTurnEvidence | undefined;
+} = {}): number {
   let marked = 0;
   for (const meta of sessionStore.list()) {
     if (meta.archivedAt !== undefined || sessionStore.isSettled(meta.id))
       continue;
     const at = sessionRuntime.interruptedRunAt(meta.id);
     if (at === undefined) continue;
-    sessionStore.recordInterruptedRun(meta.id, at);
+    let evidence: InterruptedTurnEvidence | undefined;
+    try {
+      evidence = turnEvidence?.(meta.id, at);
+    } catch (error) {
+      console.warn(
+        `[assistant] could not read the interrupted turn of ${meta.id}: ${errorText(error)}`,
+      );
+    }
+    sessionStore.recordInterruptedRun(meta.id, at, {
+      ...(cause ? { cause } : {}),
+      ...evidence,
+    });
     marked += 1;
   }
   return marked;

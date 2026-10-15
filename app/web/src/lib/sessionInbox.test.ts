@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type {
+  SessionInterruptedRun,
   SessionListItem,
   WorkflowRunAttention,
   WorkflowRunCard,
@@ -40,6 +41,7 @@ import {
   sessionRelationsKey,
   sessionStatusBadge,
   sessionStatusDetail,
+  interruptedRunTitle,
   sessionStatusText,
   SETTLED_PAGE_SIZE,
   tierForStatus,
@@ -897,6 +899,50 @@ describe("interrupted turns", () => {
     });
     expect(sessionStatusDetail(s, status)).toBe(
       "Cut off by a restart — send a prompt to continue",
+    );
+  });
+
+  it("says whether the prompt survived, which is what decides the next step", () => {
+    const crash = {
+      kind: "crash" as const,
+      detail: "Uncaught exception: WebSocket connection failed",
+    };
+    const detail = (run: Partial<SessionInterruptedRun>) =>
+      sessionStatusDetail(
+        interrupted({ interruptedRun: { at: NOW - 60_000, ...run } }),
+        "interrupted",
+      );
+    expect(detail({ cause: crash, promptKept: true, modelSteps: 2 })).toBe(
+      'Server crashed after 2 agent steps — your message was kept; say "continue"',
+    );
+    expect(detail({ cause: crash, promptKept: true, modelSteps: 0 })).toBe(
+      'Server crashed before the agent replied — your message was kept; say "continue"',
+    );
+    expect(
+      detail({
+        cause: { kind: "restart", detail: "Stopped by SIGTERM" },
+        promptKept: false,
+      }),
+    ).toBe(
+      "Server restarted before your message reached the agent — send it again",
+    );
+    expect(detail({ promptKept: true, modelSteps: 1 })).toBe(
+      'Server stopped after 1 agent step — your message was kept; say "continue"',
+    );
+    expect(detail({ cause: crash })).toBe(
+      "Server crashed mid-turn — check the conversation before continuing",
+    );
+  });
+
+  it("puts the process's own reason in the tooltip, not on the line", () => {
+    expect(
+      interruptedRunTitle({
+        at: NOW,
+        cause: { kind: "crash", detail: "Uncaught exception: boom" },
+        promptKept: false,
+      }),
+    ).toBe(
+      "Server crashed before your message reached the agent — send it again\nUncaught exception: boom",
     );
   });
 

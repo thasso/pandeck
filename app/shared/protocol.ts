@@ -1608,6 +1608,29 @@ export interface SessionRunFailure {
   message: string;
 }
 
+/** Why the server process that cut a turn off ended, in its own last words. */
+export interface ServerExitCause {
+  /** `crash`: an uncaught error. `restart`: a stop/deploy that did not wait the turn out. */
+  kind: "crash" | "restart";
+  /** Bounded, human-readable reason; never a stack trace. */
+  detail: string;
+}
+
+/** A turn the server process died inside, and what boot learned about it. */
+export interface SessionInterruptedRun {
+  at: number;
+  /** Absent when the process left no word: killed outright (OOM, SIGKILL, power loss). */
+  cause?: ServerExitCause;
+  /**
+   * Whether the cut turn's prompt is in the agent's own history: true means a
+   * plain "continue" resumes it, false means it must be sent again. Absent when
+   * the history could not be read.
+   */
+  promptKept?: boolean;
+  /** Model responses the agent's history holds after that prompt. */
+  modelSteps?: number;
+}
+
 /** What raised a session's attention revision: a run that ENDED, either way. */
 export type SessionOutcomeKind = "completed" | "failed";
 
@@ -1756,7 +1779,7 @@ export interface SessionListItem {
    * session is streaming — an unfinished turn that is still running is just a
    * running turn.
    */
-  interruptedRun?: { at: number };
+  interruptedRun?: SessionInterruptedRun;
   /**
    * True while peer-prompt work is on its way into this session — queued
    * behind its next turn, mid-delivery, or waiting out a retry backoff.

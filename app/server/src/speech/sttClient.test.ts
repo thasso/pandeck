@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import {
   connectSttWhenReady,
   encodeSttFrames,
@@ -170,4 +170,21 @@ test("stops waiting as soon as the recognizer process is gone", async () => {
     () => connectSttWhenReady("ws://127.0.0.1:1", 60_000, () => false),
     /exited before it was ready/,
   );
+});
+
+test("a refused connect that errors twice rejects instead of crashing", async () => {
+  // Bun's `ws` emits "error" twice for one refused connection (Node's emits it
+  // once). The second must still find a listener: an unheard "error" is an
+  // uncaught exception that takes the whole server down.
+  const connection = new SttConnection("ws://127.0.0.1:1", (url) => {
+    const ws = new WebSocket(url);
+    ws.prependOnceListener("error", (err) => {
+      queueMicrotask(() => ws.emit("error", err));
+    });
+    return ws;
+  });
+  await assert.rejects(() => connection.connect(2_000));
+  // Let the repeated emit land; a missing listener would throw here.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(connection.open, false);
 });

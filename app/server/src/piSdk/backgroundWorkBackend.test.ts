@@ -1179,3 +1179,34 @@ test("WebSocket monitor emits activity and Stop closes only its owned socket", a
   await flush();
   assert.equal(backgroundWorkStore.getItem(second.item.id)?.state, "completed");
 });
+
+test("a WebSocket monitor survives the second error Bun emits for one refused connection", async () => {
+  const proxy = eventProxy();
+  const sockets: FakeSocket[] = [];
+  const backend = new PiBackgroundWorkBackend({
+    createSocket: () => {
+      const socket = new FakeSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    events: proxy.events,
+  });
+  const supervisor = new BackgroundWorkSupervisor({ ports: [backend] });
+  proxy.setTarget(supervisor);
+  const ownerSessionId = owner();
+  const admission = admit(supervisor, ownerSessionId, "monitor-websocket");
+  backend.reserve(admission.item.id, {
+    type: "socket",
+    ownerSessionId,
+    kind: "monitor-websocket",
+    url: "ws://127.0.0.1:1",
+  });
+  await supervisor.launch(admission);
+  const refused = new Error("WebSocket connection failed: Failed to connect");
+  // An "error" with no listener throws synchronously from `emit`.
+  sockets[0]!.emit("error", refused);
+  sockets[0]!.emit("error", refused);
+  sockets[0]!.emit("close");
+  await flush();
+  assert.equal(backgroundWorkStore.getItem(admission.item.id)?.state, "failed");
+});

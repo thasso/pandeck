@@ -80,12 +80,16 @@ export class SttConnection {
     | undefined;
   private closedReason: string | undefined;
 
-  constructor(private readonly url: string) {}
+  constructor(
+    private readonly url: string,
+    private readonly createSocket: (url: string) => WebSocket = (url) =>
+      new WebSocket(url, { perMessageDeflate: false }),
+  ) {}
 
   /** Resolves once the socket is open, or rejects on connect failure/timeout. */
   async connect(timeoutMs = 10_000): Promise<void> {
     await new Promise<void>((resolvePromise, reject) => {
-      const ws = new WebSocket(this.url, { perMessageDeflate: false });
+      const ws = this.createSocket(this.url);
       const timer = setTimeout(() => {
         ws.terminate();
         reject(
@@ -98,9 +102,15 @@ export class SttConnection {
         this.ws = ws;
         resolvePromise();
       });
-      ws.once("error", (err) => {
+      // `on`, never `once`: Bun's `ws` emits "error" TWICE for one refused
+      // connection, and an "error" with no listener left is an uncaught
+      // exception that takes the whole server down. Refusals are routine here:
+      // `connectSttWhenReady` retries them while the model loads.
+      ws.on("error", (err) => {
         clearTimeout(timer);
-        reject(err instanceof Error ? err : new Error(String(err)));
+        const error = err instanceof Error ? err : new Error(String(err));
+        reject(error);
+        this.fail(error);
       });
       ws.on("message", (raw, isBinary) => {
         if (isBinary) return;

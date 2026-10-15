@@ -518,7 +518,12 @@ export async function listSessions(
       // mark was cleared would otherwise report a session as BOTH interrupted
       // and running, and the badge is about work that is waiting, not moving.
       ...(row.interruptedRunAt !== undefined && !isStreaming
-        ? { interruptedRun: { at: row.interruptedRunAt } }
+        ? {
+            interruptedRun: {
+              at: row.interruptedRunAt,
+              ...row.interruptedRunDetail,
+            },
+          }
         : {}),
       ...(queuedRecipients.has(row.id) ? { queuedWork: true } : {}),
       ...(awaitingReplies.has(row.id)
