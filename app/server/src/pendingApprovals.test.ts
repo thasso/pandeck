@@ -17,6 +17,7 @@ import {
   approvalsForSession,
   createApproval,
   hasPendingApproval,
+  reconcileLegacyAgentDefinitionCard,
   registerApprovalExecutor,
   resolveApproval,
   setApprovalBroadcastForTests,
@@ -210,4 +211,42 @@ test("a card whose decision is in flight is not superseded", async () => {
   expect(byId.get(card.id)?.status).toBe("executed");
   expect(byId.get(fresh.id)?.status).toBe("pending");
   expect(executions).toEqual([card.id]);
+});
+
+test("a legacy single-model agent definition card reads in the list shape", () => {
+  const card = reconcileLegacyAgentDefinitionCard({
+    renderKind: "approval",
+    id: "legacy-agent",
+    sessionId: SESSION,
+    kind: "agentDefinition",
+    status: "executed",
+    decision: "approved",
+    title: "Create agent reviewer",
+    createdAt: 1,
+    body: {
+      kind: "agentDefinition",
+      action: "edit",
+      name: "reviewer",
+      description: "Reviews diffs",
+      persona: "developer",
+      model: { before: "sonnet", after: "opus" },
+      resolvedModel: "claude-sdk/opus",
+      effort: { after: "high", effective: "xhigh" },
+      source: "---\nname: reviewer\n---\n",
+      reason: "Add reviewer",
+    } as never,
+  });
+  expect(card.body).toEqual({
+    kind: "agentDefinition",
+    action: "edit",
+    name: "reviewer",
+    description: "Reviews diffs",
+    persona: "developer",
+    model: { before: ["sonnet"], after: ["opus"] },
+    resolvedModels: [{ model: "claude-sdk/opus", effort: "xhigh" }],
+    effort: { after: "high" },
+    source: "---\nname: reviewer\n---\n",
+    reason: "Add reviewer",
+  });
+  expect(reconcileLegacyAgentDefinitionCard(card)).toBe(card);
 });

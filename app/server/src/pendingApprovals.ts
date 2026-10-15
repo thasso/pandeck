@@ -39,6 +39,7 @@ import {
   formatPaObjectLink,
 } from "@assistant/shared/objectLinks";
 import type {
+  AgentDefinitionApprovalBody,
   ApprovalBody,
   ApprovalCard,
   ApprovalDecision,
@@ -47,7 +48,9 @@ import type {
   ApprovalResolutionEdits,
   DisplayMessage,
   Patch,
+  ThinkingLevel,
 } from "@assistant/shared";
+import { AGENT_DEFAULT_EFFORT } from "./agents/agentLibrary.ts";
 import { inDbTransaction } from "./db/index.ts";
 import { approvalStore, type StoredApproval } from "./db/approvalStore.ts";
 
@@ -110,9 +113,52 @@ export function registerApprovalExecutor(
  * store did, so a card written with the legacy shape still reads repaired.
  */
 const asRecord = (stored: StoredApproval): ApprovalRecord => ({
-  card: reconcileLegacyPartialApprovalCard(stored.card),
+  card: reconcileLegacyAgentDefinitionCard(
+    reconcileLegacyPartialApprovalCard(stored.card),
+  ),
   context: stored.context,
 });
+
+/**
+ * Agent definition cards written before definitions listed several models hold
+ * one model string and one `resolvedModel`. Lift them into the list shape so a
+ * session showing one still renders.
+ */
+export function reconcileLegacyAgentDefinitionCard(
+  card: ApprovalCard,
+): ApprovalCard {
+  const body = card.body;
+  if (body.kind !== "agentDefinition" || Array.isArray(body.model.after))
+    return card;
+  const { resolvedModel, model, effort, ...rest } = body as unknown as Omit<
+    AgentDefinitionApprovalBody,
+    "model" | "resolvedModels" | "effort"
+  > & {
+    model: { before?: string; after: string };
+    resolvedModel?: string;
+    effort: AgentDefinitionApprovalBody["effort"] & {
+      effective?: ThinkingLevel;
+    };
+  };
+  const { effective, ...written } = effort;
+  return {
+    ...card,
+    body: {
+      ...rest,
+      model: {
+        ...(model.before !== undefined ? { before: [model.before] } : {}),
+        after: [model.after],
+      },
+      resolvedModels: [
+        {
+          model: resolvedModel ?? model.after,
+          effort: effective ?? written.after ?? AGENT_DEFAULT_EFFORT,
+        },
+      ],
+      effort: written,
+    },
+  };
+}
 
 /**
  * Older executors lost their mutated item body when a post-create link failed,
