@@ -3619,20 +3619,21 @@ export interface AgentDefinitionApprovalBody {
    * (a developer has native Bash, Edit and Write), so it is approved too.
    */
   personaBefore?: "developer" | "assistant";
-  /** The model as written, before (edit only) and after. */
-  model: { before?: string; after: string };
-  /** The connected model `after` resolved to when proposed: `provider/id`. */
-  resolvedModel: string;
+  /** The listed models as written, before (edit only) and after. */
+  model: { before?: string[]; after: string[] };
   /**
-   * Effort before (edit only) and after; absent means the definition default
-   * (`medium`). `effective` is the level the model will actually run at,
-   * present when it differs from `after`: a default, or a level fitted to the
-   * ones the model supports.
+   * What each model in `after` resolved to when proposed, in order: the
+   * connected model (`provider/id`, plus a pinned version) and the effort it
+   * runs at, the definition's or the default fitted to what it supports.
+   */
+  resolvedModels: Array<{ model: string; effort: ThinkingLevel }>;
+  /**
+   * Effort as written before (edit only) and after; absent means the
+   * definition default (`medium`).
    */
   effort: {
     before?: ThinkingLevel;
     after?: ThinkingLevel;
-    effective?: ThinkingLevel;
   };
   /** The complete `AGENT.md` the approval would write. */
   source: string;
@@ -3878,6 +3879,11 @@ export interface SessionSpawnApprovalItem {
   /** The new session's title — there is no separate label, and auto-naming is suppressed. */
   title: string;
   agentType: "developer" | "assistant";
+  /**
+   * The agent definition the session runs as, on whatever runtime the user
+   * approves here; `agentType` is its persona.
+   */
+  agent?: string;
   /** The opening prompt, delivered as a peer prompt from the proposing session. */
   prompt: string;
   /** Who owns the work from creation; absent means coordinator. */
@@ -4516,6 +4522,17 @@ export type SessionIdleReason =
   /** A `/pr` card is waiting for the user to pick which Task the PR is for. */
   | "awaiting_task_choice";
 
+/**
+ * Who chose an agent session's runtime: one of the models its definition
+ * lists, or the user in a proposal card.
+ */
+export const SESSION_AGENT_RUNTIME_SOURCES = [
+  "definition",
+  "approval",
+] as const;
+export type SessionAgentRuntimeSource =
+  (typeof SESSION_AGENT_RUNTIME_SOURCES)[number];
+
 /** A session's frozen agent definition, as the inspector shows it. */
 export type SessionAgentSummary =
   | {
@@ -4526,6 +4543,7 @@ export type SessionAgentSummary =
       /** `provider/id` of the model it runs on. */
       model: string;
       effort: ThinkingLevel;
+      runtimeSource: SessionAgentRuntimeSource;
       denyTools: string[];
       skills: string[];
     }

@@ -36,6 +36,19 @@ async function agentRuntimes(
               ? { pinnedModel: row.runtime.agent.pinnedModel }
               : {}),
             thinkingLevel: row.runtime.thinkingLevel,
+            models: row.runtime.listed.map((choice) =>
+              choice.runtime
+                ? {
+                    spec: choice.spec,
+                    provider: choice.runtime.model.provider,
+                    modelId: choice.runtime.model.id,
+                    ...(choice.runtime.pinnedModel
+                      ? { pinnedModel: choice.runtime.pinnedModel }
+                      : {}),
+                    thinkingLevel: choice.runtime.thinkingLevel,
+                  }
+                : { spec: choice.spec, problem: choice.problem },
+            ),
           };
   }
   return { agentRuntimes: runtimes };

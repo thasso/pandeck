@@ -52,7 +52,10 @@ const AGENTS_COPY: LibraryPageCopy = {
     "These folders cannot be used as agents. They stay listed here so a typo does not simply make an agent disappear.",
 };
 
-/** What an agent runs on, as one line: persona, model and effort. */
+/**
+ * What an agent runs on, as one line: persona, default model and effort, then
+ * the other models it may run on.
+ */
 function agentRuntimeLabel(
   runtime: NonNullable<EntryLibraryList["agentRuntimes"]>[string],
 ): string | undefined {
@@ -60,7 +63,16 @@ function agentRuntimeLabel(
   const model = `${runtime.provider}/${runtime.modelId}${
     runtime.pinnedModel ? ` (pinned ${runtime.pinnedModel})` : ""
   }`;
-  return `${runtime.persona} · ${model} · ${runtime.thinkingLevel} effort`;
+  const others = runtime.models
+    .slice(1)
+    .map((listed) =>
+      listed.problem === undefined
+        ? `${listed.provider}/${listed.modelId} at ${listed.thinkingLevel}`
+        : `${listed.spec} (unavailable)`,
+    );
+  return `${runtime.persona} · ${model} · ${runtime.thinkingLevel} effort${
+    others.length > 0 ? ` · also ${others.join(", ")}` : ""
+  }`;
 }
 
 export function AgentsSettingsSection({

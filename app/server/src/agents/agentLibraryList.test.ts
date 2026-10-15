@@ -31,7 +31,7 @@ test("a definition named like an Object member still gets its runtime", async ()
         name,
         description: "An agent.",
         persona: "assistant",
-        model: "opus",
+        models: ["opus"],
         denyTools: [],
         skills: [],
         body: "Work.",

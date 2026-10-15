@@ -556,6 +556,7 @@ describe("agent definitions row", () => {
         provider: "claude-sdk",
         modelId: "opus",
         thinkingLevel: "high",
+        models: [],
       },
       stale: { problem: 'No enabled account offers a model "gemini".' },
     },

@@ -251,6 +251,12 @@ function AgentSection({
           <PropertyText className="text-foreground">
             {agent.model}, {agent.effort} effort
           </PropertyText>
+          <PropertyLabel>Chosen by</PropertyLabel>
+          <PropertyText className="text-foreground">
+            {agent.runtimeSource === "approval"
+              ? "You, in a proposal card"
+              : "The definition's model list"}
+          </PropertyText>
           {agent.denyTools.length > 0 ? (
             <>
               <PropertyLabel>Denied tools</PropertyLabel>

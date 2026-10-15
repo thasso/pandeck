@@ -1,9 +1,10 @@
 /**
  * Resolving an agent definition for a spawn (`docs/agent-definitions.md`
- * "Spawning by name"): read the definition the library holds NOW, check that
- * it can run, pick its account, and produce the frozen copy the session will
- * run as. Nothing here falls back: a definition whose model no longer
- * resolves, or whose account does not offer it, refuses the spawn.
+ * "Spawning by name"): read the definition the library holds NOW, pick the
+ * listed model the caller named or the first, check that it can run, pick its
+ * account, and produce the frozen copy the session will run as. Nothing here
+ * falls back: a model that no longer resolves, or whose account does not
+ * offer it, refuses the spawn, never moving on to the next listed one.
  */
 import {
   isSafeEntryName,
@@ -20,8 +21,17 @@ import { assertManifest } from "../library/entryManifest.ts";
 import { resolveEntrySource } from "../library/libraryAuthoring.ts";
 import { scanLibrary, type LibraryScan } from "../library/libraryScanner.ts";
 import type { LibraryStore } from "../library/libraryStore.ts";
-import { agentKind, agentLibraryStore } from "./agentLibrary.ts";
-import { checkAgentRuntime } from "./agentRuntime.ts";
+import {
+  agentKind,
+  agentLibraryStore,
+  type AgentManifest,
+} from "./agentLibrary.ts";
+import {
+  agentRuntimeLabel,
+  checkAgentRuntime,
+  type AgentModelChoice,
+  type AgentRuntime,
+} from "./agentRuntime.ts";
 import type { SessionAgent } from "./sessionAgent.ts";
 
 /** A definition that cannot be spawned right now; the reason is the message. */
@@ -37,6 +47,8 @@ export interface AgentSpawnRuntime {
   credentialProfileId: string;
   accountName?: string;
   thinkingLevel: ThinkingLevel;
+  /** Every model the definition lists, in order, as each resolves now. */
+  listed: AgentModelChoice[];
 }
 
 /** The outside state a spawn reads besides the runtime check; for tests. */
@@ -114,16 +126,81 @@ function notFoundReason(name: string, diagnostics: EntryDiagnostic[]): string {
 /** How many distinct problems a refusal quotes. */
 const MAX_QUOTED_PROBLEMS = 3;
 
+/** The forms a caller may name a listed model by. */
+function namesOf(choice: AgentModelChoice): string[] {
+  const forms = [choice.spec];
+  const runtime = choice.runtime;
+  if (runtime) {
+    const { provider, id } = runtime.model;
+    forms.push(id, `${provider}/${id}`);
+    if (runtime.pinnedModel)
+      forms.push(runtime.pinnedModel, `${provider}/${runtime.pinnedModel}`);
+  }
+  return forms.map((form) => form.toLowerCase());
+}
+
+/** The listed models that can run now, for a refusal to offer instead. */
+function runnableNamed(choices: readonly AgentModelChoice[]): string {
+  const runnable = choices.filter((choice) => choice.runtime);
+  return runnable.length === 0
+    ? "None of its listed models can run now."
+    : `Its listed models that can run now: ${runnable
+        .map(
+          (choice) => `${choice.spec} (${agentRuntimeLabel(choice.runtime!)})`,
+        )
+        .join(", ")}; name one as modelId.`;
+}
+
 /**
- * Resolve one definition for a spawn, against `scanned` when the caller holds
- * a scan, else a fresh one. Every refusal is an {@link AgentSpawnRefusedError}.
+ * The listed model a spawn runs on: the one `wanted` names, else the first.
+ * A model the definition does not list is refused, never approximated: running
+ * it needs the user's approval.
  */
-export async function resolveAgentSpawn(
+function chosenModel(
+  name: string,
+  choices: readonly AgentModelChoice[],
+  wanted: string | undefined,
+): { spec: string; runtime: AgentRuntime } {
+  if (wanted === undefined) {
+    const first = choices[0]!;
+    if (first.runtime) return { spec: first.spec, runtime: first.runtime };
+    throw new AgentSpawnRefusedError(
+      `Agent "${name}" cannot run on its default model "${first.spec}": ${first.problem} ${runnableNamed(choices.slice(1))}`,
+    );
+  }
+  const asked = wanted.trim().toLowerCase();
+  const matches = choices.filter((choice) => namesOf(choice).includes(asked));
+  if (matches.length > 1)
+    throw new AgentSpawnRefusedError(
+      `"${wanted}" names more than one model agent "${name}" lists (${matches.map((choice) => choice.spec).join(", ")}); name one exactly, as provider/id.`,
+    );
+  const match = matches[0];
+  if (!match)
+    throw new AgentSpawnRefusedError(
+      `Agent "${name}" does not list "${wanted}"; it runs only on ${choices.map((choice) => choice.spec).join(", ")}. To run it on another model, use operation "propose" with this agent so the user can approve that runtime.`,
+    );
+  if (match.problem !== undefined)
+    throw new AgentSpawnRefusedError(
+      `Agent "${name}" cannot run on "${match.spec}": ${match.problem}`,
+    );
+  return { spec: match.spec, runtime: match.runtime };
+}
+
+/** A definition read and parsed for a spawn, before any model is chosen. */
+interface AgentDefinitionRead {
+  manifest: AgentManifest;
+  blob: string;
+  listed: AgentModelChoice[];
+}
+
+/**
+ * Read one definition for a spawn and check everything but its models, which
+ * are answered one by one. Every refusal is an {@link AgentSpawnRefusedError}.
+ */
+async function readAgentDefinition(
   name: string,
   scanned?: { library: LibraryStore; scan: LibraryScan },
-  /** An account the caller picked, in place of the automatic one. */
-  options: { profileId?: string; requiresEnterprise?: boolean } = {},
-): Promise<AgentSpawnRuntime> {
+): Promise<AgentDefinitionRead> {
   // A name no definition could declare is refused unquoted: it is the
   // caller's own input, of any size.
   if (!isSafeEntryName(name))
@@ -148,17 +225,74 @@ export async function resolveAgentSpawn(
       `Agent definition "${name}" is larger than an agent definition may be.`,
     );
   let manifest;
-  let runtime;
+  let listed;
   try {
     // The bytes being frozen are parsed again, not trusted to the scan.
     manifest = assertManifest(agentKind, read.source, read.path);
-    runtime = (await checkAgentRuntime(manifest))!;
+    listed = (await checkAgentRuntime(manifest, { checkModel: "each" }))!;
   } catch (error) {
     throw new AgentSpawnRefusedError(
       `Agent "${name}" cannot run: ${(error as Error).message}`,
     );
   }
-  const { model, pinnedModel, thinkingLevel } = runtime;
+  // The bytes on disk, not the decoded text: decoding drops a BOM and bad
+  // UTF-8, and the id has to name the repository's own blob.
+  const blob = await library.gitBlobIdOf(read.raw);
+  return { manifest, blob, listed };
+}
+
+/** The role half of a frozen agent: everything a runtime choice never changes. */
+export type AgentRole = Omit<
+  SessionAgent,
+  "provider" | "model" | "pinnedModel" | "effort" | "runtimeSource"
+>;
+
+function roleOf({ manifest, blob }: AgentDefinitionRead): AgentRole {
+  return {
+    name: manifest.name,
+    blob,
+    persona: manifest.persona,
+    denyTools: [...manifest.denyTools],
+    skills: [...manifest.skills],
+    body: manifest.body.trim(),
+  };
+}
+
+/**
+ * A definition's role for a runtime the USER approves (a proposal card): its
+ * models do not need to run, since the user picks the runtime, but everything
+ * else about it does.
+ */
+export async function resolveAgentRole(
+  name: string,
+  scanned?: { library: LibraryStore; scan: LibraryScan },
+): Promise<{ role: AgentRole; listed: AgentModelChoice[] }> {
+  const read = await readAgentDefinition(name, scanned);
+  return { role: roleOf(read), listed: read.listed };
+}
+
+/**
+ * Resolve one definition for a spawn, against `scanned` when the caller holds
+ * a scan, else a fresh one. Every refusal is an {@link AgentSpawnRefusedError}.
+ */
+export async function resolveAgentSpawn(
+  name: string,
+  scanned?: { library: LibraryStore; scan: LibraryScan },
+  options: {
+    /** An account the caller picked, in place of the automatic one. */
+    profileId?: string;
+    requiresEnterprise?: boolean;
+    /** One of the listed models; the first when absent. */
+    model?: string;
+  } = {},
+): Promise<AgentSpawnRuntime> {
+  const read = await readAgentDefinition(name, scanned);
+  const { manifest, listed } = read;
+  const { model, pinnedModel, thinkingLevel } = chosenModel(
+    name,
+    listed,
+    options.model,
+  ).runtime;
   const credentialProfileId =
     options.profileId ??
     (await sources.accountFor({
@@ -192,21 +326,14 @@ export async function resolveAgentSpawn(
       `Agent "${name}" cannot run: the account its ${model.provider} sessions use (${sources.accountName(credentialProfileId) ?? credentialProfileId}) does not offer ${model.provider}/${model.id}.`,
     );
   const accountName = sources.accountName(credentialProfileId);
-  // The bytes on disk, not the decoded text: decoding drops a BOM and bad
-  // UTF-8, and the id has to name the repository's own blob.
-  const blob = await library.gitBlobIdOf(read.raw);
   return {
     agent: {
-      name: manifest.name,
-      blob,
-      persona: manifest.persona,
+      ...roleOf(read),
       provider: model.provider,
       model: model.id,
       ...(pinnedModel ? { pinnedModel } : {}),
       effort: thinkingLevel,
-      denyTools: [...manifest.denyTools],
-      skills: [...manifest.skills],
-      body: manifest.body.trim(),
+      runtimeSource: "definition",
     },
     description: manifest.description,
     provider: model.provider,
@@ -215,6 +342,7 @@ export async function resolveAgentSpawn(
     credentialProfileId,
     ...(accountName ? { accountName } : {}),
     thinkingLevel,
+    listed,
   };
 }
 

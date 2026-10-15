@@ -92,6 +92,22 @@ const LIST: EntryLibraryList = {
       modelId: "opus",
       pinnedModel: "claude-opus-5-5",
       thinkingLevel: "high",
+      models: [
+        {
+          spec: "claude-opus-5-5",
+          provider: "claude-sdk",
+          modelId: "opus",
+          pinnedModel: "claude-opus-5-5",
+          thinkingLevel: "high",
+        },
+        {
+          spec: "sol",
+          provider: "openai-codex",
+          modelId: "gpt-6.1-sol",
+          thinkingLevel: "high",
+        },
+        { spec: "gemini", problem: "No enabled account offers it." },
+      ],
     },
     stale: { problem: 'No enabled account offers a model "gemini".' },
   },
@@ -118,7 +134,7 @@ it("shows what each definition runs on, or why it cannot start", () => {
   act(() => root!.render(<AgentsSettingsSection library={ready(LIST)} />));
   const text = container!.textContent ?? "";
   expect(text).toContain(
-    "developer · claude-sdk/opus (pinned claude-opus-5-5) · high effort",
+    "developer · claude-sdk/opus (pinned claude-opus-5-5) · high effort · also openai-codex/gpt-6.1-sol at high, gemini (unavailable)",
   );
   expect(text).toContain(
     'Cannot start: No enabled account offers a model "gemini".',

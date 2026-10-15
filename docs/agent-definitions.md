@@ -3,13 +3,15 @@
 **Status:** implemented by [Task-780](pa://task/780): the shared library core
 ([Task-781](pa://task/781)), the agent library with its `agent_*` tools
 ([Task-782](pa://task/782)), spawning by name ([Task-783](pa://task/783)), and
-the UI ([Task-784](pa://task/784)).
+the UI ([Task-784](pa://task/784)). Model lists and agents in proposals:
+[Task-795](pa://task/795), part of [Task-794](pa://task/794); the new-session
+page's single Agent row with free model picks is [Task-796](pa://task/796).
 
 An agent definition is a user-authored Markdown file that describes a reusable
-agent: which persona it builds on, which model and effort it runs at, which
-tools it must not use, and the role instructions it follows. Any session can
-spawn one by name ("spawn a test-reviewer agent"), and the result is an ordinary
-peer session the user can watch and take over.
+agent: which persona it builds on, which models it may run on and at what
+effort, which tools it must not use, and the role instructions it follows. Any
+session can spawn one by name ("spawn a test-reviewer agent"), and the result is
+an ordinary peer session the user can watch and take over.
 
 ## Skill or agent
 
@@ -64,7 +66,7 @@ description:
   Verifies that the tests a branch adds fail without its code changes. Use after
   an implementer reports done.
 persona: developer
-model: opus
+model: [openai-codex/gpt-6.1-sol, opus]
 effort: high
 tools:
   deny: [worktree_commit, worktree_push, worktree_create_pull_request]
@@ -73,15 +75,15 @@ tools:
 You are a test reviewer. ...
 ```
 
-| Key           | Required | Meaning                                                                                                |
-| ------------- | -------- | ------------------------------------------------------------------------------------------------------ |
-| `name`        | yes      | Declared name; same rule as skills (`isSafeEntryName` in `app/shared/library.ts`).                     |
-| `description` | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description.     |
-| `persona`     | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                    |
-| `model`       | yes      | An alias or an exact model id. See [Model and effort](#model-and-effort).                              |
-| `effort`      | no       | A `ThinkingLevel`. Fitted to the levels the model supports. Defaults to `medium`, fitted the same way. |
-| `tools.deny`  | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).              |
-| `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.          |
+| Key           | Required | Meaning                                                                                                 |
+| ------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `name`        | yes      | Declared name; same rule as skills (`isSafeEntryName` in `app/shared/library.ts`).                      |
+| `description` | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description.      |
+| `persona`     | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                     |
+| `model`       | yes      | One model, or a list of 1-8; the first is the default. See [Model and effort](#model-and-effort).       |
+| `effort`      | no       | A `ThinkingLevel`. Fitted to the levels each model supports. Defaults to `medium`, fitted the same way. |
+| `tools.deny`  | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).               |
+| `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.           |
 
 The body is the role instructions. It must be non-empty, and the whole
 `AGENT.md` has a size bound (`maxManifestBytes`, 16 KiB) so a definition cannot
@@ -93,7 +95,13 @@ the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
 
 ## Model and effort
 
-`model` takes:
+`model` is one model or a list of them (`model: [sol, opus]`). The list is the
+set of runtimes the user approved for this definition: a spawn may pick any
+listed model without asking, and the first is the one it runs on when the caller
+names none. A model listed twice, by the same spec in another case or by two
+specs that resolve to the same connected model, is refused.
+
+Each entry takes:
 
 1. An exact model id from a connected account (`gpt-6-luna`). This pins a
    version. When two providers offer the same id, `provider/id`
@@ -110,24 +118,27 @@ the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
    accounts on a whole hyphen-separated token. More than one match, or none, is
    a validation error, never a guess.
 
-The resolved model decides the provider and therefore the harness. `effort` is
-fitted to the levels the model supports (`clampThinkingLevelForModel`, which
-tries the next level up before the next one down), as spawn already does for
-thinking hints. A definition without `effort` runs at `medium`
-(`AGENT_DEFAULT_EFFORT`), fitted the same way. The card shows that level, and
-approval checks it like an explicit one (`checkAgentRuntime`).
+The resolved model decides the provider and therefore the harness, so one
+definition can run on Claude and on pi. `effort` is fitted to the levels each
+model supports (`clampThinkingLevelForModel`, which tries the next level up
+before the next one down), as spawn already does for thinking hints. A
+definition without `effort` runs at `medium` (`AGENT_DEFAULT_EFFORT`), fitted
+the same way. The card shows the level per model, and approval checks it like an
+explicit one (`checkAgentRuntime`).
 
-Validation at write time checks that the model resolves against the accounts
-connected right now. A spawn resolves it again. A model that stopped resolving,
-because an account was removed, refuses the spawn with the reason. There is no
-fallback to another model.
+Validation at write time checks that every listed model resolves against the
+accounts connected right now. A spawn resolves them again and needs only the one
+it runs on (`checkModel: "each"`). A model that stopped resolving, because an
+account was removed, refuses the spawn with the reason. There is no fallback to
+another model: an unavailable default refuses and names the listed models that
+can run, and the caller picks one explicitly.
 
 ### The account
 
 A definition never names an account. `accountFor` in `agents/agentSpawn.ts`
-calls `pickAccount` at the definition's resolved model and effective effort,
-without preferring the proposer's account. Both structural validation and the
-late creation read use that policy. The model and effort never change to suit an
+calls `pickAccount` at the chosen listed model and its effective effort, without
+preferring the proposer's account. Both structural validation and the late
+creation read use that policy. The model and effort never change to suit an
 account. A selected account that does not offer the model refuses the spawn.
 
 The sender's enterprise requirement is captured before library or structural
@@ -183,12 +194,13 @@ it declares before doing anything (`withCheckedArguments` in
 `tools/library/libraryTools.ts`): not every adapter enforces the schema, and a
 wrong shape is refused rather than coerced into the file.
 
-`agent_create` takes the definition as fields (`persona`, `model`, `effort`,
+`agent_create` takes the definition as fields (`persona`, `models`, `effort`,
 `denyTools`, `skills`, `body`) and renders `AGENT.md` deterministically
-(`formatAgentManifest`). Before anything reaches the user, the definition must
-satisfy the content rule and the runtime check (`agents/agentRuntime.ts`): the
-model resolves against the enabled accounts, the denied tools are the persona's
-own or native, the skills are valid library skills.
+(`formatAgentManifest`): one model as a plain value, several as a list. Before
+anything reaches the user, the definition must satisfy the content rule and the
+runtime check (`agents/agentRuntime.ts`): every model resolves against the
+enabled accounts, the denied tools are the persona's own or native, the skills
+are valid library skills.
 
 ### Persona, model and effort changes need approval
 
@@ -202,24 +214,25 @@ session grant for these cards is labelled to say so. A create or edit stopped
 before its card exists leaves none, so no grant can execute it later.
 
 - **Create** always sets a model, so every `agent_create` is a card. It shows
-  the persona, the model as written and the connected model it resolved to, the
-  effort, and the complete `AGENT.md`. Nothing is written until approval; the
+  the persona, the models as written, the connected model each resolved to with
+  the effort it runs at (`resolvedModels`, the default first), the effort as
+  written, and the complete `AGENT.md`. Nothing is written until approval; the
   executor checks the runtime again and creates the entry.
 - **Edit** is previewed first (`previewEntryEdit`). When the result changes
-  `persona`, `model` or `effort`, it is a card showing before and after, and the
-  executor applies the same edits only if the model still resolves to what the
-  card showed, at the effort the card showed, and the locked result is
-  byte-for-byte the `AGENT.md` the card showed, so a hand edit made while the
-  card waited refuses rather than being carried along. An edit may never change
-  the declared name: the card names its target by it. Any other edit commits
-  directly; inside the locked write it is judged again (`editEntrySource`'s
-  `check`), and the file must still hold the bytes that were judged when the
-  write starts: persona, model and effort must still be unchanged, and the
-  denied tools and skills must still exist. Every locked agent edit, approved or
-  direct, also re-reads the file after its check and refuses if a hand edit
-  landed meanwhile, leaving that edit in place. A direct edit does not
-  re-resolve the model, so a definition whose account went away can still have
-  its instructions fixed.
+  `persona`, the listed models (their order included: the first is the default)
+  or `effort`, it is a card showing before and after, and the executor applies
+  the same edits only if every model still resolves to what the card showed, at
+  the effort the card showed, and the locked result is byte-for-byte the
+  `AGENT.md` the card showed, so a hand edit made while the card waited refuses
+  rather than being carried along. An edit may never change the declared name:
+  the card names its target by it. Any other edit commits directly; inside the
+  locked write it is judged again (`editEntrySource`'s `check`), and the file
+  must still hold the bytes that were judged when the write starts: persona,
+  models and effort must still be unchanged, and the denied tools and skills
+  must still exist. Every locked agent edit, approved or direct, also re-reads
+  the file after its check and refuses if a hand edit landed meanwhile, leaving
+  that edit in place. A direct edit does not re-resolve the model, so a
+  definition whose account went away can still have its instructions fixed.
 - Rename, delete and supporting files never change what a definition runs on and
   commit directly; `AGENT.md` itself is refused by `agent_manage_files` under
   any case, since a case-insensitive filesystem opens `agent.md` as the
@@ -238,12 +251,20 @@ before its card exists leaves none, so no grant can execute it later.
   name. Spawning an invalid one is refused with at most three of its distinct
   problems and how many more there are (`notFoundReason`).
 - An `agent` field on a `spawn` row, naming a definition. The row then takes no
-  `profileId` and no `agentType`; stating either is refused. Model, effort, and
-  persona come from the definition and the account from the account function.
-  `worktreeId` is still required for a `developer` definition. `title` and
-  `prompt` stay required: the prompt is the target and the task, the definition
-  is the role. A `propose` row may not name an agent: the user already approved
-  what a definition runs on.
+  `profileId` and no `agentType`; stating either is refused. Persona and effort
+  come from the definition, the model is the listed one `modelId` names (by its
+  spec, its `provider/id`, its id or its pinned version; ambiguous names are
+  refused) or else the first, and the account comes from the account function. A
+  model the definition does not list, `provider` and `thinkingLevel` are refused
+  with a pointer to `propose`. `worktreeId` is still required for a `developer`
+  definition. `title` and `prompt` stay required: the prompt is the target and
+  the task, the definition is the role.
+- An `agent` field on a `propose` row, also without `agentType`. The card shows
+  the role beside the persona and starts from the definition's default runtime
+  unless the row hints another; the user picks any runtime there. Approval reads
+  the definition again (`approvedAgentOf` in `sessionSpawn.ts`) and refuses,
+  leaving the card pending, when it is gone, cannot run, or now has another
+  persona. The session runs the role on exactly the approved runtime.
 
 The opening prompt still carries the coordinator's session id and the
 instruction to report back, as for any spawn.
@@ -262,8 +283,11 @@ The second read is frozen in the insert-only `session_agent` table (migration
 `0079_session_agent.sql`): name, the `AGENT.md` git blob id (of the bytes on
 disk, in the library repository's own object format, SHA-1 or SHA-256), persona,
 provider, model, the concrete version a definition pinned (`claude-opus-5-5`
-rather than `opus`), effective effort, deny list, the definition's own skills,
-and the body text. Like `session_skills`, the first insert wins for the
+rather than `opus`), effective effort, who chose that runtime (`runtimeSource`:
+`definition` for a listed model, `approval` for a proposal card; a row stored
+before this existed reads as `definition`), deny list, the definition's own
+skills, and the body text. A card-approved runtime carries no pin: it follows
+normal session model rules. Like `session_skills`, the first insert wins for the
 session's life, a fork copies the parent's row, and resumes read the row rather
 than the library. Editing or deleting a definition affects new spawns only. A
 row that does not parse fails closed: the session refuses to run rather than run
@@ -294,9 +318,10 @@ The session runs the model it was spawned on, never one a harness picks:
   (`sessionSkillPreset`), so the skills runtime mounts them through the existing
   path.
 
-The session inspector's Agent section shows the frozen name, model, effort,
-denied tools, skills and blob id; the name opens the definition on the Agents
-page (`/settings/agents?entry=<name>`), as the library holds it now.
+The session inspector's Agent section shows the frozen name, model, effort, who
+chose the runtime, denied tools, skills and blob id; the name opens the
+definition on the Agents page (`/settings/agents?entry=<name>`), as the library
+holds it now.
 
 ## Shared library core
 
@@ -369,18 +394,19 @@ Settings → Agents (`/settings/agents`) is the shared library page
 (`LibrarySettingsSection`), the one Settings → Skills uses: the list, the
 folders that need a fix with their reason, one entry's files, and its recent
 commits. Each row adds what the definition would run on right now (persona,
-model, pinned version, effort), or why it cannot start. Nothing on the page
-writes; definitions change through the `agent_*` tools or by hand.
+default model, pinned version, effort, and the other listed models), or why it
+cannot start. Nothing on the page writes; definitions change through the
+`agent_*` tools or by hand.
 
 Both pages read through the same server pieces, one per library:
 
 - **Topic.** `skills` and `agents` each answer a subscribe with one
   `libraryList` message (`library/libraryPublish.ts`). The agents list also
-  carries `agentRuntimes`, each definition's resolved runtime or problem
-  (`agents/agentLibraryList.ts`), and is republished after every agent mutation
-  and every refused agent first send. A skill change does not republish it, so a
-  definition that names a skill just deleted or renamed shows as runnable until
-  the next subscribe or refusal.
+  carries `agentRuntimes`, each definition's default runtime with every listed
+  model (`models`), or its problem (`agents/agentLibraryList.ts`), and is
+  republished after every agent mutation and every refused agent first send. A
+  skill change does not republish it, so a definition that names a skill just
+  deleted or renamed shows as runnable until the next subscribe or refusal.
 - **HTTP.** `/api/<library>/detail`, `/file` and `/history`
   (`library/libraryHttp.ts`).
 

@@ -150,6 +150,14 @@ test("subscribing to agents answers with each definition's runtime or problem", 
       provider: "claude-sdk",
       modelId: "opus",
       thinkingLevel: "medium",
+      models: [
+        {
+          spec: "opus",
+          provider: "claude-sdk",
+          modelId: "opus",
+          thinkingLevel: "medium",
+        },
+      ],
     });
     assert.match(
       message.list?.agentRuntimes?.stale?.problem ?? "",

@@ -16,8 +16,10 @@
  *   the turn, and the user chooses each session's runtime there.
  * - `agents` ([Task-783](pa://task/783)) reads the agent definitions and what
  *   each would run on now. Read-only. A `spawn` row naming one with `agent`
- *   takes its persona, model and effort from the definition the user approved
- *   (`docs/agent-definitions.md`) instead of a roster row.
+ *   takes its persona and effort from the definition the user approved, and
+ *   one of the models it lists (`modelId`, else the first), instead of a
+ *   roster row; a `propose` row naming one keeps the role on whatever runtime
+ *   the user picks ([Task-795](pa://task/795), `docs/agent-definitions.md`).
  *
  * What either path creates is an ordinary session the user can read, re-prompt
  * and take over — never a subagent, and nothing here reaches that registry.
@@ -63,7 +65,7 @@ function makeSessionSpawnTool() {
     name: "session_spawn",
     label: "Spawn Sessions",
     description:
-      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, model and effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each child is an ordinary conversation the user can watch and take over. Use this for work that deserves its own session, not small tasks. Choose owner "user" for work the user will run or follow themselves; those sessions go to their inbox and owe you no reply. Default owner "coordinator" is for helpers whose results you need to continue, such as your implementer and reviewer. YOU own those helpers: keep their ids, expect peer replies, chase quiet ones, and use session_control to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
+      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, the models it may run on and an effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions on a model it lists, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each child is an ordinary conversation the user can watch and take over. Use this for work that deserves its own session, not small tasks. Choose owner "user" for work the user will run or follow themselves; those sessions go to their inbox and owe you no reply. Default owner "coordinator" is for helpers whose results you need to continue, such as your implementer and reviewer. YOU own those helpers: keep their ids, expect peer replies, chase quiet ones, and use session_control to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
     searchHint:
       "spawn start delegate implementer reviewer parallel helpers approved runtimes profiles cross-family review named role definitions",
     parameters: {
@@ -109,7 +111,7 @@ function makeSessionSpawnTool() {
               agent: {
                 type: "string",
                 description:
-                  'Only for "spawn", instead of profileId and agentType: the name of an agent definition from `operation: "agents"`. The session runs as that agent — its persona, instructions, model and effort — and a developer agent still needs worktreeId. The prompt names the target and the task; the definition is the role.',
+                  'Instead of profileId and agentType: the name of an agent definition from `operation: "agents"`. The session runs as that agent — its persona, instructions, denied tools and skills — and a developer agent still needs worktreeId. On "spawn" it runs on the definition\'s first model at its effort, or on another model it lists named as modelId. On "propose" the user picks any runtime for it in the card. The prompt names the target and the task; the definition is the role.',
               },
               worktreeId: {
                 type: "string",
@@ -140,12 +142,12 @@ function makeSessionSpawnTool() {
               provider: {
                 type: "string",
                 description:
-                  'Only for "propose": optional model-provider hint, e.g. `claude-sdk`. Omit it and the session inherits YOUR runtime; the user picks in the card either way.',
+                  'Only for "propose": optional model-provider hint, e.g. `claude-sdk`. Omit it and the session inherits YOUR runtime, or an agent row its definition\'s first model; the user picks in the card either way.',
               },
               modelId: {
                 type: "string",
                 description:
-                  'Only for "propose": optional model hint, e.g. `sonnet`. An unavailable one is not an error, it is shown to the user as a note next to the model that would run instead.',
+                  'On "propose": optional model hint, e.g. `sonnet`. An unavailable one is not an error, it is shown to the user as a note next to the model that would run instead. On "spawn", only with agent: one of the models that definition lists; any other is refused.',
               },
               thinkingLevel: {
                 type: "string",
@@ -248,6 +250,14 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
     if ("problem" in agent)
       return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem, "spawning it refuses with the whole reason")}`;
     const { runtime } = agent;
+    // The other listed models, as a caller names them in modelId.
+    const others = runtime.listed
+      .slice(1)
+      .map((choice) =>
+        choice.runtime
+          ? `${choice.spec} (${choice.runtime.model.provider}/${choice.runtime.model.id}, ${choice.runtime.thinkingLevel} effort)`
+          : `${choice.spec} (cannot run: ${clip(choice.problem, "spawning on it refuses with the whole reason")})`,
+      );
     return [
       `- ${agent.name}: ${clip(agent.description, "agent_get reads it whole")}`,
       `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
@@ -257,11 +267,12 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
       }, ${runtime.thinkingLevel} effort${
         runtime.accountName ? `, account ${runtime.accountName}` : ""
       }${runtime.agent.persona === "developer" ? "; needs a worktreeId" : ""}`,
+      ...(others.length > 0 ? [`  also runs on: ${others.join("; ")}`] : []),
     ].join("\n");
   });
   const omitted = agents.length - shown.length;
   return [
-    `Agent definitions (${agents.length}${omitted > 0 ? `, the first ${shown.length} listed` : ""}). Spawn one with a row naming it as agent (no profileId, no agentType); the prompt still states the target and the task.`,
+    `Agent definitions (${agents.length}${omitted > 0 ? `, the first ${shown.length} listed` : ""}). Spawn one with a row naming it as agent (no profileId, no agentType); it runs on its first model, or on another it lists named as modelId. Any other runtime needs operation "propose" with the agent. The prompt still states the target and the task.`,
     ...lines,
     ...(omitted > 0
       ? [
@@ -305,7 +316,10 @@ async function runDirectSpawn(
       prompt: row.prompt,
       ...(row.owner === undefined ? {} : { owner: row.owner }),
       ...(row.agent
-        ? { agent: row.agent }
+        ? {
+            agent: row.agent,
+            ...(row.modelId === undefined ? {} : { modelId: row.modelId }),
+          }
         : { profileId: row.profileId!, agentType: row.agentType! }),
       ...(row.responseRequested === undefined
         ? {}
@@ -388,9 +402,12 @@ async function runProposal(
   try {
     body = await buildSpawnProposal({
       senderSessionId: ctx.session.sessionId,
+      // `checkRawRow` proved each row names an agent or an agentType.
       rows: rows.map(
-        ({ profileId: _profile, agent: _agent, ...row }) =>
-          row as SpawnRequestRow,
+        ({ profileId: _profile, agent, agentType, ...row }): SpawnRequestRow =>
+          agent !== undefined
+            ? { ...row, agent }
+            : { ...row, agentType: agentType! },
       ),
     });
   } catch (err) {
@@ -441,11 +458,11 @@ function readOperation(value: unknown): SpawnOperation {
  * One row as parsed off the wire; which fields are legal is the caller's rule.
  * `agentType` is absent exactly on an agent row.
  */
-interface ParsedRow extends Omit<SpawnRequestRow, "agentType"> {
-  agentType?: SpawnRequestRow["agentType"];
+type ParsedRow = Omit<SpawnRequestRow, "agentType" | "agent"> & {
+  agentType?: "developer" | "assistant";
   profileId?: string;
   agent?: string;
-}
+};
 
 /** Every property a row may carry, on any operation. */
 const ROW_PROPERTIES = [
@@ -510,28 +527,24 @@ function checkRawRow(
 
   if (operation === "spawn") {
     for (const key of RUNTIME_HINTS)
-      if (stated(row, key))
+      if (stated(row, key) && !(key === "modelId" && stated(row, "agent")))
         throw new Error(
           stated(row, "agent")
-            ? `${where} sets ${key}, which an agent row does not accept: the agent definition decides the model and effort, and the account follows from the model.`
+            ? `${where} sets ${key}, which an agent row does not accept: the definition decides the effort, modelId picks one of its listed models, and the account follows from the model. Use operation "propose" with the agent to ask the user for a different runtime.`
             : `${where} sets ${key}, which operation "spawn" does not accept: the approved runtime named by profileId decides the account, model and thinking level. Use operation "propose" to ask the user for a different runtime.`,
         );
-    if (stated(row, "agent"))
-      for (const key of ["profileId", "agentType"] as const)
-        if (stated(row, key))
-          throw new Error(
-            `${where} names an agent and sets ${key}: the definition decides the persona and the runtime, so drop ${key}.`,
-          );
-  } else {
-    if (stated(row, "profileId"))
+    if (stated(row, "agent") && stated(row, "profileId"))
       throw new Error(
-        `${where} names a profileId, which belongs to operation "spawn". A proposal lets the user pick the runtime, so drop it or spawn directly.`,
+        `${where} names an agent and sets profileId: an agent runs on one of the models its definition lists, chosen with modelId. Drop profileId, or use operation "propose" with the agent to ask the user for another runtime.`,
       );
-    if (stated(row, "agent"))
-      throw new Error(
-        `${where} names an agent, which belongs to operation "spawn": the user already approved what a definition runs on, so spawn it directly.`,
-      );
-  }
+  } else if (stated(row, "profileId"))
+    throw new Error(
+      `${where} names a profileId, which belongs to operation "spawn". A proposal lets the user pick the runtime, so drop it or spawn directly.`,
+    );
+  if (stated(row, "agent") && stated(row, "agentType"))
+    throw new Error(
+      `${where} names an agent and sets agentType: the definition decides the persona, so drop agentType.`,
+    );
 
   // Kind checks for what remains. A stated value of the wrong type is refused
   // rather than ignored, for the same reason: silence would hide the request.
@@ -572,7 +585,7 @@ function readRows(
     return {
       title: text(row.title),
       ...(stated(row, "agentType")
-        ? { agentType: text(row.agentType) as SpawnRequestRow["agentType"] }
+        ? { agentType: text(row.agentType) as ParsedRow["agentType"] }
         : {}),
       prompt: text(row.prompt),
       ...(typeof row.responseRequested === "boolean"

@@ -42,6 +42,7 @@ const reviewer = {
   provider: "claude-sdk",
   model: "opus",
   effort: "high" as const,
+  runtimeSource: "definition" as const,
   denyTools: ["worktree_push", "bash", "write"],
   skills: [],
   body: "Prove every new test fails without the change.",
@@ -63,6 +64,45 @@ test("an unreadable row refuses to run rather than run without the agent", () =>
     unreadable: true,
   });
   assert.equal(sessionAgentSummary("never-spawned"), undefined);
+});
+
+test("a row stored before runtimes had a source ran its definition's own", () => {
+  const { runtimeSource: _source, ...older } = reviewer;
+  sessionStore.freezeAgent("older-row", JSON.stringify(older));
+  assert.equal(sessionAgent("older-row")?.runtimeSource, "definition");
+  const summary = sessionAgentSummary("older-row");
+  assert.equal(
+    summary && !summary.unreadable && summary.runtimeSource,
+    "definition",
+  );
+  // A source this build does not know fails closed like any unreadable row.
+  sessionStore.freezeAgent(
+    "unknown-source",
+    JSON.stringify({ ...reviewer, runtimeSource: "someone" }),
+  );
+  assert.throws(
+    () => sessionAgent("unknown-source"),
+    SessionAgentUnreadableError,
+  );
+});
+
+test("an approved runtime is frozen and shown with its source", () => {
+  const approved = {
+    ...reviewer,
+    provider: "openai-codex",
+    model: "gpt-6.1-sol",
+    runtimeSource: "approval" as const,
+  };
+  assert.deepEqual(freezeSessionAgent("approved-row", approved), approved);
+  assert.deepEqual(sessionAgentSummary("approved-row"), {
+    name: "test-reviewer",
+    blob: reviewer.blob,
+    model: "openai-codex/gpt-6.1-sol",
+    effort: "high",
+    runtimeSource: "approval",
+    denyTools: reviewer.denyTools,
+    skills: [],
+  });
 });
 
 test("denied app tools leave the toolset; native names never match app tools", () => {

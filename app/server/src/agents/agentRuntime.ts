@@ -1,7 +1,7 @@
 /**
  * Whether an agent definition can RUN right now (`docs/agent-definitions.md`
- * "Model and effort", "Tools"): its model resolves against the connected
- * accounts, its effort fits that model, the tools it denies exist for its
+ * "Model and effort", "Tools"): its models resolve against the connected
+ * accounts, its effort fits each of them, the tools it denies exist for its
  * persona, and the skills it mounts are valid library skills.
  *
  * None of this is the manifest's content rule — it depends on accounts,
@@ -41,6 +41,18 @@ export interface AgentRuntime {
    * an approval checks and a spawn freezes.
    */
   thinkingLevel: ThinkingLevel;
+}
+
+/** One listed model as it resolves now, or why it cannot run. */
+export type AgentModelChoice =
+  | { spec: string; runtime: AgentRuntime; problem?: undefined }
+  | { spec: string; problem: string; runtime?: undefined };
+
+/** `provider/id`, plus the version a pin holds an alias to. */
+export function agentRuntimeLabel(runtime: AgentRuntime): string {
+  return `${runtime.model.provider}/${runtime.model.id}${
+    runtime.pinnedModel ? ` (${runtime.pinnedModel})` : ""
+  }`;
 }
 
 /** The outside state a runtime check reads; injectable for tests. */
@@ -157,41 +169,78 @@ function quoteFew(names: readonly string[]): string {
 /** Tools a definition may not deny: every spawn depends on them. */
 const AGENT_REQUIRED_TOOLS = ["session_send_prompt"] as const;
 
+/** Resolve one listed model and fit the definition's effort to it. */
+function agentRuntimeFor(
+  spec: string,
+  effort: ThinkingLevel | undefined,
+  models: readonly AgentModelOption[],
+): AgentRuntime {
+  const model = resolveAgentModel(spec, models);
+  const { pinnedId, ...option } = model;
+  const pinned =
+    pinnedId !== undefined &&
+    [pinnedId, `${model.provider}/${pinnedId}`].some(
+      (form) => form.toLowerCase() === spec.toLowerCase(),
+    );
+  return {
+    model: option,
+    ...(pinned ? { pinnedModel: pinnedId } : {}),
+    thinkingLevel: clampThinkingLevelForModel(
+      option,
+      effort ?? AGENT_DEFAULT_EFFORT,
+    ),
+  };
+}
+
 /**
  * Check everything about a definition that its file alone cannot prove, and
- * throw ONE refusal naming every problem. `checkModel: false` skips the model
- * (an edit that leaves model and effort alone must not fail because an
- * account was disconnected since the definition was approved).
+ * throw ONE refusal naming every problem. It answers every listed model in
+ * order. `checkModel: false` skips the models (an edit that leaves models and
+ * effort alone must not fail because an account was disconnected since the
+ * definition was approved). `"each"` reports a model that cannot run on its
+ * own row rather than refusing: a spawn needs only the one it runs on.
  */
 export async function checkAgentRuntime(
   manifest: Pick<
     AgentManifest,
-    "persona" | "model" | "effort" | "denyTools" | "skills"
+    "persona" | "models" | "effort" | "denyTools" | "skills"
   >,
-  options: { checkModel?: boolean; sources?: AgentRuntimeSources } = {},
-): Promise<AgentRuntime | undefined> {
+  options: {
+    checkModel?: boolean | "each";
+    sources?: AgentRuntimeSources;
+  } = {},
+): Promise<AgentModelChoice[] | undefined> {
   const sources = options.sources ?? activeSources;
   const problems: string[] = [];
-  let runtime: AgentRuntime | undefined;
+  let choices: AgentModelChoice[] | undefined;
   if (options.checkModel !== false) {
-    try {
-      const model = resolveAgentModel(manifest.model, await sources.models());
-      const { pinnedId, ...option } = model;
-      const pinned =
-        pinnedId !== undefined &&
-        [pinnedId, `${model.provider}/${pinnedId}`].some(
-          (form) => form.toLowerCase() === manifest.model.toLowerCase(),
-        );
-      runtime = {
-        model: option,
-        ...(pinned ? { pinnedModel: pinnedId } : {}),
-        thinkingLevel: clampThinkingLevelForModel(
-          option,
-          manifest.effort ?? AGENT_DEFAULT_EFFORT,
-        ),
-      };
-    } catch (error) {
-      problems.push((error as Error).message);
+    const models = await sources.models();
+    choices = manifest.models.map((spec) => {
+      try {
+        return {
+          spec,
+          runtime: agentRuntimeFor(spec, manifest.effort, models),
+        };
+      } catch (error) {
+        return { spec, problem: (error as Error).message };
+      }
+    });
+    if (options.checkModel !== "each") {
+      const seen = new Map<string, string>();
+      for (const choice of choices) {
+        if (choice.problem !== undefined) {
+          problems.push(choice.problem);
+          continue;
+        }
+        // Two specs for one model would offer a caller a choice that is none.
+        const label = agentRuntimeLabel(choice.runtime);
+        const earlier = seen.get(label);
+        if (earlier !== undefined)
+          problems.push(
+            `Models "${earlier}" and "${choice.spec}" both resolve to ${label}; list it once.`,
+          );
+        else seen.set(label, choice.spec);
+      }
     }
   }
   if (manifest.denyTools.length > 0) {
@@ -224,5 +273,5 @@ export async function checkAgentRuntime(
       );
   }
   if (problems.length > 0) throw new EntryValidationError(problems.join(" "));
-  return runtime;
+  return choices;
 }

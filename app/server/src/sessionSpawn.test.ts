@@ -1969,9 +1969,11 @@ function writeAgent(patch: Record<string, unknown> = {}): void {
   };
   const folder = join(agentsRoot, String(definition.name));
   mkdirSync(folder, { recursive: true });
+  // A `model` patch is the one listed model; `models` lists several.
+  const { model, ...rest } = definition;
   writeFileSync(
     join(folder, "AGENT.md"),
-    formatAgentManifest(definition as never),
+    formatAgentManifest({ models: [model], ...rest } as never),
   );
 }
 
@@ -2190,19 +2192,134 @@ test.each([
   [{ profileId: "pr_terra" }, /names an agent and sets profileId/],
   [{ agentType: "assistant" }, /names an agent and sets agentType/],
   [
+    { thinkingLevel: "high" },
+    /sets thinkingLevel, which an agent row does not accept: the definition decides the effort/,
+  ],
+  [
+    { provider: "claude-sdk" },
+    /sets provider, which an agent row does not accept/,
+  ],
+  [
     { modelId: "opus" },
-    /which an agent row does not accept: the agent definition decides/,
+    /does not list "opus"; it runs only on sonnet\. To run it on another model, use operation "propose"/,
   ],
 ])("an agent row stating %o is refused", async (patch, error) => {
   await useAgents();
-  writeAgent();
+  writeAgent({ persona: "assistant" });
   await expect(spawnDirect([agentRow(patch)])).rejects.toThrow(error);
+  expect(recorded.claude).toHaveLength(0);
+  expect(recorded.pi).toHaveLength(0);
 });
 
-test("a proposal may not name an agent, and a row without one needs agentType", async () => {
-  await expect(propose([{ ...row(), agent: "test-reviewer" }])).rejects.toThrow(
-    /names an agent, which belongs to operation "spawn"/,
+test("an agent row runs on another model its definition lists, with the same role", async () => {
+  await useAgents();
+  writeAgent({ models: ["sonnet", "gpt-5"] });
+  activeWorktree("wt-agent-listed");
+
+  const text = await spawnDirect([
+    agentRow({ worktreeId: "wt-agent-listed", modelId: "gpt-5" }),
+  ]);
+
+  expect(recorded.claude).toHaveLength(0);
+  expect(recorded.pi[0]).toMatchObject({
+    agentType: "developer",
+    modelId: "gpt-5",
+    agent: {
+      name: "test-reviewer",
+      persona: "developer",
+      provider: "openai-codex",
+      model: "gpt-5",
+      runtimeSource: "definition",
+      denyTools: ["worktree_push"],
+      body: "You are a test reviewer.",
+    },
+  });
+  expect(text).toContain("on agent test-reviewer");
+});
+
+test("an unavailable default refuses and names the listed models that can run", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", models: ["gemini", "gpt-5"] });
+
+  await expect(spawnDirect([agentRow()])).rejects.toThrow(
+    /cannot run on its default model "gemini": .* Its listed models that can run now: gpt-5 \(openai-codex\/gpt-5\); name one as modelId\./,
   );
+  expect(recorded.pi).toHaveLength(0);
+
+  // Naming the one that can run is the caller's explicit choice.
+  await spawnDirect([agentRow({ modelId: "gpt-5" })]);
+  expect(recorded.pi[0]).toMatchObject({ modelId: "gpt-5" });
+});
+
+test("a proposal may name an agent: the user picks the runtime, the role stays", async () => {
+  await useAgents();
+  writeAgent({ name: "researcher", persona: "assistant", model: "gpt-5" });
+  await expect(propose([{ ...row(), agent: "researcher" }])).rejects.toThrow(
+    /names an agent and sets agentType/,
+  );
+  const { agentType: _persona, ...withoutPersona } = row();
+
+  // Without hints the card starts from the definition's default runtime.
+  const { card: plain } = await propose([
+    { ...withoutPersona, agent: "researcher" },
+  ]);
+  expect(bodyOf(plain).items[0]).toMatchObject({
+    agent: "researcher",
+    agentType: "assistant",
+    provider: "openai-codex",
+    modelId: "gpt-5",
+  });
+
+  // A model the definition does not list, approved in the card.
+  const { card } = await propose([
+    {
+      ...withoutPersona,
+      agent: "researcher",
+      provider: "claude-sdk",
+      modelId: "sonnet",
+      thinkingLevel: "high",
+    },
+  ]);
+  expect(bodyOf(card).items[0]).toMatchObject({
+    agent: "researcher",
+    provider: "claude-sdk",
+    modelId: "sonnet",
+  });
+  const { card: done } = await resolveApproval(card.id, "approved");
+  expect(done.status).toBe("executed");
+  const id = String(recorded.claude[0]!.id);
+  expect(JSON.parse(sessionStore.getAgent(id)!)).toMatchObject({
+    name: "researcher",
+    persona: "assistant",
+    provider: "claude-sdk",
+    model: "sonnet",
+    effort: "high",
+    runtimeSource: "approval",
+    denyTools: ["worktree_push"],
+    body: "You are a test reviewer.",
+  });
+  expect(JSON.parse(sessionStore.getAgent(id)!)).not.toHaveProperty(
+    "pinnedModel",
+  );
+});
+
+test("a card for an agent whose persona changed while it waited stays pending", async () => {
+  await useAgents();
+  writeAgent({ name: "researcher", persona: "assistant", model: "gpt-5" });
+  const { agentType: _persona, ...withoutPersona } = row();
+  const { card } = await propose([{ ...withoutPersona, agent: "researcher" }]);
+  activeWorktree("wt-persona-moved");
+  writeAgent({ name: "researcher", persona: "developer", model: "gpt-5" });
+
+  await expect(resolveApproval(card.id, "approved")).rejects.toThrow(
+    /now runs as the developer persona, not the assistant this card was proposed for/,
+  );
+  expect(approvalsForSession(SENDER).at(-1)?.status).toBe("pending");
+  expect(recorded.pi).toHaveLength(0);
+  expect(recorded.claude).toHaveLength(0);
+});
+
+test("a row without an agent needs agentType", async () => {
   const { agentType: _omitted, ...withoutPersona } = row();
   await expect(
     spawnDirect([{ ...withoutPersona, profileId: "pr_terra" }]),

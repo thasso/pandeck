@@ -46,7 +46,10 @@ export interface EntryLibraryList {
   agentRuntimes?: Record<string, AgentRuntimeSummary>;
 }
 
-/** What one agent definition runs on now, as the browser shows and preselects it. */
+/**
+ * What one agent definition runs on now, as the browser shows and preselects
+ * it: its default (first listed) model, and every model it lists.
+ */
 export type AgentRuntimeSummary =
   | {
       persona: "developer" | "assistant";
@@ -55,9 +58,23 @@ export type AgentRuntimeSummary =
       /** The concrete version a definition pins, when it names one. */
       pinnedModel?: string;
       thinkingLevel: ThinkingLevel;
+      models: AgentListedModelSummary[];
       problem?: never;
     }
   | { problem: string; persona?: never };
+
+/** One model a definition lists, as it resolves now, or why it cannot run. */
+type AgentListedModelSummary =
+  | {
+      /** As written in the definition. */
+      spec: string;
+      provider: string;
+      modelId: string;
+      pinnedModel?: string;
+      thinkingLevel: ThinkingLevel;
+      problem?: never;
+    }
+  | { spec: string; problem: string; provider?: never };
 
 /**
  * One definition's runtime from an agents list. An own-property read: a

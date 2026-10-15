@@ -94,6 +94,7 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
     provider: "openai-codex",
     model: "gpt-5",
     effort: "high",
+    runtimeSource: "definition",
     denyTools: ["bash"],
     skills: [],
     body: "Review the tests.",
