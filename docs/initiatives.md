@@ -183,15 +183,15 @@ The page has two views:
 - **List**: the members as a tree with progress per epic, for reading and for
   small screens.
 
-A node shows the Task's title, its short label when it has one, its status
-(todo, doing or done) and, separately, a blocked marker (see Progress): a
-started Task whose blocker is still open shows doing AND blocked, and a todo
-Task with neither is startable. An archived member is toned back, like an
-archived Task link. A node also carries a marker while a session is running on
-the Task. "Startable" and the critical path are computed, never stored. The
-critical path is the longest chain of open Tasks along `blocks` ending at the
-next open milestone. The map can highlight it, hide done Tasks, and collapse a
-member epic into one node with its progress ("7/14 done") and expand it again.
+A node shows the Task's title, its Task id badge (`Task-<n>`), its status (todo,
+doing or done) and, separately, a blocked marker (see Progress): a started Task
+whose blocker is still open shows doing AND blocked, and a todo Task with
+neither is startable. An archived member is toned back, like an archived Task
+link. A node also carries a marker while a session is running on the Task.
+"Startable" and the critical path are computed, never stored. The critical path
+is the longest chain of open Tasks along `blocks` ending at the next open
+milestone. The map can highlight it, hide done Tasks, and collapse a member epic
+into one node with its progress ("7/14 done") and expand it again.
 
 Selecting a node opens the object panel with the existing Task detail and the
 Task's sessions, where a session can be started from the Task and its status
@@ -211,8 +211,9 @@ re-reads the graph.
   graph or asks for a layout; the Initiative event that follows it does.
 - **What a node is.** A member or an outside blocker stub opens that real Task
   in the object panel. Lanes, Project groups and the milestone column are
-  drawing and take no input. A Task has no short-label field yet, so a node
-  shows its title and `#id`.
+  drawing and take no input. A node and a list row name a Task by its title and
+  its Task id badge; nothing is parsed from the title, so a label an agent wrote
+  into it (Hosted Labs' "L6") reads as part of the title.
 
 ## The attention list
 

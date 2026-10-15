@@ -34,6 +34,7 @@ import { IconButton } from "../common/IconButton.tsx";
 import { LIVE_PULSE } from "../common/load.tsx";
 import { TaskStatusIcon } from "../TaskStatusIcon.tsx";
 import { TaskBlockedIndicator } from "../TaskBlockedIndicator.tsx";
+import { TaskIdBadge } from "../TaskIdBadge.tsx";
 import {
   memberStateLabel,
   type InitiativeMember,
@@ -185,7 +186,7 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
           aria-hidden
           className="flex w-full min-w-0 items-center gap-2 text-xs text-muted-foreground"
         >
-          <span className="font-mono tabular-nums">#{layoutNode.taskId}</span>
+          <TaskIdBadge id={layoutNode.taskId} />
           {external ? <span className="truncate">Outside</span> : null}
           {layoutNode.kind === "collapsed" && layoutNode.progress ? (
             <span className="tabular-nums">

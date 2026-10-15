@@ -4,6 +4,7 @@ import { Item } from "../ui/item.tsx";
 import { LIVE_PULSE } from "../common/load.tsx";
 import { TaskStatusIcon } from "../TaskStatusIcon.tsx";
 import { TaskBlockedIndicator } from "../TaskBlockedIndicator.tsx";
+import { TaskIdBadge } from "../TaskIdBadge.tsx";
 import {
   flattenTree,
   memberStateLabel,
@@ -139,9 +140,7 @@ const MemberRow = memo(function MemberRow({
               {progress.done}/{progress.total} done
             </span>
           ) : null}
-          <span className="font-mono text-xs text-muted-foreground tabular-nums">
-            #{member.id}
-          </span>
+          <TaskIdBadge id={member.id} />
         </span>
       </Item>
     </li>

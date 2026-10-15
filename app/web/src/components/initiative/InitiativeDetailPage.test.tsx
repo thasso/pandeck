@@ -159,6 +159,10 @@ describe("InitiativeDetailPage views", () => {
     expect(container.querySelector("[aria-label='Initiative map']")).toBeNull();
     const row = button(container, /Per-customer session quotas/)!;
     expect(row.getAttribute("aria-label")).toContain("In progress, blocked");
+    // Named by its title and the shared Task id badge, nothing parsed.
+    expect(row.querySelector(`[title="Task-${T.SDC5}"]`)?.textContent).toBe(
+      `#${T.SDC5}`,
+    );
     act(() => row.click());
     expect(onSelectTask).toHaveBeenCalledWith(T.SDC5);
   });
@@ -186,6 +190,12 @@ describe("InitiativeDetailPage views", () => {
     // Every laid-out box is a Task button; lanes and groups are not.
     const nodes = map!.querySelectorAll(".react-flow__node button");
     expect(nodes).toHaveLength(HOSTED_LABS_LAYOUT.nodes.length);
+    for (const node of HOSTED_LABS_LAYOUT.nodes)
+      expect(
+        map!.querySelector(
+          `[data-id="${node.id}"] [title="Task-${node.taskId}"]`,
+        ),
+      ).not.toBeNull();
     // A pointer reaches every Task node and passes through every frame (a
     // jsdom `click()` alone would not notice either).
     const wrappers = [
