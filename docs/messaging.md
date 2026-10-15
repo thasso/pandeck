@@ -53,6 +53,11 @@ is nothing to do, and `TOAST_DWELL_MS` when the reader must finish reading or
 act, such as for a failure or an action. Which one applies is a function of what
 the toast asks of the reader, and nothing else.
 
+Global toasts sit at the top center, below the header or mobile status pill,
+with the top safe area respected on desktop and mobile. They do not occupy the
+bottom composer or object-dock area. Each toast has one close button; an error
+uses a warning triangle rather than another X-shaped glyph.
+
 ## Failures
 
 A failure lives on its object. It says what failed, and where the user can act

@@ -102,6 +102,22 @@ export const Restarting: Story = {
   args: { status: "restarting", toast: "none" },
 };
 
+/** An error below the desktop header, with one unambiguous close button. */
+export const ErrorToast: Story = {
+  args: { status: "live", toast: "error" },
+};
+
+/** The error stays below the phone status pill and clear of bottom controls. */
+export const PhoneErrorToast: Story = {
+  args: { status: "restart-queued", toast: "error" },
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+};
+
+export const PhoneErrorToastDark: Story = {
+  ...PhoneErrorToast,
+  globals: { theme: "dark", viewport: { value: "paPhone", isRotated: false } },
+};
+
 /** Appears after the reconnect grace period. */
 export const Reconnecting: Story = {
   args: { status: "reconnecting", toast: "error" },

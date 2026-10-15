@@ -23,7 +23,7 @@
  * surface — on a wide layout the menu closed when the row was chosen, and the
  * dock's row is a button, not a place a failure can wait to be found — so its
  * outcome, good or bad, travels as a toast NAMING the pull request. The review's success is the one silent case: the navigation
- * is the confirmation, and a toast over the composer would announce what the
+ * is the confirmation, and a toast would announce what the
  * user is already looking at. Only when its surface is GONE by the time the
  * answer lands does the review speak instead of navigating, with the hand-off
  * as the toast's action, which is the case `docs/messaging.md` reserves a

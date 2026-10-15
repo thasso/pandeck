@@ -34,7 +34,8 @@ the same parts a shadcn example would.
     rotating `<svg>` at a fractional offset (`loading-states.md`).
   - `sonner.tsx`: reads the `.dark` class instead of `next-themes`, and its
     loading icon is the decorative `Spinner` (as in `button.tsx`), not a
-    spinning `Loader2Icon`.
+    spinning `Loader2Icon`. Errors use `TriangleAlertIcon` so the close button
+    is the only X-shaped glyph.
   - `input-group.tsx`: dims only when its text control is disabled, not when any
     addon button is.
   - `slider.tsx`: `thumbProps` (accessible name and value text belong on the

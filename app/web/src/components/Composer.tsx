@@ -1178,7 +1178,7 @@ export const Composer = memo(function Composer({
     maxUtteranceSeconds: dictation?.status?.maxUtteranceSeconds ?? 120,
     onTranscript: (spoken) => insertDictated(spoken),
     // Dictation failures are transient feedback about a gesture, so they belong
-    // in the toast stack (which floats above the composer and dismisses itself),
+    // in the auto-dismissing toast stack,
     // not in the error slot under the bar — that slot is about the draft you are
     // about to send and sticks around until something replaces it.
     onError: (message) =>
