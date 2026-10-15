@@ -122,6 +122,9 @@ export function canonicalSidebarSection(route: Route): SidebarSection {
       return "tasks";
     case "projects":
       return "projects";
+    // Initiatives are the group at the top of the Projects browser.
+    case "initiatives":
+      return "projects";
     case "pullRequests":
       return "pull-requests";
     // A worktree's canonical browse location is its Project page now; the

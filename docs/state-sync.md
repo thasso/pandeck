@@ -204,7 +204,12 @@ per-surface sub-tasks — no page invents its own delta format.
   subscribe answer is a snapshot (`initiativeList`) or, when asked, a digest
   with `getStateItems` catch-up. The graph read also carries the map's layout,
   laid out in a worker thread when it is read and never from a write or a flush;
-  status changes keep it (`docs/initiatives.md`, Layout and placement).
+  status changes keep it (`docs/initiatives.md`, Layout and placement). The
+  client keeps a few reads keyed by id: a newer revision from an event, a
+  snapshot, or a snapshot that leaves the id out marks a held read stale and its
+  open page re-reads it, keeping the old graph on screen; an answer older than a
+  revision the tab already holds is shown and read again. A Task event never
+  touches it.
 - Subagents: canonical durable thread registry summaries, with revisions in
   event sidecars; an authorized connection may hold one or more thread-detail
   topics, each with a bounded snapshot/digest/item read and its own

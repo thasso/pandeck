@@ -76,6 +76,8 @@ export interface TopicSurface {
  * staged-context Task picker is expanded. Session inspector surfaces also
  * subscribe to the skills library while they render its loaded/unloaded list,
  * and to Worktrees while they list the worktrees the session's spawn tree owns.
+ * Initiatives are held by the Projects browser, whose top group lists them, and
+ * by their own pages, which add Tasks and Projects for the live map.
  */
 export function topicsForSurface({
   sidebarVisible,
@@ -117,6 +119,16 @@ export function topicsForSurface({
   // Backlog broadcasts on the session list to spell out a name.
   if (shownSection === "sessions") topics.add("workflow");
   if (projectBrowser || projectIndexSurface) topics.add("projects");
+  // Initiatives are the group at the top of the Projects browser, and their
+  // pages read them. One Initiative's page also reads the Tasks topic, which
+  // recolours a node the moment a member's status moves, and Projects, which
+  // names each lane's Project. It reads no Worktree projection.
+  const initiativeSurface = routeName === "initiatives";
+  if (projectBrowser || initiativeSurface) topics.add("initiatives");
+  if (initiativeSurface) {
+    topics.add("tasks");
+    topics.add("projects");
+  }
   if (
     shownSection === "tasks" ||
     projectBrowser ||

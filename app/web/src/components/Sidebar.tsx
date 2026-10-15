@@ -10,6 +10,7 @@ import {
 import { FileDiff } from "lucide-react";
 import type {
   InboxPositionEntry,
+  InitiativeSummary,
   ProjectRecord,
   PullRequestInventoryItem,
   SessionListItem,
@@ -39,6 +40,7 @@ import type {
 import { SessionInbox } from "./SessionInbox.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
+import { InitiativeBrowserGroup } from "./initiative/InitiativeBrowserGroup.tsx";
 import {
   WorktreeFileTree,
   useWorktreeFileTree,
@@ -166,6 +168,12 @@ interface Props {
   ) => void;
   /** Open a Project's detail route. */
   onOpenProject: (id: string) => void;
+  /** Live Initiative summaries, for the group atop the Projects browser. */
+  initiatives: readonly InitiativeSummary[];
+  /** An Initiative snapshot answered during this socket episode. */
+  initiativesFresh: boolean;
+  /** Initiative id open in the main pane, for highlighting. */
+  selectedInitiativeId: string | null;
   /** All known worktrees; null until first fetched. */
   worktrees: WorktreeRecord[] | null;
   /** Live git status per worktree id: what THIS socket episode observed. */
@@ -467,6 +475,9 @@ function SidebarImpl({
   onLoadProjects,
   onReorderProjects,
   onOpenProject,
+  initiatives,
+  initiativesFresh,
+  selectedInitiativeId,
   worktrees,
   worktreeStatuses,
   lastKnownWorktreeStatuses = NO_WORKTREE_STATUSES,
@@ -838,27 +849,35 @@ function SidebarImpl({
             externalToolbar
           />
         ) : section === "projects" ? (
-          <ProjectTreePane
-            projects={activeProjects}
-            selectedId={selectedProjectId}
-            loading={!projectsLoaded}
-            reorderState={projectMutations["registry:reorder"]}
-            relationsLoading={worktrees === null}
-            sessions={projectSessionCache.current.value}
-            currentSessionId={currentId}
-            worktrees={worktrees}
-            worktreeStatuses={projectStatusCache.current.value}
-            selectedWorktreeId={selectedWorktreeId}
-            onReorder={onReorderProjects}
-            onOpenProject={onOpenProject}
-            onOpenSession={onSelect}
-            onArchiveSession={onArchive}
-            onOpenWorktree={onOpenWorktree}
-            onStartSession={onStartSessionForProject}
-            onStartSessionInWorktree={onStartSessionInWorktree}
-            onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
-            flush
-          />
+          <>
+            <InitiativeBrowserGroup
+              initiatives={initiatives}
+              fresh={initiativesFresh}
+              selectedId={selectedInitiativeId}
+              onNavigate={onNavigate}
+            />
+            <ProjectTreePane
+              projects={activeProjects}
+              selectedId={selectedProjectId}
+              loading={!projectsLoaded}
+              reorderState={projectMutations["registry:reorder"]}
+              relationsLoading={worktrees === null}
+              sessions={projectSessionCache.current.value}
+              currentSessionId={currentId}
+              worktrees={worktrees}
+              worktreeStatuses={projectStatusCache.current.value}
+              selectedWorktreeId={selectedWorktreeId}
+              onReorder={onReorderProjects}
+              onOpenProject={onOpenProject}
+              onOpenSession={onSelect}
+              onArchiveSession={onArchive}
+              onOpenWorktree={onOpenWorktree}
+              onStartSession={onStartSessionForProject}
+              onStartSessionInWorktree={onStartSessionInWorktree}
+              onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+              flush
+            />
+          </>
         ) : section === "pull-requests" ? (
           <PullRequestBrowser
             inventory={pullRequestInventory}

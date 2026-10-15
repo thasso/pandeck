@@ -201,6 +201,19 @@ The map is live: it follows the `tasks` and `initiatives` topics, so a status
 change recolours a node without a reload, and a link or membership change
 re-reads the graph.
 
+- **Which view.** Map is the default on a wide screen and List on a phone; the
+  user's switch holds for the browser tab. A read that carries `layoutError`
+  shows the reason and a retry the user presses (nothing retries on its own, so
+  a busy layout pool is never polled), and lists the members instead.
+- **What is live.** Between reads, a node's status, title, blocked marker and
+  running marker come from the Tasks topic and the session list. The read alone
+  decides membership, hierarchy and geometry, so a Task event never reads the
+  graph or asks for a layout; the Initiative event that follows it does.
+- **What a node is.** A member or an outside blocker stub opens that real Task
+  in the object panel. Lanes, Project groups and the milestone column are
+  drawing and take no input. A Task has no short-label field yet, so a node
+  shows its title and `#id`.
+
 ## The attention list
 
 An Initiative is a Sessions inbox item, following the Workflow Run precedent

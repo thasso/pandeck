@@ -69,6 +69,8 @@ import type {
   ProjectListRequest,
   ProjectListResponse,
   ProjectRecord,
+  InitiativeDetail,
+  InitiativeLayout,
   InitiativeSummary,
   ProjectSummary,
   PullRequestCard,
@@ -418,6 +420,16 @@ interface WorkflowRunStartState {
   error?: string;
 }
 
+/**
+ * One `initiativeDetail` answer: the graph, and the map's layout for exactly
+ * that graph or why it could not be drawn (`layoutError`, with the graph kept).
+ */
+export interface InitiativeRead {
+  item: InitiativeDetail;
+  layout?: InitiativeLayout;
+  layoutError?: string;
+}
+
 export interface UIState {
   hydrated: boolean;
   /** `cache` means the app shell rendered from browser-local data and is waiting for websocket reconciliation. */
@@ -497,6 +509,21 @@ export interface UIState {
    * is subscribed. The graph is a keyed `getInitiative` read.
    */
   initiatives: InitiativeSummary[];
+  /** An `initiativeList` snapshot answered during the current socket episode. */
+  initiativesFresh: boolean;
+  /** The Initiative list could not be read; cleared by the next snapshot. */
+  initiativeListError: string | null;
+  /**
+   * Keyed Initiative reads (`getInitiative`): the graph with its map layout, or
+   * `ready(null)` when it does not exist or was deleted. A newer `initiatives`
+   * event or snapshot revision re-reads an entry; Task events never do.
+   */
+  initiativeDetails: Record<string, LoadState<InitiativeRead | null>>;
+  /** The revision each held read is as of, pruned with the cache. */
+  initiativeDetailRevisions: Record<string, number>;
+  initiativeDetailsLru: string[];
+  /** The Initiative a page is showing; its read is never pruned. */
+  openInitiativeId: string | null;
   /**
    * Canonical bounded background-work registry. Held only while the topic is
    * subscribed; per-session activity travels on the session row instead, so no
@@ -881,6 +908,12 @@ const emptyInitial: UIState = {
   stateEventRevisions: {},
   subagentThreads: [],
   initiatives: [],
+  initiativesFresh: false,
+  initiativeListError: null,
+  initiativeDetails: {},
+  initiativeDetailRevisions: {},
+  initiativeDetailsLru: [],
+  openInitiativeId: null,
   backgroundWorkItems: [],
   backgroundWorkTruncated: false,
   backgroundStopPending: [],
@@ -1532,6 +1565,8 @@ const LONG_MUTATION_SETTLE_TIMEOUT_MS = 15 * 60_000;
 /** Full Task bodies are useful on revisit but must stay bounded. */
 export const TASK_PROJECTION_CACHE_LIMIT = 16;
 const PROJECT_DETAIL_CACHE_LIMIT = 12;
+/** Initiative reads carry a whole graph and layout, so fewer are kept. */
+const INITIATIVE_DETAIL_CACHE_LIMIT = 6;
 /** Digest catch-up degrades to the full snapshot instead of hanging stale. */
 const TASK_DIGEST_TIMEOUT_MS = 10_000;
 
@@ -1821,6 +1856,15 @@ type Action =
       events: ProjectStateEventsMessage["events"];
     }
   | { kind: "setOpenProjectProjection"; id: string | null }
+  | { kind: "initiativeDetailLoad"; id: string }
+  | {
+      kind: "initiativeDetailResult";
+      id: string;
+      read: InitiativeRead | null;
+      revision?: number;
+      error?: string;
+    }
+  | { kind: "setOpenInitiative"; id: string | null }
   | { kind: "projectMutationStart"; key: string }
   | { kind: "projectMutationResult"; key: string; error?: string }
   | { kind: "worktreeListLoad" }
@@ -3748,6 +3792,29 @@ function applySubagentEvent(
   };
 }
 
+/**
+ * Mark a held Initiative read for a re-read when `revision` is newer than the
+ * one it is as of. Only a summary revision does this — an event, a snapshot or
+ * the answer to a read — and never a Task event, which recolours the map from
+ * the Tasks topic without a read or a layout.
+ */
+function staleInitiativeDetail(
+  details: UIState["initiativeDetails"],
+  held: UIState["initiativeDetails"],
+  detailRevisions: UIState["initiativeDetailRevisions"],
+  id: string,
+  revision: number | undefined,
+): UIState["initiativeDetails"] {
+  const detail = details[id];
+  if (!detail || dataOf(detail) === undefined) return details;
+  if (detail.status === "refreshing") return details;
+  if (revision !== undefined && revision <= (detailRevisions[id] ?? -1))
+    return details;
+  const next = details === held ? { ...held } : details;
+  next[id] = beginLoad(detail);
+  return next;
+}
+
 function applyInitiativeEvent(
   state: UIState,
   message: InitiativeStateEventsMessage,
@@ -3755,11 +3822,21 @@ function applyInitiativeEvent(
   const current = state.stateEventRevisions.initiatives ?? {};
   let revisions: Record<string, number> | null = null;
   let initiatives = state.initiatives;
+  let initiativeDetails = state.initiativeDetails;
   for (const event of message.events) {
     const known = revisions?.[event.id] ?? current[event.id] ?? -1;
     if (event.revision <= known) continue;
     revisions ??= { ...current };
     revisions[event.id] = event.revision;
+    // A delete is a newer revision too: an archived Initiative's open page
+    // re-reads, and a deleted one answers `null`.
+    initiativeDetails = staleInitiativeDetail(
+      initiativeDetails,
+      state.initiativeDetails,
+      state.initiativeDetailRevisions,
+      event.id,
+      event.revision,
+    );
     const index = initiatives.findIndex((item) => item.id === event.id);
     if (event.kind === "delete") {
       if (index >= 0)
@@ -3776,10 +3853,65 @@ function applyInitiativeEvent(
   return {
     ...state,
     initiatives,
+    initiativeDetails,
     stateEventRevisions: {
       ...state.stateEventRevisions,
       initiatives: revisions,
     },
+  };
+}
+
+/**
+ * The `initiativeList` snapshot names the whole live projection, so it judges
+ * every held read: one it leaves out (archived or deleted while this tab was
+ * away) and one whose revision moved past its read both re-read.
+ */
+function applyInitiativeSnapshot(
+  state: UIState,
+  items: InitiativeSummary[],
+  revisions: Record<string, number>,
+): UIState {
+  let initiativeDetails = state.initiativeDetails;
+  for (const id of Object.keys(state.initiativeDetails))
+    initiativeDetails = staleInitiativeDetail(
+      initiativeDetails,
+      state.initiativeDetails,
+      state.initiativeDetailRevisions,
+      id,
+      revisions[id],
+    );
+  return {
+    ...state,
+    initiatives: items,
+    initiativesFresh: true,
+    initiativeListError: null,
+    initiativeDetails,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      initiatives: revisions,
+    },
+  };
+}
+
+function pruneInitiativeDetails(
+  state: UIState,
+  details: UIState["initiativeDetails"],
+  revisions: UIState["initiativeDetailRevisions"],
+  lru: string[],
+): Pick<
+  UIState,
+  "initiativeDetails" | "initiativeDetailRevisions" | "initiativeDetailsLru"
+> {
+  const keep = new Set([
+    ...lru.slice(-INITIATIVE_DETAIL_CACHE_LIMIT),
+    ...(state.openInitiativeId ? [state.openInitiativeId] : []),
+  ]);
+  const kept = <T>(record: Record<string, T>) =>
+    Object.fromEntries(Object.entries(record).filter(([id]) => keep.has(id)));
+  return {
+    initiativeDetails: kept(details),
+    initiativeDetailRevisions: kept(revisions),
+    initiativeDetailsLru: lru.filter((id) => keep.has(id)),
   };
 }
 
@@ -4615,6 +4747,54 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   }
   if (action.kind === "projectSaved")
     return applyProjectSaved(state, action.item, action.revision);
+  if (action.kind === "initiativeDetailLoad") {
+    const current =
+      state.initiativeDetails[action.id] ?? idle<InitiativeRead | null>();
+    return {
+      ...state,
+      initiativeDetails: {
+        ...state.initiativeDetails,
+        [action.id]: beginLoad(current),
+      },
+      initiativeDetailsLru: touchLru(state.initiativeDetailsLru, action.id),
+    };
+  }
+  if (action.kind === "initiativeDetailResult") {
+    const current =
+      state.initiativeDetails[action.id] ?? idle<InitiativeRead | null>();
+    const answered = action.error
+      ? failFrom(current, action.error)
+      : ready(action.read);
+    // An answer older than a summary revision this tab already holds was read
+    // before that write: show it, and read again.
+    const knownSummaryRevision =
+      state.stateEventRevisions.initiatives?.[action.id] ?? -1;
+    const next =
+      !action.error &&
+      action.revision !== undefined &&
+      action.revision < knownSummaryRevision
+        ? beginLoad(answered)
+        : answered;
+    return {
+      ...state,
+      ...pruneInitiativeDetails(
+        state,
+        { ...state.initiativeDetails, [action.id]: next },
+        action.revision === undefined
+          ? state.initiativeDetailRevisions
+          : {
+              ...state.initiativeDetailRevisions,
+              [action.id]: action.revision,
+            },
+        touchLru(state.initiativeDetailsLru, action.id),
+      ),
+    };
+  }
+  if (action.kind === "setOpenInitiative") {
+    return state.openInitiativeId === action.id
+      ? state
+      : { ...state, openInitiativeId: action.id };
+  }
   if (action.kind === "setOpenProjectProjection") {
     return state.openProjectProjectionId === action.id
       ? state
@@ -5087,6 +5267,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // makes them due for either a subscription snapshot or one-off read.
       sessionListFresh: action.connected ? state.sessionListFresh : false,
       taskListFresh: action.connected ? state.taskListFresh : false,
+      initiativesFresh: action.connected ? state.initiativesFresh : false,
       projectListFresh: action.connected ? state.projectListFresh : false,
       worktreesFresh: action.connected ? state.worktreesFresh : false,
       worktreeListError: action.connected ? state.worktreeListError : null,
@@ -5578,14 +5759,14 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       };
     }
     case "initiativeList":
-      return {
-        ...state,
-        initiatives: msg.items,
-        stateEventRevisions: {
-          ...state.stateEventRevisions,
-          initiatives: taskDigestRecord(msg.revisions) ?? {},
-        },
-      };
+      return applyInitiativeSnapshot(
+        state,
+        msg.items,
+        taskDigestRecord(msg.revisions) ?? {},
+      );
+    case "initiativeDetail":
+      // Correlated before reducer dispatch in the socket effect.
+      return state;
     case "subagentThreadList": {
       const revisions = taskDigestRecord(msg.revisions);
       return {
@@ -6009,6 +6190,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           projectListError:
             listFailureFor(msg, "project") ?? state.projectListError,
           taskListError: listFailureFor(msg, "task") ?? state.taskListError,
+          initiativeListError:
+            listFailureFor(msg, "initiative") ?? state.initiativeListError,
           worktreeListError:
             listFailureFor(msg, "worktree") ?? state.worktreeListError,
           error: msg.message,
@@ -6456,6 +6639,9 @@ export interface AssistantActions {
   listProjects: (request?: ProjectListRequest) => void;
   requestProjectDetail: (id: string) => void;
   setOpenProjectProjection: (id: string | null) => void;
+  /** Read one Initiative's graph and layout; a read in flight is not repeated. */
+  requestInitiativeDetail: (id: string) => void;
+  setOpenInitiative: (id: string | null) => void;
   saveProject: (id: string, patch: Partial<ProjectRecord>) => void;
   provisionProjectRepo: (id: string) => void;
   removeProjectRepo: (id: string) => void;
@@ -6747,6 +6933,8 @@ export function useAssistant({
   /** Latest in-flight keyed reads; a superseded same-id answer is ignored. */
   const taskDetailRequestsRef = useRef(new Map<string, string>());
   const projectDetailRequestsRef = useRef(new Map<string, string>());
+  /** The one live `getInitiative` per id; an older answer is dropped. */
+  const initiativeDetailRequestsRef = useRef(new Map<string, string>());
   /** Latest list generation for every comment target. */
   const commentRequestsRef = useRef(new Map<string, string>());
   /** Immediate surface ownership, independent of asynchronous reducer updates. */
@@ -7402,6 +7590,27 @@ export function useAssistant({
         });
         return;
       }
+      if (msg.type === "initiativeDetail") {
+        if (initiativeDetailRequestsRef.current.get(msg.id) !== msg.requestId)
+          return;
+        initiativeDetailRequestsRef.current.delete(msg.id);
+        dispatch({
+          kind: "initiativeDetailResult",
+          id: msg.id,
+          read: msg.item
+            ? {
+                item: msg.item,
+                ...(msg.layout ? { layout: msg.layout } : {}),
+                ...(msg.layoutError !== undefined
+                  ? { layoutError: msg.layoutError }
+                  : {}),
+              }
+            : null,
+          ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
+          ...(msg.error ? { error: msg.error } : {}),
+        });
+        return;
+      }
       if (msg.type === "projectDetail") {
         if (projectDetailRequestsRef.current.get(msg.id) !== msg.requestId)
           return;
@@ -7888,6 +8097,17 @@ export function useAssistant({
             error: "Connection lost while loading this Project.",
           });
         projectDetailRequestsRef.current.clear();
+        // A map read lost with its socket is answered now, so its page says so
+        // and offers a retry instead of waiting forever; the snapshot on the
+        // next subscribe marks held reads stale by revision.
+        for (const id of initiativeDetailRequestsRef.current.keys())
+          dispatch({
+            kind: "initiativeDetailResult",
+            id,
+            read: null,
+            error: "Connection lost while loading this Initiative.",
+          });
+        initiativeDetailRequestsRef.current.clear();
         // A delivery click belongs to the connection it was sent on: its
         // `mutationSettled` and any stamped refusal can only arrive there, and
         // the reconnect answers with a fresh run list instead. So the claim is
@@ -8790,6 +9010,14 @@ export function useAssistant({
       },
       setOpenProjectProjection: (id) =>
         dispatch({ kind: "setOpenProjectProjection", id }),
+      requestInitiativeDetail: (id) => {
+        if (initiativeDetailRequestsRef.current.has(id)) return;
+        const requestId = createClientId();
+        initiativeDetailRequestsRef.current.set(id, requestId);
+        dispatch({ kind: "initiativeDetailLoad", id });
+        send({ type: "getInitiative", id, requestId });
+      },
+      setOpenInitiative: (id) => dispatch({ kind: "setOpenInitiative", id }),
       saveProject: (id, patch) => {
         const requestId = startProjectMutation(
           id,

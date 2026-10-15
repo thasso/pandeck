@@ -449,6 +449,15 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   same "only where it adds something" dedup as `blockedReason`. Session buttons
   navigate through the screens model; cancel confirms that sessions, worktree
   and PR remain. Terminal runs collapse to subdued lifecycle/date rows.
+- `initiative/` holds the Initiative surfaces (`docs/initiatives.md`):
+  `InitiativesIndexPage` (by state), `InitiativeDetailPage` (header from the
+  live summary, members from the keyed read, the five load states, Map/List
+  switch), `InitiativeListView`, the sidebar's `InitiativeBrowserGroup`, the
+  panel's `InitiativeTaskSummary`/`InitiativeInspectorSummary`, and
+  `InitiativeMap`, the only importer of `@xyflow/react`, loaded lazily. The map
+  draws the server's boxes and routes as they are; each Task node is an `Item`
+  rendered as a button, and lanes, groups and the milestone column are
+  pointer-transparent drawing.
 - `ProjectDetailPage.tsx` is the Project's CONTENT, in use order: description,
   its Tasks (`renderTasks`, a render prop because the list is the lazy
   `BacklogList` and needs App's socket state — the page only decides where it

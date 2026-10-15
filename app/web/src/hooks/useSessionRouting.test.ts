@@ -3,6 +3,8 @@ import type { SessionListItem } from "@assistant/shared";
 import {
   backgroundTasksPath,
   canonicalizeEmptySessionToCreate,
+  initiativePath,
+  INITIATIVES_PATH,
   fileViewerPath,
   isSectionIndexRoute,
   knowledgePath,
@@ -50,6 +52,26 @@ describe("parseRoute", () => {
       name: "projects",
       id: "proj_1",
     });
+  });
+
+  it("parses Initiative routes, whose browse home is the Projects section", () => {
+    expect(parseRoute(INITIATIVES_PATH)).toEqual({ name: "initiatives" });
+    expect(parseRoute("/initiatives/")).toEqual({ name: "initiatives" });
+    expect(parseRoute(initiativePath("12"))).toEqual({
+      name: "initiatives",
+      id: "12",
+    });
+    // The selected member rides the fragment, not the route.
+    expect(parseRoute(`${initiativePath("12")}#task-817`)).toEqual({
+      name: "initiatives",
+      id: "12",
+    });
+    expect(canonicalSidebarSection({ name: "initiatives", id: "12" })).toBe(
+      "projects",
+    );
+    // The index is a real page in the main pane, not a browser screen.
+    expect(isSectionIndexRoute({ name: "initiatives" })).toBe(false);
+    expect(isSectionIndexRoute({ name: "initiatives", id: "12" })).toBe(false);
   });
 
   it("rejects removed calendar routes", () => {

@@ -32,6 +32,10 @@ const DEFAULT_CHUNK_BUDGET_KB = 500;
 // generated data, split per language, and never part of the initial load.
 const SHIKI_DATA_CHUNK_BUDGET_KB = 800;
 
+// The split size, in bytes of module SOURCE before minification: minified, a
+// piece of this size lands well under `DEFAULT_CHUNK_BUDGET_KB`.
+const INITIAL_CHUNK_SOURCE_BYTES = 640 * 1024;
+
 function isShikiDataChunk(moduleIds: string[]): boolean {
   return (
     moduleIds.length > 0 &&
@@ -125,6 +129,35 @@ export default defineConfig(({ command }) => {
       // fetchable asset. Everything else keeps the default inlining behavior.
       assetsInlineLimit: (filePath) =>
         filePath.endsWith("pcm16Worklet.js") ? false : undefined,
+      rolldownOptions: {
+        output: {
+          // Pieces of one graph can import each other in a cycle, so each
+          // module runs when it is first needed rather than when its chunk
+          // loads; without this a split leaves React's CommonJS wrapper
+          // undefined at first use (a blank app).
+          strictExecutionOrder: true,
+          codeSplitting: {
+            // What the entry loads before anything else is split into
+            // libraries and app code, each into pieces near the budget, so
+            // no initial chunk outgrows it. `$initial` keeps the lazy chunks
+            // (pages, Markdown, diffs, the map, Shiki grammars) as they are.
+            groups: [
+              {
+                name: "vendor",
+                test: /[\\/]node_modules[\\/]/,
+                tags: ["$initial"],
+                priority: 1,
+                maxSize: INITIAL_CHUNK_SOURCE_BYTES,
+              },
+              {
+                name: "app",
+                tags: ["$initial"],
+                maxSize: INITIAL_CHUNK_SOURCE_BYTES,
+              },
+            ],
+          },
+        },
+      },
     },
     resolve: {
       // Consume the shared package from source so both toolchains agree. Subpath

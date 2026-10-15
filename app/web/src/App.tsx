@@ -150,6 +150,8 @@ import { useLocationHash } from "./hooks/useLocationHash.ts";
 import { workflowRunPath } from "./lib/workflowRunRoutes.ts";
 import {
   backgroundTasksPath,
+  initiativePath,
+  INITIATIVES_PATH,
   isSectionIndexRoute,
   knowledgePath,
   PERMANENT_ASSISTANT_PATH,
@@ -299,7 +301,15 @@ import {
   buildProjectsById,
   projectColor,
   projectDisplayKey,
+  resolveProjectDisplay,
 } from "./lib/projectDisplay.ts";
+import {
+  initiativeTaskFragment,
+  liveTaskIndex,
+  selectedTaskFromHash,
+} from "./lib/initiativeView.ts";
+import { InitiativeTaskSummary } from "./components/initiative/InitiativeTaskSummary.tsx";
+import { InitiativeInspectorSummary } from "./components/initiative/InitiativeInspectorSummary.tsx";
 import { AppShell } from "./components/shell/AppShell.tsx";
 import {
   DocumentNavigationMarker,
@@ -542,6 +552,16 @@ const TaskManagementPage = lazy(() =>
 const ProjectDetailPage = lazy(() =>
   import("./components/ProjectDetailPage.tsx").then((module) => ({
     default: module.ProjectDetailPage,
+  })),
+);
+const InitiativeDetailPage = lazy(() =>
+  import("./components/initiative/InitiativeDetailPage.tsx").then((module) => ({
+    default: module.InitiativeDetailPage,
+  })),
+);
+const InitiativesIndexPage = lazy(() =>
+  import("./components/initiative/InitiativesIndexPage.tsx").then((module) => ({
+    default: module.InitiativesIndexPage,
   })),
 );
 const SessionStatusPanel = lazy(() =>
@@ -1711,7 +1731,9 @@ function AppContent() {
     browserScreen ||
     route.name === "settings" ||
     route.name === "usage" ||
-    route.name === "backgroundTasks";
+    route.name === "backgroundTasks" ||
+    // The Initiatives index inspects nothing; its Back sits in its header.
+    (route.name === "initiatives" && !route.id);
   const sessionScreen =
     route.name === "session" ||
     route.name === "new" ||
@@ -2806,6 +2828,72 @@ function AppContent() {
     route.name === "settings" ? (route.section ?? null) : null;
   // Includes archived so stale assignments still resolve names in badges/selectors.
   const projectsById = useMemo(() => buildProjectsById(projects), [projects]);
+  // One Initiative's page: the member Task the fragment selects opens in the
+  // object panel, and the live Tasks topic recolours its map
+  // (`lib/initiativeView.ts`).
+  const selectedInitiativeId =
+    route.name === "initiatives" ? (route.id ?? null) : null;
+  const initiativeSelectedTaskId = selectedInitiativeId
+    ? selectedTaskFromHash(locationHash)
+    : null;
+  const initiativeLiveTasks = useMemo(
+    () => liveTaskIndex(state.taskList?.items, state.taskListFresh),
+    [state.taskList, state.taskListFresh],
+  );
+  const selectInitiativeTask = useCallback(
+    (taskId: string) => {
+      if (!selectedInitiativeId) return;
+      navigate(
+        `${initiativePath(selectedInitiativeId)}${initiativeTaskFragment(taskId)}`,
+      );
+      // Selecting is the user asking to see that Task, so the panel opens; it
+      // never closes for navigation.
+      setInspectorOpen(true);
+    },
+    [navigate, selectedInitiativeId, setInspectorOpen],
+  );
+  const initiativeProjectLabel = useCallback(
+    (projectId: string | undefined) =>
+      projectId
+        ? resolveProjectDisplay(projectId, projectsById).label
+        : "No Project",
+    [projectsById],
+  );
+  const openInitiativesIndex = useCallback(
+    () => navigate(INITIATIVES_PATH),
+    [navigate],
+  );
+  // The selected Task's summary: its Backlog row, or the body read for one the
+  // live list does not hold (archived, or an outside blocker).
+  const initiativeSelectedDetail = initiativeSelectedTaskId
+    ? state.taskDetails[initiativeSelectedTaskId]
+    : undefined;
+  const initiativeSelectedTask = useMemo(() => {
+    if (!initiativeSelectedTaskId) return undefined;
+    const listed = backlogTasks.find(
+      (task) => task.id === initiativeSelectedTaskId,
+    );
+    if (listed) return listed;
+    const body = initiativeSelectedDetail
+      ? dataOf(initiativeSelectedDetail)
+      : undefined;
+    return body ? taskSummaryOf(body) : undefined;
+  }, [backlogTasks, initiativeSelectedDetail, initiativeSelectedTaskId]);
+  const initiativeTaskInList =
+    initiativeSelectedTaskId !== null &&
+    backlogTasks.some((task) => task.id === initiativeSelectedTaskId);
+  useEffect(() => {
+    if (!initiativeSelectedTaskId || !state.taskListFresh) return;
+    if (initiativeTaskInList) return;
+    if (state.taskDetails[initiativeSelectedTaskId]) return;
+    actions.requestTaskDetail(initiativeSelectedTaskId);
+  }, [
+    actions,
+    initiativeSelectedTaskId,
+    initiativeTaskInList,
+    state.taskDetails,
+    state.taskListFresh,
+  ]);
   const selectedTaskDetailState = selectedTaskId
     ? state.taskDetails[selectedTaskId]
     : undefined;
@@ -6162,6 +6250,16 @@ function AppContent() {
         onRun: () => startSessionForTask(task.id, task.title),
       };
     }
+    // An Initiative page leads with the member Task it has selected: the
+    // Initiative itself is managed by agents, not started from.
+    if (route.name === "initiatives" && initiativeSelectedTask) {
+      const task = initiativeSelectedTask;
+      return {
+        label: "Start session for this task",
+        icon,
+        onRun: () => startSessionForTask(task.id, task.title),
+      };
+    }
     if (route.name === "projects" && route.id) {
       const projectId = route.id;
       return {
@@ -6208,6 +6306,7 @@ function AppContent() {
     route,
     routeDocumentTarget,
     backlogTasks,
+    initiativeSelectedTask,
     pullRequestWorktreeId,
     startSessionForTask,
     startSessionForProject,
@@ -6844,6 +6943,9 @@ function AppContent() {
         onLoadProjects={loadProjects}
         onReorderProjects={reorderProjects}
         onOpenProject={openProject}
+        initiatives={state.initiatives}
+        initiativesFresh={state.initiativesFresh}
+        selectedInitiativeId={selectedInitiativeId}
         worktrees={state.worktrees}
         worktreeStatuses={state.worktreeStatuses}
         lastKnownWorktreeStatuses={state.cachedWorktreeStatuses}
@@ -7078,6 +7180,32 @@ function AppContent() {
           />
         )}
       </TaskInspector>
+    ) : route.name === "initiatives" && route.id ? (
+      initiativeSelectedTaskId ? (
+        <TaskInspector
+          // Keyed by the Task it inspects, so its sections' state never
+          // carries over to the next selection.
+          key={initiativeSelectedTaskId}
+          task={initiativeSelectedTask}
+          sessions={state.sessions}
+          openers={inspectorOpeners}
+          onStartSession={startSessionForTask}
+        >
+          {initiativeSelectedTask ? (
+            <InitiativeTaskSummary
+              task={initiativeSelectedTask}
+              onCycleStatus={cycleTaskStatus}
+              onOpenTask={(id) => navigateFromInspector(taskPath(id))}
+            />
+          ) : null}
+        </TaskInspector>
+      ) : (
+        <Inspector relations={[]} actions={[]}>
+          <InitiativeInspectorSummary
+            summary={state.initiatives.find((item) => item.id === route.id)}
+          />
+        </Inspector>
+      )
     ) : route.name === "projects" && route.id ? (
       <ProjectInspector
         project={
@@ -7171,6 +7299,7 @@ function AppContent() {
         status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
       />
     ) : route.name === "settings" ||
+      route.name === "initiatives" ||
       route.name === "knowledge" ||
       route.name === "usage" ||
       route.name === "backgroundTasks" ||
@@ -7513,6 +7642,44 @@ function AppContent() {
                         onOpenSession={openSession}
                         workflowIndicators={workflowIndicators}
                       />
+                    </Suspense>
+                  ) : route.name === "initiatives" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening Initiatives…" />
+                      }
+                    >
+                      {route.id ? (
+                        <InitiativeDetailPage
+                          // R3: another Initiative is another object, with its
+                          // own loading state.
+                          key={route.id}
+                          initiativeId={route.id}
+                          back={screenBack}
+                          mobile={mobileLayout}
+                          connected={state.connected}
+                          summary={state.initiatives.find(
+                            (item) => item.id === route.id,
+                          )}
+                          detailState={state.initiativeDetails[route.id]}
+                          onLoadDetail={actions.requestInitiativeDetail}
+                          onOpenInitiative={actions.setOpenInitiative}
+                          liveTasks={initiativeLiveTasks}
+                          sessions={state.sessions}
+                          projectLabel={initiativeProjectLabel}
+                          selectedTaskId={initiativeSelectedTaskId}
+                          onSelectTask={selectInitiativeTask}
+                          onOpenIndex={openInitiativesIndex}
+                        />
+                      ) : (
+                        <InitiativesIndexPage
+                          back={screenBack}
+                          initiatives={state.initiatives}
+                          fresh={state.initiativesFresh}
+                          error={state.initiativeListError}
+                          onOpen={navigate}
+                        />
+                      )}
                     </Suspense>
                   ) : route.name === "projects" ? (
                     <Suspense

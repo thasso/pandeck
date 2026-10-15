@@ -212,6 +212,15 @@ section that reads a domain list subscribes only while the main pane RENDERS it
 — the browser listing its entry reads nothing — because for the skills library a
 subscribe is what makes the server rescan the user's working tree.
 
+Initiatives (`docs/initiatives.md`) have their canonical location in a group at
+the TOP of the Projects browser, because they sit above Projects. The group is
+bounded: it lists the active and paused Initiatives, and its heading opens
+`/initiatives`, the index page that lists every live Initiative by state (done
+ones included). It holds the `initiatives` topic only while the Projects browser
+is on screen; an Initiative's page holds it too, with Tasks and Projects for the
+live map. There is no Initiatives section of its own and no view of an
+Initiative inside a Project page.
+
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached
 Task data, and mutation broadcasts update every subscribed tab/PWA instance. The
@@ -753,9 +762,14 @@ left at the top edge, not a pixel offset — these lists re-sort under them.
 
 Routes identify objects, not sidebar state: one canonical route shape per object
 type (`/sessions/:id`, `/tasks/:id`, `/worktrees/:id`, …) plus section index
-routes such as `/knowledge`. The singleton Personal Assistant has the dedicated
-`/assistant` route so its empty first-use state is not mistaken for the ordinary
-`/sessions/create` draft surface. No legacy aliases.
+routes such as `/knowledge`. `/initiatives/:id` is one Initiative and
+`/initiatives` its index, a real page rather than a browser screen; both belong
+to the Projects section, so Back from either goes to `/projects`. The member
+Task selected on an Initiative page is a fragment, `#task-<id>` (see below), so
+a selection survives a reload and back/forward pass through it. The singleton
+Personal Assistant has the dedicated `/assistant` route so its empty first-use
+state is not mistaken for the ordinary `/sessions/create` draft surface. No
+legacy aliases.
 
 Document routes share one navigation shell around source-specific renderers
 (`docs/document-presentation.md`). `/files/<absolute path>` addresses a live
@@ -850,6 +864,15 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    The panel holds the Worktrees topic whenever it shows a session. A group may
    bound its first page (a session's Tasks shows five) and reveal the rest on
    demand.
+
+An Initiative page is the one main-pane object whose panel can show ANOTHER
+object: selecting a node on its map, or a row of its list, opens that member
+Task (or outside blocker) in the panel with the ordinary Task inspector — its
+sessions, Start a session, and its status through the usual cycling control —
+under a summary naming the Task. Selecting is the user asking to see it, so it
+opens the panel; navigation still never closes it. With nothing selected, the
+panel summarizes the Initiative and offers no Initiative action: agents manage
+Initiatives, and the user's one write, Settle, belongs to its inbox card.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

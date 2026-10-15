@@ -38,6 +38,7 @@ catalog:
   "@types/web-push": "3.6.4"
   "@types/ws": "8.18.1"
   "@vitejs/plugin-react": "6.1.1"
+  "@xyflow/react": "12.12.0"
   approx-string-match: "2.0.0"
   "chart.js": "4.5.1"
   concurrently: "10.0.5"

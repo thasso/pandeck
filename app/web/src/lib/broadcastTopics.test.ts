@@ -473,6 +473,33 @@ describe("topicsForSurface", () => {
     ).toEqual(["workflow", "projects"]);
   });
 
+  it("holds Initiatives for the Projects browser and the Initiative pages", () => {
+    expect(
+      topicsForSurface({
+        sidebarVisible: true,
+        sidebarSection: "projects",
+        routeName: "session",
+      }).sort(),
+    ).toEqual(["initiatives", "projects", "worktrees"]);
+    // One Initiative's map recolours from the Tasks topic and names lanes from
+    // Projects; it reads no Worktree projection.
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "projects",
+        routeName: "initiatives",
+      }).sort(),
+    ).toEqual(["initiatives", "projects", "tasks"]);
+    // A hidden Projects browser holds nothing on a conversation.
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "projects",
+        routeName: "session",
+      }),
+    ).not.toContain("initiatives");
+  });
+
   it("holds only Projects for a conversation with the browser hidden", () => {
     // A session's title bar names its project and links to it.
     expect(

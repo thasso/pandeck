@@ -122,6 +122,11 @@ capability logic.
   had the title); now a forgotten field is a link that renders without one.
   `transcriptMentions.test.ts` asserts each Markdown-bearing field by name, so
   adding a rendered field without adding it here fails.
+- `initiativeView.ts` is the Initiative page's view model: the keyed read with
+  the live Tasks topic laid over it (status, title, blocked, running), the
+  member tree with per-epic progress, and the `#task-<id>` selection fragment.
+  The overlay never adds or removes a member; only a list the current socket
+  episode answered may speak over the read.
 - `broadcastTopics.ts` owns `topicsForSurface`, the one rule for which
   `BroadcastTopic`s a browser declares: the main pane's route always, the
   selected sidebar section only while its browser is visible. Pure and tested

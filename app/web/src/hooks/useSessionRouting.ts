@@ -43,6 +43,9 @@ import {
  *   /tasks/:id           → Task detail
  *   /projects            → Project detail placeholder (list lives in the sidebar)
  *   /projects/:id        → Project detail
+ *   /initiatives         → every Initiative, grouped by state (a real page)
+ *   /initiatives/:id     → one Initiative's map and list; `#task-<id>` selects
+ *                          a member Task for the object panel
  *   /pull-requests       → Pull Requests section index (a real surface)
  *   /pull-requests/:projectId/:provider/:repositoryKey/:number → one PR
  *   /knowledge           → the Knowledge Base folder (files)
@@ -73,6 +76,11 @@ export type Route =
   | { name: "settings"; section?: SettingsSection }
   | { name: "tasks"; id?: string }
   | { name: "projects"; id?: string }
+  /**
+   * Initiatives browse in a group at the top of the Projects section, since
+   * they sit above Projects (`docs/initiatives.md`). The index is a real page.
+   */
+  | { name: "initiatives"; id?: string }
   /**
    * The Pull Requests section. Addressing ONE pull request takes the same four
    * components the server joins on: project, provider, repository (`owner/repo`)
@@ -137,6 +145,12 @@ export function taskPath(id: string): string {
 
 export function projectPath(id: string): string {
   return `/projects/${encodeURIComponent(id)}`;
+}
+
+export const INITIATIVES_PATH = "/initiatives";
+
+export function initiativePath(id: string): string {
+  return `${INITIATIVES_PATH}/${encodeURIComponent(id)}`;
 }
 
 const PULL_REQUESTS_PATH = "/pull-requests";
@@ -270,6 +284,14 @@ export function parseRoute(pathAndSearch: string): Route {
   const projectDetail = pathname.match(/^\/projects\/([^/]+)\/?$/);
   if (projectDetail?.[1])
     return { name: "projects", id: decodeURIComponent(projectDetail[1]) };
+  if (pathname === INITIATIVES_PATH || pathname === `${INITIATIVES_PATH}/`)
+    return { name: "initiatives" };
+  const initiativeDetail = pathname.match(/^\/initiatives\/([^/]+)\/?$/);
+  if (initiativeDetail?.[1])
+    return {
+      name: "initiatives",
+      id: decodeURIComponent(initiativeDetail[1]),
+    };
   if (pathname === PULL_REQUESTS_PATH || pathname === `${PULL_REQUESTS_PATH}/`)
     return { name: "pullRequests" };
   const pullRequestDetail = pathname.match(
@@ -426,6 +448,8 @@ function routeKey(route: Route): string {
   if (route.name === "tasks") return route.id ? `tasks:${route.id}` : "tasks";
   if (route.name === "projects")
     return route.id ? `projects:${route.id}` : "projects";
+  if (route.name === "initiatives")
+    return route.id ? `initiatives:${route.id}` : "initiatives";
   if (route.name === "pullRequests")
     return route.number === undefined
       ? "pullRequests"
@@ -494,6 +518,7 @@ function routeMatchesServer(
     route.name === "settings" ||
     route.name === "tasks" ||
     route.name === "projects" ||
+    route.name === "initiatives" ||
     route.name === "pullRequests" ||
     route.name === "worktrees" ||
     route.name === "knowledge" ||
@@ -606,6 +631,7 @@ export function useSessionRouting({
       route.name === "settings" ||
       route.name === "tasks" ||
       route.name === "projects" ||
+      route.name === "initiatives" ||
       route.name === "pullRequests" ||
       route.name === "worktrees" ||
       route.name === "knowledge" ||
@@ -666,6 +692,7 @@ export function useSessionRouting({
       route.name === "settings" ||
       route.name === "tasks" ||
       route.name === "projects" ||
+      route.name === "initiatives" ||
       route.name === "pullRequests" ||
       route.name === "worktrees" ||
       route.name === "knowledge" ||

@@ -81,10 +81,12 @@ function summary(id: string, title = `Initiative ${id}`): InitiativeSummary {
 }
 
 let latestState: UIState;
+let latestActions: ReturnType<typeof useAssistant>["actions"];
 
 function InitiativeHarness() {
   const { actions, state } = useAssistant();
   latestState = state;
+  latestActions = actions;
   useEffect(() => actions.setTopics(["initiatives"]), [actions]);
   return null;
 }
@@ -166,5 +168,42 @@ describe("Initiative socket/reducer scenario", () => {
     warn.mockRestore();
     expect(unsubscribes(socket)).toHaveLength(1);
     expect(subscribes(socket)).toHaveLength(2);
+  });
+
+  it("reads one Initiative by id, drops a superseded answer, and answers a lost read", async () => {
+    await act(async () => root.render(<InitiativeHarness />));
+    const socket = ScenarioSocket.instances[0]!;
+    await act(async () => {
+      socket.open();
+      socket.receive(readyMessage());
+    });
+    await act(async () => latestActions.requestInitiativeDetail("7"));
+    // A second ask while the first is in flight sends nothing.
+    await act(async () => latestActions.requestInitiativeDetail("7"));
+    const reads = socket.sent.filter(
+      (message) => message.type === "getInitiative",
+    );
+    expect(reads).toHaveLength(1);
+    const first = reads[0]!;
+    if (first.type !== "getInitiative") throw new Error("unreachable");
+    expect(first.collapsed).toBeUndefined();
+    expect(latestState.initiativeDetails["7"]?.status).toBe("loading");
+
+    // An answer to a request this tab no longer waits on is ignored.
+    await act(async () =>
+      socket.receive({
+        type: "initiativeDetail",
+        id: "7",
+        item: null,
+        requestId: "someone-else",
+      }),
+    );
+    expect(latestState.initiativeDetails["7"]?.status).toBe("loading");
+
+    await act(async () => socket.close());
+    expect(latestState.initiativeDetails["7"]).toEqual({
+      status: "error",
+      error: "Connection lost while loading this Initiative.",
+    });
   });
 });

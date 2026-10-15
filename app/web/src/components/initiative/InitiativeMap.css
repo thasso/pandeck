@@ -1,0 +1,11 @@
+/* React Flow's attribution link, in the app's tokens: `base.css` leaves it
+   unstyled, and the full `style.css` would bring React Flow's own palette. */
+.react-flow__attribution {
+  background: transparent;
+  padding: 2px 6px;
+}
+
+.react-flow__attribution a {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
