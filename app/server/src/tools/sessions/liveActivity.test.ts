@@ -116,9 +116,21 @@ test("an idle or unloaded session reports no activity; queued work is counted ei
   assert.deepEqual(liveActivityFields("nobody", "not_loaded"), {});
   installBackgroundUpdateQueue({
     count: (id) => (id === "held" ? 3 : 0),
+    unhandled: (id) =>
+      id === "failed"
+        ? {
+            count: 2,
+            batch: [{ itemId: "bgw_a", revision: 3, attemptId: "attempt-1" }],
+          }
+        : { count: 0, batch: [] },
     publish: () => {},
   });
   assert.deepEqual(liveActivityFields("held", "idle"), {
     queuedWork: { backgroundUpdates: 3 },
   });
+  assert.deepEqual(
+    liveActivityFields("failed", "idle"),
+    { queuedWork: { unhandledBackgroundUpdates: 2 } },
+    "updates a turn did not finish are inspectable too",
+  );
 });

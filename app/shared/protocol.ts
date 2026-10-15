@@ -1786,6 +1786,17 @@ export interface SessionListItem {
    */
   queuedWork?: boolean;
   /**
+   * Background-work updates it was given whose handling turn did not finish
+   * (`SessionState.unhandledBackgroundUpdates`); absent when there are none.
+   */
+  unhandledBackgroundUpdates?: number;
+  /**
+   * Background updates bound to a turn whose outcome is not recorded yet: a
+   * running turn's, or one whose settlement could not be written. They hold
+   * settlement too; absent when there are none.
+   */
+  handlingBackgroundUpdates?: number;
+  /**
    * The peers that still owe this session a reply, by session id: it asked
    * (`responseRequested`), their turn ended without the answer, and nothing
    * from them — nor from a peer they handed the work to, on that handoff's
@@ -1937,6 +1948,10 @@ export function settleBlockedReason(
   if (session.attention === "question" || session.awaitingInput)
     return "it is waiting for your answer.";
   if (session.queuedWork) return "work is queued behind it.";
+  if (session.unhandledBackgroundUpdates)
+    return "background updates it was given were not handled.";
+  if (session.handlingBackgroundUpdates)
+    return "background updates it was given are still being handled.";
   return undefined;
 }
 
@@ -4532,6 +4547,17 @@ export type SessionAgentSummary =
   /** A stored definition this build cannot read: the session refuses to run. */
   | { name: string; unreadable: true };
 
+/**
+ * One background update a turn was given and did not finish handling, as the
+ * user's Recover and Dismiss address it: the job, the revision it was owed
+ * under, and the attempt it was interrupted in (null when none stands).
+ */
+export interface BackgroundHandlingRef {
+  itemId: string;
+  revision: number;
+  attemptId: string | null;
+}
+
 export interface SessionState {
   sessionId: string;
   sessionFile?: string;
@@ -4571,6 +4597,20 @@ export interface SessionState {
    * absent when there are none. A count only: their content is model context.
    */
   queuedBackgroundUpdates?: number;
+  /**
+   * Background-work updates this session was given whose handling turn did
+   * not finish — it failed, was stopped, or was cut off by a restart. They
+   * are never offered again on their own: only the user's
+   * `recoverBackgroundUpdates` (or `dismissBackgroundUpdates`) moves them.
+   * Absent when there are none. A count only.
+   */
+  unhandledBackgroundUpdates?: number;
+  /**
+   * The oldest of them, at most one Recover's worth: the exact identities the
+   * user's Recover or Dismiss acts on, so neither reaches a fact that arrived,
+   * or an attempt that started, after the user looked.
+   */
+  unhandledBackgroundBatch?: BackgroundHandlingRef[];
   /**
    * Why the session is idle, when it's idle for a specific reason the UI should
    * surface (rather than just "done"). Currently only a pending question; modeled
@@ -7195,7 +7235,9 @@ export type PromptQueueCommand = Extract<
       | "sendQueuedPromptNow"
       | "resumePromptQueue"
       | "sendQueuedPeerPromptNow"
-      | "withdrawQueuedPeerPrompt";
+      | "withdrawQueuedPeerPrompt"
+      | "recoverBackgroundUpdates"
+      | "dismissBackgroundUpdates";
   }
 >;
 
@@ -7248,6 +7290,26 @@ export type ClientMessage =
   | { type: "sendQueuedPeerPromptNow"; sessionId: string; id: string }
   /** Withdraw a peer prompt before delivery; its sender's card says cancelled. */
   | { type: "withdrawQueuedPeerPrompt"; sessionId: string; id: string }
+  /**
+   * Have the session finish handling the background updates whose earlier
+   * turn did not ({@link SessionState.unhandledBackgroundUpdates}): one new
+   * turn with a bounded reference to them, oldest first. Refused while the
+   * session is stopped, running, archived or gone.
+   */
+  | {
+      type: "recoverBackgroundUpdates";
+      sessionId: string;
+      items: BackgroundHandlingRef[];
+    }
+  /**
+   * Let exactly these updates go unhandled: their receipts are cancelled. The
+   * job is untouched, the hold stays, and nothing records them as handled.
+   */
+  | {
+      type: "dismissBackgroundUpdates";
+      sessionId: string;
+      items: BackgroundHandlingRef[];
+    }
   | { type: "acceptCommitDryRun"; entryId: string }
   /**
    * Approve or reject a pending card. `edits` are the user's per-row changes to
@@ -7940,8 +8002,17 @@ export type ServerMessage =
   | { type: "promptQueue"; sessionId: string; queue: PromptQueueState }
   /** The peer prompts waiting for a session changed; `items` is the complete new list. */
   | { type: "peerPromptQueue"; sessionId: string; items: QueuedPeerPrompt[] }
-  /** The count of background-work updates waiting for a session changed. */
-  | { type: "backgroundUpdateQueue"; sessionId: string; count: number }
+  /**
+   * The background-work updates waiting for a session changed: `count` still
+   * to be delivered, `unhandled` delivered into a turn that did not finish.
+   */
+  | {
+      type: "backgroundUpdateQueue";
+      sessionId: string;
+      count: number;
+      unhandled?: number;
+      unhandledBatch?: BackgroundHandlingRef[];
+    }
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
   | StateEventsMessage<"subagents", SubagentThreadSummary>

@@ -147,3 +147,53 @@ describe("PromptQueueLedge after a Stop", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+describe("PromptQueueLedge with unhandled background updates", () => {
+  const buttonNamed = (name: string) =>
+    [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === name,
+    );
+
+  it("stays for them with nothing queued, and offers Recover and Dismiss", () => {
+    const onRecoverBackground = vi.fn();
+    const onDismissBackground = vi.fn();
+    render({
+      running: false,
+      unhandledBackgroundUpdates: 2,
+      onRecoverBackground,
+      onDismissBackground,
+    });
+    expect(container.textContent).toContain("2 background updates not handled");
+    expect(container.textContent).toContain(
+      "2 background updates were given to a turn that did not finish.",
+    );
+    act(() => buttonNamed("Recover")!.click());
+    act(() => buttonNamed("Dismiss")!.click());
+    expect(onRecoverBackground).toHaveBeenCalledTimes(1);
+    expect(onDismissBackground).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables Recover while stopped or running, and says why", () => {
+    render({
+      queue: { items: [], paused: false, automaticTurnsHeld: true },
+      running: false,
+      unhandledBackgroundUpdates: 1,
+      onRecoverBackground: vi.fn(),
+      onDismissBackground: vi.fn(),
+    });
+    expect(buttonNamed("Recover")!.disabled).toBe(true);
+    expect(buttonNamed("Recover")!.title).toBe("Resume the session first.");
+    expect(buttonNamed("Resume")).toBeDefined();
+
+    render({
+      running: true,
+      unhandledBackgroundUpdates: 1,
+      onRecoverBackground: vi.fn(),
+      onDismissBackground: vi.fn(),
+    });
+    expect(buttonNamed("Recover")!.disabled).toBe(true);
+    expect(buttonNamed("Recover")!.title).toBe(
+      "Recover once the running turn ends.",
+    );
+  });
+});

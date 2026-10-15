@@ -80,5 +80,7 @@
   "0079_session_agent.sql": "76bef4a316c06a80c022c73ab3bf0c919235a903a071e5b06a61efcbe791e666",
   "0080_peer_prompt_reservation.sql": "f8427abaf418abc41587d3505c385abf2544a59b81a12e1e92b0fb535a055f9b",
   "0081_session_requires_enterprise.sql": "217dd734db872bdda312faa00b7839057a0d7bd037382fa13ec5c25a6522b5b3",
-  "0082_session_interrupted_run_detail.sql": "9969281315c26152e1a32e7871aeb95cda13e52c4b44c6a8d140e623c3e3d78c"
+  "0082_session_interrupted_run_detail.sql": "9969281315c26152e1a32e7871aeb95cda13e52c4b44c6a8d140e623c3e3d78c",
+  "0083_background_delivery_handling.sql": "97d23263c0a0a38e95d21e5b6d2355acb345e739e30cdd052b183b2915b835ac",
+  "0084_background_delivery_prior_receipt.sql": "d2dc3e72e6074951d37eb260cf04c8e274b7f93139444c2cd07b5e72e9883a7b"
 }

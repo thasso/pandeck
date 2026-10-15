@@ -1,3 +1,4 @@
+import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -355,6 +356,39 @@ function queuedWorkRecipients(): Set<string> {
   return queued;
 }
 
+/**
+ * Background updates each session was given and did not finish handling, and
+ * those bound to a turn whose outcome is not recorded yet, in one read. Both
+ * hold its settlement and retention like queued work does: an archived session
+ * would hide the only place they can be recovered.
+ */
+function unhandledBackgroundBySession(): Map<
+  string,
+  { interrupted: number; handling: number }
+> {
+  try {
+    return backgroundDeliveryOutboxStore.handlingCounts();
+  } catch (err) {
+    console.warn(
+      "Failed to read unhandled background updates for session list:",
+      err instanceof Error ? err.name : "error",
+    );
+    return new Map();
+  }
+}
+
+/** A row's background-handling fields; each absent at zero. */
+function backgroundHandlingFields(
+  counts: { interrupted: number; handling: number } | undefined,
+): { unhandledBackgroundUpdates?: number; handlingBackgroundUpdates?: number } {
+  return {
+    ...(counts?.interrupted
+      ? { unhandledBackgroundUpdates: counts.interrupted }
+      : {}),
+    ...(counts?.handling ? { handlingBackgroundUpdates: counts.handling } : {}),
+  };
+}
+
 export async function listSessions(
   allLive: LiveListInfo[],
   readAt: (key: string) => number,
@@ -378,6 +412,7 @@ export async function listSessions(
   const worktreeAckBySession = sessionStore.worktreeMissingAckBySession();
   const objectRefsBySessionId = objectRefsBySession();
   const queuedRecipients = queuedWorkRecipients();
+  const unhandledBackground = unhandledBackgroundBySession();
   const awaitingReplies = awaitingRepliesBySender();
   const delegationBySession = subagentStore.delegationSummaries();
   // A separate component from `isStreaming`/`runStartedAt`: background work is
@@ -526,6 +561,7 @@ export async function listSessions(
           }
         : {}),
       ...(queuedRecipients.has(row.id) ? { queuedWork: true } : {}),
+      ...backgroundHandlingFields(unhandledBackground.get(row.id)),
       ...(awaitingReplies.has(row.id)
         ? { awaitingRepliesFrom: awaitingReplies.get(row.id)! }
         : {}),
@@ -616,6 +652,7 @@ export async function listSessions(
         taskChoiceSessions,
       ),
       ...(queuedRecipients.has(key) ? { queuedWork: true } : {}),
+      ...backgroundHandlingFields(unhandledBackground.get(key)),
       ...(awaitingReplies.has(key)
         ? { awaitingRepliesFrom: awaitingReplies.get(key)! }
         : {}),

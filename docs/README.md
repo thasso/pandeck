@@ -93,7 +93,10 @@ only binding rules; everything else lives here.
   hold a Stop puts on every turn the user did not just ask for (automatic work
   and their own older queued work), its generations and resume authority, and
   the outbox that keeps background facts a Stop touched across a restart until
-  they are delivered.
+  they are delivered; and why a delivered background fact is not a handled one:
+  its claim before exposure, its binding to the run it reached, settlement only
+  by that run's clean end, interruption on any other end or a restart, and the
+  user's explicit Recover and Dismiss.
 - `delegation-failure-notices.md` — what a coordinator is told when work it
   delegated stops on a failure: which failures count (and which never do: a
   retry, an abort, a Stop, a stand-down), the spawn/request/delivery routes to

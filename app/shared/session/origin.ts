@@ -37,6 +37,11 @@ export interface BackgroundWorkPromptPresentation {
   kind: "background-work";
   updates: BackgroundWorkPromptUpdate[];
   omittedCount?: number;
+  /**
+   * The user's Recover: a new turn asked to finish handling these updates,
+   * which an earlier turn was given and did not finish. Absent on a delivery.
+   */
+  recovery?: true;
 }
 
 type SystemPromptPresentation = BackgroundWorkPromptPresentation;

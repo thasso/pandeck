@@ -207,7 +207,11 @@ export function liveActivityFields(
   runtime: RuntimeState,
 ): {
   liveActivity?: Record<string, unknown>;
-  queuedWork?: { peerMessages?: number; backgroundUpdates?: number };
+  queuedWork?: {
+    peerMessages?: number;
+    backgroundUpdates?: number;
+    unhandledBackgroundUpdates?: number;
+  };
 } {
   const fields: ReturnType<typeof liveActivityFields> = {};
   const progress =
@@ -270,12 +274,20 @@ export function liveActivityFields(
   } catch {
     // Best-effort, like the runtime overlay: the read itself still answers.
   }
-  const backgroundUpdates =
-    backgroundUpdateQueueField(id).queuedBackgroundUpdates ?? 0;
-  if (peerMessages > 0 || backgroundUpdates > 0)
+  const background = backgroundUpdateQueueField(id);
+  const backgroundUpdates = background.queuedBackgroundUpdates ?? 0;
+  // Given to the session in a turn that did not finish: only the user's
+  // Recover or Dismiss moves them.
+  const unhandledBackgroundUpdates = background.unhandledBackgroundUpdates ?? 0;
+  if (
+    peerMessages > 0 ||
+    backgroundUpdates > 0 ||
+    unhandledBackgroundUpdates > 0
+  )
     fields.queuedWork = {
       ...(peerMessages > 0 ? { peerMessages } : {}),
       ...(backgroundUpdates > 0 ? { backgroundUpdates } : {}),
+      ...(unhandledBackgroundUpdates > 0 ? { unhandledBackgroundUpdates } : {}),
     };
   return fields;
 }

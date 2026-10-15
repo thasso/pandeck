@@ -1,3 +1,7 @@
+import {
+  dismissBackgroundHandling,
+  requestBackgroundRecovery,
+} from "./backgroundCompletionNotices.ts";
 import type { WebSocket } from "ws";
 import {
   SESSION_READ_DWELL_MS,
@@ -917,6 +921,8 @@ export class Connection implements Viewer {
       case "resumePromptQueue":
       case "sendQueuedPeerPromptNow":
       case "withdrawQueuedPeerPrompt":
+      case "recoverBackgroundUpdates":
+      case "dismissBackgroundUpdates":
         return this.onPromptQueueCommand(msg);
       case "loadTimelineBlock":
         return this.onLoadTimelineBlock(msg.entryId, msg.blockIndex, msg.kind);
@@ -3432,6 +3438,17 @@ export class Connection implements Viewer {
     const target = { type: "session" as const, id: sessionId };
     if (!this.resolveSessionRef(sessionId)) {
       this.send({ type: "error", message: "Unknown session.", target });
+      return;
+    }
+    // Background updates a turn did not finish handling belong to any
+    // session, the permanent Assistant's included.
+    if (msg.type === "recoverBackgroundUpdates") {
+      const refused = await requestBackgroundRecovery(sessionId, msg.items);
+      if (refused) this.send({ type: "error", message: refused, target });
+      return;
+    }
+    if (msg.type === "dismissBackgroundUpdates") {
+      dismissBackgroundHandling(sessionId, msg.items);
       return;
     }
     if (isPermanentAssistantSession(sessionId)) {

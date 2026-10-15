@@ -4,7 +4,9 @@
  *
  * The prompt facade with a scripted adapter: what the MODEL receives carries the
  * deferred block, the durable log and the client projection keep only the clean
- * human text, and the block is consumed exactly once — by an ACCEPTED turn.
+ * human text, and the block is claimed by exactly one prompt: bound to the run
+ * its append joined (whose outcome alone settles it), or given back when the
+ * prompt provably never exposed it.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -28,6 +30,7 @@ const {
   promptRuntimeSessionWithRuntime,
   setDeferredBackgroundContextProvider,
 } = await import("./runtimePrompt.ts");
+const { subscribeSessionRunEnded } = await import("./runtime/liveSession.ts");
 const { closeDb } = await import("../db/index.ts");
 const { updateSettings, getSettings } = await import("../settings.ts");
 
@@ -82,22 +85,60 @@ function harnessed(sessionId: string) {
   };
 }
 
-/** A provider that hands out one block and records whether it was committed. */
+/**
+ * A provider that hands out one block, claimed by the prompt that takes it, and
+ * records where it was exposed and how its carrier ended. A carrier that ends
+ * without exposing it — or a steer the provider refused after its append —
+ * gives it back, as `completionDelivery.ts` does.
+ */
 function oneBlock(block: string) {
-  const state = { commits: 0, peeks: 0, live: true };
+  const state = {
+    claims: 0,
+    live: true,
+    exposures: [] as (string | undefined)[],
+    providerCalls: [] as (string | undefined)[],
+    declined: 0,
+    finished: [] as unknown[],
+  };
   setDeferredBackgroundContextProvider(() => {
-    state.peeks += 1;
     if (!state.live) return undefined;
+    state.claims += 1;
+    state.live = false;
+    let exposed = false;
+    let called = false;
+    let declined = false;
     return {
       block,
-      commit: () => {
-        state.commits += 1;
-        state.live = false;
+      hooks: {
+        onUserEntry: (_entryId, runId) => {
+          exposed = true;
+          state.exposures.push(runId);
+        },
+        onProviderCall: (runId) => {
+          called = true;
+          state.providerCalls.push(runId);
+        },
+        onProviderDeclined: () => {
+          declined = true;
+          state.declined += 1;
+        },
+      },
+      finished: (thrown) => {
+        state.finished.push(thrown);
+        // As `BackgroundHandlingAttempt`: only the runtime's own word that the
+        // provider never had it gives the block back.
+        if (declined || (!exposed && !called)) state.live = true;
       },
     };
   });
   return state;
 }
+
+/** Every run outcome, as `index.ts` hears them to settle background facts. */
+const outcomes: { sessionId: string; runId: string; stopReason: string }[] = [];
+subscribeSessionRunEnded((sessionId, outcome) =>
+  outcomes.push({ sessionId, ...outcome }),
+);
 
 test("a deferred fact reaches the model and never the durable log", async () => {
   const { runtime, modelTexts, driver } = harnessed("sess-defer");
@@ -116,7 +157,14 @@ test("a deferred fact reaches the model and never the durable log", async () => 
     modelTexts[0]!.endsWith("what next?"),
     "the human text stays last, after the model-only block",
   );
-  assert.equal(state.commits, 1, "an accepted turn consumes the block");
+  assert.equal(state.exposures.length, 1, "appended once, into a run");
+  const run = outcomes.find((o) => o.sessionId === "sess-defer");
+  assert.equal(
+    state.exposures[0],
+    run?.runId,
+    "bound to the run whose outcome settles it",
+  );
+  assert.equal(run?.stopReason, "end");
 
   const durable = runtime
     .get("sess-defer")!
@@ -156,7 +204,7 @@ test("the block is consumed once and does not repeat on the next turn", async ()
   assert.ok(modelTexts[0]!.includes("ONLY-ONCE"));
   assert.ok(
     !modelTexts[1]!.includes("ONLY-ONCE"),
-    "a committed block must not ride a second turn",
+    "a claimed block must not ride a second turn",
   );
 });
 
@@ -174,7 +222,7 @@ test("a hidden prompt carries the deferred block", async () => {
   });
 
   assert.ok(modelTexts[0]!.includes("MUST-APPEAR"));
-  assert.equal(state.commits, 1);
+  assert.equal(state.exposures.length, 1);
 });
 
 /**
@@ -253,7 +301,9 @@ test("a steering prompt into a live turn carries the deferred block", async () =
     h.modelTexts.some((t) => t.includes("MUST-APPEAR-TOO")),
     "the block rides the mid-turn message",
   );
-  assert.equal(state.commits, 1);
+  assert.equal(state.exposures.length, 1);
+  assert.ok(state.exposures[0], "bound to the run the steer joined");
+  assert.equal(state.live, false, "taken by that run");
   h.release();
 });
 
@@ -271,7 +321,8 @@ test("a steer the provider rejects does not consume the deferred block", async (
       steer: true,
     }),
   );
-  assert.equal(state.commits, 0, "a rejected steer consumes nothing");
+  assert.equal(state.declined, 1, "the runtime says pi took nothing");
+  assert.equal(state.live, true, "a rejected steer gives the block back");
   assert.ok(
     !h.modelTexts.some((t) => t.includes("SURVIVES-REJECTED-STEER")),
     "and the block never reached the model",
@@ -279,10 +330,10 @@ test("a steer the provider rejects does not consume the deferred block", async (
   h.release();
 });
 
-test("a provider that refuses the prompt does not consume the fact", async () => {
-  // The commit must follow PROVIDER ACCEPTANCE, not the durable append that
-  // precedes it. Committing at append threw the only copy away whenever the
-  // adapter then rejected — a fact the model never saw, gone.
+test("a turn that fails after its append keeps the fact with that failed run, never the next turn", async () => {
+  // Once appended, the prompt may have reached the provider: whether it did is
+  // the run's outcome to say, and a failed run leaves the fact interrupted for
+  // the user's Recover — never silently handed to whatever turn comes next.
   const modelTexts: string[] = [];
   let failNext = true;
   const adapter: PromptableAdapter = {
@@ -330,16 +381,18 @@ test("a provider that refuses the prompt does not consume the fact", async () =>
       clientRequestId: "p1",
     }),
   );
-  assert.equal(state.commits, 0, "a rejected prompt consumes nothing");
+  const failed = outcomes.find((o) => o.sessionId === "sess-provider-refused");
+  assert.equal(failed?.stopReason, "error");
+  assert.deepEqual(state.exposures, [failed?.runId], "bound to the failed run");
+  assert.equal(state.live, false, "not given back to the queue");
 
   await promptRuntimeSessionWithRuntime(runtime, driver, "second", {
     clientRequestId: "p2",
   });
   assert.ok(
-    modelTexts[0]!.includes("SURVIVES-PROVIDER-FAILURE"),
-    "the fact still reaches the next turn that the provider accepts",
+    !modelTexts[0]!.includes("SURVIVES-PROVIDER-FAILURE"),
+    "an unrelated later turn does not carry, or discharge, it",
   );
-  assert.equal(state.commits, 1);
 });
 
 test("a refused turn leaves the fact for the next one", async () => {
@@ -350,15 +403,16 @@ test("a refused turn leaves the fact for the next one", async () => {
   await promptRuntimeSessionWithRuntime(runtime, driver, "once", {
     clientRequestId: "same",
   });
-  assert.equal(state.commits, 1);
+  assert.equal(state.exposures.length, 1);
 
   const second = oneBlock("SURVIVES-AGAIN");
   await promptRuntimeSessionWithRuntime(runtime, driver, "again", {
     clientRequestId: "same",
   });
   assert.equal(
-    second.commits,
+    second.exposures.length,
     0,
-    "a deduplicated prompt appends nothing, so it consumes nothing",
+    "a deduplicated prompt appends nothing",
   );
+  assert.equal(second.live, true, "so the block goes back");
 });

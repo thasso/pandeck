@@ -51,11 +51,24 @@ const script = `
     held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,
-    offer: async (sessionId, offer, key) => {
-      offered.push({ sessionId, key, block: offer.contextBlock });
+    offer: async (sessionId, offer, _key, attempt) => {
+      offered.push({ sessionId, key: offer.contextBlock, block: offer.contextBlock });
+      handled(sessionId, attempt);
       return "delivered";
     },
   });
+  // A turn as the facade runs it: claimed, appended into a run, and that run
+  // ended cleanly — the one thing that retires a fact.
+  let runs = 0;
+  const handled = (sessionId, attempt) => {
+    runs += 1;
+    const runId = "run-" + process.pid + "-" + runs;
+    attempt.reserve();
+    attempt.exposed("entry-" + runs, runId);
+    attempt.finished(undefined);
+    notices.settleBackgroundHandling(sessionId, { runId, stopReason: "end", abortRequested: false });
+  };
+
   let now = 1000;
   const timers = [];
   const clock = {
@@ -200,7 +213,11 @@ test("a crash right after the deadline's terminal commit still owes and delivers
     }
 
   const boot = await run(["boot", "", ""]);
-  assert.deepEqual(boot.result.restore, { restored: 4, forgotten: 0 });
+  assert.deepEqual(boot.result.restore, {
+    restored: 4,
+    forgotten: 0,
+    interrupted: 0,
+  });
   assert.deepEqual(
     boot.result.offeredAtBoot.sort(),
     ["ack-unheld", "provider-unheld"],
@@ -216,6 +233,10 @@ test("a crash right after the deadline's terminal commit still owes and delivers
   assert.equal(boot.result.launches, 0, "nothing is relaunched");
 
   const reboot = await run(["reboot", "", ""]);
-  assert.deepEqual(reboot.result.restore, { restored: 0, forgotten: 0 });
+  assert.deepEqual(reboot.result.restore, {
+    restored: 0,
+    forgotten: 0,
+    interrupted: 0,
+  });
   assert.deepEqual(reboot.result.offered, []);
 }, 300_000);

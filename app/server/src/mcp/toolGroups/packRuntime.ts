@@ -224,14 +224,50 @@ function saveStore(sessionId: string): void {
   );
 }
 
+/**
+ * Artifacts something durable still names and the cap must not evict: the
+ * output of background work still running, or of a fact its session is owed
+ * or has not finished handling (`backgroundCompletionNotices.ts`). A guard
+ * that cannot answer evicts nothing this time.
+ */
+let retentionGuard: ((sessionId: string) => ReadonlySet<string>) | undefined;
+export function setArtifactRetentionGuard(
+  guard: ((sessionId: string) => ReadonlySet<string>) | undefined,
+): void {
+  retentionGuard = guard;
+}
+
+/**
+ * The oldest artifacts past the cap that nothing still names. Never the one
+ * being added: a background output is captured BEFORE the evidence that
+ * makes its work row name it is recorded, so at this moment nothing can
+ * protect it yet, and evicting it would lose the only copy. It becomes an
+ * ordinary candidate from the next addition on, once its owner had the
+ * chance to claim it.
+ */
+function evictable(
+  sessionId: string,
+  artifacts: SessionArtifact[],
+  incoming: SessionArtifact,
+): SessionArtifact[] {
+  const excess = artifacts.length - MAX_ARTIFACTS;
+  if (excess <= 0) return [];
+  let kept: ReadonlySet<string>;
+  try {
+    kept = retentionGuard?.(sessionId) ?? new Set();
+  } catch {
+    return [];
+  }
+  return artifacts
+    .filter((a) => a !== incoming && !kept.has(a.id))
+    .slice(0, excess);
+}
+
 function appendArtifact(sessionId: string, artifact: SessionArtifact): void {
   const store = loadStore(sessionId);
   const previous = store.artifacts;
-  store.artifacts = [...previous, artifact];
-  const dropped =
-    store.artifacts.length > MAX_ARTIFACTS
-      ? store.artifacts.splice(0, store.artifacts.length - MAX_ARTIFACTS)
-      : [];
+  const dropped = evictable(sessionId, [...previous, artifact], artifact);
+  store.artifacts = [...previous, artifact].filter((a) => !dropped.includes(a));
   try {
     saveStore(sessionId);
   } catch (err) {

@@ -5870,14 +5870,33 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // Like `promptQueue`: the next `state` frame carries the same count.
       const viewed = state.session;
       if (!viewed || viewed.sessionId !== msg.sessionId) return state;
-      if ((viewed.queuedBackgroundUpdates ?? 0) === msg.count) return state;
-      const { queuedBackgroundUpdates: _previous, ...rest } = viewed;
+      const unhandled = msg.unhandled ?? 0;
+      const batch = msg.unhandledBatch ?? [];
+      if (
+        (viewed.queuedBackgroundUpdates ?? 0) === msg.count &&
+        (viewed.unhandledBackgroundUpdates ?? 0) === unhandled &&
+        JSON.stringify(viewed.unhandledBackgroundBatch ?? []) ===
+          JSON.stringify(batch)
+      )
+        return state;
+      const {
+        queuedBackgroundUpdates: _previous,
+        unhandledBackgroundUpdates: _previousUnhandled,
+        unhandledBackgroundBatch: _previousBatch,
+        ...rest
+      } = viewed;
       return {
         ...state,
-        session:
-          msg.count > 0
-            ? { ...rest, queuedBackgroundUpdates: msg.count }
-            : rest,
+        session: {
+          ...rest,
+          ...(msg.count > 0 ? { queuedBackgroundUpdates: msg.count } : {}),
+          ...(unhandled > 0
+            ? {
+                unhandledBackgroundUpdates: unhandled,
+                unhandledBackgroundBatch: batch,
+              }
+            : {}),
+        },
       };
     }
     case "peerPromptCardUpdate":

@@ -960,12 +960,25 @@ class SessionHub {
     });
   }
 
-  /** How many background-work updates wait for this session, told to its viewers. */
-  broadcastBackgroundUpdateQueue(sessionId: string, count: number): void {
+  /**
+   * How many background-work updates wait for this session, and how many it
+   * was given without finishing them, told to its viewers.
+   */
+  broadcastBackgroundUpdateQueue(
+    sessionId: string,
+    count: number,
+    unhandled: {
+      count: number;
+      batch: import("@assistant/shared").BackgroundHandlingRef[];
+    },
+  ): void {
     this.sendToSessionViewers(sessionId, {
       type: "backgroundUpdateQueue",
       sessionId,
       count,
+      ...(unhandled.count > 0
+        ? { unhandled: unhandled.count, unhandledBatch: unhandled.batch }
+        : {}),
     });
   }
 

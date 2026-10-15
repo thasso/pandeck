@@ -285,4 +285,23 @@ describe("BackgroundWorkPromptCard", () => {
       expect(body(toggle!)?.querySelector(".break-words")).not.toBeNull();
     },
   );
+
+  it("says a Recover is one, above the rows it carries again", () => {
+    act(() =>
+      root.render(
+        <BackgroundWorkPromptCard
+          presentation={{
+            kind: "background-work",
+            updates: [update()],
+            recovery: true,
+          }}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain(
+      "Recovery: an earlier turn was given this update and did not finish",
+    );
+    renderCard([update()]);
+    expect(container.textContent).not.toContain("Recovery");
+  });
 });
