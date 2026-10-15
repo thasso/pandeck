@@ -391,12 +391,18 @@ facade.
   settled ones (`sessionStore.isSettled`, so a session woken by its own outcome
   still counts as working in the checkout).
 - `initiativeStore.ts` owns Initiative rows (migration `0085_initiatives.sql`)
-  and their `initiative —member→ task` edges. Every write runs in `mutation`,
-  which stamps the touched rows from the `initiative_revision` sequence before
-  COMMIT and notifies after it; `touchHolders` is the Task seam's fan-out
-  through the same path. Members resolve at read time (stored edges plus
+  and their `initiative —member→ task` edges: plain edges never nest
+  (`dropCoveredPlainEdges` runs inside a Task move's transaction), marked
+  milestone edges may. Every write runs in `mutation`, which stamps the touched
+  rows from the `initiative_revision` sequence inside the transaction (joining a
+  caller's open one) and notifies after it; `touchHolders` is the Task seam's
+  fan-out through the same path, and a `sessionStore` liveness listener reaches
+  it for session writes. Members resolve at read time (stored edges plus
   descendants along `subtask`), and `INITIATIVE_STORE_SQL` holds the walks that
   `initiativeStoreQueryPlan.test.ts` pins to index searches.
+- `sessionStore.subscribeLiveness` is told, after each write lands, the ids of
+  sessions whose liveness it may have changed: archive and unarchive, settle and
+  unsettle, a raised outcome, a tombstone, a newly inserted row.
 - `links.ts` owns the generic edge graph and fixed relation vocabulary;
   `sessionObjectStore.ts` owns durable `session —context→ first-class object`
   edges (surfaced as inspector related-object rows) and projects them as compact

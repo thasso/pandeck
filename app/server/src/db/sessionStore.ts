@@ -35,6 +35,32 @@ import type { AgentUsage } from "@assistant/shared/session";
 import { randomUUID } from "node:crypto";
 import { getDb } from "./index.ts";
 
+/**
+ * Receives the ids of sessions whose LIVENESS may have changed: archived or
+ * unarchived, settled or unsettled, a raised outcome, a tombstone, a new row.
+ * Initiative summaries list a member Task's sessions only while they are live
+ * (`initiativeStore`), so every such write reports here once it has landed.
+ */
+type SessionLivenessListener = (ids: readonly string[]) => void;
+
+const livenessListeners = new Set<SessionLivenessListener>();
+
+function subscribeLiveness(listener: SessionLivenessListener): () => void {
+  livenessListeners.add(listener);
+  return () => livenessListeners.delete(listener);
+}
+
+function noteLiveness(ids: readonly string[]): void {
+  if (!ids.length) return;
+  for (const listener of livenessListeners) {
+    try {
+      listener(ids);
+    } catch {
+      // A listener cannot make an already durable session write fail.
+    }
+  }
+}
+
 /** Failure text is a sidebar label, not a log: keep it short enough to render. */
 const MAX_RUN_FAILURE_CHARS = 240;
 
@@ -406,6 +432,7 @@ function upsert(input: SessionUpsert): boolean {
           ? 1
           : 0,
       );
+    if (!prev) noteLiveness([input.id]);
     return true;
   } catch (err) {
     console.warn(
@@ -447,7 +474,10 @@ function markDeleted(
       "UPDATE session_index SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
     )
     .run(ts, id);
-  if (result.changes > 0) return "deleted";
+  if (result.changes > 0) {
+    noteLiveness([id]);
+    return "deleted";
+  }
   return getDb().prepare("SELECT 1 FROM session_index WHERE id = ?").get(id)
     ? "already-deleted"
     : "missing";
@@ -490,6 +520,7 @@ function setArchived(id: string, archived: boolean, ts = Date.now()): void {
       )
       .run(archived ? ts : null, id);
     if (archived) markReadThrough(id);
+    noteLiveness([id]);
   } catch {
     // best-effort mirror
   }
@@ -553,6 +584,7 @@ function archiveSettledBatch(
       for (const row of rows) archived.push(row.id);
     }
     db.exec("COMMIT");
+    noteLiveness(archived);
     return archived;
   } catch (err) {
     try {
@@ -628,13 +660,14 @@ function setSettled(
   try {
     const db = getDb();
     if (!settled) {
-      return (
+      const unsettled =
         db
           .prepare(
             "UPDATE session_index SET settled_at_ms = NULL WHERE id = ? AND deleted_at_ms IS NULL",
           )
-          .run(id).changes > 0
-      );
+          .run(id).changes > 0;
+      if (unsettled) noteLiveness([id]);
+      return unsettled;
     }
     const result =
       throughRevision === undefined
@@ -656,7 +689,10 @@ function setSettled(
                 WHERE id = ? AND deleted_at_ms IS NULL`,
             )
             .run(ts, Math.max(0, Math.trunc(throughRevision)), id);
-    if (result.changes > 0) markReadThrough(id);
+    if (result.changes > 0) {
+      markReadThrough(id);
+      noteLiveness([id]);
+    }
     return result.changes > 0;
   } catch {
     return false;
@@ -689,6 +725,7 @@ function recordSessionOutcome(
       RETURNING attention_revision AS revision`,
       )
       .get(kind, ts, id) as { revision: number } | undefined;
+    if (row) noteLiveness([id]);
     return row?.revision;
   } catch {
     return undefined;
@@ -805,6 +842,7 @@ function settleWithPeers(
         throw new Error("peer row not updated");
     for (const settledId of [id, ...peerIds]) markReadThrough(settledId);
     db.exec("COMMIT");
+    noteLiveness([id, ...peerIds]);
     return true;
   } catch {
     try {
@@ -1801,6 +1839,7 @@ function usageDelta(
  * call sites) if SQLite is ever replaced.
  */
 export const sessionStore = {
+  subscribeLiveness,
   get,
   getIncludingDeleted,
   list,

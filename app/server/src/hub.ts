@@ -861,10 +861,13 @@ class SessionHub {
   }
 
   /**
-   * The Projects diff over the live projection (neither archived nor deleted):
+   * The Task diff over the live projection (neither archived nor deleted):
    * archiving is a delete, unarchiving an upsert. A Task write moves only the
    * revisions of the Initiatives holding it, so only those re-read their
-   * members here.
+   * members here. A write to an Initiative already outside the projection — a
+   * rename, a member change or a delete after it was archived — is reported as
+   * a `delete` again with its new revision, as archived Tasks are: no list
+   * holds it, and an open graph of it re-reads on that revision.
    */
   private flushInitiativeBroadcast(): void {
     const index = initiativeRevisionIndex();
@@ -893,6 +896,12 @@ class SessionHub {
         id,
         revision: index.get(id)?.revision ?? revision + 1,
       });
+    }
+    for (const id of pending) {
+      if (flushed.has(id) || baseline.has(id)) continue;
+      const entry = index.get(id);
+      if (!entry || entry.live) continue;
+      events.push({ kind: "delete", id, revision: entry.revision });
     }
     this.lastFlushedInitiativeRevisions = flushed;
     if (events.length) {

@@ -6,22 +6,22 @@
  * not at all, and the mutation stamps the Initiative's revision and notifies
  * the `initiatives` topic in the same act. Members are resolved at read time
  * (stored members plus their descendants), so the counts and the graph always
- * describe the Tasks as they are now; Task writes reach the Initiatives that
- * hold them through `initiativeStore.touchHolders`, called from the Task
- * notification seam.
+ * describe the Tasks as they are now; Task and session writes reach the
+ * Initiatives that read them through the store's fan-out, called from their
+ * own notification seams.
  */
-import type {
-  InitiativeAttention,
-  InitiativeDetail,
-  InitiativeExternalBlocker,
-  InitiativeGraphEdge,
-  InitiativeGraphNode,
-  InitiativeProgress,
-  InitiativeState,
-  InitiativeSummary,
-  InitiativeTaskState,
-  StateDigestEntry,
-  StateEvent,
+import {
+  INITIATIVE_SUMMARY_SESSION_LIMIT,
+  type InitiativeAttention,
+  type InitiativeDetail,
+  type InitiativeExternalBlocker,
+  type InitiativeGraphEdge,
+  type InitiativeGraphNode,
+  type InitiativeProgress,
+  type InitiativeState,
+  type InitiativeSummary,
+  type StateDigestEntry,
+  type StateEvent,
 } from "@assistant/shared";
 import {
   initiativeStore,
@@ -35,6 +35,17 @@ import { taskStore } from "./db/taskStore.ts";
 /** A list entry: the summary, plus when it was archived for archived reads. */
 export interface InitiativeListItem extends InitiativeSummary {
   archivedAt?: number;
+}
+
+/**
+ * What a membership write did beyond its own Tasks: the plain members an added
+ * ancestor absorbed, and the removed Tasks that are still members because a
+ * member ancestor covers them.
+ */
+export interface InitiativeMembershipWrite {
+  initiative: InitiativeRow;
+  absorbedTaskIds: string[];
+  stillMembers: Array<{ taskId: string; through: string }>;
 }
 
 export function subscribeInitiativeChanges(
@@ -83,7 +94,9 @@ export interface UpdateInitiativeInput {
   state?: InitiativeState;
 }
 
-export function createInitiative(input: CreateInitiativeInput): InitiativeRow {
+export function createInitiative(
+  input: CreateInitiativeInput,
+): InitiativeMembershipWrite {
   const title = cleanTitle(input.title);
   return initiativeStore.mutation((touch) => {
     const row = initiativeStore.create(touch, {
@@ -91,8 +104,8 @@ export function createInitiative(input: CreateInitiativeInput): InitiativeRow {
       description: input.description ?? "",
       state: input.state ?? "active",
     });
-    addMembersTo(touch, row.id, input.taskIds ?? []);
-    return initiativeStore.get(row.id)!;
+    const absorbed = addMembersTo(touch, row.id, input.taskIds ?? []);
+    return membershipWrite(row.id, absorbed, []);
   });
 }
 
@@ -139,18 +152,24 @@ export function deleteInitiative(id: string): void {
 }
 
 /**
- * Add Tasks, each with its whole subtree. A Task already stored is left as it
- * is. A Task inside a member's subtree, or one whose subtree holds a member, is
- * refused with the reason rather than stored twice.
+ * Add Tasks, each with its whole subtree. The list is one request, so its
+ * order does not matter:
+ * - a Task already stored is left as it is;
+ * - a Task a member already covers is refused with the reason, and the whole
+ *   operation with it;
+ * - a Task under another Task in the same list is absorbed into it;
+ * - a Task holding plain members absorbs them — their edges go and it takes
+ *   the first one's place — while marked (milestone) edges below it stay.
+ * The Tasks that remain keep the order they were given in.
  */
 export function addInitiativeMembers(
   id: string,
   taskIds: readonly string[],
-): InitiativeRow {
+): InitiativeMembershipWrite {
   const current = requireInitiative(id);
   return initiativeStore.mutation((touch) => {
-    addMembersTo(touch, current.id, taskIds);
-    return initiativeStore.get(current.id)!;
+    const absorbed = addMembersTo(touch, current.id, taskIds);
+    return membershipWrite(current.id, absorbed, []);
   });
 }
 
@@ -158,105 +177,149 @@ function addMembersTo(
   touch: Set<number>,
   initiativeId: number,
   taskIds: readonly string[],
-): void {
-  for (const raw of taskIds) {
-    const taskId = requireTask(raw);
-    const stored = new Set(
-      initiativeStore.memberEdges(initiativeId).map((edge) => edge.taskId),
-    );
-    if (stored.has(taskId)) continue;
-    const ancestor = ancestorsOf(taskId).find((id) => stored.has(id));
-    if (ancestor !== undefined)
+): number[] {
+  const requested = [...new Set(taskIds.map(requireTask))];
+  const edges = initiativeStore.memberEdges(initiativeId);
+  const stored = new Set(edges.map((edge) => edge.taskId));
+  const fresh = requested.filter((taskId) => !stored.has(taskId));
+  for (const taskId of fresh) {
+    const covering = coveringEdge(edges, taskId);
+    if (covering)
       throw new Error(
-        `${taskStore.displayId(taskId)} is already a member of ${displayId(initiativeId)} through its ancestor ${taskStore.displayId(ancestor)}, whose whole subtree is included.`,
+        `${taskStore.displayId(taskId)} is already a member of ${displayId(initiativeId)} through its ancestor ${taskStore.displayId(covering.taskId)}, whose whole subtree is included.`,
       );
-    const descendant = [...stored].find((member) =>
-      ancestorsOf(member).includes(taskId),
-    );
-    if (descendant !== undefined)
-      throw new Error(
-        `${taskStore.displayId(taskId)} contains ${taskStore.displayId(descendant)}, which is already a member of ${displayId(initiativeId)}. Remove ${taskStore.displayId(descendant)} first, then add ${taskStore.displayId(taskId)}.`,
-      );
-    initiativeStore.addMember(touch, initiativeId, taskId);
   }
+  const inList = new Set(fresh);
+  const ancestors = new Map(
+    fresh.map((taskId) => [taskId, initiativeStore.ancestorIds(taskId)]),
+  );
+  const roots = fresh.filter(
+    (taskId) =>
+      !ancestors.get(taskId)!.some((ancestor) => inList.has(ancestor)),
+  );
+  const absorbed = fresh.filter((taskId) => !roots.includes(taskId));
+  for (const root of roots) {
+    const below = initiativeStore
+      .memberEdges(initiativeId)
+      .filter(
+        (edge) =>
+          !edge.milestone &&
+          initiativeStore.ancestorIds(edge.taskId).includes(root),
+      );
+    for (const edge of below)
+      initiativeStore.removeMember(touch, initiativeId, edge.taskId);
+    initiativeStore.addMember(
+      touch,
+      initiativeId,
+      root,
+      false,
+      below.length
+        ? Math.min(...below.map((edge) => edge.position))
+        : undefined,
+    );
+    absorbed.push(...below.map((edge) => edge.taskId));
+  }
+  return absorbed;
 }
 
 /**
  * Remove stored members. A Task that is not a member is already where the
  * caller wants it; one that is a member only through an ancestor cannot be
- * removed on its own, and the refusal says which ancestor holds it.
+ * removed on its own, and the refusal says which ancestor holds it. Removing a
+ * stored edge under a member ancestor (a marked one) leaves the Task a member
+ * through that ancestor, and the answer says so.
  */
 export function removeInitiativeMembers(
   id: string,
   taskIds: readonly string[],
-): InitiativeRow {
+): InitiativeMembershipWrite {
   const current = requireInitiative(id);
   return initiativeStore.mutation((touch) => {
+    const stillMembers: Array<{ taskId: number; through: number }> = [];
     for (const raw of taskIds) {
       const taskId = parseId(raw);
       if (taskId === undefined) throw new Error(`Task not found: ${raw}`);
       const edges = initiativeStore.memberEdges(current.id);
+      const others = edges.filter((edge) => edge.taskId !== taskId);
+      const covering = coveringEdge(others, taskId);
       if (edges.some((edge) => edge.taskId === taskId)) {
         initiativeStore.removeMember(touch, current.id, taskId);
+        if (covering) stillMembers.push({ taskId, through: covering.taskId });
         continue;
       }
-      const holder = holdingEdge(edges, taskId);
-      if (holder)
+      if (covering)
         throw new Error(
-          `${taskStore.displayId(taskId)} is a member of ${displayId(current.id)} only through ${taskStore.displayId(holder.taskId)}. Remove ${taskStore.displayId(holder.taskId)}, or move ${taskStore.displayId(taskId)} out of its subtree.`,
+          `${taskStore.displayId(taskId)} is a member of ${displayId(current.id)} only through ${taskStore.displayId(covering.taskId)}. Remove ${taskStore.displayId(covering.taskId)}, or move ${taskStore.displayId(taskId)} out of its subtree.`,
         );
     }
-    return initiativeStore.get(current.id)!;
+    return membershipWrite(current.id, [], stillMembers);
   });
 }
 
-/** Mark or clear milestones; the mark lives on a stored membership edge. */
+/**
+ * Mark or clear milestones. The mark lives on a membership edge: marking a
+ * Task covered by a member stores a marked edge for it, and clearing that mark
+ * deletes the edge again (the Task stays a member through its ancestor);
+ * clearing an uncovered Task's mark keeps it as a plain member.
+ */
 export function setInitiativeMilestones(
   id: string,
   taskIds: readonly string[],
   milestone: boolean,
-): InitiativeRow {
+): InitiativeMembershipWrite {
   const current = requireInitiative(id);
   return initiativeStore.mutation((touch) => {
     for (const raw of taskIds) {
       const taskId = requireTask(raw);
       const edges = initiativeStore.memberEdges(current.id);
       const edge = edges.find((candidate) => candidate.taskId === taskId);
-      if (!edge) {
-        const holder = holdingEdge(edges, taskId);
+      const covering = coveringEdge(
+        edges.filter((candidate) => candidate.taskId !== taskId),
+        taskId,
+      );
+      if (!edge && !covering)
         throw new Error(
-          holder
-            ? `${taskStore.displayId(taskId)} is a member of ${displayId(current.id)} only through ${taskStore.displayId(holder.taskId)}; a milestone is marked on a Task added with addMembers.`
-            : `${taskStore.displayId(taskId)} is not a member of ${displayId(current.id)}; add it first.`,
+          `${taskStore.displayId(taskId)} is not a member of ${displayId(current.id)}; add it first.`,
         );
+      if (milestone) {
+        if (!edge) initiativeStore.addMember(touch, current.id, taskId, true);
+        else if (!edge.milestone)
+          initiativeStore.setMilestone(touch, current.id, edge, true);
+      } else if (edge?.milestone) {
+        if (covering) initiativeStore.removeMember(touch, current.id, taskId);
+        else initiativeStore.setMilestone(touch, current.id, edge, false);
       }
-      if (edge.milestone !== milestone)
-        initiativeStore.setMilestone(touch, current.id, edge, milestone);
     }
-    return initiativeStore.get(current.id)!;
+    return membershipWrite(current.id, [], []);
   });
 }
 
-/** The stored edge whose subtree holds `taskId`, if one does. */
-function holdingEdge(
+/** The stored edge whose subtree holds `taskId`, nearest ancestor first. */
+function coveringEdge(
   edges: readonly InitiativeMemberEdge[],
   taskId: number,
 ): InitiativeMemberEdge | undefined {
-  const ancestors = ancestorsOf(taskId);
-  return edges.find((edge) => ancestors.includes(edge.taskId));
+  const byTask = new Map(edges.map((edge) => [edge.taskId, edge]));
+  for (const ancestor of initiativeStore.ancestorIds(taskId)) {
+    const edge = byTask.get(ancestor);
+    if (edge) return edge;
+  }
+  return undefined;
 }
 
-/** Parent first, up to the root; a stored cycle stops the walk. */
-function ancestorsOf(taskId: number): number[] {
-  const chain: number[] = [];
-  const seen = new Set([taskId]);
-  let cursor = taskStore.parentOf(taskId);
-  while (cursor !== undefined && !seen.has(cursor)) {
-    seen.add(cursor);
-    chain.push(cursor);
-    cursor = taskStore.parentOf(cursor);
-  }
-  return chain;
+function membershipWrite(
+  initiativeId: number,
+  absorbed: readonly number[],
+  stillMembers: ReadonlyArray<{ taskId: number; through: number }>,
+): InitiativeMembershipWrite {
+  return {
+    initiative: initiativeStore.get(initiativeId)!,
+    absorbedTaskIds: absorbed.map(String),
+    stillMembers: stillMembers.map((entry) => ({
+      taskId: String(entry.taskId),
+      through: String(entry.through),
+    })),
+  };
 }
 
 function cleanTitle(value: string): string {
@@ -267,12 +330,16 @@ function cleanTitle(value: string): string {
 
 /* --------------------------------- reads --------------------------------- */
 
-function taskState(member: InitiativeMemberRow): InitiativeTaskState {
-  if (member.status === "done") return "done";
-  if (member.status === "doing") return "doing";
-  return member.openBlockers > 0 ? "blocked" : "startable";
+/** Blocked is independent of status: an open blocker on a Task not done. */
+function isBlocked(member: InitiativeMemberRow): boolean {
+  return member.status !== "done" && member.openBlockers > 0;
 }
 
+/**
+ * Counts per `docs/initiatives.md`: every member in `total`, every done one in
+ * `done`, and only unarchived members in `doing`, `startable` and `blocked` —
+ * a shelved Task is neither work in progress nor work that could start.
+ */
 function progressOf(
   members: readonly InitiativeMemberRow[],
 ): InitiativeProgress {
@@ -283,7 +350,16 @@ function progressOf(
     startable: 0,
     blocked: 0,
   };
-  for (const member of members) progress[taskState(member)] += 1;
+  for (const member of members) {
+    if (member.status === "done") {
+      progress.done += 1;
+      continue;
+    }
+    if (member.archived) continue;
+    if (member.status === "doing") progress.doing += 1;
+    if (isBlocked(member)) progress.blocked += 1;
+    else if (member.status === "todo") progress.startable += 1;
+  }
   return progress;
 }
 
@@ -302,13 +378,15 @@ function summaryOf(
   members: readonly InitiativeMemberRow[],
 ): InitiativeSummary {
   const attention = attentionOf(row);
+  const sessions = initiativeStore.memberSessionIds(row.id);
   return {
     id: String(row.id),
     title: row.title,
     state: row.state,
     ...(attention ? { attention } : {}),
     progress: progressOf(members),
-    sessionIds: initiativeStore.memberSessionIds(row.id),
+    sessionIds: sessions.slice(0, INITIATIVE_SUMMARY_SESSION_LIMIT),
+    sessionCount: sessions.length,
     updatedAt: row.updatedAt,
   };
 }
@@ -403,7 +481,7 @@ export function readInitiative(id: string): InitiativeDetail | null {
       id: String(member.taskId),
       title: member.title,
       status: member.status,
-      state: taskState(member),
+      ...(isBlocked(member) ? { blocked: true as const } : {}),
       ...(member.projectId ? { projectId: member.projectId } : {}),
       ...(parent !== undefined ? { parentId: String(parent) } : {}),
       ...(edge ? { direct: true as const } : {}),

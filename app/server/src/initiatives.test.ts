@@ -1,14 +1,17 @@
 /**
  * The Initiative domain (docs/initiatives.md): membership resolved at read
- * time, the refusals that keep a Task from being stored twice, the progress
- * counts, the graph read, and notify-with-ids as the only revision bump. The
- * coverage guard at the end fails when a new exported write is not exercised.
+ * time, absorption and the one refusal that keep a plain membership from being
+ * stored twice, milestones on stored and covered members, the progress counts,
+ * the member sessions, the graph read, and notify-with-ids as the only
+ * revision bump. The coverage guard at the end fails when a new exported write
+ * is not exercised.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
+import { INITIATIVE_SUMMARY_SESSION_LIMIT } from "@assistant/shared";
 import {
   addInitiativeMembers,
   archiveInitiative,
@@ -27,13 +30,41 @@ import {
   unarchiveInitiative,
   updateInitiative,
 } from "./initiatives.ts";
-import { createTask, linkSessionToTask, updateTask } from "./tasks.ts";
+import {
+  archiveTask,
+  createTask,
+  linkSessionToTask,
+  reorderTasks,
+  updateTask,
+} from "./tasks.ts";
 import { getDb } from "./db/index.ts";
+import { initiativeStore } from "./db/initiativeStore.ts";
+import { sessionStore } from "./db/sessionStore.ts";
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 
-function task(title: string, extra: { parentId?: string } = {}): string {
-  return createTask({ title, source: { createdBy: "user" }, ...extra }).id;
+function task(title: string, parentId?: string): string {
+  return createTask({
+    title,
+    source: { createdBy: "user" },
+    ...(parentId ? { parentId } : {}),
+  }).id;
+}
+
+function initiative(title: string, taskIds: string[] = []): string {
+  return String(createInitiative({ title, taskIds }).initiative.id);
+}
+
+/** The stored edges, as `id` or `id*` for a milestone, in the user's order. */
+function stored(id: string): string[] {
+  return initiativeStore
+    .memberEdges(Number(id))
+    .sort((a, b) => a.position - b.position)
+    .map((edge) => `${edge.taskId}${edge.milestone ? "*" : ""}`);
+}
+
+function memberIds(id: string): string[] {
+  return readInitiative(id)!.nodes.map((node) => node.id);
 }
 
 function revisionOf(id: string): number {
@@ -56,6 +87,24 @@ function movesRevision(id: string, write: () => void): void {
   assert.ok(heard.includes(id), `Initiative ${id} was not notified`);
 }
 
+let sessionSerial = 0;
+/** A session row in `scope` (user by default), linked to `taskId`. */
+function session(taskId: string, scope: "user" | "internal" = "user"): string {
+  sessionSerial += 1;
+  const id = `sess-initiative-${sessionSerial}`;
+  sessionStore.upsert({
+    id,
+    scope,
+    harness: "pi",
+    agentType: "developer",
+    title: id,
+    messageCount: 1,
+    createdAt: 1_000 + sessionSerial,
+  });
+  linkSessionToTask(taskId, { sessionId: id });
+  return id;
+}
+
 test("the migration's state check refuses an unknown state", () => {
   assert.throws(
     () =>
@@ -70,10 +119,9 @@ test("the migration's state check refuses an unknown state", () => {
 
 test("adding a Task adds its subtree, including subtasks created later", () => {
   const epic = task("Epic");
-  const child = task("Child", { parentId: epic });
-  const initiative = createInitiative({ title: "Subtree", taskIds: [epic] });
-  const id = String(initiative.id);
-  const late = task("Created later", { parentId: child });
+  const child = task("Child", epic);
+  const id = initiative("Subtree", [epic]);
+  const late = task("Created later", child);
 
   const detail = readInitiative(id)!;
   assert.deepEqual(
@@ -88,108 +136,242 @@ test("adding a Task adds its subtree, including subtasks created later", () => {
   assert.equal(detail.progress.total, 3);
 });
 
-test("a Task inside a member, or holding one, is refused with the reason", () => {
-  const epic = task("Refusal epic");
-  const child = task("Refusal child", { parentId: epic });
-  const grandchild = task("Refusal grandchild", { parentId: child });
-  const initiative = createInitiative({ title: "Refusals", taskIds: [child] });
-  const id = String(initiative.id);
+test("adding an epic absorbs its plain members and keeps their place", () => {
+  const first = task("Absorb first root");
+  const epic = task("Absorb epic");
+  const child = task("Absorb child", epic);
+  const grandchild = task("Absorb grandchild", child);
+  const marked = task("Absorb milestone", epic);
+  const id = initiative("Absorption", [first, child, marked]);
+  setInitiativeMilestones(id, [marked], true);
+  assert.deepEqual(stored(id), [first, child, `${marked}*`]);
 
+  const write = addInitiativeMembers(id, [epic]);
+  assert.deepEqual(write.absorbedTaskIds, [child]);
+  assert.deepEqual(
+    stored(id),
+    [first, epic, `${marked}*`],
+    "the epic takes the absorbed edge's place; the milestone edge stays",
+  );
+  assert.deepEqual(
+    memberIds(id).sort(),
+    [first, epic, child, grandchild, marked].sort(),
+  );
+
+  // A plain member under a member stays refused, with the reason.
   assert.throws(
     () => addInitiativeMembers(id, [grandchild]),
     new RegExp(
-      `Task-${grandchild} is already a member .* ancestor Task-${child}`,
+      `Task-${grandchild} is already a member .* through its ancestor Task-${epic}`,
     ),
   );
-  assert.throws(
-    () => addInitiativeMembers(id, [epic]),
-    new RegExp(
-      `Task-${epic} contains Task-${child}, which is already a member`,
-    ),
-  );
-  // Re-adding a stored member is already the end state.
-  addInitiativeMembers(id, [child]);
-  // All or nothing: the refused grandchild takes the valid Task with it.
-  const other = task("Refusal other");
+  // Re-adding a stored Task, marked or plain, is already the end state.
+  addInitiativeMembers(id, [epic, marked]);
+  assert.deepEqual(stored(id), [first, epic, `${marked}*`]);
+  // All or nothing: the refused Task takes the valid one with it.
+  const other = task("Absorb other");
   assert.throws(() => addInitiativeMembers(id, [other, grandchild]));
-  assert.deepEqual(readInitiative(id)!.rootIds, [child]);
-  // A member through an ancestor cannot be removed on its own.
-  assert.throws(
-    () => removeInitiativeMembers(id, [grandchild]),
-    new RegExp(`only through Task-${child}`),
-  );
+  assert.deepEqual(stored(id), [first, epic, `${marked}*`]);
   assert.throws(() => addInitiativeMembers(id, ["999999"]), /Task not found/);
   assert.throws(
     () => createInitiative({ title: "  " }),
     /An Initiative needs a title/,
   );
+  // A create absorbs the same way inside its own write.
+  const created = createInitiative({
+    title: "Absorbing create",
+    taskIds: [child, epic],
+  });
+  assert.deepEqual(created.absorbedTaskIds, [child]);
 });
 
-test("milestones live on stored membership edges", () => {
-  const epic = task("Milestone epic");
-  const sub = task("Milestone sub", { parentId: epic });
-  const release = task("First release");
-  const initiative = createInitiative({
-    title: "Milestones",
-    taskIds: [epic, release],
-  });
-  const id = String(initiative.id);
+test("one member list is one request: its order never decides absorb or refuse", () => {
+  const first = task("List first");
+  const epic = task("List epic");
+  const child = task("List child", epic);
+  const grandchild = task("List grandchild", child);
+  const last = task("List last");
+  const orders = [
+    [first, child, epic, grandchild, last],
+    [first, epic, child, grandchild, last],
+    [first, grandchild, child, epic, last],
+  ];
+  for (const order of orders) {
+    const write = createInitiative({ title: "List order", taskIds: order });
+    const id = String(write.initiative.id);
+    assert.deepEqual(
+      [...write.absorbedTaskIds].sort(),
+      [child, grandchild].sort(),
+      `order ${order.join(",")}`,
+    );
+    assert.deepEqual(stored(id), [first, epic, last], "roots keep list order");
+    const added = initiative("List add");
+    assert.deepEqual(
+      [...addInitiativeMembers(added, order).absorbedTaskIds].sort(),
+      [child, grandchild].sort(),
+    );
+    assert.deepEqual(stored(added), [first, epic, last]);
+  }
 
-  setInitiativeMilestones(id, [release], true);
-  let detail = readInitiative(id)!;
-  assert.deepEqual(detail.milestoneIds, [release]);
-  assert.equal(
-    detail.nodes.find((node) => node.id === release)?.milestone,
-    true,
+  // A list Task a member ALREADY covers fails the whole operation.
+  const id = initiative("List refusal", [epic]);
+  setInitiativeMilestones(id, [child], true);
+  const before = stored(id);
+  const outsider = task("List outsider");
+  assert.throws(
+    () => addInitiativeMembers(id, [outsider, grandchild]),
+    new RegExp(`Task-${grandchild} is already a member`),
   );
-  assert.deepEqual(detail.rootIds, [epic, release], "the mark keeps the order");
+  assert.deepEqual(
+    stored(id),
+    before,
+    "nothing of the refused list is written",
+  );
+  // A list never carries a mark, and an add over a marked edge keeps it.
+  const root = task("List root above epic");
+  updateTask(epic, { parentId: root });
+  assert.deepEqual(stored(id), [epic, `${child}*`]);
+  addInitiativeMembers(id, [root]);
+  assert.deepEqual(stored(id), [root, `${child}*`]);
+});
 
-  assert.throws(() => setInitiativeMilestones(id, [sub], true), /only through/);
+test("milestones work on covered subtasks, and a clear undoes exactly the mark", () => {
+  const epic = task("Milestone epic");
+  const covered = task("Covered milestone", epic);
+  const sibling = task("Covered sibling", epic);
+  const release = task("First release");
+  const id = initiative("Milestones", [epic, release]);
+
+  setInitiativeMilestones(id, [covered, release], true);
+  const detail = readInitiative(id)!;
+  assert.deepEqual(stored(id), [epic, `${release}*`, `${covered}*`]);
+  assert.deepEqual(detail.milestoneIds, [release, covered]);
+  assert.deepEqual(
+    detail.nodes
+      .filter((node) => node.milestone)
+      .map((node) => [node.id, node.parentId]),
+    [
+      [covered, epic],
+      [release, undefined],
+    ],
+    "a covered milestone stays under its parent on the graph",
+  );
+  assert.deepEqual(detail.rootIds, [epic, release]);
+
+  // Clearing a covered mark deletes its edge; the Task stays a member.
+  setInitiativeMilestones(id, [covered], false);
+  assert.deepEqual(stored(id), [epic, `${release}*`]);
+  assert.ok(memberIds(id).includes(covered));
+  // Clearing an uncovered mark keeps the plain membership.
+  setInitiativeMilestones(id, [release], false);
+  assert.deepEqual(stored(id), [epic, release]);
+  // A covered Task without a mark has nothing to clear.
+  setInitiativeMilestones(id, [sibling], false);
+  assert.deepEqual(stored(id), [epic, release]);
+
   assert.throws(
     () => setInitiativeMilestones(id, [task("Outsider")], true),
     /not a member .* add it first/,
   );
-  setInitiativeMilestones(id, [release], false);
-  detail = readInitiative(id)!;
-  assert.deepEqual(detail.milestoneIds, []);
+
+  // Removing the ancestor leaves a marked descendant as a member of its own.
+  setInitiativeMilestones(id, [covered], true);
+  const kept = removeInitiativeMembers(id, [epic]);
+  assert.deepEqual(kept.stillMembers, []);
+  assert.deepEqual(stored(id), [release, `${covered}*`]);
+  assert.deepEqual(memberIds(id).sort(), [release, covered].sort());
 });
 
-test("counts split todo by open blockers, and the graph draws outside blockers as stubs", () => {
+test("removing a covered marked edge reports where the Task stays a member", () => {
+  const epic = task("Remove epic");
+  const covered = task("Remove covered", epic);
+  const id = initiative("Remove", [epic]);
+  setInitiativeMilestones(id, [covered], true);
+
+  const write = removeInitiativeMembers(id, [covered]);
+  assert.deepEqual(write.stillMembers, [{ taskId: covered, through: epic }]);
+  assert.deepEqual(stored(id), [epic]);
+  assert.ok(memberIds(id).includes(covered));
+  // Covered and unmarked: there is no edge of its own to remove.
+  assert.throws(
+    () => removeInitiativeMembers(id, [covered]),
+    new RegExp(`only through Task-${epic}`),
+  );
+  // Not a member at all: already the end state.
+  removeInitiativeMembers(id, [task("Never a member")]);
+});
+
+test("a move under another member drops the plain edge it no longer needs", () => {
+  const epic = task("Move epic");
+  const plain = task("Moved plain root");
+  const marked = task("Moved marked root");
+  const dragged = task("Dragged root");
+  const id = initiative("Moves", [epic, plain, marked, dragged]);
+  setInitiativeMilestones(id, [marked], true);
+
+  updateTask(plain, { parentId: epic });
+  updateTask(marked, { parentId: epic });
+  reorderTasks([dragged], [{ id: dragged, parentId: epic }], true);
+
+  assert.deepEqual(
+    stored(id),
+    [epic, `${marked}*`],
+    "plain memberships never nest; the milestone edge stays",
+  );
+  assert.deepEqual(memberIds(id).sort(), [epic, plain, marked, dragged].sort());
+  assert.deepEqual(readInitiative(id)!.rootIds, [epic]);
+});
+
+test("counts: archived open Tasks leave the work buckets, doing and blocked overlap", () => {
   const epic = task("Count epic");
-  const done = task("Done", { parentId: epic });
-  const doing = task("Doing", { parentId: epic });
-  const blocked = task("Blocked", { parentId: epic });
-  const startable = task("Startable", { parentId: epic });
+  const done = task("Done", epic);
+  const archivedDone = task("Archived done", epic);
+  const doing = task("Doing", epic);
+  const doingBlocked = task("Doing and blocked", epic);
+  const blocked = task("Blocked", epic);
+  const startable = task("Startable", epic);
+  const shelved = task("Shelved todo", epic);
+  const shelvedDoing = task("Shelved doing", epic);
   const outside = task("Outside prerequisite");
   const closedBlocker = task("Closed prerequisite");
-  updateTask(done, { status: "done", actor: { kind: "user" } });
-  updateTask(doing, { status: "doing", actor: { kind: "user" } });
-  updateTask(closedBlocker, { status: "done", actor: { kind: "user" } });
+  for (const id of [done, archivedDone, closedBlocker])
+    updateTask(id, { status: "done", actor: { kind: "user" } });
+  for (const id of [doing, doingBlocked, shelvedDoing])
+    updateTask(id, { status: "doing", actor: { kind: "user" } });
   updateTask(blocked, {
     addLinks: [
       { type: "blocked-by", taskId: outside },
       { type: "blocked-by", taskId: doing },
     ],
   });
+  updateTask(doingBlocked, {
+    addLinks: [{ type: "blocked-by", taskId: outside }],
+  });
   updateTask(startable, {
     addLinks: [{ type: "blocked-by", taskId: closedBlocker }],
   });
-  const initiative = createInitiative({ title: "Counts", taskIds: [epic] });
-  const id = String(initiative.id);
+  updateTask(done, { addLinks: [{ type: "blocked-by", taskId: outside }] });
+  for (const id of [archivedDone, shelved, shelvedDoing]) archiveTask(id);
+  const id = initiative("Counts", [epic]);
 
   const detail = readInitiative(id)!;
   assert.deepEqual(detail.progress, {
-    total: 5,
-    done: 1,
-    doing: 1,
+    total: 9,
+    done: 2,
+    doing: 2,
     startable: 2,
-    blocked: 1,
+    blocked: 2,
   });
-  const state = (taskId: string) =>
-    detail.nodes.find((node) => node.id === taskId)?.state;
-  assert.equal(state(epic), "startable");
-  assert.equal(state(blocked), "blocked");
-  assert.equal(state(startable), "startable");
+  const node = (taskId: string) =>
+    detail.nodes.find((candidate) => candidate.id === taskId)!;
+  assert.deepEqual(
+    [node(doingBlocked).status, node(doingBlocked).blocked],
+    ["doing", true],
+  );
+  assert.equal(node(blocked).blocked, true);
+  assert.equal(node(done).blocked, undefined, "a done Task is never blocked");
+  assert.equal(node(startable).blocked, undefined);
+  assert.equal(node(shelved).archived, true);
   assert.deepEqual(
     detail.externalBlockers.map((stub) => [stub.id, stub.status]),
     [
@@ -203,37 +385,62 @@ test("counts split todo by open blockers, and the graph draws outside blockers a
       `${closedBlocker}->${startable}`,
       `${doing}->${blocked}`,
       `${outside}->${blocked}`,
+      `${outside}->${doingBlocked}`,
+      `${outside}->${done}`,
     ].sort(),
   );
   assert.ok(
-    !detail.nodes.some((node) => "description" in node),
+    !detail.nodes.some((candidate) => "description" in candidate),
     "the graph never carries a Task description",
   );
 });
 
-test("the summary names the sessions linked to unarchived member Tasks", () => {
+test("the summary lists live user sessions on member Tasks, archived Tasks included", () => {
   const epic = task("Session epic");
-  const sub = task("Session sub", { parentId: epic });
-  const shelved = task("Shelved", { parentId: epic });
-  linkSessionToTask(sub, { sessionId: "sess-initiative-a" });
-  linkSessionToTask(epic, { sessionId: "sess-initiative-b" });
-  linkSessionToTask(sub, { sessionId: "sess-initiative-b" });
-  linkSessionToTask(shelved, { sessionId: "sess-initiative-c" });
-  updateTask(shelved, { archivedAt: Date.now() });
-  const initiative = createInitiative({ title: "Sessions", taskIds: [epic] });
+  const sub = task("Session sub", epic);
+  const shelved = task("Session shelved", epic);
+  const id = initiative("Sessions", [epic]);
+  const onSub = session(sub);
+  const onShelved = session(shelved);
+  const archived = session(sub);
+  const settled = session(epic);
+  const reopened = session(epic);
+  const internal = session(epic, "internal");
+  linkSessionToTask(epic, { sessionId: "sess-with-no-row" });
+  archiveTask(shelved);
+  sessionStore.setArchived(archived, true);
+  sessionStore.setSettled(settled, true);
+  sessionStore.setSettled(reopened, true);
+  sessionStore.recordSessionOutcome(reopened, "completed");
 
-  const summary = initiativeSummaryFor(String(initiative.id))!;
-  assert.deepEqual(summary.sessionIds, [
-    "sess-initiative-a",
-    "sess-initiative-b",
-  ]);
-  // An archived member stays a member and keeps counting.
-  assert.equal(summary.progress.total, 3);
+  const summary = initiativeSummaryFor(id)!;
+  assert.deepEqual(
+    summary.sessionIds,
+    [reopened, onShelved, onSub],
+    "newest first; archived, settled, other-scope and unknown sessions never count",
+  );
+  assert.equal(summary.sessionCount, 3);
+  assert.ok(!summary.sessionIds.includes(internal));
+  assert.equal(summary.progress.total, 3, "an archived member still counts");
+});
+
+test("the summary carries a bounded number of session ids and the true count", () => {
+  const epic = task("Many sessions");
+  const id = initiative("Many sessions", [epic]);
+  const extra = 3;
+  for (
+    let index = 0;
+    index < INITIATIVE_SUMMARY_SESSION_LIMIT + extra;
+    index += 1
+  )
+    session(epic);
+  const summary = initiativeSummaryFor(id)!;
+  assert.equal(summary.sessionIds.length, INITIATIVE_SUMMARY_SESSION_LIMIT);
+  assert.equal(summary.sessionCount, INITIATIVE_SUMMARY_SESSION_LIMIT + extra);
 });
 
 test("the live projection excludes archived and deleted Initiatives", () => {
-  const initiative = createInitiative({ title: "Projection" });
-  const id = String(initiative.id);
+  const id = initiative("Projection");
   const inDigest = () =>
     initiativeRevisionDigest().some((entry) => entry.id === id);
   assert.ok(inDigest());
@@ -259,28 +466,23 @@ test("the live projection excludes archived and deleted Initiatives", () => {
 });
 
 test("list reads filter by state and search", () => {
-  const paused = createInitiative({
-    title: "Hosted Labs rollout",
-    description: "Three projects",
-    state: "paused",
-  });
-  const active = createInitiative({ title: "Unrelated" });
+  const paused = String(
+    createInitiative({
+      title: "Hosted Labs rollout",
+      description: "Three projects",
+      state: "paused",
+    }).initiative.id,
+  );
+  const active = initiative("Unrelated");
   const ids = (items: { id: string }[]) => items.map((item) => item.id);
-  assert.ok(
-    ids(listInitiatives({ state: "paused" })).includes(String(paused.id)),
-  );
-  assert.ok(
-    !ids(listInitiatives({ state: "paused" })).includes(String(active.id)),
-  );
-  assert.deepEqual(ids(listInitiatives({ query: "three PROJECTS" })), [
-    String(paused.id),
-  ]);
+  assert.ok(ids(listInitiatives({ state: "paused" })).includes(paused));
+  assert.ok(!ids(listInitiatives({ state: "paused" })).includes(active));
+  assert.deepEqual(ids(listInitiatives({ query: "three PROJECTS" })), [paused]);
 });
 
 test("every Initiative write reports the row it touched", () => {
   const member = task("Revision member");
-  const created = createInitiative({ title: "Revision subject" });
-  const id = String(created.id);
+  const id = initiative("Revision subject");
   assert.ok(revisionOf(id) > 0, "a create stamps above the default 0");
 
   movesRevision(id, () => updateInitiative(id, { title: "Renamed" }));
@@ -294,10 +496,10 @@ test("every Initiative write reports the row it touched", () => {
   assert.equal(initiativeRevisionIndex().get(id)?.live, false);
 
   // A refused write rolls back whole and touches nothing.
-  const kept = createInitiative({ title: "Refused write" });
-  const before = revisionOf(String(kept.id));
-  assert.throws(() => addInitiativeMembers(String(kept.id), ["999999"]));
-  assert.equal(revisionOf(String(kept.id)), before);
+  const kept = initiative("Refused write");
+  const before = revisionOf(kept);
+  assert.throws(() => addInitiativeMembers(kept, ["999999"]));
+  assert.equal(revisionOf(kept), before);
 
   // Coverage guard: every exported write of the domain is exercised above
   // (a create is checked by the stamp it starts with).

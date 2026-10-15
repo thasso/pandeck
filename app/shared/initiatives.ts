@@ -24,20 +24,24 @@ export interface InitiativeAttention {
 }
 
 /**
- * Where a member Task stands. Exclusive: `startable` and `blocked` split the
- * `todo` Tasks by whether one of their blockers is still open (neither done
- * nor archived). Computed on read, never stored.
+ * Member counts. `total` is every member, archived ones included; `done`
+ * counts done members whether archived or not. The other buckets count only
+ * unarchived members, and `doing` and `blocked` overlap: a started Task whose
+ * blocker is still open is in both. So the buckets need not sum to `total`.
  */
-export type InitiativeTaskState = "done" | "doing" | "startable" | "blocked";
-
-/** Member counts by {@link InitiativeTaskState}; they sum to `total`. */
 export interface InitiativeProgress {
   total: number;
   done: number;
+  /** Unarchived `doing` members, blocked or not. */
   doing: number;
+  /** Unarchived `todo` members with no open blocker. */
   startable: number;
+  /** Unarchived members that are not done and have an open blocker. */
   blocked: number;
 }
+
+/** At most this many session ids ride a summary; `sessionCount` has the rest. */
+export const INITIATIVE_SUMMARY_SESSION_LIMIT = 50;
 
 /** The `initiatives` topic projection: what lists and the inbox card read. */
 export interface InitiativeSummary {
@@ -47,10 +51,14 @@ export interface InitiativeSummary {
   attention?: InitiativeAttention;
   progress: InitiativeProgress;
   /**
-   * Sessions linked to an unarchived member Task (its `context` edges), in
-   * first-seen order. Structural membership only, nothing parsed from titles.
+   * User sessions linked to a member Task (its `context` edges) that are
+   * neither archived nor settled, most recently updated first and at most
+   * {@link INITIATIVE_SUMMARY_SESSION_LIMIT}. Structural membership only,
+   * nothing parsed from titles; an archived member Task still counts.
    */
   sessionIds: string[];
+  /** How many sessions qualify; above `sessionIds.length` when it was cut. */
+  sessionCount: number;
   updatedAt: number;
 }
 
@@ -59,11 +67,15 @@ export interface InitiativeGraphNode {
   id: string;
   title: string;
   status: TaskStatus;
-  state: InitiativeTaskState;
+  /**
+   * An open blocker (neither done nor archived) holds this Task up. Never set
+   * on a done Task, and independent of `doing`: a started Task can be blocked.
+   */
+  blocked?: true;
   projectId?: string;
   /** The parent Task, present only when the parent is a member too. */
   parentId?: string;
-  /** Stored on a membership edge, as opposed to joining through a parent. */
+  /** Holds a stored membership edge, rather than joining only through a parent. */
   direct?: true;
   milestone?: true;
   archived?: true;

@@ -712,6 +712,7 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
         ? { sessionRefs: normalizeSessionRefs(patch.sessionRefs) }
         : {}),
     });
+    if (patch.parentId !== undefined) dropNestedMemberships([nid]);
     return [
       ...cascaded,
       ...applyTaskLinkChanges(nid, linkChanges),
@@ -904,19 +905,33 @@ export function reorderTasks(
   placements?: TaskReorderPlacement[],
   byUser = false,
 ): void {
-  const order = placements?.length
+  assertTopLevelWrite("reorderTasks");
+  const order: TaskReorderPlacement[] = placements?.length
     ? placements
-    : orderedIds.map((id) => ({ id, parentId: undefined }));
-  const siblingIndex = new Map<string, number>();
-  const seen = new Set<string>();
-  const reparented: number[] = [];
-  const touched = new Set<string>();
+    : orderedIds.map((id) => ({ id }));
   // A move takes a Task out of the Initiatives its old parent held it in.
   const formerHolders = initiativeStore.holdersOf(
     order
       .map((placement) => parseId(placement.id.trim()))
       .filter((id): id is number => id !== undefined),
   );
+  // One transaction: a placement refused late in the list (a Task another tab
+  // deleted, a duplicate, a cycle) must not leave the earlier moves written
+  // without the notification that reports them — that is a hierarchy, and an
+  // Initiative's membership, changing with nobody told.
+  const touched = withDbTransaction(() => applyReorder(order, byUser));
+  notify(touched, formerHolders);
+}
+
+function applyReorder(
+  order: readonly TaskReorderPlacement[],
+  byUser: boolean,
+): Set<string> {
+  const siblingIndex = new Map<string, number>();
+  const seen = new Set<string>();
+  const reparented: number[] = [];
+  const moved: number[] = [];
+  const touched = new Set<string>();
   for (const placement of order) {
     const childId = parseId(placement.id.trim());
     if (childId === undefined || !taskStore.get(childId))
@@ -944,8 +959,10 @@ export function reorderTasks(
       previousParent !== undefined &&
       taskStore.get(previousParent)?.archivedAt !== undefined;
     if (!hiddenParent) {
-      if (byUser && (previousParent ?? null) !== parentId)
-        reparented.push(childId);
+      if ((previousParent ?? null) !== parentId) {
+        moved.push(childId);
+        if (byUser) reparented.push(childId);
+      }
       // enforces single-parent + acyclic, and reports the subtree a project
       // inheritance moved with it.
       for (const id of taskStore.setParent(childId, parentId))
@@ -962,7 +979,21 @@ export function reorderTasks(
     if (taskStore.get(id)?.triagedAt === undefined)
       taskStore.update(id, { triagedAt: now });
   }
-  notify(touched, formerHolders);
+  dropNestedMemberships(moved);
+  return touched;
+}
+
+/**
+ * A Task moved under another member of an Initiative it was a plain member of
+ * (or one holding plain members below it) is now covered twice; its plain edge
+ * goes, since its new ancestor already makes it a member. Inside the move's
+ * transaction, so the hierarchy and the stored membership never disagree; the
+ * notification after it reports those Initiatives as current holders.
+ */
+function dropNestedMemberships(moved: readonly number[]): void {
+  if (!moved.length) return;
+  for (const initiativeId of initiativeStore.holdersOf(moved))
+    initiativeStore.dropCoveredPlainEdges(initiativeId);
 }
 
 /* ------------------------------- assembly -------------------------------- */

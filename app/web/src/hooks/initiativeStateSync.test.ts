@@ -16,6 +16,7 @@ function summary(
     state: "active",
     progress: { total: 3, done: 1, doing: 1, startable: 1, blocked: 0 },
     sessionIds: [],
+    sessionCount: 0,
     updatedAt: 1_800_000_000_000,
     ...partial,
   };

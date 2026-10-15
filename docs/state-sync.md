@@ -190,14 +190,19 @@ per-surface sub-tasks — no page invents its own delta format.
   with `getStateItems` and force a keyed detail read only when that id is open.
 - Initiatives: canonical live summaries (neither archived nor deleted) plus a
   keyed graph read (`getInitiative` → `initiativeDetail`, carrying the revision
-  it is as of). Archiving is a `delete`, unarchiving an `upsert`. A summary's
-  progress counts read member Tasks, so the Task seam's notify-with-ids also
-  reports the Initiatives holding a touched Task, as a member or below one, in
-  the same act; a delete or a move reads the holders it takes the Task from
-  before it writes. That fan-out runs on every Task write, so its walk up the
-  ancestor chain is pinned to index searches
-  (`initiativeStoreQueryPlan.test.ts`). The subscribe answer is a snapshot
-  (`initiativeList`) or, when asked, a digest with `getStateItems` catch-up.
+  it is as of). Archiving is a `delete`, unarchiving an `upsert`, and a write to
+  an Initiative already outside the projection is reported as a `delete` again
+  with its new revision, as archived Tasks are. A summary reads member Tasks,
+  their outside blockers and the live sessions on them, so the Task seam's
+  notify-with-ids also reports the Initiatives that read a touched Task — as a
+  member or below one, or through a Task it blocks — in the same act, and a
+  delete or a move reads the holders it takes the Task from before it writes.
+  `sessionStore` reports every session whose liveness a write may change
+  (archive, settle, a raised outcome, a tombstone, a new row), which reaches the
+  Initiatives on that session's Tasks. Both fan-outs run on hot paths, so their
+  walks are pinned to index searches (`initiativeStoreQueryPlan.test.ts`). The
+  subscribe answer is a snapshot (`initiativeList`) or, when asked, a digest
+  with `getStateItems` catch-up.
 - Subagents: canonical durable thread registry summaries, with revisions in
   event sidecars; an authorized connection may hold one or more thread-detail
   topics, each with a bounded snapshot/digest/item read and its own

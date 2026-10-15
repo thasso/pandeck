@@ -52,8 +52,11 @@ test("subscribe, digest, items and the keyed graph read round-trip", () => {
     title: "Wire epic",
     source: { createdBy: "user" },
   });
-  const live = createInitiative({ title: "Wire live", taskIds: [epic.id] });
-  const archived = createInitiative({ title: "Wire archived" });
+  const live = createInitiative({
+    title: "Wire live",
+    taskIds: [epic.id],
+  }).initiative;
+  const archived = createInitiative({ title: "Wire archived" }).initiative;
   archiveInitiative(String(archived.id));
   const liveId = String(live.id);
   const archivedId = String(archived.id);

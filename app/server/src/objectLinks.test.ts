@@ -143,7 +143,7 @@ describe("pa:// object links", () => {
   });
 
   it("resolves Initiative links to their title and page", async () => {
-    const initiative = createInitiative({ title: "Hosted Labs" });
+    const { initiative } = createInitiative({ title: "Hosted Labs" });
     const links = await resolvePaObjectLinks([
       `pa://initiative/${initiative.id}`,
       "pa://initiative/999999",

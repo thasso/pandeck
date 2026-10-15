@@ -4,24 +4,29 @@
  * The row holds the Initiative's own columns. Membership is an
  * `initiative —member→ task` edge in the generic {@link ./links.ts} graph,
  * `position` for the user's order and `{ "milestone": true }` in its metadata.
- * Only the Task that was added carries an edge: its descendants are members by
- * being under it, resolved here at read time.
+ * A PLAIN edge is stored only for a Task no other member covers: its
+ * descendants are members by being under it, resolved here at read time. A
+ * MARKED edge (a milestone) may sit under a member, since it carries the mark.
  *
- * Every write goes through {@link mutation}, which stamps the touched rows'
- * revisions in the same transaction and notifies after COMMIT, so a bump and
- * its notification cannot diverge (docs/state-sync.md). Task writes reach the
- * Initiatives holding a Task through {@link touchHolders}, the same seam.
+ * Every Initiative write goes through {@link mutation}, which stamps the
+ * touched rows' revisions in the same transaction and notifies once they are
+ * stamped, so a bump and its notification cannot diverge
+ * (docs/state-sync.md). Task and session writes reach the Initiatives that
+ * read them through {@link touchHolders} and {@link touchSessionHolders}, the
+ * same seam.
  */
 import type { InitiativeState } from "@assistant/shared";
-import { getDb, withDbTransaction } from "./index.ts";
+import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import {
   addLink,
+  incoming,
   outgoing,
   removeAllFor,
   removeLink,
   type NodeRef,
 } from "./links.ts";
+import { sessionStore } from "./sessionStore.ts";
 
 type TaskStatus = "todo" | "doing" | "done";
 
@@ -40,7 +45,7 @@ export interface InitiativeRow {
   archivedAt?: number;
 }
 
-/** One stored membership edge: a Task added to the Initiative. */
+/** One stored membership edge: a Task added, or marked, in the Initiative. */
 export interface InitiativeMemberEdge {
   taskId: number;
   position: number;
@@ -89,12 +94,16 @@ function taskNode(id: number): NodeRef {
 }
 
 /**
- * Run `fn` in one transaction, stamp every Initiative it touched with the next
- * `initiative_revision` value before COMMIT, and notify after it. A write that
- * throws touches nothing and notifies nobody.
+ * Run `fn` atomically, stamp every Initiative it touched with the next
+ * `initiative_revision` value inside the same transaction, and notify once it
+ * is written. A write that throws touches nothing and notifies nobody.
+ *
+ * Inside a caller's open transaction (a session tombstone that is part of a
+ * larger delete) the stamp joins it: a rollback takes the stamp with it, and
+ * the listeners only schedule a debounced flush that reads committed state.
  */
 function mutation<T>(fn: (touch: Set<number>) => T): T {
-  const { value, touched } = withDbTransaction(() => {
+  const { value, touched } = inDbTransaction(() => {
     const touched = new Set<number>();
     const value = fn(touched);
     if (touched.size) {
@@ -221,13 +230,42 @@ function memberEdges(id: number): InitiativeMemberEdge[] {
     }));
 }
 
-/** Store a membership edge after the last one. */
-function addMember(touch: Set<number>, id: number, taskId: number): void {
+/** A Task's ancestors, parent first; a stored hierarchy cycle stops the walk. */
+function ancestorIds(taskId: number): number[] {
+  const chain: number[] = [];
+  const seen = new Set([taskId]);
+  let cursor = parentOf(taskId);
+  while (cursor !== undefined && !seen.has(cursor)) {
+    seen.add(cursor);
+    chain.push(cursor);
+    cursor = parentOf(cursor);
+  }
+  return chain;
+}
+
+function parentOf(taskId: number): number | undefined {
+  const edge = incoming(taskNode(taskId), "subtask").find(
+    (link) => link.fromType === "task",
+  );
+  return edge ? Number(edge.fromId) : undefined;
+}
+
+/** Store a membership edge, plain or marked, after the last one unless placed. */
+function addMember(
+  touch: Set<number>,
+  id: number,
+  taskId: number,
+  milestone = false,
+  at?: number,
+): void {
   const edges = memberEdges(id);
-  const position = edges.length
-    ? Math.max(...edges.map((edge) => edge.position)) + 1
-    : 0;
-  addLink(initiativeNode(id), "member", taskNode(taskId), { position });
+  const position =
+    at ??
+    (edges.length ? Math.max(...edges.map((edge) => edge.position)) + 1 : 0);
+  addLink(initiativeNode(id), "member", taskNode(taskId), {
+    position,
+    ...(milestone ? { metadata: { milestone: true } } : {}),
+  });
   touch.add(id);
 }
 
@@ -251,6 +289,31 @@ function setMilestone(
 }
 
 /**
+ * Drop every PLAIN edge another stored edge of the same Initiative now covers,
+ * and answer the Task ids it dropped. A covered Task is a member through its
+ * ancestor, so this changes what is stored, never who is a member. Marked
+ * edges stay: they carry a milestone.
+ *
+ * Runs inside the caller's transaction and stamps nothing itself: a Task move
+ * that nests a member reports the Initiatives holding it through the Task
+ * notification seam right after it commits, and an Initiative write has its
+ * own mutation.
+ */
+function dropCoveredPlainEdges(id: number): number[] {
+  const edges = memberEdges(id);
+  const stored = new Set(edges.map((edge) => edge.taskId));
+  const dropped: number[] = [];
+  for (const edge of edges) {
+    if (edge.milestone) continue;
+    if (!ancestorIds(edge.taskId).some((ancestor) => stored.has(ancestor)))
+      continue;
+    removeLink(initiativeNode(id), "member", taskNode(edge.taskId));
+    dropped.push(edge.taskId);
+  }
+  return dropped;
+}
+
+/**
  * Stored members plus every descendant, walked along `subtask` edges. `UNION`
  * deduplicates, so a member under another member and a stored hierarchy cycle
  * both terminate.
@@ -269,7 +332,7 @@ const MEMBERS_CTE = `WITH RECURSIVE member(id) AS (
         ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'subtask' AND l.to_type = 'task'
   )`;
 
-/** Exposed for the query-plan test: what the summary and graph read issue. */
+/** Exposed for the query-plan test: what the summary and graph reads issue. */
 export const INITIATIVE_STORE_SQL = {
   members: `${MEMBERS_CTE}
     SELECT t.id, t.title, t.status, t.sort_order, t.archived_at_ms,
@@ -284,13 +347,24 @@ export const INITIATIVE_STORE_SQL = {
                AND bt.deleted_at_ms IS NULL AND bt.archived_at_ms IS NULL AND bt.status <> 'done') AS open_blockers
       FROM member m CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
      WHERE t.deleted_at_ms IS NULL`,
+  /**
+   * The LIVE sessions on member Tasks, archived Tasks included: a user-scope
+   * session row (default-closed: a link to a session with no row, or another
+   * scope, never qualifies) that is neither tombstoned, archived nor settled —
+   * the `sessionStore.isSettled` conjunction, so a raised outcome counts again.
+   * Each linked session is one primary-key lookup; nothing reads session
+   * history beyond the member Tasks' own links.
+   */
   memberSessions: `${MEMBERS_CTE}
-    SELECT l.to_id AS session_id
+    SELECT DISTINCT s.id AS session_id, s.created_at_ms
       FROM member m
       CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
       CROSS JOIN links l ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'context' AND l.to_type = 'session'
-     WHERE t.deleted_at_ms IS NULL AND t.archived_at_ms IS NULL
-     ORDER BY l.created_at_ms, l.to_id`,
+      CROSS JOIN session_index s ON s.id = l.to_id
+     WHERE t.deleted_at_ms IS NULL
+       AND s.scope = 'user' AND s.deleted_at_ms IS NULL AND s.archived_at_ms IS NULL
+       AND (s.settled_at_ms IS NULL OR s.attention_revision > s.attention_settled_revision)
+     ORDER BY s.created_at_ms DESC, s.id`,
   blockersInto: `SELECT b.from_id, b.to_id, t.title, t.status, t.archived_at_ms,
            (SELECT j.to_id FROM links j
              WHERE j.from_type = 'task' AND j.from_id = b.from_id AND j.relation = 'in_project'
@@ -302,19 +376,29 @@ export const INITIATIVE_STORE_SQL = {
        AND t.deleted_at_ms IS NULL
      ORDER BY b.created_at_ms`,
   /**
-   * The Initiatives holding any of the given Tasks, as a member or through a
-   * member ancestor: the walk goes UP `subtask` edges from each Task, then
-   * across to `member` edges. Runs on every Task write, so it touches only the
-   * `links_to_idx` entries of the Tasks' ancestor chains.
+   * The Initiatives that read any of the given Tasks: a Task is read by the
+   * Initiatives holding it (as a member or through a member ancestor) and, as
+   * an external blocker stub, by the ones holding a Task it blocks. So the walk
+   * seeds with the Tasks and the Tasks they block, goes UP `subtask` edges, then
+   * across to `member` edges. Runs on every Task write, so it touches only
+   * index entries of those Tasks and their ancestor chains.
    */
   holders: `WITH RECURSIVE lineage(id) AS (
       SELECT value FROM json_each(?)
+      UNION
+      SELECT b.to_id FROM json_each(?) seed CROSS JOIN links b
+          ON b.from_type = 'task' AND b.from_id = seed.value AND b.relation = 'blocks' AND b.to_type = 'task'
       UNION
       SELECT l.from_id FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
           ON l.to_type = 'task' AND l.to_id = a.id AND l.relation = 'subtask' AND l.from_type = 'task'
     )
     SELECT DISTINCT l.from_id AS id FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
         ON l.to_type = 'task' AND l.to_id = a.id AND l.relation = 'member' AND l.from_type = 'initiative'`,
+  /** The Tasks linked to the given sessions: where a session change lands. */
+  sessionTasks: `SELECT DISTINCT l.from_id AS id
+      FROM links l INDEXED BY links_to_idx
+     WHERE l.to_type = 'session' AND l.to_id IN (SELECT value FROM json_each(?))
+       AND l.relation = 'context' AND l.from_type = 'task'`,
 } as const;
 
 function members(id: number): InitiativeMemberRow[] {
@@ -342,12 +426,12 @@ function members(id: number): InitiativeMemberRow[] {
   }));
 }
 
-/** Sessions linked to an unarchived member Task, first link first. */
+/** The live sessions on member Tasks, newest first. */
 function memberSessionIds(id: number): string[] {
   const rows = getDb()
     .prepare(INITIATIVE_STORE_SQL.memberSessions)
     .all(String(id)) as Array<{ session_id: string }>;
-  return [...new Set(rows.map((row) => row.session_id))];
+  return rows.map((row) => row.session_id);
 }
 
 /** Every `blocks` link into the given Tasks from a live Task. */
@@ -373,19 +457,19 @@ function blockersInto(taskIds: readonly number[]): InitiativeBlockerEdge[] {
   }));
 }
 
-/** The Initiatives holding any of `taskIds`, member or descendant. */
+/** The Initiatives that read any of `taskIds` (see `INITIATIVE_STORE_SQL.holders`). */
 function holdersOf(taskIds: Iterable<number>): number[] {
-  const ids = [...new Set(taskIds)].map(String);
-  if (!ids.length) return [];
+  const ids = JSON.stringify([...new Set(taskIds)].map(String));
+  if (ids === "[]") return [];
   const rows = getDb()
     .prepare(INITIATIVE_STORE_SQL.holders)
-    .all(JSON.stringify(ids)) as Array<{ id: string }>;
+    .all(ids, ids) as Array<{ id: string }>;
   return rows.map((row) => Number(row.id));
 }
 
 /**
  * The Task notification seam's fan-out: bump and notify every Initiative that
- * holds one of `taskIds` now, plus `formerHolders` — the ones a delete or a
+ * reads one of `taskIds` now, plus `formerHolders` — the ones a delete or a
  * move took the Task away from, read before the write.
  */
 function touchHolders(
@@ -398,6 +482,29 @@ function touchHolders(
     for (const id of ids) touch.add(id);
   });
 }
+
+/**
+ * A session's liveness changed, so the summaries listing the sessions of the
+ * Tasks it is linked to may have to add or drop it.
+ */
+function touchSessionHolders(sessionIds: readonly string[]): void {
+  if (!sessionIds.length) return;
+  const rows = getDb()
+    .prepare(INITIATIVE_STORE_SQL.sessionTasks)
+    .all(JSON.stringify([...new Set(sessionIds)])) as Array<{ id: string }>;
+  touchHolders(rows.map((row) => Number(row.id)));
+}
+
+sessionStore.subscribeLiveness((ids) => {
+  try {
+    touchSessionHolders(ids);
+  } catch (error) {
+    // The session write is durable already; say that the summaries listing
+    // its sessions stay behind until their next write.
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`[initiatives] session fan-out failed: ${detail}`);
+  }
+});
 
 /* ------------------------------- revisions -------------------------------- */
 
@@ -471,9 +578,11 @@ export const initiativeStore = {
   remove,
   // membership
   memberEdges,
+  ancestorIds,
   addMember,
   removeMember,
   setMilestone,
+  dropCoveredPlainEdges,
   members,
   memberSessionIds,
   blockersInto,

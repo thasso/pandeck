@@ -1437,11 +1437,14 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   browser and agent mutations never push a complete `projectList`, so every open
   sidebar converges without a reload.
 - `initiatives.ts` is the Initiative domain (`docs/initiatives.md`): writes
-  validated whole inside one store mutation (a Task under a member, or holding
-  one, is refused with the reason), progress counts and the graph read, and the
-  `initiatives` topic's revision index, digest, items and snapshot. `hub.ts`
-  flushes its events on the Task window, so a Task write and the counts it moved
-  leave together.
+  validated whole inside one store mutation (an add under a member is refused
+  with the reason, an add over plain members absorbs them, a milestone on a
+  covered Task stores a marked edge), progress counts with status and blocked
+  kept apart, the graph read, and the `initiatives` topic's revision index,
+  digest, items and snapshot. `hub.ts` flushes its events on the Task window, so
+  a Task write and the counts it moved leave together, and repeats a `delete`
+  for a write to an archived Initiative. `tasks.ts` `reorderTasks` writes all
+  its placements in one transaction and notifies after it.
 - `subagentRegistry.ts` narrows durable thread and held-thread run projections
   into bounded summaries, revision sidecars and keyed detail reads. `hub.ts`
   coalesces the store's post-commit touched-id seam into registry events and

@@ -567,7 +567,7 @@
       "to": 24100,
       "task": "initiatives",
       "date": "2026-10-15",
-      "why": "task_manage now says a dependency between Tasks is an addLinks blocks/blocked-by link, never only prose: a prose dependency is invisible to the Initiative map, blocked state and the attention list (docs/initiatives.md); the ceiling stays 500 below prompt plus eagerTools"
+      "why": "task_manage now says a dependency between Tasks is an addLinks blocks link, never only prose: a prose dependency is invisible to the Initiative map, blocked state and the attention list (docs/initiatives.md); the ceiling stays 500 below prompt plus eagerTools"
     }
   ]
 }

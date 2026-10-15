@@ -825,11 +825,15 @@ persona toolsets.
   (`linksOmitted`). The coordinator's create-only variant has no link fields.
 - `initiatives/initiativeTools.ts` holds the deferred `initiative_read` and
   `initiative_manage` (`docs/initiatives.md`), grouped for the developer and
-  personal-assistant personas only. A read by id returns the members as a tree
-  cut depth-first at a byte budget (`truncated`, `omittedForBudget`), each node
-  with its open blockers by id and no Task description; `initiative_manage`
-  operations run in order, each one whole or not at all, and the result names
-  every touched Initiative once with its progress and milestones.
+  personal-assistant personas only. Every answer is bounded by its whole UTF-8
+  size: a read by id caps its description, milestone ids, outside blockers and
+  each node's `blockedBy` (saying how many it left out), then cuts the member
+  tree depth-first at a node boundary with `nextOffset` to read on, a page's top
+  nodes naming their `parentId`; list and manage answers are cut the same way
+  (`omittedForBudget`). `initiative_manage` operations run in order, each one
+  whole or not at all, and the result names every touched Initiative once with
+  its progress, absorbed Tasks and removed Tasks still members through an
+  ancestor.
 - `task_manage`'s result is a fixed payload — `renderKind: "taskManage"`,
   `version`, `changedCount` (mutated + deleted Tasks), `changed[]`, optional
   `deletedIds` and `warnings` — carried identically in the TEXT and `details`

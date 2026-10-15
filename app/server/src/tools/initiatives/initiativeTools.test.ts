@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createTask, updateTask } from "../../tasks.ts";
-import { readInitiative } from "../../initiatives.ts";
-import type { ToolCallContext } from "../../mcp/tool.ts";
+import { readInitiative, setInitiativeMilestones } from "../../initiatives.ts";
+import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
 import { affirmed, assertPromptRules } from "../../test/promptRules.ts";
 import { toolGroupsFor } from "../catalog.ts";
 import { initiativeTools } from "./initiativeTools.ts";
+
+const BUDGET = 24_000;
 
 const ctx: ToolCallContext = {
   toolCallId: "initiative-tool-test",
@@ -30,23 +32,86 @@ function task(title: string, parentId?: string, description = ""): string {
   }).id;
 }
 
-async function manage(operations: Record<string, unknown>[]) {
-  const result = await manageTool().execute({ operations }, ctx);
-  return result.details as {
-    changedCount: number;
-    changed: Array<{
-      id: string;
-      title: string;
-      state: string;
-      archived?: boolean;
-      progress: { total: number };
-      milestoneIds: string[];
-    }>;
-    deletedIds?: string[];
-  };
+function textOf(result: ToolResult): string {
+  const block = result.content[0];
+  return block?.type === "text" ? block.text : "";
 }
 
-test("initiative_manage creates with members, marks a milestone, and reports compactly", async () => {
+/** The answer's text, asserted within the budget in UTF-8 bytes. */
+function bounded(result: ToolResult): string {
+  const text = textOf(result);
+  assert.ok(
+    Buffer.byteLength(text, "utf8") <= BUDGET,
+    `answer is ${Buffer.byteLength(text, "utf8")} bytes`,
+  );
+  assert.deepEqual(JSON.parse(text), result.details);
+  return text;
+}
+
+interface ManageAnswer {
+  changedCount: number;
+  changed: Array<{
+    id: string;
+    title: string;
+    state: string;
+    archived?: boolean;
+    progress: { total: number };
+    milestoneCount: number;
+    absorbedTaskIds?: string[];
+    stillMembers?: Array<{ taskId: string; through: string }>;
+  }>;
+  omittedForBudget?: number;
+  deletedIds?: string[];
+}
+
+async function manage(operations: Record<string, unknown>[]) {
+  const result = await manageTool().execute({ operations }, ctx);
+  bounded(result);
+  return result.details as ManageAnswer;
+}
+
+interface ToolMember {
+  id: string;
+  status: string;
+  blocked?: boolean;
+  parentId?: string;
+  milestone?: boolean;
+  blockedBy?: string[];
+  blockedByCount?: number;
+  children?: ToolMember[];
+}
+
+interface ReadAnswer {
+  description?: string;
+  descriptionTruncated?: boolean;
+  milestoneIds?: string[];
+  milestonesOmitted?: number;
+  externalBlockers?: Array<{ id: string }>;
+  externalBlockersOmitted?: number;
+  totalMembers: number;
+  offset?: number;
+  members: ToolMember[];
+  truncated?: boolean;
+  nextOffset?: number;
+}
+
+async function read(id: string, offset?: number): Promise<ReadAnswer> {
+  const result = await readTool().execute(
+    { id, ...(offset !== undefined ? { offset } : {}) },
+    ctx,
+  );
+  bounded(result);
+  return result.details as ReadAnswer;
+}
+
+function flatten(members: readonly ToolMember[]): ToolMember[] {
+  return members.flatMap((member) => [
+    member,
+    ...flatten(member.children ?? []),
+  ]);
+}
+
+test("initiative_manage creates with members, marks a covered milestone, and reports compactly", async () => {
   const epic = task("Tool epic", undefined, "A long body that never travels.");
   const sub = task("Tool sub", epic);
   const release = task("Tool release");
@@ -57,33 +122,33 @@ test("initiative_manage creates with members, marks a milestone, and reports com
       operation: "create",
       title: "Hosted rollout",
       description: "Across three projects.",
-      taskIds: [epic, release],
+      taskIds: [epic, sub, release],
     },
   ]);
-  const id = created.changed[0]!.id;
-  assert.equal(created.changed[0]!.progress.total, 3);
+  const entry = created.changed[0]!;
+  const id = entry.id;
+  assert.equal(entry.progress.total, 3);
+  assert.deepEqual(entry.absorbedTaskIds, [sub], "the epic absorbed its sub");
 
   const marked = await manage([
-    { operation: "setMilestone", id, taskIds: [release] },
+    { operation: "setMilestone", id, taskIds: [release, sub] },
     { operation: "update", id, state: "paused" },
   ]);
   assert.equal(marked.changedCount, 1, "one Initiative, reported once");
-  assert.deepEqual(marked.changed[0]!.milestoneIds, [release]);
+  assert.equal(marked.changed[0]!.milestoneCount, 2);
   assert.equal(marked.changed[0]!.state, "paused");
 
-  const read = await readTool().execute({ id }, ctx);
-  const text = read.content[0]!.type === "text" ? read.content[0]!.text : "";
+  const removed = await manage([
+    { operation: "removeMembers", id, taskIds: [sub] },
+  ]);
+  assert.deepEqual(removed.changed[0]!.stillMembers, [
+    { taskId: sub, through: epic },
+  ]);
+
+  const result = await readTool().execute({ id }, ctx);
+  const text = bounded(result);
   assert.ok(!text.includes("never travels"), "no Task description");
-  const detail = read.details as {
-    description: string;
-    milestoneIds: string[];
-    members: Array<{
-      id: string;
-      children?: Array<{ id: string }>;
-      blockedBy?: string[];
-      milestone?: boolean;
-    }>;
-  };
+  const detail = result.details as ReadAnswer;
   assert.equal(detail.description, "Across three projects.");
   assert.deepEqual(
     detail.members.map((member) => member.id),
@@ -94,6 +159,8 @@ test("initiative_manage creates with members, marks a milestone, and reports com
     [sub],
   );
   assert.deepEqual(detail.members[1]!.blockedBy, [sub]);
+  assert.equal(detail.members[1]!.blocked, true);
+  assert.equal(detail.members[1]!.status, "todo");
   assert.equal(detail.members[1]!.milestone, true);
 });
 
@@ -108,6 +175,10 @@ test("initiative_manage refusals throw, and each operation is all or nothing", a
   await assert.rejects(
     manage([{ operation: "addMembers", id, taskIds: [child] }]),
     /already a member .* through its ancestor/,
+  );
+  await assert.rejects(
+    manage([{ operation: "setMilestone", id, taskIds: [task("Outside")] }]),
+    /not a member/,
   );
   await assert.rejects(
     manage([{ operation: "archive", id, taskIds: [child] }]),
@@ -138,8 +209,13 @@ test("initiative_read lists by state, and delete removes the Initiative", async 
   ]);
   const id = changed[0]!.id;
   const listed = await readTool().execute({ state: "done" }, ctx);
+  bounded(listed);
   const items = (listed.details as { items: Array<{ id: string }> }).items;
   assert.ok(items.some((item) => item.id === id));
+  await assert.rejects(
+    readTool().execute({ state: "done", offset: 1 }, ctx),
+    /offset applies only to a read by id/,
+  );
 
   await manage([{ operation: "archive", id }]);
   const hidden = await readTool().execute({ state: "done" }, ctx);
@@ -154,24 +230,95 @@ test("initiative_read lists by state, and delete removes the Initiative", async 
   await assert.rejects(readTool().execute({ id }, ctx), /Initiative not found/);
 });
 
-test("a read by id is byte-bounded at a node boundary", async () => {
+test("a big tree pages on nextOffset until every member was read once", async () => {
   const epic = task("Big epic");
   for (let index = 0; index < 220; index += 1)
     task(`Subtask ${index} ${"x".repeat(80)}`, epic);
   const { changed } = await manage([
     { operation: "create", title: "Big", taskIds: [epic] },
   ]);
-  const read = await readTool().execute({ id: changed[0]!.id }, ctx);
-  const text = read.content[0]!.type === "text" ? read.content[0]!.text : "";
-  assert.ok(Buffer.byteLength(text) <= 24_000, `${Buffer.byteLength(text)}`);
-  const detail = read.details as {
-    truncated?: boolean;
-    omittedForBudget?: number;
-    members: Array<{ children?: unknown[] }>;
-  };
-  assert.equal(detail.truncated, true);
-  assert.ok(detail.omittedForBudget! > 0);
-  assert.ok(detail.members[0]!.children!.length > 0, "the tree kept its root");
+  const id = changed[0]!.id;
+  const seen: string[] = [];
+  let page = await read(id);
+  assert.equal(page.totalMembers, 221);
+  assert.equal(page.truncated, true);
+  assert.ok(page.members[0]!.children!.length > 0, "the tree kept its root");
+  seen.push(...flatten(page.members).map((member) => member.id));
+  let pages = 1;
+  while (page.nextOffset !== undefined) {
+    const next = await read(id, page.nextOffset);
+    assert.equal(next.offset, page.nextOffset);
+    assert.equal(next.description, undefined, "only the first page has it");
+    assert.equal(
+      next.members[0]!.parentId,
+      epic,
+      "a page top says where it hangs",
+    );
+    seen.push(...flatten(next.members).map((member) => member.id));
+    page = next;
+    pages += 1;
+  }
+  assert.ok(pages > 1);
+  assert.equal(seen.length, 221);
+  assert.equal(new Set(seen).size, 221);
+});
+
+test("the whole read stays bounded under many outside blockers, milestones and multibyte text", async () => {
+  const wide = "界".repeat(200);
+  const epic = task(`Multibyte epic ${wide}`);
+  const blocked = task(`Blocked ${wide}`, epic);
+  for (let index = 0; index < 200; index += 1) {
+    const outside = task(`Outside ${index} ${wide}`);
+    updateTask(blocked, {
+      addLinks: [{ type: "blocked-by", taskId: outside }],
+    });
+  }
+  const milestones: string[] = [];
+  for (let index = 0; index < 30; index += 1)
+    milestones.push(task(`Milestone ${index} ${wide}`, epic));
+  const { changed } = await manage([
+    {
+      operation: "create",
+      title: wide,
+      description: "説明".repeat(5_000),
+      taskIds: [epic],
+    },
+  ]);
+  const id = changed[0]!.id;
+  setInitiativeMilestones(id, milestones, true);
+
+  const detail = await read(id);
+  assert.equal(detail.descriptionTruncated, true);
+  assert.equal(detail.milestoneIds!.length, 20);
+  assert.equal(detail.milestonesOmitted, 10);
+  assert.ok(detail.externalBlockersOmitted! > 0);
+  assert.equal(
+    detail.externalBlockers!.length + detail.externalBlockersOmitted!,
+    200,
+  );
+  const members = flatten(detail.members);
+  assert.ok(members.length > 0, "members still fit beside the capped lists");
+  const blockedNode = members.find((member) => member.id === blocked);
+  assert.ok(blockedNode, "the blocked member is on the first page");
+  assert.equal(blockedNode.blockedBy!.length, 10);
+  assert.equal(blockedNode.blockedByCount, 200);
+  // Reading on reaches every member.
+  let page = detail;
+  let total = members.length;
+  while (page.nextOffset !== undefined) {
+    page = await read(id, page.nextOffset);
+    total += flatten(page.members).length;
+  }
+  assert.equal(total, 32);
+});
+
+test("a manage answer of twenty wide Initiatives stays bounded", async () => {
+  const wide = "界".repeat(200);
+  const answer = await manage(
+    Array.from({ length: 20 }, () => ({ operation: "create", title: wide })),
+  );
+  assert.equal(answer.changedCount, 20);
+  assert.equal(answer.changed.length + (answer.omittedForBudget ?? 0), 20);
 });
 
 test("the tools are deferred and reach only developer and personal-assistant", () => {
@@ -204,6 +351,7 @@ test("Initiative tool descriptions carry their rules", () => {
       rules: {
         "no-task-descriptions": /Task descriptions are a task_read away/i,
         "byte-bounded": /byte-bounded/i,
+        "read-on": /nextOffset/,
       },
     },
     initiative_manage: {
@@ -212,7 +360,10 @@ test("Initiative tool descriptions carry their rules", () => {
         "delete-only-on-request": affirmed(
           /delete only (when|if) the user (explicitly )?(asks|requests)/i,
         ),
-        "add-the-epic": /add an epic rather than its subtasks/i,
+        "under-a-member-refused": /adding a Task under a member is refused/i,
+        "epic-absorbs": /adding an epic absorbs/i,
+        "covered-milestone":
+          /milestone is a member Task, even one inside a member epic/i,
         "dependencies-are-links":
           /dependencies[^.\n]*task_manage blocks links/i,
       },

@@ -27,17 +27,63 @@ member Tasks, and its milestones.
   the Task that was added; its descendants are resolved at read time, so a
   subtask created later under a member epic is a member without another write. A
   Task may belong to several Initiatives.
+  - Plain memberships never nest. Adding a Task whose ancestor is already a
+    member is refused with the reason. Adding a Task that holds plain members
+    below it ABSORBS them: in the same write their edges go, the added Task
+    takes the first one's place in the user's order, and the answer names the
+    absorbed Tasks. A Task moved under another member (a reparent or a Backlog
+    drag) loses its plain edge in the move's own write the same way; it stays a
+    member through its new ancestor.
+  - The Tasks of one add (or create) are one request, so their order never
+    decides the outcome: a listed Task under another listed Task is absorbed
+    into it and reported, and the Tasks left keep the order they were listed in.
+    A listed Task that an EXISTING member covers fails the whole operation, and
+    nothing of it is written. A list adds plain members only; marking a covered
+    Task is `setMilestone`'s alone, and an add never absorbs a marked edge.
+  - Removing a stored member removes its edge. A Task that is a member only
+    through an ancestor cannot be removed on its own, and the refusal names the
+    ancestor; removing a Task that is not a member does nothing.
 - **Milestones:** a milestone is an ordinary member Task marked as a milestone
   on its membership edge. Being a Task, it takes `blocks` links like any other,
   shows in the Backlog, and is done when its status is done. The mark is scoped
   to the Initiative, so the Task model does not change.
+  - A milestone may be a subtask of a member epic. Marking a Task covered by a
+    member stores a marked edge for it, the one kind of edge allowed under
+    another member, and absorption and moves keep it. Clearing that mark deletes
+    the edge, and the Task stays a member through its ancestor; clearing the
+    mark of a Task nothing covers keeps it as a plain member.
+  - A marked edge is a membership of its own: removing the ancestor leaves the
+    milestone a member. Removing the marked edge of a covered Task leaves it a
+    member through the ancestor, and the answer says which. Marking a Task that
+    is not a member is refused.
 
 An Initiative does not touch a Task's project. A subtask still lives in its
 parent's project (`docs/tasks.md`); the Initiative is the one thing that spans
 them.
 
-Archived member Tasks stay members. Deleting a Task drops its membership edges
-like every other edge, and notifies the Initiatives it belonged to.
+Archived member Tasks stay members: they stay in the tree, the graph and the
+total. Deleting a Task drops its membership edges like every other edge, and
+notifies the Initiatives it belonged to.
+
+## Progress
+
+A member's status (todo, doing, done) and whether it is blocked are separate
+facts. Blocked follows `docs/tasks.md`: at least one blocker is neither done nor
+archived. A done Task is never blocked; a started Task can be.
+
+The counts are:
+
+- **total:** every member, archived ones included;
+- **done:** every done member, archived or not, so the 14-day auto-archive never
+  erodes progress;
+- **doing:** unarchived `doing` members, blocked or not;
+- **startable:** unarchived `todo` members with no open blocker;
+- **blocked:** unarchived members that are not done and have an open blocker,
+  `doing` ones included.
+
+An archived open Task is shelved work, so it counts in none of doing, startable
+or blocked. `doing` and `blocked` overlap. The buckets therefore need not sum to
+the total.
 
 ## Dependencies are `blocks` links
 
@@ -67,13 +113,16 @@ create or edit form, and its only Initiative write is Settle.
 - `initiative_read`: a list (state filter, search) or one Initiative by id. A
   read by id returns its members as a tree with their status and blocked state,
   the milestones, and progress counts. It never returns Task descriptions; those
-  are a `task_read` away.
+  are a `task_read` away. Every answer is bounded in bytes: its lists are capped
+  with the count of what was left out, and a member tree cut short says where to
+  read on (`nextOffset`).
 - `initiative_manage`: a batch of `create`, `update` (title, description,
   state), `addMembers`, `removeMembers`, `setMilestone` / `clearMilestone`,
   `archive`, `unarchive` and `delete`. Each operation is all-or-nothing, like
-  `task_manage`. `delete` only when the user explicitly asks. Adding a Task
-  whose ancestor is already a member is refused with the reason, rather than
-  stored twice.
+  `task_manage`. `delete` only when the user explicitly asks. The membership and
+  milestone rules above apply as written: an add under a member is refused, an
+  add over plain members absorbs them, and the answer names absorbed Tasks and
+  removed ones still members through an ancestor.
 
 Both are deferred tools, found with a tool search for "initiative", and are
 available to the developer and personal-assistant personas. Their rules live in
@@ -89,14 +138,18 @@ the tool descriptions, never in a harness-specific prompt layer.
   `metadata_json` carrying `{ "milestone": true }` on a milestone.
 - Initiatives join the state-change event model (`docs/state-sync.md`) as their
   own topic, `initiatives`. A summary carries the id, title, state, attention
-  cursor and progress counts (total, done, doing, startable, blocked). Because
-  the counts move with member Tasks, the Task notification seam also reports the
-  Initiatives that hold a touched Task, member or descendant, in the same flush.
-  A Task write is the only place that knows it changed, so no second path
-  recomputes counts on a timer.
+  cursor, progress counts (total, done, doing, startable, blocked) and the
+  card's sessions (below). Because the counts move with member Tasks, the Task
+  notification seam also reports the Initiatives that read a touched Task — as a
+  member or descendant, or as an outside blocker of a member — in the same
+  flush, and a session's liveness change reports the Initiatives listing it. A
+  write is the only place that knows it changed, so no second path recomputes
+  counts on a timer.
 - The graph (nodes, the parent tree, `blocks` edges, milestones) is detail, read
   by id with the revision it is as of, the same way a Task body is. A newer
-  Initiative event re-reads it.
+  Initiative event re-reads it. An archived Initiative leaves the live list, but
+  a later write to it still raises an event (a `delete` with the new revision,
+  as for an archived Task), so its open graph re-reads too.
 
 ## The Initiative page
 
@@ -113,13 +166,15 @@ The page has two views:
 - **List**: the members as a tree with progress per epic, for reading and for
   small screens.
 
-A node shows the Task's title, its short label when it has one, and its state:
-done, doing, startable (todo with no open blocker) or blocked. It also carries a
-marker while a session is running on the Task. "Startable" and the critical path
-are computed, never stored. The critical path is the longest chain of open Tasks
-along `blocks` ending at the next open milestone. The map can highlight it, hide
-done Tasks, and collapse a member epic into one node with its progress ("7/14
-done") and expand it again.
+A node shows the Task's title, its short label when it has one, its status
+(todo, doing or done) and, separately, a blocked marker (see Progress): a
+started Task whose blocker is still open shows doing AND blocked, and a todo
+Task with neither is startable. An archived member is toned back, like an
+archived Task link. A node also carries a marker while a session is running on
+the Task. "Startable" and the critical path are computed, never stored. The
+critical path is the longest chain of open Tasks along `blocks` ending at the
+next open milestone. The map can highlight it, hide done Tasks, and collapse a
+member epic into one node with its progress ("7/14 done") and expand it again.
 
 Selecting a node opens the object panel with the existing Task detail and the
 Task's sessions, where a session can be started from the Task and its status
@@ -147,6 +202,12 @@ An Initiative is a Sessions inbox item, following the Workflow Run precedent
 The card shows the title, state, progress, how many Tasks can start now and how
 many are blocked, the next open milestone, and the sessions working on its
 Tasks. Opening it goes to the map.
+
+The sessions working on its Tasks are the user's sessions linked to a member
+Task, archived member Tasks included, that are neither archived nor settled (a
+settled session counts again once a new outcome raises it). The summary carries
+the newest 50 of them and the full count, so a longer list says how many it left
+out.
 
 Those sessions are listed in a disclosure on the card but keep their own inbox
 cards. Unlike a Workflow Run's role sessions they are not folded away: a Task
