@@ -1445,6 +1445,15 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   a Task write and the counts it moved leave together, and repeats a `delete`
   for a write to an archived Initiative. `tasks.ts` `reorderTasks` writes all
   its placements in one transaction and notifies after it.
+- `initiativeLayout.ts` lays out the Initiative map: a structure projection of
+  the graph whose digest is the layout key, the plan of lanes, stubs, the
+  milestone column and collapsed epics, two elkjs passes (columns and order,
+  then routing at the planned rows, repeated while a lane needs more room), and
+  a bounded cache whose entries are shared by concurrent reads.
+  `readInitiativeMap` answers `getInitiative` in `connection.ts`.
+  `initiativeLayoutRunner.ts` runs elkjs in `initiativeLayoutWorker.ts`: one
+  worker thread started on demand, one job at a time with a time limit, ended
+  when idle.
 - `subagentRegistry.ts` narrows durable thread and held-thread run projections
   into bounded summaries, revision sidecars and keyed detail reads. `hub.ts`
   coalesces the store's post-commit touched-id seam into registry events and

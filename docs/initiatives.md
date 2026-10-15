@@ -250,8 +250,32 @@ structural: sessions linked to member Tasks, nothing parsed from titles.
 - **Layout runs on the server.** elkjs lays the graph out left to right with one
   lane per member epic. Its bundle is well over the web client's 500 KB chunk
   budget, and the layout only changes when membership or links change, which
-  already happens on the server. The graph read carries node positions and edge
-  routes, cached by graph revision and collapse state. A status change recolours
-  a node and never needs a new layout.
+  already happens on the server. It runs in a worker thread when a map is read,
+  never from a write or an event flush. A status change recolours a node and
+  never needs a new layout.
+  - Each member with no member parent is a root and has a lane; every descendant
+    is drawn in its root's lane. The lanes of one Project sit together, Projects
+    and lanes in member order.
+  - An outside blocker is a stub in the first column of each lane it blocks
+    into. Milestones, a milestone under an epic included, stand in a column to
+    the right of every lane, and an outside blocker of a milestone has its stub
+    just left of them.
+  - `getInitiative` may name collapsed epics. A member with member children is
+    then one node with its descendants' progress, and the arrows into and out of
+    its subtree end at it; a milestone under it stays drawn. The set is applied
+    canonically: an id that collapses nothing, or sits under another collapsed
+    epic, is dropped.
+  - The `initiativeDetail` answer carries `layout` for exactly the graph it
+    carries: node boxes, lanes, Project groups, the milestone column and
+    orthogonal arrow routes. The layout reads only structure — the members and
+    their order, the hierarchy, each root's Project, the milestone marks and the
+    `blocks` links — and its `key` is a digest of that and the collapsed set.
+    Layouts are cached by Initiative and key, so a status, title, blocked or
+    archive change keeps the layout while the Initiative's revision, which they
+    do move, still dates the graph. The read checks the structure again once the
+    layout is done and lays it out anew if it moved.
+  - A layout that cannot be computed (over 1,000 nodes, an ELK error, or past
+    the worker's 20 s limit per pass) leaves the graph in the answer and says
+    why in `layoutError`.
 - **Sidebar location.** Initiatives are a group at the top of the Projects
   section, since they sit above Projects (`app/web/docs/ui-shell.md`).

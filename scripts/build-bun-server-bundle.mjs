@@ -116,6 +116,10 @@ const serverBundle = await bundle(join(repoRoot, "app/server/src/index.ts"), {
   plugins,
 });
 const workerBundle = await bundle(xhrWorkerSource, { plugins });
+const layoutWorkerBundle = await bundle(
+  join(repoRoot, "app/server/src/initiativeLayoutWorker.ts"),
+  { plugins },
+);
 const watcherWrapperBundle = await bundle(watcherWrapperSource, {
   format: "cjs",
 });
@@ -125,6 +129,10 @@ mkdirSync(join(outputDir, "native"), { recursive: true });
 copy(process.execPath, "personal-assistant-server", 0o755);
 await write(join(outputDir, "server.js"), serverBundle);
 await write(join(outputDir, "workers", "xhr-sync-worker.js"), workerBundle);
+await write(
+  join(outputDir, "workers", "initiative-layout-worker.js"),
+  layoutWorkerBundle,
+);
 await write(
   join(outputDir, "native", "watcher-wrapper.js"),
   watcherWrapperBundle,

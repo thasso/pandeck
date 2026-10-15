@@ -35,6 +35,7 @@
     "@parcel/watcher": "catalog:",
     "@playwright/mcp": "catalog:",
     "approx-string-match": "catalog:",
+    "elkjs": "catalog:",
     "jsdom": "catalog:",
     "mdast-util-from-markdown": "catalog:",
     "mdast-util-gfm": "catalog:",

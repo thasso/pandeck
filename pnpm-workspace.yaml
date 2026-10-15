@@ -41,6 +41,7 @@ catalog:
   approx-string-match: "2.0.0"
   "chart.js": "4.5.1"
   concurrently: "10.0.5"
+  elkjs: "0.12.0"
   esbuild: "0.28.2"
   hast-util-to-jsx-runtime: "2.3.6"
   jsdom: "30.1.1"

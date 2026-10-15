@@ -2,14 +2,16 @@
  * The `initiatives` topic over the socket: a cold subscribe answers the live
  * snapshot with its revision sidecar, a warm one the digest, `getStateItems`
  * catches up after a diff, and `getInitiative` answers the graph with the
- * revision it is as of. Every message passes the client validator first.
+ * revision it is as of and the layout that draws it. Every message passes the
+ * client validator first.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
-import type {
-  BroadcastTopic,
-  ClientMessage,
-  ServerMessage,
+import { afterAll, test } from "vitest";
+import {
+  INITIATIVE_LAYOUT_COLLAPSE_LIMIT,
+  type BroadcastTopic,
+  type ClientMessage,
+  type ServerMessage,
 } from "@assistant/shared";
 import { Connection } from "./connection.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
@@ -18,12 +20,19 @@ import {
   createInitiative,
   initiativeRevision,
 } from "./initiatives.ts";
+import { stopInitiativeLayoutWorker } from "./initiativeLayoutRunner.ts";
 import { createTask } from "./tasks.ts";
+
+afterAll(() => stopInitiativeLayoutWorker());
 
 interface ConnectionHandlers {
   onSubscribe(topics: BroadcastTopic[], digests?: BroadcastTopic[]): void;
   onGetStateItems(topic: "initiatives", ids: string[], requestId: string): void;
-  onGetInitiative(id: string, requestId: string): void;
+  onGetInitiative(
+    id: string,
+    requestId: string,
+    collapsed?: readonly string[],
+  ): Promise<void>;
 }
 
 function makeConnection() {
@@ -47,10 +56,15 @@ function valid(message: ClientMessage): ClientMessage {
   return parsed;
 }
 
-test("subscribe, digest, items and the keyed graph read round-trip", () => {
+test("subscribe, digest, items and the keyed graph read round-trip", async () => {
   const epic = createTask({
     title: "Wire epic",
     source: { createdBy: "user" },
+  });
+  const step = createTask({
+    title: "Wire step",
+    source: { createdBy: "user" },
+    parentId: epic.id,
   });
   const live = createInitiative({
     title: "Wire live",
@@ -76,7 +90,7 @@ test("subscribe, digest, items and the keyed graph read round-trip", () => {
   assert.deepEqual(snapshot.revisions, [
     { id: liveId, revision: initiativeRevision(liveId)! },
   ]);
-  assert.equal(snapshot.items[0]!.progress.total, 1);
+  assert.equal(snapshot.items[0]!.progress.total, 2);
 
   valid({
     type: "subscribe",
@@ -111,8 +125,20 @@ test("subscribe, digest, items and the keyed graph read round-trip", () => {
   );
 
   valid({ type: "getInitiative", id: liveId, requestId: "graph-1" });
-  warm.connection.onGetInitiative(liveId, "graph-1");
-  warm.connection.onGetInitiative("424242", "graph-2");
+  await warm.connection.onGetInitiative(liveId, "graph-1");
+  await warm.connection.onGetInitiative("424242", "graph-2");
+  const collapse = valid({
+    type: "getInitiative",
+    id: liveId,
+    requestId: "graph-3",
+    collapsed: [epic.id],
+  });
+  assert.ok(collapse.type === "getInitiative");
+  await warm.connection.onGetInitiative(
+    liveId,
+    collapse.requestId,
+    collapse.collapsed,
+  );
   const details = warm.sent.filter(
     (message) => message.type === "initiativeDetail",
   );
@@ -122,12 +148,30 @@ test("subscribe, digest, items and the keyed graph read round-trip", () => {
   assert.equal(found.revision, initiativeRevision(liveId));
   assert.deepEqual(
     found.item?.nodes.map((node) => node.id),
-    [epic.id],
+    [epic.id, step.id],
   );
+  assert.deepEqual(
+    found.layout?.nodes.map((node) => [node.id, node.laneId]),
+    [
+      [epic.id, epic.id],
+      [step.id, epic.id],
+    ],
+  );
+  assert.equal(found.layoutError, undefined);
   const missing = details[1];
   assert.ok(missing?.type === "initiativeDetail");
   assert.equal(missing.item, null);
   assert.equal(missing.revision, undefined);
+  assert.equal(missing.layout, undefined);
+  const collapsed = details[2];
+  assert.ok(collapsed?.type === "initiativeDetail");
+  assert.deepEqual(collapsed.layout?.collapsed, [epic.id]);
+  assert.deepEqual(
+    collapsed.layout?.nodes.map((node) => [node.kind, node.hiddenTaskIds]),
+    [["collapsed", [step.id]]],
+  );
+  assert.equal(collapsed.layout?.nodes[0]!.progress?.total, 1);
+  assert.notEqual(collapsed.layout?.key, found.layout?.key);
 });
 
 test("the validator refuses an unknown state-items topic", () => {
@@ -142,4 +186,27 @@ test("the validator refuses an unknown state-items topic", () => {
     validateClientMessage({ type: "getInitiative", requestId: "x" }).ok,
     false,
   );
+});
+
+test("the validator bounds a map's collapsed epics", () => {
+  const read = (collapsed: unknown) =>
+    validateClientMessage({
+      type: "getInitiative",
+      id: "1",
+      requestId: "x",
+      collapsed,
+    }).ok;
+  assert.equal(read(["12", "13"]), true);
+  assert.equal(
+    read(Array.from({ length: INITIATIVE_LAYOUT_COLLAPSE_LIMIT }, String)),
+    true,
+  );
+  assert.equal(
+    read(Array.from({ length: INITIATIVE_LAYOUT_COLLAPSE_LIMIT + 1 }, String)),
+    false,
+  );
+  assert.equal(read([""]), false);
+  assert.equal(read(["x".repeat(33)]), false);
+  assert.equal(read([12]), false);
+  assert.equal(read("12"), false);
 });

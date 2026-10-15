@@ -4,7 +4,8 @@
  * the spawn broker (its cancel and its group kill), the in-process fallback,
  * a watcher subscribed with a git-derived ignore set, the SQLite paths that
  * depend on the `node:sqlite` shim, the package proxy's env reaching
- * children but never the server's own fetch, and pi's OAuth flows.
+ * children but never the server's own fetch, pi's OAuth flows, and an
+ * Initiative map laid out by elkjs in the bundled layout worker.
  *
  * Not run from a checkout. `test-bun-server-bundle.mjs` bundles it with the
  * server's own plugins and runs it with the packaged Bun, once per mode:
@@ -36,6 +37,9 @@ import {
 } from "../app/server/src/db/links.ts";
 import { sessionStore } from "../app/server/src/db/sessionStore.ts";
 import { GitCommandError, git } from "../app/server/src/gitExec.ts";
+import { readInitiativeMap } from "../app/server/src/initiativeLayout.ts";
+import { stopInitiativeLayoutWorker } from "../app/server/src/initiativeLayoutRunner.ts";
+import { createInitiative } from "../app/server/src/initiatives.ts";
 import { updateGithubSettings } from "../app/server/src/githubSettings.ts";
 import {
   packageProxyEnvironment,
@@ -49,6 +53,7 @@ import {
   spawnBrokerPidForTests,
 } from "../app/server/src/spawnBroker.ts";
 import { childProcessEnv } from "../app/server/src/subprocessEnv.ts";
+import { createTask, updateTask } from "../app/server/src/tasks.ts";
 import { treeIgnoreForTests } from "../app/server/src/worktrees/worktreeWatcher.ts";
 
 const mode = process.argv[2];
@@ -490,6 +495,55 @@ async function checkPiOAuthFlows() {
   );
 }
 
+/**
+ * elkjs's worker script takes its web-worker path wherever `self` exists, and
+ * Bun defines it, so `new ELK()` threw under Bun. The bundled layout worker
+ * hides `self` in its own thread; this lays out a small map through it, with
+ * an outside blocker, and checks the server thread kept its `self`.
+ */
+async function checkInitiativeLayout() {
+  const user = { source: { createdBy: "user" } };
+  const epic = createTask({ ...user, title: "Probe epic", projectId: "probe" });
+  const first = createTask({ ...user, title: "Probe 1", parentId: epic.id });
+  const second = createTask({ ...user, title: "Probe 2", parentId: epic.id });
+  const outside = createTask({ ...user, title: "Probe outside" });
+  updateTask(second.id, {
+    addLinks: [
+      { type: "blocked-by", taskId: first.id },
+      { type: "blocked-by", taskId: outside.id },
+    ],
+  });
+  const id = String(
+    createInitiative({ title: "Probe map", taskIds: [epic.id] }).initiative.id,
+  );
+  const read = await readInitiativeMap(id);
+  assert(
+    read.layout && read.layoutError === undefined,
+    `The Initiative map was not laid out: ${read.layoutError}`,
+  );
+  const at = (taskId) => read.layout.nodes.find((node) => node.id === taskId);
+  assert(
+    read.layout.nodes.length === 4 && read.layout.edges.length === 2,
+    `Unexpected map: ${JSON.stringify(read.layout)}`,
+  );
+  assert(
+    at(first.id).x < at(second.id).x,
+    "The map does not read left to right.",
+  );
+  for (const edge of read.layout.edges)
+    assert(
+      edge.points.every(
+        (point, i) =>
+          i === 0 ||
+          point.x === edge.points[i - 1].x ||
+          point.y === edge.points[i - 1].y,
+      ),
+      `A route is not orthogonal: ${JSON.stringify(edge.points)}`,
+    );
+  assert(typeof self === "object", "The server thread lost its `self`.");
+  stopInitiativeLayoutWorker();
+}
+
 await checkGit();
 await checkPackageProxyEnvironment();
 if (mode === "broker") {
@@ -497,6 +551,7 @@ if (mode === "broker") {
   checkSqlite();
   checkSyncSpawnEnvironment();
   await checkPiOAuthFlows();
+  await checkInitiativeLayout();
 }
 console.log(`Bun runtime probe (${mode}) passed.`);
 process.exit(0);

@@ -22,6 +22,7 @@ import {
   type InitiativeSummary,
   type StateDigestEntry,
   type StateEvent,
+  type TaskStatus,
 } from "@assistant/shared";
 import {
   initiativeStore,
@@ -364,14 +365,20 @@ function isBlocked(member: InitiativeMemberRow): boolean {
   return member.status !== "done" && member.openBlockers > 0;
 }
 
+function progressOf(
+  members: readonly InitiativeMemberRow[],
+): InitiativeProgress {
+  return initiativeProgressOf(members, isBlocked);
+}
+
 /**
  * Counts per `docs/initiatives.md`: every member in `total`, every done one in
  * `done`, and only unarchived members in `doing`, `startable` and `blocked` —
  * a shelved Task is neither work in progress nor work that could start.
  */
-function progressOf(
-  members: readonly InitiativeMemberRow[],
-): InitiativeProgress {
+export function initiativeProgressOf<
+  T extends { status: TaskStatus; archived?: boolean },
+>(members: readonly T[], blocked: (member: T) => boolean): InitiativeProgress {
   const progress: InitiativeProgress = {
     total: members.length,
     done: 0,
@@ -386,7 +393,7 @@ function progressOf(
     }
     if (member.archived) continue;
     if (member.status === "doing") progress.doing += 1;
-    if (isBlocked(member)) progress.blocked += 1;
+    if (blocked(member)) progress.blocked += 1;
     else if (member.status === "todo") progress.startable += 1;
   }
   return progress;

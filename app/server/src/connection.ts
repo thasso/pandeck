@@ -268,12 +268,11 @@ import {
   projectStateItems,
 } from "./projectRegistry.ts";
 import {
-  initiativeRevision,
   initiativeRevisionDigest,
   initiativeSnapshot,
   initiativeStateItems,
-  readInitiative,
 } from "./initiatives.ts";
+import { readInitiativeMap } from "./initiativeLayout.ts";
 import {
   cloneAndRegisterProjectRepo,
   deleteProjectRepoFolder,
@@ -1136,7 +1135,7 @@ export class Connection implements Viewer {
       case "getProject":
         return this.onGetProject(msg.id, msg.requestId);
       case "getInitiative":
-        return this.onGetInitiative(msg.id, msg.requestId);
+        return this.onGetInitiative(msg.id, msg.requestId, msg.collapsed);
       case "saveProject":
         return this.onSaveProject(msg.id, msg.patch, msg.requestId);
       case "provisionProjectRepo":
@@ -2134,15 +2133,26 @@ export class Connection implements Viewer {
     }
   }
 
-  private onGetInitiative(id: string, requestId: string): void {
+  /**
+   * The graph and its map layout. The layout is computed off the event loop
+   * and may take a while; the answer carries the graph as read once it is done.
+   */
+  private async onGetInitiative(
+    id: string,
+    requestId: string,
+    collapsed: readonly string[] = [],
+  ): Promise<void> {
     try {
-      const item = readInitiative(id);
-      const revision = item ? initiativeRevision(id) : undefined;
+      const read = await readInitiativeMap(id, collapsed);
       this.send({
         type: "initiativeDetail",
         id,
-        item,
-        ...(revision !== undefined ? { revision } : {}),
+        item: read.item,
+        ...(read.revision !== undefined ? { revision: read.revision } : {}),
+        ...(read.layout ? { layout: read.layout } : {}),
+        ...(read.layoutError !== undefined
+          ? { layoutError: read.layoutError }
+          : {}),
         requestId,
       });
     } catch (err) {

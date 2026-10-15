@@ -58,6 +58,10 @@ export const PACKAGED_XHR_SYNC_WORKER = runtimeAssetPath(
   "workers",
   "xhr-sync-worker.js",
 );
+/** The Initiative layout worker: its bundle when packaged, else its source. */
+export const INITIATIVE_LAYOUT_WORKER = configuredRoot
+  ? runtimeAssetPath("workers", "initiative-layout-worker.js")
+  : runtimeAssetPath("app", "server", "src", "initiativeLayoutWorker.ts");
 /** Playwright MCP CLI installed with the server, never fetched at runtime. */
 export const PLAYWRIGHT_MCP_CLI_PATH = configuredRoot
   ? runtimeAssetPath("browser-mcp", "cli.js")
@@ -111,6 +115,7 @@ export function assertPackagedRuntimeAssets(): void {
     runtimeAssetPath("browser-mcp", "package.json"),
     runtimeAssetPath("browser-mcp", "playwright-core", "package.json"),
     PACKAGED_XHR_SYNC_WORKER,
+    INITIATIVE_LAYOUT_WORKER,
   ];
   const missing = required.filter((path) => !existsSync(path));
   if (missing.length > 0)

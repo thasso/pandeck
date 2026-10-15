@@ -21,6 +21,7 @@
  */
 import {
   BROADCAST_TOPICS,
+  INITIATIVE_LAYOUT_COLLAPSE_LIMIT,
   isHarness,
   isPeerRuntimeRelativeCost,
   MAX_INBOX_POSITIONS,
@@ -83,6 +84,14 @@ const STRING_ARRAY: FieldSpec = {
   kind: "a string array",
 };
 const ARRAY: FieldSpec = { check: Array.isArray, kind: "an array" };
+/** A map's collapsed epics: bounded Task ids, the server drops what does not apply. */
+const COLLAPSED_EPICS: FieldSpec = {
+  check: (value: unknown) =>
+    isStringArray(value) &&
+    value.length <= INITIATIVE_LAYOUT_COLLAPSE_LIMIT &&
+    value.every((id) => id.length > 0 && id.length <= 32),
+  kind: `at most ${INITIATIVE_LAYOUT_COLLAPSE_LIMIT} Task ids`,
+};
 const OBJECT: FieldSpec = { check: isPlainObject, kind: "an object" };
 
 /**
@@ -1074,7 +1083,10 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
       ? null
       : "request must be an object",
   getProject: fields({ id: STRING, requestId: STRING }),
-  getInitiative: fields({ id: STRING, requestId: STRING }),
+  getInitiative: fields(
+    { id: STRING, requestId: STRING },
+    { collapsed: COLLAPSED_EPICS },
+  ),
   saveProject: fields({ id: STRING, patch: OBJECT }, { requestId: STRING }),
   provisionProjectRepo: fields({ id: STRING }, { requestId: STRING }),
   removeProjectRepo: fields({ id: STRING }, { requestId: STRING }),

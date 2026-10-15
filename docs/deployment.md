@@ -80,16 +80,17 @@ The Bun package contains the pinned Bun executable, one deterministic bundled
 server module, and explicit runtime assets: the built web UI, app configuration
 and prompts, SQLite migrations and their lock, the root version manifest, the
 Apache-2.0 `LICENSE` and `NOTICE`, the native watcher addon, Photon module and
-WASM, a bundled JSDOM sync-XHR worker, the Claude CLI, and `browser-mcp/` with
-the pinned Playwright MCP CLI and its `playwright-core` package. It does not
-contain Node, tsx, workspace sources, or a `node_modules` tree. The wrapper sets
-`ASSISTANT_RUNTIME_DIR` to this asset root. `runtimeAssets.ts` captures it once
-at module load and is the single server-side resolver for these files, so the
-bundled module never uses its own location to infer installed asset paths. The
-variable is then scrubbed before any agent starts: a worktree dev server must
-not inherit production assets or identify its checkout as a packaged build. The
-optional `ASSISTANT_CLAUDE_CLI_BIN` override is captured and scrubbed for the
-same reason. Lazy Photon and JSDOM loaders consume the captured paths rather
+WASM, a bundled JSDOM sync-XHR worker, the bundled Initiative layout worker
+(elkjs, which `server.js` does not contain), the Claude CLI, and `browser-mcp/`
+with the pinned Playwright MCP CLI and its `playwright-core` package. It does
+not contain Node, tsx, workspace sources, or a `node_modules` tree. The wrapper
+sets `ASSISTANT_RUNTIME_DIR` to this asset root. `runtimeAssets.ts` captures it
+once at module load and is the single server-side resolver for these files, so
+the bundled module never uses its own location to infer installed asset paths.
+The variable is then scrubbed before any agent starts: a worktree dev server
+must not inherit production assets or identify its checkout as a packaged build.
+The optional `ASSISTANT_CLAUDE_CLI_BIN` override is captured and scrubbed for
+the same reason. Lazy Photon and JSDOM loaders consume the captured paths rather
 than rereading the scrubbed environment. Starting the packaged bundle without
 `ASSISTANT_RUNTIME_DIR` fails immediately with a named packaged-server error.
 
@@ -212,25 +213,27 @@ a ChatGPT credential the check seeds in its data directory, which fails the way
 production did — every subscription model — if that registration is lost. The
 check itself exercises each adapter behavior above directly. It also compiles
 and runs a Photon probe so the WASM path is covered inside a compiled Bun
-executable. From an unrelated cwd and a clean environment, it also runs the
-packaged browser MCP CLI's version command and an MCP initialize plus
-`tools/list`, covering the patched local imports without a workspace
-`node_modules`. When Chrome or Chromium is available, the check also launches it
-and navigates a page. The Nix sandbox has neither browser, so that last probe
-reports an explicit skip there; the same clean-environment probe with the pinned
-Bun 1.3.13 passes launch and navigation on a host with Chrome. The server itself
-keeps its deterministic bundle beside the executable because Bun's standalone
-compiler randomizes its embedded module-table encryption; the package wrapper
-invokes that module explicitly, while `/proc/<pid>/exe` remains the packaged Bun
-executable. Bun's ordinary bundler also emits scheduler-dependent module order
-and identifier names, even when pinned to one CPU and given a lexically
-recreated source tree. The builder therefore uses pinned esbuild for the server
-module and its two bundled helpers; Bun remains the packaged runtime. The flake
-closure check rejects Node, tsx, `node_modules`, and source derivations, then
-confirms pinned git and OpenSSH remain present. The install check also scans
-every runtime file for the Nix source path and build directory. CI builds the
-package and its closure check on every change (`docs/ci-cd.md`), and a
-deployment of that commit builds the same derivation.
+executable. The probe lays out a small Initiative map through the packaged
+layout worker, which covers elkjs under Bun (below). From an unrelated cwd and a
+clean environment, it also runs the packaged browser MCP CLI's version command
+and an MCP initialize plus `tools/list`, covering the patched local imports
+without a workspace `node_modules`. When Chrome or Chromium is available, the
+check also launches it and navigates a page. The Nix sandbox has neither
+browser, so that last probe reports an explicit skip there; the same
+clean-environment probe with the pinned Bun 1.3.13 passes launch and navigation
+on a host with Chrome. The server itself keeps its deterministic bundle beside
+the executable because Bun's standalone compiler randomizes its embedded
+module-table encryption; the package wrapper invokes that module explicitly,
+while `/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary
+bundler also emits scheduler-dependent module order and identifier names, even
+when pinned to one CPU and given a lexically recreated source tree. The builder
+therefore uses pinned esbuild for the server module and its two bundled helpers;
+Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
+`node_modules`, and source derivations, then confirms pinned git and OpenSSH
+remain present. The install check also scans every runtime file for the Nix
+source path and build directory. CI builds the package and its closure check on
+every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
+derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler: Bun
 1.3.13's standalone compiler encrypts its embedded module table with a random
@@ -253,6 +256,10 @@ production code already or affect only test clients:
   `import()` of a sibling file, which the bundle does not have, so every
   subscription model failed. `piSdk/models.ts` registers the flows statically,
   and the runtime probe covers it (above).
+- Fixed in the server: elkjs's worker script registers itself as a web worker
+  wherever `self` exists, and Bun defines `self`, so `new ELK()` threw.
+  `initiativeLayoutWorker.ts` removes `self` from its own thread's global before
+  it loads elkjs; the server thread keeps it. The runtime probe covers it.
 - Fixed in the child_process shim: synchronous spawns without `env`, or with
   `env: null`, used the start-up environment. `Bun.spawnSync` does too, and is
   kept out of the bundle.

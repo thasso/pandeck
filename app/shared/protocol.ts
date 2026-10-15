@@ -22,7 +22,11 @@ import type {
 } from "./session/entries.ts";
 import type { PaObjectLinkResolution } from "./objectLinks.ts";
 import type { UsageIndicator } from "./usage.ts";
-import type { InitiativeDetail, InitiativeSummary } from "./initiatives.ts";
+import type {
+  InitiativeDetail,
+  InitiativeLayout,
+  InitiativeSummary,
+} from "./initiatives.ts";
 import type { ApprovalGrant } from "./approvalGrants.ts";
 import type {
   CommentTarget,
@@ -7896,8 +7900,16 @@ export type ClientMessage =
   | { type: "listProjects"; request?: ProjectListRequest }
   /** Request one full Project document; answers are correlated per id. */
   | { type: "getProject"; id: string; requestId: string }
-  /** Request one Initiative with its graph; answers are correlated per id. */
-  | { type: "getInitiative"; id: string; requestId: string }
+  /**
+   * Request one Initiative with its graph and its map layout; answers are
+   * correlated per id. `collapsed` names member epics drawn as one node each.
+   */
+  | {
+      type: "getInitiative";
+      id: string;
+      requestId: string;
+      collapsed?: string[];
+    }
   /** Persist editable Project registry fields/properties. */
   | {
       type: "saveProject";
@@ -8478,12 +8490,16 @@ export type ServerMessage =
   /**
    * One Initiative with its graph, as of `revision`: a newer `initiatives`
    * event re-reads it. `item` is null when it does not exist or was deleted.
+   * `layout` draws exactly that graph; when it could not be computed, the
+   * answer still carries `item` and says why in `layoutError`.
    */
   | {
       type: "initiativeDetail";
       id: string;
       item: InitiativeDetail | null;
       revision?: number;
+      layout?: InitiativeLayout;
+      layoutError?: string;
       requestId: string;
       error?: string;
     }

@@ -112,3 +112,84 @@ export interface InitiativeDetail extends InitiativeSummary {
   /** Milestone Task ids, in the user's order. */
   milestoneIds: string[];
 }
+
+/* --------------------------------- layout -------------------------------- */
+
+/**
+ * At most this many collapsed epics ride a `getInitiative`; the server drops
+ * any that are not collapsible, so the applied set is the layout's own.
+ */
+export const INITIATIVE_LAYOUT_COLLAPSE_LIMIT = 500;
+
+/** Pixels from the layout's top-left corner, y growing downwards. */
+export interface InitiativeLayoutPoint {
+  x: number;
+  y: number;
+}
+
+export interface InitiativeLayoutBox extends InitiativeLayoutPoint {
+  width: number;
+  height: number;
+}
+
+/**
+ * One drawn box. `task` is a member Task, `collapsed` a member epic standing
+ * for its hidden subtree, `external` the stub of a blocker outside the
+ * Initiative: one per lane it blocks into, so `id` is not the Task id there.
+ * A milestone sits in the milestone column, outside every lane.
+ */
+export interface InitiativeLayoutNode extends InitiativeLayoutBox {
+  id: string;
+  kind: "task" | "collapsed" | "external";
+  taskId: string;
+  /** The lane it is drawn in; absent in the milestone column. */
+  laneId?: string;
+  milestone?: true;
+  /** A collapsed epic's hidden descendants; milestones stay drawn. */
+  hiddenTaskIds?: string[];
+  /** A collapsed epic's descendants' counts, as of the read. */
+  progress?: InitiativeProgress;
+}
+
+/** One lane per member root epic; `id` is the root Task's id. */
+export interface InitiativeLayoutLane extends InitiativeLayoutBox {
+  id: string;
+  projectId?: string;
+}
+
+/** The lanes of one Project, in the user's member order. */
+export interface InitiativeLayoutGroup extends InitiativeLayoutBox {
+  projectId?: string;
+  laneIds: string[];
+}
+
+/**
+ * A routed `blocks` arrow between two layout nodes: orthogonal segments from
+ * the blocker's border to the blocked node's border. Arrows inside a collapsed
+ * epic are gone, and those into or out of it end at its node.
+ */
+export interface InitiativeLayoutEdge {
+  from: string;
+  to: string;
+  points: InitiativeLayoutPoint[];
+}
+
+/**
+ * Where the map draws everything, laid out left to right on the server. It
+ * depends only on the graph's structure (members, hierarchy, the lane's
+ * Project, milestone marks, `blocks` links, order) and the collapsed set, so a
+ * status, title or archive change keeps it: `key` names exactly that input.
+ */
+export interface InitiativeLayout {
+  key: string;
+  /** The collapsed epics it applied, ascending by id. */
+  collapsed: string[];
+  width: number;
+  height: number;
+  groups: InitiativeLayoutGroup[];
+  lanes: InitiativeLayoutLane[];
+  /** The column on the right holding the milestones, when there are any. */
+  milestoneColumn?: InitiativeLayoutBox;
+  nodes: InitiativeLayoutNode[];
+  edges: InitiativeLayoutEdge[];
+}

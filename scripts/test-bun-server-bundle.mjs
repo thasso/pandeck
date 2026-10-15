@@ -817,6 +817,7 @@ async function checkBunPragma() {
   for (const [bundled, pragma] of [
     ["server.js", BUN_PRAGMA],
     ["workers/xhr-sync-worker.js", BUN_PRAGMA],
+    ["workers/initiative-layout-worker.js", BUN_PRAGMA],
     ["native/watcher-wrapper.js", BUN_CJS_PRAGMA],
   ]) {
     const firstLine = (await file(join(runtimeRoot, bundled)).text()).split(
@@ -1320,6 +1321,7 @@ try {
     "native/watcher.node",
     "personal-assistant-server",
     "web/index.html",
+    "workers/initiative-layout-worker.js",
     "workers/xhr-sync-worker.js",
   ])
     assert(
@@ -1330,7 +1332,11 @@ try {
   // Bun.spawnSync starts its child with the start-up environment whatever
   // process.env holds now, and no shim covers it. Server code cannot name it
   // (its types are Node's); this keeps it out of every bundled dependency.
-  for (const bundled of ["server.js", "workers/xhr-sync-worker.js"])
+  for (const bundled of [
+    "server.js",
+    "workers/initiative-layout-worker.js",
+    "workers/xhr-sync-worker.js",
+  ])
     assert(
       !/\bBun\s*(?:\.\s*spawnSync\b|\[\s*["'`]spawnSync)/.test(
         await file(join(runtimeRoot, bundled)).text(),

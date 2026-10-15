@@ -202,7 +202,9 @@ per-surface sub-tasks — no page invents its own delta format.
   Initiatives on that session's Tasks. Both fan-outs run on hot paths, so their
   walks are pinned to index searches (`initiativeStoreQueryPlan.test.ts`). The
   subscribe answer is a snapshot (`initiativeList`) or, when asked, a digest
-  with `getStateItems` catch-up.
+  with `getStateItems` catch-up. The graph read also carries the map's layout,
+  laid out in a worker thread when it is read and never from a write or a flush;
+  status changes keep it (`docs/initiatives.md`, Layout and placement).
 - Subagents: canonical durable thread registry summaries, with revisions in
   event sidecars; an authorized connection may hold one or more thread-detail
   topics, each with a bounded snapshot/digest/item read and its own

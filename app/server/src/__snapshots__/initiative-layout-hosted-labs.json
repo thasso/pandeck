@@ -1,0 +1,1074 @@
+{
+ "width": 3356,
+ "height": 1048,
+ "collapsed": [],
+ "groups": [
+  {
+   "projectId": "fixture-sdc",
+   "laneIds": [
+    "SDC"
+   ],
+   "x": 24,
+   "y": 24,
+   "width": 2648,
+   "height": 376
+  },
+  {
+   "projectId": "fixture-stardust",
+   "laneIds": [
+    "LAB"
+   ],
+   "x": 24,
+   "y": 440,
+   "width": 2648,
+   "height": 272
+  },
+  {
+   "projectId": "fixture-srs",
+   "laneIds": [
+    "SRS"
+   ],
+   "x": 24,
+   "y": 752,
+   "width": 2648,
+   "height": 272
+  }
+ ],
+ "lanes": [
+  {
+   "id": "SDC",
+   "projectId": "fixture-sdc",
+   "x": 36,
+   "y": 56,
+   "width": 2624,
+   "height": 332
+  },
+  {
+   "id": "LAB",
+   "projectId": "fixture-stardust",
+   "x": 36,
+   "y": 472,
+   "width": 2624,
+   "height": 228
+  },
+  {
+   "id": "SRS",
+   "projectId": "fixture-srs",
+   "x": 36,
+   "y": 784,
+   "width": 2624,
+   "height": 228
+  }
+ ],
+ "milestoneColumn": {
+  "x": 2724,
+  "y": 24,
+  "width": 608,
+  "height": 1000
+ },
+ "nodes": [
+  {
+   "id": "external:OUT-REVIEW:SDC",
+   "kind": "external",
+   "taskId": "OUT-REVIEW",
+   "laneId": "SDC",
+   "x": 52,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC",
+   "kind": "task",
+   "taskId": "SDC",
+   "laneId": "SDC",
+   "x": 388,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC1",
+   "kind": "task",
+   "taskId": "SDC1",
+   "laneId": "SDC",
+   "x": 388,
+   "y": 103,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC2",
+   "kind": "task",
+   "taskId": "SDC2",
+   "laneId": "SDC",
+   "x": 724,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC3",
+   "kind": "task",
+   "taskId": "SDC3",
+   "laneId": "SDC",
+   "x": 1060,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC4",
+   "kind": "task",
+   "taskId": "SDC4",
+   "laneId": "SDC",
+   "x": 1060,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC4a",
+   "kind": "task",
+   "taskId": "SDC4a",
+   "laneId": "SDC",
+   "x": 388,
+   "y": 300,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC4b",
+   "kind": "task",
+   "taskId": "SDC4b",
+   "laneId": "SDC",
+   "x": 724,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC5",
+   "kind": "task",
+   "taskId": "SDC5",
+   "laneId": "SDC",
+   "x": 1396,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC6",
+   "kind": "task",
+   "taskId": "SDC6",
+   "laneId": "SDC",
+   "x": 1732,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC7",
+   "kind": "task",
+   "taskId": "SDC7",
+   "laneId": "SDC",
+   "x": 1396,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC8",
+   "kind": "task",
+   "taskId": "SDC8",
+   "laneId": "SDC",
+   "x": 1732,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC9",
+   "kind": "task",
+   "taskId": "SDC9",
+   "laneId": "SDC",
+   "x": 2068,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB",
+   "kind": "task",
+   "taskId": "LAB",
+   "laneId": "LAB",
+   "x": 388,
+   "y": 508,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB1",
+   "kind": "task",
+   "taskId": "LAB1",
+   "laneId": "LAB",
+   "x": 1060,
+   "y": 508,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB2",
+   "kind": "task",
+   "taskId": "LAB2",
+   "laneId": "LAB",
+   "x": 1396,
+   "y": 612,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB3",
+   "kind": "task",
+   "taskId": "LAB3",
+   "laneId": "LAB",
+   "x": 1732,
+   "y": 612,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB4",
+   "kind": "task",
+   "taskId": "LAB4",
+   "laneId": "LAB",
+   "x": 2068,
+   "y": 612,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB5",
+   "kind": "task",
+   "taskId": "LAB5",
+   "laneId": "LAB",
+   "x": 1396,
+   "y": 508,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB6",
+   "kind": "task",
+   "taskId": "LAB6",
+   "laneId": "LAB",
+   "x": 1732,
+   "y": 508,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB7",
+   "kind": "task",
+   "taskId": "LAB7",
+   "laneId": "LAB",
+   "x": 2068,
+   "y": 508,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB8",
+   "kind": "task",
+   "taskId": "LAB8",
+   "laneId": "LAB",
+   "x": 2404,
+   "y": 508,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB9",
+   "kind": "task",
+   "taskId": "LAB9",
+   "laneId": "LAB",
+   "x": 388,
+   "y": 612,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "external:OUT-REVIEW:SRS",
+   "kind": "external",
+   "taskId": "OUT-REVIEW",
+   "laneId": "SRS",
+   "x": 52,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS",
+   "kind": "task",
+   "taskId": "SRS",
+   "laneId": "SRS",
+   "x": 388,
+   "y": 859,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS1",
+   "kind": "task",
+   "taskId": "SRS1",
+   "laneId": "SRS",
+   "x": 1060,
+   "y": 924,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS2",
+   "kind": "task",
+   "taskId": "SRS2",
+   "laneId": "SRS",
+   "x": 1396,
+   "y": 924,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS3",
+   "kind": "task",
+   "taskId": "SRS3",
+   "laneId": "SRS",
+   "x": 1732,
+   "y": 924,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS4",
+   "kind": "task",
+   "taskId": "SRS4",
+   "laneId": "SRS",
+   "x": 1732,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS5",
+   "kind": "task",
+   "taskId": "SRS5",
+   "laneId": "SRS",
+   "x": 2068,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS6",
+   "kind": "task",
+   "taskId": "SRS6",
+   "laneId": "SRS",
+   "x": 1060,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS7",
+   "kind": "task",
+   "taskId": "SRS7",
+   "laneId": "SRS",
+   "x": 2404,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS8",
+   "kind": "task",
+   "taskId": "SRS8",
+   "laneId": "SRS",
+   "x": 1396,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "external:OUT-LEGAL:milestones",
+   "kind": "external",
+   "taskId": "OUT-LEGAL",
+   "x": 2740,
+   "y": 300,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "RELEASE",
+   "kind": "task",
+   "taskId": "RELEASE",
+   "milestone": true,
+   "x": 3076,
+   "y": 300,
+   "width": 240,
+   "height": 72
+  }
+ ],
+ "edges": [
+  {
+   "from": "external:OUT-REVIEW:SDC",
+   "to": "SDC2",
+   "points": [
+    {
+     "x": 292,
+     "y": 128
+    },
+    {
+     "x": 302,
+     "y": 128
+    },
+    {
+     "x": 302,
+     "y": 92
+    },
+    {
+     "x": 648,
+     "y": 92
+    },
+    {
+     "x": 648,
+     "y": 140
+    },
+    {
+     "x": 724,
+     "y": 140
+    }
+   ]
+  },
+  {
+   "from": "SDC1",
+   "to": "SDC2",
+   "points": [
+    {
+     "x": 628,
+     "y": 139
+    },
+    {
+     "x": 638,
+     "y": 139
+    },
+    {
+     "x": 638,
+     "y": 116
+    },
+    {
+     "x": 724,
+     "y": 116
+    }
+   ]
+  },
+  {
+   "from": "SDC2",
+   "to": "SDC3",
+   "points": [
+    {
+     "x": 964,
+     "y": 128
+    },
+    {
+     "x": 1060,
+     "y": 128
+    }
+   ]
+  },
+  {
+   "from": "SDC4b",
+   "to": "SDC4",
+   "points": [
+    {
+     "x": 964,
+     "y": 232
+    },
+    {
+     "x": 1060,
+     "y": 232
+    }
+   ]
+  },
+  {
+   "from": "SDC4a",
+   "to": "SDC4b",
+   "points": [
+    {
+     "x": 628,
+     "y": 336
+    },
+    {
+     "x": 638,
+     "y": 336
+    },
+    {
+     "x": 638,
+     "y": 232
+    },
+    {
+     "x": 724,
+     "y": 232
+    }
+   ]
+  },
+  {
+   "from": "SDC3",
+   "to": "SDC5",
+   "points": [
+    {
+     "x": 1300,
+     "y": 116
+    },
+    {
+     "x": 1310,
+     "y": 116
+    },
+    {
+     "x": 1310,
+     "y": 128
+    },
+    {
+     "x": 1396,
+     "y": 128
+    }
+   ]
+  },
+  {
+   "from": "SDC5",
+   "to": "SDC6",
+   "points": [
+    {
+     "x": 1636,
+     "y": 128
+    },
+    {
+     "x": 1732,
+     "y": 128
+    }
+   ]
+  },
+  {
+   "from": "SRS6",
+   "to": "SDC7",
+   "points": [
+    {
+     "x": 1300,
+     "y": 844
+    },
+    {
+     "x": 1320,
+     "y": 844
+    },
+    {
+     "x": 1320,
+     "y": 232
+    },
+    {
+     "x": 1396,
+     "y": 232
+    }
+   ]
+  },
+  {
+   "from": "SDC7",
+   "to": "SDC8",
+   "points": [
+    {
+     "x": 1636,
+     "y": 232
+    },
+    {
+     "x": 1732,
+     "y": 232
+    }
+   ]
+  },
+  {
+   "from": "SDC6",
+   "to": "SDC9",
+   "points": [
+    {
+     "x": 1972,
+     "y": 128
+    },
+    {
+     "x": 1982,
+     "y": 128
+    },
+    {
+     "x": 1982,
+     "y": 116
+    },
+    {
+     "x": 2068,
+     "y": 116
+    }
+   ]
+  },
+  {
+   "from": "SDC8",
+   "to": "SDC9",
+   "points": [
+    {
+     "x": 1972,
+     "y": 232
+    },
+    {
+     "x": 1982,
+     "y": 232
+    },
+    {
+     "x": 1982,
+     "y": 140
+    },
+    {
+     "x": 2068,
+     "y": 140
+    }
+   ]
+  },
+  {
+   "from": "LAB1",
+   "to": "LAB2",
+   "points": [
+    {
+     "x": 1300,
+     "y": 544
+    },
+    {
+     "x": 1310,
+     "y": 544
+    },
+    {
+     "x": 1310,
+     "y": 648
+    },
+    {
+     "x": 1396,
+     "y": 648
+    }
+   ]
+  },
+  {
+   "from": "LAB2",
+   "to": "LAB3",
+   "points": [
+    {
+     "x": 1636,
+     "y": 636
+    },
+    {
+     "x": 1646,
+     "y": 636
+    },
+    {
+     "x": 1646,
+     "y": 648
+    },
+    {
+     "x": 1732,
+     "y": 648
+    }
+   ]
+  },
+  {
+   "from": "LAB3",
+   "to": "LAB4",
+   "points": [
+    {
+     "x": 1972,
+     "y": 648
+    },
+    {
+     "x": 2068,
+     "y": 648
+    }
+   ]
+  },
+  {
+   "from": "SDC3",
+   "to": "LAB5",
+   "points": [
+    {
+     "x": 1300,
+     "y": 140
+    },
+    {
+     "x": 1330,
+     "y": 140
+    },
+    {
+     "x": 1330,
+     "y": 544
+    },
+    {
+     "x": 1396,
+     "y": 544
+    }
+   ]
+  },
+  {
+   "from": "LAB5",
+   "to": "LAB6",
+   "points": [
+    {
+     "x": 1636,
+     "y": 544
+    },
+    {
+     "x": 1732,
+     "y": 544
+    }
+   ]
+  },
+  {
+   "from": "LAB6",
+   "to": "LAB7",
+   "points": [
+    {
+     "x": 1972,
+     "y": 544
+    },
+    {
+     "x": 2068,
+     "y": 544
+    }
+   ]
+  },
+  {
+   "from": "LAB4",
+   "to": "LAB8",
+   "points": [
+    {
+     "x": 2308,
+     "y": 648
+    },
+    {
+     "x": 2318,
+     "y": 648
+    },
+    {
+     "x": 2318,
+     "y": 532
+    },
+    {
+     "x": 2404,
+     "y": 532
+    }
+   ]
+  },
+  {
+   "from": "LAB7",
+   "to": "LAB8",
+   "points": [
+    {
+     "x": 2308,
+     "y": 544
+    },
+    {
+     "x": 2328,
+     "y": 544
+    },
+    {
+     "x": 2328,
+     "y": 556
+    },
+    {
+     "x": 2404,
+     "y": 556
+    }
+   ]
+  },
+  {
+   "from": "SRS1",
+   "to": "SRS2",
+   "points": [
+    {
+     "x": 1300,
+     "y": 960
+    },
+    {
+     "x": 1396,
+     "y": 960
+    }
+   ]
+  },
+  {
+   "from": "external:OUT-REVIEW:SRS",
+   "to": "SRS3",
+   "points": [
+    {
+     "x": 292,
+     "y": 856
+    },
+    {
+     "x": 302,
+     "y": 856
+    },
+    {
+     "x": 302,
+     "y": 848
+    },
+    {
+     "x": 638,
+     "y": 848
+    },
+    {
+     "x": 638,
+     "y": 869
+    },
+    {
+     "x": 974,
+     "y": 869
+    },
+    {
+     "x": 974,
+     "y": 902
+    },
+    {
+     "x": 1310,
+     "y": 902
+    },
+    {
+     "x": 1310,
+     "y": 911
+    },
+    {
+     "x": 1656,
+     "y": 911
+    },
+    {
+     "x": 1656,
+     "y": 972
+    },
+    {
+     "x": 1732,
+     "y": 972
+    }
+   ]
+  },
+  {
+   "from": "SRS2",
+   "to": "SRS3",
+   "points": [
+    {
+     "x": 1636,
+     "y": 960
+    },
+    {
+     "x": 1646,
+     "y": 960
+    },
+    {
+     "x": 1646,
+     "y": 948
+    },
+    {
+     "x": 1732,
+     "y": 948
+    }
+   ]
+  },
+  {
+   "from": "LAB2",
+   "to": "SRS4",
+   "points": [
+    {
+     "x": 1636,
+     "y": 660
+    },
+    {
+     "x": 1646,
+     "y": 660
+    },
+    {
+     "x": 1646,
+     "y": 856
+    },
+    {
+     "x": 1732,
+     "y": 856
+    }
+   ]
+  },
+  {
+   "from": "SRS3",
+   "to": "SRS5",
+   "points": [
+    {
+     "x": 1972,
+     "y": 960
+    },
+    {
+     "x": 1982,
+     "y": 960
+    },
+    {
+     "x": 1982,
+     "y": 844
+    },
+    {
+     "x": 2068,
+     "y": 844
+    }
+   ]
+  },
+  {
+   "from": "SRS4",
+   "to": "SRS5",
+   "points": [
+    {
+     "x": 1972,
+     "y": 856
+    },
+    {
+     "x": 1992,
+     "y": 856
+    },
+    {
+     "x": 1992,
+     "y": 868
+    },
+    {
+     "x": 2068,
+     "y": 868
+    }
+   ]
+  },
+  {
+   "from": "SRS5",
+   "to": "SRS7",
+   "points": [
+    {
+     "x": 2308,
+     "y": 856
+    },
+    {
+     "x": 2404,
+     "y": 856
+    }
+   ]
+  },
+  {
+   "from": "SRS6",
+   "to": "SRS8",
+   "points": [
+    {
+     "x": 1300,
+     "y": 868
+    },
+    {
+     "x": 1310,
+     "y": 868
+    },
+    {
+     "x": 1310,
+     "y": 856
+    },
+    {
+     "x": 1396,
+     "y": 856
+    }
+   ]
+  },
+  {
+   "from": "SDC9",
+   "to": "RELEASE",
+   "points": [
+    {
+     "x": 2308,
+     "y": 128
+    },
+    {
+     "x": 2318,
+     "y": 128
+    },
+    {
+     "x": 2318,
+     "y": 186
+    },
+    {
+     "x": 2654,
+     "y": 186
+    },
+    {
+     "x": 2654,
+     "y": 255
+    },
+    {
+     "x": 3010,
+     "y": 255
+    },
+    {
+     "x": 3010,
+     "y": 354
+    },
+    {
+     "x": 3076,
+     "y": 354
+    }
+   ]
+  },
+  {
+   "from": "LAB8",
+   "to": "RELEASE",
+   "points": [
+    {
+     "x": 2644,
+     "y": 544
+    },
+    {
+     "x": 2654,
+     "y": 544
+    },
+    {
+     "x": 2654,
+     "y": 382
+    },
+    {
+     "x": 3000,
+     "y": 382
+    },
+    {
+     "x": 3000,
+     "y": 336
+    },
+    {
+     "x": 3076,
+     "y": 336
+    }
+   ]
+  },
+  {
+   "from": "external:OUT-LEGAL:milestones",
+   "to": "RELEASE",
+   "points": [
+    {
+     "x": 2980,
+     "y": 336
+    },
+    {
+     "x": 2990,
+     "y": 336
+    },
+    {
+     "x": 2990,
+     "y": 318
+    },
+    {
+     "x": 3076,
+     "y": 318
+    }
+   ]
+  }
+ ]
+}
