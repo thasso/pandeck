@@ -22,6 +22,7 @@ import {
 import {
   AgentSpawnRefusedError,
   listSpawnableAgents,
+  resolveAgentOnRuntime,
   resolveAgentSpawn,
   setAgentSpawnSourcesForTests,
 } from "./agentSpawn.ts";
@@ -258,6 +259,47 @@ test("a listing keeps every listed model when only the default cannot run", asyn
   assert.match(
     text,
     /other listed models that resolve now, named as modelId: sol \(openai-codex\/gpt-6\.1-sol/,
+  );
+});
+
+test("a picked runtime that is a listed model at its effort runs as listed, pin included", async () => {
+  models = [
+    { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+    model("openai-codex", "gpt-6.1-sol"),
+  ];
+  write(
+    "test-reviewer",
+    reviewer({
+      model: undefined,
+      models: ["sol", "claude-opus-5-5"],
+      effort: "high",
+    }),
+  );
+  const listed = await resolveAgentOnRuntime(
+    "test-reviewer",
+    { provider: "claude-sdk", modelId: "opus", thinkingLevel: "high" },
+    "acct-claude-sdk",
+  );
+  assert.equal(listed.runtimeSource, "definition");
+  assert.equal(listed.pinnedModel, "claude-opus-5-5");
+  // Another effort is the user's own pick: no pin, and the role is the same.
+  const picked = await resolveAgentOnRuntime(
+    "test-reviewer",
+    { provider: "claude-sdk", modelId: "opus", thinkingLevel: "low" },
+    "acct-claude-sdk",
+  );
+  assert.equal(picked.runtimeSource, "user");
+  assert.equal(picked.pinnedModel, undefined);
+  assert.deepEqual(picked.denyTools, listed.denyTools);
+  assert.equal(picked.body, listed.body);
+  offered = false;
+  await assert.rejects(
+    resolveAgentOnRuntime(
+      "test-reviewer",
+      { provider: "claude-sdk", modelId: "opus", thinkingLevel: "high" },
+      "acct-claude-sdk",
+    ),
+    /the account picked for it \(Account acct-claude-sdk\) does not offer claude-sdk\/opus/,
   );
 });
 

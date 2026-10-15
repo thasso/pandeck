@@ -34,6 +34,7 @@ async function agentRuntimes(
         ? {
             problem: row.problem,
             ...(row.listed ? { models: row.listed.map(listedSummary) } : {}),
+            ...(row.persona ? { persona: row.persona } : {}),
           }
         : {
             persona: row.runtime.agent.persona,

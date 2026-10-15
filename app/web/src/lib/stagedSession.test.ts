@@ -29,7 +29,8 @@ describe("staged session record", () => {
 
   it("carries the agent only when a restage passes it on", () => {
     expect(agentDraft.agent).toBe("test-reviewer");
-    // A model, effort or account pick restages without it, from any picker.
+    // A model, effort or account pick passes it on (App's pickers do); a
+    // restage that does not, a persona pick or a fresh start, drops it.
     const repicked = stagedSessionRecord({
       id: agentDraft.id,
       harness: "claude-sdk",
@@ -159,6 +160,30 @@ describe("re-issuing a failed first send", () => {
     ).toBe("test-reviewer");
   });
 
+  it.each([
+    [false, true],
+    [true, false],
+  ])(
+    "takes the enterprise requirement from the draft (held %s, now %s)",
+    (before, now) => {
+      const sent = reissuedFirstSend(
+        { ...held, ...(before ? { requiresEnterprise: true } : {}) },
+        {
+          harness: "claude-sdk",
+          agentType: "developer",
+          provider: "claude-sdk",
+          modelId: "opus",
+          thinkingLevel: "high",
+          requiresEnterprise: now,
+          agent: "test-reviewer",
+        },
+        { text: "again" },
+      );
+      if (now) expect(sent.requiresEnterprise).toBe(true);
+      else expect("requiresEnterprise" in sent).toBe(false);
+    },
+  );
+
   it("lands on the draft's own id when a restage gave it a new one", () => {
     const draft = {
       harness: "claude-sdk" as const,
@@ -219,7 +244,7 @@ describe("staging an agent definition", () => {
     expect(agentDraft(list, "nobody", accounts, "claude-1")).toBeUndefined();
   });
 
-  it("follows the library: keep, restage on a changed runtime, drop when gone", () => {
+  it("follows the library: keep its role whatever runs it, drop when gone", () => {
     const record = stagedSessionRecord({
       id: "draft",
       ...agentDraft(list, "test-reviewer", accounts, "claude-1")!,
@@ -240,7 +265,20 @@ describe("staging an agent definition", () => {
           },
         },
       }),
-    ).toBe("restage");
+    ).toBe("keep");
+    // A definition whose default cannot run still has its role.
+    expect(
+      reconcileStagedAgent(record, {
+        ...list,
+        agentRuntimes: {
+          "test-reviewer": {
+            problem: "Its default cannot run.",
+            persona: "developer",
+            models: [],
+          },
+        },
+      }),
+    ).toBe("keep");
     // A persona change is dropped, not restaged: the draft keeps the persona
     // its context was staged for.
     expect(

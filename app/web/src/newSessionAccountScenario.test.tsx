@@ -759,6 +759,121 @@ describe("named definitions keep account intent", () => {
   );
 });
 
+describe("a picked role keeps what the user picks to run it", () => {
+  /** Stage release-scribe: an assistant on sonnet at low effort. */
+  async function stageScribe(socket: ScenarioSocket): Promise<void> {
+    await act(async () =>
+      socket.receive({
+        type: "libraryList",
+        library: "agents",
+        list: {
+          ...settingsAgents,
+          entries: settingsAgents.entries.filter(
+            (entry) => entry.name === "release-scribe",
+          ),
+          diagnostics: [],
+          agentRuntimes: {
+            "release-scribe": {
+              persona: "assistant",
+              provider: "claude-sdk",
+              modelId: "sonnet",
+              thinkingLevel: "low",
+              models: [],
+            },
+          },
+        },
+      }),
+    );
+    await settle();
+    await click(
+      container!.querySelector<HTMLElement>(
+        'button[title^="Start as release-scribe:"]',
+      ),
+    );
+  }
+
+  /** Move the thinking slider to the model's level at `index`. */
+  async function setThinking(index: number): Promise<void> {
+    const slider = container!.querySelector<HTMLInputElement>(
+      'input[type="range"]',
+    )!;
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setValue.call(slider, String(index));
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+  }
+
+  it("an effort pick keeps the role, and the first send runs the pick", async () => {
+    const socket = await openNewSession([PERSONAL]);
+    await stageScribe(socket);
+    // sonnet: off, low, medium, high, xhigh.
+    await setThinking(3);
+    expect(
+      container!.querySelector(
+        'button[title="Start as a plain session instead of release-scribe"]',
+      ),
+    ).not.toBeNull();
+    await sendPrompt("Draft notes.");
+    expect(firstSend(socket)).toMatchObject({
+      agent: "release-scribe",
+      modelProvider: "claude-sdk",
+      modelId: "sonnet",
+      thinkingLevel: "high",
+    });
+  });
+
+  it("moves through personas and roles with the arrow keys, as one tab stop", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+    });
+    await stageScribe(socket);
+    const row = container!.querySelector(
+      '[role="listbox"][aria-label="Agent"]',
+    )!;
+    const options = [...row.querySelectorAll<HTMLElement>('[role="option"]')];
+    // The personas, then the role after them.
+    expect(options.length).toBeGreaterThan(2);
+    expect(options.at(-1)?.textContent).toBe("release-scribe");
+    // Roving focus: the row is one tab stop, not one per option.
+    expect(options.filter((option) => option.tabIndex === 0)).toHaveLength(1);
+    await act(async () => options[0]!.focus());
+    await act(async () => {
+      options[0]!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    });
+    expect(document.activeElement).toBe(options[1]);
+    await act(async () => {
+      options[1]!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    });
+    expect(document.activeElement).toBe(options[2]);
+  });
+
+  it("picking the plain persona leaves the role", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+    });
+    await stageScribe(socket);
+    expect(personaCard("Assistant")?.getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    await click(personaCard("Assistant"));
+    expect(personaCard("Assistant")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    await sendPrompt("Draft notes.");
+    expect("agent" in firstSend(socket)!).toBe(false);
+  });
+});
+
 describe("desktop Sessions quick-start usage", () => {
   it("subscribes on a cold /sessions load, updates meters and Automatic, and unsubscribes away", async () => {
     let picked = PERSONAL.id;

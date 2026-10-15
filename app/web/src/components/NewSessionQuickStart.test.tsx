@@ -529,7 +529,7 @@ describe("NewSessionQuickStart", () => {
   });
 });
 
-describe("agent definitions row", () => {
+describe("agent row: personas and definitions", () => {
   const claudeAccount = {
     id: "claude-default",
     name: "Default Claude",
@@ -568,10 +568,15 @@ describe("agent definitions row", () => {
       selectedAgent: "test-reviewer",
       profiles: [claudeAccount],
     });
-    expect(html).toContain("Agent definition");
+    expect(html).toContain('aria-label="Agent"');
+    expect(html).not.toContain("Agent definition");
     expect(html).toContain("test-reviewer");
     expect(html).toContain(
       'title="Start as a plain session instead of test-reviewer"',
+    );
+    // The persona is not the pick while a role is: one row, one choice.
+    expect(html).toMatch(
+      /aria-selected="false"[^>]*title="[^"]*"[^>]*>(?:(?!<\/button>).)*Assistant/s,
     );
     // The unusable one is shown, disabled, and its reason is visible text.
     expect(html).toMatch(
@@ -593,7 +598,46 @@ describe("agent definitions row", () => {
 
     const noClaude = render([], { agents: ready(agents), profiles: [] });
     expect(noClaude).toContain(
-      "<li>Agent &quot;test-reviewer&quot; cannot start here: no enabled account runs claude-sdk models.</li>",
+      "<li>Agent &quot;test-reviewer&quot; cannot start here: no enabled account runs a model it lists.</li>",
+    );
+  });
+
+  it("offers a definition whose default cannot start on another listed model", () => {
+    const html = render([], {
+      agents: ready({
+        ...agents,
+        agentRuntimes: {
+          ...agents.agentRuntimes,
+          "test-reviewer": {
+            problem: 'Agent "test-reviewer" cannot run on its default model.',
+            persona: "developer",
+            models: [
+              { spec: "gemini", problem: "No account offers it." },
+              {
+                spec: "opus",
+                provider: "claude-sdk",
+                modelId: "opus",
+                thinkingLevel: "high",
+              },
+            ],
+          },
+        },
+      }),
+      profiles: [claudeAccount],
+    });
+    expect(html).toMatch(
+      /<button(?![^>]*\sdisabled="")[^>]*title="Start as test-reviewer: Reviews tests\."/,
+    );
+    expect(html).not.toContain("cannot run on its default model");
+  });
+
+  it("selects the plain persona only while no role is picked", () => {
+    const html = render([], {
+      agents: ready(agents),
+      profiles: [claudeAccount],
+    });
+    expect(html).toMatch(
+      /aria-selected="true"[^>]*>(?:(?!<\/button>).)*Assistant/s,
     );
   });
 
@@ -614,18 +658,19 @@ describe("agent definitions row", () => {
   });
 
   it("shows no row unsubscribed or for an authoritatively empty library", () => {
-    expect(render([], {})).not.toContain("Agent definition");
-    expect(render([], { agents: idle() })).not.toContain("Agent definition");
+    // One persona and no definitions is no choice.
+    expect(render([], {})).not.toContain('aria-label="Agent"');
+    expect(render([], { agents: idle() })).not.toContain('aria-label="Agent"');
     expect(
       render([], {
         agents: ready({ ...agents, entries: [], agentRuntimes: {} }),
       }),
-    ).not.toContain("Agent definition");
+    ).not.toContain('aria-label="Agent"');
   });
 
   /** The markup inside the row's listbox, which may hold only its options. */
   function agentListbox(html: string): string {
-    const open = html.indexOf('role="listbox" aria-label="Agent definition"');
+    const open = html.indexOf('role="listbox" aria-label="Agent"');
     expect(open).toBeGreaterThan(-1);
     const start = html.indexOf(">", open) + 1;
     let depth = 1;
@@ -640,7 +685,7 @@ describe("agent definitions row", () => {
 
   it("reserves the row while the first read is out", () => {
     const html = render([], { agents: loading() });
-    expect(html).toContain("Agent definition");
+    expect(html).toContain('aria-label="Agent"');
     expect(html).toContain('aria-busy="true"');
     // R6: the placeholder is a labelled status region, not just a busy list.
     expect(html).toMatch(

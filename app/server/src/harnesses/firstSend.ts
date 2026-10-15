@@ -14,13 +14,15 @@ import {
   type CredentialProfileProvider,
   type Harness,
   type TaskSessionRef,
+  type ThinkingLevel,
 } from "@assistant/shared";
+import { AGENT_DEFAULT_EFFORT } from "../agents/agentLibrary.ts";
 import { publishAgentLibrary } from "../agents/agentLibraryList.ts";
 import type { SessionAgent } from "../agents/sessionAgent.ts";
 import {
   AgentSpawnRefusedError,
+  resolveAgentOnRuntime,
   resolveAgentSpawn,
-  type AgentSpawnRuntime,
 } from "../agents/agentSpawn.ts";
 import { resolveSessionAccount } from "../sessionAccount.ts";
 import type { LiveSession } from "../harness.ts";
@@ -91,15 +93,42 @@ interface FirstSendEngine {
   >;
 }
 
+/** What a first send starts as: the definition's role, on one runtime. */
+interface FirstSendAgent {
+  agent: SessionAgent;
+  provider: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+}
+
 /**
- * The definition a send starts its session as, resolved now on the picked
- * account: it decides the model and effort, and the persona and engine the
- * client staged must be its own.
+ * The runtime a send names, when it names a model: the user picked it on the
+ * new-session page, and that pick is their approval. A send naming none runs
+ * the definition's default.
+ */
+function pickedRuntime(
+  req: FirstSendRequest,
+):
+  | { provider: string; modelId: string; thinkingLevel: ThinkingLevel }
+  | undefined {
+  if (req.modelProvider === undefined || req.modelId === undefined)
+    return undefined;
+  return {
+    provider: req.modelProvider,
+    modelId: req.modelId,
+    thinkingLevel: req.thinkingLevel ?? AGENT_DEFAULT_EFFORT,
+  };
+}
+
+/**
+ * The definition a send starts its session as, resolved now: its role, on
+ * the runtime the send names or else its default on the picked account. The
+ * persona and engine the client staged must be its own.
  */
 async function firstSendAgent(
   req: FirstSendRequest,
   profileId: string,
-): Promise<{ refusal: FirstSendRefusal } | { agent?: AgentSpawnRuntime }> {
+): Promise<{ refusal: FirstSendRefusal } | { agent?: FirstSendAgent }> {
   const resolved = await resolveFirstSendAgent(req, profileId);
   // The browser picked from the `agents` list it holds. A refusal means that
   // list no longer matches the library (a hand edit, a model or account
@@ -119,7 +148,7 @@ async function firstSendAgent(
 async function agentAtCreation(
   req: FirstSendRequest,
   profileId: string,
-  prepared: AgentSpawnRuntime | undefined,
+  prepared: FirstSendAgent | undefined,
 ): Promise<{ refusal: FirstSendRefusal } | { agent?: SessionAgent }> {
   if (!prepared) return {};
   // The same checks as `prepare`: a persona or engine that no longer matches
@@ -145,14 +174,20 @@ async function agentAtCreation(
 async function resolveFirstSendAgent(
   req: FirstSendRequest,
   profileId: string,
-): Promise<{ refusal: FirstSendRefusal } | { agent?: AgentSpawnRuntime }> {
+): Promise<{ refusal: FirstSendRefusal } | { agent?: FirstSendAgent }> {
   if (req.agent === undefined) return {};
-  let agent: AgentSpawnRuntime;
+  let agent: FirstSendAgent;
   try {
-    agent = await resolveAgentSpawn(req.agent, undefined, {
-      profileId,
-      requiresEnterprise: req.requiresEnterprise === true,
-    });
+    const picked = pickedRuntime(req);
+    agent = picked
+      ? {
+          ...picked,
+          agent: await resolveAgentOnRuntime(req.agent, picked, profileId),
+        }
+      : await resolveAgentSpawn(req.agent, undefined, {
+          profileId,
+          requiresEnterprise: req.requiresEnterprise === true,
+        });
   } catch (error) {
     if (error instanceof AgentSpawnRefusedError)
       return { refusal: { message: error.message } };
@@ -168,23 +203,12 @@ async function resolveFirstSendAgent(
     };
   const harnessRefusal = agentHarnessRefusal(req.harness, agent);
   if (harnessRefusal) return { refusal: harnessRefusal };
-  // The pickers showed the definition's runtime when it was picked. If the
-  // definition changed since, running its new one would differ from what the
-  // user saw; say so instead of running it silently.
-  const staged = [req.modelProvider, req.modelId, req.thinkingLevel];
-  const current = [agent.provider, agent.modelId, agent.thinkingLevel];
-  if (staged.some((value, at) => value !== undefined && value !== current[at]))
-    return {
-      refusal: {
-        message: `Agent "${agent.agent.name}" changed since it was picked: it now runs on ${agent.provider}/${agent.modelId} at ${agent.thinkingLevel} effort. The pickers now show its current runtime; send again to start it.`,
-      },
-    };
   return { agent };
 }
 
 function agentHarnessRefusal(
   harness: Harness,
-  agent: AgentSpawnRuntime,
+  agent: FirstSendAgent,
 ): FirstSendRefusal | undefined {
   return harnessForModelProvider(agent.provider) === harness
     ? undefined
@@ -200,10 +224,13 @@ async function firstSendAccount(
   provider: CredentialProfileProvider,
 ): Promise<AccountAdmission> {
   try {
-    // A named definition fixes the model and effort before Automatic chooses
-    // an account, even when a client omits those optional preview fields.
+    // A named definition without a picked runtime fixes its default model and
+    // effort before Automatic chooses an account; a picked runtime routes like
+    // any send.
     const agent =
-      req.agent !== undefined && req.credentialProfileId === undefined
+      req.agent !== undefined &&
+      req.credentialProfileId === undefined &&
+      !pickedRuntime(req)
         ? await resolveAgentSpawn(req.agent, undefined, {
             requiresEnterprise: req.requiresEnterprise === true,
           })
@@ -261,7 +288,7 @@ const engines: Record<Harness, FirstSendEngine> = {
       if ("refusal" in started) return started;
       const { agent } = started;
       // A model the account does not offer ends the send before a worktree is
-      // provisioned for it. An agent's is its definition's.
+      // provisioned for it. An agent's is the one it resolved to.
       const provider = agent?.provider ?? req.modelProvider;
       const modelId = agent?.modelId ?? req.modelId;
       let model: Awaited<ReturnType<typeof findModelForProfile>>;

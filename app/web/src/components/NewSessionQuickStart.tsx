@@ -15,13 +15,13 @@ import {
   type ThinkingLevel,
   type WorktreeRecord,
   type CredentialProfileSummary,
-  accountProviderForModelProvider,
   agentRuntimeOf,
   type EntryLibraryList,
 } from "@assistant/shared";
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { orderCredentialProfilesByProvider } from "../lib/credentialProfiles.ts";
+import { agentPrefill } from "../lib/stagedSession.ts";
 import {
   EmptyBox,
   ErrorNote,
@@ -257,10 +257,11 @@ export function NewSessionQuickStart({
   thinkingLevel: ThinkingLevel;
   onSelectThinking: (level: ThinkingLevel) => void;
   /**
-   * The agent definitions library (`docs/agent-definitions.md`): picking one
-   * stages its persona, model and effort, and the session starts as that
-   * agent. The row reserves its place while the first read is out and keeps
-   * its pills through a rescan; an authoritatively empty library has no row.
+   * The agent definitions library (`docs/agent-definitions.md`), offered in
+   * the Agent row after the personas: picking one stages its persona and
+   * pre-fills its first listed model and effort, which stay free to change,
+   * and the session starts as that agent. Its pills reserve their place while
+   * the first read is out and stay through a rescan.
    */
   agents?: LoadState<EntryLibraryList> | undefined;
   selectedAgent?: string | null;
@@ -299,37 +300,6 @@ export function NewSessionQuickStart({
     ? orderedCredentialProfiles.filter((profile) => profile.enterprise)
     : orderedCredentialProfiles;
 
-  const agentPills =
-    agentTypes.length > 1 ? (
-      <ToggleGroup
-        variant="outline"
-        value={[selectedAgentType]}
-        onValueChange={(values) => {
-          const next = values[0] as AgentType | undefined;
-          if (next) onSelectAgentType(next);
-        }}
-      >
-        {agentTypes.map((type) => {
-          const display = AGENT_TYPE_DISPLAY[type];
-          const selected = type === selectedAgentType;
-          return (
-            <ToggleGroupItem
-              key={type}
-              value={type}
-              role="option"
-              aria-selected={selected}
-              title={display.desc}
-            >
-              <display.Icon
-                size={14}
-                className={selected ? display.activeColor : display.pillColor}
-              />
-              <span className="min-w-0 truncate">{display.label}</span>
-            </ToggleGroupItem>
-          );
-        })}
-      </ToggleGroup>
-    ) : null;
   return (
     // One card around the whole configuration: what the session starts in
     // and what runs it read as one object above the composer. It sits in the
@@ -483,22 +453,16 @@ export function NewSessionQuickStart({
           separated from the project/worktree staging above. */}
         <hr className="mx-4 border-border" />
 
-        <AgentDefinitionRow
+        {/* Build/Plan is the composer's Plan switch, not a row here. */}
+        <AgentRow
+          agentTypes={agentTypes}
+          selectedAgentType={selectedAgentType}
+          onSelectAgentType={onSelectAgentType}
           state={agents}
           accounts={credentialProfilesLoaded ? credentialProfiles : undefined}
           selectedAgent={selectedAgent}
           onSelectAgent={onSelectAgent}
         />
-
-        {/* Build/Plan is the composer's Plan switch, not a row here. */}
-        {agentPills ? (
-          <QuickRow
-            label="Agent"
-            scrollKey={`${selectedAgentType}:${agentTypes.length}`}
-          >
-            {agentPills}
-          </QuickRow>
-        ) : null}
 
         {credentialProfilesError ? (
           <div className="px-4">
@@ -631,100 +595,166 @@ export function NewSessionQuickStart({
 }
 
 /**
- * The "Agent definition" row: one pill per definition, a definition that
- * cannot start disabled with its reason. Idle (nobody subscribed) draws
- * nothing; the first read reserves the row (R4); a rescan keeps the pills
- * with an indicator (R2); a failed read says so in place.
+ * The "Agent" row: the plain personas, then the user's agent definitions. To
+ * the user both are who runs the session; a definition adds its role on top
+ * of its persona (`docs/agent-definitions.md` "UI"). Picking a persona leaves
+ * a picked role. A definition pre-fills its first listed model and effort,
+ * which the user may then change freely; one that has none to start on is
+ * not offered, with its reason below the row.
+ *
+ * The definitions' list: idle (nobody subscribed) adds nothing; the first
+ * read reserves their pills (R4); a rescan keeps them with an indicator (R2);
+ * a failed read says so in place.
  */
-function AgentDefinitionRow({
+function AgentRow({
+  agentTypes,
+  selectedAgentType,
+  onSelectAgentType,
   state,
   accounts,
   selectedAgent,
   onSelectAgent,
 }: {
+  agentTypes: AgentType[];
+  selectedAgentType: AgentType;
+  onSelectAgentType: (agentType: AgentType) => void;
   state: LoadState<EntryLibraryList> | undefined;
   /**
    * The enabled accounts, once known. A definition is staged on an account of
-   * its model's provider, so none is offered before the accounts are read.
+   * its pre-filled model's provider, so none is offered before they are read.
    */
   accounts: ReadonlyArray<{ provider: string }> | undefined;
   selectedAgent: string | null;
   onSelectAgent: (name: string | null) => void;
 }) {
-  if (!state || state.status === "idle") return null;
-  const agents = dataOf(state);
-  const error = errorOf(state);
-  if (isInitialLoad(state))
-    return (
-      // The status wraps the row: a listbox holds only its options.
-      <div role="status" aria-label="Loading agent definitions">
-        <QuickRow label="Agent definition" busy>
-          {[0, 1].map((i) => (
-            <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
-          ))}
-        </QuickRow>
-      </div>
-    );
-  if (!agents)
-    return error ? (
-      <div className="px-4">
-        <ErrorNote message={error} />
-      </div>
-    ) : null;
-  // An authoritatively empty library has nothing to offer: no row.
-  if (agents.entries.length === 0 && !error) return null;
+  const listed = state && state.status !== "idle" ? state : undefined;
+  const agents = listed ? dataOf(listed) : undefined;
+  const error = listed ? errorOf(listed) : undefined;
+  const loading = listed !== undefined && isInitialLoad(listed);
+  const definitions = agents?.entries ?? [];
+  // One persona and no definitions is no choice: no row.
+  if (agentTypes.length <= 1 && definitions.length === 0 && !loading && !error)
+    return null;
   // Why each definition cannot start here, if it cannot: the server's reason,
-  // or no enabled account of its model's provider. Each names its definition,
+  // or no enabled account for any model it lists. Each names its definition,
   // so two alike still say which pill they explain.
   const problemOf = (name: string): string | undefined => {
+    if (!agents || !accounts) return undefined;
+    if (agentPrefill(agents, name, accounts)) return undefined;
     const runtime = agentRuntimeOf(agents, name);
     if (runtime?.problem !== undefined) return runtime.problem;
-    if (runtime && accounts && !hasAccountFor(accounts, runtime.provider))
-      return `Agent "${name}" cannot start here: no enabled account runs ${runtime.provider} models.`;
-    return undefined;
+    return `Agent "${name}" cannot start here: no enabled account runs a model it lists.`;
   };
-  const problems = agents.entries.flatMap((agent) => {
+  const problems = definitions.flatMap((agent) => {
     const problem = problemOf(agent.name);
     return problem === undefined ? [] : [{ name: agent.name, problem }];
   });
-  return (
-    <>
-      <QuickRow
-        label="Agent definition"
-        scrollKey={`${selectedAgent ?? ""}:${agents.entries.length}`}
+  // One single-choice group across personas and definitions, so the row is
+  // one tab stop with arrow-key focus, as the persona pills always were.
+  const current =
+    selectedAgent !== null
+      ? `agent:${selectedAgent}`
+      : `persona:${selectedAgentType}`;
+  const pill = "max-w-52 shrink-0 snap-start";
+  const row = (
+    <QuickRow
+      label="Agent"
+      busy={loading}
+      scrollKey={`${current}:${agentTypes.length}:${definitions.length}`}
+    >
+      <ToggleGroup
+        variant="outline"
+        value={[current]}
+        onValueChange={(values) => {
+          const next = values[0] as string | undefined;
+          // Pressing the picked role again unpicks it; the picked persona
+          // stays picked.
+          if (next === undefined) {
+            if (selectedAgent !== null) onSelectAgent(null);
+          } else if (next.startsWith("agent:")) {
+            onSelectAgent(next.slice("agent:".length));
+          } else {
+            onSelectAgentType(next.slice("persona:".length) as AgentType);
+          }
+        }}
       >
-        {agents.entries.map((agent) => {
-          const runtime = agentRuntimeOf(agents, agent.name);
-          const problem = problemOf(agent.name);
-          const selected = agent.name === selectedAgent;
+        {agentTypes.map((type) => {
+          const display = AGENT_TYPE_DISPLAY[type];
+          const selected = current === `persona:${type}`;
           return (
-            <QuickPill
-              key={agent.name}
-              selected={selected}
-              // A definition that cannot start is not offered; the picked one
-              // stays clickable so it can always be unpicked.
-              disabled={
-                !selected &&
-                (problem !== undefined ||
-                  runtime === undefined ||
-                  accounts === undefined)
-              }
-              title={
-                problem ??
-                (selected
-                  ? `Start as a plain session instead of ${agent.name}`
-                  : `Start as ${agent.name}: ${agent.description}`)
-              }
-              onClick={() => onSelectAgent(selected ? null : agent.name)}
+            <ToggleGroupItem
+              key={type}
+              value={`persona:${type}`}
+              role="option"
+              aria-selected={selected}
+              data-quick-selected={selected || undefined}
+              title={display.desc}
+              className={pill}
             >
-              <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
-              <span className="min-w-0 truncate">{agent.name}</span>
-            </QuickPill>
+              <display.Icon
+                size={14}
+                className={selected ? display.activeColor : display.pillColor}
+              />
+              <span className="min-w-0 truncate">{display.label}</span>
+            </ToggleGroupItem>
           );
         })}
-      </QuickRow>
+        {/* Personas, then the roles built on them, like the worktree row's
+            pinned group. */}
+        {agentTypes.length > 0 && (loading || definitions.length > 0) ? (
+          <div
+            aria-hidden
+            className="my-1 w-px shrink-0 self-stretch bg-border"
+          />
+        ) : null}
+        {loading
+          ? [0, 1].map((i) => (
+              <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
+            ))
+          : definitions.map((agent) => {
+              const problem = problemOf(agent.name);
+              const selected = current === `agent:${agent.name}`;
+              return (
+                <ToggleGroupItem
+                  key={`agent:${agent.name}`}
+                  value={`agent:${agent.name}`}
+                  role="option"
+                  aria-selected={selected}
+                  data-quick-selected={selected || undefined}
+                  // A definition that cannot start is not offered; the picked
+                  // one stays pressable so it can always be unpicked.
+                  disabled={
+                    !selected &&
+                    (problem !== undefined || accounts === undefined)
+                  }
+                  title={
+                    problem ??
+                    (selected
+                      ? `Start as a plain session instead of ${agent.name}`
+                      : `Start as ${agent.name}: ${agent.description}`)
+                  }
+                  className={pill}
+                >
+                  <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
+                  <span className="min-w-0 truncate">{agent.name}</span>
+                </ToggleGroupItem>
+              );
+            })}
+      </ToggleGroup>
+    </QuickRow>
+  );
+  return (
+    <>
+      {loading ? (
+        // The status wraps the row: a listbox holds only its options.
+        <div role="status" aria-label="Loading agent definitions">
+          {row}
+        </div>
+      ) : (
+        row
+      )}
       {/* Outside the listbox, and where a long row cannot scroll it away. */}
-      {isPending(state) ? (
+      {listed && isPending(listed) && !loading ? (
         <div className="flex justify-center px-4">
           <RefreshIndicator label="Rescanning agents" />
         </div>
@@ -745,13 +775,4 @@ function AgentDefinitionRow({
       ) : null}
     </>
   );
-}
-
-/** Whether an enabled account can run a model of this provider. */
-function hasAccountFor(
-  accounts: ReadonlyArray<{ provider: string }>,
-  modelProvider: string,
-): boolean {
-  const provider = accountProviderForModelProvider(modelProvider);
-  return accounts.some((account) => account.provider === provider);
 }

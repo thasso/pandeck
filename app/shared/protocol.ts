@@ -4590,11 +4590,13 @@ export type SessionIdleReason =
 
 /**
  * Who chose an agent session's runtime: one of the models its definition
- * lists, or the user in a proposal card.
+ * lists, the user in a proposal card, or the user's own pick on the
+ * new-session page.
  */
 export const SESSION_AGENT_RUNTIME_SOURCES = [
   "definition",
   "approval",
+  "user",
 ] as const;
 export type SessionAgentRuntimeSource =
   (typeof SESSION_AGENT_RUNTIME_SOURCES)[number];

@@ -68,7 +68,8 @@ export type AgentRuntimeSummary =
        * may be the one that cannot run.
        */
       models?: AgentListedModelSummary[];
-      persona?: never;
+      /** Its persona, when the definition could be read. */
+      persona?: "developer" | "assistant";
     };
 
 /** One model a definition lists, as it resolves now, or why it cannot run. */

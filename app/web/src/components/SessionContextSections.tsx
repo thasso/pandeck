@@ -21,6 +21,7 @@ import type {
   ApprovalGrant,
   BrowserRuntimeInfo,
   PendingPostReloadContinuation,
+  SessionAgentRuntimeSource,
   SessionAgentSummary,
   SessionArtifact,
   SessionSkillInvocation,
@@ -204,6 +205,13 @@ function PostReloadContinuationCard({
   );
 }
 
+/** Who chose an agent session's runtime, as the inspector says it. */
+const RUNTIME_SOURCE_LABELS: Record<SessionAgentRuntimeSource, string> = {
+  definition: "The definition's model list",
+  approval: "You, in a proposal card",
+  user: "You, on the new-session page",
+};
+
 /**
  * The agent definition this session runs as, as it was frozen at its start:
  * a later edit to the definition changes new spawns only, so this shows what
@@ -253,9 +261,7 @@ function AgentSection({
           </PropertyText>
           <PropertyLabel>Chosen by</PropertyLabel>
           <PropertyText className="text-foreground">
-            {agent.runtimeSource === "approval"
-              ? "You, in a proposal card"
-              : "The definition's model list"}
+            {RUNTIME_SOURCE_LABELS[agent.runtimeSource]}
           </PropertyText>
           {agent.denyTools.length > 0 ? (
             <>
