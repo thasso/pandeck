@@ -17,3 +17,4 @@ scripts/codemods/.eopt-*.txt
 # Nix build outputs
 result
 result-*
+app/web/component-preview/fixtures/local/
