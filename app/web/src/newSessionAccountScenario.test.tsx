@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppSettings,
+  AgentInfo,
+  WorktreeRecord,
   AccountPickPreviewResult,
   ClientMessage,
   CredentialProfileSummary,
@@ -87,6 +89,18 @@ vi.mock("./components/objectInspectors.tsx", async (importOriginal) => {
     await importOriginal<typeof import("./components/objectInspectors.tsx")>();
   return {
     ...real,
+    ProjectInspector: ({
+      onStartSession,
+    }: {
+      onStartSession: (id: string) => void;
+    }) => (
+      <button
+        data-testid="fresh-project"
+        onClick={() => onStartSession("default-project")}
+      >
+        Start in project
+      </button>
+    ),
     WorktreeInspector: ({
       onStartSession,
     }: {
@@ -197,13 +211,16 @@ function projection(profiles: CredentialProfileSummary[]) {
   };
 }
 
-function readyMessage(settings: Partial<AppSettings> = {}): ServerMessage {
+function readyMessage(
+  settings: Partial<AppSettings> = {},
+  agents: AgentInfo[] = [],
+): ServerMessage {
   return {
     type: "ready",
     serverBuild: { version: "0.0.0-test" },
     state: null,
     models: [sonnet],
-    agents: [],
+    agents,
     sessions: [],
     settings,
     speechToText: {
@@ -264,7 +281,11 @@ async function openNewSession(
   pick: (
     request: Record<string, unknown>,
   ) => string | null | AccountPickPreviewResult = () => null,
-  initial: { path?: string; settings?: Partial<AppSettings> } = {},
+  initial: {
+    path?: string;
+    settings?: Partial<AppSettings>;
+    agents?: AgentInfo[];
+  } = {},
 ): Promise<ScenarioSocket> {
   previews = [];
   refines = [];
@@ -302,7 +323,7 @@ async function openNewSession(
   const socket = ScenarioSocket.instances[0]!;
   await act(async () => {
     socket.open();
-    socket.receive(readyMessage(initial.settings));
+    socket.receive(readyMessage(initial.settings, initial.agents));
   });
   await settle();
   return socket;
@@ -374,6 +395,275 @@ function requiresEnterpriseSwitch(): HTMLElement | null {
     ? container!.querySelector<HTMLElement>(`#${label.htmlFor}`)
     : null;
 }
+
+const defaultProject = {
+  id: "default-project",
+  name: "Default project",
+  key: "DP",
+};
+const mainWorktree: WorktreeRecord = {
+  id: "main:default-project",
+  projectId: defaultProject.id,
+  isMain: true,
+  mainRepoRoot: "/projects/default",
+  path: "/projects/default",
+  branch: "trunk",
+  baseBranch: "trunk",
+  baseCommit: "abc",
+  status: "active",
+  sessionIds: [],
+  taskIds: [],
+  createdAt: 0,
+  updatedAt: 0,
+};
+const projectAgents: AgentInfo[] = [
+  { agentType: "assistant", label: "Assistant" },
+  { agentType: "developer", label: "Developer" },
+  { agentType: "workshop", label: "Workshop", devOnly: true },
+];
+
+async function receiveProjects(socket: ScenarioSocket): Promise<void> {
+  await act(async () =>
+    socket.receive({
+      type: "projectList",
+      list: {
+        request: { includeArchived: true },
+        projects: [defaultProject, { id: "other", name: "Other", key: "OT" }],
+        updatedAt: 1,
+      },
+      seq: 1,
+      revisions: [
+        { id: defaultProject.id, revision: 1 },
+        { id: "other", revision: 1 },
+      ],
+    }),
+  );
+  await settle();
+}
+
+async function receiveWorktrees(
+  socket: ScenarioSocket,
+  worktrees: WorktreeRecord[],
+): Promise<void> {
+  await act(async () =>
+    socket.receive({ type: "worktreeList", worktrees, updatedAt: Date.now() }),
+  );
+  await settle();
+}
+
+function projectCard(): HTMLElement | null {
+  return container!.querySelector('button[title="Narrow to Default project"]');
+}
+
+function selectedMain(): HTMLElement | null {
+  return container!.querySelector(
+    'button[title="Remove worktree main checkout"]',
+  );
+}
+
+function personaCard(name: string): HTMLElement | undefined {
+  return [...container!.querySelectorAll<HTMLElement>('[role="option"]')].find(
+    (node) => node.textContent === name,
+  );
+}
+
+describe("project-only session defaults", () => {
+  it("selects the project's main checkout and Developer, even when Workshop is available", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+    });
+    await receiveProjects(socket);
+    await receiveWorktrees(socket, [
+      { ...mainWorktree, id: "feature", isMain: false, updatedAt: 10 },
+      { ...mainWorktree, id: "other-main", projectId: "other" },
+      { ...mainWorktree, id: "removed-main", removedAt: 1 },
+      mainWorktree,
+    ]);
+    expect(selectedMain()).toBeNull();
+    await click(projectCard());
+    expect(selectedMain()).not.toBeNull();
+    expect(personaCard("Developer")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(firstSend(socket)).toBeUndefined();
+    await sendPrompt("Fix this project");
+    expect(firstSend(socket)).toMatchObject({
+      agentType: "developer",
+      worktreeId: mainWorktree.id,
+      projectId: defaultProject.id,
+      modelProvider: "claude-sdk",
+      modelId: "sonnet",
+    });
+  });
+
+  it("defaults a project already staged by its Start session action when worktrees arrive later", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+      path: `/projects/${defaultProject.id}`,
+    });
+    await receiveProjects(socket);
+    await click(container!.querySelector('[data-testid="fresh-project"]'));
+    expect(window.location.pathname).toBe("/sessions/create");
+    expect(selectedMain()).toBeNull();
+    await receiveWorktrees(socket, [mainWorktree]);
+    expect(selectedMain()).not.toBeNull();
+    expect(personaCard("Developer")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
+  it.each([false, true])(
+    "follows a project change with untouched defaults, clearing the old project first=%s",
+    async (clearFirst) => {
+      const socket = await openNewSession([PERSONAL], undefined, {
+        agents: projectAgents,
+      });
+      await receiveProjects(socket);
+      const otherMain = {
+        ...mainWorktree,
+        id: "main:other",
+        projectId: "other",
+      };
+      await receiveWorktrees(socket, [mainWorktree, otherMain]);
+      await click(projectCard());
+      expect(selectedMain()).not.toBeNull();
+      if (clearFirst)
+        await click(
+          container!.querySelector(
+            'button[title="Remove project Default project"]',
+          ),
+        );
+      await click(container!.querySelector('button[title="Narrow to Other"]'));
+      expect(selectedMain()).not.toBeNull();
+      expect(personaCard("Developer")?.getAttribute("aria-selected")).toBe(
+        "true",
+      );
+      await sendPrompt("Work on the other project");
+      expect(firstSend(socket)).toMatchObject({
+        agentType: "developer",
+        projectId: "other",
+        worktreeId: otherMain.id,
+      });
+    },
+  );
+
+  it.each(["persona", "worktree"])(
+    "does not treat an explicit %s pick as an untouched project default",
+    async (axis) => {
+      const socket = await openNewSession([PERSONAL], undefined, {
+        agents: projectAgents,
+      });
+      await receiveProjects(socket);
+      const feature = {
+        ...mainWorktree,
+        id: "feature",
+        isMain: false,
+        branch: "feature",
+      };
+      const otherMain = {
+        ...mainWorktree,
+        id: "main:other",
+        projectId: "other",
+      };
+      await receiveWorktrees(socket, [mainWorktree, feature, otherMain]);
+      await click(projectCard());
+      if (axis === "persona") await click(personaCard("Assistant"));
+      else {
+        await click(
+          container!.querySelector('button[title="Start in feature"]'),
+        );
+        await click(
+          container!.querySelector('button[title="Start in main checkout"]'),
+        );
+      }
+      await click(container!.querySelector('button[title="Narrow to Other"]'));
+      expect(selectedMain()).toBeNull();
+      expect(personaCard("Assistant")?.getAttribute("aria-selected")).toBe(
+        "true",
+      );
+    },
+  );
+
+  it("preserves an explicit persona picked before the project", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+    });
+    await receiveProjects(socket);
+    await click(personaCard("Developer"));
+    await click(personaCard("Assistant"));
+    await click(projectCard());
+    await receiveWorktrees(socket, [mainWorktree]);
+    expect(selectedMain()).toBeNull();
+    expect(personaCard("Assistant")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    await sendPrompt("Discuss this project");
+    expect(firstSend(socket)?.worktreeId).toBeUndefined();
+    expect(firstSend(socket)?.agentType).toBe("assistant");
+  });
+
+  it("does not restore a default worktree the user removed", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+    });
+    await receiveProjects(socket);
+    await receiveWorktrees(socket, [mainWorktree]);
+    await click(projectCard());
+    await click(selectedMain());
+    await receiveWorktrees(socket, [{ ...mainWorktree, updatedAt: 10 }]);
+    expect(selectedMain()).toBeNull();
+    expect(personaCard("Assistant")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
+  it.each(["existing", "new"])(
+    "keeps a %s worktree choice when the main checkout arrives later",
+    async (choice) => {
+      const socket = await openNewSession([PERSONAL], undefined, {
+        agents: projectAgents,
+      });
+      await receiveProjects(socket);
+      const feature = {
+        ...mainWorktree,
+        id: "feature",
+        isMain: false,
+        branch: "feature",
+      };
+      await receiveWorktrees(socket, [feature]);
+      await click(projectCard());
+      await click(
+        container!.querySelector(
+          choice === "new"
+            ? 'button[title="Create a worktree in Default project when you send"]'
+            : 'button[title="Start in feature"]',
+        ),
+      );
+      await receiveWorktrees(socket, [feature, mainWorktree]);
+      expect(selectedMain()).toBeNull();
+      await sendPrompt("Implement this");
+      if (choice === "existing")
+        expect(firstSend(socket)?.worktreeId).toBe("feature");
+      else
+        expect(firstSend(socket)?.createWorktreeInProjectId).toBe(
+          defaultProject.id,
+        );
+    },
+  );
+
+  it("leaves a project without a main checkout as an Assistant draft", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+    });
+    await receiveProjects(socket);
+    await receiveWorktrees(socket, [{ ...mainWorktree, removedAt: 1 }]);
+    await click(projectCard());
+    expect(selectedMain()).toBeNull();
+    expect(personaCard("Assistant")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+});
 
 describe("named definitions keep account intent", () => {
   it.each([
