@@ -38,7 +38,7 @@ import {
   normalizeTaskTicket,
   taskSummaryOf,
 } from "@assistant/shared";
-import { inDbTransaction } from "./db/index.ts";
+import { getDb, withDbTransaction } from "./db/index.ts";
 import { taskStore, type TaskStatusActor } from "./db/taskStore.ts";
 import {
   addLink,
@@ -477,7 +477,22 @@ export function findOriginTask(sessionId: string): TaskBackRef | undefined {
 
 /* -------------------------------- mutate --------------------------------- */
 
+/**
+ * `createTask`, `updateTask` and `deleteTask` own their transaction and notify
+ * only after it commits, so they are TOP-LEVEL ONLY. Inside a caller's
+ * transaction there is no savepoint to roll back to: a caught failure would
+ * commit half an operation with no event, and a success would stamp revisions
+ * before the outer commit. Refused before anything is written.
+ */
+function assertTopLevelWrite(name: string): void {
+  if (getDb().isTransaction)
+    throw new Error(
+      `${name} must not run inside an open database transaction.`,
+    );
+}
+
 export function createTask(input: CreateTaskInput): TaskItem {
+  assertTopLevelWrite("createTask");
   const dueDateValue = normalizeDateOnly(input.dueDate);
   const scheduledForValue = normalizeDateOnly(input.scheduledFor);
   // Refused before anything is written.
@@ -485,7 +500,7 @@ export function createTask(input: CreateTaskInput): TaskItem {
     input.ticket !== undefined ? ticketInput(input.ticket) : undefined;
   const linkChanges = taskLinkChanges(input.addLinks, undefined);
   // One transaction: a link that breaks a rule leaves no half-made Task behind.
-  const { task, touched } = inDbTransaction(() => {
+  const { task, touched } = withDbTransaction(() => {
     const task = taskStore.create({
       title: cleanText(input.title, 200),
       description: stripInjectedRelayHistory(input.description ?? ""),
@@ -538,6 +553,7 @@ export function createTask(input: CreateTaskInput): TaskItem {
 }
 
 export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
+  assertTopLevelWrite("updateTask");
   const nid = parseId(id);
   const current = nid !== undefined ? readTaskItem(nid, false) : null;
   if (nid === undefined || !current) throw new Error(`Task not found: ${id}`);
@@ -549,7 +565,7 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
   const linkChanges = taskLinkChanges(patch.addLinks, patch.removeLinks);
 
   // One transaction: a link that breaks a rule writes none of the update.
-  const touched = inDbTransaction(() => {
+  const touched = withDbTransaction(() => {
     if (
       statusWrite.status !== undefined &&
       statusWrite.status !== current.status
@@ -710,6 +726,7 @@ export function stopTaskAutoArchiveSweep(): void {
 }
 
 export function deleteTask(id: string): void {
+  assertTopLevelWrite("deleteTask");
   const nid = parseId(id);
   if (nid === undefined || !taskStore.get(nid))
     throw new Error(`Task not found: ${id}`);

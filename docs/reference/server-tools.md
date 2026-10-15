@@ -815,13 +815,13 @@ persona toolsets.
   both are real dates, so a plan that has come and gone reports itself instead
   of going stale.
 - `task_manage` create/update take `addLinks: [{type, taskId}]` (`blocks`,
-  `blocked-by`, `relates`); update also takes `removeLinks: [{taskId}]`. The
-  rules and the all-or-nothing operation live in `tasks.ts`/`taskStore.ts`
-  (`docs/tasks.md`). `task_read` adds grouped `links` and `blocked` to the Task
-  read by id, and only `openBlockerCount`/`blocked` to list entries; links join
-  each entry before `boundedItems` measures it, and a single Task still too
-  large drops linked Tasks from its largest group (`linksOmitted`). The
-  coordinator's create-only variant has no link fields.
+  `blocked-by`, `relates`); update also takes `removeLinks: ["12", …]`, plain
+  Task ids. The rules and the all-or-nothing operation live in
+  `tasks.ts`/`taskStore.ts` (`docs/tasks.md`). `task_read` adds grouped `links`
+  and `blocked` to the Task read by id, and only `openBlockerCount`/`blocked` to
+  list entries; links join each entry before `boundedItems` measures it, and a
+  single Task still too large drops linked Tasks from its largest group
+  (`linksOmitted`). The coordinator's create-only variant has no link fields.
 - `task_manage`'s result is a fixed payload — `renderKind: "taskManage"`,
   `version`, `changedCount` (mutated + deleted Tasks), `changed[]`, optional
   `deletedIds` and `warnings` — carried identically in the TEXT and `details`

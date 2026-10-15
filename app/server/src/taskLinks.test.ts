@@ -11,7 +11,9 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ClientMessage, ServerMessage, TaskItem } from "@assistant/shared";
 import { Connection } from "./connection.ts";
+import { withDbTransaction } from "./db/index.ts";
 import { incoming, outgoing } from "./db/links.ts";
+import { taskStore } from "./db/taskStore.ts";
 import {
   archiveTask,
   createTask,
@@ -19,6 +21,8 @@ import {
   listTasks,
   openTaskBlockerCounts,
   readTask,
+  subscribeTaskChanges,
+  taskRevisionIndex,
   updateTask,
 } from "./tasks.ts";
 
@@ -185,6 +189,121 @@ test("blocks stays acyclic across longer chains", () => {
     assert.deepEqual(linkIds(readTask(a!.id)).blocks, [b!.id, c!.id]);
   } finally {
     discard(a!.id, b!.id, c!.id, d!.id);
+  }
+});
+
+test("reversing a link that a longer path already implies is a cycle, and keeps the original", () => {
+  const [a, b, c] = ["A", "B", "C"].map((n) => make(`Implied ${n}`));
+  try {
+    updateTask(a!.id, { addLinks: [{ type: "blocks", taskId: b!.id }] });
+    updateTask(a!.id, { addLinks: [{ type: "blocks", taskId: c!.id }] });
+    updateTask(c!.id, { addLinks: [{ type: "blocks", taskId: b!.id }] });
+    // Replacing A→B with B→A drops the direct edge, but A→C→B still runs from
+    // A to B, so B blocking A would close a cycle.
+    assert.throws(
+      () =>
+        updateTask(b!.id, { addLinks: [{ type: "blocks", taskId: a!.id }] }),
+      /cycle/,
+    );
+    assert.throws(
+      () =>
+        updateTask(a!.id, {
+          addLinks: [{ type: "blocked-by", taskId: b!.id }],
+        }),
+      /cycle/,
+    );
+    assert.deepEqual(edgesOf(a!.id), [
+      `${a!.id} blocks ${b!.id}`,
+      `${a!.id} blocks ${c!.id}`,
+    ]);
+  } finally {
+    discard(a!.id, b!.id, c!.id);
+  }
+});
+
+test("a failed operation moves no revision, notifies nobody and records no status event", () => {
+  const a = make("Quiet failure A");
+  const b = make("Quiet failure B");
+  const heard: string[][] = [];
+  const unsubscribe = subscribeTaskChanges((ids) => heard.push([...ids]));
+  try {
+    const revisions = () =>
+      [a.id, b.id].map((id) => taskRevisionIndex().get(id)?.revision);
+    const before = revisions();
+    const eventsBefore = taskStore.statusEventsForTask(Number(a.id)).length;
+    assert.throws(() =>
+      updateTask(a.id, {
+        status: "doing",
+        actor: { kind: "user" },
+        addLinks: [
+          { type: "blocks", taskId: b.id },
+          { type: "relates", taskId: "999999" },
+        ],
+      }),
+    );
+    assert.throws(() =>
+      createTask({
+        title: "Quiet failed create",
+        addLinks: [
+          { type: "relates", taskId: a.id },
+          { type: "relates", taskId: "999999" },
+        ],
+        source: { createdBy: "agent" },
+      }),
+    );
+    assert.deepEqual(revisions(), before);
+    assert.deepEqual(heard, []);
+    assert.equal(
+      taskStore.statusEventsForTask(Number(a.id)).length,
+      eventsBefore,
+    );
+    assert.equal(readTask(a.id)?.status, "todo");
+  } finally {
+    unsubscribe();
+    discard(a.id, b.id);
+  }
+});
+
+test("the write entry points refuse to run inside a caller's transaction", () => {
+  const a = make("Top-level only A");
+  const b = make("Top-level only B");
+  const heard: string[][] = [];
+  const unsubscribe = subscribeTaskChanges((ids) => heard.push([...ids]));
+  try {
+    withDbTransaction(() => {
+      assert.throws(
+        () =>
+          updateTask(a.id, {
+            title: "Nested rename",
+            addLinks: [{ type: "blocks", taskId: b.id }],
+          }),
+        /updateTask must not run inside an open database transaction/,
+      );
+      assert.throws(
+        () =>
+          createTask({ title: "Nested create", source: { createdBy: "user" } }),
+        /createTask must not run inside an open database transaction/,
+      );
+      assert.throws(
+        () => deleteTask(b.id),
+        /deleteTask must not run inside an open database transaction/,
+      );
+    });
+    // The refusals came before any write, so the committed outer transaction
+    // carried none of them.
+    assert.equal(readTask(a.id)?.title, "Top-level only A");
+    assert.ok(readTask(b.id));
+    assert.deepEqual(edgesOf(a.id), []);
+    assert.equal(
+      listTasks({ includeArchived: true }).some(
+        (t) => t.title === "Nested create",
+      ),
+      false,
+    );
+    assert.deepEqual(heard, []);
+  } finally {
+    unsubscribe();
+    discard(a.id, b.id);
   }
 });
 

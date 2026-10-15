@@ -86,7 +86,11 @@ test("task_manage schema offers addLinks on create/update and removeLinks; the c
     }
   ).properties.operations.items.properties;
   assert.ok("addLinks" in props);
-  assert.ok("removeLinks" in props);
+  assert.deepEqual(
+    (props.removeLinks as { items: unknown }).items,
+    { type: "string" },
+    "removeLinks is a plain list of Task ids",
+  );
   const addLinks = props.addLinks as {
     items: { properties: { type: { enum: string[] } } };
   };
@@ -139,7 +143,7 @@ test("task_manage writes links on create and update, and removes them", async ()
             operation: "update",
             id: createdId,
             addLinks: [{ type: "relates", taskId: peer.id }],
-            removeLinks: [{ taskId: blocker.id }],
+            removeLinks: [blocker.id],
           },
         ],
       },
@@ -211,7 +215,7 @@ test("a link rule breach fails its whole operation; earlier operations stand", a
             {
               operation: "create",
               title: "Remove on create",
-              removeLinks: [{ taskId: a.id }],
+              removeLinks: [a.id],
             },
           ],
         },
@@ -251,6 +255,64 @@ test("a link rule breach fails its whole operation; earlier operations stand", a
     );
   } finally {
     discard(a.id, b.id);
+  }
+});
+
+test("a Slack-dedupe create applies addLinks to the existing Task, or nothing at all", async () => {
+  const permalink =
+    "https://example.slack.com/archives/C0LINKDEDUPE/p1700000000000200";
+  const existing = createTask({
+    title: "Imported Slack Task with links",
+    externalLinks: [
+      { url: permalink, type: "source", source: "slack", addedAt: Date.now() },
+    ],
+    source: { createdBy: "user" },
+  });
+  const blocker = make("Dedupe blocker");
+  const reimport = (taskId: string) =>
+    tool("task_manage").execute(
+      {
+        operations: [
+          {
+            operation: "create",
+            title: "Re-import with a link",
+            externalLinks: [{ url: permalink, source: "slack" }],
+            addLinks: [{ type: "blocked-by", taskId }],
+          },
+        ],
+      },
+      ctx,
+    );
+  try {
+    // An invalid link fails the whole resolved update: the session ref the
+    // dedupe would have added does not land either.
+    await assert.rejects(
+      reimport("999999"),
+      /Task-999999 does not exist or was deleted/,
+    );
+    const untouched = readTask(existing.id)!;
+    assert.equal(untouched.links, undefined);
+    assert.equal(
+      untouched.sessionRefs?.some(
+        (ref) => ref.sessionId === ctx.session.sessionId,
+      ),
+      false,
+    );
+
+    const result = await reimport(blocker.id);
+    const changed = (
+      result.details as {
+        changed: Array<{ id: string; deduplicated?: boolean }>;
+      }
+    ).changed[0]!;
+    assert.equal(changed.id, existing.id);
+    assert.equal(changed.deduplicated, true);
+    assert.deepEqual(
+      readTask(existing.id)?.links?.blockedBy.map((t) => t.id),
+      [blocker.id],
+    );
+  } finally {
+    discard(existing.id, blocker.id);
   }
 });
 

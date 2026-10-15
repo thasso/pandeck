@@ -246,13 +246,8 @@ const taskManageSchema = {
           },
           removeLinks: {
             type: "array",
-            description: "Update only.",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              required: ["taskId"],
-              properties: { taskId: { type: "string" } },
-            },
+            description: "Update only: Task ids to unlink.",
+            items: { type: "string" },
           },
         },
       },
@@ -353,7 +348,7 @@ interface ManageOperation {
   parentId?: string;
   sortOrder?: number;
   addLinks?: TaskLinkInput[];
-  removeLinks?: Array<{ taskId: string }>;
+  removeLinks?: string[];
 }
 
 type ManageParams = { operations?: ManageOperation[] };
@@ -498,7 +493,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
           throw new Error(
             "addLinks applies only to a create or update operation.",
           );
-        const addLinks = linkInputsForTool(op.addLinks, "addLinks");
+        const addLinks = linkInputsForTool(op.addLinks);
 
         if (op.operation === "archive") {
           if (!op.id) throw new Error("Archive operation requires id.");
@@ -638,10 +633,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
                 ? null
                 : cleanOptional(op.parentId);
           const updateSortOrder = normalizeSortOrder(op.sortOrder);
-          const removeLinks = linkInputsForTool(
-            op.removeLinks,
-            "removeLinks",
-          )?.map((link) => link.taskId);
+          const removeLinks = removeLinksForTool(op.removeLinks);
           const updated = updateTask(op.id, {
             ...(op.title !== undefined ? { title: op.title } : {}),
             ...(editedDescription !== undefined
@@ -1343,25 +1335,10 @@ function normalizeExternalLinksForTool(
  * throws rather than being skipped, since a link the agent believes it wrote
  * must not silently go missing. The rules between Tasks are the domain's.
  */
-function linkInputsForTool(
-  values: unknown,
-  field: "addLinks",
-): TaskLinkInput[] | undefined;
-function linkInputsForTool(
-  values: unknown,
-  field: "removeLinks",
-): Array<{ taskId: string }> | undefined;
-function linkInputsForTool(
-  values: unknown,
-  field: "addLinks" | "removeLinks",
-): Array<{ type?: TaskLinkType; taskId: string }> | undefined {
-  if (values === undefined) return undefined;
-  if (!Array.isArray(values) || values.length === 0)
-    throw new Error(`${field} must be a non-empty array.`);
-  return values.map((raw) => {
+function linkInputsForTool(values: unknown): TaskLinkInput[] | undefined {
+  return nonEmptyLinkArray(values, "addLinks")?.map((raw) => {
     const taskId = cleanOptional((raw as { taskId?: unknown })?.taskId);
-    if (!taskId) throw new Error(`${field}[].taskId is required.`);
-    if (field === "removeLinks") return { taskId };
+    if (!taskId) throw new Error("addLinks[].taskId is required.");
     const type = (raw as { type?: unknown }).type;
     if (!TASK_LINK_TYPE_VALUES.includes(type as TaskLinkType))
       throw new Error(
@@ -1369,6 +1346,25 @@ function linkInputsForTool(
       );
     return { type: type as TaskLinkType, taskId };
   });
+}
+
+function removeLinksForTool(values: unknown): string[] | undefined {
+  return nonEmptyLinkArray(values, "removeLinks")?.map((raw) => {
+    const taskId = cleanOptional(raw);
+    if (!taskId)
+      throw new Error("removeLinks entries must be non-empty Task ids.");
+    return taskId;
+  });
+}
+
+function nonEmptyLinkArray(
+  values: unknown,
+  field: "addLinks" | "removeLinks",
+): unknown[] | undefined {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values) || values.length === 0)
+    throw new Error(`${field} must be a non-empty array.`);
+  return values;
 }
 
 function normalizeSortOrder(value: unknown): number | undefined {
