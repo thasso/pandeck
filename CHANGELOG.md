@@ -3,6 +3,13 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.58.1] - 2026-10-15
+
+### Other changes
+
+- Normalize legacy agent approval cards on read
+  ([PR #148](https://github.com/thasso/pandeck/pull/148))
+
 ## [0.58.0] - 2026-10-15
 
 ### Upgrade notes
