@@ -473,10 +473,13 @@ for (const harness of engines) {
       return pending
         ? {
             block: "NEW DEFERRED FACT",
-            commit: () => {
-              pending = false;
-              committed++;
+            hooks: {
+              onUserEntry: () => {
+                pending = false;
+                committed++;
+              },
             },
+            finished: () => {},
           }
         : undefined;
     });
