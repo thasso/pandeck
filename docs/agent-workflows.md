@@ -102,8 +102,8 @@ the outcome:
   [Task-595](pa://task/595)) are the free-form lane. The initiating agent is the
   coordinator: it writes the roles as ordinary prose, spawns ordinary
   `scope = "user"` sessions on runtimes the user approved once in Settings, or
-  as a named agent definition from the user's library, whose model and effort
-  the user approved (`docs/agent-definitions.md`), and drives the
+  as a named agent definition from the user's library on one of the models the
+  user approved for it (`docs/agent-definitions.md`), and drives the
   review/fix/re-review loop over peer prompts. There is no watchdog, no
   ownership registry, no result contract and no automatic report — the server
   durably records one `spawned` edge from spawner to child before delivering the

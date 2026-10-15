@@ -4,7 +4,7 @@
  * factory with the agent kind's create fields, and one rule on top of it —
  * what a definition runs AS and ON is the user's call. A create always sets a
  * model, so it always becomes an approval card; an edit that changes
- * `persona`, `model` or `effort` becomes one too. Every other edit commits directly, after the same
+ * `persona`, the listed models or `effort` becomes one too. Every other edit commits directly, after the same
  * runtime check, judged inside the locked write.
  */
 import { Buffer } from "node:buffer";
@@ -19,6 +19,7 @@ import {
 import {
   AGENT_DEFAULT_EFFORT,
   AGENT_PERSONAS,
+  MAX_AGENT_MODELS,
   agentKind,
   agentLibraryStore,
   formatAgentManifest,
@@ -26,7 +27,10 @@ import {
   type AgentManifest,
   type AgentPersona,
 } from "../../agents/agentLibrary.ts";
-import { checkAgentRuntime } from "../../agents/agentRuntime.ts";
+import {
+  agentRuntimeLabel,
+  checkAgentRuntime,
+} from "../../agents/agentRuntime.ts";
 import {
   assertManifest,
   assertManifestSize,
@@ -72,10 +76,11 @@ const PENDING_NOTE =
  */
 function runsOn(manifest: {
   persona: AgentPersona;
-  model: string;
+  models: string[];
   effort?: ThinkingLevel | undefined;
 }): string {
-  return `${manifest.persona}\u0000${manifest.model}\u0000${manifest.effort ?? ""}`;
+  // Order counts: the first model is the one a spawn runs without choosing.
+  return `${manifest.persona}\u0000${manifest.models.join("\u0001")}\u0000${manifest.effort ?? ""}`;
 }
 
 function manifestPath(name: string): string {
@@ -101,8 +106,7 @@ async function propose(
   source: string,
   context: AgentCardContext,
 ): Promise<PendingApproval> {
-  const resolved = await resolvedModelOf(after);
-  const resolvedModel = resolved.label;
+  const resolvedModels = await resolvedModelsOf(after);
   // Every read is done: a call stopped meanwhile must not leave a card — one
   // an existing grant would then execute.
   if (ctx.signal?.aborted) throw new Error("Operation aborted");
@@ -116,18 +120,13 @@ async function propose(
       ? { personaBefore: before.persona }
       : {}),
     model: {
-      ...(before ? { before: before.model } : {}),
-      after: after.model,
+      ...(before ? { before: before.models } : {}),
+      after: after.models,
     },
-    resolvedModel,
+    resolvedModels,
     effort: {
       ...(before?.effort ? { before: before.effort } : {}),
       ...(after.effort ? { after: after.effort } : {}),
-      // What the model will actually use: the requested level, or the
-      // default for none, fitted to the ones it supports.
-      ...(resolved.thinkingLevel !== after.effort
-        ? { effective: resolved.thinkingLevel }
-        : {}),
     },
     source,
     reason: context.meta.reason,
@@ -159,57 +158,63 @@ async function propose(
 }
 
 /**
- * Run the full runtime check and name the connected model the definition runs
- * on — `provider/id`, plus the version a pin holds an alias to — as the card
- * shows it and as approval must still find it.
+ * Run the full runtime check and name the connected model each listed one
+ * runs on — `provider/id`, plus the version a pin holds an alias to — with
+ * the effort it runs at, as the card shows them and as approval must still
+ * find them.
  */
-async function resolvedModelOf(
+async function resolvedModelsOf(
   definition: AgentManifest,
-): Promise<{ label: string; thinkingLevel: ThinkingLevel }> {
-  const { model, pinnedModel, thinkingLevel } =
-    (await checkAgentRuntime(definition))!;
-  const label = `${model.provider}/${model.id}${
-    pinnedModel ? ` (${pinnedModel})` : ""
-  }`;
-  return { label, thinkingLevel };
+): Promise<AgentDefinitionApprovalBody["resolvedModels"]> {
+  return (await checkAgentRuntime(definition))!.map((choice) => ({
+    model: agentRuntimeLabel(choice.runtime!),
+    effort: choice.runtime!.thinkingLevel,
+  }));
 }
 
-/** Refuse an approval whose model no longer resolves to what the card showed. */
+/** Refuse an approval whose models no longer resolve to what the card showed. */
 async function assertStillResolves(
   definition: AgentManifest,
   body: AgentDefinitionApprovalBody,
 ): Promise<void> {
-  const now = await resolvedModelOf(definition);
-  if (now.label !== body.resolvedModel)
-    throw new EntryValidationError(
-      `"${definition.model}" now resolves to ${now.label}, not the ${body.resolvedModel} this card showed. Nothing was written; propose it again.`,
-    );
-  // The effort the card said the model runs at is part of what was approved:
-  // a model whose supported levels changed while the card waited would run
-  // the definition at another one.
-  const shown = body.effort.effective ?? body.effort.after;
-  if (now.thinkingLevel !== shown)
-    throw new EntryValidationError(
-      `${now.label} would now run "${definition.name}" at effort ${now.thinkingLevel}, not the ${shown ?? "default"} this card showed. Nothing was written; propose it again.`,
-    );
+  const now = await resolvedModelsOf(definition);
+  const shown = body.resolvedModels;
+  for (const [at, spec] of definition.models.entries()) {
+    const was = shown[at];
+    const is = now[at]!;
+    if (was?.model !== is.model)
+      throw new EntryValidationError(
+        `"${spec}" now resolves to ${is.model}, not the ${was?.model ?? "nothing"} this card showed. Nothing was written; propose it again.`,
+      );
+    // The effort the card said a model runs at is part of what was approved:
+    // a model whose supported levels changed while the card waited would run
+    // the definition at another one.
+    if (was.effort !== is.effort)
+      throw new EntryValidationError(
+        `${is.model} would now run "${definition.name}" at effort ${is.effort}, not the ${was.effort} this card showed. Nothing was written; propose it again.`,
+      );
+  }
 }
 
 function cardSummary(body: AgentDefinitionApprovalBody): string {
   const effort = (level: ThinkingLevel | undefined) => level ?? "default";
+  const models = body.resolvedModels
+    .map((resolved) => `${resolved.model} at ${resolved.effort}`)
+    .join(", ");
   if (body.action === "create")
-    return `a new ${body.persona} agent "${body.name}" on ${body.model.after} (${body.resolvedModel}), effort ${effort(body.effort.after)}`;
+    return `a new ${body.persona} agent "${body.name}" on ${models}`;
   const changes: string[] = [];
   if (body.personaBefore !== undefined)
     changes.push(`persona ${body.personaBefore} → ${body.persona}`);
-  if (body.model.before !== body.model.after)
+  if (body.model.before?.join(", ") !== body.model.after.join(", "))
     changes.push(
-      `model ${body.model.before} → ${body.model.after} (${body.resolvedModel})`,
+      `models ${body.model.before?.join(", ")} → ${body.model.after.join(", ")}`,
     );
   if (body.effort.before !== body.effort.after)
     changes.push(
       `effort ${effort(body.effort.before)} → ${effort(body.effort.after)}`,
     );
-  return `a change to agent "${body.name}": ${changes.join(", ")}`;
+  return `a change to agent "${body.name}": ${changes.join(", ")}; it would run on ${models}`;
 }
 
 /** Refuse a create whose name a folder or a declared agent already holds. */
@@ -245,7 +250,7 @@ function definitionOf(source: string, name: string): AgentManifest {
 const effortProperty = {
   type: "string",
   enum: THINKING_LEVELS,
-  description: `Optional effort (thinking level), fitted to the levels the model supports. Omit to run at ${AGENT_DEFAULT_EFFORT}, fitted the same way.`,
+  description: `Optional effort (thinking level), fitted to the levels each model supports. Omit to run at ${AGENT_DEFAULT_EFFORT}, fitted the same way.`,
 } as const;
 
 /** The one deferred group registered in `tools/catalog.ts`. */
@@ -256,7 +261,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
   library: () => libraryFactory(),
   create: {
     description:
-      "Propose a new agent definition: <name>/AGENT.md in the user's agents library, which any session can then spawn by name. The definition picks a persona, a model and an effort, may deny tools and mount library skills, and its body is the role instructions the spawned session follows. What an agent runs on is the user's call, so this always puts an approval card in front of the user and writes nothing until they approve; the model must resolve against a connected account now. Requires a completely clean library repository at approval time. Never put secrets, credentials, or tokens in a definition.",
+      "Propose a new agent definition: <name>/AGENT.md in the user's agents library, which any session can then spawn by name. The definition picks a persona, the models it may run on (the first is the default) and an effort, may deny tools and mount library skills, and its body is the role instructions the spawned session follows. What an agent runs on is the user's call, so this always puts an approval card in front of the user and writes nothing until they approve; the model must resolve against a connected account now. Requires a completely clean library repository at approval time. Never put secrets, credentials, or tokens in a definition.",
     properties: {
       name: {
         type: "string",
@@ -274,10 +279,13 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         description:
           "The base persona: developer (works in a repository worktree) or assistant.",
       },
-      model: {
-        type: "string",
+      models: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: MAX_AGENT_MODELS,
         description:
-          "A model alias or exact id from a connected account: opus, sonnet, haiku, fable, a unique short OpenAI name such as sol, or an exact id.",
+          "The models it may run on, the default first. Each a model alias or exact id from a connected account: opus, sonnet, haiku, fable, a unique short OpenAI name such as sol, or an exact id. A spawn may pick any of them without asking the user.",
       },
       effort: effortProperty,
       denyTools: {
@@ -297,14 +305,14 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         description: `The role instructions, in Markdown, below the frontmatter. The whole file is bounded at ${agentKind.maxManifestBytes} bytes (and ${MAX_ENTRY_SOURCE_BYTES} for any manifest).`,
       },
     },
-    required: ["name", "description", "persona", "model", "body"],
+    required: ["name", "description", "persona", "models", "body"],
     async run(params, meta, library, _options, ctx) {
       if (ctx.signal?.aborted) throw new Error("Operation aborted");
       const input: AgentDefinitionInput = {
         name: params.name as string,
         description: params.description as string,
         persona: params.persona as AgentPersona,
-        model: params.model as string,
+        models: params.models as string[],
         ...(params.effort !== undefined
           ? { effort: params.effort as ThinkingLevel }
           : {}),
@@ -325,7 +333,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
     },
   },
   edit: {
-    note: "An edit that changes persona, model or effort is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
+    note: "An edit that changes persona, the listed models or effort is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
     async run(input, meta, library, options, ctx) {
       if (ctx.signal?.aborted) throw new Error("Operation aborted");
       const current = await readEntrySource(input.name, library);

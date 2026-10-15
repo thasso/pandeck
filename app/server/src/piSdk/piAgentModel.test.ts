@@ -58,6 +58,7 @@ const agent = {
   provider: "openai-compatible",
   model: "chosen",
   effort: "off" as const,
+  runtimeSource: "definition" as const,
   denyTools: [],
   skills: [],
   body: "Review the tests.",

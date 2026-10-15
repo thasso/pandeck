@@ -45,6 +45,7 @@ function list(
         provider: "claude-sdk",
         modelId: "opus",
         thinkingLevel,
+        models: [],
       },
     },
   };

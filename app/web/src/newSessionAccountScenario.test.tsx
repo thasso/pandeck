@@ -722,6 +722,7 @@ describe("named definitions keep account intent", () => {
                 provider: "claude-sdk",
                 modelId: "sonnet",
                 thinkingLevel: "low",
+                models: [],
               },
             },
           },

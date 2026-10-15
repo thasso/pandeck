@@ -53,6 +53,8 @@ export const MAX_AGENT_MANIFEST_BYTES = 16 * 1024;
 
 /** Bound on a model spec: an alias or an exact model id. */
 const MAX_MODEL_CHARS = 128;
+/** How many models one definition may list; a card has to stay readable. */
+export const MAX_AGENT_MODELS = 8;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 /** A denied tool: an unprefixed app tool name or a native capability. */
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
@@ -75,8 +77,12 @@ export interface AgentManifest {
   /** Role instructions: the system-prompt layer a spawned session gets. */
   body: string;
   persona: AgentPersona;
-  /** As written: an alias (`opus`, `sol`) or an exact model id. */
-  model: string;
+  /**
+   * The models it may run on, as written: aliases (`opus`, `sol`) or exact
+   * ids. Never empty; the first is the default. A file may write one model as
+   * a plain value.
+   */
+  models: string[];
   effort?: ThinkingLevel;
   /** Tools the spawned session must not have; empty when none. */
   denyTools: string[];
@@ -104,15 +110,7 @@ export function parseAgentManifest(content: string, path: string) {
       const persona = fields.persona;
       if (!AGENT_PERSONAS.includes(persona as AgentPersona))
         bad(`Frontmatter persona must be one of ${AGENT_PERSONAS.join(", ")}.`);
-      const model = fields.model;
-      if (
-        typeof model !== "string" ||
-        model.length > MAX_MODEL_CHARS ||
-        !MODEL_RE.test(model)
-      )
-        bad(
-          `Frontmatter model must be a model alias or id (letters, digits, ".", "_", ":", "/", "-"; at most ${MAX_MODEL_CHARS} characters).`,
-        );
+      const models = parseModels(fields.model, issues);
       const effort = fields.effort;
       if (effort !== undefined && !isThinkingLevel(effort))
         bad(`Frontmatter effort must be one of ${THINKING_LEVELS.join(", ")}.`);
@@ -125,13 +123,43 @@ export function parseAgentManifest(content: string, path: string) {
         bad("The body must hold the agent's role instructions; it is empty.");
       return {
         persona: persona as AgentPersona,
-        model: model as string,
+        models,
         ...(isThinkingLevel(effort) ? { effort } : {}),
         denyTools,
         skills,
       };
     },
   );
+}
+
+/** `model`: one spec, or a list of them whose first entry is the default. */
+function parseModels(value: unknown, issues: ManifestIssue[]): string[] {
+  const models = Array.isArray(value) ? value : [value];
+  if (
+    models.length === 0 ||
+    models.length > MAX_AGENT_MODELS ||
+    !models.every(
+      (model) =>
+        typeof model === "string" &&
+        model.length <= MAX_MODEL_CHARS &&
+        MODEL_RE.test(model),
+    )
+  ) {
+    issues.push({
+      code: "invalid-field",
+      error: `Frontmatter model must be a model alias or id, or a list of 1-${MAX_AGENT_MODELS} of them (letters, digits, ".", "_", ":", "/", "-"; at most ${MAX_MODEL_CHARS} characters each).`,
+    });
+    return [];
+  }
+  const specs = models as string[];
+  if (new Set(specs.map((spec) => spec.toLowerCase())).size !== specs.length) {
+    issues.push({
+      code: "invalid-field",
+      error: "Frontmatter model lists a model twice.",
+    });
+    return [];
+  }
+  return specs;
 }
 
 function parseDenyList(value: unknown, issues: ManifestIssue[]): string[] {
@@ -235,7 +263,8 @@ export interface AgentDefinitionInput {
   name: string;
   description: string;
   persona: AgentPersona;
-  model: string;
+  /** Never empty; the first is the default. */
+  models: string[];
   effort?: ThinkingLevel;
   denyTools?: string[];
   skills?: string[];
@@ -253,7 +282,12 @@ export function formatAgentManifest(input: AgentDefinitionInput): string {
     `name: ${yamlScalar(input.name)}`,
     `description: ${yamlString(input.description)}`,
     `persona: ${input.persona}`,
-    `model: ${yamlString(input.model)}`,
+    // One model stays the plain value every definition used to have.
+    `model: ${
+      input.models.length === 1
+        ? yamlString(input.models[0]!)
+        : yamlList(input.models)
+    }`,
   ];
   if (input.effort !== undefined) lines.push(`effort: ${input.effort}`);
   if (input.denyTools?.length)

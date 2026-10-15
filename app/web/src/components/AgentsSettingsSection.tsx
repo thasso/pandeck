@@ -52,7 +52,10 @@ const AGENTS_COPY: LibraryPageCopy = {
     "These folders cannot be used as agents. They stay listed here so a typo does not simply make an agent disappear.",
 };
 
-/** What an agent runs on, as one line: persona, model and effort. */
+/**
+ * What an agent runs on, as one line: persona, default model and effort, then
+ * the other models it may run on.
+ */
 function agentRuntimeLabel(
   runtime: NonNullable<EntryLibraryList["agentRuntimes"]>[string],
 ): string | undefined {
@@ -60,7 +63,16 @@ function agentRuntimeLabel(
   const model = `${runtime.provider}/${runtime.modelId}${
     runtime.pinnedModel ? ` (pinned ${runtime.pinnedModel})` : ""
   }`;
-  return `${runtime.persona} · ${model} · ${runtime.thinkingLevel} effort`;
+  const others = runtime.models
+    .slice(1)
+    .map((listed) =>
+      listed.problem === undefined
+        ? `${listed.provider}/${listed.modelId} at ${listed.thinkingLevel}`
+        : `${listed.spec} (unavailable)`,
+    );
+  return `${runtime.persona} · ${model} · ${runtime.thinkingLevel} effort${
+    others.length > 0 ? ` · also ${others.join(", ")}` : ""
+  }`;
 }
 
 export function AgentsSettingsSection({
@@ -80,13 +92,33 @@ export function AgentsSettingsSection({
         const runtime = agentRuntimeOf(list, agent.name);
         if (!runtime) return null;
         const label = agentRuntimeLabel(runtime);
-        return label ? (
-          <ItemDescription>{label}</ItemDescription>
-        ) : (
-          <ItemDescription className="flex items-start gap-1.5">
-            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-            <span>Cannot start: {runtime.problem}</span>
-          </ItemDescription>
+        if (label) return <ItemDescription>{label}</ItemDescription>;
+        // A default that cannot run may leave other listed models that
+        // resolve; their accounts are checked only when one is spawned.
+        const runnable = (runtime.models ?? []).flatMap((listed) =>
+          listed.problem === undefined
+            ? [
+                `${listed.provider}/${listed.modelId} at ${listed.thinkingLevel}`,
+              ]
+            : [],
+        );
+        return (
+          <>
+            <ItemDescription className="flex items-start gap-1.5">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                {runnable.length > 0
+                  ? "Default model cannot start"
+                  : "Cannot start"}
+                : {runtime.problem}
+              </span>
+            </ItemDescription>
+            {runnable.length > 0 ? (
+              <ItemDescription>
+                Also lists {runnable.join(", ")}
+              </ItemDescription>
+            ) : null}
+          </>
         );
       }}
     />

@@ -548,11 +548,17 @@ export const approvalBodies: ApprovalCard[] = [
       description:
         "Verifies that the tests a branch adds fail without its code changes.",
       persona: "developer",
-      model: { before: "sonnet", after: "opus" },
-      resolvedModel: "claude-sdk/opus",
-      effort: { before: "medium", after: "max", effective: "high" },
+      model: {
+        before: ["sonnet"],
+        after: ["opus", "openai-codex/gpt-6.1-sol"],
+      },
+      resolvedModels: [
+        { model: "claude-sdk/opus", effort: "high" },
+        { model: "openai-codex/gpt-6.1-sol", effort: "xhigh" },
+      ],
+      effort: { before: "medium", after: "max" },
       source:
-        '---\nname: test-reviewer\ndescription: "Verifies that the tests a branch adds fail without its code changes."\npersona: developer\nmodel: "opus"\neffort: max\ntools:\n  deny: [worktree_commit, worktree_push]\n---\n\nYou are a test reviewer. Revert the code changes, keep the new tests, and report which ones still pass.\n',
+        '---\nname: test-reviewer\ndescription: "Verifies that the tests a branch adds fail without its code changes."\npersona: developer\nmodel: [opus, openai-codex/gpt-6.1-sol]\neffort: max\ntools:\n  deny: [worktree_commit, worktree_push]\n---\n\nYou are a test reviewer. Revert the code changes, keep the new tests, and report which ones still pass.\n',
       reason: "Run test-reviewer on Opus",
     },
   }),

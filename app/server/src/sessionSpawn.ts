@@ -69,8 +69,10 @@ import {
 import { readTask } from "./tasks.ts";
 import {
   AgentSpawnRefusedError,
+  resolveAgentRole,
   resolveAgentSpawn,
   scanAgentsForSpawn,
+  type AgentRole,
   type AgentSpawnRuntime,
 } from "./agents/agentSpawn.ts";
 import type { SessionAgent } from "./agents/sessionAgent.ts";
@@ -90,10 +92,18 @@ export const MAX_SPAWN_TITLE_CHARS = 60;
 
 type SpawnAgentType = "developer" | "assistant";
 
-/** One row as the agent asked for it, before any resolution. */
-export interface SpawnRequestRow {
+/**
+ * One row as the agent asked for it, before any resolution. A row naming an
+ * agent definition takes its persona from it and states no `agentType`.
+ */
+export type SpawnRequestRow = SpawnRequestRowFields &
+  (
+    | { agentType: SpawnAgentType; agent?: undefined }
+    | { agent: string; agentType?: undefined }
+  );
+
+interface SpawnRequestRowFields {
   title: string;
-  agentType: SpawnAgentType;
   prompt: string;
   owner?: "coordinator" | "user";
   responseRequested?: boolean;
@@ -296,7 +306,7 @@ async function tryRuntime(
  * any enabled account can run.
  */
 async function resolveRuntime(
-  row: SpawnRequestRow,
+  row: SpawnRequestRowFields,
   fallback: SpawnFallbackRuntime | undefined,
   requiresEnterprise: boolean,
 ): Promise<ResolvedRuntime> {
@@ -410,7 +420,9 @@ interface StructuralRow {
  * persona, worktree, Project or Task costs a tool error in exactly the same way
  * whether or not the runtime was pre-approved.
  */
-async function validateStructure(row: SpawnRequestRow): Promise<StructuralRow> {
+async function validateStructure(
+  row: SpawnRequestRowFields & { agentType: SpawnAgentType },
+): Promise<StructuralRow> {
   const owner = row.owner ?? "coordinator";
   if (owner !== "coordinator" && owner !== "user")
     throw new SpawnProposalError('owner must be "coordinator" or "user".');
@@ -511,11 +523,41 @@ export async function buildSpawnProposal(
   const fallback = fallbackRuntimeOf(sender);
 
   const items: SessionSpawnApprovalItem[] = [];
+  // One scan resolves every agent row; execution reads each again.
+  let agents: Awaited<ReturnType<typeof scanAgentsForSpawn>> | undefined;
   for (const row of input.rows) {
-    const structural = await validateStructure(row);
-    const runtime = await resolveRuntime(row, fallback, requiresEnterprise);
+    let agentType: SpawnAgentType;
+    let rowFallback = fallback;
+    if (row.agent === undefined) agentType = row.agentType;
+    else {
+      const name = row.agent.trim();
+      if (!name)
+        throw new SpawnProposalError(`"${row.title}" names an empty agent.`);
+      agents ??= await scanAgentsForSpawn();
+      let resolved;
+      try {
+        resolved = await resolveAgentRole(name, agents);
+      } catch (err) {
+        if (err instanceof AgentSpawnRefusedError)
+          throw new SpawnProposalError(`"${row.title}": ${err.message}`);
+        throw err;
+      }
+      agentType = resolved.role.persona;
+      // An un-hinted row starts from the definition's default, not from
+      // the proposer's own runtime.
+      const runtime = resolved.listed[0]?.runtime;
+      if (runtime)
+        rowFallback = {
+          provider: runtime.model.provider,
+          modelId: runtime.model.id,
+          thinkingLevel: runtime.thinkingLevel,
+        };
+    }
+    const structural = await validateStructure({ ...row, agentType });
+    const runtime = await resolveRuntime(row, rowFallback, requiresEnterprise);
     items.push({
       ...approvalItemOf(structural),
+      ...(row.agent !== undefined ? { agent: row.agent.trim() } : {}),
       responseRequested: row.responseRequested === true,
       provider: runtime.provider,
       modelId: runtime.modelId,
@@ -643,6 +685,9 @@ async function settledItem(
     throw new Error(
       `"${profile.name}" no longer offers ${item.provider}/${item.modelId} — pick another model for "${item.title}", or skip that row.`,
     );
+  // The role must still exist as the persona the row was checked for; the
+  // card keeps it pending otherwise. Execution reads it again.
+  if (item.agent !== undefined) await approvedAgentOf(item);
   return {
     ...item,
     modelName: model.name,
@@ -814,7 +859,8 @@ async function spawnOne(
   // disabled, deleted or re-pointed the approved row — so a runtime resolved
   // before those awaits is a claim about the past. A caller whose runtime comes
   // from live settings re-resolves here and the row runs on THAT, or not at
-  // all; nothing between this call and `deps.create*` yields to the event loop.
+  // all. The only await left before `deps.create*` is a pi model lookup, and an
+  // agent's definition is read again after it (below).
   let agent: SessionAgent | undefined;
   if (options.currentRuntime) {
     const runtime = await options.currentRuntime();
@@ -873,7 +919,13 @@ async function spawnOne(
         `${item.provider}/${item.modelId} is no longer available on this account.`,
       );
     spec = { harness: "pi", model, ...start };
+    // A definition deleted, re-pointed or edited during that lookup must not
+    // start as it was read before it.
+    if (agent) await assertAgentUnchanged(agent, item.title);
   }
+  // A card-approved row: the role read last, on the runtime the user approved.
+  if (!options.currentRuntime && item.agent !== undefined)
+    spec = { ...spec, agent: await approvedAgentOf(item) };
   // Pi model lookup is asynchronous, so make the enterprise check the final
   // account read before createSession claims the child row.
   if (
@@ -937,6 +989,59 @@ async function spawnOne(
     responseRequested: item.responseRequested,
     ...(item.taskId ? { taskId: item.taskId } : {}),
   });
+}
+
+/**
+ * The definition a card-approved row runs as, read now: its role, frozen with
+ * the runtime the user approved rather than one it lists. A definition edited
+ * meanwhile runs as edited; one gone, unrunnable or moved to another persona
+ * refuses the row.
+ */
+async function approvedAgentOf(
+  item: SessionSpawnApprovalItem,
+): Promise<SessionAgent> {
+  let role: AgentRole;
+  try {
+    ({ role } = await resolveAgentRole(item.agent!));
+  } catch (err) {
+    if (err instanceof AgentSpawnRefusedError)
+      throw new Error(`"${item.title}": ${err.message}`);
+    throw err;
+  }
+  if (role.persona !== item.agentType)
+    throw new Error(
+      `Agent definition "${role.name}" now runs as the ${role.persona} persona, not the ${item.agentType} this card was proposed for; nothing was created for "${item.title}".`,
+    );
+  return {
+    ...role,
+    provider: item.provider,
+    model: item.modelId,
+    effort: item.thinkingLevel,
+    runtimeSource: "approval",
+  };
+}
+
+/**
+ * Refuse a direct agent row whose definition changed since its runtime was
+ * resolved: the blob covers its persona, models, denied tools, skills and
+ * body, so an unchanged one still lists the model the row runs on.
+ */
+async function assertAgentUnchanged(
+  agent: SessionAgent,
+  title: string,
+): Promise<void> {
+  let role: AgentRole;
+  try {
+    ({ role } = await resolveAgentRole(agent.name));
+  } catch (err) {
+    if (err instanceof AgentSpawnRefusedError)
+      throw new Error(`"${title}": ${err.message} Nothing was created.`);
+    throw err;
+  }
+  if (role.blob !== agent.blob)
+    throw new Error(
+      `Agent definition "${agent.name}" changed while "${title}" was being started; nothing was created. Spawn it again to run the current definition.`,
+    );
 }
 
 /**
@@ -1022,14 +1127,25 @@ registerApprovalExecutor("sessionSpawn", {
  * One row of a DIRECT batch ([Task-595](pa://task/595)): the same structural
  * fields as a proposal row, plus what it must run on — an approved runtime
  * (`profileId`) or an agent definition (`agent`), exactly one of them. There
- * is deliberately no provider/model/thinking/account field: the human's roster
- * and the definitions they approved are the only places those are chosen on
- * this path. An agent row takes its persona from the definition.
+ * is deliberately no provider/thinking/account field: the human's roster and
+ * the definitions they approved are the only places those are chosen on this
+ * path. An agent row takes its persona from the definition, and `modelId`
+ * picks one of the models it lists.
  */
 export type DirectSpawnRequestRow = DirectSpawnRowFields &
   (
-    | { profileId: string; agentType: SpawnAgentType; agent?: undefined }
-    | { agent: string; profileId?: undefined; agentType?: undefined }
+    | {
+        profileId: string;
+        agentType: SpawnAgentType;
+        agent?: undefined;
+        modelId?: never;
+      }
+    | {
+        agent: string;
+        modelId?: string;
+        profileId?: undefined;
+        agentType?: undefined;
+      }
   );
 
 interface DirectSpawnRowFields {
@@ -1107,6 +1223,7 @@ export async function spawnApprovedPeers(input: {
       try {
         early = await resolveAgentSpawn(row.agent.trim(), agents, {
           requiresEnterprise,
+          ...(row.modelId !== undefined ? { model: row.modelId } : {}),
         });
       } catch (err) {
         if (err instanceof AgentSpawnRefusedError)
@@ -1237,7 +1354,12 @@ function rowRuntime(
 ): () => Promise<RowRuntime> {
   if (row.agent !== undefined) {
     const name = row.agent.trim();
-    return () => resolveAgentSpawn(name, undefined, { requiresEnterprise });
+    const model = row.modelId;
+    return () =>
+      resolveAgentSpawn(name, undefined, {
+        requiresEnterprise,
+        ...(model !== undefined ? { model } : {}),
+      });
   }
   const profileId = row.profileId;
   return () => resolveApprovedPeerRuntime(profileId, { requiresEnterprise });

@@ -727,8 +727,9 @@ function spawnResolutionEdits(
 
 /** Where the session will run, as one readable line. */
 function spawnTargetLine(item: SessionSpawnApprovalItem): string {
+  const persona = item.agentType === "developer" ? "Developer" : "Assistant";
   return [
-    item.agentType === "developer" ? "Developer" : "Assistant",
+    item.agent ? `Agent ${item.agent} (${persona})` : persona,
     item.projectName ?? item.projectId,
     item.worktreeName ?? item.worktreeId,
     // The id alone says nothing about what the session is being sent to do; the
@@ -999,11 +1000,17 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
           · <Change before={body.personaBefore} after={body.persona} />
         </span>
       </Row>
-      <Row label="Model">
-        <Change before={body.model.before} after={body.model.after} />{" "}
-        <span className="font-mono text-muted-foreground">
-          ({body.resolvedModel})
-        </span>
+      <Row label="Models">
+        <Change
+          before={body.model.before?.join(", ")}
+          after={body.model.after.join(", ")}
+        />
+        {body.resolvedModels.map((resolved, at) => (
+          <span key={at} className="block font-mono text-muted-foreground">
+            {resolved.model} at {resolved.effort}
+            {at === 0 ? " (default)" : ""}
+          </span>
+        ))}
       </Row>
       <Row label="Effort">
         <Change
@@ -1012,12 +1019,6 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
             : {})}
           after={effort(body.effort.after)}
         />
-        {body.effort.effective ? (
-          <span className="text-muted-foreground">
-            {" "}
-            (runs as {body.effort.effective})
-          </span>
-        ) : null}
       </Row>
       <Row label="Purpose">{body.description}</Row>
       {body.resultCommit ? (

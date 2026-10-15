@@ -78,7 +78,7 @@ const definition = {
   name: "test-reviewer",
   description: "Checks that new tests fail without the code change.",
   persona: "developer",
-  model: "sonnet",
+  models: ["sonnet"],
   effort: "medium",
   denyTools: ["worktree_push"],
   body: "You are a test reviewer.",
@@ -133,8 +133,40 @@ describe("agent_create", () => {
     assert.equal(card.body.kind, "agentDefinition");
     if (card.body.kind !== "agentDefinition") return;
     assert.equal(card.body.action, "create");
-    assert.equal(card.body.resolvedModel, "claude-sdk/sonnet");
+    assert.deepEqual(card.body.resolvedModels, [
+      { model: "claude-sdk/sonnet", effort: "medium" },
+    ]);
     assert.match(card.body.source, /^---\nname: test-reviewer\n/);
+  });
+
+  test("a definition listing several models shows each on the card and writes them in order", async () => {
+    await call("agent_create", { ...definition, models: ["sonnet", "opus"] });
+    const card = latestCard();
+    assert.equal(card.body.kind, "agentDefinition");
+    if (card.body.kind !== "agentDefinition") return;
+    assert.deepEqual(card.body.model.after, ["sonnet", "opus"]);
+    assert.deepEqual(
+      card.body.resolvedModels.map((resolved) => resolved.model),
+      ["claude-sdk/sonnet", "claude-sdk/opus"],
+    );
+    const { card: done } = await resolveApproval(card.id, "approved");
+    assert.equal(done.status, "executed", done.error);
+    assert.match(
+      readFileSync(manifest(), "utf8"),
+      /^model: \[sonnet, opus\]$/m,
+    );
+  });
+
+  test("a model list with a model that does not resolve makes no card", async () => {
+    const cards = approvalsForSession(sessionId).length;
+    await assert.rejects(
+      tool("agent_create").execute(
+        { ...definition, models: ["sonnet", "gemini"] },
+        ctx(),
+      ),
+      /No enabled account offers a model "gemini"/,
+    );
+    assert.equal(approvalsForSession(sessionId).length, cards);
   });
 
   test("a list stated as anything but a list of names is refused, not dropped", async () => {
@@ -244,7 +276,7 @@ describe("agent_create", () => {
     assert.equal(card.body.kind, "agentDefinition");
     if (card.body.kind !== "agentDefinition") return;
     assert.equal(card.body.effort.after, "max");
-    assert.equal(card.body.effort.effective, "high");
+    assert.equal(card.body.resolvedModels[0]?.effort, "high");
   });
 
   test("approval refuses when the model would now run at another effort than the card showed", async () => {
@@ -276,7 +308,7 @@ describe("agent_create", () => {
     assert.equal(createCard.body.kind, "agentDefinition");
     if (createCard.body.kind !== "agentDefinition") return;
     assert.equal(createCard.body.effort.after, undefined);
-    assert.equal(createCard.body.effort.effective, "medium");
+    assert.equal(createCard.body.resolvedModels[0]?.effort, "medium");
     // The model stops supporting medium while the card waits: the default
     // would now be fitted to another level than the card showed.
     setAgentRuntimeSourcesForTests({
@@ -338,6 +370,14 @@ describe("agent_create", () => {
         provider: "claude-sdk",
         modelId: "sonnet",
         thinkingLevel: "medium",
+        models: [
+          {
+            spec: "sonnet",
+            provider: "claude-sdk",
+            modelId: "sonnet",
+            thinkingLevel: "medium",
+          },
+        ],
       });
     } finally {
       setLibraryBroadcaster({ broadcast: () => {} });
@@ -347,7 +387,10 @@ describe("agent_create", () => {
 
   test("a model no connected account offers is refused before any card", async () => {
     await assert.rejects(
-      tool("agent_create").execute({ ...definition, model: "gemini" }, ctx()),
+      tool("agent_create").execute(
+        { ...definition, models: ["gemini"] },
+        ctx(),
+      ),
       /No enabled account offers a model "gemini"/,
     );
     assert.equal(approvalsForSession(sessionId).length, 0);
@@ -417,7 +460,7 @@ describe("agent_edit", () => {
     assert.equal(result.terminate, true);
     assert.match(
       text,
-      /model sonnet → opus \(claude-sdk\/opus\), effort medium → high/,
+      /models sonnet → opus, effort medium → high; it would run on claude-sdk\/opus at high/,
     );
     assert.equal(readFileSync(manifest(), "utf8"), original);
 
@@ -579,7 +622,8 @@ describe("agent_edit", () => {
     });
     const pending = latestCard();
     assert.equal(
-      pending.body.kind === "agentDefinition" && pending.body.effort.effective,
+      pending.body.kind === "agentDefinition" &&
+        pending.body.resolvedModels[0]?.effort,
       "high",
     );
     setAgentRuntimeSourcesForTests({
@@ -710,17 +754,19 @@ describe("agent tool races and pins", () => {
     await call("agent_create", {
       ...definition,
       name: "qualified",
-      model: "claude-sdk/claude-opus-5-5",
+      models: ["claude-sdk/claude-opus-5-5"],
     });
+    const qualified = latestCard().body;
     assert.equal(
-      latestCard().body.kind === "agentDefinition" &&
-        (latestCard().body as { resolvedModel: string }).resolvedModel,
+      qualified.kind === "agentDefinition" &&
+        qualified.resolvedModels[0]?.model,
       "claude-sdk/opus (claude-opus-5-5)",
     );
-    await call("agent_create", { ...definition, model: "claude-opus-5-5" });
+    await call("agent_create", { ...definition, models: ["claude-opus-5-5"] });
     const card = latestCard();
     assert.equal(
-      card.body.kind === "agentDefinition" && card.body.resolvedModel,
+      card.body.kind === "agentDefinition" &&
+        card.body.resolvedModels[0]?.model,
       "claude-sdk/opus (claude-opus-5-5)",
     );
     const { card: done } = await resolveApproval(card.id, "approved");

@@ -9,7 +9,9 @@
  */
 import {
   isSafeEntryName,
+  SESSION_AGENT_RUNTIME_SOURCES,
   THINKING_LEVELS,
+  type SessionAgentRuntimeSource,
   type SessionAgentSummary,
   type ThinkingLevel,
 } from "@assistant/shared";
@@ -36,6 +38,12 @@ export interface SessionAgent {
   pinnedModel?: string;
   /** The effort it runs at, already fitted to the model. */
   effort: ThinkingLevel;
+  /**
+   * Who chose the runtime above: one of the definition's listed models, or
+   * the user in a proposal card. A row stored before this existed came from
+   * the definition.
+   */
+  runtimeSource: SessionAgentRuntimeSource;
   denyTools: string[];
   skills: string[];
   body: string;
@@ -69,6 +77,10 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
     (value.pinnedModel === undefined ||
       typeof value.pinnedModel === "string") &&
     (THINKING_LEVELS as readonly unknown[]).includes(value.effort) &&
+    (value.runtimeSource === undefined ||
+      (SESSION_AGENT_RUNTIME_SOURCES as readonly unknown[]).includes(
+        value.runtimeSource,
+      )) &&
     isStringList(value.denyTools) &&
     isStringList(value.skills) &&
     typeof value.body === "string"
@@ -83,6 +95,9 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
         ? { pinnedModel: value.pinnedModel }
         : {}),
       effort: value.effort as ThinkingLevel,
+      runtimeSource:
+        (value.runtimeSource as SessionAgentRuntimeSource | undefined) ??
+        "definition",
       denyTools: value.denyTools,
       skills: value.skills,
       body: value.body,
@@ -176,6 +191,7 @@ export function sessionAgentSummary(
       agent.pinnedModel ? ` (${agent.pinnedModel})` : ""
     }`,
     effort: agent.effort,
+    runtimeSource: agent.runtimeSource,
     denyTools: agent.denyTools,
     skills: agent.skills,
   };

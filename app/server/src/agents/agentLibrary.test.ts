@@ -49,7 +49,7 @@ describe("the AGENT.md content rule", () => {
       description: "Checks that new tests fail without the code change.",
       body: "\nYou are a test reviewer.\n",
       persona: "developer",
-      model: "opus",
+      models: ["opus"],
       effort: "high",
       denyTools: ["worktree_push", "bash"],
       skills: ["castlabs-ui"],
@@ -112,12 +112,59 @@ describe("the AGENT.md content rule", () => {
     );
   });
 
+  test("model is one model or a list of them, the first being the default", () => {
+    const listed = parseAgentManifest(
+      valid.replace("model: opus", 'model: [openai-codex/gpt-6.1-sol, "opus"]'),
+      "x/AGENT.md",
+    );
+    assert.ok(listed.ok);
+    assert.deepEqual(listed.manifest.models, [
+      "openai-codex/gpt-6.1-sol",
+      "opus",
+    ]);
+    for (const [model, error] of [
+      ["[]", /model must be a model alias or id, or a list of 1-8/],
+      ["[opus, Opus]", /model lists a model twice/],
+      ["[opus, has spaces]", /model must be a model alias or id/],
+      [
+        `[${Array.from({ length: 9 }, (_, at) => `m${at}`).join(", ")}]`,
+        /a list of 1-8 of them/,
+      ],
+    ] as const)
+      assert.match(
+        issuesOf(valid.replace("model: opus", `model: ${model}`)).join(),
+        error,
+      );
+  });
+
+  test("one model renders as a plain value, several as a list, and both read back", () => {
+    const base = {
+      name: "reviewer",
+      description: "Reviews.",
+      persona: "developer" as const,
+      body: "Review.",
+    };
+    const one = formatAgentManifest({ ...base, models: ["opus"] });
+    assert.match(one, /^model: "opus"$/m);
+    const several = formatAgentManifest({
+      ...base,
+      models: ["openai-codex/gpt-6.1-sol", "opus"],
+    });
+    assert.match(several, /^model: \[openai-codex\/gpt-6\.1-sol, opus\]$/m);
+    const parsed = parseAgentManifest(several, "reviewer/AGENT.md");
+    assert.ok(parsed.ok);
+    assert.deepEqual(parsed.manifest.models, [
+      "openai-codex/gpt-6.1-sol",
+      "opus",
+    ]);
+  });
+
   test("names the YAML subset would read as numbers or booleans render as strings", () => {
     const source = formatAgentManifest({
       name: "123",
       description: "Numbers.",
       persona: "developer",
-      model: "opus",
+      models: ["opus"],
       denyTools: ["true", "null"],
       skills: ["true", "123", "castlabs-ui"],
       body: "Body.",
@@ -136,7 +183,7 @@ describe("the AGENT.md content rule", () => {
       name: "spaced",
       description: "One\u2028two",
       persona: "assistant",
-      model: "opus",
+      models: ["opus"],
       body: "Body.",
     });
     const parsed = parseAgentManifest(source, "spaced/AGENT.md");
@@ -149,7 +196,7 @@ describe("the AGENT.md content rule", () => {
       name: "test-reviewer",
       description: 'Checks tests: "fail first", # always',
       persona: "developer" as const,
-      model: "gpt-6.1-sol",
+      models: ["gpt-6.1-sol"],
       effort: "xhigh" as const,
       denyTools: ["worktree_commit", "edit"],
       skills: ["castlabs-ui"],
@@ -159,7 +206,7 @@ describe("the AGENT.md content rule", () => {
     const parsed = parseAgentManifest(source, "test-reviewer/AGENT.md");
     assert.ok(parsed.ok);
     assert.equal(parsed.manifest.description, input.description);
-    assert.equal(parsed.manifest.model, input.model);
+    assert.deepEqual(parsed.manifest.models, input.models);
     assert.equal(parsed.manifest.effort, "xhigh");
     assert.deepEqual(parsed.manifest.denyTools, input.denyTools);
     assert.deepEqual(parsed.manifest.skills, input.skills);

@@ -122,6 +122,20 @@ test("shows every proposed session, its target and its runtime", () => {
   expect(host.textContent).toContain("is not available on any enabled account");
 });
 
+test("a row naming an agent shows the role beside its persona", () => {
+  const base = card();
+  if (base.body.kind !== "sessionSpawn") throw new Error("spawn card");
+  render(
+    card({
+      body: {
+        ...base.body,
+        items: [{ ...base.body.items[0]!, agent: "reviewer" }],
+      },
+    }),
+  );
+  expect(host.textContent).toContain("Agent reviewer (Assistant)");
+});
+
 test("the opening message is collapsed until asked for", () => {
   render(card());
 

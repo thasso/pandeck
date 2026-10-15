@@ -40,6 +40,7 @@ it("shows the frozen agent and opens its definition by name", () => {
           blob: "0123456789abcdef0123",
           model: "claude-sdk/opus (claude-opus-5-5)",
           effort: "high",
+          runtimeSource: "definition",
           denyTools: ["worktree_push"],
           skills: [],
         }}
@@ -49,6 +50,7 @@ it("shows the frozen agent and opens its definition by name", () => {
   );
   const text = container!.textContent ?? "";
   expect(text).toContain("claude-sdk/opus (claude-opus-5-5), high effort");
+  expect(text).toContain("The definition's model list");
   expect(text).toContain("worktree_push");
   expect(text).toContain("0123456789ab");
   const link = [...container!.querySelectorAll("button")].find(
@@ -57,6 +59,26 @@ it("shows the frozen agent and opens its definition by name", () => {
   expect(link).toBeDefined();
   act(() => link!.click());
   expect(opened).toEqual(["test-reviewer"]);
+});
+
+it("says when the user approved the runtime in a proposal card", () => {
+  act(() =>
+    root!.render(
+      <SessionContextSections
+        sessionId="approved-agent-session"
+        agent={{
+          name: "test-reviewer",
+          blob: "0123456789abcdef0123",
+          model: "openai-codex/gpt-6.1-sol",
+          effort: "high",
+          runtimeSource: "approval",
+          denyTools: [],
+          skills: [],
+        }}
+      />,
+    ),
+  );
+  expect(container!.textContent).toContain("You, in a proposal card");
 });
 
 it("says an unreadable stored definition refuses to run", () => {

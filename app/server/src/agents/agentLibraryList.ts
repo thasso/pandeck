@@ -4,7 +4,11 @@
  * valid definition would run on right now, so the Agents page can say why one
  * cannot start and the new-session picker can preselect its runtime.
  */
-import type { AgentRuntimeSummary } from "@assistant/shared";
+import type {
+  AgentListedModelSummary,
+  AgentRuntimeSummary,
+} from "@assistant/shared";
+import type { AgentModelChoice } from "./agentRuntime.ts";
 import {
   libraryListMessage,
   publishLibrary,
@@ -27,7 +31,10 @@ async function agentRuntimes(
     if (!valid.has(row.name) || Object.hasOwn(runtimes, row.name)) continue;
     runtimes[row.name] =
       "problem" in row
-        ? { problem: row.problem }
+        ? {
+            problem: row.problem,
+            ...(row.listed ? { models: row.listed.map(listedSummary) } : {}),
+          }
         : {
             persona: row.runtime.agent.persona,
             provider: row.runtime.provider,
@@ -36,9 +43,25 @@ async function agentRuntimes(
               ? { pinnedModel: row.runtime.agent.pinnedModel }
               : {}),
             thinkingLevel: row.runtime.thinkingLevel,
+            models: row.runtime.listed.map(listedSummary),
           };
   }
   return { agentRuntimes: runtimes };
+}
+
+/** One listed model as the browser shows it. */
+function listedSummary(choice: AgentModelChoice): AgentListedModelSummary {
+  return choice.runtime
+    ? {
+        spec: choice.spec,
+        provider: choice.runtime.model.provider,
+        modelId: choice.runtime.model.id,
+        ...(choice.runtime.pinnedModel
+          ? { pinnedModel: choice.runtime.pinnedModel }
+          : {}),
+        thinkingLevel: choice.runtime.thinkingLevel,
+      }
+    : { spec: choice.spec, problem: choice.problem };
 }
 
 /** The `agents` topic's list message, for one store. */

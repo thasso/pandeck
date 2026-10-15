@@ -300,12 +300,14 @@ export const settingsAgents: EntryLibraryList = {
       modelId: "opus",
       pinnedModel: "claude-opus-5-5",
       thinkingLevel: "high",
+      models: [],
     },
     "release-scribe": {
       persona: "assistant",
       provider: "openai-codex",
       modelId: "gpt-6.1-sol",
       thinkingLevel: "medium",
+      models: [],
     },
     "legacy-auditor": {
       problem:

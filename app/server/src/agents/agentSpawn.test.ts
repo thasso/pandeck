@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelOption } from "@assistant/shared";
 import { afterEach, beforeEach, test } from "vitest";
+import { spawnableAgentsText } from "../tools/sessions/sessionSpawnTool.ts";
 import { agentKind, formatAgentManifest } from "./agentLibrary.ts";
 import {
   setAgentRuntimeSourcesForTests,
@@ -61,8 +62,9 @@ function write(folder: string, source: string): string {
   return source;
 }
 
-const reviewer = (patch: Record<string, unknown> = {}) =>
-  formatAgentManifest({
+/** A definition's source; a `model` patch is its one listed model. */
+const reviewer = (patch: Record<string, unknown> = {}) => {
+  const { model, ...definition } = {
     name: "test-reviewer",
     description: "Checks that new tests fail without the change.",
     persona: "developer",
@@ -71,7 +73,12 @@ const reviewer = (patch: Record<string, unknown> = {}) =>
     skills: [],
     body: "You are a test reviewer.",
     ...patch,
+  };
+  return formatAgentManifest({
+    models: [model],
+    ...definition,
   } as never);
+};
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "agent-spawn-"));
@@ -111,6 +118,7 @@ test("a definition resolves to its model, account and the exact bytes it froze",
     provider: "claude-sdk",
     model: "opus",
     effort: "high",
+    runtimeSource: "definition",
     denyTools: ["worktree_push"],
     skills: [],
     body: "You are a test reviewer.",
@@ -141,6 +149,118 @@ test("no effort runs at the default, fitted to the model", async () => {
   assert.equal(runtime.agent.effort, "high");
 });
 
+test("a caller picks a listed model by any name it resolves to; the role is the same", async () => {
+  write(
+    "test-reviewer",
+    reviewer({ model: undefined, models: ["sol", "opus"], effort: "high" }),
+  );
+  const byDefault = await resolveAgentSpawn("test-reviewer");
+  assert.equal(byDefault.provider, "openai-codex");
+  assert.equal(byDefault.modelId, "gpt-6.1-sol");
+  assert.deepEqual(
+    byDefault.listed.map((choice) => choice.spec),
+    ["sol", "opus"],
+  );
+  for (const name of ["opus", "claude-sdk/opus", "OPUS"]) {
+    const picked = await resolveAgentSpawn("test-reviewer", undefined, {
+      model: name,
+    });
+    assert.equal(picked.provider, "claude-sdk");
+    assert.equal(picked.modelId, "opus");
+    assert.equal(picked.credentialProfileId, "acct-claude-sdk");
+    const { provider: _p, model: _m, ...role } = picked.agent;
+    const { provider: _dp, model: _dm, ...defaultRole } = byDefault.agent;
+    assert.deepEqual(role, defaultRole, "only the runtime differs");
+  }
+  assert.equal(
+    (
+      await resolveAgentSpawn("test-reviewer", undefined, {
+        model: "gpt-6.1-sol",
+      })
+    ).modelId,
+    "gpt-6.1-sol",
+  );
+});
+
+test("a model the definition does not list is refused, never approximated", async () => {
+  models.push(model("claude-sdk", "sonnet"));
+  write("test-reviewer", reviewer({ model: undefined, models: ["opus"] }));
+  await assert.rejects(
+    resolveAgentSpawn("test-reviewer", undefined, { model: "sonnet" }),
+    /does not list "sonnet"; it runs only on opus\. To run it on another model, use operation "propose"/,
+  );
+});
+
+test("a listed model that cannot run refuses when named; the default still runs", async () => {
+  write(
+    "test-reviewer",
+    reviewer({ model: undefined, models: ["opus", "gemini"] }),
+  );
+  await assert.rejects(
+    resolveAgentSpawn("test-reviewer", undefined, { model: "gemini" }),
+    /Agent "test-reviewer" cannot run on "gemini": No enabled account offers a model "gemini"/,
+  );
+  const runtime = await resolveAgentSpawn("test-reviewer");
+  assert.equal(runtime.modelId, "opus");
+  assert.match(runtime.listed[1]?.problem ?? "", /"gemini"/);
+});
+
+test("a name matching two listed models is refused as ambiguous", async () => {
+  models = [
+    { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
+    model("openai-codex", "gpt-6.1-sol"),
+  ];
+  write(
+    "test-reviewer",
+    reviewer({ model: undefined, models: ["opus", "claude-opus-5-5"] }),
+  );
+  await assert.rejects(
+    resolveAgentSpawn("test-reviewer", undefined, { model: "claude-sdk/opus" }),
+    /names more than one model agent "test-reviewer" lists \(opus, claude-opus-5-5\)/,
+  );
+  const pinned = await resolveAgentSpawn("test-reviewer", undefined, {
+    model: "claude-opus-5-5",
+  });
+  assert.equal(pinned.agent.pinnedModel, "claude-opus-5-5");
+});
+
+test("a listing keeps every listed model when only the default cannot run", async () => {
+  write(
+    "test-reviewer",
+    reviewer({ model: undefined, models: ["gemini", "sol"] }),
+  );
+  const [row] = await listSpawnableAgents();
+  assert.ok(row && "problem" in row);
+  assert.match(row.problem, /cannot run on its default model "gemini"/);
+  assert.deepEqual(
+    row.listed?.map((choice) => [choice.spec, choice.runtime?.model.id]),
+    [
+      ["gemini", undefined],
+      ["sol", "gpt-6.1-sol"],
+    ],
+  );
+  // The default resolved but its account refused it: it is no alternative.
+  write(
+    "test-reviewer",
+    reviewer({ model: undefined, models: ["opus", "sol"] }),
+  );
+  offered = false;
+  const [refused] = await listSpawnableAgents();
+  assert.ok(refused && "problem" in refused);
+  assert.equal(refused.listed?.[0]?.runtime, undefined);
+  assert.match(
+    refused.listed?.[0]?.problem ?? "",
+    /does not offer claude-sdk\/opus/,
+  );
+  assert.equal(refused.listed?.[1]?.runtime?.model.id, "gpt-6.1-sol");
+  const text = spawnableAgentsText([refused]);
+  assert.doesNotMatch(text, /named as modelId: [^\n]*opus \(/);
+  assert.match(
+    text,
+    /other listed models that resolve now, named as modelId: sol \(openai-codex\/gpt-6\.1-sol/,
+  );
+});
+
 test("a model that stopped resolving refuses; nothing falls back", async () => {
   write("test-reviewer", reviewer());
   models = [model("openai-codex", "gpt-6.1-sol")];
@@ -148,7 +268,7 @@ test("a model that stopped resolving refuses; nothing falls back", async () => {
     resolveAgentSpawn("test-reviewer"),
     (error: Error) =>
       error instanceof AgentSpawnRefusedError &&
-      /Agent "test-reviewer" cannot run: No enabled account offers a model "opus"/.test(
+      /Agent "test-reviewer" cannot run on its default model "opus": No enabled account offers a model "opus".* None of its listed models resolve now\./.test(
         error.message,
       ),
   );

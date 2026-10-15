@@ -57,10 +57,10 @@ const sources: AgentRuntimeSources = {
 
 const base: Pick<
   AgentManifest,
-  "persona" | "model" | "effort" | "denyTools" | "skills"
+  "persona" | "models" | "effort" | "denyTools" | "skills"
 > = {
   persona: "developer",
-  model: "opus",
+  models: ["opus"],
   denyTools: [],
   skills: [],
 };
@@ -160,21 +160,26 @@ describe("resolveAgentModel", () => {
 });
 
 describe("checkAgentRuntime", () => {
+  /** The default (first) model's runtime. */
+  async function defaultOf(
+    manifest: typeof base,
+    options: Parameters<typeof checkAgentRuntime>[1] = { sources },
+  ) {
+    return (await checkAgentRuntime(manifest, options))?.[0]?.runtime;
+  }
+
   test("resolves the model and lowers the effort to what it supports", async () => {
-    const runtime = await checkAgentRuntime(
-      { ...base, model: "sol", effort: "off" },
-      { sources },
-    );
+    const runtime = await defaultOf({
+      ...base,
+      models: ["sol"],
+      effort: "off",
+    });
     assert.equal(runtime?.model.id, "gpt-6.1-sol");
     assert.equal(runtime?.thinkingLevel, "low");
     // No effort runs at the default, fitted the same way.
+    assert.equal((await defaultOf(base))?.thinkingLevel, "medium");
     assert.equal(
-      (await checkAgentRuntime(base, { sources }))?.thinkingLevel,
-      "medium",
-    );
-    assert.equal(
-      (await checkAgentRuntime({ ...base, model: "sol" }, { sources }))
-        ?.thinkingLevel,
+      (await defaultOf({ ...base, models: ["sol"] }))?.thinkingLevel,
       "medium",
     );
     const highOnly = {
@@ -182,8 +187,50 @@ describe("checkAgentRuntime", () => {
       models: async () => [model("claude-sdk", "opus", ["off", "high"])],
     };
     assert.equal(
-      (await checkAgentRuntime(base, { sources: highOnly }))?.thinkingLevel,
+      (await defaultOf(base, { sources: highOnly }))?.thinkingLevel,
       "high",
+    );
+  });
+
+  test("every listed model resolves in order, each with the effort fitted to it", async () => {
+    const choices = await checkAgentRuntime(
+      { ...base, models: ["sol", "opus"], effort: "off" },
+      { sources },
+    );
+    assert.deepEqual(
+      choices?.map((choice) => [
+        choice.spec,
+        choice.runtime?.model.id,
+        choice.runtime?.thinkingLevel,
+      ]),
+      [
+        ["sol", "gpt-6.1-sol", "low"],
+        ["opus", "opus", "off"],
+      ],
+    );
+  });
+
+  test("authoring needs every listed model; a spawn reads each on its own", async () => {
+    const manifest = { ...base, models: ["opus", "gemini"] };
+    await assert.rejects(
+      checkAgentRuntime(manifest, { sources }),
+      /No enabled account offers a model "gemini"/,
+    );
+    const each = await checkAgentRuntime(manifest, {
+      sources,
+      checkModel: "each",
+    });
+    assert.equal(each?.[0]?.runtime?.model.id, "opus");
+    assert.match(each?.[1]?.problem ?? "", /"gemini"/);
+  });
+
+  test("two specs for one model are refused when authoring", async () => {
+    await assert.rejects(
+      checkAgentRuntime(
+        { ...base, models: ["sol", "gpt-6.1-sol"] },
+        { sources },
+      ),
+      /Models "sol" and "gpt-6\.1-sol" both resolve to openai-codex\/gpt-6\.1-sol; list it once\./,
     );
   });
 
@@ -194,14 +241,14 @@ describe("checkAgentRuntime", () => {
         { ...model("claude-sdk", "opus"), pinnedId: "claude-opus-5-5" },
       ],
     };
-    const pinned = await checkAgentRuntime(
-      { ...base, model: "claude-opus-5-5" },
+    const pinned = await defaultOf(
+      { ...base, models: ["claude-opus-5-5"] },
       { sources: pinnedSources },
     );
     assert.equal(pinned?.model.id, "opus");
     assert.equal(pinned?.pinnedModel, "claude-opus-5-5");
     assert.ok(!("pinnedId" in pinned!.model));
-    const alias = await checkAgentRuntime(base, { sources: pinnedSources });
+    const alias = await defaultOf(base, { sources: pinnedSources });
     assert.equal(alias?.pinnedModel, undefined);
   });
 
@@ -232,7 +279,7 @@ describe("checkAgentRuntime", () => {
       checkAgentRuntime(
         {
           ...base,
-          model: "gemini",
+          models: ["gemini"],
           denyTools: ["worktree_pusj"],
           skills: ["missing-skill"],
         },
@@ -248,7 +295,7 @@ describe("checkAgentRuntime", () => {
   test("the model can be left unchecked for edits that keep it", async () => {
     assert.equal(
       await checkAgentRuntime(
-        { ...base, model: "retired-model" },
+        { ...base, models: ["retired-model"] },
         { sources, checkModel: false },
       ),
       undefined,

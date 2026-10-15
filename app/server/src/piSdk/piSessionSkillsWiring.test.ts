@@ -47,6 +47,7 @@ const agent = {
   provider: "openai-codex",
   model: "gpt-5",
   effort: "high" as const,
+  runtimeSource: "definition" as const,
   denyTools: ["bash"],
   skills: ["agent-skill"],
   body: "Review the tests.",
