@@ -32,19 +32,102 @@ import {
 } from "./loadState.ts";
 
 /**
- * The three groups, in the order they are rendered.
+ * The groups, in the order they are rendered.
  *
  * `needs-review` leads because somebody else is blocked on it; `cleanup` trails
- * because the work is over and only a checkout is left. The ids are stable —
- * they key the sections' headings and the tests below.
+ * because the work is over and only a checkout is left. A TEAM request sits
+ * below your own work: it asks a group, often for every pull request in the
+ * repository (a CODEOWNERS rule), so it is the one group that can run to dozens
+ * of rows and the browser collapses it. The ids are stable — they key the
+ * sections' headings and the tests below.
  */
-export type PullRequestGroupId = "needs-review" | "yours" | "cleanup";
+export type PullRequestGroupId =
+  "needs-review" | "yours" | "assigned" | "team-review" | "cleanup";
 
 export interface PullRequestGroupMeta {
   id: PullRequestGroupId;
   title: string;
   /** What the group is, for its empty/assistive wording. */
   description: string;
+}
+
+/** Every reason group, in render order. */
+export const PULL_REQUEST_GROUP_IDS: readonly PullRequestGroupId[] = [
+  "needs-review",
+  "yours",
+  "assigned",
+  "team-review",
+  "cleanup",
+];
+
+/** How the list is grouped: by the strongest reason, by project, by when. */
+export type PullRequestGroupBy = "reason" | "project" | "date";
+
+export function normalizePullRequestGroupBy(
+  value: unknown,
+): PullRequestGroupBy {
+  if (value === "project" || value === "date") return value;
+  // The former "Flat" view was already ordered by date.
+  return value === "none" ? "date" : "reason";
+}
+
+/** Date bands, newest first; `unknown` (no `updatedAt`) sorts last. */
+const DATE_BANDS = [
+  { id: "today", title: "Today" },
+  { id: "yesterday", title: "Yesterday" },
+  { id: "week", title: "This week" },
+  { id: "month", title: "This month" },
+  { id: "older", title: "Older" },
+  { id: "unknown", title: "Date unknown" },
+] as const;
+
+type DateBand = (typeof DATE_BANDS)[number]["id"];
+
+/** Which band an update time falls in, against local midnight of `now`. */
+function dateBandOf(updatedAt: number | undefined, now: number): DateBand {
+  if (updatedAt === undefined) return "unknown";
+  const day = 86_400_000;
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
+  const today = midnight.getTime();
+  if (updatedAt >= today) return "today";
+  if (updatedAt >= today - day) return "yesterday";
+  if (updatedAt >= today - 6 * day) return "week";
+  if (updatedAt >= today - 29 * day) return "month";
+  return "older";
+}
+
+/** The list's browser-local view: grouping and filters (`Prefs`). */
+export interface PullRequestListView {
+  groupBy: PullRequestGroupBy;
+  /** The one project shown; null = all. */
+  projectId: string | null;
+  /** Reasons shown, by each row's strongest one. All of them = no filter. */
+  reasons: readonly PullRequestGroupId[];
+  hideDrafts: boolean;
+}
+
+export const DEFAULT_PULL_REQUEST_VIEW: PullRequestListView = {
+  groupBy: "reason",
+  projectId: null,
+  reasons: PULL_REQUEST_GROUP_IDS,
+  hideDrafts: false,
+};
+
+/** Whether the reason filter leaves anything out. */
+export function reasonFilterActive(
+  reasons: readonly PullRequestGroupId[],
+): boolean {
+  return PULL_REQUEST_GROUP_IDS.some((id) => !reasons.includes(id));
+}
+
+/** How many filters narrow the list — the filter button's badge. */
+export function pullRequestFilterCount(view: PullRequestListView): number {
+  return (
+    (view.projectId !== null ? 1 : 0) +
+    (reasonFilterActive(view.reasons) ? 1 : 0) +
+    (view.hideDrafts ? 1 : 0)
+  );
 }
 
 export const PULL_REQUEST_GROUPS: readonly PullRequestGroupMeta[] = [
@@ -55,6 +138,16 @@ export const PULL_REQUEST_GROUPS: readonly PullRequestGroupMeta[] = [
   },
   { id: "yours", title: "Yours", description: "Pull requests you opened" },
   {
+    id: "assigned",
+    title: "Assigned to you",
+    description: "Pull requests you are an assignee of",
+  },
+  {
+    id: "team-review",
+    title: "Team review requests",
+    description: "A team you are in was asked to review",
+  },
+  {
     id: "cleanup",
     title: "Needs cleanup",
     description: "Finished upstream, still checked out locally",
@@ -62,19 +155,93 @@ export const PULL_REQUEST_GROUPS: readonly PullRequestGroupMeta[] = [
 ];
 
 /**
- * Which group a pull request belongs to.
+ * Which group a pull request belongs to: its STRONGEST reason, in the order
+ * the groups are rendered.
  *
  * A terminal pull request is ALWAYS cleanup: the server inventories one only
  * while a local worktree still holds its head branch, so its whole reason for
  * being listed is the checkout. Among open ones a review request outranks
  * authorship — your own pull request that someone also asked you to review is
- * still work somebody is waiting on, and it must not hide in "Yours".
+ * still work somebody is waiting on, and it must not hide in "Yours" — and a
+ * team request is the weakest claim on you. The other reasons stay visible on
+ * the row and the page (`pullRequestReasons`).
  */
 export function classifyPullRequest(
   item: PullRequestInventoryItem,
 ): PullRequestGroupId {
   if (item.state !== "open") return "cleanup";
-  return item.reviewRequested ? "needs-review" : "yours";
+  if (item.reviewRequested) return "needs-review";
+  if (item.mine) return "yours";
+  if (item.assignedToMe) return "assigned";
+  if (item.teamReviewRequests?.length) return "team-review";
+  // Nothing the server selects on is set — an older snapshot. Listed by the
+  // server as yours, so it stays where it always was.
+  return "yours";
+}
+
+export type PullRequestReasonKind =
+  "review-requested" | "author" | "assignee" | "team-review" | "local-worktree";
+
+export interface PullRequestReason {
+  kind: PullRequestReasonKind;
+  /** The sentence, for the page. */
+  label: string;
+  /** A word or two, for a row badge. */
+  short: string;
+}
+
+/**
+ * EVERY reason this pull request is in your list, strongest first — the
+ * answer to "why am I seeing this?". The group states only the first; the row
+ * badges the others and the page states them all.
+ *
+ * Only what the wire states is claimed. A merged or closed pull request has
+ * left the open list, so it can no longer say whose it was (`mine` is false
+ * there by contract) — its reason is the checkout, and that is all it says.
+ */
+export function pullRequestReasons(
+  item: PullRequestInventoryItem,
+): PullRequestReason[] {
+  if (item.state !== "open")
+    return item.worktreeId
+      ? [
+          {
+            kind: "local-worktree",
+            label: `A local worktree still holds ${item.headBranch}`,
+            short: "local checkout",
+          },
+        ]
+      : [];
+  const reasons: PullRequestReason[] = [];
+  if (item.reviewRequested)
+    reasons.push({
+      kind: "review-requested",
+      label: "Your review was requested",
+      // What it asks of you, in one word; the solid badge says it is asked.
+      short: "review",
+    });
+  if (item.mine)
+    reasons.push({
+      kind: "author",
+      label: "You opened it",
+      short: "mine",
+    });
+  if (item.assignedToMe)
+    reasons.push({
+      kind: "assignee",
+      label: "You are assigned",
+      short: "assigned",
+    });
+  const teams = item.teamReviewRequests ?? [];
+  if (teams.length > 0)
+    reasons.push({
+      kind: "team-review",
+      label: `Review requested from ${teams.length === 1 ? "your team" : "your teams"} ${teams.map((team) => `@${team}`).join(", ")}`,
+      // One word on a row, however many teams: the label (its tooltip, and
+      // the detail page) names them.
+      short: "team",
+    });
+  return reasons;
 }
 
 /**
@@ -150,48 +317,47 @@ export function comparePullRequests(
 }
 
 export interface PullRequestInboxOptions {
-  query?: string;
-  /** Resolved project labels, so the query can match what the row DISPLAYS. */
+  view?: PullRequestListView;
+  /** The clock the date bands are cut against. */
+  now?: number;
+  /** Resolved project labels, for project group headings and their order. */
   projectLabels?: Record<string, string>;
 }
 
-/**
- * Whether the query matches. It reads everything the row shows plus the two
- * branches, because "which PR was the one off `release-3`?" is exactly the
- * question this box is opened for. `#41` and `41` both match a number.
- *
- * The needle is normalized HERE rather than by the caller: this is exported,
- * and a helper that silently requires pre-lowercased input answers "no match"
- * for `Release-3` — a failure that looks like a search returning nothing.
- */
-export function matchesPullRequestQuery(
+/** Whether the view's filters keep this pull request. */
+export function matchesPullRequestView(
   item: PullRequestInventoryItem,
-  query: string,
-  options: PullRequestInboxOptions = {},
+  view: PullRequestListView,
 ): boolean {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return true;
-  const bare = needle.startsWith("#") ? needle.slice(1) : needle;
-  const haystack = [
-    item.title,
-    item.headBranch,
-    item.baseBranch,
-    item.author ?? "",
-    options.projectLabels?.[item.projectId] ?? "",
-  ]
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes(needle) || String(item.number).includes(bare);
+  if (view.projectId !== null && item.projectId !== view.projectId)
+    return false;
+  if (view.hideDrafts && item.draft) return false;
+  return view.reasons.includes(classifyPullRequest(item));
 }
 
-interface PullRequestGroup extends PullRequestGroupMeta {
+interface PullRequestGroup {
+  /** Stable: a reason id, `project:<id>`, or `all`. */
+  id: string;
+  title: string;
+  description: string;
+  /** Has a disclosure heading. */
+  collapsible: boolean;
+  /**
+   * Where a collapsible group starts. The team group starts closed: it is
+   * often every pull request of a repository (a CODEOWNERS rule).
+   */
+  defaultOpen: boolean;
+  /** Draws its heading in the attention tone. */
+  emphasis: boolean;
+  /** Set on a project group: its heading is the project's. */
+  projectId?: string;
   items: PullRequestInventoryItem[];
 }
 
 export interface PullRequestInboxView {
-  /** Only the groups that have rows, in `PULL_REQUEST_GROUPS` order. */
+  /** Only the groups that have rows, in render order. */
   groups: PullRequestGroup[];
-  /** Nothing matched — which is an empty state only once the source answered. */
+  /** Nothing passed the filters — an empty state only once the source answered. */
   empty: boolean;
   /** Rows across every group, for a count. */
   total: number;
@@ -201,25 +367,68 @@ export function buildPullRequestInbox(
   items: readonly PullRequestInventoryItem[],
   options: PullRequestInboxOptions = {},
 ): PullRequestInboxView {
-  // `matchesPullRequestQuery` normalizes for itself, so the raw query travels.
-  const query = options.query ?? "";
-  const byGroup = new Map<PullRequestGroupId, PullRequestInventoryItem[]>(
-    PULL_REQUEST_GROUPS.map((group) => [group.id, []]),
-  );
-  let total = 0;
-  for (const item of items) {
-    if (!matchesPullRequestQuery(item, query, options)) continue;
-    byGroup.get(classifyPullRequest(item))!.push(item);
-    total += 1;
-  }
+  const view = options.view ?? DEFAULT_PULL_REQUEST_VIEW;
+  const shown = items.filter((item) => matchesPullRequestView(item, view));
   const groups: PullRequestGroup[] = [];
-  for (const meta of PULL_REQUEST_GROUPS) {
-    const rows = byGroup.get(meta.id)!;
-    if (rows.length === 0) continue;
-    rows.sort(comparePullRequests);
-    groups.push({ ...meta, items: rows });
+  if (view.groupBy === "reason") {
+    for (const meta of PULL_REQUEST_GROUPS) {
+      const rows = shown.filter(
+        (item) => classifyPullRequest(item) === meta.id,
+      );
+      if (rows.length === 0) continue;
+      groups.push({
+        ...meta,
+        collapsible: true,
+        defaultOpen: meta.id !== "team-review",
+        emphasis: meta.id === "needs-review",
+        items: rows.sort(comparePullRequests),
+      });
+    }
+  } else if (view.groupBy === "project") {
+    const byProject = new Map<string, PullRequestInventoryItem[]>();
+    for (const item of shown) {
+      const rows = byProject.get(item.projectId) ?? [];
+      rows.push(item);
+      byProject.set(item.projectId, rows);
+    }
+    const label = (id: string) => options.projectLabels?.[id] ?? id;
+    for (const [projectId, rows] of [...byProject].sort(([a], [b]) =>
+      label(a).localeCompare(label(b)),
+    ))
+      groups.push({
+        id: `project:${projectId}`,
+        title: label(projectId),
+        description: `Pull requests in ${label(projectId)}`,
+        collapsible: true,
+        defaultOpen: true,
+        emphasis: false,
+        projectId,
+        items: rows.sort(comparePullRequests),
+      });
+  } else {
+    const now = options.now ?? Date.now();
+    const byBand = new Map<DateBand, PullRequestInventoryItem[]>();
+    for (const item of shown) {
+      const band = dateBandOf(item.updatedAt, now);
+      const rows = byBand.get(band) ?? [];
+      rows.push(item);
+      byBand.set(band, rows);
+    }
+    for (const band of DATE_BANDS) {
+      const rows = byBand.get(band.id);
+      if (!rows?.length) continue;
+      groups.push({
+        id: `date:${band.id}`,
+        title: band.title,
+        description: `Updated ${band.title.toLowerCase()}`,
+        collapsible: true,
+        defaultOpen: true,
+        emphasis: false,
+        items: rows.sort(comparePullRequests),
+      });
+    }
   }
-  return { groups, empty: total === 0, total };
+  return { groups, empty: shown.length === 0, total: shown.length };
 }
 
 /* -------------------------------- vocabulary ------------------------------- */
@@ -534,4 +743,84 @@ export function pullRequestJoinSources(
       ...(state.taskListError ? { error: state.taskListError } : {}),
     },
   };
+}
+
+/** One row of a pull request's session tree. */
+export interface PullRequestSessionTreeRow {
+  session: SessionListItem;
+  /** 1 = a tree's root, as `SessionInboxCard.depth` counts. */
+  depth: number;
+  /** The pull request names this session itself (its join ids). */
+  linked: boolean;
+}
+
+/**
+ * The sessions a pull request is joined to, each shown in its WHOLE spawn
+ * tree: from the session at the top of its `spawnedBySessionId` chain down
+ * through every peer at every depth, so the coordinator that started the work
+ * and the peers beside the linked one are visible too. Trees are ordered by
+ * their latest activity, siblings likewise, newest first. Archived sessions
+ * are out, as everywhere a session list is shown; a spawn cycle is walked
+ * once. Only sessions the list HOLDS can appear — the join ids that resolve
+ * nothing are the caller's to state.
+ */
+export function pullRequestSessionTree(
+  sessions: readonly SessionListItem[],
+  linkedIds: readonly string[],
+): PullRequestSessionTreeRow[] {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const children = new Map<string, SessionListItem[]>();
+  for (const session of sessions) {
+    const parent = session.spawnedBySessionId;
+    if (session.archived || !parent || parent === session.id) continue;
+    const list = children.get(parent) ?? [];
+    list.push(session);
+    children.set(parent, list);
+  }
+  const linked = new Set(linkedIds);
+  const rootOf = (session: SessionListItem): SessionListItem => {
+    const seen = new Set<string>([session.id]);
+    let current = session;
+    for (;;) {
+      const parent = current.spawnedBySessionId
+        ? byId.get(current.spawnedBySessionId)
+        : undefined;
+      if (!parent || parent.archived || seen.has(parent.id)) return current;
+      seen.add(parent.id);
+      current = parent;
+    }
+  };
+  // The latest activity anywhere in a subtree, so a tree whose peer just
+  // moved sorts above one that went quiet.
+  const latest = new Map<string, number>();
+  const latestOf = (session: SessionListItem, seen: Set<string>): number => {
+    const known = latest.get(session.id);
+    if (known !== undefined) return known;
+    seen.add(session.id);
+    let value = session.updatedAt;
+    for (const child of children.get(session.id) ?? [])
+      if (!seen.has(child.id)) value = Math.max(value, latestOf(child, seen));
+    latest.set(session.id, value);
+    return value;
+  };
+  const roots = new Map<string, SessionListItem>();
+  for (const id of linkedIds) {
+    const session = byId.get(id);
+    if (!session || session.archived) continue;
+    const root = rootOf(session);
+    roots.set(root.id, root);
+  }
+  const byActivity = (a: SessionListItem, b: SessionListItem) =>
+    latestOf(b, new Set()) - latestOf(a, new Set());
+  const rows: PullRequestSessionTreeRow[] = [];
+  const walked = new Set<string>();
+  const walk = (session: SessionListItem, depth: number) => {
+    if (walked.has(session.id)) return;
+    walked.add(session.id);
+    rows.push({ session, depth, linked: linked.has(session.id) });
+    for (const child of [...(children.get(session.id) ?? [])].sort(byActivity))
+      walk(child, depth + 1);
+  };
+  for (const root of [...roots.values()].sort(byActivity)) walk(root, 1);
+  return rows;
 }

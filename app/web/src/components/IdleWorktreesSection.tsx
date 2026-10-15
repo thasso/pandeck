@@ -1,11 +1,12 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { GitBranch } from "lucide-react";
+import { FolderKanban, GitBranch, HardDrive, Moon } from "lucide-react";
 import type { IdleWorktree, PullRequestInventoryItem } from "@assistant/shared";
 import { ErrorNote, RefreshIndicator, Skeleton } from "./common/load.tsx";
 import { ConfirmDialog } from "./common/dialogs.tsx";
+import { ListCardRow } from "./ListCardRow.tsx";
+import { ListGroupSection } from "./ListGroupSection.tsx";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { Button } from "./ui/button.tsx";
-import { Item, ItemContent, ItemDescription, ItemTitle } from "./ui/item.tsx";
 import {
   dataOf,
   errorOf,
@@ -49,65 +50,68 @@ const IdleWorktreeRow = memo(function IdleWorktreeRow({
   const { worktree } = item;
   const label = idleWorktreeLabel(item);
   const idleFor = idleForLabel(item.lastActivityAt, now);
-  const open = () => onOpen(worktree.id);
   return (
-    <Item
-      size="xs"
-      data-idle-worktree-row
-      data-list-row-id={`idle-worktree:${worktree.id}`}
-      role="button"
-      tabIndex={0}
-      aria-label={`Worktree ${worktree.branch} — ${label}, ${idleFor}`}
-      onClick={open}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          open();
-        }
+    <ListCardRow
+      rowProps={{
+        "data-idle-worktree-row": "",
+        "data-list-row-id": `idle-worktree:${worktree.id}`,
       }}
-      className={`cursor-pointer select-none hover:bg-muted ${density === "comfortable" ? "py-2" : "py-1.5"}`}
-    >
-      <ItemContent className="min-w-0 gap-0.5">
-        <ItemTitle className="w-full min-w-0 gap-1.5 font-normal">
-          <GitBranch
-            size={14}
-            className="shrink-0 text-muted-foreground"
-            aria-hidden
-          />
-          <span className="min-w-0 flex-1 truncate font-mono text-xs">
-            {worktree.branch}
-          </span>
-          {worktree.pullRequest ? (
-            <SessionDeliveryMark
-              session={{ pullRequest: worktree.pullRequest }}
-              variant="glyph"
-            />
-          ) : null}
-        </ItemTitle>
-        <ItemDescription className="flex min-w-0 items-center gap-1.5 pl-5">
+      ariaLabel={`Worktree ${worktree.branch} — ${label}, ${idleFor}`}
+      density={density}
+      onOpen={() => onOpen(worktree.id)}
+      // The same three rows as the pull requests above it: where it lives,
+      // which checkout, and what retiring it would lose.
+      context={
+        <>
           {project ? (
             <span
-              className="flex shrink-0 items-center gap-1"
+              className="flex max-w-full shrink-0 items-center gap-1"
               title={project.name}
             >
-              <span
-                className="size-1.5 rounded-full"
-                style={{ backgroundColor: project.color }}
+              <FolderKanban
+                size={11}
+                className="shrink-0"
+                style={{ color: project.color }}
                 aria-hidden
               />
-              {project.key}
+              <span className="min-w-0 truncate">{project.key}</span>
             </span>
           ) : null}
+          <span className="flex shrink-0 items-center gap-1 text-foreground">
+            <HardDrive size={11} className="shrink-0" aria-hidden />
+            worktree
+          </span>
+        </>
+      }
+      age={idleFor}
+      leading={
+        <GitBranch
+          size={13}
+          className="shrink-0 text-muted-foreground"
+          aria-hidden
+        />
+      }
+      title={worktree.branch}
+      signals={
+        <>
           <span
-            className={`min-w-0 flex-1 truncate ${item.kind === "delivered" ? "" : "text-warning"}`}
+            className={`min-w-0 flex-1 basis-0 truncate ${item.kind === "delivered" ? "" : "text-warning"}`}
+            title={label}
           >
             {label}
           </span>
-          <span className="shrink-0 tabular-nums">{idleFor}</span>
-        </ItemDescription>
-      </ItemContent>
-    </Item>
+          {worktree.pullRequest ? (
+            <span className="flex shrink-0 items-center">
+              <SessionDeliveryMark
+                session={{ pullRequest: worktree.pullRequest }}
+                variant="responsive"
+                showNumber
+              />
+            </span>
+          ) : null}
+        </>
+      }
+    />
   );
 });
 
@@ -267,47 +271,51 @@ export function IdleWorktreesSection({
       </>
     );
   return (
-    <section
-      aria-labelledby="pull-requests-idle-worktrees"
-      className="mb-1 flex flex-col gap-px"
-    >
-      <div className="flex items-center gap-1 px-2 pb-0.5">
-        <h2
-          id="pull-requests-idle-worktrees"
-          className="min-w-0 flex-1 text-xs font-medium text-muted-foreground"
-        >
-          Idle worktrees ({rows.length})
-        </h2>
-        {/* R2: a poll keeps the rows and says so here. */}
-        {isPending(idle) ? (
-          <RefreshIndicator label="Refreshing idle worktrees" />
+    <>
+      <ListGroupSection
+        id="idle-worktrees"
+        title="Idle worktrees"
+        count={rows.length}
+        icon={<Moon size={14} className="shrink-0" aria-hidden />}
+        actions={
+          // R2: a poll keeps the rows and says so here. A status, not an act:
+          // the band itself offers nothing to do.
+          isPending(idle) ? (
+            <RefreshIndicator label="Refreshing idle worktrees" />
+          ) : undefined
+        }
+      >
+        {error ? (
+          <ErrorNote message={error} onRetry={onReload} className="m-1" />
         ) : null}
+        {rows.map((item) => (
+          <IdleWorktreeRow
+            key={item.worktree.id}
+            item={item}
+            project={projects.get(item.worktree.projectId)}
+            now={now}
+            density={density}
+            onOpen={onOpenWorktree}
+          />
+        ))}
+        {/* The one bulk act, under the rows it acts on: quiet and
+            right-aligned, as an action row is everywhere else. */}
         {retirable.length > 0 ? (
-          <Button
-            size="xs"
-            variant="ghost"
-            busy={bulk?.busy ?? false}
-            onClick={() => setBulk({ targets: retirable, busy: false })}
-          >
-            Retire {retirable.length}…
-          </Button>
+          <div className="flex justify-end border-b border-border/60 px-1 py-1">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-muted-foreground"
+              busy={bulk?.busy ?? false}
+              onClick={() => setBulk({ targets: retirable, busy: false })}
+            >
+              Retire {retirable.length} with nothing unmerged…
+            </Button>
+          </div>
         ) : null}
-      </div>
-      {error ? (
-        <ErrorNote message={error} onRetry={onReload} className="mb-1" />
-      ) : null}
-      {rows.map((item) => (
-        <IdleWorktreeRow
-          key={item.worktree.id}
-          item={item}
-          project={projects.get(item.worktree.projectId)}
-          now={now}
-          density={density}
-          onOpen={onOpenWorktree}
-        />
-      ))}
+      </ListGroupSection>
       {dialog}
-    </section>
+    </>
   );
 }
 

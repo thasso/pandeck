@@ -1,3 +1,9 @@
+import {
+  normalizePullRequestGroupBy,
+  PULL_REQUEST_GROUP_IDS,
+  type PullRequestGroupBy,
+  type PullRequestGroupId,
+} from "../lib/pullRequestInbox.ts";
 import { applyPatch } from "@assistant/shared";
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -118,6 +124,14 @@ export interface Prefs {
   backlogViewMode: BacklogViewMode;
   /** Backlog project filter: which project(s) the list is narrowed to. */
   backlogProjectFilter: BacklogProjectFilter;
+  /** Pull Requests list: how rows are grouped. */
+  pullRequestGroupBy: PullRequestGroupBy;
+  /** Pull Requests list: the one project shown, or null for all. */
+  pullRequestProjectFilter: string | null;
+  /** Pull Requests list: the reasons (strongest per row) shown. */
+  pullRequestReasonFilter: PullRequestGroupId[];
+  /** Pull Requests list: leave drafts out. */
+  pullRequestHideDrafts: boolean;
   /** Worktree detail views: width of the local navigator rail. */
   worktreeChangesRailWidth: number;
   /** Worktree detail views: whether the local navigator rail is collapsed. */
@@ -200,6 +214,10 @@ const defaults: Prefs = {
   backlogView: "backlog",
   backlogViewMode: "normal",
   backlogProjectFilter: ALL_PROJECT_FILTER,
+  pullRequestGroupBy: "reason",
+  pullRequestProjectFilter: null,
+  pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
+  pullRequestHideDrafts: false,
   worktreeChangesRailWidth: 300,
   worktreeChangesRailCollapsed: false,
   worktreeNavigatorViewMode: "tree",
@@ -226,6 +244,7 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
     textScale: normalizeTextScale(known.textScale),
     navSlots: normalizeNavSlots(known.navSlots),
     backlogView: normalizeBacklogView(known.backlogView),
+    pullRequestGroupBy: normalizePullRequestGroupBy(known.pullRequestGroupBy),
     ...(workflowRoleRuntimes !== undefined ? { workflowRoleRuntimes } : {}),
   };
 }
