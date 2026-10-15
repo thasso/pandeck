@@ -156,6 +156,7 @@ import {
   createDisplayProjectionCache,
   entriesToDisplayMessages,
 } from "@assistant/shared/display";
+import { placeCardRows } from "@assistant/shared/cardPlacement";
 import { AssistantSocket, defaultSocketUrl } from "../lib/socket.ts";
 import { sessionIdFromPathname } from "../lib/sessionRoutes.ts";
 import { recordWebBuild } from "../lib/webBuild.ts";
@@ -2088,11 +2089,7 @@ function withChat(
   );
   const loadedFrom = loadedHistoryStart(base, state.timelineStart);
   const messages = mergeProvisionMessage(
-    mergePullRequestCardMessages(
-      mergeApprovalMessages(base, approvals, loadedFrom),
-      pullRequestCards,
-      loadedFrom,
-    ),
+    placeCardRows(base, [...approvals, ...pullRequestCards], loadedFrom),
     worktreeProvision,
   );
   const streamingMessageId = messages.find((m) => m.streaming)?.id ?? null;
@@ -2941,79 +2938,6 @@ function loadedHistoryStart(
   return Number.isFinite(at) ? at : null;
 }
 
-/** Restore store-backed approval cards to the turn/tool position where they were issued. */
-function mergeApprovalMessages(
-  base: DisplayMessage[],
-  approvals: DisplayMessage[],
-  loadedFrom: number | null,
-): DisplayMessage[] {
-  const result = [...base];
-  const ordered = [...approvals].sort(
-    (a, b) => approvalCreatedAt(a) - approvalCreatedAt(b),
-  );
-  for (const message of ordered) {
-    const approval = message.blocks.find(
-      (block): block is Extract<DisplayBlock, { kind: "approval" }> =>
-        block.kind === "approval",
-    )?.approval;
-    const sourceToolCallId = approval?.sourceToolCallId;
-    let insertAt = -1;
-    if (sourceToolCallId) {
-      const anchor = result.findIndex((candidate) =>
-        candidate.blocks.some(
-          (block) => block.kind === "tool" && block.toolId === sourceToolCallId,
-        ),
-      );
-      if (anchor >= 0) {
-        insertAt = anchor + 1;
-        while (
-          insertAt < result.length &&
-          approvalSourceToolCallId(result[insertAt]!) === sourceToolCallId
-        )
-          insertAt += 1;
-      }
-    }
-    if (insertAt < 0) {
-      const createdAt = approvalCreatedAt(message);
-      if (loadedFrom !== null && createdAt < loadedFrom) continue;
-      insertAt = result.findIndex((candidate) => {
-        const candidateAt = candidate.createdAt
-          ? Date.parse(candidate.createdAt)
-          : Number.NaN;
-        return Number.isFinite(candidateAt) && candidateAt > createdAt;
-      });
-      if (insertAt < 0) {
-        // Keep trailing undated live/store overlays after the last durable
-        // message; an unrelated undated card earlier in history must not pull
-        // this approval ahead of its timestamp.
-        let lastDated = -1;
-        for (let index = 0; index < result.length; index += 1)
-          if (result[index]!.createdAt) lastDated = index;
-        insertAt = lastDated >= 0 ? lastDated + 1 : result.length;
-      }
-    }
-    result.splice(insertAt, 0, message);
-  }
-  return result;
-}
-
-function approvalCreatedAt(message: DisplayMessage): number {
-  const card = message.blocks.find(
-    (block): block is Extract<DisplayBlock, { kind: "approval" }> =>
-      block.kind === "approval",
-  )?.approval;
-  return (
-    card?.createdAt ?? (message.createdAt ? Date.parse(message.createdAt) : 0)
-  );
-}
-
-function approvalSourceToolCallId(message: DisplayMessage): string | undefined {
-  return message.blocks.find(
-    (block): block is Extract<DisplayBlock, { kind: "approval" }> =>
-      block.kind === "approval",
-  )?.approval.sourceToolCallId;
-}
-
 export type ClientPullRequestCard = PullRequestCard & {
   /** Browser-local bridge from the click to the server's durable `busyAction`. */
   pendingAction?: PullRequestCardAction;
@@ -3241,79 +3165,6 @@ function upsertPullRequestCard(
     ...messages,
     { id: msgId, role: "assistant", blocks: [block], createdAt },
   ];
-}
-
-/** Restore store-backed pull-request cards to the turn/tool position where they were issued (mirrors `mergeApprovalMessages`). */
-function mergePullRequestCardMessages(
-  base: DisplayMessage[],
-  cards: DisplayMessage[],
-  loadedFrom: number | null,
-): DisplayMessage[] {
-  const result = [...base];
-  const ordered = [...cards].sort(
-    (a, b) => pullRequestCardCreatedAt(a) - pullRequestCardCreatedAt(b),
-  );
-  for (const message of ordered) {
-    const card = message.blocks.find(
-      (block): block is Extract<DisplayBlock, { kind: "pullRequest" }> =>
-        block.kind === "pullRequest",
-    )?.pullRequest;
-    const sourceToolCallId = card?.sourceToolCallId;
-    let insertAt = -1;
-    if (sourceToolCallId) {
-      const anchor = result.findIndex((candidate) =>
-        candidate.blocks.some(
-          (block) => block.kind === "tool" && block.toolId === sourceToolCallId,
-        ),
-      );
-      if (anchor >= 0) {
-        insertAt = anchor + 1;
-        while (
-          insertAt < result.length &&
-          pullRequestCardSourceToolCallId(result[insertAt]!) ===
-            sourceToolCallId
-        )
-          insertAt += 1;
-      }
-    }
-    if (insertAt < 0) {
-      const createdAt = pullRequestCardCreatedAt(message);
-      if (loadedFrom !== null && createdAt < loadedFrom) continue;
-      insertAt = result.findIndex((candidate) => {
-        const candidateAt = candidate.createdAt
-          ? Date.parse(candidate.createdAt)
-          : Number.NaN;
-        return Number.isFinite(candidateAt) && candidateAt > createdAt;
-      });
-      if (insertAt < 0) {
-        let lastDated = -1;
-        for (let index = 0; index < result.length; index += 1)
-          if (result[index]!.createdAt) lastDated = index;
-        insertAt = lastDated >= 0 ? lastDated + 1 : result.length;
-      }
-    }
-    result.splice(insertAt, 0, message);
-  }
-  return result;
-}
-
-function pullRequestCardCreatedAt(message: DisplayMessage): number {
-  const card = message.blocks.find(
-    (block): block is Extract<DisplayBlock, { kind: "pullRequest" }> =>
-      block.kind === "pullRequest",
-  )?.pullRequest;
-  return (
-    card?.createdAt ?? (message.createdAt ? Date.parse(message.createdAt) : 0)
-  );
-}
-
-function pullRequestCardSourceToolCallId(
-  message: DisplayMessage,
-): string | undefined {
-  return message.blocks.find(
-    (block): block is Extract<DisplayBlock, { kind: "pullRequest" }> =>
-      block.kind === "pullRequest",
-  )?.pullRequest.sourceToolCallId;
 }
 
 function canOptimisticallyUpdateTaskList(

@@ -329,16 +329,17 @@ vocabulary: the inbox's `needs-you` tier, ahead of `attention` (failed, unread),
 tier, the badge and the dot are how it is found.
 
 Inside the session, the card itself has to be found too. It is anchored at the
-tool call that proposed it, so anything the agent says afterwards pushes it up
-the transcript. While an approval card is pending, the composer's ledge names it
-(`PendingApprovalsLedge`), and a tap jumps to the card and flashes it. The strip
-only finds the card: Approve and Reject stay on the card. Each proposing tool's
-result also hands the agent a `pa://approval/<id>` link to its card, so "approve
-this" in the agent's reply is a link to the card, showing the card's live
-status. Both reach the card the same way, through a `resolveTimelineAnchor` with
-an `approval` target. The server answers with the card's row id
-(`approval-<id>`) and the index of the turn that proposed it, so a windowed
-transcript loads back far enough to show the card.
+tool call that proposed it — splitting the turn there when the call sits inside
+it (`app/shared/cardPlacement.ts`) — so anything the agent says afterwards
+pushes it up the transcript. While an approval card is pending, the composer's
+ledge names it (`PendingApprovalsLedge`), and a tap jumps to the card and
+flashes it. The strip only finds the card: Approve and Reject stay on the card.
+Each proposing tool's result also hands the agent a `pa://approval/<id>` link to
+its card, so "approve this" in the agent's reply is a link to the card, showing
+the card's live status. Both reach the card the same way, through a
+`resolveTimelineAnchor` with an `approval` target. The server answers with the
+card's row id (`approval-<id>`) and the index of the turn that proposed it, so a
+windowed transcript loads back far enough to show the card.
 
 This qualifies for push because the work has stopped until the user acts.
 Account login failures are the explicit additional condition below.

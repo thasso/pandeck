@@ -3,12 +3,21 @@
  * No in-repo client sends or reads the `pa/*` keys (pi runs tools through
  * `piSdk/agentToolAdapter.ts`, Claude ignores them); the server still honours
  * them for a possible external MCP client. `anthropic/*` keys are read by the
- * Claude Agent SDK's native tool search. Everything beyond the plain MCP tool
+ * Claude Agent SDK's native tool search, and the Claude CLI sends its own
+ * `claudecode/*` request keys. Everything beyond the plain MCP tool
  * surface rides under these keys so the wire stays standard MCP.
  */
 
 /** Request `_meta` key: the caller's tool-call id (else the MCP request id is used). */
 export const TOOL_CALL_ID_META_KEY = "pa/toolCallId";
+
+/**
+ * Request `_meta` key the Claude CLI sets on every `tools/call`: the model's
+ * `tool_use` id, which is the id the transcript's tool block carries. Cards
+ * anchor at their `sourceToolCallId`, so without it every card a Claude tool
+ * created named the MCP request number and never found its tool call.
+ */
+export const CLAUDE_TOOL_USE_ID_META_KEY = "claudecode/toolUseId";
 
 /** CallToolResult `_meta` key: the tool's "stop after this tool batch" flag. */
 export const TERMINATE_META_KEY = "pa/terminate";

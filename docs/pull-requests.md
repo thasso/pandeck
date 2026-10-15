@@ -484,12 +484,17 @@ timeline, because only a mutable store supports being patched long after the
 - The card itself is a separate durable record, re-emitted on attach right AFTER
   the atomic snapshot (mirrors approval cards) and anchored at the `/pr` tool
   call's position via `sourceToolCallId` so it renders right after it rather
-  than at the bottom of the transcript. Since it is not IN that snapshot, a
-  snapshot for the session already in view — a reconnect, a cache-bearing reload
-  — keeps the client's cards instead of blanking them: clearing them unmounts
-  every card in a transcript whose other rows all stay, which reads as one card
-  blinking on its own and loses the local state of the control the user is using
-  (`useAssistant`'s `snapshot` case).
+  than at the bottom of the transcript. One assistant entry holds a whole turn,
+  so placement (`app/shared/cardPlacement.ts`, shared by the client and the
+  server snapshot) splits that entry after the call and continues the rest of
+  the turn below the card, live and after reload alike. Claude tools learn the
+  call id from the CLI's `_meta["claudecode/toolUseId"]`; without it the anchor
+  names the MCP request number and the card falls back to its creation time.
+  Since it is not IN that snapshot, a snapshot for the session already in view —
+  a reconnect, a cache-bearing reload — keeps the client's cards instead of
+  blanking them: clearing them unmounts every card in a transcript whose other
+  rows all stay, which reads as one card blinking on its own and loses the local
+  state of the control the user is using (`useAssistant`'s `snapshot` case).
 - Every change (task pick, drafting, CI, review, merge) broadcasts
   `pullRequestCardUpdate`, and the client upserts the card by id.
 - Workflow publication reuses a matching live card for the run worktree/branch.

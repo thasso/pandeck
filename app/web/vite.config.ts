@@ -143,6 +143,9 @@ export default defineConfig(({ command }) => {
         "@assistant/shared/display": fileURLToPath(
           new URL("../shared/displayMapping.ts", import.meta.url),
         ),
+        "@assistant/shared/cardPlacement": fileURLToPath(
+          new URL("../shared/cardPlacement.ts", import.meta.url),
+        ),
         "@assistant/shared/turnStats": fileURLToPath(
           new URL("../shared/turnStats.ts", import.meta.url),
         ),

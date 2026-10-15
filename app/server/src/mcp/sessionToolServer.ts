@@ -6,7 +6,8 @@
  * `piSdk/agentToolAdapter.ts`.
  *
  * Wire contract beyond plain MCP (all under `_meta`, see ./meta.ts):
- *  - request `_meta["pa/toolCallId"]`: caller-supplied tool-call id (falls back
+ *  - request `_meta["pa/toolCallId"]`, else the Claude CLI's
+ *    `_meta["claudecode/toolUseId"]`: caller-supplied tool-call id (falls back
  *    to the MCP request id);
  *  - progress: when the caller sends a `progressToken`, tool `ctx.progress`
  *    partials are emitted as `notifications/progress` with the partial
@@ -28,6 +29,7 @@ import type { AgentTool, ToolResult, ToolSession } from "./tool.ts";
 import {
   ANTHROPIC_ALWAYS_LOAD_META_KEY,
   ANTHROPIC_SEARCH_HINT_META_KEY,
+  CLAUDE_TOOL_USE_ID_META_KEY,
   DETAILS_META_KEY,
   PI_EXTRAS_META_KEY,
   TERMINATE_META_KEY,
@@ -154,11 +156,11 @@ export function createSessionToolServer(
         );
 
       const meta = req.params._meta;
-      const requestedId = meta?.[TOOL_CALL_ID_META_KEY];
-      const toolCallId =
-        typeof requestedId === "string" && requestedId
-          ? requestedId
-          : String(extra.requestId);
+      const requestedId = [
+        meta?.[TOOL_CALL_ID_META_KEY],
+        meta?.[CLAUDE_TOOL_USE_ID_META_KEY],
+      ].find((id): id is string => typeof id === "string" && id !== "");
+      const toolCallId = requestedId ?? String(extra.requestId);
       const progressToken = meta?.progressToken;
       let progressCount = 0;
       const progress =

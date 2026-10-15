@@ -980,9 +980,11 @@ export class ClaudeSdkSession implements LiveSession {
 
   /**
    * `snapshot().length` without building the snapshot: the approval and card
-   * merges only insert, so the count is a sum. The session list asks this for
-   * every Claude row on every rebuild, and projecting a long transcript each
-   * time just to count it was most of that rebuild.
+   * merges insert, so the count is a sum — short only by the continuation row a
+   * card adds when it splits a turn, which a list-row size hint can ignore. The
+   * session list asks this for every Claude row on every rebuild, and
+   * projecting a long transcript each time just to count it was most of that
+   * rebuild.
    */
   private messageCount(): number {
     const counted = this.committedDisplayCount;

@@ -10,6 +10,7 @@ import type {
   NewPendingChatComment,
   PendingChatCommentsController,
 } from "../hooks/usePendingChatComments.ts";
+import { placeCardRows } from "@assistant/shared/cardPlacement";
 import { mount } from "../test/mount.tsx";
 import { chatToolCommentTargets, MessageList } from "./MessageList.tsx";
 import type { TranscriptViewPrefs } from "./transcriptView.ts";
@@ -431,6 +432,97 @@ describe("MessageList chat comments", () => {
         { entryId: "assistant-entry", anchorBlock: 0, renderedBlock: 0 },
         { entryId: "tool-result", anchorBlock: 0, renderedBlock: 1 },
         { entryId: "assistant-entry", anchorBlock: 2, renderedBlock: 2 },
+      ]);
+    });
+
+    it("keeps entry coordinates on a turn split around a card", () => {
+      const entry: DisplayMessage = {
+        id: "assistant-entry",
+        role: "assistant",
+        createdAt: "2026-08-20T14:31:00.000Z",
+        blocks: [
+          { kind: "text", text: "Opening text" },
+          {
+            kind: "tool",
+            toolId: "tc1",
+            name: "read",
+            args: {},
+            output: "tool body",
+            isError: false,
+            done: true,
+          },
+          { kind: "text", text: "Final text" },
+        ],
+      };
+      const card: DisplayMessage = {
+        id: "pull-request-card-p1",
+        role: "assistant",
+        createdAt: "2026-08-20T14:30:30.000Z",
+        blocks: [
+          {
+            kind: "pullRequest",
+            pullRequest: {
+              renderKind: "pullRequest",
+              id: "p1",
+              sessionId: "s1",
+              status: "open",
+              createdAt: Date.parse("2026-08-20T14:30:30.000Z"),
+              updatedAt: Date.parse("2026-08-20T14:30:30.000Z"),
+              sourceToolCallId: "tc1",
+              title: "Ship it",
+              headBranch: "feature",
+              baseBranch: "main",
+              warnings: [],
+            },
+          },
+        ],
+      };
+      render(placeCardRows([entry], [card]), {
+        timeline: [
+          {
+            id: "assistant-entry",
+            seq: 10,
+            createdAt: "2026-08-20T14:31:00.000Z",
+            type: "message",
+            role: "assistant",
+            content: [
+              { type: "text", text: "Opening text" },
+              { type: "toolCall", toolCallId: "tc1", name: "read", input: {} },
+              { type: "text", text: "Final text" },
+            ],
+          },
+          {
+            id: "tool-result",
+            seq: 11,
+            createdAt: "2026-08-20T14:31:01.000Z",
+            type: "message",
+            role: "toolResult",
+            toolCallId: "tc1",
+            content: [{ type: "text", text: "tool body" }],
+          },
+        ] as ClientTimelineEntry[],
+      });
+
+      const targets = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          "[data-chat-comment-target], [data-chat-comment-named-target]",
+        ),
+      );
+      expect(
+        targets.map((target) => ({
+          row: target.closest<HTMLElement>("[data-message-id]")?.dataset
+            .messageId,
+          entryId: target.dataset.chatEntryId,
+          anchorBlock: Number(target.dataset.chatBlockIndex),
+        })),
+      ).toEqual([
+        { row: "assistant-entry", entryId: "assistant-entry", anchorBlock: 0 },
+        { row: "assistant-entry", entryId: "tool-result", anchorBlock: 0 },
+        {
+          row: "assistant-entry~tc1",
+          entryId: "assistant-entry",
+          anchorBlock: 2,
+        },
       ]);
     });
 

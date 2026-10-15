@@ -11,6 +11,10 @@ import { Bot, PackageCheck, Scissors } from "lucide-react";
 import { Badge } from "./ui/badge.tsx";
 import { AppCard } from "./common/AppCard.tsx";
 import { peerPromptCardOf } from "@assistant/shared/toolCards";
+import {
+  displayBlockOffset,
+  displayEntryId,
+} from "@assistant/shared/cardPlacement";
 import { ErrorNote, PaneLoading } from "./common/load.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import type {
@@ -483,6 +487,10 @@ export const AssistantMessage = memo(function AssistantMessage({
   const { blocks, streaming } = message;
   const last = blocks[blocks.length - 1];
   const progress = streaming ? activityLabel(last) : null;
+  // Comment addresses are entry coordinates; a continuation row of a turn split
+  // around a card starts partway into its entry.
+  const entryId = displayEntryId(message);
+  const blockOffset = displayBlockOffset(message);
 
   // A turn whose only blocks are thinking/tools renders nothing when those are
   // hidden, avoiding empty spacing between visible turns.
@@ -521,8 +529,8 @@ export const AssistantMessage = memo(function AssistantMessage({
           {...(chatCommentable
             ? {
                 "data-chat-comment-target": "",
-                "data-chat-entry-id": message.id,
-                "data-chat-block-index": i,
+                "data-chat-entry-id": entryId,
+                "data-chat-block-index": blockOffset + i,
                 "data-chat-render-block-index": i,
               }
             : {})}
@@ -555,7 +563,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       );
     }
     if (block.kind === "tool") {
-      const target = toolCommentTargets?.get(i);
+      const target = toolCommentTargets?.get(blockOffset + i);
       const rendered = renderToolBlock(
         block,
         target ? { ...toolCtx, commentTarget: target } : toolCtx,

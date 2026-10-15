@@ -4,8 +4,8 @@
  * (`db/pullRequestCardStore.ts`), cards
  * injected into session snapshots on attach (mirrors `withApprovalBlocks`),
  * updates broadcast as `pullRequestCardUpdate` so a viewer upserts by id, and
- * `sourceToolCallId` anchors a card at the `/pr` synthetic tool call that issued
- * it (client restore/order logic mirrors `mergeApprovalMessages`).
+ * `sourceToolCallId` anchors a card at the tool call that issued it (placement
+ * is shared with approvals and the client: `@assistant/shared/cardPlacement`).
  *
  * Unlike approvals, there is no execute-on-decision seam: `prWorkflow.ts`
  * creates and patches cards directly (drafting + provider calls happen inline),
@@ -20,6 +20,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { applyPatch } from "@assistant/shared";
+import { placeCardRows } from "@assistant/shared/cardPlacement";
 import type {
   DisplayMessage,
   Patch,
@@ -421,59 +422,12 @@ function pullRequestCardBlocksForSession(sessionId: string): DisplayMessage[] {
   }));
 }
 
-/** Interleave pull-request cards into a legacy DisplayMessage snapshot (mirrors `withApprovalBlocks`). */
+/** Interleave pull-request cards into a DisplayMessage snapshot at their issuing tool/time. */
 export function withPullRequestCardBlocks(
   messages: DisplayMessage[],
   sessionId: string,
 ): DisplayMessage[] {
-  const result = [...messages];
-  for (const message of pullRequestCardBlocksForSession(sessionId)) {
-    const card = cardFromMessage(message);
-    let insertAt = -1;
-    if (card?.sourceToolCallId) {
-      const anchor = result.findIndex((candidate) =>
-        candidate.blocks.some(
-          (block) =>
-            block.kind === "tool" && block.toolId === card.sourceToolCallId,
-        ),
-      );
-      if (anchor >= 0) {
-        insertAt = anchor + 1;
-        while (
-          insertAt < result.length &&
-          cardFromMessage(result[insertAt]!)?.sourceToolCallId ===
-            card.sourceToolCallId
-        )
-          insertAt += 1;
-      }
-    }
-    if (insertAt < 0) {
-      const createdAt = card?.createdAt ?? 0;
-      insertAt = result.findIndex(
-        (candidate) =>
-          candidate.createdAt && Date.parse(candidate.createdAt) > createdAt,
-      );
-      if (insertAt < 0) {
-        let lastDated = -1;
-        for (let index = 0; index < result.length; index += 1)
-          if (result[index]!.createdAt) lastDated = index;
-        insertAt = lastDated >= 0 ? lastDated + 1 : result.length;
-      }
-    }
-    result.splice(insertAt, 0, message);
-  }
-  return result;
-}
-
-function cardFromMessage(message: DisplayMessage): PullRequestCard | undefined {
-  return message.blocks.find(
-    (
-      block,
-    ): block is Extract<
-      (typeof message.blocks)[number],
-      { kind: "pullRequest" }
-    > => block.kind === "pullRequest",
-  )?.pullRequest;
+  return placeCardRows(messages, pullRequestCardBlocksForSession(sessionId));
 }
 
 /* ----------------------------- creation ---------------------------------- */
