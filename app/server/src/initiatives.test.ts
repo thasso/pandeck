@@ -37,7 +37,7 @@ import {
   reorderTasks,
   updateTask,
 } from "./tasks.ts";
-import { getDb } from "./db/index.ts";
+import { getDb, withDbTransaction } from "./db/index.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 
@@ -136,7 +136,7 @@ test("adding a Task adds its subtree, including subtasks created later", () => {
   assert.equal(detail.progress.total, 3);
 });
 
-test("adding an epic absorbs its plain members and keeps their place", () => {
+test("adding an epic absorbs its plain members, which leave no slot behind", () => {
   const first = task("Absorb first root");
   const epic = task("Absorb epic");
   const child = task("Absorb child", epic);
@@ -150,8 +150,8 @@ test("adding an epic absorbs its plain members and keeps their place", () => {
   assert.deepEqual(write.absorbedTaskIds, [child]);
   assert.deepEqual(
     stored(id),
-    [first, epic, `${marked}*`],
-    "the epic takes the absorbed edge's place; the milestone edge stays",
+    [first, `${marked}*`, epic],
+    "the absorbed edge just goes, the epic is appended, the milestone stays",
   );
   assert.deepEqual(
     memberIds(id).sort(),
@@ -167,11 +167,11 @@ test("adding an epic absorbs its plain members and keeps their place", () => {
   );
   // Re-adding a stored Task, marked or plain, is already the end state.
   addInitiativeMembers(id, [epic, marked]);
-  assert.deepEqual(stored(id), [first, epic, `${marked}*`]);
+  assert.deepEqual(stored(id), [first, `${marked}*`, epic]);
   // All or nothing: the refused Task takes the valid one with it.
   const other = task("Absorb other");
   assert.throws(() => addInitiativeMembers(id, [other, grandchild]));
-  assert.deepEqual(stored(id), [first, epic, `${marked}*`]);
+  assert.deepEqual(stored(id), [first, `${marked}*`, epic]);
   assert.throws(() => addInitiativeMembers(id, ["999999"]), /Task not found/);
   assert.throws(
     () => createInitiative({ title: "  " }),
@@ -183,6 +183,26 @@ test("adding an epic absorbs its plain members and keeps their place", () => {
     taskIds: [child, epic],
   });
   assert.deepEqual(created.absorbedTaskIds, [child]);
+});
+
+test("new members append after the surviving ones, in the order given", () => {
+  const x = task("Order X");
+  const parent = task("Order parent");
+  updateTask(x, { parentId: parent });
+  const r1 = task("Order R1");
+  const y = task("Order Y");
+  const id = initiative("Order", [x]);
+  const write = addInitiativeMembers(id, [r1, parent]);
+  assert.deepEqual(write.absorbedTaskIds, [x]);
+  assert.deepEqual(stored(id), [r1, parent], "[X] + [R1, P] gives [R1, P]");
+
+  // An existing member that is not absorbed keeps its place before the new.
+  const x2 = task("Order X2");
+  const parent2 = task("Order parent 2");
+  updateTask(x2, { parentId: parent2 });
+  const kept = initiative("Order kept", [x2, y]);
+  addInitiativeMembers(kept, [parent2]);
+  assert.deepEqual(stored(kept), [y, parent2]);
 });
 
 test("one member list is one request: its order never decides absorb or refuse", () => {
@@ -232,7 +252,7 @@ test("one member list is one request: its order never decides absorb or refuse",
   updateTask(epic, { parentId: root });
   assert.deepEqual(stored(id), [epic, `${child}*`]);
   addInitiativeMembers(id, [root]);
-  assert.deepEqual(stored(id), [root, `${child}*`]);
+  assert.deepEqual(stored(id), [`${child}*`, root]);
 });
 
 test("milestones work on covered subtasks, and a clear undoes exactly the mark", () => {
@@ -299,6 +319,65 @@ test("removing a covered marked edge reports where the Task stays a member", () 
   );
   // Not a member at all: already the end state.
   removeInitiativeMembers(id, [task("Never a member")]);
+});
+
+test("stillMembers describes the state the whole operation leaves", () => {
+  const top = task("Final top");
+  const mid = task("Final mid", top);
+  const leaf = task("Final leaf", mid);
+  for (const order of [
+    [leaf, mid],
+    [mid, leaf],
+  ]) {
+    const id = initiative("Final pair", [mid]);
+    setInitiativeMilestones(id, [leaf], true);
+    const write = removeInitiativeMembers(id, order);
+    assert.deepEqual(write.stillMembers, [], `order ${order.join(",")}`);
+    assert.deepEqual(stored(id), []);
+    assert.deepEqual(memberIds(id), []);
+  }
+  // A surviving ancestor still covers both.
+  const id = initiative("Final surviving", [top]);
+  setInitiativeMilestones(id, [mid, leaf], true);
+  const write = removeInitiativeMembers(id, [leaf, mid]);
+  assert.deepEqual(
+    [...write.stillMembers].sort((a, b) => a.taskId.localeCompare(b.taskId)),
+    [
+      { taskId: leaf, through: top },
+      { taskId: mid, through: top },
+    ].sort((a, b) => a.taskId.localeCompare(b.taskId)),
+  );
+  assert.deepEqual(stored(id), [top]);
+  assert.deepEqual(memberIds(id).sort(), [top, mid, leaf].sort());
+});
+
+test("public writes refuse to run inside a caller's transaction", () => {
+  const member = task("Nested member");
+  const kept = initiative("Nested kept", [member]);
+  const count = () =>
+    (
+      getDb().prepare("SELECT COUNT(*) AS n FROM initiatives").get() as {
+        n: number;
+      }
+    ).n;
+  const before = count();
+  const revision = revisionOf(kept);
+  const outsider = task("Never added");
+  withDbTransaction(() => {
+    for (const write of [
+      () => createInitiative({ title: "partial", taskIds: ["999999"] }),
+      () => createInitiative({ title: "valid but nested" }),
+      () => addInitiativeMembers(kept, [outsider]),
+      () => updateInitiative(kept, { title: "Never renamed" }),
+      () => removeInitiativeMembers(kept, [member]),
+      () => deleteInitiative(kept),
+    ])
+      assert.throws(write, /must not run inside an open database transaction/);
+  });
+  assert.equal(count(), before, "nothing a caught failure began was committed");
+  assert.equal(revisionOf(kept), revision);
+  assert.deepEqual(stored(kept), [member]);
+  assert.equal(readInitiative(kept)!.title, "Nested kept");
 });
 
 test("a move under another member drops the plain edge it no longer needs", () => {
@@ -424,19 +503,52 @@ test("the summary lists live user sessions on member Tasks, archived Tasks inclu
   assert.equal(summary.progress.total, 3, "an archived member still counts");
 });
 
-test("the summary carries a bounded number of session ids and the true count", () => {
+test("the store answers a bounded page of session ids and the exact count", () => {
   const epic = task("Many sessions");
+  const sub = task("Many sessions sub", epic);
   const id = initiative("Many sessions", [epic]);
   const extra = 3;
+  const ids: string[] = [];
   for (
     let index = 0;
     index < INITIATIVE_SUMMARY_SESSION_LIMIT + extra;
     index += 1
   )
-    session(epic);
+    ids.push(session(epic));
+  // Linked to two member Tasks: still one session.
+  for (const sessionId of ids.slice(0, 10))
+    linkSessionToTask(sub, { sessionId });
+  // Two created in the same millisecond, ordered by id.
+  const tieA = "sess-tie-a";
+  const tieB = "sess-tie-b";
+  for (const tie of [tieB, tieA]) {
+    sessionStore.upsert({
+      id: tie,
+      scope: "user",
+      harness: "pi",
+      agentType: "developer",
+      title: tie,
+      messageCount: 1,
+      createdAt: 9_999_999,
+    });
+    linkSessionToTask(sub, { sessionId: tie });
+  }
+  const total = INITIATIVE_SUMMARY_SESSION_LIMIT + extra + 2;
+
+  const page = initiativeStore.memberSessions(
+    Number(id),
+    INITIATIVE_SUMMARY_SESSION_LIMIT,
+  );
+  assert.equal(page.ids.length, INITIATIVE_SUMMARY_SESSION_LIMIT);
+  assert.equal(page.count, total);
+  assert.deepEqual(page.ids.slice(0, 3), [tieA, tieB, ids.at(-1)]);
+  assert.deepEqual(initiativeStore.memberSessions(Number(id), 2).ids, [
+    tieA,
+    tieB,
+  ]);
   const summary = initiativeSummaryFor(id)!;
-  assert.equal(summary.sessionIds.length, INITIATIVE_SUMMARY_SESSION_LIMIT);
-  assert.equal(summary.sessionCount, INITIATIVE_SUMMARY_SESSION_LIMIT + extra);
+  assert.deepEqual(summary.sessionIds, page.ids);
+  assert.equal(summary.sessionCount, total);
 });
 
 test("the live projection excludes archived and deleted Initiatives", () => {

@@ -21,6 +21,7 @@ import {
   setInitiativeMilestones,
   unarchiveInitiative,
   updateInitiative,
+  initiativeMembershipNow,
   type InitiativeMembershipWrite,
 } from "../../initiatives.ts";
 
@@ -156,7 +157,7 @@ function makeInitiativeReadTool() {
       const id = cleanOptional(params.id);
       if (id) {
         const detail = readInitiative(id);
-        if (!detail) throw new Error(`Initiative not found: ${id}`);
+        if (!detail) throw new Error(`Initiative not found: ${shortText(id)}`);
         return compactJsonResult(detailForTool(detail, params.offset ?? 0));
       }
       if (params.offset !== undefined)
@@ -189,14 +190,13 @@ function makeInitiativeManageTool() {
       const operations = params.operations ?? [];
       if (operations.length === 0)
         throw new Error("initiative_manage requires at least one operation.");
+      // Every id this answer names is the canonical one a write returned,
+      // never the caller's spelling: `0003` and `3` are one Initiative.
       const changed = new Set<string>();
       const deletedIds: string[] = [];
       const absorbed = new Map<string, string[]>();
-      const stillMembers = new Map<
-        string,
-        Array<{ taskId: string; through: string }>
-      >();
-      const record = (write: InitiativeMembershipWrite): void => {
+      const removed = new Map<string, Set<string>>();
+      const record = (write: InitiativeMembershipWrite): string => {
         const id = String(write.initiative.id);
         changed.add(id);
         if (write.absorbedTaskIds.length)
@@ -204,22 +204,19 @@ function makeInitiativeManageTool() {
             ...(absorbed.get(id) ?? []),
             ...write.absorbedTaskIds,
           ]);
-        if (write.stillMembers.length)
-          stillMembers.set(id, [
-            ...(stillMembers.get(id) ?? []),
-            ...write.stillMembers,
-          ]);
+        return id;
       };
       for (const op of operations) {
         const operation = op.operation;
         const id = cleanOptional(op.id);
         const taskIds = op.taskIds?.map((taskId) => taskId.trim());
+        const named = shortText(String(operation));
         if (
           taskIds !== undefined &&
           operation !== "create" &&
           !MEMBER_OPERATIONS.has(operation ?? "")
         )
-          throw new Error(`taskIds does not apply to ${operation}.`);
+          throw new Error(`taskIds does not apply to ${named}.`);
         if (operation === "create") {
           record(
             createInitiative({
@@ -233,7 +230,7 @@ function makeInitiativeManageTool() {
           );
           continue;
         }
-        if (!id) throw new Error(`${operation} requires id.`);
+        if (!id) throw new Error(`${named} requires id.`);
         if (operation === "update") {
           if (
             op.title === undefined &&
@@ -241,26 +238,27 @@ function makeInitiativeManageTool() {
             op.state === undefined
           )
             throw new Error("update needs a title, description or state.");
-          updateInitiative(id, {
+          const row = updateInitiative(id, {
             ...(op.title !== undefined ? { title: op.title } : {}),
             ...(op.description !== undefined
               ? { description: op.description }
               : {}),
             ...(op.state !== undefined ? { state: op.state } : {}),
           });
-        } else if (operation === "archive") archiveInitiative(id);
-        else if (operation === "unarchive") unarchiveInitiative(id);
+          changed.add(String(row.id));
+        } else if (operation === "archive")
+          changed.add(String(archiveInitiative(id).id));
+        else if (operation === "unarchive")
+          changed.add(String(unarchiveInitiative(id).id));
         else if (operation === "delete") {
-          deleteInitiative(id);
-          changed.delete(id);
-          absorbed.delete(id);
-          stillMembers.delete(id);
-          deletedIds.push(id);
-          continue;
+          const canonical = deleteInitiative(id);
+          changed.delete(canonical);
+          absorbed.delete(canonical);
+          removed.delete(canonical);
+          deletedIds.push(canonical);
         } else if (MEMBER_OPERATIONS.has(operation ?? "")) {
-          if (!taskIds?.length)
-            throw new Error(`${operation} requires taskIds.`);
-          record(
+          if (!taskIds?.length) throw new Error(`${named} requires taskIds.`);
+          const canonical = record(
             operation === "addMembers"
               ? addInitiativeMembers(id, taskIds)
               : operation === "removeMembers"
@@ -271,15 +269,23 @@ function makeInitiativeManageTool() {
                     operation === "setMilestone",
                   ),
           );
-          continue;
-        } else throw new Error(`Unknown operation: ${String(operation)}`);
-        changed.add(id);
+          if (operation === "removeMembers") {
+            const set = removed.get(canonical) ?? new Set<string>();
+            for (const taskId of taskIds) {
+              const n = Number(taskId);
+              if (Number.isInteger(n) && n > 0) set.add(String(n));
+            }
+            removed.set(canonical, set);
+          }
+        } else throw new Error(`Unknown operation: ${named}`);
       }
       const entries = [...changed].flatMap((id) => {
         const detail = readInitiative(id);
         if (!detail) return [];
         const absorbedIds = absorbed.get(id) ?? [];
-        const kept = stillMembers.get(id) ?? [];
+        // As of the END of the batch: a later operation may have removed the
+        // ancestor that covered a Task an earlier one removed.
+        const kept = initiativeMembershipNow(id, [...(removed.get(id) ?? [])]);
         return [
           {
             id: detail.id,
@@ -344,6 +350,8 @@ interface ToolMember {
   blockedBy?: string[];
   /** How many open blockers there are, when `blockedBy` was capped. */
   blockedByCount?: number;
+  /** Only if a node alone outgrew a page: its title is a task_read away. */
+  titleOmitted?: true;
   children?: ToolMember[];
 }
 
@@ -379,7 +387,10 @@ function detailForTool(
     totalMembers: detail.nodes.length,
   };
   if (start === 0) {
-    const description = clipBytes(detail.description, DESCRIPTION_MAX_BYTES);
+    const description = clipSerialized(
+      detail.description,
+      DESCRIPTION_MAX_BYTES,
+    );
     if (description) head.description = description;
     if (description.length < detail.description.length)
       head.descriptionTruncated = true;
@@ -423,8 +434,17 @@ function detailForTool(
     };
     // A child's place in its parent's `children` array costs a comma and,
     // for the first one, the key itself.
-    const cost = jsonBytes(member) + (parent ? 14 : 1);
-    if (cost > remaining) break;
+    let cost = jsonBytes(member) + (parent ? 14 : 1);
+    if (cost > remaining) {
+      // The head is bounded (a ≤1.2 KB title, the capped lists) and so is a
+      // node (a ≤1.2 KB Task title, ten blocker ids), so a page always has
+      // room for its first node. Should it not, the node goes without its
+      // title rather than the read stop advancing.
+      if (next > start) break;
+      delete (member as { title?: string }).title;
+      member.titleOmitted = true;
+      cost = jsonBytes(member) + (parent ? 14 : 1);
+    }
     remaining -= cost;
     byId.set(member.id, member);
     if (parent) (parent.children ??= []).push(member);
@@ -479,18 +499,27 @@ function fitByBytes<T extends InitiativeExternalBlocker | object>(
   return kept;
 }
 
-/** The longest prefix of `text` within `maxBytes` UTF-8, cut between characters. */
-function clipBytes(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+/**
+ * The longest prefix of `text` whose JSON-SERIALIZED form, quotes aside, fits
+ * in `maxBytes`: what the answer carries is the escaped text, and a control
+ * character costs six bytes there for its one in the string.
+ */
+function clipSerialized(text: string, maxBytes: number): string {
+  if (jsonBytes(text) - 2 <= maxBytes) return text;
   let bytes = 0;
   let end = 0;
   for (const char of text) {
-    const size = Buffer.byteLength(char, "utf8");
+    const size = jsonBytes(char) - 2;
     if (bytes + size > maxBytes) break;
     bytes += size;
     end += char.length;
   }
   return text.slice(0, end);
+}
+
+/** A caller-supplied word an error repeats: short, never the input whole. */
+function shortText(value: string): string {
+  return value.length <= 40 ? value : `${value.slice(0, 40)}…`;
 }
 
 function jsonBytes(payload: unknown): number {

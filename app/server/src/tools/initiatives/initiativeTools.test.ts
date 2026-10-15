@@ -376,3 +376,102 @@ test("Initiative tool descriptions carry their rules", () => {
     },
   });
 });
+
+test("control characters in an accepted description cannot overrun the read or stall its paging", async () => {
+  const epic = task(`Escaped epic ${"\u0001".repeat(190)}`);
+  for (let index = 0; index < 60; index += 1)
+    task(`Escaped ${index} ${"\u0000".repeat(180)}`, epic);
+  const { changed } = await manage([
+    {
+      operation: "create",
+      title: "\u0000".repeat(200),
+      description: "\u0000".repeat(4_000) + "\u001f".repeat(4_000),
+      taskIds: [epic],
+    },
+  ]);
+  const id = changed[0]!.id;
+  let page = await read(id);
+  assert.equal(page.descriptionTruncated, true);
+  let total = flatten(page.members).length;
+  assert.ok(total > 0, "the first page carries members beside the head");
+  let pages = 1;
+  while (page.nextOffset !== undefined) {
+    const before = page.nextOffset;
+    page = await read(id, page.nextOffset);
+    const got = flatten(page.members).length;
+    assert.ok(got > 0, `page at ${before} advanced`);
+    total += got;
+    pages += 1;
+  }
+  assert.ok(pages > 1);
+  assert.equal(total, 61);
+});
+
+test("answers name canonical ids, never the caller's spelling", async () => {
+  const { changed } = await manage([
+    { operation: "create", title: "Canonical ids" },
+  ]);
+  const id = changed[0]!.id;
+  const padded = `${"0".repeat(24_000)}${id}`;
+  const renamed = await manage([
+    { operation: "update", id: padded, title: "Renamed" },
+    { operation: "archive", id: padded },
+    { operation: "unarchive", id },
+  ]);
+  assert.equal(renamed.changedCount, 1, "one Initiative, however spelled");
+  assert.equal(renamed.changed[0]!.id, id);
+  const deleted = await manage([{ operation: "delete", id: padded }]);
+  assert.deepEqual(deleted.deletedIds, [id]);
+  for (const call of [
+    () => manage([{ operation: "delete", id: padded }]),
+    () => readTool().execute({ id: padded }, ctx),
+    () => manage([{ operation: padded, id }]),
+    () =>
+      manage([
+        { operation: "create", title: "x", taskIds: [`${"9".repeat(30_000)}`] },
+      ]),
+  ])
+    await assert.rejects(call, (error: Error) => {
+      assert.ok(
+        Buffer.byteLength(error.message, "utf8") < 400,
+        `error is ${Buffer.byteLength(error.message, "utf8")} bytes`,
+      );
+      return true;
+    });
+});
+
+test("a batch reports removed Tasks as still members only as the batch leaves them", async () => {
+  const top = task("Batch top");
+  const leaf = task("Batch leaf", top);
+  const { changed } = await manage([
+    { operation: "create", title: "Batch final", taskIds: [top] },
+  ]);
+  const id = changed[0]!.id;
+  await manage([{ operation: "setMilestone", id, taskIds: [leaf] }]);
+  const both = await manage([
+    { operation: "removeMembers", id, taskIds: [leaf] },
+    { operation: "removeMembers", id, taskIds: [top] },
+  ]);
+  assert.equal(both.changed[0]!.stillMembers, undefined);
+  assert.equal(readInitiative(id)!.progress.total, 0);
+
+  await manage([
+    { operation: "addMembers", id, taskIds: [top] },
+    { operation: "setMilestone", id, taskIds: [leaf] },
+  ]);
+  const kept = await manage([
+    { operation: "removeMembers", id, taskIds: [leaf] },
+  ]);
+  assert.deepEqual(kept.changed[0]!.stillMembers, [
+    { taskId: leaf, through: top },
+  ]);
+  // Removed while covered, then the Initiative itself is deleted: nothing
+  // remains to be a member of.
+  const gone = await manage([
+    { operation: "setMilestone", id, taskIds: [leaf] },
+    { operation: "removeMembers", id, taskIds: [leaf] },
+    { operation: "delete", id },
+  ]);
+  assert.deepEqual(gone.changed, []);
+  assert.deepEqual(gone.deletedIds, [id]);
+});

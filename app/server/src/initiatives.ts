@@ -67,15 +67,21 @@ function displayId(id: number): string {
 
 function requireInitiative(id: string): InitiativeRow {
   const row = getInitiative(id);
-  if (!row) throw new Error(`Initiative not found: ${id}`);
+  if (!row) throw new Error(`Initiative not found: ${quoted(id)}`);
   return row;
 }
 
 function requireTask(id: string): number {
   const nid = parseId(id);
   if (nid === undefined || !taskStore.get(nid))
-    throw new Error(`Task not found: ${id}`);
+    throw new Error(`Task not found: ${quoted(id)}`);
   return nid;
+}
+
+/** A caller's id spelling, as an error may repeat it: short, never the input whole. */
+function quoted(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.length <= 40 ? trimmed : `${trimmed.slice(0, 40)}…`;
 }
 
 /* -------------------------------- writes --------------------------------- */
@@ -143,12 +149,16 @@ function setArchived(id: string, archived: boolean): InitiativeRow {
   });
 }
 
-/** Tombstone the Initiative and drop its membership edges; its Tasks stay. */
-export function deleteInitiative(id: string): void {
+/**
+ * Tombstone the Initiative and drop its membership edges; its Tasks stay.
+ * Answers the canonical id it deleted.
+ */
+export function deleteInitiative(id: string): string {
   const current = requireInitiative(id);
   initiativeStore.mutation((touch) => {
     initiativeStore.remove(touch, current.id);
   });
+  return String(current.id);
 }
 
 /**
@@ -158,9 +168,10 @@ export function deleteInitiative(id: string): void {
  * - a Task a member already covers is refused with the reason, and the whole
  *   operation with it;
  * - a Task under another Task in the same list is absorbed into it;
- * - a Task holding plain members absorbs them — their edges go and it takes
- *   the first one's place — while marked (milestone) edges below it stay.
- * The Tasks that remain keep the order they were given in.
+ * - a Task holding plain members absorbs them: their edges go, while marked
+ *   (milestone) edges below it stay.
+ * Existing members keep their places, and the Tasks added are appended after
+ * them in the order they were given in; an absorbed edge leaves no slot.
  */
 export function addInitiativeMembers(
   id: string,
@@ -208,15 +219,7 @@ function addMembersTo(
       );
     for (const edge of below)
       initiativeStore.removeMember(touch, initiativeId, edge.taskId);
-    initiativeStore.addMember(
-      touch,
-      initiativeId,
-      root,
-      false,
-      below.length
-        ? Math.min(...below.map((edge) => edge.position))
-        : undefined,
-    );
+    initiativeStore.addMember(touch, initiativeId, root);
     absorbed.push(...below.map((edge) => edge.taskId));
   }
   return absorbed;
@@ -227,7 +230,8 @@ function addMembersTo(
  * caller wants it; one that is a member only through an ancestor cannot be
  * removed on its own, and the refusal says which ancestor holds it. Removing a
  * stored edge under a member ancestor (a marked one) leaves the Task a member
- * through that ancestor, and the answer says so.
+ * through that ancestor; the answer says so as of the END of the operation, so
+ * an ancestor the same list removes covers nothing.
  */
 export function removeInitiativeMembers(
   id: string,
@@ -235,24 +239,28 @@ export function removeInitiativeMembers(
 ): InitiativeMembershipWrite {
   const current = requireInitiative(id);
   return initiativeStore.mutation((touch) => {
-    const stillMembers: Array<{ taskId: number; through: number }> = [];
+    const removed: number[] = [];
     for (const raw of taskIds) {
       const taskId = parseId(raw);
-      if (taskId === undefined) throw new Error(`Task not found: ${raw}`);
+      if (taskId === undefined)
+        throw new Error(`Task not found: ${quoted(raw)}`);
       const edges = initiativeStore.memberEdges(current.id);
-      const others = edges.filter((edge) => edge.taskId !== taskId);
-      const covering = coveringEdge(others, taskId);
       if (edges.some((edge) => edge.taskId === taskId)) {
         initiativeStore.removeMember(touch, current.id, taskId);
-        if (covering) stillMembers.push({ taskId, through: covering.taskId });
+        removed.push(taskId);
         continue;
       }
+      const covering = coveringEdge(edges, taskId);
       if (covering)
         throw new Error(
           `${taskStore.displayId(taskId)} is a member of ${displayId(current.id)} only through ${taskStore.displayId(covering.taskId)}. Remove ${taskStore.displayId(covering.taskId)}, or move ${taskStore.displayId(taskId)} out of its subtree.`,
         );
     }
-    return membershipWrite(current.id, [], stillMembers);
+    return membershipWrite(
+      current.id,
+      [],
+      initiativeMembershipNow(String(current.id), removed.map(String)),
+    );
   });
 }
 
@@ -310,16 +318,37 @@ function coveringEdge(
 function membershipWrite(
   initiativeId: number,
   absorbed: readonly number[],
-  stillMembers: ReadonlyArray<{ taskId: number; through: number }>,
+  stillMembers: InitiativeMembershipWrite["stillMembers"],
 ): InitiativeMembershipWrite {
   return {
     initiative: initiativeStore.get(initiativeId)!,
     absorbedTaskIds: absorbed.map(String),
-    stillMembers: stillMembers.map((entry) => ({
-      taskId: String(entry.taskId),
-      through: String(entry.through),
-    })),
+    stillMembers,
   };
+}
+
+/**
+ * Which of `taskIds` hold no stored edge of the Initiative NOW but are members
+ * through a member ancestor, and that ancestor. Read from the current edges,
+ * so a caller asks after its writes and gets the state they left.
+ */
+export function initiativeMembershipNow(
+  id: string,
+  taskIds: readonly string[],
+): InitiativeMembershipWrite["stillMembers"] {
+  const nid = parseId(id);
+  if (nid === undefined || !initiativeStore.get(nid)) return [];
+  const edges = initiativeStore.memberEdges(nid);
+  const stored = new Set(edges.map((edge) => edge.taskId));
+  const result: InitiativeMembershipWrite["stillMembers"] = [];
+  for (const raw of new Set(taskIds)) {
+    const taskId = parseId(raw);
+    if (taskId === undefined || stored.has(taskId)) continue;
+    const covering = coveringEdge(edges, taskId);
+    if (covering)
+      result.push({ taskId: String(taskId), through: String(covering.taskId) });
+  }
+  return result;
 }
 
 function cleanTitle(value: string): string {
@@ -378,15 +407,18 @@ function summaryOf(
   members: readonly InitiativeMemberRow[],
 ): InitiativeSummary {
   const attention = attentionOf(row);
-  const sessions = initiativeStore.memberSessionIds(row.id);
+  const sessions = initiativeStore.memberSessions(
+    row.id,
+    INITIATIVE_SUMMARY_SESSION_LIMIT,
+  );
   return {
     id: String(row.id),
     title: row.title,
     state: row.state,
     ...(attention ? { attention } : {}),
     progress: progressOf(members),
-    sessionIds: sessions.slice(0, INITIATIVE_SUMMARY_SESSION_LIMIT),
-    sessionCount: sessions.length,
+    sessionIds: sessions.ids,
+    sessionCount: sessions.count,
     updatedAt: row.updatedAt,
   };
 }

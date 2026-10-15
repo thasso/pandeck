@@ -66,11 +66,16 @@ test("a session change finds its Tasks through links_to_idx", () => {
 test("the member walk and its session filter search by key", () => {
   const plan = assertIndexed("members", ["1"]);
   assert.match(plan, /SEARCH t USING INTEGER PRIMARY KEY/);
-  const sessions = assertIndexed("memberSessions", ["1"]);
-  assert.match(
-    sessions,
-    /SEARCH s USING INDEX sqlite_autoindex_session_index_1 \(id=\?\)/,
-    "each linked session is one primary-key lookup",
-  );
+  for (const name of ["memberSessions", "memberSessionCount"] as const) {
+    const sessions = assertIndexed(
+      name,
+      name === "memberSessions" ? ["1", "50"] : ["1"],
+    );
+    assert.match(
+      sessions,
+      /SEARCH s USING INDEX sqlite_autoindex_session_index_1 \(id=\?\)/,
+      `${name}: each linked session is one primary-key lookup`,
+    );
+  }
   assertIndexed("blockersInto", ["[]"]);
 });

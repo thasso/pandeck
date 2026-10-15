@@ -29,17 +29,20 @@ member Tasks, and its milestones.
   Task may belong to several Initiatives.
   - Plain memberships never nest. Adding a Task whose ancestor is already a
     member is refused with the reason. Adding a Task that holds plain members
-    below it ABSORBS them: in the same write their edges go, the added Task
-    takes the first one's place in the user's order, and the answer names the
-    absorbed Tasks. A Task moved under another member (a reparent or a Backlog
-    drag) loses its plain edge in the move's own write the same way; it stays a
-    member through its new ancestor.
+    below it ABSORBS them: in the same write their edges go and the answer names
+    the absorbed Tasks. An absorbed edge leaves no slot behind: existing members
+    keep their places and the added Tasks are appended after them, in the order
+    they were listed in. A Task moved under another member (a reparent or a
+    Backlog drag) loses its plain edge in the move's own write the same way; it
+    stays a member through its new ancestor.
   - The Tasks of one add (or create) are one request, so their order never
     decides the outcome: a listed Task under another listed Task is absorbed
-    into it and reported, and the Tasks left keep the order they were listed in.
-    A listed Task that an EXISTING member covers fails the whole operation, and
-    nothing of it is written. A list adds plain members only; marking a covered
-    Task is `setMilestone`'s alone, and an add never absorbs a marked edge.
+    into it and reported, and the Tasks left are appended in the order they were
+    listed in. With [X] stored, adding [R1, P] where P is X's parent leaves [R1,
+    P]. A listed Task that an EXISTING member covers fails the whole operation,
+    and nothing of it is written. A list adds plain members only; marking a
+    covered Task is `setMilestone`'s alone, and an add never absorbs a marked
+    edge.
   - Removing a stored member removes its edge. A Task that is a member only
     through an ancestor cannot be removed on its own, and the refusal names the
     ancestor; removing a Task that is not a member does nothing.
@@ -54,8 +57,10 @@ member Tasks, and its milestones.
     mark of a Task nothing covers keeps it as a plain member.
   - A marked edge is a membership of its own: removing the ancestor leaves the
     milestone a member. Removing the marked edge of a covered Task leaves it a
-    member through the ancestor, and the answer says which. Marking a Task that
-    is not a member is refused.
+    member through the ancestor, and the answer says which — as of the end of
+    the operation, so an ancestor removed in the same operation, or by a later
+    operation of the same batch, covers nothing. Marking a Task that is not a
+    member is refused.
 
 An Initiative does not touch a Task's project. A subtask still lives in its
 parent's project (`docs/tasks.md`); the Initiative is the one thing that spans
@@ -119,10 +124,12 @@ create or edit form, and its only Initiative write is Settle.
 - `initiative_manage`: a batch of `create`, `update` (title, description,
   state), `addMembers`, `removeMembers`, `setMilestone` / `clearMilestone`,
   `archive`, `unarchive` and `delete`. Each operation is all-or-nothing, like
-  `task_manage`. `delete` only when the user explicitly asks. The membership and
-  milestone rules above apply as written: an add under a member is refused, an
-  add over plain members absorbs them, and the answer names absorbed Tasks and
-  removed ones still members through an ancestor.
+  `task_manage`, and runs in its own transaction, never inside a caller's.
+  `delete` only when the user explicitly asks. The membership and milestone
+  rules above apply as written: an add under a member is refused, an add over
+  plain members absorbs them, and the answer names absorbed Tasks and removed
+  ones still members through an ancestor once the batch is done. Every id it
+  names is the canonical one, never the caller's spelling.
 
 Both are deferred tools, found with a tool search for "initiative", and are
 available to the developer and personal-assistant personas. Their rules live in
@@ -206,8 +213,10 @@ Tasks. Opening it goes to the map.
 The sessions working on its Tasks are the user's sessions linked to a member
 Task, archived member Tasks included, that are neither archived nor settled (a
 settled session counts again once a new outcome raises it). The summary carries
-the newest 50 of them and the full count, so a longer list says how many it left
-out.
+at most 50 of them, newest by session creation first (ties by id), and the full
+count; the query returns no more than that. When the count is larger, the card
+says how many more there are ("and N more") rather than presenting the 50 as all
+of them.
 
 Those sessions are listed in a disclosure on the card but keep their own inbox
 cards. Unlike a Workflow Run's role sessions they are not folded away: a Task

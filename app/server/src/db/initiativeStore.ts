@@ -16,7 +16,7 @@
  * same seam.
  */
 import type { InitiativeState } from "@assistant/shared";
-import { getDb, inDbTransaction } from "./index.ts";
+import { getDb, inDbTransaction, withDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import {
   addLink,
@@ -94,38 +94,62 @@ function taskNode(id: number): NodeRef {
 }
 
 /**
- * Run `fn` atomically, stamp every Initiative it touched with the next
- * `initiative_revision` value inside the same transaction, and notify once it
- * is written. A write that throws touches nothing and notifies nobody.
+ * Run one Initiative write in its OWN transaction, stamp every Initiative it
+ * touched with the next `initiative_revision` value before COMMIT, and notify
+ * after it. A write that throws touches nothing and notifies nobody.
  *
- * Inside a caller's open transaction (a session tombstone that is part of a
- * larger delete) the stamp joins it: a rollback takes the stamp with it, and
- * the listeners only schedule a debounced flush that reads committed state.
+ * Top-level only, like `createTask`: joined to a caller's transaction, a
+ * failure the caller catches would leave half an operation in that commit with
+ * no revision and no event. Refused before anything is written.
  */
 function mutation<T>(fn: (touch: Set<number>) => T): T {
-  const { value, touched } = inDbTransaction(() => {
+  if (getDb().isTransaction)
+    throw new Error(
+      "An Initiative write must not run inside an open database transaction.",
+    );
+  const { value, touched } = withDbTransaction(() => {
     const touched = new Set<number>();
     const value = fn(touched);
-    if (touched.size) {
-      const revision = nextId("initiative_revision");
-      const stamp = getDb().prepare(
-        "UPDATE initiatives SET revision = ? WHERE id = ?",
-      );
-      for (const id of touched) stamp.run(revision, id);
-    }
+    stampRevisions(touched);
     return { value, touched };
   });
-  if (touched.size) {
-    const ids = [...touched].map(String);
-    for (const listener of listeners) {
-      try {
-        listener(ids);
-      } catch {
-        // A listener cannot make an already durable write fail.
-      }
+  notifyListeners(touched);
+  return value;
+}
+
+/**
+ * Bump and notify Initiatives whose summaries another domain's write changed.
+ * The ONE stamp that may join a caller's open transaction: a session tombstone
+ * inside a larger delete (`backgroundWorkStore.deleteOwnerSession`) moves the
+ * Initiatives listing that session, and a rollback must take the stamp with
+ * it. It only stamps — it writes nothing a caller could half-commit — and the
+ * listeners only schedule a debounced flush that reads committed state.
+ */
+function stampAndNotify(ids: ReadonlySet<number>): void {
+  if (!ids.size) return;
+  inDbTransaction(() => stampRevisions(ids));
+  notifyListeners(ids);
+}
+
+function stampRevisions(ids: ReadonlySet<number>): void {
+  if (!ids.size) return;
+  const revision = nextId("initiative_revision");
+  const stamp = getDb().prepare(
+    "UPDATE initiatives SET revision = ? WHERE id = ?",
+  );
+  for (const id of ids) stamp.run(revision, id);
+}
+
+function notifyListeners(ids: ReadonlySet<number>): void {
+  if (!ids.size) return;
+  const touched = [...ids].map(String);
+  for (const listener of listeners) {
+    try {
+      listener(touched);
+    } catch {
+      // A listener cannot make an already durable write fail.
     }
   }
-  return value;
 }
 
 /* --------------------------------- rows ---------------------------------- */
@@ -250,18 +274,17 @@ function parentOf(taskId: number): number | undefined {
   return edge ? Number(edge.fromId) : undefined;
 }
 
-/** Store a membership edge, plain or marked, after the last one unless placed. */
+/** Store a membership edge, plain or marked, after the last one. */
 function addMember(
   touch: Set<number>,
   id: number,
   taskId: number,
   milestone = false,
-  at?: number,
 ): void {
   const edges = memberEdges(id);
-  const position =
-    at ??
-    (edges.length ? Math.max(...edges.map((edge) => edge.position)) + 1 : 0);
+  const position = edges.length
+    ? Math.max(...edges.map((edge) => edge.position)) + 1
+    : 0;
   addLink(initiativeNode(id), "member", taskNode(taskId), {
     position,
     ...(milestone ? { metadata: { milestone: true } } : {}),
@@ -332,6 +355,19 @@ const MEMBERS_CTE = `WITH RECURSIVE member(id) AS (
         ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'subtask' AND l.to_type = 'task'
   )`;
 
+/** Distinct live user sessions linked to a member Task, as CTE `live`. */
+const LIVE_MEMBER_SESSIONS = `,
+  live(id, created_at_ms) AS (
+    SELECT DISTINCT s.id, s.created_at_ms
+      FROM member m
+      CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
+      CROSS JOIN links l ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'context' AND l.to_type = 'session'
+      CROSS JOIN session_index s ON s.id = l.to_id
+     WHERE t.deleted_at_ms IS NULL
+       AND s.scope = 'user' AND s.deleted_at_ms IS NULL AND s.archived_at_ms IS NULL
+       AND (s.settled_at_ms IS NULL OR s.attention_revision > s.attention_settled_revision)
+  )`;
+
 /** Exposed for the query-plan test: what the summary and graph reads issue. */
 export const INITIATIVE_STORE_SQL = {
   members: `${MEMBERS_CTE}
@@ -353,18 +389,14 @@ export const INITIATIVE_STORE_SQL = {
    * scope, never qualifies) that is neither tombstoned, archived nor settled —
    * the `sessionStore.isSettled` conjunction, so a raised outcome counts again.
    * Each linked session is one primary-key lookup; nothing reads session
-   * history beyond the member Tasks' own links.
+   * history beyond the member Tasks' own links. The page answers at most
+   * `LIMIT` ids, newest session first by creation, ties by id; the count is
+   * its own aggregate, so neither reaches JavaScript as a whole list.
    */
-  memberSessions: `${MEMBERS_CTE}
-    SELECT DISTINCT s.id AS session_id, s.created_at_ms
-      FROM member m
-      CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
-      CROSS JOIN links l ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'context' AND l.to_type = 'session'
-      CROSS JOIN session_index s ON s.id = l.to_id
-     WHERE t.deleted_at_ms IS NULL
-       AND s.scope = 'user' AND s.deleted_at_ms IS NULL AND s.archived_at_ms IS NULL
-       AND (s.settled_at_ms IS NULL OR s.attention_revision > s.attention_settled_revision)
-     ORDER BY s.created_at_ms DESC, s.id`,
+  memberSessions: `${MEMBERS_CTE}${LIVE_MEMBER_SESSIONS}
+    SELECT id FROM live ORDER BY created_at_ms DESC, id LIMIT ?`,
+  memberSessionCount: `${MEMBERS_CTE}${LIVE_MEMBER_SESSIONS}
+    SELECT COUNT(*) AS n FROM live`,
   blockersInto: `SELECT b.from_id, b.to_id, t.title, t.status, t.archived_at_ms,
            (SELECT j.to_id FROM links j
              WHERE j.from_type = 'task' AND j.from_id = b.from_id AND j.relation = 'in_project'
@@ -426,12 +458,27 @@ function members(id: number): InitiativeMemberRow[] {
   }));
 }
 
-/** The live sessions on member Tasks, newest first. */
-function memberSessionIds(id: number): string[] {
-  const rows = getDb()
-    .prepare(INITIATIVE_STORE_SQL.memberSessions)
-    .all(String(id)) as Array<{ session_id: string }>;
-  return rows.map((row) => row.session_id);
+/**
+ * At most `limit` live sessions on member Tasks, newest first by creation
+ * (ties by id), and how many there are in all.
+ */
+function memberSessions(
+  id: number,
+  limit: number,
+): { ids: string[]; count: number } {
+  const ids = (
+    getDb()
+      .prepare(INITIATIVE_STORE_SQL.memberSessions)
+      .all(String(id), limit) as Array<{ id: string }>
+  ).map((row) => row.id);
+  const count = (
+    getDb()
+      .prepare(INITIATIVE_STORE_SQL.memberSessionCount)
+      .get(String(id)) as {
+      n: number;
+    }
+  ).n;
+  return { ids, count };
 }
 
 /** Every `blocks` link into the given Tasks from a live Task. */
@@ -476,11 +523,7 @@ function touchHolders(
   taskIds: Iterable<number>,
   formerHolders: Iterable<number> = [],
 ): void {
-  const ids = new Set([...holdersOf(taskIds), ...formerHolders]);
-  if (!ids.size) return;
-  mutation((touch) => {
-    for (const id of ids) touch.add(id);
-  });
+  stampAndNotify(new Set([...holdersOf(taskIds), ...formerHolders]));
 }
 
 /**
@@ -584,7 +627,7 @@ export const initiativeStore = {
   setMilestone,
   dropCoveredPlainEdges,
   members,
-  memberSessionIds,
+  memberSessions,
   blockersInto,
   holdersOf,
   touchHolders,

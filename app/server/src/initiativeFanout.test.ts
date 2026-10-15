@@ -36,6 +36,7 @@ import {
 import { deleteProject, upsertProject } from "./projectRegistry.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { withDbTransaction } from "./db/index.ts";
 
 function task(title: string, parentId?: string): string {
   return createTask({
@@ -432,6 +433,75 @@ test("archive deletes, later writes repeat the delete at a newer revision, unarc
     assert.equal(deleted.kind, "delete");
     assert.equal(revisionOf(id), deleted.revision);
     assert.equal(initiativeStore.get(Number(id)), undefined);
+  } finally {
+    hub.unregister(viewer);
+  }
+});
+
+test("a session tombstone inside a larger transaction stamps with it, or not at all", async () => {
+  const member = task("Nested tombstone member");
+  const id = initiative("Nested tombstone", [member]);
+  const register = (sessionId: string) => {
+    sessionStore.upsert({
+      id: sessionId,
+      scope: "user",
+      harness: "pi",
+      agentType: "developer",
+      title: sessionId,
+      messageCount: 1,
+    });
+    linkSessionToTask(member, { sessionId });
+  };
+  register("sess-nested-rolled-back");
+  register("sess-nested-committed");
+  await hub.flushPendingBroadcastsForTests();
+  const messages: ServerMessage[] = [];
+  const viewer = {
+    send: (message: ServerMessage) => messages.push(message),
+    wantsTopic: (topic: string) => topic === "initiatives",
+  };
+  hub.register(viewer);
+  try {
+    const before = revisionOf(id);
+    assert.throws(() =>
+      withDbTransaction(() => {
+        assert.equal(
+          sessionStore.markDeleted("sess-nested-rolled-back"),
+          "deleted",
+        );
+        throw new Error("the larger delete fails");
+      }),
+    );
+    await hub.flushPendingBroadcastsForTests();
+    assert.equal(revisionOf(id), before, "the stamp rolled back with it");
+    assert.deepEqual(
+      initiativeBatches(messages),
+      [],
+      "no event for a revision that never committed",
+    );
+    assert.ok(
+      readInitiative(id)!.sessionIds.includes("sess-nested-rolled-back"),
+    );
+
+    withDbTransaction(() => {
+      assert.equal(
+        sessionStore.markDeleted("sess-nested-committed"),
+        "deleted",
+      );
+    });
+    await hub.flushPendingBroadcastsForTests();
+    const after = revisionOf(id);
+    assert.ok(after > before);
+    const events = initiativeBatches(messages).flat();
+    assert.deepEqual(
+      events.map((event) => [event.id, event.kind, event.revision]),
+      [[id, "upsert", after]],
+    );
+    const upsert = events[0];
+    assert.ok(
+      upsert?.kind === "upsert" &&
+        !upsert.item.sessionIds.includes("sess-nested-committed"),
+    );
   } finally {
     hub.unregister(viewer);
   }

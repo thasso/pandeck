@@ -52,8 +52,9 @@ export interface InitiativeSummary {
   progress: InitiativeProgress;
   /**
    * User sessions linked to a member Task (its `context` edges) that are
-   * neither archived nor settled, most recently updated first and at most
-   * {@link INITIATIVE_SUMMARY_SESSION_LIMIT}. Structural membership only,
+   * neither archived nor settled, newest by session creation first (ties by
+   * id) and at most {@link INITIATIVE_SUMMARY_SESSION_LIMIT}; a card shows
+   * "and N more" from `sessionCount` when it cut. Structural membership only,
    * nothing parsed from titles; an archived member Task still counts.
    */
   sessionIds: string[];
