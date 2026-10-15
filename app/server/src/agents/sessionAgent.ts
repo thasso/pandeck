@@ -39,9 +39,9 @@ export interface SessionAgent {
   /** The effort it runs at, already fitted to the model. */
   effort: ThinkingLevel;
   /**
-   * Who chose the runtime above: one of the definition's listed models, or
-   * the user in a proposal card. A row stored before this existed came from
-   * the definition.
+   * Who chose the runtime above: one of the definition's listed models, the
+   * user in a proposal card, or the user on the new-session page. A row
+   * stored before this existed came from the definition.
    */
   runtimeSource: SessionAgentRuntimeSource;
   denyTools: string[];

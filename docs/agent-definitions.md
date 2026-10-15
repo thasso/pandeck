@@ -4,8 +4,8 @@
 ([Task-781](pa://task/781)), the agent library with its `agent_*` tools
 ([Task-782](pa://task/782)), spawning by name ([Task-783](pa://task/783)), and
 the UI ([Task-784](pa://task/784)). Model lists and agents in proposals:
-[Task-795](pa://task/795), part of [Task-794](pa://task/794); the new-session
-page's single Agent row with free model picks is [Task-796](pa://task/796).
+[Task-795](pa://task/795); the new-session page's single Agent row with free
+model picks: [Task-796](pa://task/796); both part of [Task-794](pa://task/794).
 
 An agent definition is a user-authored Markdown file that describes a reusable
 agent: which persona it builds on, which models it may run on and at what
@@ -418,58 +418,68 @@ Both pages read through the same server pieces, one per library:
 - **HTTP.** `/api/<library>/detail`, `/file` and `/history`
   (`library/libraryHttp.ts`).
 
-The new-session page offers the definitions as an "Agent definition" row
-(`NewSessionQuickStart`): it reserves its place while the first read is out,
-keeps its pills with an indicator through a rescan, says a failed read in place,
-and has no row for an empty library. Picking one stages its persona, model and
-effort, on an account of the model's provider; a definition is offered only once
-the accounts are read and one of that provider is enabled. The pick lives on the
-staged session record (`lib/stagedSession.ts`), so a model, effort, account or
-persona pick from any picker drops it, as do a fresh start and leaving the page;
-staging a worktree for the same persona keeps it. Picking a definition sets the
-persona exactly as the persona pills do: an `assistant` one keeps a staged
-worktree, and a `developer` one needs a worktree before the composer sends. A
-first send retried after a failure, from the composer or a Retry button, runs
-what the pickers show then: engine, persona, account, model, effort and agent
-(`reissuedFirstSend`), on the draft's own session id. A comment-review draft
-offers no definitions: its handoff creates the session without a first send. The
-row and the pick belong to `/sessions/create`, where the `agents` topic is held;
-the Sessions list route shows the draft without them, so a pick is dropped
-there. Every fresh draft (a new session, one for a Task, project, file or
-worktree, a pull request or review, or a document's comments sent to a new
-session) also retires a first send held for retry. On that page the pick follows
-the agents list (`hooks/useStagedAgentReconcile.ts`), and never undoes what
-leaving the page spent: a definition that is gone, cannot start any more, or now
-runs as another persona is dropped, and one whose model or effort changed is
-restaged, so the pickers show what will run. A persona is never switched under
-the user: it decides which worktree the draft needs, and a draft whose first
-send is held for retry offers no persona or worktree picker. The account a
-definition suggests does not turn Automatic into a pin. A compatible explicit
-account stays picked; staging a definition on another provider clears that
-incompatible pin to Automatic. Fresh drafts reset account intent, and no account
-choice is saved as a default. Missing, disabled or demoted explicit accounts
-remain selected and are refused rather than replaced. With no enabled account of
-the definition's provider, the definition pick is dropped. A staged definition
-skips the composer's model checks, since its model may be one Settings → Models
-hides from the pickers; the server checks it against the account. The first send
-carries `agent`; an Automatic first send resolves its fixed model and effort
-before picking an account, even without the client's optional runtime preview
-fields. The server then resolves the definition again on that account
-(`harnesses/firstSend.ts`): the session runs on the definition's model and
-effort and freezes it exactly as a spawn does, read again right before the
-session is created (a worktree provisioned first can take seconds). A runtime
-that moved between the two reads refuses the send. A Claude send names its own
+The new-session page has one "Agent" row (`NewSessionQuickStart`): the plain
+personas, then the definitions. To the user both answer who runs the session; a
+definition adds its role on top of its persona. The definitions' part of the row
+reserves its place while the first read is out, keeps its pills with an
+indicator through a rescan, says a failed read in place, and adds nothing for an
+empty library. A persona pill is selected only while no definition is.
+
+Picking a definition stages its persona and pre-fills its first listed model
+that resolves and that an enabled account can run, at its effort (`agentPrefill`
+in `lib/stagedSession.ts`), on an account of that model's provider. A definition
+with no such model is not offered, with its reason below the row; the accounts
+must be read first. After that the model, effort and account pickers are free:
+the pick lives on the staged session record, and a model, effort, account or
+Build/Plan pick keeps it, since what the user picks to run a role is their
+approval. Picking a persona pill (or the composer's persona picker) leaves the
+role, as do clicking the picked definition again, a fresh start and leaving the
+page; staging a worktree for the same persona keeps it. Picking a definition
+sets the persona exactly as the persona pills do: an `assistant` one keeps a
+staged worktree, and a `developer` one needs a worktree before the composer
+sends. A first send retried after a failure, from the composer or a Retry
+button, runs what the pickers show then: engine, persona, account, model, effort
+and agent (`reissuedFirstSend`), on the draft's own session id. A comment-review
+draft offers no definitions: its handoff creates the session without a first
+send. The definitions and the pick belong to `/sessions/create`, where the
+`agents` topic is held; the Sessions list route shows the draft without them, so
+a pick is dropped there. Every fresh draft (a new session, one for a Task,
+project, file or worktree, a pull request or review, or a document's comments
+sent to a new session) also retires a first send held for retry.
+
+On that page the pick follows the agents list
+(`hooks/useStagedAgentReconcile.ts`), and never undoes what leaving the page
+spent: a definition that is gone, broken beyond its models, or now runs as
+another persona is dropped. Its runtime is never restaged: what the pickers show
+is what the first send runs. A persona is never switched under the user: it
+decides which worktree the draft needs, and a draft whose first send is held for
+retry offers no persona or worktree picker. The account a definition suggests
+does not turn Automatic into a pin. A compatible explicit account stays picked;
+staging a definition on another provider clears that incompatible pin to
+Automatic. Fresh drafts reset account intent, and no account choice is saved as
+a default. Missing, disabled or demoted explicit accounts remain selected and
+are refused rather than replaced. A staged definition skips the composer's model
+checks, since its pre-filled model may be one Settings → Models hides from the
+pickers; the server checks it against the account.
+
+The first send carries `agent` with the runtime the pickers show. The server
+(`harnesses/firstSend.ts`) reads the definition for its role and freezes it on
+exactly that runtime (`resolveAgentOnRuntime` in `agents/agentSpawn.ts`): a
+listed model at the definition's effort freezes as `runtimeSource: definition`
+with its pin, any other runtime as `runtimeSource: user` without one. The
+account must offer the model. A send naming no runtime runs the definition's
+default, resolved before Automatic picks an account. The role is read again
+right before the session is created (a worktree provisioned first can take
+seconds), so a hand edit then is what it freezes. A Claude send names its own
 id, and an agent only ever starts a NEW session (`SessionAgentConflictError`):
 an existing one would keep its own runtime and account whatever the send names.
 The one reuse is finishing a creation that failed after writing its agent row,
-and only with byte-for-byte that definition; a plain creation may not take such
-an id over either. A persona, engine, model or effort that no longer matches the
-definition refuses the send rather than run something other than what the
-pickers showed. The refusal says what the definition runs on now and republishes
-the agents list, so the draft follows it: after a model or effort change the
-next send starts the definition, and after a persona change the agent is no
-longer picked and the next send is a plain session of the draft's persona.
-`appAudit.test.ts` holds `App` to the fresh-draft and re-issue helpers.
+and only with byte-for-byte that definition and runtime; a plain creation may
+not take such an id over either. A persona or engine that no longer matches the
+definition refuses the send, republishing the agents list so the draft follows
+it: after a persona change the agent is no longer picked and the next send is a
+plain session of the draft's persona. `appAudit.test.ts` holds `App` to the
+fresh-draft and re-issue helpers.
 
 ## Out of scope
 

@@ -3172,6 +3172,11 @@ function AppContent() {
          * clear lands. The flag is how the caller says which of the two this is.
          */
         fresh?: boolean;
+        /**
+         * The user picked this persona: that leaves a staged role, whichever
+         * persona it runs as. Staging context (a worktree) keeps it.
+         */
+        leaveAgent?: boolean;
       },
     ) => {
       if (opts?.fresh) resetStagedAccount();
@@ -3205,7 +3210,9 @@ function AppContent() {
         // persona switch (`startStagedSession` drops it where the axis is gone).
         // A fresh start has no `current`, so it stages Build.
         mode: current?.mode,
-        agent: agentAcrossPersonaSwitch(current, agentType),
+        agent: opts?.leaveAgent
+          ? undefined
+          : agentAcrossPersonaSwitch(current, agentType),
       });
     },
     [
@@ -3216,6 +3223,13 @@ function AppContent() {
       defaultNewSessionModel,
       defaultNewSessionThinking,
     ],
+  );
+  // A persona picked by the user (the Agent row, the composer) leaves a
+  // staged role: the plain persona is the choice.
+  const pickStagedAgentType = useCallback(
+    (agentType: AgentType) =>
+      switchStagedAgentType(agentType, { leaveAgent: true }),
+    [switchStagedAgentType],
   );
 
   // Composable staged-context derivation (project ⊃ worktree, project ⊃ task):
@@ -4595,8 +4609,10 @@ function AppContent() {
               findModelOption(provider, id),
               currentThinkingLevel,
             ),
-            // Restage: changing the model does not change the staged mode.
+            // Restage: changing the model does not change the staged mode,
+            // nor the role; what runs a role is the user's choice.
             mode: (pendingStart ?? stagedStart)?.mode,
+            agent: (pendingStart ?? stagedStart)?.agent,
           });
           return;
         }
@@ -4626,8 +4642,10 @@ function AppContent() {
               ? { modelId: current?.modelId }
               : {}),
             thinkingLevel: level,
-            // Restage: changing the thinking level does not change the mode.
+            // Restage: changing the thinking level changes neither the mode
+            // nor the role.
             mode: current?.mode,
+            agent: current?.agent,
           });
         } else {
           actions.setThinkingLevel(level);
@@ -4680,9 +4698,9 @@ function AppContent() {
 
   /**
    * Stage a fresh session as the agent definition `name` (or drop it): its
-   * persona, model and effort in one restage, on an account of its provider.
-   * The server resolves the definition again when the first prompt creates
-   * the session, so this is a preview of what it will run, not a promise.
+   * persona and a pre-filled model and effort in one restage, on an account
+   * of that model's provider. The pickers stay free afterwards: the first
+   * send runs the role on whatever they show then.
    */
   const stageAgent = (name: string | null) => {
     // A review handoff creates its session without a first send, so it cannot
@@ -4718,12 +4736,6 @@ function AppContent() {
     list: dataOf(state.agentLibrary),
     pendingStart,
     setPendingStart,
-    accounts:
-      credentialProfileProjection !== undefined
-        ? activeCredentialProfiles
-        : undefined,
-    accountId: credentialProfileId,
-    setAccountId: setAgentAccount,
   });
   /**
    * The draft as the pickers show it this render: what a re-issued first send
@@ -4803,8 +4815,9 @@ function AppContent() {
         harness: harnessForAccountProvider(profile.provider),
         agentType: agentTypeForPicker,
         thinkingLevel: "off",
-        // Restage: switching WHO runs the session keeps its mode.
+        // Restage: switching WHO runs the session keeps its mode and role.
         mode: (pendingStart ?? stagedStart)?.mode,
+        agent: (pendingStart ?? stagedStart)?.agent,
       });
     }
   };
@@ -6564,7 +6577,7 @@ function AppContent() {
             showAgentTypePicker ? availableAgentTypes : undefined
           }
           onAgentTypeChange={
-            showAgentTypePicker ? switchStagedAgentType : undefined
+            showAgentTypePicker ? pickStagedAgentType : undefined
           }
           dictation={composerDictation}
         />
@@ -6731,7 +6744,7 @@ function AppContent() {
               }
               agentTypes={availableAgentTypes}
               selectedAgentType={agentTypeForPicker}
-              onSelectAgentType={switchStagedAgentType}
+              onSelectAgentType={pickStagedAgentType}
               worktrees={orderedWorktrees}
               worktreesLoaded={state.worktrees !== null}
               projects={orderedPickerProjects}

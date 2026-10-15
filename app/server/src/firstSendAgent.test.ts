@@ -350,14 +350,15 @@ test("a send staged on another engine than the definition's is refused", async (
   );
 });
 
-test("a definition whose runtime changed since it was picked is refused, not run", async () => {
-  const { conn, sent } = makeConnection();
+test("a runtime the user picked runs with the role, as their own pick", async () => {
+  const { conn } = makeConnection();
 
   await conn.handleFirstSend({
     harness: "claude-sdk",
-    id: "agent-stale-pick",
+    id: "agent-user-pick",
     agentType: "assistant",
     text: "hello",
+    // The definition runs opus at high; the user lowered the effort.
     modelProvider: "claude-sdk",
     modelId: "opus",
     thinkingLevel: "low",
@@ -365,21 +366,63 @@ test("a definition whose runtime changed since it was picked is refused, not run
     credentialProfileId: claudeProfile.id,
   });
 
+  assert.equal(acquired.length, 1);
+  assert.equal(acquired[0]?.opts.thinkingLevel, "low");
+  const frozen = JSON.parse(sessionStore.getAgent("agent-user-pick") ?? "null");
+  assert.equal(frozen.effort, "low");
+  assert.equal(frozen.runtimeSource, "user");
+  assert.equal(frozen.body, "Research carefully.");
+  assert.deepEqual(prompts, ["hello"]);
+});
+
+test("a role keeps its identity on another provider's engine the user picked", async () => {
+  const { conn } = makeConnection();
+
+  // researcher lists only claude-sdk/opus; the user picked a pi model.
+  await conn.handleFirstSend({
+    harness: "pi",
+    id: "pi-user-pick",
+    agentType: "assistant",
+    text: "Research it.",
+    modelProvider: "openai-codex",
+    modelId: "gpt-5",
+    thinkingLevel: "medium",
+    agent: "researcher",
+  });
+
+  assert.equal(piAcquired.length, 1);
+  const [, model, thinking, opts] = piAcquired[0] as [
+    string,
+    { provider: string; id: string },
+    string,
+    { agent?: { name: string; model: string; runtimeSource: string } },
+  ];
+  assert.deepEqual(model, { provider: "openai-codex", id: "gpt-5" });
+  assert.equal(thinking, "medium");
+  assert.equal(opts.agent?.name, "researcher");
+  assert.equal(opts.agent?.model, "gpt-5");
+  assert.equal(opts.agent?.runtimeSource, "user");
+});
+
+test("a picked model the account does not offer is refused", async () => {
+  const { conn, sent } = makeConnection();
+  setAgentSpawnSourcesForTests({ offers: async () => false });
+
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
+    id: "agent-unoffered-pick",
+    agentType: "assistant",
+    text: "hello",
+    modelProvider: "claude-sdk",
+    modelId: "opus",
+    thinkingLevel: "high",
+    agent: "researcher",
+    credentialProfileId: claudeProfile.id,
+  });
+
   assert.equal(acquired.length, 0);
-  assert.equal(prompts.length, 0);
-  assert.match(
-    JSON.stringify(sent),
-    /Agent \\"researcher\\" changed since it was picked: it now runs on claude-sdk\/opus at high effort/,
-  );
-  // The browser's stale list is published again, so its draft follows it.
-  await vi.waitFor(() =>
-    assert.ok(
-      published.some(
-        (message) =>
-          message.type === "libraryList" && message.library === "agents",
-      ),
-    ),
-  );
+  assert.equal(sessionStore.getAgent("agent-unoffered-pick"), undefined);
+  assert.match(JSON.stringify(sent), /does not offer claude-sdk\/opus/);
 });
 
 /** A hand edit that lands after the send was prepared, before creation. */

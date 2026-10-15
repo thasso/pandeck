@@ -219,7 +219,7 @@ describe("staging an agent definition", () => {
     expect(agentDraft(list, "nobody", accounts, "claude-1")).toBeUndefined();
   });
 
-  it("follows the library: keep, restage on a changed runtime, drop when gone", () => {
+  it("follows the library: keep its role whatever runs it, drop when gone", () => {
     const record = stagedSessionRecord({
       id: "draft",
       ...agentDraft(list, "test-reviewer", accounts, "claude-1")!,
@@ -240,7 +240,20 @@ describe("staging an agent definition", () => {
           },
         },
       }),
-    ).toBe("restage");
+    ).toBe("keep");
+    // A definition whose default cannot run still has its role.
+    expect(
+      reconcileStagedAgent(record, {
+        ...list,
+        agentRuntimes: {
+          "test-reviewer": {
+            problem: "Its default cannot run.",
+            persona: "developer",
+            models: [],
+          },
+        },
+      }),
+    ).toBe("keep");
     // A persona change is dropped, not restaged: the draft keeps the persona
     // its context was staged for.
     expect(

@@ -41,6 +41,8 @@ import type { SessionAgent } from "./sessionAgent.ts";
  */
 export class AgentSpawnRefusedError extends Error {
   listed?: AgentModelChoice[];
+  /** Its persona, when the definition itself could be read. */
+  persona?: AgentManifest["persona"];
 }
 
 /** Everything a spawn needs from one definition. */
@@ -281,6 +283,51 @@ export async function resolveAgentRole(
 }
 
 /**
+ * A definition started on a runtime the USER picked on the new-session page:
+ * that pick is their approval. A listed model at the definition's effort runs
+ * as listed, its pin included; any other runtime is the user's own and
+ * follows normal session model rules. The role is the definition's either way.
+ */
+export async function resolveAgentOnRuntime(
+  name: string,
+  runtime: { provider: string; modelId: string; thinkingLevel: ThinkingLevel },
+  /** The account it runs on, which must offer the model. */
+  profileId: string,
+): Promise<SessionAgent> {
+  const read = await readAgentDefinition(name);
+  let offered: boolean;
+  try {
+    offered = await sources.offers(
+      profileId,
+      runtime.provider,
+      runtime.modelId,
+    );
+  } catch (error) {
+    throw new AgentSpawnRefusedError(
+      `Agent "${name}" cannot run: the models of its ${runtime.provider} account could not be read: ${(error as Error).message}`,
+    );
+  }
+  if (!offered)
+    throw new AgentSpawnRefusedError(
+      `Agent "${name}" cannot run: the account picked for it (${sources.accountName(profileId) ?? profileId}) does not offer ${runtime.provider}/${runtime.modelId}.`,
+    );
+  const listed = read.listed.find(
+    (choice) =>
+      choice.runtime?.model.provider === runtime.provider &&
+      choice.runtime.model.id === runtime.modelId &&
+      choice.runtime.thinkingLevel === runtime.thinkingLevel,
+  )?.runtime;
+  return {
+    ...roleOf(read),
+    provider: runtime.provider,
+    model: runtime.modelId,
+    ...(listed?.pinnedModel ? { pinnedModel: listed.pinnedModel } : {}),
+    effort: runtime.thinkingLevel,
+    runtimeSource: listed ? "definition" : "user",
+  };
+}
+
+/**
  * Resolve one definition for a spawn, against `scanned` when the caller holds
  * a scan, else a fresh one. Every refusal is an {@link AgentSpawnRefusedError}.
  */
@@ -302,6 +349,7 @@ export async function resolveAgentSpawn(
     return await spawnRuntimeOf(read, name, chosen.runtime, options);
   } catch (error) {
     if (error instanceof AgentSpawnRefusedError) {
+      error.persona ??= read.manifest.persona;
       // A chosen model that resolved but cannot start on its account is no
       // alternative either: its row says why.
       const failed = chosen?.spec;
@@ -388,6 +436,7 @@ export type SpawnableAgent =
       description?: string;
       problem: string;
       listed?: AgentModelChoice[];
+      persona?: AgentManifest["persona"];
     };
 
 /**
@@ -414,6 +463,7 @@ export async function listSpawnableAgents(scanned?: {
         description: entry.description,
         problem: error.message,
         ...(error.listed ? { listed: error.listed } : {}),
+        ...(error.persona ? { persona: error.persona } : {}),
       });
     }
   }
