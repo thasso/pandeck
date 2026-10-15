@@ -66,11 +66,11 @@ backlog/task interaction and drag/reorder behavior.
   "pending" forever, leaving an expanded block a preview until a full page load.
   The reducer ignores answers for a session that is not viewed, and the body
   cache is keyed by session (`lazyBodyLifecycleScenario.test.tsx`).
-- `useAssistant.ts` writes the app shell cache (`localStorage`) only through a
-  `lib/idleWriter.ts` `IdleWriter`, never straight from the effect: the payload
-  is a `JSON.stringify` of the session list plus the cacheable Task list (~217
-  KB measured against production data) and a blocking `setItem`, on an effect
-  that fires up to ~4x/second while any agent streams. Deferring it costs
+- `useAssistant.ts` writes the app shell cache (`persistentStore`) only through
+  a `lib/idleWriter.ts` `IdleWriter`, never straight from the effect: the
+  payload is a `JSON.stringify` of the session list plus the cacheable Task list
+  (~217 KB measured against production data) and a blocking `setItem`, on an
+  effect that fires up to ~4x/second while any agent streams. Deferring it costs
   nothing — it is a COLD-START accelerator, so lagging live state by seconds is
   invisible — as long as it is flushed on `pagehide`/hidden and unmount.
   `taskListForCache` additionally drops any Markdown body a summary happens to

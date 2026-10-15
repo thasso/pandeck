@@ -112,6 +112,7 @@ import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
+import { localStore } from "../lib/localStore.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 
 interface BranchNavItem {
@@ -297,10 +298,7 @@ interface AttachmentDraft extends PromptAttachment {
  */
 function composerKeyboardDebugEnabled(): boolean {
   try {
-    return (
-      typeof localStorage !== "undefined" &&
-      localStorage.getItem("composerKbDebug") === "1"
-    );
+    return localStore.getItem("composerKbDebug") === "1";
   } catch {
     return false;
   }

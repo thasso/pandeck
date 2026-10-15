@@ -11,7 +11,12 @@ import {
   workflowRunRoleSessionIds,
 } from "@assistant/shared";
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import {
+  readAppShellCacheRecord,
+  writeAppShellCacheRecord,
+} from "../lib/appShellCacheStore.ts";
 import { createClientId } from "../lib/clientId.ts";
+import { localStore } from "../lib/localStore.ts";
 import { createIdleWriter, type IdleWriter } from "../lib/idleWriter.ts";
 import { announceMessage } from "../lib/messageAnnounce.ts";
 import { sessionSettleCascade } from "../lib/sessionInbox.ts";
@@ -797,7 +802,6 @@ export interface UIState {
   objectLinks: Record<string, PaObjectLinkResolution>;
 }
 
-const APP_SHELL_CACHE_KEY = "assistant.appShellCache.v1";
 const APP_SHELL_CACHE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 interface AppShellCache {
@@ -1236,9 +1240,7 @@ function reconcileProjectList(
   return reused ? { ...incoming, projects } : incoming;
 }
 
-function parseAppShellCache(raw: string | null): AppShellCache | null {
-  if (!raw) return null;
-  const parsed = JSON.parse(raw) as unknown;
+function parseAppShellCache(parsed: unknown): AppShellCache | null {
   if (!isObject(parsed) || parsed.version !== 1) return null;
   const savedAt = typeof parsed.savedAt === "number" ? parsed.savedAt : 0;
   if (!savedAt || Date.now() - savedAt > APP_SHELL_CACHE_MAX_AGE_MS)
@@ -1308,7 +1310,7 @@ function parseAppShellCache(raw: string | null): AppShellCache | null {
 function loadAppShellCache(): AppShellCache | null {
   if (typeof window === "undefined") return null;
   try {
-    return parseAppShellCache(window.localStorage.getItem(APP_SHELL_CACHE_KEY));
+    return parseAppShellCache(readAppShellCacheRecord());
   } catch {
     return null;
   }
@@ -1483,7 +1485,7 @@ function saveAppShellCache(state: UIState): void {
       ),
       credentialProfileProjection: state.credentialProfileProjection,
     };
-    window.localStorage.setItem(APP_SHELL_CACHE_KEY, JSON.stringify(payload));
+    writeAppShellCacheRecord({ ...payload });
   } catch {
     // Best-effort cache only; quota/private-mode failures should not affect use.
   }
@@ -6840,7 +6842,7 @@ export function useAssistant({
             : undefined;
       if (import.meta.env.PROD && incomingWebBuildId) {
         try {
-          if (recordWebBuild(window.localStorage, incomingWebBuildId)) {
+          if (recordWebBuild(localStore, incomingWebBuildId)) {
             window.location.reload();
             return;
           }

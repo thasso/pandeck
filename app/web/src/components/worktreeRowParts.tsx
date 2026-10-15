@@ -13,6 +13,7 @@ import { Badge } from "./ui/badge.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Tree } from "./common/Tree.tsx";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
+import { persistentStore } from "../lib/persistentStore.ts";
 
 /**
  * A row's action shows on hover or focus where there is a pointer to hover
@@ -270,7 +271,7 @@ const EXPANDED_WORKTREES_STORAGE_KEY = "assistant.worktreeBrowser.expanded.v1";
 export function loadExpandedWorktreeIds(): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
-    const raw = window.localStorage.getItem(EXPANDED_WORKTREES_STORAGE_KEY);
+    const raw = persistentStore().getItem(EXPANDED_WORKTREES_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(
       Array.isArray(parsed)
@@ -284,7 +285,7 @@ export function loadExpandedWorktreeIds(): Set<string> {
 
 export function persistExpandedWorktreeIds(ids: Set<string>) {
   try {
-    window.localStorage.setItem(
+    persistentStore().setItem(
       EXPANDED_WORKTREES_STORAGE_KEY,
       JSON.stringify([...ids]),
     );

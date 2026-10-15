@@ -5,7 +5,7 @@ import {
   type PullRequestGroupId,
 } from "../lib/pullRequestInbox.ts";
 import { applyPatch } from "@assistant/shared";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   TaskStatus,
   ThinkingLevel,
@@ -18,6 +18,8 @@ import {
   type BacklogView,
   type BacklogViewMode,
 } from "../lib/backlogTreeModel.ts";
+import { localStore } from "../lib/localStore.ts";
+import { persistentStore } from "../lib/persistentStore.ts";
 import {
   DEFAULT_NAV_SLOTS,
   normalizeNavSlots,
@@ -194,6 +196,13 @@ const OPTIONAL_PREF_KEYS = {
 } satisfies Record<OptionalPrefKey, true>;
 
 const KEY = "assistant.prefs";
+/**
+ * The slice `index.html` applies before any module runs, so neither the theme
+ * nor the text scale flashes. It stays in `localStorage` (the only storage a
+ * synchronous inline script can read) and stays tiny; everything else lives in
+ * `persistentStore` under `KEY`.
+ */
+const PAINT_KEY = "assistant.prefs.paint";
 
 const defaults: Prefs = {
   theme: "dark",
@@ -256,7 +265,7 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
  */
 export function loadPrefs(): Prefs {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = persistentStore().getItem(KEY);
     if (!raw) return defaults;
     return normalizeStoredPrefs(JSON.parse(raw) as Partial<Prefs>);
   } catch {
@@ -273,15 +282,47 @@ function applyTextScale(scale: TextScale) {
 
 export function usePrefs() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
+  // Rendered before a slow store read answered: `prefs` are the defaults, and
+  // writing them would replace the stored prefs. Hold the user's changes until
+  // the read lands, then replay them onto what it found.
+  const loaded = useRef(persistentStore().isLoaded());
+  const unsaved = useRef<Partial<Prefs>>({});
 
   useEffect(() => {
-    localStorage.setItem(KEY, JSON.stringify(prefs));
+    if (loaded.current) return;
+    let live = true;
+    void persistentStore()
+      .whenLoaded()
+      .then(() => {
+        if (!live) return;
+        loaded.current = true;
+        setPrefs({ ...loadPrefs(), ...unsaved.current });
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loaded.current)
+      try {
+        persistentStore().setItem(KEY, JSON.stringify(prefs));
+        const paint = JSON.stringify({
+          theme: prefs.theme,
+          textScale: prefs.textScale,
+        });
+        if (localStore.getItem(PAINT_KEY) !== paint)
+          localStore.setItem(PAINT_KEY, paint);
+      } catch {
+        // Best-effort; the prefs still apply to this page.
+      }
     const root = document.documentElement;
     root.classList.toggle("dark", prefs.theme === "dark");
     applyTextScale(prefs.textScale);
   }, [prefs]);
 
   const update = useCallback((patch: Partial<Prefs>) => {
+    if (!loaded.current) Object.assign(unsaved.current, patch);
     setPrefs((p) => ({ ...p, ...patch }));
   }, []);
 

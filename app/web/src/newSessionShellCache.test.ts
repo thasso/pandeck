@@ -9,6 +9,7 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { createInitialState } from "./hooks/useAssistant.ts";
+import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 
 beforeEach(() => window.localStorage.clear());
 
@@ -39,25 +40,22 @@ it("hydrates every boot-critical new-session source from the app-shell cache", (
     updatedAt: 1,
   };
   const worktrees: WorktreeRecord[] = [];
-  window.localStorage.setItem(
-    "assistant.appShellCache.v1",
-    JSON.stringify({
-      version: 1,
-      savedAt: Date.now(),
-      models: [model],
-      agents: [],
-      sessions: [],
-      settings: defaults.settings,
-      slashCommands: [],
-      taskList: null,
-      projectList,
-      worktrees,
-      credentialProfileProjection: {
-        profiles: [profile],
-        modelsByProfile: { [profile.id]: [model] },
-      },
-    }),
-  );
+  writeAppShellCacheRecord({
+    version: 1,
+    savedAt: Date.now(),
+    models: [model],
+    agents: [],
+    sessions: [],
+    settings: defaults.settings,
+    slashCommands: [],
+    taskList: null,
+    projectList,
+    worktrees,
+    credentialProfileProjection: {
+      profiles: [profile],
+      modelsByProfile: { [profile.id]: [model] },
+    },
+  });
 
   const hydrated = createInitialState();
   expect(hydrated.hydrationSource).toBe("cache");
@@ -89,20 +87,17 @@ it("hydrates settled Task objects with their revision sidecar for a warm digest"
     ],
     updatedAt: 2,
   };
-  window.localStorage.setItem(
-    "assistant.appShellCache.v1",
-    JSON.stringify({
-      version: 1,
-      savedAt: Date.now(),
-      models: [],
-      agents: [],
-      sessions: [],
-      settings: defaults.settings,
-      slashCommands: [],
-      taskList,
-      taskRevisions: { "413": 27 },
-    }),
-  );
+  writeAppShellCacheRecord({
+    version: 1,
+    savedAt: Date.now(),
+    models: [],
+    agents: [],
+    sessions: [],
+    settings: defaults.settings,
+    slashCommands: [],
+    taskList,
+    taskRevisions: { "413": 27 },
+  });
 
   const hydrated = createInitialState();
   expect(hydrated.taskList).toEqual(taskList);
@@ -126,22 +121,19 @@ it("never paints a cached Personal Assistant singleton in the session list", () 
     id: "chat",
     agentType: "assistant",
   };
-  window.localStorage.setItem(
-    "assistant.appShellCache.v1",
-    JSON.stringify({
-      version: 1,
-      savedAt: Date.now(),
-      models: [],
-      agents: [],
-      // A row an older build cached before the server stopped sending it.
-      sessions: [singleton, ordinary],
-      settings: defaults.settings,
-      slashCommands: [],
-      taskList: null,
-      projectList: null,
-      worktrees: [],
-    }),
-  );
+  writeAppShellCacheRecord({
+    version: 1,
+    savedAt: Date.now(),
+    models: [],
+    agents: [],
+    // A row an older build cached before the server stopped sending it.
+    sessions: [singleton, ordinary],
+    settings: defaults.settings,
+    slashCommands: [],
+    taskList: null,
+    projectList: null,
+    worktrees: [],
+  });
 
   const hydrated = createInitialState();
   expect(hydrated.hydrationSource).toBe("cache");
@@ -160,23 +152,20 @@ it("drops who still owes a reply from cached rows, like every live fact", () => 
     messageCount: 3,
     awaitingRepliesFrom: ["reviewer"],
   };
-  window.localStorage.setItem(
-    "assistant.appShellCache.v1",
-    JSON.stringify({
-      version: 1,
-      savedAt: Date.now(),
-      models: [],
-      agents: [],
-      // Cached while the reviewer was still working: restored alone, the
-      // debt would read as a stalled tree until the first list arrives.
-      sessions: [owed],
-      settings: defaults.settings,
-      slashCommands: [],
-      taskList: null,
-      projectList: null,
-      worktrees: [],
-    }),
-  );
+  writeAppShellCacheRecord({
+    version: 1,
+    savedAt: Date.now(),
+    models: [],
+    agents: [],
+    // Cached while the reviewer was still working: restored alone, the
+    // debt would read as a stalled tree until the first list arrives.
+    sessions: [owed],
+    settings: defaults.settings,
+    slashCommands: [],
+    taskList: null,
+    projectList: null,
+    worktrees: [],
+  });
 
   const hydrated = createInitialState();
   expect(hydrated.sessions[0]?.awaitingRepliesFrom).toBe(undefined);

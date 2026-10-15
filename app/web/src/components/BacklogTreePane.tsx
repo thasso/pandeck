@@ -55,6 +55,7 @@ import {
   type BacklogProjectFilter,
   type TaskPlacement,
 } from "../lib/backlogTreeModel.ts";
+import { persistentStore } from "../lib/persistentStore.ts";
 
 const INDENT_WIDTH = 22;
 const TIGHT_INDENT_WIDTH = 12;
@@ -838,7 +839,7 @@ function FilteredEmptyState({
 
 function loadIds(key: string): Set<string> {
   try {
-    const raw = window.localStorage.getItem(key);
+    const raw = persistentStore().getItem(key);
     if (!raw) return new Set();
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
@@ -851,7 +852,7 @@ function loadIds(key: string): Set<string> {
 
 function persistIds(key: string, ids: Set<string>): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify([...ids]));
+    persistentStore().setItem(key, JSON.stringify([...ids]));
   } catch {
     // Ignore storage failures; collapse state still applies for this render.
   }

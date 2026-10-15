@@ -15,6 +15,7 @@ import {
 } from "./hooks/useAssistant.ts";
 import { dataOf } from "./lib/loadState.ts";
 import { topicsForSurface } from "./lib/broadcastTopics.ts";
+import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -263,20 +264,17 @@ describe("Task-route socket load scenario", () => {
   });
 
   it("uses one digest subscription for a warm canonical Backlog", async () => {
-    window.localStorage.setItem(
-      "assistant.appShellCache.v1",
-      JSON.stringify({
-        version: 1,
-        savedAt: Date.now(),
-        models: [],
-        agents: [],
-        sessions: [],
-        settings: {},
-        slashCommands: [],
-        taskList: taskListMessage().list,
-        taskRevisions: { a: 1, b: 1 },
-      }),
-    );
+    writeAppShellCacheRecord({
+      version: 1,
+      savedAt: Date.now(),
+      models: [],
+      agents: [],
+      sessions: [],
+      settings: {},
+      slashCommands: [],
+      taskList: taskListMessage().list,
+      taskRevisions: { a: 1, b: 1 },
+    });
     const socket = await renderHarness(<TaskRouteHarness selectedId={null} />);
     await act(async () => socket.open());
 

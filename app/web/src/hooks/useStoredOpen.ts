@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { localStore } from "../lib/localStore.ts";
 
 function readStoredBoolean(key: string, fallback: boolean): boolean {
   try {
-    const value = window.localStorage.getItem(key);
+    const value = localStore.getItem(key);
     if (value === "open") return true;
     if (value === "closed") return false;
   } catch {
@@ -31,7 +32,7 @@ export function useStoredOpen(
       const next = !current;
       if (key) {
         try {
-          window.localStorage.setItem(key, next ? "open" : "closed");
+          localStore.setItem(key, next ? "open" : "closed");
         } catch {
           // Ignore storage failures; folding is still useful for this render.
         }

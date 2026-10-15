@@ -19,6 +19,7 @@ import { newSessionShell, stagedTranscript } from "./lib/newSessionShell.ts";
 import { PageHeader } from "./components/PageHeader.tsx";
 import { SessionBootstrapNarration } from "./components/SessionStage.tsx";
 import { SessionTitleText } from "./components/SessionTitleText.tsx";
+import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -248,33 +249,30 @@ describe("new-session load request counts", () => {
   });
 
   it("requests a digest when a settled Task list and sidecar are warm", async () => {
-    window.localStorage.setItem(
-      "assistant.appShellCache.v1",
-      JSON.stringify({
-        version: 1,
-        savedAt: Date.now(),
-        models: [],
-        agents: [],
-        sessions: [],
-        settings: {},
-        slashCommands: [],
-        taskList: {
-          request: {},
-          items: [
-            {
-              id: "413",
-              title: "Warm",
-              status: "doing",
-              source: { createdBy: "user" },
-              createdAt: 1,
-              updatedAt: 2,
-            },
-          ],
-          updatedAt: 2,
-        },
-        taskRevisions: { "413": 12 },
-      }),
-    );
+    writeAppShellCacheRecord({
+      version: 1,
+      savedAt: Date.now(),
+      models: [],
+      agents: [],
+      sessions: [],
+      settings: {},
+      slashCommands: [],
+      taskList: {
+        request: {},
+        items: [
+          {
+            id: "413",
+            title: "Warm",
+            status: "doing",
+            source: { createdBy: "user" },
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        ],
+        updatedAt: 2,
+      },
+      taskRevisions: { "413": 12 },
+    });
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => projectionResponse()),
@@ -314,25 +312,22 @@ describe("new-session load request counts", () => {
   });
 
   it("revalidates cache-seeded lists once on a non-subscribing session surface", async () => {
-    window.localStorage.setItem(
-      "assistant.appShellCache.v1",
-      JSON.stringify({
-        version: 1,
-        savedAt: Date.now(),
-        models: [],
-        agents: [],
-        sessions: [],
-        settings: {},
-        slashCommands: [],
-        taskList: { request: {}, items: [], updatedAt: 1 },
-        projectList: {
-          request: { includeArchived: true },
-          projects: [],
-          updatedAt: 1,
-        },
-        worktrees: [],
-      }),
-    );
+    writeAppShellCacheRecord({
+      version: 1,
+      savedAt: Date.now(),
+      models: [],
+      agents: [],
+      sessions: [],
+      settings: {},
+      slashCommands: [],
+      taskList: { request: {}, items: [], updatedAt: 1 },
+      projectList: {
+        request: { includeArchived: true },
+        projects: [],
+        updatedAt: 1,
+      },
+      worktrees: [],
+    });
     const socket = await renderHarness(<CachedSessionRouteHarness />);
     await act(async () => {
       socket.open();

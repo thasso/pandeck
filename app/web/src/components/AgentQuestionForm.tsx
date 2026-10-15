@@ -44,6 +44,7 @@ import {
 import { Progress, ProgressLabel } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
+import { persistentStore } from "../lib/persistentStore.ts";
 
 const QUESTION_DRAFT_STORAGE_PREFIX = "assistant.agentQuestionDraft.";
 const QUESTION_DRAFT_STORAGE_VERSION = 1;
@@ -70,6 +71,12 @@ export function AgentQuestionForm({
   const [drafts, setDrafts] = useState<Record<string, QuestionDraft>>({});
   const [error, setError] = useState<string | null>(null);
   const [loadedRequestId, setLoadedRequestId] = useState<string | null>(null);
+  // Whether the store's read had answered when the panel was restored, and
+  // what the user changed since. Before it answers the panel starts empty and
+  // is not written — the whole panel is one entry, so writing it would replace
+  // the stored answers; they are merged in when the read lands.
+  const restoredLoaded = useRef(false);
+  const edits = useRef({ questions: new Set<string>(), moved: false });
 
   // Keyed on the request ID alone: this restores the panel for a DIFFERENT
   // question set, so `request` is read through a ref rather than depended on.
@@ -84,15 +91,38 @@ export function AgentQuestionForm({
       setLoadedRequestId(null);
       return;
     }
+    const store = persistentStore();
     const restored = readStoredQuestionPanelState(current);
+    restoredLoaded.current = store.isLoaded();
+    edits.current = { questions: new Set(), moved: false };
     setIndex(restored?.index ?? 0);
     setDrafts(restored?.drafts ?? initialDrafts(current.questions));
     setError(null);
     setLoadedRequestId(current.requestId);
+    if (restoredLoaded.current) return;
+    let live = true;
+    void store.whenLoaded().then(() => {
+      if (!live) return;
+      restoredLoaded.current = true;
+      const stored = readStoredQuestionPanelState(current);
+      // What the user already changed wins, per question; any change keeps
+      // them on the step they are on.
+      const { questions: changed, moved } = edits.current;
+      setDrafts((drafts) => {
+        const merged = { ...(stored?.drafts ?? drafts) };
+        for (const id of changed) if (drafts[id]) merged[id] = drafts[id];
+        return merged;
+      });
+      if (stored && !moved && changed.size === 0) setIndex(stored.index);
+    });
+    return () => {
+      live = false;
+    };
   }, [requestId]);
 
   useEffect(() => {
     if (!request || loadedRequestId !== request.requestId) return;
+    if (!restoredLoaded.current) return;
     writeStoredQuestionPanelState(request, { index, drafts });
   }, [request, loadedRequestId, index, drafts]);
 
@@ -109,7 +139,13 @@ export function AgentQuestionForm({
 
   if (!request) return null;
 
+  const moveTo = (next: (current: number) => number) => {
+    edits.current.moved = true;
+    setIndex(next);
+  };
+
   const setDraft = (questionId: string, patch: Patch<QuestionDraft>) => {
+    edits.current.questions.add(questionId);
     setDrafts((currentDrafts) => {
       const base = currentDrafts[questionId] ?? { choiceIds: [], text: "" };
       return {
@@ -138,7 +174,7 @@ export function AgentQuestionForm({
       setError(validation);
       return;
     }
-    setIndex((i) => Math.min(i + 1, questions.length));
+    moveTo((i) => Math.min(i + 1, questions.length));
     setError(null);
   };
 
@@ -165,7 +201,7 @@ export function AgentQuestionForm({
           <Button
             variant="outline"
             size="xs"
-            onClick={() => setIndex((i) => Math.max(0, i - 1))}
+            onClick={() => moveTo((i) => Math.max(0, i - 1))}
             disabled={index === 0}
           >
             Back
@@ -202,7 +238,7 @@ export function AgentQuestionForm({
         <QuestionSummary
           questions={questions}
           answers={answers}
-          onEdit={(questionIndex) => setIndex(questionIndex)}
+          onEdit={(questionIndex) => moveTo(() => questionIndex)}
         />
       ) : current ? (
         <QuestionStep
@@ -275,7 +311,7 @@ function readStoredQuestionPanelState(
   request: AgentQuestionRequest,
 ): Pick<StoredQuestionPanelState, "index" | "drafts"> | null {
   try {
-    const raw = window.localStorage.getItem(questionDraftStorageKey(request));
+    const raw = persistentStore().getItem(questionDraftStorageKey(request));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredQuestionPanelState>;
     if (
@@ -304,7 +340,7 @@ function writeStoredQuestionPanelState(
       drafts: sanitizeStoredDrafts(request.questions, state.drafts),
       updatedAt: Date.now(),
     };
-    window.localStorage.setItem(
+    persistentStore().setItem(
       questionDraftStorageKey(request),
       JSON.stringify(payload),
     );
@@ -315,7 +351,7 @@ function writeStoredQuestionPanelState(
 
 function clearStoredQuestionPanelState(request: AgentQuestionRequest): void {
   try {
-    window.localStorage.removeItem(questionDraftStorageKey(request));
+    persistentStore().removeItem(questionDraftStorageKey(request));
   } catch {
     // Best-effort browser-local convenience only.
   }

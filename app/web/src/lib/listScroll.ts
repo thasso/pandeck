@@ -23,6 +23,7 @@ import {
   type IdleWriter,
   type IdleWriterEnv,
 } from "./idleWriter.ts";
+import { persistentStore } from "./persistentStore.ts";
 
 /** Within this of the top there is nothing worth remembering — that is the default. */
 export const LIST_SCROLL_TOP_PX = 4;
@@ -279,7 +280,7 @@ export function listScrollMemory(): ListScrollMemory {
   if (sharedMemory) return sharedMemory;
   let storage: ListScrollStorage | null = null;
   try {
-    storage = typeof window === "undefined" ? null : window.localStorage;
+    storage = typeof window === "undefined" ? null : persistentStore();
   } catch {
     // Private-mode/blocked storage: the position then lives for this page only.
     storage = null;

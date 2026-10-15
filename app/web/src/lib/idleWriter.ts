@@ -3,8 +3,8 @@
  *
  * A cache write that is cheap in isolation becomes a main-thread stall when it
  * rides a broadcast: the app shell cache is a `JSON.stringify` of the whole
- * session list plus the Task list (~217 KB against production data) followed by
- * a blocking `localStorage.setItem`, and the sessions list alone is rebroadcast
+ * session list plus the Task list (~217 KB against production data) per save,
+ * and the sessions list alone is rebroadcast
  * up to ~4x/second while any agent streams. This defers the write past the
  * burst (only the LAST value is ever written), waits for an idle callback so it
  * never competes with a frame, and can be flushed synchronously when the page
