@@ -788,18 +788,25 @@ function removeTaskLink(a: number, b: number): number[] {
  * How many OPEN blockers each blocked Task has: blockers that are neither done
  * nor archived. A done or archived blocker is still listed as a link, but no
  * longer holds the Task up. Tasks without an open blocker are absent.
+ *
+ * `taskId` narrows the same query to one Task (an indexed lookup), for a
+ * single summary; a list or a broadcast batch reads the whole map once.
  */
-function openBlockerCounts(): Map<number, number> {
+function openBlockerCounts(taskId?: number): Map<number, number> {
   const rows = getDb()
     .prepare(
       `SELECT l.to_id AS taskId, COUNT(*) AS n
          FROM links l JOIN tasks t ON t.id = l.from_id
         WHERE l.from_type = 'task' AND l.relation = 'blocks' AND l.to_type = 'task'
+          ${taskId === undefined ? "" : "AND l.to_id = ?"}
           AND t.deleted_at_ms IS NULL AND t.archived_at_ms IS NULL
           AND t.status <> 'done'
         GROUP BY l.to_id`,
     )
-    .all() as Array<{ taskId: string; n: number }>;
+    .all(...(taskId === undefined ? [] : [String(taskId)])) as Array<{
+    taskId: string;
+    n: number;
+  }>;
   return new Map(rows.map((row) => [Number(row.taskId), row.n]));
 }
 

@@ -883,3 +883,41 @@ describe("BacklogTreePane density", () => {
     expect(started).toEqual([]);
   });
 });
+
+describe("BacklogTreePane blocked badge", () => {
+  const blockedLabel = "Blocked by 2 open tasks";
+
+  it("shows a two-line row's open blocker count on its meta line", () => {
+    render(
+      [
+        task({ id: "1", title: "Waits", openBlockerCount: 2 }),
+        task({ id: "2", title: "Free" }),
+      ],
+      (ids) => ids,
+      { density: "comfortable" },
+    );
+    const badge = container!.querySelector<HTMLElement>(
+      `[role="img"][aria-label="${blockedLabel}"]`,
+    );
+    // The count is VISIBLE, not only in the tooltip.
+    expect(badge?.textContent).toBe("2");
+    expect(badge?.getAttribute("title")).toBe(blockedLabel);
+    // On line 2, beside the id — line 1 belongs to the title.
+    expect(badge!.parentElement!.textContent).toContain("#1");
+    const free = container!.querySelector('[data-list-row-id="2"]')!;
+    expect(free.querySelector('[aria-label^="Blocked by"]')).toBeNull();
+  });
+
+  it("keeps the glyph and count on a single-line row's title line", () => {
+    render(
+      [task({ id: "1", title: "Waits", openBlockerCount: 2 })],
+      (ids) => ids,
+      { density: "tight" },
+    );
+    const badge = container!.querySelector<HTMLElement>(
+      `[role="img"][aria-label="${blockedLabel}"]`,
+    );
+    expect(badge?.textContent).toBe("2");
+    expect(badge!.parentElement!.textContent).toContain("Waits");
+  });
+});

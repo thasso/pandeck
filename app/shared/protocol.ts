@@ -2661,6 +2661,12 @@ export interface TaskSummary {
    * user as its creator and is still an arrival that waits here.
    */
   triagedAt?: number;
+  /**
+   * How many of this Task's blockers are still open — neither done nor
+   * archived. Absent when none is, so a set count always means "blocked".
+   * Computed on read, never stored, and it never prevents a status change.
+   */
+  openBlockerCount?: number;
 }
 
 /**
@@ -2716,6 +2722,9 @@ export function taskSummaryOf(item: TaskItem): TaskSummary {
       ? { statusSuggestion: item.statusSuggestion }
       : {}),
     ...(item.triagedAt !== undefined ? { triagedAt: item.triagedAt } : {}),
+    ...(item.openBlockerCount
+      ? { openBlockerCount: item.openBlockerCount }
+      : {}),
   };
 }
 
@@ -8532,18 +8541,22 @@ export type ServerMessage =
    * The mutator's direct reply to `saveTask`: the authoritative FULL Task, which
    * is how a detail view adopts the stored body and how a create settles its
    * browser-local temp row (matched through `requestId`). It carries no list —
-   * the list rows travel as `stateEvents`.
+   * the list rows travel as `stateEvents`. `revision` is the Task's state-event
+   * revision as of this reply: only a NEWER event marks the detail stale.
    */
-  | { type: "taskSaved"; item: TaskItem; requestId?: string }
+  | { type: "taskSaved"; item: TaskItem; revision?: number; requestId?: string }
   /**
    * Response to a `getTask` request. `item: null` without `error` is an
    * authoritative not-found answer; `error` is a failed read. Correlation lets
-   * the client drop a superseded read for the same id.
+   * the client drop a superseded read for the same id. `revision` as on
+   * `taskSaved`: a linked Task's change reaches this detail only as a newer
+   * event for THIS Task, never through its `updatedAt`.
    */
   | {
       type: "taskDetail";
       id: string;
       item: TaskItem | null;
+      revision?: number;
       requestId?: string;
       error?: string;
     }

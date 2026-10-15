@@ -73,6 +73,8 @@ export interface TaskRowMeta {
   dirty: boolean;
   /** A non-terminal Workflow Run exists; attention means at least one is paused. */
   workflow: { attention: boolean } | null;
+  /** How many open Tasks this one waits on (`openBlockerCount`); 0 = none. */
+  blockers: number;
   /** The day the user planned to work on this, when it says more than `due`. */
   planned: string | null;
   due: string | null;
@@ -169,6 +171,7 @@ export function buildTaskRowMeta(
     workflow: workflowIndicator
       ? { attention: workflowIndicator.attention }
       : null,
+    blockers: task.openBlockerCount ?? 0,
     planned: scheduledLabel(task, ctx.today),
     due: dueLabel(task, ctx.today),
     overdue: Boolean(task.dueDate && task.dueDate < ctx.today),
@@ -207,6 +210,7 @@ export function taskRowMetaEmpty(meta: TaskRowMeta): boolean {
     meta.delivery ||
     meta.dirty ||
     meta.workflow ||
+    meta.blockers ||
     meta.planned ||
     meta.due ||
     meta.priority ||

@@ -8,6 +8,7 @@ import {
   TASK_STATUS_LABEL,
 } from "./TaskStatusIcon.tsx";
 import { TaskProjectMeta } from "./TaskRowBody.tsx";
+import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
@@ -238,6 +239,9 @@ function InboxRow({
                   />
                 ) : null}
                 <TaskIdBadge id={task.id} />
+                {task.openBlockerCount ? (
+                  <TaskBlockedIndicator openBlockers={task.openBlockerCount} />
+                ) : null}
                 <span className="shrink-0">{origin}</span>
               </span>
               {preview ? (

@@ -68,6 +68,7 @@ interface PageOptions {
   taskDetails?: Record<string, TaskItem>;
   taskMutations?: Record<string, LoadState<true>>;
   saveTask?: AssistantActions["saveTask"];
+  onSelect?: (id: string) => void;
 }
 
 function render(options: PageOptions): string {
@@ -113,7 +114,7 @@ function page(options: PageOptions) {
       prefs={prefs}
       onUpdatePrefs={() => {}}
       selectedId={options.selectedId}
-      onSelect={() => {}}
+      onSelect={options.onSelect ?? (() => {})}
       onCloseDetail={() => {}}
       onClose={() => {}}
       onOpenSession={() => {}}
@@ -164,6 +165,100 @@ describe("TaskManagementPage description", () => {
     });
     expect(html).toContain("No description yet.");
     expect(html).not.toContain('aria-label="Loading description"');
+  });
+});
+
+describe("TaskManagementPage links", () => {
+  const blockerLinks = {
+    blockedBy: [
+      {
+        id: "3",
+        title: "Open blocker",
+        status: "doing" as const,
+        archived: false,
+      },
+      {
+        id: "4",
+        title: "Done blocker",
+        status: "done" as const,
+        archived: false,
+      },
+    ],
+    blocks: [],
+    relates: [
+      {
+        id: "5",
+        title: "Shelved sibling",
+        status: "todo" as const,
+        archived: true,
+      },
+    ],
+  };
+
+  it("lists the full Task's links and says it is blocked", () => {
+    const html = render({
+      items: [task({ openBlockerCount: 1 })],
+      selectedId: "7",
+      taskDetails: {
+        "7": task({
+          description: "Body",
+          openBlockerCount: 1,
+          blocked: true,
+          links: blockerLinks,
+        }),
+      },
+    });
+    expect(html).toContain('aria-label="Links"');
+    expect(html).toContain('aria-label="Blocked by"');
+    expect(html).toContain('aria-label="Related"');
+    // Nothing blocks on this Task, so there is no Blocks group.
+    expect(html).not.toContain('aria-label="Blocks"');
+    expect(html).toContain("Open blocker");
+    expect(html).toContain("Shelved sibling");
+    expect(html).toContain('aria-label="Blocked by 1 open task"');
+    expect(html).toContain("Blocked · 1");
+  });
+
+  it("draws neither while the body is loading or when there is nothing to say", () => {
+    const loadingHtml = render({ items: [task()], selectedId: "7" });
+    expect(loadingHtml).not.toContain('aria-label="Links"');
+
+    const html = render({
+      items: [task()],
+      selectedId: "7",
+      taskDetails: { "7": task({ description: "Body" }) },
+    });
+    expect(html).not.toContain('aria-label="Links"');
+    expect(html).not.toContain("Blocked");
+  });
+
+  it("opens a linked Task on its route", async () => {
+    const onSelect = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          page({
+            items: [task()],
+            selectedId: "7",
+            taskDetails: {
+              "7": task({ description: "Body", links: blockerLinks }),
+            },
+            onSelect,
+          }),
+        ),
+      );
+      const row = [
+        ...container.querySelectorAll('[aria-label="Links"] button'),
+      ].find((button) => button.textContent?.includes("Done blocker"));
+      await act(async () => (row as HTMLButtonElement).click());
+      expect(onSelect).toHaveBeenCalledWith("4");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
   });
 });
 

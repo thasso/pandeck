@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
+import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
 import { Spinner } from "./common/load.tsx";
 import {
   projectPath,
@@ -221,7 +222,16 @@ export function TaskRowBody({
           </span>
         ) : null}
         {/* A single-line row has nowhere else to put the id, so there it closes
-            line 1 — the one shape where it shares the title's line. */}
+            line 1 — the one shape where it shares the title's line. Being
+            blocked rides with it as a glyph and its count: line 2's chip is
+            not there to say it, and it is the one fact a row must not hide. */}
+        {!line2 && task.openBlockerCount ? (
+          <TaskBlockedIndicator
+            openBlockers={task.openBlockerCount}
+            size={12}
+            className="self-center text-xs"
+          />
+        ) : null}
         {line2 ? null : <TaskIdBadge id={task.id} onNavigate={onNavigate} />}
       </span>
       {line2 ? (
@@ -369,6 +379,11 @@ function TaskMetaItems({
           <MessageSquare size={10} aria-hidden />
           Session
         </MetaLink>
+      ) : null}
+      {/* Waiting on other Tasks: true this second, like `working`, and the
+          reason a row with nothing else going on is not being picked up. */}
+      {meta.blockers ? (
+        <TaskBlockedIndicator openBlockers={meta.blockers} />
       ) : null}
       {/* The code, and what has become of it. One group, because the dirty dot
           marks whichever chip stands for "there is code" — and either chip may

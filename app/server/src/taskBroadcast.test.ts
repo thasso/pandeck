@@ -11,6 +11,8 @@ import {
   archiveTask,
   createTask,
   deleteTask,
+  readTask,
+  taskRevisionIndex,
   unarchiveTask,
   updateTask,
 } from "./tasks.ts";
@@ -202,6 +204,154 @@ test("a link change broadcasts both of its Tasks, and so does deleting one", asy
   } finally {
     hub.unregister(viewer);
     for (const task of [blocker, blocked, bystander]) {
+      try {
+        deleteTask(task.id);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+});
+
+test("a blocker's status change re-broadcasts the Task it blocks with its new count", async () => {
+  const messages: ServerMessage[] = [];
+  const viewer = {
+    send: (message: ServerMessage) => messages.push(message),
+    wantsTopic: (topic: string) => topic === "tasks",
+  };
+  const blocker = createTask({
+    title: "Count blocker",
+    source: { createdBy: "user" },
+  });
+  const blocked = createTask({
+    title: "Count blocked",
+    source: { createdBy: "user" },
+  });
+  updateTask(blocked.id, {
+    addLinks: [{ type: "blocked-by", taskId: blocker.id }],
+  });
+  await settled();
+  hub.register(viewer);
+  try {
+    const summaryOf = (id: string): TaskSummary | undefined => {
+      const event = lastBatch(messages).events.find((e) => e.id === id);
+      return event?.kind === "upsert" ? event.item : undefined;
+    };
+
+    updateTask(blocker.id, { status: "done", actor: { kind: "user" } });
+    await settled();
+    assert.deepEqual(
+      lastBatch(messages)
+        .events.map((event) => event.id)
+        .sort(),
+      [blocker.id, blocked.id].sort(),
+    );
+    const unblocked = summaryOf(blocked.id);
+    assert.ok(unblocked, "the blocked Task is re-sent");
+    assert.equal(unblocked.openBlockerCount, undefined);
+
+    updateTask(blocker.id, { status: "todo", actor: { kind: "user" } });
+    await settled();
+    assert.equal(summaryOf(blocked.id)?.openBlockerCount, 1);
+
+    // A field no linked Task shows reaches no linked Task.
+    updateTask(blocker.id, { description: "Only the body" });
+    await settled();
+    assert.equal(
+      lastBatch(messages).events.some((event) => event.id === blocked.id),
+      false,
+    );
+
+    // Archiving the blocker leaves the projection (a delete) and un-blocks.
+    archiveTask(blocker.id);
+    await settled();
+    const archived = lastBatch(messages);
+    assert.equal(
+      archived.events.find((event) => event.id === blocker.id)?.kind,
+      "delete",
+    );
+    const released = summaryOf(blocked.id);
+    assert.ok(released && !("openBlockerCount" in released));
+  } finally {
+    hub.unregister(viewer);
+    for (const task of [blocker, blocked]) {
+      try {
+        deleteTask(task.id);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+});
+
+test("an already-archived Task hears its linked Tasks change, without rejoining the list", async () => {
+  const messages: ServerMessage[] = [];
+  const viewer = {
+    send: (message: ServerMessage) => messages.push(message),
+    wantsTopic: (topic: string) => topic === "tasks",
+  };
+  const shelved = createTask({
+    title: "Archived and blocked",
+    source: { createdBy: "user" },
+  });
+  const blocker = createTask({
+    title: "Live blocker",
+    source: { createdBy: "user" },
+  });
+  updateTask(shelved.id, {
+    addLinks: [{ type: "blocked-by", taskId: blocker.id }],
+  });
+  archiveTask(shelved.id);
+  await settled();
+  hub.register(viewer);
+  try {
+    /** The archived Task's event in the last batch, after `write`. */
+    const shelvedEventAfter = async (write: () => void) => {
+      const before = messages.length;
+      write();
+      await settled();
+      const batch = lastBatch(messages);
+      assert.ok(messages.length > before, "the write was broadcast");
+      return batch.events.find((event) => event.id === shelved.id);
+    };
+    const revision = () => taskRevisionIndex().get(shelved.id)!.revision;
+
+    for (const [what, write] of [
+      ["rename", () => updateTask(blocker.id, { title: "Blocker renamed" })],
+      [
+        "completion",
+        () =>
+          updateTask(blocker.id, { status: "done", actor: { kind: "user" } }),
+      ],
+      [
+        "link change",
+        () =>
+          updateTask(blocker.id, {
+            addLinks: [{ type: "relates", taskId: shelved.id }],
+          }),
+      ],
+      ["unlink", () => updateTask(blocker.id, { removeLinks: [shelved.id] })],
+    ] as const) {
+      const event = await shelvedEventAfter(write);
+      assert.ok(event, `${what}: the archived Task is reported`);
+      // A delete: it stays out of every list, and its revision is the one an
+      // open body of it compares against.
+      assert.equal(event.kind, "delete", what);
+      assert.equal(event.revision, revision(), what);
+    }
+    assert.equal(
+      messages.some(
+        (m) =>
+          m.type === "stateEvents" &&
+          m.events.some((e) => e.id === shelved.id && e.kind === "upsert"),
+      ),
+      false,
+      "the archived Task never comes back as a list row",
+    );
+    assert.equal(readTask(shelved.id)?.links, undefined);
+  } finally {
+    hub.unregister(viewer);
+    for (const task of [shelved, blocker]) {
       try {
         deleteTask(task.id);
       } catch {

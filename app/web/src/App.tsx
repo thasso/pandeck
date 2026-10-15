@@ -46,6 +46,7 @@ import {
   type SessionMode,
   type SessionState,
   type TaskStatus,
+  taskSummaryOf,
   type ThinkingLevel,
   UNLABELED_SESSION_TITLE,
   type WorktreeChangeFile,
@@ -6933,9 +6934,17 @@ function AppContent() {
     onOpenKnowledge: (id) => navigateFromInspector(knowledgeEntryHref(id)),
   };
 
+  // An archived Task has no Backlog row; its page is drawn from its body, and
+  // so is its inspector (`TaskManagementPage`'s routing does the same).
+  const inspectedBody = selectedTaskDetailState
+    ? dataOf(selectedTaskDetailState)
+    : null;
   const inspectedTask =
     route.name === "tasks" && route.id
-      ? backlogTasks.find((t) => t.id === route.id)
+      ? (backlogTasks.find((t) => t.id === route.id) ??
+        (inspectedBody?.id === route.id
+          ? taskSummaryOf(inspectedBody)
+          : undefined))
       : undefined;
   // The session's actions (`sessionInspectorActions`): published by the
   // session header into its ⋯ on every layout, since on a phone the inspector
@@ -7013,18 +7022,21 @@ function AppContent() {
           if (runTaskArchive([taskId], taskArchiveContext, actions))
             openSidebarSection("tasks");
         }}
+        onUnarchive={(taskId) => actions.archiveTask(taskId, false)}
         onDelete={(taskId) => {
           if (!inspectedTask) return;
           // The same act as the Backlog's, through the same rules: subtree-shaped
           // and deepest first, with the count declared in the question
           // (`lib/taskDelete.ts`). Deleting the head alone from here would scatter
-          // the subtasks the tree's own delete removes.
-          const doomed = deleteSet(taskArchiveContext.tasks, [taskId]);
-          const { title, body } = deleteConfirmation(
-            taskArchiveContext.tasks,
-            [taskId],
-            doomed,
-          );
+          // the subtasks the tree's own delete removes. An archived Task is not
+          // in that list, so it joins it for the count.
+          const tasks = taskArchiveContext.tasks.some(
+            (task) => task.id === taskId,
+          )
+            ? taskArchiveContext.tasks
+            : [...taskArchiveContext.tasks, inspectedTask];
+          const doomed = deleteSet(tasks, [taskId]);
+          const { title, body } = deleteConfirmation(tasks, [taskId], doomed);
           void dialogs
             .confirm({ title, body, confirmLabel: "Delete", danger: true })
             .then((confirmed) => {

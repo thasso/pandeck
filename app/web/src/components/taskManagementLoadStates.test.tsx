@@ -6,7 +6,14 @@ import type { AssistantActions } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
 import type { Prefs } from "../hooks/usePrefs.ts";
 import { ALL_PROJECT_FILTER } from "../lib/backlogTreeModel.ts";
-import { failed, ready, refreshing, type LoadState } from "../lib/loadState.ts";
+import {
+  failed,
+  idle,
+  loading,
+  ready,
+  refreshing,
+  type LoadState,
+} from "../lib/loadState.ts";
 import { TaskManagementPage } from "./TaskManagementPage.tsx";
 
 if (!window.matchMedia)
@@ -95,13 +102,50 @@ function markup({
 
 describe("Task management load states", () => {
   it("distinguishes a cold selected route, a missing Task, and no selection", () => {
-    expect(markup({ tasks: null })).toContain("Loading Task…");
-    expect(markup({ tasks: [], selectedId: "missing" })).toContain(
-      "Task-missing is not available",
-    );
+    expect(
+      markup({ tasks: null, detailState: idle<TaskItem | null>() }),
+    ).toContain("Loading Task…");
+    // Not in the live list is not "missing": an archived Task has no row, so
+    // the page waits for the body the route asked for.
+    expect(
+      markup({
+        tasks: [],
+        selectedId: "missing",
+        detailState: loading<TaskItem | null>(),
+      }),
+    ).toContain("Loading Task…");
+    // Only the server's answer says there is no such Task.
+    expect(
+      markup({
+        tasks: [],
+        selectedId: "missing",
+        detailState: ready<TaskItem | null>(null),
+      }),
+    ).toContain("Task-missing does not exist.");
     expect(markup({ tasks: [], selectedId: null })).toContain(
       "Select a task to see its details.",
     );
+  });
+
+  it("says a Task does not exist only once that answer is settled", () => {
+    const missing = { tasks: [], selectedId: "missing" };
+    // A re-read of a Task last answered not-found is still a read under way.
+    const rereading = markup({
+      ...missing,
+      detailState: refreshing<TaskItem | null>(null),
+    });
+    expect(rereading).toContain("Loading Task…");
+    expect(rereading).not.toContain("does not exist");
+
+    // And when that re-read fails, the failure is what is true now: shown,
+    // with its Retry, rather than the old answer.
+    const failedReread = markup({
+      ...missing,
+      detailState: failed<TaskItem | null>("Read failed", null),
+    });
+    expect(failedReread).toContain("Read failed");
+    expect(failedReread).toContain("Retry");
+    expect(failedReread).not.toContain("does not exist");
   });
 
   it("retains the same Task body through refresh and refresh failure", () => {
@@ -134,10 +178,11 @@ describe("Task management load states", () => {
     const gone = markup({
       tasks: [],
       selectedId: "missing",
+      detailState: ready<TaskItem | null>(null),
       failure: "Failed to delete task: locked",
     });
     expect(gone).toContain("Failed to delete task: locked");
-    expect(gone).toContain("Task-missing is not available");
+    expect(gone).toContain("Task-missing does not exist.");
   });
 
   it("reserves the workflow card slot until the topic answers", () => {

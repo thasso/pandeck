@@ -233,3 +233,22 @@ describe("BacklogFocusList rows", () => {
     expect(recorded.navigated).toEqual([]);
   });
 });
+
+describe("BacklogFocusList blocked badge", () => {
+  it("shows a Focus row's open blocker count", () => {
+    render([
+      task({ id: "1", status: "doing", openBlockerCount: 1 }),
+      task({ id: "2", status: "doing" }),
+    ]);
+    const badges = container!.querySelectorAll<HTMLElement>(
+      '[role="img"][aria-label="Blocked by 1 open task"]',
+    );
+    expect(badges).toHaveLength(1);
+    expect(badges[0]!.textContent).toBe("1");
+    expect(
+      badges[0]!
+        .closest("[data-list-row-id]")
+        ?.getAttribute("data-list-row-id"),
+    ).toBe("1");
+  });
+});

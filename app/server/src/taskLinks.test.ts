@@ -9,7 +9,12 @@
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import type { ClientMessage, ServerMessage, TaskItem } from "@assistant/shared";
+import {
+  taskSummaryOf,
+  type ClientMessage,
+  type ServerMessage,
+  type TaskItem,
+} from "@assistant/shared";
 import { Connection } from "./connection.ts";
 import { withDbTransaction } from "./db/index.ts";
 import { incoming, outgoing } from "./db/links.ts";
@@ -18,11 +23,17 @@ import {
   archiveTask,
   createTask,
   deleteTask,
+  linkSessionToTask,
+  listSessionTasks,
   listTasks,
   openTaskBlockerCounts,
   readTask,
   subscribeTaskChanges,
   taskRevisionIndex,
+  taskStateItems,
+  taskSummaryFor,
+  unarchiveTask,
+  unlinkSessionEverywhere,
   updateTask,
 } from "./tasks.ts";
 
@@ -464,6 +475,12 @@ test("the socket deleteTask clears links, and getTask returns them", async () =>
       [doomed.id],
     );
     assert.equal(before.item?.blocked, true);
+    // The reply names the revision its body is as of, so the client can tell
+    // a later event about this Task from the echo of what it already holds.
+    assert.equal(
+      before.revision,
+      taskRevisionIndex().get(survivor.id)?.revision,
+    );
 
     await connection.handle({
       type: "deleteTask",
@@ -484,8 +501,96 @@ test("the socket deleteTask clears links, and getTask returns them", async () =>
     assert.ok(after?.type === "taskDetail");
     assert.equal(after.item?.links, undefined);
     assert.equal(after.item?.blocked, undefined);
+    assert.ok(
+      after.revision! > before.revision!,
+      "losing the link moved the survivor's revision",
+    );
   } finally {
     connection.dispose();
     discard(doomed.id, survivor.id);
+  }
+});
+
+test("every summary carries its open blocker count, done and archived blockers excluded", () => {
+  const task = make("Counted subject");
+  const open = make("Counted open blocker");
+  const second = make("Counted second blocker");
+  const done = make("Counted done blocker");
+  const shelved = make("Counted archived blocker");
+  const sessionId = "blocker-count-session";
+  try {
+    updateTask(task.id, {
+      addLinks: [
+        { type: "blocked-by", taskId: open.id },
+        { type: "blocked-by", taskId: second.id },
+        { type: "blocked-by", taskId: done.id },
+        { type: "blocked-by", taskId: shelved.id },
+      ],
+    });
+    updateTask(done.id, { status: "done", actor: { kind: "user" } });
+    archiveTask(shelved.id);
+    linkSessionToTask(task.id, { sessionId, origin: "reference" });
+
+    // Every read that builds a summary agrees: the list, a single summary, a
+    // state-event item, a session's Tasks, and the full item's own narrowing.
+    const listed = listTasks().find((t) => t.id === task.id);
+    assert.equal(listed?.openBlockerCount, 2);
+    assert.equal(taskSummaryFor(task.id)?.openBlockerCount, 2);
+    const [event] = taskStateItems([task.id]);
+    assert.ok(event?.kind === "upsert");
+    assert.equal(event.item.openBlockerCount, 2);
+    assert.equal(
+      listSessionTasks("assistant", sessionId).find((t) => t.id === task.id)
+        ?.openBlockerCount,
+      2,
+    );
+    const full = readTask(task.id)!;
+    assert.equal(full.openBlockerCount, 2);
+    assert.equal(full.blocked, true);
+    assert.deepEqual(taskSummaryOf(full), listed);
+
+    // The blockers themselves are not blocked, so they carry no count at all.
+    const blocker = listTasks().find((t) => t.id === open.id);
+    assert.ok(blocker && !("openBlockerCount" in blocker));
+
+    updateTask(open.id, { status: "done", actor: { kind: "user" } });
+    assert.equal(taskSummaryFor(task.id)?.openBlockerCount, 1);
+    archiveTask(second.id);
+    const unblocked = taskSummaryFor(task.id);
+    assert.ok(unblocked && !("openBlockerCount" in unblocked));
+    assert.equal(readTask(task.id)?.openBlockerCount, undefined);
+
+    // Coming back from the archive makes it count again.
+    unarchiveTask(second.id);
+    assert.equal(taskSummaryFor(task.id)?.openBlockerCount, 1);
+  } finally {
+    unlinkSessionEverywhere(sessionId);
+    discard(task.id, open.id, second.id, done.id, shelved.id);
+  }
+});
+
+test("the socket taskSaved names the revision its Task is as of", async () => {
+  const task = make("Socket saved revision");
+  const sent: ServerMessage[] = [];
+  const connection = new Connection({
+    OPEN: 1,
+    readyState: 1,
+    send: (raw: string) => sent.push(JSON.parse(raw) as ServerMessage),
+  } as unknown as ConstructorParameters<typeof Connection>[0]);
+  try {
+    await connection.handle({
+      type: "saveTask",
+      request: { id: task.id, status: "doing" },
+      requestId: "saved-revision",
+    } as ClientMessage);
+    const saved = sent.find(
+      (m) => m.type === "taskSaved" && m.requestId === "saved-revision",
+    );
+    assert.ok(saved?.type === "taskSaved");
+    assert.equal(saved.item.status, "doing");
+    assert.equal(saved.revision, taskRevisionIndex().get(task.id)?.revision);
+  } finally {
+    connection.dispose();
+    discard(task.id);
   }
 });
