@@ -200,6 +200,14 @@ export interface TreeProps<T> {
   getRowAlign?: ((node: TreeNode<T>) => "center" | "stretch") | undefined;
   /** Extra classes on a row, by node + state. */
   getRowClassName?: (node: TreeNode<T>, state: TreeNodeState) => string;
+  /**
+   * Rows drawn as a GROUP BAND — the `ListGroupSection` look: the `chart-3`
+   * neutral with white text, pinned while its rows scroll under it. For a
+   * tree whose top level groups the rest (the Backlog by Project, flush).
+   * Everything under a band is drawn one level shallower: the band already
+   * says the rows belong to it, so an indent would only spend width.
+   */
+  getRowBand?: ((node: TreeNode<T>) => boolean) | undefined;
   /** Extra classes on the tree container. */
   className?: string | undefined;
   /** Accessible label for the tree. */
@@ -275,6 +283,7 @@ export function Tree<T>({
   rowAlign = "center",
   getRowAlign,
   getRowClassName,
+  getRowBand,
   className,
   "aria-label": ariaLabel,
 }: TreeProps<T>) {
@@ -546,6 +555,24 @@ export function Tree<T>({
     [projected, resetDrag, items, canDrop, selected, selectedSet, onMove],
   );
 
+  // How many band rows sit above each row: it is drawn that many levels
+  // shallower (`getRowBand`). Rows are flattened parents-first, so one pass
+  // over the list resolves every parent before its children.
+  const bandDepth = useMemo(() => {
+    const byId = new Map<string, number>();
+    if (!getRowBand) return byId;
+    const bands = new Set(
+      flattened.filter((row) => getRowBand(toNode(row))).map((row) => row.id),
+    );
+    for (const node of flattened) {
+      const parent = node.parentId;
+      if (parent === null) continue;
+      byId.set(node.id, (byId.get(parent) ?? 0) + (bands.has(parent) ? 1 : 0));
+    }
+    return byId;
+  }, [flattened, getRowBand]);
+  const bandAncestors = (node: FlattenedNode<T>) => bandDepth.get(node.id) ?? 0;
+
   const renderRow = (node: FlattenedNode<T>) => {
     const hasChildren = node.children.length > 0;
     const isExpanded = expandedSet.has(node.id);
@@ -556,7 +583,8 @@ export function Tree<T>({
       selected: selectedSet.has(node.id),
     };
     const depth =
-      node.id === activeId && projected ? projected.depth : node.depth;
+      (node.id === activeId && projected ? projected.depth : node.depth) -
+      bandAncestors(node);
 
     const common = {
       node,
@@ -572,7 +600,11 @@ export function Tree<T>({
       selected: state.selected,
       content: renderNode(node, state),
       swipe: rowSwipe?.(toNode(node)) ?? null,
-      rowClassName: getRowClassName?.(node, state),
+      rowClassName: cx(
+        getRowClassName?.(node, state),
+        getRowBand?.(toNode(node)) && "sticky top-0 z-20",
+      ),
+      band: getRowBand?.(toNode(node)) ?? false,
       onToggle: () => setExpandedFor(node.id, !isExpanded),
       onSelect: (e: ReactMouseEvent<HTMLLIElement>) =>
         selectNode(node, e.shiftKey || e.metaKey || e.ctrlKey),
@@ -660,6 +692,8 @@ interface RowProps<T> {
   content: ReactNode;
   swipe?: TreeRowSwipe | null;
   rowClassName?: string | undefined;
+  /** Drawn as a group band (`getRowBand`). */
+  band?: boolean;
   onToggle: () => void;
   onSelect: (e: ReactMouseEvent<HTMLLIElement>) => void;
   onKeyDown: (e: ReactKeyboardEvent<HTMLLIElement>) => void;
@@ -680,6 +714,7 @@ function RowBody<T>({
   selected,
   content,
   onToggle,
+  band = false,
   badge,
   elevated,
 }: Pick<
@@ -695,6 +730,7 @@ function RowBody<T>({
   | "selected"
   | "content"
   | "onToggle"
+  | "band"
 > & { badge?: number | undefined; elevated?: boolean }) {
   const stretch = rowAlign === "stretch";
   // A flush row has no container inset to sit in, so it keeps its own.
@@ -702,7 +738,8 @@ function RowBody<T>({
   return (
     <div
       className={cx(
-        "relative z-10 flex gap-1 text-foreground transition-colors",
+        "relative z-10 flex gap-1 transition-colors",
+        band && !elevated ? "bg-chart-3 text-white" : "text-foreground",
         flush ? "rounded-none border-b border-border/60" : "rounded-md",
         stretch ? "items-stretch" : "items-center",
         // The indent animates (`index.css`) so a row promoted out of a vanished
@@ -713,11 +750,17 @@ function RowBody<T>({
         // selection tint (no text recolor, so the hierarchy stays legible).
         elevated
           ? "border border-border bg-card shadow-lg"
-          : selected
-            ? flush
-              ? "bg-muted"
-              : "bg-accent/60"
-            : "hover:bg-muted",
+          : band
+            ? // A band is never "selected-looking": its tint would be lost on
+              // the dark neutral, and a hover lightens it instead.
+              selected
+              ? "bg-[color-mix(in_oklab,var(--chart-3)_85%,white)]"
+              : "hover:bg-[color-mix(in_oklab,var(--chart-3)_90%,white)]"
+            : selected
+              ? flush
+                ? "bg-muted"
+                : "bg-accent/60"
+              : "hover:bg-muted",
       )}
       style={{ paddingLeft: inset + depth * indentWidth }}
     >
@@ -762,7 +805,11 @@ function RowBody<T>({
         >
           <ChevronRight
             size={compact ? 12 : 14}
-            className={cx("transition-transform", isExpanded && "rotate-90")}
+            className={cx(
+              "transition-transform",
+              isExpanded && "rotate-90",
+              band && "text-white/70",
+            )}
           />
         </Button>
       ) : (

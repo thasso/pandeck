@@ -372,7 +372,8 @@ body {
    the fit measures mid-animation widths: it read a half-grown label as fitting,
    let it grow, saw it wrap, and flickered at the edge. Colours still ease;
    sizes change at once. */
-.session-card-status-line .group\/badge {
+.session-card-status-line .group\/badge,
+.list-card-signals .group\/badge {
   transition-property: color, background-color, border-color, box-shadow;
 }
 
