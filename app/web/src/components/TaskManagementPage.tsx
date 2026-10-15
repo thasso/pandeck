@@ -383,7 +383,12 @@ export function TaskManagementPage({
     [workflowRuns, selectedId],
   );
   const detailOnlyActive = detailOnly;
+  // A body known NOT to exist — answered, or retained through a later read
+  // that is still on its way or failed. Only a settled answer says so on the
+  // page (`detailNotFound`); the others show that read's own state.
   const detailUnavailable = dataOf(detailState) === null;
+  const detailNotFound =
+    detailState.status === "ready" && detailState.data === null;
 
   // The open Task is a cache pin, independent of whether its body is currently
   // loading or ready. Late replies for other ids may fill the LRU without ever
@@ -549,24 +554,27 @@ export function TaskManagementPage({
               paObjectReferences={paObjectReferences}
               onOpenPaObject={onOpenPaObject}
             />
-          ) : selectedId && detailUnavailable ? (
-            // The server answered: there is no such Task (never was, or it was
-            // deleted). No way out is offered — where to go next is the user's
-            // call, and the shell's navigation is what answers it.
-            <div className="flex h-full items-center justify-center px-6">
-              <EmptyBox>Task-{selectedId} does not exist.</EmptyBox>
-            </div>
           ) : selectedId && detailError ? (
-            // Neither a Backlog row nor a body to draw the page from.
+            // The current read failed, and there is no body to draw the page
+            // from — even one an earlier answer said does not exist: the
+            // failure is what is true now, and it can be retried.
             <div className="px-5 pt-4">
               <ErrorNote
                 message={detailError}
                 onRetry={() => actions.requestTaskDetail(selectedId)}
               />
             </div>
+          ) : selectedId && detailNotFound ? (
+            // The server answered: there is no such Task (never was, or it was
+            // deleted). No way out is offered — where to go next is the user's
+            // call, and the shell's navigation is what answers it.
+            <div className="flex h-full items-center justify-center px-6">
+              <EmptyBox>Task-{selectedId} does not exist.</EmptyBox>
+            </div>
           ) : selectedId ? (
             // A Task IS addressed; the list or the body carrying it has not
-            // arrived yet. "Select a task" here would deny the route.
+            // arrived yet, or a re-read of one said to be missing is under way.
+            // "Select a task" here would deny the route.
             <PaneLoading label="Loading Task…" className="h-full" />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">

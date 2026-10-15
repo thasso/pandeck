@@ -127,6 +127,27 @@ describe("Task management load states", () => {
     );
   });
 
+  it("says a Task does not exist only once that answer is settled", () => {
+    const missing = { tasks: [], selectedId: "missing" };
+    // A re-read of a Task last answered not-found is still a read under way.
+    const rereading = markup({
+      ...missing,
+      detailState: refreshing<TaskItem | null>(null),
+    });
+    expect(rereading).toContain("Loading Task…");
+    expect(rereading).not.toContain("does not exist");
+
+    // And when that re-read fails, the failure is what is true now: shown,
+    // with its Retry, rather than the old answer.
+    const failedReread = markup({
+      ...missing,
+      detailState: failed<TaskItem | null>("Read failed", null),
+    });
+    expect(failedReread).toContain("Read failed");
+    expect(failedReread).toContain("Retry");
+    expect(failedReread).not.toContain("does not exist");
+  });
+
   it("retains the same Task body through refresh and refresh failure", () => {
     const refreshingHtml = markup({ detailState: refreshing(item) });
     expect(refreshingHtml).toContain("Retained body");
