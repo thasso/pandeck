@@ -7,6 +7,8 @@ import {
   useState,
 } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   ArrowUpRight,
   Bot,
@@ -44,6 +46,7 @@ import type {
   WorkflowCommitCheckChoice,
   WorkflowRunSummary,
 } from "@assistant/shared";
+import { taskSummaryOf } from "@assistant/shared";
 import {
   taskMutationKey,
   type AssistantActions,
@@ -264,10 +267,6 @@ export function TaskManagementPage({
     () => backlogState.taskList?.items ?? [],
     [backlogState.taskList],
   );
-  // `?? []` above cannot say whether the list is cold or genuinely empty, and
-  // the detail pane has to: an unfound Task with the list still on its way is
-  // loading, not "nothing selected" (R1).
-  const tasksLoaded = backlogState.taskList !== null;
   const projectsById = useMemo(
     () => buildProjectsById(backlogState.projectList?.projects ?? []),
     [backlogState.projectList],
@@ -361,9 +360,21 @@ export function TaskManagementPage({
     return map;
   }, [items]);
 
-  const selectedTask = selectedId
+  // The page is routed on the selected ID, not on the Backlog row: an archived
+  // Task — reached through a link — has no row in the live list, so its page
+  // is drawn from its body, and `getTask` is asked either way.
+  const selectedRow = selectedId
     ? (items.find((item) => item.id === selectedId) ?? null)
     : null;
+  const selectedBody = dataOf(detailState);
+  const bodySummary = useMemo(
+    () =>
+      selectedBody && selectedBody.id === selectedId
+        ? taskSummaryOf(selectedBody)
+        : null,
+    [selectedBody, selectedId],
+  );
+  const selectedTask = selectedRow ?? bodySummary;
   const selectedRuns = useMemo(
     () =>
       (workflowRuns ?? [])
@@ -386,7 +397,7 @@ export function TaskManagementPage({
   // newer summary marks retained data `refreshing`, which starts the same keyed
   // read without blanking the body.
   useEffect(() => {
-    if (!selectedId || !selectedTask || !connected) return;
+    if (!selectedId || !connected) return;
     const detail = dataOf(detailState);
     const disconnectedFailure =
       detailState.status === "error" &&
@@ -395,10 +406,11 @@ export function TaskManagementPage({
       detailState.status === "idle" ||
       detailState.status === "refreshing" ||
       disconnectedFailure ||
-      (detail && detail.updatedAt < selectedTask.updatedAt)
+      (detail && selectedRow && detail.updatedAt < selectedRow.updatedAt)
     )
       actions.requestTaskDetail(selectedId);
-  }, [actions, connected, detailState, selectedId, selectedTask]);
+  }, [actions, connected, detailState, selectedId, selectedRow]);
+  const detailError = errorOf(detailState);
 
   return (
     <div
@@ -533,22 +545,29 @@ export function TaskManagementPage({
                 taskMutations[taskMutationKey(selectedTask.id, "edit")]
               }
               onRetryDetail={() => actions.requestTaskDetail(selectedTask.id)}
+              onRestore={() => actions.archiveTask(selectedTask.id, false)}
               paObjectReferences={paObjectReferences}
               onOpenPaObject={onOpenPaObject}
             />
-          ) : selectedId && !tasksLoaded ? (
-            // A Task IS addressed; the list carrying it simply has not arrived.
-            // "Select a task" here would deny the selection the route makes.
-            <PaneLoading label="Loading Task…" className="h-full" />
-          ) : selectedId ? (
-            // No way out is offered: the address named a Task that is not
-            // there, and where to go next is the user's call — the shell's
-            // navigation is what answers it.
+          ) : selectedId && detailUnavailable ? (
+            // The server answered: there is no such Task (never was, or it was
+            // deleted). No way out is offered — where to go next is the user's
+            // call, and the shell's navigation is what answers it.
             <div className="flex h-full items-center justify-center px-6">
-              <EmptyBox>
-                Task-{selectedId} is not available in the Backlog.
-              </EmptyBox>
+              <EmptyBox>Task-{selectedId} does not exist.</EmptyBox>
             </div>
+          ) : selectedId && detailError ? (
+            // Neither a Backlog row nor a body to draw the page from.
+            <div className="px-5 pt-4">
+              <ErrorNote
+                message={detailError}
+                onRetry={() => actions.requestTaskDetail(selectedId)}
+              />
+            </div>
+          ) : selectedId ? (
+            // A Task IS addressed; the list or the body carrying it has not
+            // arrived yet. "Select a task" here would deny the route.
+            <PaneLoading label="Loading Task…" className="h-full" />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
               <div className="flex size-10 items-center justify-center rounded-xl bg-card text-muted-foreground">
@@ -659,6 +678,7 @@ function TaskDetailPanel({
   statusMutation,
   editMutation,
   onRetryDetail,
+  onRestore,
   paObjectReferences,
   onOpenPaObject,
 }: {
@@ -718,6 +738,8 @@ function TaskDetailPanel({
   statusMutation?: LoadState<true> | undefined;
   editMutation?: LoadState<true> | undefined;
   onRetryDetail: () => void;
+  /** Bring an archived Task back into the Backlog. */
+  onRestore: () => void;
   paObjectReferences: MarkdownPaObjectReference[];
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
 }) {
@@ -786,6 +808,7 @@ function TaskDetailPanel({
               onDismissSuggestion={onDismissSuggestion}
               onDismissFromInbox={onDismissFromInbox}
               onPlanToday={onPlanToday}
+              onRestore={onRestore}
               onOpenSession={onOpenSession}
               sessions={sessions}
               projectsById={projectsById}
@@ -808,7 +831,12 @@ function TaskDetailPanel({
               // The status control lives HERE on a wide layout and in the object
               // dock's action row on a phone — the dock is the object's action home
               // there, so this block shows the state and does not offer to change it.
-              onSetStatus={mobile ? undefined : onSetStatus}
+              // An archived Task shows it too: Restore is its one action.
+              onSetStatus={
+                mobile || item.archivedAt !== undefined
+                  ? undefined
+                  : onSetStatus
+              }
             />
 
             {/* The other Tasks this one waits on, holds up or relates to. They
@@ -972,6 +1000,7 @@ function TaskTitleBlock({
   onDismissSuggestion,
   onDismissFromInbox,
   onPlanToday,
+  onRestore,
   onOpenSession,
   sessions,
   projectsById,
@@ -990,6 +1019,7 @@ function TaskTitleBlock({
   onDismissSuggestion: () => void;
   onDismissFromInbox: () => void;
   onPlanToday: () => void;
+  onRestore: () => void;
   onOpenSession: (id: string) => void;
   /** The session list, to name the agent session behind a suggestion. */
   sessions: UIState["sessions"];
@@ -1006,7 +1036,9 @@ function TaskTitleBlock({
   const statusError = errorOf(statusMutation ?? idle());
   const [subtasksOpen, setSubtasksOpen] = useState(false);
   const suggestion = pendingStatusSuggestion(item);
-  const inInbox = belongsInInbox(item);
+  const archived = item.archivedAt !== undefined;
+  // An archived Task is out of the Backlog, so out of its Inbox too.
+  const inInbox = !archived && belongsInInbox(item);
   const originSession = item.source?.sessionId
     ? sessions.find((session) => session.id === item.source?.sessionId)
     : undefined;
@@ -1040,6 +1072,24 @@ function TaskTitleBlock({
           {item.title}
         </h1>
       )}
+      {archived ? (
+        // Reached through a link or an address: the Task is out of the Backlog
+        // and every list, and Restore is the way back. The page still reads in
+        // full — its links, its body — because that is why it was opened.
+        <TaskNoticeCard
+          tone="info"
+          icon={<Archive />}
+          title="Archived"
+          actions={
+            <Button size="xs" onClick={onRestore}>
+              <ArchiveRestore />
+              Restore to Backlog
+            </Button>
+          }
+        >
+          <p>This Task is archived: it is in no list until it is restored.</p>
+        </TaskNoticeCard>
+      ) : null}
       {suggestion ? (
         // An agent's claim about this Task's status, answered on the Task
         // itself as well as in the Focus view's review bucket: a card with a

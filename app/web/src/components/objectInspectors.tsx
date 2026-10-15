@@ -1034,6 +1034,7 @@ export function TaskInspector({
   onStartSession,
   onRunWorkflow,
   onArchive,
+  onUnarchive,
   onDelete,
   children,
 }: {
@@ -1047,9 +1048,12 @@ export function TaskInspector({
    */
   onRunWorkflow?: ((taskId: string) => void) | undefined;
   onArchive?: (taskId: string) => void;
+  /** Bring an archived Task back; offered instead of Archive when it is one. */
+  onUnarchive?: (taskId: string) => void;
   onDelete?: (taskId: string) => void;
   children?: ReactNode;
 }) {
+  const archived = task?.archivedAt !== undefined;
   const actions: InspectorAction[] = task
     ? [
         {
@@ -1069,16 +1073,27 @@ export function TaskInspector({
               },
             ]
           : []),
-        ...(onArchive
-          ? [
-              {
-                key: "archive",
-                icon: <Archive size={14} />,
-                label: "Archive task",
-                onRun: () => onArchive(task.id),
-              },
-            ]
-          : []),
+        ...(archived
+          ? onUnarchive
+            ? [
+                {
+                  key: "unarchive",
+                  icon: <ArchiveRestore size={14} />,
+                  label: "Restore task",
+                  onRun: () => onUnarchive(task.id),
+                },
+              ]
+            : []
+          : onArchive
+            ? [
+                {
+                  key: "archive",
+                  icon: <Archive size={14} />,
+                  label: "Archive task",
+                  onRun: () => onArchive(task.id),
+                },
+              ]
+            : []),
         ...(onDelete
           ? [
               {

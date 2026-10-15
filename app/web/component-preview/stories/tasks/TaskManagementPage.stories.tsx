@@ -115,8 +115,32 @@ const linkedTasks: TaskItem[] = [
   },
 ];
 
+/**
+ * The archived Task the links story relates to, opened through that link: it
+ * has no Backlog row, so its page is drawn from its body alone.
+ */
+const archivedTask: TaskItem = {
+  ...backlogTask("655", "Earlier pass at the project page layout", "todo"),
+  description:
+    "Superseded by the shared property list; kept for the screenshots in it.",
+  archivedAt: Date.now() - 3 * 86_400_000,
+  links: {
+    blocks: [],
+    blockedBy: [],
+    relates: [
+      {
+        id: "714",
+        title: "Refine the task and project surfaces",
+        status: "doing",
+        projectId: "pandeck",
+        archived: false,
+      },
+    ],
+  },
+};
+
 function renderPage(
-  state: "loading" | "empty" | "tasks" | "notices" | "links",
+  state: "loading" | "empty" | "tasks" | "notices" | "links" | "archived",
 ) {
   const items =
     state === "loading"
@@ -125,7 +149,7 @@ function renderPage(
         ? []
         : state === "notices"
           ? [noticedTask]
-          : state === "links"
+          : state === "links" || state === "archived"
             ? linkedTasks
             : [taskAreaTask as TaskItem];
   const backlogState = {
@@ -157,9 +181,15 @@ function renderPage(
           ? noticedTask.id
           : state === "links"
             ? linkedTasks[0]!.id
-            : null
+            : state === "archived"
+              ? archivedTask.id
+              : null
       }
-      {...(state === "links" ? { detailState: ready(linkedTasks[0]!) } : {})}
+      {...(state === "links"
+        ? { detailState: ready(linkedTasks[0]!) }
+        : state === "archived"
+          ? { detailState: ready(archivedTask) }
+          : {})}
       onSelect={() => {}}
       onCloseDetail={() => {}}
       onClose={() => {}}
@@ -204,3 +234,5 @@ export const TaskNotices: Story = { render: () => renderPage("notices") };
  * grouped under it, and the blocked rows in the Backlog beside it.
  */
 export const TaskLinks: Story = { render: () => renderPage("links") };
+/** An archived Task opened from a link: no Backlog row, its notice and Restore. */
+export const ArchivedTask: Story = { render: () => renderPage("archived") };

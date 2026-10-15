@@ -175,11 +175,15 @@ per-surface sub-tasks — no page invents its own delta format.
   moves only the revision (`docs/tasks.md`). A touched Task that was ALREADY
   outside the live projection (archived) is reported as a `delete` again, as
   Background work reports a non-member: no list holds it, and the revision is
-  what an open body of it compares against. A snapshot advances the sidecar
-  without those events, so it re-reads any cached body whose snapshot revision
-  is newer, and any body of an archived Task, which no snapshot or digest can
-  vouch for. A body read without a revision (an older server) stays on the
-  `updatedAt` rule.
+  what an open body of it compares against. That rests on an invariant: the
+  client's `taskList` is ONLY ever the canonical live projection. A list read
+  with `includeArchived` must never be stored there, or such a `delete` drops a
+  real row. A canonical snapshot or digest names the whole live projection, so
+  it is authoritative about absence too: it re-reads every cached body it leaves
+  out (archived or deleted, perhaps while the tab was away) and every live body
+  whose revision is newer than the one it was read at. A filtered snapshot
+  judges nothing. A body read without a revision (an older server) stays on the
+  `updatedAt` rule for live rows.
 - Projects: canonical archived-inclusive lean summaries plus keyed full
   documents. Project archive/restore is an upsert; only deletion removes
   registry membership. Failed optimistic mutations recover their touched ids

@@ -3662,6 +3662,10 @@ function applyEvent(
     if (!items) continue;
 
     const index = items.findIndex((item) => item.id === event.id);
+    // A `delete` may name a Task that was ALREADY archived (its linked Task
+    // changed): a no-op here only because `taskList` is the canonical LIVE
+    // projection and never holds an archived row. A list read with
+    // `includeArchived` must never be stored here, or this drops a real row.
     if (event.kind === "delete") {
       if (index >= 0) items = items.filter((item) => item.id !== event.id);
       continue;
@@ -3924,11 +3928,16 @@ function retainedTaskDetailRevisions(
 }
 
 /**
- * Bodies an authoritative Task SNAPSHOT says are stale: a live row whose
- * snapshot revision is newer than the one its body was read at, and a body of a
- * Task outside the live projection (archived), whose changes no snapshot can
- * vouch for. A body read without a revision stays on the `updatedAt` rule
- * (`reconcileTaskDetails`).
+ * Bodies an authoritative Task SNAPSHOT or digest says are stale. Both name the
+ * WHOLE live projection, so they are authoritative about absence as well:
+ *  - a body of a Task the snapshot leaves out is re-read, whatever it said when
+ *    it was read — the Task was archived or deleted (perhaps while this tab was
+ *    away), or was archived all along, and no snapshot vouches for it;
+ *  - a live body is re-read when the snapshot's revision is newer than the one
+ *    it was read at. A body read without a revision (an older server) stays on
+ *    the `updatedAt` rule (`reconcileTaskDetails`).
+ * Only canonical lists may be passed: a filtered one leaves rows out that are
+ * still live.
  */
 function reconcileTaskDetailRevisions(
   details: Record<string, LoadState<TaskItem | null>>,
@@ -3937,14 +3946,10 @@ function reconcileTaskDetailRevisions(
 ): Record<string, LoadState<TaskItem | null>> {
   let next = details;
   for (const [id, detail] of Object.entries(details)) {
-    const known = detailRevisions[id];
-    if (known === undefined || !dataOf(detail)) continue;
+    if (!dataOf(detail)) continue;
     const live = liveRevisions[id];
-    const archived = dataOf(detail)!.archivedAt !== undefined;
-    // Live: stale only when the snapshot's revision is newer. Absent from the
-    // live projection: stale when archived, since nothing vouches for it; a
-    // live body outside this snapshot is not this snapshot's to judge.
-    const stale = live !== undefined ? live > known : archived;
+    const known = detailRevisions[id];
+    const stale = live === undefined || (known !== undefined && live > known);
     if (!stale) continue;
     const refreshing = beginLoad(detail);
     if (refreshing === detail) continue;
@@ -4034,11 +4039,21 @@ function applyTaskSaved(
     const index = list.items.findIndex(
       (row) => row.id === tempId || row.id === item.id,
     );
-    const items = list.items.slice();
-    if (index >= 0) items[index] = summary;
-    else items.unshift(summary);
-    if (index < 0 || !wireValueEqual(list.items[index], summary))
-      taskList = { ...list, items };
+    if (item.archivedAt !== undefined) {
+      // An archived Task is no row of the live list: saving one from its page
+      // (reached through a link) must not put it back.
+      if (index >= 0)
+        taskList = {
+          ...list,
+          items: list.items.filter((_, at) => at !== index),
+        };
+    } else {
+      const items = list.items.slice();
+      if (index >= 0) items[index] = summary;
+      else items.unshift(summary);
+      if (index < 0 || !wireValueEqual(list.items[index], summary))
+        taskList = { ...list, items };
+    }
   }
   const detailLru = touchLru(state.taskDetailsLru, item.id);
   const detailCache = pruneProjectionCache(
@@ -5530,9 +5545,20 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         state.taskDetails,
         taskList.items,
       );
+      // As a digest does: rows the canonical snapshot no longer lists left the
+      // live projection, so their recorded statuses are dropped.
+      const taskStatuses = canonical
+        ? forgetTaskStatuses(
+            state.taskStatuses,
+            (state.taskList?.items ?? [])
+              .map((item) => item.id)
+              .filter((id) => !(id in canonical)),
+          )
+        : state.taskStatuses;
       return {
         ...state,
         taskList,
+        taskStatuses,
         taskListFresh: true,
         taskListError: null,
         stateEventRevisions: {

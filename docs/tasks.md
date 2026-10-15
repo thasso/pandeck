@@ -178,7 +178,10 @@ Task's change moves this Task's revision without its `updatedAt`, so the
 `taskDetail` and `taskSaved` replies name the revision their body is as of, and
 the client re-reads a body on any NEWER event for it (`taskDetailRevisions`). An
 archived Task stays out of the list but still gets that event, as a repeated
-`delete`, so its open page refreshes too (`docs/state-sync.md`).
+`delete`, so its open page refreshes too (`docs/state-sync.md`). The Task page
+is routed on the Task's id, not on its Backlog row: an archived Task opened from
+a link is drawn from its body, says it is archived, and offers Restore; only the
+server's not-found answer makes the page say the Task does not exist.
 
 ## Where a piece of work belongs
 

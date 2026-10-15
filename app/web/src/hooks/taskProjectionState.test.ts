@@ -338,5 +338,116 @@ describe("Task keyed projections", () => {
       expect(cached).toHaveLength(TASK_PROJECTION_CACHE_LIMIT);
       expect(Object.keys(state.taskDetailRevisions).sort()).toEqual(cached);
     });
+
+    describe("a Task that left the live projection while this tab was away", () => {
+      /** Task 1 in the canonical list, its body cached at revision 4. */
+      function cached() {
+        const item = task("1", 1);
+        const other = task("9", 1);
+        let state = reduceAssistantState(createInitialState(), {
+          kind: "server",
+          msg: {
+            type: "taskList",
+            list: {
+              items: [taskSummaryOf(item), taskSummaryOf(other)],
+              updatedAt: 1,
+              request: {},
+            },
+            seq: 1,
+            revisions: [
+              { id: "1", revision: 4 },
+              { id: "9", revision: 4 },
+            ],
+          },
+        });
+        state = reduceAssistantState(state, {
+          kind: "taskDetailResult",
+          id: item.id,
+          item,
+          revision: 4,
+        });
+        return { item, other, state };
+      }
+
+      /** Every way back: a full snapshot, or a digest, that leaves it out. */
+      function resubscribe(
+        state: ReturnType<typeof createInitialState>,
+        other: TaskItem,
+      ) {
+        return {
+          snapshot: reduceAssistantState(state, snapshot(other, 4)),
+          digest: reduceAssistantState(state, {
+            kind: "server",
+            msg: {
+              type: "stateDigest",
+              topic: "tasks",
+              seq: 5,
+              entries: [{ id: other.id, revision: 4 }],
+            },
+          }),
+        };
+      }
+
+      it("re-reads a body archived offline, and adopts the archived body", () => {
+        const { item, other, state } = cached();
+        for (const [path, after] of Object.entries(resubscribe(state, other))) {
+          // The cached body has no `archivedAt`: only the snapshot's
+          // ABSENCE says it changed.
+          expect(after.taskDetails[item.id]?.status, path).toBe("refreshing");
+          expect(
+            after.taskList?.items.map((t) => t.id),
+            path,
+          ).toEqual(["9"]);
+          const archived = { ...item, archivedAt: 3, updatedAt: 3 };
+          const reread = reduceAssistantState(after, {
+            kind: "taskDetailResult",
+            id: item.id,
+            item: archived,
+            revision: 6,
+          });
+          expect(reread.taskDetails[item.id], path).toEqual({
+            status: "ready",
+            data: archived,
+          });
+          expect(reread.taskStatuses[item.id]?.updatedAt, path).toBe(3);
+        }
+      });
+
+      it("re-reads a body deleted offline into not-found", () => {
+        const { item, other, state } = cached();
+        for (const [path, after] of Object.entries(resubscribe(state, other))) {
+          expect(after.taskDetails[item.id]?.status, path).toBe("refreshing");
+          // The recorded status of a row that left goes with it.
+          expect(item.id in after.taskStatuses, path).toBe(false);
+          const reread = reduceAssistantState(after, {
+            kind: "taskDetailResult",
+            id: item.id,
+            item: null,
+          });
+          expect(reread.taskDetails[item.id], path).toEqual({
+            status: "ready",
+            data: null,
+          });
+        }
+      });
+
+      it("leaves a body alone when a filtered list happens to omit it", () => {
+        const { item, other, state } = cached();
+        const filtered = reduceAssistantState(state, {
+          kind: "server",
+          msg: {
+            type: "taskList",
+            list: {
+              items: [taskSummaryOf(other)],
+              updatedAt: 1,
+              request: { status: "todo" },
+            },
+            seq: 6,
+            revisions: [{ id: other.id, revision: 4 }],
+          },
+        });
+        expect(filtered.taskDetails[item.id]?.status).toBe("ready");
+      });
+    });
   });
 });
