@@ -107,7 +107,11 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   until `text` or the remark plugins change. Together those make a re-render a
   reconciliation of the existing DOM rather than a rebuild of it, which is what
   a wide code block's horizontal scroll, a live selection and the lazily mounted
-  `CodeBlock`s inside it depend on.
+  `CodeBlock`s inside it depend on. Table cells wrap prose at word boundaries
+  within the available width. Top-level assistant tables may grow beyond the
+  prose column, capped at 70rem and the shell width; nested tables stay within
+  their parent block. Unbreakable content keeps its column wide and the wrapper
+  scrolls as a fallback, not the default for ordinary table text.
 - The Knowledge Base has no browser of its own: the `/knowledge` route and the
   right panel's Knowledge tab draw `worktree/WorktreeDetailPage.tsx` for the
   checkout `knowledge` (`lib/knowledgeCheckout.ts` builds its record), with
