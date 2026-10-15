@@ -20,9 +20,12 @@ import { useFetchState, type FetchStateResult } from "./useFetchState.ts";
  * request and live, so a list must never trigger it.
  * @intent Keyed by the pull request's four-component identity, so another pull
  * request gets its own placeholder (R3). It follows the inventory: when the
- * inventory reports a new head or a newer `updatedAt`, something happened on the
- * provider and the conversation is read again, keeping what is on screen (R2).
- * An explicit reload skips the server's short cache.
+ * inventory reports a new head, a newer `updatedAt` or a different CI summary,
+ * something happened on the provider and the conversation is read again,
+ * keeping what is on screen (R2). CI is part of that because a check finishing
+ * does not move the pull request's `updatedAt`. Those reads and an explicit
+ * reload skip the server's short cache: the change is already known, so a
+ * cached answer from before it would be consumed with no later retry.
  */
 export function usePullRequestConversation(
   target: PullRequestTarget,
@@ -44,7 +47,7 @@ export function usePullRequestConversation(
   // one the initial read already answered.
   const revision =
     item && pullRequestRowId(item) === key
-      ? `${item.headSha ?? ""}@${item.updatedAt ?? ""}`
+      ? `${item.headSha ?? ""}@${item.updatedAt ?? ""}#${item.ci?.state ?? ""}/${item.ci?.total ?? ""}`
       : undefined;
   const seen = useRef(revision);
   useEffect(() => {
@@ -55,6 +58,7 @@ export function usePullRequestConversation(
     }
     if (seen.current === revision) return;
     seen.current = revision;
+    fresh.current = true;
     reload();
   }, [revision, reload]);
 
