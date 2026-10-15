@@ -177,6 +177,13 @@ Status is OBSERVED, not reported (`224be3de`). The rules follow from that:
 
 ## What a Task-attached session is given
 
+The session inspector's Tasks section includes the Task it was started from and
+any referenced Tasks, for both Pi and Claude SDK sessions. Live and detached
+session state expose the same `tasks`, `relatedGlobalTasks`, and optional
+`originTask` fields. Task lists contain summaries, never description bodies.
+Each read uses the current stored links and Task metadata; a failed Task read
+falls back to an empty list or absent origin without failing the session view.
+
 **The injected Task context is AUTHORITATIVE: a Task-attached session makes zero
 Task calls before doing real work.** The attachment bytes ride the first user
 message and are cached for the session, while a `task_read` reprocesses the
