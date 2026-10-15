@@ -7,7 +7,13 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { ServerMessage, StateEvent, TaskSummary } from "@assistant/shared";
 import { hub } from "./hub.ts";
-import { archiveTask, createTask, deleteTask, unarchiveTask } from "./tasks.ts";
+import {
+  archiveTask,
+  createTask,
+  deleteTask,
+  unarchiveTask,
+  updateTask,
+} from "./tasks.ts";
 
 /** The task broadcast is coalesced (see `hub.flushTaskBroadcast`), so a test ends its window. */
 const settled = () => hub.flushPendingBroadcastsForTests();
@@ -119,7 +125,6 @@ test("one flush carries only the rows that changed", async () => {
   await settled();
   hub.register(viewer);
   try {
-    const { updateTask } = await import("./tasks.ts");
     updateTask(moved.id, { status: "doing", actor: { kind: "user" } });
     await settled();
     const batch = lastBatch(messages);
@@ -136,5 +141,72 @@ test("one flush carries only the rows that changed", async () => {
     hub.unregister(viewer);
     deleteTask(untouched.id);
     deleteTask(moved.id);
+  }
+});
+
+test("a link change broadcasts both of its Tasks, and so does deleting one", async () => {
+  const messages: ServerMessage[] = [];
+  const viewer = {
+    send: (message: ServerMessage) => messages.push(message),
+    wantsTopic: (topic: string) => topic === "tasks",
+  };
+  const blocker = createTask({
+    title: "Broadcast blocker",
+    source: { createdBy: "user" },
+  });
+  const blocked = createTask({
+    title: "Broadcast blocked",
+    source: { createdBy: "user" },
+  });
+  const bystander = createTask({
+    title: "Broadcast bystander",
+    source: { createdBy: "user" },
+  });
+  await settled();
+  hub.register(viewer);
+  try {
+    updateTask(blocked.id, {
+      addLinks: [{ type: "blocked-by", taskId: blocker.id }],
+    });
+    await settled();
+    const link = lastBatch(messages);
+    assert.deepEqual(
+      link.events.map((event) => [event.id, event.kind]).sort(),
+      [
+        [blocker.id, "upsert"],
+        [blocked.id, "upsert"],
+      ].sort(),
+      "both ends of the link, and nothing else",
+    );
+    for (const event of link.events)
+      assert.ok(
+        event.kind === "upsert" && !("links" in event.item),
+        "links stay detail-only; the summary does not carry them",
+      );
+
+    deleteTask(blocker.id);
+    await settled();
+    const removal = lastBatch(messages);
+    assert.deepEqual(
+      removal.events.map((event) => [event.id, event.kind]).sort(),
+      [
+        [blocker.id, "delete"],
+        [blocked.id, "upsert"],
+      ].sort(),
+      "the survivor lost a link, so its viewers hear about it",
+    );
+    assert.equal(
+      removal.events.some((event) => event.id === bystander.id),
+      false,
+    );
+  } finally {
+    hub.unregister(viewer);
+    for (const task of [blocker, blocked, bystander]) {
+      try {
+        deleteTask(task.id);
+      } catch {
+        /* already gone */
+      }
+    }
   }
 });

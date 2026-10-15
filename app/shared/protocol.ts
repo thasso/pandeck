@@ -2704,6 +2704,38 @@ export function taskSummaryOf(item: TaskItem): TaskSummary {
   };
 }
 
+/**
+ * A link between two Tasks, as a writer names it from one end. `blocks` is
+ * directional ("this Task blocks that one"); `blocked-by` is the same link
+ * named from the other end and is stored as the reverse `blocks`. `relates` is
+ * symmetric. A pair of Tasks holds at most one link, so writing a different
+ * type replaces the existing one.
+ */
+export type TaskLinkType = "blocks" | "blocked-by" | "relates";
+
+export interface TaskLinkInput {
+  type: TaskLinkType;
+  taskId: string;
+}
+
+/** The Task on the other end of a link, as a detail view lists it. */
+export interface TaskLinkedTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  projectId?: string;
+  archived: boolean;
+}
+
+/** A Task's links grouped by how they read from that Task. */
+export interface TaskLinks {
+  /** Tasks this one blocks. */
+  blocks: TaskLinkedTask[];
+  /** Tasks that block this one, including done and archived ones. */
+  blockedBy: TaskLinkedTask[];
+  relates: TaskLinkedTask[];
+}
+
 /** Full task document: a summary plus the Markdown body and full server session metadata. */
 export interface TaskItem extends Omit<TaskSummary, "sessionRefs"> {
   description: string;
@@ -2711,6 +2743,16 @@ export interface TaskItem extends Omit<TaskSummary, "sessionRefs"> {
   /** Time this task was recorded as included in a commit. */
   committedAt?: number;
   sessionRefs?: TaskSessionRef[];
+  /**
+   * Links to other Tasks, on a full single-Task read (`getTask`, a save's
+   * reply); absent when there are none. Never part of a summary or a list.
+   */
+  links?: TaskLinks;
+  /**
+   * Set when at least one blocker is neither done nor archived. Computed on
+   * read, never stored, and it never prevents a status change.
+   */
+  blocked?: true;
 }
 
 export interface TaskListRequest {

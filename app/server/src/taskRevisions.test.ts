@@ -147,6 +147,67 @@ test("deleting a parent reports the children it orphans", () => {
   }
 });
 
+test("a Task link write reports BOTH of its Tasks", () => {
+  const a = createTask({ title: "Link end A", source: { createdBy: "user" } });
+  const b = createTask({ title: "Link end B", source: { createdBy: "user" } });
+  const c = createTask({ title: "Link end C", source: { createdBy: "user" } });
+  try {
+    // A link is a fact about both ends; a viewer of either one owes an event.
+    movesRevisions([a.id, b.id], () =>
+      updateTask(a.id, { addLinks: [{ type: "blocks", taskId: b.id }] }),
+    );
+    // Replacing the type, from the other end, still touches both.
+    movesRevisions([a.id, b.id], () =>
+      updateTask(b.id, { addLinks: [{ type: "relates", taskId: a.id }] }),
+    );
+    movesRevisions([a.id, b.id], () =>
+      updateTask(a.id, { removeLinks: [b.id] }),
+    );
+    // A create with links reports the Tasks it linked to.
+    let created = "";
+    movesRevisions([c.id], () => {
+      created = createTask({
+        title: "Linked at birth",
+        addLinks: [{ type: "blocked-by", taskId: c.id }],
+        source: { createdBy: "agent" },
+      }).id;
+    });
+    discard(created);
+  } finally {
+    discard(a.id, b.id, c.id);
+  }
+});
+
+test("deleting a linked Task reports the Tasks that lose the link", () => {
+  const doomed = createTask({
+    title: "Deleted linked Task",
+    source: { createdBy: "user" },
+  });
+  const blocked = createTask({
+    title: "Loses its blocker",
+    source: { createdBy: "user" },
+  });
+  const related = createTask({
+    title: "Loses its relation",
+    source: { createdBy: "user" },
+  });
+  try {
+    updateTask(doomed.id, {
+      addLinks: [
+        { type: "blocks", taskId: blocked.id },
+        { type: "relates", taskId: related.id },
+      ],
+    });
+    movesRevisions([doomed.id, blocked.id, related.id], () =>
+      deleteTask(doomed.id),
+    );
+    assert.equal(readTask(blocked.id)?.links, undefined);
+    assert.equal(readTask(related.id)?.links, undefined);
+  } finally {
+    discard(doomed.id, blocked.id, related.id);
+  }
+});
+
 test("deleting a Project reports the Tasks it orphans", () => {
   const task = createTask({
     title: "Task in a doomed project",
@@ -202,6 +263,7 @@ test("every exported Task write is covered by the revision test", () => {
   const readsOnly = new Set([
     "listTasks",
     "readTask",
+    "openTaskBlockerCounts",
     "listSessionTasks",
     "listRelatedGlobalTasks",
     "findOriginTask",

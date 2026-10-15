@@ -205,6 +205,56 @@ test("SQLite task foundation: tasks, links, sequences", async () => {
   taskStore.remove(loopA.id);
   taskStore.remove(loopB.id);
 
+  /* ------------------------------ task links ------------------------------ */
+  const left = taskStore.create({ title: "Link left" });
+  const right = taskStore.create({ title: "Link right" });
+  // Both ends changed, so both are returned for the caller to report.
+  assert.deepEqual(taskStore.setTaskLink(right.id, "relates", left.id), [
+    right.id,
+    left.id,
+  ]);
+  assert.deepEqual(
+    outgoing({ type: "task", id: String(left.id) }, "relates").map(
+      (e) => e.toId,
+    ),
+    [String(right.id)],
+    "relates is stored from the lower id",
+  );
+  assert.deepEqual(
+    taskStore.setTaskLink(left.id, "relates", right.id),
+    [],
+    "re-stating the exact link changes nothing",
+  );
+  assert.deepEqual(taskStore.taskLinkIds(right.id), {
+    blocks: [],
+    blockedBy: [],
+    relates: [left.id],
+  });
+  taskStore.setTaskLink(right.id, "blocks", left.id);
+  assert.deepEqual(taskStore.taskLinkIds(left.id), {
+    blocks: [],
+    blockedBy: [right.id],
+    relates: [],
+  });
+  assert.equal(taskStore.openBlockerCounts().get(left.id), 1);
+  assert.deepEqual(taskStore.removeTaskLink(left.id, right.id), [
+    left.id,
+    right.id,
+  ]);
+  assert.deepEqual(
+    taskStore.removeTaskLink(left.id, right.id),
+    [],
+    "removing a link that is not there changes nothing",
+  );
+  taskStore.setTaskLink(left.id, "blocks", right.id);
+  taskStore.remove(left.id);
+  assert.deepEqual(
+    taskStore.linkedTaskIds(right.id),
+    [],
+    "a tombstoned Task's links go with it",
+  );
+  taskStore.remove(right.id);
+
   /* --------------------------- remove + cleanup --------------------------- */
   taskStore.remove(t1.id);
   assert.equal(taskStore.get(t1.id), undefined, "removed task gone");

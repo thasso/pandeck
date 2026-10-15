@@ -20,7 +20,7 @@ A Task is one commitment the user keeps: something they intend to happen, worth
 seeing again tomorrow. It carries a title, a Markdown description that is the
 durable statement of the work, a status, a priority, an optional parent (subtask
 edges form epics), an optional project, an optional ticket, external source
-links, and two independent dates.
+links, links to other Tasks, and two independent dates.
 
 An external link records which provider it points at (`slack`, `jira`, `github`,
 `forgejo`, `unknown`), inferred from the URL when the writer omits it. Only
@@ -118,6 +118,48 @@ drag, which reaches `reorderTasks` without ever passing through
 `projectId` stays STORED rather than derived from the root, so list filters,
 `taskSummaryOf` and the wire model are untouched. Nothing else is inherited —
 not the ticket, not external links.
+
+## Tasks link to each other
+
+Two Tasks can be linked in one of two ways (Task-798):
+
+- `blocks` is directional: "A blocks B" means B waits on A. `blocked-by` is not
+  a second type, only the same link named from B's end; `task_manage` stores "B
+  blocked-by A" as "A blocks B".
+- `relates` is symmetric. It is stored once, from the lower id to the higher, so
+  the pair has a single spelling.
+
+Both are edges in the generic `links` graph, written only through
+`taskStore.setTaskLink` / `removeTaskLink`, which check and write in one
+transaction:
+
+- A pair of Tasks holds at most ONE link, across both types and directions.
+  Linking an already-linked pair REPLACES that link: an agent changing "relates"
+  to "blocks", or flipping the direction, never ends up with two.
+- No self-links, no link to a deleted or nonexistent Task, and `blocks` stays
+  acyclic — however long the chain the new link would close. Archived Tasks can
+  be linked.
+- A `task_manage` create or update is all-or-nothing, links included: one bad
+  link and none of that operation is written. Earlier operations in the batch
+  stand, as before. One operation may name a given Task only once across
+  `addLinks` and `removeLinks`.
+
+"Blocked" is COMPUTED, never stored: a Task is blocked while at least one of its
+blockers is neither done nor archived. Done and archived blockers are still
+listed; they just no longer count. Being blocked never refuses a status change —
+the user may know something the graph does not.
+
+A link is a fact about both of its Tasks, so every add, replace and remove
+notifies both, and deleting a Task (which drops all its edges) notifies every
+Task it was linked to; they survive with that link gone.
+
+Links are detail, not list data. `TaskItem.links` (grouped `blocks`,
+`blockedBy`, `relates`, each entry the other Task's id, title, status, project
+and archived flag) and `TaskItem.blocked` come with a single-Task read — the
+socket's `getTask` and `task_read` by id. Summaries and broadcasts carry
+neither; `task_read` list entries carry only `openBlockerCount` and `blocked`. A
+UI that puts blocked state into summaries must also notify the Tasks a blocker
+blocks when the blocker's status or archive state changes.
 
 ## Where a piece of work belongs
 

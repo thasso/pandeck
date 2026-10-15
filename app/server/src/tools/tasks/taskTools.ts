@@ -3,6 +3,9 @@ import type {
   TaskDueFilter,
   TaskExternalLink,
   TaskItem,
+  TaskLinkedTask,
+  TaskLinkInput,
+  TaskLinkType,
   TaskPriority,
   TaskScheduledFilter,
   TaskSessionRef,
@@ -25,6 +28,7 @@ import {
   createTask,
   deleteTask,
   listTasks,
+  openTaskBlockerCounts,
   readTask,
   taskSummaryOf,
   unarchiveTask,
@@ -51,6 +55,11 @@ const TASK_DUE_FILTER_VALUES = [
   "upcoming",
   "unscheduled",
 ] as const;
+const TASK_LINK_TYPE_VALUES = [
+  "blocks",
+  "blocked-by",
+  "relates",
+] as const satisfies readonly TaskLinkType[];
 const TASK_SCHEDULED_FILTER_VALUES = [
   "past",
   "today",
@@ -217,6 +226,34 @@ const taskManageSchema = {
             type: "number",
             description: "Position among siblings, lower first.",
           },
+          addLinks: {
+            type: "array",
+            description: "One link per Task pair; a new type replaces it.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["type", "taskId"],
+              properties: {
+                type: {
+                  type: "string",
+                  enum: TASK_LINK_TYPE_VALUES,
+                  description:
+                    "blocks: this Task blocks taskId; blocked-by: the reverse.",
+                },
+                taskId: { type: "string" },
+              },
+            },
+          },
+          removeLinks: {
+            type: "array",
+            description: "Update only.",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["taskId"],
+              properties: { taskId: { type: "string" } },
+            },
+          },
         },
       },
     },
@@ -315,6 +352,8 @@ interface ManageOperation {
   priority?: TaskPriority | "";
   parentId?: string;
   sortOrder?: number;
+  addLinks?: TaskLinkInput[];
+  removeLinks?: Array<{ taskId: string }>;
 }
 
 type ManageParams = { operations?: ManageOperation[] };
@@ -333,7 +372,7 @@ function makeTaskReadTool() {
     name: "task_read",
     label: "Tasks: Read",
     description:
-      "Read one Task by id, its subtasks, or a bounded Task list/search. Results are byte-bounded: when the payload flags dropped content, narrow the read instead of assuming it was complete.",
+      "Read one Task by id, its subtasks, or a bounded Task list/search. Only a read by id lists links. Results are byte-bounded: when the payload flags dropped content, narrow the read instead of assuming it was complete.",
     parameters: taskReadSchema,
     async execute(params, ctx) {
       const id = cleanOptional(params.id);
@@ -345,8 +384,9 @@ function makeTaskReadTool() {
 
       const maxResults = normalizeReadLimit(params.maxResults);
       let items: TaskSummary[];
+      let task: TaskItem | null = null;
       if (id) {
-        const task = readTask(id);
+        task = readTask(id);
         if (!task) throw new Error(`Task not found: ${id}`);
         items = params.includeSubtasks
           ? [
@@ -383,10 +423,19 @@ function makeTaskReadTool() {
       }
 
       const totalCount = items.length;
+      // Links are part of what the budget bounds, so they join each entry
+      // before it is measured.
+      const read = task;
+      const blockerCounts =
+        !read || items.length > 1 ? openTaskBlockerCounts() : undefined;
       const bounded = boundedItems({
         summaries: items.slice(0, maxResults),
         includeDescriptions: Boolean(params.includeDescriptions),
         budgetBytes: READ_BUDGET_BYTES - ENVELOPE_BYTES,
+        relations: (summary) =>
+          read && summary.id === read.id
+            ? linksForTool(read)
+            : openBlockersForTool(blockerCounts?.get(summary.id)),
       });
       const omittedForBudget =
         Math.min(items.length, maxResults) - bounded.items.length;
@@ -439,6 +488,17 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
           throw new Error(
             "descriptionEdits applies only to an update operation.",
           );
+        if (op.removeLinks !== undefined && op.operation !== "update")
+          throw new Error("removeLinks applies only to an update operation.");
+        if (
+          op.addLinks !== undefined &&
+          op.operation !== "create" &&
+          op.operation !== "update"
+        )
+          throw new Error(
+            "addLinks applies only to a create or update operation.",
+          );
+        const addLinks = linkInputsForTool(op.addLinks, "addLinks");
 
         if (op.operation === "archive") {
           if (!op.id) throw new Error("Archive operation requires id.");
@@ -487,6 +547,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
                   readTask(duplicate.id)?.sessionRefs,
                   session,
                 ),
+                ...(addLinks ? { addLinks } : {}),
               }),
               deduplicated: true,
             });
@@ -509,6 +570,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
               ...(createSortOrder !== undefined
                 ? { sortOrder: createSortOrder }
                 : {}),
+              ...(addLinks ? { addLinks } : {}),
               sessionRefs: [
                 {
                   harness: session.harness,
@@ -576,6 +638,10 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
                 ? null
                 : cleanOptional(op.parentId);
           const updateSortOrder = normalizeSortOrder(op.sortOrder);
+          const removeLinks = linkInputsForTool(
+            op.removeLinks,
+            "removeLinks",
+          )?.map((link) => link.taskId);
           const updated = updateTask(op.id, {
             ...(op.title !== undefined ? { title: op.title } : {}),
             ...(editedDescription !== undefined
@@ -605,6 +671,8 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
             ...(updateSortOrder !== undefined
               ? { sortOrder: updateSortOrder }
               : {}),
+            ...(addLinks ? { addLinks } : {}),
+            ...(removeLinks ? { removeLinks } : {}),
             sessionRefs: addSessionRef(current?.sessionRefs, session),
           });
           changed.push({
@@ -807,10 +875,80 @@ function normalizeDescriptionEdits(
   });
 }
 
+/** One linked Task in a tool result. */
+interface ToolLinkedTask {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  projectId?: string;
+  archived?: true;
+}
+
+/** What `task_read` adds to an entry about the Task's links. */
+interface ToolTaskRelations {
+  links?: {
+    blocks?: ToolLinkedTask[];
+    blockedBy?: ToolLinkedTask[];
+    relates?: ToolLinkedTask[];
+  };
+  /** Linked Tasks left out to fit the byte budget. */
+  linksOmitted?: number;
+  openBlockerCount?: number;
+  blocked?: true;
+}
+
+type ToolTask = ReturnType<typeof taskForTool> & ToolTaskRelations;
+
 interface BoundedItems {
-  items: ReturnType<typeof taskForTool>[];
+  items: ToolTask[];
   descriptionsTruncated: boolean;
   descriptionsOmitted: boolean;
+}
+
+/** A single-Task read's links, grouped as they read from that Task. */
+function linksForTool(task: TaskItem): ToolTaskRelations {
+  if (!task.links) return {};
+  const entries = (list: TaskLinkedTask[]): ToolLinkedTask[] =>
+    list.map((linked) => ({
+      id: linked.id,
+      title: linked.title,
+      status: linked.status,
+      ...(linked.projectId ? { projectId: linked.projectId } : {}),
+      ...(linked.archived ? { archived: true as const } : {}),
+    }));
+  const { blocks, blockedBy, relates } = task.links;
+  return {
+    links: {
+      ...(blocks.length ? { blocks: entries(blocks) } : {}),
+      ...(blockedBy.length ? { blockedBy: entries(blockedBy) } : {}),
+      ...(relates.length ? { relates: entries(relates) } : {}),
+    },
+    ...(task.blocked ? { blocked: true as const } : {}),
+  };
+}
+
+/** A list entry carries only how many open blockers hold it up. */
+function openBlockersForTool(count: number | undefined): ToolTaskRelations {
+  return count ? { openBlockerCount: count, blocked: true } : {};
+}
+
+/**
+ * The last resort for one Task too large for the budget on its own: drop
+ * linked Tasks from the largest group until it fits, and count what went.
+ */
+function trimLinksToBudget(item: ToolTask, budgetBytes: number): void {
+  const groups = item.links ? Object.values(item.links) : [];
+  let omitted = 0;
+  while (jsonBytes([item]) > budgetBytes) {
+    const largest = groups.reduce<ToolLinkedTask[] | undefined>(
+      (best, group) => (group.length > (best?.length ?? 0) ? group : best),
+      undefined,
+    );
+    if (!largest) break;
+    largest.pop();
+    omitted += 1;
+  }
+  if (omitted) item.linksOmitted = omitted;
 }
 
 /**
@@ -823,10 +961,19 @@ function boundedItems(args: {
   summaries: TaskSummary[];
   includeDescriptions: boolean;
   budgetBytes: number;
+  relations: (summary: TaskSummary) => ToolTaskRelations;
 }): BoundedItems {
-  const { summaries, includeDescriptions, budgetBytes } = args;
+  const { summaries, includeDescriptions, budgetBytes, relations } = args;
+  const render = (
+    item: TaskSummary,
+    description: boolean,
+    descriptionMaxChars?: number,
+  ): ToolTask => ({
+    ...taskForTool(item, description, {}, descriptionMaxChars),
+    ...relations(item),
+  });
   if (includeDescriptions) {
-    const full = summaries.map((item) => taskForTool(item, true));
+    const full = summaries.map((item) => render(item, true));
     if (jsonBytes(full) <= budgetBytes)
       return {
         items: full,
@@ -834,7 +981,7 @@ function boundedItems(args: {
         descriptionsOmitted: false,
       };
     const clipped = summaries.map((item) =>
-      taskForTool(item, true, {}, DESCRIPTION_MAX_CHARS),
+      render(item, true, DESCRIPTION_MAX_CHARS),
     );
     if (jsonBytes(clipped) <= budgetBytes)
       return {
@@ -843,9 +990,10 @@ function boundedItems(args: {
         descriptionsOmitted: false,
       };
   }
-  const previews = summaries.map((item) => taskForTool(item, false));
+  const previews = summaries.map((item) => render(item, false));
   while (previews.length > 1 && jsonBytes(previews) > budgetBytes)
     previews.pop();
+  if (previews.length === 1) trimLinksToBudget(previews[0]!, budgetBytes);
   return {
     items: previews,
     descriptionsTruncated: false,
@@ -1188,6 +1336,39 @@ function normalizeExternalLinksForTool(
     });
   }
   return out.length ? out : undefined;
+}
+
+/**
+ * An operation's `addLinks` / `removeLinks`, shape-checked: a malformed entry
+ * throws rather than being skipped, since a link the agent believes it wrote
+ * must not silently go missing. The rules between Tasks are the domain's.
+ */
+function linkInputsForTool(
+  values: unknown,
+  field: "addLinks",
+): TaskLinkInput[] | undefined;
+function linkInputsForTool(
+  values: unknown,
+  field: "removeLinks",
+): Array<{ taskId: string }> | undefined;
+function linkInputsForTool(
+  values: unknown,
+  field: "addLinks" | "removeLinks",
+): Array<{ type?: TaskLinkType; taskId: string }> | undefined {
+  if (values === undefined) return undefined;
+  if (!Array.isArray(values) || values.length === 0)
+    throw new Error(`${field} must be a non-empty array.`);
+  return values.map((raw) => {
+    const taskId = cleanOptional((raw as { taskId?: unknown })?.taskId);
+    if (!taskId) throw new Error(`${field}[].taskId is required.`);
+    if (field === "removeLinks") return { taskId };
+    const type = (raw as { type?: unknown }).type;
+    if (!TASK_LINK_TYPE_VALUES.includes(type as TaskLinkType))
+      throw new Error(
+        `addLinks[].type must be one of ${TASK_LINK_TYPE_VALUES.join(", ")}.`,
+      );
+    return { type: type as TaskLinkType, taskId };
+  });
 }
 
 function normalizeSortOrder(value: unknown): number | undefined {
