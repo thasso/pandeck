@@ -2247,7 +2247,7 @@ test("an unavailable default refuses and names the listed models that can run", 
   writeAgent({ persona: "assistant", models: ["gemini", "gpt-5"] });
 
   await expect(spawnDirect([agentRow()])).rejects.toThrow(
-    /cannot run on its default model "gemini": .* Its listed models that can run now: gpt-5 \(openai-codex\/gpt-5\); name one as modelId\./,
+    /cannot run on its default model "gemini": .* Its listed models that resolve now: gpt-5 \(openai-codex\/gpt-5\); name one as modelId\./,
   );
   expect(recorded.pi).toHaveLength(0);
 
@@ -2470,7 +2470,7 @@ test('operation "agents" lists definitions and stays available in Plan', async (
   expect(text).toMatch(/- stale: CANNOT SPAWN — .*gemini/);
   // A default that cannot run still leaves the listed models that can.
   expect(text).toMatch(
-    /- fallback: Checks that new tests fail[^\n]*\n {2}its default model cannot run — [^\n]*"gemini"[^\n]*\n {2}runs on, named as modelId: gpt-5 \(openai-codex\/gpt-5, low effort\)/,
+    /- fallback: Checks that new tests fail[^\n]*\n {2}its default model cannot run — [^\n]*"gemini"[^\n]*\n {2}other listed models that resolve now, named as modelId: gpt-5 \(openai-codex\/gpt-5, low effort\)/,
   );
   await expect(
     spawnTool.execute(

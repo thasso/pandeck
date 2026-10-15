@@ -246,12 +246,14 @@ before its card exists leaves none, so no grant can execute it later.
   its description, persona, and the model, effort and account it would run on
   now. A definition that cannot be spawned is listed with the reason, so a
   caller knows why one it was told about cannot be used. One whose default model
-  cannot run still lists the models that can, to name as `modelId`; the agents
-  topic carries them as `models` beside the `problem`. The answer is bounded
-  like `agent_list` (200 rows, the true total stated), with descriptions and
-  reasons cut at 300 characters; a definition left out can still be spawned by
-  name. Spawning an invalid one is refused with at most three of its distinct
-  problems and how many more there are (`notFoundReason`).
+  cannot run still lists the other models that resolve, to name as `modelId`
+  (their accounts are checked only when one is named); the agents topic carries
+  them as `models` beside the `problem`, the failed default marked with its
+  reason. The answer is bounded like `agent_list` (200 rows, the true total
+  stated), with descriptions and reasons cut at 300 characters; a definition
+  left out can still be spawned by name. Spawning an invalid one is refused with
+  at most three of its distinct problems and how many more there are
+  (`notFoundReason`).
 - An `agent` field on a `spawn` row, naming a definition. The row then takes no
   `profileId` and no `agentType`; stating either is refused. Persona and effort
   come from the definition, the model is the listed one `modelId` names (by its

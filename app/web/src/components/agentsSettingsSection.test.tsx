@@ -155,7 +155,7 @@ it("shows what each definition runs on, or why it cannot start", () => {
   expect(text).toContain(
     'Default model cannot start: Agent "fallback" cannot run on its default model "gemini".',
   );
-  expect(text).toContain("Can run on openai-codex/gpt-6.1-sol at high");
+  expect(text).toContain("Also lists openai-codex/gpt-6.1-sol at high");
   expect(asked).toEqual([]);
 });
 

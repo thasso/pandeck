@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelOption } from "@assistant/shared";
 import { afterEach, beforeEach, test } from "vitest";
+import { spawnableAgentsText } from "../tools/sessions/sessionSpawnTool.ts";
 import { agentKind, formatAgentManifest } from "./agentLibrary.ts";
 import {
   setAgentRuntimeSourcesForTests,
@@ -238,7 +239,7 @@ test("a listing keeps every listed model when only the default cannot run", asyn
       ["sol", "gpt-6.1-sol"],
     ],
   );
-  // An account refusing the default carries the listed models too.
+  // The default resolved but its account refused it: it is no alternative.
   write(
     "test-reviewer",
     reviewer({ model: undefined, models: ["opus", "sol"] }),
@@ -246,7 +247,18 @@ test("a listing keeps every listed model when only the default cannot run", asyn
   offered = false;
   const [refused] = await listSpawnableAgents();
   assert.ok(refused && "problem" in refused);
-  assert.equal(refused.listed?.length, 2);
+  assert.equal(refused.listed?.[0]?.runtime, undefined);
+  assert.match(
+    refused.listed?.[0]?.problem ?? "",
+    /does not offer claude-sdk\/opus/,
+  );
+  assert.equal(refused.listed?.[1]?.runtime?.model.id, "gpt-6.1-sol");
+  const text = spawnableAgentsText([refused]);
+  assert.doesNotMatch(text, /named as modelId: [^\n]*opus \(/);
+  assert.match(
+    text,
+    /other listed models that resolve now, named as modelId: sol \(openai-codex\/gpt-6\.1-sol/,
+  );
 });
 
 test("a model that stopped resolving refuses; nothing falls back", async () => {
@@ -256,7 +268,7 @@ test("a model that stopped resolving refuses; nothing falls back", async () => {
     resolveAgentSpawn("test-reviewer"),
     (error: Error) =>
       error instanceof AgentSpawnRefusedError &&
-      /Agent "test-reviewer" cannot run on its default model "opus": No enabled account offers a model "opus".* None of its listed models can run now\./.test(
+      /Agent "test-reviewer" cannot run on its default model "opus": No enabled account offers a model "opus".* None of its listed models resolve now\./.test(
         error.message,
       ),
   );

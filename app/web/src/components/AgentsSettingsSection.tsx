@@ -93,7 +93,8 @@ export function AgentsSettingsSection({
         if (!runtime) return null;
         const label = agentRuntimeLabel(runtime);
         if (label) return <ItemDescription>{label}</ItemDescription>;
-        // A default that cannot run leaves the other listed models usable.
+        // A default that cannot run may leave other listed models that
+        // resolve; their accounts are checked only when one is spawned.
         const runnable = (runtime.models ?? []).flatMap((listed) =>
           listed.problem === undefined
             ? [
@@ -114,7 +115,7 @@ export function AgentsSettingsSection({
             </ItemDescription>
             {runnable.length > 0 ? (
               <ItemDescription>
-                Can run on {runnable.join(", ")}
+                Also lists {runnable.join(", ")}
               </ItemDescription>
             ) : null}
           </>

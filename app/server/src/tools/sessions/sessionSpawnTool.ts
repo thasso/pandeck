@@ -249,14 +249,15 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
   const shown = agents.slice(0, MAX_LISTED_ENTRIES);
   const lines = shown.map((agent) => {
     if ("problem" in agent) {
-      // A default that cannot run leaves the other listed models usable.
+      // A default that cannot run may leave other listed models to try; they
+      // resolve, and their accounts are checked when one is named.
       const runnable = (agent.listed ?? []).filter((choice) => choice.runtime);
       if (runnable.length === 0)
         return `- ${agent.name}: CANNOT SPAWN — ${clip(agent.problem, "spawning it refuses with the whole reason")}`;
       return [
         `- ${agent.name}: ${clip(agent.description ?? "", "agent_get reads it whole")}`,
         `  its default model cannot run — ${clip(agent.problem, "spawning it refuses with the whole reason")}`,
-        `  runs on, named as modelId: ${runnable.map(listedText).join("; ")}`,
+        `  other listed models that resolve now, named as modelId: ${runnable.map(listedText).join("; ")}`,
       ].join("\n");
     }
     const { runtime } = agent;

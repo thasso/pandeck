@@ -145,12 +145,15 @@ function namesOf(choice: AgentModelChoice): string[] {
   return forms.map((form) => form.toLowerCase());
 }
 
-/** The listed models that can run now, for a refusal to offer instead. */
+/**
+ * The listed models that resolve now, for a refusal to offer instead. Their
+ * accounts are checked only when one is chosen.
+ */
 function runnableNamed(choices: readonly AgentModelChoice[]): string {
   const runnable = choices.filter((choice) => choice.runtime);
   return runnable.length === 0
-    ? "None of its listed models can run now."
-    : `Its listed models that can run now: ${runnable
+    ? "None of its listed models resolve now."
+    : `Its listed models that resolve now: ${runnable
         .map(
           (choice) => `${choice.spec} (${agentRuntimeLabel(choice.runtime!)})`,
         )
@@ -293,10 +296,21 @@ export async function resolveAgentSpawn(
   } = {},
 ): Promise<AgentSpawnRuntime> {
   const read = await readAgentDefinition(name, scanned);
+  let chosen: { spec: string; runtime: AgentRuntime } | undefined;
   try {
-    return await spawnRuntimeOf(read, name, options);
+    chosen = chosenModel(name, read.listed, options.model);
+    return await spawnRuntimeOf(read, name, chosen.runtime, options);
   } catch (error) {
-    if (error instanceof AgentSpawnRefusedError) error.listed ??= read.listed;
+    if (error instanceof AgentSpawnRefusedError) {
+      // A chosen model that resolved but cannot start on its account is no
+      // alternative either: its row says why.
+      const failed = chosen?.spec;
+      error.listed ??= read.listed.map((choice) =>
+        choice.spec === failed
+          ? { spec: choice.spec, problem: error.message }
+          : choice,
+      );
+    }
     throw error;
   }
 }
@@ -305,14 +319,10 @@ export async function resolveAgentSpawn(
 async function spawnRuntimeOf(
   read: AgentDefinitionRead,
   name: string,
+  { model, pinnedModel, thinkingLevel }: AgentRuntime,
   options: Parameters<typeof resolveAgentSpawn>[2] & {},
 ): Promise<AgentSpawnRuntime> {
   const { manifest, listed } = read;
-  const { model, pinnedModel, thinkingLevel } = chosenModel(
-    name,
-    listed,
-    options.model,
-  ).runtime;
   const credentialProfileId =
     options.profileId ??
     (await sources.accountFor({
