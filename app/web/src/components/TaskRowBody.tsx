@@ -223,14 +223,13 @@ export function TaskRowBody({
         ) : null}
         {/* A single-line row has nowhere else to put the id, so there it closes
             line 1 — the one shape where it shares the title's line. Being
-            blocked rides with it as one glyph: line 2's chip is not there to
-            say it, and it is the one fact a row must not hide. */}
+            blocked rides with it as a glyph and its count: line 2's chip is
+            not there to say it, and it is the one fact a row must not hide. */}
         {!line2 && task.openBlockerCount ? (
           <TaskBlockedIndicator
             openBlockers={task.openBlockerCount}
-            glyph
             size={12}
-            className="self-center"
+            className="self-center text-xs"
           />
         ) : null}
         {line2 ? null : <TaskIdBadge id={task.id} onNavigate={onNavigate} />}

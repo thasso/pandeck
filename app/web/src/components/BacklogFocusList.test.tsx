@@ -235,16 +235,16 @@ describe("BacklogFocusList rows", () => {
 });
 
 describe("BacklogFocusList blocked badge", () => {
-  it("says a Focus row is blocked, with the count in the tooltip", () => {
+  it("shows a Focus row's open blocker count", () => {
     render([
       task({ id: "1", status: "doing", openBlockerCount: 1 }),
       task({ id: "2", status: "doing" }),
     ]);
     const badges = container!.querySelectorAll<HTMLElement>(
-      '[title="Blocked: waiting on 1 open Task"]',
+      '[role="img"][aria-label="Blocked by 1 open task"]',
     );
     expect(badges).toHaveLength(1);
-    expect(badges[0]!.textContent).toBe("Blocked");
+    expect(badges[0]!.textContent).toBe("1");
     expect(
       badges[0]!
         .closest("[data-list-row-id]")

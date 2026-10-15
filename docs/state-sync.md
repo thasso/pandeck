@@ -172,7 +172,14 @@ per-surface sub-tasks — no page invents its own delta format.
 - Tasks: canonical live summaries plus keyed full bodies. A body's reply
   (`taskDetail`, `taskSaved`) carries the revision it is as of, and a newer
   event re-reads it even when the summary is unchanged: a linked Task's rename
-  moves only the revision (`docs/tasks.md`).
+  moves only the revision (`docs/tasks.md`). A touched Task that was ALREADY
+  outside the live projection (archived) is reported as a `delete` again, as
+  Background work reports a non-member: no list holds it, and the revision is
+  what an open body of it compares against. A snapshot advances the sidecar
+  without those events, so it re-reads any cached body whose snapshot revision
+  is newer, and any body of an archived Task, which no snapshot or digest can
+  vouch for. A body read without a revision (an older server) stays on the
+  `updatedAt` rule.
 - Projects: canonical archived-inclusive lean summaries plus keyed full
   documents. Project archive/restore is an upsert; only deletion removes
   registry membership. Failed optimistic mutations recover their touched ids

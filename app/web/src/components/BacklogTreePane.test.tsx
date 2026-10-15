@@ -885,9 +885,9 @@ describe("BacklogTreePane density", () => {
 });
 
 describe("BacklogTreePane blocked badge", () => {
-  const blockedTitle = "Blocked: waiting on 2 open Tasks";
+  const blockedLabel = "Blocked by 2 open tasks";
 
-  it("says a two-line row is blocked on its meta line, with the count in the tooltip", () => {
+  it("shows a two-line row's open blocker count on its meta line", () => {
     render(
       [
         task({ id: "1", title: "Waits", openBlockerCount: 2 }),
@@ -897,29 +897,27 @@ describe("BacklogTreePane blocked badge", () => {
       { density: "comfortable" },
     );
     const badge = container!.querySelector<HTMLElement>(
-      `[title="${blockedTitle}"]`,
+      `[role="img"][aria-label="${blockedLabel}"]`,
     );
-    expect(badge?.textContent).toBe("Blocked");
+    // The count is VISIBLE, not only in the tooltip.
+    expect(badge?.textContent).toBe("2");
+    expect(badge?.getAttribute("title")).toBe(blockedLabel);
     // On line 2, beside the id — line 1 belongs to the title.
     expect(badge!.parentElement!.textContent).toContain("#1");
     const free = container!.querySelector('[data-list-row-id="2"]')!;
-    expect(free.textContent).not.toContain("Blocked");
+    expect(free.querySelector('[aria-label^="Blocked by"]')).toBeNull();
   });
 
-  it("keeps the blocked state on a single-line row as one glyph", () => {
+  it("keeps the glyph and count on a single-line row's title line", () => {
     render(
       [task({ id: "1", title: "Waits", openBlockerCount: 2 })],
       (ids) => ids,
-      {
-        density: "tight",
-      },
+      { density: "tight" },
     );
-    const glyph = container!.querySelector<HTMLElement>(
-      `[role="img"][aria-label="${blockedTitle}"]`,
+    const badge = container!.querySelector<HTMLElement>(
+      `[role="img"][aria-label="${blockedLabel}"]`,
     );
-    expect(glyph).not.toBeNull();
-    // No word on a line that has room for one character.
-    expect(glyph!.textContent).toBe("");
-    expect(glyph!.parentElement!.textContent).toContain("Waits");
+    expect(badge?.textContent).toBe("2");
+    expect(badge!.parentElement!.textContent).toContain("Waits");
   });
 });

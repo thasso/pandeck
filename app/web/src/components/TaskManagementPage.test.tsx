@@ -215,7 +215,8 @@ describe("TaskManagementPage links", () => {
     expect(html).not.toContain('aria-label="Blocks"');
     expect(html).toContain("Open blocker");
     expect(html).toContain("Shelved sibling");
-    expect(html).toContain('title="Blocked: waiting on 1 open Task"');
+    expect(html).toContain('aria-label="Blocked by 1 open task"');
+    expect(html).toContain("Blocked · 1");
   });
 
   it("draws neither while the body is loading or when there is nothing to say", () => {

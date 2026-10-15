@@ -172,11 +172,13 @@ blockers it already resolved. `task_read` list entries report it with `blocked`.
 
 The UI only DISPLAYS links; agents manage them through `task_manage`. The Task
 page lists them under Blocked by, Blocks and Related, done and archived Tasks
-toned back, and says "Blocked" while a blocker is open; every Task row with an
-open blocker carries the same marker, its count in the tooltip. A linked Task's
-change moves this Task's revision without its `updatedAt`, so the `taskDetail`
-and `taskSaved` replies name the revision their body is as of, and the client
-re-reads a body on any NEWER event for it (`taskDetailRevisions`).
+toned back, and says "Blocked" with the count of open blockers; every Task row
+with an open blocker carries the same marker as a glyph and that count. A linked
+Task's change moves this Task's revision without its `updatedAt`, so the
+`taskDetail` and `taskSaved` replies name the revision their body is as of, and
+the client re-reads a body on any NEWER event for it (`taskDetailRevisions`). An
+archived Task stays out of the list but still gets that event, as a repeated
+`delete`, so its open page refreshes too (`docs/state-sync.md`).
 
 ## Where a piece of work belongs
 

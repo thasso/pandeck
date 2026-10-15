@@ -212,5 +212,131 @@ describe("Task keyed projections", () => {
       });
       expect(state.taskDetailRevisions[item.id]).toBe(4);
     });
+
+    /** A full `taskList` snapshot — the reconnect / resync answer. */
+    function snapshot(item: TaskItem, revision: number) {
+      return {
+        kind: "server" as const,
+        msg: {
+          type: "taskList" as const,
+          list: {
+            items: [taskSummaryOf(item)],
+            updatedAt: item.updatedAt,
+            request: {},
+          },
+          seq: 9,
+          revisions: [{ id: item.id, revision }],
+        },
+      };
+    }
+
+    it("re-reads a body a reconnect snapshot carries a newer revision for", () => {
+      // A linked Task was renamed while this tab was away: the snapshot has
+      // the same summary and updatedAt, and revision 5 — and having advanced
+      // the sidecar, it is the last chance to notice.
+      const item = task("1", 1);
+      let state = listed(item, 4);
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item,
+        revision: 4,
+      });
+      const same = reduceAssistantState(state, snapshot(item, 4));
+      expect(same.taskDetails[item.id]?.status).toBe("ready");
+
+      const newer = reduceAssistantState(state, snapshot(item, 5));
+      expect(newer.taskDetails[item.id]?.status).toBe("refreshing");
+      expect(dataOf(newer.taskDetails[item.id]!)).toBe(item);
+    });
+
+    it("leaves a body read without a revision to updatedAt", () => {
+      // An older server sends no revision: a newer revision alone proves
+      // nothing about the body, a newer updatedAt still does.
+      const item = task("1", 1);
+      let state = listed(item, 4);
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item,
+      });
+      expect(state.taskDetailRevisions[item.id]).toBeUndefined();
+
+      state = reduceAssistantState(state, event(item, 5));
+      expect(state.taskDetails[item.id]?.status).toBe("ready");
+      state = reduceAssistantState(state, snapshot(item, 6));
+      expect(state.taskDetails[item.id]?.status).toBe("ready");
+
+      state = reduceAssistantState(state, event({ ...item, updatedAt: 2 }, 7));
+      expect(state.taskDetails[item.id]?.status).toBe("refreshing");
+    });
+
+    it("re-reads an archived Task's body on a newer delete, and after a snapshot", () => {
+      // The list never holds an archived Task; its open body hears about a
+      // linked Task's change only through the revision a delete carries.
+      const archived = { ...task("2", 1), archivedAt: 1 };
+      let state = listed(task("1", 1), 4);
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: archived.id,
+        item: archived,
+        revision: 3,
+      });
+      const deleted = reduceAssistantState(state, {
+        kind: "server",
+        msg: {
+          type: "stateEvents",
+          topic: "tasks",
+          seq: 2,
+          events: [{ kind: "delete", id: archived.id, revision: 6 }],
+        },
+      });
+      expect(deleted.taskDetails[archived.id]?.status).toBe("refreshing");
+      expect(deleted.taskList?.items.map((t) => t.id)).toEqual(["1"]);
+
+      // A snapshot cannot vouch for a Task outside the live projection.
+      const resynced = reduceAssistantState(state, snapshot(task("1", 1), 4));
+      expect(resynced.taskDetails[archived.id]?.status).toBe("refreshing");
+      expect(resynced.taskDetails["1"]).toBeUndefined();
+    });
+
+    it("re-reads a raw taskDetail older than an applied event, like the correlated reply", () => {
+      const item = task("1", 1);
+      let state = listed(item, 4);
+      state = reduceAssistantState(state, event(item, 6));
+      state = reduceAssistantState(state, {
+        kind: "server",
+        msg: { type: "taskDetail", id: item.id, item, revision: 5 },
+      });
+      expect(state.taskDetails[item.id]?.status).toBe("refreshing");
+      expect(state.taskDetailRevisions[item.id]).toBe(5);
+    });
+
+    it("prunes the revision sidecar with the body cache", () => {
+      let state = createInitialState();
+      const reads = TASK_PROJECTION_CACHE_LIMIT + 10;
+      for (let index = 0; index < reads; index += 1) {
+        const id = String(index);
+        state = reduceAssistantState(
+          state,
+          index % 3 === 0
+            ? {
+                kind: "server",
+                msg: { type: "taskDetail", id, item: task(id), revision: 1 },
+              }
+            : index % 3 === 1
+              ? {
+                  kind: "taskDetailResult",
+                  id,
+                  item: task(id),
+                  revision: 1,
+                }
+              : { kind: "taskSaved", item: task(id), revision: 1 },
+        );
+      }
+      const cached = Object.keys(state.taskDetails).sort();
+      expect(cached).toHaveLength(TASK_PROJECTION_CACHE_LIMIT);
+      expect(Object.keys(state.taskDetailRevisions).sort()).toEqual(cached);
+    });
   });
 });

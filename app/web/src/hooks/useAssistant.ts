@@ -3552,6 +3552,13 @@ function applyTaskDigest(state: UIState, message: TaskDigestMessage): UIState {
         ? state.taskList
         : { ...state.taskList, items },
     stateEventRevisions: { ...state.stateEventRevisions, tasks: revisions },
+    // The digest names only live rows; an archived Task's open body may have
+    // missed changes while this tab was away, and nothing else will say so.
+    taskDetails: reconcileTaskDetailRevisions(
+      state.taskDetails,
+      state.taskDetailRevisions,
+      taskDigestRecord(message.entries) ?? {},
+    ),
     taskListFresh: changedIds.length === 0,
     taskStatuses,
     error: null,
@@ -3635,12 +3642,17 @@ function applyEvent(
     revisions[event.id] = event.revision;
     // An event newer than the body is the only signal some body changes send:
     // a linked Task's title or status moves this Task's revision, not its
-    // `updatedAt`, and often not its summary either.
+    // `updatedAt`, and often not its summary either. That includes a `delete`
+    // for a Task that was already archived: the list has nothing to drop, but
+    // an open body of it is stale. A body read without a revision (an older
+    // server) is left to the `updatedAt` reconciliation below.
     const detail = taskDetails[event.id];
+    const detailRevision = state.taskDetailRevisions[event.id];
     if (
       detail &&
       dataOf(detail) &&
-      event.revision > (state.taskDetailRevisions[event.id] ?? -1)
+      detailRevision !== undefined &&
+      event.revision > detailRevision
     ) {
       if (taskDetails === state.taskDetails) taskDetails = { ...taskDetails };
       taskDetails[event.id] = beginLoad(detail);
@@ -3890,16 +3902,110 @@ function applyProjectSaved(
 }
 
 /**
- * Record the revision a body is as of. A reply without one (a failed read) keeps
- * what was known: forgetting it would mark the body stale on the next event.
+ * Record the revision a body is as of, and keep the sidecar to the bodies the
+ * cache still holds — it is pruned with the cache, never on its own. A reply
+ * without one (a failed read, an older server) keeps what was known:
+ * forgetting it would leave the body to `updatedAt` alone.
  */
-function withTaskDetailRevision(
+function retainedTaskDetailRevisions(
   revisions: Record<string, number>,
+  cache: Record<string, unknown>,
   id: string,
   revision: number | undefined,
 ): Record<string, number> {
-  if (revision === undefined || revisions[id] === revision) return revisions;
-  return { ...revisions, [id]: revision };
+  let next = revisions;
+  if (revision !== undefined && revisions[id] !== revision)
+    next = { ...revisions, [id]: revision };
+  const dropped = Object.keys(next).filter((key) => !(key in cache));
+  if (!dropped.length) return next;
+  if (next === revisions) next = { ...revisions };
+  for (const key of dropped) delete next[key];
+  return next;
+}
+
+/**
+ * Bodies an authoritative Task SNAPSHOT says are stale: a live row whose
+ * snapshot revision is newer than the one its body was read at, and a body of a
+ * Task outside the live projection (archived), whose changes no snapshot can
+ * vouch for. A body read without a revision stays on the `updatedAt` rule
+ * (`reconcileTaskDetails`).
+ */
+function reconcileTaskDetailRevisions(
+  details: Record<string, LoadState<TaskItem | null>>,
+  detailRevisions: Record<string, number>,
+  liveRevisions: Record<string, number>,
+): Record<string, LoadState<TaskItem | null>> {
+  let next = details;
+  for (const [id, detail] of Object.entries(details)) {
+    const known = detailRevisions[id];
+    if (known === undefined || !dataOf(detail)) continue;
+    const live = liveRevisions[id];
+    const archived = dataOf(detail)!.archivedAt !== undefined;
+    // Live: stale only when the snapshot's revision is newer. Absent from the
+    // live projection: stale when archived, since nothing vouches for it; a
+    // live body outside this snapshot is not this snapshot's to judge.
+    const stale = live !== undefined ? live > known : archived;
+    if (!stale) continue;
+    const refreshing = beginLoad(detail);
+    if (refreshing === detail) continue;
+    if (next === details) next = { ...details };
+    next[id] = refreshing;
+  }
+  return next;
+}
+
+/**
+ * Adopt a keyed body read (`getTask`'s answer) — the one path for the socket's
+ * correlated reply and for the raw message.
+ */
+function applyTaskDetailAnswer(
+  state: UIState,
+  answer: {
+    id: string;
+    item: TaskItem | null;
+    revision?: number | undefined;
+    error?: string | undefined;
+  },
+): UIState {
+  const current = state.taskDetails[answer.id] ?? idle<TaskItem | null>();
+  const answered = answer.error
+    ? failFrom(current, answer.error)
+    : ready(answer.item);
+  // A read that left the server before an event this tab already applied is
+  // adopted (it is still the best body there is) and re-read at once.
+  const next =
+    !answer.error &&
+    answer.revision !== undefined &&
+    answer.revision < (state.stateEventRevisions.tasks?.[answer.id] ?? -1)
+      ? beginLoad(answered)
+      : answered;
+  const lru = touchLru(state.taskDetailsLru, answer.id);
+  const projection = pruneProjectionCache(
+    { ...state.taskDetails, [answer.id]: next },
+    lru,
+    state.taskMutations,
+    state.openTaskProjectionId,
+  );
+  return {
+    ...state,
+    taskDetails: projection.cache,
+    taskDetailRevisions: retainedTaskDetailRevisions(
+      state.taskDetailRevisions,
+      projection.cache,
+      answer.id,
+      answer.error ? undefined : answer.revision,
+    ),
+    taskDetailsLru: projection.lru,
+    ...(answer.error
+      ? {}
+      : {
+          taskStatuses: withTaskStatus(
+            state.taskStatuses,
+            answer.id,
+            answer.item,
+          ),
+        }),
+  };
 }
 
 /**
@@ -3945,8 +4051,9 @@ function applyTaskSaved(
     ...state,
     taskList,
     taskDetails: detailCache.cache,
-    taskDetailRevisions: withTaskDetailRevision(
+    taskDetailRevisions: retainedTaskDetailRevisions(
       state.taskDetailRevisions,
+      detailCache.cache,
       item.id,
       revision,
     ),
@@ -4838,46 +4945,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       taskDetailsLru: touchLru(state.taskDetailsLru, action.id),
     };
   }
-  if (action.kind === "taskDetailResult") {
-    const current = state.taskDetails[action.id] ?? idle<TaskItem | null>();
-    const answered = action.error
-      ? failFrom(current, action.error)
-      : ready(action.item);
-    // A read that left the server before an event this tab already applied is
-    // adopted (it is still the best body there is) and re-read at once.
-    const next =
-      !action.error &&
-      action.revision !== undefined &&
-      action.revision < (state.stateEventRevisions.tasks?.[action.id] ?? -1)
-        ? beginLoad(answered)
-        : answered;
-    const lru = touchLru(state.taskDetailsLru, action.id);
-    const projection = pruneProjectionCache(
-      { ...state.taskDetails, [action.id]: next },
-      lru,
-      state.taskMutations,
-      state.openTaskProjectionId,
-    );
-    return {
-      ...state,
-      taskDetails: projection.cache,
-      taskDetailRevisions: withTaskDetailRevision(
-        state.taskDetailRevisions,
-        action.id,
-        action.error ? undefined : action.revision,
-      ),
-      taskDetailsLru: projection.lru,
-      ...(action.error
-        ? {}
-        : {
-            taskStatuses: withTaskStatus(
-              state.taskStatuses,
-              action.id,
-              action.item,
-            ),
-          }),
-    };
-  }
+  if (action.kind === "taskDetailResult")
+    return applyTaskDetailAnswer(state, action);
   if (action.kind === "unwatchComments") {
     const key = commentTargetKey(action.target);
     const comments = { ...state.comments };
@@ -5451,19 +5520,34 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     case "taskList": {
       const taskList = reconcileTaskList(state.taskList, msg.list);
       const revisionRecord = taskDigestRecord(msg.revisions);
-      const revisions =
+      const canonical =
         isCacheableTaskList(taskList) &&
         revisionRecord &&
         taskListHasRevisionSidecar(taskList, revisionRecord)
           ? revisionRecord
-          : {};
+          : null;
+      const byUpdatedAt = reconcileTaskDetails(
+        state.taskDetails,
+        taskList.items,
+      );
       return {
         ...state,
         taskList,
         taskListFresh: true,
         taskListError: null,
-        stateEventRevisions: { ...state.stateEventRevisions, tasks: revisions },
-        taskDetails: reconcileTaskDetails(state.taskDetails, taskList.items),
+        stateEventRevisions: {
+          ...state.stateEventRevisions,
+          tasks: canonical ?? {},
+        },
+        // The snapshot advances the revision sidecar, so the events that would
+        // have marked a body stale will never be applied: compare here.
+        taskDetails: canonical
+          ? reconcileTaskDetailRevisions(
+              byUpdatedAt,
+              state.taskDetailRevisions,
+              canonical,
+            )
+          : byUpdatedAt,
         error: null,
       };
     }
@@ -5720,36 +5804,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // is the same adoption without one, for any other dispatcher of the raw
       // message (tests, a replayed transcript of frames).
       return applyTaskSaved(state, msg.item, undefined, msg.revision);
-    case "taskDetail": {
-      const current = state.taskDetails[msg.id] ?? idle<TaskItem | null>();
-      const next = msg.error ? failFrom(current, msg.error) : ready(msg.item);
-      const lru = touchLru(state.taskDetailsLru, msg.id);
-      const projection = pruneProjectionCache(
-        { ...state.taskDetails, [msg.id]: next },
-        lru,
-        state.taskMutations,
-        state.openTaskProjectionId,
-      );
-      return {
-        ...state,
-        taskDetails: projection.cache,
-        taskDetailRevisions: withTaskDetailRevision(
-          state.taskDetailRevisions,
-          msg.id,
-          msg.error ? undefined : msg.revision,
-        ),
-        taskDetailsLru: projection.lru,
-        ...(msg.error
-          ? {}
-          : {
-              taskStatuses: withTaskStatus(
-                state.taskStatuses,
-                msg.id,
-                msg.item,
-              ),
-            }),
-      };
-    }
+    case "taskDetail":
+      return applyTaskDetailAnswer(state, msg);
     case "forkedSession": {
       // The new session's chat arrived via the transport `snapshot` (sent by the
       // server's view() switch just before this message); we only update session

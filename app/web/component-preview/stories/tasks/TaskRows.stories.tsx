@@ -61,9 +61,8 @@ export const StatusStates: Story = {
 };
 
 /**
- * A Task waiting on open Tasks: the "Blocked" chip on a two-line row's meta
- * line, and the glyph a single-line row keeps beside its title. The count is
- * the tooltip.
+ * A Task waiting on two open Tasks: the glyph and count on a two-line row's
+ * meta line, and the same pair a single-line row keeps beside its title.
  */
 export const Blocked: Story = {
   render: () => {

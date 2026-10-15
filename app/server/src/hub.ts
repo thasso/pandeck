@@ -883,7 +883,9 @@ class SessionHub {
    * Diff the domain's `{id → revision}` map against the one last flushed:
    * changed or new live ids become upserts carrying the row's summary, ids that
    * left the live projection become deletes. Membership is what travels, so
-   * archiving is a delete and unarchiving an upsert.
+   * archiving is a delete and unarchiving an upsert. A touched id that was
+   * already outside the projection is reported as a delete too, so an open
+   * body of an archived Task hears that its linked Tasks changed.
    */
   private flushTaskBroadcast(): void {
     const index = taskRevisionIndex();
@@ -927,6 +929,17 @@ class SessionHub {
         id,
         revision: index.get(id)?.revision ?? revision + 1,
       });
+    }
+    // A write that touched a row ALREADY outside the projection — an archived
+    // Task whose linked Task was renamed, completed or unlinked — still owes
+    // its viewers a revision. It travels as a `delete`: a no-op for every list,
+    // which never held the row, and the newer revision an open body of that
+    // Task is waiting for. It never puts an archived summary back in the list.
+    for (const id of pending) {
+      if (flushed.has(id) || baseline.has(id)) continue;
+      const entry = index.get(id);
+      if (!entry || entry.live) continue;
+      events.push({ kind: "delete", id, revision: entry.revision });
     }
     this.lastFlushedTaskRevisions = flushed;
     if (events.length > 0) {

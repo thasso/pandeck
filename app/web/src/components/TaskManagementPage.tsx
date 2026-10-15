@@ -1205,6 +1205,7 @@ function TaskTitleBlock({
         {item.openBlockerCount ? (
           <TaskBlockedIndicator
             openBlockers={item.openBlockerCount}
+            label
             size={14}
             className="gap-1.5"
           />

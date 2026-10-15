@@ -95,8 +95,8 @@ function TaskLinkRow({
         {item.openBlockerCount && !done && !item.archived ? (
           <TaskBlockedIndicator
             openBlockers={item.openBlockerCount}
-            glyph
             size={12}
+            className="text-xs"
           />
         ) : null}
         <span className="shrink-0 font-mono text-xs text-muted-foreground">
