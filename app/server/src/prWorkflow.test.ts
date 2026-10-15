@@ -350,6 +350,9 @@ function fakeProvider(impl: Partial<GitHostingProvider>): GitHostingProvider {
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
     pullRequestReview: async () => null,
+    pullRequestConversation: async () => {
+      throw new Error("not used");
+    },
     pullRequestDetail: async () => null,
     mergePullRequest: async () => {
       throw new Error("not used");

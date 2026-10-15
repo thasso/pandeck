@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  PullRequestConversationResponse,
   PullRequestInventoryItem,
   PullRequestInventoryResponse,
 } from "@assistant/shared";
@@ -13,6 +14,7 @@ import {
 } from "./lib/pullRequestInbox.ts";
 import { PullRequestBrowser } from "./components/PullRequestBrowser.tsx";
 import { PullRequestDetailPage } from "./components/pullRequest/PullRequestDetailPage.tsx";
+import { loading } from "./lib/loadState.ts";
 
 /**
  * The Pull Requests routes' real ownership seam: ONE inventory read for the
@@ -68,6 +70,12 @@ const NO_JOINS = {
   tasks: { rows: [], fresh: true },
 } as const;
 
+/**
+ * The page's own second read is out of this seam: it is per pull request and
+ * keyed by its own hook, never by the inventory.
+ */
+const NO_CONVERSATION = loading<PullRequestConversationResponse>();
+
 /** Resolved by each test, so a pending first load can be observed. */
 let answer: (response: PullRequestInventoryResponse) => void = () => {};
 let requests = 0;
@@ -93,6 +101,8 @@ function PullRequestRouteHarness({
       onReload={inventory.reload}
       projects={[]}
       joins={NO_JOINS}
+      conversation={NO_CONVERSATION}
+      onReloadConversation={() => {}}
       onOpenWorktree={() => {}}
       onOpenSession={() => {}}
       onOpenTask={() => {}}

@@ -58,6 +58,9 @@ function fakeProvider(
       mergeMethods: ["squash"],
       canClose: true,
     }),
+    pullRequestConversation: async () => {
+      throw new Error("not used");
+    },
     pullRequestDetail: async () => ({
       number: 42,
       state: "open" as const,

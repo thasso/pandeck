@@ -600,15 +600,26 @@ slot MIGRATES to `pull-requests` in place, so a user who arranged their bar
 keeps the position rather than finding the replacement at its default one.
 
 The browser lists what wants something from you, never a repository's whole open
-list (that is the Project page), in three groups in this order:
+list (that is the Project page). A toolbar above it groups and filters, like the
+Tasks list: group by reason (the default), by project or by date of the last
+update; filter by project, by reason and by hiding drafts. The choices are
+browser-local preferences. By reason, the groups are, in this order:
 
 1. **Needs your review** — your review was requested. It leads because somebody
    else is blocked on it, and a review request outranks your own authorship on
    the same pull request.
 2. **Yours** — the ones you opened, with drafts marked rather than hidden.
-3. **Needs cleanup** — merged or closed, with a local worktree still holding the
+3. **Assigned to you** — you are an assignee.
+4. **Team review requests** — a team you are in was asked to review. It starts
+   folded: a CODEOWNERS rule can request a team on every pull request of a
+   repository.
+5. **Needs cleanup** — merged or closed, with a local worktree still holding the
    head branch. The checkout is what is left to deal with, and it is what keeps
    a finished pull request visible until it is gone.
+
+Every group is a `ListGroupSection` band: sticky, collapsible, its open state
+remembered for the tab. The same band divides Tasks Focus and the Backlog
+grouped by project, so a sidebar list is sectioned one way everywhere.
 
 Under them, **Idle worktrees** lists the checkouts nobody is working in that no
 pull-request row covers, each saying what retiring it would lose
@@ -624,12 +635,18 @@ every repository has a #1 and one project can hold two repositories (a spawned
 worktree publishing to a `pushurl` fork). Addressing on project and number would
 give two rows one URL, highlight both, and open whichever came first.
 
-A row states `#number`, the title, the project chip, the head branch, a draft
-marker, a marker when a local worktree holds the branch, and two glyphs for CI
-and review. The whole vocabulary distinguishes UNKNOWN from a negative answer,
-because absence on the wire means the provider was not reached: an unread CI
-reads as unknown, never as passing, and an unread review as unknown, never as
-agreement. Threads are only counted when the provider actually counted them.
+A row is a `ListCardRow`, the attention inbox's three rows: the project, the
+author when it is not you, and the head branch, with the age closing the line;
+`#number` and the title under the state glyph; then the signals. The signals
+lead with WHY it is yours — **review**, **mine**, **assigned**, **team**, each
+with its group's icon — then merged or closed, draft, conflicts and an open
+review, with the local-checkout mark and CI closing the line on the right. When
+the line is too narrow every signal drops its words and keeps its icon before
+any signal is dropped. The whole vocabulary distinguishes UNKNOWN from a
+negative answer, because absence on the wire means the provider was not reached:
+an unread CI reads as unknown, never as passing, and an unread review as
+unknown, never as agreement. Threads are only counted when the provider actually
+counted them.
 
 One pull request opens at
 `/pull-requests/:projectId/:provider/:repositoryKey/:number` — the detail page.
@@ -638,8 +655,12 @@ a single opaque identifier rather than two path components, and a provider this
 build does not have is rejected rather than parsed. It states the provider's
 answer (checks, review, mergeability, the exact head) and the local objects the
 pull request is joined to: the worktree with its dirt and drift and a link into
-its changes, the sessions, the linked Tasks. A `mergeable: null` is the provider
-still computing and says so; it is never rendered as a conflict.
+its changes, the sessions — each in its whole spawn tree, so the coordinator and
+the peers beside a linked session show too — and the linked Tasks. Below those
+it renders the conversation read (`docs/pull-requests.md`): the description, the
+individual checks, the timeline of comments and reviews, and the review threads,
+each block with its own load state. A `mergeable: null` is the provider still
+computing and says so; it is never rendered as a conflict.
 
 The joins keep four answers apart, because the ids are authoritative and the
 lists that resolve them are not. No ids is the only "none" the page may claim —
@@ -659,9 +680,13 @@ including the endpoints and the shared seams): on a wide layout the page
 header's `…` menu, on a phone the object dock. In order: **Start session in
 worktree**, **Review in a session**, **Create worktree** (**Update worktree**
 once one exists), **Merge & clean up…** (**Clean up…** for a terminal pull
-request), and **Open on GitHub/Forgejo**. The page itself draws no action bar
-and no link out: it states what the provider says and what the pull request is
-joined to, and stays the surface those acts change.
+request), and **Open on GitHub/Forgejo**. The page draws no action bar, but it
+offers the same acts where their subject is: Create worktree beside the
+worktree, Start session and Review in a session beside the sessions, Merge &
+clean up under the description, Clean up in a note on a terminal pull request
+whose checkout remains, and a plain link to the provider in the title's line.
+One `PullRequestActionsProvider` owns those flows for the routed pull request,
+so the page and the panel share one busy state and one merge dialog.
 
 Start session in worktree is the primary action — the one the wide header and
 the dock's action row draw in the primary slot — but only once a local worktree
@@ -679,7 +704,7 @@ worktree exist only while the pull request is OPEN, since a merged one has
 normally had its head branch deleted and the only possible answer would be that
 it is gone. A merge the pull request itself blocks (draft, a KNOWN conflict,
 unreadable capabilities) is disabled with its reason, and because a disabled
-row's tooltip reaches neither a keyboard nor a phone the page's Status block
+row's tooltip reaches neither a keyboard nor a phone the page, under its title,
 states the same sentence as TEXT. The merge confirmation is one
 `components/common/dialogs.tsx` dialog listing every consequence with a per-item
 opt-out and the sentence under each control describing what THIS click will do;

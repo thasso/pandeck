@@ -295,7 +295,7 @@ export interface GitHostingProvider {
 }
 
 /** {@link GitHostingProvider.pullRequestConversation}'s answer. */
-export interface ProviderPullRequestConversation {
+interface ProviderPullRequestConversation {
   headSha?: string;
   body: string;
   author?: string;
@@ -1706,6 +1706,7 @@ export function forgetOpenPullAnnotations(ref: RemoteRepoRef): void {
 export function resetGithubOpenPullAnnotationsForTests(): void {
   openPullAnnotations.clear();
   openPullAnnotationGenerations.clear();
+  viewerTeamsCache.clear();
 }
 
 /** Pages of the REST reviewer list read before giving up as unknown. */

@@ -7,6 +7,7 @@ import {
 } from "@assistant/shared";
 import type { UseMemory } from "../../src/hooks/useMemory.ts";
 import type { Prefs } from "../../src/hooks/usePrefs.ts";
+import { PULL_REQUEST_GROUP_IDS } from "../../src/lib/pullRequestInbox.ts";
 import { DEFAULT_NAV_SLOTS } from "../../src/hooks/useSidebarSection.ts";
 import { ALL_PROJECT_FILTER } from "../../src/lib/backlogTreeModel.ts";
 import { ready } from "../../src/lib/loadState.ts";
@@ -237,6 +238,10 @@ export const settingsPrefs: Prefs = {
   diffIgnoreWhitespace: true,
   diffWrap: false,
   diffExpandContext: false,
+  pullRequestGroupBy: "reason",
+  pullRequestProjectFilter: null,
+  pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
+  pullRequestHideDrafts: false,
 };
 export const settingsMemory: UseMemory = {
   list: ready({ cards: [], total: 0, hasMore: false }),

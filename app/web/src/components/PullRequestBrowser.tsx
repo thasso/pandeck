@@ -155,14 +155,12 @@ function StateIcon({ item }: { item: PullRequestInventoryItem }) {
 const REASON_BADGE_CLASS: Record<PullRequestReasonKind, string> = {
   "review-requested": "border-transparent bg-primary text-primary-foreground",
   assignee: "border-primary/40 bg-primary/10 text-primary",
-  // Blue from the theme's terminal palette: green is taken by Merged, and
-  // the other two hues the theme has (warning, destructive) mean trouble.
-  author:
-    "w-16 justify-center border-[color-mix(in_oklab,var(--ansi-blue)_40%,transparent)] bg-[color-mix(in_oklab,var(--ansi-blue)_12%,transparent)] text-[var(--ansi-blue)]",
+  // The theme's `info` blue: green is taken by Merged, and the other two
+  // hues the theme has (warning, destructive) mean trouble.
+  author: "w-16 justify-center border-info/40 bg-info/12 text-info",
   // The same blue and the same width as "mine", outlined rather than filled:
   // yours through a team, one step removed from yours.
-  "team-review":
-    "w-16 justify-center border-[color-mix(in_oklab,var(--ansi-blue)_40%,transparent)] text-[var(--ansi-blue)]",
+  "team-review": "w-16 justify-center border-info/40 text-info",
   "local-worktree": "",
 };
 

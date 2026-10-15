@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, test, vi } from "vitest";
 import type { PullRequestInventoryItem } from "@assistant/shared";
 import {
+  forgetWorktreeInPullRequestInventory,
   invalidatePullRequestInventorySnapshot,
   mergePullRequestInventoryBuild,
   obsoletePullRequestInventoryBuild,
@@ -398,4 +399,57 @@ test("a mutation while waiting for an abandoned build does not discard the next 
   release();
   await next;
   assert.equal(calls, 2, "the build after the wait already saw the mutation");
+});
+
+test("forgetting a removed worktree drops its terminal rows and unjoins open ones", async () => {
+  const merged: PullRequestInventoryItem = {
+    ...item("pa", 1),
+    state: "merged",
+    worktreeId: "wt",
+  };
+  const open: PullRequestInventoryItem = { ...item("pa", 2), worktreeId: "wt" };
+  const other: PullRequestInventoryItem = {
+    ...item("pa", 3),
+    worktreeId: "elsewhere",
+  };
+  const write = vi.fn();
+  setPullRequestInventorySyncOperationsForTests({
+    build: async () => ({ items: [], projectIds: [], failedProjectIds: [] }),
+    read: () => ({
+      version: 1,
+      builtAt: 1,
+      projects: { pa: { items: [merged, open, other], fetchedAt: 1 } },
+    }),
+    write,
+    now: () => 2,
+  });
+
+  forgetWorktreeInPullRequestInventory("wt");
+
+  // Written at once, with no provider read: the list loses the merged row now.
+  const { worktreeId: _gone, ...unjoined } = open;
+  assert.deepEqual(write.mock.calls[0]?.[0].projects.pa.items, [
+    unjoined,
+    other,
+  ]);
+  stopPullRequestInventorySync();
+});
+
+test("forgetting a worktree the snapshot never joined writes nothing", () => {
+  const write = vi.fn();
+  setPullRequestInventorySyncOperationsForTests({
+    build: async () => ({ items: [], projectIds: [], failedProjectIds: [] }),
+    read: () => ({
+      version: 1,
+      builtAt: 1,
+      projects: { pa: { items: [item("pa", 1)], fetchedAt: 1 } },
+    }),
+    write,
+    now: () => 2,
+  });
+
+  forgetWorktreeInPullRequestInventory("wt");
+
+  assert.equal(write.mock.calls.length, 0);
+  stopPullRequestInventorySync();
 });

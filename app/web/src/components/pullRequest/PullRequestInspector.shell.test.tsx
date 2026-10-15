@@ -34,6 +34,7 @@ vi.mock("../../lib/pullRequestsApi.ts", async (importOriginal) => ({
 }));
 
 const { PullRequestInspector } = await import("../objectInspectors.tsx");
+const { PullRequestActionsProvider } = await import("./PullRequestActions.tsx");
 const { InspectorChromeProvider } = await import("../shell/Inspector.tsx");
 const { RoutePrimaryActionProvider, useRouteSecondaryActions } =
   await import("../shell/RoutePrimaryAction.tsx");
@@ -102,25 +103,31 @@ afterEach(() => {
 
 function panel(item: PullRequestInventoryItem) {
   return (
-    <PullRequestInspector
-      state={ready(item)}
-      projects={[]}
-      joins={{
-        worktrees: { rows: [] as WorktreeRecord[], fresh: true },
-        sessions: { rows: [] as SessionListItem[], fresh: true },
-        tasks: { rows: [] as TaskSummary[], fresh: true },
-      }}
-      openers={{
-        onOpenTask: () => {},
-        onOpenProject: () => {},
-        onOpenSession: () => {},
-        onOpenWorktree: () => {},
-        onOpenKnowledge: () => {},
-      }}
+    <PullRequestActionsProvider
+      item={item}
+      onReload={() => {}}
       onStartSession={() => {}}
       onReview={() => {}}
-      onReload={() => {}}
-    />
+    >
+      <PullRequestInspector
+        state={ready(item)}
+        projects={[]}
+        joins={{
+          worktrees: { rows: [] as WorktreeRecord[], fresh: true },
+          sessions: { rows: [] as SessionListItem[], fresh: true },
+          tasks: { rows: [] as TaskSummary[], fresh: true },
+        }}
+        openers={{
+          onOpenTask: () => {},
+          onOpenProject: () => {},
+          onOpenSession: () => {},
+          onOpenWorktree: () => {},
+          onOpenKnowledge: () => {},
+        }}
+        onStartSession={() => {}}
+        onReload={() => {}}
+      />
+    </PullRequestActionsProvider>
   );
 }
 

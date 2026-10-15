@@ -13,6 +13,7 @@ import {
 } from "../../src/hooks/useAssistant.ts";
 import type { BacklogState } from "../../src/hooks/useBacklog.ts";
 import type { Prefs } from "../../src/hooks/usePrefs.ts";
+import { PULL_REQUEST_GROUP_IDS } from "../../src/lib/pullRequestInbox.ts";
 import { DEFAULT_NAV_SLOTS } from "../../src/hooks/useSidebarSection.ts";
 import { ALL_PROJECT_FILTER } from "../../src/lib/backlogTreeModel.ts";
 
@@ -383,4 +384,8 @@ export const shellPrefs: Prefs = {
   diffIgnoreWhitespace: true,
   diffWrap: false,
   diffExpandContext: false,
+  pullRequestGroupBy: "reason",
+  pullRequestProjectFilter: null,
+  pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
+  pullRequestHideDrafts: false,
 };

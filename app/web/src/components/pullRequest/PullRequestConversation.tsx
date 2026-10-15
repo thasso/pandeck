@@ -20,7 +20,6 @@ import {
   CircleSlash,
   ExternalLink,
   FileCode2,
-  FileText,
   ListChecks,
   MessageSquareText,
   MessagesSquare,
@@ -255,58 +254,11 @@ export function ChecksBlock({
  * read top to bottom, and a fold in the middle of a comment hid exactly the
  * part a reviewer meant. The page scrolls; nothing here clips.
  */
-export function ExpandableMarkdown({
-  text,
-}: {
-  text: string;
-  /** Kept for callers; nothing is clipped any more. */
-  maxHeight?: string;
-}) {
+export function ProviderMarkdown({ text }: { text: string }) {
   return (
     <div className="min-w-0 text-foreground">
       <Markdown text={text} density="compact" />
     </div>
-  );
-}
-
-export function DescriptionBlock({
-  body,
-  author,
-  createdAt,
-  pending,
-}: {
-  body: string | undefined;
-  author: string | undefined;
-  createdAt: number | undefined;
-  pending: boolean;
-}) {
-  return (
-    <Block
-      title="Description"
-      icon={<FileText size={13} />}
-      aside={
-        author ? (
-          <span>
-            {author}
-            {createdAt ? ` · ${relativeTime(createdAt)}` : ""}
-          </span>
-        ) : null
-      }
-    >
-      {body === undefined ? (
-        pending ? (
-          <BlockSkeleton label="Loading the description" />
-        ) : (
-          <EmptyBox variant="inline">
-            The description could not be read.
-          </EmptyBox>
-        )
-      ) : body.trim() ? (
-        <ExpandableMarkdown text={body} />
-      ) : (
-        <EmptyBox variant="inline">No description provided.</EmptyBox>
-      )}
-    </Block>
   );
 }
 
@@ -388,7 +340,10 @@ function TimelineItem({ entry }: { entry: PullRequestTimelineEntry }) {
       actions={
         <>
           {verdict ? (
-            <Badge variant="outline" className="border-white/30 text-white">
+            <Badge
+              variant="outline"
+              className="border-band-foreground/30 text-band-foreground"
+            >
               {REVIEW_VERDICT_LABEL[verdict]}
             </Badge>
           ) : null}
@@ -398,7 +353,7 @@ function TimelineItem({ entry }: { entry: PullRequestTimelineEntry }) {
     >
       {body || (entry.kind === "review" && entry.threadComments) ? (
         <div className={`flex min-w-0 flex-col gap-1 ${COMMENT_BODY}`}>
-          {body ? <ExpandableMarkdown text={body} /> : null}
+          {body ? <ProviderMarkdown text={body} /> : null}
           {entry.kind === "review" && entry.threadComments ? (
             <p className="text-xs text-muted-foreground">
               {entry.threadComments} inline{" "}
@@ -481,12 +436,18 @@ function ThreadSection({ thread }: { thread: PullRequestReviewThread }) {
       actions={
         <>
           {thread.outdated ? (
-            <Badge variant="outline" className="border-white/30 text-white">
+            <Badge
+              variant="outline"
+              className="border-band-foreground/30 text-band-foreground"
+            >
               outdated
             </Badge>
           ) : null}
           {thread.resolved ? (
-            <Badge variant="outline" className="border-white/30 text-white">
+            <Badge
+              variant="outline"
+              className="border-band-foreground/30 text-band-foreground"
+            >
               resolved
             </Badge>
           ) : null}
@@ -538,7 +499,7 @@ function ThreadSection({ thread }: { thread: PullRequestReviewThread }) {
             }
           >
             <div className={`min-w-0 ${COMMENT_BODY}`}>
-              <ExpandableMarkdown text={comment.body} />
+              <ProviderMarkdown text={comment.body} />
             </div>
           </ListGroupSection>
         ))}

@@ -9,7 +9,7 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { PullRequestDetailPage } from "./PullRequestDetailPage.tsx";
-import { ready } from "../../lib/loadState.ts";
+import { loading, ready } from "../../lib/loadState.ts";
 import type {
   JoinSource,
   PullRequestJoinSources,
@@ -128,6 +128,8 @@ function render(
           sessions: joins.sessions ?? fresh<SessionListItem>([]),
           tasks: joins.tasks ?? fresh<TaskSummary>([]),
         }}
+        conversation={loading()}
+        onReloadConversation={() => {}}
         onOpenWorktree={() => {}}
         onOpenSession={() => {}}
         onOpenTask={() => {}}
@@ -242,7 +244,7 @@ describe("the relations block", () => {
 describe("the status block", () => {
   it("never renders an unfinished mergeability check as a conflict", () => {
     const el = render(pr({ mergeable: null }));
-    expect(el.textContent).toContain("The provider is still checking");
+    expect(el.textContent).toContain("MergeableChecking…");
     expect(el.textContent).not.toContain("Conflicts with the base branch");
   });
 

@@ -5,7 +5,11 @@ import {
   classifyPullRequest,
   comparePullRequests,
   isPullRequestTarget,
-  matchesPullRequestQuery,
+  DEFAULT_PULL_REQUEST_VIEW,
+  matchesPullRequestView,
+  pullRequestFilterCount,
+  pullRequestReasons,
+  pullRequestSessionTree,
   pullRequestCiState,
   pullRequestDetailState,
   pullRequestMergeability,
@@ -43,10 +47,12 @@ function pr(
 }
 
 describe("grouping", () => {
-  it("renders the three groups in a fixed order", () => {
+  it("renders the groups in a fixed order", () => {
     expect(PULL_REQUEST_GROUPS.map((group) => group.id)).toEqual([
       "needs-review",
       "yours",
+      "assigned",
+      "team-review",
       "cleanup",
     ]);
   });
@@ -57,6 +63,17 @@ describe("grouping", () => {
       "needs-review",
     );
     expect(classifyPullRequest(pr({ mine: true }))).toBe("yours");
+  });
+
+  it("ranks a personal assignment above a team review request", () => {
+    expect(
+      classifyPullRequest(
+        pr({ mine: false, assignedToMe: true, teamReviewRequests: ["core"] }),
+      ),
+    ).toBe("assigned");
+    expect(
+      classifyPullRequest(pr({ mine: false, teamReviewRequests: ["core"] })),
+    ).toBe("team-review");
   });
 
   it("files every terminal pull request under cleanup", () => {
@@ -80,9 +97,45 @@ describe("grouping", () => {
 
   it("is empty only when nothing matched", () => {
     expect(buildPullRequestInbox([]).empty).toBe(true);
-    expect(buildPullRequestInbox([pr()], { query: "nothing" }).empty).toBe(
-      true,
+    expect(
+      buildPullRequestInbox([pr()], {
+        view: { ...DEFAULT_PULL_REQUEST_VIEW, projectId: "elsewhere" },
+      }).empty,
+    ).toBe(true);
+  });
+
+  it("starts the team group closed: it can be a whole repository", () => {
+    const view = buildPullRequestInbox([
+      pr({ number: 1 }),
+      pr({ number: 2, mine: false, teamReviewRequests: ["core"] }),
+    ]);
+    expect(view.groups.map((group) => [group.id, group.defaultOpen])).toEqual([
+      ["yours", true],
+      ["team-review", false],
+    ]);
+  });
+
+  it("groups by project, ordered by the label each heading shows", () => {
+    const view = buildPullRequestInbox(
+      [pr({ number: 1, projectId: "b" }), pr({ number: 2, projectId: "a" })],
+      {
+        view: { ...DEFAULT_PULL_REQUEST_VIEW, groupBy: "project" },
+        projectLabels: { a: "Zeta", b: "Alpha" },
+      },
     );
+    expect(view.groups.map((group) => group.title)).toEqual(["Alpha", "Zeta"]);
+  });
+
+  it("groups by date into bands, with an unknown time last", () => {
+    const now = Date.UTC(2026, 9, 15, 12);
+    const view = buildPullRequestInbox(
+      [pr({ number: 1 }), pr({ number: 2, updatedAt: now })],
+      { view: { ...DEFAULT_PULL_REQUEST_VIEW, groupBy: "date" }, now },
+    );
+    expect(view.groups.map((group) => group.id)).toEqual([
+      "date:today",
+      "date:unknown",
+    ]);
   });
 });
 
@@ -146,38 +199,105 @@ describe("ordering", () => {
   });
 });
 
-describe("search", () => {
-  const item = pr({ title: "Ship the inbox", headBranch: "inbox-ship" });
-
-  it("matches the title, both branches and the author", () => {
-    expect(matchesPullRequestQuery(item, "inbox")).toBe(true);
-    expect(matchesPullRequestQuery(item, "main")).toBe(true);
-    expect(matchesPullRequestQuery(pr({ author: "ada" }), "ada")).toBe(true);
-    expect(matchesPullRequestQuery(item, "nothing here")).toBe(false);
+describe("filters", () => {
+  it("keeps everything under the default view", () => {
+    expect(matchesPullRequestView(pr(), DEFAULT_PULL_REQUEST_VIEW)).toBe(true);
+    expect(pullRequestFilterCount(DEFAULT_PULL_REQUEST_VIEW)).toBe(0);
   });
 
-  it("matches the number with or without the hash", () => {
-    expect(matchesPullRequestQuery(item, "#7")).toBe(true);
-    expect(matchesPullRequestQuery(item, "7")).toBe(true);
-    expect(matchesPullRequestQuery(item, "#8")).toBe(false);
-  });
-
-  it("matches what the row DISPLAYS for the project", () => {
+  it("filters by project, by strongest reason and by draft", () => {
+    const view = DEFAULT_PULL_REQUEST_VIEW;
+    expect(matchesPullRequestView(pr(), { ...view, projectId: "other" })).toBe(
+      false,
+    );
     expect(
-      matchesPullRequestQuery(item, "pandeck", {
-        projectLabels: { pa: "PA Pandeck" },
+      matchesPullRequestView(pr({ reviewRequested: true }), {
+        ...view,
+        reasons: ["yours"],
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      matchesPullRequestView(pr({ draft: true }), {
+        ...view,
+        hideDrafts: true,
+      }),
+    ).toBe(false);
+    expect(
+      pullRequestFilterCount({
+        ...view,
+        projectId: "other",
+        reasons: ["yours"],
+        hideDrafts: true,
+      }),
+    ).toBe(3);
+  });
+});
+
+describe("reasons", () => {
+  it("lists every reason, personal ones before the team", () => {
+    expect(
+      pullRequestReasons(
+        pr({
+          reviewRequested: true,
+          mine: true,
+          assignedToMe: true,
+          teamReviewRequests: ["core"],
+        }),
+      ).map((reason) => reason.kind),
+    ).toEqual(["review-requested", "author", "assignee", "team-review"]);
   });
 
-  it("matches everything when the query is empty", () => {
-    expect(matchesPullRequestQuery(item, "")).toBe(true);
-    expect(matchesPullRequestQuery(item, "   ")).toBe(true);
+  it("claims only the checkout for a terminal pull request", () => {
+    expect(
+      pullRequestReasons(pr({ state: "merged", worktreeId: "wt" })).map(
+        (reason) => reason.kind,
+      ),
+    ).toEqual(["local-worktree"]);
+    expect(pullRequestReasons(pr({ state: "merged" }))).toEqual([]);
+  });
+});
+
+describe("session tree", () => {
+  const session = (
+    id: string,
+    updatedAt: number,
+    patch: Record<string, unknown> = {},
+  ) =>
+    ({
+      id,
+      title: id,
+      createdAt: 0,
+      updatedAt,
+      messageCount: 1,
+      ...patch,
+    }) as unknown as Parameters<typeof pullRequestSessionTree>[0][number];
+
+  it("shows a linked session in its whole spawn tree", () => {
+    const rows = pullRequestSessionTree(
+      [
+        session("root", 1),
+        session("impl", 3, { spawnedBySessionId: "root" }),
+        session("review", 2, { spawnedBySessionId: "root" }),
+        session("other", 9),
+      ],
+      ["impl"],
+    );
+    expect(rows.map((row) => [row.session.id, row.depth, row.linked])).toEqual([
+      ["root", 1, false],
+      ["impl", 2, true],
+      ["review", 2, false],
+    ]);
   });
 
-  it("normalizes the needle itself, so a direct caller cannot get it wrong", () => {
-    expect(matchesPullRequestQuery(item, "INBOX")).toBe(true);
-    expect(matchesPullRequestQuery(item, "  Inbox  ")).toBe(true);
+  it("walks a spawn cycle once", () => {
+    const rows = pullRequestSessionTree(
+      [
+        session("a", 1, { spawnedBySessionId: "b" }),
+        session("b", 2, { spawnedBySessionId: "a" }),
+      ],
+      ["a"],
+    );
+    expect(new Set(rows.map((row) => row.session.id)).size).toBe(rows.length);
   });
 });
 

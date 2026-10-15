@@ -8,8 +8,12 @@ import type {
 } from "@assistant/shared";
 const hoisted = vi.hoisted(() => ({ retire: vi.fn() }));
 vi.mock("../lib/worktrees.ts", () => ({ retireWorktree: hoisted.retire }));
-const { PullRequestBrowser } = await import("./PullRequestBrowser.tsx");
-import type { PullRequestTarget } from "../lib/pullRequestInbox.ts";
+const { PullRequestBrowser, PullRequestListToolbar } =
+  await import("./PullRequestBrowser.tsx");
+import {
+  DEFAULT_PULL_REQUEST_VIEW,
+  type PullRequestTarget,
+} from "../lib/pullRequestInbox.ts";
 import { failed, loading, ready, refreshing } from "../lib/loadState.ts";
 
 /**
@@ -92,7 +96,7 @@ describe("PullRequestBrowser", () => {
     expect(el.querySelector("[data-pull-request-row]")).toBeNull();
   });
 
-  it("names the three groups in order and puts a review request first", () => {
+  it("names the groups in order and puts a review request first", () => {
     const el = render(
       <PullRequestBrowser
         inventory={ready([
@@ -108,7 +112,7 @@ describe("PullRequestBrowser", () => {
     );
     expect(
       [...el.querySelectorAll("h2")].map((node) =>
-        node.textContent?.replace(/\s*\(\d+\)$/, ""),
+        node.textContent?.replace(/\d+$/, ""),
       ),
     ).toEqual(["Needs your review", "Yours", "Needs cleanup"]);
     // …and the freshest pull request of all does not jump the groups.
@@ -163,7 +167,16 @@ describe("PullRequestBrowser", () => {
       />,
     );
     expect(el.querySelectorAll("[data-pull-request-row]")).toHaveLength(1);
-    expect(el.textContent).toContain("Refreshing pull requests");
+    // The mark is the toolbar's, above the list.
+    const bar = render(
+      <PullRequestListToolbar
+        view={DEFAULT_PULL_REQUEST_VIEW}
+        onChange={NOOP}
+        inventory={refreshing([pr({ number: 5 })])}
+        projects={PROJECTS}
+      />,
+    );
+    expect(bar.textContent).toContain("Refreshing pull requests");
   });
 
   it("keeps the rows under a failed refresh and offers the retry", () => {
@@ -380,7 +393,7 @@ describe("PullRequestBrowser idle worktrees", () => {
       />,
     );
     expect(el.textContent).toContain("inventory read failed");
-    expect(el.textContent).toContain("Idle worktrees (1)");
+    expect(el.textContent).toContain("Idle worktrees1");
     expect(el.textContent).toContain("idle-branch");
   });
 });
@@ -433,7 +446,9 @@ describe("PullRequestBrowser keeps a bulk retirement across the inventory answer
     const el = render(browser(loading()));
     act(() =>
       [...el.querySelectorAll("button")]
-        .find((button) => button.textContent?.includes("Retire 1…"))!
+        .find((button) =>
+          button.textContent?.includes("Retire 1 with nothing unmerged…"),
+        )!
         .click(),
     );
     act(() =>

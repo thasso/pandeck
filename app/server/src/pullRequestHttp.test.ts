@@ -84,3 +84,25 @@ test("GET serves the persisted snapshot without a provider call", async () => {
   });
   assert.equal(hoisted.provider.mock.calls.length, 0);
 });
+
+test("the conversation route refuses an incomplete identity before any provider read", async () => {
+  let status = 0;
+  const res = {
+    writeHead(next: number) {
+      status = next;
+      return this;
+    },
+    end() {
+      return this;
+    },
+  } as unknown as ServerResponse;
+  await handlePullRequestApi(
+    { method: "GET" } as IncomingMessage,
+    res,
+    new URL(
+      "http://localhost/api/pull-requests/conversation?projectId=pa&provider=github&number=7",
+    ),
+    () => ({ "content-type": "application/json" }),
+  );
+  assert.equal(status, 400);
+});

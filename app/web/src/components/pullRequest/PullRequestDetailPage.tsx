@@ -92,7 +92,7 @@ import {
   Block,
   BlockSkeleton,
   ChecksBlock,
-  ExpandableMarkdown,
+  ProviderMarkdown,
   ThreadsBlock,
   TimelineBlock,
 } from "./PullRequestConversation.tsx";
@@ -744,7 +744,7 @@ export function PullRequestDetailPage({
               <BlockSkeleton label="Loading the description" />
             ) : null
           ) : talk.body.trim() ? (
-            <ExpandableMarkdown text={talk.body} maxHeight="max-h-[32rem]" />
+            <ProviderMarkdown text={talk.body} />
           ) : (
             <span className="text-sm text-muted-foreground">
               No description provided.
