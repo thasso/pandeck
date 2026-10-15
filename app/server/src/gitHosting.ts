@@ -21,6 +21,9 @@ import {
   type PullRequestMergeMethod,
   type PullRequestMergeResult,
   type PullRequestRepositoryCapabilities,
+  type PullRequestReviewThread,
+  type PullRequestReviewVerdict,
+  type PullRequestTimelineEntry,
   type WorktreeCiStatus,
   type WorktreePullRequestInfo,
   type WorktreePullRequestReview,
@@ -243,6 +246,14 @@ export interface GitHostingProvider {
   ciStatus(ref: string): Promise<ProviderCiStatus | null>;
   /** Per-check machine evidence for an exact ref, used by Workflow Runs. */
   refChecks(ref: string): Promise<GitHostingRefChecks>;
+  /**
+   * What is written ON one pull request — description, comments, submitted
+   * reviews, inline review threads — plus its current head, for the detail
+   * page. Bounded per section; a THROW means it could not be read.
+   */
+  pullRequestConversation(
+    prNumber: number,
+  ): Promise<ProviderPullRequestConversation>;
   /** Review state of one open PR. `null` = could not be determined. */
   pullRequestReview(
     prNumber: number,
@@ -281,6 +292,448 @@ export interface GitHostingProvider {
    * or already reset; a provider without a metered budget leaves it out.
    */
   rateLimit?(): { remaining: number; resetAt: number } | null;
+}
+
+/** {@link GitHostingProvider.pullRequestConversation}'s answer. */
+export interface ProviderPullRequestConversation {
+  headSha?: string;
+  body: string;
+  author?: string;
+  createdAt?: number;
+  assignees: string[];
+  requestedReviewers: { users: string[]; teams: string[] };
+  /** Oldest first. */
+  timeline: PullRequestTimelineEntry[];
+  timelineTruncated?: boolean;
+  threads: PullRequestReviewThread[];
+  threadsTotal?: number;
+}
+
+/** Per-section bounds for the conversation read. */
+const CONVERSATION_ENTRIES = 50;
+const CONVERSATION_THREADS = 50;
+const THREAD_COMMENTS = 20;
+/** One body's characters; a longer one is cut with a note. */
+const CONVERSATION_BODY_CHARS = 20_000;
+const DIFF_HUNK_CHARS = 600;
+
+function boundedBody(raw: unknown): string {
+  const text = typeof raw === "string" ? raw : "";
+  return text.length > CONVERSATION_BODY_CHARS
+    ? `${text.slice(0, CONVERSATION_BODY_CHARS)}\n\n_… cut here; the rest is on the provider._`
+    : text;
+}
+
+function parsedTime(raw: string | null | undefined): { createdAt?: number } {
+  const parsed = raw ? Date.parse(raw) || undefined : undefined;
+  return parsed !== undefined ? { createdAt: parsed } : {};
+}
+
+function boundedHunk(raw: unknown): { diffHunk?: string } {
+  return typeof raw === "string" && raw
+    ? { diffHunk: raw.slice(-DIFF_HUNK_CHARS) }
+    : {};
+}
+
+/**
+ * A "commented" review with no body is only the envelope of inline comments,
+ * which the threads already show; listing it would put an empty "reviewed"
+ * line in the conversation for every reply. Verdicts always stay.
+ */
+function keepReviewInTimeline(
+  verdict: PullRequestReviewVerdict,
+  body: string,
+): boolean {
+  return verdict !== "commented" || body.trim().length > 0;
+}
+
+function byCreatedAt(
+  a: { createdAt?: number },
+  b: { createdAt?: number },
+): number {
+  return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+}
+
+/* ---------------------- GitHub conversation (GraphQL) ---------------------- */
+
+interface GithubConversationComment {
+  databaseId?: number | null;
+  author?: { login?: string } | null;
+  body?: string | null;
+  createdAt?: string | null;
+  url?: string | null;
+}
+
+interface GithubConversationPull {
+  body?: string | null;
+  createdAt?: string | null;
+  headRefOid?: string | null;
+  author?: { login?: string } | null;
+  assignees?: { nodes?: Array<{ login?: string } | null> };
+  reviewRequests?: {
+    nodes?: Array<{
+      requestedReviewer?: {
+        __typename?: string;
+        login?: string;
+        slug?: string;
+      } | null;
+    } | null>;
+  };
+  comments?: {
+    totalCount?: number;
+    nodes?: Array<GithubConversationComment | null>;
+  };
+  reviews?: {
+    totalCount?: number;
+    nodes?: Array<
+      | (GithubConversationComment & {
+          state?: string | null;
+          submittedAt?: string | null;
+          comments?: { totalCount?: number };
+        })
+      | null
+    >;
+  };
+  reviewThreads?: {
+    totalCount?: number;
+    nodes?: Array<{
+      id?: string;
+      isResolved?: boolean;
+      isOutdated?: boolean;
+      path?: string | null;
+      line?: number | null;
+      originalLine?: number | null;
+      comments?: {
+        totalCount?: number;
+        nodes?: Array<
+          | (GithubConversationComment & {
+              diffHunk?: string | null;
+            })
+          | null
+        >;
+      };
+    } | null>;
+  };
+}
+
+/**
+ * Team reviewers by `slug` only: reading a team's organization needs the
+ * `read:org` scope, and one field the token may not read fails the whole
+ * GraphQL query.
+ */
+const GITHUB_CONVERSATION_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      body createdAt headRefOid author { login }
+      assignees(first: 20) { nodes { login } }
+      reviewRequests(first: 50) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug } } } }
+      comments(last: ${CONVERSATION_ENTRIES}) { totalCount nodes { databaseId author { login } body createdAt url } }
+      reviews(last: ${CONVERSATION_ENTRIES}) { totalCount nodes { databaseId author { login } state body submittedAt url comments { totalCount } } }
+      reviewThreads(last: ${CONVERSATION_THREADS}) { totalCount nodes { id isResolved isOutdated path line originalLine comments(first: ${THREAD_COMMENTS}) { totalCount nodes { databaseId author { login } body createdAt url diffHunk } } } }
+    }
+  }
+}`;
+
+const GITHUB_VERDICT: Record<string, PullRequestReviewVerdict> = {
+  APPROVED: "approved",
+  CHANGES_REQUESTED: "changes-requested",
+  COMMENTED: "commented",
+  DISMISSED: "dismissed",
+};
+
+function githubCommentOf(
+  node: GithubConversationComment,
+  createdAt?: string | null,
+) {
+  return {
+    id: String(node.databaseId ?? ""),
+    ...(node.author?.login ? { author: node.author.login } : {}),
+    body: boundedBody(node.body),
+    ...parsedTime(createdAt ?? node.createdAt),
+    ...(node.url ? { url: node.url } : {}),
+  };
+}
+
+async function githubPullRequestConversation(
+  config: GithubApiConfig,
+  ref: RemoteRepoRef,
+  prNumber: number,
+  signal: AbortSignal,
+): Promise<ProviderPullRequestConversation> {
+  const data = await githubGraphql<{
+    repository?: { pullRequest?: GithubConversationPull | null } | null;
+  }>(
+    config,
+    GITHUB_CONVERSATION_QUERY,
+    { owner: ref.owner, name: ref.repo, number: prNumber },
+    signal,
+  );
+  const pull = data.repository?.pullRequest;
+  if (!pull) throw new Error(`Pull request #${prNumber} was not found.`);
+  const timeline: PullRequestTimelineEntry[] = [];
+  for (const node of pull.comments?.nodes ?? [])
+    if (node) timeline.push({ kind: "comment", ...githubCommentOf(node) });
+  for (const node of pull.reviews?.nodes ?? []) {
+    if (!node || !node.state || node.state === "PENDING") continue;
+    const verdict = GITHUB_VERDICT[node.state] ?? "commented";
+    const body = boundedBody(node.body);
+    if (!keepReviewInTimeline(verdict, body)) continue;
+    const inline = node.comments?.totalCount ?? 0;
+    timeline.push({
+      kind: "review",
+      verdict,
+      ...githubCommentOf(node, node.submittedAt),
+      ...(inline > 0 ? { threadComments: inline } : {}),
+    });
+  }
+  timeline.sort(byCreatedAt);
+  const threads: PullRequestReviewThread[] = [];
+  for (const node of pull.reviewThreads?.nodes ?? []) {
+    if (!node?.id) continue;
+    const comments = (node.comments?.nodes ?? []).filter(
+      (comment): comment is NonNullable<typeof comment> => comment !== null,
+    );
+    const line = node.line ?? node.originalLine ?? undefined;
+    threads.push({
+      id: node.id,
+      path: node.path ?? "",
+      ...(line ? { line } : {}),
+      ...(typeof node.isResolved === "boolean"
+        ? { resolved: node.isResolved }
+        : {}),
+      ...(node.isOutdated ? { outdated: true } : {}),
+      ...boundedHunk(comments[0]?.diffHunk),
+      ...(comments[0]?.url ? { url: comments[0].url } : {}),
+      comments: comments.map((comment) => githubCommentOf(comment)),
+      ...((node.comments?.totalCount ?? 0) > comments.length
+        ? { truncated: true }
+        : {}),
+    });
+  }
+  const users: string[] = [];
+  const teams: string[] = [];
+  for (const request of pull.reviewRequests?.nodes ?? []) {
+    const reviewer = request?.requestedReviewer;
+    if (reviewer?.__typename === "User" && reviewer.login)
+      users.push(reviewer.login);
+    else if (reviewer?.__typename === "Team" && reviewer.slug)
+      teams.push(reviewer.slug);
+  }
+  const entriesTotal =
+    (pull.comments?.totalCount ?? 0) + (pull.reviews?.totalCount ?? 0);
+  const threadsTotal = pull.reviewThreads?.totalCount ?? threads.length;
+  return {
+    ...(pull.headRefOid ? { headSha: pull.headRefOid } : {}),
+    body: boundedBody(pull.body),
+    ...(pull.author?.login ? { author: pull.author.login } : {}),
+    ...parsedTime(pull.createdAt),
+    assignees: (pull.assignees?.nodes ?? [])
+      .map((node) => node?.login)
+      .filter((login): login is string => Boolean(login)),
+    requestedReviewers: { users, teams },
+    timeline,
+    ...((pull.comments?.totalCount ?? 0) >
+      (pull.comments?.nodes?.length ?? 0) ||
+    (pull.reviews?.totalCount ?? 0) > (pull.reviews?.nodes?.length ?? 0)
+      ? { timelineTruncated: entriesTotal > 0 }
+      : {}),
+    threads,
+    ...(threadsTotal > threads.length ? { threadsTotal } : {}),
+  };
+}
+
+/* ------------------------ Forgejo conversation (REST) ---------------------- */
+
+interface ForgejoComment {
+  id?: number;
+  user?: { login?: string } | null;
+  body?: string | null;
+  created_at?: string | null;
+  html_url?: string | null;
+}
+
+interface ForgejoReview extends ForgejoComment {
+  state?: string | null;
+  submitted_at?: string | null;
+  comments_count?: number;
+  dismissed?: boolean;
+  stale?: boolean;
+}
+
+interface ForgejoReviewComment extends ForgejoComment {
+  path?: string | null;
+  line?: number | null;
+  original_line?: number | null;
+  position?: number | null;
+  original_position?: number | null;
+  diff_hunk?: string | null;
+  resolver?: { login?: string } | null;
+  pull_request_review_id?: number;
+}
+
+const FORGEJO_VERDICT: Record<string, PullRequestReviewVerdict> = {
+  APPROVED: "approved",
+  REQUEST_CHANGES: "changes-requested",
+  COMMENT: "commented",
+};
+
+/** Reviews whose inline comments are read (one request each). */
+const FORGEJO_REVIEWS_WITH_COMMENTS = 20;
+
+function forgejoCommentOf(node: ForgejoComment, createdAt?: string | null) {
+  return {
+    id: String(node.id ?? ""),
+    ...(node.user?.login ? { author: node.user.login } : {}),
+    body: boundedBody(node.body),
+    ...parsedTime(createdAt ?? node.created_at),
+    ...(node.html_url ? { url: node.html_url } : {}),
+  };
+}
+
+async function forgejoPullRequestConversation(
+  config: ForgejoApiConfig,
+  repoApi: string,
+  prNumber: number,
+  signal: () => AbortSignal,
+): Promise<ProviderPullRequestConversation> {
+  const [pullRes, commentsRes, reviewsRes] = await Promise.all([
+    forgejoRequest<
+      ForgejoPull & {
+        body?: string | null;
+        created_at?: string | null;
+        assignees?: Array<{ login?: string }> | null;
+        requested_reviewers_teams?: Array<{ name?: string }> | null;
+      }
+    >(config, "GET", `${repoApi}/pulls/${prNumber}`, { signal: signal() }),
+    forgejoRequest<ForgejoComment[]>(
+      config,
+      "GET",
+      `${repoApi}/issues/${prNumber}/comments`,
+      { query: { limit: CONVERSATION_ENTRIES }, signal: signal() },
+    ),
+    forgejoRequest<ForgejoReview[]>(
+      config,
+      "GET",
+      `${repoApi}/pulls/${prNumber}/reviews`,
+      { query: { limit: CONVERSATION_ENTRIES }, signal: signal() },
+    ),
+  ]);
+  const pull = requireData(pullRes, "the pull request");
+  const comments = requirePullRequestList<ForgejoComment>(
+    requireData(commentsRes, "pull request comments"),
+    "pull request comments",
+  );
+  const reviews = requirePullRequestList<ForgejoReview>(
+    requireData(reviewsRes, "pull request reviews"),
+    "pull request reviews",
+  );
+  const timeline: PullRequestTimelineEntry[] = comments.map((comment) => ({
+    kind: "comment",
+    ...forgejoCommentOf(comment),
+  }));
+  for (const review of reviews) {
+    const raw = review.state ?? "";
+    if (raw === "PENDING" || raw === "REQUEST_REVIEW") continue;
+    const verdict: PullRequestReviewVerdict = review.dismissed
+      ? "dismissed"
+      : (FORGEJO_VERDICT[raw] ?? "commented");
+    const body = boundedBody(review.body);
+    if (!keepReviewInTimeline(verdict, body)) continue;
+    timeline.push({
+      kind: "review",
+      verdict,
+      ...forgejoCommentOf(review, review.submitted_at),
+      ...((review.comments_count ?? 0) > 0
+        ? { threadComments: review.comments_count! }
+        : {}),
+    });
+  }
+  timeline.sort(byCreatedAt);
+  // Forgejo hangs inline comments off the review that wrote them and has no
+  // reply chain, so a thread is the comments on one path and line, in order.
+  const commented = reviews
+    .filter((review) => (review.comments_count ?? 0) > 0 && review.id)
+    .slice(-FORGEJO_REVIEWS_WITH_COMMENTS);
+  const inline = (
+    await Promise.all(
+      commented.map(async (review) => {
+        const res = await forgejoRequest<ForgejoReviewComment[]>(
+          config,
+          "GET",
+          `${repoApi}/pulls/${prNumber}/reviews/${review.id}/comments`,
+          { signal: signal() },
+        );
+        return requirePullRequestList<ForgejoReviewComment>(
+          requireData(res, "review comments"),
+          "review comments",
+        );
+      }),
+    )
+  ).flat();
+  inline.sort((a, b) =>
+    byCreatedAt(parsedTime(a.created_at), parsedTime(b.created_at)),
+  );
+  const threadsByKey = new Map<string, ForgejoReviewComment[]>();
+  for (const comment of inline) {
+    const line =
+      comment.line ??
+      comment.original_line ??
+      comment.position ??
+      comment.original_position ??
+      0;
+    const key = `${comment.path ?? ""}#${line}`;
+    const list = threadsByKey.get(key) ?? [];
+    list.push(comment);
+    threadsByKey.set(key, list);
+  }
+  const threads: PullRequestReviewThread[] = [...threadsByKey].map(
+    ([key, list]) => {
+      const head = list[0]!;
+      const line =
+        head.line ?? head.original_line ?? head.position ?? undefined;
+      const shown = list.slice(0, THREAD_COMMENTS);
+      return {
+        id: `${prNumber}:${key}`,
+        path: head.path ?? "",
+        ...(line ? { line } : {}),
+        // Forgejo records who resolved a conversation on its comments.
+        resolved: list.some((comment) => Boolean(comment.resolver)),
+        ...(head.line == null && head.original_line != null
+          ? { outdated: true }
+          : {}),
+        ...boundedHunk(head.diff_hunk),
+        ...(head.html_url ? { url: head.html_url } : {}),
+        comments: shown.map((comment) => forgejoCommentOf(comment)),
+        ...(list.length > shown.length ? { truncated: true } : {}),
+      };
+    },
+  );
+  return {
+    ...(pull.head?.sha ? { headSha: pull.head.sha } : {}),
+    body: boundedBody(pull.body),
+    ...(pull.user?.login ? { author: pull.user.login } : {}),
+    ...parsedTime(pull.created_at),
+    assignees: (pull.assignees ?? [])
+      .map((user) => user?.login)
+      .filter((login): login is string => Boolean(login)),
+    requestedReviewers: {
+      users: (pull.requested_reviewers ?? [])
+        .map((user) => user?.login)
+        .filter((login): login is string => Boolean(login)),
+      teams: (pull.requested_reviewers_teams ?? [])
+        .map((team) => team?.name)
+        .filter((name): name is string => Boolean(name)),
+    },
+    timeline,
+    ...(comments.length >= CONVERSATION_ENTRIES ||
+    reviews.length >= CONVERSATION_ENTRIES
+      ? { timelineTruncated: true }
+      : {}),
+    threads: threads.slice(-CONVERSATION_THREADS),
+    ...(threads.length > CONVERSATION_THREADS
+      ? { threadsTotal: threads.length }
+      : {}),
+  };
 }
 
 /** One worktree's question to {@link GitHostingProvider.branchStatuses}. */
@@ -1183,9 +1636,17 @@ interface GithubOpenPull extends GithubGraphqlReviews {
   headRefOid?: string;
   baseRefName?: string;
   author?: { login?: string } | null;
+  assignees?: { nodes?: Array<{ login?: string } | null> };
   reviewRequests?: {
     totalCount?: number;
-    nodes?: Array<{ requestedReviewer?: { login?: string } | null } | null>;
+    nodes?: Array<{
+      requestedReviewer?: {
+        __typename?: string;
+        login?: string;
+        slug?: string;
+        combinedSlug?: string;
+      } | null;
+    } | null>;
   };
   commits?: {
     nodes?: Array<{
@@ -1201,7 +1662,8 @@ const GITHUB_OPEN_PULLS_QUERY = `query($owner: String!, $name: String!) {
       nodes {
         number title url isDraft updatedAt mergeable headRefName headRefOid baseRefName
         author { login }
-        reviewRequests(first: 100) { totalCount nodes { requestedReviewer { ... on User { login } } } }
+        assignees(first: 20) { nodes { login } }
+        reviewRequests(first: 100) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Team { slug combinedSlug } } } }
         ${GITHUB_REVIEW_FIELDS}
         commits(last: 1) { nodes { commit { oid ${GITHUB_ROLLUP_FIELDS} } } }
       }
@@ -1282,6 +1744,48 @@ async function githubUserReviewRequested(
   throw new Error(
     `GitHub still listed requested reviewers for #${prNumber} after ${REVIEW_REQUEST_PAGE_CAP} pages.`,
   );
+}
+
+/**
+ * The authenticated user's teams as lowercased `org/slug`, for telling a TEAM
+ * review request that is yours from one that is not. REST `/user/teams` works
+ * with the `repo` scope, unlike reading a team's organization in GraphQL, and
+ * it changes rarely: cached per token. `null` = could not be read, which makes
+ * every team request UNKNOWN rather than "not yours".
+ */
+const VIEWER_TEAMS_MS = 15 * 60_000;
+const viewerTeamsCache = new Map<
+  string,
+  { at: number; teams: Promise<Set<string> | null> }
+>();
+
+function githubViewerTeams(
+  config: GithubApiConfig,
+  signal: AbortSignal,
+): Promise<Set<string> | null> {
+  const cached = viewerTeamsCache.get(config.token);
+  if (cached && Date.now() - cached.at < VIEWER_TEAMS_MS) return cached.teams;
+  const teams = githubRequest<
+    Array<{ slug?: string; organization?: { login?: string } }>
+  >(config, "GET", "/user/teams", { query: { per_page: 100 }, signal }).then(
+    (res) =>
+      Array.isArray(res.data)
+        ? new Set(
+            res.data
+              .filter((team) => team.slug && team.organization?.login)
+              .map((team) =>
+                `${team.organization!.login}/${team.slug}`.toLowerCase(),
+              ),
+          )
+        : null,
+    () => {
+      // Do not pin a failure for the whole window.
+      viewerTeamsCache.delete(config.token);
+      return null;
+    },
+  );
+  viewerTeamsCache.set(config.token, { at: Date.now(), teams });
+  return teams;
 }
 
 async function githubOpenPullRequests(
@@ -1372,6 +1876,7 @@ async function githubOpenPullRequests(
           reviewRequested.add(pull.number);
       }),
     );
+  const myTeams = await githubViewerTeams(config, signal);
   return pulls.map((pull) => ({
     number: pull.number,
     url: pull.url,
@@ -1383,6 +1888,25 @@ async function githubOpenPullRequests(
     // verify would put someone else's PRs in your "needs you" list.
     mine: Boolean(login) && pull.author?.login === login,
     reviewRequested: reviewRequested.has(pull.number),
+    ...(login &&
+    (pull.assignees?.nodes ?? []).some((node) => node?.login === login)
+      ? { assignedToMe: true }
+      : {}),
+    // Unknown membership leaves the field out: absent is unknown, not none.
+    ...(myTeams
+      ? {
+          teamReviewRequests: (pull.reviewRequests?.nodes ?? [])
+            .map((node) => node?.requestedReviewer)
+            .filter(
+              (reviewer) =>
+                reviewer?.__typename === "Team" &&
+                reviewer.slug &&
+                reviewer.combinedSlug &&
+                myTeams.has(reviewer.combinedSlug.toLowerCase()),
+            )
+            .map((reviewer) => reviewer!.slug!),
+        }
+      : {}),
     ...(pull.isDraft === true ? { draft: true } : {}),
     ...updatedAtFragment(pull.updatedAt),
   }));
@@ -1769,6 +2293,9 @@ export function githubProvider(
         `${repoWebUrl}/commit/${refOid}`,
       );
     },
+    pullRequestConversation(prNumber) {
+      return githubPullRequestConversation(config, ref, prNumber, signal());
+    },
     async refChecks(refOid) {
       const summary = await githubRefChecks(
         config,
@@ -1909,8 +2436,46 @@ interface ForgejoPull {
   base?: { ref?: string };
   user?: { login?: string };
   requested_reviewers?: Array<{ login?: string }> | null;
+  requested_reviewers_teams?: Array<{ id?: number; name?: string }> | null;
+  assignees?: Array<{ login?: string }> | null;
   draft?: boolean;
   updated_at?: string;
+}
+
+/** Forgejo twin of {@link githubViewerTeams}: the user's team ids. */
+const forgejoTeamsCache = new Map<
+  string,
+  { at: number; teams: Promise<Set<number> | null> }
+>();
+
+function forgejoViewerTeams(
+  config: ForgejoApiConfig,
+  signal: AbortSignal,
+): Promise<Set<number> | null> {
+  const key = `${config.baseUrl}#${config.token ?? ""}`;
+  const cached = forgejoTeamsCache.get(key);
+  if (cached && Date.now() - cached.at < VIEWER_TEAMS_MS) return cached.teams;
+  const teams = forgejoRequest<Array<{ id?: number }>>(
+    config,
+    "GET",
+    "/user/teams",
+    { query: { limit: 100 }, signal },
+  ).then(
+    (res) =>
+      res && Array.isArray(res.data)
+        ? new Set(
+            res.data
+              .map((team) => team.id)
+              .filter((id): id is number => typeof id === "number"),
+          )
+        : null,
+    () => {
+      forgejoTeamsCache.delete(key);
+      return null;
+    },
+  );
+  forgejoTeamsCache.set(key, { at: Date.now(), teams });
+  return teams;
 }
 
 /**
@@ -2378,6 +2943,9 @@ export function forgejoProvider(
         total: summary.total,
       };
     },
+    pullRequestConversation(prNumber) {
+      return forgejoPullRequestConversation(config, repoApi, prNumber, signal);
+    },
     async refChecks(refOid) {
       const summary = await forgejoRefChecks(
         config,
@@ -2435,6 +3003,7 @@ export function forgejoProvider(
       ]);
       const pulls = requireData(res, "pull requests");
       if (!Array.isArray(pulls)) return null;
+      const myTeams = await forgejoViewerTeams(config, signal());
       return pulls.map((pull) => ({
         number: pull.number,
         url: pull.html_url,
@@ -2446,6 +3015,21 @@ export function forgejoProvider(
         reviewRequested:
           Boolean(login) &&
           (pull.requested_reviewers ?? []).some((r) => r?.login === login),
+        ...(login && (pull.assignees ?? []).some((a) => a?.login === login)
+          ? { assignedToMe: true }
+          : {}),
+        ...(myTeams
+          ? {
+              teamReviewRequests: (pull.requested_reviewers_teams ?? [])
+                .filter(
+                  (team) =>
+                    typeof team?.id === "number" &&
+                    myTeams.has(team.id) &&
+                    team.name,
+                )
+                .map((team) => team.name!),
+            }
+          : {}),
         ...(pull.draft === true || /^(?:WIP:|\[WIP\])/i.test(pull.title)
           ? { draft: true }
           : {}),

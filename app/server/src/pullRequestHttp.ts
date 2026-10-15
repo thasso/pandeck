@@ -35,6 +35,7 @@ import {
   readPullRequestInventorySnapshot,
 } from "./pullRequestInventorySnapshot.ts";
 import { refreshPullRequestInventorySnapshot } from "./pullRequestInventorySync.ts";
+import { readPullRequestConversation } from "./pullRequestConversation.ts";
 import { checkoutPullRequestFromView } from "./pullRequestViewCheckout.ts";
 import {
   checkPullRequestFromView,
@@ -60,6 +61,10 @@ export async function handlePullRequestApi(
   }
   if (url.pathname === "/api/pull-requests/checkout") {
     await handleCheckout(req, res, headers);
+    return;
+  }
+  if (url.pathname === "/api/pull-requests/conversation") {
+    await handleConversation(req, res, url, headers);
     return;
   }
   if (url.pathname !== "/api/pull-requests") {
@@ -164,6 +169,42 @@ async function handleCheckout(
   }
   await answer(req, res, headers, () =>
     runThenRefreshInventory(() => checkoutPullRequestFromView(request)),
+  );
+}
+
+/**
+ * `GET /api/pull-requests/conversation` — the detail page's live read of one
+ * pull request's description, conversation, threads and checks, addressed by
+ * the same four components as the actions (query parameters). `fresh=1`
+ * skips the short server cache.
+ */
+async function handleConversation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  headers: HeaderFactory,
+): Promise<void> {
+  if (req.method !== "GET") {
+    json(req, res, headers, 405, { error: "Method not allowed" });
+    return;
+  }
+  let request: PullRequestViewCheckRequest;
+  try {
+    const number = Number(url.searchParams.get("number"));
+    request = parseIdentity({
+      projectId: url.searchParams.get("projectId") ?? undefined,
+      provider: url.searchParams.get("provider") ?? undefined,
+      repositoryKey: url.searchParams.get("repositoryKey") ?? undefined,
+      number: Number.isFinite(number) ? number : undefined,
+    });
+  } catch (err) {
+    json(req, res, headers, 400, { error: errorText(err) });
+    return;
+  }
+  await answer(req, res, headers, () =>
+    readPullRequestConversation(request, {
+      fresh: url.searchParams.get("fresh") === "1",
+    }),
   );
 }
 

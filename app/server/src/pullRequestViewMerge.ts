@@ -149,6 +149,23 @@ async function resolve(
   };
 }
 
+/**
+ * The provider for this identity, through the same resolution the merge and
+ * the check use — so a read cannot describe a different repository than the
+ * actions act on. Throws `PullRequestViewMergeError` (404) when nothing local
+ * publishes there.
+ */
+export async function resolvePullRequestProvider(
+  request: PullRequestViewCheckRequest,
+  operations: PullRequestViewMergeOperations = defaultOperations,
+): Promise<{ provider: GitHostingProvider; identityKey: string }> {
+  const { repository } = await resolve(request, operations);
+  return {
+    provider: repository.provider,
+    identityKey: repository.identityKey,
+  };
+}
+
 export async function mergePullRequestFromView(
   request: PullRequestViewMergeRequest,
   operations: PullRequestViewMergeOperations = defaultOperations,

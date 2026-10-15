@@ -493,11 +493,18 @@ function groupCandidates(
   };
 
   for (const list of lists) {
-    // Selection: a pull request is listed when it is YOURS or when your review
-    // was asked for. Everything else open on the repository is the Project
-    // page's business, not this view's.
+    // Selection: a pull request is listed when it is YOURS, when you are
+    // assigned, or when your review was asked for — of you, or of a team you
+    // are in. Everything else open on the repository is the Project page's
+    // business, not this view's.
     for (const pull of list.pullRequests) {
-      if (!pull.mine && !pull.reviewRequested) continue;
+      if (
+        !pull.mine &&
+        !pull.reviewRequested &&
+        !pull.assignedToMe &&
+        !pull.teamReviewRequests?.length
+      )
+        continue;
       const identity = pullRequestIdentity(
         list.provider,
         list.repoWebUrl,
@@ -670,6 +677,10 @@ async function inventoryItem(
     ...(pull.author ? { author: pull.author } : {}),
     mine: pull.mine,
     reviewRequested: pull.reviewRequested,
+    ...(pull.assignedToMe ? { assignedToMe: true } : {}),
+    ...(pull.teamReviewRequests
+      ? { teamReviewRequests: pull.teamReviewRequests }
+      : {}),
     ...(pull.draft ? { draft: true } : {}),
     ...(pull.updatedAt !== undefined ? { updatedAt: pull.updatedAt } : {}),
     state: "open",

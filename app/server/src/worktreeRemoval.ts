@@ -84,7 +84,7 @@ import {
   worktreeIdleRefusal,
 } from "./worktrees/idleWorktrees.ts";
 import { baseBranchTarget } from "./worktrees/worktreeSync.ts";
-import { invalidatePullRequestInventorySnapshot } from "./pullRequestInventorySync.ts";
+import { forgetWorktreeInPullRequestInventory } from "./pullRequestInventorySync.ts";
 
 /** The side-effecting seams, injectable exactly like `PullRequestActionOperations`. */
 export interface WorktreeRemovalOperations {
@@ -100,6 +100,8 @@ export interface WorktreeRemovalOperations {
   ): Promise<void>;
   settleSessions(worktreeId: string): Promise<void>;
   stopTrackedWork?(worktreeId: string): Promise<void>;
+  /** Drop what the pull request inventory joined to a removed checkout. */
+  inventoryChanged?(worktreeId: string): void;
 }
 
 const STOP_TRACKED_WORK_BUDGET_MS = 3_000;
@@ -139,6 +141,7 @@ const defaultOperations: WorktreeRemovalOperations = {
   removeWorktree,
   settleSessions: settleSessionsForRemovedWorktree,
   stopTrackedWork: stopTrackedWorkForWorktree,
+  inventoryChanged: forgetWorktreeInPullRequestInventory,
 };
 
 /** Injectable seams for the full retire sequence. */
@@ -159,7 +162,7 @@ export interface WorktreeRetireOperations {
   settleSessions(worktreeId: string): Promise<void>;
   stopTrackedWork?(worktreeId: string): Promise<void>;
   /** Drop a cleanup item whose local worktree no longer exists. */
-  inventoryChanged?(): void;
+  inventoryChanged?(worktreeId: string): void;
 }
 
 const defaultRetireOperations: WorktreeRetireOperations = {
@@ -176,7 +179,7 @@ const defaultRetireOperations: WorktreeRetireOperations = {
   removeWorktree,
   settleSessions: settleSessionsForRemovedWorktree,
   stopTrackedWork: stopTrackedWorkForWorktree,
-  inventoryChanged: invalidatePullRequestInventorySnapshot,
+  inventoryChanged: forgetWorktreeInPullRequestInventory,
 };
 
 interface GuardedRemovalOperations {
@@ -345,7 +348,7 @@ export async function retireWorktree(
     });
     if (cleanup.status === "refused")
       return refused(cleanup.refusal, cleanup.kind);
-    operations.inventoryChanged?.();
+    operations.inventoryChanged?.(row.id);
     invalidateIdleWorktrees();
     return {
       worktreeId: row.id,
@@ -422,7 +425,7 @@ export async function retireWorktree(
   );
   if (removal.status === "refused")
     return refused(removal.refusal, removal.kind);
-  operations.inventoryChanged?.();
+  operations.inventoryChanged?.(row.id);
   invalidateIdleWorktrees();
   return {
     worktreeId: row.id,
@@ -467,7 +470,11 @@ export async function removeWorktreeAndSettleSessions(
       blockersAreRefusals: false,
     },
   );
-  return result.status === "refused" ? result.refusal : undefined;
+  if (result.status === "refused") return result.refusal;
+  // Plain Remove used to leave a merged pull request listed under Needs
+  // cleanup until the next background build, minutes later.
+  operations.inventoryChanged?.(worktreeId);
+  return undefined;
 }
 
 function removalRefusal(blocked: string): string {
