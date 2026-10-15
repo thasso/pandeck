@@ -860,6 +860,15 @@ staging** mode: staged references are visible and removable. The first send
 commits the initial context envelope; later attachments are recorded as
 turn-level context events, not merged into the initial envelope.
 
+A project-only draft defaults to that project's main checkout and the Developer
+persona, including when the worktree list arrives after the project is staged.
+This default uses the main-checkout marker, not the branch name or activity
+order. It applies only before any runtime or other context has been staged;
+explicit persona/worktree choices, Tasks, documents and review handoffs keep
+their selections. Untouched defaults follow a change of project to its own main
+checkout. Removing the default worktree does not select it again. A project
+without an available main checkout keeps the ordinary Assistant draft.
+
 The draft has no header on any layout — it is visibly a new session, and the
 header would only say so — until that first send. From acceptance until the
 dedicated naming agent settles, every surface uses the stable **Unlabeled

@@ -1093,6 +1093,12 @@ function AppContent() {
   const [pendingStart, setPendingStart] = useState<StagedSessionRecord | null>(
     null,
   );
+  // Only this exact, untouched record is a project default. A runtime restage
+  // replaces it; a manual worktree pick explicitly spends it below.
+  const projectDefaultRef = useRef<{
+    record: StagedSessionRecord;
+    worktreeId: string;
+  } | null>(null);
   /**
    * A first send is armed and the server has not answered yet.
    *
@@ -1191,7 +1197,10 @@ function AppContent() {
    * left, and re-issuing it would carry that draft's Task, worktree and
    * project into the new one.
    */
-  const beginFreshDraft = useCallback(() => setStagedSend(null), []);
+  const beginFreshDraft = useCallback(() => {
+    projectDefaultRef.current = null;
+    setStagedSend(null);
+  }, []);
   /** Structured review threads staged for the new-session composer; the first send performs the handoff. */
   const [pendingWorktreeReview, setPendingWorktreeReview] =
     useState<PendingWorktreeReview | null>(null);
@@ -3210,7 +3219,16 @@ function AppContent() {
       // cancels it: there is then no repository to create it in.
       const dropsNewWorktree = pendingNewWorktree && !norm;
       if (dropsNewWorktree) setPendingNewWorktree(false);
-      if (
+      const dropsProjectDefault =
+        dropsWorktree &&
+        pendingStart === projectDefaultRef.current?.record &&
+        pendingWorktreeContext === projectDefaultRef.current?.worktreeId;
+      if (dropsProjectDefault) {
+        // Changing projects discards our default, not a user pick. Leave the
+        // next project-only draft eligible for its own main checkout.
+        projectDefaultRef.current = null;
+        setPendingStart(null);
+      } else if (
         (dropsWorktree || dropsNewWorktree) &&
         (pendingStart ?? stagedStart)?.agentType === "developer"
       )
@@ -3242,6 +3260,7 @@ function AppContent() {
       /** Passed straight to `switchStagedAgentType` — see its `fresh`. */
       opts?: { fresh?: boolean },
     ) => {
+      projectDefaultRef.current = null;
       setPendingFileContext(null);
       if (
         pendingWorktreeReview &&
@@ -3284,6 +3303,7 @@ function AppContent() {
    */
   const stageNewWorktree = useCallback(
     (staged: boolean) => {
+      projectDefaultRef.current = null;
       setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setPendingWorktreeContext(null);
@@ -4148,6 +4168,57 @@ function AppContent() {
   // Knowledge entry / comment-review bundle) shows on a fresh new-chat surface.
   const showContextPicker =
     isNewChatRoute && !displayHasUserPrompt && !sendInFlight;
+  // A project-only draft starts in its main checkout as Developer. Wait for
+  // the worktree subscription if necessary, but never replace a staged runtime
+  // or object handoff. Writing the record also makes this a one-time default:
+  // removing the worktree or changing persona afterwards remains the user's pick.
+  useEffect(() => {
+    if (
+      !showContextPicker ||
+      stagedSend ||
+      !pendingProjectContext ||
+      pendingStart ||
+      pendingWorktreeContext ||
+      pendingNewWorktree ||
+      pendingTaskAttach ||
+      pendingFileContext ||
+      pendingWorktreeReview ||
+      sessionReviewDraft ||
+      !availableAgentTypes.includes("developer") ||
+      !stagedStart
+    )
+      return;
+    const main = state.worktrees?.find(
+      (worktree) =>
+        worktree.projectId === pendingProjectContext &&
+        worktree.isMain &&
+        !worktree.removedAt,
+    );
+    if (!main) return;
+    const record = stagedSessionRecord({
+      ...stagedStart,
+      id: createClientId(),
+      agentType: "developer",
+      mode: stagedStart.mode,
+    });
+    projectDefaultRef.current = { record, worktreeId: main.id };
+    setPendingWorktreeContext(main.id);
+    setPendingStart(record);
+  }, [
+    showContextPicker,
+    stagedSend,
+    pendingProjectContext,
+    pendingStart,
+    pendingWorktreeContext,
+    pendingNewWorktree,
+    pendingTaskAttach,
+    pendingFileContext,
+    pendingWorktreeReview,
+    sessionReviewDraft,
+    availableAgentTypes,
+    stagedStart,
+    state.worktrees,
+  ]);
   // Developer sessions require a worktree (server-enforced): while one is
   // staged without it, sending is blocked and the composer hint/auto-open
   // steer to the Worktree picker. A staged "+ New worktree" satisfies it — the
