@@ -12,7 +12,7 @@ import { Toaster } from "./ui/sonner.tsx";
 /**
  * @component ToastViewport
  * @purpose Renders transient global toasts from the `toast` store through
- *   shadcn's Sonner toaster, centred near the bottom above the composer.
+ *   shadcn's Sonner toaster, top-centred below the header and status pill.
  * @useWhen Mounted once at the app root. Trigger toasts with `showToast(...)`
  *   (or `copyWithToast`) from anywhere; do not mount this more than once.
  * @intent The store stays the owner of timing, keys and replacement
@@ -59,8 +59,9 @@ export function ToastViewport() {
   }, [toasts]);
   return (
     <Toaster
-      position="bottom-center"
-      offset={{ bottom: "calc(5.5rem + var(--app-safe-area-bottom, 0px))" }}
+      position="top-center"
+      offset={{ top: "calc(3.5rem + var(--app-safe-area-top, 0px))" }}
+      mobileOffset={{ top: "calc(3.5rem + var(--app-safe-area-top, 0px))" }}
       style={{ zIndex: 60 }}
     />
   );
