@@ -3,6 +3,46 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.58.0] - 2026-10-15
+
+### Upgrade notes
+
+- This release adds three SQLite migrations (`0082`–`0084`, interrupted-run
+  detail and background delivery handling). Back up `DATA_DIR` before upgrading
+  if you may need to roll back to 0.57.0, because an older version does not
+  reverse them.
+- Browser-local state moved from `localStorage` to IndexedDB
+  ([PR #140](https://github.com/thasso/pandeck/pull/140)).
+
+### Other changes
+
+- Unify the Agent row and preserve roles across runtime picks
+  ([PR #146](https://github.com/thasso/pandeck/pull/146))
+- Tasks: show task links and blocked state in the UI
+  ([PR #145](https://github.com/thasso/pandeck/pull/145))
+- Tasks: blocks / relates links between Tasks (server + agent tools)
+  ([PR #144](https://github.com/thasso/pandeck/pull/144))
+- Support agent model lists and role-preserving runtime proposals
+  ([PR #143](https://github.com/thasso/pandeck/pull/143))
+- Move browser-local state off localStorage into an IndexedDB store
+  ([PR #140](https://github.com/thasso/pandeck/pull/140))
+- Rework the Pull Requests list and detail page
+  ([PR #142](https://github.com/thasso/pandeck/pull/142))
+- Preserve interrupted background handling for explicit recovery
+  ([PR #127](https://github.com/thasso/pandeck/pull/127))
+- Include linked Tasks in Claude session state
+  ([PR #141](https://github.com/thasso/pandeck/pull/141))
+- Prevent duplicate WebSocket errors from crashing the server
+  ([PR #139](https://github.com/thasso/pandeck/pull/139))
+- Default project-only drafts to main checkout
+  ([PR #138](https://github.com/thasso/pandeck/pull/138))
+- Move global toasts away from bottom controls
+  ([PR #137](https://github.com/thasso/pandeck/pull/137))
+- Restore wrapping in Markdown table cells
+  ([PR #136](https://github.com/thasso/pandeck/pull/136))
+- Anchor chat cards at their tool calls
+  ([PR #134](https://github.com/thasso/pandeck/pull/134))
+
 ## [0.57.0] - 2026-10-14
 
 ### Other changes
