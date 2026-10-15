@@ -3,7 +3,7 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "version": "0.58.0",
+  "version": "0.58.1",
   "scripts": {
     "check:apns": "tsx src/checkApnsCredential.ts",
     "check:prompts": "tsx src/checkPromptBudgets.ts",
