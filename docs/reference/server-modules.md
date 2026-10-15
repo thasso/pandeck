@@ -1448,12 +1448,17 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - `initiativeLayout.ts` lays out the Initiative map: a structure projection of
   the graph whose digest is the layout key, the plan of lanes, stubs, the
   milestone column and collapsed epics, two elkjs passes (columns and order,
-  then routing at the planned rows, repeated while a lane needs more room), and
-  a bounded cache whose entries are shared by concurrent reads.
-  `readInitiativeMap` answers `getInitiative` in `connection.ts`.
-  `initiativeLayoutRunner.ts` runs elkjs in `initiativeLayoutWorker.ts`: one
-  worker thread started on demand, one job at a time with a time limit, ended
-  when idle.
+  then routing at the planned rows, repeated while a lane needs more room).
+  Planning is linear in members and links, since it runs on the event loop.
+  Layouts being computed are kept apart from finished ones: one per drawing,
+  admitted up to a global and a per-map limit, each with one deadline, and
+  aborted when superseded or deleted. Finished ones sit in a bounded LRU, where
+  a transient failure expires after a short wait. `readInitiativeMap` answers
+  `getInitiative` in `connection.ts`. `initiativeLayoutRunner.ts` runs elkjs in
+  `initiativeLayoutWorker.ts`: one worker thread started on demand, ended when
+  idle, one job at a time from a bounded queue, each job with a deadline and a
+  per-pass limit. Synchronous worker start or dispatch failures fail their job
+  without leaving the queue.
 - `subagentRegistry.ts` narrows durable thread and held-thread run projections
   into bounded summaries, revision sidecars and keyed detail reads. `hub.ts`
   coalesces the store's post-commit touched-id seam into registry events and

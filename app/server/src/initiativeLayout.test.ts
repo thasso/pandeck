@@ -9,6 +9,8 @@
 import assert from "node:assert/strict";
 import { afterAll, beforeEach, expect, test, vi } from "vitest";
 import type {
+  InitiativeDetail,
+  InitiativeGraphNode,
   InitiativeLayout,
   InitiativeLayoutBox,
   InitiativeLayoutNode,
@@ -22,23 +24,39 @@ import {
   setInitiativeMilestones,
   subscribeInitiativeChanges,
 } from "./initiatives.ts";
-import { readInitiativeMap } from "./initiativeLayout.ts";
+import {
+  initiativeLayoutCacheState,
+  planInitiativeLayoutForTests,
+  readInitiativeMap,
+} from "./initiativeLayout.ts";
 import {
   runElkLayout,
   stopInitiativeLayoutWorker,
 } from "./initiativeLayoutRunner.ts";
 import { archiveTask, createTask, updateTask } from "./tasks.ts";
 
+/** The unmocked runner, for a test that wraps one call in a fault. */
+const real = vi.hoisted(() => ({
+  run: undefined as unknown as typeof import("./initiativeLayoutRunner.ts").runElkLayout,
+}));
+
 vi.mock("./initiativeLayoutRunner.ts", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("./initiativeLayoutRunner.ts")>();
+  real.run = actual.runElkLayout;
   return { ...actual, runElkLayout: vi.fn(actual.runElkLayout) };
 });
 
 const elkRuns = vi.mocked(runElkLayout);
 
+/** Moves the server's clock forward, as the cache and the runner read it. */
+let skew = 0;
+const realNow = Date.now.bind(Date);
+vi.spyOn(Date, "now").mockImplementation(() => realNow() + skew);
+
 beforeEach(() => {
   elkRuns.mockClear();
+  skew = 0;
 });
 afterAll(() => stopInitiativeLayoutWorker());
 
@@ -762,3 +780,315 @@ for (const seed of [3, 7, 11, 19, 23, 31, 42, 57, 64, 77, 88, 99])
     const layout = await mapOf(id, random() < 0.4 ? [pick(parents)] : []);
     assertValidGeometry(layout);
   });
+
+/* --------------------------- failure and capacity -------------------------- */
+
+test("a transient failure is laid out again after a short wait, with no write", async () => {
+  const { initiativeId, ids } = hostedLabs();
+  // The worker is lost while the first pass runs.
+  const pending = readInitiativeMap(initiativeId);
+  stopInitiativeLayoutWorker();
+  const failed = await pending;
+  assert.ok(failed.item, "the graph still answers");
+  assert.match(failed.layoutError ?? "", /stopped/);
+
+  // Rereads right after it answer the same, without piling up work.
+  elkRuns.mockClear();
+  assert.equal(
+    (await readInitiativeMap(initiativeId)).layoutError,
+    failed.layoutError,
+  );
+  assert.equal(elkRuns.mock.calls.length, 0);
+
+  // A little later, a reread lays it out again: no structural write, no
+  // restart; a status change in between does not get in the way.
+  updateTask(ids.SDC5!, { status: "doing", actor: { kind: "user" } });
+  skew += 6_000;
+  const recovered = await readInitiativeMap(initiativeId);
+  assert.equal(recovered.layoutError, undefined);
+  assert.ok(recovered.layout);
+  assert.ok(elkRuns.mock.calls.length > 0, "laid out afresh");
+  elkRuns.mockClear();
+  const kept = await readInitiativeMap(initiativeId);
+  assert.equal(kept.layout, recovered.layout, "and kept like any layout");
+  assert.equal(elkRuns.mock.calls.length, 0);
+});
+
+test("a pass past its time limit is transient too, and recovers", async () => {
+  const { initiativeId } = hostedLabs();
+  elkRuns.mockImplementationOnce((graph, options) =>
+    real.run(graph, { ...options, passLimitMs: 1 }),
+  );
+  const failed = await readInitiativeMap(initiativeId);
+  assert.match(
+    failed.layoutError ?? "",
+    /right now: The layout took longer than/,
+  );
+  skew += 6_000;
+  assert.ok((await readInitiativeMap(initiativeId)).layout);
+});
+
+test("an ELK error is kept: the same graph would fail the same way", async () => {
+  const { initiativeId } = hostedLabs();
+  elkRuns.mockImplementationOnce(() =>
+    Promise.reject(new Error("Referenced shape does not exist")),
+  );
+  const failed = await readInitiativeMap(initiativeId);
+  assert.match(
+    failed.layoutError ?? "",
+    /could not be laid out: Referenced shape/,
+  );
+  skew += 600_000;
+  elkRuns.mockClear();
+  assert.equal(
+    (await readInitiativeMap(initiativeId)).layoutError,
+    failed.layoutError,
+  );
+  assert.equal(elkRuns.mock.calls.length, 0);
+});
+
+/** Collapsed sets of the fixture, each a different drawing. */
+function drawings(ids: Record<string, string>): string[][] {
+  return [
+    [],
+    [ids.SDC!],
+    [ids.LAB!],
+    [ids.SRS!],
+    [ids.SDC!, ids.LAB!],
+    [ids.LAB!, ids.SRS!],
+  ];
+}
+
+test("a burst of one map's drawings is admitted up to its share; the rest are refused, recoverably", async () => {
+  const { initiativeId, ids } = hostedLabs();
+  const reads = await Promise.all(
+    drawings(ids).map((collapsed) =>
+      readInitiativeMap(initiativeId, collapsed),
+    ),
+  );
+  const drawn = reads.filter((read) => read.layout);
+  const refused = reads.filter((read) => read.layoutError);
+  assert.equal(drawn.length, 3, "three drawings of one map at a time");
+  assert.equal(refused.length, 3);
+  for (const read of refused) {
+    assert.match(read.layoutError!, /Too many drawings of this map/);
+    assert.ok(read.item, "a refusal still answers the graph");
+  }
+  assert.equal(
+    initiativeLayoutCacheState().pending,
+    0,
+    "nothing is left running",
+  );
+  // A refusal is not kept: the same drawing lays out on the next read.
+  const again = await readInitiativeMap(initiativeId, drawings(ids)[5]!);
+  assert.ok(again.layout);
+});
+
+test("all maps together are admitted up to the global limit", async () => {
+  const maps = [
+    hostedLabs("Burst A"),
+    hostedLabs("Burst B"),
+    hostedLabs("Burst C"),
+  ];
+  const reads = await Promise.all(
+    maps.flatMap(({ initiativeId, ids }) =>
+      drawings(ids)
+        .slice(0, 3)
+        .map((collapsed) => readInitiativeMap(initiativeId, collapsed)),
+    ),
+  );
+  const refused = reads.filter((read) => read.layoutError);
+  assert.equal(reads.length - refused.length, 8);
+  assert.equal(refused.length, 1);
+  assert.match(refused[0]!.layoutError!, /Too many maps are being laid out/);
+  assert.equal(initiativeLayoutCacheState().pending, 0);
+});
+
+test("a drawing being laid out is shared, however many finished layouts push it out of the cache", async () => {
+  const { initiativeId } = hostedLabs();
+  let release!: () => void;
+  elkRuns.mockImplementationOnce(
+    (graph, options) =>
+      new Promise((resolve, reject) => {
+        release = () => void real.run(graph, options).then(resolve, reject);
+      }),
+  );
+  const first = readInitiativeMap(initiativeId);
+  for (let n = 0; n < 70; n += 1) {
+    const task = createTask({
+      title: `Filler ${n}`,
+      source: { createdBy: "user" },
+    });
+    await mapOf(
+      String(
+        createInitiative({ title: `Filler ${n}`, taskIds: [task.id] })
+          .initiative.id,
+      ),
+    );
+  }
+  assert.deepEqual(initiativeLayoutCacheState(), { pending: 1, settled: 64 });
+  const second = readInitiativeMap(initiativeId);
+  assert.equal(
+    initiativeLayoutCacheState().pending,
+    1,
+    "no second computation",
+  );
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.ok(a.layout);
+  assert.equal(b.layout, a.layout, "one computation answered both");
+});
+
+test("superseded and deleted drawings are let go at once", async () => {
+  const { initiativeId, ids } = hostedLabs();
+  const before = readInitiativeMap(initiativeId);
+  assert.equal(initiativeLayoutCacheState().pending, 1);
+  updateTask(ids.SRS8!, {
+    addLinks: [{ type: "blocked-by", taskId: ids.SDC9! }],
+  });
+  const after = readInitiativeMap(initiativeId);
+  assert.equal(
+    initiativeLayoutCacheState().pending,
+    1,
+    "the old structure is dropped",
+  );
+  const [a, b] = await Promise.all([before, after]);
+  assert.ok(a.layout && a.layout === b.layout, "both answer the new structure");
+  assert.ok(
+    a.layout.edges.some(
+      (edge) => edge.from === ids.SDC9 && edge.to === ids.SRS8,
+    ),
+  );
+
+  const doomed = readInitiativeMap(initiativeId, [ids.LAB!]);
+  assert.equal(initiativeLayoutCacheState().pending, 1);
+  deleteInitiative(initiativeId);
+  assert.deepEqual(await doomed, { item: null });
+  assert.equal(initiativeLayoutCacheState().pending, 0);
+});
+
+/* ------------------------------ large maps -------------------------------- */
+
+function synthetic(
+  nodes: InitiativeGraphNode[],
+  rootIds: string[],
+  edges: Array<{ from: string; to: string }> = [],
+): InitiativeDetail {
+  return {
+    id: "1",
+    title: "Synthetic",
+    state: "active",
+    progress: {
+      total: nodes.length,
+      done: 0,
+      doing: 0,
+      startable: 0,
+      blocked: 0,
+    },
+    sessionIds: [],
+    sessionCount: 0,
+    updatedAt: 0,
+    description: "",
+    createdAt: 0,
+    rootIds,
+    nodes,
+    externalBlockers: [],
+    edges,
+    milestoneIds: [],
+  };
+}
+
+function loneRoots(count: number): InitiativeDetail {
+  const nodes = Array.from({ length: count }, (_, n): InitiativeGraphNode => ({
+    id: String(n + 1),
+    title: "Lone",
+    status: "todo",
+    projectId: `p${n % 7}`,
+  }));
+  const edges = nodes
+    .slice(1)
+    .map((node, n) => ({ from: String(n + 1), to: node.id }));
+  return synthetic(
+    nodes,
+    nodes.map((node) => node.id),
+    edges,
+  );
+}
+
+/** One root, `width` children each with a chain of `depth` below. */
+function tree(width: number, depth: number): InitiativeDetail {
+  const nodes: InitiativeGraphNode[] = [
+    { id: "1", title: "Epic", status: "todo" },
+  ];
+  let next = 2;
+  for (let w = 0; w < width; w += 1) {
+    let parent = "1";
+    for (let d = 0; d < depth; d += 1) {
+      const id = String(next++);
+      nodes.push({ id, title: "Step", status: "todo", parentId: parent });
+      parent = id;
+    }
+  }
+  return synthetic(nodes, ["1"]);
+}
+
+test("an oversized map is refused after linear planning work", () => {
+  const small = planInitiativeLayoutForTests(loneRoots(6_000));
+  const large = planInitiativeLayoutForTests(loneRoots(24_000));
+  assert.match(small.error ?? "", /6000 nodes, more than the 1000/);
+  assert.match(large.error ?? "", /24000 nodes/);
+  // Members plus links, a constant number of times over.
+  assert.ok(
+    small.steps <= 8 * (6_000 + 6_000),
+    `${small.steps} steps for 6,000`,
+  );
+  assert.ok(
+    large.steps / small.steps < 4.5,
+    `four times the map took ${(large.steps / small.steps).toFixed(2)} times the work`,
+  );
+});
+
+test("a huge tree collapsed into a few nodes plans linearly, however deep", () => {
+  const wide = planInitiativeLayoutForTests(tree(20_000, 1), ["1"]);
+  assert.deepEqual(
+    [wide.nodes, wide.collapsed, wide.error],
+    [1, ["1"], undefined],
+  );
+  const deep = planInitiativeLayoutForTests(tree(1, 20_000), ["1"]);
+  assert.deepEqual(
+    [deep.nodes, deep.collapsed, deep.error],
+    [1, ["1"], undefined],
+  );
+  assert.ok(
+    deep.steps <= 8 * 20_001,
+    `${deep.steps} steps for a chain of 20,000`,
+  );
+  const open = planInitiativeLayoutForTests(tree(1, 20_000));
+  assert.match(open.error ?? "", /20001 nodes/);
+});
+
+test("a map over the node limit answers its graph without any layout, and collapsing it draws it", async () => {
+  const epic = createTask({
+    title: "Huge epic",
+    source: { createdBy: "user" },
+  }).id;
+  for (let n = 0; n < 1_100; n += 1)
+    createTask({
+      title: `Step ${n}`,
+      source: { createdBy: "user" },
+      parentId: epic,
+    });
+  const id = String(
+    createInitiative({ title: "Huge", taskIds: [epic] }).initiative.id,
+  );
+  const open = await readInitiativeMap(id);
+  assert.equal(open.item?.nodes.length, 1_101);
+  assert.match(
+    open.layoutError ?? "",
+    /1101 nodes, more than the 1000 it lays out/,
+  );
+  assert.equal(elkRuns.mock.calls.length, 0);
+  const folded = await mapOf(id, [epic]);
+  assert.equal(folded.nodes.length, 1);
+  assert.equal(folded.nodes[0]!.progress?.total, 1_100);
+}, 120_000);

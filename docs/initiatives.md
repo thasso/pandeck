@@ -274,8 +274,14 @@ structural: sessions linked to member Tasks, nothing parsed from titles.
     archive change keeps the layout while the Initiative's revision, which they
     do move, still dates the graph. The read checks the structure again once the
     layout is done and lays it out anew if it moved.
-  - A layout that cannot be computed (over 1,000 nodes, an ELK error, or past
-    the worker's 20 s limit per pass) leaves the graph in the answer and says
-    why in `layoutError`.
+  - A layout that cannot be computed leaves the graph in the answer and says why
+    in `layoutError`. Over 1,000 drawn nodes, or an ELK error, the answer stands
+    until the structure changes. Everything else is transient and a read 5 s
+    later lays the map out again, with no write: a pass past its 20 s limit, a
+    layout past its 60 s deadline (its waits for the worker included), a worker
+    that was lost or could not start, or a refusal because too many layouts are
+    running (8 at once, 3 of them for one map). One layout runs per drawing
+    however many reads wait on it, and a newer structure or a deleted Initiative
+    lets the older drawings go before their next pass.
 - **Sidebar location.** Initiatives are a group at the top of the Projects
   section, since they sit above Projects (`app/web/docs/ui-shell.md`).

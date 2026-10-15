@@ -36,7 +36,11 @@ import {
   initiativeRevision,
   readInitiative,
 } from "./initiatives.ts";
-import { runElkLayout } from "./initiativeLayoutRunner.ts";
+import {
+  runElkLayout,
+  TransientLayoutError,
+  type RunElkLayoutOptions,
+} from "./initiativeLayoutRunner.ts";
 
 /** Bumped whenever the drawing changes for the same structure. */
 const LAYOUT_VERSION = 1;
@@ -61,6 +65,13 @@ const ROUTING_ROUNDS = 6;
 const MAX_LAYOUT_NODES = 1_000;
 /** Layouts kept, across Initiatives and collapsed sets, least recent out. */
 const CACHE_LIMIT = 64;
+/** Layouts computed at once, over all maps and for one map. */
+const MAX_PENDING_LAYOUTS = 8;
+const MAX_PENDING_PER_INITIATIVE = 3;
+/** All of one layout's passes, its waits for the worker included. */
+const LAYOUT_DEADLINE_MS = 60_000;
+/** How long a transient failure answers before a read lays out again. */
+const TRANSIENT_RETRY_MS = 5_000;
 /** Reads that found the structure changed under them before giving up. */
 const MAX_ATTEMPTS = 3;
 
@@ -147,18 +158,27 @@ interface LayoutTarget {
   error?: string;
 }
 
+/**
+ * Loop iterations spent planning, for tests: planning runs on the event loop,
+ * so its work must stay linear in members and links, however large the map.
+ */
+let planSteps = 0;
+
+function structureKeyOf(structure: LayoutStructure): string {
+  return digest(JSON.stringify(structure));
+}
+
 function layoutTarget(
   detail: InitiativeDetail,
   requested: readonly string[],
 ): LayoutTarget {
   const structure = structureOf(detail);
-  const structureKey = digest(JSON.stringify(structure));
-  const collapsed = appliedCollapse(structure, requested);
-  const plan = planOf(structure, collapsed);
+  const structureKey = structureKeyOf(structure);
+  const plan = planOf(structure, requested);
   return {
     structureKey,
-    key: digest(`${structureKey}|${collapsed.join(",")}`),
-    collapsed,
+    key: digest(`${structureKey}|${plan.collapsed.join(",")}`),
+    collapsed: plan.collapsed,
     plan,
     ...(plan.nodes.length > MAX_LAYOUT_NODES
       ? {
@@ -168,111 +188,130 @@ function layoutTarget(
   };
 }
 
-/** Each of `id`'s member ancestors, nearest first; a stored cycle ends the walk. */
-function ancestorsOf(
-  parent: ReadonlyMap<string, string | undefined>,
-  id: string,
-): string[] {
-  const seen = new Set([id]);
-  const result: string[] = [];
-  for (let at = parent.get(id); at !== undefined; at = parent.get(at)) {
-    if (seen.has(at)) break;
-    seen.add(at);
-    result.push(at);
-  }
-  return result;
+/** Plan a detail as a read would, for tests: the drawn size and the work it took. */
+export function planInitiativeLayoutForTests(
+  detail: InitiativeDetail,
+  requested: readonly string[] = [],
+): { nodes: number; collapsed: string[]; error?: string; steps: number } {
+  planSteps = 0;
+  const target = layoutTarget(detail, requested);
+  return {
+    nodes: target.plan.nodes.length,
+    collapsed: target.collapsed,
+    ...(target.error !== undefined ? { error: target.error } : {}),
+    steps: planSteps,
+  };
 }
 
 /**
- * The requested epics that collapse anything: a member with member children,
- * not under another collapsed one. Ascending by id, so equal sets are one key.
+ * What is drawn, in one pass over the members and one over the links, so a
+ * map too large to lay out is refused without quadratic work on the event
+ * loop. Lanes follow the graph read: depth-first from each root in the user's
+ * order; only a stored hierarchy cycle leaves a member for a lane of its own.
+ *
+ * The same walk applies the collapsed set: a requested member with member
+ * children collapses unless a requested ancestor already does. Ascending by
+ * id, so equal sets are one key. A collapsed epic stands for its descendants,
+ * except milestones, which stay drawn.
  */
-function appliedCollapse(
-  structure: LayoutStructure,
-  requested: readonly string[],
-): string[] {
-  const parent = new Map(
-    structure.nodes.map((node) => [node.id, node.parentId]),
-  );
-  const parents = new Set(
-    structure.nodes.flatMap((node) =>
-      node.parentId !== undefined ? [node.parentId] : [],
-    ),
-  );
-  const wanted = new Set(requested.filter((id) => parents.has(id)));
-  return [...wanted]
-    .filter((id) => !ancestorsOf(parent, id).some((up) => wanted.has(up)))
-    .sort(compareIds);
-}
-
 function planOf(
   structure: LayoutStructure,
-  collapsed: readonly string[],
-): LayoutPlan {
-  const parent = new Map(
-    structure.nodes.map((node) => [node.id, node.parentId]),
-  );
-  const byId = new Map(structure.nodes.map((node) => [node.id, node]));
+  requested: readonly string[],
+): LayoutPlan & { collapsed: string[] } {
+  const byId = new Map<string, StructureNode>();
   const children = new Map<string, string[]>();
   for (const node of structure.nodes) {
+    planSteps += 1;
+    byId.set(node.id, node);
     if (node.parentId === undefined) continue;
-    const siblings = children.get(node.parentId) ?? [];
-    siblings.push(node.id);
-    children.set(node.parentId, siblings);
+    const siblings = children.get(node.parentId);
+    if (siblings) siblings.push(node.id);
+    else children.set(node.parentId, [node.id]);
   }
+  const wanted = new Set(requested.filter((id) => children.has(id)));
 
-  // Lanes follow the graph read: depth-first from each root in the user's
-  // order; only a stored hierarchy cycle leaves a member for a lane of its own.
   const laneRootOf = new Map<string, string>();
+  /** The collapsed epic that stands for a member; absent when it is drawn. */
+  const standsFor = new Map<string, string>();
+  const collapsedSet = new Set<string>();
   const laneRoots: string[] = [];
-  const claim = (root: string, id: string): void => {
-    if (laneRootOf.has(id)) return;
-    laneRootOf.set(id, root);
-    for (const child of children.get(id) ?? []) claim(root, child);
+  const walk = (root: string): void => {
+    const stack: Array<{ id: string; collapsedBy?: string }> = [{ id: root }];
+    while (stack.length > 0) {
+      planSteps += 1;
+      const { id, collapsedBy } = stack.pop()!;
+      if (laneRootOf.has(id)) continue;
+      laneRootOf.set(id, root);
+      let by = collapsedBy;
+      if (by === undefined && wanted.has(id)) {
+        collapsedSet.add(id);
+        by = id;
+      }
+      if (by !== undefined && by !== id && !byId.get(id)?.milestone)
+        standsFor.set(id, by);
+      const below = children.get(id) ?? [];
+      for (let i = below.length - 1; i >= 0; i -= 1)
+        stack.push({
+          id: below[i]!,
+          ...(by !== undefined ? { collapsedBy: by } : {}),
+        });
+    }
   };
-  for (const root of [
-    ...structure.rootIds,
-    ...structure.nodes.map((node) => node.id),
-  ]) {
-    if (!byId.has(root) || laneRootOf.has(root)) continue;
-    laneRoots.push(root);
-    claim(root, root);
+  for (const id of structure.rootIds) {
+    planSteps += 1;
+    if (byId.has(id) && !laneRootOf.has(id)) {
+      laneRoots.push(id);
+      walk(id);
+    }
   }
-
-  const collapsedSet = new Set(collapsed);
-  const representative = (id: string): string => {
-    if (byId.get(id)?.milestone) return id;
-    let rep = id;
-    for (const up of [id, ...ancestorsOf(parent, id)])
-      if (collapsedSet.has(up)) rep = up;
-    return rep;
-  };
+  for (const node of structure.nodes) {
+    planSteps += 1;
+    if (!laneRootOf.has(node.id)) {
+      laneRoots.push(node.id);
+      walk(node.id);
+    }
+  }
+  const collapsed = [...collapsedSet].sort(compareIds);
+  const representative = (id: string): string => standsFor.get(id) ?? id;
 
   const visible = new Map<string, PlanNode>();
   const hidden = new Map<string, string[]>();
+  const laneMembers = new Map<string, PlanNode[]>();
+  const milestones: PlanNode[] = [];
   for (const node of structure.nodes) {
+    planSteps += 1;
     const rep = representative(node.id);
     if (rep !== node.id) {
-      const list = hidden.get(rep) ?? [];
-      list.push(node.id);
-      hidden.set(rep, list);
+      const list = hidden.get(rep);
+      if (list) list.push(node.id);
+      else hidden.set(rep, [node.id]);
       continue;
     }
-    visible.set(node.id, {
+    const drawn: PlanNode = {
       id: node.id,
       kind: collapsedSet.has(node.id) ? "collapsed" : "task",
       taskId: node.id,
       ...(node.milestone
         ? { milestone: true as const }
         : { laneId: laneRootOf.get(node.id)! }),
-    });
+    };
+    visible.set(node.id, drawn);
+    if (drawn.laneId === undefined) milestones.push(drawn);
+    else {
+      const list = laneMembers.get(drawn.laneId);
+      if (list) list.push(drawn);
+      else laneMembers.set(drawn.laneId, [drawn]);
+    }
   }
+
   for (const [id, hiddenTaskIds] of hidden)
     visible.get(id)!.hiddenTaskIds = hiddenTaskIds;
 
   const stubs = new Map<string, PlanNode>();
+  const stubsByLane = new Map<string | undefined, PlanNode[]>();
   const edges = new Map<string, [string, string]>();
   for (const [from, to] of structure.edges) {
+    planSteps += 1;
     const target = visible.get(representative(to));
     if (!target) continue;
     let source: string;
@@ -280,63 +319,66 @@ function planOf(
       source = representative(from);
     } else {
       source = `external:${from}:${target.laneId ?? MILESTONE_REGION}`;
-      if (!stubs.has(source))
-        stubs.set(source, {
+      if (!stubs.has(source)) {
+        const stub: PlanNode = {
           id: source,
           kind: "external",
           taskId: from,
           ...(target.laneId !== undefined ? { laneId: target.laneId } : {}),
-        });
+        };
+        stubs.set(source, stub);
+        const list = stubsByLane.get(target.laneId);
+        if (list) list.push(stub);
+        else stubsByLane.set(target.laneId, [stub]);
+      }
     }
     if (source === target.id) continue;
     edges.set(`${source}>${target.id}`, [source, target.id]);
   }
 
-  const lanes = laneRoots
-    .filter((root) =>
-      [...visible.values()].some((node) => node.laneId === root),
-    )
-    .map((root) => {
-      const projectId = byId.get(root)?.projectId;
-      return { id: root, ...(projectId ? { projectId } : {}) };
-    });
   const groups: LayoutPlan["groups"] = [];
-  for (const lane of lanes) {
-    const group = groups.find((entry) => entry.projectId === lane.projectId);
-    if (group) group.laneIds.push(lane.id);
-    else
-      groups.push({
-        ...(lane.projectId ? { projectId: lane.projectId } : {}),
-        laneIds: [lane.id],
-      });
+  const groupOf = new Map<string | undefined, LayoutPlan["groups"][number]>();
+  const laneOf = new Map<string, LayoutPlan["lanes"][number]>();
+  for (const root of laneRoots) {
+    planSteps += 1;
+    if (!laneMembers.has(root)) continue;
+    const projectId = byId.get(root)?.projectId;
+    laneOf.set(root, { id: root, ...(projectId ? { projectId } : {}) });
+    const group = groupOf.get(projectId);
+    if (group) group.laneIds.push(root);
+    else {
+      const created = { ...(projectId ? { projectId } : {}), laneIds: [root] };
+      groupOf.set(projectId, created);
+      groups.push(created);
+    }
   }
   const orderedLanes = groups.flatMap((group) =>
-    group.laneIds.map((id) => lanes.find((lane) => lane.id === id)!),
+    group.laneIds.map((id) => laneOf.get(id)!),
   );
 
   const stubsIn = (laneId: string | undefined): PlanNode[] =>
-    [...stubs.values()]
-      .filter((stub) => stub.laneId === laneId)
-      .sort((a, b) => compareIds(a.taskId, b.taskId));
+    [...(stubsByLane.get(laneId) ?? [])].sort((a, b) =>
+      compareIds(a.taskId, b.taskId),
+    );
   const milestoneOrder = new Map(
     structure.milestoneIds.map((id, index) => [id, index]),
   );
   const nodes: PlanNode[] = [
     ...orderedLanes.flatMap((lane) => [
       ...stubsIn(lane.id),
-      ...[...visible.values()].filter((node) => node.laneId === lane.id),
+      ...laneMembers.get(lane.id)!,
     ]),
     ...stubsIn(undefined),
-    ...[...visible.values()]
-      .filter((node) => node.milestone)
-      .sort(
-        (a, b) =>
-          (milestoneOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
-          (milestoneOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER),
-      ),
+    ...milestones.sort(
+      (a, b) =>
+        (milestoneOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+        (milestoneOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+    ),
   ];
   const order = new Map(nodes.map((node, index) => [node.id, index]));
+  planSteps += nodes.length + edges.size;
   return {
+    collapsed,
     groups,
     lanes: orderedLanes,
     nodes,
@@ -395,8 +437,13 @@ function elkEdges(edges: ReadonlyArray<[string, string]>): ElkExtendedEdge[] {
  * routes every arrow orthogonally; it runs again, a few times at most, while a
  * lane needs more room than its rows were given.
  */
-async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
+async function computeLayout(
+  target: LayoutTarget,
+  run: Pick<RunElkLayoutOptions, "deadline" | "signal">,
+): Promise<InitiativeLayout> {
   const { plan } = target;
+  // Every pass shares the one deadline and stops once the drawing is superseded.
+  const pass = (graph: ElkNode) => runElkLayout(graph, run);
   const empty: InitiativeLayout = {
     key: target.key,
     collapsed: target.collapsed,
@@ -412,13 +459,31 @@ async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
   const byId = new Map(plan.nodes.map((node) => [node.id, node]));
   const inLane = plan.nodes.filter((node) => node.laneId !== undefined);
   const laneIds = new Set(inLane.map((node) => node.id));
+  // Indexed once: these are read per lane and per node below, on the event loop.
+  const byLane = new Map<string, PlanNode[]>();
+  for (const node of inLane) {
+    const list = byLane.get(node.laneId!);
+    if (list) list.push(node);
+    else byLane.set(node.laneId!, [node]);
+  }
+  const into = new Map<string, string[]>();
+  const outOf = new Map<string, string[]>();
+  for (const [from, to] of plan.edges) {
+    const sources = into.get(to);
+    if (sources) sources.push(from);
+    else into.set(to, [from]);
+    const targets = outOf.get(from);
+    if (targets) targets.push(to);
+    else outOf.set(from, [to]);
+  }
+  const laneRecord = new Map(plan.lanes.map((lane) => [lane.id, lane]));
 
   // Pass 1: columns and in-column order of the lanes' nodes.
   const column = new Map<string, number>();
   const firstY = new Map<string, number>();
   let laneColumns = 0;
   if (inLane.length > 0) {
-    const layered = await runElkLayout({
+    const layered = await pass({
       id: "root",
       layoutOptions: LAYERING_OPTIONS,
       children: inLane.map((node) => ({
@@ -456,8 +521,7 @@ async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
     top += GROUP_HEADER;
     for (const laneId of group.laneIds) {
       const byColumn = new Map<number, PlanNode[]>();
-      for (const node of inLane) {
-        if (node.laneId !== laneId) continue;
+      for (const node of byLane.get(laneId) ?? []) {
         const at = column.get(node.id)!;
         const list = byColumn.get(at) ?? [];
         list.push(node);
@@ -499,8 +563,8 @@ async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
     if (known !== undefined) return known;
     onPath.add(id);
     let value = 0;
-    for (const [from, to] of plan.edges)
-      if (to === id && milestoneIds.has(from) && !onPath.has(from))
+    for (const from of into.get(id) ?? [])
+      if (milestoneIds.has(from) && !onPath.has(from))
         value = Math.max(value, depthOf(from) + 1);
     onPath.delete(id);
     depth.set(id, value);
@@ -550,18 +614,18 @@ async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
       cursor = y + ROW_PITCH;
     }
   };
-  const milestoneColumns = [
-    ...new Set(milestones.map((node) => column.get(node.id)!)),
-  ].sort((a, b) => a - b);
+  const milestoneColumns = new Map<number, PlanNode[]>();
+  for (const node of milestones) {
+    const at = column.get(node.id)!;
+    const list = milestoneColumns.get(at);
+    if (list) list.push(node);
+    else milestoneColumns.set(at, [node]);
+  }
+  const columnsInOrder = [...milestoneColumns.keys()].sort((a, b) => a - b);
   const placeMilestones = () => {
-    for (const at of milestoneColumns)
-      place(
-        milestones.filter((node) => column.get(node.id) === at),
-        (id) => plan.edges.filter(([, to]) => to === id).map(([from]) => from),
-      );
-    place(regionStubs, (id) =>
-      plan.edges.filter(([from]) => from === id).map(([, to]) => to),
-    );
+    for (const at of columnsInOrder)
+      place(milestoneColumns.get(at)!, (id) => into.get(id) ?? []);
+    place(regionStubs, (id) => outOf.get(id) ?? []);
   };
 
   // Pass 2: keep the planned positions, route the arrows. ELK moves a node
@@ -573,7 +637,7 @@ async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
   let routed: ElkNode = { id: "root" };
   for (let round = 1; round <= ROUTING_ROUNDS; round += 1) {
     placeMilestones();
-    routed = await runElkLayout({
+    routed = await pass({
       id: "root",
       layoutOptions: ROUTING_OPTIONS,
       children: plan.nodes.map((node) => ({
@@ -595,9 +659,7 @@ async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
       });
     if (round === ROUTING_ROUNDS) break;
     const extent = (laneId: string, y: (id: string) => number) => {
-      const ys = inLane
-        .filter((node) => node.laneId === laneId)
-        .map((node) => y(node.id));
+      const ys = (byLane.get(laneId) ?? []).map((node) => y(node.id));
       return { top: Math.min(...ys), bottom: Math.max(...ys) + NODE_HEIGHT };
     };
     let carried = 0;
@@ -638,13 +700,9 @@ async function computeLayout(target: LayoutTarget): Promise<InitiativeLayout> {
     for (const group of plan.groups) {
       const groupLanes = group.laneIds.map((laneId) => {
         const extent = unionOf(
-          inLane
-            .filter((node) => node.laneId === laneId)
-            .map((node) => node.id),
+          (byLane.get(laneId) ?? []).map((node) => node.id),
         );
-        const projectId = plan.lanes.find(
-          (lane) => lane.id === laneId,
-        )?.projectId;
+        const projectId = laneRecord.get(laneId)?.projectId;
         const lane: InitiativeLayoutLane = {
           id: laneId,
           ...(projectId ? { projectId } : {}),
@@ -776,58 +834,145 @@ function orthogonalPoints(
 
 /* ------------------------------ cache, reads ----------------------------- */
 
-type Outcome = { layout: InitiativeLayout } | { error: string };
+type Outcome =
+  | { layout: InitiativeLayout }
+  /** `transient`: the machinery failed, not the graph; a later read retries. */
+  | { error: string; transient?: true };
 
-interface CacheEntry {
+interface Settled {
+  initiativeId: string;
+  structureKey: string;
+  outcome: Outcome;
+  /** A transient failure answers until then, and is laid out afresh after. */
+  retryAt?: number;
+}
+
+interface Pending {
   initiativeId: string;
   structureKey: string;
   outcome: Promise<Outcome>;
+  abort: AbortController;
 }
 
 /**
- * Layouts by Initiative and drawing key, least recently read first. An entry
- * is the promise, so concurrent reads of one key share one computation. A
- * failure is kept like a result: the input is deterministic, so it would fail
- * again. A read that sees a new structure drops the Initiative's older ones.
+ * Finished layouts by Initiative and drawing key, least recently read first.
+ * An ELK error is kept like a layout: the input is deterministic, so it would
+ * fail again. A transient failure (time limit, worker lost or unable to
+ * start, a full queue) is kept only {@link TRANSIENT_RETRY_MS}, so a read
+ * after it lays out again without any write, and rereads before it do not
+ * pile up work.
  */
-const cache = new Map<string, CacheEntry>();
+const settled = new Map<string, Settled>();
+/**
+ * Layouts being computed, one per drawing however many reads wait on it. Apart
+ * from the finished ones, so no eviction there ever orphans or duplicates a
+ * computation; bounded by admission instead.
+ */
+const pending = new Map<string, Pending>();
+
+function admissionRefusal(initiativeId: string): string | undefined {
+  if (pending.size >= MAX_PENDING_LAYOUTS)
+    return "Too many maps are being laid out; read it again shortly.";
+  let own = 0;
+  for (const entry of pending.values())
+    if (entry.initiativeId === initiativeId) own += 1;
+  return own >= MAX_PENDING_PER_INITIATIVE
+    ? "Too many drawings of this map are being laid out; read it again shortly."
+    : undefined;
+}
 
 function layoutOf(
   initiativeId: string,
   target: LayoutTarget,
 ): Promise<Outcome> {
   if (target.error) return Promise.resolve({ error: target.error });
-  for (const [key, entry] of cache)
+  // A new structure supersedes the Initiative's older drawings: finished ones
+  // can never be read again, and unfinished ones stop before their next pass.
+  for (const [key, entry] of settled)
     if (
       entry.initiativeId === initiativeId &&
       entry.structureKey !== target.structureKey
     )
-      cache.delete(key);
+      settled.delete(key);
+  for (const [key, entry] of pending)
+    if (
+      entry.initiativeId === initiativeId &&
+      entry.structureKey !== target.structureKey
+    ) {
+      pending.delete(key);
+      entry.abort.abort();
+    }
+
   const cacheKey = `${initiativeId}:${target.key}`;
-  const hit = cache.get(cacheKey);
-  if (hit) {
-    cache.delete(cacheKey);
-    cache.set(cacheKey, hit);
-    return hit.outcome;
+  const hit = settled.get(cacheKey);
+  if (hit && (hit.retryAt === undefined || Date.now() < hit.retryAt)) {
+    settled.delete(cacheKey);
+    settled.set(cacheKey, hit);
+    return Promise.resolve(hit.outcome);
   }
-  const outcome = computeLayout(target).then(
-    (layout): Outcome => ({ layout }),
-    (err: unknown): Outcome => ({
-      error: `The map could not be laid out: ${err instanceof Error ? err.message : String(err)}`,
-    }),
-  );
-  cache.set(cacheKey, {
+  if (hit) settled.delete(cacheKey);
+  const running = pending.get(cacheKey);
+  if (running) return running.outcome;
+
+  const refusal = admissionRefusal(initiativeId);
+  if (refusal) return Promise.resolve({ error: refusal, transient: true });
+
+  const abort = new AbortController();
+  const entry: Pending = {
     initiativeId,
     structureKey: target.structureKey,
-    outcome,
+    abort,
+    outcome: computeLayout(target, {
+      deadline: Date.now() + LAYOUT_DEADLINE_MS,
+      signal: abort.signal,
+    }).then(
+      (layout): Outcome => ({ layout }),
+      (err: unknown): Outcome =>
+        err instanceof TransientLayoutError
+          ? {
+              error: `The map could not be laid out right now: ${err.message}`,
+              transient: true,
+            }
+          : {
+              error: `The map could not be laid out: ${err instanceof Error ? err.message : String(err)}`,
+            },
+    ),
+  };
+  pending.set(cacheKey, entry);
+  void entry.outcome.then((outcome) => {
+    if (pending.get(cacheKey) !== entry) return;
+    pending.delete(cacheKey);
+    settled.set(cacheKey, {
+      initiativeId,
+      structureKey: target.structureKey,
+      outcome,
+      ...("transient" in outcome
+        ? { retryAt: Date.now() + TRANSIENT_RETRY_MS }
+        : {}),
+    });
+    while (settled.size > CACHE_LIMIT)
+      settled.delete(settled.keys().next().value!);
   });
-  while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
-  return outcome;
+  return entry.outcome;
 }
 
+/** A deleted Initiative's drawings: nothing of it is read again. */
 function forget(initiativeId: string): void {
-  for (const [key, entry] of cache)
-    if (entry.initiativeId === initiativeId) cache.delete(key);
+  for (const [key, entry] of settled)
+    if (entry.initiativeId === initiativeId) settled.delete(key);
+  for (const [key, entry] of pending)
+    if (entry.initiativeId === initiativeId) {
+      pending.delete(key);
+      entry.abort.abort();
+    }
+}
+
+/** What the layout cache holds, for tests. */
+export function initiativeLayoutCacheState(): {
+  pending: number;
+  settled: number;
+} {
+  return { pending: pending.size, settled: settled.size };
 }
 
 export interface InitiativeMapRead {
@@ -863,7 +1008,9 @@ export async function readInitiativeMap(
     }
     const revision = initiativeRevision(item.id);
     const base = { item, ...(revision !== undefined ? { revision } : {}) };
-    if (layoutTarget(item, collapsed).key === target.key)
+    // The applied collapsed set follows from the structure, so equal
+    // structures are the same drawing: no second plan is needed to tell.
+    if (structureKeyOf(structureOf(item)) === target.structureKey)
       return "error" in outcome
         ? { ...base, layoutError: outcome.error }
         : { ...base, layout: withProgress(outcome.layout, item) };

@@ -6,23 +6,44 @@
  *
  * The worker starts on the first layout and ends after a minute without one,
  * so an idle server holds no thread. It never keeps the process alive. Jobs run
- * one at a time in arrival order: a job past its time limit ends the worker
- * (ELK cannot be interrupted any other way) and fails alone, and the next job
- * starts a fresh one.
+ * one at a time in arrival order, and every job is bounded:
+ * - at most {@link MAX_QUEUED_LAYOUT_JOBS} wait; one more is refused at once;
+ * - a job carries a deadline, which also ends its wait in the queue;
+ * - a running job has at most 20 s, and past it the worker is ended (ELK
+ *   cannot be interrupted any other way); the job fails alone and the next
+ *   one starts a fresh worker;
+ * - an aborted job leaves the queue; one already running finishes its pass.
+ * A worker that cannot start or take a job fails that job with the reason,
+ * and the queue moves on. Only an ELK error answers a plain `Error`: every
+ * other failure is a {@link TransientLayoutError}, worth trying again later.
  */
 import { Worker } from "node:worker_threads";
 import type { ElkNode } from "elkjs/lib/elk-api.js";
 import { INITIATIVE_LAYOUT_WORKER } from "./runtimeAssets.ts";
 
-const DEFAULT_TIMEOUT_MS = 20_000;
+const PASS_LIMIT_MS = 20_000;
 const IDLE_MS = 60_000;
+/** Jobs that may wait behind the running one. */
+export const MAX_QUEUED_LAYOUT_JOBS = 16;
+
+/** A failure of the machinery, not of the graph: the same layout may work later. */
+export class TransientLayoutError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "TransientLayoutError";
+  }
+}
 
 interface Job {
   id: number;
   graph: ElkNode;
-  timeoutMs: number;
+  passLimitMs: number;
+  /** Epoch ms after which the job fails, waiting or running. */
+  deadline: number;
   resolve: (graph: ElkNode) => void;
   reject: (err: Error) => void;
+  /** Ends the job's wait in the queue (deadline timer, abort listener). */
+  release?: (() => void) | undefined;
 }
 
 interface Answer {
@@ -38,19 +59,73 @@ let idleTimer: ReturnType<typeof setTimeout> | undefined;
 const queue: Job[] = [];
 let nextId = 1;
 
-/** Lay out one ELK graph in the worker; rejects on an ELK error or the time limit. */
+export interface RunElkLayoutOptions {
+  /** The running pass's limit; 20 s unless a test shortens it. */
+  passLimitMs?: number;
+  /** Epoch ms by which the job must finish, its wait included. */
+  deadline?: number;
+  /** Aborting takes a waiting job out of the queue. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Lay out one ELK graph in the worker. Rejects with a plain `Error` for an
+ * ELK error and with a {@link TransientLayoutError} for everything else: a
+ * full queue, the deadline or pass limit, an abort, or a worker that could
+ * not start, take the job or stay alive.
+ */
 export function runElkLayout(
   graph: ElkNode,
-  options: { timeoutMs?: number } = {},
+  options: RunElkLayoutOptions = {},
 ): Promise<ElkNode> {
   return new Promise((resolve, reject) => {
-    queue.push({
+    if (options.signal?.aborted) {
+      reject(new TransientLayoutError("The layout was cancelled."));
+      return;
+    }
+    if (queue.length >= MAX_QUEUED_LAYOUT_JOBS) {
+      reject(
+        new TransientLayoutError(
+          "The layout queue is full; read the map again shortly.",
+        ),
+      );
+      return;
+    }
+    const passLimitMs = options.passLimitMs ?? PASS_LIMIT_MS;
+    const job: Job = {
       id: nextId++,
       graph,
-      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      passLimitMs,
+      deadline: options.deadline ?? Date.now() + passLimitMs,
       resolve,
       reject,
-    });
+    };
+    const leave = (err: TransientLayoutError) => {
+      const at = queue.indexOf(job);
+      if (at < 0) return;
+      queue.splice(at, 1);
+      job.release?.();
+      job.reject(err);
+    };
+    const waited = setTimeout(
+      () =>
+        leave(
+          new TransientLayoutError(
+            "The layout waited too long for the worker; read the map again shortly.",
+          ),
+        ),
+      Math.max(0, job.deadline - Date.now()),
+    );
+    waited.unref();
+    const onAbort = () =>
+      leave(new TransientLayoutError("The layout was cancelled."));
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    job.release = () => {
+      clearTimeout(waited);
+      options.signal?.removeEventListener("abort", onAbort);
+      job.release = undefined;
+    };
+    queue.push(job);
     pump();
   });
 }
@@ -61,38 +136,80 @@ export function stopInitiativeLayoutWorker(): void {
   idleTimer = undefined;
   const ending = worker;
   worker = undefined;
-  if (current) fail(new Error("The layout worker was stopped."));
-  void ending?.terminate();
+  end(ending);
+  if (current) fail(new TransientLayoutError("The layout worker was stopped."));
 }
 
+/** What the runner holds right now, for tests: nothing may linger. */
+export function initiativeLayoutRunnerState(): {
+  running: boolean;
+  queued: number;
+  worker: boolean;
+} {
+  return {
+    running: current !== undefined || currentTimer !== undefined,
+    queued: queue.length,
+    worker: worker !== undefined,
+  };
+}
+
+/**
+ * Start queued jobs until one is running or none is left. A loop, never a
+ * recursion: a worker that keeps failing to start fails each job once, in
+ * order, and nothing it throws leaves this function.
+ */
 function pump(): void {
-  if (current) return;
-  const job = queue.shift();
-  if (!job) {
-    idleTimer ??= setTimeout(stopInitiativeLayoutWorker, IDLE_MS);
-    idleTimer.unref();
-    return;
+  while (!current) {
+    const job = queue.shift();
+    if (!job) {
+      idleTimer ??= setTimeout(stopInitiativeLayoutWorker, IDLE_MS);
+      idleTimer.unref();
+      return;
+    }
+    job.release?.();
+    const limit = Math.min(job.passLimitMs, job.deadline - Date.now());
+    if (limit <= 0) {
+      job.reject(
+        new TransientLayoutError(
+          "The layout waited too long for the worker; read the map again shortly.",
+        ),
+      );
+      continue;
+    }
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = undefined;
+    current = job;
+    currentTimer = setTimeout(() => {
+      const ending = worker;
+      worker = undefined;
+      end(ending);
+      fail(
+        new TransientLayoutError(
+          `The layout took longer than ${Math.round(limit / 1000)} s.`,
+        ),
+      );
+    }, limit);
+    currentTimer.unref();
+    try {
+      ensureWorker().postMessage({ id: job.id, graph: job.graph });
+    } catch (err) {
+      const broken = worker;
+      worker = undefined;
+      end(broken);
+      settle().reject(
+        new TransientLayoutError(
+          `The layout worker could not take the job: ${err instanceof Error ? err.message : String(err)}`,
+          { cause: err },
+        ),
+      );
+    }
   }
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = undefined;
-  current = job;
-  currentTimer = setTimeout(() => {
-    const ending = worker;
-    worker = undefined;
-    fail(
-      new Error(
-        `The layout took longer than ${Math.round(job.timeoutMs / 1000)} s.`,
-      ),
-    );
-    void ending?.terminate();
-  }, job.timeoutMs);
-  currentTimer.unref();
-  ensureWorker().postMessage({ id: job.id, graph: job.graph });
 }
 
 function ensureWorker(): Worker {
   if (worker) return worker;
   const started = new Worker(INITIATIVE_LAYOUT_WORKER);
+  worker = started;
   started.unref();
   started.on("message", (answer: Answer) => {
     if (worker !== started || current?.id !== answer.id) return;
@@ -104,14 +221,22 @@ function ensureWorker(): Worker {
   const lost = (err: Error) => {
     if (worker !== started) return;
     worker = undefined;
-    if (current) fail(err);
+    if (current) fail(new TransientLayoutError(err.message, { cause: err }));
   };
   started.on("error", lost);
   started.on("exit", (code) =>
     lost(new Error(`The layout worker exited (code ${code}).`)),
   );
-  worker = started;
   return started;
+}
+
+function end(ending: Worker | undefined): void {
+  if (!ending) return;
+  try {
+    ending.terminate().catch(() => undefined);
+  } catch {
+    // A worker that never started has nothing to end.
+  }
 }
 
 function settle(): Job {
