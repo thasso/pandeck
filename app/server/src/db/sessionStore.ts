@@ -23,6 +23,7 @@ import {
   sessionScopeOrFailClosed,
   type Harness,
   type SessionForkOrigin,
+  type SessionInterruptedRun,
   type SessionMode,
   type SessionOutcomeAttention,
   type SessionOutcomeKind,
@@ -41,6 +42,9 @@ type SessionUsageSource =
   "provider_reported" | "imported" | "estimated" | "manual";
 
 /** Canonical, minimal metadata record for one session. */
+/** What boot learned about an interrupted turn, beside its timestamp. */
+type InterruptedRunDetail = Omit<SessionInterruptedRun, "at">;
+
 export interface SessionMeta {
   id: string;
   /** Whose session this is; only `user` rows reach a default projection. */
@@ -89,6 +93,8 @@ export interface SessionMeta {
    * work is waiting to be continued. Cleared the moment a new run starts.
    */
   interruptedRunAt?: number;
+  /** What boot learned about that turn; absent for a mark that predates it. */
+  interruptedRunDetail?: InterruptedRunDetail;
   readAt: number;
   forkOrigin?: SessionForkOrigin;
   forkAutoRenamePending: boolean;
@@ -175,6 +181,7 @@ interface DbSessionRow {
   last_error_at_ms: number | null;
   last_error_text: string | null;
   interrupted_run_at_ms: number | null;
+  interrupted_run_json: string | null;
   read_at_ms: number;
   fork_origin_json: string | null;
   fork_auto_rename_pending: number;
@@ -219,9 +226,7 @@ function fromRow(row: DbSessionRow): SessionMeta {
           lastError: { at: row.last_error_at_ms, message: row.last_error_text },
         }
       : {}),
-    ...(row.interrupted_run_at_ms !== null
-      ? { interruptedRunAt: row.interrupted_run_at_ms }
-      : {}),
+    ...interruptedRunFields(row),
     readAt: row.read_at_ms,
     ...(parseForkOrigin(row.fork_origin_json)
       ? {
@@ -251,6 +256,46 @@ function attentionFromRow(
     settledRevision: row.attention_settled_revision,
     kind: row.attention_kind === "failed" ? "failed" : "completed",
     at: row.attention_at_ms ?? row.updated_at_ms,
+  };
+}
+
+function interruptedRunFields(
+  row: DbSessionRow,
+): Pick<SessionMeta, "interruptedRunAt" | "interruptedRunDetail"> {
+  if (row.interrupted_run_at_ms === null) return {};
+  const detail = parseInterruptedRunDetail(row.interrupted_run_json);
+  return {
+    interruptedRunAt: row.interrupted_run_at_ms,
+    ...(detail ? { interruptedRunDetail: detail } : {}),
+  };
+}
+
+/** Keeps only well-typed fields: an unreadable detail is an absent one. */
+function parseInterruptedRunDetail(
+  raw: string | null,
+): InterruptedRunDetail | undefined {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const value = parsed as Record<string, unknown>;
+  const cause = value.cause as Record<string, unknown> | undefined;
+  return {
+    ...(cause &&
+    (cause.kind === "crash" || cause.kind === "restart") &&
+    typeof cause.detail === "string"
+      ? { cause: { kind: cause.kind, detail: cause.detail } }
+      : {}),
+    ...(typeof value.promptKept === "boolean"
+      ? { promptKept: value.promptKept }
+      : {}),
+    ...(typeof value.modelSteps === "number"
+      ? { modelSteps: value.modelSteps }
+      : {}),
   };
 }
 
@@ -820,13 +865,17 @@ function recordRunFailure(id: string, message: string, ts = Date.now()): void {
  * the server is up an interrupted turn is not a thing that can be observed, only
  * a thing that is discovered afterwards.
  */
-function recordInterruptedRun(id: string, ts: number): void {
+function recordInterruptedRun(
+  id: string,
+  ts: number,
+  detail: InterruptedRunDetail = {},
+): void {
   try {
     getDb()
       .prepare(
-        "UPDATE session_index SET interrupted_run_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
+        "UPDATE session_index SET interrupted_run_at_ms = ?, interrupted_run_json = ? WHERE id = ? AND deleted_at_ms IS NULL",
       )
-      .run(ts, id);
+      .run(ts, JSON.stringify(detail), id);
   } catch {
     // best-effort mirror
   }
@@ -842,7 +891,7 @@ function clearInterruptedRun(id: string): void {
   try {
     getDb()
       .prepare(
-        "UPDATE session_index SET interrupted_run_at_ms = NULL WHERE id = ? AND deleted_at_ms IS NULL",
+        "UPDATE session_index SET interrupted_run_at_ms = NULL, interrupted_run_json = NULL WHERE id = ? AND deleted_at_ms IS NULL",
       )
       .run(id);
   } catch {

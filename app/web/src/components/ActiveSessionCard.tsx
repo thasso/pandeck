@@ -30,6 +30,7 @@ import {
   sessionClusterSummary,
   sessionStatusBadge,
   sessionStatusDetail,
+  interruptedRunTitle,
   stallLabel,
   stallMore,
   stallParts,
@@ -225,6 +226,12 @@ function ActiveSessionCardImpl({
   const title = session.title.trim() || "Untitled session";
   const badge = sessionStatusBadge(session, status, now);
   const detail = sessionStatusDetail(session, status);
+  const sentence =
+    status === "quiet" || status === "interrupted" ? detail : undefined;
+  const sentenceTitle =
+    status === "interrupted" && session.interruptedRun
+      ? interruptedRunTitle(session.interruptedRun)
+      : sentence;
   const meta = sessionCardMeta(session, relations);
   const age = sessionCardAge(session, status, now);
   // What the fold states instead of six cards: the aggregate line, and the one
@@ -277,9 +284,7 @@ function ActiveSessionCardImpl({
   // The status line's fallback: with no signal to show, it says the state in
   // words (the title's glyph says it as an icon), so the row is not just the
   // row's buttons.
-  const hasSignals = Boolean(
-    cluster || backgroundChip || delivery || (status === "quiet" && detail),
-  );
+  const hasSignals = Boolean(cluster || backgroundChip || delivery || sentence);
   const stateWords =
     status === "quiet"
       ? "Idle"
@@ -574,11 +579,15 @@ function ActiveSessionCardImpl({
                       />
                     </span>
                   ) : null}
-                  {/* The badge already names the state; the one sentence it
-                  cannot say is an Idle card's queued work. */}
-                  {status === "quiet" && detail ? (
-                    <span className="min-w-0 flex-1 basis-0 truncate text-muted-foreground">
-                      {detail}
+                  {/* The badge already names the state; the sentences it
+                  cannot say are an Idle card's queued work and what a cut
+                  turn needs from you. */}
+                  {sentence ? (
+                    <span
+                      className="min-w-0 flex-1 basis-0 truncate text-muted-foreground"
+                      title={sentenceTitle}
+                    >
+                      {sentence}
                     </span>
                   ) : null}
                   {hasSignals ? null : (

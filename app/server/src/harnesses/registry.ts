@@ -21,6 +21,9 @@ import { sessionRefFile } from "./storage.ts";
 import { CWD } from "../config.ts";
 import { readClaudeSdkRecordCwd } from "../claudeSdk/claudeSdkRecords.ts";
 import { readSessionHeaderCwd } from "../piSdk/sessionOpen.ts";
+import { piInterruptedTurn } from "../piSdk/interruptedTurn.ts";
+import { claudeInterruptedTurn } from "../claudeSdk/interruptedTurn.ts";
+import type { InterruptedTurnEvidence } from "../interruptedTurnEvidence.ts";
 
 /** A stored session as a lifecycle change names it. */
 interface SessionRef {
@@ -72,6 +75,14 @@ interface HarnessSessions {
    * pi's transcript; Claude removes its native transcript in the background.
    */
   remove(ref: SessionRef): Promise<void>;
+  /**
+   * What the engine's own history holds of a turn that started at `since` and
+   * that the server died inside; undefined when it cannot tell.
+   */
+  interruptedTurn(
+    id: string,
+    since: number,
+  ): InterruptedTurnEvidence | undefined;
 }
 
 const sessions: Record<Harness, HarnessSessions> = {
@@ -101,6 +112,7 @@ const sessions: Record<Harness, HarnessSessions> = {
       piStore.evict(id);
       if (file) await rm(file, { force: true }).catch(() => {});
     },
+    interruptedTurn: (id, since) => piInterruptedTurn(id, since),
   },
   "claude-sdk": {
     list: () => claudeSdkStore.list(),
@@ -138,6 +150,13 @@ const sessions: Record<Harness, HarnessSessions> = {
     },
     // Tombstones the id and deletes its record and native transcript.
     remove: async ({ id }) => claudeSdkStore.remove(id),
+    // The row holds the live binding; failover moves the history with it.
+    interruptedTurn: (id, since) =>
+      claudeInterruptedTurn(
+        id,
+        since,
+        sessionStore.get(id)?.credentialProfileId,
+      ),
   },
 };
 
@@ -241,6 +260,19 @@ export const harnessRegistry = {
    */
   residentById(id: string): LiveSession | undefined {
     return residentInMemory(id);
+  },
+
+  /**
+   * What the agent's own history holds of a turn the server died inside: the
+   * engine named by the session's row answers. Undefined when there is no row
+   * or the engine cannot tell. Reads files only; opens no harness.
+   */
+  interruptedTurn(
+    id: string,
+    since: number,
+  ): InterruptedTurnEvidence | undefined {
+    const harness = sessionStore.get(id)?.harness;
+    return harness ? sessions[harness].interruptedTurn(id, since) : undefined;
   },
 
   /** Probe cwd before opening, so a singleton can retire an unusable session. */

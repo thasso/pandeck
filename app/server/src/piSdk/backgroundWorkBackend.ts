@@ -103,7 +103,7 @@ type PendingLaunch = ProcessLaunch | SocketLaunch;
 
 interface SocketLike {
   on(event: "message", listener: (data: RawData) => void): this;
-  once(event: "error", listener: (error: Error) => void): this;
+  on(event: "error", listener: (error: Error) => void): this;
   once(event: "close", listener: () => void): this;
   close(): void;
 }
@@ -769,7 +769,10 @@ export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
       settle();
     };
     socket.on("message", (data) => output.push(rawData(data)));
-    socket.once("error", (error) => finish(error));
+    // `on`, never `once`: Bun's `ws` emits "error" twice for one refused
+    // connection, and an unheard second one crashes the server. `finish` is
+    // already idempotent.
+    socket.on("error", (error) => finish(error));
     socket.once("close", () => finish());
     void done.finally(() => this.running.delete(itemId));
     this.running.set(itemId, running);

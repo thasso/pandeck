@@ -63,7 +63,8 @@ else `waiting` while `awaitingModelSince` is set, else `receiving`.
 - Waiting on peers or background work is shown only as the counts the queues
   hold (below), never classified from an idle run.
 - Progress is runtime memory. A server restart ends every run, so a reconnect
-  after one carries no progress at all, and `interruptedRun` says what happened.
+  after one carries no progress at all, and `interruptedRun` says what happened
+  (`interrupted-turns.md`).
 
 ## Lifecycle and delivery
 

@@ -870,6 +870,46 @@ test("boot marks the sessions holding a turn that never finished", async () => {
   );
 });
 
+test("the mark says why the process ended and whether the prompt was kept", async () => {
+  const cut = await liveSession();
+  cut.adapter.emit({ type: "messageStarted", streamId: "m1" });
+  const asked: [string, number][] = [];
+
+  markInterruptedRunsOnBoot({
+    cause: { kind: "crash", detail: "Uncaught exception: boom" },
+    turnEvidence: (id, since) => {
+      asked.push([id, since]);
+      return { promptKept: true, modelSteps: 3 };
+    },
+  });
+
+  const at = sessionStore.get(cut.id)?.interruptedRunAt;
+  assert.ok(at !== undefined);
+  assert.ok(
+    asked.some(([id, since]) => id === cut.id && since === at),
+    "the harness is asked about the turn that started at the open bracket",
+  );
+  assert.deepEqual(sessionStore.get(cut.id)?.interruptedRunDetail, {
+    cause: { kind: "crash", detail: "Uncaught exception: boom" },
+    promptKept: true,
+    modelSteps: 3,
+  });
+});
+
+test("an unreadable history still marks the turn, just without a verdict", async () => {
+  const cut = await liveSession();
+  cut.adapter.emit({ type: "messageStarted", streamId: "m1" });
+
+  markInterruptedRunsOnBoot({
+    turnEvidence: () => {
+      throw new Error("transcript unreadable");
+    },
+  });
+
+  assert.ok(sessionStore.get(cut.id)?.interruptedRunAt !== undefined);
+  assert.deepEqual(sessionStore.get(cut.id)?.interruptedRunDetail, {});
+});
+
 test("a settled session is out of scope, and cannot be a false negative either", async () => {
   const settled = await liveSession();
   settled.adapter.emit({ type: "messageStarted", streamId: "m1" });
@@ -904,4 +944,5 @@ test("the next run start clears the interrupted mark, whether or not it succeeds
     undefined,
     "a started run releases the badge",
   );
+  assert.equal(sessionStore.get(id)?.interruptedRunDetail, undefined);
 });

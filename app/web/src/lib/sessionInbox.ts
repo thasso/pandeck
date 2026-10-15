@@ -15,6 +15,7 @@
  */
 import type {
   InboxPositionEntry,
+  SessionInterruptedRun,
   SessionListItem,
   SpawnClusterForest,
   WorkflowRunCard,
@@ -737,7 +738,9 @@ export function sessionStatusDetail(
     case "failed":
       return bounded(session.lastError?.message ?? "The last run failed.");
     case "interrupted":
-      return "Cut off by a restart — send a prompt to continue";
+      return session.interruptedRun
+        ? interruptedRunSentence(session.interruptedRun)
+        : undefined;
     // Only a retry the provider reported says anything: how long a run has
     // gone without output is the conversation's to show, not a card alarm.
     case "running":
@@ -749,6 +752,39 @@ export function sessionStatusDetail(
     case "quiet":
       return session.queuedWork ? "Queued work is waiting to run" : undefined;
   }
+}
+
+/**
+ * What a cut turn needs from the user. Whether its prompt reached the agent's
+ * own history is the whole decision: kept, "continue" resumes the work; lost,
+ * the message has to be sent again. A mark from before boot learned either
+ * keeps the old, undecided sentence.
+ */
+function interruptedRunSentence(run: SessionInterruptedRun): string {
+  if (!run.cause && run.promptKept === undefined)
+    return "Cut off by a restart — send a prompt to continue";
+  const cause =
+    run.cause?.kind === "crash"
+      ? "Server crashed"
+      : run.cause?.kind === "restart"
+        ? "Server restarted"
+        : "Server stopped";
+  if (run.promptKept === false)
+    return `${cause} before your message reached the agent — send it again`;
+  if (run.promptKept === undefined)
+    return `${cause} mid-turn — check the conversation before continuing`;
+  const steps = run.modelSteps ?? 0;
+  const when =
+    steps > 0
+      ? `after ${steps} agent step${steps === 1 ? "" : "s"}`
+      : "before the agent replied";
+  return `${cause} ${when} — your message was kept; say "continue"`;
+}
+
+/** The sentence plus the process's own reason, for a tooltip. */
+export function interruptedRunTitle(run: SessionInterruptedRun): string {
+  const sentence = interruptedRunSentence(run);
+  return run.cause ? `${sentence}\n${run.cause.detail}` : sentence;
 }
 
 /**

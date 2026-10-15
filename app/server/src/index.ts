@@ -185,6 +185,7 @@ import {
   markInterruptedRunsOnBoot,
   settleCompletedWorkflowRunSessionsOnBoot,
 } from "./sessionActivity.ts";
+import { noteServerExit, takePreviousServerExit } from "./serverExitRecord.ts";
 import { registerPdfClaudeFallback } from "./pdfClaudeFallback.ts";
 import { startPackageProxyIfEnabled } from "./packageProxy/packageProxy.ts";
 import { bootStep } from "./bootStep.ts";
@@ -1685,6 +1686,9 @@ if (!IS_PROD) {
 function requestGracefulShutdown(signal: NodeJS.Signals): void {
   if (shutdownRequested) return;
   shutdownRequested = true;
+  // Written now, not at exit: a drain the force timeout cuts short ends the
+  // process without passing here again, and that is the case it explains.
+  noteServerExit({ kind: "restart", detail: `Stopped by ${signal}` });
   console.log(
     `[assistant] ${signal} received; draining active sessions before shutdown.`,
   );
@@ -1787,6 +1791,19 @@ process.on("uncaughtException", (err) => {
     return;
   }
   console.error("Uncaught exception:", err);
+  // An unheard "error" event wraps the real reason in `context` (Node's
+  // ERR_UNHANDLED_ERROR); its own message only says that nobody listened.
+  const context = (err as { context?: { message?: unknown } }).context;
+  noteServerExit({
+    kind: "crash",
+    detail: `Uncaught exception: ${
+      typeof context?.message === "string"
+        ? context.message
+        : err instanceof Error
+          ? err.message
+          : String(err)
+    }`,
+  });
   process.exit(1);
 });
 
@@ -1946,7 +1963,10 @@ server.listen(PORT, HOST, () => {
     // run bracket in its log is the only evidence, and this is the one moment it
     // can be read honestly (nothing is live yet, so an open bracket cannot be a
     // turn that is merely still going).
-    const interrupted = markInterruptedRunsOnBoot();
+    const interrupted = markInterruptedRunsOnBoot({
+      cause: takePreviousServerExit(),
+      turnEvidence: (id, since) => harnessRegistry.interruptedTurn(id, since),
+    });
     if (interrupted > 0)
       console.log(
         `[assistant] ${interrupted} session(s) hold a turn cut off by the previous exit`,

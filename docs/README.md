@@ -137,6 +137,10 @@ only binding rules; everything else lives here.
   unreadable one fails closed), what a live file-level backup restores, the
   one-writer backstop that refuses rather than clobbers, lazy migration of
   legacy single-file records, and the measured cost per persist.
+- `interrupted-turns.md` — a turn the server died inside: the boot mark, the
+  dying process's own exit record, the harness's native-history verdict on
+  whether the prompt survived, and the card sentence that says "continue" or
+  "send it again".
 - `live-progress.md` — what a running session's runtime observes of its run
   (model output, tool starts and ends, provider retries) and the queued work
   behind it: the honesty rules (silence is not a stall, no inferred retries),

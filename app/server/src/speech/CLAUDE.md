@@ -21,3 +21,6 @@ Fully local CPU inference behind `/ws/speech`.
   routed into `DATA_DIR`.
 - The browser holds the authoritative audio and retries over HTTP, so add no
   server-side utterance state that outlives a connection.
+- The recognizer socket listens for `error` with `on`, never `once`: production
+  Bun emits it twice for one refused connect, and the warm-up retries refusals
+  by design, so an unheard second one crashes the whole server.
