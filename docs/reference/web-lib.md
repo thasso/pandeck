@@ -856,9 +856,13 @@ capability logic.
   synchronous shape, loaded into memory before the first render (`main.tsx`,
   bounded at 300 ms), written behind on a coalescing delay, mirrored to other
   windows over a `BroadcastChannel`, and migrating the keys it took over from
-  `localStorage` on first load. `createPersistentStore` takes the backend,
-  legacy storage, channel and timer as inputs so its rules are tested without
-  IndexedDB; without IndexedDB it passes through to `localStorage`.
+  `localStorage` on first load. `isLoaded`/`whenLoaded` tell a consumer that
+  rendered before a slow read when the stored values arrive. Every write is
+  stamped (a clock plus the window id) and the newest stamp wins in commits,
+  messages and the load; removals are stored as tombstones.
+  `createPersistentStore` takes the backend, legacy storage, channel and timer
+  as inputs so its rules are tested without IndexedDB; without IndexedDB it
+  passes through to `localStorage`.
 - `localStore.ts` is the one door to `localStorage`, for values under 512 chars
   that must stay there (`app/web/docs/loading-states.md` § Browser storage).
 - `newSessionRuntime.ts` owns new-session model/harness defaults and the

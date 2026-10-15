@@ -390,6 +390,29 @@ over a `BroadcastChannel`. The pre-render read is bounded at 300 ms; a slower
 database renders as a fresh profile would, and its entries merge in when the
 read lands (a key this page already wrote keeps its newer value).
 
+That first render must not destroy what the read will bring. Until the store
+`isLoaded()`, a consumer writes only what the user changed — never the default
+or empty value it rendered, which would replace the stored one — and on
+`whenLoaded()` it re-reads what it showed (`useBrowserDraft`). A value that
+bundles several things the user edits separately is not written before the load
+at all; the user's changes are replayed onto what it read (`usePrefs`, which
+also holds the pre-paint slice; the agent question answers, per question). A
+read-modify-write of a whole list (the recent dictation) waits for the load.
+
+Windows write the same keys and hear each other late, so every write carries a
+stamp: a clock that never runs behind any stamp the window has seen (its own
+writes, messages, the load), then the window's id. The newest stamp wins in
+every place: a commit leaves an entry alone that already holds a newer stamp
+(read and written in one transaction), memory ignores a message older than what
+it holds, and the load does not replace a newer local write. A write made before
+the load answered is held unstamped — the clock has not seen the stored stamps
+yet, so any stamp could lose to the very entry it replaces — and is stamped,
+broadcast and committed once the load lands, unless a message for the key
+arrived after it. A removal is stored as a stamped tombstone, so an older write
+landing later cannot bring the value back; tombstones older than 30 days are
+pruned on load. Values migrated from `localStorage` carry the oldest stamp and
+never replace a stored entry.
+
 **Why not `localStorage`.** WebKit (macOS/iOS 26, so the Tauri shell and Safari)
 keeps `localStorage` in SQLite in WAL mode, and since mid-2025
 `SQLiteStorageArea` leaves its cached read statement un-reset after reading a

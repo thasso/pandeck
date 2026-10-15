@@ -19,8 +19,7 @@
  * deliberately trivial.
  */
 
-import type { KeyValueStorage } from "./localStore.ts";
-import { persistentStore } from "./persistentStore.ts";
+import { persistentStore, type PersistentStore } from "./persistentStore.ts";
 
 const STORAGE_KEY = "assistant.dictation.recent";
 /** Enough to spot a pattern; short enough to scan. */
@@ -83,7 +82,7 @@ export function transcriptAge(at: number, now: number = Date.now()): string {
 
 /* ------------------------------ browser storage ----------------------------- */
 
-function storage(): KeyValueStorage | undefined {
+function storage(): PersistentStore | undefined {
   try {
     return typeof window === "undefined" ? undefined : persistentStore();
   } catch {
@@ -105,6 +104,12 @@ export function recentTranscripts(): RecentTranscript[] {
 export function recordTranscript(text: string, at: number = Date.now()): void {
   const store = storage();
   if (!store) return;
+  // Before a slow store read answers the list reads empty, and writing it
+  // would drop the stored transcripts.
+  if (!store.isLoaded()) {
+    void store.whenLoaded().then(() => recordTranscript(text, at));
+    return;
+  }
   const next = appendTranscript(
     parseStoredTranscripts(store.getItem(STORAGE_KEY)),
     text,
