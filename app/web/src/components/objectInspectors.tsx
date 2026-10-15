@@ -103,12 +103,7 @@ import {
   useWorktreeDelivery,
 } from "./worktree/WorktreeDelivery.tsx";
 import { useWorktreeRetire } from "./worktree/useWorktreeRetire.tsx";
-import { usePullRequestMergeCleanup } from "./pullRequest/usePullRequestMergeCleanup.tsx";
-import {
-  usePullRequestReview,
-  usePullRequestWorktree,
-  type PullRequestReviewHandoff,
-} from "./pullRequest/usePullRequestCheckout.tsx";
+import { usePullRequestActions } from "./pullRequest/PullRequestActions.tsx";
 import {
   hostingProviderLabel,
   pullRequestMergeBlockedReason,
@@ -2386,13 +2381,12 @@ export function pullRequestInspectorActions(
  * merge & clean up, open on the provider) and what it is joined to here.
  * @useWhen The main pane shows a pull request detail route.
  * @avoidWhen The route is the section's index — there is no object to inspect.
- * @intent The page states what the provider says and what the pull request is
- * joined to; the ACTS live here, in the one Actions list every object type
- * has, rather than in a bar of their own on the page. The merge dialog and the
- * checkout flows are owned here for the same reason the worktree's delivery
- * flows are owned by its panel: their state is keyed by the object, and the
- * host keys this panel by the pull request so no consent-bearing refusal can
- * survive into another one.
+ * @intent The one Actions list every object type has. The flows behind the
+ * acts — the merge dialog, the checkout and review — are owned by
+ * `PullRequestActionsProvider`, keyed by the pull request, because the detail
+ * page offers the same acts inline where it states what they would change
+ * ("no worktree" beside Create worktree); this panel and the page read ONE
+ * busy state and open ONE dialog.
  * @related Inspector, PullRequestDetailPage, WorktreeInspector.
  */
 export function PullRequestInspector({
@@ -2402,7 +2396,6 @@ export function PullRequestInspector({
   worktreeStatuses,
   openers,
   onStartSession,
-  onReview,
   onReload,
 }: {
   /**
@@ -2417,9 +2410,7 @@ export function PullRequestInspector({
   worktreeStatuses?: Record<string, WorktreeGitStatus>;
   openers: ObjectOpeners;
   onStartSession: (worktreeId: string) => void;
-  /** The checkout exists — hand the review off to the staged composer. */
-  onReview: PullRequestReviewHandoff;
-  /** Something changed on the server — refetch the inventory that shows it. */
+  /** Retry a failed inventory read. */
   onReload: () => void;
 }) {
   const item = dataOf(state) ?? null;
@@ -2427,26 +2418,21 @@ export function PullRequestInspector({
   // R1/R4: only a read that has not answered reserves the panel. A retained
   // item stays through a refresh or a failed one (R2).
   const loading = item === null && state.status === "loading";
-  const merge = usePullRequestMergeCleanup({ item, onDone: onReload });
-  const review = usePullRequestReview({ item, onReady: onReview });
-  const checkout = usePullRequestWorktree({
-    item,
-    onDone: onReload,
-    onStartSession,
-  });
-  const actions: InspectorAction[] = item
-    ? pullRequestInspectorActions(item, {
-        onStartSession,
-        onReview: review.start,
-        reviewBusy: review.busy,
-        onCheckout: checkout.start,
-        checkoutBusy: checkout.busy,
-        onMerge: merge.open,
-        mergeBusy: merge.busy,
-        mergeSuspended: merge.suspended,
-        onOpenExternal: () => window.open(item.url, "_blank", "noreferrer"),
-      })
-    : [];
+  const acts = usePullRequestActions(item);
+  const actions: InspectorAction[] =
+    item && acts
+      ? pullRequestInspectorActions(item, {
+          onStartSession,
+          onReview: acts.review.start,
+          reviewBusy: acts.review.busy,
+          onCheckout: acts.checkout.start,
+          checkoutBusy: acts.checkout.busy,
+          onMerge: acts.merge.open,
+          mergeBusy: acts.merge.busy,
+          mergeSuspended: acts.merge.suspended,
+          onOpenExternal: () => window.open(item.url, "_blank", "noreferrer"),
+        })
+      : [];
   return (
     <Inspector
       loading={loading}
@@ -2475,9 +2461,7 @@ export function PullRequestInspector({
           beside the retained content, which stays actionable, or as the
           panel's whole answer when there is nothing else. */}
       {error ? <ErrorNote message={error} onRetry={onReload} /> : null}
-      {item ? (
-        merge.dialog
-      ) : !loading && !error ? (
+      {!item && !loading && !error ? (
         <EmptyBox>This pull request is not in your inventory.</EmptyBox>
       ) : null}
     </Inspector>

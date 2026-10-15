@@ -280,6 +280,7 @@ import {
   type ObjectRef,
   type SessionActionInputs,
 } from "./components/objectInspectors.tsx";
+import { PullRequestActionsProvider } from "./components/pullRequest/PullRequestActions.tsx";
 import type { SendCommentsTarget } from "./components/review/SendCommentsSheet.tsx";
 import {
   DocumentCommentHostProvider,
@@ -572,7 +573,7 @@ const SessionArtifactViewer = lazy(() =>
 );
 const PullRequestDetailPage = lazy(() =>
   import("./components/pullRequest/PullRequestDetailPage.tsx").then(
-    (module) => ({ default: module.PullRequestDetailPage }),
+    (module) => ({ default: module.PullRequestDetailRoute }),
   ),
 );
 const WorktreeDetailPage = lazy(
@@ -1568,6 +1569,25 @@ function AppContent() {
     route.name === "pullRequests" ||
     (sidebarPanelOpen && sidebarSection === "pull-requests");
   const pullRequestInventory = usePullRequestInventory(pullRequestsActive);
+  // A worktree created or removed changes what the inventory joins (a merged
+  // pull request leaves Needs cleanup with its checkout), and the server
+  // already pruned its snapshot — so ask again now, not at the next poll.
+  const activeWorktreeKey = useMemo(
+    () =>
+      (state.worktrees ?? [])
+        .filter((row) => row.status === "active")
+        .map((row) => row.id)
+        .sort()
+        .join(","),
+    [state.worktrees],
+  );
+  const reloadInventoryOnWorktreeChange = pullRequestInventory.reload;
+  const seenWorktreeKey = useRef(activeWorktreeKey);
+  useEffect(() => {
+    if (seenWorktreeKey.current === activeWorktreeKey) return;
+    seenWorktreeKey.current = activeWorktreeKey;
+    if (pullRequestsActive) reloadInventoryOnWorktreeChange();
+  }, [activeWorktreeKey, pullRequestsActive, reloadInventoryOnWorktreeChange]);
   // The cleanup queue's worktree half, polled exactly while the inventory is.
   const idleWorktreeQueue = useIdleWorktrees(pullRequestsActive);
   const pullRequestDetail = useMemo(
@@ -7067,7 +7087,6 @@ function AppContent() {
           worktreeStatuses={state.worktreeStatuses}
           openers={inspectorOpeners}
           onStartSession={startSessionInWorktree}
-          onReview={startPullRequestReviewDraft}
           onReload={pullRequestInventory.reload}
         />
       ) : (
@@ -7289,517 +7308,546 @@ function AppContent() {
           <KnowledgeOpenTargetsProvider targets={knowledgeOpenTargets}>
             <PaObjectLinkSourceProvider value={paObjectLinkSource}>
               {import.meta.env.DEV ? <PerfHud /> : null}
-              <AppShell
-                mobile={mobileLayout}
-                // No app header on small screens: its actions are nav-bar slots now and its
-                // panel toggles never existed there, so the bar had nothing left to hold
-                // (ui-shell.md, Small Screens). On wide layouts it survives as the home of
-                // the two pane toggles, which have nowhere better yet.
-                header={
-                  mobileLayout ? undefined : (
-                    <Topbar
-                      prefs={prefs}
-                      updatePrefs={update}
-                      sidebarOpen={sidebarPanelOpen}
-                      inspectorOpen={inspectorOpen}
-                      onToggleSidebar={toggleSidebarPanel}
-                      onToggleInspector={() =>
-                        setInspectorOpen((open) => !open)
-                      }
-                      connected={state.connected}
-                      reloading={state.reloading}
-                      hydrationSource={state.hydrationSource}
-                      accountLoginAlerts={state.accountLoginAlerts}
-                      onNavigate={navigate}
-                    />
-                  )
+              <PullRequestActionsProvider
+                // The routed pull request's acts, owned once for the page's
+                // inline buttons and the object panel alike.
+                item={
+                  pullRequestTarget ? (dataOf(pullRequestDetail) ?? null) : null
                 }
-                left={{
-                  open: sidebarPanelOpen,
-                  width: prefs.sidebarWidth,
-                  minWidth: SIDEBAR_MIN_WIDTH,
-                  onResize: (width) => update({ sidebarWidth: width }),
-                  animate: prefs.animateLeftSidebar,
-                  // On mobile the browser is a route-driven screen, so it has no dismiss.
-                  mobilePresentation: "screen",
-                  onDismiss: () => setSidebarOpen(false),
-                  label: "sidebar",
-                  content: sidebarContent,
-                }}
-                right={{
-                  open: inspectorOpen,
-                  width: prefs.taskDrawerWidth,
-                  minWidth: TASK_DRAWER_MIN_WIDTH,
-                  onResize: (width) => update({ taskDrawerWidth: width }),
-                  animate: prefs.animateRightDrawer,
-                  // On mobile the object panel is a bottom dock: peek at rest, sheet when
-                  // expanded. `open` therefore means expanded there.
-                  mobilePresentation: "dock",
-                  ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
-                  mobileDockSuppressed:
-                    dockSuppressed || composerOwnsBottomEdge,
-                  onExpand: () => setInspectorOpen(true),
-                  onDismiss: () => setInspectorOpen(false),
-                  label: "inspector",
-                  // The page header owns the inspector's overflow actions on wide layouts,
-                  // so keep their publisher alive even when the panel itself is closed.
-                  keepMountedWhenClosed: true,
-                  // The expanded sheet is where a document's detailed zoom controls
-                  // live on a phone; the desktop keeps them in the viewer's header.
-                  content: mobileLayout ? (
-                    <>
-                      {documentRoute && documentNavigation?.zoom ? (
-                        <DocumentZoomSection zoom={documentNavigation.zoom} />
-                      ) : null}
-                      <SessionRowDetailsContext.Provider
-                        value={sessionRowDetails}
-                      >
-                        {rightPanelContent}
-                      </SessionRowDetailsContext.Provider>
-                    </>
-                  ) : (
-                    desktopRightPanelContent
-                  ),
-                }}
-                edgeBack={edgeBack}
+                onReload={pullRequestInventory.reload}
+                onStartSession={startSessionInWorktree}
+                onReview={startPullRequestReviewDraft}
               >
-                {routeDocumentTarget ? (
-                  <DocumentNavigationMarker
-                    target={routeDocumentTarget}
-                    title={
-                      routeDocumentTarget.path.split("/").pop() ??
-                      routeDocumentTarget.path
-                    }
-                  />
-                ) : null}
-                {route.name === "tasks" ? (
-                  <Suspense
-                    fallback={<LazySurfaceFallback label="Opening Task…" />}
-                  >
-                    <TaskManagementPage
-                      backlogState={backlogState}
-                      connected={state.connected}
-                      detailState={selectedTaskDetailState}
-                      failure={
-                        selectedTaskId
-                          ? state.objectFailures.task[selectedTaskId]
-                          : undefined
+                <AppShell
+                  mobile={mobileLayout}
+                  // No app header on small screens: its actions are nav-bar slots now and its
+                  // panel toggles never existed there, so the bar had nothing left to hold
+                  // (ui-shell.md, Small Screens). On wide layouts it survives as the home of
+                  // the two pane toggles, which have nowhere better yet.
+                  header={
+                    mobileLayout ? undefined : (
+                      <Topbar
+                        prefs={prefs}
+                        updatePrefs={update}
+                        sidebarOpen={sidebarPanelOpen}
+                        inspectorOpen={inspectorOpen}
+                        onToggleSidebar={toggleSidebarPanel}
+                        onToggleInspector={() =>
+                          setInspectorOpen((open) => !open)
+                        }
+                        connected={state.connected}
+                        reloading={state.reloading}
+                        hydrationSource={state.hydrationSource}
+                        accountLoginAlerts={state.accountLoginAlerts}
+                        onNavigate={navigate}
+                      />
+                    )
+                  }
+                  left={{
+                    open: sidebarPanelOpen,
+                    width: prefs.sidebarWidth,
+                    minWidth: SIDEBAR_MIN_WIDTH,
+                    onResize: (width) => update({ sidebarWidth: width }),
+                    animate: prefs.animateLeftSidebar,
+                    // On mobile the browser is a route-driven screen, so it has no dismiss.
+                    mobilePresentation: "screen",
+                    onDismiss: () => setSidebarOpen(false),
+                    label: "sidebar",
+                    content: sidebarContent,
+                  }}
+                  right={{
+                    open: inspectorOpen,
+                    width: prefs.taskDrawerWidth,
+                    minWidth: TASK_DRAWER_MIN_WIDTH,
+                    onResize: (width) => update({ taskDrawerWidth: width }),
+                    animate: prefs.animateRightDrawer,
+                    // On mobile the object panel is a bottom dock: peek at rest, sheet when
+                    // expanded. `open` therefore means expanded there.
+                    mobilePresentation: "dock",
+                    ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
+                    mobileDockSuppressed:
+                      dockSuppressed || composerOwnsBottomEdge,
+                    onExpand: () => setInspectorOpen(true),
+                    onDismiss: () => setInspectorOpen(false),
+                    label: "inspector",
+                    // The page header owns the inspector's overflow actions on wide layouts,
+                    // so keep their publisher alive even when the panel itself is closed.
+                    keepMountedWhenClosed: true,
+                    // The expanded sheet is where a document's detailed zoom controls
+                    // live on a phone; the desktop keeps them in the viewer's header.
+                    content: mobileLayout ? (
+                      <>
+                        {documentRoute && documentNavigation?.zoom ? (
+                          <DocumentZoomSection zoom={documentNavigation.zoom} />
+                        ) : null}
+                        <SessionRowDetailsContext.Provider
+                          value={sessionRowDetails}
+                        >
+                          {rightPanelContent}
+                        </SessionRowDetailsContext.Provider>
+                      </>
+                    ) : (
+                      desktopRightPanelContent
+                    ),
+                  }}
+                  edgeBack={edgeBack}
+                >
+                  {routeDocumentTarget ? (
+                    <DocumentNavigationMarker
+                      target={routeDocumentTarget}
+                      title={
+                        routeDocumentTarget.path.split("/").pop() ??
+                        routeDocumentTarget.path
                       }
-                      onDismissFailure={() =>
-                        selectedTaskId &&
-                        actions.dismissObjectFailure("task", selectedTaskId)
-                      }
-                      workflowRuns={selectedTaskWorkflowRuns}
-                      workflowCards={selectedTaskWorkflowCards}
-                      accountNames={accountNames}
-                      sessions={backlogSessions}
-                      taskMutations={selectedTaskMutations}
-                      actions={actions}
-                      prefs={prefs}
-                      onUpdatePrefs={update}
-                      selectedId={route.id ?? null}
-                      detailOnly
-                      back={screenBack}
-                      mobile={mobileLayout}
-                      onSelect={(id) => navigate(taskPath(id))}
-                      onNavigate={openBacklogRowLink}
-                      onCloseDetail={() => openSidebarSection("tasks")}
-                      onClose={closeSettings}
-                      paObjectReferences={paObjectReferences}
-                      onOpenPaObject={(link) => navigate(link.href)}
-                      onOpenSession={openSession}
-                      workflowIndicators={workflowIndicators}
                     />
-                  </Suspense>
-                ) : route.name === "projects" ? (
-                  <Suspense
-                    fallback={<LazySurfaceFallback label="Opening Projects…" />}
-                  >
-                    <ProjectDetailPage
-                      key={selectedProjectId ?? "projects-index"}
-                      back={screenBack}
-                      projects={projects}
-                      loaded={projectsLoaded}
-                      listError={state.projectListError}
-                      // The failure this project is CARRYING, for the writes no control
-                      // on the page tracks. Retired by its own dismiss, or by this
-                      // project's next write (`docs/messaging.md`).
-                      failure={
-                        selectedProjectId
-                          ? state.objectFailures.project[selectedProjectId]
-                          : undefined
-                      }
-                      onDismissFailure={() =>
-                        selectedProjectId &&
-                        actions.dismissObjectFailure(
-                          "project",
-                          selectedProjectId,
-                        )
-                      }
-                      selectedId={selectedProjectId}
-                      onLoad={loadProjects}
-                      detailState={selectedProjectDetailState}
-                      onLoadDetail={actions.requestProjectDetail}
-                      onOpenProjection={actions.setOpenProjectProjection}
-                      mutationStates={projectPageMutationCache.current.value}
-                      onBackToList={projectBackToList}
-                      onSave={saveProject}
-                      onCloneRepo={cloneProjectRepo}
-                      onRemoveClone={removeProjectRepo}
-                      worktreeState={selectedProjectWorktreeState}
-                      onLoadWorktrees={reloadWorktrees}
-                      worktreeStatuses={projectPageStatusCache.current.value}
-                      onOpenWorktree={openWorktree}
-                      onCreateWorktree={createWorktreeForProject}
-                      onStartSessionInWorktree={startSessionInWorktree}
-                      onOpenProject={openProject}
-                      sessions={state.sessions}
-                      currentSessionId={displayCurrentId}
-                      onOpenSession={openSession}
-                      onArchiveSession={archiveSession}
-                      paObjectReferences={paObjectReferences}
-                      onOpenPaObject={openProjectPaObject}
-                    />
-                  </Suspense>
-                ) : route.name === "pullRequests" ? (
-                  <Suspense
-                    fallback={
-                      <LazySurfaceFallback label="Opening Pull Requests…" />
-                    }
-                  >
-                    {pullRequestTarget ? (
-                      <PullRequestDetailPage
-                        // R3: the page is keyed by what it addresses, so switching pull
-                        // requests mounts the new one's own loading state rather than
-                        // leaving the previous body under a new number.
-                        key={`${pullRequestTarget.projectId}#${pullRequestTarget.provider}#${pullRequestTarget.repositoryKey}#${pullRequestTarget.number}`}
-                        back={screenBack}
-                        target={pullRequestTarget}
-                        state={pullRequestDetail}
-                        onReload={pullRequestInventory.reload}
-                        projects={projects}
-                        // ONE mapping, in a tested pure function: the lists AND what is
-                        // known about their currency travel together, so a later tidy
-                        // cannot quietly turn "not answered yet" into "there are none"
-                        // (`lib/pullRequestInbox.ts`).
-                        joins={pullRequestJoins}
-                        status={
-                          pullRequestWorktreeId
-                            ? state.worktreeStatuses[pullRequestWorktreeId]
+                  ) : null}
+                  {route.name === "tasks" ? (
+                    <Suspense
+                      fallback={<LazySurfaceFallback label="Opening Task…" />}
+                    >
+                      <TaskManagementPage
+                        backlogState={backlogState}
+                        connected={state.connected}
+                        detailState={selectedTaskDetailState}
+                        failure={
+                          selectedTaskId
+                            ? state.objectFailures.task[selectedTaskId]
                             : undefined
                         }
-                        onOpenWorktree={(id) =>
-                          navigate(worktreePath(id, "changes"))
+                        onDismissFailure={() =>
+                          selectedTaskId &&
+                          actions.dismissObjectFailure("task", selectedTaskId)
                         }
+                        workflowRuns={selectedTaskWorkflowRuns}
+                        workflowCards={selectedTaskWorkflowCards}
+                        accountNames={accountNames}
+                        sessions={backlogSessions}
+                        taskMutations={selectedTaskMutations}
+                        actions={actions}
+                        prefs={prefs}
+                        onUpdatePrefs={update}
+                        selectedId={route.id ?? null}
+                        detailOnly
+                        back={screenBack}
+                        mobile={mobileLayout}
+                        onSelect={(id) => navigate(taskPath(id))}
+                        onNavigate={openBacklogRowLink}
+                        onCloseDetail={() => openSidebarSection("tasks")}
+                        onClose={closeSettings}
+                        paObjectReferences={paObjectReferences}
+                        onOpenPaObject={(link) => navigate(link.href)}
                         onOpenSession={openSession}
-                        onOpenTask={openTaskById}
+                        workflowIndicators={workflowIndicators}
                       />
-                    ) : (
-                      <PullRequestIndexPlaceholder back={screenBack} />
-                    )}
-                  </Suspense>
-                ) : route.name === "worktrees" ? (
-                  <Suspense
-                    fallback={<LazySurfaceFallback label="Opening Worktree…" />}
-                  >
-                    {(() => {
-                      const worktree = state.worktrees?.find(
-                        (item) => item.id === route.id,
-                      );
-                      if (!worktree) {
-                        return (
-                          <WorktreePlaceholder
+                    </Suspense>
+                  ) : route.name === "projects" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening Projects…" />
+                      }
+                    >
+                      <ProjectDetailPage
+                        key={selectedProjectId ?? "projects-index"}
+                        back={screenBack}
+                        projects={projects}
+                        loaded={projectsLoaded}
+                        listError={state.projectListError}
+                        // The failure this project is CARRYING, for the writes no control
+                        // on the page tracks. Retired by its own dismiss, or by this
+                        // project's next write (`docs/messaging.md`).
+                        failure={
+                          selectedProjectId
+                            ? state.objectFailures.project[selectedProjectId]
+                            : undefined
+                        }
+                        onDismissFailure={() =>
+                          selectedProjectId &&
+                          actions.dismissObjectFailure(
+                            "project",
+                            selectedProjectId,
+                          )
+                        }
+                        selectedId={selectedProjectId}
+                        onLoad={loadProjects}
+                        detailState={selectedProjectDetailState}
+                        onLoadDetail={actions.requestProjectDetail}
+                        onOpenProjection={actions.setOpenProjectProjection}
+                        mutationStates={projectPageMutationCache.current.value}
+                        onBackToList={projectBackToList}
+                        onSave={saveProject}
+                        onCloneRepo={cloneProjectRepo}
+                        onRemoveClone={removeProjectRepo}
+                        worktreeState={selectedProjectWorktreeState}
+                        onLoadWorktrees={reloadWorktrees}
+                        worktreeStatuses={projectPageStatusCache.current.value}
+                        onOpenWorktree={openWorktree}
+                        onCreateWorktree={createWorktreeForProject}
+                        onStartSessionInWorktree={startSessionInWorktree}
+                        onOpenProject={openProject}
+                        sessions={state.sessions}
+                        currentSessionId={displayCurrentId}
+                        onOpenSession={openSession}
+                        onArchiveSession={archiveSession}
+                        paObjectReferences={paObjectReferences}
+                        onOpenPaObject={openProjectPaObject}
+                      />
+                    </Suspense>
+                  ) : route.name === "pullRequests" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening Pull Requests…" />
+                      }
+                    >
+                      {pullRequestTarget ? (
+                        // The page lists sessions with the inspector's rows,
+                        // which read their worktree and account from here.
+                        <SessionRowDetailsContext.Provider
+                          value={sessionRowDetails}
+                        >
+                          <PullRequestDetailPage
+                            // R3: the page is keyed by what it addresses, so switching pull
+                            // requests mounts the new one's own loading state rather than
+                            // leaving the previous body under a new number.
+                            key={`${pullRequestTarget.projectId}#${pullRequestTarget.provider}#${pullRequestTarget.repositoryKey}#${pullRequestTarget.number}`}
                             back={screenBack}
-                            detail={
-                              state.worktrees === null
-                                ? "Loading worktrees…"
-                                : "This worktree no longer exists."
+                            target={pullRequestTarget}
+                            state={pullRequestDetail}
+                            onReload={pullRequestInventory.reload}
+                            projects={projects}
+                            // ONE mapping, in a tested pure function: the lists AND what is
+                            // known about their currency travel together, so a later tidy
+                            // cannot quietly turn "not answered yet" into "there are none"
+                            // (`lib/pullRequestInbox.ts`).
+                            joins={pullRequestJoins}
+                            status={
+                              pullRequestWorktreeId
+                                ? state.worktreeStatuses[pullRequestWorktreeId]
+                                : undefined
+                            }
+                            onOpenWorktree={(id) =>
+                              navigate(worktreePath(id, "changes"))
+                            }
+                            onOpenSession={openSession}
+                            onOpenTask={openTaskById}
+                          />
+                        </SessionRowDetailsContext.Provider>
+                      ) : (
+                        <PullRequestIndexPlaceholder back={screenBack} />
+                      )}
+                    </Suspense>
+                  ) : route.name === "worktrees" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening Worktree…" />
+                      }
+                    >
+                      {(() => {
+                        const worktree = state.worktrees?.find(
+                          (item) => item.id === route.id,
+                        );
+                        if (!worktree) {
+                          return (
+                            <WorktreePlaceholder
+                              back={screenBack}
+                              detail={
+                                state.worktrees === null
+                                  ? "Loading worktrees…"
+                                  : "This worktree no longer exists."
+                              }
+                            />
+                          );
+                        }
+                        return (
+                          <WorktreeDetailPage
+                            back={screenBack}
+                            worktree={worktree}
+                            status={state.worktreeStatuses[worktree.id]}
+                            narrow={mobileLayout}
+                            view={route.view ?? "changes"}
+                            filePath={route.path}
+                            from={route.from}
+                            to={route.to}
+                            anchor={route.anchor}
+                            navigate={navigate}
+                            prefs={prefs}
+                            onUpdatePrefs={update}
+                            comments={
+                              state.worktreeComments[worktree.id] ??
+                              NO_WORKTREE_COMMENTS
+                            }
+                            onLoadComments={() =>
+                              worktreeCommentWatch.list(worktree.id)
+                            }
+                            onUnloadComments={() =>
+                              worktreeCommentWatch.unwatch(worktree.id)
+                            }
+                            onSubmitReview={(commentIds) =>
+                              setWorktreeSubmission({
+                                worktreeId: worktree.id,
+                                commentIds,
+                              })
+                            }
+                            commentActions={worktreeCommentActionsFor(
+                              worktree.id,
+                            )}
+                            openComment={
+                              worktreeCommentToOpen &&
+                              worktreeCommentToOpen.worktreeId === worktree.id
+                                ? {
+                                    commentId: worktreeCommentToOpen.commentId,
+                                    nonce: worktreeCommentToOpen.nonce,
+                                  }
+                                : undefined
                             }
                           />
                         );
+                      })()}
+                    </Suspense>
+                  ) : route.name === "knowledge" && !knowledgeEnabled ? (
+                    <EmptyBox
+                      className="m-6"
+                      action={
+                        <Button
+                          variant="outline"
+                          onClick={() => openSettingsSection("knowledge-base")}
+                        >
+                          Open Knowledge Base settings
+                        </Button>
                       }
-                      return (
-                        <WorktreeDetailPage
+                    >
+                      The Knowledge Base is turned off.
+                    </EmptyBox>
+                  ) : route.name === "knowledge" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening Knowledge…" />
+                      }
+                    >
+                      <WorktreeDetailPage
+                        back={screenBack}
+                        worktree={knowledgeCheckoutRecord(
+                          state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
+                        )}
+                        status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
+                        title="Knowledge Base"
+                        lineComments={false}
+                        markdownPreviewFirst
+                        // The sidebar's Knowledge section is the file tree.
+                        browseAsDocuments
+                        documentComments={knowledgeCommentDocument}
+                        narrow={mobileLayout}
+                        view={route.view ?? "files"}
+                        filePath={route.path}
+                        from={route.from}
+                        to={route.to}
+                        anchor={route.anchor}
+                        navigate={navigate}
+                        prefs={prefs}
+                        onUpdatePrefs={update}
+                        comments={NO_WORKTREE_COMMENTS}
+                        onLoadComments={noopKnowledgeComments}
+                        onUnloadComments={noopKnowledgeComments}
+                        commentActions={NO_KNOWLEDGE_COMMENT_ACTIONS}
+                        onSubmitReview={noopKnowledgeComments}
+                      />
+                    </Suspense>
+                  ) : route.name === "settings" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening Settings…" />
+                      }
+                    >
+                      <SettingsPage
+                        back={screenBack}
+                        models={state.models}
+                        accountModels={settingsAccountModels}
+                        credentialProfiles={credentialProfiles}
+                        usageIndicators={state.usageIndicators}
+                        onOpenSection={(section) =>
+                          navigate(settingsPath(section))
+                        }
+                        projects={projects}
+                        settings={state.settings}
+                        memory={memory}
+                        skills={state.skillLibrary}
+                        agents={state.agentLibrary}
+                        prefs={prefs}
+                        speechToText={state.speechToText}
+                        serverBuild={state.serverBuild}
+                        onUpdate={actions.updateSettings}
+                        onToggleSkill={actions.setSkillEnabled}
+                        onUpdatePrefs={update}
+                        onRefreshModels={actions.refreshModels}
+                        modelsRefreshing={state.modelsRefreshRequestId !== null}
+                        section={route.section}
+                        onSaveAndTestJira={actions.saveAndTestJiraSettings}
+                        onTestJira={actions.testJiraSettings}
+                        jiraStatus={state.jiraStatus}
+                        onSaveAndTestConfluence={
+                          actions.saveAndTestConfluenceSettings
+                        }
+                        onTestConfluence={actions.testConfluenceSettings}
+                        confluenceStatus={state.confluenceStatus}
+                        onUpdateTempo={actions.updateTempoSettings}
+                        onSaveAndTestTempo={actions.saveAndTestTempoSettings}
+                        onTestTempo={actions.testTempoSettings}
+                        tempoStatus={state.tempoStatus}
+                        onUpdateGoogle={actions.updateGoogleSettings}
+                        onSaveAndTestGoogle={actions.saveAndTestGoogleSettings}
+                        onTestGoogle={actions.testGoogleSettings}
+                        googleStatus={state.googleStatus}
+                        onSaveAndTestSlack={actions.saveAndTestSlackSettings}
+                        onTestSlack={actions.testSlackSettings}
+                        slackStatus={state.slackStatus}
+                        onSaveAndTestOpenAiCompatible={
+                          actions.saveAndTestOpenAiCompatibleSettings
+                        }
+                        onTestOpenAiCompatible={
+                          actions.testOpenAiCompatibleSettings
+                        }
+                        openAiCompatibleStatus={state.openAiCompatibleStatus}
+                        onSaveAndTestBrave={actions.saveAndTestBraveSettings}
+                        onTestBrave={actions.testBraveSettings}
+                        braveStatus={state.braveStatus}
+                        onSaveAndTestContext7={
+                          actions.saveAndTestContext7Settings
+                        }
+                        onTestContext7={actions.testContext7Settings}
+                        context7Status={state.context7Status}
+                        onSaveAndTestGithub={actions.saveAndTestGithubSettings}
+                        onTestGithub={actions.testGithubSettings}
+                        githubStatus={state.githubStatus}
+                        onSaveAndTestForgejo={
+                          actions.saveAndTestForgejoSettings
+                        }
+                        onTestForgejo={actions.testForgejoSettings}
+                        forgejoStatus={state.forgejoStatus}
+                      />
+                    </Suspense>
+                  ) : route.name === "usage" ? (
+                    <Suspense
+                      fallback={<LazySurfaceFallback label="Opening Usage…" />}
+                    >
+                      <UsagePage back={screenBack} />
+                    </Suspense>
+                  ) : route.name === "files" ? (
+                    <Suspense
+                      fallback={<LazySurfaceFallback label="Opening file…" />}
+                    >
+                      <FileViewerPage path={route.path} anchor={route.anchor} />
+                    </Suspense>
+                  ) : route.name === "artifacts" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening artifact…" />
+                      }
+                    >
+                      <SessionArtifactViewer
+                        sessionId={route.sessionId}
+                        path={route.path}
+                        anchor={route.anchor}
+                      />
+                    </Suspense>
+                  ) : route.name === "backgroundTasks" ? (
+                    <Suspense
+                      fallback={
+                        <LazySurfaceFallback label="Opening background work…" />
+                      }
+                    >
+                      <BackgroundTasksPage
+                        back={screenBack}
+                        items={state.backgroundWorkItems}
+                        truncated={state.backgroundWorkTruncated}
+                        sessions={state.sessions}
+                        anchoredId={route.taskId}
+                        stopPending={backgroundStopPending}
+                        onStop={actions.stopBackgroundWork}
+                        onStopAllForOwner={actions.stopAllBackgroundWork}
+                        onOpenSession={openSession}
+                      />
+                    </Suspense>
+                  ) : (
+                    <>
+                      {chatHeaderHidden ? null : (
+                        <PageHeader
                           back={screenBack}
-                          worktree={worktree}
-                          status={state.worktreeStatuses[worktree.id]}
-                          narrow={mobileLayout}
-                          view={route.view ?? "changes"}
-                          filePath={route.path}
-                          from={route.from}
-                          to={route.to}
-                          anchor={route.anchor}
-                          navigate={navigate}
-                          prefs={prefs}
-                          onUpdatePrefs={update}
-                          comments={
-                            state.worktreeComments[worktree.id] ??
-                            NO_WORKTREE_COMMENTS
+                          {...sessionHeaderIcon("session", {
+                            harness: displayHarness,
+                            agentType: displayAgentType,
+                          })}
+                          // The session header is always one compact identity row. Counts have a
+                          // richer home in the right panel's Tasks and Tools sections; the glyph
+                          // carries the session-id copy action on every viewport.
+                          density="compact"
+                          icon={
+                            sessionIdCopied ? (
+                              <Check size={16} strokeWidth={2.5} />
+                            ) : (
+                              chatHeaderGlyph
+                            )
                           }
-                          onLoadComments={() =>
-                            worktreeCommentWatch.list(worktree.id)
+                          onIconClick={copySessionId}
+                          iconLabel={
+                            sessionIdCopied ? "Copied!" : "Copy session ID"
                           }
-                          onUnloadComments={() =>
-                            worktreeCommentWatch.unwatch(worktree.id)
-                          }
-                          onSubmitReview={(commentIds) =>
-                            setWorktreeSubmission({
-                              worktreeId: worktree.id,
-                              commentIds,
-                            })
-                          }
-                          commentActions={worktreeCommentActionsFor(
-                            worktree.id,
-                          )}
-                          openComment={
-                            worktreeCommentToOpen &&
-                            worktreeCommentToOpen.worktreeId === worktree.id
-                              ? {
-                                  commentId: worktreeCommentToOpen.commentId,
-                                  nonce: worktreeCommentToOpen.nonce,
+                          objectOverflow={false}
+                          title={sessionTitleHeading}
+                          // Exactly two actions, on every layout: Comment on the
+                          // transcript selection, and ⋯ for the rest. The worktree
+                          // is reached through the title block itself.
+                          actions={
+                            <div className="flex items-center gap-1">
+                              <IconButton
+                                label="Add comment"
+                                title={
+                                  chatCommentSelection
+                                    ? "Add comment"
+                                    : "Select text to comment"
                                 }
-                              : undefined
+                                // Keep the transcript selection the comment anchors to.
+                                onPointerDown={(event) =>
+                                  event.preventDefault()
+                                }
+                                onClick={commentOnSelection}
+                                data-comment-actuation
+                                disabled={!chatCommentSelection}
+                              >
+                                <MessageSquareQuote />
+                              </IconButton>
+                              <PublishRouteSecondaryActions
+                                actions={sessionInspectorActions(
+                                  sessionActionInputs,
+                                )}
+                              />
+                              <ChatHeaderMenu
+                                mobile={mobileLayout}
+                                view={
+                                  displayHasMessages
+                                    ? {
+                                        ...transcriptView,
+                                        onChange: updateTranscriptView,
+                                      }
+                                    : undefined
+                                }
+                              />
+                            </div>
                           }
                         />
-                      );
-                    })()}
-                  </Suspense>
-                ) : route.name === "knowledge" && !knowledgeEnabled ? (
-                  <EmptyBox
-                    className="m-6"
-                    action={
-                      <Button
-                        variant="outline"
-                        onClick={() => openSettingsSection("knowledge-base")}
-                      >
-                        Open Knowledge Base settings
-                      </Button>
-                    }
-                  >
-                    The Knowledge Base is turned off.
-                  </EmptyBox>
-                ) : route.name === "knowledge" ? (
-                  <Suspense
-                    fallback={
-                      <LazySurfaceFallback label="Opening Knowledge…" />
-                    }
-                  >
-                    <WorktreeDetailPage
-                      back={screenBack}
-                      worktree={knowledgeCheckoutRecord(
-                        state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
                       )}
-                      status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
-                      title="Knowledge Base"
-                      lineComments={false}
-                      markdownPreviewFirst
-                      // The sidebar's Knowledge section is the file tree.
-                      browseAsDocuments
-                      documentComments={knowledgeCommentDocument}
-                      narrow={mobileLayout}
-                      view={route.view ?? "files"}
-                      filePath={route.path}
-                      from={route.from}
-                      to={route.to}
-                      anchor={route.anchor}
-                      navigate={navigate}
-                      prefs={prefs}
-                      onUpdatePrefs={update}
-                      comments={NO_WORKTREE_COMMENTS}
-                      onLoadComments={noopKnowledgeComments}
-                      onUnloadComments={noopKnowledgeComments}
-                      commentActions={NO_KNOWLEDGE_COMMENT_ACTIONS}
-                      onSubmitReview={noopKnowledgeComments}
-                    />
-                  </Suspense>
-                ) : route.name === "settings" ? (
-                  <Suspense
-                    fallback={<LazySurfaceFallback label="Opening Settings…" />}
-                  >
-                    <SettingsPage
-                      back={screenBack}
-                      models={state.models}
-                      accountModels={settingsAccountModels}
-                      credentialProfiles={credentialProfiles}
-                      usageIndicators={state.usageIndicators}
-                      onOpenSection={(section) =>
-                        navigate(settingsPath(section))
-                      }
-                      projects={projects}
-                      settings={state.settings}
-                      memory={memory}
-                      skills={state.skillLibrary}
-                      agents={state.agentLibrary}
-                      prefs={prefs}
-                      speechToText={state.speechToText}
-                      serverBuild={state.serverBuild}
-                      onUpdate={actions.updateSettings}
-                      onToggleSkill={actions.setSkillEnabled}
-                      onUpdatePrefs={update}
-                      onRefreshModels={actions.refreshModels}
-                      modelsRefreshing={state.modelsRefreshRequestId !== null}
-                      section={route.section}
-                      onSaveAndTestJira={actions.saveAndTestJiraSettings}
-                      onTestJira={actions.testJiraSettings}
-                      jiraStatus={state.jiraStatus}
-                      onSaveAndTestConfluence={
-                        actions.saveAndTestConfluenceSettings
-                      }
-                      onTestConfluence={actions.testConfluenceSettings}
-                      confluenceStatus={state.confluenceStatus}
-                      onUpdateTempo={actions.updateTempoSettings}
-                      onSaveAndTestTempo={actions.saveAndTestTempoSettings}
-                      onTestTempo={actions.testTempoSettings}
-                      tempoStatus={state.tempoStatus}
-                      onUpdateGoogle={actions.updateGoogleSettings}
-                      onSaveAndTestGoogle={actions.saveAndTestGoogleSettings}
-                      onTestGoogle={actions.testGoogleSettings}
-                      googleStatus={state.googleStatus}
-                      onSaveAndTestSlack={actions.saveAndTestSlackSettings}
-                      onTestSlack={actions.testSlackSettings}
-                      slackStatus={state.slackStatus}
-                      onSaveAndTestOpenAiCompatible={
-                        actions.saveAndTestOpenAiCompatibleSettings
-                      }
-                      onTestOpenAiCompatible={
-                        actions.testOpenAiCompatibleSettings
-                      }
-                      openAiCompatibleStatus={state.openAiCompatibleStatus}
-                      onSaveAndTestBrave={actions.saveAndTestBraveSettings}
-                      onTestBrave={actions.testBraveSettings}
-                      braveStatus={state.braveStatus}
-                      onSaveAndTestContext7={
-                        actions.saveAndTestContext7Settings
-                      }
-                      onTestContext7={actions.testContext7Settings}
-                      context7Status={state.context7Status}
-                      onSaveAndTestGithub={actions.saveAndTestGithubSettings}
-                      onTestGithub={actions.testGithubSettings}
-                      githubStatus={state.githubStatus}
-                      onSaveAndTestForgejo={actions.saveAndTestForgejoSettings}
-                      onTestForgejo={actions.testForgejoSettings}
-                      forgejoStatus={state.forgejoStatus}
-                    />
-                  </Suspense>
-                ) : route.name === "usage" ? (
-                  <Suspense
-                    fallback={<LazySurfaceFallback label="Opening Usage…" />}
-                  >
-                    <UsagePage back={screenBack} />
-                  </Suspense>
-                ) : route.name === "files" ? (
-                  <Suspense
-                    fallback={<LazySurfaceFallback label="Opening file…" />}
-                  >
-                    <FileViewerPage path={route.path} anchor={route.anchor} />
-                  </Suspense>
-                ) : route.name === "artifacts" ? (
-                  <Suspense
-                    fallback={<LazySurfaceFallback label="Opening artifact…" />}
-                  >
-                    <SessionArtifactViewer
-                      sessionId={route.sessionId}
-                      path={route.path}
-                      anchor={route.anchor}
-                    />
-                  </Suspense>
-                ) : route.name === "backgroundTasks" ? (
-                  <Suspense
-                    fallback={
-                      <LazySurfaceFallback label="Opening background work…" />
-                    }
-                  >
-                    <BackgroundTasksPage
-                      back={screenBack}
-                      items={state.backgroundWorkItems}
-                      truncated={state.backgroundWorkTruncated}
-                      sessions={state.sessions}
-                      anchoredId={route.taskId}
-                      stopPending={backgroundStopPending}
-                      onStop={actions.stopBackgroundWork}
-                      onStopAllForOwner={actions.stopAllBackgroundWork}
-                      onOpenSession={openSession}
-                    />
-                  </Suspense>
-                ) : (
-                  <>
-                    {chatHeaderHidden ? null : (
-                      <PageHeader
-                        back={screenBack}
-                        {...sessionHeaderIcon("session", {
-                          harness: displayHarness,
-                          agentType: displayAgentType,
-                        })}
-                        // The session header is always one compact identity row. Counts have a
-                        // richer home in the right panel's Tasks and Tools sections; the glyph
-                        // carries the session-id copy action on every viewport.
-                        density="compact"
-                        icon={
-                          sessionIdCopied ? (
-                            <Check size={16} strokeWidth={2.5} />
-                          ) : (
-                            chatHeaderGlyph
-                          )
-                        }
-                        onIconClick={copySessionId}
-                        iconLabel={
-                          sessionIdCopied ? "Copied!" : "Copy session ID"
-                        }
-                        objectOverflow={false}
-                        title={sessionTitleHeading}
-                        // Exactly two actions, on every layout: Comment on the
-                        // transcript selection, and ⋯ for the rest. The worktree
-                        // is reached through the title block itself.
-                        actions={
-                          <div className="flex items-center gap-1">
-                            <IconButton
-                              label="Add comment"
-                              title={
-                                chatCommentSelection
-                                  ? "Add comment"
-                                  : "Select text to comment"
-                              }
-                              // Keep the transcript selection the comment anchors to.
-                              onPointerDown={(event) => event.preventDefault()}
-                              onClick={commentOnSelection}
-                              data-comment-actuation
-                              disabled={!chatCommentSelection}
-                            >
-                              <MessageSquareQuote />
-                            </IconButton>
-                            <PublishRouteSecondaryActions
-                              actions={sessionInspectorActions(
-                                sessionActionInputs,
-                              )}
-                            />
-                            <ChatHeaderMenu
-                              mobile={mobileLayout}
-                              view={
-                                displayHasMessages
-                                  ? {
-                                      ...transcriptView,
-                                      onChange: updateTranscriptView,
-                                    }
-                                  : undefined
-                              }
-                            />
-                          </div>
-                        }
-                      />
-                    )}
 
-                    {/* A cached boot paint is the one case where the stage shows a
+                      {/* A cached boot paint is the one case where the stage shows a
                 transcript nobody has revalidated yet; a streaming row narrates
                 that itself, and two narrations for one source is exactly what
                 the model forbids. */}
-                    {usePreview && !previewHasStreamingMessage && (
-                      <SessionRefreshMark />
-                    )}
+                      {usePreview && !previewHasStreamingMessage && (
+                        <SessionRefreshMark />
+                      )}
 
-                    {chatSurface}
-                  </>
-                )}
-              </AppShell>
+                      {chatSurface}
+                    </>
+                  )}
+                </AppShell>
+              </PullRequestActionsProvider>
               {worktreeOverlay.createForProjectId ||
               worktreeOverlay.mergeWorktreeId ||
               worktreeOverlay.removeWorktreeId ? (
