@@ -453,7 +453,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
     label: coordinatorCreateOnly ? "Tasks: Create Follow-ups" : "Tasks: Manage",
     description: coordinatorCreateOnly
       ? "Create durable follow-up Tasks only when the user's current message explicitly asks. This coordinator-only variant cannot update, archive, or delete Tasks. Every created Task lands untriaged, is linked under this Workflow Run's Task, and carries its pull request as a source link when present."
-      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Status writes are SUGGESTIONS the user answers. Set dates, priority, project and ticket only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, ticket, dueDate or scheduledFor and resets priority.",
+      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Status writes are SUGGESTIONS the user answers. Record a dependency as an addLinks blocks/blocked-by link, never only in prose. Set dates, priority, project and ticket only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, ticket, dueDate or scheduledFor and resets priority.",
     parameters: coordinatorCreateOnly
       ? coordinatorTaskCreateSchema
       : taskManageSchema,

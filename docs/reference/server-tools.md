@@ -108,14 +108,15 @@ persona toolsets.
 - Tool modules live in domain subfolders: `core/` (time, question, project
   registry, contacts, `ls`), `google/` (Calendar, Drive, Gmail, Meet, meeting
   minutes), `jira/`, `tempo/`, `slack/`, `github/`, `container/` (container
-  image pulls), `tasks/` (task tools), `sessions/` (log, inspection, lookup,
-  send-prompt), `workflow/` (structured Workflow Run completion), `knowledge/`
-  (KB, memory, attachments, documents), `skills/` (skills-library authoring and
-  history), `web/` (web, Context7), and `workshop/` (`workshopHandoffTool.ts`
-  for handoff, `worktreeReviewTools.ts` for worktree review, `worktreeTools.ts`
-  for managed lifecycle). Each `*Tools.ts`/`*Tool.ts` module owns one
-  integration/domain family's tools plus that family's non-tool helper exports
-  (stores, accept-mutation helpers, display converters).
+  image pulls), `tasks/` (task tools), `initiatives/` (Initiative tools),
+  `sessions/` (log, inspection, lookup, send-prompt), `workflow/` (structured
+  Workflow Run completion), `knowledge/` (KB, memory, attachments, documents),
+  `skills/` (skills-library authoring and history), `web/` (web, Context7), and
+  `workshop/` (`workshopHandoffTool.ts` for handoff, `worktreeReviewTools.ts`
+  for worktree review, `worktreeTools.ts` for managed lifecycle). Each
+  `*Tools.ts`/`*Tool.ts` module owns one integration/domain family's tools plus
+  that family's non-tool helper exports (stores, accept-mutation helpers,
+  display converters).
 - Matching `*Settings.ts` files at `src/` root own integration configuration.
 - `google/googleDriveTools.ts` keeps browsing, text retrieval, and user
   downloads separate. `google_drive_search_files` doubles as the folder browser:
@@ -822,6 +823,13 @@ persona toolsets.
   list entries; links join each entry before `boundedItems` measures it, and a
   single Task still too large drops linked Tasks from its largest group
   (`linksOmitted`). The coordinator's create-only variant has no link fields.
+- `initiatives/initiativeTools.ts` holds the deferred `initiative_read` and
+  `initiative_manage` (`docs/initiatives.md`), grouped for the developer and
+  personal-assistant personas only. A read by id returns the members as a tree
+  cut depth-first at a byte budget (`truncated`, `omittedForBudget`), each node
+  with its open blockers by id and no Task description; `initiative_manage`
+  operations run in order, each one whole or not at all, and the result names
+  every touched Initiative once with its progress and milestones.
 - `task_manage`'s result is a fixed payload — `renderKind: "taskManage"`,
   `version`, `changedCount` (mutated + deleted Tasks), `changed[]`, optional
   `deletedIds` and `warnings` — carried identically in the TEXT and `details`

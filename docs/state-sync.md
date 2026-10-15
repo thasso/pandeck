@@ -188,6 +188,16 @@ per-surface sub-tasks — no page invents its own delta format.
   documents. Project archive/restore is an upsert; only deletion removes
   registry membership. Failed optimistic mutations recover their touched ids
   with `getStateItems` and force a keyed detail read only when that id is open.
+- Initiatives: canonical live summaries (neither archived nor deleted) plus a
+  keyed graph read (`getInitiative` → `initiativeDetail`, carrying the revision
+  it is as of). Archiving is a `delete`, unarchiving an `upsert`. A summary's
+  progress counts read member Tasks, so the Task seam's notify-with-ids also
+  reports the Initiatives holding a touched Task, as a member or below one, in
+  the same act; a delete or a move reads the holders it takes the Task from
+  before it writes. That fan-out runs on every Task write, so its walk up the
+  ancestor chain is pinned to index searches
+  (`initiativeStoreQueryPlan.test.ts`). The subscribe answer is a snapshot
+  (`initiativeList`) or, when asked, a digest with `getStateItems` catch-up.
 - Subagents: canonical durable thread registry summaries, with revisions in
   event sidecars; an authorized connection may hold one or more thread-detail
   topics, each with a bounded snapshot/digest/item read and its own

@@ -1,0 +1,484 @@
+/**
+ * The `initiatives` store (`docs/initiatives.md`).
+ *
+ * The row holds the Initiative's own columns. Membership is an
+ * `initiative —member→ task` edge in the generic {@link ./links.ts} graph,
+ * `position` for the user's order and `{ "milestone": true }` in its metadata.
+ * Only the Task that was added carries an edge: its descendants are members by
+ * being under it, resolved here at read time.
+ *
+ * Every write goes through {@link mutation}, which stamps the touched rows'
+ * revisions in the same transaction and notifies after COMMIT, so a bump and
+ * its notification cannot diverge (docs/state-sync.md). Task writes reach the
+ * Initiatives holding a Task through {@link touchHolders}, the same seam.
+ */
+import type { InitiativeState } from "@assistant/shared";
+import { getDb, withDbTransaction } from "./index.ts";
+import { nextId } from "./sequences.ts";
+import {
+  addLink,
+  outgoing,
+  removeAllFor,
+  removeLink,
+  type NodeRef,
+} from "./links.ts";
+
+type TaskStatus = "todo" | "doing" | "done";
+
+export interface InitiativeRow {
+  id: number;
+  title: string;
+  description: string;
+  state: InitiativeState;
+  revision: number;
+  attentionRevision: number;
+  attentionSettledRevision: number;
+  attentionKind?: Exclude<InitiativeState, "active">;
+  attentionAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number;
+}
+
+/** One stored membership edge: a Task added to the Initiative. */
+export interface InitiativeMemberEdge {
+  taskId: number;
+  position: number;
+  milestone: boolean;
+}
+
+/** One resolved member: a stored member or a live descendant of one. */
+export interface InitiativeMemberRow {
+  taskId: number;
+  title: string;
+  status: TaskStatus;
+  sortOrder?: number;
+  archived: boolean;
+  /** The Task's parent, member or not. */
+  parentId?: number;
+  projectId?: string;
+  /** Blockers neither done nor archived, the `openBlockerCounts` rule. */
+  openBlockers: number;
+}
+
+/** A `blocks` link into a member, with the blocking Task's display fields. */
+interface InitiativeBlockerEdge {
+  fromId: number;
+  toId: number;
+  title: string;
+  status: TaskStatus;
+  archived: boolean;
+  projectId?: string;
+}
+
+export type InitiativeChangeListener = (ids: readonly string[]) => void;
+
+const listeners = new Set<InitiativeChangeListener>();
+
+function subscribe(listener: InitiativeChangeListener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function initiativeNode(id: number): NodeRef {
+  return { type: "initiative", id: String(id) };
+}
+
+function taskNode(id: number): NodeRef {
+  return { type: "task", id: String(id) };
+}
+
+/**
+ * Run `fn` in one transaction, stamp every Initiative it touched with the next
+ * `initiative_revision` value before COMMIT, and notify after it. A write that
+ * throws touches nothing and notifies nobody.
+ */
+function mutation<T>(fn: (touch: Set<number>) => T): T {
+  const { value, touched } = withDbTransaction(() => {
+    const touched = new Set<number>();
+    const value = fn(touched);
+    if (touched.size) {
+      const revision = nextId("initiative_revision");
+      const stamp = getDb().prepare(
+        "UPDATE initiatives SET revision = ? WHERE id = ?",
+      );
+      for (const id of touched) stamp.run(revision, id);
+    }
+    return { value, touched };
+  });
+  if (touched.size) {
+    const ids = [...touched].map(String);
+    for (const listener of listeners) {
+      try {
+        listener(ids);
+      } catch {
+        // A listener cannot make an already durable write fail.
+      }
+    }
+  }
+  return value;
+}
+
+/* --------------------------------- rows ---------------------------------- */
+
+function create(
+  touch: Set<number>,
+  input: { title: string; description: string; state: InitiativeState },
+): InitiativeRow {
+  const id = nextId("initiative");
+  const now = Date.now();
+  getDb()
+    .prepare(
+      `INSERT INTO initiatives (id, title, description, state, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, input.title, input.description, input.state, now, now);
+  touch.add(id);
+  return get(id)!;
+}
+
+/** A live or archived Initiative; tombstoned rows are gone. */
+function get(id: number): InitiativeRow | undefined {
+  const row = getDb()
+    .prepare("SELECT * FROM initiatives WHERE id = ? AND deleted_at_ms IS NULL")
+    .get(id) as DbInitiativeRow | undefined;
+  return row ? fromRow(row) : undefined;
+}
+
+function list(filter: { includeArchived?: boolean } = {}): InitiativeRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT * FROM initiatives WHERE deleted_at_ms IS NULL
+       ${filter.includeArchived ? "" : "AND archived_at_ms IS NULL"}
+       ORDER BY updated_at_ms DESC, id DESC`,
+    )
+    .all() as unknown as DbInitiativeRow[];
+  return rows.map(fromRow);
+}
+
+function update(
+  touch: Set<number>,
+  id: number,
+  patch: { title?: string; description?: string; state?: InitiativeState },
+): void {
+  const sets: string[] = [];
+  const params: Array<string | number> = [];
+  if (patch.title !== undefined) {
+    sets.push("title = ?");
+    params.push(patch.title);
+  }
+  if (patch.description !== undefined) {
+    sets.push("description = ?");
+    params.push(patch.description);
+  }
+  if (patch.state !== undefined) {
+    sets.push("state = ?");
+    params.push(patch.state);
+  }
+  sets.push("updated_at_ms = ?");
+  params.push(Date.now());
+  getDb()
+    .prepare(
+      `UPDATE initiatives SET ${sets.join(", ")} WHERE id = ? AND deleted_at_ms IS NULL`,
+    )
+    .run(...params, id);
+  touch.add(id);
+}
+
+function setArchived(touch: Set<number>, id: number, archived: boolean): void {
+  const now = Date.now();
+  getDb()
+    .prepare(
+      "UPDATE initiatives SET archived_at_ms = ?, updated_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(archived ? now : null, now, id);
+  touch.add(id);
+}
+
+/** Tombstone the row and drop its membership edges. */
+function remove(touch: Set<number>, id: number): void {
+  getDb()
+    .prepare(
+      "UPDATE initiatives SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(Date.now(), id);
+  removeAllFor(initiativeNode(id));
+  touch.add(id);
+}
+
+/* ------------------------------ membership ------------------------------- */
+
+/** The stored membership edges, in the user's order. */
+function memberEdges(id: number): InitiativeMemberEdge[] {
+  return outgoing(initiativeNode(id), "member")
+    .filter((edge) => edge.toType === "task")
+    .map((edge, index) => ({
+      taskId: Number(edge.toId),
+      position: edge.position ?? index,
+      milestone:
+        (edge.metadata as { milestone?: unknown } | undefined)?.milestone ===
+        true,
+    }));
+}
+
+/** Store a membership edge after the last one. */
+function addMember(touch: Set<number>, id: number, taskId: number): void {
+  const edges = memberEdges(id);
+  const position = edges.length
+    ? Math.max(...edges.map((edge) => edge.position)) + 1
+    : 0;
+  addLink(initiativeNode(id), "member", taskNode(taskId), { position });
+  touch.add(id);
+}
+
+function removeMember(touch: Set<number>, id: number, taskId: number): void {
+  removeLink(initiativeNode(id), "member", taskNode(taskId));
+  touch.add(id);
+}
+
+/** Rewrite one stored edge's milestone mark, keeping its position. */
+function setMilestone(
+  touch: Set<number>,
+  id: number,
+  edge: InitiativeMemberEdge,
+  milestone: boolean,
+): void {
+  addLink(initiativeNode(id), "member", taskNode(edge.taskId), {
+    position: edge.position,
+    ...(milestone ? { metadata: { milestone: true } } : {}),
+  });
+  touch.add(id);
+}
+
+/**
+ * Stored members plus every descendant, walked along `subtask` edges. `UNION`
+ * deduplicates, so a member under another member and a stored hierarchy cycle
+ * both terminate.
+ *
+ * Every walk here joins `CROSS JOIN`: SQLite then keeps the written order, the
+ * few ids already found driving an index search of `links`. A lookup by the
+ * edge's TARGET names `links_to_idx`: given `from_type` as well, the planner
+ * otherwise prefers the covering primary key on `from_type` alone, which is
+ * every edge leaving a Task (`initiativeStoreQueryPlan.test.ts`).
+ */
+const MEMBERS_CTE = `WITH RECURSIVE member(id) AS (
+    SELECT to_id FROM links
+     WHERE from_type = 'initiative' AND from_id = ? AND relation = 'member' AND to_type = 'task'
+    UNION
+    SELECT l.to_id FROM member m CROSS JOIN links l
+        ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'subtask' AND l.to_type = 'task'
+  )`;
+
+/** Exposed for the query-plan test: what the summary and graph read issue. */
+export const INITIATIVE_STORE_SQL = {
+  members: `${MEMBERS_CTE}
+    SELECT t.id, t.title, t.status, t.sort_order, t.archived_at_ms,
+           (SELECT p.from_id FROM links p INDEXED BY links_to_idx
+             WHERE p.to_type = 'task' AND p.to_id = m.id AND p.relation = 'subtask' AND p.from_type = 'task'
+             LIMIT 1) AS parent_id,
+           (SELECT j.to_id FROM links j
+             WHERE j.from_type = 'task' AND j.from_id = m.id AND j.relation = 'in_project'
+             LIMIT 1) AS project_id,
+           (SELECT COUNT(*) FROM links b INDEXED BY links_to_idx CROSS JOIN tasks bt ON bt.id = CAST(b.from_id AS INTEGER)
+             WHERE b.to_type = 'task' AND b.to_id = m.id AND b.relation = 'blocks' AND b.from_type = 'task'
+               AND bt.deleted_at_ms IS NULL AND bt.archived_at_ms IS NULL AND bt.status <> 'done') AS open_blockers
+      FROM member m CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
+     WHERE t.deleted_at_ms IS NULL`,
+  memberSessions: `${MEMBERS_CTE}
+    SELECT l.to_id AS session_id
+      FROM member m
+      CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
+      CROSS JOIN links l ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'context' AND l.to_type = 'session'
+     WHERE t.deleted_at_ms IS NULL AND t.archived_at_ms IS NULL
+     ORDER BY l.created_at_ms, l.to_id`,
+  blockersInto: `SELECT b.from_id, b.to_id, t.title, t.status, t.archived_at_ms,
+           (SELECT j.to_id FROM links j
+             WHERE j.from_type = 'task' AND j.from_id = b.from_id AND j.relation = 'in_project'
+             LIMIT 1) AS project_id
+      FROM links b INDEXED BY links_to_idx
+      CROSS JOIN tasks t ON t.id = CAST(b.from_id AS INTEGER)
+     WHERE b.to_type = 'task' AND b.to_id IN (SELECT value FROM json_each(?))
+       AND b.relation = 'blocks' AND b.from_type = 'task'
+       AND t.deleted_at_ms IS NULL
+     ORDER BY b.created_at_ms`,
+  /**
+   * The Initiatives holding any of the given Tasks, as a member or through a
+   * member ancestor: the walk goes UP `subtask` edges from each Task, then
+   * across to `member` edges. Runs on every Task write, so it touches only the
+   * `links_to_idx` entries of the Tasks' ancestor chains.
+   */
+  holders: `WITH RECURSIVE lineage(id) AS (
+      SELECT value FROM json_each(?)
+      UNION
+      SELECT l.from_id FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
+          ON l.to_type = 'task' AND l.to_id = a.id AND l.relation = 'subtask' AND l.from_type = 'task'
+    )
+    SELECT DISTINCT l.from_id AS id FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
+        ON l.to_type = 'task' AND l.to_id = a.id AND l.relation = 'member' AND l.from_type = 'initiative'`,
+} as const;
+
+function members(id: number): InitiativeMemberRow[] {
+  const rows = getDb()
+    .prepare(INITIATIVE_STORE_SQL.members)
+    .all(String(id)) as unknown as Array<{
+    id: number;
+    title: string;
+    status: TaskStatus;
+    sort_order: number | null;
+    archived_at_ms: number | null;
+    parent_id: string | null;
+    project_id: string | null;
+    open_blockers: number;
+  }>;
+  return rows.map((row) => ({
+    taskId: row.id,
+    title: row.title,
+    status: row.status,
+    ...(row.sort_order !== null ? { sortOrder: row.sort_order } : {}),
+    archived: row.archived_at_ms !== null,
+    ...(row.parent_id !== null ? { parentId: Number(row.parent_id) } : {}),
+    ...(row.project_id !== null ? { projectId: row.project_id } : {}),
+    openBlockers: row.open_blockers,
+  }));
+}
+
+/** Sessions linked to an unarchived member Task, first link first. */
+function memberSessionIds(id: number): string[] {
+  const rows = getDb()
+    .prepare(INITIATIVE_STORE_SQL.memberSessions)
+    .all(String(id)) as Array<{ session_id: string }>;
+  return [...new Set(rows.map((row) => row.session_id))];
+}
+
+/** Every `blocks` link into the given Tasks from a live Task. */
+function blockersInto(taskIds: readonly number[]): InitiativeBlockerEdge[] {
+  if (!taskIds.length) return [];
+  const rows = getDb()
+    .prepare(INITIATIVE_STORE_SQL.blockersInto)
+    .all(JSON.stringify(taskIds.map(String))) as unknown as Array<{
+    from_id: string;
+    to_id: string;
+    title: string;
+    status: TaskStatus;
+    archived_at_ms: number | null;
+    project_id: string | null;
+  }>;
+  return rows.map((row) => ({
+    fromId: Number(row.from_id),
+    toId: Number(row.to_id),
+    title: row.title,
+    status: row.status,
+    archived: row.archived_at_ms !== null,
+    ...(row.project_id !== null ? { projectId: row.project_id } : {}),
+  }));
+}
+
+/** The Initiatives holding any of `taskIds`, member or descendant. */
+function holdersOf(taskIds: Iterable<number>): number[] {
+  const ids = [...new Set(taskIds)].map(String);
+  if (!ids.length) return [];
+  const rows = getDb()
+    .prepare(INITIATIVE_STORE_SQL.holders)
+    .all(JSON.stringify(ids)) as Array<{ id: string }>;
+  return rows.map((row) => Number(row.id));
+}
+
+/**
+ * The Task notification seam's fan-out: bump and notify every Initiative that
+ * holds one of `taskIds` now, plus `formerHolders` — the ones a delete or a
+ * move took the Task away from, read before the write.
+ */
+function touchHolders(
+  taskIds: Iterable<number>,
+  formerHolders: Iterable<number> = [],
+): void {
+  const ids = new Set([...holdersOf(taskIds), ...formerHolders]);
+  if (!ids.size) return;
+  mutation((touch) => {
+    for (const id of ids) touch.add(id);
+  });
+}
+
+/* ------------------------------- revisions -------------------------------- */
+
+/** Every row's revision and live-projection membership (not archived, not tombstoned). */
+function revisions(): Array<{ id: number; revision: number; live: boolean }> {
+  const rows = getDb()
+    .prepare(
+      "SELECT id, revision, archived_at_ms, deleted_at_ms FROM initiatives",
+    )
+    .all() as Array<{
+    id: number;
+    revision: number;
+    archived_at_ms: number | null;
+    deleted_at_ms: number | null;
+  }>;
+  return rows.map((row) => ({
+    id: row.id,
+    revision: row.revision,
+    live: row.archived_at_ms === null && row.deleted_at_ms === null,
+  }));
+}
+
+/* --------------------------------- rows ---------------------------------- */
+
+interface DbInitiativeRow {
+  id: number;
+  title: string;
+  description: string;
+  state: InitiativeState;
+  revision: number;
+  attention_revision: number;
+  attention_settled_revision: number;
+  attention_kind: Exclude<InitiativeState, "active"> | null;
+  attention_at_ms: number | null;
+  created_at_ms: number;
+  updated_at_ms: number;
+  archived_at_ms: number | null;
+  deleted_at_ms: number | null;
+}
+
+function fromRow(row: DbInitiativeRow): InitiativeRow {
+  return {
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    state: row.state,
+    revision: row.revision,
+    attentionRevision: row.attention_revision,
+    attentionSettledRevision: row.attention_settled_revision,
+    ...(row.attention_kind !== null
+      ? { attentionKind: row.attention_kind }
+      : {}),
+    ...(row.attention_at_ms !== null
+      ? { attentionAt: row.attention_at_ms }
+      : {}),
+    createdAt: row.created_at_ms,
+    updatedAt: row.updated_at_ms,
+    ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
+  };
+}
+
+export const initiativeStore = {
+  mutation,
+  subscribe,
+  // rows
+  create,
+  get,
+  list,
+  update,
+  setArchived,
+  remove,
+  // membership
+  memberEdges,
+  addMember,
+  removeMember,
+  setMilestone,
+  members,
+  memberSessionIds,
+  blockersInto,
+  holdersOf,
+  touchHolders,
+  // revisions
+  revisions,
+};

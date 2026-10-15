@@ -268,6 +268,13 @@ import {
   projectStateItems,
 } from "./projectRegistry.ts";
 import {
+  initiativeRevision,
+  initiativeRevisionDigest,
+  initiativeSnapshot,
+  initiativeStateItems,
+  readInitiative,
+} from "./initiatives.ts";
+import {
   cloneAndRegisterProjectRepo,
   deleteProjectRepoFolder,
   isManagedRepoDir,
@@ -1128,6 +1135,8 @@ export class Connection implements Viewer {
         return this.onListProjects(msg.request ?? {});
       case "getProject":
         return this.onGetProject(msg.id, msg.requestId);
+      case "getInitiative":
+        return this.onGetInitiative(msg.id, msg.requestId);
       case "saveProject":
         return this.onSaveProject(msg.id, msg.patch, msg.requestId);
       case "provisionProjectRepo":
@@ -1744,6 +1753,7 @@ export class Connection implements Viewer {
           this.onListProjects({ includeArchived: true });
         }
       }
+      if (topic === "initiatives") this.onSubscribeInitiatives(digestTopics);
       if (topic === "subagents") {
         // The registry is deliberately snapshot-only until a consumer needs
         // digest catch-up. Held run detail has its own digest-capable topic.
@@ -1823,8 +1833,36 @@ export class Connection implements Viewer {
     }
   }
 
+  /** Digest when the client holds a settled list, else the live snapshot. */
+  private onSubscribeInitiatives(digestTopics: ReadonlySet<BroadcastTopic>) {
+    try {
+      if (digestTopics.has("initiatives")) {
+        this.send({
+          type: "stateDigest",
+          topic: "initiatives",
+          seq: hub.initiativeEventSeq(),
+          entries: initiativeRevisionDigest(),
+        });
+        return;
+      }
+      const snapshot = initiativeSnapshot();
+      this.send({
+        type: "initiativeList",
+        items: snapshot.items,
+        seq: hub.initiativeEventSeq(),
+        revisions: snapshot.revisions,
+      });
+    } catch (err) {
+      this.send({
+        type: "error",
+        message: `Failed to list Initiatives: ${errorText(err)}`,
+        target: { type: "initiative" },
+      });
+    }
+  }
+
   private onGetStateItems(
-    topic: "tasks" | "projects",
+    topic: "tasks" | "projects" | "initiatives",
     ids: string[],
     requestId: string,
   ): void {
@@ -1845,12 +1883,24 @@ export class Connection implements Viewer {
           requestId,
           events: projectStateItems(ids),
         });
+      } else if (topic === "initiatives") {
+        this.send({
+          type: "stateItems",
+          topic,
+          requestId,
+          events: initiativeStateItems(ids),
+        });
       }
     } catch (err) {
+      const label = {
+        tasks: "Task",
+        projects: "Project",
+        initiatives: "Initiative",
+      }[topic];
       this.send({
         type: "error",
         requestId,
-        message: `Failed to fetch ${topic === "tasks" ? "Task" : "Project"} state items: ${errorText(err)}`,
+        message: `Failed to fetch ${label} state items: ${errorText(err)}`,
       });
     }
   }
@@ -2080,6 +2130,28 @@ export class Connection implements Viewer {
         item: null,
         requestId,
         error: `Failed to read Project: ${errorText(err)}`,
+      });
+    }
+  }
+
+  private onGetInitiative(id: string, requestId: string): void {
+    try {
+      const item = readInitiative(id);
+      const revision = item ? initiativeRevision(id) : undefined;
+      this.send({
+        type: "initiativeDetail",
+        id,
+        item,
+        ...(revision !== undefined ? { revision } : {}),
+        requestId,
+      });
+    } catch (err) {
+      this.send({
+        type: "initiativeDetail",
+        id,
+        item: null,
+        requestId,
+        error: `Failed to read Initiative: ${errorText(err)}`,
       });
     }
   }

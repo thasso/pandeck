@@ -57,8 +57,10 @@ test("personal-assistant is a real persona with integrations, settings and codin
       "accounts_sign_in",
       "worktree_create",
       "worktree_status",
+      "initiative_read",
+      "initiative_manage",
     ].sort(),
-    "personal-assistant adds settings and managed worktree startup",
+    "personal-assistant adds settings, managed worktree startup and Initiatives",
   );
 });
 

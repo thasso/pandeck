@@ -69,6 +69,7 @@ import type {
   ProjectListRequest,
   ProjectListResponse,
   ProjectRecord,
+  InitiativeSummary,
   ProjectSummary,
   PullRequestCard,
   PullRequestCardAction,
@@ -492,6 +493,11 @@ export interface UIState {
   /** Canonical bounded subagent registry; detail/transcript state stays keyed. */
   subagentThreads: SubagentThreadSummary[];
   /**
+   * Live Initiative summaries from the `initiatives` topic, held only while it
+   * is subscribed. The graph is a keyed `getInitiative` read.
+   */
+  initiatives: InitiativeSummary[];
+  /**
    * Canonical bounded background-work registry. Held only while the topic is
    * subscribed; per-session activity travels on the session row instead, so no
    * surface has to hold this list to know a session is busy.
@@ -874,6 +880,7 @@ const emptyInitial: UIState = {
   taskList: null,
   stateEventRevisions: {},
   subagentThreads: [],
+  initiatives: [],
   backgroundWorkItems: [],
   backgroundWorkTruncated: false,
   backgroundStopPending: [],
@@ -3493,6 +3500,10 @@ function applyOptimisticSettings(
 
 type TaskStateEventsMessage = StateEventsMessage<"tasks", TaskSummary>;
 type ProjectStateEventsMessage = StateEventsMessage<"projects", ProjectSummary>;
+type InitiativeStateEventsMessage = StateEventsMessage<
+  "initiatives",
+  InitiativeSummary
+>;
 type SubagentStateEventsMessage = StateEventsMessage<
   "subagents",
   SubagentThreadSummary
@@ -3620,10 +3631,13 @@ function applyEvent(
   message:
     | TaskStateEventsMessage
     | ProjectStateEventsMessage
+    | InitiativeStateEventsMessage
     | SubagentStateEventsMessage
     | BackgroundStateEventsMessage,
 ): UIState {
   if (message.topic === "projects") return applyProjectEvent(state, message);
+  if (message.topic === "initiatives")
+    return applyInitiativeEvent(state, message);
   if (message.topic === "subagents") return applySubagentEvent(state, message);
   if (message.topic === "background")
     return applyBackgroundEvent(state, message);
@@ -3731,6 +3745,41 @@ function applySubagentEvent(
     ...state,
     subagentThreads: threads,
     stateEventRevisions: { ...state.stateEventRevisions, subagents: revisions },
+  };
+}
+
+function applyInitiativeEvent(
+  state: UIState,
+  message: InitiativeStateEventsMessage,
+): UIState {
+  const current = state.stateEventRevisions.initiatives ?? {};
+  let revisions: Record<string, number> | null = null;
+  let initiatives = state.initiatives;
+  for (const event of message.events) {
+    const known = revisions?.[event.id] ?? current[event.id] ?? -1;
+    if (event.revision <= known) continue;
+    revisions ??= { ...current };
+    revisions[event.id] = event.revision;
+    const index = initiatives.findIndex((item) => item.id === event.id);
+    if (event.kind === "delete") {
+      if (index >= 0)
+        initiatives = initiatives.filter((item) => item.id !== event.id);
+    } else if (index < 0) {
+      initiatives = [...initiatives, event.item];
+    } else if (!wireValueEqual(initiatives[index], event.item)) {
+      const next = initiatives.slice();
+      next[index] = event.item;
+      initiatives = next;
+    }
+  }
+  if (!revisions) return state;
+  return {
+    ...state,
+    initiatives,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      initiatives: revisions,
+    },
   };
 }
 
@@ -5461,6 +5510,13 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           ? applyProjectDigest(state, msg)
           : state;
     case "stateItems": {
+      if (msg.topic === "initiatives")
+        return applyEvent(state, {
+          type: "stateEvents",
+          topic: "initiatives",
+          seq: 0,
+          events: msg.events,
+        });
       const applied =
         msg.topic === "tasks"
           ? applyEvent(state, {
@@ -5521,6 +5577,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           : {}),
       };
     }
+    case "initiativeList":
+      return {
+        ...state,
+        initiatives: msg.items,
+        stateEventRevisions: {
+          ...state.stateEventRevisions,
+          initiatives: taskDigestRecord(msg.revisions) ?? {},
+        },
+      };
     case "subagentThreadList": {
       const revisions = taskDigestRecord(msg.revisions);
       return {
@@ -7118,6 +7183,9 @@ export function useAssistant({
       if (msg.type === "backgroundWorkList") {
         topicSeqRef.current.background = msg.seq;
       }
+      if (msg.type === "initiativeList") {
+        topicSeqRef.current.initiatives = msg.seq;
+      }
       if (msg.type === "subagentThreadList") {
         // A snapshot is the authoritative tripwire baseline, including after a
         // gap resubscribe and on a cold subscribe.
@@ -7143,7 +7211,9 @@ export function useAssistant({
         }
         subagentRunSeqRef.current[msg.threadId] = msg.seq;
       }
-      if (msg.type === "stateDigest") {
+      // This client takes the `initiatives` snapshot on every subscribe and never
+      // asks for its digest or items, so neither answer has a sync to settle.
+      if (msg.type === "stateDigest" && msg.topic !== "initiatives") {
         clearDigestSync(msg.topic);
         topicSeqRef.current[msg.topic] = msg.seq;
         const changedIds =
@@ -7237,7 +7307,7 @@ export function useAssistant({
         }
         clearSubagentRunDigestSync(msg.threadId);
       }
-      if (msg.type === "stateItems") {
+      if (msg.type === "stateItems" && msg.topic !== "initiatives") {
         const receivedIds = new Set(msg.events.map((event) => event.id));
         const complete = (expectedIds: ReadonlySet<string>) =>
           receivedIds.size === msg.events.length &&

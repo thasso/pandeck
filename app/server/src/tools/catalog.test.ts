@@ -590,7 +590,7 @@ describe("tool catalog", () => {
     const permanent = agentToolsFor("personal-assistant")
       .map((tool) => tool.name)
       .sort();
-    // The Personal Assistant also gets settings and coding-start tools.
+    // The Personal Assistant also gets settings, coding-start and Initiative tools.
     assert.deepEqual(
       permanent,
       [
@@ -603,6 +603,8 @@ describe("tool catalog", () => {
         "accounts_sign_in",
         "worktree_create",
         "worktree_status",
+        "initiative_read",
+        "initiative_manage",
       ].sort(),
     );
     const workshop = new Set(

@@ -592,6 +592,10 @@ test("Task descriptions carry the rules no schema field states", () => {
           /delete only (when|if) the user (explicitly )?(asks|requests)|delete only on (explicit )?(user )?request/i,
         ),
         "empty-string-clears": /empty string[^.\n]*clears?/i,
+        // A prose dependency is invisible to the Initiative map and blocked
+        // state (docs/initiatives.md).
+        "dependency-is-a-link":
+          /dependency[^.\n]*addLinks[^.\n]*blocks[^.\n]*never only in prose/i,
       },
     },
   });

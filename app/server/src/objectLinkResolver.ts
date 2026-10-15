@@ -9,6 +9,7 @@ import {
   type PaObjectLinkResolution,
 } from "@assistant/shared/objectLinks";
 import { readTask } from "./tasks.ts";
+import { getInitiative } from "./initiatives.ts";
 import { approvalForId } from "./pendingApprovals.ts";
 import { getProject } from "./projectRegistry.ts";
 import { hub } from "./hub.ts";
@@ -67,6 +68,10 @@ async function resolveOne(
     case "task": {
       const task = readTask(parsed.id);
       return resolved(parsed, task ? task.title : undefined, Boolean(task));
+    }
+    case "initiative": {
+      const initiative = getInitiative(parsed.id);
+      return resolved(parsed, initiative?.title, Boolean(initiative));
     }
     case "project": {
       const project = getProject(parsed.id);

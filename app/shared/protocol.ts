@@ -22,6 +22,7 @@ import type {
 } from "./session/entries.ts";
 import type { PaObjectLinkResolution } from "./objectLinks.ts";
 import type { UsageIndicator } from "./usage.ts";
+import type { InitiativeDetail, InitiativeSummary } from "./initiatives.ts";
 import type { ApprovalGrant } from "./approvalGrants.ts";
 import type {
   CommentTarget,
@@ -64,6 +65,7 @@ import type {
 export * from "./memory.ts";
 export * from "./memoryValidation.ts";
 export * from "./workflow.ts";
+export * from "./initiatives.ts";
 export * from "./library.ts";
 export * from "./skills.ts";
 export * from "./comments.ts";
@@ -1585,7 +1587,7 @@ export type SessionTaskProgress = Record<TaskStatus, number>;
 export interface SessionObjectRef {
   objectType: Exclude<
     import("./objectLinks.ts").PaObjectType,
-    "session" | "approval"
+    "session" | "approval" | "initiative"
   >;
   id: string;
   source: "initial-context" | "comment-handoff" | "manual";
@@ -6305,6 +6307,8 @@ export interface PromptAttachment {
 export type BroadcastTopic =
   | "tasks"
   | "projects"
+  /** Live Initiative summaries; the graph is a keyed `getInitiative` read. */
+  | "initiatives"
   /** Canonical durable subagent-thread registry summaries. */
   | "subagents"
   /** Canonical durable session-owned background work items. */
@@ -6320,6 +6324,7 @@ export type BroadcastTopic =
 export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "tasks",
   "projects",
+  "initiatives",
   "subagents",
   "background",
   "worktrees",
@@ -7870,7 +7875,7 @@ export type ClientMessage =
   /** Batch-fetch rows whose revisions differed in a state digest. */
   | {
       type: "getStateItems";
-      topic: "tasks" | "projects";
+      topic: "tasks" | "projects" | "initiatives";
       ids: string[];
       requestId: string;
     }
@@ -7891,6 +7896,8 @@ export type ClientMessage =
   | { type: "listProjects"; request?: ProjectListRequest }
   /** Request one full Project document; answers are correlated per id. */
   | { type: "getProject"; id: string; requestId: string }
+  /** Request one Initiative with its graph; answers are correlated per id. */
+  | { type: "getInitiative"; id: string; requestId: string }
   /** Persist editable Project registry fields/properties. */
   | {
       type: "saveProject";
@@ -8199,6 +8206,7 @@ export type ServerMessage =
     }
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
+  | StateEventsMessage<"initiatives", InitiativeSummary>
   | StateEventsMessage<"subagents", SubagentThreadSummary>
   | StateEventsMessage<"background", BackgroundWorkItemSummary>
   | CommentsSnapshotMessage
@@ -8455,6 +8463,30 @@ export type ServerMessage =
   | StateItemsMessage<"tasks", TaskSummary>
   | StateDigestMessage<"projects">
   | StateItemsMessage<"projects", ProjectSummary>
+  | StateDigestMessage<"initiatives">
+  | StateItemsMessage<"initiatives", InitiativeSummary>
+  /**
+   * Cold/resync snapshot of the live Initiatives. Mutations never travel this
+   * way; the sidecar `revisions` seeds the client's next resubscribe.
+   */
+  | {
+      type: "initiativeList";
+      items: InitiativeSummary[];
+      seq: number;
+      revisions: StateDigestEntry[];
+    }
+  /**
+   * One Initiative with its graph, as of `revision`: a newer `initiatives`
+   * event re-reads it. `item` is null when it does not exist or was deleted.
+   */
+  | {
+      type: "initiativeDetail";
+      id: string;
+      item: InitiativeDetail | null;
+      revision?: number;
+      requestId: string;
+      error?: string;
+    }
   /** Cold/resync registry snapshot; run history is deliberately absent. */
   | {
       type: "subagentThreadList";

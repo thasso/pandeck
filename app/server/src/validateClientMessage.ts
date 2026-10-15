@@ -533,8 +533,8 @@ const validateTopics: Validator = (msg) => {
   if (msg.digests === undefined) return null;
   if (!Array.isArray(msg.digests)) return "digests must be an array";
   for (const topic of msg.digests) {
-    if (topic !== "tasks" && topic !== "projects")
-      return "digests currently supports only tasks and projects";
+    if (topic !== "tasks" && topic !== "projects" && topic !== "initiatives")
+      return "digests currently supports only tasks, projects and initiatives";
     if (!msg.topics.includes(topic))
       return "digests must be a subset of topics";
   }
@@ -542,8 +542,12 @@ const validateTopics: Validator = (msg) => {
 };
 
 const validateGetStateItems: Validator = (msg) => {
-  if (msg.topic !== "tasks" && msg.topic !== "projects")
-    return "topic must be tasks or projects";
+  if (
+    msg.topic !== "tasks" &&
+    msg.topic !== "projects" &&
+    msg.topic !== "initiatives"
+  )
+    return "topic must be tasks, projects or initiatives";
   if (!Array.isArray(msg.ids) || !msg.ids.every(isString))
     return "ids must be an array of strings";
   if (!isString(msg.requestId)) return "requestId must be a string";
@@ -1070,6 +1074,7 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
       ? null
       : "request must be an object",
   getProject: fields({ id: STRING, requestId: STRING }),
+  getInitiative: fields({ id: STRING, requestId: STRING }),
   saveProject: fields({ id: STRING, patch: OBJECT }, { requestId: STRING }),
   provisionProjectRepo: fields({ id: STRING }, { requestId: STRING }),
   removeProjectRepo: fields({ id: STRING }, { requestId: STRING }),

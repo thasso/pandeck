@@ -96,6 +96,7 @@ import {
   taskToolsForKind,
   workflowCoordinatorTaskCreateTools,
 } from "./tasks/taskTools.ts";
+import { initiativeTools } from "./initiatives/initiativeTools.ts";
 import { assistantTempoTools } from "./tempo/tempoTools.ts";
 import { assistantTempoExportTools } from "./tempo/tempoExportTools.ts";
 import { context7Tools } from "./web/context7Tools.ts";
@@ -157,6 +158,8 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   accounts_sign_in: "local",
   task_read: "none",
   task_manage: "local",
+  initiative_read: "none",
+  initiative_manage: "local",
   list_attachments: "none",
   read_attachment: "none",
   kb_search: "none",
@@ -766,6 +769,25 @@ function settingsToolGroup(): UnclassifiedToolGroup {
   };
 }
 
+/**
+ * Initiatives: Tasks grouped across Projects (`docs/initiatives.md`). Deferred,
+ * since few sessions organize one, and only for the developer and
+ * personal-assistant personas the contract names.
+ */
+function initiativeToolGroup(): UnclassifiedToolGroup {
+  return {
+    id: "initiatives",
+    label: "Initiatives",
+    description:
+      "Initiatives: group Tasks across Projects with milestones, and read their member tree and progress.",
+    searchHint:
+      "initiative initiatives milestone epic cross-project group progress map",
+    loading: "deferred",
+    family: "shared",
+    tools: initiativeTools(),
+  };
+}
+
 /** Extra groups for the coding personas (workshop/developer). */
 function codingToolGroups(): UnclassifiedToolGroup[] {
   return [
@@ -963,6 +985,9 @@ export function toolGroupsFor(agentType: AgentType): ToolGroup[] {
     ]);
   const groups = [
     ...commonToolGroups(agentType),
+    ...(agentType === "developer" || isPersonalAssistantAgentType(agentType)
+      ? [initiativeToolGroup()]
+      : []),
     ...(agentType === "workshop" || agentType === "developer"
       ? codingToolGroups()
       : []),
