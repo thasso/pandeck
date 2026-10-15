@@ -438,14 +438,15 @@ page; staging a worktree for the same persona keeps it. Picking a definition
 sets the persona exactly as the persona pills do: an `assistant` one keeps a
 staged worktree, and a `developer` one needs a worktree before the composer
 sends. A first send retried after a failure, from the composer or a Retry
-button, runs what the pickers show then: engine, persona, account, model, effort
-and agent (`reissuedFirstSend`), on the draft's own session id. A comment-review
-draft offers no definitions: its handoff creates the session without a first
-send. The definitions and the pick belong to `/sessions/create`, where the
-`agents` topic is held; the Sessions list route shows the draft without them, so
-a pick is dropped there. Every fresh draft (a new session, one for a Task,
-project, file or worktree, a pull request or review, or a document's comments
-sent to a new session) also retires a first send held for retry.
+button, runs what the pickers show then: engine, persona, account and its
+enterprise requirement, model, effort and agent (`reissuedFirstSend`), on the
+draft's own session id. A comment-review draft offers no definitions: its
+handoff creates the session without a first send. The definitions and the pick
+belong to `/sessions/create`, where the `agents` topic is held; the Sessions
+list route shows the draft without them, so a pick is dropped there. Every fresh
+draft (a new session, one for a Task, project, file or worktree, a pull request
+or review, or a document's comments sent to a new session) also retires a first
+send held for retry.
 
 On that page the pick follows the agents list
 (`hooks/useStagedAgentReconcile.ts`), and never undoes what leaving the page

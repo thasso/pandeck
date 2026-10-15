@@ -29,7 +29,8 @@ describe("staged session record", () => {
 
   it("carries the agent only when a restage passes it on", () => {
     expect(agentDraft.agent).toBe("test-reviewer");
-    // A model, effort or account pick restages without it, from any picker.
+    // A model, effort or account pick passes it on (App's pickers do); a
+    // restage that does not, a persona pick or a fresh start, drops it.
     const repicked = stagedSessionRecord({
       id: agentDraft.id,
       harness: "claude-sdk",
@@ -158,6 +159,30 @@ describe("re-issuing a failed first send", () => {
       ).agent,
     ).toBe("test-reviewer");
   });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ])(
+    "takes the enterprise requirement from the draft (held %s, now %s)",
+    (before, now) => {
+      const sent = reissuedFirstSend(
+        { ...held, ...(before ? { requiresEnterprise: true } : {}) },
+        {
+          harness: "claude-sdk",
+          agentType: "developer",
+          provider: "claude-sdk",
+          modelId: "opus",
+          thinkingLevel: "high",
+          requiresEnterprise: now,
+          agent: "test-reviewer",
+        },
+        { text: "again" },
+      );
+      if (now) expect(sent.requiresEnterprise).toBe(true);
+      else expect("requiresEnterprise" in sent).toBe(false);
+    },
+  );
 
   it("lands on the draft's own id when a restage gave it a new one", () => {
     const draft = {

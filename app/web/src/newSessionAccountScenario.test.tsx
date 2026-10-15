@@ -828,6 +828,35 @@ describe("a picked role keeps what the user picks to run it", () => {
     });
   });
 
+  it("moves through personas and roles with the arrow keys, as one tab stop", async () => {
+    const socket = await openNewSession([PERSONAL], undefined, {
+      agents: projectAgents,
+    });
+    await stageScribe(socket);
+    const row = container!.querySelector(
+      '[role="listbox"][aria-label="Agent"]',
+    )!;
+    const options = [...row.querySelectorAll<HTMLElement>('[role="option"]')];
+    // The personas, then the role after them.
+    expect(options.length).toBeGreaterThan(2);
+    expect(options.at(-1)?.textContent).toBe("release-scribe");
+    // Roving focus: the row is one tab stop, not one per option.
+    expect(options.filter((option) => option.tabIndex === 0)).toHaveLength(1);
+    await act(async () => options[0]!.focus());
+    await act(async () => {
+      options[0]!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    });
+    expect(document.activeElement).toBe(options[1]);
+    await act(async () => {
+      options[1]!.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+      );
+    });
+    expect(document.activeElement).toBe(options[2]);
+  });
+
   it("picking the plain persona leaves the role", async () => {
     const socket = await openNewSession([PERSONAL], undefined, {
       agents: projectAgents,

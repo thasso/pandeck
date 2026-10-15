@@ -100,6 +100,8 @@ export interface DraftRuntime {
   agentType: AgentType;
   /** The account picked for it. */
   credentialProfileId?: string | undefined;
+  /** Whether only enterprise accounts may run it, as the switch shows now. */
+  requiresEnterprise?: boolean | undefined;
   provider?: string | undefined;
   modelId?: string | undefined;
   thinkingLevel?: ThinkingLevel | undefined;
@@ -111,8 +113,9 @@ export interface DraftRuntime {
  * A failed first send re-issued, from the composer or a Retry button. Its
  * consumed context (the Task, the worktree, the project to provision in) and
  * request identity are the held send's; what RUNS it is what the pickers show
- * now — engine, persona, account, model, effort and agent — so a pick made
- * after the failure is the one sent, and a dropped agent stays dropped. A pick
+ * now — engine, persona, account and its enterprise requirement, model, effort
+ * and agent — so a pick made after the failure is the one sent, and a dropped
+ * agent stays dropped. A pick
  * that restaged the draft gave it a new id, which the send takes too, so it
  * lands on the session the page shows.
  */
@@ -124,6 +127,7 @@ export function reissuedFirstSend(
   const {
     agentType: _persona,
     credentialProfileId: _account,
+    requiresEnterprise: _enterprise,
     modelProvider: _provider,
     modelId: _model,
     thinkingLevel: _thinking,
@@ -139,6 +143,7 @@ export function reissuedFirstSend(
     ...(draft.credentialProfileId !== undefined
       ? { credentialProfileId: draft.credentialProfileId }
       : {}),
+    ...(draft.requiresEnterprise ? { requiresEnterprise: true } : {}),
     ...(draft.provider !== undefined ? { modelProvider: draft.provider } : {}),
     ...(draft.modelId !== undefined ? { modelId: draft.modelId } : {}),
     ...(draft.thinkingLevel !== undefined

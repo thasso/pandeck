@@ -4749,6 +4749,7 @@ function AppContent() {
     ...firstPromptRuntimeSelection(displaySession),
     agentType: displayAgentType,
     ...(credentialProfileId !== null ? { credentialProfileId } : {}),
+    requiresEnterprise,
     agent: (pendingStart ?? stagedStart)?.agent,
   };
   const draftRuntimeRef = useRef(draftRuntime);

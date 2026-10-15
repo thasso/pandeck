@@ -36,6 +36,7 @@ import {
   type LoadState,
 } from "../lib/loadState.ts";
 import { Item } from "./ui/item.tsx";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import {
   ModelQuickRow,
   ProviderAccountRow,
@@ -648,67 +649,98 @@ function AgentRow({
     const problem = problemOf(agent.name);
     return problem === undefined ? [] : [{ name: agent.name, problem }];
   });
+  // One single-choice group across personas and definitions, so the row is
+  // one tab stop with arrow-key focus, as the persona pills always were.
+  const current =
+    selectedAgent !== null
+      ? `agent:${selectedAgent}`
+      : `persona:${selectedAgentType}`;
+  const pill = "max-w-52 shrink-0 snap-start";
   const row = (
     <QuickRow
       label="Agent"
       busy={loading}
-      scrollKey={`${selectedAgent ?? selectedAgentType}:${agentTypes.length}:${definitions.length}`}
+      scrollKey={`${current}:${agentTypes.length}:${definitions.length}`}
     >
-      {agentTypes.map((type) => {
-        const display = AGENT_TYPE_DISPLAY[type];
-        const selected = selectedAgent === null && type === selectedAgentType;
-        return (
-          <QuickPill
-            key={type}
-            selected={selected}
-            title={display.desc}
-            onClick={() => onSelectAgentType(type)}
-          >
-            <display.Icon
-              size={14}
-              className={selected ? display.activeColor : display.pillColor}
-            />
-            <span className="min-w-0 truncate">{display.label}</span>
-          </QuickPill>
-        );
-      })}
-      {/* Personas, then the roles built on them, like the worktree row's
-          pinned group. */}
-      {agentTypes.length > 0 && (loading || definitions.length > 0) ? (
-        <div
-          aria-hidden
-          className="my-1 w-px shrink-0 self-stretch bg-border"
-        />
-      ) : null}
-      {loading
-        ? [0, 1].map((i) => (
-            <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
-          ))
-        : definitions.map((agent) => {
-            const problem = problemOf(agent.name);
-            const selected = agent.name === selectedAgent;
-            return (
-              <QuickPill
-                key={`agent:${agent.name}`}
-                selected={selected}
-                // A definition that cannot start is not offered; the picked
-                // one stays clickable so it can always be unpicked.
-                disabled={
-                  !selected && (problem !== undefined || accounts === undefined)
-                }
-                title={
-                  problem ??
-                  (selected
-                    ? `Start as a plain session instead of ${agent.name}`
-                    : `Start as ${agent.name}: ${agent.description}`)
-                }
-                onClick={() => onSelectAgent(selected ? null : agent.name)}
-              >
-                <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
-                <span className="min-w-0 truncate">{agent.name}</span>
-              </QuickPill>
-            );
-          })}
+      <ToggleGroup
+        variant="outline"
+        value={[current]}
+        onValueChange={(values) => {
+          const next = values[0] as string | undefined;
+          // Pressing the picked role again unpicks it; the picked persona
+          // stays picked.
+          if (next === undefined) {
+            if (selectedAgent !== null) onSelectAgent(null);
+          } else if (next.startsWith("agent:")) {
+            onSelectAgent(next.slice("agent:".length));
+          } else {
+            onSelectAgentType(next.slice("persona:".length) as AgentType);
+          }
+        }}
+      >
+        {agentTypes.map((type) => {
+          const display = AGENT_TYPE_DISPLAY[type];
+          const selected = current === `persona:${type}`;
+          return (
+            <ToggleGroupItem
+              key={type}
+              value={`persona:${type}`}
+              role="option"
+              aria-selected={selected}
+              data-quick-selected={selected || undefined}
+              title={display.desc}
+              className={pill}
+            >
+              <display.Icon
+                size={14}
+                className={selected ? display.activeColor : display.pillColor}
+              />
+              <span className="min-w-0 truncate">{display.label}</span>
+            </ToggleGroupItem>
+          );
+        })}
+        {/* Personas, then the roles built on them, like the worktree row's
+            pinned group. */}
+        {agentTypes.length > 0 && (loading || definitions.length > 0) ? (
+          <div
+            aria-hidden
+            className="my-1 w-px shrink-0 self-stretch bg-border"
+          />
+        ) : null}
+        {loading
+          ? [0, 1].map((i) => (
+              <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
+            ))
+          : definitions.map((agent) => {
+              const problem = problemOf(agent.name);
+              const selected = current === `agent:${agent.name}`;
+              return (
+                <ToggleGroupItem
+                  key={`agent:${agent.name}`}
+                  value={`agent:${agent.name}`}
+                  role="option"
+                  aria-selected={selected}
+                  data-quick-selected={selected || undefined}
+                  // A definition that cannot start is not offered; the picked
+                  // one stays pressable so it can always be unpicked.
+                  disabled={
+                    !selected &&
+                    (problem !== undefined || accounts === undefined)
+                  }
+                  title={
+                    problem ??
+                    (selected
+                      ? `Start as a plain session instead of ${agent.name}`
+                      : `Start as ${agent.name}: ${agent.description}`)
+                  }
+                  className={pill}
+                >
+                  <UserRoundCog aria-hidden className="size-3.5 shrink-0" />
+                  <span className="min-w-0 truncate">{agent.name}</span>
+                </ToggleGroupItem>
+              );
+            })}
+      </ToggleGroup>
     </QuickRow>
   );
   return (
