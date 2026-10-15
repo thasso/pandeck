@@ -827,9 +827,12 @@ persona toolsets.
   `initiative_manage` (`docs/initiatives.md`), grouped for the developer and
   personal-assistant personas only. Every answer is bounded by its whole UTF-8
   size: a read by id caps its description, milestone ids, outside blockers and
-  each node's `blockedBy` (saying how many it left out), then cuts the member
-  tree depth-first at a node boundary with `nextOffset` to read on, a page's top
-  nodes naming their `parentId`; list and manage answers are cut the same way
+  each node's `blockedBy` (saying how many it left out), fits the head, each
+  node and each outside blocker within its own cap (`fitRecord`: optional fields
+  dropped in a fixed order into `omitted`, then required strings `clipped`),
+  then cuts the member tree depth-first at a node boundary with `nextOffset` to
+  read on, a page's top nodes naming their `parentId`, and measures the whole
+  answer before returning it; list and manage answers are cut the same way
   (`omittedForBudget`). `initiative_manage` operations run in order, each one
   whole or not at all, and the result names every touched Initiative once with
   its progress, absorbed Tasks and removed Tasks still members through an

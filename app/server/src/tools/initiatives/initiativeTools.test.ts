@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import type { InitiativeDetail } from "@assistant/shared";
 import { createTask, updateTask } from "../../tasks.ts";
 import { readInitiative, setInitiativeMilestones } from "../../initiatives.ts";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
@@ -8,6 +9,24 @@ import { toolGroupsFor } from "../catalog.ts";
 import { initiativeTools } from "./initiativeTools.ts";
 
 const BUDGET = 24_000;
+/** The tool's whole-record caps: a read's head, a member, an outside blocker. */
+const HEAD_MAX = 19_000;
+const NODE_MAX = 4_000;
+const BLOCKER_MAX = 2_000;
+
+/**
+ * Details the read serves for ids no store holds: a generic shape whose every
+ * string may be far larger than the store accepts today.
+ */
+const synthetic = vi.hoisted(() => new Map<string, InitiativeDetail>());
+vi.mock("../../initiatives.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../initiatives.ts")>();
+  return {
+    ...real,
+    readInitiative: (id: string) =>
+      synthetic.get(id) ?? real.readInitiative(id),
+  };
+});
 
 const ctx: ToolCallContext = {
   toolCallId: "initiative-tool-test",
@@ -70,23 +89,34 @@ async function manage(operations: Record<string, unknown>[]) {
   return result.details as ManageAnswer;
 }
 
-interface ToolMember {
+/** Fields a record left out or cut to fit its cap. */
+interface FitNote {
+  omitted?: string[];
+  clipped?: string[];
+}
+
+interface ToolMember extends FitNote {
   id: string;
+  title?: string;
   status: string;
   blocked?: boolean;
-  parentId?: string;
+  projectId?: string;
   milestone?: boolean;
+  archived?: boolean;
+  parentId?: string;
   blockedBy?: string[];
   blockedByCount?: number;
   children?: ToolMember[];
 }
 
-interface ReadAnswer {
+interface ReadAnswer extends FitNote {
+  id: string;
+  title: string;
   description?: string;
   descriptionTruncated?: boolean;
   milestoneIds?: string[];
   milestonesOmitted?: number;
-  externalBlockers?: Array<{ id: string }>;
+  externalBlockers?: Array<{ id: string; projectId?: string } & FitNote>;
   externalBlockersOmitted?: number;
   totalMembers: number;
   offset?: number;
@@ -101,7 +131,9 @@ async function read(id: string, offset?: number): Promise<ReadAnswer> {
     ctx,
   );
   bounded(result);
-  return result.details as ReadAnswer;
+  const answer = result.details as ReadAnswer;
+  assertEnvelope(answer, offset ?? 0);
+  return answer;
 }
 
 function flatten(members: readonly ToolMember[]): ToolMember[] {
@@ -109,6 +141,81 @@ function flatten(members: readonly ToolMember[]): ToolMember[] {
     member,
     ...flatten(member.children ?? []),
   ]);
+}
+
+const MEMBER_KEYS = new Set([
+  "id",
+  "title",
+  "status",
+  "blocked",
+  "projectId",
+  "milestone",
+  "archived",
+  "parentId",
+  "blockedBy",
+  "blockedByCount",
+  "omitted",
+  "clipped",
+  "children",
+]);
+
+function bytesOf(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+/**
+ * One record's fit notes are true: each omitted field may be given up and is
+ * absent, each clipped one is required and ends in the clip mark, none twice.
+ */
+function assertFitNote(
+  record: FitNote,
+  droppable: readonly string[],
+  clippable: readonly string[],
+) {
+  const { omitted = [], clipped = [] } = record;
+  const fields = record as Record<string, unknown>;
+  assert.equal(new Set(omitted).size, omitted.length);
+  assert.equal(new Set(clipped).size, clipped.length);
+  for (const key of omitted) {
+    assert.ok(droppable.includes(key), `${key} may not be omitted`);
+    assert.equal(fields[key], undefined, `omitted ${key} is absent`);
+  }
+  for (const key of clipped) {
+    assert.ok(clippable.includes(key), `${key} may not be clipped`);
+    const value = fields[key];
+    assert.ok(typeof value === "string" && value.endsWith("…"), key);
+  }
+}
+
+/**
+ * The whole envelope of a read by id: within the budget (`bounded`), its head,
+ * each outside blocker and each member within their caps with true fit notes,
+ * only known member fields, and a `nextOffset` that moved on.
+ */
+function assertEnvelope(answer: ReadAnswer, offset: number) {
+  const { members, truncated, nextOffset, ...head } = answer;
+  assert.ok(bytesOf(head) <= HEAD_MAX, `head is ${bytesOf(head)} bytes`);
+  assertFitNote(
+    head,
+    ["externalBlockers", "description", "milestoneIds"],
+    ["title", "id"],
+  );
+  for (const stub of answer.externalBlockers ?? []) {
+    assert.ok(bytesOf(stub) <= BLOCKER_MAX, `blocker is ${bytesOf(stub)}`);
+    assertFitNote(stub, ["projectId"], ["title", "id"]);
+  }
+  for (const member of flatten(members)) {
+    const { children, ...own } = member;
+    assert.ok(bytesOf(own) <= NODE_MAX, `member is ${bytesOf(own)} bytes`);
+    for (const key of Object.keys(member)) assert.ok(MEMBER_KEYS.has(key), key);
+    assertFitNote(own, ["projectId", "blockedBy"], ["title", "parentId", "id"]);
+    if (children) assert.ok(children.length > 0);
+  }
+  if (nextOffset !== undefined) {
+    assert.equal(truncated, true);
+    assert.ok(nextOffset > offset, `page at ${offset} advanced`);
+    assert.ok(members.length > 0);
+  }
 }
 
 test("initiative_manage creates with members, marks a covered milestone, and reports compactly", async () => {
@@ -474,4 +581,188 @@ test("a batch reports removed Tasks as still members only as the batch leaves th
   ]);
   assert.deepEqual(gone.changed, []);
   assert.deepEqual(gone.deletedIds, [id]);
+});
+
+test("an accepted 30,000-byte projectId cannot overrun a first or later page", async () => {
+  // Task writes accept an unknown projectId with a warning and store it whole.
+  const huge = "p".repeat(30_000);
+  const created = (title: string, projectId: string, parentId?: string) =>
+    createTask({
+      title,
+      description: "",
+      source: { createdBy: "user" },
+      projectId,
+      ...(parentId ? { parentId } : {}),
+    }).id;
+  const epic = created("Huge project epic", huge);
+  const small = created("Small project member", "small-project", epic);
+  const subtasks: string[] = [];
+  for (let index = 0; index < 150; index += 1)
+    subtasks.push(created(`Huge ${index} ${"y".repeat(150)}`, huge, epic));
+  const outside = created("Huge project outside", huge);
+  updateTask(subtasks[0]!, {
+    addLinks: [{ type: "blocked-by", taskId: outside }],
+  });
+  const { changed } = await manage([
+    { operation: "create", title: "Huge projects", taskIds: [epic] },
+  ]);
+  const id = changed[0]!.id;
+  setInitiativeMilestones(id, [subtasks[1]!], true);
+
+  const first = await read(id);
+  assert.equal(first.totalMembers, 152);
+  assert.equal(first.truncated, true);
+  assert.equal(first.members[0]!.id, epic, "the first node is the huge one");
+  assert.deepEqual(first.externalBlockers, [
+    {
+      id: outside,
+      title: "Huge project outside",
+      status: "todo",
+      omitted: ["projectId"],
+    },
+  ]);
+  let page = first;
+  const seen: ToolMember[] = flatten(first.members);
+  let pages = 1;
+  while (page.nextOffset !== undefined) {
+    page = await read(id, page.nextOffset);
+    const top = page.members[0]!;
+    assert.equal(top.parentId, epic, "a later page's top still hangs on");
+    assert.deepEqual(top.omitted, ["projectId"]);
+    seen.push(...flatten(page.members));
+    pages += 1;
+  }
+  assert.ok(pages > 1, "the tree needed a continuation page");
+  assert.equal(new Set(seen.map((member) => member.id)).size, 152);
+  assert.equal(seen.length, 152);
+  for (const member of seen) {
+    assert.equal(member.clipped, undefined, "titles fit whole");
+    assert.ok(member.title);
+    if (member.id === small) {
+      assert.equal(member.projectId, "small-project");
+      assert.equal(member.omitted, undefined);
+    } else {
+      assert.equal(member.projectId, undefined);
+      assert.deepEqual(member.omitted, ["projectId"]);
+    }
+  }
+  const blockedMember = seen.find((member) => member.id === subtasks[0]);
+  assert.deepEqual(blockedMember!.blockedBy, [outside]);
+  assert.equal(blockedMember!.blocked, true);
+  assert.equal(seen.find((m) => m.id === subtasks[1])!.milestone, true);
+});
+
+test("every string of a read may be oversized: fields drop, then clip, and paging still advances", async () => {
+  const big = (mark: string, index: number | string = "") =>
+    `${mark}${index}-${"\u0000界".repeat(6_000)}`;
+  const stubs = Array.from({ length: 12 }, (_, index) => ({
+    id: big("stub", index),
+    title: big("stub title", index),
+    status: "todo" as const,
+    projectId: big("stub project", index),
+  }));
+  const root = {
+    id: big("root"),
+    title: big("root title"),
+    status: "doing" as const,
+    blocked: true as const,
+    projectId: big("root project"),
+    direct: true as const,
+    milestone: true as const,
+  };
+  const children = Array.from({ length: 40 }, (_, index) => ({
+    // Short ids beside huge ones: a generic shape, not a canonical number.
+    id: index % 2 ? big("child", index) : `child-${index}`,
+    title: big("child title", index),
+    status: "todo" as const,
+    projectId: big("child project", index),
+    parentId: root.id,
+    ...(index % 5 === 0 ? { archived: true as const } : {}),
+    // A future field the tool does not name never reaches the answer.
+    label: big("label", index),
+  }));
+  const nodes = [root, ...children];
+  const progress = {
+    total: nodes.length,
+    done: 0,
+    doing: 1,
+    startable: 40,
+    blocked: 1,
+  };
+  synthetic.set("synthetic", {
+    id: big("initiative"),
+    title: big("initiative title"),
+    state: "active",
+    progress,
+    sessionIds: [],
+    sessionCount: 0,
+    updatedAt: 0,
+    description: big("description"),
+    createdAt: 0,
+    rootIds: [root.id],
+    nodes,
+    externalBlockers: stubs,
+    edges: [
+      ...stubs.map((stub) => ({ from: stub.id, to: root.id })),
+      { from: root.id, to: children[1]!.id },
+    ],
+    milestoneIds: Array.from({ length: 25 }, (_, index) => big("ms", index)),
+  });
+
+  const sources = new Map(nodes.map((node) => [node.id, node]));
+  let offset = 0;
+  const seen: ToolMember[] = [];
+  const blockerCount = new Map([
+    [root.id, stubs.length],
+    [children[1]!.id, 1],
+  ]);
+  let page = await read("synthetic");
+  // Twenty 54 KB milestone ids alone outgrow a head: every optional list
+  // goes, in order, then the title and the id are cut.
+  assert.deepEqual(page.omitted, [
+    "externalBlockers",
+    "description",
+    "milestoneIds",
+  ]);
+  assert.equal(page.descriptionTruncated, undefined);
+  assert.equal(page.milestonesOmitted, undefined);
+  assert.deepEqual(page.clipped, ["title", "id"]);
+  for (;;) {
+    const got = flatten(page.members);
+    assert.ok(got.length > 0, `page at ${offset} advanced`);
+    got.forEach((member, index) => {
+      const source = nodes[offset + index]!;
+      assert.equal(member.status, source.status);
+      assert.equal(member.blocked, "blocked" in source ? true : undefined);
+      assert.equal(member.archived, "archived" in source ? true : undefined);
+      assert.equal(member.milestone, "milestone" in source ? true : undefined);
+      assert.ok(!("label" in member) && !("direct" in member));
+      for (const key of ["id", "title", "parentId"] as const) {
+        const value = member[key];
+        if (value === undefined) continue;
+        const whole = (source as { [key: string]: unknown })[key] as string;
+        if (member.clipped?.includes(key))
+          assert.ok(whole.startsWith(value.slice(0, -1)), key);
+        else assert.equal(value, whole, key);
+      }
+      // A page top names where it hangs, whole or clipped.
+      if (index === 0 && "parentId" in source) assert.ok(member.parentId);
+      // Their blockers' 54 KB ids cannot ride along; the count still does.
+      const blockers = blockerCount.get(source.id) ?? 0;
+      assert.deepEqual(
+        member.omitted,
+        blockers ? ["projectId", "blockedBy"] : ["projectId"],
+      );
+      assert.equal(member.blockedByCount, blockers > 10 ? blockers : undefined);
+      assert.ok(sources.has(source.id));
+    });
+    seen.push(...got);
+    if (page.nextOffset === undefined) break;
+    offset = page.nextOffset;
+    page = await read("synthetic", offset);
+    assert.equal(page.omitted, undefined, "a later page has no lists to drop");
+    assert.deepEqual(page.clipped, ["title", "id"]);
+  }
+  assert.equal(seen.length, nodes.length, "every member read once");
+  synthetic.delete("synthetic");
 });

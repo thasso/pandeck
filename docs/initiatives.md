@@ -120,7 +120,17 @@ create or edit form, and its only Initiative write is Settle.
   the milestones, and progress counts. It never returns Task descriptions; those
   are a `task_read` away. Every answer is bounded in bytes: its lists are capped
   with the count of what was left out, and a member tree cut short says where to
-  read on (`nextOffset`).
+  read on (`nextOffset`). Each record is also capped whole, as serialized: the
+  head (19 KB), a member (4 KB) and an outside blocker (2 KB). One over its cap
+  gives up optional fields in a fixed order, naming each in `omitted`: the head
+  `externalBlockers`, `description`, then `milestoneIds`; a member `projectId`,
+  then `blockedBy`; a blocker `projectId`. Every other field is required. If the
+  record is still over, its required strings are cut in order (a member's
+  `title`, `parentId`, then `id`; elsewhere `title`, then `id`), each ending in
+  `…` and named in `clipped`. The caps leave every page room for its first
+  member, so a read always moves on, and the whole answer is measured once more
+  before it goes out. A Task's `projectId` is stored as written, so a long one
+  is the usual reason a member omits it.
 - `initiative_manage`: a batch of `create`, `update` (title, description,
   state), `addMembers`, `removeMembers`, `setMilestone` / `clearMilestone`,
   `archive`, `unarchive` and `delete`. Each operation is all-or-nothing, like

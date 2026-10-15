@@ -39,6 +39,34 @@ const DESCRIPTION_MAX_BYTES = 4_000;
 const MILESTONE_IDS_MAX = 20;
 const EXTERNAL_BLOCKERS_MAX_BYTES = 6_000;
 const BLOCKED_BY_MAX = 10;
+/**
+ * Whole-record caps (`fitRecord`). A head and one node, each at its cap, plus
+ * the node's place in the tree and the trailer, stay inside the budget, so
+ * every page carries at least its first node.
+ */
+const HEAD_MAX_BYTES = 19_000;
+const NODE_MAX_BYTES = 4_000;
+const EXTERNAL_BLOCKER_MAX_BYTES = 2_000;
+/** What a record's top level costs in its parent's `children` at most. */
+const CHILD_PLACE_BYTES = 14;
+/** Ends a string `fitRecord` cut; the record names it in `clipped`. */
+const CLIP_MARK = "…";
+
+/**
+ * The fields `fitRecord` may give up, in the order it gives them up; each
+ * group goes whole and is named in `omitted` by its first key. Every other
+ * field is required: only the `*_CLIP` strings may be cut, in that order.
+ */
+const HEAD_DROP = [
+  ["externalBlockers", "externalBlockersOmitted"],
+  ["description", "descriptionTruncated"],
+  ["milestoneIds", "milestonesOmitted"],
+] as const;
+const HEAD_CLIP = ["title", "id"] as const;
+const NODE_DROP = [["projectId"], ["blockedBy"]] as const;
+const NODE_CLIP = ["title", "parentId", "id"] as const;
+const EXTERNAL_BLOCKER_DROP = [["projectId"]] as const;
+const EXTERNAL_BLOCKER_CLIP = ["title", "id"] as const;
 /** A manage answer names at most this many Tasks per Initiative and list. */
 const MANAGE_TASK_IDS_MAX = 20;
 
@@ -350,9 +378,13 @@ interface ToolMember {
   blockedBy?: string[];
   /** How many open blockers there are, when `blockedBy` was capped. */
   blockedByCount?: number;
-  /** Only if a node alone outgrew a page: its title is a task_read away. */
-  titleOmitted?: true;
   children?: ToolMember[];
+}
+
+/** What `fitRecord` left out of a record or cut, named in the record. */
+interface FitNote {
+  omitted?: string[];
+  clipped?: string[];
 }
 
 /**
@@ -398,7 +430,14 @@ function detailForTool(
     if (detail.milestoneIds.length > MILESTONE_IDS_MAX)
       head.milestonesOmitted = detail.milestoneIds.length - MILESTONE_IDS_MAX;
     const blockers = fitByBytes(
-      detail.externalBlockers,
+      detail.externalBlockers.map((stub) =>
+        fitRecord(
+          stub,
+          EXTERNAL_BLOCKER_MAX_BYTES,
+          EXTERNAL_BLOCKER_DROP,
+          EXTERNAL_BLOCKER_CLIP,
+        ),
+      ),
       EXTERNAL_BLOCKERS_MAX_BYTES,
     );
     head.externalBlockers = blockers;
@@ -406,9 +445,12 @@ function detailForTool(
       head.externalBlockersOmitted =
         detail.externalBlockers.length - blockers.length;
   } else head.offset = start;
+  const fittedHead = fitRecord(head, HEAD_MAX_BYTES, HEAD_DROP, HEAD_CLIP);
 
   let remaining =
-    READ_BUDGET_BYTES - jsonBytes({ ...head, members: [] }) - TRAILER_BYTES;
+    READ_BUDGET_BYTES -
+    jsonBytes({ ...fittedHead, members: [] }) -
+    TRAILER_BYTES;
   const byId = new Map<string, ToolMember>();
   const roots: ToolMember[] = [];
   let next = start;
@@ -416,47 +458,89 @@ function detailForTool(
     const node = detail.nodes[next]!;
     const blockers = blockedBy.get(node.id) ?? [];
     const parent = node.parentId ? byId.get(node.parentId) : undefined;
-    const member: ToolMember = {
-      id: node.id,
-      title: node.title,
-      status: node.status,
-      ...(node.blocked ? { blocked: true as const } : {}),
-      ...(node.projectId ? { projectId: node.projectId } : {}),
-      ...(node.milestone ? { milestone: true as const } : {}),
-      ...(node.archived ? { archived: true as const } : {}),
-      ...(!parent && node.parentId ? { parentId: node.parentId } : {}),
-      ...(blockers.length
-        ? { blockedBy: blockers.slice(0, BLOCKED_BY_MAX) }
-        : {}),
-      ...(blockers.length > BLOCKED_BY_MAX
-        ? { blockedByCount: blockers.length }
-        : {}),
-    };
-    // A child's place in its parent's `children` array costs a comma and,
-    // for the first one, the key itself.
-    let cost = jsonBytes(member) + (parent ? 14 : 1);
-    if (cost > remaining) {
-      // The head is bounded (a ≤1.2 KB title, the capped lists) and so is a
-      // node (a ≤1.2 KB Task title, ten blocker ids), so a page always has
-      // room for its first node. Should it not, the node goes without its
-      // title rather than the read stop advancing.
-      if (next > start) break;
-      delete (member as { title?: string }).title;
-      member.titleOmitted = true;
-      cost = jsonBytes(member) + (parent ? 14 : 1);
-    }
+    const member = fitRecord<ToolMember>(
+      {
+        id: node.id,
+        title: node.title,
+        status: node.status,
+        ...(node.blocked ? { blocked: true as const } : {}),
+        ...(node.projectId ? { projectId: node.projectId } : {}),
+        ...(node.milestone ? { milestone: true as const } : {}),
+        ...(node.archived ? { archived: true as const } : {}),
+        ...(!parent && node.parentId ? { parentId: node.parentId } : {}),
+        ...(blockers.length
+          ? { blockedBy: blockers.slice(0, BLOCKED_BY_MAX) }
+          : {}),
+        ...(blockers.length > BLOCKED_BY_MAX
+          ? { blockedByCount: blockers.length }
+          : {}),
+      },
+      NODE_MAX_BYTES,
+      NODE_DROP,
+      NODE_CLIP,
+    );
+    // A root's place costs a comma; a child's also its parent's `children`
+    // key, charged for every child. The first node is always taken: the head
+    // and node caps leave it room, and the check below holds the line.
+    const cost = jsonBytes(member) + (parent ? CHILD_PLACE_BYTES : 1);
+    if (cost > remaining && next > start) break;
     remaining -= cost;
-    byId.set(member.id, member);
+    // Keyed by the node's own id, not a clipped one, so its children find it.
+    byId.set(node.id, member);
     if (parent) (parent.children ??= []).push(member);
     else roots.push(member);
   }
-  return {
-    ...head,
+  const answer = {
+    ...fittedHead,
     members: roots,
     ...(next < detail.nodes.length
       ? { truncated: true, nextOffset: next }
       : {}),
   };
+  // The postcondition itself, on the answer as serialized. A read writes
+  // nothing, so refusing here loses no work.
+  if (jsonBytes(answer) > READ_BUDGET_BYTES)
+    throw new Error(
+      `initiative_read: the answer at offset ${start} passed its budget.`,
+    );
+  return answer;
+}
+
+/**
+ * `record` within `maxBytes` of serialized JSON, measured whole after every
+ * step, metadata included. It drops the `drop` groups in order, each named by
+ * its first key in `omitted`, then cuts the `clip` strings in order, each
+ * ending in {@link CLIP_MARK} and named in `clipped`. A record that fits comes
+ * back as it was.
+ */
+function fitRecord<T extends object>(
+  record: T,
+  maxBytes: number,
+  drop: readonly (readonly string[])[],
+  clip: readonly string[],
+): T & FitNote {
+  const fitted: T & FitNote = { ...record };
+  const fields = fitted as Record<string, unknown>;
+  for (const group of drop) {
+    if (jsonBytes(fitted) <= maxBytes) return fitted;
+    if (!group.some((key) => key in fields)) continue;
+    for (const key of group) delete fields[key];
+    (fitted.omitted ??= []).push(group[0]!);
+  }
+  const markBytes = jsonBytes(CLIP_MARK) - 2;
+  for (const key of clip) {
+    if (jsonBytes(fitted) <= maxBytes) return fitted;
+    const value = fields[key];
+    if (typeof value !== "string" || jsonBytes(value) - 2 <= markBytes)
+      continue;
+    (fitted.clipped ??= []).push(key);
+    const over = jsonBytes(fitted) - maxBytes;
+    const room = jsonBytes(value) - 2 - over - markBytes;
+    fields[key] = clipSerialized(value, Math.max(0, room)) + CLIP_MARK;
+  }
+  if (jsonBytes(fitted) > maxBytes)
+    throw new Error(`A ${maxBytes}-byte record cap cannot be met.`);
+  return fitted;
 }
 
 /** A list read: entries in order until the budget, then a count of the rest. */
