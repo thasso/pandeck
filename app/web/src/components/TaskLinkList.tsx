@@ -2,19 +2,25 @@ import { useState } from "react";
 import type { TaskStatus } from "@assistant/shared";
 import { Button } from "./ui/button.tsx";
 import { TaskStatusIcon } from "./TaskStatusIcon.tsx";
+import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
 
 /** One Task as a link row, with the Tasks under it when it is a tree. */
 export interface TaskLinkItem {
   id: string;
   title: string;
   status: TaskStatus;
+  /** Archived: still reachable, but out of the way — the row is toned back. */
+  archived?: boolean | undefined;
+  /** Open Tasks this one waits on; a positive count marks it blocked. */
+  openBlockerCount?: number | undefined;
   children?: TaskLinkItem[] | undefined;
 }
 
 /**
  * @component TaskLinkList
  * @purpose Tasks listed as links to them: the status glyph, the title (struck
- *   through once done) and the id, a row that opens the Task. Subtasks nest
+ *   through once done, toned back once archived), a blocked glyph when it
+ *   waits on open Tasks, and the id — a row that opens the Task. Subtasks nest
  *   under their parent on a guide line.
  * @useWhen Anywhere a Task is named as a related object rather than worked on
  *   — the Task page's subtasks, the inspectors' Tasks sections — so a Task
@@ -64,6 +70,7 @@ function TaskLinkRow({
   item: TaskLinkItem;
   onOpen: (id: string) => void;
 }) {
+  const done = item.status === "done";
   return (
     <li>
       <Button
@@ -72,12 +79,26 @@ function TaskLinkRow({
         className="w-full justify-start gap-2 font-normal"
         onClick={() => onOpen(item.id)}
       >
-        <TaskStatusIcon status={item.status} size={14} />
+        <span className={`flex shrink-0 ${item.archived ? "opacity-60" : ""}`}>
+          <TaskStatusIcon status={item.status} size={14} />
+        </span>
         <span
-          className={`min-w-0 flex-1 truncate text-left ${item.status === "done" ? "text-muted-foreground line-through" : ""}`}
+          className={`min-w-0 flex-1 truncate text-left ${done ? "text-muted-foreground line-through" : item.archived ? "text-muted-foreground" : ""}`}
         >
           {item.title}
         </span>
+        {item.archived ? (
+          <span className="shrink-0 text-xs text-muted-foreground">
+            Archived
+          </span>
+        ) : null}
+        {item.openBlockerCount && !done && !item.archived ? (
+          <TaskBlockedIndicator
+            openBlockers={item.openBlockerCount}
+            glyph
+            size={12}
+          />
+        ) : null}
         <span className="shrink-0 font-mono text-xs text-muted-foreground">
           #{item.id}
         </span>

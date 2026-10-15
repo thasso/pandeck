@@ -136,6 +136,8 @@ export interface ObjectRef {
   counters?: { additions: number; deletions: number };
   /** Task status shown as the relation icon when kind is task. */
   taskStatus?: TaskStatus;
+  /** Open Tasks a task ref waits on (`TaskSummary.openBlockerCount`). */
+  taskOpenBlockerCount?: number;
   /** True when a linked session is currently running. */
   running?: boolean;
   /**
@@ -326,7 +328,13 @@ function taskStatusIcon(status: TaskStatus): ReactNode {
 function taskObjectRef(
   task: Pick<
     TaskSummary,
-    "id" | "title" | "status" | "parentId" | "sortOrder" | "createdAt"
+    | "id"
+    | "title"
+    | "status"
+    | "parentId"
+    | "sortOrder"
+    | "createdAt"
+    | "openBlockerCount"
   >,
   subtitle?: string,
 ): ObjectRef {
@@ -336,6 +344,9 @@ function taskObjectRef(
     title: task.title,
     ...(subtitle !== undefined ? { subtitle } : {}),
     taskStatus: task.status,
+    ...(task.openBlockerCount
+      ? { taskOpenBlockerCount: task.openBlockerCount }
+      : {}),
   };
 }
 
@@ -453,6 +464,9 @@ function taskLinkItems(refs: ObjectRef[]): TaskLinkItem[] | null {
       id: ref.id,
       title: ref.title,
       status: ref.taskStatus,
+      ...(ref.taskOpenBlockerCount
+        ? { openBlockerCount: ref.taskOpenBlockerCount }
+        : {}),
       ...(children ? { children } : {}),
     });
   }

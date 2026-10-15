@@ -210,3 +210,74 @@ test("a link change broadcasts both of its Tasks, and so does deleting one", asy
     }
   }
 });
+
+test("a blocker's status change re-broadcasts the Task it blocks with its new count", async () => {
+  const messages: ServerMessage[] = [];
+  const viewer = {
+    send: (message: ServerMessage) => messages.push(message),
+    wantsTopic: (topic: string) => topic === "tasks",
+  };
+  const blocker = createTask({
+    title: "Count blocker",
+    source: { createdBy: "user" },
+  });
+  const blocked = createTask({
+    title: "Count blocked",
+    source: { createdBy: "user" },
+  });
+  updateTask(blocked.id, {
+    addLinks: [{ type: "blocked-by", taskId: blocker.id }],
+  });
+  await settled();
+  hub.register(viewer);
+  try {
+    const summaryOf = (id: string): TaskSummary | undefined => {
+      const event = lastBatch(messages).events.find((e) => e.id === id);
+      return event?.kind === "upsert" ? event.item : undefined;
+    };
+
+    updateTask(blocker.id, { status: "done", actor: { kind: "user" } });
+    await settled();
+    assert.deepEqual(
+      lastBatch(messages)
+        .events.map((event) => event.id)
+        .sort(),
+      [blocker.id, blocked.id].sort(),
+    );
+    const unblocked = summaryOf(blocked.id);
+    assert.ok(unblocked, "the blocked Task is re-sent");
+    assert.equal(unblocked.openBlockerCount, undefined);
+
+    updateTask(blocker.id, { status: "todo", actor: { kind: "user" } });
+    await settled();
+    assert.equal(summaryOf(blocked.id)?.openBlockerCount, 1);
+
+    // A field no linked Task shows reaches no linked Task.
+    updateTask(blocker.id, { description: "Only the body" });
+    await settled();
+    assert.equal(
+      lastBatch(messages).events.some((event) => event.id === blocked.id),
+      false,
+    );
+
+    // Archiving the blocker leaves the projection (a delete) and un-blocks.
+    archiveTask(blocker.id);
+    await settled();
+    const archived = lastBatch(messages);
+    assert.equal(
+      archived.events.find((event) => event.id === blocker.id)?.kind,
+      "delete",
+    );
+    const released = summaryOf(blocked.id);
+    assert.ok(released && !("openBlockerCount" in released));
+  } finally {
+    hub.unregister(viewer);
+    for (const task of [blocker, blocked]) {
+      try {
+        deleteTask(task.id);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+});

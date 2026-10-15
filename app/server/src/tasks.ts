@@ -227,6 +227,7 @@ export function taskStateItems(
 ): StateEvent<TaskSummary>[] {
   const index = taskRevisionIndex();
   const events: StateEvent<TaskSummary>[] = [];
+  let blockerCounts: Map<string, number> | undefined;
   for (const id of new Set(ids)) {
     const entry = index.get(id);
     if (!entry) continue;
@@ -234,7 +235,8 @@ export function taskStateItems(
       events.push({ kind: "delete", id, revision: entry.revision });
       continue;
     }
-    const item = taskSummaryFor(id);
+    blockerCounts ??= openTaskBlockerCounts();
+    const item = taskSummaryFor(id, blockerCounts);
     if (item)
       events.push({ kind: "upsert", id, revision: entry.revision, item });
   }
@@ -245,12 +247,35 @@ export function taskStateItems(
  * The live-projection summary for one Task, or null when it is not in it
  * (archived, tombstoned, never existed) — which is exactly when the domain owes
  * its viewers a `delete` rather than an `upsert`.
+ *
+ * A caller projecting several Tasks passes one `openTaskBlockerCounts()` map
+ * for the batch; alone, the Task's own count is one indexed query.
  */
-export function taskSummaryFor(id: string): TaskSummary | null {
+export function taskSummaryFor(
+  id: string,
+  blockerCounts?: ReadonlyMap<string, number>,
+): TaskSummary | null {
   const nid = parseId(id);
   const item = nid === undefined ? null : readTaskItem(nid, false);
   if (!item || item.archivedAt !== undefined) return null;
-  return taskSummaryOf(item);
+  return toSummary(
+    withOpenBlockers(
+      item,
+      blockerCounts
+        ? blockerCounts.get(id)
+        : taskStore.openBlockerCounts(nid).get(nid!),
+    ),
+  );
+}
+
+/**
+ * A Task's current state-event revision, for a reply that hands a viewer the
+ * full Task: the client marks that detail stale only on an event NEWER than
+ * this, so a write's own echo does not refetch what the reply already holds.
+ */
+export function taskRevision(id: string): number | undefined {
+  const nid = parseId(id);
+  return nid === undefined ? undefined : taskStore.get(nid)?.revision;
 }
 
 /** Sessions currently linked to a live Task, for the per-session back-link refresh. */
@@ -338,7 +363,10 @@ export function listTasks(filter: TaskListFilter = {}): TaskSummary[] {
     )
     .filter((item) => !query || matchesQuery(item, query));
 
-  return order(items).map(toSummary);
+  const blockerCounts = openTaskBlockerCounts();
+  return order(items).map((item) =>
+    toSummary(withOpenBlockers(item, blockerCounts.get(item.id))),
+  );
 }
 
 /** One full Task, with its links to other Tasks resolved (`TaskItem.links`). */
@@ -362,13 +390,21 @@ function readTaskItem(nid: number, withLinks: boolean): TaskItem | null {
     : item;
 }
 
+/** Attach how many open blockers hold the Task up; nothing when none do. */
+function withOpenBlockers<T extends TaskItem>(
+  item: T,
+  count: number | undefined,
+): T {
+  return count ? { ...item, openBlockerCount: count } : item;
+}
+
 /**
  * The linked Tasks behind a Task's link ids, and whether one of its blockers is
  * still open: neither done nor archived.
  */
 function resolveTaskLinks(
   ids: ReturnType<typeof taskStore.taskLinkIds>,
-): Pick<TaskItem, "links" | "blocked"> {
+): Pick<TaskItem, "links" | "blocked" | "openBlockerCount"> {
   if (!ids.blocks.length && !ids.blockedBy.length && !ids.relates.length)
     return {};
   const linked = (list: number[]): TaskLinkedTask[] =>
@@ -391,10 +427,15 @@ function resolveTaskLinks(
     blockedBy: linked(ids.blockedBy),
     relates: linked(ids.relates),
   };
-  const blocked = links.blockedBy.some(
+  // The same rule as `taskStore.openBlockerCounts`, read off the blockers this
+  // detail already resolved rather than queried a second time.
+  const openBlockerCount = links.blockedBy.filter(
     (blocker) => blocker.status !== "done" && !blocker.archived,
-  );
-  return { links, ...(blocked ? { blocked: true as const } : {}) };
+  ).length;
+  return {
+    links,
+    ...(openBlockerCount ? { openBlockerCount, blocked: true as const } : {}),
+  };
 }
 
 /**
@@ -443,7 +484,12 @@ function sessionLinkedTasks(sessionId: string): TaskItem[] {
 }
 
 function sessionTaskSummaries(sessionId: string): TaskSummary[] {
-  return sessionLinkedTasks(sessionId).map(toSummary);
+  const tasks = sessionLinkedTasks(sessionId);
+  if (!tasks.length) return [];
+  const blockerCounts = openTaskBlockerCounts();
+  return tasks.map((item) =>
+    toSummary(withOpenBlockers(item, blockerCounts.get(item.id))),
+  );
 }
 
 export function listSessionTasks(
@@ -646,10 +692,37 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
         ? { sessionRefs: normalizeSessionRefs(patch.sessionRefs) }
         : {}),
     });
-    return [...cascaded, ...applyTaskLinkChanges(nid, linkChanges)];
+    return [
+      ...cascaded,
+      ...applyTaskLinkChanges(nid, linkChanges),
+      ...(linkedStateChanged(current, patch, statusWrite.status)
+        ? taskStore.linkedTaskIds(nid).map(String)
+        : []),
+    ];
   });
   notify([id, ...touched]);
   return readTask(id)!;
+}
+
+/**
+ * Whether a write changes what this Task's LINKED Tasks show of it: the title
+ * and status their detail views list, and — through status and archiving — the
+ * open-blocker count on the Tasks it blocks. Any of these reports every linked
+ * Task (`blocks` both ways, and `relates`) in the write's one notification;
+ * other fields, a description or a priority, report none.
+ */
+function linkedStateChanged(
+  current: TaskItem,
+  patch: UpdateTaskInput,
+  status: TaskStatus | undefined,
+): boolean {
+  return (
+    (patch.title !== undefined &&
+      cleanText(patch.title, 200) !== current.title) ||
+    (status !== undefined && status !== current.status) ||
+    (patch.archivedAt !== undefined &&
+      (patch.archivedAt !== null) !== (current.archivedAt !== undefined))
+  );
 }
 
 export function archiveTask(id: string, actor?: TaskStatusActor): TaskItem {

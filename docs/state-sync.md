@@ -169,7 +169,10 @@ per-surface sub-tasks — no page invents its own delta format.
 
 ## Adopted domains
 
-- Tasks: canonical live summaries plus keyed full bodies.
+- Tasks: canonical live summaries plus keyed full bodies. A body's reply
+  (`taskDetail`, `taskSaved`) carries the revision it is as of, and a newer
+  event re-reads it even when the summary is unchanged: a linked Task's rename
+  moves only the revision (`docs/tasks.md`).
 - Projects: canonical archived-inclusive lean summaries plus keyed full
   documents. Project archive/restore is an upsert; only deletion removes
   registry membership. Failed optimistic mutations recover their touched ids

@@ -20,6 +20,7 @@ import {
   notifyTaskChange,
   readTask,
   reorderTasks,
+  subscribeTaskChanges,
   sweepCompletedTaskArchive,
   taskRevisionIndex,
   unarchiveTask,
@@ -208,6 +209,144 @@ test("deleting a linked Task reports the Tasks that lose the link", () => {
   }
 });
 
+/**
+ * Run `write` and return the id sets it notified, one entry per notification.
+ */
+function heardDuring(write: () => void): string[][] {
+  const heard: string[][] = [];
+  const unsubscribe = subscribeTaskChanges((ids) => heard.push([...ids]));
+  try {
+    write();
+  } finally {
+    unsubscribe();
+  }
+  return heard;
+}
+
+test("a status, title or archive change reports every linked Task once", () => {
+  const subject = createTask({
+    title: "Neighbour subject",
+    source: { createdBy: "user" },
+  });
+  const blocks = createTask({
+    title: "Waits on the subject",
+    source: { createdBy: "user" },
+  });
+  const blocker = createTask({
+    title: "The subject waits on it",
+    source: { createdBy: "user" },
+  });
+  const related = createTask({
+    title: "Related to the subject",
+    source: { createdBy: "user" },
+  });
+  const bystander = createTask({
+    title: "Not linked",
+    source: { createdBy: "user" },
+  });
+  try {
+    updateTask(subject.id, {
+      addLinks: [
+        { type: "blocks", taskId: blocks.id },
+        { type: "blocked-by", taskId: blocker.id },
+        { type: "relates", taskId: related.id },
+      ],
+    });
+    const everyone = [subject.id, blocks.id, blocker.id, related.id].sort();
+    const writes: Array<[string, () => void]> = [
+      [
+        "status",
+        () =>
+          updateTask(subject.id, { status: "done", actor: { kind: "user" } }),
+      ],
+      ["title", () => updateTask(subject.id, { title: "Neighbour renamed" })],
+      ["archive", () => archiveTask(subject.id)],
+      ["unarchive", () => unarchiveTask(subject.id)],
+      [
+        "several fields at once",
+        () =>
+          updateTask(subject.id, {
+            title: "Neighbour renamed again",
+            status: "todo",
+            description: "and a body",
+            actor: { kind: "user" },
+          }),
+      ],
+    ];
+    for (const [what, write] of writes) {
+      let heard: string[][] = [];
+      movesRevisions(everyone, () => {
+        heard = heardDuring(write);
+      });
+      assert.equal(heard.length, 1, `${what}: one notification per write`);
+      assert.deepEqual(
+        [...heard[0]!].sort(),
+        everyone,
+        `${what}: the subject and each linked Task, each exactly once`,
+      );
+    }
+    // The blocker's own status change reaches the subject it holds up, which
+    // is what moves the subject's open-blocker count in the list.
+    assert.deepEqual(
+      heardDuring(() =>
+        updateTask(blocker.id, { status: "done", actor: { kind: "user" } }),
+      ).map((ids) => [...ids].sort()),
+      [[blocker.id, subject.id].sort()],
+    );
+    assert.equal(
+      heardDuring(() => updateTask(bystander.id, { title: "Still alone" }))
+        .flat()
+        .includes(subject.id),
+      false,
+    );
+  } finally {
+    discard(subject.id, blocks.id, blocker.id, related.id, bystander.id);
+  }
+});
+
+test("a change linked Tasks cannot see reports only the Task itself", () => {
+  const subject = createTask({
+    title: "Quiet subject",
+    source: { createdBy: "user" },
+  });
+  const other = createTask({
+    title: "Quiet neighbour",
+    source: { createdBy: "user" },
+  });
+  try {
+    updateTask(subject.id, {
+      addLinks: [{ type: "blocks", taskId: other.id }],
+    });
+    const writes: Array<[string, () => void]> = [
+      ["description", () => updateTask(subject.id, { description: "Body" })],
+      ["priority", () => updateTask(subject.id, { priority: "high" })],
+      ["dates", () => updateTask(subject.id, { scheduledFor: "2026-10-20" })],
+      // Saving the title it already has is not a rename.
+      ["same title", () => updateTask(subject.id, { title: "Quiet subject" })],
+      // An agent's status write is a SUGGESTION: the status does not move.
+      [
+        "agent suggestion",
+        () =>
+          updateTask(subject.id, {
+            status: "done",
+            actor: { kind: "agent", id: "session-1" },
+          }),
+      ],
+      // Archiving an already archived Task changes nothing either.
+      ["re-unarchive", () => unarchiveTask(subject.id)],
+    ];
+    for (const [what, write] of writes)
+      assert.deepEqual(
+        heardDuring(write),
+        [[subject.id]],
+        `${what}: the linked Task is not told`,
+      );
+    assert.equal(readTask(subject.id)?.status, "todo");
+  } finally {
+    discard(subject.id, other.id);
+  }
+});
+
 test("deleting a Project reports the Tasks it orphans", () => {
   const task = createTask({
     title: "Task in a doomed project",
@@ -273,6 +412,7 @@ test("every exported Task write is covered by the revision test", () => {
     "taskRevisionDigest",
     "taskStateItems",
     "taskSummaryFor",
+    "taskRevision",
     "taskLinkedSessionIds",
     "shiftLocalDateKey",
     "startTaskAutoArchiveSweep",

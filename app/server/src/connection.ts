@@ -231,6 +231,7 @@ import {
   markTaskProcessed,
   readTask,
   taskRevisionDigest,
+  taskRevision,
   taskStateItems,
   reorderTasks,
   unarchiveTask,
@@ -3048,9 +3049,11 @@ export class Connection implements Viewer {
           });
       // The FULL item, and only it: the detail view adopts the stored body from
       // here, and a create settles its optimistic row against it (`requestId`).
+      const revision = taskRevision(item.id);
       this.send({
         type: "taskSaved",
         item,
+        ...(revision !== undefined ? { revision } : {}),
         ...(requestId ? { requestId } : {}),
       });
       if (this.viewing) this.viewing.broadcastState();
@@ -3099,7 +3102,14 @@ export class Connection implements Viewer {
   private onGetTask(id: string, requestId: string): void {
     try {
       const item = readTask(id);
-      this.send({ type: "taskDetail", id, item, requestId });
+      const revision = item ? taskRevision(id) : undefined;
+      this.send({
+        type: "taskDetail",
+        id,
+        item,
+        ...(revision !== undefined ? { revision } : {}),
+        requestId,
+      });
     } catch (err) {
       this.send({
         type: "taskDetail",

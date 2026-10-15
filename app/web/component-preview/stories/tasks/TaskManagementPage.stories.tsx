@@ -7,6 +7,7 @@ import type { Prefs } from "../../../src/hooks/usePrefs.ts";
 import type { TaskItem } from "@assistant/shared";
 import { TaskManagementPage } from "../../../src/components/TaskManagementPage.tsx";
 import { ALL_PROJECT_FILTER } from "../../../src/lib/backlogTreeModel.ts";
+import { ready } from "../../../src/lib/loadState.ts";
 import { taskAreaProjects, taskAreaTask } from "../../fixtures/tasks.ts";
 
 const prefs = {
@@ -33,7 +34,90 @@ const noticedTask: TaskItem = {
   },
 };
 
-function renderPage(state: "loading" | "empty" | "tasks" | "notices") {
+/** A plain Backlog row to stand beside the linked Task. */
+function backlogTask(
+  id: string,
+  title: string,
+  status: TaskItem["status"],
+): TaskItem {
+  return {
+    id,
+    title,
+    status,
+    description: "",
+    projectId: "pandeck",
+    source: { createdBy: "user" },
+    triagedAt: Date.now(),
+    createdAt: Date.now() - 86_400_000,
+    updatedAt: Date.now() - 60 * 60_000,
+  };
+}
+
+/**
+ * A Task linked every way a Task can be: held up by one open and one finished
+ * Task, holding up another, and related to an archived one. The open blocker
+ * makes it blocked, which its Backlog row says as well as its page.
+ */
+const linkedTasks: TaskItem[] = [
+  {
+    ...(taskAreaTask as TaskItem),
+    triagedAt: Date.now(),
+    openBlockerCount: 1,
+    description:
+      "Keep the backlog scannable while bringing its controls into the shared UI system.",
+    blocked: true,
+    links: {
+      blockedBy: [
+        {
+          id: "698",
+          title: "Settle the shared property list",
+          status: "doing",
+          projectId: "pandeck",
+          archived: false,
+        },
+        {
+          id: "702",
+          title: "Move the inspector onto shadcn sections",
+          status: "done",
+          projectId: "pandeck",
+          archived: false,
+        },
+      ],
+      blocks: [
+        {
+          id: "731",
+          title: "Write the Backlog walkthrough for the docs site",
+          status: "todo",
+          projectId: "docs",
+          archived: false,
+        },
+      ],
+      relates: [
+        {
+          id: "655",
+          title: "Earlier pass at the project page layout",
+          status: "todo",
+          projectId: "pandeck",
+          archived: true,
+        },
+      ],
+    },
+  },
+  backlogTask("698", "Settle the shared property list", "doing"),
+  {
+    ...backlogTask(
+      "731",
+      "Write the Backlog walkthrough for the docs site",
+      "todo",
+    ),
+    projectId: "docs",
+    openBlockerCount: 1,
+  },
+];
+
+function renderPage(
+  state: "loading" | "empty" | "tasks" | "notices" | "links",
+) {
   const items =
     state === "loading"
       ? null
@@ -41,7 +125,9 @@ function renderPage(state: "loading" | "empty" | "tasks" | "notices") {
         ? []
         : state === "notices"
           ? [noticedTask]
-          : [taskAreaTask as TaskItem];
+          : state === "links"
+            ? linkedTasks
+            : [taskAreaTask as TaskItem];
   const backlogState = {
     connected: true,
     taskList: items === null ? null : { items, updatedAt: Date.now() },
@@ -66,7 +152,14 @@ function renderPage(state: "loading" | "empty" | "tasks" | "notices") {
       actions={actions}
       prefs={prefs}
       onUpdatePrefs={() => {}}
-      selectedId={state === "notices" ? noticedTask.id : null}
+      selectedId={
+        state === "notices"
+          ? noticedTask.id
+          : state === "links"
+            ? linkedTasks[0]!.id
+            : null
+      }
+      {...(state === "links" ? { detailState: ready(linkedTasks[0]!) } : {})}
       onSelect={() => {}}
       onCloseDetail={() => {}}
       onClose={() => {}}
@@ -106,3 +199,8 @@ export const Empty: Story = { render: () => renderPage("empty") };
 export const WithTasks: Story = { render: () => renderPage("tasks") };
 /** A Task opened with its notice cards: an agent's suggestion and the Inbox. */
 export const TaskNotices: Story = { render: () => renderPage("notices") };
+/**
+ * A blocked Task's page: the Blocked marker on its facts line, its links
+ * grouped under it, and the blocked rows in the Backlog beside it.
+ */
+export const TaskLinks: Story = { render: () => renderPage("links") };

@@ -100,6 +100,8 @@ import { buildProjectsById } from "../lib/projectDisplay.ts";
 import { projectPath } from "../hooks/useSessionRouting.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
+import { TaskLinksSection } from "./TaskLinksSection.tsx";
+import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useLocationHash } from "../hooks/useLocationHash.ts";
 import {
@@ -809,6 +811,11 @@ function TaskDetailPanel({
               onSetStatus={mobile ? undefined : onSetStatus}
             />
 
+            {/* The other Tasks this one waits on, holds up or relates to. They
+                come with the full Task, so a refresh keeps the last ones shown
+                rather than blanking them. */}
+            <TaskLinksSection links={detail?.links} onOpenTask={onOpenTask} />
+
             {!runsLoaded ? (
               <div
                 role="status"
@@ -1193,6 +1200,15 @@ function TaskTitleBlock({
             {TASK_STATUS_LABEL[item.status]}
           </span>
         )}
+        {/* Read off the live summary rather than the body, so it changes the
+            moment a blocker is done, without waiting for the re-read. */}
+        {item.openBlockerCount ? (
+          <TaskBlockedIndicator
+            openBlockers={item.openBlockerCount}
+            size={14}
+            className="gap-1.5"
+          />
+        ) : null}
         {/* Always present, a picker either way: a Task with no Project says
             so, and setting one is a click away rather than in the inspector. */}
         <span className="inline-flex min-w-0 items-center gap-0.5">

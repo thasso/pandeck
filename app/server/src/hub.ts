@@ -21,6 +21,7 @@ import {
   subscribeTaskChanges,
   taskLinkedSessionIds,
   taskRevisionIndex,
+  openTaskBlockerCounts,
   taskSummaryFor,
 } from "./tasks.ts";
 import {
@@ -892,6 +893,8 @@ class SessionHub {
       this.lastFlushedTaskRevisions ?? seedTaskBaseline(index, pending);
     const events: StateEvent<TaskSummary>[] = [];
     const flushed = new Map<string, number>();
+    // Read once, and only when a row actually changed.
+    let blockerCounts: Map<string, number> | undefined;
     for (const [id, entry] of index) {
       if (!entry.live) continue;
       if (baseline.get(id) === entry.revision) {
@@ -900,7 +903,8 @@ class SessionHub {
       }
       // Summaries only. Bodies are the bulk of a Task payload (~350 KB of
       // Markdown across the active list here) and no list surface renders them.
-      const item = taskSummaryFor(id);
+      blockerCounts ??= openTaskBlockerCounts();
+      const item = taskSummaryFor(id, blockerCounts);
       if (!item) {
         // A live row with no summary cannot happen in one synchronous flush.
         // If it ever does, carry the OLD revision forward so the next flush

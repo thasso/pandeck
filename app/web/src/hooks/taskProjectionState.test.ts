@@ -113,4 +113,104 @@ describe("Task keyed projections", () => {
     expect(state.taskDetails["0"]).toBeDefined();
     expect(state.taskDetails["1"]).toBeUndefined();
   });
+
+  describe("a body is as fresh as the revision it was read at", () => {
+    /** The Backlog list holding `item`, at `revision`. */
+    function listed(item: TaskItem, revision: number) {
+      return reduceAssistantState(createInitialState(), {
+        kind: "server",
+        msg: {
+          type: "taskList",
+          list: {
+            items: [taskSummaryOf(item)],
+            updatedAt: item.updatedAt,
+            request: {},
+          },
+          seq: 1,
+          revisions: [{ id: item.id, revision }],
+        },
+      });
+    }
+
+    function event(item: TaskItem, revision: number) {
+      return {
+        kind: "server" as const,
+        msg: {
+          type: "stateEvents" as const,
+          topic: "tasks" as const,
+          seq: 2,
+          events: [
+            {
+              kind: "upsert" as const,
+              id: item.id,
+              revision,
+              item: taskSummaryOf(item),
+            },
+          ],
+        },
+      };
+    }
+
+    it("re-reads a body on a newer event whose summary and updatedAt did not move", () => {
+      // A linked Task was renamed: this Task's revision moved, nothing else.
+      const item = task("1", 1);
+      let state = listed(item, 4);
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item,
+        revision: 4,
+      });
+      expect(state.taskDetails[item.id]?.status).toBe("ready");
+
+      state = reduceAssistantState(state, event(item, 5));
+      expect(state.taskDetails[item.id]?.status).toBe("refreshing");
+      expect(dataOf(state.taskDetails[item.id]!)).toBe(item);
+    });
+
+    it("keeps a saved body ready when the save's own event echoes it", () => {
+      const item = task("1", 1);
+      let state = listed(item, 4);
+      const saved = { ...item, title: "Renamed", updatedAt: 2 };
+      state = reduceAssistantState(state, {
+        kind: "taskSaved",
+        item: saved,
+        revision: 5,
+      });
+      state = reduceAssistantState(state, event(saved, 5));
+      expect(state.taskDetails[item.id]?.status).toBe("ready");
+      expect(state.taskDetailRevisions[item.id]).toBe(5);
+    });
+
+    it("re-reads a reply that is older than an event already applied", () => {
+      const item = task("1", 1);
+      let state = listed(item, 4);
+      state = reduceAssistantState(state, event(item, 6));
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item,
+        revision: 5,
+      });
+      expect(state.taskDetails[item.id]?.status).toBe("refreshing");
+    });
+
+    it("keeps the known revision when a refresh fails", () => {
+      const item = task("1", 1);
+      let state = listed(item, 4);
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item,
+        revision: 4,
+      });
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item: null,
+        error: "read failed",
+      });
+      expect(state.taskDetailRevisions[item.id]).toBe(4);
+    });
+  });
 });

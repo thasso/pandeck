@@ -646,6 +646,13 @@ export interface UIState {
   >;
   /** Keyed full-body reads; `ready(null)` is authoritative not-found. */
   taskDetails: Record<string, LoadState<TaskItem | null>>;
+  /**
+   * The state-event revision each cached body is as of (the `taskDetail` /
+   * `taskSaved` envelope). A NEWER event marks that body stale even when the
+   * row's `updatedAt` did not move — a linked Task's rename or status change
+   * reaches this Task's links only that way.
+   */
+  taskDetailRevisions: Record<string, number>;
   /** Least-recently-used order for the bounded per-Task body cache. */
   taskDetailsLru: string[];
   /**
@@ -907,6 +914,7 @@ const emptyInitial: UIState = {
   openTaskProjectionId: null,
   worktreeMerge: {},
   taskDetails: {},
+  taskDetailRevisions: {},
   taskDetailsLru: [],
   taskStatuses: {},
   taskMutations: {},
@@ -1766,6 +1774,7 @@ type Action =
       kind: "taskDetailResult";
       id: string;
       item: TaskItem | null;
+      revision?: number;
       error?: string;
     }
   | { kind: "unwatchComments"; target: CommentTarget }
@@ -1776,7 +1785,7 @@ type Action =
    * The server's direct answer to `saveTask`, carrying the temp id its pending
    * entry recorded (the wire message never does — the server has no temp ids).
    */
-  | { kind: "taskSaved"; item: TaskItem; tempId?: string }
+  | { kind: "taskSaved"; item: TaskItem; revision?: number; tempId?: string }
   | {
       kind: "taskRecoveryItems";
       events: TaskStateEventsMessage["events"];
@@ -3615,6 +3624,7 @@ function applyEvent(
   let revisions: Record<string, number> | null = null;
   let items = state.taskList?.items;
   let taskStatuses = state.taskStatuses;
+  let taskDetails = state.taskDetails;
 
   for (const event of message.events) {
     const knownRevision =
@@ -3623,6 +3633,18 @@ function applyEvent(
 
     revisions ??= { ...currentRevisions };
     revisions[event.id] = event.revision;
+    // An event newer than the body is the only signal some body changes send:
+    // a linked Task's title or status moves this Task's revision, not its
+    // `updatedAt`, and often not its summary either.
+    const detail = taskDetails[event.id];
+    if (
+      detail &&
+      dataOf(detail) &&
+      event.revision > (state.taskDetailRevisions[event.id] ?? -1)
+    ) {
+      if (taskDetails === state.taskDetails) taskDetails = { ...taskDetails };
+      taskDetails[event.id] = beginLoad(detail);
+    }
     if (event.kind === "delete")
       taskStatuses = forgetTaskStatuses(taskStatuses, [event.id]);
     if (!items) continue;
@@ -3658,8 +3680,8 @@ function applyEvent(
     taskList,
     taskDetails:
       taskList === state.taskList
-        ? state.taskDetails
-        : reconcileTaskDetails(state.taskDetails, taskList?.items),
+        ? taskDetails
+        : reconcileTaskDetails(taskDetails, taskList?.items),
     taskStatuses,
   };
 }
@@ -3868,6 +3890,19 @@ function applyProjectSaved(
 }
 
 /**
+ * Record the revision a body is as of. A reply without one (a failed read) keeps
+ * what was known: forgetting it would mark the body stale on the next event.
+ */
+function withTaskDetailRevision(
+  revisions: Record<string, number>,
+  id: string,
+  revision: number | undefined,
+): Record<string, number> {
+  if (revision === undefined || revisions[id] === revision) return revisions;
+  return { ...revisions, [id]: revision };
+}
+
+/**
  * Adopt the mutator's direct reply to `saveTask`.
  *
  * Two jobs the broadcast event cannot do. The full `item` becomes the cached
@@ -3882,6 +3917,7 @@ function applyTaskSaved(
   state: UIState,
   item: TaskItem,
   tempId?: string,
+  revision?: number,
 ): UIState {
   const list = state.taskList;
   const summary = taskSummaryOf(item);
@@ -3909,6 +3945,11 @@ function applyTaskSaved(
     ...state,
     taskList,
     taskDetails: detailCache.cache,
+    taskDetailRevisions: withTaskDetailRevision(
+      state.taskDetailRevisions,
+      item.id,
+      revision,
+    ),
     taskDetailsLru: detailCache.lru,
     taskStatuses: withTaskStatus(state.taskStatuses, item.id, item),
     error: null,
@@ -4784,7 +4825,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     return taskList === state.taskList ? state : { ...state, taskList };
   }
   if (action.kind === "taskSaved") {
-    return applyTaskSaved(state, action.item, action.tempId);
+    return applyTaskSaved(state, action.item, action.tempId, action.revision);
   }
   if (action.kind === "taskDetailLoad") {
     const current = state.taskDetails[action.id] ?? idle<TaskItem | null>();
@@ -4799,9 +4840,17 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   }
   if (action.kind === "taskDetailResult") {
     const current = state.taskDetails[action.id] ?? idle<TaskItem | null>();
-    const next = action.error
+    const answered = action.error
       ? failFrom(current, action.error)
       : ready(action.item);
+    // A read that left the server before an event this tab already applied is
+    // adopted (it is still the best body there is) and re-read at once.
+    const next =
+      !action.error &&
+      action.revision !== undefined &&
+      action.revision < (state.stateEventRevisions.tasks?.[action.id] ?? -1)
+        ? beginLoad(answered)
+        : answered;
     const lru = touchLru(state.taskDetailsLru, action.id);
     const projection = pruneProjectionCache(
       { ...state.taskDetails, [action.id]: next },
@@ -4812,6 +4861,11 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     return {
       ...state,
       taskDetails: projection.cache,
+      taskDetailRevisions: withTaskDetailRevision(
+        state.taskDetailRevisions,
+        action.id,
+        action.error ? undefined : action.revision,
+      ),
       taskDetailsLru: projection.lru,
       ...(action.error
         ? {}
@@ -5665,7 +5719,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // ACTION instead, because only it can look up the create's temp id. This
       // is the same adoption without one, for any other dispatcher of the raw
       // message (tests, a replayed transcript of frames).
-      return applyTaskSaved(state, msg.item);
+      return applyTaskSaved(state, msg.item, undefined, msg.revision);
     case "taskDetail": {
       const current = state.taskDetails[msg.id] ?? idle<TaskItem | null>();
       const next = msg.error ? failFrom(current, msg.error) : ready(msg.item);
@@ -5679,6 +5733,11 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return {
         ...state,
         taskDetails: projection.cache,
+        taskDetailRevisions: withTaskDetailRevision(
+          state.taskDetailRevisions,
+          msg.id,
+          msg.error ? undefined : msg.revision,
+        ),
         taskDetailsLru: projection.lru,
         ...(msg.error
           ? {}
@@ -7186,6 +7245,7 @@ export function useAssistant({
           kind: "taskDetailResult",
           id: msg.id,
           item: msg.item,
+          ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
           ...(msg.error ? { error: msg.error } : {}),
         });
         return;
@@ -7509,6 +7569,7 @@ export function useAssistant({
         dispatch({
           kind: "taskSaved",
           item: msg.item,
+          ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
           ...(tempId !== undefined ? { tempId } : {}),
         });
         return;

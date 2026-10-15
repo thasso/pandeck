@@ -155,15 +155,28 @@ the user may know something the graph does not.
 
 A link is a fact about both of its Tasks, so every add, replace and remove
 notifies both, and deleting a Task (which drops all its edges) notifies every
-Task it was linked to; they survive with that link gone.
+Task it was linked to; they survive with that link gone. A write that changes a
+Task's title, status or archived state also notifies every Task linked to it,
+`blocks` in both directions and `relates`, in that write's one notification:
+their summaries may carry its blocker state, and their detail views list its
+title and status. Any other field changes nothing they show and notifies none.
 
-Links are detail, not list data. `TaskItem.links` (grouped `blocks`,
+Links themselves are detail, not list data. `TaskItem.links` (grouped `blocks`,
 `blockedBy`, `relates`, each entry the other Task's id, title, status, project
 and archived flag) and `TaskItem.blocked` come with a single-Task read — the
-socket's `getTask` and `task_read` by id. Summaries and broadcasts carry
-neither; `task_read` list entries carry only `openBlockerCount` and `blocked`. A
-UI that puts blocked state into summaries must also notify the Tasks a blocker
-blocks when the blocker's status or archive state changes.
+socket's `getTask` and `task_read` by id. Every summary — lists, broadcasts,
+session Task lists — carries only `openBlockerCount`, absent when no blocker is
+open, computed by the one batched `taskStore.openBlockerCounts` query (narrowed
+to one Task for a single summary); a full Task derives the same count from the
+blockers it already resolved. `task_read` list entries report it with `blocked`.
+
+The UI only DISPLAYS links; agents manage them through `task_manage`. The Task
+page lists them under Blocked by, Blocks and Related, done and archived Tasks
+toned back, and says "Blocked" while a blocker is open; every Task row with an
+open blocker carries the same marker, its count in the tooltip. A linked Task's
+change moves this Task's revision without its `updatedAt`, so the `taskDetail`
+and `taskSaved` replies name the revision their body is as of, and the client
+re-reads a body on any NEWER event for it (`taskDetailRevisions`).
 
 ## Where a piece of work belongs
 

@@ -883,3 +883,43 @@ describe("BacklogTreePane density", () => {
     expect(started).toEqual([]);
   });
 });
+
+describe("BacklogTreePane blocked badge", () => {
+  const blockedTitle = "Blocked: waiting on 2 open Tasks";
+
+  it("says a two-line row is blocked on its meta line, with the count in the tooltip", () => {
+    render(
+      [
+        task({ id: "1", title: "Waits", openBlockerCount: 2 }),
+        task({ id: "2", title: "Free" }),
+      ],
+      (ids) => ids,
+      { density: "comfortable" },
+    );
+    const badge = container!.querySelector<HTMLElement>(
+      `[title="${blockedTitle}"]`,
+    );
+    expect(badge?.textContent).toBe("Blocked");
+    // On line 2, beside the id — line 1 belongs to the title.
+    expect(badge!.parentElement!.textContent).toContain("#1");
+    const free = container!.querySelector('[data-list-row-id="2"]')!;
+    expect(free.textContent).not.toContain("Blocked");
+  });
+
+  it("keeps the blocked state on a single-line row as one glyph", () => {
+    render(
+      [task({ id: "1", title: "Waits", openBlockerCount: 2 })],
+      (ids) => ids,
+      {
+        density: "tight",
+      },
+    );
+    const glyph = container!.querySelector<HTMLElement>(
+      `[role="img"][aria-label="${blockedTitle}"]`,
+    );
+    expect(glyph).not.toBeNull();
+    // No word on a line that has room for one character.
+    expect(glyph!.textContent).toBe("");
+    expect(glyph!.parentElement!.textContent).toContain("Waits");
+  });
+});

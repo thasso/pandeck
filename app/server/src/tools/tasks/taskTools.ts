@@ -28,7 +28,6 @@ import {
   createTask,
   deleteTask,
   listTasks,
-  openTaskBlockerCounts,
   readTask,
   taskSummaryOf,
   unarchiveTask,
@@ -421,8 +420,6 @@ function makeTaskReadTool() {
       // Links are part of what the budget bounds, so they join each entry
       // before it is measured.
       const read = task;
-      const blockerCounts =
-        !read || items.length > 1 ? openTaskBlockerCounts() : undefined;
       const bounded = boundedItems({
         summaries: items.slice(0, maxResults),
         includeDescriptions: Boolean(params.includeDescriptions),
@@ -430,7 +427,7 @@ function makeTaskReadTool() {
         relations: (summary) =>
           read && summary.id === read.id
             ? linksForTool(read)
-            : openBlockersForTool(blockerCounts?.get(summary.id)),
+            : openBlockersForTool(summary.openBlockerCount),
       });
       const omittedForBudget =
         Math.min(items.length, maxResults) - bounded.items.length;
