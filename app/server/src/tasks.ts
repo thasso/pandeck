@@ -7,8 +7,8 @@
  *   - intrinsic fields              → the `tasks` row
  *   - parent/project/session/ticket/url → `links` edges
  *
- * The single-Task model has no session/global scope, no reminders, and no
- * task-dependencies. Ids surface as stringified integers ("42").
+ * Tasks link to each other through `blocks` and `relates` edges (rules in
+ * `taskStore.setTaskLink`). Ids surface as stringified integers ("42").
  */
 import type {
   AgentType,
@@ -20,6 +20,9 @@ import type {
   TaskExternalLinkSource,
   TaskExternalLinkType,
   TaskItem,
+  TaskLinkedTask,
+  TaskLinkInput,
+  TaskLinks,
   TaskPriority,
   TaskReorderPlacement,
   TaskSessionOrigin,
@@ -35,6 +38,7 @@ import {
   normalizeTaskTicket,
   taskSummaryOf,
 } from "@assistant/shared";
+import { getDb, withDbTransaction } from "./db/index.ts";
 import { taskStore, type TaskStatusActor } from "./db/taskStore.ts";
 import {
   addLink,
@@ -75,6 +79,8 @@ export interface CreateTaskInput {
   sessionRefs?: TaskSessionRef[];
   parentId?: string;
   sortOrder?: number;
+  /** Links to other Tasks, written with the Task or not at all. */
+  addLinks?: TaskLinkInput[];
   /**
    * The Task was TYPED by the user rather than arriving, so it needs no triage.
    * Deliberately separate from `source.createdBy`, which records who wanted it:
@@ -100,6 +106,13 @@ export interface UpdateTaskInput {
   sortOrder?: number | null;
   /** Dismiss a pending status suggestion without applying it. */
   clearStatusSuggestion?: boolean;
+  /**
+   * Links to other Tasks. Each REPLACES any existing link with that Task; the
+   * update is written whole or not at all.
+   */
+  addLinks?: TaskLinkInput[];
+  /** Task ids whose link with this Task, whatever its type, is removed. */
+  removeLinks?: string[];
   /** One short line recorded with an agent's status suggestion. */
   statusReason?: string;
   /**
@@ -235,8 +248,8 @@ export function taskStateItems(
  */
 export function taskSummaryFor(id: string): TaskSummary | null {
   const nid = parseId(id);
-  const item = nid === undefined ? null : readTask(id);
-  if (!item || nid === undefined || item.archivedAt !== undefined) return null;
+  const item = nid === undefined ? null : readTaskItem(nid, false);
+  if (!item || item.archivedAt !== undefined) return null;
   return taskSummaryOf(item);
 }
 
@@ -328,14 +341,71 @@ export function listTasks(filter: TaskListFilter = {}): TaskSummary[] {
   return order(items).map(toSummary);
 }
 
+/** One full Task, with its links to other Tasks resolved (`TaskItem.links`). */
 export function readTask(id: string): TaskItem | null {
   const nid = parseId(id);
-  if (nid === undefined) return null;
+  return nid === undefined ? null : readTaskItem(nid, true);
+}
+
+function readTaskItem(nid: number, withLinks: boolean): TaskItem | null {
   const task = taskStore.get(nid);
   if (!task) return null;
   const out = outgoing(node(nid));
-  const parentEdge = incoming(node(nid), "subtask")[0];
-  return assemble(task, out, parentEdge);
+  const inc = incoming(node(nid));
+  const item = assemble(
+    task,
+    out,
+    inc.find((edge) => edge.relation === "subtask"),
+  );
+  return withLinks
+    ? { ...item, ...resolveTaskLinks(taskStore.taskLinkIdsFrom(out, inc)) }
+    : item;
+}
+
+/**
+ * The linked Tasks behind a Task's link ids, and whether one of its blockers is
+ * still open: neither done nor archived.
+ */
+function resolveTaskLinks(
+  ids: ReturnType<typeof taskStore.taskLinkIds>,
+): Pick<TaskItem, "links" | "blocked"> {
+  if (!ids.blocks.length && !ids.blockedBy.length && !ids.relates.length)
+    return {};
+  const linked = (list: number[]): TaskLinkedTask[] =>
+    list.flatMap((id) => {
+      const task = taskStore.get(id);
+      if (!task) return [];
+      const projectId = taskStore.projectOf(id);
+      return [
+        {
+          id: String(id),
+          title: task.title,
+          status: task.status,
+          ...(projectId ? { projectId } : {}),
+          archived: task.archivedAt !== undefined,
+        },
+      ];
+    });
+  const links: TaskLinks = {
+    blocks: linked(ids.blocks),
+    blockedBy: linked(ids.blockedBy),
+    relates: linked(ids.relates),
+  };
+  const blocked = links.blockedBy.some(
+    (blocker) => blocker.status !== "done" && !blocker.archived,
+  );
+  return { links, ...(blocked ? { blocked: true as const } : {}) };
+}
+
+/**
+ * Open blockers per blocked Task id — blockers neither done nor archived. A
+ * Task absent from the map is not blocked.
+ */
+export function openTaskBlockerCounts(): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const [id, n] of taskStore.openBlockerCounts())
+    counts.set(String(id), n);
+  return counts;
 }
 
 /**
@@ -407,145 +477,178 @@ export function findOriginTask(sessionId: string): TaskBackRef | undefined {
 
 /* -------------------------------- mutate --------------------------------- */
 
+/**
+ * `createTask`, `updateTask` and `deleteTask` own their transaction and notify
+ * only after it commits, so they are TOP-LEVEL ONLY. Inside a caller's
+ * transaction there is no savepoint to roll back to: a caught failure would
+ * commit half an operation with no event, and a success would stamp revisions
+ * before the outer commit. Refused before anything is written.
+ */
+function assertTopLevelWrite(name: string): void {
+  if (getDb().isTransaction)
+    throw new Error(
+      `${name} must not run inside an open database transaction.`,
+    );
+}
+
 export function createTask(input: CreateTaskInput): TaskItem {
+  assertTopLevelWrite("createTask");
   const dueDateValue = normalizeDateOnly(input.dueDate);
   const scheduledForValue = normalizeDateOnly(input.scheduledFor);
   // Refused before anything is written.
   const ticketValue =
     input.ticket !== undefined ? ticketInput(input.ticket) : undefined;
-  const task = taskStore.create({
-    title: cleanText(input.title, 200),
-    description: stripInjectedRelayHistory(input.description ?? ""),
-    status: input.status ?? "todo",
-    priority: normalizePriority(input.priority),
-    ...(dueDateValue !== undefined ? { dueDate: dueDateValue } : {}),
-    ...(scheduledForValue !== undefined
-      ? { scheduledFor: scheduledForValue }
-      : {}),
-    // TYPED vs ARRIVED is the caller's statement, NOT an inference from
-    // `createdBy`. Slack shortcut intake, for instance, honestly records the
-    // user as the creator (they asked for it) while still being an arrival they
-    // have not processed — deriving triage from `createdBy` silently kept every
-    // Slack Task out of the Inbox it is advertised to land in. Default is
-    // untriaged: the ONE path where a Task is typed straight into the Backlog
-    // says so (`connection.ts` `onSaveTask`).
-    ...(input.triaged ? { triagedAt: Date.now() } : {}),
-    ...(input.source?.agentType
-      ? { sourceAgentType: input.source.agentType }
-      : {}),
-    ...(input.source?.sessionId
-      ? { sourceSessionId: input.source.sessionId }
-      : {}),
-    createdBy: input.source?.createdBy === "user" ? "user" : "agent",
+  const linkChanges = taskLinkChanges(input.addLinks, undefined);
+  // One transaction: a link that breaks a rule leaves no half-made Task behind.
+  const { task, touched } = withDbTransaction(() => {
+    const task = taskStore.create({
+      title: cleanText(input.title, 200),
+      description: stripInjectedRelayHistory(input.description ?? ""),
+      status: input.status ?? "todo",
+      priority: normalizePriority(input.priority),
+      ...(dueDateValue !== undefined ? { dueDate: dueDateValue } : {}),
+      ...(scheduledForValue !== undefined
+        ? { scheduledFor: scheduledForValue }
+        : {}),
+      // TYPED vs ARRIVED is the caller's statement, NOT an inference from
+      // `createdBy`. Slack shortcut intake, for instance, honestly records the
+      // user as the creator (they asked for it) while still being an arrival they
+      // have not processed — deriving triage from `createdBy` silently kept every
+      // Slack Task out of the Inbox it is advertised to land in. Default is
+      // untriaged: the ONE path where a Task is typed straight into the Backlog
+      // says so (`connection.ts` `onSaveTask`).
+      ...(input.triaged ? { triagedAt: Date.now() } : {}),
+      ...(input.source?.agentType
+        ? { sourceAgentType: input.source.agentType }
+        : {}),
+      ...(input.source?.sessionId
+        ? { sourceSessionId: input.source.sessionId }
+        : {}),
+      createdBy: input.source?.createdBy === "user" ? "user" : "agent",
+    });
+    const cascaded = applyRelations(task.id, {
+      // Only when the caller stated one: an omitted project is inherited from
+      // `parentId`, and passing null here would clear it again.
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(ticketValue ? { ticket: ticketValue } : {}),
+      externalLinks: normalizeExternalLinks(input.externalLinks),
+      parentId: input.parentId ?? null,
+      // A Task is BORN with a place. Leaving it unpositioned used to hand the
+      // Backlog nothing but recency to sort it by, so working on a fresh capture
+      // moved it; `nextSortOrder` picks the end of the group it joins.
+      sortOrder:
+        input.sortOrder ??
+        taskStore.nextSortOrder(
+          (input.parentId ? parseId(input.parentId) : undefined) ?? null,
+        ),
+      sessionRefs: normalizeSessionRefs(input.sessionRefs),
+    });
+    return {
+      task,
+      touched: [...cascaded, ...applyTaskLinkChanges(task.id, linkChanges)],
+    };
   });
-  const cascaded = applyRelations(task.id, {
-    // Only when the caller stated one: an omitted project is inherited from
-    // `parentId`, and passing null here would clear it again.
-    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-    ...(ticketValue ? { ticket: ticketValue } : {}),
-    externalLinks: normalizeExternalLinks(input.externalLinks),
-    parentId: input.parentId ?? null,
-    // A Task is BORN with a place. Leaving it unpositioned used to hand the
-    // Backlog nothing but recency to sort it by, so working on a fresh capture
-    // moved it; `nextSortOrder` picks the end of the group it joins.
-    sortOrder:
-      input.sortOrder ??
-      taskStore.nextSortOrder(
-        (input.parentId ? parseId(input.parentId) : undefined) ?? null,
-      ),
-    sessionRefs: normalizeSessionRefs(input.sessionRefs),
-  });
-  notify([String(task.id), ...cascaded]);
+  notify([String(task.id), ...touched]);
   return readTask(String(task.id))!;
 }
 
 export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
+  assertTopLevelWrite("updateTask");
   const nid = parseId(id);
-  const current = nid !== undefined ? readTask(id) : null;
+  const current = nid !== undefined ? readTaskItem(nid, false) : null;
   if (nid === undefined || !current) throw new Error(`Task not found: ${id}`);
   const ticketValue =
     patch.ticket !== undefined ? ticketInput(patch.ticket) : undefined;
 
   const statusWrite = resolveStatusWrite(current, patch);
   const triage = resolveTriage(current, patch);
+  const linkChanges = taskLinkChanges(patch.addLinks, patch.removeLinks);
 
-  if (
-    statusWrite.status !== undefined &&
-    statusWrite.status !== current.status
-  ) {
-    taskStore.addStatusEvent(
-      nid,
-      current.status,
-      statusWrite.status,
-      patch.actor ?? { kind: "system" },
-    );
-  }
-
-  taskStore.update(nid, {
-    ...(patch.title !== undefined
-      ? { title: cleanText(patch.title, 200) }
-      : {}),
-    ...(patch.description !== undefined
-      ? { description: stripInjectedRelayHistory(patch.description) }
-      : {}),
-    ...(statusWrite.status !== undefined ? { status: statusWrite.status } : {}),
-    ...statusWrite.suggestionColumns,
-    ...triage,
-    ...(patch.priority !== undefined
-      ? { priority: patch.priority === null ? "normal" : patch.priority }
-      : {}),
-    ...(patch.dueDate !== undefined
-      ? {
-          dueDate:
-            patch.dueDate === null
-              ? null
-              : (normalizeDateOnly(patch.dueDate) ?? null),
-        }
-      : {}),
-    ...(patch.scheduledFor !== undefined
-      ? {
-          scheduledFor:
-            patch.scheduledFor === null
-              ? null
-              : (normalizeDateOnly(patch.scheduledFor) ?? null),
-        }
-      : {}),
-    ...(patch.commitHash !== undefined ? { commitHash: patch.commitHash } : {}),
-    ...(patch.committedAt !== undefined
-      ? { committedAt: patch.committedAt }
-      : {}),
-    ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
-  });
-  if (patch.archivedAt !== undefined) {
-    taskStore.setArchived(nid, patch.archivedAt !== null);
-    // A Task comes back from the archive holding the index it had when it left,
-    // which the Backlog has long since given to somebody else. It rejoins its
-    // group like any other arrival, which is also how it gets seen again. Only a
-    // real RETURN does: unarchiving is not rejected on a Task that is already
-    // live, and repeating it may not move a row the user placed.
+  // One transaction: a link that breaks a rule writes none of the update.
+  const touched = withDbTransaction(() => {
     if (
-      patch.archivedAt === null &&
-      current.archivedAt !== undefined &&
-      patch.sortOrder === undefined
-    )
-      taskStore.update(nid, {
-        sortOrder: taskStore.nextSortOrder(taskStore.parentOf(nid) ?? null),
-      });
-  }
+      statusWrite.status !== undefined &&
+      statusWrite.status !== current.status
+    ) {
+      taskStore.addStatusEvent(
+        nid,
+        current.status,
+        statusWrite.status,
+        patch.actor ?? { kind: "system" },
+      );
+    }
 
-  const cascaded = applyRelations(nid, {
-    ...(patch.projectId !== undefined ? { projectId: patch.projectId } : {}),
-    ...(ticketValue !== undefined ? { ticket: ticketValue } : {}),
-    ...(patch.externalLinks !== undefined
-      ? { externalLinks: normalizeExternalLinks(patch.externalLinks) }
-      : {}),
-    ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
-    ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
-    ...(patch.sessionRefs !== undefined
-      ? { sessionRefs: normalizeSessionRefs(patch.sessionRefs) }
-      : {}),
+    taskStore.update(nid, {
+      ...(patch.title !== undefined
+        ? { title: cleanText(patch.title, 200) }
+        : {}),
+      ...(patch.description !== undefined
+        ? { description: stripInjectedRelayHistory(patch.description) }
+        : {}),
+      ...(statusWrite.status !== undefined
+        ? { status: statusWrite.status }
+        : {}),
+      ...statusWrite.suggestionColumns,
+      ...triage,
+      ...(patch.priority !== undefined
+        ? { priority: patch.priority === null ? "normal" : patch.priority }
+        : {}),
+      ...(patch.dueDate !== undefined
+        ? {
+            dueDate:
+              patch.dueDate === null
+                ? null
+                : (normalizeDateOnly(patch.dueDate) ?? null),
+          }
+        : {}),
+      ...(patch.scheduledFor !== undefined
+        ? {
+            scheduledFor:
+              patch.scheduledFor === null
+                ? null
+                : (normalizeDateOnly(patch.scheduledFor) ?? null),
+          }
+        : {}),
+      ...(patch.commitHash !== undefined
+        ? { commitHash: patch.commitHash }
+        : {}),
+      ...(patch.committedAt !== undefined
+        ? { committedAt: patch.committedAt }
+        : {}),
+      ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
+    });
+    if (patch.archivedAt !== undefined) {
+      taskStore.setArchived(nid, patch.archivedAt !== null);
+      // A Task comes back from the archive holding the index it had when it left,
+      // which the Backlog has long since given to somebody else. It rejoins its
+      // group like any other arrival, which is also how it gets seen again. Only a
+      // real RETURN does: unarchiving is not rejected on a Task that is already
+      // live, and repeating it may not move a row the user placed.
+      if (
+        patch.archivedAt === null &&
+        current.archivedAt !== undefined &&
+        patch.sortOrder === undefined
+      )
+        taskStore.update(nid, {
+          sortOrder: taskStore.nextSortOrder(taskStore.parentOf(nid) ?? null),
+        });
+    }
+
+    const cascaded = applyRelations(nid, {
+      ...(patch.projectId !== undefined ? { projectId: patch.projectId } : {}),
+      ...(ticketValue !== undefined ? { ticket: ticketValue } : {}),
+      ...(patch.externalLinks !== undefined
+        ? { externalLinks: normalizeExternalLinks(patch.externalLinks) }
+        : {}),
+      ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
+      ...(patch.sortOrder !== undefined ? { sortOrder: patch.sortOrder } : {}),
+      ...(patch.sessionRefs !== undefined
+        ? { sessionRefs: normalizeSessionRefs(patch.sessionRefs) }
+        : {}),
+    });
+    return [...cascaded, ...applyTaskLinkChanges(nid, linkChanges)];
   });
-  notify([id, ...cascaded]);
+  notify([id, ...touched]);
   return readTask(id)!;
 }
 
@@ -623,6 +726,7 @@ export function stopTaskAutoArchiveSweep(): void {
 }
 
 export function deleteTask(id: string): void {
+  assertTopLevelWrite("deleteTask");
   const nid = parseId(id);
   if (nid === undefined || !taskStore.get(nid))
     throw new Error(`Task not found: ${id}`);
@@ -633,8 +737,11 @@ export function deleteTask(id: string): void {
   // Backlog drag sends that dead id back as a placement — which `reorderTasks`
   // refuses, failing the whole reorder.
   const orphaned = taskStore.children(nid).map((child) => String(child.id));
+  // Its linked Tasks lose their links to it in the same cleanup, and their
+  // viewers have to hear that just as much.
+  const linked = taskStore.linkedTaskIds(nid).map(String);
   taskStore.remove(nid); // tombstone + edge cleanup
-  notify([id, ...orphaned]);
+  notify([id, ...orphaned, ...linked]);
 }
 
 /**
@@ -969,6 +1076,81 @@ function applyRelations(
   }
   cascaded.delete(String(taskId));
   return [...cascaded];
+}
+
+/* ------------------------------ task links -------------------------------- */
+
+/** One operation's link writes, checked for shape and conflicts up front. */
+interface TaskLinkChanges {
+  add: Array<{ type: TaskLinkInput["type"]; taskId: number }>;
+  remove: number[];
+}
+
+const TASK_LINK_TYPES = new Set<string>(["blocks", "blocked-by", "relates"]);
+
+function linkTargetId(raw: unknown): number {
+  const id = typeof raw === "string" ? parseId(raw.trim()) : undefined;
+  if (id === undefined)
+    throw new Error(`Not a Task id to link: ${JSON.stringify(raw)}.`);
+  return id;
+}
+
+/**
+ * Normalize an operation's `addLinks` / `removeLinks`. One operation may name a
+ * Task once: two links to it, or adding and removing it together, would leave
+ * the outcome to argument order.
+ */
+function taskLinkChanges(
+  add: readonly TaskLinkInput[] | undefined,
+  remove: readonly string[] | undefined,
+): TaskLinkChanges {
+  const changes: TaskLinkChanges = { add: [], remove: [] };
+  const named = new Set<number>();
+  const claim = (id: number) => {
+    if (named.has(id))
+      throw new Error(
+        `Task-${id} is named more than once in this operation's links; give each Task one link change.`,
+      );
+    named.add(id);
+  };
+  for (const link of add ?? []) {
+    if (!TASK_LINK_TYPES.has(link?.type))
+      throw new Error(
+        `Unknown Task link type ${JSON.stringify(link?.type)}; use blocks, blocked-by or relates.`,
+      );
+    const taskId = linkTargetId(link.taskId);
+    claim(taskId);
+    changes.add.push({ type: link.type, taskId });
+  }
+  for (const raw of remove ?? []) {
+    const taskId = linkTargetId(raw);
+    claim(taskId);
+    changes.remove.push(taskId);
+  }
+  return changes;
+}
+
+/**
+ * Write one operation's link changes for `taskId`, inside the caller's
+ * transaction, and return the OTHER Tasks whose links moved: a link is a fact
+ * about both of its ends, so both owe their viewers an event.
+ */
+function applyTaskLinkChanges(
+  taskId: number,
+  changes: TaskLinkChanges,
+): string[] {
+  const touched = new Set<number>();
+  for (const other of changes.remove)
+    for (const id of taskStore.removeTaskLink(taskId, other)) touched.add(id);
+  for (const { type, taskId: other } of changes.add) {
+    const ids =
+      type === "blocked-by"
+        ? taskStore.setTaskLink(other, "blocks", taskId)
+        : taskStore.setTaskLink(taskId, type, other);
+    for (const id of ids) touched.add(id);
+  }
+  touched.delete(taskId);
+  return [...touched].map(String);
 }
 
 /* -------------------------------- triage ---------------------------------- */

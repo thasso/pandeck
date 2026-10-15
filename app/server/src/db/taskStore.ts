@@ -9,7 +9,7 @@
  * Writes are synchronous (node:sqlite + WAL), durable at call time; `closeDb()`
  * flushes on exit. This is the single façade over task metadata.
  */
-import { getDb } from "./index.ts";
+import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import {
   addLink,
@@ -117,8 +117,7 @@ function create(input: CreateTaskInput): Task {
   const db = getDb();
   const now = Date.now();
   const status = input.status ?? "todo";
-  db.exec("BEGIN");
-  try {
+  return inDbTransaction(() => {
     const id = nextId("task");
     db.prepare(
       `
@@ -141,12 +140,8 @@ function create(input: CreateTaskInput): Task {
       now,
       status === "done" ? now : null,
     );
-    db.exec("COMMIT");
     return get(id)!;
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+  });
 }
 
 function get(id: number): Task | undefined {
@@ -365,14 +360,19 @@ function revisions(): TaskRevisionRow[] {
   }));
 }
 
-/** Tombstone a task and remove all its graph edges. */
+/**
+ * Tombstone a task and remove all its graph edges — including its `blocks` and
+ * `relates` links, so the Tasks on their other ends simply lose them.
+ */
 function remove(id: number, ts = Date.now()): void {
-  getDb()
-    .prepare(
-      "UPDATE tasks SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
-    )
-    .run(ts, id);
-  removeAllFor(taskNode(id));
+  inDbTransaction(() => {
+    getDb()
+      .prepare(
+        "UPDATE tasks SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
+      )
+      .run(ts, id);
+    removeAllFor(taskNode(id));
+  });
 }
 
 /* ------------------------------- hierarchy ------------------------------- */
@@ -596,6 +596,213 @@ function links(taskId: number): { outgoing: Link[]; incoming: Link[] } {
   };
 }
 
+/* ------------------------------- task links ------------------------------- */
+
+type TaskLinkRelation = "blocks" | "relates";
+
+const TASK_LINK_RELATIONS: readonly TaskLinkRelation[] = ["blocks", "relates"];
+
+/** One stored link between two Tasks, read from the edge that holds it. */
+interface TaskLinkEdge {
+  relation: TaskLinkRelation;
+  fromId: number;
+  toId: number;
+}
+
+/** The Tasks on the other end of each kind of link, oldest link first. */
+interface TaskLinkIds {
+  blocks: number[];
+  blockedBy: number[];
+  relates: number[];
+}
+
+function taskEdges(
+  edges: readonly Link[],
+  end: "fromId" | "toId",
+): Array<Link & { relation: TaskLinkRelation }> {
+  return edges.filter(
+    (edge): edge is Link & { relation: TaskLinkRelation } =>
+      (edge.relation === "blocks" || edge.relation === "relates") &&
+      edge.fromType === "task" &&
+      edge.toType === "task" &&
+      Number.isInteger(Number(edge[end])),
+  );
+}
+
+/**
+ * Group a Task's link edges by how they read from THIS Task. Takes the edges a
+ * caller already loaded, so a detail read pays no extra query for a Task with
+ * no links.
+ */
+function taskLinkIdsFrom(
+  out: readonly Link[],
+  inc: readonly Link[],
+): TaskLinkIds {
+  const ids: TaskLinkIds = { blocks: [], blockedBy: [], relates: [] };
+  const relates: Array<{ id: number; at: number }> = [];
+  for (const edge of taskEdges(out, "toId")) {
+    if (edge.relation === "blocks") ids.blocks.push(Number(edge.toId));
+    else relates.push({ id: Number(edge.toId), at: edge.createdAt });
+  }
+  for (const edge of taskEdges(inc, "fromId")) {
+    if (edge.relation === "blocks") ids.blockedBy.push(Number(edge.fromId));
+    else relates.push({ id: Number(edge.fromId), at: edge.createdAt });
+  }
+  // `relates` arrives from both directions; merge them back into link age.
+  ids.relates = relates.sort((a, b) => a.at - b.at).map((entry) => entry.id);
+  return ids;
+}
+
+function taskLinkIds(taskId: number): TaskLinkIds {
+  return taskLinkIdsFrom(
+    outgoing(taskNode(taskId)),
+    incoming(taskNode(taskId)),
+  );
+}
+
+/** Every Task linked to this one, whatever the type or direction. */
+function linkedTaskIds(taskId: number): number[] {
+  const ids = taskLinkIds(taskId);
+  return [...new Set([...ids.blocks, ...ids.blockedBy, ...ids.relates])];
+}
+
+/** The one link between two Tasks, in either direction and of either type. */
+function taskLinkBetween(a: number, b: number): TaskLinkEdge | undefined {
+  for (const relation of TASK_LINK_RELATIONS)
+    for (const [fromId, toId] of [
+      [a, b],
+      [b, a],
+    ] as const)
+      if (
+        outgoing(taskNode(fromId), relation).some(
+          (edge) => edge.toType === "task" && edge.toId === String(toId),
+        )
+      )
+        return { relation, fromId, toId };
+  return undefined;
+}
+
+/**
+ * Whether `from` reaches `to` along `blocks` edges, ignoring the single edge
+ * `skip` (the pair link a write is about to replace).
+ */
+function blocksPathExists(
+  from: number,
+  to: number,
+  skip?: { fromId: number; toId: number },
+): boolean {
+  const seen = new Set<number>([from]);
+  const queue = [from];
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const edge of outgoing(taskNode(current), "blocks")) {
+      if (edge.toType !== "task") continue;
+      const next = Number(edge.toId);
+      if (skip && current === skip.fromId && next === skip.toId) continue;
+      if (next === to) return true;
+      if (!seen.has(next)) {
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Link two Tasks: `blocks` reads "`a` blocks `b`"; `relates` is symmetric and
+ * stored from the lower id to the higher one, so the pair has one spelling.
+ *
+ * The rules are checked before anything is written, inside the same
+ * transaction as the write:
+ *  - both Tasks exist and are not deleted (archived ones may be linked);
+ *  - no self-links;
+ *  - at most ONE link per unordered pair, across both types — linking an
+ *    already-linked pair REPLACES that link, whatever its type or direction;
+ *  - `blocks` stays acyclic.
+ *
+ * Returns the ids whose links changed (both ends), or nothing when the exact
+ * link already existed.
+ */
+function setTaskLink(
+  a: number,
+  relation: TaskLinkRelation,
+  b: number,
+): number[] {
+  return inDbTransaction(() => {
+    if (a === b) throw new Error(`${displayId(a)} cannot be linked to itself.`);
+    for (const id of [a, b])
+      if (!get(id))
+        throw new Error(
+          `Cannot link ${displayId(a)} and ${displayId(b)}: ${displayId(id)} does not exist or was deleted.`,
+        );
+    const [fromId, toId] =
+      relation === "relates" ? [Math.min(a, b), Math.max(a, b)] : [a, b];
+    const existing = taskLinkBetween(a, b);
+    if (
+      existing?.relation === relation &&
+      existing.fromId === fromId &&
+      existing.toId === toId
+    )
+      return [];
+    if (
+      relation === "blocks" &&
+      blocksPathExists(
+        toId,
+        fromId,
+        existing?.relation === "blocks" ? existing : undefined,
+      )
+    )
+      throw new Error(
+        `${displayId(fromId)} cannot block ${displayId(toId)}: ${displayId(toId)} already blocks ${displayId(fromId)}, directly or through other Tasks, so the link would make a cycle.`,
+      );
+    if (existing)
+      removeLink(
+        taskNode(existing.fromId),
+        existing.relation,
+        taskNode(existing.toId),
+      );
+    addLink(taskNode(fromId), relation, taskNode(toId));
+    return [a, b];
+  });
+}
+
+/**
+ * Remove whatever link joins two Tasks. Returns both ids when one was removed,
+ * nothing when the pair was not linked.
+ */
+function removeTaskLink(a: number, b: number): number[] {
+  return inDbTransaction(() => {
+    const existing = taskLinkBetween(a, b);
+    if (!existing) return [];
+    removeLink(
+      taskNode(existing.fromId),
+      existing.relation,
+      taskNode(existing.toId),
+    );
+    return [a, b];
+  });
+}
+
+/**
+ * How many OPEN blockers each blocked Task has: blockers that are neither done
+ * nor archived. A done or archived blocker is still listed as a link, but no
+ * longer holds the Task up. Tasks without an open blocker are absent.
+ */
+function openBlockerCounts(): Map<number, number> {
+  const rows = getDb()
+    .prepare(
+      `SELECT l.to_id AS taskId, COUNT(*) AS n
+         FROM links l JOIN tasks t ON t.id = l.from_id
+        WHERE l.from_type = 'task' AND l.relation = 'blocks' AND l.to_type = 'task'
+          AND t.deleted_at_ms IS NULL AND t.archived_at_ms IS NULL
+          AND t.status <> 'done'
+        GROUP BY l.to_id`,
+    )
+    .all() as Array<{ taskId: string; n: number }>;
+  return new Map(rows.map((row) => [Number(row.taskId), row.n]));
+}
+
 /* --------------------------------- rows ---------------------------------- */
 
 interface DbTaskRow {
@@ -699,6 +906,13 @@ export const taskStore = {
   addUrl,
   urlsFor,
   links,
+  // task links
+  taskLinkIdsFrom,
+  taskLinkIds,
+  linkedTaskIds,
+  setTaskLink,
+  removeTaskLink,
+  openBlockerCounts,
   // helpers
   displayId,
   taskNode,

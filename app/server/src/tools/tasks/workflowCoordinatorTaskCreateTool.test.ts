@@ -188,3 +188,32 @@ test("refuses every non-create operation even through a forged direct call", asy
     /can only create follow-up Tasks/,
   );
 });
+
+test("cannot write Task links, even through a forged direct call", async () => {
+  const sessionId = "coordinator-task-links";
+  coordinatorRun(sessionId);
+  const title = "Follow-up that must not link";
+
+  await assert.rejects(
+    tool.execute(
+      {
+        operations: [
+          {
+            operation: "create",
+            title,
+            addLinks: [{ type: "blocks", taskId: sourceTaskId }],
+          },
+        ],
+      } as never,
+      context(sessionId),
+    ),
+    /cannot set addLinks/,
+  );
+  assert.equal(
+    tasks
+      .listTasks({ includeArchived: true })
+      .some((candidate) => candidate.title === title),
+    false,
+  );
+  assert.equal(tasks.readTask(sourceTaskId!)?.links, undefined);
+});

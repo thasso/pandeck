@@ -14,7 +14,7 @@
  * own stores, which build their typed helpers on top of these primitives.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { getDb } from "./index.ts";
+import { getDb, inDbTransaction } from "./index.ts";
 
 /** Known node types. Kept small and explicit; extend as new entities appear. */
 export type NodeType =
@@ -46,6 +46,11 @@ export type NodeType =
  *  - `created_worktree` session → worktree (the agent session that created
  *                  it with `worktree_create`; at most one per worktree, many
  *                  per session, and never replaced by later relinking)
+ *  - `blocks`     task → task (the source must finish before the target;
+ *                  "blocked-by" is this edge read backwards)
+ *  - `relates`    task → task, symmetric, stored from the lower id to the higher
+ *                  one. A pair of Tasks holds at most one `blocks` or `relates`
+ *                  edge (`taskStore.setTaskLink` enforces it).
  */
 export type Relation =
   | "subtask"
@@ -56,7 +61,9 @@ export type Relation =
   | "github"
   | "link"
   | "in_worktree"
-  | "created_worktree";
+  | "created_worktree"
+  | "blocks"
+  | "relates";
 
 const RELATIONS: ReadonlySet<Relation> = new Set([
   "subtask",
@@ -68,6 +75,8 @@ const RELATIONS: ReadonlySet<Relation> = new Set([
   "link",
   "in_worktree",
   "created_worktree",
+  "blocks",
+  "relates",
 ]);
 
 export interface NodeRef {
@@ -272,19 +281,20 @@ export function setOutgoing(
   targets: Array<{ to: NodeRef; metadata?: unknown }>,
 ): void {
   assertRelation(relation);
-  const db = getDb();
-  db.exec("BEGIN");
   try {
-    db.prepare(
-      "DELETE FROM links WHERE from_type = ? AND from_id = ? AND relation = ?",
-    ).run(from.type, from.id, relation);
-    targets.forEach((t, index) =>
-      addLink(from, relation, t.to, { position: index, metadata: t.metadata }),
-    );
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    inDbTransaction(() => {
+      getDb()
+        .prepare(
+          "DELETE FROM links WHERE from_type = ? AND from_id = ? AND relation = ?",
+        )
+        .run(from.type, from.id, relation);
+      targets.forEach((t, index) =>
+        addLink(from, relation, t.to, {
+          position: index,
+          metadata: t.metadata,
+        }),
+      );
+    });
   } finally {
     noteWrite(from.type);
   }
@@ -309,21 +319,18 @@ export function allLinks(relation?: Relation): Link[] {
 
 /** Delete every edge touching a node (either endpoint). Call when an entity is removed. */
 export function removeAllFor(node: NodeRef): void {
-  const db = getDb();
-  db.exec("BEGIN");
   try {
-    db.prepare("DELETE FROM links WHERE from_type = ? AND from_id = ?").run(
-      node.type,
-      node.id,
-    );
-    db.prepare("DELETE FROM links WHERE to_type = ? AND to_id = ?").run(
-      node.type,
-      node.id,
-    );
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    inDbTransaction(() => {
+      const db = getDb();
+      db.prepare("DELETE FROM links WHERE from_type = ? AND from_id = ?").run(
+        node.type,
+        node.id,
+      );
+      db.prepare("DELETE FROM links WHERE to_type = ? AND to_id = ?").run(
+        node.type,
+        node.id,
+      );
+    });
   } finally {
     writesToEveryType += 1;
   }
