@@ -129,6 +129,12 @@ Two Tasks can be linked in one of two ways (Task-798):
 - `relates` is symmetric. It is stored once, from the lower id to the higher, so
   the pair has a single spelling.
 
+`blocks` is the one dependency type. A prerequisite, a Task needed to finish
+(even one the work can be built against first), and a simplification the team
+chose to wait for are all `blocks`. A simplification nobody waits for gets no
+link, and `relates` is never a dependency. A dependency written only as prose is
+invisible to blocked state and to the Initiative map (`docs/initiatives.md`).
+
 Both are edges in the generic `links` graph, written only through
 `taskStore.setTaskLink` / `removeTaskLink`, which check and write in one
 transaction:
