@@ -33,7 +33,14 @@ import {
   runElkLayout,
   stopInitiativeLayoutWorker,
 } from "./initiativeLayoutRunner.ts";
-import { archiveTask, createTask, updateTask } from "./tasks.ts";
+import { withDbTransaction } from "./db/index.ts";
+import { taskStore } from "./db/taskStore.ts";
+import {
+  archiveTask,
+  createTask,
+  notifyTaskChange,
+  updateTask,
+} from "./tasks.ts";
 
 /** The unmocked runner, for a test that wraps one call in a fault. */
 const real = vi.hoisted(() => ({
@@ -1086,29 +1093,44 @@ test("a huge tree collapsed into a few nodes plans linearly, however deep", () =
   assert.match(open.error ?? "", /20001 nodes/);
 });
 
+test("the node limit is exact: 1,000 drawn nodes are laid out, 1,001 are not", () => {
+  const at = planInitiativeLayoutForTests(tree(999, 1));
+  assert.deepEqual([at.nodes, at.error], [1_000, undefined]);
+  const over = planInitiativeLayoutForTests(tree(1_000, 1));
+  assert.equal(over.nodes, 1_001);
+  assert.match(over.error ?? "", /1001 nodes, more than the 1000 it lays out/);
+});
+
 test("a map over the node limit answers its graph without any layout, and collapsing it draws it", async () => {
   const epic = createTask({
     title: "Huge epic",
     source: { createdBy: "user" },
   }).id;
-  for (let n = 0; n < 1_100; n += 1)
-    createTask({
-      title: `Step ${n}`,
-      source: { createdBy: "user" },
-      parentId: epic,
-    });
+  // Through `createTask` every child reads all its siblings, so a thousand of
+  // them took most of a minute. The store writes the same rows and subtask
+  // edges in one transaction, and the change seam announces them as any write
+  // does.
+  const steps = withDbTransaction(() =>
+    Array.from({ length: 1_000 }, (_, n) => {
+      const step = taskStore.create({ title: `Step ${n}`, createdBy: "user" });
+      taskStore.setParent(step.id, Number(epic), n);
+      taskStore.update(step.id, { sortOrder: n });
+      return String(step.id);
+    }),
+  );
+  notifyTaskChange(steps);
   const id = String(
     createInitiative({ title: "Huge", taskIds: [epic] }).initiative.id,
   );
   const open = await readInitiativeMap(id);
-  assert.equal(open.item?.nodes.length, 1_101);
+  assert.equal(open.item?.nodes.length, 1_001);
   assert.match(
     open.layoutError ?? "",
-    /1101 nodes, more than the 1000 it lays out/,
+    /1001 nodes, more than the 1000 it lays out/,
   );
   // The size outcome is its own answer, not a failure to retry: the drawn
   // count for the asked-for collapsed set, and the limit.
-  assert.deepEqual(open.layoutTooLarge, { nodes: 1_101, limit: 1_000 });
+  assert.deepEqual(open.layoutTooLarge, { nodes: 1_001, limit: 1_000 });
   assert.equal(elkRuns.mock.calls.length, 0);
   assert.equal(
     (await readInitiativeMap(id, [epic])).layoutTooLarge,
@@ -1117,5 +1139,5 @@ test("a map over the node limit answers its graph without any layout, and collap
   );
   const folded = await mapOf(id, [epic]);
   assert.equal(folded.nodes.length, 1);
-  assert.equal(folded.nodes[0]!.progress?.total, 1_100);
+  assert.equal(folded.nodes[0]!.progress?.total, 1_000);
 }, 120_000);
