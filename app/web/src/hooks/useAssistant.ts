@@ -8204,11 +8204,22 @@ export function useAssistant({
         const key = taskMutationRequestsRef.current.get(requestId);
         if (key) {
           taskMutationRequestsRef.current.delete(requestId);
-          dispatch({
-            kind: "taskMutationResult",
-            key,
-            error: "The server did not answer this Task change. Try again.",
-          });
+          const error =
+            "The server did not answer this Task change. Try again.";
+          dispatch({ kind: "taskMutationResult", key, error });
+          // The deadline is this write's outcome, judged as a refusal is: in
+          // place while the Task's control is on screen, otherwise announced
+          // naming the Task — a shut panel would keep it silent.
+          const taskId = pending?.objectIds[0];
+          if (taskId && key.startsWith(`${taskId}:`))
+            announceArrival(
+              {
+                type: "error",
+                message: error,
+                target: { type: "task", id: taskId },
+              },
+              stateRef.current,
+            );
         }
         const projectKey = projectMutationRequestsRef.current.get(requestId);
         if (projectKey) {

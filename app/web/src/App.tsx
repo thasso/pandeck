@@ -2707,9 +2707,10 @@ function AppContent() {
     ? selectedTaskFromHash(locationHash)
     : null;
   // The ONE Task whose full detail is open: the Task route's, or the one an
-  // Initiative page shows in its panel. Its body pin, its mutations, its runs
-  // and the home that claims its failures all follow this id, so the panel's
-  // Task detail behaves exactly as the Task page does.
+  // Initiative page shows in its panel. Its body pin, its mutations and its
+  // runs follow this id, and so does the claim on its failures while its
+  // detail is on screen (`failureHomeTaskId`), so the panel's Task detail
+  // behaves exactly as the Task page does.
   const openTaskId = selectedTaskId ?? initiativeSelectedTaskId;
   const selectedStatusMutation = openTaskId
     ? state.taskMutations[taskMutationKey(openTaskId, "status")]
@@ -5098,6 +5099,21 @@ function AppContent() {
    * COLLECTION, so the pane's `ErrorNote` needs no claim here at all.
    */
   const stagedSendSessionId = stagedSend?.input?.id ?? null;
+  // The Task route's detail is the main pane, on screen whatever the panel
+  // does. An Initiative page's selected Task draws its failures only in the
+  // object panel, so it has a home only while that panel actually shows it:
+  // wide, open with its Inspector tab in front; a phone, the dock expanded and
+  // not stood down. Shut, behind another tab or the panel home, closed, or
+  // collapsed, its note is hidden or gone, and the failure is announced.
+  const failureHomeTaskId =
+    selectedTaskId ??
+    (initiativeSelectedTaskId &&
+    inspectorOpen &&
+    (mobileLayout
+      ? !dockSuppressed && !composerOwnsBottomEdge
+      : inspectorTabVisible)
+      ? initiativeSelectedTaskId
+      : null);
   useEffect(() => {
     setFailureHomes({
       viewedSessionId: displayCurrentId ?? null,
@@ -5114,9 +5130,7 @@ function AppContent() {
       // status, so a failure about it would be suppressed into nothing.
       openObjects: {
         project: selectedProjectId ? [selectedProjectId] : [],
-        // The Task route's Task, or the one an Initiative page's panel shows
-        // with its status control: either way a failure about it has a home.
-        task: openTaskId ? [openTaskId] : [],
+        task: failureHomeTaskId ? [failureHomeTaskId] : [],
       },
     });
   }, [
@@ -5124,7 +5138,7 @@ function AppContent() {
     sessionShell.ownsFailure,
     stagedSendSessionId,
     selectedProjectId,
-    openTaskId,
+    failureHomeTaskId,
   ]);
 
   // Leaving settings returns to the chat we were in, or to /sessions/create for a fresh start.
@@ -6252,16 +6266,9 @@ function AppContent() {
         onRun: () => startSessionForTask(task.id, task.title),
       };
     }
-    // An Initiative page leads with the member Task it has selected: the
-    // Initiative itself is managed by agents, not started from.
-    if (route.name === "initiatives" && initiativeSelectedTask) {
-      const task = initiativeSelectedTask;
-      return {
-        label: "Start session for this task",
-        icon,
-        onRun: () => startSessionForTask(task.id, task.title),
-      };
-    }
+    // An Initiative page leads with nothing: agents manage the Initiative, and
+    // the member Task it selects leads only in the panel showing that Task
+    // (`initiativeTaskPrimaryAction`), never in the Initiative's own header.
     if (route.name === "projects" && route.id) {
       const projectId = route.id;
       return {
@@ -6308,13 +6315,30 @@ function AppContent() {
     route,
     routeDocumentTarget,
     backlogTasks,
-    initiativeSelectedTask,
     pullRequestWorktreeId,
     startSessionForTask,
     startSessionForProject,
     startSessionInWorktree,
     startSessionForFile,
   ]);
+  // The Task an Initiative page shows in its panel leads with its own Start,
+  // published only inside that panel: its Task header draws it on a wide
+  // layout, and the dock's row (that panel's resting header) on a phone.
+  const initiativeTaskPrimaryAction = useMemo<RoutePrimaryAction | null>(
+    () =>
+      initiativeSelectedTask
+        ? {
+            label: "Start session for this task",
+            icon: <MessageSquarePlus size={18} />,
+            onRun: () =>
+              startSessionForTask(
+                initiativeSelectedTask.id,
+                initiativeSelectedTask.title,
+              ),
+          }
+        : null,
+    [initiativeSelectedTask, startSessionForTask],
+  );
 
   const dockPeek = useMemo<DockPeek | undefined>(() => {
     if (!dockCarriesBack) return undefined;
@@ -6338,8 +6362,11 @@ function AppContent() {
       primarySlotShowsReview(pendingCommentCount)
         ? commentActuation.onSubmitReview
         : undefined;
+    // The dock is the object panel, so on an Initiative page its row is the
+    // selected Task's header and leads with that Task's Start.
+    const primaryAction = routePrimaryAction ?? initiativeTaskPrimaryAction;
     const objectDockActions =
-      commentActuation?.onComment || submitInSlot || routePrimaryAction ? (
+      commentActuation?.onComment || submitInSlot || primaryAction ? (
         <>
           {commentActuation?.onComment ? (
             <DockAction
@@ -6359,11 +6386,11 @@ function AppContent() {
               badge={pendingCommentCount}
               commentActuation
             />
-          ) : routePrimaryAction ? (
+          ) : primaryAction ? (
             <DockAction
-              icon={routePrimaryAction.icon}
-              label={routePrimaryAction.label}
-              onRun={routePrimaryAction.onRun}
+              icon={primaryAction.icon}
+              label={primaryAction.label}
+              onRun={primaryAction.onRun}
             />
           ) : null}
         </>
@@ -6490,6 +6517,7 @@ function AppContent() {
     clearDictationRequest,
     receiveTranscript,
     routePrimaryAction,
+    initiativeTaskPrimaryAction,
   ]);
 
   // Navigating from inside the object panel changes the main pane — which on a
@@ -7202,48 +7230,54 @@ function AppContent() {
         // inspector (sessions, Start session, context). The detail owns the
         // body read, its refresh, not-found and failure. One scroll column,
         // keyed by the Task, so nothing carries over to the next selection.
-        <div
+        //
+        // Its own action scope, like the Knowledge and Worktree panels': the
+        // Task's Start and the Task inspector's menu belong to the Task header
+        // drawn here, so the Initiative's page header never wears them.
+        <RoutePrimaryActionProvider
           key={initiativeSelectedTaskId}
-          className="flex h-full min-h-0 flex-col overflow-y-auto"
+          action={initiativeTaskPrimaryAction}
         >
-          <Suspense fallback={<LazySurfaceFallback label="Opening Task…" />}>
-            <TaskManagementPage
-              backlogState={backlogState}
-              connected={state.connected}
-              detailState={selectedTaskDetailState}
-              failure={state.objectFailures.task[initiativeSelectedTaskId]}
-              onDismissFailure={() =>
-                actions.dismissObjectFailure("task", initiativeSelectedTaskId)
-              }
-              workflowRuns={selectedTaskWorkflowRuns}
-              workflowCards={selectedTaskWorkflowCards}
-              accountNames={accountNames}
-              sessions={backlogSessions}
-              taskMutations={selectedTaskMutations}
-              actions={actions}
-              prefs={prefs}
-              onUpdatePrefs={update}
-              selectedId={initiativeSelectedTaskId}
-              detailOnly
-              // The panel is the object's own surface on every layout, so its
-              // status control stays in the detail rather than the dock.
-              mobile={false}
-              onSelect={(id) => navigateFromInspector(taskPath(id))}
-              onNavigate={navigateFromInspector}
-              onCloseDetail={() => {}}
-              onClose={() => {}}
-              paObjectReferences={paObjectReferences}
-              onOpenPaObject={(link) => navigateFromInspector(link.href)}
-              onOpenSession={(id) => navigateFromInspector(sessionPath(id))}
-              workflowIndicators={workflowIndicators}
-            />
-          </Suspense>
-          {initiativeSelectedTask
-            ? taskInspectorFor(initiativeSelectedTask, {
-                showEmptySessions: true,
-              })
-            : null}
-        </div>
+          <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+            <Suspense fallback={<LazySurfaceFallback label="Opening Task…" />}>
+              <TaskManagementPage
+                backlogState={backlogState}
+                connected={state.connected}
+                detailState={selectedTaskDetailState}
+                failure={state.objectFailures.task[initiativeSelectedTaskId]}
+                onDismissFailure={() =>
+                  actions.dismissObjectFailure("task", initiativeSelectedTaskId)
+                }
+                workflowRuns={selectedTaskWorkflowRuns}
+                workflowCards={selectedTaskWorkflowCards}
+                accountNames={accountNames}
+                sessions={backlogSessions}
+                taskMutations={selectedTaskMutations}
+                actions={actions}
+                prefs={prefs}
+                onUpdatePrefs={update}
+                selectedId={initiativeSelectedTaskId}
+                detailOnly
+                // The panel is the object's own surface on every layout, so its
+                // status control stays in the detail rather than the dock.
+                mobile={false}
+                onSelect={(id) => navigateFromInspector(taskPath(id))}
+                onNavigate={navigateFromInspector}
+                onCloseDetail={() => {}}
+                onClose={() => {}}
+                paObjectReferences={paObjectReferences}
+                onOpenPaObject={(link) => navigateFromInspector(link.href)}
+                onOpenSession={(id) => navigateFromInspector(sessionPath(id))}
+                workflowIndicators={workflowIndicators}
+              />
+            </Suspense>
+            {initiativeSelectedTask
+              ? taskInspectorFor(initiativeSelectedTask, {
+                  showEmptySessions: true,
+                })
+              : null}
+          </div>
+        </RoutePrimaryActionProvider>
       ) : (
         <Inspector relations={[]} actions={[]}>
           <InitiativeInspectorSummary

@@ -873,10 +873,16 @@ failure states, description, links, runs) over the ordinary Task inspector (its
 sessions, empty or not, Start a session, context and actions). The detail owns
 the Task's body read, so an archived or outside Task, one that no longer exists,
 and a failed or reconnecting read behave as on the Task page, and the selected
-Task's failures have their home there. Selecting is the user asking to see it,
-so it opens the panel; navigation still never closes it. With nothing selected,
-the panel summarizes the Initiative and offers no Initiative action: agents
-manage Initiatives, and the user's one write, Settle, belongs to its inbox card.
+Task's failures have their home there while the panel shows it: shut, behind
+another tab or the panel home, with the Inspector tab closed, or in a collapsed
+dock, a failure about it is announced naming the Task. The Task's actions are
+the panel's too: its Start and its `…` menu sit in the Task header drawn inside
+the panel (on a phone, the dock's row and sheet), in an action scope of their
+own, so the Initiative's page header never offers to start, archive or delete a
+Task. Selecting is the user asking to see it, so it opens the panel; navigation
+still never closes it. With nothing selected, the panel summarizes the
+Initiative and offers no Initiative action: agents manage Initiatives, and the
+user's one write, Settle, belongs to its inbox card.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

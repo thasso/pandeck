@@ -230,7 +230,8 @@ one is announced. The claim is by id rather than by type because the alternative
 suppresses every row in the list behind the one open member, and it requires the
 surface to be on screen rather than merely mounted: a note behind an unselected
 panel tab, or behind a collapsed panel, would suppress the announcement and then
-show the user nothing at all.
+show the user nothing at all. A Task write the server never answers ends at its
+deadline, and that outcome is judged against the same claims as a refusal.
 
 A collection's load failure needs no claim: it is a condition, kept on the
 collection and rendered by the pane whenever the user arrives, on screen or not,

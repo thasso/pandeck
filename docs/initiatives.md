@@ -223,12 +223,14 @@ re-reads the graph.
 - **What a node is.** A member or an outside blocker stub opens that real Task
   in the object panel: the same Task detail the Task page shows (its body, its
   status control with its busy and failure states, description, links and runs)
-  over the Task's sessions, Start session, context and actions. An archived
-  member opens the same way, and a Task that no longer exists says so. Lanes,
-  Project groups and the milestone column are drawing and take no input. A node
-  and a list row name a Task by its title and its Task id badge; nothing is
-  parsed from the title, so a label an agent wrote into it (Hosted Labs' "L6")
-  reads as part of the title.
+  over the Task's sessions, Start session, context and actions. Those actions
+  stay in the panel's Task header; the Initiative's header carries none. A
+  failure about the Task is shown there while the panel is on screen and
+  announced naming it otherwise. An archived member opens the same way, and a
+  Task that no longer exists says so. Lanes, Project groups and the milestone
+  column are drawing and take no input. A node and a list row name a Task by its
+  title and its Task id badge; nothing is parsed from the title, so a label an
+  agent wrote into it (Hosted Labs' "L6") reads as part of the title.
 
 ## The attention list
 
