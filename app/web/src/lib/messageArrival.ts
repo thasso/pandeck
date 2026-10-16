@@ -198,7 +198,8 @@ function failureOnObject(
 
 /**
  * Collections whose load failure the client keeps as a CONDITION on the
- * collection itself (`projectListError`, `worktreeListError`, `taskListError`),
+ * collection itself (`projectListError`, `worktreeListError`, `taskListError`,
+ * `initiativeListError`),
  * rendered by the pane whenever the user goes there.
  *
  * Listed once, and read by both the reducer that stores the condition and the
@@ -209,6 +210,7 @@ const CONDITION_COLLECTIONS: readonly MessageTarget["type"][] = [
   "project",
   "task",
   "worktree",
+  "initiative",
 ];
 
 /** Whether this target names one of those collections rather than a member. */

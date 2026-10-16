@@ -336,6 +336,26 @@ it("claims an Initiative card for its Settle only, by id", () => {
   ).toBe(false);
 });
 
+// The Initiative LIST is a condition collection like the other three: its
+// failure is kept on the list and never also announced, while a failure naming
+// one Initiative still needs its own home.
+it("keeps an Initiative list failure as its condition, and only the list", () => {
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Failed to list Initiatives: database is locked",
+      target: { type: "initiative" },
+    }),
+  ).toBe(true);
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Failed to settle Initiative",
+      target: { type: "initiative", id: "6" },
+    }),
+  ).toBe(false);
+});
+
 // A project or Task answers the same first question as a
 // session, and the answer is per OBJECT: one open Task says nothing about the
 // rest of the list.

@@ -302,6 +302,21 @@ function resubscribed(socket: ScenarioSocket, mark: number): boolean {
   );
 }
 
+/** The toasts about the Initiative LIST. */
+const listToasts = () =>
+  getToasts()
+    .map((toast) => toast.message)
+    .filter((message) => message.includes("Failed to list Initiatives"));
+
+/** The list failure's Retry. */
+function retryButton(): HTMLButtonElement | null {
+  return (
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Retry",
+    ) ?? null
+  );
+}
+
 /** The toasts that name the Billing migration Initiative. */
 const billingToasts = () =>
   getToasts().filter((toast) =>
@@ -786,5 +801,68 @@ describe("Initiative inbox card", () => {
     expect(
       state.initiatives.find((item) => item.id === "6")?.attention,
     ).toMatchObject({ revision: 2 });
+  });
+
+  it("keeps a failed Initiative list read as its condition, said once (F041)", async () => {
+    await act(async () => root.render(<Harness />));
+    const socket = ScenarioSocket.instances.at(-1)!;
+    await act(async () => {
+      socket.open();
+      socket.receive(readyMessage());
+      socket.receive({
+        type: "error",
+        message: "Failed to list Initiatives: database is locked",
+        target: { type: "initiative" },
+      });
+    });
+    expect(state.initiativeListError).toBe(
+      "Failed to list Initiatives: database is locked",
+    );
+    expect(container.textContent).toContain("database is locked");
+    expect(retryButton()).not.toBeNull();
+    expect(listToasts(), "the condition is not also said in passing").toEqual(
+      [],
+    );
+  });
+
+  it("keeps a failed Initiative list read off the chat being viewed (F042)", async () => {
+    const socket = await boot([paused(1)]);
+    await streamViewedChat(socket);
+    const before = chatRuntime();
+    expect(before.runState).toBe("running");
+    expect(before.liveStreams).toHaveLength(1);
+
+    // A refresh of the list fails: no request of the user's is waiting on it.
+    await act(async () => {
+      socket.receive({
+        type: "error",
+        message: "Failed to list Initiatives: database is locked",
+        target: { type: "initiative" },
+      });
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(chatRuntime(), "the chat's turn is untouched").toEqual(before);
+    expect(state.initiativeListError).toBe(
+      "Failed to list Initiatives: database is locked",
+    );
+    expect(retryButton()).not.toBeNull();
+    expect(card("6"), "held items stay under the failure").not.toBeNull();
+    expect(listToasts()).toEqual([]);
+
+    // Retry reads again; the list's answer retires the condition.
+    const mark = socket.sent.length;
+    await act(async () => retryButton()!.click());
+    expect(resubscribed(socket, mark)).toBe(true);
+    expect(state.initiativeListError).toBeNull();
+    await act(async () =>
+      socket.receive({
+        type: "initiativeList",
+        items: [paused(1)],
+        seq: 7,
+        revisions: [{ id: "6", revision: 10 }],
+      }),
+    );
+    expect(container.textContent).not.toContain("database is locked");
+    expect(chatRuntime()).toEqual(before);
   });
 });

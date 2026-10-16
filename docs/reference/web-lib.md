@@ -1111,10 +1111,10 @@ capability logic.
   worktree does not: its writes narrate themselves where they were issued).
   `arrivalHasHome` consumes an arrival against those claims plus the collections
   whose load failure is kept as a pane condition (`CONDITION_COLLECTIONS`:
-  projects, Tasks, worktrees). Errors only: the in-place note exists for a
-  failure, so a warning naming the session or object in view is still announced.
-  Why it is shaped this way, and what each earlier shape cost, is
-  `docs/messaging.md`.
+  projects, Tasks, worktrees, Initiatives). Errors only: the in-place note
+  exists for a failure, so a warning naming the session or object in view is
+  still announced. Why it is shaped this way, and what each earlier shape cost,
+  is `docs/messaging.md`.
 - `historyNav.ts` owns the app's position in its own history, and therefore
   every `pushState`/`replaceState` in the app. The platform answers no question
   about history's shape — deliberately, since that would leak browsing — so each

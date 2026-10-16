@@ -243,8 +243,10 @@ way it is the Initiative's outcome alone and never reaches the viewed chat's.
 
 A collection's load failure needs no claim: it is a condition, kept on the
 collection and rendered by the pane whenever the user arrives, on screen or not,
-so it is never also said in passing. Three collections keep one — projects,
-Tasks and worktrees. Where the pane's note offers a RETRY, that failure also
+so it is never also said in passing. Four collections keep one — projects,
+Tasks, worktrees and Initiatives. An Initiative list failure is that condition
+and nothing more: it never reaches the viewed chat's outcome, whose live turn it
+has nothing to do with. Where the pane's note offers a RETRY, that failure also
 reopens the collection's once-per-episode read gate (Tasks, worktrees), or the
 retry is a no-op behind a gate that already believes the list was read.
 

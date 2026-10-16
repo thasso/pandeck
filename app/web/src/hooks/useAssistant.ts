@@ -1875,6 +1875,8 @@ type Action =
     }
   | { kind: "setOpenInitiative"; id: string | null }
   | { kind: "initiativeListRetry" }
+  /** The Initiative list could not be read: a condition on that list alone. */
+  | { kind: "initiativeListFailed"; message: string }
   | { kind: "projectMutationStart"; key: string }
   | { kind: "projectMutationResult"; key: string; error?: string }
   | { kind: "worktreeListLoad" }
@@ -4885,6 +4887,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ),
     };
   }
+  if (action.kind === "initiativeListFailed")
+    return { ...state, initiativeListError: action.message };
   if (action.kind === "initiativeListRetry") {
     return state.initiativeListError === null
       ? state
@@ -8096,6 +8100,19 @@ export function useAssistant({
             error: msg.message,
           });
         }
+      }
+      // A failed Initiative LIST read is a condition on that list, kept
+      // for its panes to render with their Retry — and nothing else. It
+      // must not reach the reducer's generic `error`, which is the VIEWED
+      // chat's outcome: that would end a turn still streaming there. Its
+      // announcement is owned by the condition (`CONDITION_COLLECTIONS`).
+      if (
+        msg.type === "error" &&
+        msg.target?.type === "initiative" &&
+        !msg.target.id
+      ) {
+        dispatch({ kind: "initiativeListFailed", message: msg.message });
+        return;
       }
       if (msg.type === "taskSaved") {
         // The temp id lives in the pending queue, never on the wire: the server
