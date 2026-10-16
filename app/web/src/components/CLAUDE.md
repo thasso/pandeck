@@ -1,6 +1,10 @@
-<!-- instruction-budget: bytes=2688 reason="The link/embed/card, agent-text and loading rules exceed 2048." task=markdown-card-fields date=2026-10-17 -->
+<!-- instruction-budget: bytes=2880 reason="Markdown presentation, agent-text, rendering/loading rules and the shared browser-row contract exceed 2048." task=document-presentation date=2026-09-11 -->
 
 # Web components
+
+- Flat browser items use `common/ListRow` for one, two or three lines; feature
+  code supplies content and behavior, not a separate row frame. Hierarchical
+  lists keep `common/Tree`.
 
 - Markdown: `[x](target)` is a link, `![x](target)` a chrome-free lazy embed,
   and tool output the ONLY card. `[![x](y)](z)` keeps the authored link z and

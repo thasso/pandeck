@@ -8,13 +8,7 @@ import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleText } from "./SessionTitleText.tsx";
 import { identityLabel } from "./SessionRow.tsx";
 import { IconButton } from "./common/IconButton.tsx";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
+import { ListRow } from "./common/ListRow.tsx";
 
 export type InboxShelfKind = "settled" | "archived";
 
@@ -83,9 +77,9 @@ export function InboxShelfRow({
   const comfortable = density === "comfortable";
 
   return (
-    <Item
-      size="xs"
-      variant={active ? "muted" : "default"}
+    <ListRow
+      active={active}
+      density={density}
       data-session-row
       data-list-row-id={session.id}
       data-session-row-active={active ? "true" : undefined}
@@ -94,16 +88,11 @@ export function InboxShelfRow({
       aria-label={`Open ${settled ? "settled" : "archived"} ${identityLabel(session)} session: ${title}${
         delivery ? ` — pull request: ${delivery.title}` : ""
       }`}
-      onClick={onOpen}
+      onOpen={onOpen}
+      onFocusSibling={onFocusSibling}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          e.preventDefault();
-          onFocusSibling?.(e.key === "ArrowDown" ? 1 : -1);
-        } else if (e.key.toLowerCase() === "s" && settled) {
+        if (e.key.toLowerCase() === "s" && settled) {
           e.preventDefault();
           onRestore();
         } else if (e.key.toLowerCase() === "e") {
@@ -114,39 +103,31 @@ export function InboxShelfRow({
           onDelete();
         }
       }}
-      className={`cursor-pointer select-none flex-nowrap hover:bg-muted ${
-        comfortable ? "min-h-11" : ""
-      }`}
-    >
-      <ItemMedia variant="icon" className={agent.activeColor} aria-hidden>
-        <AgentIcon />
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="w-full">
-          <span className="truncate">
-            <SessionTitleText
-              title={title}
-              pending={session.titleGenerationPending}
-            />
+      leading={<AgentIcon className={agent.activeColor} aria-hidden />}
+      title={
+        <SessionTitleText
+          title={title}
+          pending={session.titleGenerationPending}
+        />
+      }
+      trailing={
+        <>
+          <SessionDeliveryMark session={session} variant="glyph" />
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {relativeAge(at, now)}
           </span>
-        </ItemTitle>
-      </ItemContent>
-      <ItemActions className="gap-1">
-        <SessionDeliveryMark session={session} variant="glyph" />
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {relativeAge(at, now)}
-        </span>
-        <IconButton
-          label={restoreLabel}
-          size={comfortable ? "icon-lg" : "icon-xs"}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRestore();
-          }}
-        >
-          <RestoreIcon />
-        </IconButton>
-      </ItemActions>
-    </Item>
+          <IconButton
+            label={restoreLabel}
+            size={comfortable ? "icon-lg" : "icon-xs"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRestore();
+            }}
+          >
+            <RestoreIcon />
+          </IconButton>
+        </>
+      }
+    />
   );
 }

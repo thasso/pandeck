@@ -3,7 +3,7 @@ import { FolderKanban, GitBranch, HardDrive, Moon } from "lucide-react";
 import type { IdleWorktree, PullRequestInventoryItem } from "@assistant/shared";
 import { ErrorNote, RefreshIndicator, Skeleton } from "./common/load.tsx";
 import { ConfirmDialog } from "./common/dialogs.tsx";
-import { ListCardRow } from "./ListCardRow.tsx";
+import { ListRow } from "./common/ListRow.tsx";
 import { ListGroupSection } from "./ListGroupSection.tsx";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { Button } from "./ui/button.tsx";
@@ -51,7 +51,7 @@ const IdleWorktreeRow = memo(function IdleWorktreeRow({
   const label = idleWorktreeLabel(item);
   const idleFor = idleForLabel(item.lastActivityAt, now);
   return (
-    <ListCardRow
+    <ListRow
       rowProps={{
         "data-idle-worktree-row": "",
         "data-list-row-id": `idle-worktree:${worktree.id}`,

@@ -26,13 +26,7 @@ import {
   type IdleWorktreesProps,
 } from "./PullRequestBrowser.tsx";
 import { Badge } from "@/components/ui/badge";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
+import { ListRow } from "./common/ListRow.tsx";
 import type {
   PullRequestListView,
   PullRequestTarget,
@@ -79,6 +73,7 @@ import { createSessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
 import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
+import type { RowDensity } from "../lib/rowDensity.ts";
 import {
   initiativePath,
   type SettingsSection,
@@ -297,6 +292,7 @@ function BrowserRow({
   current = false,
   selected = current,
   count = 0,
+  density = "tight",
   onClick,
 }: {
   icon: ReactNode;
@@ -304,29 +300,22 @@ function BrowserRow({
   current?: boolean;
   selected?: boolean;
   count?: number;
+  density?: RowDensity;
   onClick: () => void;
 }) {
   return (
-    <Item
-      size="xs"
-      variant={selected ? "muted" : "default"}
+    <ListRow
+      active={selected}
+      density={density}
       render={<button type="button" />}
       aria-current={current ? "page" : undefined}
-      onClick={onClick}
-      className="text-left hover:bg-muted"
-    >
-      <ItemMedia variant="icon">{icon}</ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="w-full">
-          <span className="truncate">{label}</span>
-        </ItemTitle>
-      </ItemContent>
-      {count > 0 ? (
-        <ItemActions>
-          <Badge variant="secondary">{count}</Badge>
-        </ItemActions>
-      ) : null}
-    </Item>
+      onOpen={onClick}
+      leading={icon}
+      title={label}
+      trailing={
+        count > 0 ? <Badge variant="secondary">{count}</Badge> : undefined
+      }
+    />
   );
 }
 
@@ -415,7 +404,9 @@ export function sidebarWorktreeWatchIds(
 function SettingsSectionList({
   activeSection,
   onOpenSection,
+  density,
 }: {
+  density: RowDensity;
   activeSection?: SettingsSection | null | undefined;
   onOpenSection?: ((section: SettingsSection) => void) | undefined;
 }) {
@@ -431,13 +422,14 @@ function SettingsSectionList({
             (section) => section.id === activeSection,
           )}
         >
-          <div className="flex flex-col gap-0.5 px-1 py-1 sm:px-2">
+          <div className="flex flex-col">
             {group.sections.map((section) => (
               <BrowserRow
                 key={section.id}
                 icon={section.icon}
                 label={section.label}
                 selected={activeSection === section.id}
+                density={density}
                 onClick={() => onOpenSection?.(section.id)}
               />
             ))}
@@ -861,6 +853,7 @@ function SidebarImpl({
       >
         {section === "settings" ? (
           <SettingsSectionList
+            density={mobile ? "comfortable" : "tight"}
             activeSection={activeSection}
             onOpenSection={onOpenSection}
           />

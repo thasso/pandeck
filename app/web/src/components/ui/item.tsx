@@ -42,11 +42,13 @@ const itemVariants = cva(
         default: "border-transparent",
         outline: "border-border",
         muted: "border-transparent bg-muted/50",
+        list: "flex-nowrap cursor-pointer select-none overflow-hidden rounded-none border-0 text-left hover:bg-muted data-[active=true]:bg-muted focus-visible:border-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40",
       },
       size: {
         default: "gap-2.5 px-3 py-2.5",
         sm: "gap-2.5 px-3 py-2.5",
         xs: "gap-2 px-2.5 py-2 in-data-[slot=dropdown-menu-content]:p-0",
+        list: "gap-0 p-0",
       },
     },
     defaultVariants: {

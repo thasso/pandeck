@@ -31,8 +31,8 @@ import {
   type WorkflowRunInboxItem,
 } from "../lib/sessionInbox.ts";
 import { relativeAge } from "../lib/relativeTime.ts";
-import { CARD_OUTER_ROW, type RowDensity } from "../lib/rowDensity.ts";
-import { useInertOverflow } from "../hooks/useInertOverflow.ts";
+import type { RowDensity } from "../lib/rowDensity.ts";
+import { ListRow, ListRowContent } from "./common/ListRow.tsx";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
@@ -170,7 +170,6 @@ function WorkflowRunInboxCardImpl({
   // carries the live CI and review state the run card itself does not.
   const prSession = workflowRunPullRequestSession(item);
   const prDelivery = prSession ? sessionDelivery(prSession) : undefined;
-  const signalRowRef = useInertOverflow<HTMLDivElement>();
   const roles =
     item.counts.total > 0 ? workflowRunRolesSummary(item.counts) : null;
   const bubbleLabel = bubbled ? sessionClusterBubbleLabel(bubbled, now) : null;
@@ -180,7 +179,8 @@ function WorkflowRunInboxCardImpl({
   const open = () => onOpen(run.taskId, run.id);
 
   return (
-    <div
+    <ListRow
+      divider={false}
       data-session-row
       data-list-row-id={`run:${run.id}`}
       role="button"
@@ -190,16 +190,11 @@ function WorkflowRunInboxCardImpl({
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
         prDelivery ? ` — pull request: ${prDelivery.title}` : ""
       }${settleOffered && item.settleBlocked ? ` — ${settleLabel}` : ""}`}
-      onClick={open}
+      onOpen={open}
+      onFocusSibling={onFocusSibling}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          open();
-        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          e.preventDefault();
-          onFocusSibling?.(e.key === "ArrowDown" ? 1 : -1);
-        } else if (
+        if (
           e.key.toLowerCase() === "s" &&
           settleOffered &&
           !item.settleBlocked
@@ -208,18 +203,11 @@ function WorkflowRunInboxCardImpl({
           settle();
         }
       }}
-      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
     >
-      {/* The session card's three rows, in the same places: context with the
-          time, identity with the state in the leading slot, then signals with
-          Settle at the right edge. Each row shows an item whole or not at all. */}
-      <div
-        className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 pl-2 pr-1 ${density === "comfortable" ? "py-2.5" : "py-2"}`}
-      >
-        <div
-          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground`}
-        >
-          <div className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden">
+      <ListRowContent
+        density={density}
+        context={
+          <>
             {projectKey ? (
               <span
                 className="flex max-w-full shrink-0 items-center gap-1"
@@ -246,47 +234,38 @@ function WorkflowRunInboxCardImpl({
             <span className="flex shrink-0 items-center gap-1">
               <ClipboardList size={11} aria-hidden />#{run.taskId}
             </span>
-          </div>
-          <span className="shrink-0 tabular-nums">
-            {relativeAge(run.updatedAt, now)}
-          </span>
-        </div>
-
-        <div className="flex min-w-0 items-center gap-1.5">
-          {/* A moving run shows what it IS; one that stopped, ended or waits
+          </>
+        }
+        age={relativeAge(run.updatedAt, now)}
+        identity={
+          <>
+            {/* A moving run shows what it IS; one that stopped, ended or waits
               on you shows that state instead. */}
-          <span className="flex size-4 shrink-0 items-center justify-center">
-            {moving ? (
-              <Workflow
-                size={13}
-                className="shrink-0 text-primary"
-                aria-hidden
-              />
-            ) : (
-              <span
-                role="img"
-                aria-label={badge.label}
-                title={badge.label}
-                className={`flex size-4 shrink-0 items-center justify-center ${TONE_TEXT[badge.tone]}`}
-              >
-                <RunBadgeIcon kind={badge.kind} size={13} />
-              </span>
-            )}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-            {title}
-          </span>
-        </div>
-
-        <div
-          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
-        >
-          {/* Signals show whole or not at all; DOM order is the drop order, so
-              the role session that needs you outlasts the phase. */}
-          <div
-            ref={signalRowRef}
-            className="session-card-status-line flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden"
-          >
+            <span className="flex size-4 shrink-0 items-center justify-center">
+              {moving ? (
+                <Workflow
+                  size={13}
+                  className="shrink-0 text-primary"
+                  aria-hidden
+                />
+              ) : (
+                <span
+                  role="img"
+                  aria-label={badge.label}
+                  title={badge.label}
+                  className={`flex size-4 shrink-0 items-center justify-center ${TONE_TEXT[badge.tone]}`}
+                >
+                  <RunBadgeIcon kind={badge.kind} size={13} />
+                </span>
+              )}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+              {title}
+            </span>
+          </>
+        }
+        signals={
+          <>
             {item.counts.total > 0 ? (
               <Button
                 variant="ghost"
@@ -351,11 +330,10 @@ function WorkflowRunInboxCardImpl({
                 {phase}
               </span>
             ) : null}
-          </div>
-          {/* A disabled Settle keeps its reason as the tooltip AND in the
-              card's spoken label, so the refusal is readable without a
-              pointer. */}
-          {settleOffered ? (
+          </>
+        }
+        trailing={
+          settleOffered ? (
             // `title` too: a disabled trigger opens no tooltip, and the
             // reason Settle is refused must stay readable on hover.
             <IconButton
@@ -371,10 +349,10 @@ function WorkflowRunInboxCardImpl({
             >
               <Check />
             </IconButton>
-          ) : null}
-        </div>
-      </div>
-    </div>
+          ) : null
+        }
+      />
+    </ListRow>
   );
 }
 

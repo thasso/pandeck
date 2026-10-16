@@ -65,7 +65,7 @@ import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import { relativeTime } from "../lib/sessionRows.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
-import { ListCardRow } from "./ListCardRow.tsx";
+import { ListRow } from "./common/ListRow.tsx";
 import { ListGroupSection } from "./ListGroupSection.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -175,7 +175,7 @@ const REASON_BADGE_ICON: Record<PullRequestReasonKind, typeof Layers> = {
 
 /**
  * A short signal on the row's bottom line: icon plus one or two words. The
- * words go first when the line is tight (`ListCardRow`), the icon stays.
+ * words go first when the line is tight (`ListRow`), the icon stays.
  */
 function Signal({
   className,
@@ -242,7 +242,7 @@ const PullRequestRow = memo(function PullRequestRow({
     (reason) => reason.kind !== "local-worktree",
   );
   return (
-    <ListCardRow
+    <ListRow
       rowProps={{
         "data-pull-request-row": "",
         "data-list-row-id": pullRequestRowId(item),

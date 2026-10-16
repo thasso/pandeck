@@ -204,16 +204,18 @@ Settings as a primary section shows its configuration pages in labeled groups in
 the object browser, with the most frequently oriented surfaces first. Each group
 uses `ListGroupSection`: an edge-to-edge sticky header with its icon, no count,
 and tab-local remembered disclosure state. Navigating to a settings page opens
-its group; the reader can collapse it again. Model configuration and provider
-account setup share a Models & providers group, but each provider keeps its own
-page rather than mixing account types in one form. A section whose mapping is
-still unclear may ship with a minimal or empty browser until the shape is
-decided. A section only one client can act on (Port forwarding, the macOS shell)
-stays routable everywhere and renders a page that says what it needs, but is
-listed only where it works (`shownWhen`). A settings section that reads a domain
-list subscribes only while the main pane RENDERS it — the browser listing its
-entry reads nothing — because for the skills library a subscribe is what makes
-the server rescan the user's working tree.
+its group; the reader can collapse it again. Settings entries are one-line
+`common/ListRow` items, flush with the shared headers, using the same selected,
+hover and keyboard-focus treatment as Attention and Pull Requests. Model
+configuration and provider account setup share a Models & providers group, but
+each provider keeps its own page rather than mixing account types in one form. A
+section whose mapping is still unclear may ship with a minimal or empty browser
+until the shape is decided. A section only one client can act on (Port
+forwarding, the macOS shell) stays routable everywhere and renders a page that
+says what it needs, but is listed only where it works (`shownWhen`). A settings
+section that reads a domain list subscribes only while the main pane RENDERS it
+— the browser listing its entry reads nothing — because for the skills library a
+subscribe is what makes the server rescan the user's working tree.
 
 Initiatives (`docs/initiatives.md`) have their canonical location in a group at
 the TOP of the Projects browser, because they sit above Projects. The group is
@@ -717,18 +719,18 @@ every repository has a #1 and one project can hold two repositories (a spawned
 worktree publishing to a `pushurl` fork). Addressing on project and number would
 give two rows one URL, highlight both, and open whichever came first.
 
-A row is a `ListCardRow`, the attention inbox's three rows: the project, the
-author when it is not you, and the head branch, with the age closing the line;
-`#number` and the title under the state glyph; then the signals. The signals
-lead with WHY it is yours — **review**, **mine**, **assigned**, **team**, each
-with its group's icon — then merged or closed, draft, conflicts and an open
-review, with the local-checkout mark and CI closing the line on the right. When
-the line is too narrow every signal drops its words and keeps its icon before
-any signal is dropped. The whole vocabulary distinguishes UNKNOWN from a
-negative answer, because absence on the wire means the provider was not reached:
-an unread CI reads as unknown, never as passing, and an unread review as
-unknown, never as agreement. Threads are only counted when the provider actually
-counted them.
+A row is a `common/ListRow`, shared with the attention inbox, using three rows:
+the project, the author when it is not you, and the head branch, with the age
+closing the line; `#number` and the title under the state glyph; then the
+signals. The signals lead with WHY it is yours — **review**, **mine**,
+**assigned**, **team**, each with its group's icon — then merged or closed,
+draft, conflicts and an open review, with the local-checkout mark and CI closing
+the line on the right. When the line is too narrow every signal drops its words
+and keeps its icon before any signal is dropped. The whole vocabulary
+distinguishes UNKNOWN from a negative answer, because absence on the wire means
+the provider was not reached: an unread CI reads as unknown, never as passing,
+and an unread review as unknown, never as agreement. Threads are only counted
+when the provider actually counted them.
 
 One pull request opens at
 `/pull-requests/:projectId/:provider/:repositoryKey/:number` — the detail page.

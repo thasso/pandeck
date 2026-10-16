@@ -10,7 +10,7 @@
  * disagree — which is why this is a prop the host passes, never a breakpoint a
  * row reads for itself.
  *
- * Shared by the Backlog and the Sessions inbox so the two browsers cannot
+ * Shared by browser rows, the Backlog and the Sessions inbox so they cannot
  * answer the same question differently.
  */
 export type RowDensity = "tight" | "comfortable";

@@ -43,6 +43,9 @@ the same parts a shadcn example would.
     thumb) and one thumb for a scalar `value`.
   - `badge.tsx`, `alert.tsx`: `success` and `warning` variants on the app's
     status tokens.
+  - `item.tsx`: `list` variant and size for `common/ListRow`: square, flush,
+    full-strength selected fill and inset keyboard focus, with geometry owned by
+    the shared row content.
   - `select.tsx`: an `xs` trigger size matching `Button size="xs"`, so a select
     fits a card footer's options beside its buttons.
   - Overlays sit in the layer bands of `ui-shell.md` instead of `z-50`: dialog,
@@ -66,7 +69,8 @@ the same parts a shadcn example would.
 | Edit a shown text value in place                                                | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)                                                       |
 | Choice                                                                          | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`                                                           |
 | Form rows, labels, help and errors                                              | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                                                              |
-| A list row (session, task, file, setting)                                       | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                                                                    |
+| A browser row with one, two or three lines                                      | [`common/ListRow`](../src/components/common/ListRow.tsx) (Settings, session history, Attention, Pull Requests, idle worktrees)     |
+| Other list rows and tree content                                                | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                                                                    |
 | An object or event card (transcript result, notice, card-list item)             | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)                                                |
 | A page or settings section that groups rows                                     | `Card`                                                                                                                             |
 | Collapsible list sections, including Pull Requests and Tasks grouped by project | [`ListGroupSection`](../src/components/ListGroupSection.tsx) (sticky header with chevron, icon, title, count and optional actions) |
@@ -91,6 +95,30 @@ the same parts a shadcn example would.
 translucent border cannot expose rows beneath a sticky header. Hover and
 selection use `accent` with `accent-foreground` instead. There is no separate
 group-header palette.
+
+### Browser rows
+
+`common/ListRow` is the shared edge-to-edge browser item, built on `Item`. A
+title with an optional leading icon is one line. Add either `context` above or
+`signals` below for two lines; provide both for three. Omitted lines take no
+space; passing `signals={null}` reserves an empty signal line. `age` closes the
+context line, `pinned` keeps important signals visible, and `trailing` keeps
+controls fixed at the end of the final line. Context and signals show whole
+items or hide them; hidden controls become inert, and signals compact before
+dropping items.
+
+The row owns padding, typography, line spacing, selection, hover, focus and
+Enter/Space/arrow-key behavior. Its host supplies `density`, object data,
+accessible names, domain shortcuts, and actions. Simple navigation renders a
+real button. Rows containing other controls use the default focusable container
+so buttons are never nested. A parent grouping a row with expanded children
+passes `divider={false}` and owns that group's separator.
+
+`ListRowContent` provides the same geometry inside a domain-owned presentation
+wrapper, such as a session's actions flip. `identity` accepts an existing
+identity composition such as `SessionTitleRow`, preserving its status semantics.
+Do not recreate the frame or line spacing in feature components. Storybook's
+`Common/ListRow` shows the one-, two-, and three-line layouts.
 
 An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
