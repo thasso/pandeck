@@ -340,12 +340,7 @@ function TimelineItem({ entry }: { entry: PullRequestTimelineEntry }) {
       actions={
         <>
           {verdict ? (
-            <Badge
-              variant="outline"
-              className="border-band-foreground/30 text-band-foreground"
-            >
-              {REVIEW_VERDICT_LABEL[verdict]}
-            </Badge>
+            <Badge variant="outline">{REVIEW_VERDICT_LABEL[verdict]}</Badge>
           ) : null}
           <EntryMeta createdAt={entry.createdAt} url={entry.url} />
         </>
@@ -435,22 +430,8 @@ function ThreadSection({ thread }: { thread: PullRequestReviewThread }) {
       defaultOpen={thread.resolved !== true}
       actions={
         <>
-          {thread.outdated ? (
-            <Badge
-              variant="outline"
-              className="border-band-foreground/30 text-band-foreground"
-            >
-              outdated
-            </Badge>
-          ) : null}
-          {thread.resolved ? (
-            <Badge
-              variant="outline"
-              className="border-band-foreground/30 text-band-foreground"
-            >
-              resolved
-            </Badge>
-          ) : null}
+          {thread.outdated ? <Badge variant="outline">outdated</Badge> : null}
+          {thread.resolved ? <Badge variant="outline">resolved</Badge> : null}
           {thread.url ? (
             <a
               href={thread.url}

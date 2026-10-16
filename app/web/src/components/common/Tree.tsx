@@ -202,7 +202,8 @@ export interface TreeProps<T> {
   getRowClassName?: (node: TreeNode<T>, state: TreeNodeState) => string;
   /**
    * Rows drawn as a GROUP BAND — the `ListGroupSection` look: the theme's
-   * `band` colour, pinned while its rows scroll under it. For a
+   * `border` colour over an opaque `background`, pinned while its rows scroll
+   * under it. For a
    * tree whose top level groups the rest (the Backlog by Project, flush).
    * Everything under a band is drawn one level shallower: the band already
    * says the rows belong to it, so an indent would only spend width.
@@ -739,7 +740,9 @@ function RowBody<T>({
     <div
       className={cx(
         "relative z-10 flex gap-1 transition-colors",
-        band && !elevated ? "bg-band text-band-foreground" : "text-foreground",
+        band && !elevated
+          ? "group-header-surface text-foreground"
+          : "text-foreground",
         flush ? "rounded-none border-b border-border/60" : "rounded-md",
         stretch ? "items-stretch" : "items-center",
         // The indent animates (`index.css`) so a row promoted out of a vanished
@@ -751,11 +754,9 @@ function RowBody<T>({
         elevated
           ? "border border-border bg-card shadow-lg"
           : band
-            ? // A band is never "selected-looking": its tint would be lost on
-              // the dark neutral, and a hover lightens it instead.
-              selected
-              ? "bg-band-active"
-              : "hover:bg-band-hover"
+            ? selected
+              ? "bg-accent bg-none text-accent-foreground"
+              : "hover:bg-accent hover:bg-none hover:text-accent-foreground"
             : selected
               ? flush
                 ? "bg-muted"
@@ -808,7 +809,7 @@ function RowBody<T>({
             className={cx(
               "transition-transform",
               isExpanded && "rotate-90",
-              band && "text-band-foreground/70",
+              band && "text-foreground/70",
             )}
           />
         </Button>

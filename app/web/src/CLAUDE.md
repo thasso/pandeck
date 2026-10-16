@@ -12,7 +12,9 @@
   render test catches it.
 - Build UI from the shadcn components in `components/ui/` per
   `app/web/docs/ui-components.md`: no styled raw controls, theme tokens only,
-  `text-xs`–`text-xl` only. `uiConsistencyAudit.test.ts` counts may only drop.
+  `text-xs`–`text-xl` only. Reuse existing color token names across themes; new
+  colors, tokens or ad hoc color mixes require explicit user approval.
+  `uiConsistencyAudit.test.ts` counts may only drop.
 - A `saveTask` not editing the title OMITS `title` (an update without one keeps
   it) but must still send `status`, coerced to `todo` when missing
   (`taskSaveTitleAudit.test.ts` allowlists the two title saves).

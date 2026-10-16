@@ -85,6 +85,13 @@ the same parts a shadcn example would.
 | Tables, separators, kbd hints, breadcrumbs                                      | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                                                                          |
 | Search-and-pick lists                                                           | `Command`                                                                                                                          |
 
+`ListGroupSection` and the tree's group headers use `border` over an opaque
+`background`, with `foreground` text in both themes. The shared
+`group-header-surface` class layers these existing tokens so dark mode's
+translucent border cannot expose rows beneath a sticky header. Hover and
+selection use `accent` with `accent-foreground` instead. There is no separate
+group-header palette.
+
 An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
 of its action group — after a card footer's primary button, at a header's right
@@ -115,6 +122,9 @@ server that bounds such a field must not cut it mid-sentence at a small limit.
 - `className` on a `ui/` component is for layout only: margin, gap, width and
   height, flex and grid placement, position, responsive visibility. Colors,
   borders, radius, padding and font size come from the component.
+- Reuse existing theme colors by the same token name in light and dark mode.
+  Adding new colors, color tokens, or ad hoc color mixes requires explicit user
+  approval. A UI styling request alone is not permission to expand the palette.
 - Colors are theme tokens only: `background`, `foreground`, `card`, `popover`,
   `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`, `input`,
   `ring`, plus the app's `success` and `warning` (with `-soft` fills). No
