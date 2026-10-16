@@ -982,6 +982,8 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   // Same rule for a Workflow Run's Settle (Task-677): the observed revision is
   // required, so a stale item cannot acknowledge an outcome it never rendered.
   settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),
+  // And for an Initiative's: the revision its clicked inbox card rendered.
+  settleInitiative: fields({ id: STRING, throughRevision: COUNT }),
   setInboxPositions: (msg) => {
     const { positions } = msg;
     if (!Array.isArray(positions) || positions.length === 0)

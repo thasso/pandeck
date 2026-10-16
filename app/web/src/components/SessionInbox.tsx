@@ -26,6 +26,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { isShelvedSession, MAX_INBOX_POSITIONS } from "@assistant/shared";
 import type {
   InboxPositionEntry,
+  InitiativeSummary,
   ProjectRecord,
   SessionListItem,
   TaskSummary,
@@ -37,13 +38,14 @@ import type {
 import { ActiveSessionCard } from "./ActiveSessionCard.tsx";
 import { ClusterChildRow } from "./ClusterChildRow.tsx";
 import { WorkflowRunInboxCard } from "./WorkflowRunInboxCard.tsx";
+import { InitiativeInboxCard } from "./InitiativeInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
 import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
-import { EmptyBox, PaneLoading } from "./common/load.tsx";
+import { EmptyBox, ErrorNote, PaneLoading } from "./common/load.tsx";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -76,6 +78,13 @@ import {
   type WorkflowRunInboxItem,
 } from "../lib/sessionInbox.ts";
 import { globalBackgroundActivity } from "../lib/backgroundWork.ts";
+import {
+  buildInitiativeInbox,
+  initiativeItemId,
+  initiativeLayoutKey,
+  initiativeSessionsLabel,
+  type InitiativeInboxItem,
+} from "../lib/initiativeInbox.ts";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 
 // Every row in this browser — card, settled row, archived row — answers the
@@ -189,6 +198,24 @@ interface Props {
    */
   onSettleWorkflowRun: (runId: string, throughRevision: number) => void;
   /**
+   * Live Initiative summaries (the `initiatives` topic). Active ones are items
+   * of their own, and paused or done ones while their outcome is unsettled.
+   */
+  initiatives: readonly InitiativeSummary[];
+  /** An Initiative snapshot answered during this socket episode. */
+  initiativesFresh: boolean;
+  /** The Initiative list could not be read; stated above the items it holds. */
+  initiativeListError: string | null;
+  /** Ask for the Initiative list again; stable. */
+  onRetryInitiatives: () => void;
+  /** Open one Initiative's page, where its map is. */
+  onOpenInitiative: (initiativeId: string) => void;
+  /**
+   * Settle a paused or done Initiative through the revision its clicked card
+   * rendered: the one Initiative write the UI makes.
+   */
+  onSettleInitiative: (initiativeId: string, throughRevision: number) => void;
+  /**
    * Place working-set items where the user dragged them. Absent, the list
    * does not drag. Only the working set below **Needs you** drags: that block
    * empties as it is answered, and the shelves are history.
@@ -240,6 +267,12 @@ export function SessionInbox({
   onOpenTask,
   onOpenWorkflowRun,
   onSettleWorkflowRun,
+  initiatives,
+  initiativesFresh,
+  initiativeListError,
+  onRetryInitiatives,
+  onOpenInitiative,
+  onSettleInitiative,
   onSetInboxPositions,
   onOpenWorktree,
 }: Props) {
@@ -322,6 +355,14 @@ export function SessionInbox({
         onSettleWorkflowRun(runId, throughRevision),
       ),
     [settleWithExit, onSettleWorkflowRun],
+  );
+  // The same capture for an Initiative: the revision its card rendered.
+  const settleInitiativeItem = useCallback(
+    (initiativeId: string, throughRevision: number) =>
+      settleWithExit(initiativeItemId(initiativeId), () =>
+        onSettleInitiative(initiativeId, throughRevision),
+      ),
+    [settleWithExit, onSettleInitiative],
   );
 
   /**
@@ -483,6 +524,14 @@ export function SessionInbox({
     ],
   );
 
+  // Initiatives are items of their own, newest first, read off their summaries
+  // alone. Their sessions are LISTED under them and keep their own cards, so
+  // nothing here takes a session out of `view`.
+  const initiativeItems = useMemo(
+    () => buildInitiativeInbox(initiatives, sessions, readCurrentId),
+    [initiatives, sessions, readCurrentId],
+  );
+
   // Which peers a cluster card is showing under it. The disclosure is the
   // user's: open, and the cluster lists every peer. The card is told that state
   // and nothing else, so its label always describes what the click will do.
@@ -507,11 +556,19 @@ export function SessionInbox({
   // own. A run item is deliberately not a reason to tick every second: it shows
   // a minute-granularity age and no elapsed label, so only the SESSIONS under it
   // can ask for the faster clock.
-  const anyRunning = [...view.needsYou, ...view.active].some(
-    (item) =>
-      (item.kind === "session" && item.card.status === "running") ||
-      childRows(item).some((child) => child.status === "running"),
-  );
+  const initiativeRows = (item: InitiativeInboxItem): SessionInboxCard[] =>
+    expandedClusters.has(initiativeItemId(item.initiative.id))
+      ? item.sessions
+      : [];
+  const anyRunning =
+    [...view.needsYou, ...view.active].some(
+      (item) =>
+        (item.kind === "session" && item.card.status === "running") ||
+        childRows(item).some((child) => child.status === "running"),
+    ) ||
+    initiativeItems.some((item) =>
+      initiativeRows(item).some((child) => child.status === "running"),
+    );
   const now = useNow(anyRunning ? RUNNING_TICK_MS : IDLE_TICK_MS);
 
   // Which Task a session belongs to, when exactly ONE can be identified. A
@@ -628,6 +685,13 @@ export function SessionInbox({
         // digest that ignored it would leave the baseline at the old geometry
         // for the next keyed change to animate from.
         density,
+        ...initiativeItems.map((item) =>
+          initiativeLayoutKey(
+            item,
+            expandedClusters.has(initiativeItemId(item.initiative.id)),
+            now,
+          ),
+        ),
         ...[...view.needsYou, ...view.active].map((item) =>
           [
             item.kind === "run"
@@ -645,7 +709,15 @@ export function SessionInbox({
           ].join("\u0000"),
         ),
       ].join("\u0000"),
-    [density, view, now, relationsById, childRows],
+    [
+      density,
+      view,
+      now,
+      relationsById,
+      childRows,
+      initiativeItems,
+      expandedClusters,
+    ],
   );
 
   // A card MOVES when its state changes — read, finished, started running — and
@@ -761,6 +833,10 @@ export function SessionInbox({
   // `inboxItemId` is what keeps a run id from colliding with a session id.
   const toggleRunRoles = useCallback(
     (runId: string) => toggleCluster(`run:${runId}`),
+    [toggleCluster],
+  );
+  const toggleInitiativeSessions = useCallback(
+    (initiativeId: string) => toggleCluster(initiativeItemId(initiativeId)),
     [toggleCluster],
   );
 
@@ -954,6 +1030,58 @@ export function SessionInbox({
     );
   };
 
+  /**
+   * An Initiative and, when opened, the sessions started from its Tasks. Those
+   * rows only LIST sessions that keep their own cards, so they open the
+   * session and offer none of its lifecycle actions: Settle, Archive and
+   * Delete stay on the session's own card, where that session is the subject.
+   * Settle is the one verb the Initiative carries, with the settle exit.
+   */
+  const renderInitiativeItem = (item: InitiativeInboxItem) => {
+    const id = initiativeItemId(item.initiative.id);
+    const open = expandedClusters.has(id);
+    const rows = initiativeRows(item);
+    return (
+      <div key={id} data-inbox-card={id}>
+        <ExitStage leaving={settling.includes(id)}>
+          <div className={`border-b border-border/60 ${open ? "pb-2" : ""}`}>
+            <InitiativeInboxCard
+              item={item}
+              now={now}
+              density={density}
+              expanded={open}
+              onOpen={onOpenInitiative}
+              onSettle={settleInitiativeItem}
+              onToggleSessions={toggleInitiativeSessions}
+              onFocusSibling={focusSibling}
+            />
+            {rows.map((child) => (
+              <ClusterChildRow
+                key={child.session.id}
+                card={child}
+                now={now}
+                density={density}
+                relation="working"
+                active={child.session.id === currentId}
+                // The session's own card already carries its id.
+                listRowId={`${id}:${child.session.id}`}
+                onOpen={onSelect}
+                onFocusSibling={focusSibling}
+              />
+            ))}
+            {open && item.more > 0 ? (
+              <p className="border-t border-border/60 py-1.5 pl-3 text-xs text-muted-foreground">
+                {rows.length > 0
+                  ? `and ${item.more} more`
+                  : `${initiativeSessionsLabel(item.more)} not listed here`}
+              </p>
+            ) : null}
+          </div>
+        </ExitStage>
+      </div>
+    );
+  };
+
   const renderItem = (item: SessionInboxItem, dragging: boolean) =>
     item.kind === "run"
       ? renderRunItem(item, dragging)
@@ -1007,11 +1135,18 @@ export function SessionInbox({
   // rather than instead of it: the bar states the same three counts on a cold
   // start as at any other moment, and a browser that swapped its own header out
   // would be the first thing to move.
+  // Initiatives count against both claims too: an inbox holding only an
+  // Initiative is not empty. And neither claim is made before the Initiative
+  // list has answered (or failed): that would state an emptiness nobody read.
+  const initiativesPending = !initiativesFresh && !initiativeListError;
+  const nothingToShow =
+    view.empty && archivedSessions.length === 0 && initiativeItems.length === 0;
   const coldStart =
     sessions.length === 0 &&
     archivedAvailableCount === 0 &&
     view.needsYou.length === 0 &&
-    view.active.length === 0;
+    view.active.length === 0 &&
+    initiativeItems.length === 0;
 
   return (
     <div
@@ -1032,9 +1167,11 @@ export function SessionInbox({
         />
       )}
 
-      {coldStart ? (
+      {nothingToShow && initiativesPending ? (
+        <PaneLoading label="Loading Initiatives…" className="flex-none p-3" />
+      ) : coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
-      ) : view.empty && archivedSessions.length === 0 ? (
+      ) : nothingToShow ? (
         <EmptyBox>Nothing needs you right now.</EmptyBox>
       ) : null}
 
@@ -1048,6 +1185,27 @@ export function SessionInbox({
           className="flex flex-col"
         >
           {renderCardList(view.needsYou)}
+        </section>
+      ) : null}
+
+      {/* Initiatives head the working set, newest first and never dragged:
+          their order is creation alone, and Settle is the one Initiative
+          write the UI makes. A failed list read is stated here, over any
+          items still held. */}
+      {initiativeListError ? (
+        <ErrorNote
+          className="mx-2 my-1"
+          message={initiativeListError}
+          onRetry={onRetryInitiatives}
+        />
+      ) : null}
+      {initiativeItems.length > 0 ? (
+        <section
+          aria-label="Initiatives"
+          data-inbox-initiatives
+          className="flex flex-col"
+        >
+          {initiativeItems.map(renderInitiativeItem)}
         </section>
       ) : null}
 

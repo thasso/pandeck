@@ -26,6 +26,7 @@ import {
   readInitiative,
   removeInitiativeMembers,
   setInitiativeMilestones,
+  settleInitiative,
   subscribeInitiativeChanges,
   unarchiveInitiative,
   updateInitiative,
@@ -88,8 +89,16 @@ function movesRevision(id: string, write: () => void): void {
 }
 
 let sessionSerial = 0;
-/** A session row in `scope` (user by default), linked to `taskId`. */
-function session(taskId: string, scope: "user" | "internal" = "user"): string {
+/**
+ * A session row in `scope` (user by default), STARTED from `taskId`: the
+ * `task-start` link `linkTaskStart` writes, which is what makes a session work
+ * on an Initiative's Task.
+ */
+function session(
+  taskId: string,
+  scope: "user" | "internal" = "user",
+  origin: "task-start" | "reference" | null = "task-start",
+): string {
   sessionSerial += 1;
   const id = `sess-initiative-${sessionSerial}`;
   sessionStore.upsert({
@@ -101,7 +110,10 @@ function session(taskId: string, scope: "user" | "internal" = "user"): string {
     messageCount: 1,
     createdAt: 1_000 + sessionSerial,
   });
-  linkSessionToTask(taskId, { sessionId: id });
+  linkSessionToTask(taskId, {
+    sessionId: id,
+    ...(origin ? { origin } : {}),
+  });
   return id;
 }
 
@@ -485,7 +497,14 @@ test("the summary lists live user sessions on member Tasks, archived Tasks inclu
   const settled = session(epic);
   const reopened = session(epic);
   const internal = session(epic, "internal");
-  linkSessionToTask(epic, { sessionId: "sess-with-no-row" });
+  linkSessionToTask(epic, {
+    sessionId: "sess-with-no-row",
+    origin: "task-start",
+  });
+  // Live user sessions that only REFERENCE a member Task, or whose link has
+  // no origin, are not working on it: neither the page nor the count.
+  const passive = session(sub, "user", "reference");
+  const noOrigin = session(sub, "user", null);
   archiveTask(shelved);
   sessionStore.setArchived(archived, true);
   sessionStore.setSettled(settled, true);
@@ -500,6 +519,8 @@ test("the summary lists live user sessions on member Tasks, archived Tasks inclu
   );
   assert.equal(summary.sessionCount, 3);
   assert.ok(!summary.sessionIds.includes(internal));
+  assert.ok(!summary.sessionIds.includes(passive));
+  assert.ok(!summary.sessionIds.includes(noOrigin));
   assert.equal(summary.progress.total, 3, "an archived member still counts");
 });
 
@@ -517,7 +538,7 @@ test("the store answers a bounded page of session ids and the exact count", () =
     ids.push(session(epic));
   // Linked to two member Tasks: still one session.
   for (const sessionId of ids.slice(0, 10))
-    linkSessionToTask(sub, { sessionId });
+    linkSessionToTask(sub, { sessionId, origin: "task-start" });
   // Two created in the same millisecond, ordered by id.
   const tieA = "sess-tie-a";
   const tieB = "sess-tie-b";
@@ -531,7 +552,7 @@ test("the store answers a bounded page of session ids and the exact count", () =
       messageCount: 1,
       createdAt: 9_999_999,
     });
-    linkSessionToTask(sub, { sessionId: tie });
+    linkSessionToTask(sub, { sessionId: tie, origin: "task-start" });
   }
   const total = INITIATIVE_SUMMARY_SESSION_LIMIT + extra + 2;
 
@@ -599,6 +620,7 @@ test("every Initiative write reports the row it touched", () => {
 
   movesRevision(id, () => updateInitiative(id, { title: "Renamed" }));
   movesRevision(id, () => updateInitiative(id, { state: "paused" }));
+  movesRevision(id, () => settleInitiative(id, 1));
   movesRevision(id, () => addInitiativeMembers(id, [member]));
   movesRevision(id, () => setInitiativeMilestones(id, [member], true));
   movesRevision(id, () => removeInitiativeMembers(id, [member]));

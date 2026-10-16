@@ -117,13 +117,18 @@ export function topicsForSurface({
     topics.add("projects");
     topics.add("workflow");
   }
-  // A VISIBLE Sessions browser shows live Workflow Runs as items of its own
-  // ([Task-676](pa://task/676)), so it holds the run topic and nothing else:
-  // the run summaries and their cards are what those items are made of, while
-  // the Task titles beside them stay a best-effort join on whatever Backlog
-  // rows this tab already has. Subscribing to Tasks here would put the large
-  // Backlog broadcasts on the session list to spell out a name.
-  if (shownSection === "sessions") topics.add("workflow");
+  // A VISIBLE Sessions browser shows live Workflow Runs ([Task-676](pa://task/676))
+  // and Initiatives (`docs/initiatives.md`) as items of their own, so it holds
+  // those two topics and nothing else: the run summaries and cards and the
+  // Initiative summaries are what those items are made of — an Initiative's
+  // summary carries its next milestone's title for exactly this reason — while
+  // a run's Task title stays a best-effort join on whatever Backlog rows this
+  // tab already has. Subscribing to Tasks here would put the large Backlog
+  // broadcasts on the session list to spell out a name.
+  if (shownSection === "sessions") {
+    topics.add("workflow");
+    topics.add("initiatives");
+  }
   if (projectBrowser || projectIndexSurface) topics.add("projects");
   // Initiatives are the group at the top of the Projects browser, and their
   // pages read them. One Initiative's page also reads the Tasks topic, which

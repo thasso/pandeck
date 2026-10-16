@@ -401,8 +401,12 @@ facade.
   through `stampAndNotify`, the one seam that may join a caller's transaction: a
   session tombstone inside a larger delete, whose rollback takes the stamp with
   it. Members resolve at read time (stored edges plus descendants along
-  `subtask`); member sessions come back as a bounded page plus a separate count.
-  `INITIATIVE_STORE_SQL` holds the statements that
+  `subtask`); member sessions — only those a member Task's `context` edge marks
+  `task-start` — come back as a bounded page plus a separate count over one
+  shared CTE. `update` raises the attention cursor inside the state write itself
+  (`state <> ?` read against the old row), `create` raises it for an Initiative
+  born paused or done, and `settle` is the clamped, forward-only
+  acknowledgement. `INITIATIVE_STORE_SQL` holds the statements that
   `initiativeStoreQueryPlan.test.ts` pins to index searches.
 - `sessionStore.subscribeLiveness` is told, after each write lands, the ids of
   sessions whose liveness it may have changed: archive and unarchive, settle and

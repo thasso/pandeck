@@ -2685,6 +2685,13 @@ function AppContent() {
     [actions],
   );
 
+  /** Settle an Initiative from its inbox card; same stability contract. */
+  const settleInitiative = useCallback(
+    (initiativeId: string, throughRevision: number) =>
+      actions.settleInitiative(initiativeId, throughRevision),
+    [actions],
+  );
+
   /** Place dragged Sessions inbox items; same stability contract. */
   const setInboxPositions = useCallback(
     (positions: InboxPositionEntry[]) => actions.setInboxPositions(positions),
@@ -6988,6 +6995,7 @@ function AppContent() {
         workflowCards={state.workflowCards}
         onOpenWorkflowRun={openWorkflowRun}
         onSettleWorkflowRun={settleWorkflowRun}
+        onSettleInitiative={settleInitiative}
         onSetInboxPositions={setInboxPositions}
         pullRequestInventory={pullRequestInventory.state}
         onReloadPullRequests={pullRequestInventory.reload}

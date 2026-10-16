@@ -75,7 +75,10 @@ import { createSessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
 import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
-import type { SettingsSection } from "../hooks/useSessionRouting.ts";
+import {
+  initiativePath,
+  type SettingsSection,
+} from "../hooks/useSessionRouting.ts";
 import {
   isNavAction,
   type NavAction,
@@ -219,6 +222,11 @@ interface Props {
   onOpenWorkflowRun: (taskId: string, runId: string) => void;
   /** Settle one Workflow Run out of the Sessions inbox working set. */
   onSettleWorkflowRun: (runId: string, throughRevision: number) => void;
+  /**
+   * Settle a paused or done Initiative from its Sessions inbox card, through
+   * the revision the card rendered.
+   */
+  onSettleInitiative: (initiativeId: string, throughRevision: number) => void;
   /** Place Sessions inbox items where the user dragged them. */
   onSetInboxPositions: (positions: InboxPositionEntry[]) => void;
   /** The app's pull-request inventory (`hooks/usePullRequestInventory.ts`). */
@@ -494,6 +502,7 @@ function SidebarImpl({
   workflowCards,
   onOpenWorkflowRun,
   onSettleWorkflowRun,
+  onSettleInitiative,
   onSetInboxPositions,
   pullRequestInventory,
   onReloadPullRequests,
@@ -615,6 +624,11 @@ function SidebarImpl({
   // rebroadcast hands back the same ids in a fresh array. Keep the PREVIOUS
   // array when the ids are unchanged: React then bails out of the re-render
   // entirely, and the set below stays referentially stable for its consumers.
+  // An Initiative card opens its page, the map, by its canonical route.
+  const openInitiative = useCallback(
+    (initiativeId: string) => onNavigate(initiativePath(initiativeId)),
+    [onNavigate],
+  );
   const onVisibleProjectWorktreeIds = useCallback((ids: string[]) => {
     setVisibleProjectWorktreeIds((current) =>
       current.length === ids.length && current.every((id, i) => id === ids[i])
@@ -941,6 +955,12 @@ function SidebarImpl({
             onOpenTask={onOpenTask}
             onOpenWorkflowRun={onOpenWorkflowRun}
             onSettleWorkflowRun={onSettleWorkflowRun}
+            initiatives={initiatives}
+            initiativesFresh={initiativesFresh}
+            initiativeListError={initiativeListError}
+            onRetryInitiatives={onRetryInitiatives}
+            onOpenInitiative={openInitiative}
+            onSettleInitiative={onSettleInitiative}
             onSetInboxPositions={onSetInboxPositions}
             onOpenWorktree={onOpenWorktree}
           />

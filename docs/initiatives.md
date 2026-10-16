@@ -155,13 +155,13 @@ the tool descriptions, never in a harness-specific prompt layer.
   `metadata_json` carrying `{ "milestone": true }` on a milestone.
 - Initiatives join the state-change event model (`docs/state-sync.md`) as their
   own topic, `initiatives`. A summary carries the id, title, state, attention
-  cursor, progress counts (total, done, doing, startable, blocked) and the
-  card's sessions (below). Because the counts move with member Tasks, the Task
-  notification seam also reports the Initiatives that read a touched Task — as a
-  member or descendant, or as an outside blocker of a member — in the same
-  flush, and a session's liveness change reports the Initiatives listing it. A
-  write is the only place that knows it changed, so no second path recomputes
-  counts on a timer.
+  cursor, progress counts (total, done, doing, startable, blocked), the next
+  open milestone and the card's sessions (below). Because the counts move with
+  member Tasks, the Task notification seam also reports the Initiatives that
+  read a touched Task — as a member or descendant, or as an outside blocker of a
+  member — in the same flush, and a session's liveness change reports the
+  Initiatives listing it. A write is the only place that knows it changed, so no
+  second path recomputes counts on a timer.
 - The graph (nodes, the parent tree, `blocks` edges, milestones) is detail, read
   by id with the revision it is as of, the same way a Task body is. A newer
   Initiative event re-reads it. An archived Initiative leaves the live list, but
@@ -242,22 +242,35 @@ An Initiative is a Sessions inbox item, following the Workflow Run precedent
 - **Once paused or done**, it stays an item with that outcome until the user
   settles it. The change of state raises the attention cursor
   (`attention_revision` / `attention_settled_revision`, the same shape and rules
-  as a Workflow Run's); Settle acknowledges exactly the revision the clicked
-  item rendered. A settled Initiative leaves the inbox, and setting it active
-  again brings it back.
-- Only the user settles. An agent changing the state never removes the item.
+  as a Workflow Run's) in the same write; an Initiative created paused or done
+  arrives raised, while re-stating its state, or setting it active, raises
+  nothing. Settle acknowledges exactly the revision the clicked item rendered
+  (`settleInitiative`, whose `throughRevision` is required): the server clamps
+  it to the stored revision and only ever moves the acknowledgement forward, so
+  an outcome raised after the render stays an item. A settled Initiative leaves
+  the inbox, and setting it active again brings it back.
+- Only the user settles. An agent changing the state never removes the item, and
+  no agent tool settles. Archiving or deleting the Initiative takes its item
+  away with it.
 
 The card shows the title, state, progress, how many Tasks can start now and how
 many are blocked, the next open milestone, and the sessions working on its
-Tasks. Opening it goes to the map.
+Tasks. Opening it goes to the map. The next open milestone is the first
+milestone in the user's member order that is neither done nor archived; the
+summary carries its id and title, so the card needs no Task list.
 
-The sessions working on its Tasks are the user's sessions linked to a member
-Task, archived member Tasks included, that are neither archived nor settled (a
-settled session counts again once a new outcome raises it). The summary carries
+The sessions working on its Tasks are the user's sessions STARTED from a member
+Task (`task-start`, `linkTaskStart`), archived member Tasks included, that are
+neither archived nor settled (a settled session counts again once a new outcome
+raises it). A session that only referenced a member Task, or whose link has no
+origin, is not listed and not counted. This is the map's definition without its
+second half: the inbox needs no running turn, because an idle session, or one
+waiting on the user, is still the work the card points to. The summary carries
 at most 50 of them, newest by session creation first (ties by id), and the full
-count; the query returns no more than that. When the count is larger, the card
-says how many more there are ("and N more") rather than presenting the 50 as all
-of them.
+count; both come from one rule in the query, a session started from several
+member Tasks counts once, and the query returns no more than that. When the
+count is larger, the card says how many more there are ("and N more") rather
+than presenting the 50 as all of them.
 
 Those sessions are listed in a disclosure on the card but keep their own inbox
 cards. Unlike a Workflow Run's role sessions they are not folded away: a Task

@@ -505,8 +505,8 @@ right edge. The pause reason and next action are the card's spoken label. The
 item is named by the TASK the run works on, since a run has no title of its own;
 the Task's title is a best-effort join on the Backlog rows this tab already
 holds, so a browser that has none shows the id and the run is still complete. A
-visible Sessions browser therefore holds the `workflow` topic — and only that
-one.
+visible Sessions browser therefore holds the `workflow` topic, and the
+`initiatives` topic for the Initiative items below — and no Tasks.
 
 Membership is STRUCTURAL: the ids on the run's recipe card projection, and
 nothing else. No rule here parses a session's title or looks for a role-like
@@ -596,6 +596,39 @@ Task row and the run list load asynchronously, and native fragment scrolling
 resolves once against a page that does not have the element yet. The jump
 scrolls the card into view and focuses it, once per address, honouring reduced
 motion.
+
+An **Initiative** is a Sessions inbox item too (`docs/initiatives.md`, The
+attention list), following the run's precedent where it can. An ACTIVE
+Initiative is always an item and offers no Settle, since ongoing work has no
+outcome to acknowledge; a paused or done one is an item while its attention
+revision is unsettled, and Settle — the one Initiative write the UI makes —
+sends exactly the revision the clicked card rendered, captured at the click and
+sent after the settle exit, so an outcome raised meanwhile stays an item. The
+card has the session card's three rows: "Initiative" with its done/total
+progress and the time; the title led by the Initiative glyph while active, else
+by its Paused or Done mark; then the disclosure of its sessions, how many Tasks
+are ready and how many blocked, and the next open milestone, with Settle at the
+right edge. Everything else is in its spoken label. Opening the card goes to
+`/initiatives/:id`, the map. Every fact comes from the `initiatives` summary,
+the next milestone's title included, so no card reads a graph, a layout or the
+Tasks topic, and a member Task's change reaches it as the Initiative's own
+event.
+
+Initiatives are NOT ordered among the dragged items: dragging would be a second
+Initiative write. They form their own block at the top of the working set, below
+**Needs you**, newest first, and a state change never moves one. The block holds
+no loading placeholder, but neither the cold-start nor the "nothing needs you"
+claim is made before the Initiative list has answered — an inbox holding only an
+Initiative is not empty — and a failed list read is stated there with a retry,
+over any items still held.
+
+The disclosure lists the sessions started from its member Tasks, at most the
+summary's 50, newest first, and says "and N more" for the rest (and for any this
+browser does not hold). Unlike a run's roles they are NOT folded: each keeps its
+own card, and a session may be listed under several Initiatives. The listed rows
+are compact `working` rows that open the session; they carry no Settle, Archive
+or Delete, which stay on the session's own card, and the disclosure and Settle
+never open the Initiative.
 
 ## Pull Requests
 

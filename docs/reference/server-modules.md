@@ -1440,11 +1440,13 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   validated whole inside one store mutation (an add under a member is refused
   with the reason, an add over plain members absorbs them, a milestone on a
   covered Task stores a marked edge), progress counts with status and blocked
-  kept apart, the graph read, and the `initiatives` topic's revision index,
-  digest, items and snapshot. `hub.ts` flushes its events on the Task window, so
-  a Task write and the counts it moved leave together, and repeats a `delete`
-  for a write to an archived Initiative. `tasks.ts` `reorderTasks` writes all
-  its placements in one transaction and notifies after it.
+  kept apart, the next open milestone, `settleInitiative` (the user's Settle,
+  reached only from `connection.ts`), the graph read, and the `initiatives`
+  topic's revision index, digest, items and snapshot. `hub.ts` flushes its
+  events on the Task window, so a Task write and the counts it moved leave
+  together, and repeats a `delete` for a write to an archived Initiative.
+  `tasks.ts` `reorderTasks` writes all its placements in one transaction and
+  notifies after it.
 - `initiativeLayout.ts` lays out the Initiative map: a structure projection of
   the graph whose digest is the layout key, the plan of lanes, stubs, the
   milestone column and collapsed epics, two elkjs passes (columns and order,

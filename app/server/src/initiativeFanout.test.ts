@@ -285,7 +285,10 @@ test("a session's archive, settle and raised outcome move the Initiatives listin
     title: "liveness",
     messageCount: 1,
   });
-  linkSessionToTask(member, { sessionId: "sess-liveness" });
+  linkSessionToTask(member, {
+    sessionId: "sess-liveness",
+    origin: "task-start",
+  });
   const listed = () => readInitiative(id)!.sessionIds;
   assert.deepEqual(listed(), ["sess-liveness"]);
 
@@ -321,7 +324,10 @@ test("a session's archive, settle and raised outcome move the Initiatives listin
 test("a session row registered after its Task link still reaches the summary", () => {
   const member = task("Late session member");
   const id = initiative("Late session", [member]);
-  linkSessionToTask(member, { sessionId: "sess-late-row" });
+  linkSessionToTask(member, {
+    sessionId: "sess-late-row",
+    origin: "task-start",
+  });
   assert.deepEqual(readInitiative(id)!.sessionIds, []);
   assert.deepEqual(
     bumped([id], () =>
@@ -450,7 +456,7 @@ test("a session tombstone inside a larger transaction stamps with it, or not at 
       title: sessionId,
       messageCount: 1,
     });
-    linkSessionToTask(member, { sessionId });
+    linkSessionToTask(member, { sessionId, origin: "task-start" });
   };
   register("sess-nested-rolled-back");
   register("sess-nested-committed");

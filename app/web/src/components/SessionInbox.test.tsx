@@ -80,6 +80,12 @@ describe("SessionInbox bar", () => {
           onOpenTask={() => {}}
           onOpenWorkflowRun={() => {}}
           onSettleWorkflowRun={() => {}}
+          initiatives={[]}
+          initiativesFresh
+          initiativeListError={null}
+          onRetryInitiatives={() => {}}
+          onOpenInitiative={() => {}}
+          onSettleInitiative={() => {}}
           onOpenWorktree={() => {}}
         />,
       );
@@ -265,6 +271,12 @@ describe("SessionInbox clusters", () => {
           onOpenTask={() => {}}
           onOpenWorkflowRun={() => {}}
           onSettleWorkflowRun={() => {}}
+          initiatives={[]}
+          initiativesFresh
+          initiativeListError={null}
+          onRetryInitiatives={() => {}}
+          onOpenInitiative={() => {}}
+          onSettleInitiative={() => {}}
           onOpenWorktree={() => {}}
         />,
       );
@@ -625,6 +637,12 @@ describe("SessionInbox density", () => {
           onOpenTask={() => {}}
           onOpenWorkflowRun={() => {}}
           onSettleWorkflowRun={() => {}}
+          initiatives={[]}
+          initiativesFresh
+          initiativeListError={null}
+          onRetryInitiatives={() => {}}
+          onOpenInitiative={() => {}}
+          onSettleInitiative={() => {}}
           onOpenWorktree={() => {}}
         />,
       );
@@ -787,6 +805,12 @@ describe("SessionInbox swipe", () => {
           onOpenTask={() => {}}
           onOpenWorkflowRun={() => {}}
           onSettleWorkflowRun={() => {}}
+          initiatives={[]}
+          initiativesFresh
+          initiativeListError={null}
+          onRetryInitiatives={() => {}}
+          onOpenInitiative={() => {}}
+          onSettleInitiative={() => {}}
           onOpenWorktree={() => {}}
         />,
       );
@@ -1121,6 +1145,12 @@ describe("SessionInbox Workflow Run items", () => {
           onOpenTask={() => {}}
           onOpenWorkflowRun={handlers.onOpenWorkflowRun ?? (() => {})}
           onSettleWorkflowRun={handlers.onSettleWorkflowRun ?? (() => {})}
+          initiatives={[]}
+          initiativesFresh
+          initiativeListError={null}
+          onRetryInitiatives={() => {}}
+          onOpenInitiative={() => {}}
+          onSettleInitiative={() => {}}
           onOpenWorktree={() => {}}
         />,
       );
@@ -1490,6 +1520,12 @@ describe("SessionInbox drag-to-reorder", () => {
           onOpenTask={() => {}}
           onOpenWorkflowRun={() => {}}
           onSettleWorkflowRun={() => {}}
+          initiatives={[]}
+          initiativesFresh
+          initiativeListError={null}
+          onRetryInitiatives={() => {}}
+          onOpenInitiative={() => {}}
+          onSettleInitiative={() => {}}
           onSetInboxPositions={() => {}}
           onOpenWorktree={() => {}}
         />,

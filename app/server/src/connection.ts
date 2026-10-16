@@ -271,6 +271,7 @@ import {
   initiativeRevisionDigest,
   initiativeSnapshot,
   initiativeStateItems,
+  settleInitiative,
 } from "./initiatives.ts";
 import { readInitiativeMap } from "./initiativeLayout.ts";
 import {
@@ -994,6 +995,8 @@ export class Connection implements Viewer {
         );
       case "settleWorkflowRun":
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
+      case "settleInitiative":
+        return this.onSettleInitiative(msg.id, msg.throughRevision);
       case "setInboxPositions":
         return this.onSetInboxPositions(msg.positions);
       case "renameSession":
@@ -2162,6 +2165,23 @@ export class Connection implements Viewer {
         item: null,
         requestId,
         error: `Failed to read Initiative: ${errorText(err)}`,
+      });
+    }
+  }
+
+  /**
+   * The user's Settle on an Initiative's inbox card. The answer is the
+   * `initiatives` event the write raises for every subscriber; a refusal names
+   * the Initiative, and the browser re-reads the list it settled optimistically.
+   */
+  private onSettleInitiative(id: string, throughRevision: number): void {
+    try {
+      settleInitiative(id, throughRevision);
+    } catch (err) {
+      this.send({
+        type: "error",
+        target: { type: "initiative", id },
+        message: `Failed to settle Initiative: ${errorText(err)}`,
       });
     }
   }

@@ -1924,6 +1924,16 @@ type Action =
       now: number;
     }
   /**
+   * A Settle on an Initiative's inbox card: its attention is acknowledged
+   * through the revision the click saw, with the server's clamp, so an
+   * outcome raised since stays awake here too.
+   */
+  | {
+      kind: "optimisticInitiativeSettle";
+      initiativeId: string;
+      throughRevision: number;
+    }
+  /**
    * Sessions inbox items dragged to a new place: sessions and runs in ONE
    * dispatch, since a renumbering places both and the list must not show a
    * half-applied order.
@@ -4412,6 +4422,14 @@ function targetTitle(
       const task = state.taskList?.items.find((item) => item.id === target.id);
       return task ? `Task-${task.id} ${task.title}` : undefined;
     }
+    case "initiative": {
+      const initiative = state.initiatives.find(
+        (item) => item.id === target.id,
+      );
+      return initiative
+        ? `Initiative-${initiative.id} ${initiative.title}`
+        : undefined;
+    }
     default:
       return undefined;
   }
@@ -4875,6 +4893,21 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           action.now,
         );
     return { ...state, sessions, error: null };
+  }
+  if (action.kind === "optimisticInitiativeSettle") {
+    let changed = false;
+    const initiatives = state.initiatives.map((item) => {
+      if (item.id !== action.initiativeId || !item.attention) return item;
+      // The server's own clamp: never past the stored revision, never back.
+      const settledRevision = Math.max(
+        item.attention.settledRevision,
+        Math.min(item.attention.revision, action.throughRevision),
+      );
+      if (settledRevision === item.attention.settledRevision) return item;
+      changed = true;
+      return { ...item, attention: { ...item.attention, settledRevision } };
+    });
+    return changed ? { ...state, initiatives } : state;
   }
   if (action.kind === "optimisticWorkflowRunSettle") {
     let sessions = state.sessions;
@@ -6547,6 +6580,12 @@ export interface AssistantActions {
    * server settles the run's role sessions with it.
    */
   settleWorkflowRun: (runId: string, throughRevision: number) => void;
+  /**
+   * Settle a paused or done Initiative from its Sessions inbox card: the
+   * command acknowledges `throughRevision`, the attention revision the CLICKED
+   * card rendered, captured by the caller at the click.
+   */
+  settleInitiative: (initiativeId: string, throughRevision: number) => void;
   /**
    * Place Sessions inbox items where the user dragged them
    * (`planInboxDrop`). Optimistic: the cards stay where they were dropped,
@@ -8659,6 +8698,42 @@ export function useAssistant({
           // its exit animation, and a newer event landing in that window must
           // stay awake rather than be acknowledged by a click that never saw
           // it.
+          throughRevision: observed,
+          requestId,
+        });
+      },
+      settleInitiative: (initiativeId, throughRevision) => {
+        // Optimistic like a run's Settle. The success answer is the
+        // `initiatives` event the write raises; a refusal or a deadline
+        // re-reads the list, whose snapshot replaces the optimistic
+        // acknowledgement with the server's own, and the refusal itself is
+        // announced naming the Initiative.
+        const requestId = trackMutation(
+          { topic: "initiatives", objectIds: [initiativeId] },
+          () => {
+            if (!topicsRef.current.has("initiatives")) return;
+            send({ type: "unsubscribe", topics: ["initiatives"] });
+            send(
+              taskSubscribeMessage(
+                ["initiatives"],
+                stateRef.current,
+                pendingMutationsRef.current,
+              ),
+            );
+          },
+        );
+        const observed = Math.max(0, Math.trunc(throughRevision));
+        dispatch({
+          kind: "optimisticInitiativeSettle",
+          initiativeId,
+          throughRevision: observed,
+        });
+        send({
+          type: "settleInitiative",
+          id: initiativeId,
+          // What the user SAW, passed in from the click: the inbox sends this
+          // after its exit animation, and an outcome raised in that window
+          // must stay awake.
           throughRevision: observed,
           requestId,
         });

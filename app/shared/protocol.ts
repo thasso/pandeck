@@ -7680,6 +7680,19 @@ export type ClientMessage =
       requestId?: string;
     }
   /**
+   * The user's Settle on an Initiative's inbox card, the one Initiative write
+   * the UI makes (`docs/initiatives.md`, The attention list). `throughRevision`
+   * is the `InitiativeAttention` revision the clicked card rendered,
+   * REQUIRED as on `settleWorkflowRun`; the server clamps it and only moves the
+   * acknowledgement forward. The outcome travels as an `initiatives` event.
+   */
+  | {
+      type: "settleInitiative";
+      id: string;
+      throughRevision: number;
+      requestId?: string;
+    }
+  /**
    * Place Sessions inbox items where the user dragged them
    * ({@link inboxPositionOf}). Usually one entry; the browser sends the whole
    * list renumbered when two neighbours leave no room between them. An unknown

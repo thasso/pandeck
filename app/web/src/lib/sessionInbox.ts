@@ -366,7 +366,7 @@ function bubbles(card: SessionInboxCard): boolean {
  * Run's role and the composer ledge's row can never classify the same session
  * differently.
  */
-function inboxCard(
+export function inboxCard(
   session: SessionListItem,
   readCurrentId: string | undefined,
 ): SessionInboxCard {

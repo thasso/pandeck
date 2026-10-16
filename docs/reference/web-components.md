@@ -1603,6 +1603,14 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   acknowledge or destroy something its surface cannot undo. Its rows ARE tab
   stops (`tabbable`), which the inbox's are not: there is no roving focus above
   them here, so without it the link would be reachable by pointer alone.
+- `InitiativeInboxCard.tsx` is an Initiative's Sessions inbox card, built from
+  `lib/initiativeInbox.ts` over the `initiatives` summary alone: title, state,
+  progress, ready and blocked counts, the next open milestone, a disclosure of
+  the sessions started from its Tasks (listed as `ClusterChildRow`s with
+  relation `working` and no lifecycle actions, since each keeps its own card),
+  and Settle on a paused or done outcome, which `SessionInbox` sends through the
+  settle exit with the revision captured at the click. Initiatives head the
+  working set in their own block, newest first and never dragged.
 - The Sessions section's browser is an INBOX of the working set, not a history
   list: `SessionInbox.tsx` owns it (search, the labelled **Needs you** block,
   one priority-sorted list for everything else still unsettled, the compact

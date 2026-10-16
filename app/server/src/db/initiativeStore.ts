@@ -160,12 +160,26 @@ function create(
 ): InitiativeRow {
   const id = nextId("initiative");
   const now = Date.now();
+  // Created paused or done, it arrives with that outcome: the first revision is
+  // raised in the same row, so the inbox holds it until the user settles it.
+  const outcome = input.state === "active" ? null : input.state;
   getDb()
     .prepare(
-      `INSERT INTO initiatives (id, title, description, state, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO initiatives (id, title, description, state, attention_revision,
+                                attention_kind, attention_at_ms, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(id, input.title, input.description, input.state, now, now);
+    .run(
+      id,
+      input.title,
+      input.description,
+      input.state,
+      outcome ? 1 : 0,
+      outcome,
+      outcome ? now : null,
+      now,
+      now,
+    );
   touch.add(id);
   return get(id)!;
 }
@@ -204,17 +218,53 @@ function update(
     sets.push("description = ?");
     params.push(patch.description);
   }
+  const now = Date.now();
   if (patch.state !== undefined) {
-    sets.push("state = ?");
-    params.push(patch.state);
+    // The attention bump rides the state write itself: SQLite evaluates every
+    // SET expression against the row as it was, so `state <> ?` compares with
+    // the stored state in this one statement and no reader can slip between a
+    // check and the write. Only a real change TO paused or done raises;
+    // re-stating a state, or becoming active, raises nothing.
+    const raises = "(state <> ? AND ? <> 'active')";
+    sets.push(
+      "state = ?",
+      `attention_revision = attention_revision + CASE WHEN ${raises} THEN 1 ELSE 0 END`,
+      `attention_kind = CASE WHEN ${raises} THEN ? ELSE attention_kind END`,
+      `attention_at_ms = CASE WHEN ${raises} THEN ? ELSE attention_at_ms END`,
+    );
+    const s = patch.state;
+    params.push(s, s, s, s, s, s, s, s, now);
   }
   sets.push("updated_at_ms = ?");
-  params.push(Date.now());
+  params.push(now);
   getDb()
     .prepare(
       `UPDATE initiatives SET ${sets.join(", ")} WHERE id = ? AND deleted_at_ms IS NULL`,
     )
     .run(...params, id);
+  touch.add(id);
+}
+
+/**
+ * Acknowledge the attention cursor through `throughRevision`, the revision the
+ * user's clicked card rendered: the `workflowStore.settleRun` rules. Clamped to
+ * the stored revision, since acknowledging the future is meaningless, and only
+ * ever forward, so an older click landing after a newer one cannot bring back
+ * an outcome already acknowledged; a lower value leaves a newer outcome
+ * unacknowledged. The cursor is the user's reading position, not an edit, so
+ * the Initiative's `updated_at_ms` stays.
+ */
+function settle(touch: Set<number>, id: number, throughRevision: number): void {
+  getDb()
+    .prepare(
+      `UPDATE initiatives
+          SET attention_settled_revision = MAX(
+                attention_settled_revision,
+                MIN(attention_revision, ?)
+              )
+        WHERE id = ? AND deleted_at_ms IS NULL`,
+    )
+    .run(Math.max(0, Math.trunc(throughRevision)), id);
   touch.add(id);
 }
 
@@ -355,7 +405,13 @@ const MEMBERS_CTE = `WITH RECURSIVE member(id) AS (
         ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'subtask' AND l.to_type = 'task'
   )`;
 
-/** Distinct live user sessions linked to a member Task, as CTE `live`. */
+/**
+ * Distinct live user sessions STARTED from a member Task, as CTE `live`: the
+ * `context` edge `linkTaskStart` writes, `origin` `task-start` in its metadata.
+ * A session that only referenced the Task, or whose link has no origin, is not
+ * working on it (`docs/initiatives.md`). Both the page and the count read this
+ * one CTE, so they cannot disagree on who qualifies.
+ */
 const LIVE_MEMBER_SESSIONS = `,
   live(id, created_at_ms) AS (
     SELECT DISTINCT s.id, s.created_at_ms
@@ -364,6 +420,8 @@ const LIVE_MEMBER_SESSIONS = `,
       CROSS JOIN links l ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'context' AND l.to_type = 'session'
       CROSS JOIN session_index s ON s.id = l.to_id
      WHERE t.deleted_at_ms IS NULL
+       AND CASE WHEN json_valid(l.metadata_json)
+                THEN json_extract(l.metadata_json, '$.origin') END = 'task-start'
        AND s.scope = 'user' AND s.deleted_at_ms IS NULL AND s.archived_at_ms IS NULL
        AND (s.settled_at_ms IS NULL OR s.attention_revision > s.attention_settled_revision)
   )`;
@@ -384,7 +442,9 @@ export const INITIATIVE_STORE_SQL = {
       FROM member m CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
      WHERE t.deleted_at_ms IS NULL`,
   /**
-   * The LIVE sessions on member Tasks, archived Tasks included: a user-scope
+   * The LIVE sessions started from member Tasks, archived Tasks included
+   * (`LIVE_MEMBER_SESSIONS`; a malformed edge metadata reads as no origin, never
+   * as an error): a user-scope
    * session row (default-closed: a link to a session with no row, or another
    * scope, never qualifies) that is neither tombstoned, archived nor settled —
    * the `sessionStore.isSettled` conjunction, so a raised outcome counts again.
@@ -617,6 +677,7 @@ export const initiativeStore = {
   get,
   list,
   update,
+  settle,
   setArchived,
   remove,
   // membership

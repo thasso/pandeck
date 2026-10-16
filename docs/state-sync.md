@@ -209,7 +209,10 @@ per-surface sub-tasks — no page invents its own delta format.
   snapshot, or a snapshot that leaves the id out marks a held read stale and its
   open page re-reads it, keeping the old graph on screen; an answer older than a
   revision the tab already holds is shown and read again. A Task event never
-  touches it.
+  touches it. The user's Settle (`settleInitiative`) is an Initiative write like
+  any other, answered by its event; the browser applies it optimistically with
+  the server's clamp, and a refused or unanswered one re-reads the list by
+  resubscribing, since this client takes the snapshot on every subscribe.
 - Subagents: canonical durable thread registry summaries, with revisions in
   event sidecars; an authorized connection may hold one or more thread-detail
   topics, each with a bounded snapshot/digest/item read and its own

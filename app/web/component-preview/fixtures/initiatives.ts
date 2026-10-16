@@ -28,6 +28,7 @@ export const HOSTED_LABS_DETAIL: InitiativeDetail = {
     startable: 5,
     blocked: 18,
   },
+  nextMilestone: { id: "931", title: "First hosted release" },
   sessionIds: ["sess-labs-images", "sess-quotas"],
   sessionCount: 2,
   updatedAt: 1792100000000,

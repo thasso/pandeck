@@ -43,6 +43,17 @@ export interface InitiativeProgress {
 /** At most this many session ids ride a summary; `sessionCount` has the rest. */
 export const INITIATIVE_SUMMARY_SESSION_LIMIT = 50;
 
+/**
+ * The first milestone, in the user's member order, that is still open: not
+ * done and not archived (an archived open Task is shelved, the rule that makes
+ * a blocker open). Its title rides the summary so the inbox card can name it
+ * without holding the Tasks topic.
+ */
+export interface InitiativeMilestoneRef {
+  id: string;
+  title: string;
+}
+
 /** The `initiatives` topic projection: what lists and the inbox card read. */
 export interface InitiativeSummary {
   id: string;
@@ -50,15 +61,22 @@ export interface InitiativeSummary {
   state: InitiativeState;
   attention?: InitiativeAttention;
   progress: InitiativeProgress;
+  /** Absent when the Initiative has no open milestone. */
+  nextMilestone?: InitiativeMilestoneRef;
   /**
-   * User sessions linked to a member Task (its `context` edges) that are
-   * neither archived nor settled, newest by session creation first (ties by
-   * id) and at most {@link INITIATIVE_SUMMARY_SESSION_LIMIT}; a card shows
-   * "and N more" from `sessionCount` when it cut. Structural membership only,
-   * nothing parsed from titles; an archived member Task still counts.
+   * User sessions STARTED from a member Task (`task-start`, `linkTaskStart`)
+   * that are neither archived nor settled, newest by session creation first
+   * (ties by id) and at most {@link INITIATIVE_SUMMARY_SESSION_LIMIT}; a card
+   * shows "and N more" from `sessionCount` when it cut. A session that only
+   * referenced a member Task, or whose link has no origin, is not listed.
+   * Structural membership only, nothing parsed from titles; an archived member
+   * Task still counts, and a session on several member Tasks is listed once.
    */
   sessionIds: string[];
-  /** How many sessions qualify; above `sessionIds.length` when it was cut. */
+  /**
+   * How many sessions qualify, by the same rule; above `sessionIds.length`
+   * when it was cut.
+   */
   sessionCount: number;
   updatedAt: number;
 }

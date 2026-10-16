@@ -89,6 +89,12 @@ describe("the host-drawn Sessions bar", () => {
         onOpenTask={() => {}}
         onOpenWorkflowRun={() => {}}
         onSettleWorkflowRun={() => {}}
+        initiatives={[]}
+        initiativesFresh
+        initiativeListError={null}
+        onRetryInitiatives={() => {}}
+        onOpenInitiative={() => {}}
+        onSettleInitiative={() => {}}
         onOpenWorktree={() => {}}
       />
     );

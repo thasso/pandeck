@@ -17,6 +17,7 @@ import {
   type InitiativeExternalBlocker,
   type InitiativeGraphEdge,
   type InitiativeGraphNode,
+  type InitiativeMilestoneRef,
   type InitiativeProgress,
   type InitiativeState,
   type InitiativeSummary,
@@ -130,6 +131,24 @@ export function updateInitiative(
         : {}),
       ...(patch.state !== undefined ? { state: patch.state } : {}),
     });
+    return initiativeStore.get(current.id)!;
+  });
+}
+
+/**
+ * The user's Settle on an Initiative's inbox card: acknowledge its attention
+ * through `throughRevision`, the revision that card rendered. Forward-only and
+ * clamped (`initiativeStore.settle`), so a stale click leaves a newer outcome
+ * standing. No agent tool reaches this, and a state change never calls it: an
+ * agent changing the state never takes the item away from the user.
+ */
+export function settleInitiative(
+  id: string,
+  throughRevision: number,
+): InitiativeRow {
+  const current = requireInitiative(id);
+  return initiativeStore.mutation((touch) => {
+    initiativeStore.settle(touch, current.id, throughRevision);
     return initiativeStore.get(current.id)!;
   });
 }
@@ -409,21 +428,43 @@ function attentionOf(row: InitiativeRow): InitiativeAttention | undefined {
   };
 }
 
+/**
+ * The first marked edge, in the user's member order, whose Task is a member
+ * now and still open — neither done nor archived. Read from the stored marks
+ * and the resolved members, never from a title.
+ */
+function nextOpenMilestone(
+  edges: readonly InitiativeMemberEdge[],
+  members: readonly InitiativeMemberRow[],
+): InitiativeMilestoneRef | undefined {
+  const byId = new Map(members.map((member) => [member.taskId, member]));
+  for (const edge of edges) {
+    if (!edge.milestone) continue;
+    const member = byId.get(edge.taskId);
+    if (member && member.status !== "done" && !member.archived)
+      return { id: String(member.taskId), title: member.title };
+  }
+  return undefined;
+}
+
 function summaryOf(
   row: InitiativeRow,
   members: readonly InitiativeMemberRow[],
+  edges: readonly InitiativeMemberEdge[] = initiativeStore.memberEdges(row.id),
 ): InitiativeSummary {
   const attention = attentionOf(row);
   const sessions = initiativeStore.memberSessions(
     row.id,
     INITIATIVE_SUMMARY_SESSION_LIMIT,
   );
+  const nextMilestone = nextOpenMilestone(edges, members);
   return {
     id: String(row.id),
     title: row.title,
     state: row.state,
     ...(attention ? { attention } : {}),
     progress: progressOf(members),
+    ...(nextMilestone ? { nextMilestone } : {}),
     sessionIds: sessions.ids,
     sessionCount: sessions.count,
     updatedAt: row.updatedAt,
@@ -552,7 +593,7 @@ export function readInitiative(id: string): InitiativeDetail | null {
   }
 
   return {
-    ...summaryOf(row, members),
+    ...summaryOf(row, members, edges),
     description: row.description,
     createdAt: row.createdAt,
     ...(row.archivedAt !== undefined ? { archivedAt: row.archivedAt } : {}),
