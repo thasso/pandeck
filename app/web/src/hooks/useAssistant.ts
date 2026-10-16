@@ -521,8 +521,17 @@ export interface UIState {
    * is subscribed. The graph is a keyed `getInitiative` read.
    */
   initiatives: InitiativeSummary[];
-  /** An `initiativeList` snapshot answered during the current socket episode. */
+  /**
+   * An `initiativeList` snapshot answered the current subscription during this
+   * socket episode.
+   */
   initiativesFresh: boolean;
+  /**
+   * A new subscription's snapshot is out over a list an earlier one answered
+   * this episode: the held list is shown as refreshing, never as ready or
+   * empty. A snapshot, a failed read or a disconnect ends it.
+   */
+  initiativesRefreshing: boolean;
   /** The Initiative list could not be read; cleared by the next snapshot. */
   initiativeListError: string | null;
   /**
@@ -927,6 +936,7 @@ const emptyInitial: UIState = {
   subagentThreads: [],
   initiatives: [],
   initiativesFresh: false,
+  initiativesRefreshing: false,
   initiativeListError: null,
   initiativeSettleErrors: {},
   initiativeDetails: {},
@@ -1885,6 +1895,8 @@ type Action =
     }
   | { kind: "setOpenInitiative"; id: string | null }
   | { kind: "initiativeListRetry" }
+  /** An `initiatives` subscribe went out: subscribing is the list read. */
+  | { kind: "initiativeListSubscribed" }
   /** The Initiative list could not be read: a condition on that list alone. */
   | { kind: "initiativeListFailed"; message: string }
   | { kind: "projectMutationStart"; key: string }
@@ -3936,6 +3948,7 @@ function applyInitiativeSnapshot(
     ...state,
     initiatives: items,
     initiativesFresh: true,
+    initiativesRefreshing: false,
     initiativeListError: null,
     initiativeDetails,
     stateEventRevisions: {
@@ -4911,8 +4924,19 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ),
     };
   }
+  if (action.kind === "initiativeListSubscribed") {
+    // Only an answered list has anything to refresh; before that it is still
+    // the first read.
+    return state.initiativesFresh
+      ? { ...state, initiativesFresh: false, initiativesRefreshing: true }
+      : state;
+  }
   if (action.kind === "initiativeListFailed")
-    return { ...state, initiativeListError: action.message };
+    return {
+      ...state,
+      initiativeListError: action.message,
+      initiativesRefreshing: false,
+    };
   if (action.kind === "initiativeListRetry") {
     return state.initiativeListError === null
       ? state
@@ -5432,6 +5456,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       sessionListFresh: action.connected ? state.sessionListFresh : false,
       taskListFresh: action.connected ? state.taskListFresh : false,
       initiativesFresh: action.connected ? state.initiativesFresh : false,
+      initiativesRefreshing: action.connected
+        ? state.initiativesRefreshing
+        : false,
       projectListFresh: action.connected ? state.projectListFresh : false,
       worktreesFresh: action.connected ? state.worktreesFresh : false,
       worktreeListError: action.connected ? state.worktreeListError : null,
@@ -8197,6 +8224,8 @@ export function useAssistant({
           console.warn(
             `[state-sync] ${msg.topic} event gap: expected seq ${previous + 1}, got ${msg.seq}; resubscribing.`,
           );
+          if (msg.topic === "initiatives")
+            dispatch({ kind: "initiativeListSubscribed" });
           socket.send({ type: "unsubscribe", topics: [msg.topic] });
           socket.send(
             taskSubscribeMessage(
@@ -8930,6 +8959,7 @@ export function useAssistant({
           { topic: "initiatives", objectIds: [initiativeId] },
           () => {
             if (!topicsRef.current.has("initiatives")) return;
+            dispatch({ kind: "initiativeListSubscribed" });
             send({ type: "unsubscribe", topics: ["initiatives"] });
             send(
               taskSubscribeMessage(
@@ -9164,6 +9194,10 @@ export function useAssistant({
         for (const library of LIBRARY_TOPICS)
           if (added.includes(library))
             dispatch({ kind: "libraryLoad", library });
+        // The same for the Initiative list, which a surface coming back
+        // reads anew even when this episode answered it before.
+        if (added.includes("initiatives"))
+          dispatch({ kind: "initiativeListSubscribed" });
         if (added.length > 0)
           send(
             taskSubscribeMessage(

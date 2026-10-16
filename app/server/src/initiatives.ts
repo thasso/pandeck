@@ -567,23 +567,31 @@ export function readInitiative(id: string): InitiativeDetail | null {
     });
   const nodes: InitiativeGraphNode[] = [];
   const placed = new Set<number>();
-  const visit = (member: InitiativeMemberRow): void => {
-    if (placed.has(member.taskId)) return;
-    placed.add(member.taskId);
-    const edge = direct.get(member.taskId);
-    const parent = graphParent(member);
-    nodes.push({
-      id: String(member.taskId),
-      title: member.title,
-      status: member.status,
-      ...(isBlocked(member) ? { blocked: true as const } : {}),
-      ...(member.projectId ? { projectId: member.projectId } : {}),
-      ...(parent !== undefined ? { parentId: String(parent) } : {}),
-      ...(edge ? { direct: true as const } : {}),
-      ...(edge?.milestone ? { milestone: true as const } : {}),
-      ...(member.archived ? { archived: true as const } : {}),
-    });
-    for (const child of children.get(member.taskId) ?? []) visit(child);
+  // Preorder on an explicit stack: Task depth has no bound, a call stack does.
+  // Children go on in reverse so they come off in Backlog order.
+  const visit = (start: InitiativeMemberRow): void => {
+    const stack = [start];
+    while (stack.length > 0) {
+      const member = stack.pop()!;
+      if (placed.has(member.taskId)) continue;
+      placed.add(member.taskId);
+      const edge = direct.get(member.taskId);
+      const parent = graphParent(member);
+      nodes.push({
+        id: String(member.taskId),
+        title: member.title,
+        status: member.status,
+        ...(isBlocked(member) ? { blocked: true as const } : {}),
+        ...(member.projectId ? { projectId: member.projectId } : {}),
+        ...(parent !== undefined ? { parentId: String(parent) } : {}),
+        ...(edge ? { direct: true as const } : {}),
+        ...(edge?.milestone ? { milestone: true as const } : {}),
+        ...(member.archived ? { archived: true as const } : {}),
+      });
+      const below = children.get(member.taskId) ?? [];
+      for (let index = below.length - 1; index >= 0; index -= 1)
+        stack.push(below[index]!);
+    }
   };
   for (const rootId of rootIds) visit(byId.get(rootId)!);
   // Only a stored hierarchy cycle leaves members unreached from a root.

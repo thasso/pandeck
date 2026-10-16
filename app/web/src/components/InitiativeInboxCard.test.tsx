@@ -68,6 +68,7 @@ interface Options {
   onSetInboxPositions?: () => void;
   sessions?: SessionListItem[];
   fresh?: boolean;
+  refreshing?: boolean;
   error?: string | null;
   density?: RowDensity;
 }
@@ -110,6 +111,7 @@ function inbox(
         onSettleWorkflowRun={() => {}}
         initiatives={next}
         initiativesFresh={more.fresh ?? options.fresh ?? true}
+        initiativesRefreshing={more.refreshing ?? options.refreshing ?? false}
         initiativeListError={more.error ?? options.error ?? null}
         onRetryInitiatives={() => {
           calls.retried += 1;
@@ -426,6 +428,29 @@ describe("Initiative items in the Sessions inbox", () => {
     )!;
     act(() => retry.click());
     expect(calls.retried).toBe(1);
+  });
+
+  it("refreshes a held empty answer without claiming it or loading anew (F055)", () => {
+    const view = mount();
+    const { render } = inbox(view, [], { fresh: false, refreshing: true });
+    const status = [...view.container.querySelectorAll('[role="status"]')];
+    expect(status.map((el) => el.textContent)).toEqual([
+      "Refreshing Initiatives",
+    ]);
+    expect(text(view)).not.toContain("Loading Initiatives");
+    expect(text(view)).not.toContain("No sessions yet");
+    expect(text(view)).not.toContain("Nothing needs you");
+
+    render([initiative("7")], { fresh: false, refreshing: true });
+    expect(
+      card(view, "7"),
+      "held items stay while it refreshes",
+    ).not.toBeNull();
+    expect(text(view)).not.toContain("Nothing needs you");
+
+    render([], { fresh: true, refreshing: false });
+    expect(text(view)).toContain("No sessions yet");
+    expect(view.container.querySelector('[role="status"]')).toBeNull();
   });
 
   it("claims no emptiness when the first Initiative read failed (F040)", () => {

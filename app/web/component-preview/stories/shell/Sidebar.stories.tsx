@@ -77,6 +77,7 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         onOpenProject={noop}
         initiatives={[hostedLabsSummary()]}
         initiativesFresh
+        initiativesRefreshing={false}
         initiativeListError={null}
         initiativeSettleErrors={{}}
         onRetryInitiatives={noop}

@@ -198,32 +198,44 @@ export function memberTree(
     siblings.push(node);
     children.set(node.parentId, siblings);
   }
+  // Built on an explicit stack, since Task depth has no bound and a call stack
+  // does: each id comes off where a depth-first walk would reach it, and a
+  // child left unheld or already drawn is skipped with its subtree.
+  const roots: MemberTreeRow[] = [];
+  const order: MemberTreeRow[] = [];
   const seen = new Set<string>();
-  const build = (id: string, depth: number): MemberTreeRow | null => {
+  const stack: Array<{ id: string; depth: number; into: MemberTreeRow[] }> = [];
+  for (let index = detail.rootIds.length - 1; index >= 0; index -= 1)
+    stack.push({ id: detail.rootIds[index]!, depth: 0, into: roots });
+  while (stack.length > 0) {
+    const { id, depth, into } = stack.pop()!;
     const member = members.get(id);
-    if (!member || seen.has(id)) return null;
+    if (!member || seen.has(id)) continue;
     seen.add(id);
-    const rows = (children.get(id) ?? [])
-      .map((child) => build(child.id, depth + 1))
-      .filter((row): row is MemberTreeRow => row !== null);
-    const row: MemberTreeRow = { member, depth, children: rows };
-    if (rows.length > 0) {
-      const progress = { total: 0, done: 0 };
-      const count = (list: MemberTreeRow[]) => {
-        for (const child of list) {
-          progress.total += 1;
-          if (child.member.status === "done") progress.done += 1;
-          count(child.children);
-        }
-      };
-      count(rows);
-      row.progress = progress;
+    const row: MemberTreeRow = { member, depth, children: [] };
+    into.push(row);
+    order.push(row);
+    const below = children.get(id) ?? [];
+    for (let index = below.length - 1; index >= 0; index -= 1)
+      stack.push({
+        id: below[index]!.id,
+        depth: depth + 1,
+        into: row.children,
+      });
+  }
+  // Children before parents, so each row is counted once, into its parent.
+  for (let index = order.length - 1; index >= 0; index -= 1) {
+    const row = order[index]!;
+    if (row.children.length === 0) continue;
+    const progress = { total: 0, done: 0 };
+    for (const child of row.children) {
+      progress.total += 1 + (child.progress?.total ?? 0);
+      progress.done +=
+        (child.member.status === "done" ? 1 : 0) + (child.progress?.done ?? 0);
     }
-    return row;
-  };
-  return detail.rootIds
-    .map((id) => build(id, 0))
-    .filter((row): row is MemberTreeRow => row !== null);
+    row.progress = progress;
+  }
+  return roots;
 }
 
 /* ------------------------------- collapse -------------------------------- */
@@ -389,13 +401,13 @@ export function hiddenDoneIds(
 /** Flatten a tree in reading order, for keyboard order and test assertions. */
 export function flattenTree(rows: readonly MemberTreeRow[]): MemberTreeRow[] {
   const out: MemberTreeRow[] = [];
-  const walk = (list: readonly MemberTreeRow[]) => {
-    for (const row of list) {
-      out.push(row);
-      walk(row.children);
-    }
-  };
-  walk(rows);
+  const stack = [...rows].reverse();
+  while (stack.length > 0) {
+    const row = stack.pop()!;
+    out.push(row);
+    for (let index = row.children.length - 1; index >= 0; index -= 1)
+      stack.push(row.children[index]!);
+  }
   return out;
 }
 

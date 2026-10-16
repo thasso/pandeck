@@ -953,6 +953,7 @@ export function SessionInboxStory({
             onSettleWorkflowRun={() => {}}
             initiatives={initiatives}
             initiativesFresh
+            initiativesRefreshing={false}
             initiativeListError={null}
             onRetryInitiatives={() => {}}
             onOpenInitiative={() => {}}

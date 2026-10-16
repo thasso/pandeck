@@ -82,6 +82,7 @@ describe("SessionInbox bar", () => {
           onSettleWorkflowRun={() => {}}
           initiatives={[]}
           initiativesFresh
+          initiativesRefreshing={false}
           initiativeListError={null}
           onRetryInitiatives={() => {}}
           onOpenInitiative={() => {}}
@@ -273,6 +274,7 @@ describe("SessionInbox clusters", () => {
           onSettleWorkflowRun={() => {}}
           initiatives={[]}
           initiativesFresh
+          initiativesRefreshing={false}
           initiativeListError={null}
           onRetryInitiatives={() => {}}
           onOpenInitiative={() => {}}
@@ -639,6 +641,7 @@ describe("SessionInbox density", () => {
           onSettleWorkflowRun={() => {}}
           initiatives={[]}
           initiativesFresh
+          initiativesRefreshing={false}
           initiativeListError={null}
           onRetryInitiatives={() => {}}
           onOpenInitiative={() => {}}
@@ -807,6 +810,7 @@ describe("SessionInbox swipe", () => {
           onSettleWorkflowRun={() => {}}
           initiatives={[]}
           initiativesFresh
+          initiativesRefreshing={false}
           initiativeListError={null}
           onRetryInitiatives={() => {}}
           onOpenInitiative={() => {}}
@@ -1147,6 +1151,7 @@ describe("SessionInbox Workflow Run items", () => {
           onSettleWorkflowRun={handlers.onSettleWorkflowRun ?? (() => {})}
           initiatives={[]}
           initiativesFresh
+          initiativesRefreshing={false}
           initiativeListError={null}
           onRetryInitiatives={() => {}}
           onOpenInitiative={() => {}}
@@ -1522,6 +1527,7 @@ describe("SessionInbox drag-to-reorder", () => {
           onSettleWorkflowRun={() => {}}
           initiatives={[]}
           initiativesFresh
+          initiativesRefreshing={false}
           initiativeListError={null}
           onRetryInitiatives={() => {}}
           onOpenInitiative={() => {}}

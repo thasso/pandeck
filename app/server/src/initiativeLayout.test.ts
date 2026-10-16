@@ -20,6 +20,7 @@ import {
   addInitiativeMembers,
   createInitiative,
   deleteInitiative,
+  readInitiative,
   removeInitiativeMembers,
   setInitiativeMilestones,
   subscribeInitiativeChanges,
@@ -35,6 +36,7 @@ import {
 } from "./initiativeLayoutRunner.ts";
 import { withDbTransaction } from "./db/index.ts";
 import { taskStore } from "./db/taskStore.ts";
+import { deepTaskChain } from "./test/deepTaskChain.ts";
 import {
   archiveTask,
   createTask,
@@ -1140,4 +1142,88 @@ test("a map over the node limit answers its graph without any layout, and collap
   const folded = await mapOf(id, [epic]);
   assert.equal(folded.nodes.length, 1);
   assert.equal(folded.nodes[0]!.progress?.total, 1_000);
+}, 120_000);
+
+/**
+ * Levels below the root. A recursive member walk in a test worker on Node 24
+ * read 6,000 levels and overflowed at 7,000.
+ */
+const DEEP = 10_000;
+
+test("a hierarchy deeper than any call stack is read whole, refused unfolded and drawn folded", async () => {
+  const deep = deepTaskChain(DEEP);
+  const [root] = deep.chain;
+  const leaf = deep.chain.at(-1)!;
+  const lone = createTask({
+    title: "Lone root",
+    source: { createdBy: "user" },
+  }).id;
+  const id = String(
+    createInitiative({ title: "Deep", taskIds: [root!, lone] }).initiative.id,
+  );
+  setInitiativeMilestones(id, [leaf], true);
+
+  // Depth-first from the roots in the user's order, children in Backlog
+  // order: the side Task sorts before the chain's next level.
+  const order = [
+    ...deep.chain.slice(0, deep.branchAt + 1),
+    deep.side,
+    ...deep.chain.slice(deep.branchAt + 1),
+    lone,
+  ];
+  const parentOf = new Map<string, string>([
+    [deep.side, deep.chain[deep.branchAt]!],
+  ]);
+  deep.chain.forEach((taskId, n) => {
+    if (n > 0) parentOf.set(taskId, deep.chain[n - 1]!);
+  });
+  const detail = readInitiative(id)!;
+  assert.deepEqual(
+    detail.nodes.map((node) => node.id),
+    order,
+  );
+  assert.deepEqual(detail.rootIds, [root, lone]);
+  assert.deepEqual(detail.milestoneIds, [leaf]);
+  assert.deepEqual(
+    detail.nodes.map((node) => [
+      node.parentId ?? null,
+      node.direct === true,
+      node.milestone === true,
+      node.archived === true,
+      node.status,
+    ]),
+    order.map((taskId) => [
+      parentOf.get(taskId) ?? null,
+      // A milestone mark on a covered Task is a stored edge of its own.
+      taskId === root || taskId === lone || taskId === leaf,
+      taskId === leaf,
+      deep.archived.has(taskId),
+      deep.done.has(taskId) ? "done" : "todo",
+    ]),
+  );
+  assert.equal(detail.progress.total, DEEP + 3);
+  assert.equal(detail.progress.done, deep.done.size);
+
+  const open = await readInitiativeMap(id);
+  assert.equal(open.item?.nodes.length, DEEP + 3);
+  assert.deepEqual(open.layoutTooLarge, { nodes: DEEP + 3, limit: 1_000 });
+  assert.equal(open.layout, undefined);
+  assert.equal(elkRuns.mock.calls.length, 0);
+
+  // Folded at the root, it is three nodes, really laid out, and the answer
+  // still carries every member.
+  const folded = await readInitiativeMap(id, [root!]);
+  assert.equal(folded.layoutTooLarge, undefined);
+  assert.equal(folded.layoutError, undefined);
+  assert.equal(folded.item?.nodes.length, DEEP + 3);
+  assert.equal(elkRuns.mock.calls.length, 2, "one layout, two passes");
+  const drawn = folded.layout!.nodes;
+  assert.deepEqual(
+    drawn.map((node) => `${node.kind}:${node.taskId}`).sort(),
+    [`collapsed:${root}`, `task:${leaf}`, `task:${lone}`].sort(),
+  );
+  const epic = drawn.find((node) => node.kind === "collapsed")!;
+  assert.equal(epic.progress?.total, DEEP + 1);
+  assert.equal(epic.progress?.done, deep.done.size);
+  assertValidGeometry(folded.layout!);
 }, 120_000);

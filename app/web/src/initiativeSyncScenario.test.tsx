@@ -14,7 +14,9 @@ import type {
   ServerMessage,
 } from "@assistant/shared";
 import { useAssistant, type UIState } from "./hooks/useAssistant.ts";
+import { InitiativeBrowserGroup } from "./components/initiative/InitiativeBrowserGroup.tsx";
 import { InitiativeDetailPage } from "./components/initiative/InitiativeDetailPage.tsx";
+import { InitiativesIndexPage } from "./components/initiative/InitiativesIndexPage.tsx";
 import { HOSTED_LABS_DETAIL } from "../component-preview/fixtures/initiatives.ts";
 
 (
@@ -94,12 +96,57 @@ function InitiativeHarness() {
   return null;
 }
 
+/**
+ * The index and the Projects browser's group, mounted only while `shown`, as
+ * App holds the topic only while a surface reading it is on screen.
+ */
+function SurfacesHarness({ shown }: { shown: boolean }) {
+  const { actions, state } = useAssistant();
+  latestState = state;
+  latestActions = actions;
+  useEffect(
+    () => actions.setTopics(shown ? ["initiatives"] : []),
+    [actions, shown],
+  );
+  if (!shown) return null;
+  return (
+    <>
+      <InitiativesIndexPage
+        initiatives={state.initiatives}
+        fresh={state.initiativesFresh}
+        refreshing={state.initiativesRefreshing}
+        error={state.initiativeListError}
+        onRetry={actions.retryInitiatives}
+        onOpen={() => {}}
+      />
+      <InitiativeBrowserGroup
+        initiatives={state.initiatives}
+        fresh={state.initiativesFresh}
+        refreshing={state.initiativesRefreshing}
+        error={state.initiativeListError}
+        onRetry={actions.retryInitiatives}
+        selectedId={null}
+        onNavigate={() => {}}
+      />
+    </>
+  );
+}
+
 let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
   ScenarioSocket.instances = [];
   vi.stubGlobal("WebSocket", ScenarioSocket);
+  // The index's list scroll watches its rows; jsdom has no layout.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   window.localStorage.clear();
   container = document.createElement("div");
   document.body.append(container);
@@ -171,6 +218,11 @@ describe("Initiative socket/reducer scenario", () => {
     warn.mockRestore();
     expect(unsubscribes(socket)).toHaveLength(1);
     expect(subscribes(socket)).toHaveLength(2);
+    // The resubscribe is a read in progress over the list held (F055).
+    expect([
+      latestState.initiativesFresh,
+      latestState.initiativesRefreshing,
+    ]).toEqual([false, true]);
   });
 
   it("reads one Initiative by id, drops a superseded answer, and answers a lost read", async () => {
@@ -326,5 +378,117 @@ describe("Initiative socket/reducer scenario", () => {
     );
     expect(latestState.initiativesFresh).toBe(true);
     expect(latestState.initiatives.map((item) => item.id)).toEqual(["1"]);
+  });
+
+  describe("a topic dropped and taken again (F055)", () => {
+    const refreshIndicators = () =>
+      [...container.querySelectorAll('[role="status"]')].filter(
+        (el) => el.textContent === "Refreshing Initiatives",
+      );
+    const indexRows = () =>
+      [...container.querySelectorAll("li[data-list-row-id]")]
+        .map((el) => el.getAttribute("data-list-row-id")!)
+        .filter((id) => !id.startsWith("initiative:"));
+    const groupRows = () =>
+      [...container.querySelectorAll("li[data-list-row-id]")]
+        .map((el) => el.getAttribute("data-list-row-id")!)
+        .filter((id) => id.startsWith("initiative:"));
+    const text = () => container.textContent ?? "";
+    const snapshot = (socket: ScenarioSocket, items: InitiativeSummary[]) =>
+      act(async () =>
+        socket.receive({
+          type: "initiativeList",
+          items,
+          seq: 4,
+          revisions: items.map((item) => ({ id: item.id, revision: 1 })),
+        }),
+      );
+
+    async function answeredThenTakenAgain(items: InitiativeSummary[]) {
+      await act(async () => root.render(<SurfacesHarness shown />));
+      const socket = ScenarioSocket.instances[0]!;
+      await act(async () => {
+        socket.open();
+        socket.receive(readyMessage());
+      });
+      await snapshot(socket, items);
+      expect(latestState.initiativesFresh).toBe(true);
+      expect(refreshIndicators()).toHaveLength(0);
+      // Every surface reading the list leaves, so the topic is let go...
+      await act(async () => root.render(<SurfacesHarness shown={false} />));
+      expect(unsubscribes(socket)).toHaveLength(1);
+      // ...and one comes back: that subscription is a new read, still out.
+      await act(async () => root.render(<SurfacesHarness shown />));
+      expect(subscribes(socket)).toHaveLength(2);
+      expect(
+        socket.sent.filter((message) =>
+          JSON.stringify(message).includes("initiatives"),
+        ),
+        "subscribing is the read: nothing else asks for the list",
+      ).toHaveLength(3);
+      return socket;
+    }
+
+    it("keeps the held rows, marked refreshing, until the new snapshot answers", async () => {
+      const socket = await answeredThenTakenAgain([summary("1")]);
+      expect(indexRows()).toEqual(["1"]);
+      expect(groupRows()).toEqual(["initiative:1"]);
+      expect(refreshIndicators()).toHaveLength(2);
+      expect(latestState.initiativesFresh).toBe(false);
+      expect(text()).not.toContain("Loading Initiatives");
+      expect(text()).not.toContain("No Initiatives yet");
+
+      await snapshot(socket, [summary("1", "Renamed"), summary("2")]);
+      expect(indexRows().sort()).toEqual(["1", "2"]);
+      expect(text()).toContain("Renamed");
+      expect(refreshIndicators()).toHaveLength(0);
+      expect(latestState.initiativesFresh).toBe(true);
+    });
+
+    it("keeps a held empty answer refreshing too: neither empty nor a first load until it answers", async () => {
+      const socket = await answeredThenTakenAgain([]);
+      expect(refreshIndicators()).toHaveLength(2);
+      expect(text()).not.toContain("No Initiatives yet");
+      expect(text()).not.toContain("Loading Initiatives");
+      expect(
+        container.querySelector('[aria-label="Loading Initiatives"]'),
+      ).toBeNull();
+
+      await snapshot(socket, []);
+      expect(refreshIndicators()).toHaveLength(0);
+      expect(text()).toContain("No Initiatives yet");
+    });
+
+    it("draws the rows a held empty answer's refresh brings", async () => {
+      const socket = await answeredThenTakenAgain([]);
+      expect(text()).not.toContain("No Initiatives yet");
+      await snapshot(socket, [summary("3")]);
+      expect(indexRows()).toEqual(["3"]);
+      expect(groupRows()).toEqual(["initiative:3"]);
+      expect(refreshIndicators()).toHaveLength(0);
+      expect(text()).not.toContain("No Initiatives yet");
+    });
+
+    it("states a failed refresh over the held rows, and a retry reads again", async () => {
+      const socket = await answeredThenTakenAgain([summary("1")]);
+      await act(async () =>
+        socket.receive({
+          type: "error",
+          message: "Failed to list Initiatives: database is locked",
+          target: { type: "initiative" },
+        }),
+      );
+      expect(latestState.initiativeListError).toBe(
+        "Failed to list Initiatives: database is locked",
+      );
+      expect(indexRows()).toEqual(["1"]);
+      expect(text()).not.toContain("No Initiatives yet");
+      await act(async () => latestActions.retryInitiatives());
+      expect(subscribes(socket)).toHaveLength(3);
+      await snapshot(socket, [summary("1")]);
+      expect(latestState.initiativeListError).toBeNull();
+      expect(latestState.initiativesFresh).toBe(true);
+      expect(refreshIndicators()).toHaveLength(0);
+    });
   });
 });

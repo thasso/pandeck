@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import type { InitiativeDetail } from "@assistant/shared";
 import { createTask, updateTask } from "../../tasks.ts";
-import { readInitiative, setInitiativeMilestones } from "../../initiatives.ts";
+import {
+  listInitiatives,
+  readInitiative,
+  setInitiativeMilestones,
+} from "../../initiatives.ts";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
+import { deepTaskChain } from "../../test/deepTaskChain.ts";
 import { affirmed, assertPromptRules } from "../../test/promptRules.ts";
 import { toolGroupsFor } from "../catalog.ts";
 import { initiativeTools } from "./initiativeTools.ts";
@@ -418,6 +423,67 @@ test("the whole read stays bounded under many outside blockers, milestones and m
   }
   assert.equal(total, 32);
 });
+
+/**
+ * Levels below the root. A recursive member walk in a test worker on Node 24
+ * read 6,000 levels and overflowed at 7,000.
+ */
+const DEEP = 10_000;
+
+test("a hierarchy deeper than any call stack: manage answers the writes it landed, and the read pages it whole", async () => {
+  const deep = deepTaskChain(DEEP);
+  const [root] = deep.chain;
+  const leaf = deep.chain.at(-1)!;
+  // The answer reads the graph after the writes committed. Failing there
+  // would report landed writes as failed, and a retried create would make a
+  // second Initiative.
+  const created = await manage([
+    { operation: "create", title: "Deep chain", taskIds: [root] },
+  ]);
+  const id = created.changed[0]!.id;
+  assert.equal(created.changed[0]!.progress.total, DEEP + 2);
+  const marked = await manage([
+    { operation: "setMilestone", id, taskIds: [leaf] },
+  ]);
+  assert.equal(marked.changed[0]!.milestoneCount, 1);
+  assert.deepEqual(
+    listInitiatives({ query: "Deep chain" }).map((item) => item.id),
+    [id],
+  );
+
+  const order = [
+    ...deep.chain.slice(0, deep.branchAt + 1),
+    deep.side,
+    ...deep.chain.slice(deep.branchAt + 1),
+  ];
+  const seen: ToolMember[] = [];
+  let page = await read(id);
+  assert.equal(page.totalMembers, DEEP + 2);
+  assert.equal(page.members[0]!.id, root);
+  for (;;) {
+    const members = flatten(page.members);
+    if (seen.length > 0) {
+      const top = page.members[0]!;
+      const above = order.indexOf(top.id) - 1;
+      const parent =
+        top.id === deep.chain[deep.branchAt + 1]
+          ? deep.chain[deep.branchAt]
+          : order[above];
+      assert.equal(top.parentId, parent, "a page top says where it hangs");
+    }
+    seen.push(...members);
+    if (page.nextOffset === undefined) break;
+    page = await read(id, page.nextOffset);
+  }
+  assert.deepEqual(
+    seen.map((member) => member.id),
+    order,
+  );
+  const byId = new Map(seen.map((member) => [member.id, member]));
+  assert.equal(byId.get(leaf)!.milestone, true);
+  assert.equal(byId.get(deep.side)!.archived, true);
+  assert.equal(byId.get(deep.side)!.status, "done");
+}, 120_000);
 
 test("a manage answer of twenty wide Initiatives stays bounded", async () => {
   const wide = "界".repeat(200);

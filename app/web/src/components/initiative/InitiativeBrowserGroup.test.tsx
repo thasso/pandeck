@@ -19,6 +19,7 @@ describe("InitiativeBrowserGroup", () => {
       <InitiativeBrowserGroup
         initiatives={[]}
         fresh={false}
+        refreshing={false}
         error={failure}
         onRetry={onRetry}
         selectedId={null}
@@ -41,6 +42,7 @@ describe("InitiativeBrowserGroup", () => {
       <InitiativeBrowserGroup
         initiatives={[hostedLabsSummary()]}
         fresh={false}
+        refreshing={false}
         error={failure}
         onRetry={() => {}}
         selectedId={null}
@@ -56,6 +58,7 @@ describe("InitiativeBrowserGroup", () => {
       <InitiativeBrowserGroup
         initiatives={[]}
         fresh={false}
+        refreshing={false}
         error={null}
         onRetry={() => {}}
         selectedId={null}
@@ -74,6 +77,7 @@ describe("InitiativeBrowserGroup", () => {
       <InitiativeBrowserGroup
         initiatives={[labs]}
         fresh
+        refreshing={false}
         error={null}
         onRetry={() => {}}
         selectedId={null}
@@ -146,6 +150,7 @@ describe("InitiativeBrowserGroup", () => {
       <InitiativeBrowserGroup
         initiatives={[labs]}
         fresh
+        refreshing={false}
         error={null}
         onRetry={() => {}}
         selectedId={labs.id}

@@ -24,6 +24,7 @@ const meta = {
   args: {
     initiatives,
     fresh: true,
+    refreshing: false,
     error: null,
     onRetry: () => {},
     onOpen: () => {},
@@ -36,7 +37,7 @@ type Story = StoryObj<typeof meta>;
 
 export const ByState: Story = {};
 export const Loading: Story = { args: { initiatives: [], fresh: false } };
-export const Refreshing: Story = { args: { fresh: false } };
+export const Refreshing: Story = { args: { fresh: false, refreshing: true } };
 export const Empty: Story = { args: { initiatives: [] } };
 export const Failed: Story = {
   args: {

@@ -48,7 +48,12 @@ import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
-import { EmptyBox, ErrorNote, PaneLoading } from "./common/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  PaneLoading,
+  RefreshIndicator,
+} from "./common/load.tsx";
 import type { InitiativeSettleError } from "../hooks/useAssistant.ts";
 import { Button } from "@/components/ui/button";
 import {
@@ -208,8 +213,10 @@ interface Props {
    * of their own, and paused or done ones while their outcome is unsettled.
    */
   initiatives: readonly InitiativeSummary[];
-  /** An Initiative snapshot answered during this socket episode. */
+  /** An Initiative snapshot answered the current subscription. */
   initiativesFresh: boolean;
+  /** A new Initiative snapshot is out over the list an earlier one answered. */
+  initiativesRefreshing: boolean;
   /** The Initiative list could not be read; stated above the items it holds. */
   initiativeListError: string | null;
   /**
@@ -280,6 +287,7 @@ export function SessionInbox({
   onSettleWorkflowRun,
   initiatives,
   initiativesFresh,
+  initiativesRefreshing,
   initiativeListError,
   initiativeSettleErrors,
   onRetryInitiatives,
@@ -1205,7 +1213,8 @@ export function SessionInbox({
   // Initiatives count against both claims too: an inbox holding only an
   // Initiative is not empty. And neither claim is made before the Initiative
   // list has answered: that would state an emptiness nobody read. A failed
-  // read is not that answer — until one comes, the failure stands alone.
+  // read is not that answer — until one comes, the failure stands alone. Nor
+  // is an earlier answer while a new read is out: that one refreshes.
   const initiativesPending = !initiativesFresh && !initiativeListError;
   const nothingToShow =
     view.empty && archivedSessions.length === 0 && initiativeItems.length === 0;
@@ -1236,7 +1245,13 @@ export function SessionInbox({
       )}
 
       {nothingToShow && initiativesPending ? (
-        <PaneLoading label="Loading Initiatives…" className="flex-none p-3" />
+        initiativesRefreshing ? (
+          <div className="flex flex-none justify-center p-3">
+            <RefreshIndicator label="Refreshing Initiatives" />
+          </div>
+        ) : (
+          <PaneLoading label="Loading Initiatives…" className="flex-none p-3" />
+        )
       ) : !initiativesFresh ? null : coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
       ) : nothingToShow ? (

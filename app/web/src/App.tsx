@@ -7013,6 +7013,7 @@ function AppContent() {
         onOpenProject={openProject}
         initiatives={state.initiatives}
         initiativesFresh={state.initiativesFresh}
+        initiativesRefreshing={state.initiativesRefreshing}
         initiativeListError={state.initiativeListError}
         initiativeSettleErrors={state.initiativeSettleErrors}
         onRetryInitiatives={actions.retryInitiatives}
@@ -7797,6 +7798,7 @@ function AppContent() {
                           back={screenBack}
                           initiatives={state.initiatives}
                           fresh={state.initiativesFresh}
+                          refreshing={state.initiativesRefreshing}
                           error={state.initiativeListError}
                           onRetry={actions.retryInitiatives}
                           onOpen={navigate}

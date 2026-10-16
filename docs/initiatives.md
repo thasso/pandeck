@@ -167,6 +167,11 @@ the tool descriptions, never in a harness-specific prompt layer.
   member — in the same flush, and a session's liveness change reports the
   Initiatives listing it. A write is the only place that knows it changed, so no
   second path recomputes counts on a timer.
+- Subscribing is the list read, every time. When a surface comes back to the
+  list, or a gap or a Settle's refusal or deadline resubscribes, after an
+  earlier snapshot answered in the same connection, the list held is refreshing:
+  its rows stay with a refresh indicator, and nothing calls it ready or empty
+  until the new snapshot answers.
 - The graph (nodes, the parent tree, `blocks` edges, milestones) is detail, read
   by id with the revision it is as of, the same way a Task body is. A newer
   Initiative event re-reads it. An archived Initiative leaves the live list, but
@@ -300,6 +305,9 @@ re-reads the graph.
   Retry), the notice says the count was for the epics collapsed before, and says
   every epic is collapsed only of an answer for that choice. The server's limit
   and answer stay as they are, and nothing is read again until the user asks.
+  Task depth has no bound, so neither the graph read nor the page's member tree
+  walks the hierarchy recursively: a valid hierarchy of any depth still reaches
+  this outcome, its collapsed drawing and the List.
 
 ## The attention list
 

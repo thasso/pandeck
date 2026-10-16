@@ -28,7 +28,10 @@ import {
   milestoneMembers,
   runningTaskIds,
   selectedTaskFromHash,
+  type InitiativeMember,
+  type MemberTreeRow,
 } from "./initiativeView.ts";
+import { deepInitiative } from "../test/deepInitiative.ts";
 
 function task(partial: Partial<TaskSummary> & { id: string }): TaskSummary {
   return {
@@ -203,7 +206,154 @@ describe("the member tree", () => {
       T.RELEASE,
     ]);
   });
+
+  it("builds a hierarchy deeper than any call stack, each epic counting its descendants", () => {
+    const deep = deepInitiative(DEEP);
+    const members = initiativeMembers(deep.detail, null, NO_RUNNING);
+    const rows = flattenTree(memberTree(deep.detail, members));
+    // From the bottom up: what lies under each level of the chain.
+    const under = new Map<string, { total: number; done: number }>();
+    let below = { total: 0, done: 0 };
+    for (let n = deep.chain.length - 1; n >= 0; n -= 1) {
+      const id = deep.chain[n]!;
+      const sideUnder = n === deep.branchAt;
+      const progress = {
+        total: below.total + (sideUnder ? 1 : 0),
+        done: below.done + (sideUnder && deep.done.has(deep.side) ? 1 : 0),
+      };
+      if (progress.total > 0) under.set(id, progress);
+      below = {
+        total: progress.total + 1,
+        done: progress.done + (deep.done.has(id) ? 1 : 0),
+      };
+    }
+    const depthOf = new Map(deep.chain.map((id, n) => [id, n]));
+    depthOf.set(deep.side, deep.branchAt + 1).set(deep.lone, 0);
+    expect(rows.map((row) => [row.member.id, row.depth, row.progress])).toEqual(
+      deep.detail.nodes.map((node) => [
+        node.id,
+        depthOf.get(node.id),
+        under.get(node.id),
+      ]),
+    );
+    expect(rows[0]!.progress).toEqual({
+      total: DEEP + 1,
+      done: deep.done.size,
+    });
+    const leaf = rows.find((row) => row.member.id === deep.leaf)!;
+    expect([leaf.member.milestone, leaf.depth]).toEqual([true, DEEP]);
+    const side = rows.find((row) => row.member.id === deep.side)!;
+    expect([side.member.archived, side.member.status]).toEqual([true, "done"]);
+  });
+
+  it("flattens a tree deeper than any call stack in reading order", () => {
+    const deep = deepInitiative(DEEP);
+    const members = initiativeMembers(deep.detail, null, NO_RUNNING);
+    // Built by hand, bottom up, so only the flattening is under test.
+    let row: MemberTreeRow | undefined;
+    for (let n = deep.chain.length - 1; n >= 0; n -= 1)
+      row = {
+        member: members.get(deep.chain[n]!)!,
+        depth: n,
+        children: row ? [row] : [],
+      };
+    expect(flattenTree([row!]).map((each) => each.member.id)).toEqual(
+      deep.chain,
+    );
+  });
+
+  it("matches the recursive tree on small shapes: order, depth, counts and each member once", () => {
+    for (const seed of [1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233]) {
+      const detail = randomDetail(seed);
+      const members = new Map(initiativeMembers(detail, null, NO_RUNNING));
+      // A node the overlay does not hold is left out, with its subtree.
+      for (const node of detail.nodes)
+        if (Number(node.id) % 7 === seed % 7) members.delete(node.id);
+      const tree = memberTree(detail, members);
+      expect(tree).toEqual(recursiveMemberTree(detail, members));
+      const ids = flattenTree(tree).map((row) => row.member.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
 });
+
+const DEEP = 20_000;
+
+/**
+ * A small read with every shape the tree guards against: roots named twice, a
+ * root that is also another member's child, a child listed twice, and parents
+ * the read does not hold.
+ */
+function randomDetail(seed: number): InitiativeDetail {
+  let state = seed;
+  const next = () => {
+    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    return state / 2_147_483_648;
+  };
+  const count = 3 + Math.floor(next() * 28);
+  const nodes: InitiativeDetail["nodes"] = [];
+  for (let n = 1; n <= count; n += 1) {
+    const parent = n > 1 && next() < 0.7 ? Math.ceil(next() * (n - 1)) : 0;
+    nodes.push({
+      id: String(n),
+      title: `Task ${n}`,
+      status: next() < 0.4 ? "done" : "todo",
+      ...(parent ? { parentId: String(parent) } : {}),
+      ...(next() < 0.2 ? { archived: true as const } : {}),
+      ...(next() < 0.15 ? { milestone: true as const } : {}),
+    });
+  }
+  const twice = nodes[Math.floor(next() * nodes.length)]!;
+  if (twice.parentId) nodes.push(twice);
+  const roots = nodes.filter((node) => !node.parentId).map((node) => node.id);
+  const child = nodes.find((node) => node.parentId)?.id;
+  return {
+    ...HOSTED_LABS_DETAIL,
+    rootIds: [...roots, roots[0]!, ...(child ? [child] : []), "999"],
+    nodes,
+    externalBlockers: [],
+    edges: [],
+    milestoneIds: [],
+  };
+}
+
+/** The recursive tree it replaced, the reference on shapes small enough. */
+function recursiveMemberTree(
+  detail: InitiativeDetail,
+  members: ReadonlyMap<string, InitiativeMember>,
+): MemberTreeRow[] {
+  const children = new Map<string, InitiativeDetail["nodes"]>();
+  for (const node of detail.nodes) {
+    if (!node.parentId) continue;
+    children.set(node.parentId, [...(children.get(node.parentId) ?? []), node]);
+  }
+  const seen = new Set<string>();
+  const build = (id: string, depth: number): MemberTreeRow | null => {
+    const member = members.get(id);
+    if (!member || seen.has(id)) return null;
+    seen.add(id);
+    const rows = (children.get(id) ?? [])
+      .map((child) => build(child.id, depth + 1))
+      .filter((row): row is MemberTreeRow => row !== null);
+    const row: MemberTreeRow = { member, depth, children: rows };
+    if (rows.length > 0) {
+      const progress = { total: 0, done: 0 };
+      const count = (list: MemberTreeRow[]) => {
+        for (const each of list) {
+          progress.total += 1;
+          if (each.member.status === "done") progress.done += 1;
+          count(each.children);
+        }
+      };
+      count(rows);
+      row.progress = progress;
+    }
+    return row;
+  };
+  return detail.rootIds
+    .map((id) => build(id, 0))
+    .filter((row): row is MemberTreeRow => row !== null);
+}
 
 describe("the selection fragment", () => {
   it("round-trips a Task id and ignores other fragments", () => {

@@ -23,28 +23,32 @@ import { InitiativeProgressLine } from "./InitiativeProgressLine.tsx";
  * @useWhen The Initiative route without an id; the Projects browser's
  *   Initiatives group links here.
  * @intent The list is the `initiatives` topic itself. It is empty only once a
- *   snapshot this socket episode answered says so; an archived Initiative is
- *   not listed (it leaves the live projection) but its page still opens.
+ *   snapshot answered for the current subscription says so; coming back to
+ *   it after an earlier answer refreshes the list held. An archived Initiative
+ *   is not listed (it leaves the live projection) but its page still opens.
  */
 export function InitiativesIndexPage({
   back,
   initiatives,
   fresh,
+  refreshing,
   error,
   onRetry,
   onOpen,
 }: {
   back?: PageHeaderBack | undefined;
   initiatives: readonly InitiativeSummary[];
-  /** A snapshot answered during this socket episode. */
+  /** A snapshot answered the current subscription. */
   fresh: boolean;
+  /** A new snapshot is out over the list an earlier one answered. */
+  refreshing: boolean;
   error: string | null;
   /** Ask for the list again after it failed. */
   onRetry: () => void;
   onOpen: (path: string) => void;
 }) {
   const scrollRef = useListScroll({ listKey: "initiatives" });
-  const loading = !fresh && initiatives.length === 0 && !error;
+  const loading = !fresh && !refreshing && initiatives.length === 0 && !error;
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
@@ -53,7 +57,7 @@ export function InitiativesIndexPage({
         title="Initiatives"
         subtitle="Work that spans Projects, by state"
         actions={
-          !fresh && initiatives.length > 0 ? (
+          !fresh && (refreshing || initiatives.length > 0) ? (
             <RefreshIndicator label="Refreshing Initiatives" />
           ) : undefined
         }

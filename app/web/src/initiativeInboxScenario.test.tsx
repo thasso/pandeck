@@ -194,6 +194,7 @@ function Harness({
       onSettleWorkflowRun={() => {}}
       initiatives={assistant.state.initiatives}
       initiativesFresh={assistant.state.initiativesFresh}
+      initiativesRefreshing={assistant.state.initiativesRefreshing}
       initiativeListError={assistant.state.initiativeListError}
       initiativeSettleErrors={assistant.state.initiativeSettleErrors}
       onRetryInitiatives={assistant.actions.retryInitiatives}
@@ -507,6 +508,11 @@ describe("Initiative inbox card", () => {
         toast.message.includes("Initiative-6 Billing migration"),
       ),
     ).toBe(true);
+    // That re-read is a read in progress over the list held (F055).
+    expect([state.initiativesFresh, state.initiativesRefreshing]).toEqual([
+      false,
+      true,
+    ]);
 
     // The fresh snapshot is the server's own answer: still unsettled.
     await act(async () =>
@@ -518,6 +524,10 @@ describe("Initiative inbox card", () => {
       }),
     );
     expect(settleButton("6")).not.toBeNull();
+    expect([state.initiativesFresh, state.initiativesRefreshing]).toEqual([
+      true,
+      false,
+    ]);
   });
 
   it("takes the reconnect's snapshot as the truth", async () => {

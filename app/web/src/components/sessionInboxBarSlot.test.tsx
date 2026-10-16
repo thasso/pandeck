@@ -91,6 +91,7 @@ describe("the host-drawn Sessions bar", () => {
         onSettleWorkflowRun={() => {}}
         initiatives={[]}
         initiativesFresh
+        initiativesRefreshing={false}
         initiativeListError={null}
         onRetryInitiatives={() => {}}
         onOpenInitiative={() => {}}

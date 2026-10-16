@@ -176,8 +176,10 @@ interface Props {
   onOpenProject: (id: string) => void;
   /** Live Initiative summaries, for the group atop the Projects browser. */
   initiatives: readonly InitiativeSummary[];
-  /** An Initiative snapshot answered during this socket episode. */
+  /** An Initiative snapshot answered the current subscription. */
   initiativesFresh: boolean;
+  /** A new Initiative snapshot is out over the list an earlier one answered. */
+  initiativesRefreshing: boolean;
   /** The Initiative list could not be read. */
   initiativeListError: string | null;
   /** A Settle's failure, by Initiative id, for its inbox card. */
@@ -494,6 +496,7 @@ function SidebarImpl({
   onOpenProject,
   initiatives,
   initiativesFresh,
+  initiativesRefreshing,
   initiativeListError,
   initiativeSettleErrors,
   onRetryInitiatives,
@@ -879,6 +882,7 @@ function SidebarImpl({
             <InitiativeBrowserGroup
               initiatives={initiatives}
               fresh={initiativesFresh}
+              refreshing={initiativesRefreshing}
               error={initiativeListError}
               onRetry={onRetryInitiatives}
               selectedId={selectedInitiativeId}
@@ -963,6 +967,7 @@ function SidebarImpl({
             onSettleWorkflowRun={onSettleWorkflowRun}
             initiatives={initiatives}
             initiativesFresh={initiativesFresh}
+            initiativesRefreshing={initiativesRefreshing}
             initiativeListError={initiativeListError}
             initiativeSettleErrors={initiativeSettleErrors}
             onRetryInitiatives={onRetryInitiatives}

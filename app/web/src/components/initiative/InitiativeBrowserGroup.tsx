@@ -2,7 +2,7 @@ import { memo } from "react";
 import { ArrowRight, Waypoints } from "lucide-react";
 import type { InitiativeSummary } from "@assistant/shared";
 import { Item } from "../ui/item.tsx";
-import { ErrorNote, Skeleton } from "../common/load.tsx";
+import { ErrorNote, RefreshIndicator, Skeleton } from "../common/load.tsx";
 import { LinkButton } from "../common/LinkButton.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
 import {
@@ -22,18 +22,22 @@ import { followRowLink } from "../../lib/rowLink.ts";
  *   other group, and the index is a link of its own beside it, so a modifier
  *   click opens it in a new tab. With nothing to list it shows the band alone,
  *   so the index stays one tap away without spending rows on an empty state.
+ *   A new read over a list it held marks the band refreshing.
  */
 export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   initiatives,
   fresh,
+  refreshing,
   error,
   onRetry,
   selectedId,
   onNavigate,
 }: {
   initiatives: readonly InitiativeSummary[];
-  /** A snapshot answered during this socket episode. */
+  /** A snapshot answered the current subscription. */
   fresh: boolean;
+  /** A new snapshot is out over the list an earlier one answered. */
+  refreshing: boolean;
   /**
    * The list could not be read. It is stated here with a retry, over any rows
    * still held, so the group never waits on a snapshot that is not coming.
@@ -54,23 +58,29 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
       icon={<Waypoints size={14} className="shrink-0" aria-hidden />}
       containsSelected={open.some((initiative) => initiative.id === selectedId)}
       actions={
-        <LinkButton
-          variant="ghost"
-          size="icon-xs"
-          label="Show all Initiatives"
-          href={INITIATIVES_PATH}
-          onClick={(event) =>
-            followRowLink(event, INITIATIVES_PATH, onNavigate)
-          }
-        >
-          <ArrowRight />
-        </LinkButton>
+        <>
+          {refreshing ? (
+            <RefreshIndicator label="Refreshing Initiatives" />
+          ) : null}
+          <LinkButton
+            variant="ghost"
+            size="icon-xs"
+            label="Show all Initiatives"
+            href={INITIATIVES_PATH}
+            onClick={(event) =>
+              followRowLink(event, INITIATIVES_PATH, onNavigate)
+            }
+          >
+            <ArrowRight />
+          </LinkButton>
+        </>
       }
     >
       {error ? (
         <ErrorNote className="mx-2 my-1" message={error} onRetry={onRetry} />
       ) : null}
       {error && initiatives.length === 0 ? null : !fresh &&
+        !refreshing &&
         initiatives.length === 0 ? (
         <div role="status" aria-label="Loading Initiatives" className="px-2.5">
           <Skeleton className="h-6 w-3/4" />

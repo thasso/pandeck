@@ -22,6 +22,7 @@ import {
   HOSTED_LABS_TASK_IDS as T,
   hostedLabsSummary,
 } from "../../../component-preview/fixtures/initiatives.ts";
+import { deepInitiative } from "../../test/deepInitiative.ts";
 import { InitiativeDetailPage } from "./InitiativeDetailPage.tsx";
 
 beforeAll(() => {
@@ -372,6 +373,44 @@ describe("InitiativeDetailPage views", () => {
     expect(blockedMarker(row(/^First hosted release, Task-/))).toBe(
       "Blocked by 3 open tasks",
     );
+  });
+
+  it("opens a hierarchy deeper than any call stack folded: its epic counts it, holds the selection and keeps its milestone listed", () => {
+    const deep = deepInitiative(20_000);
+    const [root] = deep.chain;
+    const selected = deep.chain[5_000]!;
+    window.sessionStorage.setItem(
+      `assistant.initiativeMap.v1:${deep.detail.id}`,
+      JSON.stringify({
+        collapsed: [root],
+        hideDone: false,
+        criticalPath: false,
+      }),
+    );
+    const { container, onLoadDetail } = renderPage(
+      ready({ item: deep.detail, requestedCollapsed: [root!] }),
+      {
+        initiativeId: deep.detail.id,
+        mobile: true,
+        summary: undefined,
+        selectedTaskId: selected,
+      },
+    );
+    expect(
+      [...container.querySelectorAll("[aria-label='Members'] li")].map((li) =>
+        li.getAttribute("data-list-row-id"),
+      ),
+    ).toEqual([root, deep.leaf, deep.lone]);
+    expect(
+      button(container, /^Level 0, Task-/)!.getAttribute("aria-label"),
+    ).toBe(
+      `Level 0, Task-${root}, Ready to start, ${deep.done.size} of ${20_001} done, collapsed, holds the selected Task`,
+    );
+    expect(text(container)).toContain(
+      `The selected Task, Task-${selected}, is inside collapsed Level 0.`,
+    );
+    expect(button(container, /^Expand Level 0$/)).toBeDefined();
+    expect(onLoadDetail).not.toHaveBeenCalled();
   });
 
   it("adds the overview map to the map (F025)", async () => {
