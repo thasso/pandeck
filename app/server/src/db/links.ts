@@ -26,7 +26,8 @@ export type NodeType =
   | "url"
   | "doc"
   | "worktree"
-  | "knowledge";
+  | "knowledge"
+  | "initiative";
 
 /**
  * Known relations. Directed from → to:
@@ -51,6 +52,10 @@ export type NodeType =
  *  - `relates`    task → task, symmetric, stored from the lower id to the higher
  *                  one. A pair of Tasks holds at most one `blocks` or `relates`
  *                  edge (`taskStore.setTaskLink` enforces it).
+ *  - `member`     initiative → task (ordered by `position`, the user's order;
+ *                  `{ milestone: true }` in metadata marks a milestone). Only
+ *                  the Task that was added holds one; its descendants are
+ *                  members through it (`initiativeStore`).
  */
 export type Relation =
   | "subtask"
@@ -63,7 +68,8 @@ export type Relation =
   | "in_worktree"
   | "created_worktree"
   | "blocks"
-  | "relates";
+  | "relates"
+  | "member";
 
 const RELATIONS: ReadonlySet<Relation> = new Set([
   "subtask",
@@ -77,6 +83,7 @@ const RELATIONS: ReadonlySet<Relation> = new Set([
   "created_worktree",
   "blocks",
   "relates",
+  "member",
 ]);
 
 export interface NodeRef {

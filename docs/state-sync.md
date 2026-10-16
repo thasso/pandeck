@@ -188,6 +188,31 @@ per-surface sub-tasks — no page invents its own delta format.
   documents. Project archive/restore is an upsert; only deletion removes
   registry membership. Failed optimistic mutations recover their touched ids
   with `getStateItems` and force a keyed detail read only when that id is open.
+- Initiatives: canonical live summaries (neither archived nor deleted) plus a
+  keyed graph read (`getInitiative` → `initiativeDetail`, carrying the revision
+  it is as of). Archiving is a `delete`, unarchiving an `upsert`, and a write to
+  an Initiative already outside the projection is reported as a `delete` again
+  with its new revision, as archived Tasks are. A summary reads member Tasks,
+  their outside blockers and the live sessions on them, so the Task seam's
+  notify-with-ids also reports the Initiatives that read a touched Task — as a
+  member or below one, or through a Task it blocks — in the same act, and a
+  delete or a move reads the holders it takes the Task from before it writes.
+  `sessionStore` reports every session whose liveness a write may change
+  (archive, settle, a raised outcome, a tombstone, a new row), which reaches the
+  Initiatives on that session's Tasks. Both fan-outs run on hot paths, so their
+  walks are pinned to index searches (`initiativeStoreQueryPlan.test.ts`). The
+  subscribe answer is a snapshot (`initiativeList`) or, when asked, a digest
+  with `getStateItems` catch-up. The graph read also carries the map's layout,
+  laid out in a worker thread when it is read and never from a write or a flush;
+  status changes keep it (`docs/initiatives.md`, Layout and placement). The
+  client keeps a few reads keyed by id: a newer revision from an event, a
+  snapshot, or a snapshot that leaves the id out marks a held read stale and its
+  open page re-reads it, keeping the old graph on screen; an answer older than a
+  revision the tab already holds is shown and read again. A Task event never
+  touches it. The user's Settle (`settleInitiative`) is an Initiative write like
+  any other, answered by its event; the browser applies it optimistically with
+  the server's clamp, and a refused or unanswered one re-reads the list by
+  resubscribing, since this client takes the snapshot on every subscribe.
 - Subagents: canonical durable thread registry summaries, with revisions in
   event sidecars; an authorized connection may hold one or more thread-detail
   topics, each with a bounded snapshot/digest/item read and its own

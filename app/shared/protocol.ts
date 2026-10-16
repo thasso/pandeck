@@ -22,6 +22,12 @@ import type {
 } from "./session/entries.ts";
 import type { PaObjectLinkResolution } from "./objectLinks.ts";
 import type { UsageIndicator } from "./usage.ts";
+import type {
+  InitiativeDetail,
+  InitiativeLayout,
+  InitiativeLayoutTooLarge,
+  InitiativeSummary,
+} from "./initiatives.ts";
 import type { ApprovalGrant } from "./approvalGrants.ts";
 import type {
   CommentTarget,
@@ -64,6 +70,7 @@ import type {
 export * from "./memory.ts";
 export * from "./memoryValidation.ts";
 export * from "./workflow.ts";
+export * from "./initiatives.ts";
 export * from "./library.ts";
 export * from "./skills.ts";
 export * from "./comments.ts";
@@ -1585,7 +1592,7 @@ export type SessionTaskProgress = Record<TaskStatus, number>;
 export interface SessionObjectRef {
   objectType: Exclude<
     import("./objectLinks.ts").PaObjectType,
-    "session" | "approval"
+    "session" | "approval" | "initiative"
   >;
   id: string;
   source: "initial-context" | "comment-handoff" | "manual";
@@ -6305,6 +6312,8 @@ export interface PromptAttachment {
 export type BroadcastTopic =
   | "tasks"
   | "projects"
+  /** Live Initiative summaries; the graph is a keyed `getInitiative` read. */
+  | "initiatives"
   /** Canonical durable subagent-thread registry summaries. */
   | "subagents"
   /** Canonical durable session-owned background work items. */
@@ -6320,6 +6329,7 @@ export type BroadcastTopic =
 export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "tasks",
   "projects",
+  "initiatives",
   "subagents",
   "background",
   "worktrees",
@@ -7671,6 +7681,19 @@ export type ClientMessage =
       requestId?: string;
     }
   /**
+   * The user's Settle on an Initiative's inbox card, the one Initiative write
+   * the UI makes (`docs/initiatives.md`, The attention list). `throughRevision`
+   * is the `InitiativeAttention` revision the clicked card rendered,
+   * REQUIRED as on `settleWorkflowRun`; the server clamps it and only moves the
+   * acknowledgement forward. The outcome travels as an `initiatives` event.
+   */
+  | {
+      type: "settleInitiative";
+      id: string;
+      throughRevision: number;
+      requestId?: string;
+    }
+  /**
    * Place Sessions inbox items where the user dragged them
    * ({@link inboxPositionOf}). Usually one entry; the browser sends the whole
    * list renumbered when two neighbours leave no room between them. An unknown
@@ -7870,7 +7893,7 @@ export type ClientMessage =
   /** Batch-fetch rows whose revisions differed in a state digest. */
   | {
       type: "getStateItems";
-      topic: "tasks" | "projects";
+      topic: "tasks" | "projects" | "initiatives";
       ids: string[];
       requestId: string;
     }
@@ -7891,6 +7914,16 @@ export type ClientMessage =
   | { type: "listProjects"; request?: ProjectListRequest }
   /** Request one full Project document; answers are correlated per id. */
   | { type: "getProject"; id: string; requestId: string }
+  /**
+   * Request one Initiative with its graph and its map layout; answers are
+   * correlated per id. `collapsed` names member epics drawn as one node each.
+   */
+  | {
+      type: "getInitiative";
+      id: string;
+      requestId: string;
+      collapsed?: string[];
+    }
   /** Persist editable Project registry fields/properties. */
   | {
       type: "saveProject";
@@ -8199,6 +8232,7 @@ export type ServerMessage =
     }
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
+  | StateEventsMessage<"initiatives", InitiativeSummary>
   | StateEventsMessage<"subagents", SubagentThreadSummary>
   | StateEventsMessage<"background", BackgroundWorkItemSummary>
   | CommentsSnapshotMessage
@@ -8455,6 +8489,36 @@ export type ServerMessage =
   | StateItemsMessage<"tasks", TaskSummary>
   | StateDigestMessage<"projects">
   | StateItemsMessage<"projects", ProjectSummary>
+  | StateDigestMessage<"initiatives">
+  | StateItemsMessage<"initiatives", InitiativeSummary>
+  /**
+   * Cold/resync snapshot of the live Initiatives. Mutations never travel this
+   * way; the sidecar `revisions` seeds the client's next resubscribe.
+   */
+  | {
+      type: "initiativeList";
+      items: InitiativeSummary[];
+      seq: number;
+      revisions: StateDigestEntry[];
+    }
+  /**
+   * One Initiative with its graph, as of `revision`: a newer `initiatives`
+   * event re-reads it. `item` is null when it does not exist or was deleted.
+   * `layout` draws exactly that graph; when it could not be computed, the
+   * answer still carries `item` and says why in `layoutError`, and
+   * `layoutTooLarge` sets the size outcome apart from a failure.
+   */
+  | {
+      type: "initiativeDetail";
+      id: string;
+      item: InitiativeDetail | null;
+      revision?: number;
+      layout?: InitiativeLayout;
+      layoutError?: string;
+      layoutTooLarge?: InitiativeLayoutTooLarge;
+      requestId: string;
+      error?: string;
+    }
   /** Cold/resync registry snapshot; run history is deliberately absent. */
   | {
       type: "subagentThreadList";

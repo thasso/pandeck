@@ -122,6 +122,17 @@ capability logic.
   had the title); now a forgotten field is a link that renders without one.
   `transcriptMentions.test.ts` asserts each Markdown-bearing field by name, so
   adding a rendered field without adding it here fails.
+- `initiativeInbox.ts` shapes Initiatives as Sessions inbox items: active ones
+  for their own block, unsettled paused or done outcomes merged into Needs you
+  on the inbox's position scale (`mergeNeedsYou`), the revision Settle
+  acknowledges, the disclosure's at most five sessions (needing the user first,
+  then newest, from the summary's ids the browser holds) with everything else
+  counted as "more", and the content key the card memoizes on.
+- `initiativeView.ts` is the Initiative page's view model: the keyed read with
+  the live Tasks topic laid over it (status, title, blocked, running), the
+  member tree with per-epic progress, and the `#task-<id>` selection fragment.
+  The overlay never adds or removes a member; only a list the current socket
+  episode answered may speak over the read.
 - `broadcastTopics.ts` owns `topicsForSurface`, the one rule for which
   `BroadcastTopic`s a browser declares: the main pane's route always, the
   selected sidebar section only while its browser is visible. Pure and tested
@@ -1092,16 +1103,18 @@ capability logic.
   background failure with no object to be found by. `openObjects` is the same
   claim for the other three object types that own a surface — the project, Task
   and Knowledge entry currently open, one id each, compared BY id so the open
-  member says nothing about the rest of its list. `objectFailureFrom` is their
-  `sessionFailureFrom`, over the one internal derivation both use, and
+  member says nothing about the rest of its list. `initiativeCards` claims the
+  Initiatives whose Sessions inbox card is on screen with its Settle, read only
+  for that tracked write through `initiativeCardHasHome`. `objectFailureFrom` is
+  their `sessionFailureFrom`, over the one internal derivation both use, and
   `OBJECT_FAILURE_TYPES` is the single list of which types keep such a store (a
   worktree does not: its writes narrate themselves where they were issued).
   `arrivalHasHome` consumes an arrival against those claims plus the collections
   whose load failure is kept as a pane condition (`CONDITION_COLLECTIONS`:
-  projects, Tasks, worktrees). Errors only: the in-place note exists for a
-  failure, so a warning naming the session or object in view is still announced.
-  Why it is shaped this way, and what each earlier shape cost, is
-  `docs/messaging.md`.
+  projects, Tasks, worktrees, Initiatives). Errors only: the in-place note
+  exists for a failure, so a warning naming the session or object in view is
+  still announced. Why it is shaped this way, and what each earlier shape cost,
+  is `docs/messaging.md`.
 - `historyNav.ts` owns the app's position in its own history, and therefore
   every `pushState`/`replaceState` in the app. The platform answers no question
   about history's shape — deliberately, since that would leak browsing — so each

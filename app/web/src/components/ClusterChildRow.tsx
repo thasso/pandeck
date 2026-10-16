@@ -28,11 +28,12 @@ export interface ClusterChildRowProps {
   /**
    * How this row is related to the item above it, for the spoken label: peers
    * of a spawn cluster are `coordinated`, a Workflow Run's own sessions are
-   * `workflow`, and the composer ledge's peers — owned or taken over — are
-   * `spawned`. The row is otherwise identical, and the word is the only place
+   * `workflow`, the composer ledge's peers — owned or taken over — are
+   * `spawned`, and the sessions started from an Initiative's Tasks are
+   * `working`. The row is otherwise identical, and the word is the only place
    * the surfaces differ.
    */
-  relation?: "coordinated" | "workflow" | "spawned";
+  relation?: "coordinated" | "workflow" | "spawned" | "working";
   /**
    * A tab stop of its own. The inbox says no: its rows are reached by arrow
    * key from the item above them, and a second stop per folded peer would put

@@ -40,6 +40,7 @@ import {
 } from "@assistant/shared";
 import { getDb, withDbTransaction } from "./db/index.ts";
 import { taskStore, type TaskStatusActor } from "./db/taskStore.ts";
+import { initiativeStore } from "./db/initiativeStore.ts";
 import {
   addLink,
   allLinks,
@@ -163,8 +164,17 @@ export function subscribeTaskChanges(fn: TaskChangeListener): () => void {
  * that carries it. Every write path in this module therefore reports what it
  * touched, INCLUDING the rows a cascade moved (an inherited project) rather
  * than only the row the caller named.
+ *
+ * The same act reports the Initiatives that hold a touched Task, as a member
+ * or below one, because their progress counts and graphs read these rows
+ * (docs/initiatives.md). A write that can take a Task OUT of an Initiative — a
+ * delete, a move to another parent — reads the holders before it writes and
+ * passes them as `formerHolders`: afterwards nothing links them any more.
  */
-function notify(ids: Iterable<string>): void {
+function notify(
+  ids: Iterable<string>,
+  formerHolders: readonly number[] = [],
+): void {
   // A write may make old completed work eligible (most importantly, completing
   // its active parent). Retention is best-effort: this write is already durable,
   // so a sweep failure must never make the caller see a false save failure or
@@ -176,6 +186,14 @@ function notify(ids: Iterable<string>): void {
     .map((id) => parseId(id))
     .filter((id): id is number => id !== undefined);
   if (numeric.length) taskStore.stampRevisions(numeric);
+  try {
+    initiativeStore.touchHolders(numeric, formerHolders);
+  } catch (error) {
+    // The Task write is durable already; a failed fan-out leaves the counts of
+    // the Initiatives holding it behind until their next write, so say so.
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`[tasks] Initiative fan-out failed: ${detail}`);
+  }
   for (const fn of listeners) {
     try {
       fn(touched);
@@ -609,6 +627,8 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
   const statusWrite = resolveStatusWrite(current, patch);
   const triage = resolveTriage(current, patch);
   const linkChanges = taskLinkChanges(patch.addLinks, patch.removeLinks);
+  const formerHolders =
+    patch.parentId !== undefined ? initiativeStore.holdersOf([nid]) : [];
 
   // One transaction: a link that breaks a rule writes none of the update.
   const touched = withDbTransaction(() => {
@@ -692,6 +712,7 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
         ? { sessionRefs: normalizeSessionRefs(patch.sessionRefs) }
         : {}),
     });
+    if (patch.parentId !== undefined) dropNestedMemberships([nid]);
     return [
       ...cascaded,
       ...applyTaskLinkChanges(nid, linkChanges),
@@ -700,7 +721,7 @@ export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
         : []),
     ];
   });
-  notify([id, ...touched]);
+  notify([id, ...touched], formerHolders);
   return readTask(id)!;
 }
 
@@ -813,8 +834,11 @@ export function deleteTask(id: string): void {
   // Its linked Tasks lose their links to it in the same cleanup, and their
   // viewers have to hear that just as much.
   const linked = taskStore.linkedTaskIds(nid).map(String);
+  // The cleanup drops its membership edges and the `subtask` edges its
+  // children joined Initiatives through, so the Initiatives are read first.
+  const formerHolders = initiativeStore.holdersOf([nid]);
   taskStore.remove(nid); // tombstone + edge cleanup
-  notify([id, ...orphaned, ...linked]);
+  notify([id, ...orphaned, ...linked], formerHolders);
 }
 
 /**
@@ -881,12 +905,32 @@ export function reorderTasks(
   placements?: TaskReorderPlacement[],
   byUser = false,
 ): void {
-  const order = placements?.length
+  assertTopLevelWrite("reorderTasks");
+  const order: TaskReorderPlacement[] = placements?.length
     ? placements
-    : orderedIds.map((id) => ({ id, parentId: undefined }));
+    : orderedIds.map((id) => ({ id }));
+  // A move takes a Task out of the Initiatives its old parent held it in.
+  const formerHolders = initiativeStore.holdersOf(
+    order
+      .map((placement) => parseId(placement.id.trim()))
+      .filter((id): id is number => id !== undefined),
+  );
+  // One transaction: a placement refused late in the list (a Task another tab
+  // deleted, a duplicate, a cycle) must not leave the earlier moves written
+  // without the notification that reports them — that is a hierarchy, and an
+  // Initiative's membership, changing with nobody told.
+  const touched = withDbTransaction(() => applyReorder(order, byUser));
+  notify(touched, formerHolders);
+}
+
+function applyReorder(
+  order: readonly TaskReorderPlacement[],
+  byUser: boolean,
+): Set<string> {
   const siblingIndex = new Map<string, number>();
   const seen = new Set<string>();
   const reparented: number[] = [];
+  const moved: number[] = [];
   const touched = new Set<string>();
   for (const placement of order) {
     const childId = parseId(placement.id.trim());
@@ -915,8 +959,10 @@ export function reorderTasks(
       previousParent !== undefined &&
       taskStore.get(previousParent)?.archivedAt !== undefined;
     if (!hiddenParent) {
-      if (byUser && (previousParent ?? null) !== parentId)
-        reparented.push(childId);
+      if ((previousParent ?? null) !== parentId) {
+        moved.push(childId);
+        if (byUser) reparented.push(childId);
+      }
       // enforces single-parent + acyclic, and reports the subtree a project
       // inheritance moved with it.
       for (const id of taskStore.setParent(childId, parentId))
@@ -933,7 +979,21 @@ export function reorderTasks(
     if (taskStore.get(id)?.triagedAt === undefined)
       taskStore.update(id, { triagedAt: now });
   }
-  notify(touched);
+  dropNestedMemberships(moved);
+  return touched;
+}
+
+/**
+ * A Task moved under another member of an Initiative it was a plain member of
+ * (or one holding plain members below it) is now covered twice; its plain edge
+ * goes, since its new ancestor already makes it a member. Inside the move's
+ * transaction, so the hierarchy and the stored membership never disagree; the
+ * notification after it reports those Initiatives as current holders.
+ */
+function dropNestedMemberships(moved: readonly number[]): void {
+  if (!moved.length) return;
+  for (const initiativeId of initiativeStore.holdersOf(moved))
+    initiativeStore.dropCoveredPlainEdges(initiativeId);
 }
 
 /* ------------------------------- assembly -------------------------------- */

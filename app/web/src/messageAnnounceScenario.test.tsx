@@ -117,6 +117,7 @@ function claim(homes: Partial<FailureHomes>): void {
     viewedSessionId: null,
     stagedSend: null,
     openObjects: { project: [], task: [] },
+    initiativeCards: [],
     ...homes,
   });
 }

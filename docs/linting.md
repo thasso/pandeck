@@ -651,7 +651,8 @@ apply.
 `knip.json` at the repo root covers all four workspaces, including `scripts/`.
 It carries only what knip does not already infer: the codemod entry points,
 which no `package.json` script names; the server's `check*`/`measure*` scripts;
-the `project` globs; and `ignoreBinaries` for `nix` and `vitest`, which
+the Initiative layout worker, which a `Worker` starts by path rather than an
+import; the `project` globs; and `ignoreBinaries` for `nix` and `vitest`, which
 `scripts/` shells out to and no manifest here provides.
 
 Keep it **hint-free**. `pnpm exec knip` prints a "Configuration hints" section

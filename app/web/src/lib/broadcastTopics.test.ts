@@ -460,17 +460,62 @@ describe("topicsForSurface", () => {
     ).toEqual(["worktrees", "projects"]);
   });
 
-  it("holds Workflow Runs alone for a visible Sessions browser", () => {
-    // The run items are made of the run summaries and their cards; the Task
-    // titles beside them stay a best-effort join, so the large Backlog
-    // broadcasts do not ride along on the session list.
+  it("holds Workflow Runs and Initiatives alone for a visible Sessions browser", () => {
+    // The run items are made of the run summaries and their cards, and the
+    // Initiative items of their summaries, which carry the next milestone's
+    // title themselves; a run's Task title stays a best-effort join, so the
+    // large Backlog broadcasts do not ride along on the session list.
     expect(
       topicsForSurface({
         sidebarVisible: true,
         sidebarSection: "sessions",
         routeName: "session",
       }),
-    ).toEqual(["workflow", "projects"]);
+    ).toEqual(["workflow", "initiatives", "projects"]);
+    // A hidden Sessions browser holds neither.
+    const hidden = topicsForSurface({
+      sidebarVisible: false,
+      sidebarSection: "sessions",
+      routeName: "session",
+    });
+    expect(hidden).not.toContain("initiatives");
+    expect(hidden).not.toContain("tasks");
+  });
+
+  it("holds Initiatives for the Projects browser and the Initiative pages", () => {
+    expect(
+      topicsForSurface({
+        sidebarVisible: true,
+        sidebarSection: "projects",
+        routeName: "session",
+      }).sort(),
+    ).toEqual(["initiatives", "projects", "worktrees"]);
+    // One Initiative's map recolours from the Tasks topic and names lanes from
+    // Projects; it reads no Worktree projection.
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "projects",
+        routeName: "initiatives",
+      }).sort(),
+    ).toEqual(["initiatives", "projects", "tasks"]);
+    // A selected Task's detail reads its Workflow Runs, as on the Task page.
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "projects",
+        routeName: "initiatives",
+        initiativeTaskSelected: true,
+      }).sort(),
+    ).toEqual(["initiatives", "projects", "tasks", "workflow"]);
+    // A hidden Projects browser holds nothing on a conversation.
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "projects",
+        routeName: "session",
+      }),
+    ).not.toContain("initiatives");
   });
 
   it("holds only Projects for a conversation with the browser hidden", () => {

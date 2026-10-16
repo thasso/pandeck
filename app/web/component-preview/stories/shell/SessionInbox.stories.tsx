@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type {
+  InitiativeSummary,
   ProjectRecord,
   SessionListItem,
   TaskSummary,
@@ -20,12 +21,102 @@ import {
   type SessionInboxFixture,
   type SessionOverrides,
 } from "../../fixtures/shell.ts";
+import { hostedLabsSummary } from "../../fixtures/initiatives.ts";
 
 export interface SessionInboxStoryProps {
   frameWidth: number;
   density: RowDensity;
   scenario:
-    "attention" | "quiet-list" | "all-states" | "sessions" | "workflow-runs";
+    | "attention"
+    | "quiet-list"
+    | "all-states"
+    | "sessions"
+    | "workflow-runs"
+    | "initiatives"
+    | "initiatives-only";
+}
+
+/**
+ * Initiatives as inbox items: an active one (no Settle) whose sessions run past
+ * the summary's page, a paused and a done one awaiting Settle, and a paused one
+ * already settled, which is not an item. Two sessions are listed by two
+ * Initiatives and still keep one card each.
+ */
+function initiativeFixture(
+  now: number,
+  withSessions: boolean,
+): { initiatives: InitiativeSummary[]; sessions: SessionListItem[] } {
+  const min = 60_000;
+  const owned = (id: string, title: string, extra: SessionOverrides = {}) =>
+    session(now, id, title, {
+      agentType: "developer",
+      projectId: "acme-portal",
+      ...extra,
+    });
+  const sessions = withSessions
+    ? [
+        owned("labs-images", "Build the hosted SDC images", {
+          isStreaming: true,
+          updatedAt: now - 1 * min,
+        }),
+        owned("labs-quotas", "Stardust Labs quota service", {
+          updatedAt: now - 4 * min,
+          unread: true,
+          outcomeAttention: {
+            revision: 1,
+            settledRevision: 0,
+            kind: "completed",
+            at: now - 4 * min,
+          },
+        }),
+        owned("labs-srs", "SRS tenancy migration", {
+          updatedAt: now - 30 * min,
+        }),
+      ]
+    : [];
+  const listed = withSessions ? ["labs-images", "labs-quotas", "labs-srs"] : [];
+  const initiatives: InitiativeSummary[] = [
+    hostedLabsSummary({
+      sessionIds: listed,
+      sessionCount: withSessions ? 57 : 0,
+      updatedAt: now - 2 * min,
+    }),
+    {
+      id: "6",
+      title: "Billing migration to the ledger service",
+      state: "paused",
+      attention: { revision: 1, settledRevision: 0, kind: "paused", at: now },
+      progress: { total: 20, done: 12, doing: 1, startable: 2, blocked: 3 },
+      nextMilestone: { id: "870", title: "Cut over invoices" },
+      sessionIds: withSessions ? ["labs-quotas"] : [],
+      sessionCount: withSessions ? 1 : 0,
+      createdAt: now - 5 * 3 * 60 * min,
+      updatedAt: now - 3 * 60 * min,
+    },
+    {
+      id: "5",
+      title: "Docs refresh",
+      state: "done",
+      attention: { revision: 2, settledRevision: 1, kind: "done", at: now },
+      progress: { total: 9, done: 9, doing: 0, startable: 0, blocked: 0 },
+      sessionIds: [],
+      sessionCount: 0,
+      createdAt: now - 5 * 26 * 60 * min,
+      updatedAt: now - 26 * 60 * min,
+    },
+    {
+      id: "4",
+      title: "Settled pause (not an item)",
+      state: "paused",
+      attention: { revision: 1, settledRevision: 1, kind: "paused", at: now },
+      progress: { total: 3, done: 1, doing: 0, startable: 2, blocked: 0 },
+      sessionIds: [],
+      sessionCount: 0,
+      createdAt: now - 5 * 48 * 60 * min,
+      updatedAt: now - 48 * 60 * min,
+    },
+  ];
+  return { initiatives, sessions };
 }
 
 /**
@@ -743,32 +834,46 @@ export function SessionInboxStory({
   scenario,
 }: SessionInboxStoryProps) {
   const [now] = useState(() => Date.now());
-  const initial = useMemo(
-    () =>
+  const initiativeScenario =
+    scenario === "initiatives" || scenario === "initiatives-only";
+  const initial = useMemo(() => {
+    if (initiativeScenario) {
+      const fixture = initiativeFixture(now, scenario === "initiatives");
+      return {
+        ...attentionFixture(now),
+        sessions: fixture.sessions,
+        initiatives: fixture.initiatives,
+        archivedSessionCount: 0,
+      };
+    }
+    const base =
       scenario === "quiet-list"
         ? quietListFixture(now)
         : scenario === "workflow-runs"
           ? allStatesFixture(now, { withRuns: true, runsOnly: true })
           : scenario === "all-states" || scenario === "sessions"
             ? allStatesFixture(now, { withRuns: scenario === "all-states" })
-            : attentionFixture(now),
-    [now, scenario],
-  );
+            : attentionFixture(now);
+    return { ...base, initiatives: [] as InitiativeSummary[] };
+  }, [now, scenario, initiativeScenario]);
   const initialCurrentId =
     scenario === "quiet-list"
       ? "preview"
       : scenario === "all-states" ||
           scenario === "sessions" ||
-          scenario === "workflow-runs"
+          scenario === "workflow-runs" ||
+          initiativeScenario
         ? undefined
         : "coordinator";
   const [sessions, setSessions] = useState(initial.sessions);
+  const [initiatives, setInitiatives] = useState(initial.initiatives);
   const [currentId, setCurrentId] = useState<string | undefined>(
     initialCurrentId,
   );
 
   useEffect(() => {
     setSessions(initial.sessions);
+    setInitiatives(initial.initiatives);
     setCurrentId(initialCurrentId);
   }, [initial, initialCurrentId]);
 
@@ -846,6 +951,31 @@ export function SessionInboxStory({
             onOpenTask={() => {}}
             onOpenWorkflowRun={() => {}}
             onSettleWorkflowRun={() => {}}
+            initiatives={initiatives}
+            initiativesFresh
+            initiativesRefreshing={false}
+            initiativeListError={null}
+            onRetryInitiatives={() => {}}
+            onOpenInitiative={() => {}}
+            // The server's clamp, so the preview settles as the app does.
+            onSettleInitiative={(id, throughRevision) =>
+              setInitiatives((items) =>
+                items.map((item) =>
+                  item.id === id && item.attention
+                    ? {
+                        ...item,
+                        attention: {
+                          ...item.attention,
+                          settledRevision: Math.max(
+                            item.attention.settledRevision,
+                            Math.min(item.attention.revision, throughRevision),
+                          ),
+                        },
+                      }
+                    : item,
+                ),
+              )
+            }
             onOpenWorktree={() => {}}
           />
         </div>
@@ -871,6 +1001,8 @@ const meta = {
         "all-states",
         "sessions",
         "workflow-runs",
+        "initiatives",
+        "initiatives-only",
       ],
     },
   },
@@ -946,5 +1078,29 @@ export const Sessions: Story = {
 
 export const WorkflowRuns: Story = {
   args: { frameWidth: 256, density: "tight", scenario: "workflow-runs" },
+  globals: { viewport: { value: "paDesktop", isRotated: false } },
+};
+
+export const Initiatives: Story = {
+  args: { frameWidth: 256, density: "tight", scenario: "initiatives" },
+  globals: { viewport: { value: "paDesktop", isRotated: false } },
+};
+
+export const InitiativesPhone: Story = {
+  args: { frameWidth: 390, density: "comfortable", scenario: "initiatives" },
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+};
+
+export const InitiativesDark: Story = {
+  args: { frameWidth: 256, density: "tight", scenario: "initiatives" },
+  globals: {
+    theme: "dark",
+    textScale: "120",
+    viewport: { value: "paDesktop", isRotated: false },
+  },
+};
+
+export const InitiativesOnly: Story = {
+  args: { frameWidth: 256, density: "tight", scenario: "initiatives-only" },
   globals: { viewport: { value: "paDesktop", isRotated: false } },
 };

@@ -198,7 +198,8 @@ function failureOnObject(
 
 /**
  * Collections whose load failure the client keeps as a CONDITION on the
- * collection itself (`projectListError`, `worktreeListError`, `taskListError`),
+ * collection itself (`projectListError`, `worktreeListError`, `taskListError`,
+ * `initiativeListError`),
  * rendered by the pane whenever the user goes there.
  *
  * Listed once, and read by both the reducer that stores the condition and the
@@ -209,6 +210,7 @@ const CONDITION_COLLECTIONS: readonly MessageTarget["type"][] = [
   "project",
   "task",
   "worktree",
+  "initiative",
 ];
 
 /** Whether this target names one of those collections rather than a member. */
@@ -264,12 +266,23 @@ export interface FailureHomes {
    * suppressing the failure into nothing.
    */
   openObjects: Record<ObjectFailureType, readonly string[]>;
+  /**
+   * The Initiatives whose Sessions inbox card is on screen WITH its Settle
+   * control: the inbox is the visible sidebar section and the Initiative an
+   * unsettled outcome in it. That control is the one home a Settle's failure
+   * has, so this is asked only for that tracked write
+   * (`initiativeCardHasHome`), never for an arrival that merely names an
+   * Initiative. A card an optimistic Settle took away, or one in a hidden or
+   * unmounted inbox, is not here.
+   */
+  initiativeCards: readonly string[];
 }
 
 const NO_HOMES: FailureHomes = {
   viewedSessionId: null,
   stagedSend: null,
   openObjects: { project: [], task: [] },
+  initiativeCards: [],
 };
 
 let homes: FailureHomes = NO_HOMES;
@@ -298,6 +311,14 @@ export function readFailureHomes(): FailureHomes {
 /** Test seam: forget every claim. */
 export function resetFailureHomes(): void {
   homes = NO_HOMES;
+}
+
+/** Whether an Initiative Settle's failure can be said on its card right now. */
+export function initiativeCardHasHome(
+  initiativeId: string,
+  current: FailureHomes = homes,
+): boolean {
+  return current.initiativeCards.includes(initiativeId);
 }
 
 /**

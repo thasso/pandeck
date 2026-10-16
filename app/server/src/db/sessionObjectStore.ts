@@ -13,7 +13,7 @@ import {
 
 export type SessionContextObjectType = Exclude<
   PaObjectType,
-  "session" | "approval"
+  "session" | "approval" | "initiative"
 >;
 export type SessionContextSource = SessionObjectRef["source"];
 

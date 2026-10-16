@@ -449,6 +449,20 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   same "only where it adds something" dedup as `blockedReason`. Session buttons
   navigate through the screens model; cancel confirms that sessions, worktree
   and PR remain. Terminal runs collapse to subdued lifecycle/date rows.
+- `initiative/` holds the Initiative surfaces (`docs/initiatives.md`):
+  `InitiativesIndexPage` (by state), `InitiativeDetailPage` (header from the
+  live summary, members from the keyed read, the five load states, Map/List
+  switch), `InitiativeListView`, `InitiativeStateMarks` (Ready/Doing/Blocked/
+  Archived/Running/Outside, shared by node and row), the sidebar's
+  `InitiativeBrowserGroup` (with its own failure and retry),
+  `InitiativeInspectorSummary`, and `InitiativeMap`, the only importer of
+  `@xyflow/react`, loaded lazily. The map draws the server's boxes and routes as
+  they are, adds the built-in overview map, and judges each arrow by its
+  blocker's live state (`routeEdges`); each Task node is an `Item` rendered as a
+  button, and lanes, groups and the milestone column are pointer-transparent
+  drawing. A selected Task is NOT drawn by an Initiative component: App embeds
+  `TaskManagementPage` (detail only) over `TaskInspector` with
+  `showEmptySessions`, keyed by the one open Task id (`openTaskId`).
 - `ProjectDetailPage.tsx` is the Project's CONTENT, in use order: description,
   its Tasks (`renderTasks`, a render prop because the list is the lazy
   `BacklogList` and needs App's socket state — the page only decides where it
@@ -1589,6 +1603,16 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   acknowledge or destroy something its surface cannot undo. Its rows ARE tab
   stops (`tabbable`), which the inbox's are not: there is no roving focus above
   them here, so without it the link would be reachable by pointer alone.
+- `InitiativeInboxCard.tsx` is an Initiative's Sessions inbox card, built from
+  `lib/initiativeInbox.ts` over the `initiatives` summary alone: title, state,
+  progress, ready and blocked counts, the next open milestone, a disclosure of
+  the sessions started from its Tasks (listed as `ClusterChildRow`s with
+  relation `working` and no lifecycle actions, since each keeps its own card),
+  and Settle on a paused or done outcome, which `SessionInbox` sends through the
+  settle exit with the revision captured at the click. `InitiativeMoreRow` is
+  the disclosure's one "and N more" row, opening the Initiative. Active
+  Initiatives head the working set in their own block; an unsettled outcome is
+  an item of Needs you; neither is ever dragged.
 - The Sessions section's browser is an INBOX of the working set, not a history
   list: `SessionInbox.tsx` owns it (search, the labelled **Needs you** block,
   one priority-sorted list for everything else still unsettled, the compact

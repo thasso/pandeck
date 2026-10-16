@@ -212,6 +212,16 @@ section that reads a domain list subscribes only while the main pane RENDERS it
 — the browser listing its entry reads nothing — because for the skills library a
 subscribe is what makes the server rescan the user's working tree.
 
+Initiatives (`docs/initiatives.md`) have their canonical location in a group at
+the TOP of the Projects browser, because they sit above Projects. The group is
+bounded: it lists the active and paused Initiatives. It is a `ListGroupSection`
+band whose heading folds it like every group, and a link of its own in the
+band's actions opens `/initiatives`, the index page that lists every live
+Initiative by state (done ones included). It holds the `initiatives` topic only
+while the Projects browser is on screen; an Initiative's page holds it too, with
+Tasks and Projects for the live map. There is no Initiatives section of its own
+and no view of an Initiative inside a Project page.
+
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached
 Task data, and mutation broadcasts update every subscribed tab/PWA instance. The
@@ -496,8 +506,8 @@ right edge. The pause reason and next action are the card's spoken label. The
 item is named by the TASK the run works on, since a run has no title of its own;
 the Task's title is a best-effort join on the Backlog rows this tab already
 holds, so a browser that has none shows the id and the run is still complete. A
-visible Sessions browser therefore holds the `workflow` topic — and only that
-one.
+visible Sessions browser therefore holds the `workflow` topic, and the
+`initiatives` topic for the Initiative items below — and no Tasks.
 
 Membership is STRUCTURAL: the ids on the run's recipe card projection, and
 nothing else. No rule here parses a session's title or looks for a role-like
@@ -587,6 +597,59 @@ Task row and the run list load asynchronously, and native fragment scrolling
 resolves once against a page that does not have the element yet. The jump
 scrolls the card into view and focuses it, once per address, honouring reduced
 motion.
+
+An **Initiative** is a Sessions inbox item too (`docs/initiatives.md`, The
+attention list), following the run's precedent where it can. An ACTIVE
+Initiative is always an item and offers no Settle, since ongoing work has no
+outcome to acknowledge; a paused or done one is an item while its attention
+revision is unsettled, and Settle — the one Initiative write the UI makes —
+sends exactly the revision the clicked card rendered, captured at the click and
+sent after the settle exit, so an outcome raised meanwhile stays an item. The
+send belongs to the click, not to the list: leaving the Sessions section during
+the exit sends it then, as a swipe's does, and never twice. A refused or
+unanswered Settle is said under its card while the visible inbox draws that card
+with its Settle; otherwise, including when the optimistic Settle has taken the
+card away, it is announced naming the Initiative (`docs/messaging.md`). The card
+has the session card's three rows: "Initiative" with its done/total progress and
+the time; the title led by the Initiative glyph while active, else by its Paused
+or Done mark; then the disclosure of its sessions, how many Tasks are ready and
+how many blocked, and the next open milestone, with Settle at the right edge.
+Everything else is in its spoken label. Opening the card goes to
+`/initiatives/:id`, the map. Every fact comes from the `initiatives` summary,
+the next milestone's title included, so no card reads a graph, a layout or the
+Tasks topic, and a member Task's change reaches it as the Initiative's own
+event.
+
+WHERE an Initiative stands follows what it asks of the user. An ACTIVE one is in
+its own block at the top of the working set, below **Needs you**, newest first.
+An unsettled paused or done outcome is an item OF **Needs you**, like an ended
+Workflow Run: ordered among its items on their creation scale (the summary's
+`createdAt`, since nobody drags it), counted by the bar's waiting-on-you number,
+and the first row that number moves to when it leads the block. Settled, it
+leaves both places; active again, it goes back to the block. Each Initiative is
+exactly ONE card in exactly one place, and neither place drags: dragging would
+be a second Initiative write, and there is no Initiative inbox position. Nothing
+above the cards holds a loading placeholder for Initiatives, but neither the
+cold-start nor the "nothing needs you" claim is made before the Initiative list
+has answered — an inbox whose only item is an Initiative is not empty — and a
+failed list read is stated above Needs you with a retry, over any items still
+held. A failed read is not that answer: before one arrives, the failure stands
+alone, with no empty claim beside it, while sessions already held still show.
+
+The disclosure lists the sessions started from its member Tasks. The summary
+carries at most 50 of their ids (the DATA bound, newest first, with the full
+count); the open disclosure shows at most FIVE of those this browser holds (the
+DISPLAY bound), those needing the user first — waiting on a human or holding an
+unresolved failure, what lifts a Workflow Run's line — then newest created, ties
+by id. Whatever it does not show — past five, past the 50 ids, or not held here
+— is ONE "and N more" row, N being the full count minus the rows shown, which
+opens the Initiative's page; it is never shown when every session fits. Unlike a
+run's roles they are NOT folded: each keeps its own card, and a session may be
+listed under several Initiatives. The listed rows are compact `working` rows
+that open the session; they carry no Settle, Archive or Delete, which stay on
+the session's own card. The disclosure and Settle never open the Initiative, a
+session row opens only its session, and the more row only the Initiative; all of
+them are rows of the list for the arrow keys.
 
 ## Pull Requests
 
@@ -753,9 +816,14 @@ left at the top edge, not a pixel offset — these lists re-sort under them.
 
 Routes identify objects, not sidebar state: one canonical route shape per object
 type (`/sessions/:id`, `/tasks/:id`, `/worktrees/:id`, …) plus section index
-routes such as `/knowledge`. The singleton Personal Assistant has the dedicated
-`/assistant` route so its empty first-use state is not mistaken for the ordinary
-`/sessions/create` draft surface. No legacy aliases.
+routes such as `/knowledge`. `/initiatives/:id` is one Initiative and
+`/initiatives` its index, a real page rather than a browser screen; both belong
+to the Projects section, so Back from either goes to `/projects`. The member
+Task selected on an Initiative page is a fragment, `#task-<id>` (see below), so
+a selection survives a reload and back/forward pass through it. The singleton
+Personal Assistant has the dedicated `/assistant` route so its empty first-use
+state is not mistaken for the ordinary `/sessions/create` draft surface. No
+legacy aliases.
 
 Document routes share one navigation shell around source-specific renderers
 (`docs/document-presentation.md`). `/files/<absolute path>` addresses a live
@@ -850,6 +918,25 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    The panel holds the Worktrees topic whenever it shows a session. A group may
    bound its first page (a session's Tasks shows five) and reveal the rest on
    demand.
+
+An Initiative page is the one main-pane object whose panel can show ANOTHER
+object: selecting a node on its map, or a row of its list, opens that member
+Task (or outside blocker) in the panel as the Task route shows it across its
+page and its panel — the Task detail (body, status control with its busy and
+failure states, description, links, runs) over the ordinary Task inspector (its
+sessions, empty or not, Start a session, context and actions). The detail owns
+the Task's body read, so an archived or outside Task, one that no longer exists,
+and a failed or reconnecting read behave as on the Task page, and the selected
+Task's failures have their home there while the panel shows it: shut, behind
+another tab or the panel home, with the Inspector tab closed, or in a collapsed
+dock, a failure about it is announced naming the Task. The Task's actions are
+the panel's too: its Start and its `…` menu sit in the Task header drawn inside
+the panel (on a phone, the dock's row and sheet), in an action scope of their
+own, so the Initiative's page header never offers to start, archive or delete a
+Task. Selecting is the user asking to see it, so it opens the panel; navigation
+still never closes it. With nothing selected, the panel summarizes the
+Initiative and offers no Initiative action: agents manage Initiatives, and the
+user's one write, Settle, belongs to its inbox card.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

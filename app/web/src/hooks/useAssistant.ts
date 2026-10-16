@@ -20,9 +20,12 @@ import { localStore } from "../lib/localStore.ts";
 import { createIdleWriter, type IdleWriter } from "../lib/idleWriter.ts";
 import { announceMessage } from "../lib/messageAnnounce.ts";
 import { sessionSettleCascade } from "../lib/sessionInbox.ts";
+import { initiativeSettleRevision } from "../lib/initiativeInbox.ts";
+import { collapseRequest, sameCollapsed } from "../lib/initiativeView.ts";
 import {
   arrivalHasHome,
   arrivalMessage,
+  initiativeCardHasHome,
   objectFailureFrom,
   type ObjectFailureType,
   sessionFailureFrom,
@@ -69,6 +72,10 @@ import type {
   ProjectListRequest,
   ProjectListResponse,
   ProjectRecord,
+  InitiativeDetail,
+  InitiativeLayout,
+  InitiativeLayoutTooLarge,
+  InitiativeSummary,
   ProjectSummary,
   PullRequestCard,
   PullRequestCardAction,
@@ -417,6 +424,24 @@ interface WorkflowRunStartState {
   error?: string;
 }
 
+/**
+ * One `initiativeDetail` answer: the graph, and the map's layout for exactly
+ * that graph or why it could not be drawn (`layoutError`, with the graph kept).
+ */
+export interface InitiativeRead {
+  item: InitiativeDetail;
+  layout?: InitiativeLayout;
+  layoutError?: string;
+  /** Set with `layoutError` when the map is over the node limit: its size. */
+  layoutTooLarge?: InitiativeLayoutTooLarge;
+  /**
+   * The collapsed epics this read asked for, as sent (none when absent): with
+   * the graph it is the drawing's identity, so a page whose wish moved since
+   * knows this read is not the one it wants.
+   */
+  requestedCollapsed?: readonly string[];
+}
+
 export interface UIState {
   hydrated: boolean;
   /** `cache` means the app shell rendered from browser-local data and is waiting for websocket reconciliation. */
@@ -491,6 +516,41 @@ export interface UIState {
   stateEventRevisions: Partial<Record<BroadcastTopic, Record<string, number>>>;
   /** Canonical bounded subagent registry; detail/transcript state stays keyed. */
   subagentThreads: SubagentThreadSummary[];
+  /**
+   * Live Initiative summaries from the `initiatives` topic, held only while it
+   * is subscribed. The graph is a keyed `getInitiative` read.
+   */
+  initiatives: InitiativeSummary[];
+  /**
+   * An `initiativeList` snapshot answered the current subscription during this
+   * socket episode.
+   */
+  initiativesFresh: boolean;
+  /**
+   * A new subscription's snapshot is out over a list an earlier one answered
+   * this episode: the held list is shown as refreshing, never as ready or
+   * empty. A snapshot, a failed read or a disconnect ends it.
+   */
+  initiativesRefreshing: boolean;
+  /** The Initiative list could not be read; cleared by the next snapshot. */
+  initiativeListError: string | null;
+  /**
+   * A Settle's failure, by Initiative id: kept only when that Initiative's
+   * inbox card was on screen to say it in place, and retired by its next
+   * Settle. Every other failure of the write is announced naming it instead.
+   */
+  initiativeSettleErrors: Readonly<Record<string, InitiativeSettleError>>;
+  /**
+   * Keyed Initiative reads (`getInitiative`): the graph with its map layout, or
+   * `ready(null)` when it does not exist or was deleted. A newer `initiatives`
+   * event or snapshot revision re-reads an entry; Task events never do.
+   */
+  initiativeDetails: Record<string, LoadState<InitiativeRead | null>>;
+  /** The revision each held read is as of, pruned with the cache. */
+  initiativeDetailRevisions: Record<string, number>;
+  initiativeDetailsLru: string[];
+  /** The Initiative a page is showing; its read is never pruned. */
+  openInitiativeId: string | null;
   /**
    * Canonical bounded background-work registry. Held only while the topic is
    * subscribed; per-session activity travels on the session row instead, so no
@@ -874,6 +934,15 @@ const emptyInitial: UIState = {
   taskList: null,
   stateEventRevisions: {},
   subagentThreads: [],
+  initiatives: [],
+  initiativesFresh: false,
+  initiativesRefreshing: false,
+  initiativeListError: null,
+  initiativeSettleErrors: {},
+  initiativeDetails: {},
+  initiativeDetailRevisions: {},
+  initiativeDetailsLru: [],
+  openInitiativeId: null,
   backgroundWorkItems: [],
   backgroundWorkTruncated: false,
   backgroundStopPending: [],
@@ -1525,6 +1594,8 @@ const LONG_MUTATION_SETTLE_TIMEOUT_MS = 15 * 60_000;
 /** Full Task bodies are useful on revisit but must stay bounded. */
 export const TASK_PROJECTION_CACHE_LIMIT = 16;
 const PROJECT_DETAIL_CACHE_LIMIT = 12;
+/** Initiative reads carry a whole graph and layout, so fewer are kept. */
+const INITIATIVE_DETAIL_CACHE_LIMIT = 6;
 /** Digest catch-up degrades to the full snapshot instead of hanging stale. */
 const TASK_DIGEST_TIMEOUT_MS = 10_000;
 
@@ -1814,6 +1885,20 @@ type Action =
       events: ProjectStateEventsMessage["events"];
     }
   | { kind: "setOpenProjectProjection"; id: string | null }
+  | { kind: "initiativeDetailLoad"; id: string }
+  | {
+      kind: "initiativeDetailResult";
+      id: string;
+      read: InitiativeRead | null;
+      revision?: number;
+      error?: string;
+    }
+  | { kind: "setOpenInitiative"; id: string | null }
+  | { kind: "initiativeListRetry" }
+  /** An `initiatives` subscribe went out: subscribing is the list read. */
+  | { kind: "initiativeListSubscribed" }
+  /** The Initiative list could not be read: a condition on that list alone. */
+  | { kind: "initiativeListFailed"; message: string }
   | { kind: "projectMutationStart"; key: string }
   | { kind: "projectMutationResult"; key: string; error?: string }
   | { kind: "worktreeListLoad" }
@@ -1870,6 +1955,22 @@ type Action =
       throughRevision: number;
       sessionIds: string[];
       now: number;
+    }
+  /**
+   * A Settle on an Initiative's inbox card: its attention is acknowledged
+   * through the revision the click saw, with the server's clamp, so an
+   * outcome raised since stays awake here too.
+   */
+  | {
+      kind: "optimisticInitiativeSettle";
+      initiativeId: string;
+      throughRevision: number;
+    }
+  /** An Initiative Settle failed while its card was on screen to say so. */
+  | {
+      kind: "initiativeSettleResult";
+      initiativeId: string;
+      error: InitiativeSettleError;
     }
   /**
    * Sessions inbox items dragged to a new place: sessions and runs in ONE
@@ -3493,6 +3594,10 @@ function applyOptimisticSettings(
 
 type TaskStateEventsMessage = StateEventsMessage<"tasks", TaskSummary>;
 type ProjectStateEventsMessage = StateEventsMessage<"projects", ProjectSummary>;
+type InitiativeStateEventsMessage = StateEventsMessage<
+  "initiatives",
+  InitiativeSummary
+>;
 type SubagentStateEventsMessage = StateEventsMessage<
   "subagents",
   SubagentThreadSummary
@@ -3620,10 +3725,13 @@ function applyEvent(
   message:
     | TaskStateEventsMessage
     | ProjectStateEventsMessage
+    | InitiativeStateEventsMessage
     | SubagentStateEventsMessage
     | BackgroundStateEventsMessage,
 ): UIState {
   if (message.topic === "projects") return applyProjectEvent(state, message);
+  if (message.topic === "initiatives")
+    return applyInitiativeEvent(state, message);
   if (message.topic === "subagents") return applySubagentEvent(state, message);
   if (message.topic === "background")
     return applyBackgroundEvent(state, message);
@@ -3731,6 +3839,144 @@ function applySubagentEvent(
     ...state,
     subagentThreads: threads,
     stateEventRevisions: { ...state.stateEventRevisions, subagents: revisions },
+  };
+}
+
+/**
+ * Mark a held Initiative read for a re-read when `revision` is newer than the
+ * one it is as of. Only a summary revision does this — an event, a snapshot or
+ * the answer to a read — and never a Task event, which recolours the map from
+ * the Tasks topic without a read or a layout.
+ */
+function staleInitiativeDetail(
+  details: UIState["initiativeDetails"],
+  held: UIState["initiativeDetails"],
+  detailRevisions: UIState["initiativeDetailRevisions"],
+  id: string,
+  revision: number | undefined,
+): UIState["initiativeDetails"] {
+  const detail = details[id];
+  if (!detail || dataOf(detail) === undefined) return details;
+  if (detail.status === "refreshing") return details;
+  if (revision !== undefined && revision <= (detailRevisions[id] ?? -1))
+    return details;
+  const next = details === held ? { ...held } : details;
+  next[id] = beginLoad(detail);
+  return next;
+}
+
+/** A `getInitiative`; an empty collapsed set is left out. */
+function initiativeReadMessage(
+  id: string,
+  requestId: string,
+  collapsed: readonly string[],
+): ClientMessage {
+  return {
+    type: "getInitiative",
+    id,
+    requestId,
+    ...(collapsed.length > 0 ? { collapsed: [...collapsed] } : {}),
+  };
+}
+
+function applyInitiativeEvent(
+  state: UIState,
+  message: InitiativeStateEventsMessage,
+): UIState {
+  const current = state.stateEventRevisions.initiatives ?? {};
+  let revisions: Record<string, number> | null = null;
+  let initiatives = state.initiatives;
+  let initiativeDetails = state.initiativeDetails;
+  for (const event of message.events) {
+    const known = revisions?.[event.id] ?? current[event.id] ?? -1;
+    if (event.revision <= known) continue;
+    revisions ??= { ...current };
+    revisions[event.id] = event.revision;
+    // A delete is a newer revision too: an archived Initiative's open page
+    // re-reads, and a deleted one answers `null`.
+    initiativeDetails = staleInitiativeDetail(
+      initiativeDetails,
+      state.initiativeDetails,
+      state.initiativeDetailRevisions,
+      event.id,
+      event.revision,
+    );
+    const index = initiatives.findIndex((item) => item.id === event.id);
+    if (event.kind === "delete") {
+      if (index >= 0)
+        initiatives = initiatives.filter((item) => item.id !== event.id);
+    } else if (index < 0) {
+      initiatives = [...initiatives, event.item];
+    } else if (!wireValueEqual(initiatives[index], event.item)) {
+      const next = initiatives.slice();
+      next[index] = event.item;
+      initiatives = next;
+    }
+  }
+  if (!revisions) return state;
+  return {
+    ...state,
+    initiatives,
+    initiativeDetails,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      initiatives: revisions,
+    },
+  };
+}
+
+/**
+ * The `initiativeList` snapshot names the whole live projection, so it judges
+ * every held read: one it leaves out (archived or deleted while this tab was
+ * away) and one whose revision moved past its read both re-read.
+ */
+function applyInitiativeSnapshot(
+  state: UIState,
+  items: InitiativeSummary[],
+  revisions: Record<string, number>,
+): UIState {
+  let initiativeDetails = state.initiativeDetails;
+  for (const id of Object.keys(state.initiativeDetails))
+    initiativeDetails = staleInitiativeDetail(
+      initiativeDetails,
+      state.initiativeDetails,
+      state.initiativeDetailRevisions,
+      id,
+      revisions[id],
+    );
+  return {
+    ...state,
+    initiatives: items,
+    initiativesFresh: true,
+    initiativesRefreshing: false,
+    initiativeListError: null,
+    initiativeDetails,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      initiatives: revisions,
+    },
+  };
+}
+
+function pruneInitiativeDetails(
+  state: UIState,
+  details: UIState["initiativeDetails"],
+  revisions: UIState["initiativeDetailRevisions"],
+  lru: string[],
+): Pick<
+  UIState,
+  "initiativeDetails" | "initiativeDetailRevisions" | "initiativeDetailsLru"
+> {
+  const keep = new Set([
+    ...lru.slice(-INITIATIVE_DETAIL_CACHE_LIMIT),
+    ...(state.openInitiativeId ? [state.openInitiativeId] : []),
+  ]);
+  const kept = <T>(record: Record<string, T>) =>
+    Object.fromEntries(Object.entries(record).filter(([id]) => keep.has(id)));
+  return {
+    initiativeDetails: kept(details),
+    initiativeDetailRevisions: kept(revisions),
+    initiativeDetailsLru: lru.filter((id) => keep.has(id)),
   };
 }
 
@@ -4176,7 +4422,11 @@ function worktreeCommentsOf(thread: CommentThread): WorktreeComment[] {
  * announce a failure that was long over. From here there is no later: the
  * message is either said now or owned by something that renders it.
  */
-function announceArrival(msg: ServerMessage, state: UIState): void {
+function announceArrival(
+  msg: ServerMessage,
+  state: UIState,
+  knownName?: string,
+): void {
   const reveal = state.revealRequest;
   const arrival = arrivalMessage(msg, {
     viewedSessionId: state.session?.sessionId ?? null,
@@ -4189,7 +4439,7 @@ function announceArrival(msg: ServerMessage, state: UIState): void {
     revealTargetKind: reveal?.target.kind ?? null,
   });
   if (!arrival || arrivalHasHome(arrival)) return;
-  const resolvedName = targetTitle(arrival.target, state);
+  const resolvedName = targetTitle(arrival.target, state) ?? knownName;
   const announcement = announceMessage({
     severity: arrival.severity,
     message: arrival.message,
@@ -4230,9 +4480,74 @@ function targetTitle(
       const task = state.taskList?.items.find((item) => item.id === target.id);
       return task ? `Task-${task.id} ${task.title}` : undefined;
     }
+    case "initiative": {
+      const initiative = state.initiatives.find(
+        (item) => item.id === target.id,
+      );
+      return initiative ? initiativeName(initiative) : undefined;
+    }
     default:
       return undefined;
   }
+}
+
+/** How an announcement names an Initiative. */
+function initiativeName(initiative: InitiativeSummary): string {
+  return `Initiative-${initiative.id} ${initiative.title}`;
+}
+
+/**
+ * What an Initiative card says under itself after its Settle failed, and the
+ * outcome revision the card showed then: a later outcome is a different item,
+ * and this is not about it.
+ */
+export interface InitiativeSettleError {
+  message: string;
+  revision: number;
+}
+
+interface InitiativeSettleRequest {
+  initiativeId: string;
+  /** Its name at the click, for a failure that outlives the list holding it. */
+  name?: string;
+  /** The deadline has already told the user this write went unanswered. */
+  timedOut?: boolean;
+}
+
+/**
+ * An Initiative Settle's failure — refused, or never answered — said once
+ * (`docs/messaging.md`): in place while that Initiative's inbox card is on
+ * screen, judged now rather than at the click, since an optimistic Settle
+ * takes the card away and a newer outcome can bring it back; otherwise
+ * announced naming the Initiative.
+ */
+function initiativeSettleFailed(
+  request: InitiativeSettleRequest,
+  message: string,
+  state: UIState,
+  dispatch: (action: Action) => void,
+): void {
+  const shown = state.initiatives.find(
+    (item) => item.id === request.initiativeId,
+  );
+  const revision = shown ? initiativeSettleRevision(shown) : undefined;
+  if (revision !== undefined && initiativeCardHasHome(request.initiativeId)) {
+    dispatch({
+      kind: "initiativeSettleResult",
+      initiativeId: request.initiativeId,
+      error: { message, revision },
+    });
+    return;
+  }
+  announceArrival(
+    {
+      type: "error",
+      message,
+      target: { type: "initiative", id: request.initiativeId },
+    },
+    state,
+    request.name,
+  );
 }
 
 /**
@@ -4566,6 +4881,72 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   }
   if (action.kind === "projectSaved")
     return applyProjectSaved(state, action.item, action.revision);
+  if (action.kind === "initiativeDetailLoad") {
+    const current =
+      state.initiativeDetails[action.id] ?? idle<InitiativeRead | null>();
+    return {
+      ...state,
+      initiativeDetails: {
+        ...state.initiativeDetails,
+        [action.id]: beginLoad(current),
+      },
+      initiativeDetailsLru: touchLru(state.initiativeDetailsLru, action.id),
+    };
+  }
+  if (action.kind === "initiativeDetailResult") {
+    const current =
+      state.initiativeDetails[action.id] ?? idle<InitiativeRead | null>();
+    const answered = action.error
+      ? failFrom(current, action.error)
+      : ready(action.read);
+    // An answer older than a summary revision this tab already holds was read
+    // before that write: show it, and read again.
+    const knownSummaryRevision =
+      state.stateEventRevisions.initiatives?.[action.id] ?? -1;
+    const next =
+      !action.error &&
+      action.revision !== undefined &&
+      action.revision < knownSummaryRevision
+        ? beginLoad(answered)
+        : answered;
+    return {
+      ...state,
+      ...pruneInitiativeDetails(
+        state,
+        { ...state.initiativeDetails, [action.id]: next },
+        action.revision === undefined
+          ? state.initiativeDetailRevisions
+          : {
+              ...state.initiativeDetailRevisions,
+              [action.id]: action.revision,
+            },
+        touchLru(state.initiativeDetailsLru, action.id),
+      ),
+    };
+  }
+  if (action.kind === "initiativeListSubscribed") {
+    // Only an answered list has anything to refresh; before that it is still
+    // the first read.
+    return state.initiativesFresh
+      ? { ...state, initiativesFresh: false, initiativesRefreshing: true }
+      : state;
+  }
+  if (action.kind === "initiativeListFailed")
+    return {
+      ...state,
+      initiativeListError: action.message,
+      initiativesRefreshing: false,
+    };
+  if (action.kind === "initiativeListRetry") {
+    return state.initiativeListError === null
+      ? state
+      : { ...state, initiativeListError: null };
+  }
+  if (action.kind === "setOpenInitiative") {
+    return state.openInitiativeId === action.id
+      ? state
+      : { ...state, openInitiativeId: action.id };
+  }
   if (action.kind === "setOpenProjectProjection") {
     return state.openProjectProjectionId === action.id
       ? state
@@ -4640,6 +5021,42 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           action.now,
         );
     return { ...state, sessions, error: null };
+  }
+  if (action.kind === "initiativeSettleResult")
+    return {
+      ...state,
+      initiativeSettleErrors: {
+        ...state.initiativeSettleErrors,
+        [action.initiativeId]: action.error,
+      },
+    };
+  if (action.kind === "optimisticInitiativeSettle") {
+    // The Initiative's next Settle retires its last one's failure.
+    const errors = state.initiativeSettleErrors;
+    const initiativeSettleErrors =
+      action.initiativeId in errors
+        ? Object.fromEntries(
+            Object.entries(errors).filter(([id]) => id !== action.initiativeId),
+          )
+        : errors;
+    let changed = false;
+    const initiatives = state.initiatives.map((item) => {
+      if (item.id !== action.initiativeId || !item.attention) return item;
+      // The server's own clamp: never past the stored revision, never back.
+      const settledRevision = Math.max(
+        item.attention.settledRevision,
+        Math.min(item.attention.revision, action.throughRevision),
+      );
+      if (settledRevision === item.attention.settledRevision) return item;
+      changed = true;
+      return { ...item, attention: { ...item.attention, settledRevision } };
+    });
+    if (!changed && initiativeSettleErrors === errors) return state;
+    return {
+      ...state,
+      initiativeSettleErrors,
+      ...(changed ? { initiatives } : {}),
+    };
   }
   if (action.kind === "optimisticWorkflowRunSettle") {
     let sessions = state.sessions;
@@ -5038,6 +5455,10 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       // makes them due for either a subscription snapshot or one-off read.
       sessionListFresh: action.connected ? state.sessionListFresh : false,
       taskListFresh: action.connected ? state.taskListFresh : false,
+      initiativesFresh: action.connected ? state.initiativesFresh : false,
+      initiativesRefreshing: action.connected
+        ? state.initiativesRefreshing
+        : false,
       projectListFresh: action.connected ? state.projectListFresh : false,
       worktreesFresh: action.connected ? state.worktreesFresh : false,
       worktreeListError: action.connected ? state.worktreeListError : null,
@@ -5461,6 +5882,13 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           ? applyProjectDigest(state, msg)
           : state;
     case "stateItems": {
+      if (msg.topic === "initiatives")
+        return applyEvent(state, {
+          type: "stateEvents",
+          topic: "initiatives",
+          seq: 0,
+          events: msg.events,
+        });
       const applied =
         msg.topic === "tasks"
           ? applyEvent(state, {
@@ -5521,6 +5949,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           : {}),
       };
     }
+    case "initiativeList":
+      return applyInitiativeSnapshot(
+        state,
+        msg.items,
+        taskDigestRecord(msg.revisions) ?? {},
+      );
+    case "initiativeDetail":
+      // Correlated before reducer dispatch in the socket effect.
+      return state;
     case "subagentThreadList": {
       const revisions = taskDigestRecord(msg.revisions);
       return {
@@ -5944,6 +6381,8 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           projectListError:
             listFailureFor(msg, "project") ?? state.projectListError,
           taskListError: listFailureFor(msg, "task") ?? state.taskListError,
+          initiativeListError:
+            listFailureFor(msg, "initiative") ?? state.initiativeListError,
           worktreeListError:
             listFailureFor(msg, "worktree") ?? state.worktreeListError,
           error: msg.message,
@@ -6294,6 +6733,12 @@ export interface AssistantActions {
    */
   settleWorkflowRun: (runId: string, throughRevision: number) => void;
   /**
+   * Settle a paused or done Initiative from its Sessions inbox card: the
+   * command acknowledges `throughRevision`, the attention revision the CLICKED
+   * card rendered, captured by the caller at the click.
+   */
+  settleInitiative: (initiativeId: string, throughRevision: number) => void;
+  /**
    * Place Sessions inbox items where the user dragged them
    * (`planInboxDrop`). Optimistic: the cards stay where they were dropped,
    * and a refusal re-reads the lists.
@@ -6391,6 +6836,20 @@ export interface AssistantActions {
   listProjects: (request?: ProjectListRequest) => void;
   requestProjectDetail: (id: string) => void;
   setOpenProjectProjection: (id: string | null) => void;
+  /**
+   * Read one Initiative's graph and the layout with `collapsed` drawn as one
+   * node each. One read per Initiative is in flight: asked again for the same
+   * set it sends nothing, and for another set it sends the newest one when the
+   * read in flight answers, dropping that answer.
+   */
+  requestInitiativeDetail: (id: string, collapsed?: readonly string[]) => void;
+  setOpenInitiative: (id: string | null) => void;
+  /**
+   * Ask for the Initiative list again after it failed: the subscription is
+   * already held, so it is dropped and taken again for a fresh snapshot, as a
+   * sequence gap does. Does nothing while no surface holds the topic.
+   */
+  retryInitiatives: () => void;
   saveProject: (id: string, patch: Partial<ProjectRecord>) => void;
   provisionProjectRepo: (id: string) => void;
   removeProjectRepo: (id: string) => void;
@@ -6682,6 +7141,16 @@ export function useAssistant({
   /** Latest in-flight keyed reads; a superseded same-id answer is ignored. */
   const taskDetailRequestsRef = useRef(new Map<string, string>());
   const projectDetailRequestsRef = useRef(new Map<string, string>());
+  /**
+   * The one live `getInitiative` per id, with the collapsed set it asked for
+   * and the newer set wished for since (`next`); an older answer is dropped.
+   */
+  const initiativeDetailRequestsRef = useRef(
+    new Map<
+      string,
+      { requestId: string; collapsed: string[]; next?: string[] }
+    >(),
+  );
   /** Latest list generation for every comment target. */
   const commentRequestsRef = useRef(new Map<string, string>());
   /** Immediate surface ownership, independent of asynchronous reducer updates. */
@@ -6691,6 +7160,15 @@ export function useAssistant({
   /** Correlates the generic mutation outcome channel to one Task control. */
   const taskMutationRequestsRef = useRef(new Map<string, string>());
   const projectMutationRequestsRef = useRef(new Map<string, string>());
+  /**
+   * An Initiative Settle in flight, by request id, with the name it was
+   * clicked under: its refusal and its deadline are the Initiative's own
+   * outcome, never the viewed chat's. Kept past the deadline (`timedOut`) so a
+   * refusal arriving after it is recognised as already told.
+   */
+  const initiativeSettleRequestsRef = useRef(
+    new Map<string, InitiativeSettleRequest>(),
+  );
   /** One in-flight targeted catch-up for the latest Task digest. */
   const taskDigestSyncRef = useRef<TaskDigestSync | null>(null);
   const projectDigestSyncRef = useRef<TaskDigestSync | null>(null);
@@ -7118,6 +7596,9 @@ export function useAssistant({
       if (msg.type === "backgroundWorkList") {
         topicSeqRef.current.background = msg.seq;
       }
+      if (msg.type === "initiativeList") {
+        topicSeqRef.current.initiatives = msg.seq;
+      }
       if (msg.type === "subagentThreadList") {
         // A snapshot is the authoritative tripwire baseline, including after a
         // gap resubscribe and on a cold subscribe.
@@ -7143,7 +7624,9 @@ export function useAssistant({
         }
         subagentRunSeqRef.current[msg.threadId] = msg.seq;
       }
-      if (msg.type === "stateDigest") {
+      // This client takes the `initiatives` snapshot on every subscribe and never
+      // asks for its digest or items, so neither answer has a sync to settle.
+      if (msg.type === "stateDigest" && msg.topic !== "initiatives") {
         clearDigestSync(msg.topic);
         topicSeqRef.current[msg.topic] = msg.seq;
         const changedIds =
@@ -7237,7 +7720,7 @@ export function useAssistant({
         }
         clearSubagentRunDigestSync(msg.threadId);
       }
-      if (msg.type === "stateItems") {
+      if (msg.type === "stateItems" && msg.topic !== "initiatives") {
         const receivedIds = new Set(msg.events.map((event) => event.id));
         const complete = (expectedIds: ReadonlySet<string>) =>
           receivedIds.size === msg.events.length &&
@@ -7327,6 +7810,44 @@ export function useAssistant({
           kind: "taskDetailResult",
           id: msg.id,
           item: msg.item,
+          ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
+          ...(msg.error ? { error: msg.error } : {}),
+        });
+        return;
+      }
+      if (msg.type === "initiativeDetail") {
+        const asked = initiativeDetailRequestsRef.current.get(msg.id);
+        if (asked?.requestId !== msg.requestId) return;
+        if (asked.next) {
+          // The page asked for another drawing while this one was read. This
+          // answer would put the older drawing back over the user's newer
+          // choice, so it is dropped, and the newest choice is read instead;
+          // the held data stays on screen, refreshing, until that answers.
+          const requestId = createClientId();
+          initiativeDetailRequestsRef.current.set(msg.id, {
+            requestId,
+            collapsed: asked.next,
+          });
+          socket.send(initiativeReadMessage(msg.id, requestId, asked.next));
+          return;
+        }
+        initiativeDetailRequestsRef.current.delete(msg.id);
+        dispatch({
+          kind: "initiativeDetailResult",
+          id: msg.id,
+          read: msg.item
+            ? {
+                item: msg.item,
+                ...(msg.layout ? { layout: msg.layout } : {}),
+                ...(msg.layoutError !== undefined
+                  ? { layoutError: msg.layoutError }
+                  : {}),
+                ...(msg.layoutTooLarge
+                  ? { layoutTooLarge: msg.layoutTooLarge }
+                  : {}),
+                requestedCollapsed: asked.collapsed,
+              }
+            : null,
           ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
           ...(msg.error ? { error: msg.error } : {}),
         });
@@ -7455,6 +7976,8 @@ export function useAssistant({
           }
         }
       }
+      if (msg.type === "mutationSettled")
+        initiativeSettleRequestsRef.current.delete(msg.requestId);
       if (msg.type === "mutationSettled") {
         // Card broadcasts are best-effort async sends and can follow this
         // generic settle. Keep their recovery alive until the matching durable
@@ -7628,6 +8151,24 @@ export function useAssistant({
           announceArrival(msg, stateRef.current);
           return;
         }
+        // An Initiative Settle's refusal is that Initiative's outcome alone.
+        // It never reaches the reducer's generic `error`, which is the VIEWED
+        // chat's outcome: that would end a turn still streaming there. Once
+        // the deadline has spoken, a late refusal has nothing left to say.
+        const initiativeSettle = initiativeSettleRequestsRef.current.get(
+          msg.requestId,
+        );
+        if (initiativeSettle) {
+          initiativeSettleRequestsRef.current.delete(msg.requestId);
+          if (!initiativeSettle.timedOut)
+            initiativeSettleFailed(
+              initiativeSettle,
+              msg.message,
+              stateRef.current,
+              dispatch,
+            );
+          return;
+        }
         const projectKey = projectMutationRequestsRef.current.get(
           msg.requestId,
         );
@@ -7640,6 +8181,19 @@ export function useAssistant({
             error: msg.message,
           });
         }
+      }
+      // A failed Initiative LIST read is a condition on that list, kept
+      // for its panes to render with their Retry — and nothing else. It
+      // must not reach the reducer's generic `error`, which is the VIEWED
+      // chat's outcome: that would end a turn still streaming there. Its
+      // announcement is owned by the condition (`CONDITION_COLLECTIONS`).
+      if (
+        msg.type === "error" &&
+        msg.target?.type === "initiative" &&
+        !msg.target.id
+      ) {
+        dispatch({ kind: "initiativeListFailed", message: msg.message });
+        return;
       }
       if (msg.type === "taskSaved") {
         // The temp id lives in the pending queue, never on the wire: the server
@@ -7670,6 +8224,8 @@ export function useAssistant({
           console.warn(
             `[state-sync] ${msg.topic} event gap: expected seq ${previous + 1}, got ${msg.seq}; resubscribing.`,
           );
+          if (msg.topic === "initiatives")
+            dispatch({ kind: "initiativeListSubscribed" });
           socket.send({ type: "unsubscribe", topics: [msg.topic] });
           socket.send(
             taskSubscribeMessage(
@@ -7818,6 +8374,17 @@ export function useAssistant({
             error: "Connection lost while loading this Project.",
           });
         projectDetailRequestsRef.current.clear();
+        // A map read lost with its socket is answered now, so its page says so
+        // and offers a retry instead of waiting forever; the snapshot on the
+        // next subscribe marks held reads stale by revision.
+        for (const id of initiativeDetailRequestsRef.current.keys())
+          dispatch({
+            kind: "initiativeDetailResult",
+            id,
+            read: null,
+            error: "Connection lost while loading this Initiative.",
+          });
+        initiativeDetailRequestsRef.current.clear();
         // A delivery click belongs to the connection it was sent on: its
         // `mutationSettled` and any stamped refusal can only arrive there, and
         // the reconnect answers with a fresh run list instead. So the claim is
@@ -7833,6 +8400,14 @@ export function useAssistant({
           dispatch({ kind: "workflowDeliveryResult", runId: pending.runId });
         }
         workflowDeliveryRequestsRef.current.clear();
+        // An Initiative Settle is answered on the connection it was sent on,
+        // or by the reconnect's snapshot, which states whether it landed. Its
+        // deadline would only say "no answer" over that snapshot, so the
+        // claim is handed back now, silently.
+        for (const [requestId, pending] of initiativeSettleRequestsRef.current)
+          if (!pending.timedOut)
+            settleMutation(pendingMutationsRef.current, requestId);
+        initiativeSettleRequestsRef.current.clear();
         episodeListReadsRef.current = {
           tasks: false,
           projects: false,
@@ -7902,11 +8477,22 @@ export function useAssistant({
         const key = taskMutationRequestsRef.current.get(requestId);
         if (key) {
           taskMutationRequestsRef.current.delete(requestId);
-          dispatch({
-            kind: "taskMutationResult",
-            key,
-            error: "The server did not answer this Task change. Try again.",
-          });
+          const error =
+            "The server did not answer this Task change. Try again.";
+          dispatch({ kind: "taskMutationResult", key, error });
+          // The deadline is this write's outcome, judged as a refusal is: in
+          // place while the Task's control is on screen, otherwise announced
+          // naming the Task — a shut panel would keep it silent.
+          const taskId = pending?.objectIds[0];
+          if (taskId && key.startsWith(`${taskId}:`))
+            announceArrival(
+              {
+                type: "error",
+                message: error,
+                target: { type: "task", id: taskId },
+              },
+              stateRef.current,
+            );
         }
         const projectKey = projectMutationRequestsRef.current.get(requestId);
         if (projectKey) {
@@ -7916,6 +8502,19 @@ export function useAssistant({
             key: projectKey,
             error: "The server did not answer this Project change. Try again.",
           });
+        }
+        // Unknown is an outcome too: the re-read above states what landed,
+        // and this says that the click went unanswered, once.
+        const initiativeSettle =
+          initiativeSettleRequestsRef.current.get(requestId);
+        if (initiativeSettle && !initiativeSettle.timedOut) {
+          initiativeSettle.timedOut = true;
+          initiativeSettleFailed(
+            initiativeSettle,
+            "The server did not answer this Settle. Try again.",
+            stateRef.current,
+            dispatch,
+          );
         }
       }, timeoutMs);
       pendingMutationsRef.current.set(requestId, {
@@ -8350,6 +8949,50 @@ export function useAssistant({
           requestId,
         });
       },
+      settleInitiative: (initiativeId, throughRevision) => {
+        // Optimistic like a run's Settle. The success answer is the
+        // `initiatives` event the write raises; a refusal or a deadline
+        // re-reads the list, whose snapshot replaces the optimistic
+        // acknowledgement with the server's own, and is said once: on the
+        // card if it is on screen, else announced naming the Initiative.
+        const requestId = trackMutation(
+          { topic: "initiatives", objectIds: [initiativeId] },
+          () => {
+            if (!topicsRef.current.has("initiatives")) return;
+            dispatch({ kind: "initiativeListSubscribed" });
+            send({ type: "unsubscribe", topics: ["initiatives"] });
+            send(
+              taskSubscribeMessage(
+                ["initiatives"],
+                stateRef.current,
+                pendingMutationsRef.current,
+              ),
+            );
+          },
+        );
+        const known = stateRef.current.initiatives.find(
+          (item) => item.id === initiativeId,
+        );
+        initiativeSettleRequestsRef.current.set(requestId, {
+          initiativeId,
+          ...(known ? { name: initiativeName(known) } : {}),
+        });
+        const observed = Math.max(0, Math.trunc(throughRevision));
+        dispatch({
+          kind: "optimisticInitiativeSettle",
+          initiativeId,
+          throughRevision: observed,
+        });
+        send({
+          type: "settleInitiative",
+          id: initiativeId,
+          // What the user SAW, passed in from the click: the inbox sends this
+          // after its exit animation, and an outcome raised in that window
+          // must stay awake.
+          throughRevision: observed,
+          requestId,
+        });
+      },
       setInboxPositions: (positions) => {
         // Both domains, because one renumbering can place sessions and runs.
         const requestId = trackMutation(
@@ -8551,6 +9194,10 @@ export function useAssistant({
         for (const library of LIBRARY_TOPICS)
           if (added.includes(library))
             dispatch({ kind: "libraryLoad", library });
+        // The same for the Initiative list, which a surface coming back
+        // reads anew even when this episode answered it before.
+        if (added.includes("initiatives"))
+          dispatch({ kind: "initiativeListSubscribed" });
         if (added.length > 0)
           send(
             taskSubscribeMessage(
@@ -8720,6 +9367,40 @@ export function useAssistant({
       },
       setOpenProjectProjection: (id) =>
         dispatch({ kind: "setOpenProjectProjection", id }),
+      requestInitiativeDetail: (id, collapsed = []) => {
+        const wish = collapseRequest(collapsed);
+        const inFlight = initiativeDetailRequestsRef.current.get(id);
+        if (inFlight) {
+          const { next: _next, ...asked } = inFlight;
+          initiativeDetailRequestsRef.current.set(
+            id,
+            sameCollapsed(asked.collapsed, wish)
+              ? asked
+              : { ...asked, next: wish },
+          );
+          return;
+        }
+        const requestId = createClientId();
+        initiativeDetailRequestsRef.current.set(id, {
+          requestId,
+          collapsed: wish,
+        });
+        dispatch({ kind: "initiativeDetailLoad", id });
+        send(initiativeReadMessage(id, requestId, wish));
+      },
+      setOpenInitiative: (id) => dispatch({ kind: "setOpenInitiative", id }),
+      retryInitiatives: () => {
+        if (!topicsRef.current.has("initiatives")) return;
+        dispatch({ kind: "initiativeListRetry" });
+        send({ type: "unsubscribe", topics: ["initiatives"] });
+        send(
+          taskSubscribeMessage(
+            ["initiatives"],
+            stateRef.current,
+            pendingMutationsRef.current,
+          ),
+        );
+      },
       saveProject: (id, patch) => {
         const requestId = startProjectMutation(
           id,

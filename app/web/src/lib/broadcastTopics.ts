@@ -32,6 +32,11 @@ export interface TopicSurface {
   workflowStartOpen?: boolean;
   /** The Projects route has a selected document (the index does not). */
   projectSelected?: boolean;
+  /**
+   * An Initiative page shows a selected Task in its panel: the Task route's
+   * detail, which reads that Task's Workflow Runs.
+   */
+  initiativeTaskSelected?: boolean;
   /** The session inspector is rendering its skills list. */
   sessionInspectorVisible?: boolean;
   /** The session inspector is on screen for a persisted session. */
@@ -76,6 +81,8 @@ export interface TopicSurface {
  * staged-context Task picker is expanded. Session inspector surfaces also
  * subscribe to the skills library while they render its loaded/unloaded list,
  * and to Worktrees while they list the worktrees the session's spawn tree owns.
+ * Initiatives are held by the Projects browser, whose top group lists them, and
+ * by their own pages, which add Tasks and Projects for the live map.
  */
 export function topicsForSurface({
   sidebarVisible,
@@ -85,6 +92,7 @@ export function topicsForSurface({
   sessionsQuickStartVisible = false,
   workflowStartOpen = false,
   projectSelected = false,
+  initiativeTaskSelected = false,
   sessionInspectorVisible = false,
   backgroundInspectorVisible = false,
   sessionTreeWorktreesVisible = false,
@@ -109,14 +117,31 @@ export function topicsForSurface({
     topics.add("projects");
     topics.add("workflow");
   }
-  // A VISIBLE Sessions browser shows live Workflow Runs as items of its own
-  // ([Task-676](pa://task/676)), so it holds the run topic and nothing else:
-  // the run summaries and their cards are what those items are made of, while
-  // the Task titles beside them stay a best-effort join on whatever Backlog
-  // rows this tab already has. Subscribing to Tasks here would put the large
-  // Backlog broadcasts on the session list to spell out a name.
-  if (shownSection === "sessions") topics.add("workflow");
+  // A VISIBLE Sessions browser shows live Workflow Runs ([Task-676](pa://task/676))
+  // and Initiatives (`docs/initiatives.md`) as items of their own, so it holds
+  // those two topics and nothing else: the run summaries and cards and the
+  // Initiative summaries are what those items are made of — an Initiative's
+  // summary carries its next milestone's title for exactly this reason — while
+  // a run's Task title stays a best-effort join on whatever Backlog rows this
+  // tab already has. Subscribing to Tasks here would put the large Backlog
+  // broadcasts on the session list to spell out a name.
+  if (shownSection === "sessions") {
+    topics.add("workflow");
+    topics.add("initiatives");
+  }
   if (projectBrowser || projectIndexSurface) topics.add("projects");
+  // Initiatives are the group at the top of the Projects browser, and their
+  // pages read them. One Initiative's page also reads the Tasks topic, which
+  // recolours a node the moment a member's status moves, and Projects, which
+  // names each lane's Project. It reads no Worktree projection.
+  const initiativeSurface = routeName === "initiatives";
+  if (projectBrowser || initiativeSurface) topics.add("initiatives");
+  if (initiativeSurface) {
+    topics.add("tasks");
+    topics.add("projects");
+    // The selected Task's detail lists its Workflow Runs, as on its own page.
+    if (initiativeTaskSelected) topics.add("workflow");
+  }
   if (
     shownSection === "tasks" ||
     projectBrowser ||

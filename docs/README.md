@@ -16,6 +16,10 @@ only binding rules; everything else lives here.
   and agent execution state: where a piece of work belongs (Task, description,
   comment, Workflow Run, or nowhere), who owns status, why a subtask's project
   follows its parent, and the audit numbers behind the boundary.
+- `initiatives.md` — Initiatives: user-owned groups of Tasks across Projects,
+  `blocks` as the one dependency type, membership and milestones as `links`
+  edges, the agent tools, the live map page, the Sessions inbox item that stays
+  until the user settles it, and the phases, and server-side layout.
 - `agent-workflows.md` — the agreed v1 Workflow Run architecture: a durable run
   with append-only steps and events, one code-delivery recipe as recipe code
   over generic step rows, structured results via `session_submit_result`,

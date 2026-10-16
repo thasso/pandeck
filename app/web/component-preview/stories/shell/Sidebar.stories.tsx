@@ -11,6 +11,7 @@ import {
   shellBacklogState,
   shellPrefs,
 } from "../../fixtures/shell.ts";
+import { hostedLabsSummary } from "../../fixtures/initiatives.ts";
 
 interface SidebarStoryProps {
   scenario: "attention" | "quiet-list";
@@ -74,6 +75,13 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         onLoadProjects={noop}
         onReorderProjects={noop}
         onOpenProject={noop}
+        initiatives={[hostedLabsSummary()]}
+        initiativesFresh
+        initiativesRefreshing={false}
+        initiativeListError={null}
+        initiativeSettleErrors={{}}
+        onRetryInitiatives={noop}
+        selectedInitiativeId={null}
         worktrees={fixture.worktrees}
         worktreeStatuses={fixture.worktreeStatuses}
         worktreeHosting={{}}
@@ -83,6 +91,7 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         workflowCards={fixture.workflowCards ?? {}}
         onOpenWorkflowRun={noop}
         onSettleWorkflowRun={noop}
+        onSettleInitiative={noop}
         onSetInboxPositions={noop}
         pullRequestInventory={ready([])}
         onReloadPullRequests={noop}

@@ -25,6 +25,7 @@
     "@pierre/diffs": "catalog:",
     "@shikijs/langs": "catalog:",
     "@shikijs/themes": "catalog:",
+    "@xyflow/react": "catalog:",
     "chart.js": "catalog:",
     "class-variance-authority": "catalog:",
     "cmdk": "catalog:",

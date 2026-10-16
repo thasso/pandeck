@@ -129,6 +129,12 @@ Two Tasks can be linked in one of two ways (Task-798):
 - `relates` is symmetric. It is stored once, from the lower id to the higher, so
   the pair has a single spelling.
 
+`blocks` is the one dependency type. A prerequisite, a Task needed to finish
+(even one the work can be built against first), and a simplification the team
+chose to wait for are all `blocks`. A simplification nobody waits for gets no
+link, and `relates` is never a dependency. A dependency written only as prose is
+invisible to blocked state and to the Initiative map (`docs/initiatives.md`).
+
 Both are edges in the generic `links` graph, written only through
 `taskStore.setTaskLink` / `removeTaskLink`, which check and write in one
 transaction:
@@ -143,10 +149,11 @@ transaction:
   link and none of that operation is written. Earlier operations in the batch
   stand, as before. One operation may name a given Task only once across
   `addLinks` and `removeLinks`.
-- `createTask`, `updateTask` and `deleteTask` own their transaction and notify
-  after it commits, so they are top-level only and refuse to run inside an open
-  one. There are no savepoints: nested, a caught failure would commit half an
-  operation without an event.
+- `createTask`, `updateTask`, `deleteTask` and `reorderTasks` own their
+  transaction and notify after it commits, so they are top-level only and refuse
+  to run inside an open one. A reorder is one write: a placement refused late in
+  the list leaves the earlier ones unwritten. There are no savepoints: nested, a
+  caught failure would commit half an operation without an event.
 
 "Blocked" is COMPUTED, never stored: a Task is blocked while at least one of its
 blockers is neither done nor archived. Done and archived blockers are still

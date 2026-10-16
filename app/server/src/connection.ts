@@ -268,6 +268,13 @@ import {
   projectStateItems,
 } from "./projectRegistry.ts";
 import {
+  initiativeRevisionDigest,
+  initiativeSnapshot,
+  initiativeStateItems,
+  settleInitiative,
+} from "./initiatives.ts";
+import { readInitiativeMap } from "./initiativeLayout.ts";
+import {
   cloneAndRegisterProjectRepo,
   deleteProjectRepoFolder,
   isManagedRepoDir,
@@ -988,6 +995,8 @@ export class Connection implements Viewer {
         );
       case "settleWorkflowRun":
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
+      case "settleInitiative":
+        return this.onSettleInitiative(msg.id, msg.throughRevision);
       case "setInboxPositions":
         return this.onSetInboxPositions(msg.positions);
       case "renameSession":
@@ -1128,6 +1137,8 @@ export class Connection implements Viewer {
         return this.onListProjects(msg.request ?? {});
       case "getProject":
         return this.onGetProject(msg.id, msg.requestId);
+      case "getInitiative":
+        return this.onGetInitiative(msg.id, msg.requestId, msg.collapsed);
       case "saveProject":
         return this.onSaveProject(msg.id, msg.patch, msg.requestId);
       case "provisionProjectRepo":
@@ -1744,6 +1755,7 @@ export class Connection implements Viewer {
           this.onListProjects({ includeArchived: true });
         }
       }
+      if (topic === "initiatives") this.onSubscribeInitiatives(digestTopics);
       if (topic === "subagents") {
         // The registry is deliberately snapshot-only until a consumer needs
         // digest catch-up. Held run detail has its own digest-capable topic.
@@ -1823,8 +1835,36 @@ export class Connection implements Viewer {
     }
   }
 
+  /** Digest when the client holds a settled list, else the live snapshot. */
+  private onSubscribeInitiatives(digestTopics: ReadonlySet<BroadcastTopic>) {
+    try {
+      if (digestTopics.has("initiatives")) {
+        this.send({
+          type: "stateDigest",
+          topic: "initiatives",
+          seq: hub.initiativeEventSeq(),
+          entries: initiativeRevisionDigest(),
+        });
+        return;
+      }
+      const snapshot = initiativeSnapshot();
+      this.send({
+        type: "initiativeList",
+        items: snapshot.items,
+        seq: hub.initiativeEventSeq(),
+        revisions: snapshot.revisions,
+      });
+    } catch (err) {
+      this.send({
+        type: "error",
+        message: `Failed to list Initiatives: ${errorText(err)}`,
+        target: { type: "initiative" },
+      });
+    }
+  }
+
   private onGetStateItems(
-    topic: "tasks" | "projects",
+    topic: "tasks" | "projects" | "initiatives",
     ids: string[],
     requestId: string,
   ): void {
@@ -1845,12 +1885,24 @@ export class Connection implements Viewer {
           requestId,
           events: projectStateItems(ids),
         });
+      } else if (topic === "initiatives") {
+        this.send({
+          type: "stateItems",
+          topic,
+          requestId,
+          events: initiativeStateItems(ids),
+        });
       }
     } catch (err) {
+      const label = {
+        tasks: "Task",
+        projects: "Project",
+        initiatives: "Initiative",
+      }[topic];
       this.send({
         type: "error",
         requestId,
-        message: `Failed to fetch ${topic === "tasks" ? "Task" : "Project"} state items: ${errorText(err)}`,
+        message: `Failed to fetch ${label} state items: ${errorText(err)}`,
       });
     }
   }
@@ -2080,6 +2132,57 @@ export class Connection implements Viewer {
         item: null,
         requestId,
         error: `Failed to read Project: ${errorText(err)}`,
+      });
+    }
+  }
+
+  /**
+   * The graph and its map layout. The layout is computed off the event loop
+   * and may take a while; the answer carries the graph as read once it is done.
+   */
+  private async onGetInitiative(
+    id: string,
+    requestId: string,
+    collapsed: readonly string[] = [],
+  ): Promise<void> {
+    try {
+      const read = await readInitiativeMap(id, collapsed);
+      this.send({
+        type: "initiativeDetail",
+        id,
+        item: read.item,
+        ...(read.revision !== undefined ? { revision: read.revision } : {}),
+        ...(read.layout ? { layout: read.layout } : {}),
+        ...(read.layoutError !== undefined
+          ? { layoutError: read.layoutError }
+          : {}),
+        ...(read.layoutTooLarge ? { layoutTooLarge: read.layoutTooLarge } : {}),
+        requestId,
+      });
+    } catch (err) {
+      this.send({
+        type: "initiativeDetail",
+        id,
+        item: null,
+        requestId,
+        error: `Failed to read Initiative: ${errorText(err)}`,
+      });
+    }
+  }
+
+  /**
+   * The user's Settle on an Initiative's inbox card. The answer is the
+   * `initiatives` event the write raises for every subscriber; a refusal names
+   * the Initiative, and the browser re-reads the list it settled optimistically.
+   */
+  private onSettleInitiative(id: string, throughRevision: number): void {
+    try {
+      settleInitiative(id, throughRevision);
+    } catch (err) {
+      this.send({
+        type: "error",
+        target: { type: "initiative", id },
+        message: `Failed to settle Initiative: ${errorText(err)}`,
       });
     }
   }

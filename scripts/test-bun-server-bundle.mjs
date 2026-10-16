@@ -16,9 +16,16 @@ import {
   BUN_PRAGMA,
   SERVER_BUNDLE_DEFINE,
   bundle,
+  directDependencyRoot,
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
 import * as childProcessShim from "./bun-shims/node-child-process.mjs";
+import {
+  collectWebNotices,
+  renderWebNotices,
+  WEB_NOTICE_PACKAGES,
+  WEB_NOTICES_FILE,
+} from "../app/web/thirdPartyNotices.ts";
 import { DatabaseSync } from "./bun-shims/node-sqlite.mjs";
 import { createRequire } from "node:module";
 import {
@@ -812,11 +819,100 @@ const AMBIENT_PROXY_VARIABLES = [
   "no_proxy",
 ];
 
+/**
+ * The web UI's Initiative map bundles @xyflow/react and the packages under it.
+ * Their notices ship beside the web bundle: exactly what the build renders
+ * from the installed packages (full texts, every copyright, each pinned
+ * version), the map's chunk names where they are, and the package NOTICE
+ * lists every package.
+ */
+async function checkWebNotices() {
+  const shipped = readFileSync(
+    join(runtimeRoot, "web", WEB_NOTICES_FILE),
+    "utf8",
+  );
+  const expected = renderWebNotices(
+    collectWebNotices(fileURLToPath(new URL("../app/web/", import.meta.url))),
+  );
+  assert(
+    shipped === expected,
+    `The packaged ${WEB_NOTICES_FILE} is not the notice of the installed map packages.`,
+  );
+  const assets = join(runtimeRoot, "web", "assets");
+  const chunks = readdirSync(assets).filter((name) => name.endsWith(".js"));
+  const carriers = [];
+  for (const name of chunks) {
+    const code = await file(join(assets, name)).text();
+    if (code.startsWith(`/*! @xyflow/react `)) carriers.push(name);
+  }
+  assert(
+    carriers.length > 0 &&
+      (await file(join(assets, carriers[0])).text()).includes(
+        `license texts: /${WEB_NOTICES_FILE} */`,
+      ),
+    "No web chunk names where the map's third-party notices are.",
+  );
+  const notice = readFileSync(join(runtimeRoot, "NOTICE"), "utf8");
+  for (const entry of WEB_NOTICE_PACKAGES)
+    assert(
+      notice.includes(`${entry.name} ${entry.version}`),
+      `The package NOTICE does not name ${entry.name} ${entry.version}.`,
+    );
+}
+
+/**
+ * elkjs ships in the layout worker under the EPL-2.0 (NOTICE): its license
+ * text exactly as the package has it, its copyright lines, and its source,
+ * beside the worker and at the end of it.
+ */
+function checkElkjsNotices() {
+  const elkjs = directDependencyRoot("elkjs");
+  const { version } = JSON.parse(
+    readFileSync(join(elkjs, "package.json"), "utf8"),
+  );
+  const notices = join(runtimeRoot, "workers", "licenses", "elkjs");
+  assert(
+    readFileSync(join(notices, "LICENSE.md"), "utf8") ===
+      readFileSync(join(elkjs, "LICENSE.md"), "utf8"),
+    "The packaged elkjs LICENSE.md is not elkjs's own license text.",
+  );
+  const notice = readFileSync(join(notices, "NOTICE.md"), "utf8");
+  for (const expected of [
+    `# elkjs ${version}`,
+    "Copyright (c) 2017 Kiel University and others.",
+    "Copyright (c) 2021 Kiel University and others.",
+    "Eclipse Public License 2.0",
+    `https://github.com/kieler/elkjs/tree/${version}`,
+    `https://registry.npmjs.org/elkjs/-/elkjs-${version}.tgz (sha512-`,
+  ])
+    assert(
+      notice.includes(expected),
+      `The packaged elkjs NOTICE.md lacks ${JSON.stringify(expected)}.`,
+    );
+  const worker = readFileSync(
+    join(runtimeRoot, "workers", "initiative-layout-worker.js"),
+    "utf8",
+  );
+  assert(
+    worker.endsWith(
+      `| EPL-2.0 | license and source: workers/licenses/elkjs/ */\n`,
+    ) && worker.includes(`/*! elkjs ${version} | Copyright (c) 2017`),
+    "The layout worker no longer ends with elkjs's notice.",
+  );
+  assert(
+    readFileSync(join(runtimeRoot, "NOTICE"), "utf8").includes(
+      `elkjs ${version}`,
+    ),
+    "The package NOTICE does not name elkjs.",
+  );
+}
+
 /** Bun loads a bundle as it stands only under its pragma: see bun-bundle.mjs. */
 async function checkBunPragma() {
   for (const [bundled, pragma] of [
     ["server.js", BUN_PRAGMA],
     ["workers/xhr-sync-worker.js", BUN_PRAGMA],
+    ["workers/initiative-layout-worker.js", BUN_PRAGMA],
     ["native/watcher-wrapper.js", BUN_CJS_PRAGMA],
   ]) {
     const firstLine = (await file(join(runtimeRoot, bundled)).text()).split(
@@ -1320,6 +1416,10 @@ try {
     "native/watcher.node",
     "personal-assistant-server",
     "web/index.html",
+    `web/${WEB_NOTICES_FILE}`,
+    "workers/initiative-layout-worker.js",
+    "workers/licenses/elkjs/LICENSE.md",
+    "workers/licenses/elkjs/NOTICE.md",
     "workers/xhr-sync-worker.js",
   ])
     assert(
@@ -1330,7 +1430,13 @@ try {
   // Bun.spawnSync starts its child with the start-up environment whatever
   // process.env holds now, and no shim covers it. Server code cannot name it
   // (its types are Node's); this keeps it out of every bundled dependency.
-  for (const bundled of ["server.js", "workers/xhr-sync-worker.js"])
+  for (const bundled of [
+    "server.js",
+    "workers/initiative-layout-worker.js",
+    "workers/licenses/elkjs/LICENSE.md",
+    "workers/licenses/elkjs/NOTICE.md",
+    "workers/xhr-sync-worker.js",
+  ])
     assert(
       !/\bBun\s*(?:\.\s*spawnSync\b|\[\s*["'`]spawnSync)/.test(
         await file(join(runtimeRoot, bundled)).text(),
@@ -1338,6 +1444,8 @@ try {
       `${bundled} calls Bun.spawnSync, which leaks the start-up environment.`,
     );
 
+  checkElkjsNotices();
+  await checkWebNotices();
   await checkBunPragma();
   await checkParseLinkMemory();
   await checkNativeAssets();

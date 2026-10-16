@@ -4,6 +4,12 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolveAuthToken } from "../server/src/authToken.ts";
 import { resolveBuildInfo } from "../server/src/buildInfo.ts";
+import {
+  collectWebNotices,
+  renderWebNotices,
+  WEB_NOTICES_FILE,
+  webNoticeBanner,
+} from "./thirdPartyNotices.ts";
 
 const TOKEN_PLACEHOLDER = '"%ASSISTANT_TOKEN%"';
 
@@ -32,6 +38,10 @@ const DEFAULT_CHUNK_BUDGET_KB = 500;
 // generated data, split per language, and never part of the initial load.
 const SHIKI_DATA_CHUNK_BUDGET_KB = 800;
 
+// The split size, in bytes of module SOURCE before minification: minified, a
+// piece of this size lands well under `DEFAULT_CHUNK_BUDGET_KB`.
+const INITIAL_CHUNK_SOURCE_BYTES = 640 * 1024;
+
 function isShikiDataChunk(moduleIds: string[]): boolean {
   return (
     moduleIds.length > 0 &&
@@ -55,6 +65,39 @@ function chunkBudgetPlugin(): Plugin {
           );
         }
       }
+    },
+  };
+}
+
+// The Initiative map bundles @xyflow/react and the packages under it, whose
+// licenses ask for their notices to travel with the code. The build writes
+// their texts, read from the installed packages, beside the bundle, and the
+// map's chunk names where they are. Both fail the build rather than ship a
+// notice that does not match (`thirdPartyNotices.ts`).
+function thirdPartyNoticesPlugin(): Plugin {
+  return {
+    name: "assistant-third-party-notices",
+    apply: "build",
+    generateBundle(_, bundle) {
+      const entries = collectWebNotices(
+        fileURLToPath(new URL(".", import.meta.url)),
+      );
+      this.emitFile({
+        type: "asset",
+        fileName: WEB_NOTICES_FILE,
+        source: renderWebNotices(entries),
+      });
+      const mapChunks = Object.values(bundle).filter(
+        (chunk) =>
+          chunk.type === "chunk" &&
+          (chunk.moduleIds ?? []).some((id) =>
+            /node_modules[\\/]@xyflow[\\/]react[\\/]/.test(id),
+          ),
+      );
+      if (mapChunks.length === 0)
+        this.error("No chunk contains @xyflow/react to carry its notice.");
+      for (const chunk of mapChunks)
+        if (chunk.type === "chunk") chunk.code = webNoticeBanner() + chunk.code;
     },
   };
 }
@@ -112,6 +155,7 @@ export default defineConfig(({ command }) => {
       react(),
       tailwindcss(),
       chunkBudgetPlugin(),
+      thirdPartyNoticesPlugin(),
       assistantTokenDevPlugin(),
     ],
     build: {
@@ -125,6 +169,35 @@ export default defineConfig(({ command }) => {
       // fetchable asset. Everything else keeps the default inlining behavior.
       assetsInlineLimit: (filePath) =>
         filePath.endsWith("pcm16Worklet.js") ? false : undefined,
+      rolldownOptions: {
+        output: {
+          // Pieces of one graph can import each other in a cycle, so each
+          // module runs when it is first needed rather than when its chunk
+          // loads; without this a split leaves React's CommonJS wrapper
+          // undefined at first use (a blank app).
+          strictExecutionOrder: true,
+          codeSplitting: {
+            // What the entry loads before anything else is split into
+            // libraries and app code, each into pieces near the budget, so
+            // no initial chunk outgrows it. `$initial` keeps the lazy chunks
+            // (pages, Markdown, diffs, the map, Shiki grammars) as they are.
+            groups: [
+              {
+                name: "vendor",
+                test: /[\\/]node_modules[\\/]/,
+                tags: ["$initial"],
+                priority: 1,
+                maxSize: INITIAL_CHUNK_SOURCE_BYTES,
+              },
+              {
+                name: "app",
+                tags: ["$initial"],
+                maxSize: INITIAL_CHUNK_SOURCE_BYTES,
+              },
+            ],
+          },
+        },
+      },
     },
     resolve: {
       // Consume the shared package from source so both toolchains agree. Subpath

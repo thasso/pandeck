@@ -1,0 +1,31 @@
+/* React Flow's attribution link, in the app's tokens: `base.css` leaves it
+   unstyled, and the full `style.css` would bring React Flow's own palette. */
+.react-flow__attribution {
+  background: transparent;
+  padding: 2px 6px;
+}
+
+.react-flow__attribution a {
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+/* The overview in the app's tokens: its card surface, the area outside the
+   view shaded with the foreground (the page background is the card's own
+   colour in the light theme, so it would shade nothing), the view framed in
+   the info colour, which no Task mark uses, so the frame still stands out
+   where it sits on a run of marks of a large map. The frame's width is the
+   map's `maskStrokeWidth` prop, which React Flow scales to screen pixels; a
+   width here would be in the drawing's units, a hair at this scale. */
+.initiative-minimap {
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: color-mix(
+    in oklab,
+    var(--foreground) 10%,
+    transparent
+  );
+  --xy-minimap-mask-stroke-color: var(--info);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}

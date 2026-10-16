@@ -7,6 +7,7 @@ import {
   paWorktreeTitle,
 } from "@assistant/shared/objectLinks";
 import { createTask } from "./tasks.ts";
+import { createInitiative } from "./initiatives.ts";
 import { resolvePaObjectLinks } from "./objectLinkResolver.ts";
 import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 
@@ -138,6 +139,25 @@ describe("pa:// object links", () => {
     ).toMatchObject({
       href: "/knowledge/files?path=example#Intro",
       existence: "missing",
+    });
+  });
+
+  it("resolves Initiative links to their title and page", async () => {
+    const { initiative } = createInitiative({ title: "Hosted Labs" });
+    const links = await resolvePaObjectLinks([
+      `pa://initiative/${initiative.id}`,
+      "pa://initiative/999999",
+    ]);
+    expect(links[0]).toMatchObject({
+      knownType: true,
+      href: `/initiatives/${initiative.id}`,
+      title: "Hosted Labs",
+      typeLabel: "Initiative",
+      existence: "exists",
+    });
+    expect(links[1]).toMatchObject({
+      existence: "missing",
+      title: "Initiative 999999",
     });
   });
 

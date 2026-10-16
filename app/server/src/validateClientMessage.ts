@@ -21,6 +21,7 @@
  */
 import {
   BROADCAST_TOPICS,
+  INITIATIVE_LAYOUT_COLLAPSE_LIMIT,
   isHarness,
   isPeerRuntimeRelativeCost,
   MAX_INBOX_POSITIONS,
@@ -83,6 +84,14 @@ const STRING_ARRAY: FieldSpec = {
   kind: "a string array",
 };
 const ARRAY: FieldSpec = { check: Array.isArray, kind: "an array" };
+/** A map's collapsed epics: bounded Task ids, the server drops what does not apply. */
+const COLLAPSED_EPICS: FieldSpec = {
+  check: (value: unknown) =>
+    isStringArray(value) &&
+    value.length <= INITIATIVE_LAYOUT_COLLAPSE_LIMIT &&
+    value.every((id) => id.length > 0 && id.length <= 32),
+  kind: `at most ${INITIATIVE_LAYOUT_COLLAPSE_LIMIT} Task ids`,
+};
 const OBJECT: FieldSpec = { check: isPlainObject, kind: "an object" };
 
 /**
@@ -533,8 +542,8 @@ const validateTopics: Validator = (msg) => {
   if (msg.digests === undefined) return null;
   if (!Array.isArray(msg.digests)) return "digests must be an array";
   for (const topic of msg.digests) {
-    if (topic !== "tasks" && topic !== "projects")
-      return "digests currently supports only tasks and projects";
+    if (topic !== "tasks" && topic !== "projects" && topic !== "initiatives")
+      return "digests currently supports only tasks, projects and initiatives";
     if (!msg.topics.includes(topic))
       return "digests must be a subset of topics";
   }
@@ -542,8 +551,12 @@ const validateTopics: Validator = (msg) => {
 };
 
 const validateGetStateItems: Validator = (msg) => {
-  if (msg.topic !== "tasks" && msg.topic !== "projects")
-    return "topic must be tasks or projects";
+  if (
+    msg.topic !== "tasks" &&
+    msg.topic !== "projects" &&
+    msg.topic !== "initiatives"
+  )
+    return "topic must be tasks, projects or initiatives";
   if (!Array.isArray(msg.ids) || !msg.ids.every(isString))
     return "ids must be an array of strings";
   if (!isString(msg.requestId)) return "requestId must be a string";
@@ -969,6 +982,8 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   // Same rule for a Workflow Run's Settle (Task-677): the observed revision is
   // required, so a stale item cannot acknowledge an outcome it never rendered.
   settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),
+  // And for an Initiative's: the revision its clicked inbox card rendered.
+  settleInitiative: fields({ id: STRING, throughRevision: COUNT }),
   setInboxPositions: (msg) => {
     const { positions } = msg;
     if (!Array.isArray(positions) || positions.length === 0)
@@ -1070,6 +1085,10 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
       ? null
       : "request must be an object",
   getProject: fields({ id: STRING, requestId: STRING }),
+  getInitiative: fields(
+    { id: STRING, requestId: STRING },
+    { collapsed: COLLAPSED_EPICS },
+  ),
   saveProject: fields({ id: STRING, patch: OBJECT }, { requestId: STRING }),
   provisionProjectRepo: fields({ id: STRING }, { requestId: STRING }),
   removeProjectRepo: fields({ id: STRING }, { requestId: STRING }),

@@ -15,7 +15,11 @@
       "includeEntryExports": true
     },
     "app/server": {
-      "entry": ["src/check*.ts", "src/measure*.ts"],
+      "entry": [
+        "src/check*.ts",
+        "src/measure*.ts",
+        "src/initiativeLayoutWorker.ts"
+      ],
       "project": "src/**/*.ts"
     },
     "app/web": {

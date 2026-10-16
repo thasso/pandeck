@@ -1037,12 +1037,22 @@ export function TaskInspector({
   onArchive,
   onUnarchive,
   onDelete,
+  noSessionRefs = false,
   children,
 }: {
   task: Task | undefined;
   sessions: SessionListItem[];
   openers: ObjectOpeners;
   onStartSession: (taskId: string, title: string) => void;
+  /**
+   * The server has answered that the Task has no session references at all:
+   * the Sessions group stays on screen saying so, with a way to start one. A
+   * surface whose main pane is NOT this Task (an Initiative page's panel) has
+   * no other place stating its sessions. Rows this browser does not hold (an
+   * archived session) are not an answer: the group is then left out, as on
+   * the Task's own route, rather than claiming there are none.
+   */
+  noSessionRefs?: boolean;
   /**
    * Open the Run-workflow start sheet for this Task. Passed only when the Task
    * has a Project a run's worktree could be provisioned from.
@@ -1116,6 +1126,32 @@ export function TaskInspector({
               taskRelationGroups(task, sessions),
               openers,
               sessions,
+            ).map((group) =>
+              noSessionRefs &&
+              group.id === "sessions" &&
+              (task.sessionRefs ?? []).length === 0
+                ? {
+                    ...group,
+                    alwaysShown: true,
+                    content: (
+                      <EmptyBox
+                        variant="inline"
+                        action={
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={() => onStartSession(task.id, task.title)}
+                          >
+                            <MessageSquarePlus />
+                            Start session for this task
+                          </Button>
+                        }
+                      >
+                        No sessions on this Task yet.
+                      </EmptyBox>
+                    ),
+                  }
+                : group,
             )
           : []
       }

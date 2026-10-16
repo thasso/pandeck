@@ -43,7 +43,7 @@
       "pi": {
         "prompt": 5600,
         "eagerTools": 19000,
-        "firstRequest": 24000
+        "firstRequest": 24100
       },
       "claude": {
         "prompt": 5600,
@@ -560,6 +560,14 @@
       "task": "pa-shell-workdir",
       "date": "2026-10-14",
       "why": "carries the native-tool block above while preserving a joint ceiling below prompt plus eagerTools; the short coding-delegation rule fits the existing prompt budget"
+    },
+    {
+      "budget": "personal-assistant.pi.firstRequest",
+      "from": 24000,
+      "to": 24100,
+      "task": "initiatives",
+      "date": "2026-10-15",
+      "why": "task_manage now says a dependency between Tasks is an addLinks blocks link, never only prose: a prose dependency is invisible to the Initiative map, blocked state and the attention list (docs/initiatives.md); the ceiling stays 500 below prompt plus eagerTools"
     }
   ]
 }
