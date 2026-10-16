@@ -20,7 +20,8 @@ import { dismissToast, getToasts } from "./lib/toast.ts";
  * is the wiring between the fragment, the Task cache and the panel
  * (`docs/initiatives.md`; F022, F027, F029). The Task's actions belong to the
  * panel's Task header alone, and its failures are claimed in place only while
- * that panel is on screen (F032, F033).
+ * that panel is on screen (F032, F033). An Initiative Settle's failure has its
+ * inbox card as a home only while the Sessions inbox shows it (F039).
  */
 
 (
@@ -127,7 +128,12 @@ async function boot(
   {
     phone = false,
     tasks = [LISTED],
-  }: { phone?: boolean; tasks?: TaskItem[] } = {},
+    initiatives = [summary()],
+  }: {
+    phone?: boolean;
+    tasks?: TaskItem[];
+    initiatives?: InitiativeSummary[];
+  } = {},
 ): Promise<FakeSocket> {
   stubLayout(phone);
   // The object panel is the user's: open, as a selection on the page leaves it.
@@ -142,13 +148,14 @@ async function boot(
   });
   await settle();
   const socket = FakeSocket.instances.at(-1)!;
-  await connect(socket, tasks);
+  await connect(socket, tasks, initiatives);
   return socket;
 }
 
 async function connect(
   socket: FakeSocket,
   tasks: TaskItem[] = [LISTED],
+  initiatives: InitiativeSummary[] = [summary()],
 ): Promise<void> {
   await act(async () => {
     socket.open();
@@ -158,9 +165,9 @@ async function connect(
   await act(async () => {
     socket.receive({
       type: "initiativeList",
-      items: [summary()],
+      items: initiatives,
       seq: 1,
-      revisions: [{ id: "7", revision: 1 }],
+      revisions: initiatives.map((item) => ({ id: item.id, revision: 1 })),
     });
     socket.receive({
       type: "taskList",
@@ -727,5 +734,67 @@ describe("the selected Task's actions (F032)", () => {
     expect(menuItems()).toEqual(
       expect.arrayContaining(["Archive task", "Delete task"]),
     );
+  });
+});
+
+/** Initiative 7 paused at `revision`, with nothing acknowledged yet. */
+function pausedAt(revision: number): InitiativeSummary {
+  return {
+    ...summary(),
+    state: "paused",
+    attention: { revision, settledRevision: 0, kind: "paused", at: 1 },
+  };
+}
+
+const SETTLE_DEADLINE = "The server did not answer this Settle. Try again.";
+
+describe("an Initiative Settle nobody answers, in the whole app (F039)", () => {
+  /**
+   * Settle the paused card on /sessions, then let done land while the server
+   * has not answered: the card is back in the inbox, offering the newer
+   * revision. `hide` runs before the deadline.
+   */
+  async function unanswered(hide?: () => Promise<void>) {
+    const socket = await boot("/sessions", { initiatives: [pausedAt(1)] });
+    const settleCard = () =>
+      buttonNamed(new RegExp(`^Settle .*${summary().title}`));
+    await until(() => settleCard() !== undefined, "the Settle control");
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout"],
+      shouldAdvanceTime: true,
+    });
+    await act(async () => settleCard()!.click());
+    await until(
+      () => sentOf(socket, "settleInitiative").length === 1,
+      "the Settle after its exit",
+    );
+    await act(async () =>
+      socket.receive({
+        type: "stateEvents",
+        topic: "initiatives",
+        seq: 2,
+        events: [{ kind: "upsert", id: "7", revision: 2, item: pausedAt(3) }],
+      }),
+    );
+    await until(() => settleCard() !== undefined, "the newer outcome");
+    if (hide) await hide();
+    await expireMutations();
+    return socket;
+  }
+
+  it("says it under the card while the Sessions inbox shows it", async () => {
+    await unanswered();
+    expect(alertsWith(SETTLE_DEADLINE)).toHaveLength(1);
+    expect(announced()).toEqual([]);
+  });
+
+  it("names the Initiative when the sidebar is shut", async () => {
+    await unanswered(() => press(/^Toggle sidebar$/));
+    expect(announced()).toEqual([
+      `Initiative-7 ${summary().title} — ${SETTLE_DEADLINE}`,
+    ]);
+    await press(/^Toggle sidebar$/);
+    expect(alertsWith(SETTLE_DEADLINE)).toHaveLength(0);
+    expect(announced()).toHaveLength(1);
   });
 });

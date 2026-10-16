@@ -248,6 +248,41 @@ describe("Initiative items in the Sessions inbox", () => {
     }
   });
 
+  it("sends a Settle exactly once whether its exit or the inbox ends first (F037)", () => {
+    vi.useFakeTimers();
+    try {
+      const outcome = initiative("2", {
+        state: "paused",
+        attention: { revision: 1, settledRevision: 0, kind: "paused", at: NOW },
+      });
+      // The section switch comes first: the exit never finishes.
+      const left = mount();
+      const first = inbox(left, [outcome], { animate: true });
+      act(() => within(left, "2", 'button[aria-label^="Settle"]')!.click());
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      act(() => left.root.unmount());
+      expect(first.calls.settled).toEqual([["2", 1]]);
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(first.calls.settled).toEqual([["2", 1]]);
+
+      // The exit finishes first, then the inbox goes.
+      const stayed = mount();
+      const second = inbox(stayed, [outcome], { animate: true });
+      act(() => within(stayed, "2", 'button[aria-label^="Settle"]')!.click());
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      act(() => stayed.root.unmount());
+      expect(second.calls.settled).toEqual([["2", 1]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens the Initiative from the card, by click and by Enter", () => {
     const view = mount();
     const { calls } = inbox(view, [initiative("7")]);
@@ -391,6 +426,46 @@ describe("Initiative items in the Sessions inbox", () => {
     )!;
     act(() => retry.click());
     expect(calls.retried).toBe(1);
+  });
+
+  it("claims no emptiness when the first Initiative read failed (F040)", () => {
+    const view = mount();
+    const error = "Failed to list Initiatives: offline";
+    const { render, calls } = inbox(view, [], { fresh: false, error });
+    expect(text(view)).toContain(error);
+    expect(text(view), "a failed read is not a zero result").not.toContain(
+      "No sessions yet",
+    );
+    expect(text(view)).not.toContain("Nothing needs you");
+    expect(view.container.querySelector('[role="status"]')).toBeNull();
+    const retry = [...view.container.querySelectorAll("button")].find(
+      (button) => button.textContent?.includes("Retry"),
+    )!;
+    act(() => retry.click());
+    expect(calls.retried).toBe(1);
+
+    // Only settled sessions held: still no "nothing needs you" over the failure.
+    render([], {
+      fresh: false,
+      error,
+      sessions: [session("s-old", { settledAt: NOW - 5_000 })],
+    });
+    expect(text(view)).toContain(error);
+    expect(text(view)).not.toContain("Nothing needs you");
+    expect(text(view)).not.toContain("No sessions yet");
+
+    // Useful sessions are never hidden by the failure.
+    render([], { fresh: false, error, sessions: [session("s-a")] });
+    expect(text(view)).toContain(error);
+    expect(
+      view.container.querySelector('[data-list-row-id="s-a"]'),
+    ).not.toBeNull();
+
+    // The list's own answer, empty, is the one that may say so.
+    const answered = mount();
+    inbox(answered, [], { fresh: true });
+    expect(text(answered)).toContain("No sessions yet");
+    expect(text(answered)).not.toContain(error);
   });
 
   it("gives a phone thumb-sized controls", () => {

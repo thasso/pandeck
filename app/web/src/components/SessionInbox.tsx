@@ -49,6 +49,7 @@ import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
 import { EmptyBox, ErrorNote, PaneLoading } from "./common/load.tsx";
+import type { InitiativeSettleError } from "../hooks/useAssistant.ts";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -211,6 +212,11 @@ interface Props {
   initiativesFresh: boolean;
   /** The Initiative list could not be read; stated above the items it holds. */
   initiativeListError: string | null;
+  /**
+   * A Settle's failure, by Initiative id, said under that Initiative's card
+   * (`UIState.initiativeSettleErrors`).
+   */
+  initiativeSettleErrors?: Readonly<Record<string, InitiativeSettleError>>;
   /** Ask for the Initiative list again; stable. */
   onRetryInitiatives: () => void;
   /** Open one Initiative's page, where its map is. */
@@ -275,6 +281,7 @@ export function SessionInbox({
   initiatives,
   initiativesFresh,
   initiativeListError,
+  initiativeSettleErrors,
   onRetryInitiatives,
   onOpenInitiative,
   onSettleInitiative,
@@ -361,14 +368,31 @@ export function SessionInbox({
       ),
     [settleWithExit, onSettleWorkflowRun],
   );
-  // The same capture for an Initiative: the revision its card rendered.
+  // The same capture for an Initiative: the revision its card rendered. Its
+  // send also outlives this list, as a swipe's does (`swipeCommit`): leaving
+  // the Sessions section mid-exit unmounts the inbox, and the timer that would
+  // have sent the acknowledgement dies with it. Whichever ends first — the
+  // exit or the inbox — sends it, and the other finds nothing left to send.
+  const initiativeSends = useRef(new Map<string, () => void>());
   const settleInitiativeItem = useCallback(
-    (initiativeId: string, throughRevision: number) =>
-      settleWithExit(initiativeItemId(initiativeId), () =>
-        onSettleInitiative(initiativeId, throughRevision),
-      ),
+    (initiativeId: string, throughRevision: number) => {
+      const id = initiativeItemId(initiativeId);
+      if (initiativeSends.current.has(id)) return;
+      const send = () => {
+        if (!initiativeSends.current.delete(id)) return;
+        onSettleInitiative(initiativeId, throughRevision);
+      };
+      initiativeSends.current.set(id, send);
+      settleWithExit(id, send);
+    },
     [settleWithExit, onSettleInitiative],
   );
+  useEffect(() => {
+    const pending = initiativeSends.current;
+    return () => {
+      for (const send of [...pending.values()]) send();
+    };
+  }, []);
 
   /**
    * The command a swiped card is waiting to send, by session id.
@@ -1056,6 +1080,13 @@ export function SessionInbox({
     const id = initiativeItemId(item.initiative.id);
     const open = expandedClusters.has(id);
     const rows = initiativeRows(item);
+    // Said about the outcome the card showed when the Settle failed; a newer
+    // outcome is a different item.
+    const settleError = initiativeSettleErrors?.[item.initiative.id];
+    const settleNote =
+      settleError && settleError.revision === item.settleRevision
+        ? settleError.message
+        : null;
     return (
       <div key={id} data-inbox-card={id}>
         <ExitStage leaving={settling.includes(id)}>
@@ -1070,6 +1101,10 @@ export function SessionInbox({
               onToggleSessions={toggleInitiativeSessions}
               onFocusSibling={focusSibling}
             />
+            {/* Its Settle's failure, on the card whose control was refused. */}
+            {settleNote ? (
+              <ErrorNote className="mx-2 my-1" message={settleNote} />
+            ) : null}
             {rows.map((child) => (
               <ClusterChildRow
                 key={child.session.id}
@@ -1169,7 +1204,8 @@ export function SessionInbox({
   // would be the first thing to move.
   // Initiatives count against both claims too: an inbox holding only an
   // Initiative is not empty. And neither claim is made before the Initiative
-  // list has answered (or failed): that would state an emptiness nobody read.
+  // list has answered: that would state an emptiness nobody read. A failed
+  // read is not that answer — until one comes, the failure stands alone.
   const initiativesPending = !initiativesFresh && !initiativeListError;
   const nothingToShow =
     view.empty && archivedSessions.length === 0 && initiativeItems.length === 0;
@@ -1201,7 +1237,7 @@ export function SessionInbox({
 
       {nothingToShow && initiativesPending ? (
         <PaneLoading label="Loading Initiatives…" className="flex-none p-3" />
-      ) : coldStart ? (
+      ) : !initiativesFresh ? null : coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
       ) : nothingToShow ? (
         <EmptyBox>Nothing needs you right now.</EmptyBox>

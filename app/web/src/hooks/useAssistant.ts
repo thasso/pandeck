@@ -20,9 +20,11 @@ import { localStore } from "../lib/localStore.ts";
 import { createIdleWriter, type IdleWriter } from "../lib/idleWriter.ts";
 import { announceMessage } from "../lib/messageAnnounce.ts";
 import { sessionSettleCascade } from "../lib/sessionInbox.ts";
+import { initiativeSettleRevision } from "../lib/initiativeInbox.ts";
 import {
   arrivalHasHome,
   arrivalMessage,
+  initiativeCardHasHome,
   objectFailureFrom,
   type ObjectFailureType,
   sessionFailureFrom,
@@ -514,6 +516,12 @@ export interface UIState {
   /** The Initiative list could not be read; cleared by the next snapshot. */
   initiativeListError: string | null;
   /**
+   * A Settle's failure, by Initiative id: kept only when that Initiative's
+   * inbox card was on screen to say it in place, and retired by its next
+   * Settle. Every other failure of the write is announced naming it instead.
+   */
+  initiativeSettleErrors: Readonly<Record<string, InitiativeSettleError>>;
+  /**
    * Keyed Initiative reads (`getInitiative`): the graph with its map layout, or
    * `ready(null)` when it does not exist or was deleted. A newer `initiatives`
    * event or snapshot revision re-reads an entry; Task events never do.
@@ -910,6 +918,7 @@ const emptyInitial: UIState = {
   initiatives: [],
   initiativesFresh: false,
   initiativeListError: null,
+  initiativeSettleErrors: {},
   initiativeDetails: {},
   initiativeDetailRevisions: {},
   initiativeDetailsLru: [],
@@ -1932,6 +1941,12 @@ type Action =
       kind: "optimisticInitiativeSettle";
       initiativeId: string;
       throughRevision: number;
+    }
+  /** An Initiative Settle failed while its card was on screen to say so. */
+  | {
+      kind: "initiativeSettleResult";
+      initiativeId: string;
+      error: InitiativeSettleError;
     }
   /**
    * Sessions inbox items dragged to a new place: sessions and runs in ONE
@@ -4368,7 +4383,11 @@ function worktreeCommentsOf(thread: CommentThread): WorktreeComment[] {
  * announce a failure that was long over. From here there is no later: the
  * message is either said now or owned by something that renders it.
  */
-function announceArrival(msg: ServerMessage, state: UIState): void {
+function announceArrival(
+  msg: ServerMessage,
+  state: UIState,
+  knownName?: string,
+): void {
   const reveal = state.revealRequest;
   const arrival = arrivalMessage(msg, {
     viewedSessionId: state.session?.sessionId ?? null,
@@ -4381,7 +4400,7 @@ function announceArrival(msg: ServerMessage, state: UIState): void {
     revealTargetKind: reveal?.target.kind ?? null,
   });
   if (!arrival || arrivalHasHome(arrival)) return;
-  const resolvedName = targetTitle(arrival.target, state);
+  const resolvedName = targetTitle(arrival.target, state) ?? knownName;
   const announcement = announceMessage({
     severity: arrival.severity,
     message: arrival.message,
@@ -4426,13 +4445,70 @@ function targetTitle(
       const initiative = state.initiatives.find(
         (item) => item.id === target.id,
       );
-      return initiative
-        ? `Initiative-${initiative.id} ${initiative.title}`
-        : undefined;
+      return initiative ? initiativeName(initiative) : undefined;
     }
     default:
       return undefined;
   }
+}
+
+/** How an announcement names an Initiative. */
+function initiativeName(initiative: InitiativeSummary): string {
+  return `Initiative-${initiative.id} ${initiative.title}`;
+}
+
+/**
+ * What an Initiative card says under itself after its Settle failed, and the
+ * outcome revision the card showed then: a later outcome is a different item,
+ * and this is not about it.
+ */
+export interface InitiativeSettleError {
+  message: string;
+  revision: number;
+}
+
+interface InitiativeSettleRequest {
+  initiativeId: string;
+  /** Its name at the click, for a failure that outlives the list holding it. */
+  name?: string;
+  /** The deadline has already told the user this write went unanswered. */
+  timedOut?: boolean;
+}
+
+/**
+ * An Initiative Settle's failure — refused, or never answered — said once
+ * (`docs/messaging.md`): in place while that Initiative's inbox card is on
+ * screen, judged now rather than at the click, since an optimistic Settle
+ * takes the card away and a newer outcome can bring it back; otherwise
+ * announced naming the Initiative.
+ */
+function initiativeSettleFailed(
+  request: InitiativeSettleRequest,
+  message: string,
+  state: UIState,
+  dispatch: (action: Action) => void,
+): void {
+  const shown = state.initiatives.find(
+    (item) => item.id === request.initiativeId,
+  );
+  const revision = shown ? initiativeSettleRevision(shown) : undefined;
+  if (revision !== undefined && initiativeCardHasHome(request.initiativeId)) {
+    dispatch({
+      kind: "initiativeSettleResult",
+      initiativeId: request.initiativeId,
+      error: { message, revision },
+    });
+    return;
+  }
+  announceArrival(
+    {
+      type: "error",
+      message,
+      target: { type: "initiative", id: request.initiativeId },
+    },
+    state,
+    request.name,
+  );
 }
 
 /**
@@ -4894,7 +4970,23 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         );
     return { ...state, sessions, error: null };
   }
+  if (action.kind === "initiativeSettleResult")
+    return {
+      ...state,
+      initiativeSettleErrors: {
+        ...state.initiativeSettleErrors,
+        [action.initiativeId]: action.error,
+      },
+    };
   if (action.kind === "optimisticInitiativeSettle") {
+    // The Initiative's next Settle retires its last one's failure.
+    const errors = state.initiativeSettleErrors;
+    const initiativeSettleErrors =
+      action.initiativeId in errors
+        ? Object.fromEntries(
+            Object.entries(errors).filter(([id]) => id !== action.initiativeId),
+          )
+        : errors;
     let changed = false;
     const initiatives = state.initiatives.map((item) => {
       if (item.id !== action.initiativeId || !item.attention) return item;
@@ -4907,7 +4999,12 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       changed = true;
       return { ...item, attention: { ...item.attention, settledRevision } };
     });
-    return changed ? { ...state, initiatives } : state;
+    if (!changed && initiativeSettleErrors === errors) return state;
+    return {
+      ...state,
+      initiativeSettleErrors,
+      ...(changed ? { initiatives } : {}),
+    };
   }
   if (action.kind === "optimisticWorkflowRunSettle") {
     let sessions = state.sessions;
@@ -6995,6 +7092,15 @@ export function useAssistant({
   /** Correlates the generic mutation outcome channel to one Task control. */
   const taskMutationRequestsRef = useRef(new Map<string, string>());
   const projectMutationRequestsRef = useRef(new Map<string, string>());
+  /**
+   * An Initiative Settle in flight, by request id, with the name it was
+   * clicked under: its refusal and its deadline are the Initiative's own
+   * outcome, never the viewed chat's. Kept past the deadline (`timedOut`) so a
+   * refusal arriving after it is recognised as already told.
+   */
+  const initiativeSettleRequestsRef = useRef(
+    new Map<string, InitiativeSettleRequest>(),
+  );
   /** One in-flight targeted catch-up for the latest Task digest. */
   const taskDigestSyncRef = useRef<TaskDigestSync | null>(null);
   const projectDigestSyncRef = useRef<TaskDigestSync | null>(null);
@@ -7785,6 +7891,8 @@ export function useAssistant({
           }
         }
       }
+      if (msg.type === "mutationSettled")
+        initiativeSettleRequestsRef.current.delete(msg.requestId);
       if (msg.type === "mutationSettled") {
         // Card broadcasts are best-effort async sends and can follow this
         // generic settle. Keep their recovery alive until the matching durable
@@ -7956,6 +8064,24 @@ export function useAssistant({
           // No `controlOwned` to set: the return below means this message never
           // reaches the reducer, so the object store never sees it either.
           announceArrival(msg, stateRef.current);
+          return;
+        }
+        // An Initiative Settle's refusal is that Initiative's outcome alone.
+        // It never reaches the reducer's generic `error`, which is the VIEWED
+        // chat's outcome: that would end a turn still streaming there. Once
+        // the deadline has spoken, a late refusal has nothing left to say.
+        const initiativeSettle = initiativeSettleRequestsRef.current.get(
+          msg.requestId,
+        );
+        if (initiativeSettle) {
+          initiativeSettleRequestsRef.current.delete(msg.requestId);
+          if (!initiativeSettle.timedOut)
+            initiativeSettleFailed(
+              initiativeSettle,
+              msg.message,
+              stateRef.current,
+              dispatch,
+            );
           return;
         }
         const projectKey = projectMutationRequestsRef.current.get(
@@ -8174,6 +8300,14 @@ export function useAssistant({
           dispatch({ kind: "workflowDeliveryResult", runId: pending.runId });
         }
         workflowDeliveryRequestsRef.current.clear();
+        // An Initiative Settle is answered on the connection it was sent on,
+        // or by the reconnect's snapshot, which states whether it landed. Its
+        // deadline would only say "no answer" over that snapshot, so the
+        // claim is handed back now, silently.
+        for (const [requestId, pending] of initiativeSettleRequestsRef.current)
+          if (!pending.timedOut)
+            settleMutation(pendingMutationsRef.current, requestId);
+        initiativeSettleRequestsRef.current.clear();
         episodeListReadsRef.current = {
           tasks: false,
           projects: false,
@@ -8268,6 +8402,19 @@ export function useAssistant({
             key: projectKey,
             error: "The server did not answer this Project change. Try again.",
           });
+        }
+        // Unknown is an outcome too: the re-read above states what landed,
+        // and this says that the click went unanswered, once.
+        const initiativeSettle =
+          initiativeSettleRequestsRef.current.get(requestId);
+        if (initiativeSettle && !initiativeSettle.timedOut) {
+          initiativeSettle.timedOut = true;
+          initiativeSettleFailed(
+            initiativeSettle,
+            "The server did not answer this Settle. Try again.",
+            stateRef.current,
+            dispatch,
+          );
         }
       }, timeoutMs);
       pendingMutationsRef.current.set(requestId, {
@@ -8706,8 +8853,8 @@ export function useAssistant({
         // Optimistic like a run's Settle. The success answer is the
         // `initiatives` event the write raises; a refusal or a deadline
         // re-reads the list, whose snapshot replaces the optimistic
-        // acknowledgement with the server's own, and the refusal itself is
-        // announced naming the Initiative.
+        // acknowledgement with the server's own, and is said once: on the
+        // card if it is on screen, else announced naming the Initiative.
         const requestId = trackMutation(
           { topic: "initiatives", objectIds: [initiativeId] },
           () => {
@@ -8722,6 +8869,13 @@ export function useAssistant({
             );
           },
         );
+        const known = stateRef.current.initiatives.find(
+          (item) => item.id === initiativeId,
+        );
+        initiativeSettleRequestsRef.current.set(requestId, {
+          initiativeId,
+          ...(known ? { name: initiativeName(known) } : {}),
+        });
         const observed = Math.max(0, Math.trunc(throughRevision));
         dispatch({
           kind: "optimisticInitiativeSettle",

@@ -604,11 +604,16 @@ outcome to acknowledge; a paused or done one is an item while its attention
 revision is unsettled, and Settle — the one Initiative write the UI makes —
 sends exactly the revision the clicked card rendered, captured at the click and
 sent after the settle exit, so an outcome raised meanwhile stays an item. The
-card has the session card's three rows: "Initiative" with its done/total
-progress and the time; the title led by the Initiative glyph while active, else
-by its Paused or Done mark; then the disclosure of its sessions, how many Tasks
-are ready and how many blocked, and the next open milestone, with Settle at the
-right edge. Everything else is in its spoken label. Opening the card goes to
+send belongs to the click, not to the list: leaving the Sessions section during
+the exit sends it then, as a swipe's does, and never twice. A refused or
+unanswered Settle is said under its card while the visible inbox draws that card
+with its Settle; otherwise, including when the optimistic Settle has taken the
+card away, it is announced naming the Initiative (`docs/messaging.md`). The card
+has the session card's three rows: "Initiative" with its done/total progress and
+the time; the title led by the Initiative glyph while active, else by its Paused
+or Done mark; then the disclosure of its sessions, how many Tasks are ready and
+how many blocked, and the next open milestone, with Settle at the right edge.
+Everything else is in its spoken label. Opening the card goes to
 `/initiatives/:id`, the map. Every fact comes from the `initiatives` summary,
 the next milestone's title included, so no card reads a graph, a layout or the
 Tasks topic, and a member Task's change reaches it as the Initiative's own
@@ -627,7 +632,8 @@ above the cards holds a loading placeholder for Initiatives, but neither the
 cold-start nor the "nothing needs you" claim is made before the Initiative list
 has answered — an inbox whose only item is an Initiative is not empty — and a
 failed list read is stated above Needs you with a retry, over any items still
-held.
+held. A failed read is not that answer: before one arrives, the failure stands
+alone, with no empty claim beside it, while sessions already held still show.
 
 The disclosure lists the sessions started from its member Tasks. The summary
 carries at most 50 of their ids (the DATA bound, newest first, with the full

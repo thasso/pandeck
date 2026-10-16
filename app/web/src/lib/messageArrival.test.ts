@@ -4,6 +4,7 @@ import {
   arrivalHasHome,
   arrivalMessage,
   type FailureHomes,
+  initiativeCardHasHome,
   objectFailureFrom,
   readFailureHomes,
   resetFailureHomes,
@@ -27,6 +28,7 @@ function claim(homes: Partial<FailureHomes>): void {
     viewedSessionId: null,
     stagedSend: null,
     openObjects: NO_OBJECTS,
+    initiativeCards: [],
     ...homes,
   });
 }
@@ -314,7 +316,24 @@ it("claims nothing until a surface says so", () => {
     viewedSessionId: null,
     stagedSend: null,
     openObjects: NO_OBJECTS,
+    initiativeCards: [],
   });
+});
+
+// An Initiative's inbox card is a home for its tracked Settle alone: the claim
+// is asked by that write, and an arrival that merely names the Initiative is
+// still announced, since nothing on the card would render it.
+it("claims an Initiative card for its Settle only, by id", () => {
+  claim({ initiativeCards: ["6"] });
+  expect(initiativeCardHasHome("6")).toBe(true);
+  expect(initiativeCardHasHome("7")).toBe(false);
+  expect(
+    arrivalHasHome({
+      severity: "error",
+      message: "Failed to read Initiative",
+      target: { type: "initiative", id: "6" },
+    }),
+  ).toBe(false);
 });
 
 // A project or Task answers the same first question as a

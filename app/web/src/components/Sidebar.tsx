@@ -54,7 +54,10 @@ import {
   type PrimaryNavSection,
 } from "./shell/PrimaryNav.tsx";
 import type { Task, TaskPlacement } from "../lib/backlogTree.ts";
-import type { AssistantActions } from "../hooks/useAssistant.ts";
+import type {
+  AssistantActions,
+  InitiativeSettleError,
+} from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
 import {
   SIDEBAR_BACKLOG_DENSITY,
@@ -177,6 +180,8 @@ interface Props {
   initiativesFresh: boolean;
   /** The Initiative list could not be read. */
   initiativeListError: string | null;
+  /** A Settle's failure, by Initiative id, for its inbox card. */
+  initiativeSettleErrors: Readonly<Record<string, InitiativeSettleError>>;
   /** Ask for the Initiative list again; stable. */
   onRetryInitiatives: () => void;
   /** Initiative id open in the main pane, for highlighting. */
@@ -490,6 +495,7 @@ function SidebarImpl({
   initiatives,
   initiativesFresh,
   initiativeListError,
+  initiativeSettleErrors,
   onRetryInitiatives,
   selectedInitiativeId,
   worktrees,
@@ -958,6 +964,7 @@ function SidebarImpl({
             initiatives={initiatives}
             initiativesFresh={initiativesFresh}
             initiativeListError={initiativeListError}
+            initiativeSettleErrors={initiativeSettleErrors}
             onRetryInitiatives={onRetryInitiatives}
             onOpenInitiative={openInitiative}
             onSettleInitiative={onSettleInitiative}

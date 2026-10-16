@@ -253,6 +253,14 @@ An Initiative is a Sessions inbox item, following the Workflow Run precedent
   an ended Workflow Run. A settled Initiative leaves the inbox, and setting it
   active again brings it back to the active block. A row that never raised a
   revision (created before this cursor) is not an outcome.
+- A Settle is the user's acknowledgement, not an effect of the card being on
+  screen: leaving the inbox while the card plays its exit still sends it, once,
+  with the revision the card rendered. Its refusal or unanswered deadline is the
+  Initiative's own outcome, never the chat being viewed: the client re-reads the
+  list, and says it once — under the card while that card is on screen with its
+  Settle, otherwise announced naming the Initiative (by the name it was clicked
+  under if the list no longer holds it). A reconnect's snapshot answers a Settle
+  in flight, so its deadline then says nothing.
 - Only the user settles. An agent changing the state never removes the item, and
   no agent tool settles. Archiving or deleting the Initiative takes its item
   away with it.

@@ -213,6 +213,7 @@ import { copyWithToast } from "./lib/clipboard.ts";
 import { showToast, TOAST_DWELL_MS } from "./lib/toast.ts";
 import { failureOnViewedSession } from "./lib/messageAnnounce.ts";
 import { setFailureHomes } from "./lib/messageArrival.ts";
+import { initiativeSettleRevision } from "./lib/initiativeInbox.ts";
 import { visibleModels } from "./lib/models.ts";
 import {
   accountModelOptions,
@@ -5121,6 +5122,17 @@ function AppContent() {
       : inspectorTabVisible)
       ? initiativeSelectedTaskId
       : null);
+  // An Initiative's inbox card states its Settle's failure only while the
+  // Sessions inbox is the section on screen and the card is drawn there with
+  // its Settle — an unsettled outcome. A shut sidebar, another section, or an
+  // optimistic Settle that took the card away leaves nothing to say it on.
+  const failureHomeInitiativeCards =
+    sidebarPanelOpen && sidebarSection === "sessions"
+      ? state.initiatives
+          .filter((item) => initiativeSettleRevision(item) !== undefined)
+          .map((item) => item.id)
+          .join(",")
+      : "";
   useEffect(() => {
     setFailureHomes({
       viewedSessionId: displayCurrentId ?? null,
@@ -5139,6 +5151,9 @@ function AppContent() {
         project: selectedProjectId ? [selectedProjectId] : [],
         task: failureHomeTaskId ? [failureHomeTaskId] : [],
       },
+      initiativeCards: failureHomeInitiativeCards
+        ? failureHomeInitiativeCards.split(",")
+        : [],
     });
   }, [
     displayCurrentId,
@@ -5146,6 +5161,7 @@ function AppContent() {
     stagedSendSessionId,
     selectedProjectId,
     failureHomeTaskId,
+    failureHomeInitiativeCards,
   ]);
 
   // Leaving settings returns to the chat we were in, or to /sessions/create for a fresh start.
@@ -6983,6 +6999,7 @@ function AppContent() {
         initiatives={state.initiatives}
         initiativesFresh={state.initiativesFresh}
         initiativeListError={state.initiativeListError}
+        initiativeSettleErrors={state.initiativeSettleErrors}
         onRetryInitiatives={actions.retryInitiatives}
         selectedInitiativeId={selectedInitiativeId}
         worktrees={state.worktrees}

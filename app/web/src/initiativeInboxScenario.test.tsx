@@ -6,6 +6,9 @@
  * clicked card rendered and acknowledges optimistically with the server's
  * clamp, a newer outcome stays awake, a refusal re-reads the list and is
  * announced naming the Initiative, and a reconnect's snapshot is the truth.
+ * A Settle survives its surface leaving mid-exit, and its refusal or deadline
+ * is the Initiative's own outcome: said once, in place on a card that is on
+ * screen or else naming it, never written over the chat being viewed.
  *   pnpm --filter @assistant/web test src/initiativeInboxScenario.test.tsx
  */
 import { act, useEffect } from "react";
@@ -19,6 +22,8 @@ import type {
 } from "@assistant/shared";
 import { useAssistant, type UIState } from "./hooks/useAssistant.ts";
 import { SessionInbox } from "./components/SessionInbox.tsx";
+import { initiativeSettleRevision } from "./lib/initiativeInbox.ts";
+import { resetFailureHomes, setFailureHomes } from "./lib/messageArrival.ts";
 import { dismissToast, getToasts } from "./lib/toast.ts";
 import { stubMatchMedia } from "./test/matchMedia.ts";
 
@@ -126,7 +131,19 @@ let state: UIState;
 let actions: ReturnType<typeof useAssistant>["actions"];
 const opened: string[] = [];
 
-function Harness() {
+/**
+ * `inbox` is whether the Sessions inbox is the section on screen; leaving it
+ * unmounts the inbox, as the sidebar's section switch does. The failure-home
+ * claim is the one App states for it: the Initiatives whose card, with its
+ * Settle control, the visible inbox is drawing.
+ */
+function Harness({
+  inbox = true,
+  animate = false,
+}: {
+  inbox?: boolean;
+  animate?: boolean;
+}) {
   const assistant = useAssistant();
   state = assistant.state;
   actions = assistant.actions;
@@ -134,6 +151,21 @@ function Harness() {
     () => assistant.actions.setTopics(["initiatives"]),
     [assistant.actions],
   );
+  const claimed = inbox
+    ? assistant.state.initiatives
+        .filter((item) => initiativeSettleRevision(item) !== undefined)
+        .map((item) => item.id)
+        .join(",")
+    : "";
+  useEffect(() => {
+    setFailureHomes({
+      viewedSessionId: null,
+      stagedSend: null,
+      openObjects: { project: [], task: [] },
+      initiativeCards: claimed ? claimed.split(",") : [],
+    });
+  }, [claimed]);
+  if (!inbox) return null;
   return (
     <SessionInbox
       sessions={assistant.state.sessions}
@@ -147,7 +179,7 @@ function Harness() {
       workflowRuns={[]}
       workflowCards={{}}
       worktreeStatuses={{}}
-      animateListChanges={false}
+      animateListChanges={animate}
       density="tight"
       onSelect={() => {}}
       onSettle={() => {}}
@@ -163,6 +195,7 @@ function Harness() {
       initiatives={assistant.state.initiatives}
       initiativesFresh={assistant.state.initiativesFresh}
       initiativeListError={assistant.state.initiativeListError}
+      initiativeSettleErrors={assistant.state.initiativeSettleErrors}
       onRetryInitiatives={assistant.actions.retryInitiatives}
       onOpenInitiative={(id) => opened.push(id)}
       onSettleInitiative={assistant.actions.settleInitiative}
@@ -189,12 +222,16 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  resetFailureHomes();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
-async function boot(items: InitiativeSummary[]): Promise<ScenarioSocket> {
-  await act(async () => root.render(<Harness />));
+async function boot(
+  items: InitiativeSummary[],
+  props: { animate?: boolean } = {},
+): Promise<ScenarioSocket> {
+  await act(async () => root.render(<Harness {...props} />));
   const socket = ScenarioSocket.instances.at(-1)!;
   await act(async () => {
     socket.open();
@@ -231,6 +268,13 @@ function card(id: string): HTMLElement | null {
   );
 }
 
+/** The whole inbox item: the card and what is said under it. */
+function item(id: string): HTMLElement | null {
+  return container.querySelector<HTMLElement>(
+    `[data-inbox-card="initiative:${id}"]`,
+  );
+}
+
 function settleButton(id: string): HTMLButtonElement | null {
   return (
     card(id)?.querySelector<HTMLButtonElement>(
@@ -241,6 +285,98 @@ function settleButton(id: string): HTMLButtonElement | null {
 
 const settles = (socket: ScenarioSocket) =>
   socket.sent.filter((message) => message.type === "settleInitiative");
+
+/** Whether the client re-read the Initiative list since `mark`. */
+function resubscribed(socket: ScenarioSocket, mark: number): boolean {
+  const after = socket.sent.slice(mark);
+  return (
+    after.some(
+      (message) =>
+        message.type === "unsubscribe" &&
+        message.topics.includes("initiatives"),
+    ) &&
+    after.some(
+      (message) =>
+        message.type === "subscribe" && message.topics.includes("initiatives"),
+    )
+  );
+}
+
+/** The toasts that name the Billing migration Initiative. */
+const billingToasts = () =>
+  getToasts().filter((toast) =>
+    toast.message.includes("Initiative-6 Billing migration"),
+  );
+
+/** View `s-quota` with its turn running and its answer streaming in. */
+async function streamViewedChat(socket: ScenarioSocket) {
+  await act(async () => {
+    socket.receive({
+      type: "snapshot",
+      state: {
+        sessionId: "s-quota",
+        harness: "pi",
+        agentType: "developer",
+        thinkingLevel: "off",
+      },
+      contextInfo: {
+        sessionId: "s-quota",
+        updatedAt: NOW,
+        messageCounts: {
+          user: 0,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          total: 0,
+        },
+        tokenUsage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+        cost: 0,
+      },
+      snapshot: {
+        sessionId: "s-quota",
+        runState: "running",
+        timeline: [],
+        timelineStart: 0,
+        totalEntryCount: 0,
+        streaming: [],
+      },
+    });
+    socket.receive({
+      type: "event",
+      sessionId: "s-quota",
+      event: { type: "messageStarted", streamId: "m1" },
+    });
+    socket.receive({
+      type: "event",
+      sessionId: "s-quota",
+      event: {
+        type: "messageDelta",
+        streamId: "m1",
+        delta: { kind: "text", text: "Drafting the quota plan" },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(50);
+  });
+}
+
+/** Everything the viewed chat's turn is: its run, its live output, its outcome. */
+function chatRuntime() {
+  return {
+    runState: state.runState,
+    streaming: state.streaming,
+    runProgress: state.runProgress,
+    liveStreams: state.liveStreams,
+    streamingMessageId: state.streamingMessageId,
+    messages: state.messages,
+    error: state.error,
+  };
+}
 
 describe("Initiative inbox card", () => {
   it("settles exactly what the card rendered, and the event confirms it", async () => {
@@ -391,6 +527,12 @@ describe("Initiative inbox card", () => {
       });
     });
     expect(settleButton("6")).not.toBeNull();
+    // The snapshot said it; its deadline has nothing left to add.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(billingToasts()).toHaveLength(0);
+    expect(item("6")?.textContent).not.toContain("did not answer");
   });
 
   it("drops the item when the Initiative is archived or deleted", async () => {
@@ -408,5 +550,241 @@ describe("Initiative inbox card", () => {
     );
     expect(card("7")).toBeNull();
     expect(card("6")).toBeNull();
+  });
+
+  it("sends a Settle whose exit the inbox did not live to finish (F037)", async () => {
+    const socket = await boot([paused(1)], { animate: true });
+    await act(async () => settleButton("6")!.click());
+    expect(settles(socket), "the card is still playing its exit").toEqual([]);
+    // Done lands while the card slides out, then the user switches section
+    // before the 350 ms exit is over: the inbox unmounts.
+    await events(socket, 2, 11, paused(2));
+    await act(async () => root.render(<Harness inbox={false} animate />));
+    expect(settles(socket)).toHaveLength(1);
+    expect(settles(socket)[0]).toMatchObject({ id: "6", throughRevision: 1 });
+
+    // Neither the exit's own timer nor coming back sends it again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await act(async () => root.render(<Harness animate />));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(settles(socket)).toHaveLength(1);
+    // The click saw revision 1; done is still waiting for the user.
+    const held = state.initiatives.find((item) => item.id === "6")!;
+    expect(held.attention).toMatchObject({ revision: 2, settledRevision: 1 });
+    expect(settleButton("6")).not.toBeNull();
+  });
+
+  it("keeps a refusal off the chat being viewed while its turn streams (F038)", async () => {
+    const socket = await boot([paused(1)]);
+    await streamViewedChat(socket);
+    const before = chatRuntime();
+    expect(before.runState).toBe("running");
+    expect(before.streaming).toBe(true);
+    expect(before.liveStreams).toHaveLength(1);
+    expect(JSON.stringify(before.messages)).toContain(
+      "Drafting the quota plan",
+    );
+
+    await act(async () => settleButton("6")!.click());
+    const requestId = (settles(socket)[0] as { requestId: string }).requestId;
+    const mark = socket.sent.length;
+    await act(async () => {
+      socket.receive({
+        type: "error",
+        requestId,
+        target: { type: "initiative", id: "6" },
+        message: "Failed to settle Initiative: database is locked",
+      });
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(chatRuntime(), "the chat's turn is untouched").toEqual(before);
+    expect(resubscribed(socket, mark)).toBe(true);
+    expect(billingToasts()).toHaveLength(1);
+    expect(billingToasts()[0]!.message).toContain("database is locked");
+
+    // The re-read is the answer: still unsettled, offered again.
+    await act(async () =>
+      socket.receive({
+        type: "initiativeList",
+        items: [paused(1)],
+        seq: 5,
+        revisions: [{ id: "6", revision: 10 }],
+      }),
+    );
+    expect(settleButton("6")).not.toBeNull();
+    expect(chatRuntime()).toEqual(before);
+    expect(billingToasts()).toHaveLength(1);
+  });
+
+  it("states an unanswered Settle on the card a newer outcome put back (F039)", async () => {
+    const socket = await boot([paused(1)]);
+    await streamViewedChat(socket);
+    const before = chatRuntime();
+    await act(async () => settleButton("6")!.click());
+    expect(card("6"), "acknowledged optimistically").toBeNull();
+    // Done lands while the server has not answered: the card is back, on
+    // screen, offering the newer revision.
+    await events(socket, 2, 11, paused(2));
+    expect(settleButton("6")).not.toBeNull();
+    const mark = socket.sent.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(resubscribed(socket, mark), "the list is re-read").toBe(true);
+    expect(item("6")?.textContent, "said in place").toContain("did not answer");
+    expect(billingToasts(), "and not said again in passing").toHaveLength(0);
+    expect(chatRuntime()).toEqual(before);
+
+    // The re-read: the click did land, revision 2 still waits for the user.
+    await act(async () =>
+      socket.receive({
+        type: "initiativeList",
+        items: [paused(2, 1)],
+        seq: 6,
+        revisions: [{ id: "6", revision: 12 }],
+      }),
+    );
+    expect(
+      state.initiatives.find((item) => item.id === "6")?.attention,
+    ).toMatchObject({ revision: 2, settledRevision: 1 });
+    expect(settleButton("6")).not.toBeNull();
+    expect(billingToasts()).toHaveLength(0);
+
+    // The Initiative's own next Settle retires the note, saying nothing new.
+    await act(async () => settleButton("6")!.click());
+    expect(settles(socket)[1]).toMatchObject({ throughRevision: 2 });
+    expect(container.textContent).not.toContain("did not answer");
+    expect(billingToasts()).toHaveLength(0);
+  });
+
+  it("does not carry an unanswered Settle's note onto a newer outcome", async () => {
+    const socket = await boot([paused(1)]);
+    await act(async () => settleButton("6")!.click());
+    await events(socket, 2, 11, paused(2));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(item("6")?.textContent).toContain("did not answer");
+    // Paused again: a different outcome, about which nothing failed.
+    await events(socket, 3, 12, paused(3, 1));
+    expect(settleButton("6")).not.toBeNull();
+    expect(container.textContent).not.toContain("did not answer");
+    expect(billingToasts()).toHaveLength(0);
+  });
+
+  it("names the Initiative when its unanswered Settle has no card on screen (F039)", async () => {
+    const socket = await boot([paused(1)]);
+    await act(async () => settleButton("6")!.click());
+    expect(card("6")).toBeNull();
+    const mark = socket.sent.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(resubscribed(socket, mark)).toBe(true);
+    expect(billingToasts()).toHaveLength(1);
+    expect(billingToasts()[0]!.message).toContain("did not answer");
+
+    // The re-read puts the card back: shown, not announced a second time.
+    await act(async () =>
+      socket.receive({
+        type: "initiativeList",
+        items: [paused(1)],
+        seq: 5,
+        revisions: [{ id: "6", revision: 10 }],
+      }),
+    );
+    expect(settleButton("6")).not.toBeNull();
+    expect(item("6")?.textContent).not.toContain("did not answer");
+    expect(billingToasts()).toHaveLength(1);
+
+    // A refusal arriving after the deadline was already told, and is still
+    // not the viewed chat's outcome.
+    const requestId = (settles(socket)[0] as { requestId: string }).requestId;
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        requestId,
+        target: { type: "initiative", id: "6" },
+        message: "Failed to settle Initiative: database is locked",
+      }),
+    );
+    expect(billingToasts()).toHaveLength(1);
+    expect(state.error).toBeNull();
+  });
+
+  it("names a refused Initiative the list no longer holds by its clicked name", async () => {
+    const socket = await boot([paused(1)]);
+    await act(async () => settleButton("6")!.click());
+    const requestId = (settles(socket)[0] as { requestId: string }).requestId;
+    await act(async () =>
+      socket.receive({
+        type: "stateEvents",
+        topic: "initiatives",
+        seq: 2,
+        events: [{ kind: "delete", id: "6", revision: 11 }],
+      }),
+    );
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        requestId,
+        target: { type: "initiative", id: "6" },
+        message: "Initiative not found.",
+      }),
+    );
+    expect(billingToasts()).toHaveLength(1);
+    expect(billingToasts()[0]!.message).toContain("Initiative not found.");
+  });
+
+  it("says nothing at the deadline of a Settle the server confirmed", async () => {
+    const socket = await boot([paused(1)]);
+    await act(async () => settleButton("6")!.click());
+    const requestId = (settles(socket)[0] as { requestId: string }).requestId;
+    await act(async () =>
+      socket.receive({ type: "mutationSettled", requestId }),
+    );
+    await events(socket, 2, 11, paused(1, 1));
+    const mark = socket.sent.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(billingToasts()).toHaveLength(0);
+    expect(socket.sent.slice(mark), "no recovery re-read").toEqual([]);
+    expect(card("6")).toBeNull();
+  });
+
+  it("names the Initiative when the inbox was left before the deadline (F039)", async () => {
+    const socket = await boot([paused(1)]);
+    await streamViewedChat(socket);
+    const before = chatRuntime();
+    await act(async () => settleButton("6")!.click());
+    // The user leaves the Sessions section; done lands while they are away.
+    await act(async () => root.render(<Harness inbox={false} />));
+    await events(socket, 2, 11, paused(2));
+    const mark = socket.sent.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(resubscribed(socket, mark)).toBe(true);
+    expect(billingToasts()).toHaveLength(1);
+    expect(billingToasts()[0]!.message).toContain("did not answer");
+    expect(chatRuntime()).toEqual(before);
+
+    // Coming back shows the card with its newer outcome, and no second word.
+    await act(async () => root.render(<Harness />));
+    expect(settleButton("6")).not.toBeNull();
+    expect(item("6")?.textContent).not.toContain("did not answer");
+    expect(billingToasts()).toHaveLength(1);
+    expect(
+      state.initiatives.find((item) => item.id === "6")?.attention,
+    ).toMatchObject({ revision: 2 });
   });
 });

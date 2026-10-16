@@ -1103,8 +1103,10 @@ capability logic.
   background failure with no object to be found by. `openObjects` is the same
   claim for the other three object types that own a surface — the project, Task
   and Knowledge entry currently open, one id each, compared BY id so the open
-  member says nothing about the rest of its list. `objectFailureFrom` is their
-  `sessionFailureFrom`, over the one internal derivation both use, and
+  member says nothing about the rest of its list. `initiativeCards` claims the
+  Initiatives whose Sessions inbox card is on screen with its Settle, read only
+  for that tracked write through `initiativeCardHasHome`. `objectFailureFrom` is
+  their `sessionFailureFrom`, over the one internal derivation both use, and
   `OBJECT_FAILURE_TYPES` is the single list of which types keep such a store (a
   worktree does not: its writes narrate themselves where they were issued).
   `arrivalHasHome` consumes an arrival against those claims plus the collections
