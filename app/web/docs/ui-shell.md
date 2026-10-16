@@ -268,9 +268,10 @@ such row, and background opens `/background-tasks`. The **Needs you** block
 keeps its label and gives up its count to the bar, which states it whether or
 not the block exists. The **Settled** and **Archived** shelves carry no count
 either: the size of the history is not a decision, and the open shelf's own
-paging says how much more there is. There is no session search: finding a
-session by title is the shelves' job, and the field cost a permanent row of
-chrome for it.
+paging says how much more there is. Both shelves use `ListGroupSection`, with
+the shared sticky group header and icon. Settled paging and lazy archive loading
+stay owned by `SessionInbox`. There is no session search: finding a session by
+title is the shelves' job, and the field cost a permanent row of chrome for it.
 
 The cards hold still: a card's state never moves it. **Needs you** and the
 working set below it are each ordered by one number per item, highest first —

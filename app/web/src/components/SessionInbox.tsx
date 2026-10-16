@@ -56,11 +56,7 @@ import {
 } from "./common/load.tsx";
 import type { InitiativeSettleError } from "../hooks/useAssistant.ts";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { ListGroupSection } from "./ListGroupSection.tsx";
 import { SwipeRow, type SwipeAction } from "./common/SwipeRow.tsx";
 import {
   MOUSE_DRAG_DISTANCE_PX,
@@ -1333,99 +1329,80 @@ export function SessionInbox({
       )}
 
       {view.settledTotal > 0 ? (
-        <Collapsible
-          render={<section aria-labelledby="session-inbox-settled" />}
+        <ListGroupSection
+          id="session-inbox-settled"
+          title="Settled"
+          icon={<Check size={14} className="shrink-0" aria-hidden />}
           open={settledExpanded}
-          onOpenChange={() => setSettledOpen((value) => !value)}
-          className="mt-1 flex flex-col"
+          onOpenChange={setSettledOpen}
         >
-          <ShelfTrigger
-            id="session-inbox-settled"
-            open={settledExpanded}
-            density={density}
-          >
-            {/* No count: "Settled (1573)" stated the size of the history, a
-                number with no decision behind it. The shelf's own paging says
-                how much more there is once it is open. */}
-            Settled
-          </ShelfTrigger>
-          <CollapsibleContent className="flex flex-col">
-            {view.settled.map((session) => (
-              <InboxShelfRow
-                key={session.id}
-                session={session}
-                kind="settled"
-                active={session.id === currentId}
-                now={now}
-                density={density}
-                onOpen={() => onSelect(session.id)}
-                onRestore={() => onSettle(session.id, false)}
-                onArchive={() => onArchive(session.id, true)}
-                onDelete={() => onDeleteSession(session.id)}
-                onFocusSibling={focusSibling}
-              />
-            ))}
-            {view.settledHidden > 0 ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  setSettledLimit((limit) => limit + SETTLED_PAGE_STEP)
-                }
-                className="justify-start"
-              >
-                Show {Math.min(SETTLED_PAGE_STEP, view.settledHidden)} more
-                settled session
-                {Math.min(SETTLED_PAGE_STEP, view.settledHidden) === 1
-                  ? ""
-                  : "s"}
-              </Button>
-            ) : null}
-          </CollapsibleContent>
-        </Collapsible>
+          {/* History totals do not inform a decision; paging says how much
+              more there is once the shelf is open. */}
+          {view.settled.map((session) => (
+            <InboxShelfRow
+              key={session.id}
+              session={session}
+              kind="settled"
+              active={session.id === currentId}
+              now={now}
+              density={density}
+              onOpen={() => onSelect(session.id)}
+              onRestore={() => onSettle(session.id, false)}
+              onArchive={() => onArchive(session.id, true)}
+              onDelete={() => onDeleteSession(session.id)}
+              onFocusSibling={focusSibling}
+            />
+          ))}
+          {view.settledHidden > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setSettledLimit((limit) => limit + SETTLED_PAGE_STEP)
+              }
+              className="justify-start"
+            >
+              Show {Math.min(SETTLED_PAGE_STEP, view.settledHidden)} more
+              settled session
+              {Math.min(SETTLED_PAGE_STEP, view.settledHidden) === 1 ? "" : "s"}
+            </Button>
+          ) : null}
+        </ListGroupSection>
       ) : null}
 
       {archivedAvailableCount > 0 ? (
-        <Collapsible
-          render={<section aria-labelledby="session-inbox-archived" />}
+        <ListGroupSection
+          id="session-inbox-archived"
+          title="Archived"
+          icon={<Archive size={14} className="shrink-0" aria-hidden />}
           open={showArchived}
           onOpenChange={setShowArchived}
-          className="mt-1 flex flex-col"
         >
-          <ShelfTrigger
-            id="session-inbox-archived"
-            open={showArchived}
-            density={density}
-          >
-            Archived
-          </ShelfTrigger>
-          <CollapsibleContent>
-            {archivedSessionsLoaded ? (
-              <div className="flex flex-col">
-                {archivedSessions.map((session) => (
-                  <InboxShelfRow
-                    key={session.id}
-                    session={session}
-                    kind="archived"
-                    active={session.id === currentId}
-                    now={now}
-                    density={density}
-                    onOpen={() => onSelect(session.id)}
-                    onRestore={() => onArchive(session.id, false)}
-                    onArchive={() => onArchive(session.id, false)}
-                    onDelete={() => onDeleteSession(session.id)}
-                    onFocusSibling={focusSibling}
-                  />
-                ))}
-              </div>
-            ) : (
-              <PaneLoading
-                label="Loading archived sessions…"
-                className="flex-none p-3"
-              />
-            )}
-          </CollapsibleContent>
-        </Collapsible>
+          {archivedSessionsLoaded ? (
+            <div className="flex flex-col">
+              {archivedSessions.map((session) => (
+                <InboxShelfRow
+                  key={session.id}
+                  session={session}
+                  kind="archived"
+                  active={session.id === currentId}
+                  now={now}
+                  density={density}
+                  onOpen={() => onSelect(session.id)}
+                  onRestore={() => onArchive(session.id, false)}
+                  onArchive={() => onArchive(session.id, false)}
+                  onDelete={() => onDeleteSession(session.id)}
+                  onFocusSibling={focusSibling}
+                />
+              ))}
+            </div>
+          ) : (
+            <PaneLoading
+              label="Loading archived sessions…"
+              className="flex-none p-3"
+            />
+          )}
+        </ListGroupSection>
       ) : null}
     </div>
   );
@@ -1464,38 +1441,6 @@ function DraggableInboxItem({
     >
       {children(isDragging)}
     </div>
-  );
-}
-
-/** The heading of a history shelf (Settled, Archived): it opens the shelf. */
-function ShelfTrigger({
-  id,
-  open,
-  density,
-  children,
-}: {
-  id: string;
-  open: boolean;
-  density: RowDensity;
-  children: ReactNode;
-}) {
-  return (
-    <CollapsibleTrigger
-      id={id}
-      render={
-        <Button
-          variant="ghost"
-          size={density === "comfortable" ? "lg" : "sm"}
-          className={`justify-start ${density === "comfortable" ? "min-h-11" : ""}`}
-        />
-      }
-    >
-      <ChevronRight
-        data-icon="inline-start"
-        className={`transition-transform ${open ? "rotate-90" : ""}`}
-      />
-      {children}
-    </CollapsibleTrigger>
   );
 }
 

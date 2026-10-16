@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   decodeBoolean,
@@ -32,6 +32,8 @@ export function ListGroupSection({
   count,
   icon,
   defaultOpen = true,
+  open: controlledOpen,
+  onOpenChange,
   emphasis = false,
   containsSelected = false,
   actions,
@@ -47,6 +49,9 @@ export function ListGroupSection({
   count?: number | undefined;
   icon: ReactNode;
   defaultOpen?: boolean;
+  /** Controlled disclosure for hosts that coordinate loading or routed rows. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** Somebody is waiting on these: the title is set bolder. */
   emphasis?: boolean;
   containsSelected?: boolean;
@@ -68,10 +73,18 @@ export function ListGroupSection({
   card?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useSessionStorageState(
+  const [storedOpen, setStoredOpen] = useSessionStorageState(
     `list-group-open:${id}`,
     defaultOpen,
     decodeBoolean,
+  );
+  const open = controlledOpen ?? storedOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (controlledOpen === undefined) setStoredOpen(next);
+      onOpenChange?.(next);
+    },
+    [controlledOpen, setStoredOpen, onOpenChange],
   );
   useEffect(() => {
     if (containsSelected) setOpen(true);
