@@ -65,6 +65,21 @@ function assertIdle(): void {
   assert.equal(state.queued, 0, "no job is left queued");
 }
 
+/**
+ * Admit a job with the clock held still. A 1 ms pass limit is also the job's
+ * default deadline, so a millisecond ticking over between admission and start
+ * would end it in the queue instead of by the pass timer under test.
+ */
+function admitAtOneInstant<T>(admit: () => T): T {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    return admit();
+  } finally {
+    clock.mockRestore();
+  }
+}
+
 function chain(length: number): ElkNode {
   const ids = Array.from({ length }, (_, i) => `n${i}`);
   return {
@@ -107,7 +122,7 @@ test("an ELK error fails its job alone", async () => {
 
 test("a job past its time limit ends the worker, and the next one starts afresh", async () => {
   await assert.rejects(
-    runElkLayout(chain(40), { passLimitMs: 1 }),
+    admitAtOneInstant(() => runElkLayout(chain(40), { passLimitMs: 1 })),
     (err: Error) =>
       err instanceof TransientLayoutError &&
       /took longer than/.test(err.message),
@@ -151,9 +166,13 @@ for (const fault of ["construct", "dispatch"] as const)
   test(`a queued job whose replacement worker fails to ${fault} fails alone, in its own callback`, async () => {
     // The first job times out; its timer ends the worker and starts the next
     // job on a replacement, which is where the fault strikes.
-    const first = runElkLayout(chain(40), { passLimitMs: 1 });
+    const first = admitAtOneInstant(() =>
+      runElkLayout(chain(40), { passLimitMs: 1 }),
+    );
     const queued = runElkLayout(chain(2));
     faults[fault] = 1;
+    // Both settle before any assertion, so a failed one leaves none in flight.
+    await Promise.allSettled([first, queued]);
     await assert.rejects(first, /took longer than/);
     await assert.rejects(
       queued,
@@ -164,9 +183,12 @@ for (const fault of ["construct", "dispatch"] as const)
   });
 
 test("a worker that keeps failing to start fails every queued job once, in order", async () => {
-  const first = runElkLayout(chain(40), { passLimitMs: 1 });
+  const first = admitAtOneInstant(() =>
+    runElkLayout(chain(40), { passLimitMs: 1 }),
+  );
   const queued = Array.from({ length: 5 }, () => runElkLayout(chain(2)));
   faults.construct = 5;
+  await Promise.allSettled([first, ...queued]);
   await assert.rejects(first, /took longer than/);
   const results = await Promise.allSettled(queued);
   assert.deepEqual(
