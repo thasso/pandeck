@@ -1456,11 +1456,13 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   admitted up to a global and a per-map limit, each with one deadline, and
   aborted when superseded or deleted. Finished ones sit in a bounded LRU, where
   a transient failure expires after a short wait. `readInitiativeMap` answers
-  `getInitiative` in `connection.ts`. `initiativeLayoutRunner.ts` runs elkjs in
-  `initiativeLayoutWorker.ts`: one worker thread started on demand, ended when
-  idle, one job at a time from a bounded queue, each job with a deadline and a
-  per-pass limit. Synchronous worker start or dispatch failures fail their job
-  without leaving the queue.
+  `getInitiative` in `connection.ts`; a plan over the node limit answers
+  `layoutTooLarge` (drawn count and limit) beside its `layoutError`, so the size
+  outcome is told apart from a failure without reading its words.
+  `initiativeLayoutRunner.ts` runs elkjs in `initiativeLayoutWorker.ts`: one
+  worker thread started on demand, ended when idle, one job at a time from a
+  bounded queue, each job with a deadline and a per-pass limit. Synchronous
+  worker start or dispatch failures fail their job without leaving the queue.
 - `subagentRegistry.ts` narrows durable thread and held-thread run projections
   into bounded summaries, revision sidecars and keyed detail reads. `hub.ts`
   coalesces the store's post-commit touched-id seam into registry events and

@@ -158,6 +158,7 @@ test("subscribe, digest, items and the keyed graph read round-trip", async () =>
     ],
   );
   assert.equal(found.layoutError, undefined);
+  assert.equal(found.layoutTooLarge, undefined);
   const missing = details[1];
   assert.ok(missing?.type === "initiativeDetail");
   assert.equal(missing.item, null);

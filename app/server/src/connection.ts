@@ -2156,6 +2156,7 @@ export class Connection implements Viewer {
         ...(read.layoutError !== undefined
           ? { layoutError: read.layoutError }
           : {}),
+        ...(read.layoutTooLarge ? { layoutTooLarge: read.layoutTooLarge } : {}),
         requestId,
       });
     } catch (err) {

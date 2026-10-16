@@ -74,6 +74,7 @@ import type {
   ProjectRecord,
   InitiativeDetail,
   InitiativeLayout,
+  InitiativeLayoutTooLarge,
   InitiativeSummary,
   ProjectSummary,
   PullRequestCard,
@@ -431,6 +432,8 @@ export interface InitiativeRead {
   item: InitiativeDetail;
   layout?: InitiativeLayout;
   layoutError?: string;
+  /** Set with `layoutError` when the map is over the node limit: its size. */
+  layoutTooLarge?: InitiativeLayoutTooLarge;
   /**
    * The collapsed epics this read asked for, as sent (none when absent): with
    * the graph it is the drawing's identity, so a page whose wish moved since
@@ -7811,6 +7814,9 @@ export function useAssistant({
                 ...(msg.layout ? { layout: msg.layout } : {}),
                 ...(msg.layoutError !== undefined
                   ? { layoutError: msg.layoutError }
+                  : {}),
+                ...(msg.layoutTooLarge
+                  ? { layoutTooLarge: msg.layoutTooLarge }
                   : {}),
                 requestedCollapsed: asked.collapsed,
               }

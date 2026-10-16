@@ -808,6 +808,8 @@ test("a transient failure is laid out again after a short wait, with no write", 
   const failed = await pending;
   assert.ok(failed.item, "the graph still answers");
   assert.match(failed.layoutError ?? "", /stopped/);
+  // A lost worker is a fault to retry, never the size outcome.
+  assert.equal(failed.layoutTooLarge, undefined);
 
   // Rereads right after it answer the same, without piling up work.
   elkRuns.mockClear();
@@ -1104,7 +1106,15 @@ test("a map over the node limit answers its graph without any layout, and collap
     open.layoutError ?? "",
     /1101 nodes, more than the 1000 it lays out/,
   );
+  // The size outcome is its own answer, not a failure to retry: the drawn
+  // count for the asked-for collapsed set, and the limit.
+  assert.deepEqual(open.layoutTooLarge, { nodes: 1_101, limit: 1_000 });
   assert.equal(elkRuns.mock.calls.length, 0);
+  assert.equal(
+    (await readInitiativeMap(id, [epic])).layoutTooLarge,
+    undefined,
+    "a drawn map carries no size outcome",
+  );
   const folded = await mapOf(id, [epic]);
   assert.equal(folded.nodes.length, 1);
   assert.equal(folded.nodes[0]!.progress?.total, 1_100);

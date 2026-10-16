@@ -144,6 +144,17 @@ export interface InitiativeDetail extends InitiativeSummary {
  */
 export const INITIATIVE_LAYOUT_COLLAPSE_LIMIT = 500;
 
+/**
+ * A map with more drawn nodes than the layout takes: an expected outcome of
+ * its size, not a failure, so nothing retrying it changes it. `nodes` is the
+ * drawing for the collapsed set the read asked for; collapsing epics draws
+ * fewer. It stands beside `layoutError`, which still says why in words.
+ */
+export interface InitiativeLayoutTooLarge {
+  nodes: number;
+  limit: number;
+}
+
 /** Pixels from the layout's top-left corner, y growing downwards. */
 export interface InitiativeLayoutPoint {
   x: number;

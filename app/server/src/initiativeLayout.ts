@@ -30,6 +30,7 @@ import type {
   InitiativeLayoutLane,
   InitiativeLayoutNode,
   InitiativeLayoutPoint,
+  InitiativeLayoutTooLarge,
 } from "@assistant/shared";
 import {
   initiativeProgressOf,
@@ -156,6 +157,8 @@ interface LayoutTarget {
   plan: LayoutPlan;
   /** Set when the plan is too large to lay out. */
   error?: string;
+  /** The same refusal as numbers: the size outcome, not a failure. */
+  tooLarge?: InitiativeLayoutTooLarge;
 }
 
 /**
@@ -183,6 +186,7 @@ function layoutTarget(
     ...(plan.nodes.length > MAX_LAYOUT_NODES
       ? {
           error: `The map has ${plan.nodes.length} nodes, more than the ${MAX_LAYOUT_NODES} it lays out; collapse epics to draw it.`,
+          tooLarge: { nodes: plan.nodes.length, limit: MAX_LAYOUT_NODES },
         }
       : {}),
   };
@@ -980,6 +984,8 @@ export interface InitiativeMapRead {
   revision?: number;
   layout?: InitiativeLayout;
   layoutError?: string;
+  /** Set with `layoutError` when the drawing is over the node limit. */
+  layoutTooLarge?: InitiativeLayoutTooLarge;
 }
 
 /**
@@ -1012,7 +1018,13 @@ export async function readInitiativeMap(
     // structures are the same drawing: no second plan is needed to tell.
     if (structureKeyOf(structureOf(item)) === target.structureKey)
       return "error" in outcome
-        ? { ...base, layoutError: outcome.error }
+        ? {
+            ...base,
+            layoutError: outcome.error,
+            // Planned, never laid out: this read's own count, not a cached
+            // failure's.
+            ...(target.tooLarge ? { layoutTooLarge: target.tooLarge } : {}),
+          }
         : { ...base, layout: withProgress(outcome.layout, item) };
     if (attempt === MAX_ATTEMPTS)
       return {

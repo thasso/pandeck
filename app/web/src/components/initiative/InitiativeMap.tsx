@@ -1,4 +1,12 @@
-import { memo, useCallback, useMemo, useRef, type FocusEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type FocusEvent,
+} from "react";
 import {
   Handle,
   MiniMap,
@@ -14,6 +22,8 @@ import {
   type EdgeProps,
   type Node,
   type NodeProps,
+  type Viewport,
+  getViewportForBounds,
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
 import "./InitiativeMap.css";
@@ -396,6 +406,8 @@ export function routeEdges(
 
 /** Below this the node text is no longer readable. */
 const READABLE_ZOOM = 0.6;
+/** The furthest out the map zooms. */
+const MIN_ZOOM = 0.15;
 const VIEW_MARGIN = 16;
 
 /**
@@ -423,6 +435,70 @@ export function initialViewport(
   return { x, y, zoom };
 }
 const EDGE_TYPES = { route: RouteEdge };
+
+/**
+ * Where turning the critical path on looks: the boxes the server drew for its
+ * nodes, never below the readable zoom the map opens at (a path wider than
+ * the pane is centred there rather than shrunk until nothing reads) and never
+ * closer than 1:1. With no chain to draw it is the whole map, as "Fit the map"
+ * shows it. Worked out from the layout's own boxes, so it needs nothing the
+ * browser has to measure first.
+ */
+function pathViewport(
+  layout: Pick<InitiativeLayout, "nodes" | "width" | "height">,
+  nodeIds: readonly string[],
+  pane: { width: number; height: number },
+): Viewport {
+  const ids = new Set(nodeIds);
+  const boxes = layout.nodes.filter((node) => ids.has(node.id));
+  if (boxes.length === 0)
+    return getViewportForBounds(
+      { x: 0, y: 0, width: layout.width, height: layout.height },
+      pane.width,
+      pane.height,
+      MIN_ZOOM,
+      1,
+      0.04,
+    );
+  const left = Math.min(...boxes.map((box) => box.x));
+  const top = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+  return getViewportForBounds(
+    { x: left, y: top, width: right - left, height: bottom - top },
+    pane.width,
+    pane.height,
+    READABLE_ZOOM,
+    1,
+    0.1,
+  );
+}
+
+/**
+ * Moves to the path when the user turns it on. Only that moment moves the
+ * viewport: a live status change that moves the path, a new drawing, or
+ * turning it off leave the view where the reader put it. A map opened with
+ * the path already on starts there instead (`onInit`).
+ */
+function PathViewport({
+  layout,
+  focus,
+}: {
+  layout: InitiativeLayout;
+  focus: readonly string[] | null;
+}) {
+  const { setViewport } = useReactFlow();
+  const store = useStoreApi();
+  const wasOn = useRef(focus !== null);
+  useEffect(() => {
+    if (focus !== null && !wasOn.current) {
+      const { width, height } = store.getState();
+      void setViewport(pathViewport(layout, focus, { width, height }));
+    }
+    wasOn.current = focus !== null;
+  }, [focus, layout, setViewport, store]);
+  return null;
+}
 
 /**
  * A member's colour in the overview, by the states its node shows: the overview
@@ -535,6 +611,12 @@ function InitiativeMapCanvas({
   // A highlighted path that has no chain to draw (no open milestone, a loop)
   // leaves every node as it is: nothing recedes behind an empty highlight.
   const highlight = onPath !== null;
+  // What the viewport fits while the path is on: its drawn nodes, or none
+  // (the whole map) when there is no chain; null while it is off.
+  const pathFocus = useMemo(
+    () => (path === null ? null : onPath ? [...onPath.nodeIds] : []),
+    [onPath, path],
+  );
   const nodes = useMemo(() => {
     const frames: FrameFlowNode[] = [
       ...layout.groups.map((group, index): FrameFlowNode => ({
@@ -673,17 +755,25 @@ function InitiativeMapCanvas({
   );
 
   const paneRef = useRef<HTMLDivElement>(null);
+  // React Flow calls `onInit` a moment after its viewport is ready, which can
+  // be after the path was turned on; it then opens on the path too, never
+  // over it with the plain opening view.
+  const pathFocusRef = useRef(pathFocus);
+  useLayoutEffect(() => {
+    pathFocusRef.current = pathFocus;
+  }, [pathFocus]);
   const openAtReadableZoom = useCallback(
     (
       instance: ReactFlowInstance<TaskFlowNode | FrameFlowNode, RouteFlowEdge>,
     ) => {
       const pane = paneRef.current;
       if (!pane) return;
+      const size = { width: pane.clientWidth, height: pane.clientHeight };
+      const focus = pathFocusRef.current;
       void instance.setViewport(
-        initialViewport(layout, {
-          width: pane.clientWidth,
-          height: pane.clientHeight,
-        }),
+        focus !== null
+          ? pathViewport(layout, focus, size)
+          : initialViewport(layout, size),
       );
     },
     [layout],
@@ -706,7 +796,7 @@ function InitiativeMapCanvas({
       selectionKeyCode={null}
       multiSelectionKeyCode={null}
       zoomOnDoubleClick={false}
-      minZoom={0.15}
+      minZoom={MIN_ZOOM}
       maxZoom={1.5}
       fitViewOptions={{ padding: 0.04 }}
       proOptions={{ hideAttribution: false }}
@@ -714,6 +804,7 @@ function InitiativeMapCanvas({
     >
       <MapControls />
       <MapOverview members={members} />
+      <PathViewport layout={layout} focus={pathFocus} />
     </ReactFlow>
   );
 }

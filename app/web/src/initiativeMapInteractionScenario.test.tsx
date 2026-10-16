@@ -187,7 +187,11 @@ async function connect(socket: FakeSocket, revision = 1): Promise<void> {
 async function answer(
   socket: FakeSocket,
   read: Extract<ClientMessage, { type: "getInitiative" }>,
-  drawing: { layout?: InitiativeLayout; layoutError?: string },
+  drawing: {
+    layout?: InitiativeLayout;
+    layoutError?: string;
+    layoutTooLarge?: { nodes: number; limit: number };
+  },
   revision = 1,
 ): Promise<void> {
   await act(async () =>
@@ -205,7 +209,11 @@ async function answer(
 
 /** Boot the page; the first read is answered with `first`. */
 async function boot(
-  first: { layout?: InitiativeLayout; layoutError?: string } = {
+  first: {
+    layout?: InitiativeLayout;
+    layoutError?: string;
+    layoutTooLarge?: { nodes: number; limit: number };
+  } = {
     layout: HOSTED_LABS_LAYOUT,
   },
   options: { mobile?: boolean } = {},
@@ -497,32 +505,51 @@ describe("live path, progress and Hide done", () => {
 describe("a map too large to draw", () => {
   const OVERSIZED =
     "The map has 1203 nodes, more than the 1000 it lays out; collapse epics to draw it.";
+  /** The server's answer for the size outcome: the reason and its numbers. */
+  const tooLarge = (nodes: number) => ({
+    layoutError: OVERSIZED.replace("1203", String(nodes)),
+    layoutTooLarge: { nodes, limit: 1_000 },
+  });
+  const alerts = () =>
+    [...container.querySelectorAll('[role="alert"]')].map(
+      (el) => el.textContent ?? "",
+    );
+  const sizeNote = () =>
+    [...container.querySelectorAll('[role="status"]')].find((el) =>
+      el.textContent?.includes("more than the 1,000 it lays out"),
+    );
 
-  it("lists the members with the collapse controls that make it drawable", async () => {
-    const socket = await boot({ layoutError: OVERSIZED });
-    expect(text()).toContain("The map could not be drawn");
-    expect(text()).toContain(OVERSIZED);
-    // The List's own collapse buttons, one per epic, and Collapse all here.
+  it("is an expected outcome: a neutral notice with the drawn count, Collapse all first, and no Retry", async () => {
+    const socket = await boot(tooLarge(1_203));
+    // Not a failure: no error alert, and no Retry that could not change it.
+    expect(alerts().filter((el) => el.includes("could not be drawn"))).toEqual(
+      [],
+    );
+    expect(button(/^Retry$/)).toBeUndefined();
+    const note = sizeNote();
+    expect(note?.textContent).toContain(
+      "This map has 1,203 nodes, more than the 1,000 it lays out",
+    );
+    // Collapse all epics is the notice's primary action.
+    const collapseAll = [...note!.querySelectorAll("button")].find((el) =>
+      el.textContent?.includes("Collapse all epics"),
+    );
+    expect(collapseAll?.className).toContain("bg-primary");
+    // The List's own collapse buttons, one per epic, are unchanged.
     for (const id of [T.SDC, T.SDC4, T.LAB, T.SRS])
       expect(button(new RegExp(`^Collapse ${TITLE(id)}$`))).toBeDefined();
-    const note = [...container.querySelectorAll('[role="status"]')].find((el) =>
-      el.textContent?.includes("Collapsed epics draw as one node each"),
-    );
-    expect(note).toBeDefined();
 
     // Nothing reads again on its own: the answer stands until asked.
     await frames(10);
     expect(reads(socket)).toHaveLength(1);
 
-    // Select a member, then collapse every epic from the note.
+    // Select a member, then collapse every epic from the notice.
     await click(new RegExp(`^${TITLE(T.LAB5)}, Task-`));
-    const collapseAll = note!.querySelector("button")!;
-    expect(collapseAll.textContent).toContain("Collapse all epics");
-    await act(async () => collapseAll.click());
+    await act(async () => collapseAll!.click());
     await frames(1);
     expect(reads(socket).at(-1)!.collapsed).toEqual([T.SDC, T.LAB, T.SRS]);
-    // The List folds at once, keeping the selection and the oversized note
-    // until the drawing answers.
+    // The List folds at once, keeping the selection and the notice until the
+    // drawing answers.
     expect(text()).toContain(
       `The selected Task, Task-${T.LAB5}, is inside collapsed ${TITLE(T.LAB)}.`,
     );
@@ -533,7 +560,7 @@ describe("a map too large to draw", () => {
       layout: HOSTED_LABS_LAYOUT_COLLAPSED,
     });
     await until(() => mapNode(T.LAB) !== null, "the drawn map");
-    expect(text()).not.toContain("The map could not be drawn");
+    expect(sizeNote()).toBeUndefined();
     // The view stays the Map, and the selection is still the Task, carried by
     // the epic that holds it rather than replaced by it.
     expect(window.sessionStorage.getItem("assistant.initiativeView.v1")).toBe(
@@ -545,17 +572,41 @@ describe("a map too large to draw", () => {
     expect(mapNode(T.LAB)!.getAttribute("aria-current")).toBeNull();
   });
 
-  it("collapses one epic from its List row, and says when every epic is collapsed", async () => {
-    const socket = await boot({ layoutError: OVERSIZED });
+  it("says the drawn count of each answer, and when every epic is collapsed", async () => {
+    const socket = await boot(tooLarge(1_203));
     await click(new RegExp(`^Collapse ${TITLE(T.LAB)}$`));
     expect(reads(socket).at(-1)!.collapsed).toEqual([T.LAB]);
-    await answer(socket, reads(socket).at(-1)!, { layoutError: OVERSIZED });
-    expect(text()).toContain(OVERSIZED);
+    await answer(socket, reads(socket).at(-1)!, tooLarge(1_195));
+    expect(sizeNote()?.textContent).toContain("This map has 1,195 nodes");
     await click(/^Collapse all epics$/);
-    await answer(socket, reads(socket).at(-1)!, { layoutError: OVERSIZED });
-    expect(text()).toContain("Every epic is collapsed.");
+    await answer(socket, reads(socket).at(-1)!, tooLarge(1_003));
+    expect(sizeNote()?.textContent).toContain(
+      "Every epic is collapsed, and the map still has 1,003 nodes",
+    );
+    expect(button(/^Retry$/)).toBeUndefined();
     expect(button(/^Expand all epics$/)).toBeDefined();
     await frames(5);
     expect(reads(socket)).toHaveLength(3);
+  });
+
+  it("keeps a real layout failure an error with a Retry the user presses", async () => {
+    const fault = "The layout took longer than 20 s.";
+    const socket = await boot({ layoutError: fault });
+    expect(
+      alerts().some(
+        (el) => el.includes("could not be drawn") && el.includes(fault),
+      ),
+    ).toBe(true);
+    expect(sizeNote()).toBeUndefined();
+    // No retry on its own; one read per press.
+    await frames(10);
+    expect(reads(socket)).toHaveLength(1);
+    await click(/^Retry$/);
+    expect(reads(socket)).toHaveLength(2);
+    await answer(socket, reads(socket).at(-1)!, { layout: HOSTED_LABS_LAYOUT });
+    await until(() => mapNode(T.LAB5) !== null, "the drawn map");
+    expect(alerts().some((el) => el.includes("could not be drawn"))).toBe(
+      false,
+    );
   });
 });

@@ -25,6 +25,7 @@ import type { UsageIndicator } from "./usage.ts";
 import type {
   InitiativeDetail,
   InitiativeLayout,
+  InitiativeLayoutTooLarge,
   InitiativeSummary,
 } from "./initiatives.ts";
 import type { ApprovalGrant } from "./approvalGrants.ts";
@@ -8504,7 +8505,8 @@ export type ServerMessage =
    * One Initiative with its graph, as of `revision`: a newer `initiatives`
    * event re-reads it. `item` is null when it does not exist or was deleted.
    * `layout` draws exactly that graph; when it could not be computed, the
-   * answer still carries `item` and says why in `layoutError`.
+   * answer still carries `item` and says why in `layoutError`, and
+   * `layoutTooLarge` sets the size outcome apart from a failure.
    */
   | {
       type: "initiativeDetail";
@@ -8513,6 +8515,7 @@ export type ServerMessage =
       revision?: number;
       layout?: InitiativeLayout;
       layoutError?: string;
+      layoutTooLarge?: InitiativeLayoutTooLarge;
       requestId: string;
       error?: string;
     }

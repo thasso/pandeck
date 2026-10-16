@@ -288,10 +288,27 @@ export const ListCollapsedOnPhone: Story = {
   },
 };
 
-/** Too large to draw: the List, its collapse buttons, and Collapse all epics. */
+/**
+ * Too large to draw, an expected outcome: a neutral notice with the drawn
+ * count, Collapse all epics first, no Retry, and the List's collapse buttons.
+ */
 export const OversizedMap: Story = {
   args: {
-    detailState: ready({ item: HOSTED_LABS_DETAIL, layoutError: OVERSIZED }),
+    detailState: ready({
+      item: HOSTED_LABS_DETAIL,
+      layoutError: OVERSIZED,
+      layoutTooLarge: { nodes: 1_203, limit: 1_000 },
+    }),
+  },
+};
+
+/** A real layout failure keeps its error and a Retry the user presses. */
+export const LayoutTimedOut: Story = {
+  args: {
+    detailState: ready({
+      item: HOSTED_LABS_DETAIL,
+      layoutError: "The layout took longer than 20 s.",
+    }),
   },
 };
 
@@ -300,7 +317,8 @@ export const OversizedEveryEpicCollapsed: Story = {
   args: {
     detailState: ready({
       item: HOSTED_LABS_DETAIL,
-      layoutError: OVERSIZED,
+      layoutError: OVERSIZED.replace("1203", "1003"),
+      layoutTooLarge: { nodes: 1_003, limit: 1_000 },
       requestedCollapsed: [T.SDC, T.LAB, T.SRS],
     }),
   },

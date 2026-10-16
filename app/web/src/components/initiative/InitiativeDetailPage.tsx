@@ -11,6 +11,7 @@ import {
 import {
   EyeOff,
   FoldHorizontal,
+  Info,
   List,
   Map as MapIcon,
   Route,
@@ -18,6 +19,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import type {
+  InitiativeLayoutTooLarge,
   InitiativeProgress,
   InitiativeSummary,
   SessionListItem,
@@ -451,7 +453,14 @@ export function InitiativeDetailPage({
       </div>
     ) : (
       <div ref={listScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
-        {view === "map" ? (
+        {view === "map" && read?.layoutTooLarge ? (
+          <MapTooLarge
+            size={read.layoutTooLarge}
+            canCollapse={collapsible.size > 0}
+            anyOpenEpic={anyOpenEpic}
+            onCollapseAll={collapseAll}
+          />
+        ) : view === "map" ? (
           <>
             <ErrorNote
               className="mb-4"
@@ -620,6 +629,52 @@ export function InitiativeDetailPage({
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col">{body}</div>
     </div>
+  );
+}
+
+const COUNT = new Intl.NumberFormat("en-US");
+
+/**
+ * A map over the layout's node limit. That is the map's size, an expected
+ * outcome and not a failure: a neutral notice with the drawn count and no
+ * Retry, since reading the same drawing again cannot change it. Collapsing
+ * epics can, so "Collapse all epics" is the primary action, and each epic's
+ * own button in the List below works as well.
+ */
+function MapTooLarge({
+  size,
+  canCollapse,
+  anyOpenEpic,
+  onCollapseAll,
+}: {
+  size: InitiativeLayoutTooLarge;
+  canCollapse: boolean;
+  anyOpenEpic: boolean;
+  onCollapseAll: () => void;
+}) {
+  const nodes = COUNT.format(size.nodes);
+  const limit = COUNT.format(size.limit);
+  return (
+    <Alert role="status" className="mb-4">
+      <Info />
+      <AlertDescription>
+        {!canCollapse
+          ? `This map has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead.`
+          : anyOpenEpic
+            ? `This map has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead. A collapsed epic draws as one node: collapse all of them, or one at a time with the button before an epic below.`
+            : `Every epic is collapsed, and the map still has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead.`}
+      </AlertDescription>
+      {canCollapse && anyOpenEpic ? (
+        // Its own row under the words, as the notice's next step, rather
+        // than a corner action the text would run under.
+        <div className="mt-2">
+          <Button size="sm" onClick={onCollapseAll}>
+            <FoldHorizontal />
+            Collapse all epics
+          </Button>
+        </div>
+      ) : null}
+    </Alert>
   );
 }
 

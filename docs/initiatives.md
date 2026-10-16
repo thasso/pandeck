@@ -206,9 +206,10 @@ change recolours a node without a reload, and a link or membership change
 re-reads the graph.
 
 - **Which view.** Map is the default on a wide screen and List on a phone; the
-  user's switch holds for the browser tab. A read that carries `layoutError`
-  shows the reason and a retry the user presses (nothing retries on its own, so
-  a busy layout pool is never polled), and lists the members instead.
+  user's switch holds for the browser tab. A read whose layout failed (a fault
+  or a timeout) shows the reason and a retry the user presses (nothing retries
+  on its own, so a busy layout pool is never polled), and lists the members
+  instead. A map too large to draw is its size, not a failure (below).
 - **What is live.** Between reads, a node's status, title, blocked marker and
   running marker come from the Tasks topic and the session list. The read alone
   decides membership, hierarchy and geometry, so a Task event never reads the
@@ -257,7 +258,12 @@ re-reads the graph.
   invalid stored data: the page names its Tasks and draws no chain. Through a
   collapsed epic the epic's node carries the path, as do the arrows into and out
   of it. Highlighted, the path's nodes carry a Path mark and its arrows are
-  drawn strongest, while the rest of the map recedes.
+  drawn strongest, while the rest of the map recedes. Turning the path on moves
+  the map to it: the view fits the path's drawn nodes, never below the readable
+  zoom the map opens at, so a path wider than the pane is centred at that zoom;
+  with no path to draw it fits the whole map. A map opened with the path already
+  on opens there. Only that moment moves the view: a live change to the path, a
+  new drawing, or turning the path off leave it where the user put it.
 - **Hide done.** A local display choice like collapsing: it takes off a done
   member with nothing open under it and a done outside blocker, with their
   arrows. A done epic over open work stays, so the open work keeps its place and
@@ -267,10 +273,15 @@ re-reads the graph.
   stays the selected Task: the panel keeps showing it, the page says where it
   went, and a collapsed epic over it is marked as holding it. Selecting a
   collapsed epic's node opens that epic's own Task.
-- **A map too large to draw.** Over 1,000 drawn nodes, the read's `layoutError`
-  says so and the members are listed instead (Which view). The List keeps its
-  collapse buttons and the note offers "Collapse all epics", so the user folds
-  the map until it can be drawn; the server's limit and answer stay as they are,
+- **A map too large to draw.** Over 1,000 drawn nodes is an expected outcome of
+  the map's size, not a failure. The read says so with `layoutTooLarge` (the
+  drawn count for the collapsed set it asked for, and the limit) beside its
+  `layoutError` words. The page lists the members under a neutral notice that
+  gives that count and the limit, with no error styling and no Retry, since
+  reading the same drawing again cannot change it. "Collapse all epics" is the
+  notice's primary action, and the List keeps each epic's own collapse button,
+  so the user folds the map until it can be drawn. With every epic already
+  collapsed, the notice says so. The server's limit and answer stay as they are,
   and nothing is read again until the user asks.
 
 ## The attention list
@@ -377,11 +388,13 @@ member Tasks, nothing parsed from titles.
     do move, still dates the graph. The read checks the structure again once the
     layout is done and lays it out anew if it moved.
   - A layout that cannot be computed leaves the graph in the answer and says why
-    in `layoutError`. Over 1,000 drawn nodes, or an ELK error, the answer stands
-    until the structure changes. Everything else is transient and a read 5 s
-    later lays the map out again, with no write: a pass past its 20 s limit, a
-    layout past its 60 s deadline (its waits for the worker included), a worker
-    that was lost or could not start, or a refusal because too many layouts are
+    in `layoutError`; over 1,000 drawn nodes it also carries `layoutTooLarge`
+    with the drawn count and the limit, which sets that size outcome apart from
+    a failure. Over 1,000 drawn nodes, or an ELK error, the answer stands until
+    the structure changes. Everything else is transient and a read 5 s later
+    lays the map out again, with no write: a pass past its 20 s limit, a layout
+    past its 60 s deadline (its waits for the worker included), a worker that
+    was lost or could not start, or a refusal because too many layouts are
     running (8 at once, 3 of them for one map). One layout runs per drawing
     however many reads wait on it, and a newer structure or a deleted Initiative
     lets the older drawings go before their next pass.
