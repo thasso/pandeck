@@ -56,33 +56,34 @@ the same parts a shadcn example would.
 
 ## Which component
 
-| Need                                                                | Use                                                                                   |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Any clickable action                                                | `Button` (`variant`, `size`)                                                          |
-| An icon-only action                                                 | `common/IconButton` (`label` is the aria-label and the tooltip)                       |
-| A link that looks like a button                                     | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`) |
-| Grouped or segmented actions                                        | `ButtonGroup`, `ToggleGroup`                                                          |
-| Text entry                                                          | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                   |
-| Edit a shown text value in place                                    | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)          |
-| Choice                                                              | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`              |
-| Form rows, labels, help and errors                                  | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                 |
-| A list row (session, task, file, setting)                           | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                       |
-| An object or event card (transcript result, notice, card-list item) | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)   |
-| A page or settings section that groups rows                         | `Card`                                                                                |
-| Status or count                                                     | `Badge`                                                                               |
-| Text an agent wrote (a title, a label, a reason, a summary)         | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card    |
-| Menu of actions                                                     | `DropdownMenu`, `ContextMenu`                                                         |
-| Secondary actions behind a `⋯`                                      | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)      |
-| Floating panel or hint                                              | `Popover`, `HoverCard`, `Tooltip`                                                     |
-| Modal                                                               | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                   |
-| Edge panel                                                          | `Sheet`, `Drawer`                                                                     |
-| Show/hide a region                                                  | `Collapsible`, `Accordion`                                                            |
-| Views of one object                                                 | `Tabs`                                                                                |
-| Nothing to show yet                                                 | `Empty` (via `common/load.tsx` where an async region owns it)                         |
-| A failure on its object                                             | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)                  |
-| Transient notice                                                    | `showToast()` (`lib/toast.ts`), rendered by Sonner                                    |
-| Tables, separators, kbd hints, breadcrumbs                          | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                             |
-| Search-and-pick lists                                               | `Command`                                                                             |
+| Need                                                                            | Use                                                                                                                                |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Any clickable action                                                            | `Button` (`variant`, `size`)                                                                                                       |
+| An icon-only action                                                             | `common/IconButton` (`label` is the aria-label and the tooltip)                                                                    |
+| A link that looks like a button                                                 | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`)                                              |
+| Grouped or segmented actions                                                    | `ButtonGroup`, `ToggleGroup`                                                                                                       |
+| Text entry                                                                      | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                                                                |
+| Edit a shown text value in place                                                | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)                                                       |
+| Choice                                                                          | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`                                                           |
+| Form rows, labels, help and errors                                              | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                                                              |
+| A list row (session, task, file, setting)                                       | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                                                                    |
+| An object or event card (transcript result, notice, card-list item)             | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)                                                |
+| A page or settings section that groups rows                                     | `Card`                                                                                                                             |
+| Collapsible list sections, including Pull Requests and Tasks grouped by project | [`ListGroupSection`](../src/components/ListGroupSection.tsx) (sticky header with chevron, icon, title, count and optional actions) |
+| Status or count                                                                 | `Badge`                                                                                                                            |
+| Text an agent wrote (a title, a label, a reason, a summary) | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card |
+| Menu of actions                                                                 | `DropdownMenu`, `ContextMenu`                                                                                                      |
+| Secondary actions behind a `⋯`                                                  | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)                                                   |
+| Floating panel or hint                                                          | `Popover`, `HoverCard`, `Tooltip`                                                                                                  |
+| Modal                                                                           | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                                                                |
+| Edge panel                                                                      | `Sheet`, `Drawer`                                                                                                                  |
+| Show/hide a region                                                              | `Collapsible`, `Accordion`                                                                                                         |
+| Views of one object                                                             | `Tabs`                                                                                                                             |
+| Nothing to show yet                                                             | `Empty` (via `common/load.tsx` where an async region owns it)                                                                      |
+| A failure on its object                                                         | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)                                                               |
+| Transient notice                                                                | `showToast()` (`lib/toast.ts`), rendered by Sonner                                                                                 |
+| Tables, separators, kbd hints, breadcrumbs                                      | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                                                                          |
+| Search-and-pick lists                                                           | `Command`                                                                                                                          |
 
 An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
