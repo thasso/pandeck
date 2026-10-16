@@ -93,7 +93,7 @@ async function flushLazy(container: HTMLElement) {
 describe("InitiativeDetailPage load states", () => {
   it("loads: reads the Initiative and shows the summary's title meanwhile", () => {
     const { container, onLoadDetail } = renderPage(idle());
-    expect(onLoadDetail).toHaveBeenCalledWith(HOSTED_LABS_DETAIL.id);
+    expect(onLoadDetail).toHaveBeenCalledWith(HOSTED_LABS_DETAIL.id, []);
     expect(text(container)).toContain("Loading the Initiative");
     expect(text(container)).toContain("Hosted Labs");
   });
@@ -116,7 +116,7 @@ describe("InitiativeDetailPage load states", () => {
     expect(onLoadDetail).not.toHaveBeenCalled();
     expect(text(container)).toContain("Connection lost");
     act(() => button(container, /^Retry$/)!.click());
-    expect(onLoadDetail).toHaveBeenCalledWith(HOSTED_LABS_DETAIL.id);
+    expect(onLoadDetail).toHaveBeenCalledWith(HOSTED_LABS_DETAIL.id, []);
   });
 
   it("re-reads a lost read once the connection is back", () => {
@@ -179,7 +179,7 @@ describe("InitiativeDetailPage views", () => {
     expect(button(container, /Per-customer session quotas/)).toBeDefined();
     onLoadDetail.mockClear();
     act(() => button(container, /^Retry$/)!.click());
-    expect(onLoadDetail).toHaveBeenCalledWith(HOSTED_LABS_DETAIL.id);
+    expect(onLoadDetail).toHaveBeenCalledWith(HOSTED_LABS_DETAIL.id, []);
   });
 
   it("draws the map on a wide screen and switches view on request", async () => {
@@ -187,9 +187,25 @@ describe("InitiativeDetailPage views", () => {
     await flushLazy(container);
     const map = container.querySelector("[aria-label='Initiative map']");
     expect(map).not.toBeNull();
-    // Every laid-out box is a Task button; lanes and groups are not.
-    const nodes = map!.querySelectorAll(".react-flow__node button");
+    // Every laid-out box is a Task button; lanes and groups are not. An epic's
+    // collapse button sits beside its Task button, never inside it.
+    const nodes = map!.querySelectorAll(
+      ".react-flow__node button:not([aria-expanded])",
+    );
     expect(nodes).toHaveLength(HOSTED_LABS_LAYOUT.nodes.length);
+    expect(map!.querySelectorAll("button button")).toHaveLength(0);
+    expect(
+      [...map!.querySelectorAll(".react-flow__node button[aria-expanded]")]
+        .map((toggle) => toggle.getAttribute("aria-label"))
+        .sort(),
+    ).toEqual(
+      [T.SDC, T.SDC4, T.LAB, T.SRS]
+        .map(
+          (id) =>
+            `Collapse ${HOSTED_LABS_DETAIL.nodes.find((n) => n.id === id)!.title}`,
+        )
+        .sort(),
+    );
     for (const node of HOSTED_LABS_LAYOUT.nodes)
       expect(
         map!.querySelector(

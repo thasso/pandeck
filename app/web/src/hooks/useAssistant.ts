@@ -21,6 +21,7 @@ import { createIdleWriter, type IdleWriter } from "../lib/idleWriter.ts";
 import { announceMessage } from "../lib/messageAnnounce.ts";
 import { sessionSettleCascade } from "../lib/sessionInbox.ts";
 import { initiativeSettleRevision } from "../lib/initiativeInbox.ts";
+import { collapseRequest, sameCollapsed } from "../lib/initiativeView.ts";
 import {
   arrivalHasHome,
   arrivalMessage,
@@ -430,6 +431,12 @@ export interface InitiativeRead {
   item: InitiativeDetail;
   layout?: InitiativeLayout;
   layoutError?: string;
+  /**
+   * The collapsed epics this read asked for, as sent (none when absent): with
+   * the graph it is the drawing's identity, so a page whose wish moved since
+   * knows this read is not the one it wants.
+   */
+  requestedCollapsed?: readonly string[];
 }
 
 export interface UIState {
@@ -3843,6 +3850,20 @@ function staleInitiativeDetail(
   return next;
 }
 
+/** A `getInitiative`; an empty collapsed set is left out. */
+function initiativeReadMessage(
+  id: string,
+  requestId: string,
+  collapsed: readonly string[],
+): ClientMessage {
+  return {
+    type: "getInitiative",
+    id,
+    requestId,
+    ...(collapsed.length > 0 ? { collapsed: [...collapsed] } : {}),
+  };
+}
+
 function applyInitiativeEvent(
   state: UIState,
   message: InitiativeStateEventsMessage,
@@ -6785,8 +6806,13 @@ export interface AssistantActions {
   listProjects: (request?: ProjectListRequest) => void;
   requestProjectDetail: (id: string) => void;
   setOpenProjectProjection: (id: string | null) => void;
-  /** Read one Initiative's graph and layout; a read in flight is not repeated. */
-  requestInitiativeDetail: (id: string) => void;
+  /**
+   * Read one Initiative's graph and the layout with `collapsed` drawn as one
+   * node each. One read per Initiative is in flight: asked again for the same
+   * set it sends nothing, and for another set it sends the newest one when the
+   * read in flight answers, dropping that answer.
+   */
+  requestInitiativeDetail: (id: string, collapsed?: readonly string[]) => void;
   setOpenInitiative: (id: string | null) => void;
   /**
    * Ask for the Initiative list again after it failed: the subscription is
@@ -7085,8 +7111,16 @@ export function useAssistant({
   /** Latest in-flight keyed reads; a superseded same-id answer is ignored. */
   const taskDetailRequestsRef = useRef(new Map<string, string>());
   const projectDetailRequestsRef = useRef(new Map<string, string>());
-  /** The one live `getInitiative` per id; an older answer is dropped. */
-  const initiativeDetailRequestsRef = useRef(new Map<string, string>());
+  /**
+   * The one live `getInitiative` per id, with the collapsed set it asked for
+   * and the newer set wished for since (`next`); an older answer is dropped.
+   */
+  const initiativeDetailRequestsRef = useRef(
+    new Map<
+      string,
+      { requestId: string; collapsed: string[]; next?: string[] }
+    >(),
+  );
   /** Latest list generation for every comment target. */
   const commentRequestsRef = useRef(new Map<string, string>());
   /** Immediate surface ownership, independent of asynchronous reducer updates. */
@@ -7752,8 +7786,21 @@ export function useAssistant({
         return;
       }
       if (msg.type === "initiativeDetail") {
-        if (initiativeDetailRequestsRef.current.get(msg.id) !== msg.requestId)
+        const asked = initiativeDetailRequestsRef.current.get(msg.id);
+        if (asked?.requestId !== msg.requestId) return;
+        if (asked.next) {
+          // The page asked for another drawing while this one was read. This
+          // answer would put the older drawing back over the user's newer
+          // choice, so it is dropped, and the newest choice is read instead;
+          // the held data stays on screen, refreshing, until that answers.
+          const requestId = createClientId();
+          initiativeDetailRequestsRef.current.set(msg.id, {
+            requestId,
+            collapsed: asked.next,
+          });
+          socket.send(initiativeReadMessage(msg.id, requestId, asked.next));
           return;
+        }
         initiativeDetailRequestsRef.current.delete(msg.id);
         dispatch({
           kind: "initiativeDetailResult",
@@ -7765,6 +7812,7 @@ export function useAssistant({
                 ...(msg.layoutError !== undefined
                   ? { layoutError: msg.layoutError }
                   : {}),
+                requestedCollapsed: asked.collapsed,
               }
             : null,
           ...(msg.revision !== undefined ? { revision: msg.revision } : {}),
@@ -9279,12 +9327,26 @@ export function useAssistant({
       },
       setOpenProjectProjection: (id) =>
         dispatch({ kind: "setOpenProjectProjection", id }),
-      requestInitiativeDetail: (id) => {
-        if (initiativeDetailRequestsRef.current.has(id)) return;
+      requestInitiativeDetail: (id, collapsed = []) => {
+        const wish = collapseRequest(collapsed);
+        const inFlight = initiativeDetailRequestsRef.current.get(id);
+        if (inFlight) {
+          const { next: _next, ...asked } = inFlight;
+          initiativeDetailRequestsRef.current.set(
+            id,
+            sameCollapsed(asked.collapsed, wish)
+              ? asked
+              : { ...asked, next: wish },
+          );
+          return;
+        }
         const requestId = createClientId();
-        initiativeDetailRequestsRef.current.set(id, requestId);
+        initiativeDetailRequestsRef.current.set(id, {
+          requestId,
+          collapsed: wish,
+        });
         dispatch({ kind: "initiativeDetailLoad", id });
-        send({ type: "getInitiative", id, requestId });
+        send(initiativeReadMessage(id, requestId, wish));
       },
       setOpenInitiative: (id) => dispatch({ kind: "setOpenInitiative", id }),
       retryInitiatives: () => {

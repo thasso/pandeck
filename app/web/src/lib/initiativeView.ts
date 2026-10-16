@@ -10,13 +10,14 @@
  *
  * Framework-free by the `lib/` contract.
  */
-import type {
-  InitiativeDetail,
-  InitiativeGraphNode,
-  InitiativeState,
-  SessionListItem,
-  TaskStatus,
-  TaskSummary,
+import {
+  INITIATIVE_LAYOUT_COLLAPSE_LIMIT,
+  type InitiativeDetail,
+  type InitiativeGraphNode,
+  type InitiativeState,
+  type SessionListItem,
+  type TaskStatus,
+  type TaskSummary,
 } from "@assistant/shared";
 import { isTaskWorking } from "./taskActivity.ts";
 
@@ -197,6 +198,166 @@ export function memberTree(
   return detail.rootIds
     .map((id) => build(id, 0))
     .filter((row): row is MemberTreeRow => row !== null);
+}
+
+/* ------------------------------- collapse -------------------------------- */
+
+/** A member's member children, in the read's order. */
+export function memberChildren(
+  detail: Pick<InitiativeDetail, "nodes">,
+): ReadonlyMap<string, readonly string[]> {
+  const children = new Map<string, string[]>();
+  for (const node of detail.nodes) {
+    if (!node.parentId) continue;
+    const siblings = children.get(node.parentId);
+    if (siblings) siblings.push(node.id);
+    else children.set(node.parentId, [node.id]);
+  }
+  return children;
+}
+
+function compareTaskIds(a: string, b: string): number {
+  return Number(a) - Number(b) || (a < b ? -1 : a > b ? 1 : 0);
+}
+
+/**
+ * The collapsed set as the server applies it (`docs/initiatives.md`, Layout
+ * and placement): an id collapses when it has member children and no ancestor
+ * in the set does, ascending by id, and no more than a `getInitiative` may
+ * carry. The page keeps the user's whole wish, nested epics included, and
+ * sends and compares only this, so two wishes that draw the same map are one
+ * request and the server's own normalisation never asks for another read.
+ */
+export function canonicalCollapsed(
+  detail: Pick<InitiativeDetail, "nodes">,
+  wanted: readonly string[],
+): string[] {
+  if (wanted.length === 0) return [];
+  const children = memberChildren(detail);
+  const parentOf = new Map<string, string>();
+  for (const node of detail.nodes)
+    if (node.parentId) parentOf.set(node.id, node.parentId);
+  const wish = new Set(wanted.filter((id) => children.has(id)));
+  const applied: string[] = [];
+  for (const id of wish) {
+    let covered = false;
+    // Up the parent chain; a stored hierarchy cycle ends the walk.
+    const seen = new Set([id]);
+    for (
+      let parent = parentOf.get(id);
+      parent !== undefined && !seen.has(parent);
+      parent = parentOf.get(parent)
+    ) {
+      seen.add(parent);
+      if (wish.has(parent)) {
+        covered = true;
+        break;
+      }
+    }
+    if (!covered) applied.push(id);
+  }
+  return collapseRequest(applied);
+}
+
+/**
+ * A collapsed set as a `getInitiative` carries it: each id once, ascending, no
+ * more than the server takes.
+ */
+export function collapseRequest(ids: readonly string[]): string[] {
+  return [...new Set(ids)]
+    .sort(compareTaskIds)
+    .slice(0, INITIATIVE_LAYOUT_COLLAPSE_LIMIT);
+}
+
+/** Two canonical sets name the same drawing. */
+export function sameCollapsed(
+  a: readonly string[],
+  b: readonly string[],
+): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
+/** Every member a collapsed epic stands for: its descendants, milestones aside. */
+export function collapsedAway(
+  detail: Pick<InitiativeDetail, "nodes">,
+  collapsed: readonly string[],
+): ReadonlyMap<string, string> {
+  const by = new Map<string, string>();
+  if (collapsed.length === 0) return by;
+  const children = memberChildren(detail);
+  const milestones = new Set(
+    detail.nodes.filter((node) => node.milestone).map((node) => node.id),
+  );
+  for (const epic of collapsed) {
+    const stack = [...(children.get(epic) ?? [])];
+    const seen = new Set([epic]);
+    while (stack.length > 0) {
+      const id = stack.pop()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (!milestones.has(id)) by.set(id, epic);
+      stack.push(...(children.get(id) ?? []));
+    }
+  }
+  return by;
+}
+
+/** A member's descendants, counted from the live facts. */
+export interface SubtreeFacts {
+  total: number;
+  /** Done descendants, archived ones too, as the Initiative's own count. */
+  done: number;
+  /** The member and everything under it is done. */
+  allDone: boolean;
+}
+
+/**
+ * Every member's {@link SubtreeFacts} in one pass, children before parents:
+ * the read lists members depth-first from the roots. A collapsed epic's
+ * "7/14 done" and Hide done both read it, so both follow the Tasks topic.
+ */
+export function subtreeFacts(
+  detail: Pick<InitiativeDetail, "nodes">,
+  members: ReadonlyMap<string, InitiativeMember>,
+): ReadonlyMap<string, SubtreeFacts> {
+  const facts = new Map<string, SubtreeFacts>();
+  for (let i = detail.nodes.length - 1; i >= 0; i -= 1) {
+    const node = detail.nodes[i]!;
+    const own = facts.get(node.id) ?? { total: 0, done: 0, allDone: true };
+    const done = members.get(node.id)?.status === "done";
+    own.allDone &&= done;
+    facts.set(node.id, own);
+    if (!node.parentId || node.parentId === node.id) continue;
+    const parent = facts.get(node.parentId) ?? {
+      total: 0,
+      done: 0,
+      allDone: true,
+    };
+    parent.total += own.total + 1;
+    parent.done += own.done + (done ? 1 : 0);
+    parent.allDone &&= own.allDone;
+    facts.set(node.parentId, parent);
+  }
+  return facts;
+}
+
+/**
+ * What "Hide done" takes off the page: a done member with nothing open under
+ * it, and a done outside blocker. A done epic over open work stays, so the
+ * open work keeps its place and its collapse control. A local display choice:
+ * nothing is written.
+ */
+export function hiddenDoneIds(
+  detail: Pick<InitiativeDetail, "nodes" | "externalBlockers">,
+  members: ReadonlyMap<string, InitiativeMember>,
+  facts: ReadonlyMap<string, SubtreeFacts>,
+): ReadonlySet<string> {
+  const hidden = new Set<string>();
+  for (const node of detail.nodes)
+    if (facts.get(node.id)?.allDone) hidden.add(node.id);
+  for (const blocker of detail.externalBlockers)
+    if (members.get(blocker.id)?.status === "done") hidden.add(blocker.id);
+  return hidden;
 }
 
 /** Flatten a tree in reading order, for keyboard order and test assertions. */

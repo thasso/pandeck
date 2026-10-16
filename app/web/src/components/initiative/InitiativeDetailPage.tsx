@@ -2,12 +2,21 @@ import {
   Component,
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   type ReactNode,
 } from "react";
-import { List, Map as MapIcon, Waypoints } from "lucide-react";
+import {
+  EyeOff,
+  FoldHorizontal,
+  List,
+  Map as MapIcon,
+  Route,
+  UnfoldHorizontal,
+  Waypoints,
+} from "lucide-react";
 import type {
   InitiativeProgress,
   InitiativeSummary,
@@ -15,9 +24,10 @@ import type {
   TaskSummary,
 } from "@assistant/shared";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
-import { Alert, AlertDescription } from "../ui/alert.tsx";
+import { Alert, AlertAction, AlertDescription } from "../ui/alert.tsx";
 import { Badge } from "../ui/badge.tsx";
 import { Button } from "../ui/button.tsx";
+import { Toggle } from "../ui/toggle.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
 import {
   EmptyBox,
@@ -31,11 +41,20 @@ import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
 import { useListScroll } from "../../hooks/useListScroll.ts";
 import {
   INITIATIVE_STATE_LABEL,
+  canonicalCollapsed,
+  collapseRequest,
+  collapsedAway,
+  hiddenDoneIds,
   initiativeMembers,
+  memberChildren,
   memberTree,
   milestoneMembers,
   runningTaskIds,
+  sameCollapsed,
+  subtreeFacts,
+  type InitiativeMember,
 } from "../../lib/initiativeView.ts";
+import { criticalPath, type CriticalPath } from "../../lib/initiativePath.ts";
 import { InitiativeListView } from "./InitiativeListView.tsx";
 import { InitiativeProgressLine } from "./InitiativeProgressLine.tsx";
 
@@ -48,6 +67,67 @@ type InitiativeView = "map" | "list";
 const VIEW_STORAGE_KEY = "assistant.initiativeView.v1";
 const decodeView = (raw: string): InitiativeView | "auto" | null =>
   raw === '"map"' ? "map" : raw === '"list"' ? "list" : null;
+
+/**
+ * How the user is looking at ONE Initiative in this tab: the epics they
+ * collapsed (nested ones included, so expanding an outer epic shows the inner
+ * one still folded), Hide done, and the critical path. Display only: nothing
+ * here is written to the server, and another Initiative starts fresh.
+ */
+interface MapSettings {
+  collapsed: string[];
+  hideDone: boolean;
+  criticalPath: boolean;
+}
+
+const NO_SETTINGS: MapSettings = {
+  collapsed: [],
+  hideDone: false,
+  criticalPath: false,
+};
+const NONE: ReadonlySet<string> = new Set();
+
+const settingsKey = (initiativeId: string) =>
+  `assistant.initiativeMap.v1:${initiativeId}`;
+
+function decodeSettings(raw: string): MapSettings | null {
+  try {
+    const value = JSON.parse(raw) as Partial<MapSettings> | null;
+    if (!value || typeof value !== "object") return null;
+    return {
+      collapsed: Array.isArray(value.collapsed)
+        ? value.collapsed.filter((id): id is string => typeof id === "string")
+        : [],
+      hideDone: value.hideDone === true,
+      criticalPath: value.criticalPath === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** What the line under the toolbar says about the highlighted path. */
+function pathSentence(
+  path: CriticalPath,
+  members: ReadonlyMap<string, InitiativeMember>,
+): string {
+  if (path.kind === "none")
+    return "No milestone is open, so there is no critical path.";
+  const milestone =
+    members.get(path.milestoneId)?.title ?? `Task-${path.milestoneId}`;
+  if (path.kind === "loop")
+    return `The blocks links before ${milestone} run in a loop (${path.taskIds
+      .slice(0, 4)
+      .map((id) => `Task-${id}`)
+      .join(", ")}${
+      path.taskIds.length > 4 ? ", …" : ""
+    }), so no critical path is drawn.`;
+  if (path.length === 1)
+    return `Critical path: nothing open blocks ${milestone}.`;
+  return path.tied
+    ? `Critical path: more than one chain of ${path.length} open Tasks ends at ${milestone}; each is marked.`
+    : `Critical path: ${path.length} open Tasks end at ${milestone}.`;
+}
 
 /**
  * @component InitiativeDetailPage
@@ -86,7 +166,8 @@ export function InitiativeDetailPage({
   /** The live summary, when the topic holds it. */
   summary: InitiativeSummary | undefined;
   detailState: LoadState<InitiativeRead | null> | undefined;
-  onLoadDetail: (id: string) => void;
+  /** Read the Initiative, its map drawn with `collapsed` folded. */
+  onLoadDetail: (id: string, collapsed: readonly string[]) => void;
   onOpenInitiative: (id: string | null) => void;
   /** The Tasks topic, or null while it is not authoritative. */
   liveTasks: ReadonlyMap<string, TaskSummary> | null;
@@ -101,28 +182,6 @@ export function InitiativeDetailPage({
     return () => onOpenInitiative(null);
   }, [initiativeId, onOpenInitiative]);
 
-  // Read when nothing is held or a newer revision marked the read stale. A
-  // read already in flight is not repeated (`requestInitiativeDetail`).
-  //
-  // Keyed on the state OBJECT, not its status string: an answer older than a
-  // revision this tab already holds lands as `refreshing` again, with new data,
-  // and only the new object says another read is due. A read in flight leaves
-  // the object as it is, so this never sends twice for one state.
-  const status = detailState?.status ?? "idle";
-  useEffect(() => {
-    const current = detailState?.status ?? "idle";
-    if (current === "idle" || current === "loading" || current === "refreshing")
-      onLoadDetail(initiativeId);
-  }, [detailState, initiativeId, onLoadDetail]);
-  // A read the connection lost is tried again once it is back, so a reconnect
-  // never leaves the page on that error; any other failure waits for Retry.
-  const wasConnected = useRef(connected);
-  useEffect(() => {
-    if (connected && !wasConnected.current && status === "error")
-      onLoadDetail(initiativeId);
-    wasConnected.current = connected;
-  }, [connected, initiativeId, onLoadDetail, status]);
-
   const [chosenView, setView] = useSessionStorageState<InitiativeView | "auto">(
     VIEW_STORAGE_KEY,
     "auto",
@@ -130,9 +189,65 @@ export function InitiativeDetailPage({
   );
   const view: InitiativeView =
     chosenView === "auto" ? (mobile ? "list" : "map") : chosenView;
+  // The page is keyed by Initiative (`App.tsx`), so this key never changes
+  // under a mounted page and one Initiative's choices never reach another.
+  const [settings, setSettings] = useSessionStorageState<MapSettings>(
+    settingsKey(initiativeId),
+    NO_SETTINGS,
+    decodeSettings,
+  );
 
   const read = detailState ? (dataOf(detailState) ?? undefined) : undefined;
   const item = read?.item;
+
+  // The drawing the user wants: their collapsed epics as the server applies
+  // them to the graph held. A read carries the set it asked for, and it draws
+  // the wanted map when both name the same applied set on that graph, so the
+  // server's normalisation never reads as a change.
+  const wish = useMemo(
+    () =>
+      item
+        ? canonicalCollapsed(item, settings.collapsed)
+        : collapseRequest(settings.collapsed),
+    [item, settings.collapsed],
+  );
+  const wishKey = wish.join(",");
+  const drawsWish =
+    !item ||
+    sameCollapsed(
+      canonicalCollapsed(item, read?.requestedCollapsed ?? []),
+      wish,
+    );
+
+  // Read when nothing is held or a newer revision marked the read stale, and
+  // when the map is shown for another collapsed set than the read was for. A
+  // read already in flight is not repeated, and a wish that moves while one
+  // runs is read as soon as it answers (`requestInitiativeDetail`).
+  //
+  // Keyed on the state OBJECT, not its status string: an answer older than a
+  // revision this tab already holds lands as `refreshing` again, with new data,
+  // and only the new object says another read is due. A read in flight leaves
+  // the object as it is, so this never sends twice for one state. A failure is
+  // read again only when the user changes what they want drawn.
+  const status = detailState?.status ?? "idle";
+  const askedWish = useRef(wishKey);
+  useEffect(() => {
+    const wishMoved = askedWish.current !== wishKey;
+    askedWish.current = wishKey;
+    const current = detailState?.status ?? "idle";
+    if (current === "idle" || current === "loading" || current === "refreshing")
+      onLoadDetail(initiativeId, wish);
+    else if (view === "map" && !drawsWish && (current === "ready" || wishMoved))
+      onLoadDetail(initiativeId, wish);
+  }, [detailState, drawsWish, initiativeId, onLoadDetail, view, wish, wishKey]);
+  // A read the connection lost is tried again once it is back, so a reconnect
+  // never leaves the page on that error; any other failure waits for Retry.
+  const wasConnected = useRef(connected);
+  useEffect(() => {
+    if (connected && !wasConnected.current && status === "error")
+      onLoadDetail(initiativeId, wish);
+    wasConnected.current = connected;
+  }, [connected, initiativeId, onLoadDetail, status, wish]);
   const running = useMemo(
     () => runningTaskIds(liveTasks, sessions),
     [liveTasks, sessions],
@@ -149,6 +264,58 @@ export function InitiativeDetailPage({
     () => (item && members ? milestoneMembers(item, members) : []),
     [item, members],
   );
+  const facts = useMemo(
+    () => (item && members ? subtreeFacts(item, members) : new Map()),
+    [item, members],
+  );
+  const collapsible = useMemo(
+    () => (item ? new Set(memberChildren(item).keys()) : NONE),
+    [item],
+  );
+  const collapsed = useMemo(() => new Set(wish), [wish]);
+  const folded = useMemo(
+    () => (item ? collapsedAway(item, wish) : new Map<string, string>()),
+    [item, wish],
+  );
+  const hidden = useMemo(
+    () =>
+      settings.hideDone && item && members
+        ? hiddenDoneIds(item, members, facts)
+        : NONE,
+    [settings.hideDone, item, members, facts],
+  );
+  const path = useMemo(
+    () =>
+      settings.criticalPath && item && members
+        ? criticalPath(item, members)
+        : null,
+    [settings.criticalPath, item, members],
+  );
+  // An epic still drawn open, by the wish: "Collapse all" has work to do.
+  const anyOpenEpic = [...collapsible].some(
+    (id) => !collapsed.has(id) && !folded.has(id),
+  );
+
+  const toggleCollapse = useCallback(
+    (taskId: string) =>
+      setSettings((previous) => ({
+        ...previous,
+        collapsed: previous.collapsed.includes(taskId)
+          ? previous.collapsed.filter((id) => id !== taskId)
+          : [...previous.collapsed, taskId],
+      })),
+    [setSettings],
+  );
+  // Collapse every epic, nested ones too: expanding one later opens a single
+  // level, which is what keeps a large map small enough to draw. The whole
+  // wish is kept; only the request is bounded (`canonicalCollapsed`).
+  const collapseAll = () =>
+    setSettings((previous) => ({
+      ...previous,
+      collapsed: [...new Set([...previous.collapsed, ...collapsible])],
+    }));
+  const expandAll = () =>
+    setSettings((previous) => ({ ...previous, collapsed: [] }));
 
   const title = summary?.title ?? item?.title;
   const state = summary?.state ?? item?.state;
@@ -162,7 +329,32 @@ export function InitiativeDetailPage({
     listKey: view === "list" ? `initiative:${initiativeId}` : null,
   });
 
-  const retry = () => onLoadDetail(initiativeId);
+  const retry = () => onLoadDetail(initiativeId, wish);
+  const showDone = () =>
+    setSettings((previous) => ({ ...previous, hideDone: false }));
+
+  const selectedFoldedIn =
+    selectedTaskId !== null ? folded.get(selectedTaskId) : undefined;
+  const notes: string[] = [];
+  if (path && members) notes.push(pathSentence(path, members));
+  if (hidden.size > 0)
+    notes.push(
+      `${hidden.size} done ${hidden.size === 1 ? "Task is" : "Tasks are"} hidden.`,
+    );
+  if (selectedTaskId !== null && hidden.has(selectedTaskId))
+    notes.push(
+      `The selected Task, Task-${selectedTaskId}, is done and hidden; it stays open in the panel.`,
+    );
+  else if (selectedFoldedIn !== undefined)
+    notes.push(
+      `The selected Task, Task-${selectedTaskId}, is inside collapsed ${
+        members?.get(selectedFoldedIn)?.title ?? `Task-${selectedFoldedIn}`
+      }.`,
+    );
+  const everythingHidden =
+    item !== undefined &&
+    item.nodes.length > 0 &&
+    item.nodes.every((node) => hidden.has(node.id));
 
   let body: ReactNode;
   if (missing) {
@@ -202,6 +394,19 @@ export function InitiativeDetailPage({
         This Initiative has no Tasks yet. Ask an agent to add some to it.
       </EmptyBox>
     );
+  } else if (everythingHidden) {
+    body = (
+      <EmptyBox
+        className="m-4"
+        action={
+          <Button size="sm" variant="outline" onClick={showDone}>
+            Show done Tasks
+          </Button>
+        }
+      >
+        Every Task in this Initiative is done, and Hide done is on.
+      </EmptyBox>
+    );
   } else {
     const list = (
       <InitiativeListView
@@ -209,6 +414,11 @@ export function InitiativeDetailPage({
         milestones={milestones}
         selectedTaskId={selectedTaskId}
         onSelectTask={onSelectTask}
+        collapsible={collapsible}
+        collapsed={collapsed}
+        onToggleCollapse={toggleCollapse}
+        hidden={hidden}
+        pathTaskIds={path?.kind === "path" ? path.taskIds : path ? NONE : null}
       />
     );
     const showMap = view === "map" && read?.layout !== undefined;
@@ -229,6 +439,12 @@ export function InitiativeDetailPage({
               projectLabel={projectLabel}
               selectedTaskId={selectedTaskId}
               onSelectTask={onSelectTask}
+              facts={facts}
+              collapsible={collapsible}
+              collapsed={collapsed}
+              onToggleCollapse={toggleCollapse}
+              hidden={hidden}
+              path={path}
             />
           </Suspense>
         </MapBoundary>
@@ -236,13 +452,32 @@ export function InitiativeDetailPage({
     ) : (
       <div ref={listScrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {view === "map" ? (
-          <ErrorNote
-            className="mb-4"
-            message={`The map could not be drawn, so the members are listed instead. ${
-              read?.layoutError ?? "The read carried no layout."
-            }`}
-            onRetry={retry}
-          />
+          <>
+            <ErrorNote
+              className="mb-4"
+              message={`The map could not be drawn, so the members are listed instead. ${
+                read?.layoutError ?? "The read carried no layout."
+              }`}
+              onRetry={retry}
+            />
+            {collapsible.size > 0 ? (
+              <Alert role="status" className="mb-4">
+                <AlertDescription>
+                  {anyOpenEpic
+                    ? "Collapsed epics draw as one node each, so a smaller map can be drawn. Collapse all of them here, or one at a time with the button before an epic below."
+                    : "Every epic is collapsed. Expand one with the button before it below, or expand them all from the toolbar."}
+                </AlertDescription>
+                {anyOpenEpic ? (
+                  <AlertAction>
+                    <Button size="xs" variant="outline" onClick={collapseAll}>
+                      <FoldHorizontal />
+                      Collapse all epics
+                    </Button>
+                  </AlertAction>
+                ) : null}
+              </Alert>
+            ) : null}
+          </>
         ) : null}
         {item.description ? (
           <p className="mb-4 max-w-prose text-sm whitespace-pre-line text-muted-foreground">
@@ -271,7 +506,13 @@ export function InitiativeDetailPage({
         }
         actions={
           detailState?.status === "refreshing" ? (
-            <RefreshIndicator label="Refreshing the Initiative" />
+            <RefreshIndicator
+              label={
+                view === "map" && !drawsWish
+                  ? "Redrawing the map"
+                  : "Refreshing the Initiative"
+              }
+            />
           ) : undefined
         }
       />
@@ -291,24 +532,77 @@ export function InitiativeDetailPage({
             </Badge>
           ) : null}
           {progress ? <InitiativeProgressLine progress={progress} /> : null}
-          <ToggleGroup
-            aria-label="View"
-            className="ml-auto"
-            size="sm"
-            variant="outline"
-            value={[view]}
-            onValueChange={(next) => {
-              const picked = next[0];
-              if (picked === "map" || picked === "list") setView(picked);
-            }}
-          >
-            <ToggleGroupItem value="map" aria-label="Map">
-              <MapIcon /> Map
-            </ToggleGroupItem>
-            <ToggleGroupItem value="list" aria-label="List">
-              <List /> List
-            </ToggleGroupItem>
-          </ToggleGroup>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {item && item.nodes.length > 0 ? (
+              <>
+                <Toggle
+                  variant="outline"
+                  size="sm"
+                  pressed={settings.criticalPath}
+                  onPressedChange={(pressed) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      criticalPath: pressed,
+                    }))
+                  }
+                >
+                  <Route /> Critical path
+                </Toggle>
+                <Toggle
+                  variant="outline"
+                  size="sm"
+                  pressed={settings.hideDone}
+                  onPressedChange={(pressed) =>
+                    setSettings((previous) => ({
+                      ...previous,
+                      hideDone: pressed,
+                    }))
+                  }
+                >
+                  <EyeOff /> Hide done
+                </Toggle>
+                {collapsible.size > 0 ? (
+                  // One button whose name follows the drawing, so focus stays
+                  // on it after a press instead of falling off a disabled one.
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={anyOpenEpic ? collapseAll : expandAll}
+                  >
+                    {anyOpenEpic ? <FoldHorizontal /> : <UnfoldHorizontal />}
+                    {anyOpenEpic ? "Collapse all epics" : "Expand all epics"}
+                  </Button>
+                ) : null}
+              </>
+            ) : null}
+            <ToggleGroup
+              aria-label="View"
+              size="sm"
+              variant="outline"
+              value={[view]}
+              onValueChange={(next) => {
+                const picked = next[0];
+                if (picked === "map" || picked === "list") setView(picked);
+              }}
+            >
+              <ToggleGroupItem value="map" aria-label="Map">
+                <MapIcon /> Map
+              </ToggleGroupItem>
+              <ToggleGroupItem value="list" aria-label="List">
+                <List /> List
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </div>
+        </div>
+      ) : null}
+      {notes.length > 0 && !missing ? (
+        <div
+          role="status"
+          className="flex flex-col gap-0.5 border-b border-border px-4 py-1.5 text-xs text-muted-foreground"
+        >
+          {notes.map((note) => (
+            <p key={note}>{note}</p>
+          ))}
         </div>
       ) : null}
       {item?.archivedAt ? (

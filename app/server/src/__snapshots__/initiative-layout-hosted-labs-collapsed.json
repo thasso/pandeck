@@ -1,0 +1,854 @@
+{
+ "width": 3356,
+ "height": 944,
+ "collapsed": [
+  "SDC4",
+  "LAB"
+ ],
+ "groups": [
+  {
+   "projectId": "fixture-sdc",
+   "laneIds": [
+    "SDC"
+   ],
+   "x": 24,
+   "y": 24,
+   "width": 2648,
+   "height": 376
+  },
+  {
+   "projectId": "fixture-stardust",
+   "laneIds": [
+    "LAB"
+   ],
+   "x": 24,
+   "y": 440,
+   "width": 2648,
+   "height": 168
+  },
+  {
+   "projectId": "fixture-srs",
+   "laneIds": [
+    "SRS"
+   ],
+   "x": 24,
+   "y": 648,
+   "width": 2648,
+   "height": 272
+  }
+ ],
+ "lanes": [
+  {
+   "id": "SDC",
+   "projectId": "fixture-sdc",
+   "x": 36,
+   "y": 56,
+   "width": 2624,
+   "height": 332
+  },
+  {
+   "id": "LAB",
+   "projectId": "fixture-stardust",
+   "x": 36,
+   "y": 472,
+   "width": 2624,
+   "height": 124
+  },
+  {
+   "id": "SRS",
+   "projectId": "fixture-srs",
+   "x": 36,
+   "y": 680,
+   "width": 2624,
+   "height": 228
+  }
+ ],
+ "milestoneColumn": {
+  "x": 2724,
+  "y": 24,
+  "width": 608,
+  "height": 896
+ },
+ "nodes": [
+  {
+   "id": "external:OUT-REVIEW:SDC",
+   "kind": "external",
+   "taskId": "OUT-REVIEW",
+   "laneId": "SDC",
+   "x": 52,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC",
+   "kind": "task",
+   "taskId": "SDC",
+   "laneId": "SDC",
+   "x": 388,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC1",
+   "kind": "task",
+   "taskId": "SDC1",
+   "laneId": "SDC",
+   "x": 388,
+   "y": 103,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC2",
+   "kind": "task",
+   "taskId": "SDC2",
+   "laneId": "SDC",
+   "x": 724,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC3",
+   "kind": "task",
+   "taskId": "SDC3",
+   "laneId": "SDC",
+   "x": 1060,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC4",
+   "kind": "collapsed",
+   "taskId": "SDC4",
+   "laneId": "SDC",
+   "hiddenTaskIds": [
+    "SDC4a",
+    "SDC4b"
+   ],
+   "x": 388,
+   "y": 300,
+   "width": 240,
+   "height": 72,
+   "progress": {
+    "total": 2,
+    "done": 0,
+    "doing": 0,
+    "startable": 1,
+    "blocked": 1
+   }
+  },
+  {
+   "id": "SDC5",
+   "kind": "task",
+   "taskId": "SDC5",
+   "laneId": "SDC",
+   "x": 1396,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC6",
+   "kind": "task",
+   "taskId": "SDC6",
+   "laneId": "SDC",
+   "x": 1732,
+   "y": 196,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC7",
+   "kind": "task",
+   "taskId": "SDC7",
+   "laneId": "SDC",
+   "x": 1396,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC8",
+   "kind": "task",
+   "taskId": "SDC8",
+   "laneId": "SDC",
+   "x": 1732,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SDC9",
+   "kind": "task",
+   "taskId": "SDC9",
+   "laneId": "SDC",
+   "x": 2068,
+   "y": 92,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "LAB",
+   "kind": "collapsed",
+   "taskId": "LAB",
+   "laneId": "LAB",
+   "hiddenTaskIds": [
+    "LAB1",
+    "LAB2",
+    "LAB3",
+    "LAB4",
+    "LAB5",
+    "LAB6",
+    "LAB7",
+    "LAB8",
+    "LAB9"
+   ],
+   "x": 1396,
+   "y": 508,
+   "width": 240,
+   "height": 72,
+   "progress": {
+    "total": 9,
+    "done": 1,
+    "doing": 0,
+    "startable": 2,
+    "blocked": 6
+   }
+  },
+  {
+   "id": "external:OUT-REVIEW:SRS",
+   "kind": "external",
+   "taskId": "OUT-REVIEW",
+   "laneId": "SRS",
+   "x": 52,
+   "y": 716,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS",
+   "kind": "task",
+   "taskId": "SRS",
+   "laneId": "SRS",
+   "x": 388,
+   "y": 755,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS1",
+   "kind": "task",
+   "taskId": "SRS1",
+   "laneId": "SRS",
+   "x": 1060,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS2",
+   "kind": "task",
+   "taskId": "SRS2",
+   "laneId": "SRS",
+   "x": 1396,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS3",
+   "kind": "task",
+   "taskId": "SRS3",
+   "laneId": "SRS",
+   "x": 1732,
+   "y": 820,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS4",
+   "kind": "task",
+   "taskId": "SRS4",
+   "laneId": "SRS",
+   "x": 1732,
+   "y": 716,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS5",
+   "kind": "task",
+   "taskId": "SRS5",
+   "laneId": "SRS",
+   "x": 2068,
+   "y": 716,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS6",
+   "kind": "task",
+   "taskId": "SRS6",
+   "laneId": "SRS",
+   "x": 1060,
+   "y": 716,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS7",
+   "kind": "task",
+   "taskId": "SRS7",
+   "laneId": "SRS",
+   "x": 2404,
+   "y": 716,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "SRS8",
+   "kind": "task",
+   "taskId": "SRS8",
+   "laneId": "SRS",
+   "x": 1396,
+   "y": 716,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "external:OUT-LEGAL:milestones",
+   "kind": "external",
+   "taskId": "OUT-LEGAL",
+   "x": 2740,
+   "y": 338,
+   "width": 240,
+   "height": 72
+  },
+  {
+   "id": "RELEASE",
+   "kind": "task",
+   "taskId": "RELEASE",
+   "milestone": true,
+   "x": 3076,
+   "y": 300,
+   "width": 240,
+   "height": 72
+  }
+ ],
+ "edges": [
+  {
+   "from": "external:OUT-REVIEW:SDC",
+   "to": "SDC2",
+   "points": [
+    {
+     "x": 292,
+     "y": 128
+    },
+    {
+     "x": 302,
+     "y": 128
+    },
+    {
+     "x": 302,
+     "y": 92
+    },
+    {
+     "x": 648,
+     "y": 92
+    },
+    {
+     "x": 648,
+     "y": 140
+    },
+    {
+     "x": 724,
+     "y": 140
+    }
+   ]
+  },
+  {
+   "from": "SDC1",
+   "to": "SDC2",
+   "points": [
+    {
+     "x": 628,
+     "y": 139
+    },
+    {
+     "x": 638,
+     "y": 139
+    },
+    {
+     "x": 638,
+     "y": 116
+    },
+    {
+     "x": 724,
+     "y": 116
+    }
+   ]
+  },
+  {
+   "from": "SDC2",
+   "to": "SDC3",
+   "points": [
+    {
+     "x": 964,
+     "y": 128
+    },
+    {
+     "x": 1060,
+     "y": 128
+    }
+   ]
+  },
+  {
+   "from": "SDC3",
+   "to": "SDC5",
+   "points": [
+    {
+     "x": 1300,
+     "y": 116
+    },
+    {
+     "x": 1330,
+     "y": 116
+    },
+    {
+     "x": 1330,
+     "y": 232
+    },
+    {
+     "x": 1396,
+     "y": 232
+    }
+   ]
+  },
+  {
+   "from": "SDC5",
+   "to": "SDC6",
+   "points": [
+    {
+     "x": 1636,
+     "y": 232
+    },
+    {
+     "x": 1732,
+     "y": 232
+    }
+   ]
+  },
+  {
+   "from": "SRS6",
+   "to": "SDC7",
+   "points": [
+    {
+     "x": 1300,
+     "y": 740
+    },
+    {
+     "x": 1320,
+     "y": 740
+    },
+    {
+     "x": 1320,
+     "y": 128
+    },
+    {
+     "x": 1396,
+     "y": 128
+    }
+   ]
+  },
+  {
+   "from": "SDC7",
+   "to": "SDC8",
+   "points": [
+    {
+     "x": 1636,
+     "y": 128
+    },
+    {
+     "x": 1732,
+     "y": 128
+    }
+   ]
+  },
+  {
+   "from": "SDC6",
+   "to": "SDC9",
+   "points": [
+    {
+     "x": 1972,
+     "y": 232
+    },
+    {
+     "x": 1982,
+     "y": 232
+    },
+    {
+     "x": 1982,
+     "y": 116
+    },
+    {
+     "x": 2068,
+     "y": 116
+    }
+   ]
+  },
+  {
+   "from": "SDC8",
+   "to": "SDC9",
+   "points": [
+    {
+     "x": 1972,
+     "y": 128
+    },
+    {
+     "x": 1992,
+     "y": 128
+    },
+    {
+     "x": 1992,
+     "y": 140
+    },
+    {
+     "x": 2068,
+     "y": 140
+    }
+   ]
+  },
+  {
+   "from": "SDC3",
+   "to": "LAB",
+   "points": [
+    {
+     "x": 1300,
+     "y": 140
+    },
+    {
+     "x": 1310,
+     "y": 140
+    },
+    {
+     "x": 1310,
+     "y": 544
+    },
+    {
+     "x": 1396,
+     "y": 544
+    }
+   ]
+  },
+  {
+   "from": "SRS1",
+   "to": "SRS2",
+   "points": [
+    {
+     "x": 1300,
+     "y": 856
+    },
+    {
+     "x": 1396,
+     "y": 856
+    }
+   ]
+  },
+  {
+   "from": "external:OUT-REVIEW:SRS",
+   "to": "SRS3",
+   "points": [
+    {
+     "x": 292,
+     "y": 752
+    },
+    {
+     "x": 302,
+     "y": 752
+    },
+    {
+     "x": 302,
+     "y": 744
+    },
+    {
+     "x": 638,
+     "y": 744
+    },
+    {
+     "x": 638,
+     "y": 765
+    },
+    {
+     "x": 974,
+     "y": 765
+    },
+    {
+     "x": 974,
+     "y": 798
+    },
+    {
+     "x": 1310,
+     "y": 798
+    },
+    {
+     "x": 1310,
+     "y": 807
+    },
+    {
+     "x": 1656,
+     "y": 807
+    },
+    {
+     "x": 1656,
+     "y": 868
+    },
+    {
+     "x": 1732,
+     "y": 868
+    }
+   ]
+  },
+  {
+   "from": "SRS2",
+   "to": "SRS3",
+   "points": [
+    {
+     "x": 1636,
+     "y": 856
+    },
+    {
+     "x": 1646,
+     "y": 856
+    },
+    {
+     "x": 1646,
+     "y": 844
+    },
+    {
+     "x": 1732,
+     "y": 844
+    }
+   ]
+  },
+  {
+   "from": "LAB",
+   "to": "SRS4",
+   "points": [
+    {
+     "x": 1636,
+     "y": 532
+    },
+    {
+     "x": 1656,
+     "y": 532
+    },
+    {
+     "x": 1656,
+     "y": 752
+    },
+    {
+     "x": 1732,
+     "y": 752
+    }
+   ]
+  },
+  {
+   "from": "SRS3",
+   "to": "SRS5",
+   "points": [
+    {
+     "x": 1972,
+     "y": 856
+    },
+    {
+     "x": 1982,
+     "y": 856
+    },
+    {
+     "x": 1982,
+     "y": 740
+    },
+    {
+     "x": 2068,
+     "y": 740
+    }
+   ]
+  },
+  {
+   "from": "SRS4",
+   "to": "SRS5",
+   "points": [
+    {
+     "x": 1972,
+     "y": 752
+    },
+    {
+     "x": 1992,
+     "y": 752
+    },
+    {
+     "x": 1992,
+     "y": 764
+    },
+    {
+     "x": 2068,
+     "y": 764
+    }
+   ]
+  },
+  {
+   "from": "SRS5",
+   "to": "SRS7",
+   "points": [
+    {
+     "x": 2308,
+     "y": 752
+    },
+    {
+     "x": 2404,
+     "y": 752
+    }
+   ]
+  },
+  {
+   "from": "SRS6",
+   "to": "SRS8",
+   "points": [
+    {
+     "x": 1300,
+     "y": 764
+    },
+    {
+     "x": 1310,
+     "y": 764
+    },
+    {
+     "x": 1310,
+     "y": 752
+    },
+    {
+     "x": 1396,
+     "y": 752
+    }
+   ]
+  },
+  {
+   "from": "SDC9",
+   "to": "RELEASE",
+   "points": [
+    {
+     "x": 2308,
+     "y": 128
+    },
+    {
+     "x": 2318,
+     "y": 128
+    },
+    {
+     "x": 2318,
+     "y": 186
+    },
+    {
+     "x": 2654,
+     "y": 186
+    },
+    {
+     "x": 2654,
+     "y": 255
+    },
+    {
+     "x": 3010,
+     "y": 255
+    },
+    {
+     "x": 3010,
+     "y": 336
+    },
+    {
+     "x": 3076,
+     "y": 336
+    }
+   ]
+  },
+  {
+   "from": "LAB",
+   "to": "RELEASE",
+   "points": [
+    {
+     "x": 1636,
+     "y": 556
+    },
+    {
+     "x": 1646,
+     "y": 556
+    },
+    {
+     "x": 1646,
+     "y": 452
+    },
+    {
+     "x": 1982,
+     "y": 452
+    },
+    {
+     "x": 1982,
+     "y": 410
+    },
+    {
+     "x": 2318,
+     "y": 410
+    },
+    {
+     "x": 2318,
+     "y": 368
+    },
+    {
+     "x": 2654,
+     "y": 368
+    },
+    {
+     "x": 2654,
+     "y": 327
+    },
+    {
+     "x": 2990,
+     "y": 327
+    },
+    {
+     "x": 2990,
+     "y": 354
+    },
+    {
+     "x": 3076,
+     "y": 354
+    }
+   ]
+  },
+  {
+   "from": "external:OUT-LEGAL:milestones",
+   "to": "RELEASE",
+   "points": [
+    {
+     "x": 2980,
+     "y": 374
+    },
+    {
+     "x": 3000,
+     "y": 374
+    },
+    {
+     "x": 3000,
+     "y": 318
+    },
+    {
+     "x": 3076,
+     "y": 318
+    }
+   ]
+  }
+ ]
+}

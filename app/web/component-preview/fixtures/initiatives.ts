@@ -1490,6 +1490,857 @@ export const HOSTED_LABS_LAYOUT: InitiativeLayout = {
   key: "fixture-hosted-labs",
 };
 
+/**
+ * The same Initiative with Stardust Labs (912) and the nested Usage metering
+ * epic (904) collapsed: the server's real output for that collapsed set, the
+ * pinned snapshot `initiative-layout-hosted-labs-collapsed.json` with its
+ * fixture names swapped for these ids. Each collapsed node's `progress` is as
+ * of the server fixture's statuses; the page draws live counts over it.
+ */
+export const HOSTED_LABS_LAYOUT_COLLAPSED: InitiativeLayout = {
+  width: 3356,
+  height: 944,
+  collapsed: ["904", "912"],
+  groups: [
+    {
+      projectId: "sdc",
+      laneIds: ["900"],
+      x: 24,
+      y: 24,
+      width: 2648,
+      height: 376,
+    },
+    {
+      projectId: "stardust-labs",
+      laneIds: ["912"],
+      x: 24,
+      y: 440,
+      width: 2648,
+      height: 168,
+    },
+    {
+      projectId: "srs",
+      laneIds: ["922"],
+      x: 24,
+      y: 648,
+      width: 2648,
+      height: 272,
+    },
+  ],
+  lanes: [
+    {
+      id: "900",
+      projectId: "sdc",
+      x: 36,
+      y: 56,
+      width: 2624,
+      height: 332,
+    },
+    {
+      id: "912",
+      projectId: "stardust-labs",
+      x: 36,
+      y: 472,
+      width: 2624,
+      height: 124,
+    },
+    {
+      id: "922",
+      projectId: "srs",
+      x: 36,
+      y: 680,
+      width: 2624,
+      height: 228,
+    },
+  ],
+  milestoneColumn: {
+    x: 2724,
+    y: 24,
+    width: 608,
+    height: 896,
+  },
+  nodes: [
+    {
+      id: "external:932:900",
+      kind: "external",
+      taskId: "932",
+      laneId: "900",
+      x: 52,
+      y: 92,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "900",
+      kind: "task",
+      taskId: "900",
+      laneId: "900",
+      x: 388,
+      y: 196,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "901",
+      kind: "task",
+      taskId: "901",
+      laneId: "900",
+      x: 388,
+      y: 103,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "902",
+      kind: "task",
+      taskId: "902",
+      laneId: "900",
+      x: 724,
+      y: 92,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "903",
+      kind: "task",
+      taskId: "903",
+      laneId: "900",
+      x: 1060,
+      y: 92,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "904",
+      kind: "collapsed",
+      taskId: "904",
+      laneId: "900",
+      hiddenTaskIds: ["910", "911"],
+      x: 388,
+      y: 300,
+      width: 240,
+      height: 72,
+      progress: {
+        total: 2,
+        done: 0,
+        doing: 0,
+        startable: 1,
+        blocked: 1,
+      },
+    },
+    {
+      id: "905",
+      kind: "task",
+      taskId: "905",
+      laneId: "900",
+      x: 1396,
+      y: 196,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "906",
+      kind: "task",
+      taskId: "906",
+      laneId: "900",
+      x: 1732,
+      y: 196,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "907",
+      kind: "task",
+      taskId: "907",
+      laneId: "900",
+      x: 1396,
+      y: 92,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "908",
+      kind: "task",
+      taskId: "908",
+      laneId: "900",
+      x: 1732,
+      y: 92,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "909",
+      kind: "task",
+      taskId: "909",
+      laneId: "900",
+      x: 2068,
+      y: 92,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "912",
+      kind: "collapsed",
+      taskId: "912",
+      laneId: "912",
+      hiddenTaskIds: [
+        "913",
+        "914",
+        "915",
+        "916",
+        "917",
+        "918",
+        "919",
+        "920",
+        "921",
+      ],
+      x: 1396,
+      y: 508,
+      width: 240,
+      height: 72,
+      progress: {
+        total: 9,
+        done: 1,
+        doing: 0,
+        startable: 2,
+        blocked: 6,
+      },
+    },
+    {
+      id: "external:932:922",
+      kind: "external",
+      taskId: "932",
+      laneId: "922",
+      x: 52,
+      y: 716,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "922",
+      kind: "task",
+      taskId: "922",
+      laneId: "922",
+      x: 388,
+      y: 755,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "923",
+      kind: "task",
+      taskId: "923",
+      laneId: "922",
+      x: 1060,
+      y: 820,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "924",
+      kind: "task",
+      taskId: "924",
+      laneId: "922",
+      x: 1396,
+      y: 820,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "925",
+      kind: "task",
+      taskId: "925",
+      laneId: "922",
+      x: 1732,
+      y: 820,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "926",
+      kind: "task",
+      taskId: "926",
+      laneId: "922",
+      x: 1732,
+      y: 716,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "927",
+      kind: "task",
+      taskId: "927",
+      laneId: "922",
+      x: 2068,
+      y: 716,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "928",
+      kind: "task",
+      taskId: "928",
+      laneId: "922",
+      x: 1060,
+      y: 716,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "929",
+      kind: "task",
+      taskId: "929",
+      laneId: "922",
+      x: 2404,
+      y: 716,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "930",
+      kind: "task",
+      taskId: "930",
+      laneId: "922",
+      x: 1396,
+      y: 716,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "external:933:milestones",
+      kind: "external",
+      taskId: "933",
+      x: 2740,
+      y: 338,
+      width: 240,
+      height: 72,
+    },
+    {
+      id: "931",
+      kind: "task",
+      taskId: "931",
+      milestone: true,
+      x: 3076,
+      y: 300,
+      width: 240,
+      height: 72,
+    },
+  ],
+  edges: [
+    {
+      from: "external:932:900",
+      to: "902",
+      points: [
+        {
+          x: 292,
+          y: 128,
+        },
+        {
+          x: 302,
+          y: 128,
+        },
+        {
+          x: 302,
+          y: 92,
+        },
+        {
+          x: 648,
+          y: 92,
+        },
+        {
+          x: 648,
+          y: 140,
+        },
+        {
+          x: 724,
+          y: 140,
+        },
+      ],
+    },
+    {
+      from: "901",
+      to: "902",
+      points: [
+        {
+          x: 628,
+          y: 139,
+        },
+        {
+          x: 638,
+          y: 139,
+        },
+        {
+          x: 638,
+          y: 116,
+        },
+        {
+          x: 724,
+          y: 116,
+        },
+      ],
+    },
+    {
+      from: "902",
+      to: "903",
+      points: [
+        {
+          x: 964,
+          y: 128,
+        },
+        {
+          x: 1060,
+          y: 128,
+        },
+      ],
+    },
+    {
+      from: "903",
+      to: "905",
+      points: [
+        {
+          x: 1300,
+          y: 116,
+        },
+        {
+          x: 1330,
+          y: 116,
+        },
+        {
+          x: 1330,
+          y: 232,
+        },
+        {
+          x: 1396,
+          y: 232,
+        },
+      ],
+    },
+    {
+      from: "905",
+      to: "906",
+      points: [
+        {
+          x: 1636,
+          y: 232,
+        },
+        {
+          x: 1732,
+          y: 232,
+        },
+      ],
+    },
+    {
+      from: "928",
+      to: "907",
+      points: [
+        {
+          x: 1300,
+          y: 740,
+        },
+        {
+          x: 1320,
+          y: 740,
+        },
+        {
+          x: 1320,
+          y: 128,
+        },
+        {
+          x: 1396,
+          y: 128,
+        },
+      ],
+    },
+    {
+      from: "907",
+      to: "908",
+      points: [
+        {
+          x: 1636,
+          y: 128,
+        },
+        {
+          x: 1732,
+          y: 128,
+        },
+      ],
+    },
+    {
+      from: "906",
+      to: "909",
+      points: [
+        {
+          x: 1972,
+          y: 232,
+        },
+        {
+          x: 1982,
+          y: 232,
+        },
+        {
+          x: 1982,
+          y: 116,
+        },
+        {
+          x: 2068,
+          y: 116,
+        },
+      ],
+    },
+    {
+      from: "908",
+      to: "909",
+      points: [
+        {
+          x: 1972,
+          y: 128,
+        },
+        {
+          x: 1992,
+          y: 128,
+        },
+        {
+          x: 1992,
+          y: 140,
+        },
+        {
+          x: 2068,
+          y: 140,
+        },
+      ],
+    },
+    {
+      from: "903",
+      to: "912",
+      points: [
+        {
+          x: 1300,
+          y: 140,
+        },
+        {
+          x: 1310,
+          y: 140,
+        },
+        {
+          x: 1310,
+          y: 544,
+        },
+        {
+          x: 1396,
+          y: 544,
+        },
+      ],
+    },
+    {
+      from: "923",
+      to: "924",
+      points: [
+        {
+          x: 1300,
+          y: 856,
+        },
+        {
+          x: 1396,
+          y: 856,
+        },
+      ],
+    },
+    {
+      from: "external:932:922",
+      to: "925",
+      points: [
+        {
+          x: 292,
+          y: 752,
+        },
+        {
+          x: 302,
+          y: 752,
+        },
+        {
+          x: 302,
+          y: 744,
+        },
+        {
+          x: 638,
+          y: 744,
+        },
+        {
+          x: 638,
+          y: 765,
+        },
+        {
+          x: 974,
+          y: 765,
+        },
+        {
+          x: 974,
+          y: 798,
+        },
+        {
+          x: 1310,
+          y: 798,
+        },
+        {
+          x: 1310,
+          y: 807,
+        },
+        {
+          x: 1656,
+          y: 807,
+        },
+        {
+          x: 1656,
+          y: 868,
+        },
+        {
+          x: 1732,
+          y: 868,
+        },
+      ],
+    },
+    {
+      from: "924",
+      to: "925",
+      points: [
+        {
+          x: 1636,
+          y: 856,
+        },
+        {
+          x: 1646,
+          y: 856,
+        },
+        {
+          x: 1646,
+          y: 844,
+        },
+        {
+          x: 1732,
+          y: 844,
+        },
+      ],
+    },
+    {
+      from: "912",
+      to: "926",
+      points: [
+        {
+          x: 1636,
+          y: 532,
+        },
+        {
+          x: 1656,
+          y: 532,
+        },
+        {
+          x: 1656,
+          y: 752,
+        },
+        {
+          x: 1732,
+          y: 752,
+        },
+      ],
+    },
+    {
+      from: "925",
+      to: "927",
+      points: [
+        {
+          x: 1972,
+          y: 856,
+        },
+        {
+          x: 1982,
+          y: 856,
+        },
+        {
+          x: 1982,
+          y: 740,
+        },
+        {
+          x: 2068,
+          y: 740,
+        },
+      ],
+    },
+    {
+      from: "926",
+      to: "927",
+      points: [
+        {
+          x: 1972,
+          y: 752,
+        },
+        {
+          x: 1992,
+          y: 752,
+        },
+        {
+          x: 1992,
+          y: 764,
+        },
+        {
+          x: 2068,
+          y: 764,
+        },
+      ],
+    },
+    {
+      from: "927",
+      to: "929",
+      points: [
+        {
+          x: 2308,
+          y: 752,
+        },
+        {
+          x: 2404,
+          y: 752,
+        },
+      ],
+    },
+    {
+      from: "928",
+      to: "930",
+      points: [
+        {
+          x: 1300,
+          y: 764,
+        },
+        {
+          x: 1310,
+          y: 764,
+        },
+        {
+          x: 1310,
+          y: 752,
+        },
+        {
+          x: 1396,
+          y: 752,
+        },
+      ],
+    },
+    {
+      from: "909",
+      to: "931",
+      points: [
+        {
+          x: 2308,
+          y: 128,
+        },
+        {
+          x: 2318,
+          y: 128,
+        },
+        {
+          x: 2318,
+          y: 186,
+        },
+        {
+          x: 2654,
+          y: 186,
+        },
+        {
+          x: 2654,
+          y: 255,
+        },
+        {
+          x: 3010,
+          y: 255,
+        },
+        {
+          x: 3010,
+          y: 336,
+        },
+        {
+          x: 3076,
+          y: 336,
+        },
+      ],
+    },
+    {
+      from: "912",
+      to: "931",
+      points: [
+        {
+          x: 1636,
+          y: 556,
+        },
+        {
+          x: 1646,
+          y: 556,
+        },
+        {
+          x: 1646,
+          y: 452,
+        },
+        {
+          x: 1982,
+          y: 452,
+        },
+        {
+          x: 1982,
+          y: 410,
+        },
+        {
+          x: 2318,
+          y: 410,
+        },
+        {
+          x: 2318,
+          y: 368,
+        },
+        {
+          x: 2654,
+          y: 368,
+        },
+        {
+          x: 2654,
+          y: 327,
+        },
+        {
+          x: 2990,
+          y: 327,
+        },
+        {
+          x: 2990,
+          y: 354,
+        },
+        {
+          x: 3076,
+          y: 354,
+        },
+      ],
+    },
+    {
+      from: "external:933:milestones",
+      to: "931",
+      points: [
+        {
+          x: 2980,
+          y: 374,
+        },
+        {
+          x: 3000,
+          y: 374,
+        },
+        {
+          x: 3000,
+          y: 318,
+        },
+        {
+          x: 3076,
+          y: 318,
+        },
+      ],
+    },
+  ],
+  key: "fixture-hosted-labs-collapsed",
+};
+
 /** Members with a running session in the stories' session list. */
 export const HOSTED_LABS_RUNNING_TASK_IDS: readonly string[] = ["914", "905"];
 

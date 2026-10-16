@@ -17,12 +17,21 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
 import "./InitiativeMap.css";
-import { Flag, Maximize, ZoomIn, ZoomOut } from "lucide-react";
+import {
+  Flag,
+  Maximize,
+  Route,
+  SquareMinus,
+  SquarePlus,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 import type {
   InitiativeLayout,
   InitiativeLayoutEdge,
   InitiativeLayoutNode,
 } from "@assistant/shared";
+import { Badge } from "../ui/badge.tsx";
 import { Item } from "../ui/item.tsx";
 import { IconButton } from "../common/IconButton.tsx";
 import { TaskStatusIcon } from "../TaskStatusIcon.tsx";
@@ -34,7 +43,9 @@ import { TaskIdBadge } from "../TaskIdBadge.tsx";
 import {
   memberStateLabel,
   type InitiativeMember,
+  type SubtreeFacts,
 } from "../../lib/initiativeView.ts";
+import { pathOnLayout, type CriticalPath } from "../../lib/initiativePath.ts";
 
 /**
  * @component InitiativeMap
@@ -46,9 +57,12 @@ import {
  * @intent Read-only. It computes no geometry and writes nothing: no drag, no
  *   connect, no edit. Status, blocked and running markers come from `members`,
  *   which the live Tasks topic updates, so a status change recolours a node
- *   without a read or a layout. A node is a real button: Tab walks the Tasks in
- *   lane order and Enter opens one in the object panel. Lanes, Project groups
- *   and the milestone column are drawing, not Tasks, and take no input.
+ *   without a read or a layout; so do a collapsed epic's progress, the
+ *   critical path and what Hide done takes away. A node is a real button: Tab
+ *   walks the Tasks in lane order and Enter opens one in the object panel. An
+ *   epic's collapse control is a button of its own beside it, never inside
+ *   it, and asks the page for another drawing. Lanes, Project groups and the
+ *   milestone column are drawing, not Tasks, and take no input.
  */
 
 type TaskNodeData = {
@@ -56,6 +70,14 @@ type TaskNodeData = {
   member: InitiativeMember | undefined;
   selected: boolean;
   onSelect: (taskId: string) => void;
+  /** A collapsed epic's live counts over its descendants. */
+  progress: Pick<SubtreeFacts, "done" | "total"> | undefined;
+  /** The selected Task is one this collapsed epic stands for. */
+  holdsSelection: boolean;
+  /** Absent unless the critical path is highlighted. */
+  onPath?: boolean;
+  /** Present on an epic: whether the user wants it collapsed. */
+  collapse?: { wanted: boolean; onToggle: (taskId: string) => void };
 };
 type FrameNodeData = { label: string; kind: "group" | "lane" | "milestones" };
 type RouteEdgeData = {
@@ -64,6 +86,8 @@ type RouteEdgeData = {
   open: boolean;
   /** It starts or ends at the selected Task. */
   selected: boolean;
+  /** Absent unless the critical path is highlighted. */
+  onPath?: boolean;
 };
 
 type TaskFlowNode = Node<TaskNodeData, "task">;
@@ -78,21 +102,32 @@ export interface InitiativeMapProps {
   projectLabel: (projectId: string | undefined) => string;
   selectedTaskId: string | null;
   onSelectTask: (taskId: string) => void;
+  /** Per member, its descendants' live counts (`subtreeFacts`). */
+  facts: ReadonlyMap<string, SubtreeFacts>;
+  /** Members with member children: each node carries a collapse control. */
+  collapsible: ReadonlySet<string>;
+  /** The epics the user wants collapsed; the drawing may not have caught up. */
+  collapsed: ReadonlySet<string>;
+  onToggleCollapse: (taskId: string) => void;
+  /** Task ids Hide done takes off the map; empty when it is off. */
+  hidden: ReadonlySet<string>;
+  /** The critical path when it is highlighted, else null. */
+  path: CriticalPath | null;
 }
 
-function nodeName(
-  layoutNode: InitiativeLayoutNode,
-  member: InitiativeMember | undefined,
-): string {
+function nodeName(data: TaskNodeData): string {
+  const { layoutNode, member, progress } = data;
   const title = member?.title ?? `Task-${layoutNode.taskId}`;
   const parts = [`${title}, Task-${layoutNode.taskId}`];
   if (layoutNode.kind === "external") parts.push("outside this Initiative");
   if (layoutNode.milestone) parts.push("milestone");
   if (member) parts.push(memberStateLabel(member));
-  if (layoutNode.kind === "collapsed" && layoutNode.progress)
-    parts.push(
-      `${layoutNode.progress.done} of ${layoutNode.progress.total} done`,
-    );
+  if (layoutNode.kind === "collapsed") {
+    parts.push("collapsed epic");
+    if (progress) parts.push(`${progress.done} of ${progress.total} done`);
+  }
+  if (data.onPath) parts.push("on the critical path");
+  if (data.holdsSelection) parts.push("holds the selected Task");
   return parts.join(", ");
 }
 
@@ -103,7 +138,7 @@ function nodeName(
  * both.
  */
 const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
-  const { layoutNode, member, selected, onSelect } = data;
+  const { layoutNode, member, selected, onSelect, progress, collapse } = data;
   const external = layoutNode.kind === "external";
   const status = member?.status ?? "todo";
   const band = memberBandClass(member);
@@ -113,7 +148,8 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
   // that clicked a visible Task is not moved.
   const reveal = useCallback(
     (event: FocusEvent<HTMLElement>) => {
-      if (!event.currentTarget.matches(":focus-visible")) return;
+      // The node's own button or its collapse control, whichever took focus.
+      if (!(event.target as HTMLElement).matches(":focus-visible")) return;
       const { width, height, transform } = store.getState();
       const [tx, ty, zoom] = transform;
       const left = layoutNode.x * zoom + tx;
@@ -132,11 +168,23 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
     },
     [getZoom, layoutNode, setCenter, store],
   );
+  const title = member?.title ?? `Task-${layoutNode.taskId}`;
+  // With the path highlighted, everything off it recedes as an archived Task
+  // does, so the chain is what the eye follows.
+  const recede = member?.archived || data.onPath === false;
   return (
     <div
       className={`relative h-full w-full rounded-lg bg-card ${
-        member?.archived ? "opacity-60" : ""
-      } ${selected ? "ring-2 ring-primary" : ""}`}
+        recede ? "opacity-60" : ""
+      } ${
+        selected
+          ? "ring-2 ring-primary"
+          : data.holdsSelection
+            ? "ring-2 ring-primary/50 ring-offset-2 ring-offset-background"
+            : ""
+      }`}
+      data-on-path={data.onPath ? "true" : undefined}
+      onFocus={reveal}
     >
       <Handle
         type="target"
@@ -151,11 +199,10 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
       <Item
         variant="outline"
         size="xs"
-        className="h-full content-start gap-1 pl-3"
-        aria-label={nodeName(layoutNode, member)}
+        className={`h-full content-start gap-1 pl-3 ${collapse ? "pr-8" : ""}`}
+        aria-label={nodeName(data)}
         aria-current={selected ? "true" : undefined}
         title={member?.title}
-        onFocus={reveal}
         onClick={() => onSelect(layoutNode.taskId)}
         render={<button type="button" />}
       >
@@ -181,14 +228,31 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
           className="flex w-full min-w-0 items-center gap-1 overflow-hidden text-xs text-muted-foreground"
         >
           <TaskIdBadge id={layoutNode.taskId} />
-          {layoutNode.kind === "collapsed" && layoutNode.progress ? (
-            <span className="tabular-nums">
-              {layoutNode.progress.done}/{layoutNode.progress.total} done
+          {layoutNode.kind === "collapsed" && progress ? (
+            <span className="shrink-0 whitespace-nowrap tabular-nums">
+              {progress.done}/{progress.total} done
             </span>
+          ) : null}
+          {data.onPath ? (
+            <Badge variant="outline">
+              <Route />
+              Path
+            </Badge>
           ) : null}
           <InitiativeStateMarks member={member} outside={external} />
         </span>
       </Item>
+      {collapse ? (
+        <IconButton
+          label={`${collapse.wanted ? "Expand" : "Collapse"} ${title}`}
+          size="icon-xs"
+          className="absolute top-1 right-1"
+          aria-expanded={!collapse.wanted}
+          onClick={() => collapse.onToggle(layoutNode.taskId)}
+        >
+          {collapse.wanted ? <SquarePlus /> : <SquareMinus />}
+        </IconButton>
+      ) : null}
       <Handle
         type="source"
         position={Position.Right}
@@ -251,19 +315,28 @@ const RouteEdge = memo(function RouteEdge({ data }: EdgeProps<RouteFlowEdge>) {
   // An edge whose blocker is still open holds work up: strong and wide. One
   // whose blocker is done is released: thin and faint. A selection makes its
   // own edges louder without merging the two kinds.
-  const tone = open
-    ? data?.selected
-      ? "stroke-primary fill-primary"
-      : "stroke-foreground/70 fill-foreground/70"
-    : data?.selected
-      ? "stroke-primary/50 fill-primary/50"
-      : "stroke-muted-foreground/40 fill-muted-foreground/40";
+  // The critical path, when highlighted, is the loudest line on the map and
+  // every other arrow recedes; open and done still differ by weight.
+  const onPath = data?.onPath === true;
+  const tone = onPath
+    ? "stroke-primary fill-primary"
+    : open
+      ? data?.selected
+        ? "stroke-primary fill-primary"
+        : "stroke-foreground/70 fill-foreground/70"
+      : data?.selected
+        ? "stroke-primary/50 fill-primary/50"
+        : "stroke-muted-foreground/40 fill-muted-foreground/40";
   return (
-    <g className={tone} data-edge-state={open ? "open" : "done"}>
+    <g
+      className={`${tone} ${data?.onPath === false ? "opacity-40" : ""}`}
+      data-edge-state={open ? "open" : "done"}
+      data-on-path={onPath ? "true" : undefined}
+    >
       <path
         d={path}
         fill="none"
-        strokeWidth={open ? (data?.selected ? 2.5 : 2) : 1}
+        strokeWidth={onPath ? 3 : open ? (data?.selected ? 2.5 : 2) : 1}
       />
       <path d={head} strokeWidth={0.5} />
     </g>
@@ -281,23 +354,38 @@ export function routeEdges(
   layout: InitiativeLayout,
   members: ReadonlyMap<string, InitiativeMember>,
   selectedTaskId: string | null,
+  {
+    hidden = new Set<string>(),
+    pathEdges = null,
+  }: {
+    /** Task ids Hide done takes off: an arrow to or from one goes with it. */
+    hidden?: ReadonlySet<string>;
+    /** `from>to` layout keys of the highlighted path, or null when it is off. */
+    pathEdges?: ReadonlySet<string> | null;
+  } = {},
 ): RouteFlowEdge[] {
   const byId = new Map(layout.nodes.map((node) => [node.id, node]));
   return layout.edges.map((edge, index): RouteFlowEdge => {
     const from = byId.get(edge.from);
+    const to = byId.get(edge.to);
     const blocker = from ? members.get(from.taskId) : undefined;
     return {
       id: `edge:${index}`,
       source: edge.from,
       target: edge.to,
       type: "route",
+      hidden:
+        (from !== undefined && hidden.has(from.taskId)) ||
+        (to !== undefined && hidden.has(to.taskId)),
       data: {
         points: edge.points,
         open: blocker ? blocker.status !== "done" && !blocker.archived : true,
         selected:
           selectedTaskId !== null &&
-          (from?.taskId === selectedTaskId ||
-            byId.get(edge.to)?.taskId === selectedTaskId),
+          (from?.taskId === selectedTaskId || to?.taskId === selectedTaskId),
+        ...(pathEdges
+          ? { onPath: pathEdges.has(`${edge.from}>${edge.to}`) }
+          : {}),
       },
       selectable: false,
       focusable: false,
@@ -433,7 +521,20 @@ function InitiativeMapCanvas({
   projectLabel,
   selectedTaskId,
   onSelectTask,
+  facts,
+  collapsible,
+  collapsed,
+  onToggleCollapse,
+  hidden,
+  path,
 }: InitiativeMapProps) {
+  const onPath = useMemo(
+    () => (path?.kind === "path" ? pathOnLayout(layout, path) : null),
+    [layout, path],
+  );
+  // A highlighted path that has no chain to draw (no open milestone, a loop)
+  // leaves every node as it is: nothing recedes behind an empty highlight.
+  const highlight = onPath !== null;
   const nodes = useMemo(() => {
     const frames: FrameFlowNode[] = [
       ...layout.groups.map((group, index): FrameFlowNode => ({
@@ -518,11 +619,28 @@ function InitiativeMapCanvas({
         height: layoutNode.height,
         pointerEvents: "all",
       },
+      hidden: hidden.has(layoutNode.taskId),
       data: {
         layoutNode,
         member: members.get(layoutNode.taskId),
         selected: layoutNode.taskId === selectedTaskId,
         onSelect: onSelectTask,
+        progress:
+          layoutNode.kind === "collapsed"
+            ? (facts.get(layoutNode.taskId) ?? layoutNode.progress)
+            : undefined,
+        holdsSelection:
+          selectedTaskId !== null &&
+          (layoutNode.hiddenTaskIds?.includes(selectedTaskId) ?? false),
+        ...(highlight ? { onPath: onPath!.nodeIds.has(layoutNode.id) } : {}),
+        ...(layoutNode.kind !== "external" && collapsible.has(layoutNode.taskId)
+          ? {
+              collapse: {
+                wanted: collapsed.has(layoutNode.taskId),
+                onToggle: onToggleCollapse,
+              },
+            }
+          : {}),
       },
       selectable: false,
       focusable: false,
@@ -530,11 +648,28 @@ function InitiativeMapCanvas({
       zIndex: 3,
     }));
     return [...frames, ...tasks];
-  }, [layout, members, projectLabel, selectedTaskId, onSelectTask]);
+  }, [
+    layout,
+    members,
+    projectLabel,
+    selectedTaskId,
+    onSelectTask,
+    facts,
+    collapsible,
+    collapsed,
+    onToggleCollapse,
+    hidden,
+    highlight,
+    onPath,
+  ]);
 
   const edges = useMemo(
-    () => routeEdges(layout, members, selectedTaskId),
-    [layout, members, selectedTaskId],
+    () =>
+      routeEdges(layout, members, selectedTaskId, {
+        hidden,
+        pathEdges: highlight ? onPath!.edgeKeys : null,
+      }),
+    [layout, members, selectedTaskId, hidden, highlight, onPath],
   );
 
   const paneRef = useRef<HTMLDivElement>(null);
@@ -592,7 +727,8 @@ export default function InitiativeMap(props: InitiativeMapProps) {
     >
       <p id="initiative-map-help" className="sr-only">
         Each Task is a button, in lane order. Press Enter to open it in the
-        object panel. Drag the background or scroll to move around the map.
+        object panel. An epic's collapse button follows it. Drag the background
+        or scroll to move around the map.
       </p>
       <ReactFlowProvider>
         <InitiativeMapCanvas {...props} />

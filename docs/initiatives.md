@@ -231,6 +231,47 @@ re-reads the graph.
   column are drawing and take no input. A node and a list row name a Task by its
   title and its Task id badge; nothing is parsed from the title, so a label an
   agent wrote into it (Hosted Labs' "L6") reads as part of the title.
+- **Collapsing an epic.** Each member with member children carries a collapse
+  button beside its node and before its list row, a control of its own and never
+  inside the button that selects the Task. The choice is the user's, for that
+  Initiative in that browser tab, and is never written; it holds nested epics
+  too, so expanding an outer epic shows an inner one still collapsed. "Collapse
+  all epics" folds every epic and "Expand all epics" opens them again. The List
+  folds at once. The Map is the server's drawing for the collapsed set (Layout
+  and placement): a read sends the set as the server applies it, carries it as
+  part of its identity, and is the drawing wanted when both name the same
+  applied set on the graph it read, so the server's normalisation never asks for
+  another read. One read per Initiative is in flight; a choice made while it
+  runs is read as soon as it answers, and that older answer is dropped rather
+  than drawn over the newer choice, while the held map stays on screen. A newer
+  Initiative revision re-reads with the current choice. A collapsed node's "7/14
+  done" counts its descendants, done ones archived or not, from the live Tasks.
+- **The critical path.** Open means neither done nor archived, judged by the
+  live status. The path ends at the next open milestone and runs back along
+  `blocks` links between open Tasks only, so a done or archived Task breaks a
+  chain. An open outside blocker can start one; the read has no links into it,
+  so a chain never reaches further back. When several chains share the longest
+  length, every one of them is marked and the page says they tie. With no open
+  milestone there is no path, and the page says so. `blocks` is acyclic
+  (`docs/tasks.md`), so a loop among the open Tasks leading to the milestone is
+  invalid stored data: the page names its Tasks and draws no chain. Through a
+  collapsed epic the epic's node carries the path, as do the arrows into and out
+  of it. Highlighted, the path's nodes carry a Path mark and its arrows are
+  drawn strongest, while the rest of the map recedes.
+- **Hide done.** A local display choice like collapsing: it takes off a done
+  member with nothing open under it and a done outside blocker, with their
+  arrows. A done epic over open work stays, so the open work keeps its place and
+  its collapse button. The page says how many Tasks it hides, and when every
+  member is done it says that with a way to show them again.
+- **What stays selected.** A selected Task that is hidden or collapsed away
+  stays the selected Task: the panel keeps showing it, the page says where it
+  went, and a collapsed epic over it is marked as holding it. Selecting a
+  collapsed epic's node opens that epic's own Task.
+- **A map too large to draw.** Over 1,000 drawn nodes, the read's `layoutError`
+  says so and the members are listed instead (Which view). The List keeps its
+  collapse buttons and the note offers "Collapse all epics", so the user folds
+  the map until it can be drawn; the server's limit and answer stay as they are,
+  and nothing is read again until the user asks.
 
 ## The attention list
 

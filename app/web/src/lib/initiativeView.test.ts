@@ -14,8 +14,13 @@ import {
   HOSTED_LABS_TASK_IDS as T,
 } from "../../component-preview/fixtures/initiatives.ts";
 import {
+  canonicalCollapsed,
+  collapseRequest,
+  collapsedAway,
   flattenTree,
+  hiddenDoneIds,
   initiativeMembers,
+  subtreeFacts,
   initiativeTaskFragment,
   liveTaskIndex,
   memberStateLabel,
@@ -206,5 +211,119 @@ describe("the selection fragment", () => {
     expect(selectedTaskFromHash("#m-abc")).toBeNull();
     expect(selectedTaskFromHash("")).toBeNull();
     expect(selectedTaskFromHash("#task-%E0%A4%A")).toBeNull();
+  });
+});
+
+describe("collapsing epics", () => {
+  it("names the set as the server applies it: epics only, outermost, ascending", () => {
+    expect(
+      canonicalCollapsed(HOSTED_LABS_DETAIL, [
+        T.SRS,
+        T.LAB,
+        T.LAB,
+        T.LAB3, // under a collapsed epic, and no children
+        T.SDC1, // no children
+        "999999", // not a member
+      ]),
+    ).toEqual([T.LAB, T.SRS]);
+    // A nested epic collapses on its own, and not under a collapsed ancestor.
+    expect(canonicalCollapsed(HOSTED_LABS_DETAIL, [T.SDC4])).toEqual([T.SDC4]);
+    expect(canonicalCollapsed(HOSTED_LABS_DETAIL, [T.SDC4, T.SDC])).toEqual([
+      T.SDC,
+    ]);
+    expect(canonicalCollapsed(HOSTED_LABS_DETAIL, [])).toEqual([]);
+    // Ids sort as numbers, then as text, and a request is capped.
+    expect(collapseRequest(["10", "9", "9", "x"])).toEqual(["9", "10", "x"]);
+    expect(
+      collapseRequest(Array.from({ length: 600 }, (_, i) => String(i))),
+    ).toHaveLength(500);
+  });
+
+  it("folds a collapsed epic's descendants away, its milestones aside", () => {
+    const detail: InitiativeDetail = {
+      ...HOSTED_LABS_DETAIL,
+      nodes: HOSTED_LABS_DETAIL.nodes.map((node) =>
+        node.id === T.SDC9 ? { ...node, milestone: true as const } : node,
+      ),
+    };
+    const away = collapsedAway(detail, [T.SDC]);
+    expect(away.get(T.SDC4a)).toBe(T.SDC);
+    expect(away.get(T.SDC5)).toBe(T.SDC);
+    expect(away.has(T.SDC9)).toBe(false);
+    expect(away.has(T.SDC)).toBe(false);
+  });
+});
+
+describe("subtree facts and Hide done", () => {
+  it("counts an epic's descendants from the live statuses", () => {
+    const members = initiativeMembers(HOSTED_LABS_DETAIL, null, NO_RUNNING);
+    const facts = subtreeFacts(HOSTED_LABS_DETAIL, members);
+    // LAB1 is done of nine; SDC4 holds two open subtasks.
+    expect(facts.get(T.LAB)).toMatchObject({
+      total: 9,
+      done: 1,
+      allDone: false,
+    });
+    expect(facts.get(T.SDC4)).toMatchObject({ total: 2, done: 0 });
+    expect(facts.get(T.SDC1)).toMatchObject({
+      total: 0,
+      done: 0,
+      allDone: true,
+    });
+    // The same counts move with the Tasks topic, no read.
+    const live = liveTaskIndex(
+      HOSTED_LABS_DETAIL.nodes
+        .filter((node) => !node.archived)
+        .map((node) =>
+          task({
+            id: node.id,
+            status:
+              node.parentId === T.LAB || node.id === T.LAB
+                ? "done"
+                : node.status,
+          }),
+        ),
+      true,
+    );
+    const moved = subtreeFacts(
+      HOSTED_LABS_DETAIL,
+      initiativeMembers(HOSTED_LABS_DETAIL, live, NO_RUNNING),
+    );
+    // LAB9 is archived and open in the read, so it is not in the live list.
+    expect(moved.get(T.LAB)).toMatchObject({
+      total: 9,
+      done: 8,
+      allDone: false,
+    });
+  });
+
+  it("hides done work with nothing open under it, and keeps a done epic over open work", () => {
+    const live = liveTaskIndex(
+      HOSTED_LABS_DETAIL.nodes
+        .filter((node) => !node.archived)
+        .map((node) =>
+          task({
+            id: node.id,
+            status:
+              node.id === T.SDC || node.id === T.SDC4 ? "done" : node.status,
+          }),
+        ),
+      true,
+    );
+    const members = initiativeMembers(HOSTED_LABS_DETAIL, live, NO_RUNNING);
+    const hidden = hiddenDoneIds(
+      HOSTED_LABS_DETAIL,
+      members,
+      subtreeFacts(HOSTED_LABS_DETAIL, members),
+    );
+    // Done leaves and the done outside blocker go.
+    for (const id of [T.SDC1, T.SDC2, T.LAB1, T.SRS1, T.SRS2, T["OUT-REVIEW"]])
+      expect(hidden.has(id)).toBe(true);
+    // SDC and SDC4 are done, but open work sits under them.
+    expect(hidden.has(T.SDC)).toBe(false);
+    expect(hidden.has(T.SDC4)).toBe(false);
+    // Open, doing, archived-open and outside-open stay.
+    for (const id of [T.SDC5, T.LAB9, T.RELEASE, T["OUT-LEGAL"]])
+      expect(hidden.has(id)).toBe(false);
   });
 });

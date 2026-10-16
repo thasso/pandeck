@@ -563,6 +563,23 @@ test("a collapsed epic is one node: arrows end at it, milestones under it stay d
   );
 });
 
+test("a collapsed drawing is pinned too: a lane folded whole, a nested epic folded in its lane", async () => {
+  const fixture = hostedLabs();
+  const { ids } = fixture;
+  const layout = await mapOf(fixture.initiativeId, [ids.LAB!, ids.SDC4!]);
+  assertValidGeometry(layout);
+  assert.deepEqual(
+    layout.collapsed,
+    [ids.SDC4, ids.LAB].sort((a, b) => Number(a) - Number(b)),
+  );
+  // The web fixture draws this, so the stories show real server geometry.
+  await expect(
+    `${JSON.stringify(named(layout, fixture.names), null, 1)}\n`,
+  ).toMatchFileSnapshot(
+    "__snapshots__/initiative-layout-hosted-labs-collapsed.json",
+  );
+});
+
 test("the collapsed set is canonical: order, repeats, leaves and nesting do not split it", async () => {
   const { initiativeId, ids } = hostedLabs();
   const first = await mapOf(initiativeId);
