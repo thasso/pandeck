@@ -201,16 +201,19 @@ a design one — and a slot the user has never seen lands at its default positio
 rather than at the end, so a new action is not born behind More.
 
 Settings as a primary section shows its configuration pages in labeled groups in
-the object browser, with the most frequently oriented surfaces first. Model
-configuration and provider account setup share a Models & providers group, but
-each provider keeps its own page rather than mixing account types in one form. A
-section whose mapping is still unclear may ship with a minimal or empty browser
-until the shape is decided. A section only one client can act on (Port
-forwarding, the macOS shell) stays routable everywhere and renders a page that
-says what it needs, but is listed only where it works (`shownWhen`). A settings
-section that reads a domain list subscribes only while the main pane RENDERS it
-— the browser listing its entry reads nothing — because for the skills library a
-subscribe is what makes the server rescan the user's working tree.
+the object browser, with the most frequently oriented surfaces first. Each group
+uses `ListGroupSection`: an edge-to-edge sticky header with its icon, no count,
+and tab-local remembered disclosure state. Navigating to a settings page opens
+its group; the reader can collapse it again. Model configuration and provider
+account setup share a Models & providers group, but each provider keeps its own
+page rather than mixing account types in one form. A section whose mapping is
+still unclear may ship with a minimal or empty browser until the shape is
+decided. A section only one client can act on (Port forwarding, the macOS shell)
+stays routable everywhere and renders a page that says what it needs, but is
+listed only where it works (`shownWhen`). A settings section that reads a domain
+list subscribes only while the main pane RENDERS it — the browser listing its
+entry reads nothing — because for the skills library a subscribe is what makes
+the server rescan the user's working tree.
 
 Initiatives (`docs/initiatives.md`) have their canonical location in a group at
 the TOP of the Projects browser, because they sit above Projects. The group is

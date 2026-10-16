@@ -38,6 +38,7 @@ import type {
   PullRequestTarget,
 } from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
+import { ListGroupSection } from "./ListGroupSection.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
 import { InitiativeBrowserGroup } from "./initiative/InitiativeBrowserGroup.tsx";
@@ -419,16 +420,18 @@ function SettingsSectionList({
   onOpenSection?: ((section: SettingsSection) => void) | undefined;
 }) {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col">
       {navigableSettingsGroups().map((group) => (
-        <section key={group.id} aria-labelledby={`settings-group-${group.id}`}>
-          <h2
-            id={`settings-group-${group.id}`}
-            className="px-2.5 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            {group.label}
-          </h2>
-          <div className="flex flex-col gap-0.5">
+        <ListGroupSection
+          key={group.id}
+          id={`settings:${group.id}`}
+          title={group.label}
+          icon={group.icon}
+          containsSelected={group.sections.some(
+            (section) => section.id === activeSection,
+          )}
+        >
+          <div className="flex flex-col gap-0.5 px-1 py-1 sm:px-2">
             {group.sections.map((section) => (
               <BrowserRow
                 key={section.id}
@@ -439,7 +442,7 @@ function SettingsSectionList({
               />
             ))}
           </div>
-        </section>
+        </ListGroupSection>
       ))}
     </div>
   );
@@ -834,12 +837,13 @@ function SidebarImpl({
       <div
         ref={browserScrollRef}
         // The shared inset every browser reads its first row in — except the
-        // attention list and the Tasks and Projects trees, which run edge to
+        // attention list, Settings groups and the Tasks and Projects trees,
+        // which run edge to
         // edge: their
         // rows are divided by hairlines, which a side inset would leave
         // hanging in empty space.
         className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
-          section === "sessions"
+          section === "sessions" || section === "settings"
             ? ""
             : section === "pull-requests" ||
                 (section === "tasks" &&

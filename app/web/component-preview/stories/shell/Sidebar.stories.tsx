@@ -166,3 +166,8 @@ export const SettingsBrowserDark: Story = {
   args: { section: "settings" },
   globals: { theme: "dark" },
 };
+
+export const SettingsBrowserPhone: Story = {
+  args: { section: "settings", mobile: true, width: 390 },
+  globals: { viewport: { value: "paPhone", isRotated: false } },
+};

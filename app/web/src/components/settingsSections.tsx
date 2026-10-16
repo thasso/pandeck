@@ -55,6 +55,7 @@ export interface SettingsSectionGroup {
     | "automation"
     | "integrations";
   label: string;
+  icon: ReactNode;
   sections: SettingsSectionEntry[];
 }
 
@@ -67,6 +68,7 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
   {
     id: "general",
     label: "General",
+    icon: <SlidersHorizontal size={14} />,
     sections: [
       { id: "appearance", label: "Appearance", icon: <Palette size={15} /> },
       { id: "profile", label: "Profile", icon: <UserRound size={15} /> },
@@ -76,6 +78,7 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
   {
     id: "models-providers",
     label: "Models & providers",
+    icon: <Cpu size={14} />,
     sections: [
       { id: "models", label: "Models", icon: <SlidersHorizontal size={15} /> },
       { id: "claude-sdk", label: "Claude SDK", icon: <Bot size={15} /> },
@@ -90,6 +93,7 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
   {
     id: "assistant",
     label: "Assistant behavior",
+    icon: <Bot size={14} />,
     sections: [
       {
         id: "personal-assistant",
@@ -120,6 +124,7 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
   {
     id: "developer",
     label: "Developer workflow",
+    icon: <GitBranch size={14} />,
     sections: [
       { id: "worktrees", label: "Worktrees", icon: <GitBranch size={15} /> },
       { id: "skills", label: "Skills", icon: <Blocks size={15} /> },
@@ -157,6 +162,7 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
   {
     id: "automation",
     label: "Tasks & automation",
+    icon: <ClipboardList size={14} />,
     sections: [
       {
         id: "task-intake",
@@ -173,6 +179,7 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
   {
     id: "integrations",
     label: "Integrations",
+    icon: <Blocks size={14} />,
     sections: [
       {
         id: "browserTools",
