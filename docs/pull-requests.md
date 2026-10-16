@@ -1281,7 +1281,10 @@ naive renderer collapses into two:
 `worktreeId` against `state.worktrees` plus one live git watch for the detail
 page's dirt-and-drift line, `sessionIds` against the session list, `taskIds`
 against the Backlog. The section therefore holds the `tasks`, `projects` and
-`worktrees` topics while it is visible.
+`worktrees` topics while it is visible. The session join is also EXTENDED there
+(`pullRequestSessionIds`): every live session row whose `worktreeId` is the pull
+request's checkout joins it, because the snapshot only learns of a session at
+its next rebuild, and a session started from this page must list at once.
 
 The ids are AUTHORITATIVE and those lists are not, so the page keeps four
 answers apart rather than collapsing them into "linked" and "not linked". Zero

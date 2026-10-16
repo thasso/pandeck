@@ -108,6 +108,7 @@ import {
   hostingProviderLabel,
   pullRequestMergeBlockedReason,
   pullRequestRowId,
+  pullRequestSessionIds,
   resolveJoinRows,
   type JoinSource,
   type PullRequestJoinSources,
@@ -2245,7 +2246,7 @@ export function pullRequestRelationGroups(
     (row) => row.id,
   );
   const sessions = resolvedJoinRows(
-    item.sessionIds,
+    pullRequestSessionIds(item, joins.sessions.rows),
     joins.sessions,
     (row) => row.id,
   );
@@ -2476,7 +2477,7 @@ export function PullRequestInspector({
               ),
               openers,
               resolvedJoinRows(
-                item.sessionIds,
+                pullRequestSessionIds(item, joins.sessions.rows),
                 joins.sessions,
                 (row) => row.id,
               ),

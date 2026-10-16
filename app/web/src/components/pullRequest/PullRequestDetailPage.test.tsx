@@ -239,6 +239,17 @@ describe("the relations block", () => {
     expect(el.textContent).toContain("Task-704");
     expect(el.textContent).not.toContain("not in this list");
   });
+
+  it("lists a session started in the checkout before the snapshot names it", () => {
+    // The inventory is rebuilt on the provider cadence; the session list is
+    // live. "Start session" from this page must show up here right away.
+    const el = render(pr({ worktreeId: "wt-1" }), {
+      worktrees: fresh([WORKTREE]),
+      sessions: fresh([{ ...SESSION, worktreeId: "wt-1" }]),
+    });
+    expect(el.textContent).not.toContain("No sessions are linked");
+    expect(el.textContent).toContain("Implementing it");
+  });
 });
 
 describe("the status block", () => {

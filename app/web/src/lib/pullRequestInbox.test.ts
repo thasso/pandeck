@@ -9,6 +9,7 @@ import {
   matchesPullRequestView,
   pullRequestFilterCount,
   pullRequestReasons,
+  pullRequestSessionIds,
   pullRequestSessionTree,
   pullRequestCiState,
   pullRequestDetailState,
@@ -298,6 +299,28 @@ describe("session tree", () => {
       ["a"],
     );
     expect(new Set(rows.map((row) => row.session.id)).size).toBe(rows.length);
+  });
+
+  it("joins a session started in the checkout after the snapshot", () => {
+    const sessions = [
+      session("card", 1),
+      session("fresh", 2, { worktreeId: "wt-1" }),
+      session("elsewhere", 3, { worktreeId: "wt-2" }),
+    ];
+    expect(
+      pullRequestSessionIds(
+        { worktreeId: "wt-1", sessionIds: ["card"] },
+        sessions,
+      ),
+    ).toEqual(["card", "fresh"]);
+    // No checkout, or no list yet: the snapshot's ids, unchanged.
+    const snapshot = ["card"];
+    expect(pullRequestSessionIds({ sessionIds: snapshot }, sessions)).toBe(
+      snapshot,
+    );
+    expect(
+      pullRequestSessionIds({ worktreeId: "wt-1", sessionIds: snapshot }, null),
+    ).toBe(snapshot);
   });
 });
 
