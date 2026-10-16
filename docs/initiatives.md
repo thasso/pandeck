@@ -43,9 +43,13 @@ member Tasks, and its milestones.
     and nothing of it is written. A list adds plain members only; marking a
     covered Task is `setMilestone`'s alone, and an add never absorbs a marked
     edge.
-  - Removing a stored member removes its edge. A Task that is a member only
-    through an ancestor cannot be removed on its own, and the refusal names the
-    ancestor; removing a Task that is not a member does nothing.
+  - Removing a stored member removes its edge. The Tasks of one removal are one
+    request too, so their order never decides the outcome: a listed Task that is
+    a member only through listed ancestors goes with them, and the answer names
+    it absorbed, whichever comes first in the list. A Task that is a member
+    through an ancestor NOT in the list cannot be removed on its own: the
+    refusal names the ancestor and nothing of the operation is written. Removing
+    a Task that is not a member does nothing.
 - **Milestones:** a milestone is an ordinary member Task marked as a milestone
   on its membership edge. Being a Task, it takes `blocks` links like any other,
   shows in the Backlog, and is done when its status is done. The mark is scoped
@@ -137,9 +141,10 @@ create or edit form, and its only Initiative write is Settle.
   `task_manage`, and runs in its own transaction, never inside a caller's.
   `delete` only when the user explicitly asks. The membership and milestone
   rules above apply as written: an add under a member is refused, an add over
-  plain members absorbs them, and the answer names absorbed Tasks and removed
-  ones still members through an ancestor once the batch is done. Every id it
-  names is the canonical one, never the caller's spelling.
+  plain members absorbs them, and the answer names absorbed Tasks (an add's, or
+  those a removal took with their ancestor) and removed ones still members
+  through an ancestor once the batch is done. Every id it names is the canonical
+  one, never the caller's spelling.
 
 Both are deferred tools, found with a tool search for "initiative", and are
 available to the developer and personal-assistant personas. Their rules live in
@@ -215,23 +220,32 @@ re-reads the graph.
   decides membership, hierarchy and geometry, so a Task event never reads the
   graph or asks for a layout; the Initiative event that follows it does.
 - **What a node shows.** Each state is a mark with a word, not a colour alone: a
-  filled Ready chip on a startable Task, Doing, a separate Blocked chip (so
-  doing and blocked show together), Archived, Running for a working session, and
-  Outside on a blocker that is not a member, which still shows its own state. A
-  done Task carries no chip; its title recedes. An arrow whose blocker is open
-  is drawn strong, one whose blocker is done or archived faint, judged by the
-  blocker's live status. An overview map shows the whole drawing.
+  filled Ready chip on a startable Task, Doing, the app's blocked marker with
+  its count of open blockers (so doing and blocked show together), Archived,
+  Running for a working session, and Outside on a blocker that is not a member,
+  which still shows its own state. Without a live row for the Task the count is
+  its read's `blocks` links whose blocker is open. A done Task carries no chip;
+  its title recedes. An arrow whose blocker is open is drawn strong, one whose
+  blocker is done or archived faint, judged by the blocker's live status. An
+  arrow out of a collapsed epic stands for the links from the Tasks folded into
+  it: it is open while ANY of those blockers is open and released once all are
+  done or archived, never judged by the epic's own status. An overview map shows
+  the whole drawing: every Task is a visible mark however large the map, and the
+  part on screen is framed.
 - **What a node is.** A member or an outside blocker stub opens that real Task
   in the object panel: the same Task detail the Task page shows (its body, its
   status control with its busy and failure states, description, links and runs)
-  over the Task's sessions, Start session, context and actions. Those actions
-  stay in the panel's Task header; the Initiative's header carries none. A
-  failure about the Task is shown there while the panel is on screen and
-  announced naming it otherwise. An archived member opens the same way, and a
-  Task that no longer exists says so. Lanes, Project groups and the milestone
-  column are drawing and take no input. A node and a list row name a Task by its
-  title and its Task id badge; nothing is parsed from the title, so a label an
-  agent wrote into it (Hosted Labs' "L6") reads as part of the title.
+  over the Task's sessions, Start session, context and actions. The panel says
+  the Task has no sessions only when the server answered that it has no session
+  references; references to sessions this browser does not hold (an archived
+  one) leave the group out, as on the Task's own route. Those actions stay in
+  the panel's Task header; the Initiative's header carries none. A failure about
+  the Task is shown there while the panel is on screen and announced naming it
+  otherwise. An archived member opens the same way, and a Task that no longer
+  exists says so. Lanes, Project groups and the milestone column are drawing and
+  take no input. A node and a list row name a Task by its title and its Task id
+  badge; nothing is parsed from the title, so a label an agent wrote into it
+  (Hosted Labs' "L6") reads as part of the title.
 - **Collapsing an epic.** Each member with member children carries a collapse
   button beside its node and before its list row, a control of its own and never
   inside the button that selects the Task. The choice is the user's, for that
@@ -281,8 +295,11 @@ re-reads the graph.
   reading the same drawing again cannot change it. "Collapse all epics" is the
   notice's primary action, and the List keeps each epic's own collapse button,
   so the user folds the map until it can be drawn. With every epic already
-  collapsed, the notice says so. The server's limit and answer stay as they are,
-  and nothing is read again until the user asks.
+  collapsed, the notice says so. The count is the held read's: while a newer
+  collapse choice is being drawn, or after that read failed (an error with its
+  Retry), the notice says the count was for the epics collapsed before, and says
+  every epic is collapsed only of an answer for that choice. The server's limit
+  and answer stay as they are, and nothing is read again until the user asks.
 
 ## The attention list
 
@@ -399,4 +416,5 @@ member Tasks, nothing parsed from titles.
     however many reads wait on it, and a newer structure or a deleted Initiative
     lets the older drawings go before their next pass.
 - **Sidebar location.** Initiatives are a group at the top of the Projects
-  section, since they sit above Projects (`app/web/docs/ui-shell.md`).
+  section, since they sit above Projects (`app/web/docs/ui-shell.md`). Its band
+  folds like every sidebar group, and a link beside it opens the index.

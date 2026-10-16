@@ -589,6 +589,57 @@ describe("a map too large to draw", () => {
     expect(reads(socket)).toHaveLength(3);
   });
 
+  it("keeps the held answer's count apart from a wish not yet answered (F046)", async () => {
+    const socket = await boot(tooLarge(1_203));
+    const notice = () => sizeNote()?.textContent ?? "";
+    const noticeCollapseAll = () =>
+      [...(sizeNote()?.querySelectorAll("button") ?? [])].find((el) =>
+        el.textContent?.includes("Collapse all epics"),
+      );
+    await act(async () => noticeCollapseAll()!.click());
+    await frames(1);
+    expect(reads(socket).at(-1)!.collapsed).toEqual([T.SDC, T.LAB, T.SRS]);
+    // The answer is held back. The 1,203 nodes are the drawing with nothing
+    // collapsed; nothing has said yet what the collapsed one counts.
+    await frames(5);
+    expect(notice()).toContain("1,203");
+    expect(notice()).toContain("1,000");
+    expect(notice()).not.toContain("Every epic is collapsed");
+    expect(notice()).not.toContain("still has");
+    expect(text()).toContain("Redrawing the map");
+    expect(button(/^Retry$/)).toBeUndefined();
+    // Nothing is left to collapse, so the notice offers no Collapse all.
+    expect(noticeCollapseAll()).toBeUndefined();
+
+    // The collapsed drawing answers, still too large: now it is said.
+    await answer(socket, reads(socket).at(-1)!, tooLarge(1_003));
+    expect(notice()).toContain(
+      "Every epic is collapsed, and the map still has 1,003 nodes",
+    );
+
+    // Expanding again before that is answered: the held count is the
+    // collapsed one, never claimed for the expanded wish, and collapsing is
+    // offered again as the way back.
+    await click(/^Expand all epics$/);
+    expect(reads(socket).at(-1)!.collapsed).toBeUndefined();
+    expect(notice()).toContain("1,003");
+    expect(notice()).not.toContain("Every epic is collapsed");
+    expect(noticeCollapseAll()?.className).toContain("bg-primary");
+
+    // That read is lost with the connection: a real fault, with its Retry,
+    // and the notice no longer says a redraw is coming.
+    const sockets = FakeSocket.instances.length;
+    await act(async () => socket.close());
+    await frames(1);
+    expect(latest.initiativeDetails["7"]?.status).toBe("error");
+    expect(button(/^Retry$/)).toBeDefined();
+    expect(text()).not.toContain("Redrawing the map");
+    expect(notice()).toContain("1,003");
+    expect(notice()).not.toContain("Every epic is collapsed");
+    expect(notice()).not.toMatch(/redraw/i);
+    await until(() => FakeSocket.instances.length > sockets, "a new socket");
+  });
+
   it("keeps a real layout failure an error with a Retry the user presses", async () => {
     const fault = "The layout took longer than 20 s.";
     const socket = await boot({ layoutError: fault });

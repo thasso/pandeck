@@ -11,16 +11,20 @@
 }
 
 /* The overview in the app's tokens: its card surface, the area outside the
-   view dimmed with the page background, the view framed in the ring colour. */
+   view shaded with the foreground (the page background is the card's own
+   colour in the light theme, so it would shade nothing), the view framed in
+   the info colour, which no Task mark uses, so the frame still stands out
+   where it sits on a run of marks of a large map. The frame's width is the
+   map's `maskStrokeWidth` prop, which React Flow scales to screen pixels; a
+   width here would be in the drawing's units, a hair at this scale. */
 .initiative-minimap {
   --xy-minimap-background-color: var(--card);
   --xy-minimap-mask-background-color: color-mix(
     in oklab,
-    var(--background) 60%,
+    var(--foreground) 10%,
     transparent
   );
-  --xy-minimap-mask-stroke-color: var(--ring);
-  --xy-minimap-mask-stroke-width: 2;
+  --xy-minimap-mask-stroke-color: var(--info);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;

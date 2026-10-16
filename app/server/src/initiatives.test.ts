@@ -363,6 +363,128 @@ test("stillMembers describes the state the whole operation leaves", () => {
   assert.deepEqual(memberIds(id).sort(), [top, mid, leaf].sort());
 });
 
+test("one removal list is one request: a covered Task whose ancestor goes with it is absorbed, in either order", () => {
+  const epic = task("Order epic");
+  const child = task("Order child", epic);
+  for (const order of [
+    [child, epic],
+    [epic, child],
+  ]) {
+    const id = initiative("Order", [epic]);
+    const write = removeInitiativeMembers(id, order);
+    assert.deepEqual(
+      write.absorbedTaskIds,
+      [child],
+      `order ${order.join(",")}`,
+    );
+    assert.deepEqual(write.stillMembers, [], `order ${order.join(",")}`);
+    assert.deepEqual(stored(id), [], `order ${order.join(",")}`);
+    assert.deepEqual(memberIds(id), [], `order ${order.join(",")}`);
+  }
+});
+
+test("a removal whose covering ancestor is not in the list is refused whole, in either order", () => {
+  const epic = task("Refused epic");
+  const child = task("Refused child", epic);
+  const other = task("Refused other");
+  for (const order of [
+    [child, other],
+    [other, child],
+  ]) {
+    const id = initiative("Refused", [epic, other]);
+    const revision = revisionOf(id);
+    const heard: string[] = [];
+    const stop = subscribeInitiativeChanges((ids) => heard.push(...ids));
+    try {
+      assert.throws(
+        () => removeInitiativeMembers(id, order),
+        new RegExp(`only through Task-${epic}`),
+        `order ${order.join(",")}`,
+      );
+    } finally {
+      stop();
+    }
+    // Nothing of it is written, and nobody hears of a change.
+    assert.deepEqual(stored(id), [epic, other], `order ${order.join(",")}`);
+    assert.equal(revisionOf(id), revision, `order ${order.join(",")}`);
+    assert.deepEqual(heard, [], `order ${order.join(",")}`);
+  }
+});
+
+test("removal keeps marked edges apart from Tasks covered only by a removed ancestor", () => {
+  const root = task("Marked root");
+  const marked = task("Marked milestone", root);
+  const below = task("Below the milestone", marked);
+  const plain = task("Plain under root", root);
+
+  // A marked ancestor that survives still covers its subtree: the list is
+  // refused, whichever order names the outer root.
+  for (const order of [
+    [root, below],
+    [below, root],
+  ]) {
+    const id = initiative("Marked survives", [root]);
+    setInitiativeMilestones(id, [marked], true);
+    assert.throws(
+      () => removeInitiativeMembers(id, order),
+      new RegExp(`only through Task-${marked}`),
+      `order ${order.join(",")}`,
+    );
+    assert.deepEqual(
+      stored(id),
+      [root, `${marked}*`],
+      `order ${order.join(",")}`,
+    );
+  }
+
+  // Both ancestors go: the plain Tasks under them are absorbed, the marked
+  // edge named in the list is removed as its own, never reported absorbed.
+  for (const order of [
+    [below, plain, marked, root],
+    [root, marked, plain, below],
+  ]) {
+    const id = initiative("Marked removed", [root]);
+    setInitiativeMilestones(id, [marked], true);
+    const write = removeInitiativeMembers(id, order);
+    assert.deepEqual(
+      [...write.absorbedTaskIds].sort(),
+      [below, plain].sort(),
+      `order ${order.join(",")}`,
+    );
+    assert.deepEqual(write.stillMembers, [], `order ${order.join(",")}`);
+    assert.deepEqual(stored(id), [], `order ${order.join(",")}`);
+  }
+
+  // The root alone: the marked edge and its subtree stay members, and a plain
+  // Task only the root covered is absorbed beside it.
+  for (const order of [
+    [plain, root],
+    [root, plain],
+  ]) {
+    const id = initiative("Root only", [root]);
+    setInitiativeMilestones(id, [marked], true);
+    const write = removeInitiativeMembers(id, order);
+    assert.deepEqual(
+      write.absorbedTaskIds,
+      [plain],
+      `order ${order.join(",")}`,
+    );
+    assert.deepEqual(stored(id), [`${marked}*`], `order ${order.join(",")}`);
+    assert.deepEqual(
+      memberIds(id).sort(),
+      [marked, below].sort(),
+      `order ${order.join(",")}`,
+    );
+  }
+
+  // The marked edge alone under a root that stays: still a member through it.
+  const id = initiative("Marked alone", [root]);
+  setInitiativeMilestones(id, [marked], true);
+  const write = removeInitiativeMembers(id, [marked]);
+  assert.deepEqual(write.absorbedTaskIds, []);
+  assert.deepEqual(write.stillMembers, [{ taskId: marked, through: root }]);
+});
+
 test("public writes refuse to run inside a caller's transaction", () => {
   const member = task("Nested member");
   const kept = initiative("Nested kept", [member]);

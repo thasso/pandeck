@@ -583,6 +583,45 @@ test("a batch reports removed Tasks as still members only as the batch leaves th
   assert.deepEqual(gone.deletedIds, [id]);
 });
 
+test("removeMembers takes its list in any order and names the Tasks it absorbed", async () => {
+  const epic = task("Any-order epic");
+  const child = task("Any-order child", epic);
+  for (const order of [
+    [child, epic],
+    [epic, child],
+  ]) {
+    const { changed } = await manage([
+      { operation: "create", title: "Any order", taskIds: [epic] },
+    ]);
+    const id = changed[0]!.id;
+    const removed = await manage([
+      { operation: "removeMembers", id, taskIds: order },
+    ]);
+    assert.deepEqual(
+      removed.changed[0]!.absorbedTaskIds,
+      [child],
+      `order ${order.join(",")}`,
+    );
+    assert.equal(removed.changed[0]!.stillMembers, undefined);
+    assert.equal(readInitiative(id)!.progress.total, 0);
+  }
+
+  // A later operation never makes an earlier list valid: the first one is
+  // refused as written, and the batch stops there.
+  const { changed } = await manage([
+    { operation: "create", title: "Not retroactive", taskIds: [epic] },
+  ]);
+  const id = changed[0]!.id;
+  await assert.rejects(
+    manage([
+      { operation: "removeMembers", id, taskIds: [child] },
+      { operation: "removeMembers", id, taskIds: [epic] },
+    ]),
+    new RegExp(`only through Task-${epic}`),
+  );
+  assert.equal(readInitiative(id)!.rootIds[0], epic);
+});
+
 test("an accepted 30,000-byte projectId cannot overrun a first or later page", async () => {
   // Task writes accept an unknown projectId with a warning and store it whole.
   const huge = "p".repeat(30_000);

@@ -41,8 +41,9 @@ export interface InitiativeListItem extends InitiativeSummary {
 
 /**
  * What a membership write did beyond its own Tasks: the plain members an added
- * ancestor absorbed, and the removed Tasks that are still members because a
- * member ancestor covers them.
+ * ancestor absorbed, or the listed Tasks a removed ancestor took with it, and
+ * the removed Tasks that are still members because a member ancestor covers
+ * them.
  */
 export interface InitiativeMembershipWrite {
   initiative: InitiativeRow;
@@ -246,12 +247,18 @@ function addMembersTo(
 }
 
 /**
- * Remove stored members. A Task that is not a member is already where the
- * caller wants it; one that is a member only through an ancestor cannot be
- * removed on its own, and the refusal says which ancestor holds it. Removing a
- * stored edge under a member ancestor (a marked one) leaves the Task a member
- * through that ancestor; the answer says so as of the END of the operation, so
- * an ancestor the same list removes covers nothing.
+ * Remove stored members. The Tasks of one removal are one request, so their
+ * order never decides the outcome: every listed stored edge goes, and the rest
+ * of the list is judged against the edges left.
+ * - A Task that is not a member is already where the caller wants it.
+ * - A listed Task without an edge of its own that only listed ancestors covered
+ *   goes with them, and the answer names it absorbed.
+ * - One that an edge NOT in the list still covers cannot be removed on its own:
+ *   the refusal says which ancestor holds it, and nothing of the list is
+ *   written.
+ * Removing a stored edge under a member ancestor (a marked one) leaves the Task
+ * a member through that ancestor; the answer says so as of the END of the
+ * operation, so an ancestor the same list removes covers nothing.
  */
 export function removeInitiativeMembers(
   id: string,
@@ -259,26 +266,33 @@ export function removeInitiativeMembers(
 ): InitiativeMembershipWrite {
   const current = requireInitiative(id);
   return initiativeStore.mutation((touch) => {
-    const removed: number[] = [];
+    const requested: number[] = [];
     for (const raw of taskIds) {
       const taskId = parseId(raw);
       if (taskId === undefined)
         throw new Error(`Task not found: ${quoted(raw)}`);
-      const edges = initiativeStore.memberEdges(current.id);
-      if (edges.some((edge) => edge.taskId === taskId)) {
-        initiativeStore.removeMember(touch, current.id, taskId);
-        removed.push(taskId);
-        continue;
-      }
-      const covering = coveringEdge(edges, taskId);
+      if (!requested.includes(taskId)) requested.push(taskId);
+    }
+    const edges = initiativeStore.memberEdges(current.id);
+    const stored = new Set(edges.map((edge) => edge.taskId));
+    const removed = requested.filter((taskId) => stored.has(taskId));
+    const left = edges.filter((edge) => !removed.includes(edge.taskId));
+    const absorbed: number[] = [];
+    // Judged before anything is written: a refusal leaves no partial write.
+    for (const taskId of requested) {
+      if (stored.has(taskId) || !coveringEdge(edges, taskId)) continue;
+      const covering = coveringEdge(left, taskId);
       if (covering)
         throw new Error(
           `${taskStore.displayId(taskId)} is a member of ${displayId(current.id)} only through ${taskStore.displayId(covering.taskId)}. Remove ${taskStore.displayId(covering.taskId)}, or move ${taskStore.displayId(taskId)} out of its subtree.`,
         );
+      absorbed.push(taskId);
     }
+    for (const taskId of removed)
+      initiativeStore.removeMember(touch, current.id, taskId);
     return membershipWrite(
       current.id,
-      [],
+      absorbed,
       initiativeMembershipNow(String(current.id), removed.map(String)),
     );
   });

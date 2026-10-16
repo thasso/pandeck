@@ -214,12 +214,13 @@ subscribe is what makes the server rescan the user's working tree.
 
 Initiatives (`docs/initiatives.md`) have their canonical location in a group at
 the TOP of the Projects browser, because they sit above Projects. The group is
-bounded: it lists the active and paused Initiatives, and its heading opens
-`/initiatives`, the index page that lists every live Initiative by state (done
-ones included). It holds the `initiatives` topic only while the Projects browser
-is on screen; an Initiative's page holds it too, with Tasks and Projects for the
-live map. There is no Initiatives section of its own and no view of an
-Initiative inside a Project page.
+bounded: it lists the active and paused Initiatives. It is a `ListGroupSection`
+band whose heading folds it like every group, and a link of its own in the
+band's actions opens `/initiatives`, the index page that lists every live
+Initiative by state (done ones included). It holds the `initiatives` topic only
+while the Projects browser is on screen; an Initiative's page holds it too, with
+Tasks and Projects for the live map. There is no Initiatives section of its own
+and no view of an Initiative inside a Project page.
 
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached

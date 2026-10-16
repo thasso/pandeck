@@ -286,3 +286,42 @@ describe("the critical path's viewport", () => {
     expect(bottomRight.y).toBeLessThanOrEqual(PANE.height + 1);
   });
 });
+
+describe("the overview (F045)", () => {
+  it("paints every Task box at least a screen pixel, and frames the view in screen pixels", async () => {
+    const page = renderPage(
+      { item: HOSTED_LABS_DETAIL, layout: HOSTED_LABS_LAYOUT },
+      live(),
+    );
+    await untilMap(page.container);
+    const overview = page.container.querySelector<HTMLElement>(
+      ".react-flow__minimap",
+    )!;
+    const svg = overview.querySelector("svg")!;
+    const marks = [
+      ...svg.querySelectorAll<SVGRectElement>("rect.react-flow__minimap-node"),
+    ].filter((rect) => rect.style.fill !== "transparent");
+    // Lanes, groups and the milestone column are not marks; every Task is.
+    expect(marks).toHaveLength(HOSTED_LABS_LAYOUT.nodes.length);
+    for (const mark of marks) {
+      // A box far under a pixel at the overview's scale (the 803-node map's
+      // are a third of one) still paints: its outline is in screen pixels and
+      // in its own colour, and it is not snapped away to nothing.
+      expect(mark.getAttribute("vector-effect")).toBe("non-scaling-stroke");
+      expect(mark.style.stroke).toBe(mark.style.fill);
+      expect(Number.parseFloat(mark.style.strokeWidth)).toBeGreaterThanOrEqual(
+        1.5,
+      );
+      expect(mark.getAttribute("shape-rendering")).toBe("geometricPrecision");
+    }
+    // The view's frame: React Flow scales a stroke given as a prop by the
+    // overview's own scale, so it stays two screen pixels at any map size.
+    const [, , viewBoxWidth] = svg.getAttribute("viewBox")!.split(" ");
+    const unitsPerPixel =
+      Number(viewBoxWidth) / (Number(svg.getAttribute("width")) + 10);
+    const frame = Number(
+      overview.style.getPropertyValue("--xy-minimap-mask-stroke-width-props"),
+    );
+    expect(frame / unitsPerPixel).toBeCloseTo(2, 3);
+  });
+});

@@ -28,8 +28,11 @@ export interface InitiativeMember {
   status: TaskStatus;
   /** An open blocker holds it up; never set on a done or archived Task. */
   blocked: boolean;
-  /** How many blockers are open, when the live Task row says. */
-  openBlockers?: number;
+  /**
+   * How many of its blockers are open: the live Task row's count, else the
+   * read's `blocks` links into it whose blocker is open by the same facts.
+   */
+  openBlockers: number;
   /** Shelved: drawn toned back, and neither startable nor blocked. */
   archived: boolean;
   /** A todo Task that is neither blocked nor archived. Computed, never stored. */
@@ -80,33 +83,42 @@ export function runningTaskIds(
 
 type TaskFacts = Pick<
   InitiativeGraphNode,
-  "id" | "title" | "status" | "blocked" | "archived" | "projectId"
+  "id" | "title" | "status" | "archived" | "projectId"
 >;
+
+/** A Task's status and archive state, live where the Tasks topic says. */
+function stateOf(
+  node: TaskFacts,
+  live: ReadonlyMap<string, TaskSummary> | null,
+): { status: TaskStatus; archived: boolean } {
+  const row = live?.get(node.id);
+  // A row in the live list is unarchived by definition: the Tasks topic holds
+  // only the live projection (`docs/state-sync.md`).
+  return row
+    ? { status: row.status, archived: false }
+    : { status: node.status, archived: node.archived === true };
+}
 
 function memberOf(
   node: TaskFacts,
   live: ReadonlyMap<string, TaskSummary> | null,
   running: ReadonlySet<string>,
+  /** Its open blockers counted over the read's links, for want of a row. */
+  heldOpenBlockers: number,
   extra: Pick<InitiativeMember, "milestone"> &
     Partial<Pick<InitiativeMember, "parentId">>,
 ): InitiativeMember {
   const row = live?.get(node.id);
-  // A row in the live list is unarchived by definition: the Tasks topic holds
-  // only the live projection (`docs/state-sync.md`).
-  const status = row?.status ?? node.status;
-  const archived = row ? false : node.archived === true;
-  const openBlockers = row ? (row.openBlockerCount ?? 0) : undefined;
-  const blocked =
-    status !== "done" &&
-    !archived &&
-    (openBlockers !== undefined ? openBlockers > 0 : node.blocked === true);
+  const { status, archived } = stateOf(node, live);
+  const openBlockers = row ? (row.openBlockerCount ?? 0) : heldOpenBlockers;
+  const blocked = status !== "done" && !archived && openBlockers > 0;
   const projectId = row?.projectId ?? node.projectId;
   return {
     id: node.id,
     title: row?.title ?? node.title,
     status,
     blocked,
-    ...(blocked && openBlockers ? { openBlockers } : {}),
+    openBlockers,
     archived,
     startable: status === "todo" && !blocked && !archived,
     running: running.has(node.id),
@@ -122,20 +134,34 @@ export function initiativeMembers(
   live: ReadonlyMap<string, TaskSummary> | null,
   running: ReadonlySet<string>,
 ): ReadonlyMap<string, InitiativeMember> {
+  // A Task without a live row counts its open blockers over the read's links
+  // (every `blocks` link into a member is one), judging each blocker by the
+  // same live-or-read facts the map draws it with.
+  const open = new Set<string>();
+  for (const node of [...detail.nodes, ...detail.externalBlockers]) {
+    const { status, archived } = stateOf(node, live);
+    if (status !== "done" && !archived) open.add(node.id);
+  }
+  const heldOpenBlockers = new Map<string, number>();
+  for (const edge of detail.edges)
+    if (open.has(edge.from))
+      heldOpenBlockers.set(edge.to, (heldOpenBlockers.get(edge.to) ?? 0) + 1);
   const members = new Map<string, InitiativeMember>();
   for (const node of detail.nodes)
     members.set(
       node.id,
-      memberOf(node, live, running, {
+      memberOf(node, live, running, heldOpenBlockers.get(node.id) ?? 0, {
         milestone: node.milestone === true,
         ...(node.parentId ? { parentId: node.parentId } : {}),
       }),
     );
+  // An outside blocker's own blockers are not in the read: only a live row
+  // counts them.
   for (const blocker of detail.externalBlockers)
     if (!members.has(blocker.id))
       members.set(
         blocker.id,
-        memberOf(blocker, live, running, { milestone: false }),
+        memberOf(blocker, live, running, 0, { milestone: false }),
       );
   return members;
 }
@@ -409,9 +435,7 @@ export function memberStateLabel(member: InitiativeMember): string {
   const parts = [status];
   if (member.blocked)
     parts.push(
-      member.openBlockers
-        ? `blocked by ${member.openBlockers} open ${member.openBlockers === 1 ? "task" : "tasks"}`
-        : "blocked",
+      `blocked by ${member.openBlockers} open ${member.openBlockers === 1 ? "task" : "tasks"}`,
     );
   if (member.archived) parts.push("archived");
   if (member.running) parts.push("a session is running");

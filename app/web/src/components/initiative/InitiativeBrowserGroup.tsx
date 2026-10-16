@@ -1,8 +1,10 @@
 import { memo } from "react";
-import { Waypoints } from "lucide-react";
+import { ArrowRight, Waypoints } from "lucide-react";
 import type { InitiativeSummary } from "@assistant/shared";
 import { Item } from "../ui/item.tsx";
 import { ErrorNote, Skeleton } from "../common/load.tsx";
+import { LinkButton } from "../common/LinkButton.tsx";
+import { ListGroupSection } from "../ListGroupSection.tsx";
 import {
   initiativePath,
   INITIATIVES_PATH,
@@ -15,9 +17,11 @@ import { followRowLink } from "../../lib/rowLink.ts";
  *   canonical sidebar location of an Initiative (`app/web/docs/ui-shell.md`).
  * @useWhen The Projects section's browser, above the Project tree.
  * @intent Bounded: it lists the active and paused Initiatives, which are few;
- *   done ones and the grouping by state live on the index its heading opens.
- *   With nothing to list it shows the heading alone, so the index stays one
- *   tap away without spending rows on an empty state.
+ *   done ones and the grouping by state live on the index. It is the sidebar's
+ *   one group band (`ListGroupSection`): its heading folds the rows like every
+ *   other group, and the index is a link of its own beside it, so a modifier
+ *   click opens it in a new tab. With nothing to list it shows the band alone,
+ *   so the index stays one tap away without spending rows on an empty state.
  */
 export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   initiatives,
@@ -43,22 +47,26 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
 }) {
   const open = initiatives.filter((initiative) => initiative.state !== "done");
   return (
-    <section aria-label="Initiatives" className="mb-2 flex flex-col">
-      <Item
-        size="xs"
-        className="text-muted-foreground"
-        render={
-          <a
-            href={INITIATIVES_PATH}
-            onClick={(event) =>
-              followRowLink(event, INITIATIVES_PATH, onNavigate)
-            }
-          />
-        }
-      >
-        <Waypoints size={14} aria-hidden />
-        <span className="flex-1 text-xs font-medium">Initiatives</span>
-      </Item>
+    <ListGroupSection
+      id="initiatives"
+      title="Initiatives"
+      count={fresh || open.length > 0 ? open.length : undefined}
+      icon={<Waypoints size={14} className="shrink-0" aria-hidden />}
+      containsSelected={open.some((initiative) => initiative.id === selectedId)}
+      actions={
+        <LinkButton
+          variant="ghost"
+          size="icon-xs"
+          label="Show all Initiatives"
+          href={INITIATIVES_PATH}
+          onClick={(event) =>
+            followRowLink(event, INITIATIVES_PATH, onNavigate)
+          }
+        >
+          <ArrowRight />
+        </LinkButton>
+      }
+    >
       {error ? (
         <ErrorNote className="mx-2 my-1" message={error} onRetry={onRetry} />
       ) : null}
@@ -109,6 +117,6 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
           })}
         </ul>
       )}
-    </section>
+    </ListGroupSection>
   );
 });

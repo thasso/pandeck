@@ -66,4 +66,100 @@ describe("InitiativeBrowserGroup", () => {
       container.querySelector('[aria-label="Loading Initiatives"]'),
     ).not.toBeNull();
   });
+
+  it("is the app's group band: its heading folds the rows, and a link of its own opens the index (F051)", () => {
+    const onNavigate = vi.fn();
+    const labs = hostedLabsSummary();
+    const { container } = mount(
+      <InitiativeBrowserGroup
+        initiatives={[labs]}
+        fresh
+        error={null}
+        onRetry={() => {}}
+        selectedId={null}
+        onNavigate={onNavigate}
+      />,
+    );
+    const heading = container.querySelector("h2");
+    // The stock band: a heading holding the fold control.
+    expect(heading, "the group band's heading").not.toBeNull();
+    const fold = heading!.querySelector("button")!;
+    expect(fold.textContent).toContain("Initiatives");
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    // The index link sits beside the fold, never inside it.
+    const index = heading!.querySelector<HTMLAnchorElement>(
+      'a[href="/initiatives"]',
+    )!;
+    expect(index.getAttribute("aria-label")).toBe("Show all Initiatives");
+    expect(index.closest("button")).toBeNull();
+    expect(fold.querySelector("a")).toBeNull();
+    const row = () =>
+      container.querySelector(`a[href="/initiatives/${labs.id}"]`);
+    expect(row()).not.toBeNull();
+
+    // The heading folds and unfolds; it navigates nowhere.
+    act(() => fold.click());
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    const folded = row();
+    expect(folded === null || folded.closest("[hidden]") !== null).toBe(true);
+    expect(onNavigate).not.toHaveBeenCalled();
+    act(() => fold.click());
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+
+    // The link navigates in the app on a plain click, and leaves a modifier
+    // click (a new tab) to the browser.
+    const click = (init: MouseEventInit) => {
+      const event = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      // What the app decided, read after React's root listener on the same
+      // container (the link stops the click there); then the browser's own
+      // navigation, which jsdom cannot do, is cancelled.
+      let prevented: boolean | undefined;
+      const observe = (seen: Event) => {
+        prevented = seen.defaultPrevented;
+        seen.preventDefault();
+      };
+      container.addEventListener("click", observe, { once: true });
+      act(() => {
+        index.dispatchEvent(event);
+      });
+      return prevented;
+    };
+    expect(click({})).toBe(true);
+    expect(onNavigate).toHaveBeenCalledWith("/initiatives");
+    onNavigate.mockClear();
+    expect(click({ ctrlKey: true })).toBe(false);
+    expect(click({ metaKey: true })).toBe(false);
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("unfolds for the open Initiative and marks its row", () => {
+    window.sessionStorage.setItem(
+      "list-group-open:initiatives",
+      JSON.stringify(false),
+    );
+    const labs = hostedLabsSummary();
+    const { container } = mount(
+      <InitiativeBrowserGroup
+        initiatives={[labs]}
+        fresh
+        error={null}
+        onRetry={() => {}}
+        selectedId={labs.id}
+        onNavigate={() => {}}
+      />,
+    );
+    const fold = container.querySelector("h2 button");
+    expect(fold, "the group band's fold control").not.toBeNull();
+    expect(fold!.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      container
+        .querySelector(`a[href="/initiatives/${labs.id}"]`)!
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    window.sessionStorage.clear();
+  });
 });

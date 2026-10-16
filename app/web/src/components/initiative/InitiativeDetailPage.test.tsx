@@ -320,6 +320,60 @@ describe("InitiativeDetailPage views", () => {
     expect(marks(T["OUT-LEGAL"])).toContain("Ready");
   });
 
+  it("marks a blocked member with the app's blocked marker, counted from the read without a live row (F048)", async () => {
+    const blockedMarker = (scope: Element) => {
+      const marker = scope.querySelector<HTMLElement>(
+        '[role="img"][aria-label^="Blocked by "]',
+      );
+      // The stock marker itself, never wrapped in a chip of its own.
+      expect(marker?.closest('[data-slot="badge"]') ?? null).toBeNull();
+      return marker?.getAttribute("aria-label");
+    };
+    const { container, rerender } = renderPage(ready(HELD));
+    await flushLazy(container);
+    const node = (taskId: string) =>
+      [...container.querySelectorAll<HTMLElement>(".react-flow__node")].find(
+        (wrapper) => wrapper.querySelector(`[title="Task-${taskId}"]`) !== null,
+      )!;
+    // No live Tasks list yet: the count is the read's own open blockers. The
+    // release waits on SDC9, LAB8 and the outside legal sign-off.
+    expect(blockedMarker(node(T.RELEASE))).toBe("Blocked by 3 open tasks");
+    expect(
+      button(container, /^First hosted release, Task-/)!.getAttribute(
+        "aria-label",
+      ),
+    ).toContain("To do, blocked by 3 open tasks");
+    // Doing and blocked stay two facts.
+    expect(blockedMarker(node(T.SDC5))).toBe("Blocked by 1 open task");
+    expect(node(T.SDC5).textContent).toContain("Doing");
+    // A live row speaks for its own Task.
+    rerender({
+      liveTasks: new Map<string, TaskSummary>([
+        [
+          T.SDC5,
+          {
+            id: T.SDC5,
+            title: "Per-customer session quotas",
+            status: "doing",
+            source: { createdBy: "user" },
+            createdAt: 1,
+            updatedAt: 2,
+            openBlockerCount: 2,
+          },
+        ],
+      ]),
+    });
+    expect(blockedMarker(node(T.SDC5))).toBe("Blocked by 2 open tasks");
+    expect(node(T.SDC5).textContent).toContain("Doing");
+
+    // The List's rows carry the same marker.
+    act(() => button(container, /^List$/)!.click());
+    const row = (title: RegExp) => button(container, title)!.closest("li")!;
+    expect(blockedMarker(row(/^First hosted release, Task-/))).toBe(
+      "Blocked by 3 open tasks",
+    );
+  });
+
   it("adds the overview map to the map (F025)", async () => {
     const { container } = renderPage(ready(HELD));
     await flushLazy(container);

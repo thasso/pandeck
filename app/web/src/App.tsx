@@ -2891,7 +2891,11 @@ function AppContent() {
   const initiativeSelectedDetail = initiativeSelectedTaskId
     ? state.taskDetails[initiativeSelectedTaskId]
     : undefined;
-  const initiativeSelectedTask = useMemo(() => {
+  // Its session references are the server's answer only from a list or a body
+  // this connection answered: a list hydrated from the shell cache, or a body
+  // being read again, may be older. Only an answered, empty list of references
+  // lets the panel say the Task has no sessions (`EmptyBox`, R1).
+  const initiativeSelected = useMemo(() => {
     if (!initiativeSelectedTaskId) return undefined;
     const body = initiativeSelectedDetail
       ? dataOf(initiativeSelectedDetail)
@@ -2900,9 +2904,20 @@ function AppContent() {
     const listed = backlogTasks.find(
       (task) => task.id === initiativeSelectedTaskId,
     );
-    if (listed) return listed;
-    return body ? taskSummaryOf(body) : undefined;
-  }, [backlogTasks, initiativeSelectedDetail, initiativeSelectedTaskId]);
+    if (listed) return { task: listed, answered: state.taskListFresh };
+    return body
+      ? {
+          task: taskSummaryOf(body),
+          answered: initiativeSelectedDetail?.status === "ready",
+        }
+      : undefined;
+  }, [
+    backlogTasks,
+    initiativeSelectedDetail,
+    initiativeSelectedTaskId,
+    state.taskListFresh,
+  ]);
+  const initiativeSelectedTask = initiativeSelected?.task;
   const selectedTaskDetailState = openTaskId
     ? state.taskDetails[openTaskId]
     : undefined;
@@ -7181,14 +7196,14 @@ function AppContent() {
   // the Backlog, an Initiative page stays where it is.
   const taskInspectorFor = (
     task: Task | undefined,
-    options: { afterRemove?: () => void; showEmptySessions?: boolean } = {},
+    options: { afterRemove?: () => void; noSessionRefs?: boolean } = {},
   ) => (
     <TaskInspector
       task={task}
       sessions={state.sessions}
       openers={inspectorOpeners}
       onStartSession={startSessionForTask}
-      showEmptySessions={options.showEmptySessions ?? false}
+      noSessionRefs={options.noSessionRefs ?? false}
       // Only a Task with a Project can have a run worktree provisioned; the
       // server still owns the real git-backed check and refuses with a
       // readable error inside the sheet.
@@ -7296,9 +7311,11 @@ function AppContent() {
                 workflowIndicators={workflowIndicators}
               />
             </Suspense>
-            {initiativeSelectedTask
-              ? taskInspectorFor(initiativeSelectedTask, {
-                  showEmptySessions: true,
+            {initiativeSelected
+              ? taskInspectorFor(initiativeSelected.task, {
+                  noSessionRefs:
+                    initiativeSelected.answered &&
+                    (initiativeSelected.task.sessionRefs ?? []).length === 0,
                 })
               : null}
           </div>

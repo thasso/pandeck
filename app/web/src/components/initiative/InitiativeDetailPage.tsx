@@ -297,6 +297,19 @@ export function InitiativeDetailPage({
   const anyOpenEpic = [...collapsible].some(
     (id) => !collapsed.has(id) && !folded.has(id),
   );
+  // The same question of the collapsed set the HELD read answered for, which
+  // is what its size outcome speaks about until the wish is answered.
+  const heldCollapsed = useMemo(
+    () =>
+      item ? canonicalCollapsed(item, read?.requestedCollapsed ?? []) : [],
+    [item, read?.requestedCollapsed],
+  );
+  const heldOpenEpic = useMemo(() => {
+    if (!item) return false;
+    const held = new Set(heldCollapsed);
+    const heldFolded = collapsedAway(item, heldCollapsed);
+    return [...collapsible].some((id) => !held.has(id) && !heldFolded.has(id));
+  }, [item, heldCollapsed, collapsible]);
 
   const toggleCollapse = useCallback(
     (taskId: string) =>
@@ -437,6 +450,7 @@ export function InitiativeDetailPage({
           >
             <InitiativeMap
               layout={read.layout!}
+              blocks={item.edges}
               members={members}
               projectLabel={projectLabel}
               selectedTaskId={selectedTaskId}
@@ -457,6 +471,10 @@ export function InitiativeDetailPage({
           <MapTooLarge
             size={read.layoutTooLarge}
             canCollapse={collapsible.size > 0}
+            answer={
+              drawsWish ? "answered" : status === "error" ? "failed" : "pending"
+            }
+            heldOpenEpic={heldOpenEpic}
             anyOpenEpic={anyOpenEpic}
             onCollapseAll={collapseAll}
           />
@@ -640,29 +658,50 @@ const COUNT = new Intl.NumberFormat("en-US");
  * Retry, since reading the same drawing again cannot change it. Collapsing
  * epics can, so "Collapse all epics" is the primary action, and each epic's
  * own button in the List below works as well.
+ *
+ * The count is the HELD read's, for the epics collapsed when it was read. Until
+ * the user's newer choice is answered the notice says so, and claims nothing
+ * about a drawing nobody has counted yet: "every epic is collapsed" is said
+ * only of an answer for that choice. A read for it that failed is the error
+ * above the page, with its Retry; the notice then only keeps the earlier count.
  */
 function MapTooLarge({
   size,
   canCollapse,
+  answer,
+  heldOpenEpic,
   anyOpenEpic,
   onCollapseAll,
 }: {
   size: InitiativeLayoutTooLarge;
   canCollapse: boolean;
+  /** Whether the held read is for the collapsed epics wanted now. */
+  answer: "answered" | "pending" | "failed";
+  /** An epic the held read drew open. */
+  heldOpenEpic: boolean;
+  /** An epic the wish leaves open: collapsing all has work to do. */
   anyOpenEpic: boolean;
   onCollapseAll: () => void;
 }) {
   const nodes = COUNT.format(size.nodes);
   const limit = COUNT.format(size.limit);
+  const collapseHint =
+    "A collapsed epic draws as one node: collapse all of them, or one at a time with the button before an epic below.";
   return (
     <Alert role="status" className="mb-4">
       <Info />
       <AlertDescription>
         {!canCollapse
           ? `This map has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead.`
-          : anyOpenEpic
-            ? `This map has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead. A collapsed epic draws as one node: collapse all of them, or one at a time with the button before an epic below.`
-            : `Every epic is collapsed, and the map still has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead.`}
+          : answer !== "answered"
+            ? `With the epics collapsed before, the map had ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead. ${
+                answer === "pending"
+                  ? "It is being drawn again for the epics collapsed now."
+                  : "It could not be drawn again for the epics collapsed now."
+              }${anyOpenEpic ? ` ${collapseHint}` : ""}`
+            : heldOpenEpic
+              ? `This map has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead. ${collapseHint}`
+              : `Every epic is collapsed, and the map still has ${nodes} nodes, more than the ${limit} it lays out, so its members are listed instead.`}
       </AlertDescription>
       {canCollapse && anyOpenEpic ? (
         // Its own row under the words, as the notice's next step, rather

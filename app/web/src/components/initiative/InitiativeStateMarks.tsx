@@ -1,19 +1,21 @@
-import { Archive, Ban, ExternalLink } from "lucide-react";
+import { Archive, ExternalLink } from "lucide-react";
 import { Badge } from "../ui/badge.tsx";
 import { LIVE_PULSE } from "../common/load.tsx";
+import { TaskBlockedIndicator } from "../TaskBlockedIndicator.tsx";
 import type { InitiativeMember } from "../../lib/initiativeView.ts";
 
 /**
  * @component InitiativeStateMarks
  * @purpose A member's state as glanceable marks, the same on a map node and a
  *   list row (`docs/initiatives.md`, The Initiative page).
- * @intent Each fact is its own mark, with a word as well as a colour, so a
- *   greyscale copy still reads:
+ * @intent Each fact is its own mark, with a word or the app's own glyph as
+ *   well as a colour, so a greyscale copy still reads:
  *   - **Ready** (a todo with no open blocker, not archived) is the only filled
  *     chip: it is what the reader came to find.
  *   - **Doing** is an outlined chip.
- *   - **Blocked** is a separate warning chip, so a started Task that is still
- *     blocked shows Doing AND Blocked.
+ *   - **Blocked** is the app's blocked marker with its open-blocker count,
+ *     apart from the chips, so a started Task that is still blocked shows
+ *     Doing AND blocked.
  *   - **Running** is a session started from the Task running a turn, a fact
  *     apart from the Doing status.
  *   - Done carries no chip: its check glyph and receding title say it.
@@ -41,10 +43,7 @@ export function InitiativeStateMarks({
         <Badge variant="outline">Doing</Badge>
       ) : null}
       {member.blocked ? (
-        <Badge variant="warning">
-          <Ban />
-          {member.openBlockers ? member.openBlockers : "Blocked"}
-        </Badge>
+        <TaskBlockedIndicator openBlockers={member.openBlockers} />
       ) : null}
       {member.archived ? (
         <Badge variant="secondary">

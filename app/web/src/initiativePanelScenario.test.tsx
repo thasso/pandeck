@@ -7,9 +7,11 @@ import {
   type ClientMessage,
   type InitiativeSummary,
   type ServerMessage,
+  type SessionListItem,
   type TaskItem,
 } from "@assistant/shared";
 import { FakeSocket } from "./test/fakeSocket.ts";
+import { writeAppShellCacheRecord } from "./lib/appShellCacheStore.ts";
 import { HOSTED_LABS_DETAIL } from "../component-preview/fixtures/initiatives.ts";
 import { dismissToast, getToasts } from "./lib/toast.ts";
 
@@ -51,14 +53,14 @@ async function settle(frames = 3): Promise<void> {
     });
 }
 
-function readyMessage(): ServerMessage {
+function readyMessage(sessions: SessionListItem[] = []): ServerMessage {
   return {
     type: "ready",
     serverBuild: { version: "0.0.0-test" },
     state: null,
     models: [],
     agents: [],
-    sessions: [],
+    sessions,
     settings: {},
     speechToText: {
       configured: false,
@@ -129,10 +131,12 @@ async function boot(
     phone = false,
     tasks = [LISTED],
     initiatives = [summary()],
+    sessions = [],
   }: {
     phone?: boolean;
     tasks?: TaskItem[];
     initiatives?: InitiativeSummary[];
+    sessions?: SessionListItem[];
   } = {},
 ): Promise<FakeSocket> {
   stubLayout(phone);
@@ -148,7 +152,7 @@ async function boot(
   });
   await settle();
   const socket = FakeSocket.instances.at(-1)!;
-  await connect(socket, tasks, initiatives);
+  await connect(socket, tasks, initiatives, sessions);
   return socket;
 }
 
@@ -156,10 +160,11 @@ async function connect(
   socket: FakeSocket,
   tasks: TaskItem[] = [LISTED],
   initiatives: InitiativeSummary[] = [summary()],
+  sessions: SessionListItem[] = [],
 ): Promise<void> {
   await act(async () => {
     socket.open();
-    socket.receive(readyMessage());
+    socket.receive(readyMessage(sessions));
   });
   await settle(1);
   await act(async () => {
@@ -595,6 +600,94 @@ const HIDDEN_PANEL: Record<
     reveal: () => press(/^Open details$/),
   },
 };
+
+describe("the selected Task's sessions (F049, F052)", () => {
+  const NO_SESSIONS = "No sessions on this Task yet.";
+  const session = (id: string, title: string): SessionListItem => ({
+    id,
+    harness: "claude-sdk",
+    agentType: "developer",
+    title,
+    createdAt: 1,
+    updatedAt: 1,
+    messageCount: 1,
+    isStreaming: false,
+  });
+  const withRefs = (...ids: string[]): TaskItem => ({
+    ...LISTED,
+    sessionRefs: ids.map((sessionId) => ({
+      sessionId,
+      origin: "task-start" as const,
+    })),
+  });
+
+  it("says a Task has none only in the app's inline empty state, once its references are answered", async () => {
+    // The shell cache holds the Task without sessions; nothing has answered
+    // for this connection yet, so it may be older than the server's.
+    writeAppShellCacheRecord({
+      version: 1,
+      savedAt: Date.now(),
+      models: [],
+      agents: [],
+      sessions: [],
+      settings: {},
+      slashCommands: [],
+      taskList: { request: {}, items: [taskSummaryOf(LISTED)], updatedAt: 5 },
+      taskRevisions: { [LISTED.id]: 5 },
+    });
+    window.sessionStorage.setItem(
+      "assistant.shell.right-panel-open.v1",
+      "true",
+    );
+    window.history.replaceState(null, "", "/initiatives/7#task-31");
+    await act(async () => {
+      root!.render(
+        <ShortcutsProvider>
+          <App />
+        </ShortcutsProvider>,
+      );
+    });
+    await settle();
+    expect(text()).toContain(LISTED.title);
+    expect(text()).not.toContain(NO_SESSIONS);
+
+    // The server answers with the same Task and no references: now it is so.
+    const socket = FakeSocket.instances.at(-1)!;
+    await connect(socket);
+    await openTask(socket);
+    const empty = [...panel().querySelectorAll('[data-slot="empty"]')].find(
+      (box) => box.textContent?.includes(NO_SESSIONS),
+    );
+    expect(empty).toBeDefined();
+    // Its way out is the empty state's own action.
+    const start = [...empty!.querySelectorAll("button")].find((button) =>
+      /^Start session for this task$/.test(button.textContent ?? ""),
+    );
+    expect(start).toBeDefined();
+  });
+
+  it("never says so for references this browser does not hold, archived ones included", async () => {
+    // Its only session is archived: the default list leaves it out.
+    const archivedOnly = withRefs("s-archived");
+    const socket = await boot("/initiatives/7#task-31", {
+      tasks: [archivedOnly],
+    });
+    await openTask(socket, archivedOnly);
+    expect(text()).toContain("The body of Task 31");
+    expect(text()).not.toContain(NO_SESSIONS);
+  });
+
+  it("lists the sessions it holds and claims nothing about the rest", async () => {
+    const partial = withRefs("s-held", "s-archived");
+    const socket = await boot("/initiatives/7#task-31", {
+      tasks: [partial],
+      sessions: [session("s-held", "Metering export run")],
+    });
+    await openTask(socket, partial);
+    expect(text()).toContain("Metering export run");
+    expect(text()).not.toContain(NO_SESSIONS);
+  });
+});
 
 describe("a failure about the selected Task while its panel is not on screen (F033)", () => {
   it.each(Object.keys(HIDDEN_PANEL))(

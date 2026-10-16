@@ -20,6 +20,7 @@ import {
   type Edge,
   type ReactFlowInstance,
   type EdgeProps,
+  type MiniMapNodeProps,
   type Node,
   type NodeProps,
   type Viewport,
@@ -37,6 +38,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import type {
+  InitiativeGraphEdge,
   InitiativeLayout,
   InitiativeLayoutEdge,
   InitiativeLayoutNode,
@@ -92,7 +94,7 @@ type TaskNodeData = {
 type FrameNodeData = { label: string; kind: "group" | "lane" | "milestones" };
 type RouteEdgeData = {
   points: InitiativeLayoutEdge["points"];
-  /** The blocker (the source) is neither done nor archived. */
+  /** A blocker it stands for is neither done nor archived. */
   open: boolean;
   /** It starts or ends at the selected Task. */
   selected: boolean;
@@ -106,6 +108,8 @@ type RouteFlowEdge = Edge<RouteEdgeData, "route">;
 
 export interface InitiativeMapProps {
   layout: InitiativeLayout;
+  /** The read's `blocks` links, which the collapsed arrows stand for. */
+  blocks: readonly InitiativeGraphEdge[];
   /** Members and outside blockers by Task id, with the live overlay applied. */
   members: ReadonlyMap<string, InitiativeMember>;
   /** A Project's display name for a group's label. */
@@ -357,28 +361,63 @@ const NODE_TYPES = { task: TaskNode, frame: FrameNode };
 
 /**
  * The map's arrows, along the server's routes. Whether an arrow holds work up
- * is its SOURCE Task's state (the blocker), live from the members, so a
- * blocker finishing releases its arrows without a read or a layout.
+ * is the state of the BLOCKERS it stands for, live from the members, so a
+ * blocker finishing releases its arrows without a read or a layout. An arrow
+ * out of a collapsed epic stands for the read's `blocks` links from the Tasks
+ * folded into it, several of them when they share an end: it holds while ANY
+ * of those blockers is open, and is released only once all of them are done
+ * or archived. The epic's own status never stands in for theirs.
  */
 export function routeEdges(
   layout: InitiativeLayout,
   members: ReadonlyMap<string, InitiativeMember>,
   selectedTaskId: string | null,
   {
+    blocks,
     hidden = new Set<string>(),
     pathEdges = null,
   }: {
+    /** The read's `blocks` links the layout drew (`InitiativeDetail.edges`). */
+    blocks: readonly InitiativeGraphEdge[];
     /** Task ids Hide done takes off: an arrow to or from one goes with it. */
     hidden?: ReadonlySet<string>;
     /** `from>to` layout keys of the highlighted path, or null when it is off. */
     pathEdges?: ReadonlySet<string> | null;
-  } = {},
+  },
 ): RouteFlowEdge[] {
   const byId = new Map(layout.nodes.map((node) => [node.id, node]));
+  // The drawn node each Task is folded into, or its own.
+  const drawnAs = new Map<string, string>();
+  for (const node of layout.nodes) {
+    if (node.kind === "external") continue;
+    drawnAs.set(node.taskId, node.id);
+    for (const hiddenId of node.hiddenTaskIds ?? [])
+      drawnAs.set(hiddenId, node.id);
+  }
+  const blockersOf = new Map<string, string[]>();
+  for (const link of blocks) {
+    const from = drawnAs.get(link.from);
+    const to = drawnAs.get(link.to);
+    if (from === undefined || to === undefined) continue;
+    const key = `${from}>${to}`;
+    const list = blockersOf.get(key);
+    if (list) list.push(link.from);
+    else blockersOf.set(key, [link.from]);
+  }
+  const isOpen = (taskId: string) => {
+    const blocker = members.get(taskId);
+    return blocker ? blocker.status !== "done" && !blocker.archived : true;
+  };
   return layout.edges.map((edge, index): RouteFlowEdge => {
     const from = byId.get(edge.from);
     const to = byId.get(edge.to);
-    const blocker = from ? members.get(from.taskId) : undefined;
+    // An outside stub, or a Task drawn as itself, is its own one blocker.
+    const blockers =
+      from?.kind === "collapsed"
+        ? (blockersOf.get(`${edge.from}>${edge.to}`) ?? [])
+        : from
+          ? [from.taskId]
+          : [];
     return {
       id: `edge:${index}`,
       source: edge.from,
@@ -389,7 +428,9 @@ export function routeEdges(
         (to !== undefined && hidden.has(to.taskId)),
       data: {
         points: edge.points,
-        open: blocker ? blocker.status !== "done" && !blocker.archived : true,
+        // A drawing whose links cannot be matched holds, as an unknown
+        // blocker does: it never reads as released by guesswork.
+        open: blockers.length === 0 || blockers.some(isOpen),
         selected:
           selectedTaskId !== null &&
           (from?.taskId === selectedTaskId || to?.taskId === selectedTaskId),
@@ -513,11 +554,52 @@ export function overviewColor(member: InitiativeMember | undefined): string {
   return "var(--muted-foreground)";
 }
 
+/** The outline, in screen pixels, of a Task's mark and of the view's frame. */
+const OVERVIEW_STROKE_PX = 2;
+
+/**
+ * One Task in the overview. On a large map its box is far under a screen pixel
+ * there (the 803-node map's are a third of one by a tenth), and React Flow's
+ * own mark, snapped to whole pixels and without an outline, paints nothing.
+ * This one is outlined in its own colour in SCREEN pixels, unsnapped, so every
+ * Task stays a visible dot however large the map; on a small map a box only
+ * gains a pixel's edge.
+ */
+const OverviewMark = memo(function OverviewMark({
+  id,
+  x,
+  y,
+  width,
+  height,
+  borderRadius,
+  className,
+  color,
+  onClick,
+}: MiniMapNodeProps) {
+  return (
+    <rect
+      className={`react-flow__minimap-node ${className}`}
+      x={x}
+      y={y}
+      width={width}
+      height={height}
+      rx={borderRadius}
+      ry={borderRadius}
+      style={{ fill: color, stroke: color, strokeWidth: OVERVIEW_STROKE_PX }}
+      vectorEffect="non-scaling-stroke"
+      shapeRendering="geometricPrecision"
+      onClick={onClick ? (event) => onClick(event, id) : undefined}
+    />
+  );
+});
+
 /**
  * The overview of the whole map: every Task and the milestone column, the
- * visible part framed, pannable and zoomable, and a click goes there. It is drawing, out of the Tab
- * order, and smaller on a narrow pane, where a phone that chose the Map still
- * needs to find its way.
+ * visible part framed, pannable and zoomable, and a click goes there. It is
+ * drawing, out of the Tab order, and smaller on a narrow pane, where a phone
+ * that chose the Map still needs to find its way. The view's frame is given as
+ * a prop, which React Flow scales by the overview's own scale, so it stays
+ * two screen pixels on a map of any size.
  */
 function MapOverview({
   members,
@@ -548,8 +630,9 @@ function MapOverview({
       zoomable
       ariaLabel="Map overview"
       nodeColor={nodeColor}
-      nodeStrokeWidth={0}
+      nodeComponent={OverviewMark}
       nodeBorderRadius={2}
+      maskStrokeWidth={OVERVIEW_STROKE_PX}
       onClick={(_, position) => goTo(position.x, position.y)}
       onNodeClick={(_, node) =>
         goTo(
@@ -593,6 +676,7 @@ function MapControls() {
 
 function InitiativeMapCanvas({
   layout,
+  blocks,
   members,
   projectLabel,
   selectedTaskId,
@@ -748,10 +832,11 @@ function InitiativeMapCanvas({
   const edges = useMemo(
     () =>
       routeEdges(layout, members, selectedTaskId, {
+        blocks,
         hidden,
         pathEdges: highlight ? onPath!.edgeKeys : null,
       }),
-    [layout, members, selectedTaskId, hidden, highlight, onPath],
+    [layout, members, selectedTaskId, blocks, hidden, highlight, onPath],
   );
 
   const paneRef = useRef<HTMLDivElement>(null);
