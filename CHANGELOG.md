@@ -3,6 +3,21 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.59.0] - 2026-10-16
+
+### Upgrade notes
+
+- This release adds SQLite migration `0085` (Initiatives). Back up `DATA_DIR`
+  before upgrading if you may need to roll back to 0.58.1, because an older
+  version does not reverse it.
+
+### Other changes
+
+- Add Initiatives with cross-project Task maps
+  ([PR #151](https://github.com/thasso/pandeck/pull/151))
+- Show live checkout sessions on PR pages
+  ([PR #150](https://github.com/thasso/pandeck/pull/150))
+
 ## [0.58.1] - 2026-10-15
 
 ### Other changes
