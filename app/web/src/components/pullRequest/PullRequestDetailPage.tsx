@@ -58,6 +58,7 @@ import {
   pullRequestCiState,
   pullRequestMergeability,
   pullRequestMergeBlockedReason,
+  pullRequestSessionIds,
   pullRequestSessionTree,
   pullRequestStateLabel,
   type PullRequestTarget,
@@ -255,21 +256,26 @@ const SESSIONS_SHOWN = 5;
  * not in it (an archived session).
  */
 function SessionTreeGroup({
-  ids,
+  item,
   source,
   actions,
   onOpenSession,
 }: {
-  ids: string[];
+  item: Pick<PullRequestInventoryItem, "worktreeId" | "sessionIds">;
   source: JoinSource<SessionListItem>;
   actions?: ReactNode;
   onOpenSession: (id: string) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
+  const sessions = source.rows;
+  const { worktreeId, sessionIds } = item;
+  const ids = useMemo(
+    () => pullRequestSessionIds({ worktreeId, sessionIds }, sessions),
+    [worktreeId, sessionIds, sessions],
+  );
   const joined = resolveJoinRows(ids, source, (row) => row.id);
   const pending = joined.filter((row) => row.kind === "pending");
   const absent = joined.filter((row) => row.kind === "absent");
-  const sessions = source.rows;
   const cards = useMemo(
     () =>
       sessions
@@ -888,7 +894,7 @@ export function PullRequestDetailPage({
         )}
 
         <SessionTreeGroup
-          ids={item.sessionIds}
+          item={item}
           source={joins.sessions}
           actions={sessionActions}
           onOpenSession={onOpenSession}

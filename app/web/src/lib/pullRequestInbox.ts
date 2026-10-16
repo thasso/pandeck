@@ -745,6 +745,25 @@ export function pullRequestJoinSources(
   };
 }
 
+/**
+ * The sessions a pull request is joined to: the inventory's ids plus every
+ * session the LIVE list places in its checkout. The inventory is a snapshot the
+ * server rebuilds on its provider cadence, so a session started in the checkout
+ * a moment ago is not in it yet; the session rows carry `worktreeId` and arrive
+ * by subscription, so that half of the join is made here, where it is current.
+ */
+export function pullRequestSessionIds(
+  item: { worktreeId?: string | undefined; sessionIds: string[] },
+  sessions: readonly SessionListItem[] | null,
+): string[] {
+  const { worktreeId } = item;
+  if (!worktreeId || !sessions) return item.sessionIds;
+  const ids = new Set(item.sessionIds);
+  for (const session of sessions)
+    if (session.worktreeId === worktreeId) ids.add(session.id);
+  return ids.size === item.sessionIds.length ? item.sessionIds : [...ids];
+}
+
 /** One row of a pull request's session tree. */
 export interface PullRequestSessionTreeRow {
   session: SessionListItem;
