@@ -18,6 +18,7 @@ import type {
   TaskStatus,
   TaskSummary,
 } from "@assistant/shared";
+import { isTaskWorking } from "./taskActivity.ts";
 
 /** One Task as the page draws it: the read's facts with the live ones over them. */
 export interface InitiativeMember {
@@ -32,7 +33,7 @@ export interface InitiativeMember {
   archived: boolean;
   /** A todo Task that is neither blocked nor archived. Computed, never stored. */
   startable: boolean;
-  /** A session linked to the Task is running a turn right now. */
+  /** A session started from the Task is running a turn right now. */
   running: boolean;
   milestone: boolean;
   projectId?: string;
@@ -53,9 +54,11 @@ export function liveTaskIndex(
 }
 
 /**
- * Tasks with a linked session that is running a turn. The link is the Task's
- * own `sessionRefs` and the run is the session row's `isStreaming`: structural,
- * nothing read from titles.
+ * Tasks a session is WORKING on right now: one started from the Task
+ * (`task-start`) that is running a turn. A session that only referenced the
+ * Task (a search, a scan, a mention) does not count, and neither does the
+ * Task's own `doing` status; this is the Backlog's one definition
+ * (`lib/taskActivity.ts`).
  */
 export function runningTaskIds(
   live: ReadonlyMap<string, TaskSummary> | null,
@@ -63,13 +66,14 @@ export function runningTaskIds(
 ): ReadonlySet<string> {
   const running = new Set<string>();
   if (!live) return running;
-  const streaming = new Set(
-    sessions.filter((session) => session.isStreaming).map(({ id }) => id),
+  const sessionById = new Map(
+    sessions
+      .filter((session) => session.isStreaming)
+      .map((session) => [session.id, session]),
   );
-  if (streaming.size === 0) return running;
+  if (sessionById.size === 0) return running;
   for (const task of live.values())
-    if (task.sessionRefs?.some((ref) => streaming.has(ref.sessionId)))
-      running.add(task.id);
+    if (isTaskWorking(task, sessionById)) running.add(task.id);
   return running;
 }
 

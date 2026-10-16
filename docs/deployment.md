@@ -86,7 +86,13 @@ with the pinned Playwright MCP CLI and its `playwright-core` package. It does
 not contain Node, tsx, workspace sources, or a `node_modules` tree. The wrapper
 sets `ASSISTANT_RUNTIME_DIR` to this asset root. elkjs ships under the EPL-2.0
 (`NOTICE`), its license text, copyright notices and source location in
-`workers/licenses/elkjs/`, which the install check requires. `runtimeAssets.ts`
+`workers/licenses/elkjs/`, which the install check requires. The web UI's
+Initiative map bundles @xyflow/react and the packages under it; the web build
+writes their license texts, read from the installed packages, to
+`licenses/third-party-web.md` in `app/web/dist` (so `web/` in the package),
+fails on a package, version or holder it does not expect, and names the file in
+the map's chunk. The install check requires that file to equal what the
+installed packages render (`app/web/thirdPartyNotices.ts`). `runtimeAssets.ts`
 captures it once at module load and is the single server-side resolver for these
 files, so the bundled module never uses its own location to infer installed
 asset paths. The variable is then scrubbed before any agent starts: a worktree

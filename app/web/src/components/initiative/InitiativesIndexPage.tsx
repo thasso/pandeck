@@ -31,6 +31,7 @@ export function InitiativesIndexPage({
   initiatives,
   fresh,
   error,
+  onRetry,
   onOpen,
 }: {
   back?: PageHeaderBack | undefined;
@@ -38,6 +39,8 @@ export function InitiativesIndexPage({
   /** A snapshot answered during this socket episode. */
   fresh: boolean;
   error: string | null;
+  /** Ask for the list again after it failed. */
+  onRetry: () => void;
   onOpen: (path: string) => void;
 }) {
   const scrollRef = useListScroll({ listKey: "initiatives" });
@@ -57,7 +60,7 @@ export function InitiativesIndexPage({
       />
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-          {error ? <ErrorNote message={error} /> : null}
+          {error ? <ErrorNote message={error} onRetry={onRetry} /> : null}
           {loading ? (
             <div role="status" className="flex flex-col gap-2">
               <span className="sr-only">Loading Initiatives…</span>

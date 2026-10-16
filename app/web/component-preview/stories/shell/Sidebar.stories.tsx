@@ -77,6 +77,8 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         onOpenProject={noop}
         initiatives={[hostedLabsSummary()]}
         initiativesFresh
+        initiativeListError={null}
+        onRetryInitiatives={noop}
         selectedInitiativeId={null}
         worktrees={fixture.worktrees}
         worktreeStatuses={fixture.worktreeStatuses}

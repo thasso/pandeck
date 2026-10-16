@@ -1036,12 +1036,19 @@ export function TaskInspector({
   onArchive,
   onUnarchive,
   onDelete,
+  showEmptySessions = false,
   children,
 }: {
   task: Task | undefined;
   sessions: SessionListItem[];
   openers: ObjectOpeners;
   onStartSession: (taskId: string, title: string) => void;
+  /**
+   * Keep the Sessions group on screen when the Task has none, saying so and
+   * offering to start one. A surface whose main pane is NOT this Task (an
+   * Initiative page's panel) has no other place stating its sessions.
+   */
+  showEmptySessions?: boolean;
   /**
    * Open the Run-workflow start sheet for this Task. Passed only when the Task
    * has a Project a run's worktree could be provisioned from.
@@ -1115,6 +1122,30 @@ export function TaskInspector({
               taskRelationGroups(task, sessions),
               openers,
               sessions,
+            ).map((group) =>
+              showEmptySessions &&
+              group.id === "sessions" &&
+              group.items.length === 0
+                ? {
+                    ...group,
+                    alwaysShown: true,
+                    content: (
+                      <div className="flex flex-col items-start gap-2 px-1">
+                        <p className="text-xs text-muted-foreground">
+                          No sessions on this Task yet.
+                        </p>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => onStartSession(task.id, task.title)}
+                        >
+                          <MessageSquarePlus />
+                          Start session for this task
+                        </Button>
+                      </div>
+                    ),
+                  }
+                : group,
             )
           : []
       }

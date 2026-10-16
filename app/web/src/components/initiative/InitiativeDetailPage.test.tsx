@@ -236,7 +236,7 @@ describe("InitiativeDetailPage views", () => {
           source: { createdBy: "user" },
           createdAt: 1,
           updatedAt: 2,
-          sessionRefs: [{ sessionId: "s1" }],
+          sessionRefs: [{ sessionId: "s1", origin: "task-start" }],
         },
       ],
     ]);
@@ -279,5 +279,37 @@ describe("InitiativeDetailPage views", () => {
     expect(
       container.querySelectorAll("[aria-label='Milestones'] button"),
     ).toHaveLength(0);
+  });
+
+  it("shows Ready, Doing and Blocked as visible marks, outside stubs included (F023)", async () => {
+    const { container } = renderPage(ready(HELD));
+    await flushLazy(container);
+    const node = (taskId: string) =>
+      [...container.querySelectorAll<HTMLElement>(".react-flow__node")].find(
+        (wrapper) => wrapper.querySelector(`[title="Task-${taskId}"]`) !== null,
+      )!;
+    const marks = (taskId: string) => node(taskId).textContent ?? "";
+    // A startable Task carries the one filled "Ready" chip.
+    expect(marks(T.SDC)).toContain("Ready");
+    // Doing AND blocked both show, independently.
+    expect(marks(T.SDC5)).toContain("Doing");
+    expect(node(T.SDC5).querySelector(".lucide-ban")).not.toBeNull();
+    expect(marks(T.SDC5)).not.toContain("Ready");
+    // Done carries no chip; archived is neither Ready nor Blocked.
+    expect(marks(T.SDC1)).not.toMatch(/Ready|Doing/);
+    expect(marks(T.LAB9)).toContain("Archived");
+    expect(marks(T.LAB9)).not.toContain("Ready");
+    // An outside blocker shows its own state beside "Outside".
+    expect(marks(T["OUT-LEGAL"])).toContain("Outside");
+    expect(marks(T["OUT-LEGAL"])).toContain("Ready");
+  });
+
+  it("adds the overview map to the map (F025)", async () => {
+    const { container } = renderPage(ready(HELD));
+    await flushLazy(container);
+    expect(container.querySelector(".react-flow__minimap")).not.toBeNull();
+    expect(
+      container.querySelector('.react-flow__minimap [tabindex="0"]'),
+    ).toBeNull();
   });
 });

@@ -867,12 +867,16 @@ there offers its route alone. Top to bottom, for the current main-pane object:
 
 An Initiative page is the one main-pane object whose panel can show ANOTHER
 object: selecting a node on its map, or a row of its list, opens that member
-Task (or outside blocker) in the panel with the ordinary Task inspector — its
-sessions, Start a session, and its status through the usual cycling control —
-under a summary naming the Task. Selecting is the user asking to see it, so it
-opens the panel; navigation still never closes it. With nothing selected, the
-panel summarizes the Initiative and offers no Initiative action: agents manage
-Initiatives, and the user's one write, Settle, belongs to its inbox card.
+Task (or outside blocker) in the panel as the Task route shows it across its
+page and its panel — the Task detail (body, status control with its busy and
+failure states, description, links, runs) over the ordinary Task inspector (its
+sessions, empty or not, Start a session, context and actions). The detail owns
+the Task's body read, so an archived or outside Task, one that no longer exists,
+and a failed or reconnecting read behave as on the Task page, and the selected
+Task's failures have their home there. Selecting is the user asking to see it,
+so it opens the panel; navigation still never closes it. With nothing selected,
+the panel summarizes the Initiative and offers no Initiative action: agents
+manage Initiatives, and the user's one write, Settle, belongs to its inbox card.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

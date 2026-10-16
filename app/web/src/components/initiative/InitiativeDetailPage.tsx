@@ -103,11 +103,17 @@ export function InitiativeDetailPage({
 
   // Read when nothing is held or a newer revision marked the read stale. A
   // read already in flight is not repeated (`requestInitiativeDetail`).
+  //
+  // Keyed on the state OBJECT, not its status string: an answer older than a
+  // revision this tab already holds lands as `refreshing` again, with new data,
+  // and only the new object says another read is due. A read in flight leaves
+  // the object as it is, so this never sends twice for one state.
   const status = detailState?.status ?? "idle";
   useEffect(() => {
-    if (status === "idle" || status === "loading" || status === "refreshing")
+    const current = detailState?.status ?? "idle";
+    if (current === "idle" || current === "loading" || current === "refreshing")
       onLoadDetail(initiativeId);
-  }, [initiativeId, onLoadDetail, status]);
+  }, [detailState, initiativeId, onLoadDetail]);
   // A read the connection lost is tried again once it is back, so a reconnect
   // never leaves the page on that error; any other failure waits for Retry.
   const wasConnected = useRef(connected);

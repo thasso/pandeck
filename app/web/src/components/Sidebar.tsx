@@ -172,6 +172,10 @@ interface Props {
   initiatives: readonly InitiativeSummary[];
   /** An Initiative snapshot answered during this socket episode. */
   initiativesFresh: boolean;
+  /** The Initiative list could not be read. */
+  initiativeListError: string | null;
+  /** Ask for the Initiative list again; stable. */
+  onRetryInitiatives: () => void;
   /** Initiative id open in the main pane, for highlighting. */
   selectedInitiativeId: string | null;
   /** All known worktrees; null until first fetched. */
@@ -477,6 +481,8 @@ function SidebarImpl({
   onOpenProject,
   initiatives,
   initiativesFresh,
+  initiativeListError,
+  onRetryInitiatives,
   selectedInitiativeId,
   worktrees,
   worktreeStatuses,
@@ -853,6 +859,8 @@ function SidebarImpl({
             <InitiativeBrowserGroup
               initiatives={initiatives}
               fresh={initiativesFresh}
+              error={initiativeListError}
+              onRetry={onRetryInitiatives}
               selectedId={selectedInitiativeId}
               onNavigate={onNavigate}
             />

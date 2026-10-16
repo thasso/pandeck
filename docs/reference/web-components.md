@@ -452,12 +452,17 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
 - `initiative/` holds the Initiative surfaces (`docs/initiatives.md`):
   `InitiativesIndexPage` (by state), `InitiativeDetailPage` (header from the
   live summary, members from the keyed read, the five load states, Map/List
-  switch), `InitiativeListView`, the sidebar's `InitiativeBrowserGroup`, the
-  panel's `InitiativeTaskSummary`/`InitiativeInspectorSummary`, and
-  `InitiativeMap`, the only importer of `@xyflow/react`, loaded lazily. The map
-  draws the server's boxes and routes as they are; each Task node is an `Item`
-  rendered as a button, and lanes, groups and the milestone column are
-  pointer-transparent drawing.
+  switch), `InitiativeListView`, `InitiativeStateMarks` (Ready/Doing/Blocked/
+  Archived/Running/Outside, shared by node and row), the sidebar's
+  `InitiativeBrowserGroup` (with its own failure and retry),
+  `InitiativeInspectorSummary`, and `InitiativeMap`, the only importer of
+  `@xyflow/react`, loaded lazily. The map draws the server's boxes and routes as
+  they are, adds the built-in overview map, and judges each arrow by its
+  blocker's live state (`routeEdges`); each Task node is an `Item` rendered as a
+  button, and lanes, groups and the milestone column are pointer-transparent
+  drawing. A selected Task is NOT drawn by an Initiative component: App embeds
+  `TaskManagementPage` (detail only) over `TaskInspector` with
+  `showEmptySessions`, keyed by the one open Task id (`openTaskId`).
 - `ProjectDetailPage.tsx` is the Project's CONTENT, in use order: description,
   its Tasks (`renderTasks`, a render prop because the list is the lazy
   `BacklogList` and needs App's socket state — the page only decides where it

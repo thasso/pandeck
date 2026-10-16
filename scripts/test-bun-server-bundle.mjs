@@ -20,6 +20,12 @@ import {
   serverBundlePlugins,
 } from "./bun-bundle.mjs";
 import * as childProcessShim from "./bun-shims/node-child-process.mjs";
+import {
+  collectWebNotices,
+  renderWebNotices,
+  WEB_NOTICE_PACKAGES,
+  WEB_NOTICES_FILE,
+} from "../app/web/thirdPartyNotices.ts";
 import { DatabaseSync } from "./bun-shims/node-sqlite.mjs";
 import { createRequire } from "node:module";
 import {
@@ -814,6 +820,47 @@ const AMBIENT_PROXY_VARIABLES = [
 ];
 
 /**
+ * The web UI's Initiative map bundles @xyflow/react and the packages under it.
+ * Their notices ship beside the web bundle: exactly what the build renders
+ * from the installed packages (full texts, every copyright, each pinned
+ * version), the map's chunk names where they are, and the package NOTICE
+ * lists every package.
+ */
+async function checkWebNotices() {
+  const shipped = readFileSync(
+    join(runtimeRoot, "web", WEB_NOTICES_FILE),
+    "utf8",
+  );
+  const expected = renderWebNotices(
+    collectWebNotices(fileURLToPath(new URL("../app/web/", import.meta.url))),
+  );
+  assert(
+    shipped === expected,
+    `The packaged ${WEB_NOTICES_FILE} is not the notice of the installed map packages.`,
+  );
+  const assets = join(runtimeRoot, "web", "assets");
+  const chunks = readdirSync(assets).filter((name) => name.endsWith(".js"));
+  const carriers = [];
+  for (const name of chunks) {
+    const code = await file(join(assets, name)).text();
+    if (code.startsWith(`/*! @xyflow/react `)) carriers.push(name);
+  }
+  assert(
+    carriers.length > 0 &&
+      (await file(join(assets, carriers[0])).text()).includes(
+        `license texts: /${WEB_NOTICES_FILE} */`,
+      ),
+    "No web chunk names where the map's third-party notices are.",
+  );
+  const notice = readFileSync(join(runtimeRoot, "NOTICE"), "utf8");
+  for (const entry of WEB_NOTICE_PACKAGES)
+    assert(
+      notice.includes(`${entry.name} ${entry.version}`),
+      `The package NOTICE does not name ${entry.name} ${entry.version}.`,
+    );
+}
+
+/**
  * elkjs ships in the layout worker under the EPL-2.0 (NOTICE): its license
  * text exactly as the package has it, its copyright lines, and its source,
  * beside the worker and at the end of it.
@@ -1369,6 +1416,7 @@ try {
     "native/watcher.node",
     "personal-assistant-server",
     "web/index.html",
+    `web/${WEB_NOTICES_FILE}`,
     "workers/initiative-layout-worker.js",
     "workers/licenses/elkjs/LICENSE.md",
     "workers/licenses/elkjs/NOTICE.md",
@@ -1397,6 +1445,7 @@ try {
     );
 
   checkElkjsNotices();
+  await checkWebNotices();
   await checkBunPragma();
   await checkParseLinkMemory();
   await checkNativeAssets();

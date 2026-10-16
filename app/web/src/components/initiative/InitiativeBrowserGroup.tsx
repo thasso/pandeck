@@ -2,7 +2,7 @@ import { memo } from "react";
 import { Waypoints } from "lucide-react";
 import type { InitiativeSummary } from "@assistant/shared";
 import { Item } from "../ui/item.tsx";
-import { Skeleton } from "../common/load.tsx";
+import { ErrorNote, Skeleton } from "../common/load.tsx";
 import {
   initiativePath,
   INITIATIVES_PATH,
@@ -22,12 +22,21 @@ import { followRowLink } from "../../lib/rowLink.ts";
 export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   initiatives,
   fresh,
+  error,
+  onRetry,
   selectedId,
   onNavigate,
 }: {
   initiatives: readonly InitiativeSummary[];
   /** A snapshot answered during this socket episode. */
   fresh: boolean;
+  /**
+   * The list could not be read. It is stated here with a retry, over any rows
+   * still held, so the group never waits on a snapshot that is not coming.
+   */
+  error: string | null;
+  /** Stable: ask for the list again. */
+  onRetry: () => void;
   selectedId: string | null;
   /** Stable host navigation; rows are links, so a modifier click opens a tab. */
   onNavigate: (path: string) => void;
@@ -50,7 +59,11 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
         <Waypoints size={14} aria-hidden />
         <span className="flex-1 text-xs font-medium">Initiatives</span>
       </Item>
-      {!fresh && initiatives.length === 0 ? (
+      {error ? (
+        <ErrorNote className="mx-2 my-1" message={error} onRetry={onRetry} />
+      ) : null}
+      {error && initiatives.length === 0 ? null : !fresh &&
+        initiatives.length === 0 ? (
         <div role="status" aria-label="Loading Initiatives" className="px-2.5">
           <Skeleton className="h-6 w-3/4" />
         </div>

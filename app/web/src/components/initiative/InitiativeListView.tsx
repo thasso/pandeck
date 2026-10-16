@@ -1,10 +1,9 @@
 import { memo } from "react";
-import { Archive, Ban, Flag } from "lucide-react";
+import { Flag } from "lucide-react";
 import { Item } from "../ui/item.tsx";
-import { LIVE_PULSE } from "../common/load.tsx";
 import { TaskStatusIcon } from "../TaskStatusIcon.tsx";
-import { TaskBlockedIndicator } from "../TaskBlockedIndicator.tsx";
 import { TaskIdBadge } from "../TaskIdBadge.tsx";
+import { InitiativeStateMarks } from "./InitiativeStateMarks.tsx";
 import {
   flattenTree,
   memberStateLabel,
@@ -108,33 +107,16 @@ const MemberRow = memo(function MemberRow({
         >
           <TaskStatusIcon status={member.status} size={14} />
           <span
-            className={`min-w-0 flex-1 truncate ${epic ? "font-medium" : ""}`}
+            className={`min-w-0 flex-1 truncate ${epic ? "font-medium" : ""} ${
+              member.status === "done" ? "text-muted-foreground" : ""
+            }`}
           >
             {member.title}
           </span>
           {member.milestone ? <Flag size={12} /> : null}
-          {member.blocked ? (
-            member.openBlockers ? (
-              <TaskBlockedIndicator openBlockers={member.openBlockers} />
-            ) : (
-              <span className="inline-flex items-center gap-0.5 text-xs text-warning">
-                <Ban size={10} /> Blocked
-              </span>
-            )
-          ) : null}
-          {member.archived ? (
-            <span className="inline-flex items-center gap-0.5 text-xs text-muted-foreground">
-              <Archive size={10} /> Archived
-            </span>
-          ) : null}
-          {member.running ? (
-            <span className="inline-flex items-center gap-1 text-xs text-primary">
-              <span
-                className={`size-1.5 rounded-full bg-primary ${LIVE_PULSE}`}
-              />
-              Running
-            </span>
-          ) : null}
+          <span className="flex shrink-0 items-center gap-1">
+            <InitiativeStateMarks member={member} />
+          </span>
           {epic ? (
             <span className="text-xs text-muted-foreground tabular-nums">
               {progress.done}/{progress.total} done

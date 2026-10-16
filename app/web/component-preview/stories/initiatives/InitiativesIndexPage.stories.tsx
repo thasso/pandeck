@@ -21,7 +21,13 @@ const initiatives = [
 const meta = {
   title: "App/Initiatives/Initiatives index",
   component: InitiativesIndexPage,
-  args: { initiatives, fresh: true, error: null, onOpen: () => {} },
+  args: {
+    initiatives,
+    fresh: true,
+    error: null,
+    onRetry: () => {},
+    onOpen: () => {},
+  },
   parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof InitiativesIndexPage>;
 

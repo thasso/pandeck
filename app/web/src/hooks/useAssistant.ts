@@ -1865,6 +1865,7 @@ type Action =
       error?: string;
     }
   | { kind: "setOpenInitiative"; id: string | null }
+  | { kind: "initiativeListRetry" }
   | { kind: "projectMutationStart"; key: string }
   | { kind: "projectMutationResult"; key: string; error?: string }
   | { kind: "worktreeListLoad" }
@@ -4790,6 +4791,11 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ),
     };
   }
+  if (action.kind === "initiativeListRetry") {
+    return state.initiativeListError === null
+      ? state
+      : { ...state, initiativeListError: null };
+  }
   if (action.kind === "setOpenInitiative") {
     return state.openInitiativeId === action.id
       ? state
@@ -6642,6 +6648,12 @@ export interface AssistantActions {
   /** Read one Initiative's graph and layout; a read in flight is not repeated. */
   requestInitiativeDetail: (id: string) => void;
   setOpenInitiative: (id: string | null) => void;
+  /**
+   * Ask for the Initiative list again after it failed: the subscription is
+   * already held, so it is dropped and taken again for a fresh snapshot, as a
+   * sequence gap does. Does nothing while no surface holds the topic.
+   */
+  retryInitiatives: () => void;
   saveProject: (id: string, patch: Partial<ProjectRecord>) => void;
   provisionProjectRepo: (id: string) => void;
   removeProjectRepo: (id: string) => void;
@@ -9018,6 +9030,18 @@ export function useAssistant({
         send({ type: "getInitiative", id, requestId });
       },
       setOpenInitiative: (id) => dispatch({ kind: "setOpenInitiative", id }),
+      retryInitiatives: () => {
+        if (!topicsRef.current.has("initiatives")) return;
+        dispatch({ kind: "initiativeListRetry" });
+        send({ type: "unsubscribe", topics: ["initiatives"] });
+        send(
+          taskSubscribeMessage(
+            ["initiatives"],
+            stateRef.current,
+            pendingMutationsRef.current,
+          ),
+        );
+      },
       saveProject: (id, patch) => {
         const requestId = startProjectMutation(
           id,

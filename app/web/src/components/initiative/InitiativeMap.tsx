@@ -1,11 +1,13 @@
 import { memo, useCallback, useMemo, useRef, type FocusEvent } from "react";
 import {
   Handle,
+  MiniMap,
   Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
   useStoreApi,
   type Edge,
   type ReactFlowInstance,
@@ -15,15 +17,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/base.css";
 import "./InitiativeMap.css";
-import {
-  Archive,
-  Ban,
-  ExternalLink,
-  Flag,
-  Maximize,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
+import { Flag, Maximize, ZoomIn, ZoomOut } from "lucide-react";
 import type {
   InitiativeLayout,
   InitiativeLayoutEdge,
@@ -31,9 +25,11 @@ import type {
 } from "@assistant/shared";
 import { Item } from "../ui/item.tsx";
 import { IconButton } from "../common/IconButton.tsx";
-import { LIVE_PULSE } from "../common/load.tsx";
 import { TaskStatusIcon } from "../TaskStatusIcon.tsx";
-import { TaskBlockedIndicator } from "../TaskBlockedIndicator.tsx";
+import {
+  InitiativeStateMarks,
+  memberBandClass,
+} from "./InitiativeStateMarks.tsx";
 import { TaskIdBadge } from "../TaskIdBadge.tsx";
 import {
   memberStateLabel,
@@ -62,7 +58,13 @@ type TaskNodeData = {
   onSelect: (taskId: string) => void;
 };
 type FrameNodeData = { label: string; kind: "group" | "lane" | "milestones" };
-type RouteEdgeData = { points: InitiativeLayoutEdge["points"]; open: boolean };
+type RouteEdgeData = {
+  points: InitiativeLayoutEdge["points"];
+  /** The blocker (the source) is neither done nor archived. */
+  open: boolean;
+  /** It starts or ends at the selected Task. */
+  selected: boolean;
+};
 
 type TaskFlowNode = Node<TaskNodeData, "task">;
 type FrameFlowNode = Node<FrameNodeData, "frame">;
@@ -104,16 +106,7 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
   const { layoutNode, member, selected, onSelect } = data;
   const external = layoutNode.kind === "external";
   const status = member?.status ?? "todo";
-  const band =
-    member?.archived || external
-      ? "bg-border"
-      : status === "done"
-        ? "bg-success"
-        : status === "doing"
-          ? "bg-primary"
-          : member?.startable
-            ? "bg-muted-foreground"
-            : "bg-border";
+  const band = memberBandClass(member);
   const store = useStoreApi();
   const { setCenter, getZoom } = useReactFlow();
   // A keyboard user tabbing to a Task off screen is brought to it; a pointer
@@ -141,11 +134,9 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
   );
   return (
     <div
-      className={`relative h-full w-full rounded-lg ${
-        external ? "bg-muted" : "bg-card"
-      } ${member?.archived ? "opacity-60" : ""} ${
-        selected ? "ring-2 ring-ring" : ""
-      }`}
+      className={`relative h-full w-full rounded-lg bg-card ${
+        member?.archived ? "opacity-60" : ""
+      } ${selected ? "ring-2 ring-primary" : ""}`}
     >
       <Handle
         type="target"
@@ -172,49 +163,30 @@ const TaskNode = memo(function TaskNode({ data }: NodeProps<TaskFlowNode>) {
           <span className="mt-0.5 shrink-0" aria-hidden>
             {layoutNode.milestone ? (
               <Flag size={14} className="text-foreground" />
-            ) : external ? (
-              <ExternalLink size={14} className="text-muted-foreground" />
             ) : (
               <TaskStatusIcon status={status} size={14} />
             )}
           </span>
-          <span className="line-clamp-2 min-w-0 flex-1 text-xs font-medium">
+          <span
+            className={`line-clamp-2 min-w-0 flex-1 text-xs font-medium ${
+              // Finished work recedes, so open work is what the eye finds.
+              status === "done" ? "text-muted-foreground" : ""
+            }`}
+          >
             {member?.title ?? `Task-${layoutNode.taskId}`}
           </span>
         </span>
         <span
           aria-hidden
-          className="flex w-full min-w-0 items-center gap-2 text-xs text-muted-foreground"
+          className="flex w-full min-w-0 items-center gap-1 overflow-hidden text-xs text-muted-foreground"
         >
           <TaskIdBadge id={layoutNode.taskId} />
-          {external ? <span className="truncate">Outside</span> : null}
           {layoutNode.kind === "collapsed" && layoutNode.progress ? (
             <span className="tabular-nums">
               {layoutNode.progress.done}/{layoutNode.progress.total} done
             </span>
           ) : null}
-          {member?.blocked ? (
-            member.openBlockers ? (
-              <TaskBlockedIndicator openBlockers={member.openBlockers} />
-            ) : (
-              <span className="inline-flex items-center gap-0.5 text-warning">
-                <Ban size={10} /> Blocked
-              </span>
-            )
-          ) : null}
-          {member?.archived ? (
-            <span className="inline-flex items-center gap-0.5">
-              <Archive size={10} /> Archived
-            </span>
-          ) : null}
-          {member?.running ? (
-            <span className="ml-auto inline-flex items-center gap-1 text-primary">
-              <span
-                className={`size-1.5 rounded-full bg-primary ${LIVE_PULSE}`}
-              />
-              Running
-            </span>
-          ) : null}
+          <InitiativeStateMarks member={member} outside={external} />
         </span>
       </Item>
       <Handle
@@ -233,7 +205,7 @@ const FrameNode = memo(function FrameNode({ data }: NodeProps<FrameFlowNode>) {
     data.kind === "group"
       ? "rounded-xl border border-border"
       : data.kind === "lane"
-        ? "rounded-lg bg-muted/40"
+        ? "rounded-lg bg-muted/20"
         : "rounded-xl border border-border bg-accent/40";
   return (
     <div aria-hidden className={`h-full w-full ${frame}`}>
@@ -259,6 +231,7 @@ const FrameNode = memo(function FrameNode({ data }: NodeProps<FrameFlowNode>) {
 const RouteEdge = memo(function RouteEdge({ data }: EdgeProps<RouteFlowEdge>) {
   const points = data?.points ?? [];
   if (points.length < 2) return null;
+  const open = data?.open ?? true;
   const path = points
     .map((point, index) => `${index === 0 ? "M" : "L"}${point.x} ${point.y}`)
     .join(" ");
@@ -266,25 +239,72 @@ const RouteEdge = memo(function RouteEdge({ data }: EdgeProps<RouteFlowEdge>) {
   const before = points[points.length - 2]!;
   const dx = Math.sign(end.x - before.x);
   const dy = Math.sign(end.y - before.y);
-  const size = 6;
+  // A filled head, long enough to read the direction at the readable zoom;
+  // the released edge keeps a smaller one.
+  const size = open ? 11 : 7;
   // Orthogonal routes end on an axis, so the head points along it.
-  const head = `M${end.x} ${end.y} L${end.x - dx * size - dy * size * 0.6} ${
-    end.y - dy * size - dx * size * 0.6
-  } L${end.x - dx * size + dy * size * 0.6} ${
-    end.y - dy * size + dx * size * 0.6
+  const head = `M${end.x} ${end.y} L${end.x - dx * size - dy * size * 0.5} ${
+    end.y - dy * size - dx * size * 0.5
+  } L${end.x - dx * size + dy * size * 0.5} ${
+    end.y - dy * size + dx * size * 0.5
   } Z`;
-  const tone = data?.open
-    ? "stroke-muted-foreground fill-muted-foreground"
-    : "stroke-border fill-border";
+  // An edge whose blocker is still open holds work up: strong and wide. One
+  // whose blocker is done is released: thin and faint. A selection makes its
+  // own edges louder without merging the two kinds.
+  const tone = open
+    ? data?.selected
+      ? "stroke-primary fill-primary"
+      : "stroke-foreground/70 fill-foreground/70"
+    : data?.selected
+      ? "stroke-primary/50 fill-primary/50"
+      : "stroke-muted-foreground/40 fill-muted-foreground/40";
   return (
-    <g className={tone}>
-      <path d={path} fill="none" strokeWidth={1.5} />
-      <path d={head} strokeWidth={1} />
+    <g className={tone} data-edge-state={open ? "open" : "done"}>
+      <path
+        d={path}
+        fill="none"
+        strokeWidth={open ? (data?.selected ? 2.5 : 2) : 1}
+      />
+      <path d={head} strokeWidth={0.5} />
     </g>
   );
 });
 
 const NODE_TYPES = { task: TaskNode, frame: FrameNode };
+
+/**
+ * The map's arrows, along the server's routes. Whether an arrow holds work up
+ * is its SOURCE Task's state (the blocker), live from the members, so a
+ * blocker finishing releases its arrows without a read or a layout.
+ */
+export function routeEdges(
+  layout: InitiativeLayout,
+  members: ReadonlyMap<string, InitiativeMember>,
+  selectedTaskId: string | null,
+): RouteFlowEdge[] {
+  const byId = new Map(layout.nodes.map((node) => [node.id, node]));
+  return layout.edges.map((edge, index): RouteFlowEdge => {
+    const from = byId.get(edge.from);
+    const blocker = from ? members.get(from.taskId) : undefined;
+    return {
+      id: `edge:${index}`,
+      source: edge.from,
+      target: edge.to,
+      type: "route",
+      data: {
+        points: edge.points,
+        open: blocker ? blocker.status !== "done" && !blocker.archived : true,
+        selected:
+          selectedTaskId !== null &&
+          (from?.taskId === selectedTaskId ||
+            byId.get(edge.to)?.taskId === selectedTaskId),
+      },
+      selectable: false,
+      focusable: false,
+      zIndex: 2,
+    };
+  });
+}
 
 /** Below this the node text is no longer readable. */
 const READABLE_ZOOM = 0.6;
@@ -315,6 +335,68 @@ export function initialViewport(
   return { x, y, zoom };
 }
 const EDGE_TYPES = { route: RouteEdge };
+
+/**
+ * A member's colour in the overview, by the states its node shows: the overview
+ * then reads as a strip of what is ready, moving, held and finished.
+ */
+export function overviewColor(member: InitiativeMember | undefined): string {
+  if (!member || member.archived) return "var(--border)";
+  if (member.status === "done") return "var(--success)";
+  if (member.blocked) return "var(--warning)";
+  if (member.status === "doing") return "var(--foreground)";
+  if (member.startable) return "var(--primary)";
+  return "var(--muted-foreground)";
+}
+
+/**
+ * The overview of the whole map: every Task and the milestone column, the
+ * visible part framed, pannable and zoomable, and a click goes there. It is drawing, out of the Tab
+ * order, and smaller on a narrow pane, where a phone that chose the Map still
+ * needs to find its way.
+ */
+function MapOverview({
+  members,
+}: {
+  members: ReadonlyMap<string, InitiativeMember>;
+}) {
+  const narrow = useStore((state) => state.width < 640);
+  const { setCenter, getZoom } = useReactFlow();
+  // A click goes where it points: a Task's box is centred, anywhere else is
+  // brought to the middle, at the zoom the reader chose.
+  const goTo = useCallback(
+    (x: number, y: number) =>
+      void setCenter(x, y, { zoom: getZoom(), duration: 200 }),
+    [getZoom, setCenter],
+  );
+  const nodeColor = useCallback(
+    (node: TaskFlowNode | FrameFlowNode) =>
+      node.type === "task"
+        ? overviewColor(members.get(node.data.layoutNode.taskId))
+        : "transparent",
+    [members],
+  );
+  return (
+    <MiniMap<TaskFlowNode | FrameFlowNode>
+      className="initiative-minimap"
+      position="bottom-right"
+      pannable
+      zoomable
+      ariaLabel="Map overview"
+      nodeColor={nodeColor}
+      nodeStrokeWidth={0}
+      nodeBorderRadius={2}
+      onClick={(_, position) => goTo(position.x, position.y)}
+      onNodeClick={(_, node) =>
+        goTo(
+          node.position.x + (node.width ?? 0) / 2,
+          node.position.y + (node.height ?? 0) / 2,
+        )
+      }
+      style={narrow ? { width: 140, height: 84 } : { width: 200, height: 120 }}
+    />
+  );
+}
 
 function MapControls() {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
@@ -450,26 +532,10 @@ function InitiativeMapCanvas({
     return [...frames, ...tasks];
   }, [layout, members, projectLabel, selectedTaskId, onSelectTask]);
 
-  const edges = useMemo(() => {
-    const byId = new Map(layout.nodes.map((node) => [node.id, node]));
-    return layout.edges.map((edge, index): RouteFlowEdge => {
-      const from = byId.get(edge.from);
-      const blocker = from ? members.get(from.taskId) : undefined;
-      return {
-        id: `edge:${index}`,
-        source: edge.from,
-        target: edge.to,
-        type: "route",
-        data: {
-          points: edge.points,
-          open: blocker ? blocker.status !== "done" && !blocker.archived : true,
-        },
-        selectable: false,
-        focusable: false,
-        zIndex: 2,
-      };
-    });
-  }, [layout, members]);
+  const edges = useMemo(
+    () => routeEdges(layout, members, selectedTaskId),
+    [layout, members, selectedTaskId],
+  );
 
   const paneRef = useRef<HTMLDivElement>(null);
   const openAtReadableZoom = useCallback(
@@ -512,6 +578,7 @@ function InitiativeMapCanvas({
       attributionPosition="bottom-left"
     >
       <MapControls />
+      <MapOverview members={members} />
     </ReactFlow>
   );
 }

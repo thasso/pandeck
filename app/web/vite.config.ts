@@ -4,6 +4,12 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolveAuthToken } from "../server/src/authToken.ts";
 import { resolveBuildInfo } from "../server/src/buildInfo.ts";
+import {
+  collectWebNotices,
+  renderWebNotices,
+  WEB_NOTICES_FILE,
+  webNoticeBanner,
+} from "./thirdPartyNotices.ts";
 
 const TOKEN_PLACEHOLDER = '"%ASSISTANT_TOKEN%"';
 
@@ -63,6 +69,39 @@ function chunkBudgetPlugin(): Plugin {
   };
 }
 
+// The Initiative map bundles @xyflow/react and the packages under it, whose
+// licenses ask for their notices to travel with the code. The build writes
+// their texts, read from the installed packages, beside the bundle, and the
+// map's chunk names where they are. Both fail the build rather than ship a
+// notice that does not match (`thirdPartyNotices.ts`).
+function thirdPartyNoticesPlugin(): Plugin {
+  return {
+    name: "assistant-third-party-notices",
+    apply: "build",
+    generateBundle(_, bundle) {
+      const entries = collectWebNotices(
+        fileURLToPath(new URL(".", import.meta.url)),
+      );
+      this.emitFile({
+        type: "asset",
+        fileName: WEB_NOTICES_FILE,
+        source: renderWebNotices(entries),
+      });
+      const mapChunks = Object.values(bundle).filter(
+        (chunk) =>
+          chunk.type === "chunk" &&
+          (chunk.moduleIds ?? []).some((id) =>
+            /node_modules[\\/]@xyflow[\\/]react[\\/]/.test(id),
+          ),
+      );
+      if (mapChunks.length === 0)
+        this.error("No chunk contains @xyflow/react to carry its notice.");
+      for (const chunk of mapChunks)
+        if (chunk.type === "chunk") chunk.code = webNoticeBanner() + chunk.code;
+    },
+  };
+}
+
 // Vite derives `isProduction` solely from an ambient `NODE_ENV` — it only
 // defaults it (to "development" for `serve`) when the variable is unset. So a
 // dev server started from an environment that already exports
@@ -116,6 +155,7 @@ export default defineConfig(({ command }) => {
       react(),
       tailwindcss(),
       chunkBudgetPlugin(),
+      thirdPartyNoticesPlugin(),
       assistantTokenDevPlugin(),
     ],
     build: {

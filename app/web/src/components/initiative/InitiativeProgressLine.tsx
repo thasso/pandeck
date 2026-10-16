@@ -8,7 +8,8 @@ import { Progress } from "../ui/progress.tsx";
  * @useWhen The Initiative page's toolbar and each row of the Initiatives index.
  * @intent The counts are the summary's own (`docs/initiatives.md`, Progress):
  *   in progress and blocked overlap, so they are stated side by side and never
- *   summed. A zero bucket is left out rather than drawn as noise.
+ *   summed. A zero bucket is left out rather than drawn as noise. "Ready to
+ *   start" is the map's Ready.
  */
 export function InitiativeProgressLine({
   progress,
@@ -28,15 +29,22 @@ export function InitiativeProgressLine({
           {done}/{total} done
         </span>
       </span>
-      {doing > 0 ? (
-        <span className="tabular-nums">{doing} in progress</span>
-      ) : null}
-      {startable > 0 ? (
-        <span className="tabular-nums">{startable} ready to start</span>
-      ) : null}
-      {blocked > 0 ? (
-        <span className="text-warning tabular-nums">{blocked} blocked</span>
-      ) : null}
+      {/* The counts are one group, so a narrow screen wraps them together
+          rather than leaving one stranded on its own line. */}
+      <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {doing > 0 ? (
+          <span className="tabular-nums">{doing} in progress</span>
+        ) : null}
+        {startable > 0 ? (
+          // The same token as a node's Ready chip: one word, one colour.
+          <span className="font-medium text-primary tabular-nums">
+            {startable} ready to start
+          </span>
+        ) : null}
+        {blocked > 0 ? (
+          <span className="text-warning tabular-nums">{blocked} blocked</span>
+        ) : null}
+      </span>
     </span>
   );
 }

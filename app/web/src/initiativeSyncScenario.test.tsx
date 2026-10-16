@@ -14,6 +14,8 @@ import type {
   ServerMessage,
 } from "@assistant/shared";
 import { useAssistant, type UIState } from "./hooks/useAssistant.ts";
+import { InitiativeDetailPage } from "./components/initiative/InitiativeDetailPage.tsx";
+import { HOSTED_LABS_DETAIL } from "../component-preview/fixtures/initiatives.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -205,5 +207,123 @@ describe("Initiative socket/reducer scenario", () => {
       status: "error",
       error: "Connection lost while loading this Initiative.",
     });
+  });
+
+  it("re-reads after an answer older than a revision received during the read (F026)", async () => {
+    // The real page on the real socket effect and reducer: a refresh whose
+    // answer predates an event that arrived while it ran must be followed by
+    // another read, not left `refreshing` forever.
+    function PageHarness() {
+      const { actions, state } = useAssistant();
+      latestState = state;
+      useEffect(() => actions.setTopics(["initiatives"]), [actions]);
+      return (
+        <InitiativeDetailPage
+          initiativeId="7"
+          mobile
+          connected={state.connected}
+          summary={state.initiatives.find((item) => item.id === "7")}
+          detailState={state.initiativeDetails["7"]}
+          onLoadDetail={actions.requestInitiativeDetail}
+          onOpenInitiative={actions.setOpenInitiative}
+          liveTasks={null}
+          sessions={[]}
+          projectLabel={() => "Project"}
+          selectedTaskId={null}
+          onSelectTask={() => {}}
+          onOpenIndex={() => {}}
+        />
+      );
+    }
+    await act(async () => root.render(<PageHarness />));
+    const socket = ScenarioSocket.instances[0]!;
+    await act(async () => {
+      socket.open();
+      socket.receive(readyMessage());
+      socket.receive({
+        type: "initiativeList",
+        items: [summary("7")],
+        seq: 1,
+        revisions: [{ id: "7", revision: 1 }],
+      });
+    });
+    const reads = () =>
+      socket.sent.flatMap((message) =>
+        message.type === "getInitiative" ? [message] : [],
+      );
+    const answer = (requestId: string, revision: number) =>
+      socket.receive({
+        type: "initiativeDetail",
+        id: "7",
+        item: { ...HOSTED_LABS_DETAIL, id: "7", title: `Revision ${revision}` },
+        revision,
+        requestId,
+      });
+    const event = (seq: number, revision: number) =>
+      socket.receive({
+        type: "stateEvents",
+        topic: "initiatives",
+        seq,
+        events: [{ kind: "upsert", id: "7", revision, item: summary("7") }],
+      });
+
+    expect(reads()).toHaveLength(1);
+    await act(async () => answer(reads()[0]!.requestId, 1));
+    expect(latestState.initiativeDetails["7"]?.status).toBe("ready");
+
+    await act(async () => event(2, 2));
+    expect(reads()).toHaveLength(2);
+    // Revision 3 lands while the second read is in flight.
+    await act(async () => event(3, 3));
+    expect(reads()).toHaveLength(2);
+    await act(async () => answer(reads()[1]!.requestId, 2));
+    // The answer is older than revision 3: shown, and read again.
+    expect(reads()).toHaveLength(3);
+    await act(async () => answer(reads()[2]!.requestId, 3));
+    const settled = latestState.initiativeDetails["7"];
+    expect(settled?.status).toBe("ready");
+    expect(settled && "data" in settled ? settled.data?.item.title : null).toBe(
+      "Revision 3",
+    );
+    // Settled: no further reads.
+    expect(reads()).toHaveLength(3);
+  });
+
+  it("states a failed list read and recovers it on retry (F030)", async () => {
+    await act(async () => root.render(<InitiativeHarness />));
+    const socket = ScenarioSocket.instances[0]!;
+    await act(async () => {
+      socket.open();
+      socket.receive(readyMessage());
+    });
+    expect(subscribes(socket)).toHaveLength(1);
+    // The cold subscribe fails on the server.
+    await act(async () =>
+      socket.receive({
+        type: "error",
+        message: "Failed to list Initiatives: database is locked",
+        target: { type: "initiative" },
+      }),
+    );
+    expect(latestState.initiativeListError).toBe(
+      "Failed to list Initiatives: database is locked",
+    );
+    expect(latestState.initiativesFresh).toBe(false);
+
+    // Retry drops the held subscription and takes it again for a snapshot.
+    await act(async () => latestActions.retryInitiatives());
+    expect(unsubscribes(socket)).toHaveLength(1);
+    expect(subscribes(socket)).toHaveLength(2);
+    expect(latestState.initiativeListError).toBeNull();
+    await act(async () =>
+      socket.receive({
+        type: "initiativeList",
+        items: [summary("1")],
+        seq: 1,
+        revisions: [{ id: "1", revision: 1 }],
+      }),
+    );
+    expect(latestState.initiativesFresh).toBe(true);
+    expect(latestState.initiatives.map((item) => item.id)).toEqual(["1"]);
   });
 });

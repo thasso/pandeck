@@ -35,7 +35,11 @@ const liveTasks = new Map<string, TaskSummary>(
         ...(node.projectId ? { projectId: node.projectId } : {}),
         ...(node.blocked ? { openBlockerCount: 1 } : {}),
         ...(HOSTED_LABS_RUNNING_TASK_IDS.includes(node.id)
-          ? { sessionRefs: [{ sessionId: `session-${node.id}` }] }
+          ? {
+              sessionRefs: [
+                { sessionId: `session-${node.id}`, origin: "task-start" },
+              ],
+            }
           : {}),
       } satisfies TaskSummary,
     ]),

@@ -111,15 +111,26 @@ describe("the live overlay", () => {
     });
   });
 
-  it("marks a Task running only through its linked streaming session", () => {
+  it("marks a Task running only through a streaming session started from it", () => {
     const live = liveTaskIndex(
       [
         task({
           id: T.LAB2,
           status: "doing",
-          sessionRefs: [{ sessionId: "s-run" }],
+          sessionRefs: [{ sessionId: "s-run", origin: "task-start" }],
         }),
-        task({ id: T.SRS4, sessionRefs: [{ sessionId: "s-idle" }] }),
+        task({
+          id: T.SRS4,
+          sessionRefs: [{ sessionId: "s-idle", origin: "task-start" }],
+        }),
+        // A streaming session that only referenced the Task (a search, a scan)
+        // or carries no origin at all is NOT working on it.
+        task({
+          id: T.SDC5,
+          status: "doing",
+          sessionRefs: [{ sessionId: "s-run", origin: "reference" }],
+        }),
+        task({ id: T.SDC6, sessionRefs: [{ sessionId: "s-run" }] }),
       ],
       true,
     );
@@ -131,6 +142,12 @@ describe("the live overlay", () => {
     const members = initiativeMembers(HOSTED_LABS_DETAIL, live, running);
     expect(members.get(T.LAB2)?.running).toBe(true);
     expect(members.get(T.SRS4)?.running).toBe(false);
+    // `doing` is the Task's status, a separate fact from a running session.
+    expect(members.get(T.SDC5)).toMatchObject({
+      status: "doing",
+      running: false,
+    });
+    expect(members.get(T.SDC6)?.running).toBe(false);
   });
 
   it("includes outside blockers, which are real Tasks", () => {

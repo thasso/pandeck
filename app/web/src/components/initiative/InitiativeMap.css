@@ -9,3 +9,19 @@
   color: var(--muted-foreground);
   text-decoration: none;
 }
+
+/* The overview in the app's tokens: its card surface, the area outside the
+   view dimmed with the page background, the view framed in the ring colour. */
+.initiative-minimap {
+  --xy-minimap-background-color: var(--card);
+  --xy-minimap-mask-background-color: color-mix(
+    in oklab,
+    var(--background) 60%,
+    transparent
+  );
+  --xy-minimap-mask-stroke-color: var(--ring);
+  --xy-minimap-mask-stroke-width: 2;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}

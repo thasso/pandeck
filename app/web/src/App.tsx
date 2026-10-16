@@ -308,7 +308,6 @@ import {
   liveTaskIndex,
   selectedTaskFromHash,
 } from "./lib/initiativeView.ts";
-import { InitiativeTaskSummary } from "./components/initiative/InitiativeTaskSummary.tsx";
 import { InitiativeInspectorSummary } from "./components/initiative/InitiativeInspectorSummary.tsx";
 import { AppShell } from "./components/shell/AppShell.tsx";
 import {
@@ -1424,6 +1423,10 @@ function AppContent() {
         // The workflow start sheet meters accounts and offers Project branches.
         workflowStartOpen: workflowStartTaskId !== null,
         projectSelected: route.name === "projects" && Boolean(route.id),
+        initiativeTaskSelected:
+          route.name === "initiatives" &&
+          Boolean(route.id) &&
+          selectedTaskFromHash(locationHash) !== null,
         // Only a surface that renders a domain list reads it. The session
         // inspector needs the current skills scan for its loaded/unloaded rows.
         settingsSection: route.name === "settings" ? route.section : undefined,
@@ -1476,6 +1479,7 @@ function AppContent() {
       sidebarPanelOpen,
       sidebarSection,
       route,
+      locationHash,
       workflowStartTaskId,
       inspectorOpen,
       mobileLayout,
@@ -2695,39 +2699,51 @@ function AppContent() {
   );
   const backlogLoaded = state.taskList !== null;
   const selectedTaskId = route.name === "tasks" ? (route.id ?? null) : null;
-  const selectedStatusMutation = selectedTaskId
-    ? state.taskMutations[taskMutationKey(selectedTaskId, "status")]
+  // One Initiative's page: the member Task the fragment selects opens in the
+  // object panel (`lib/initiativeView.ts`).
+  const selectedInitiativeId =
+    route.name === "initiatives" ? (route.id ?? null) : null;
+  const initiativeSelectedTaskId = selectedInitiativeId
+    ? selectedTaskFromHash(locationHash)
+    : null;
+  // The ONE Task whose full detail is open: the Task route's, or the one an
+  // Initiative page shows in its panel. Its body pin, its mutations, its runs
+  // and the home that claims its failures all follow this id, so the panel's
+  // Task detail behaves exactly as the Task page does.
+  const openTaskId = selectedTaskId ?? initiativeSelectedTaskId;
+  const selectedStatusMutation = openTaskId
+    ? state.taskMutations[taskMutationKey(openTaskId, "status")]
     : undefined;
-  const selectedRenameMutation = selectedTaskId
-    ? state.taskMutations[taskMutationKey(selectedTaskId, "rename")]
+  const selectedRenameMutation = openTaskId
+    ? state.taskMutations[taskMutationKey(openTaskId, "rename")]
     : undefined;
-  const selectedDescriptionMutation = selectedTaskId
-    ? state.taskMutations[taskMutationKey(selectedTaskId, "description")]
+  const selectedDescriptionMutation = openTaskId
+    ? state.taskMutations[taskMutationKey(openTaskId, "description")]
     : undefined;
   const selectedTaskMutations = useMemo(() => {
     const projection: UIState["taskMutations"] = {};
-    if (!selectedTaskId) return projection;
+    if (!openTaskId) return projection;
     if (selectedStatusMutation)
-      projection[taskMutationKey(selectedTaskId, "status")] =
+      projection[taskMutationKey(openTaskId, "status")] =
         selectedStatusMutation;
     if (selectedRenameMutation)
-      projection[taskMutationKey(selectedTaskId, "rename")] =
+      projection[taskMutationKey(openTaskId, "rename")] =
         selectedRenameMutation;
     if (selectedDescriptionMutation)
-      projection[taskMutationKey(selectedTaskId, "description")] =
+      projection[taskMutationKey(openTaskId, "description")] =
         selectedDescriptionMutation;
     return projection;
   }, [
-    selectedTaskId,
+    openTaskId,
     selectedStatusMutation,
     selectedRenameMutation,
     selectedDescriptionMutation,
   ]);
   const selectedTaskWorkflowRuns = useMemo(
     () =>
-      state.workflowRuns?.filter((run) => run.taskId === selectedTaskId) ??
+      state.workflowRuns?.filter((run) => run.taskId === openTaskId) ??
       state.workflowRuns,
-    [selectedTaskId, state.workflowRuns],
+    [openTaskId, state.workflowRuns],
   );
   const selectedTaskWorkflowCards = useMemo(() => {
     if (!selectedTaskWorkflowRuns) return {};
@@ -2831,11 +2847,6 @@ function AppContent() {
   // One Initiative's page: the member Task the fragment selects opens in the
   // object panel, and the live Tasks topic recolours its map
   // (`lib/initiativeView.ts`).
-  const selectedInitiativeId =
-    route.name === "initiatives" ? (route.id ?? null) : null;
-  const initiativeSelectedTaskId = selectedInitiativeId
-    ? selectedTaskFromHash(locationHash)
-    : null;
   const initiativeLiveTasks = useMemo(
     () => liveTaskIndex(state.taskList?.items, state.taskListFresh),
     [state.taskList, state.taskListFresh],
@@ -2863,39 +2874,28 @@ function AppContent() {
     () => navigate(INITIATIVES_PATH),
     [navigate],
   );
-  // The selected Task's summary: its Backlog row, or the body read for one the
-  // live list does not hold (archived, or an outside blocker).
+  // The selected Task's summary, for its panel's sessions and actions: its
+  // Backlog row, else the body the embedded Task detail reads for it (an
+  // archived member, an outside blocker). A body that says the Task does not
+  // exist, or a failed read with nothing retained, yields none, so the panel
+  // states that instead of offering actions on nothing.
   const initiativeSelectedDetail = initiativeSelectedTaskId
     ? state.taskDetails[initiativeSelectedTaskId]
     : undefined;
   const initiativeSelectedTask = useMemo(() => {
     if (!initiativeSelectedTaskId) return undefined;
+    const body = initiativeSelectedDetail
+      ? dataOf(initiativeSelectedDetail)
+      : undefined;
+    if (body === null) return undefined;
     const listed = backlogTasks.find(
       (task) => task.id === initiativeSelectedTaskId,
     );
     if (listed) return listed;
-    const body = initiativeSelectedDetail
-      ? dataOf(initiativeSelectedDetail)
-      : undefined;
     return body ? taskSummaryOf(body) : undefined;
   }, [backlogTasks, initiativeSelectedDetail, initiativeSelectedTaskId]);
-  const initiativeTaskInList =
-    initiativeSelectedTaskId !== null &&
-    backlogTasks.some((task) => task.id === initiativeSelectedTaskId);
-  useEffect(() => {
-    if (!initiativeSelectedTaskId || !state.taskListFresh) return;
-    if (initiativeTaskInList) return;
-    if (state.taskDetails[initiativeSelectedTaskId]) return;
-    actions.requestTaskDetail(initiativeSelectedTaskId);
-  }, [
-    actions,
-    initiativeSelectedTaskId,
-    initiativeTaskInList,
-    state.taskDetails,
-    state.taskListFresh,
-  ]);
-  const selectedTaskDetailState = selectedTaskId
-    ? state.taskDetails[selectedTaskId]
+  const selectedTaskDetailState = openTaskId
+    ? state.taskDetails[openTaskId]
     : undefined;
   const selectedProjectDetailState = selectedProjectId
     ? state.projectDetails[selectedProjectId]
@@ -5114,7 +5114,9 @@ function AppContent() {
       // status, so a failure about it would be suppressed into nothing.
       openObjects: {
         project: selectedProjectId ? [selectedProjectId] : [],
-        task: selectedTaskId ? [selectedTaskId] : [],
+        // The Task route's Task, or the one an Initiative page's panel shows
+        // with its status control: either way a failure about it has a home.
+        task: openTaskId ? [openTaskId] : [],
       },
     });
   }, [
@@ -5122,7 +5124,7 @@ function AppContent() {
     sessionShell.ownsFailure,
     stagedSendSessionId,
     selectedProjectId,
-    selectedTaskId,
+    openTaskId,
   ]);
 
   // Leaving settings returns to the chat we were in, or to /sessions/create for a fresh start.
@@ -6945,6 +6947,8 @@ function AppContent() {
         onOpenProject={openProject}
         initiatives={state.initiatives}
         initiativesFresh={state.initiativesFresh}
+        initiativeListError={state.initiativeListError}
+        onRetryInitiatives={actions.retryInitiatives}
         selectedInitiativeId={selectedInitiativeId}
         worktrees={state.worktrees}
         worktreeStatuses={state.worktreeStatuses}
@@ -7118,87 +7122,128 @@ function AppContent() {
           actions.setSpawnOwnership(displaySessionListItem.id, ownership)
       : undefined,
   };
+  // The Task inspector: the Task's sessions, its actions and its context, ONE
+  // composition for the Task route and for the Task an Initiative page shows in
+  // its panel. Only what follows a removal differs: the Task route goes back to
+  // the Backlog, an Initiative page stays where it is.
+  const taskInspectorFor = (
+    task: Task | undefined,
+    options: { afterRemove?: () => void; showEmptySessions?: boolean } = {},
+  ) => (
+    <TaskInspector
+      task={task}
+      sessions={state.sessions}
+      openers={inspectorOpeners}
+      onStartSession={startSessionForTask}
+      showEmptySessions={options.showEmptySessions ?? false}
+      // Only a Task with a Project can have a run worktree provisioned; the
+      // server still owns the real git-backed check and refuses with a
+      // readable error inside the sheet.
+      onRunWorkflow={
+        task?.projectId ? (taskId) => setWorkflowStartTaskId(taskId) : undefined
+      }
+      onArchive={(taskId) => {
+        if (runTaskArchive([taskId], taskArchiveContext, actions))
+          options.afterRemove?.();
+      }}
+      onUnarchive={(taskId) => actions.archiveTask(taskId, false)}
+      onDelete={(taskId) => {
+        if (!task) return;
+        // The same act as the Backlog's, through the same rules: subtree-shaped
+        // and deepest first, with the count declared in the question
+        // (`lib/taskDelete.ts`). Deleting the head alone from here would scatter
+        // the subtasks the tree's own delete removes. An archived Task is not
+        // in that list, so it joins it for the count.
+        const tasks = taskArchiveContext.tasks.some(
+          (candidate) => candidate.id === taskId,
+        )
+          ? taskArchiveContext.tasks
+          : [...taskArchiveContext.tasks, task];
+        const doomed = deleteSet(tasks, [taskId]);
+        const { title, body } = deleteConfirmation(tasks, [taskId], doomed);
+        void dialogs
+          .confirm({ title, body, confirmLabel: "Delete", danger: true })
+          .then((confirmed) => {
+            if (!confirmed) return;
+            for (const id of doomed) actions.deleteTask(id);
+            options.afterRemove?.();
+          });
+      }}
+    >
+      {task && (
+        <TaskContextSections
+          task={task}
+          projects={projects.filter((p) => p.status !== "archived")}
+          projectsById={projectsById}
+          jiraHost={state.settings.jira.jiraHost}
+          forgejoBaseUrl={state.settings.forgejo.baseUrl}
+          onPatch={(patch) =>
+            actions.saveTask({
+              id: task.id,
+              status: task.status,
+              ...patch,
+            })
+          }
+          onOpenProject={(id) => navigateFromInspector(projectPath(id))}
+        />
+      )}
+    </TaskInspector>
+  );
   const rightPanelContent =
     route.name === "tasks" && route.id ? (
-      <TaskInspector
-        task={inspectedTask}
-
-        sessions={state.sessions}
-        openers={inspectorOpeners}
-        onStartSession={startSessionForTask}
-        // Only a Task with a Project can have a run worktree provisioned; the
-        // server still owns the real git-backed check and refuses with a
-        // readable error inside the sheet.
-        onRunWorkflow={
-          inspectedTask?.projectId
-            ? (taskId) => setWorkflowStartTaskId(taskId)
-            : undefined
-        }
-        onArchive={(taskId) => {
-          if (runTaskArchive([taskId], taskArchiveContext, actions))
-            openSidebarSection("tasks");
-        }}
-        onUnarchive={(taskId) => actions.archiveTask(taskId, false)}
-        onDelete={(taskId) => {
-          if (!inspectedTask) return;
-          // The same act as the Backlog's, through the same rules: subtree-shaped
-          // and deepest first, with the count declared in the question
-          // (`lib/taskDelete.ts`). Deleting the head alone from here would scatter
-          // the subtasks the tree's own delete removes. An archived Task is not
-          // in that list, so it joins it for the count.
-          const tasks = taskArchiveContext.tasks.some(
-            (task) => task.id === taskId,
-          )
-            ? taskArchiveContext.tasks
-            : [...taskArchiveContext.tasks, inspectedTask];
-          const doomed = deleteSet(tasks, [taskId]);
-          const { title, body } = deleteConfirmation(tasks, [taskId], doomed);
-          void dialogs
-            .confirm({ title, body, confirmLabel: "Delete", danger: true })
-            .then((confirmed) => {
-              if (!confirmed) return;
-              for (const id of doomed) actions.deleteTask(id);
-              openSidebarSection("tasks");
-            });
-        }}
-      >
-        {inspectedTask && (
-          <TaskContextSections
-            task={inspectedTask}
-            projects={projects.filter((p) => p.status !== "archived")}
-            projectsById={projectsById}
-            jiraHost={state.settings.jira.jiraHost}
-            forgejoBaseUrl={state.settings.forgejo.baseUrl}
-            onPatch={(patch) =>
-              actions.saveTask({
-                id: inspectedTask.id,
-                status: inspectedTask.status,
-                ...patch,
-              })
-            }
-            onOpenProject={(id) => navigateFromInspector(projectPath(id))}
-          />
-        )}
-      </TaskInspector>
+      taskInspectorFor(inspectedTask, {
+        afterRemove: () => openSidebarSection("tasks"),
+      })
     ) : route.name === "initiatives" && route.id ? (
       initiativeSelectedTaskId ? (
-        <TaskInspector
-          // Keyed by the Task it inspects, so its sections' state never
-          // carries over to the next selection.
+        // The selected Task in full, the same composition the Task route shows
+        // across its page and its panel: the Task detail (title, status with
+        // its busy and failure, description, links, runs) over the Task
+        // inspector (sessions, Start session, context). The detail owns the
+        // body read, its refresh, not-found and failure. One scroll column,
+        // keyed by the Task, so nothing carries over to the next selection.
+        <div
           key={initiativeSelectedTaskId}
-          task={initiativeSelectedTask}
-          sessions={state.sessions}
-          openers={inspectorOpeners}
-          onStartSession={startSessionForTask}
+          className="flex h-full min-h-0 flex-col overflow-y-auto"
         >
-          {initiativeSelectedTask ? (
-            <InitiativeTaskSummary
-              task={initiativeSelectedTask}
-              onCycleStatus={cycleTaskStatus}
-              onOpenTask={(id) => navigateFromInspector(taskPath(id))}
+          <Suspense fallback={<LazySurfaceFallback label="Opening Task…" />}>
+            <TaskManagementPage
+              backlogState={backlogState}
+              connected={state.connected}
+              detailState={selectedTaskDetailState}
+              failure={state.objectFailures.task[initiativeSelectedTaskId]}
+              onDismissFailure={() =>
+                actions.dismissObjectFailure("task", initiativeSelectedTaskId)
+              }
+              workflowRuns={selectedTaskWorkflowRuns}
+              workflowCards={selectedTaskWorkflowCards}
+              accountNames={accountNames}
+              sessions={backlogSessions}
+              taskMutations={selectedTaskMutations}
+              actions={actions}
+              prefs={prefs}
+              onUpdatePrefs={update}
+              selectedId={initiativeSelectedTaskId}
+              detailOnly
+              // The panel is the object's own surface on every layout, so its
+              // status control stays in the detail rather than the dock.
+              mobile={false}
+              onSelect={(id) => navigateFromInspector(taskPath(id))}
+              onNavigate={navigateFromInspector}
+              onCloseDetail={() => {}}
+              onClose={() => {}}
+              paObjectReferences={paObjectReferences}
+              onOpenPaObject={(link) => navigateFromInspector(link.href)}
+              onOpenSession={(id) => navigateFromInspector(sessionPath(id))}
+              workflowIndicators={workflowIndicators}
             />
-          ) : null}
-        </TaskInspector>
+          </Suspense>
+          {initiativeSelectedTask
+            ? taskInspectorFor(initiativeSelectedTask, {
+                showEmptySessions: true,
+              })
+            : null}
+        </div>
       ) : (
         <Inspector relations={[]} actions={[]}>
           <InitiativeInspectorSummary
@@ -7677,6 +7722,7 @@ function AppContent() {
                           initiatives={state.initiatives}
                           fresh={state.initiativesFresh}
                           error={state.initiativeListError}
+                          onRetry={actions.retryInitiatives}
                           onOpen={navigate}
                         />
                       )}

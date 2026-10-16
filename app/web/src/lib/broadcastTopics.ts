@@ -32,6 +32,11 @@ export interface TopicSurface {
   workflowStartOpen?: boolean;
   /** The Projects route has a selected document (the index does not). */
   projectSelected?: boolean;
+  /**
+   * An Initiative page shows a selected Task in its panel: the Task route's
+   * detail, which reads that Task's Workflow Runs.
+   */
+  initiativeTaskSelected?: boolean;
   /** The session inspector is rendering its skills list. */
   sessionInspectorVisible?: boolean;
   /** The session inspector is on screen for a persisted session. */
@@ -87,6 +92,7 @@ export function topicsForSurface({
   sessionsQuickStartVisible = false,
   workflowStartOpen = false,
   projectSelected = false,
+  initiativeTaskSelected = false,
   sessionInspectorVisible = false,
   backgroundInspectorVisible = false,
   sessionTreeWorktreesVisible = false,
@@ -128,6 +134,8 @@ export function topicsForSurface({
   if (initiativeSurface) {
     topics.add("tasks");
     topics.add("projects");
+    // The selected Task's detail lists its Workflow Runs, as on its own page.
+    if (initiativeTaskSelected) topics.add("workflow");
   }
   if (
     shownSection === "tasks" ||

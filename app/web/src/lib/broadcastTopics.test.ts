@@ -490,6 +490,15 @@ describe("topicsForSurface", () => {
         routeName: "initiatives",
       }).sort(),
     ).toEqual(["initiatives", "projects", "tasks"]);
+    // A selected Task's detail reads its Workflow Runs, as on the Task page.
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "projects",
+        routeName: "initiatives",
+        initiativeTaskSelected: true,
+      }).sort(),
+    ).toEqual(["initiatives", "projects", "tasks", "workflow"]);
     // A hidden Projects browser holds nothing on a conversation.
     expect(
       topicsForSurface({

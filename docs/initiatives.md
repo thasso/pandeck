@@ -183,15 +183,19 @@ The page has two views:
 - **List**: the members as a tree with progress per epic, for reading and for
   small screens.
 
-A node shows the Task's title, its Task id badge (`Task-<n>`), its status (todo,
-doing or done) and, separately, a blocked marker (see Progress): a started Task
-whose blocker is still open shows doing AND blocked, and a todo Task with
-neither is startable. An archived member is toned back, like an archived Task
-link. A node also carries a marker while a session is running on the Task.
-"Startable" and the critical path are computed, never stored. The critical path
-is the longest chain of open Tasks along `blocks` ending at the next open
-milestone. The map can highlight it, hide done Tasks, and collapse a member epic
-into one node with its progress ("7/14 done") and expand it again.
+A node shows the Task's title, its Task id badge (the Backlog's own, `#<n>` for
+`Task-<n>`), its status (todo, doing or done) and, separately, a blocked marker
+(see Progress): a started Task whose blocker is still open shows doing AND
+blocked, and a todo Task with neither is startable. An archived member is toned
+back, like an archived Task link. A node also carries a marker while a session
+is working on the Task. A session is working on a Task when it was started from
+that Task (`task-start`, `linkTaskStart`) and is running a turn; one that only
+referenced the Task, or whose link has no origin, is not, and the Task's `doing`
+status is a separate fact (`app/web/src/lib/taskActivity.ts`). "Startable" and
+the critical path are computed, never stored. The critical path is the longest
+chain of open Tasks along `blocks` ending at the next open milestone. The map
+can highlight it, hide done Tasks, and collapse a member epic into one node with
+its progress ("7/14 done") and expand it again.
 
 Selecting a node opens the object panel with the existing Task detail and the
 Task's sessions, where a session can be started from the Task and its status
@@ -209,11 +213,22 @@ re-reads the graph.
   running marker come from the Tasks topic and the session list. The read alone
   decides membership, hierarchy and geometry, so a Task event never reads the
   graph or asks for a layout; the Initiative event that follows it does.
+- **What a node shows.** Each state is a mark with a word, not a colour alone: a
+  filled Ready chip on a startable Task, Doing, a separate Blocked chip (so
+  doing and blocked show together), Archived, Running for a working session, and
+  Outside on a blocker that is not a member, which still shows its own state. A
+  done Task carries no chip; its title recedes. An arrow whose blocker is open
+  is drawn strong, one whose blocker is done or archived faint, judged by the
+  blocker's live status. An overview map shows the whole drawing.
 - **What a node is.** A member or an outside blocker stub opens that real Task
-  in the object panel. Lanes, Project groups and the milestone column are
-  drawing and take no input. A node and a list row name a Task by its title and
-  its Task id badge; nothing is parsed from the title, so a label an agent wrote
-  into it (Hosted Labs' "L6") reads as part of the title.
+  in the object panel: the same Task detail the Task page shows (its body, its
+  status control with its busy and failure states, description, links and runs)
+  over the Task's sessions, Start session, context and actions. An archived
+  member opens the same way, and a Task that no longer exists says so. Lanes,
+  Project groups and the milestone column are drawing and take no input. A node
+  and a list row name a Task by its title and its Task id badge; nothing is
+  parsed from the title, so a label an agent wrote into it (Hosted Labs' "L6")
+  reads as part of the title.
 
 ## The attention list
 
