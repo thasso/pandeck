@@ -122,11 +122,12 @@ capability logic.
   had the title); now a forgotten field is a link that renders without one.
   `transcriptMentions.test.ts` asserts each Markdown-bearing field by name, so
   adding a rendered field without adding it here fails.
-- `initiativeInbox.ts` shapes Initiatives as Sessions inbox items: which are
-  items (active always; paused or done while their attention revision is
-  unsettled), the revision Settle acknowledges, the summary's session ids
-  resolved against the browser's rows with the rest counted as "more", and the
-  content key the card memoizes on.
+- `initiativeInbox.ts` shapes Initiatives as Sessions inbox items: active ones
+  for their own block, unsettled paused or done outcomes merged into Needs you
+  on the inbox's position scale (`mergeNeedsYou`), the revision Settle
+  acknowledges, the disclosure's at most five sessions (needing the user first,
+  then newest, from the summary's ids the browser holds) with everything else
+  counted as "more", and the content key the card memoizes on.
 - `initiativeView.ts` is the Initiative page's view model: the keyed read with
   the live Tasks topic laid over it (status, title, blocked, running), the
   member tree with per-epic progress, and the `#task-<id>` selection fragment.

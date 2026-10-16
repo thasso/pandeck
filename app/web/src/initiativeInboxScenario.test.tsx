@@ -99,6 +99,7 @@ const active: InitiativeSummary = {
   nextMilestone: { id: "931", title: "First hosted release" },
   sessionIds: ["s-quota"],
   sessionCount: 1,
+  createdAt: NOW - 600_000,
   updatedAt: NOW - 60_000,
 };
 
@@ -116,6 +117,7 @@ function paused(revision: number, settledRevision = 0): InitiativeSummary {
     progress: { total: 20, done: 12, doing: 1, startable: 2, blocked: 3 },
     sessionIds: ["s-quota"],
     sessionCount: 1,
+    createdAt: NOW - 900_000,
     updatedAt: NOW - 120_000,
   };
 }
@@ -249,6 +251,9 @@ describe("Initiative inbox card", () => {
       "an active Initiative offers no Settle",
     ).toBeNull();
     expect(settleButton("6")).not.toBeNull();
+    // The outcome is an item of Needs you; the active one heads the working set.
+    expect(card("6")?.closest("[data-inbox-needs-you]")).not.toBeNull();
+    expect(card("7")?.closest("[data-inbox-initiatives]")).not.toBeNull();
 
     await act(async () => settleButton("6")!.click());
     const [sent] = settles(socket);
@@ -287,6 +292,7 @@ describe("Initiative inbox card", () => {
     // The phone rendered revision 1; done (revision 2) has landed since.
     await events(socket, 2, 11, paused(2));
     expect(card("6")?.getAttribute("aria-label")).toContain("Done");
+    expect(card("6")?.closest("[data-inbox-needs-you]")).not.toBeNull();
     await act(async () => actions.settleInitiative("6", 1));
     expect(settles(socket)[0]).toMatchObject({ throughRevision: 1 });
     expect(card("6"), "revision 2 is still unacknowledged").not.toBeNull();
@@ -308,6 +314,11 @@ describe("Initiative inbox card", () => {
     });
     expect(card("6")).not.toBeNull();
     expect(settleButton("6")).toBeNull();
+    expect(
+      card("6")?.closest("[data-inbox-needs-you]"),
+      "active again leaves Needs you",
+    ).toBeNull();
+    expect(card("6")?.closest("[data-inbox-initiatives]")).not.toBeNull();
   });
 
   it("re-reads the list after a refusal and names the Initiative", async () => {

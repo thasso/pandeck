@@ -21,6 +21,7 @@ function summary(
     progress: { total: 3, done: 1, doing: 1, startable: 1, blocked: 0 },
     sessionIds: [],
     sessionCount: 0,
+    createdAt: 1_799_000_000_000,
     updatedAt: 1_800_000_000_000,
     ...partial,
   };

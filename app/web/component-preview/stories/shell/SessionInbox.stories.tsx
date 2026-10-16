@@ -90,6 +90,7 @@ function initiativeFixture(
       nextMilestone: { id: "870", title: "Cut over invoices" },
       sessionIds: withSessions ? ["labs-quotas"] : [],
       sessionCount: withSessions ? 1 : 0,
+      createdAt: now - 5 * 3 * 60 * min,
       updatedAt: now - 3 * 60 * min,
     },
     {
@@ -100,6 +101,7 @@ function initiativeFixture(
       progress: { total: 9, done: 9, doing: 0, startable: 0, blocked: 0 },
       sessionIds: [],
       sessionCount: 0,
+      createdAt: now - 5 * 26 * 60 * min,
       updatedAt: now - 26 * 60 * min,
     },
     {
@@ -110,6 +112,7 @@ function initiativeFixture(
       progress: { total: 3, done: 1, doing: 0, startable: 2, blocked: 0 },
       sessionIds: [],
       sessionCount: 0,
+      createdAt: now - 5 * 48 * 60 * min,
       updatedAt: now - 48 * 60 * min,
     },
   ];

@@ -92,7 +92,6 @@ const ARCHIVED: TaskItem = {
 function summary(): InitiativeSummary {
   const {
     description: _d,
-    createdAt: _c,
     rootIds: _r,
     nodes: _n,
     externalBlockers: _e,

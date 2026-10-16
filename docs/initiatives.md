@@ -237,8 +237,9 @@ re-reads the graph.
 An Initiative is a Sessions inbox item, following the Workflow Run precedent
 (`docs/agent-workflows.md`, `app/web/docs/ui-shell.md`).
 
-- **While active**, it is always an item. Settle is not offered: there is no
-  outcome to acknowledge, only ongoing work.
+- **While active**, it is always an item, in a block of active Initiatives above
+  the working set. Settle is not offered: there is no outcome to acknowledge,
+  only ongoing work.
 - **Once paused or done**, it stays an item with that outcome until the user
   settles it. The change of state raises the attention cursor
   (`attention_revision` / `attention_settled_revision`, the same shape and rules
@@ -247,8 +248,11 @@ An Initiative is a Sessions inbox item, following the Workflow Run precedent
   nothing. Settle acknowledges exactly the revision the clicked item rendered
   (`settleInitiative`, whose `throughRevision` is required): the server clamps
   it to the stored revision and only ever moves the acknowledgement forward, so
-  an outcome raised after the render stays an item. A settled Initiative leaves
-  the inbox, and setting it active again brings it back.
+  an outcome raised after the render stays an item. While unsettled, the outcome
+  is an item of **Needs you** and counts toward its waiting-on-you number, like
+  an ended Workflow Run. A settled Initiative leaves the inbox, and setting it
+  active again brings it back to the active block. A row that never raised a
+  revision (created before this cursor) is not an outcome.
 - Only the user settles. An agent changing the state never removes the item, and
   no agent tool settles. Archiving or deleting the Initiative takes its item
   away with it.
@@ -268,15 +272,20 @@ second half: the inbox needs no running turn, because an idle session, or one
 waiting on the user, is still the work the card points to. The summary carries
 at most 50 of them, newest by session creation first (ties by id), and the full
 count; both come from one rule in the query, a session started from several
-member Tasks counts once, and the query returns no more than that. When the
-count is larger, the card says how many more there are ("and N more") rather
-than presenting the 50 as all of them.
+member Tasks counts once, and the query returns no more than that. That is the
+data bound.
 
-Those sessions are listed in a disclosure on the card but keep their own inbox
-cards. Unlike a Workflow Run's role sessions they are not folded away: a Task
-can belong to several Initiatives, so no single card owns a session, and a
-session that needs the user must stay visible on its own. Membership is
-structural: sessions linked to member Tasks, nothing parsed from titles.
+Those sessions are listed in a disclosure on the card, and its display bound is
+FIVE rows: those needing the user first (waiting on a human, or holding an
+unresolved failure), then newest by creation, ties by id, among the listed ids
+the browser holds. Everything not shown — past five, past the 50 ids, or not
+held by the browser — is ONE "and N more" row, N being the full count minus the
+rows shown, which opens the Initiative's page; with nothing left over there is
+no such row. The sessions keep their own inbox cards. Unlike a Workflow Run's
+role sessions they are not folded away: a Task can belong to several
+Initiatives, so no single card owns a session, and a session that needs the user
+must stay visible on its own. Membership is structural: sessions linked to
+member Tasks, nothing parsed from titles.
 
 ## Phases
 

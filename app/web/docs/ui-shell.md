@@ -614,21 +614,35 @@ the next milestone's title included, so no card reads a graph, a layout or the
 Tasks topic, and a member Task's change reaches it as the Initiative's own
 event.
 
-Initiatives are NOT ordered among the dragged items: dragging would be a second
-Initiative write. They form their own block at the top of the working set, below
-**Needs you**, newest first, and a state change never moves one. The block holds
-no loading placeholder, but neither the cold-start nor the "nothing needs you"
-claim is made before the Initiative list has answered — an inbox holding only an
-Initiative is not empty — and a failed list read is stated there with a retry,
-over any items still held.
+WHERE an Initiative stands follows what it asks of the user. An ACTIVE one is in
+its own block at the top of the working set, below **Needs you**, newest first.
+An unsettled paused or done outcome is an item OF **Needs you**, like an ended
+Workflow Run: ordered among its items on their creation scale (the summary's
+`createdAt`, since nobody drags it), counted by the bar's waiting-on-you number,
+and the first row that number moves to when it leads the block. Settled, it
+leaves both places; active again, it goes back to the block. Each Initiative is
+exactly ONE card in exactly one place, and neither place drags: dragging would
+be a second Initiative write, and there is no Initiative inbox position. Nothing
+above the cards holds a loading placeholder for Initiatives, but neither the
+cold-start nor the "nothing needs you" claim is made before the Initiative list
+has answered — an inbox whose only item is an Initiative is not empty — and a
+failed list read is stated above Needs you with a retry, over any items still
+held.
 
-The disclosure lists the sessions started from its member Tasks, at most the
-summary's 50, newest first, and says "and N more" for the rest (and for any this
-browser does not hold). Unlike a run's roles they are NOT folded: each keeps its
-own card, and a session may be listed under several Initiatives. The listed rows
-are compact `working` rows that open the session; they carry no Settle, Archive
-or Delete, which stay on the session's own card, and the disclosure and Settle
-never open the Initiative.
+The disclosure lists the sessions started from its member Tasks. The summary
+carries at most 50 of their ids (the DATA bound, newest first, with the full
+count); the open disclosure shows at most FIVE of those this browser holds (the
+DISPLAY bound), those needing the user first — waiting on a human or holding an
+unresolved failure, what lifts a Workflow Run's line — then newest created, ties
+by id. Whatever it does not show — past five, past the 50 ids, or not held here
+— is ONE "and N more" row, N being the full count minus the rows shown, which
+opens the Initiative's page; it is never shown when every session fits. Unlike a
+run's roles they are NOT folded: each keeps its own card, and a session may be
+listed under several Initiatives. The listed rows are compact `working` rows
+that open the session; they carry no Settle, Archive or Delete, which stay on
+the session's own card. The disclosure and Settle never open the Initiative, a
+session row opens only its session, and the more row only the Initiative; all of
+them are rows of the list for the arrow keys.
 
 ## Pull Requests
 

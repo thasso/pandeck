@@ -38,7 +38,10 @@ import type {
 import { ActiveSessionCard } from "./ActiveSessionCard.tsx";
 import { ClusterChildRow } from "./ClusterChildRow.tsx";
 import { WorkflowRunInboxCard } from "./WorkflowRunInboxCard.tsx";
-import { InitiativeInboxCard } from "./InitiativeInboxCard.tsx";
+import {
+  InitiativeInboxCard,
+  InitiativeMoreRow,
+} from "./InitiativeInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
 import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
@@ -82,8 +85,10 @@ import {
   buildInitiativeInbox,
   initiativeItemId,
   initiativeLayoutKey,
-  initiativeSessionsLabel,
+  mergeNeedsYou,
+  needsYouEntryId,
   type InitiativeInboxItem,
+  type NeedsYouEntry,
 } from "../lib/initiativeInbox.ts";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 
@@ -524,12 +529,22 @@ export function SessionInbox({
     ],
   );
 
-  // Initiatives are items of their own, newest first, read off their summaries
-  // alone. Their sessions are LISTED under them and keep their own cards, so
-  // nothing here takes a session out of `view`.
-  const initiativeItems = useMemo(
+  // Initiatives are items of their own, read off their summaries alone: an
+  // active one in its block above the working set, an unsettled paused or done
+  // one in Needs you, ordered and counted with everything else there. Their
+  // sessions are LISTED under them and keep their own cards, so nothing here
+  // takes a session out of `view`.
+  const initiativeInbox = useMemo(
     () => buildInitiativeInbox(initiatives, sessions, readCurrentId),
     [initiatives, sessions, readCurrentId],
+  );
+  const initiativeItems = useMemo(
+    () => [...initiativeInbox.outcomes, ...initiativeInbox.active],
+    [initiativeInbox],
+  );
+  const needsYouEntries = useMemo(
+    () => mergeNeedsYou(view.needsYou, initiativeInbox.outcomes),
+    [view.needsYou, initiativeInbox],
   );
 
   // Which peers a cluster card is showing under it. The disclosure is the
@@ -765,7 +780,7 @@ export function SessionInbox({
   // A host-drawn bar hears the counts before paint, so it never shows the
   // previous list's numbers; it hears nothing once this list is gone. Only a
   // changed count reaches it (the store drops an equal answer).
-  const needsYouCount = view.needsYou.length;
+  const needsYouCount = needsYouEntries.length;
   const { activeCount: backgroundCount, ownerCount: backgroundOwners } =
     backgroundActive;
   useLayoutEffect(() => {
@@ -1070,11 +1085,14 @@ export function SessionInbox({
               />
             ))}
             {open && item.more > 0 ? (
-              <p className="border-t border-border/60 py-1.5 pl-3 text-xs text-muted-foreground">
-                {rows.length > 0
-                  ? `and ${item.more} more`
-                  : `${initiativeSessionsLabel(item.more)} not listed here`}
-              </p>
+              <InitiativeMoreRow
+                initiativeId={item.initiative.id}
+                title={item.initiative.title}
+                more={item.more}
+                density={density}
+                onOpen={onOpenInitiative}
+                onFocusSibling={focusSibling}
+              />
             ) : null}
           </div>
         </ExitStage>
@@ -1100,6 +1118,20 @@ export function SessionInbox({
         </div>
       );
     });
+
+  const renderNeedsYou = (entries: NeedsYouEntry[]) =>
+    entries.map((entry) =>
+      entry.kind === "initiative" ? (
+        renderInitiativeItem(entry.item)
+      ) : (
+        <div
+          key={needsYouEntryId(entry)}
+          data-inbox-card={needsYouEntryId(entry)}
+        >
+          {renderItem(entry.item, false)}
+        </div>
+      ),
+    );
 
   const dropItem = useCallback(
     ({ active, over }: DragEndEvent) => {
@@ -1144,7 +1176,7 @@ export function SessionInbox({
   const coldStart =
     sessions.length === 0 &&
     archivedAvailableCount === 0 &&
-    view.needsYou.length === 0 &&
+    needsYouEntries.length === 0 &&
     view.active.length === 0 &&
     initiativeItems.length === 0;
 
@@ -1159,7 +1191,7 @@ export function SessionInbox({
           session summaries alone — this surface holds no registry subscription. */}
       {barStore ? null : (
         <SessionInboxBar
-          needsYou={view.needsYou.length}
+          needsYou={needsYouEntries.length}
           working={workingCount}
           background={backgroundActive}
           onNeedsYou={focusNeedsYou}
@@ -1175,23 +1207,8 @@ export function SessionInbox({
         <EmptyBox>Nothing needs you right now.</EmptyBox>
       ) : null}
 
-      {view.needsYou.length > 0 ? (
-        // No heading: the cards say it themselves (their status icon and a
-        // bright title), and the bar above counts them. The section stays the
-        // block "Needs you" in the bar scrolls to.
-        <section
-          aria-label="Needs you"
-          data-inbox-needs-you
-          className="flex flex-col"
-        >
-          {renderCardList(view.needsYou)}
-        </section>
-      ) : null}
-
-      {/* Initiatives head the working set, newest first and never dragged:
-          their order is creation alone, and Settle is the one Initiative
-          write the UI makes. A failed list read is stated here, over any
-          items still held. */}
+      {/* A failed Initiative list read is stated above both places its
+          items stand, over any items still held. */}
       {initiativeListError ? (
         <ErrorNote
           className="mx-2 my-1"
@@ -1199,13 +1216,31 @@ export function SessionInbox({
           onRetry={onRetryInitiatives}
         />
       ) : null}
-      {initiativeItems.length > 0 ? (
+
+      {needsYouEntries.length > 0 ? (
+        // No heading: the cards say it themselves (their status icon and a
+        // bright title), and the bar above counts them. The section stays the
+        // block "Needs you" in the bar scrolls to. An Initiative's unsettled
+        // paused or done outcome is one of its items, like an ended run.
+        <section
+          aria-label="Needs you"
+          data-inbox-needs-you
+          className="flex flex-col"
+        >
+          {renderNeedsYou(needsYouEntries)}
+        </section>
+      ) : null}
+
+      {/* Active Initiatives head the working set, newest first and never
+          dragged: their order is creation alone, and Settle is the one
+          Initiative write the UI makes. */}
+      {initiativeInbox.active.length > 0 ? (
         <section
           aria-label="Initiatives"
           data-inbox-initiatives
           className="flex flex-col"
         >
-          {initiativeItems.map(renderInitiativeItem)}
+          {initiativeInbox.active.map(renderInitiativeItem)}
         </section>
       ) : null}
 

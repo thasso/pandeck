@@ -1609,8 +1609,10 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   the sessions started from its Tasks (listed as `ClusterChildRow`s with
   relation `working` and no lifecycle actions, since each keeps its own card),
   and Settle on a paused or done outcome, which `SessionInbox` sends through the
-  settle exit with the revision captured at the click. Initiatives head the
-  working set in their own block, newest first and never dragged.
+  settle exit with the revision captured at the click. `InitiativeMoreRow` is
+  the disclosure's one "and N more" row, opening the Initiative. Active
+  Initiatives head the working set in their own block; an unsettled outcome is
+  an item of Needs you; neither is ever dragged.
 - The Sessions section's browser is an INBOX of the working set, not a history
   list: `SessionInbox.tsx` owns it (search, the labelled **Needs you** block,
   one priority-sorted list for everything else still unsettled, the compact

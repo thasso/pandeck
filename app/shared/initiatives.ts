@@ -78,6 +78,12 @@ export interface InitiativeSummary {
    * when it was cut.
    */
   sessionCount: number;
+  /**
+   * When the Initiative was created: where a paused or done outcome sits in
+   * the Sessions inbox's Needs you, on the creation scale sessions and runs
+   * are ordered by there (it is never dragged).
+   */
+  createdAt: number;
   updatedAt: number;
 }
 
@@ -118,7 +124,6 @@ export interface InitiativeGraphEdge {
 /** The keyed detail read: the Initiative's own fields plus its graph. */
 export interface InitiativeDetail extends InitiativeSummary {
   description: string;
-  createdAt: number;
   archivedAt?: number;
   /** Members with no parent on the graph, in the user's order. */
   rootIds: string[];

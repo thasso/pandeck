@@ -467,6 +467,7 @@ function summaryOf(
     ...(nextMilestone ? { nextMilestone } : {}),
     sessionIds: sessions.ids,
     sessionCount: sessions.count,
+    createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -595,7 +596,6 @@ export function readInitiative(id: string): InitiativeDetail | null {
   return {
     ...summaryOf(row, members, edges),
     description: row.description,
-    createdAt: row.createdAt,
     ...(row.archivedAt !== undefined ? { archivedAt: row.archivedAt } : {}),
     rootIds: rootIds.map(String),
     nodes,

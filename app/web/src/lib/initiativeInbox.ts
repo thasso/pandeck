@@ -3,42 +3,70 @@
  * list; `app/web/docs/ui-shell.md`).
  *
  * An ACTIVE Initiative is always an item, with nothing to settle: it is
- * ongoing work, not an outcome. A paused or done one stays an item while its
- * attention cursor holds a revision the user has not settled, and Settle
- * acknowledges exactly that rendered revision. Everything here reads the
- * `initiatives` topic summary alone, so an item never asks for the graph.
+ * ongoing work, not an outcome, and it stands in its own block above the
+ * working set. A paused or done one is an OUTCOME while its attention cursor
+ * holds a revision the user has not settled: it is an item of **Needs you**,
+ * counted there like an ended Workflow Run, and Settle acknowledges exactly
+ * that rendered revision. Everything here reads the `initiatives` topic
+ * summary alone, so an item never asks for the graph.
  *
  * The sessions an item discloses are the summary's own — started from a
  * member Task, live, at most 50 — resolved against the rows this browser
- * already holds. They are LISTED, never folded: each keeps its own card,
- * because a Task can belong to several Initiatives and no card owns a session.
+ * already holds, and at most {@link INITIATIVE_DISCLOSURE_ROWS} of them are
+ * shown. They are LISTED, never folded: each keeps its own card, because a
+ * Task can belong to several Initiatives and no card owns a session.
  *
  * Framework-free by the `lib/` contract.
  */
 import type { InitiativeSummary, SessionListItem } from "@assistant/shared";
 import { relativeAge } from "./relativeTime.ts";
 import {
+  compareSessionsNeedingUserFirst,
   inboxCard,
+  inboxItemId,
+  itemPosition,
   sessionCardKey,
   type SessionInboxCard,
+  type SessionInboxItem,
 } from "./sessionInbox.ts";
+
+/**
+ * How many sessions an opened disclosure lists. The summary carries up to 50
+ * ids (the data bound); this is the display bound, so an open card never
+ * pushes the rest of the inbox off screen. The rest are one "and N more" row
+ * that opens the Initiative.
+ */
+export const INITIATIVE_DISCLOSURE_ROWS = 5;
 
 export interface InitiativeInboxItem {
   initiative: InitiativeSummary;
   /**
-   * The attention revision Settle acknowledges, present exactly while Settle
-   * is offered: the Initiative is paused or done and that revision is not
-   * settled. Captured into the click, never re-read when the command leaves.
+   * The attention revision Settle acknowledges, present exactly while the
+   * Initiative is an unsettled paused or done OUTCOME — which is also what
+   * puts it in Needs you. Captured into the click, never re-read when the
+   * command leaves.
    */
   settleRevision?: number;
-  /** The summary's sessions this browser holds, newest created first. */
+  /**
+   * The sessions the disclosure lists: the summary's that this browser holds,
+   * those needing the user first, then newest, at most
+   * {@link INITIATIVE_DISCLOSURE_ROWS}.
+   */
   sessions: SessionInboxCard[];
   /**
-   * Qualifying sessions the disclosure does not list: past the summary's page
-   * of 50, or not among this browser's session rows. Stated as "and N more",
-   * so the listed rows are never presented as all of them.
+   * Qualifying sessions the disclosure does not list — past the display
+   * bound, past the summary's page of 50, or not among this browser's rows:
+   * the full count minus the rows actually shown, stated as "and N more".
    */
   more: number;
+}
+
+/** The two places Initiative items stand in the inbox. */
+export interface InitiativeInbox {
+  /** Active Initiatives: their own block above the working set. */
+  active: InitiativeInboxItem[];
+  /** Unsettled paused or done outcomes: items of Needs you. */
+  outcomes: InitiativeInboxItem[];
 }
 
 /** The pending revision of a paused or done Initiative, else undefined. */
@@ -60,46 +88,99 @@ export function initiativeInInbox(initiative: InitiativeSummary): boolean {
   );
 }
 
-/** Newest Initiative first: ids come from one sequence, so id is creation. */
-function newestFirst(a: InitiativeSummary, b: InitiativeSummary): number {
-  return Number(b.id) - Number(a.id) || (a.id < b.id ? 1 : -1);
+/** The item's identity for React keys, layout measurement and focus. */
+export function initiativeItemId(initiativeId: string): string {
+  return `initiative:${initiativeId}`;
+}
+
+/** Newest created first, the inbox's order for an item nobody dragged. */
+function newestFirst(a: InitiativeInboxItem, b: InitiativeInboxItem): number {
+  const created = b.initiative.createdAt - a.initiative.createdAt;
+  if (created !== 0) return created;
+  const left = initiativeItemId(a.initiative.id);
+  const right = initiativeItemId(b.initiative.id);
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /**
- * The Initiative items, newest first. The order is creation alone, so a
- * state change never moves an item: the cards hold still.
+ * The Initiative items, split by where they stand. A state change moves an
+ * item only between those two places, never within one: each is ordered by
+ * creation alone, since an Initiative is never dragged.
  */
 export function buildInitiativeInbox(
   initiatives: readonly InitiativeSummary[],
   sessions: readonly SessionListItem[],
   readCurrentId?: string,
-): InitiativeInboxItem[] {
-  const items = initiatives.filter(initiativeInInbox);
-  if (items.length === 0) return [];
+): InitiativeInbox {
+  const inbox: InitiativeInbox = { active: [], outcomes: [] };
+  const listed = initiatives.filter(initiativeInInbox);
+  if (listed.length === 0) return inbox;
   const byId = new Map(
     sessions
       .filter((session) => !session.archived)
       .map((session) => [session.id, session]),
   );
-  return [...items].sort(newestFirst).map((initiative) => {
-    const rows: SessionInboxCard[] = [];
+  for (const initiative of listed) {
+    const known: SessionInboxCard[] = [];
     for (const id of initiative.sessionIds) {
       const session = byId.get(id);
-      if (session) rows.push(inboxCard(session, readCurrentId));
+      if (session) known.push(inboxCard(session, readCurrentId));
     }
+    const shown = known
+      .sort(compareSessionsNeedingUserFirst)
+      .slice(0, INITIATIVE_DISCLOSURE_ROWS);
     const settleRevision = initiativeSettleRevision(initiative);
-    return {
+    const item: InitiativeInboxItem = {
       initiative,
       ...(settleRevision !== undefined ? { settleRevision } : {}),
-      sessions: rows,
-      more: Math.max(0, initiative.sessionCount - rows.length),
+      sessions: shown,
+      more: Math.max(0, initiative.sessionCount - shown.length),
     };
-  });
+    (settleRevision !== undefined ? inbox.outcomes : inbox.active).push(item);
+  }
+  inbox.active.sort(newestFirst);
+  inbox.outcomes.sort(newestFirst);
+  return inbox;
 }
 
-/** The item's identity for React keys, layout measurement and focus. */
-export function initiativeItemId(initiativeId: string): string {
-  return `initiative:${initiativeId}`;
+/** One row of Needs you: a session or run item, or an Initiative outcome. */
+export type NeedsYouEntry =
+  | { kind: "inbox"; item: SessionInboxItem }
+  | { kind: "initiative"; item: InitiativeInboxItem };
+
+export function needsYouEntryId(entry: NeedsYouEntry): string {
+  return entry.kind === "inbox"
+    ? inboxItemId(entry.item)
+    : initiativeItemId(entry.item.initiative.id);
+}
+
+function entryPosition(entry: NeedsYouEntry): number {
+  return entry.kind === "inbox"
+    ? itemPosition(entry.item)
+    : entry.item.initiative.createdAt;
+}
+
+/**
+ * Needs you with the Initiative outcomes in it, ordered as the block always
+ * is: highest position first — an Initiative's is its creation time, the
+ * position of any item nobody dragged — then by item id.
+ */
+export function mergeNeedsYou(
+  needsYou: readonly SessionInboxItem[],
+  outcomes: readonly InitiativeInboxItem[],
+): NeedsYouEntry[] {
+  const entries: NeedsYouEntry[] = [
+    ...needsYou.map((item) => ({ kind: "inbox" as const, item })),
+    ...outcomes.map((item) => ({ kind: "initiative" as const, item })),
+  ];
+  if (outcomes.length === 0) return entries;
+  return entries.sort((a, b) => {
+    const position = entryPosition(b) - entryPosition(a);
+    if (position !== 0) return position;
+    const left = needsYouEntryId(a);
+    const right = needsYouEntryId(b);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
 }
 
 /** "3 sessions", the disclosure's own count over every qualifying session. */

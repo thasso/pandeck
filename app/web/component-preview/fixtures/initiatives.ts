@@ -1535,7 +1535,6 @@ export function hostedLabsSummary(
 ): InitiativeSummary {
   const {
     description: _description,
-    createdAt: _createdAt,
     rootIds: _rootIds,
     nodes: _nodes,
     externalBlockers: _externalBlockers,
