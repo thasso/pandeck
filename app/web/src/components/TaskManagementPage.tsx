@@ -104,6 +104,7 @@ import { projectPath } from "../hooks/useSessionRouting.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
 import { TaskLinksSection } from "./TaskLinksSection.tsx";
+import { TaskInitiativesSection } from "./TaskInitiativeList.tsx";
 import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useLocationHash } from "../hooks/useLocationHash.ts";
@@ -517,6 +518,7 @@ export function TaskManagementPage({
               subtasks={items.filter(
                 (task) => task.parentId === selectedTask.id,
               )}
+              taskTitle={(id) => items.find((task) => task.id === id)?.title}
               onOpenTask={onSelect}
               runs={selectedRuns}
               runsLoaded={workflowRuns !== null}
@@ -659,6 +661,7 @@ function TaskDetailPanel({
   progress,
   parentTask,
   subtasks,
+  taskTitle,
   onOpenTask,
   runs,
   runsLoaded,
@@ -706,6 +709,8 @@ function TaskDetailPanel({
   parentTask?: Task | undefined;
   /** Its direct subtasks, in Backlog order. */
   subtasks: Task[];
+  /** A Task's live title, when the Backlog holds it. */
+  taskTitle: (id: string) => string | undefined;
   onOpenTask: (id: string) => void;
   runs: WorkflowRunSummary[];
   runsLoaded: boolean;
@@ -851,6 +856,11 @@ function TaskDetailPanel({
                 come with the full Task, so a refresh keeps the last ones shown
                 rather than blanking them. */}
             <TaskLinksSection links={detail?.links} onOpenTask={onOpenTask} />
+            <TaskInitiativesSection
+              initiatives={detail?.initiatives}
+              onNavigate={onNavigate}
+              taskTitle={taskTitle}
+            />
 
             {!runsLoaded ? (
               <div

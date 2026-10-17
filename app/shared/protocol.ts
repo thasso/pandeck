@@ -26,6 +26,7 @@ import type {
   InitiativeDetail,
   InitiativeLayout,
   InitiativeLayoutTooLarge,
+  InitiativeState,
   InitiativeSummary,
 } from "./initiatives.ts";
 import type { ApprovalGrant } from "./approvalGrants.ts";
@@ -2767,6 +2768,18 @@ export interface TaskLinks {
   relates: TaskLinkedTask[];
 }
 
+/**
+ * An Initiative holding a Task, as that Task's detail lists it: a member
+ * itself, or through `through`, the nearest ancestor Task that holds it.
+ */
+export interface TaskInitiativeRef {
+  id: string;
+  title: string;
+  state: InitiativeState;
+  /** The ancestor Task the membership comes through; absent for a direct member. */
+  through?: { id: string; title: string };
+}
+
 /** Full task document: a summary plus the Markdown body and full server session metadata. */
 export interface TaskItem extends Omit<TaskSummary, "sessionRefs"> {
   description: string;
@@ -2779,6 +2792,12 @@ export interface TaskItem extends Omit<TaskSummary, "sessionRefs"> {
    * reply); absent when there are none. Never part of a summary or a list.
    */
   links?: TaskLinks;
+  /**
+   * The live Initiatives holding this Task, on a full single-Task read like
+   * `links`; archived and deleted ones are left out, and it is absent when
+   * there are none. Never part of a summary or a list.
+   */
+  initiatives?: TaskInitiativeRef[];
   /**
    * Set when at least one blocker is neither done nor archived. Computed on
    * read, never stored, and it never prevents a status change.

@@ -427,6 +427,19 @@ export const INITIATIVE_STATE_LABEL: Record<InitiativeState, string> = {
   done: "Done",
 };
 
+/**
+ * The state chip's look, the same on the Initiative's own page and wherever a
+ * Task names the Initiatives holding it.
+ */
+export const INITIATIVE_STATE_BADGE: Record<
+  InitiativeState,
+  "secondary" | "warning" | "success"
+> = {
+  active: "secondary",
+  paused: "warning",
+  done: "success",
+};
+
 /** The index page's groups, in the order a reader scans them. */
 export const INITIATIVE_STATE_ORDER: readonly InitiativeState[] = [
   "active",

@@ -28,6 +28,7 @@ import {
   Trash2,
   Undo2,
   UserCheck,
+  Waypoints,
   Workflow,
 } from "lucide-react";
 import {
@@ -41,6 +42,7 @@ import {
   type SessionListItem,
   type SettableSpawnOwnership,
   type TaskBackRef,
+  type TaskInitiativeRef,
   type TaskStatus,
   type TaskSummary,
   type ThinkingLevel,
@@ -124,6 +126,7 @@ import {
 } from "./SpawnedSessionsLedge.tsx";
 import { WorktreeLineDelta, WorktreeList } from "./worktreeRowParts.tsx";
 import { TaskLinkList, type TaskLinkItem } from "./TaskLinkList.tsx";
+import { TaskInitiativeList } from "./TaskInitiativeList.tsx";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { relativeTime } from "../lib/sessionRows.ts";
 import { useElapsedNow } from "./useElapsedNow.ts";
@@ -1038,12 +1041,25 @@ export function TaskInspector({
   onUnarchive,
   onDelete,
   noSessionRefs = false,
+  initiatives,
+  onNavigate,
+  taskTitle,
   children,
 }: {
   task: Task | undefined;
   sessions: SessionListItem[];
   openers: ObjectOpeners;
   onStartSession: (taskId: string, title: string) => void;
+  /**
+   * The Initiatives holding the Task, from its full read (`getTask`); a
+   * summary never carries them. Left out where the Task detail beside this
+   * inspector already lists them (an Initiative page's panel).
+   */
+  initiatives?: readonly TaskInitiativeRef[] | undefined;
+  /** Open an in-app path, here an Initiative's page. */
+  onNavigate?: ((path: string) => void) | undefined;
+  /** A Task's live title, when the Backlog holds it. */
+  taskTitle?: ((id: string) => string | undefined) | undefined;
   /**
    * The server has answered that the Task has no session references at all:
    * the Sessions group stays on screen saying so, with a way to start one. A
@@ -1158,6 +1174,21 @@ export function TaskInspector({
       actions={actions}
       sectionStorageScope={`task:${task?.id ?? "loading"}`}
     >
+      {task && initiatives?.length ? (
+        <InspectorSection
+          id="initiatives"
+          storageScope={`task:${task.id}`}
+          title="Initiatives"
+          icon={<Waypoints size={13} />}
+          summary={`${initiatives.length}`}
+        >
+          <TaskInitiativeList
+            initiatives={initiatives}
+            onNavigate={onNavigate}
+            taskTitle={taskTitle}
+          />
+        </InspectorSection>
+      ) : null}
       {children}
     </Inspector>
   );
