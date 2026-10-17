@@ -1368,8 +1368,8 @@ export interface ShowFilesCard {
  *
  * Identity comes from the Knowledge Base, never from the caller: the tool
  * checks the file exists and re-spells its path and title here. {@link note}
- * is the agent's own one line about why it is showing this file and is
- * rendered as plain text.
+ * is the agent's own one line about why it is showing this file; the card
+ * renders it and the summary as inline Markdown, the title as written.
  */
 export interface KnowledgeEntryCard {
   /** The file's path inside the Knowledge Base; the card opens it. */

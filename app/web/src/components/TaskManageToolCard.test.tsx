@@ -171,9 +171,41 @@ describe("TaskManageToolCard", () => {
         onApplyTaskStatusSuggestion={() => {}}
       />,
     );
-    expect(html).toContain("says done: tests pass");
+    expect(html).toContain("says done: ");
+    expect(html).toContain("tests pass");
     expect(html).toContain("Confirm done");
     expect(html).toContain("description updated");
+  });
+
+  it("renders the suggestion reason as Markdown and keeps the title plain", () => {
+    const html = renderToStaticMarkup(
+      <TaskManageToolCard
+        block={manageBlock(
+          { operations: [{ operation: "update", id: "297", status: "done" }] },
+          {
+            changedCount: 1,
+            changed: [
+              {
+                id: "297",
+                title: "Render `task_manage` mutations",
+                status: "todo",
+                statusSuggestion: {
+                  to: "done",
+                  at: 5,
+                  reason: "**tests** pass",
+                },
+              },
+            ],
+          },
+        )}
+        onOpenTask={() => {}}
+        onApplyTaskStatusSuggestion={() => {}}
+      />,
+    );
+    // A Task title is the user's object name, inside the chip's button.
+    expect(html).toContain("Render `task_manage` mutations");
+    expect(html).toContain("<strong>tests</strong> pass");
+    expect(html).not.toContain("**tests**");
   });
 
   it("shows no question for a suggestion the status already satisfies", () => {

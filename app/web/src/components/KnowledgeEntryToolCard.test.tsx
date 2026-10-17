@@ -106,6 +106,30 @@ it("opens the carded file in the side panel or the Knowledge route", () => {
   expect(main).toEqual(["notes/alpha.md"]);
 });
 
+it("renders the note and summary as inline Markdown but the title as named", () => {
+  // A title can fall back to the file name, so it reads as written.
+  renderCard(
+    showEntryBlock({
+      ...CARD,
+      title: "__init__.py",
+      note: "Rewrote **the summary**",
+    }),
+  );
+  expect(container!.textContent).toContain("__init__.py");
+  expect(container!.innerHTML).not.toContain("<strong>init</strong>");
+  expect(container!.innerHTML).toContain(
+    "Rewrote <strong>the summary</strong>",
+  );
+  expect(container!.querySelector("p div, p p")).toBeNull();
+
+  act(() => root?.unmount());
+  container?.remove();
+  renderCard(
+    showEntryBlock({ ...CARD, note: undefined, summary: "A `beta` summary" }),
+  );
+  expect(container!.innerHTML).toContain("A <code>beta</code> summary");
+});
+
 it("offers the route alone where there is no side panel", () => {
   renderCard(showEntryBlock(CARD), { openInMain: () => {} });
   expect(container!.textContent).not.toContain("Open in side panel");

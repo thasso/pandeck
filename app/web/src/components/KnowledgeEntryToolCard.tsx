@@ -1,6 +1,7 @@
 import { BookOpen, PanelRight, SquareArrowOutUpRight } from "lucide-react";
 import type { KnowledgeEntryCard } from "@assistant/shared";
 import { useKnowledgeOpenTargets } from "./KnowledgeOpenTargets.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "./common/AppCard.tsx";
 
@@ -64,7 +65,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
       </div>
       {(card.note ?? card.summary) ? (
         <p className="line-clamp-3 text-xs text-muted-foreground">
-          {card.note ?? card.summary}
+          <Markdown text={card.note ?? card.summary ?? ""} inline />
         </p>
       ) : null}
     </AppCard>
