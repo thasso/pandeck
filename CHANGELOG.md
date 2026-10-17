@@ -3,6 +3,13 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.59.1] - 2026-10-17
+
+### Other changes
+
+- Restore compositor-friendly spinner rotation
+  ([PR #153](https://github.com/thasso/pandeck/pull/153))
+
 ## [0.59.0] - 2026-10-16
 
 ### Upgrade notes
