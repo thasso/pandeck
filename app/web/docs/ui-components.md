@@ -70,6 +70,7 @@ the same parts a shadcn example would.
 | An object or event card (transcript result, notice, card-list item) | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)   |
 | A page or settings section that groups rows                         | `Card`                                                                                |
 | Status or count                                                     | `Badge`                                                                               |
+| Text an agent wrote (a title, a label, a reason, a summary)         | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card    |
 | Menu of actions                                                     | `DropdownMenu`, `ContextMenu`                                                         |
 | Secondary actions behind a `⋯`                                      | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)      |
 | Floating panel or hint                                              | `Popover`, `HoverCard`, `Tooltip`                                                     |
@@ -93,6 +94,17 @@ the same place. An action that is the object's next step never hides in it.
 A clickable row is an `Item` rendered as the element it is:
 `<Item render={<button type="button" onClick={…} />}>` (or an `<a>` for a link).
 The audit does not count a `render={<button` target.
+
+Agents write Markdown everywhere, so every field an agent authors renders
+through `Markdown`, never as a bare string: `**`, backticks and lists left
+literal read as broken. `inline` is for a field that is one line by nature — a
+title, a choice label, a badge, a finding — and renders emphasis, code and links
+inside the host element while keeping block syntax ("1. …", "# …") as written.
+Prose (an intro, a reason, a description, an opening message) uses
+`density="compact"` in a `div`, never inside a `<p>` such as `FieldDescription`;
+clip long prose with `ClippedMarkdown`. Stay plain only for text that must read
+verbatim: what the user typed, commit messages, paths, ids and command output. A
+server that bounds such a field must not cut it mid-sentence at a small limit.
 
 `Alert` carries `role="alert"`; a notice that is not a failure passes
 `role="status"` (or `role="note"`) so it is not announced as one.
