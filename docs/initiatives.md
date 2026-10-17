@@ -234,6 +234,14 @@ re-reads the graph.
   or a timeout) shows the reason and a retry the user presses (nothing retries
   on its own, so a busy layout pool is never polled), and lists the members
   instead. A map too large to draw is its size, not a failure (below).
+- **The description.** The Initiative's Markdown description is a band under the
+  page's toolbar, the same over the Map and the List, and is absent when the
+  description is blank. It renders through the shared Markdown renderer, so
+  `pa://` links read as titles; a Task link opens that Task in the object panel,
+  as selecting a node does, and any other link opens where the app opens it.
+  Open, it scrolls inside a bounded height; the user can fold it to its heading
+  so the map keeps its room, a display choice held for that Initiative in that
+  browser tab like collapsing an epic.
 - **What is live.** Between reads, a node's status, title, blocked marker and
   running marker come from the Tasks topic and the session list. The read alone
   decides membership, hierarchy and geometry, so a Task event never reads the

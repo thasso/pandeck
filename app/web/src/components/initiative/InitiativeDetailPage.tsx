@@ -58,6 +58,7 @@ import {
   type InitiativeMember,
 } from "../../lib/initiativeView.ts";
 import { criticalPath, type CriticalPath } from "../../lib/initiativePath.ts";
+import { InitiativeDescription } from "./InitiativeDescription.tsx";
 import { InitiativeListView } from "./InitiativeListView.tsx";
 import { InitiativeProgressLine } from "./InitiativeProgressLine.tsx";
 
@@ -74,19 +75,22 @@ const decodeView = (raw: string): InitiativeView | "auto" | null =>
 /**
  * How the user is looking at ONE Initiative in this tab: the epics they
  * collapsed (nested ones included, so expanding an outer epic shows the inner
- * one still folded), Hide done, and the critical path. Display only: nothing
- * here is written to the server, and another Initiative starts fresh.
+ * one still folded), Hide done, the critical path, and whether the description
+ * is folded. Display only: nothing here is written to the server, and another
+ * Initiative starts fresh.
  */
 interface MapSettings {
   collapsed: string[];
   hideDone: boolean;
   criticalPath: boolean;
+  descriptionFolded: boolean;
 }
 
 const NO_SETTINGS: MapSettings = {
   collapsed: [],
   hideDone: false,
   criticalPath: false,
+  descriptionFolded: false,
 };
 const NONE: ReadonlySet<string> = new Set();
 
@@ -103,6 +107,7 @@ function decodeSettings(raw: string): MapSettings | null {
         : [],
       hideDone: value.hideDone === true,
       criticalPath: value.criticalPath === true,
+      descriptionFolded: value.descriptionFolded === true,
     };
   } catch {
     return null;
@@ -134,8 +139,9 @@ function pathSentence(
 
 /**
  * @component InitiativeDetailPage
- * @purpose One Initiative (`/initiatives/:id`): its title, state and progress,
- *   and its members as a Map or a List (`docs/initiatives.md`).
+ * @purpose One Initiative (`/initiatives/:id`): its title, state, progress
+ *   and description, and its members as a Map or a List
+ *   (`docs/initiatives.md`).
  * @useWhen The Initiative route with an id.
  * @intent Read-only. The header comes from the live summary at once; the
  *   members come from the keyed read, which a newer Initiative revision
@@ -507,11 +513,6 @@ export function InitiativeDetailPage({
             ) : null}
           </>
         ) : null}
-        {item.description ? (
-          <p className="mb-4 max-w-prose text-sm whitespace-pre-line text-muted-foreground">
-            {item.description}
-          </p>
-        ) : null}
         {list}
       </div>
     );
@@ -614,6 +615,19 @@ export function InitiativeDetailPage({
             </ToggleGroup>
           </div>
         </div>
+      ) : null}
+      {item?.description.trim() && !missing ? (
+        <InitiativeDescription
+          text={item.description}
+          open={!settings.descriptionFolded}
+          onOpenChange={(open) =>
+            setSettings((previous) => ({
+              ...previous,
+              descriptionFolded: !open,
+            }))
+          }
+          onSelectTask={onSelectTask}
+        />
       ) : null}
       {notes.length > 0 && !missing ? (
         <div

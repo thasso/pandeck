@@ -33,7 +33,7 @@ export const HOSTED_LABS_DETAIL: InitiativeDetail = {
   sessionCount: 2,
   updatedAt: 1792100000000,
   description:
-    "Run SDC, Stardust Labs and SRS on hosted infrastructure, with one first release when all three are ready.",
+    "Run **SDC**, **Stardust Labs** and **SRS** on hosted infrastructure, with one first release when all three are ready.\n\n- Each product ships its hosted images first.\n- Session quotas land before [the first hosted release](pa://task/931).",
   createdAt: 1791500000000,
   rootIds: ["900", "912", "922", "931"],
   nodes: [
