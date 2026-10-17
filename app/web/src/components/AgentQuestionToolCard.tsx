@@ -9,6 +9,7 @@ import type {
 } from "@assistant/shared";
 import { AgentQuestionForm, QuestionSubject } from "./AgentQuestionForm.tsx";
 import { Badge } from "@/components/ui/badge";
+import { Markdown } from "./Markdown.tsx";
 import { AppCard } from "./common/AppCard.tsx";
 import {
   Item,
@@ -83,7 +84,9 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
           {answered.questions.map((q) => (
             <Item key={q.id} variant="outline" size="sm">
               <ItemContent>
-                <ItemTitle>{q.title}</ItemTitle>
+                <ItemTitle>
+                  <Markdown text={q.title} inline />
+                </ItemTitle>
                 <AnswerLine question={q} answer={byId.get(q.id)} />
               </ItemContent>
             </Item>
@@ -197,7 +200,7 @@ function AnswerLine({
         <div className="flex flex-wrap gap-1">
           {labels.map((label, i) => (
             <Badge key={i} variant="secondary">
-              {label}
+              <Markdown text={label} inline />
             </Badge>
           ))}
         </div>
@@ -238,7 +241,10 @@ function FallbackView({ block }: { block: ToolBlock }) {
             <Item key={i} variant="outline" size="xs">
               <ItemContent>
                 <ItemTitle className="font-normal text-muted-foreground">
-                  {typeof qt === "string" ? qt : `Question ${i + 1}`}
+                  <Markdown
+                    text={typeof qt === "string" ? qt : `Question ${i + 1}`}
+                    inline
+                  />
                 </ItemTitle>
               </ItemContent>
             </Item>

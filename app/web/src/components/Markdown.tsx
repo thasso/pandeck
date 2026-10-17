@@ -108,6 +108,15 @@ interface MarkdownProps {
    */
   density?: "prose" | "compact";
   /**
+   * Render a one-line field — a title, a label — as phrasing content inside
+   * its host: emphasis, code and links apply, line-start block syntax (lists,
+   * headings, quotes, tables) stays literal text, and the host's size and
+   * color hold. A fence or `$$` block reads as inline code or math, raw block
+   * HTML is unwrapped to its text, and an image shows its alt text, never an
+   * embed.
+   */
+  inline?: boolean;
+  /**
    * `breakout` lets a wide table use the chat pane beyond the prose column.
    * Its scroll viewport remains bounded by the pane; other Markdown blocks keep
    * their normal line length.
@@ -238,6 +247,7 @@ export const Markdown = memo(function Markdown({
   documentTarget,
   sourcePositions = false,
   density = "prose",
+  inline = false,
   tableLayout = "contained",
 }: MarkdownProps) {
   const sessionsById = useMemo(() => {
@@ -301,8 +311,9 @@ export const Markdown = memo(function Markdown({
       [remarkMath, REMARK_MATH_OPTIONS],
       remarkPaObjectLinks(),
       remarkChatReferences(sessionsById, sortedFiles),
+      ...(inline ? [remarkInlineOnly] : []),
     ],
-    [sessionsById, sortedFiles],
+    [sessionsById, sortedFiles, inline],
   );
 
   // The handlers are held in a ref and reached through fixed wrappers: a caller
@@ -364,10 +375,11 @@ export const Markdown = memo(function Markdown({
   const rehypePlugins = useMemo(
     () => [
       ...REHYPE_PLUGINS,
+      ...(inline ? [rehypeInlineOnly] : []),
       rehypeFlagMath(sawMath),
       ...(mathReady && mathKatexPlugin ? [mathKatexPlugin] : []),
     ],
-    [mathReady],
+    [mathReady, inline],
   );
 
   // The parse → sanitize → element-tree pipeline runs only when what it reads
@@ -389,11 +401,15 @@ export const Markdown = memo(function Markdown({
     [remarkPlugins, rehypePlugins, text],
   );
 
+  const body = (
+    <MarkdownRenderContext.Provider value={renderContext}>
+      {rendered}
+    </MarkdownRenderContext.Provider>
+  );
+  if (inline) return <span className="prose prose-inline">{body}</span>;
   return (
     <div className={density === "compact" ? "prose prose-compact" : "prose"}>
-      <MarkdownRenderContext.Provider value={renderContext}>
-        {rendered}
-      </MarkdownRenderContext.Provider>
+      {body}
     </div>
   );
 });
@@ -1098,6 +1114,81 @@ function hastHasMath(node: any): boolean {
     return true;
   if (!Array.isArray(node.children)) return false;
   return node.children.some((child: any) => hastHasMath(child));
+}
+
+/**
+ * Inline mode, parse side: switch off every block construct so a field like
+ * "1. Foo" or "# 3" reads as written. {@link rehypeInlineOnly} then flattens
+ * what parsing cannot rule out.
+ */
+const INLINE_DISABLED_CONSTRUCTS = [
+  "blockQuote",
+  "codeFenced",
+  "codeIndented",
+  "definition",
+  "gfmFootnoteDefinition",
+  "headingAtx",
+  "htmlFlow",
+  "list",
+  "mathFlow",
+  "setextUnderline",
+  "table",
+  "thematicBreak",
+];
+/** Phrasing elements inline mode keeps; KaTeX's MathML is added after it. */
+const INLINE_ELEMENTS = new Set([
+  "a",
+  "abbr",
+  "b",
+  "br",
+  "code",
+  "del",
+  "em",
+  "i",
+  "ins",
+  "kbd",
+  "mark",
+  "q",
+  "s",
+  "samp",
+  "small",
+  "span",
+  "strong",
+  "sub",
+  "sup",
+  "u",
+  "var",
+]);
+
+/**
+ * Inline mode, tree side, after sanitize: raw HTML (`<div>` is inline syntax
+ * to the parser) and the paragraph wrapper unwrap to their children, and an
+ * image becomes its alt text so a title never mounts an embed.
+ */
+function rehypeInlineOnly() {
+  return (tree: any) => {
+    tree.children = flattenToPhrasing(tree.children);
+  };
+}
+
+function flattenToPhrasing(nodes: any[]): any[] {
+  return nodes.flatMap((node) => {
+    if (node.type !== "element") return [node];
+    if (node.tagName === "img") {
+      const alt = node.properties?.alt;
+      return alt ? [{ type: "text", value: String(alt) }] : [];
+    }
+    const children = flattenToPhrasing(node.children ?? []);
+    if (INLINE_ELEMENTS.has(node.tagName)) return [{ ...node, children }];
+    return children;
+  });
+}
+
+function remarkInlineOnly(this: any) {
+  const data = this.data();
+  (data.micromarkExtensions ??= []).push({
+    disable: { null: INLINE_DISABLED_CONSTRUCTS },
+  });
 }
 
 function remarkPaObjectLinks() {

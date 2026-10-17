@@ -17,6 +17,7 @@ import type {
   AgentQuestionResponse,
 } from "@assistant/shared";
 import { ErrorNote } from "./common/load.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -268,8 +269,26 @@ export function QuestionSubject({
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <p className="font-medium">{title}</p>
-      {intro ? <p className="text-muted-foreground">{intro}</p> : null}
+      <p className="font-medium">
+        <Markdown text={title} inline />
+      </p>
+      {intro ? <QuestionProse text={intro} /> : null}
+    </div>
+  );
+}
+
+/**
+ * Agent-written prose on the card — intro, prompt, help, a choice's
+ * description — in the muted description style. Markdown renders blocks, so
+ * this is a `div`, not the `<p>` that `FieldDescription` is.
+ */
+function QuestionProse({ text }: { text: string }) {
+  return (
+    <div
+      data-slot="field-description"
+      className="min-w-0 text-left text-muted-foreground"
+    >
+      <Markdown text={text} density="compact" />
     </div>
   );
 }
@@ -419,17 +438,13 @@ function QuestionStep({
   return (
     <FieldSet>
       <FieldLegend className="flex w-full items-start justify-between gap-3">
-        {question.title}
+        <span className="min-w-0">
+          <Markdown text={question.title} inline />
+        </span>
         {!question.required && <Badge variant="secondary">Optional</Badge>}
       </FieldLegend>
-      {question.prompt ? (
-        <FieldDescription className="whitespace-pre-wrap">
-          {question.prompt}
-        </FieldDescription>
-      ) : null}
-      {question.helpText ? (
-        <FieldDescription>{question.helpText}</FieldDescription>
-      ) : null}
+      {question.prompt ? <QuestionProse text={question.prompt} /> : null}
+      {question.helpText ? <QuestionProse text={question.helpText} /> : null}
       <FieldGroup className="gap-3">
         {isChoiceStyle(question) ? (
           <ChoiceList question={question} draft={draft} onDraft={onDraft} />
@@ -502,9 +517,11 @@ function ChoiceField({
       <Field orientation="horizontal">
         {control}
         <FieldContent>
-          <FieldTitle>{choice.label}</FieldTitle>
+          <FieldTitle>
+            <Markdown text={choice.label} inline />
+          </FieldTitle>
           {choice.description ? (
-            <FieldDescription>{choice.description}</FieldDescription>
+            <QuestionProse text={choice.description} />
           ) : null}
         </FieldContent>
       </Field>
@@ -595,7 +612,9 @@ function QuestionSummary({
         {questions.map((question, index) => (
           <Item key={question.id} variant="outline" size="sm">
             <ItemContent className="min-w-0">
-              <ItemTitle>{question.title}</ItemTitle>
+              <ItemTitle>
+                <Markdown text={question.title} inline />
+              </ItemTitle>
               <AnswerPreview
                 question={question}
                 answer={answers.find((item) => item.questionId === question.id)}

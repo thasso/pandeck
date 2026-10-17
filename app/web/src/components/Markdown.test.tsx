@@ -31,6 +31,50 @@ describe("Markdown source positions", () => {
   });
 });
 
+describe("Markdown inline", () => {
+  it("renders phrasing inside a span and keeps block syntax literal", () => {
+    const html = renderToStaticMarkup(
+      <Markdown text="1. Use `holdersOf` **only**" inline />,
+    );
+
+    expect(html).toMatch(/^<span class="prose prose-inline">/);
+    expect(html).toContain("1. Use <code>holdersOf</code>");
+    expect(html).toContain("<strong>only</strong>");
+    expect(html).not.toMatch(/<(p|ol|li|div)[ >]/);
+  });
+
+  it("flattens raw block HTML and never mounts an embed", () => {
+    const html = renderToStaticMarkup(
+      <Markdown
+        text={
+          "<div>hello</div> and ![the report](/api/files/tmp/a.html) [![logo](/api/files/tmp/a.png)](https://example.com)"
+        }
+        inline
+      />,
+    );
+
+    expect(html).toContain("hello and the report ");
+    expect(html).toContain(">logo</a>");
+    expect(html).not.toMatch(/<(div|p|img|iframe|figure)[ >]/);
+  });
+
+  it("reads a fence as inline code rather than a block", () => {
+    const html = renderToStaticMarkup(
+      <Markdown text={"```js\nhello\n```"} inline />,
+    );
+
+    expect(html).toContain("<code>");
+    expect(html).not.toMatch(/<(pre|div)[ >]/);
+  });
+
+  it("does not read a leading hash as a heading", () => {
+    const html = renderToStaticMarkup(<Markdown text="# 3 is next" inline />);
+
+    expect(html).toContain("# 3 is next");
+    expect(html).not.toContain("<h1");
+  });
+});
+
 describe("Markdown tables", () => {
   it("keeps wide tables in a keyboard-scrollable region", () => {
     const html = renderToStaticMarkup(

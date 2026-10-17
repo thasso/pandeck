@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=2688 reason="The Markdown presentation rule prevents links silently becoming cards; the existing rendering and loading rules already exceed 2048." task=document-presentation date=2026-09-11 -->
+<!-- instruction-budget: bytes=2688 reason="The link/embed/card, agent-text and loading rules exceed 2048." task=markdown-card-fields date=2026-10-17 -->
 
 # Web components
 
@@ -15,10 +15,10 @@
 - Settings and integration pages are end-user surfaces: deployment details,
   protocol names, scopes, token diagnostics and test controls stay out of the
   primary flow; tokens and raw credential files never enter the UI.
-- Rich tool cards tolerate partial, streaming or malformed output, aligned with
-  the server `renderKind`. A new card registers in `tools/` with a focused
-  `shouldRender…` predicate on normalized names and render kinds, never a
-  provider-only label.
+- Cards tolerate partial, streaming or malformed output (per the server
+  `renderKind`) and render agent text via `Markdown`, `inline` for one-liners,
+  never bare. A new card registers in `tools/` with a focused `shouldRender…`
+  predicate on normalized names and render kinds, never a provider-only label.
 - An async region renders one of loading/refreshing/ready/empty/error: empty
   only once the source answered, refreshing never blanks an object's data (a
   different object gets a placeholder). That chrome comes from `common/load.tsx`

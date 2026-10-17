@@ -16,6 +16,9 @@ import { DATA_DIR } from "../../config.ts";
 const MAX_QUESTIONS = 12;
 const MAX_CHOICES = 20;
 const MAX_TEXT_CHARS = 4000;
+/** Agent-written Markdown fields: generous, so a cut never lands mid-sentence. */
+const MAX_PROSE_CHARS = 4000;
+const MAX_CHOICE_DESCRIPTION_CHARS = 1500;
 /** Keep the most recent resolved question flows per session for the in-band card. */
 const MAX_ANSWERED_PER_SESSION = 20;
 
@@ -369,7 +372,7 @@ export const askQuestionsTool = defineAgentTool<QuestionToolParams>({
   name: "ask_questions",
   label: "Ask Questions",
   description:
-    "Ask the user an interactive question flow in the web UI: use it for more than one clarification or for structured choices, and keep prose for a single simple question. A question they return with disposition=discuss is a request to continue that point in chat, not an answer.",
+    "Ask the user an interactive question flow in the web UI: use it for more than one clarification or for structured choices, and keep prose for a single simple question. Every text field renders Markdown. A question they return with disposition=discuss is a request to continue that point in chat, not an answer.",
   parameters: askQuestionsSchema,
   executionMode: "sequential",
   async execute(params, ctx) {
@@ -419,7 +422,7 @@ function buildRequest(
     used.add(id);
     return { ...q, id };
   });
-  const introValue = cleanOptionalMultilineText(params.intro, 800);
+  const introValue = cleanOptionalMultilineText(params.intro, MAX_PROSE_CHARS);
   return {
     requestId: `question-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     toolCallId,
@@ -441,8 +444,11 @@ function normalizeQuestion(
   const defaultChoiceIds = (raw.defaultChoiceIds ?? []).filter((id) =>
     choices.some((choice) => choice.id === id),
   );
-  const promptValue = cleanOptionalMultilineText(raw.prompt, 1200);
-  const helpTextValue = cleanOptionalMultilineText(raw.helpText, 600);
+  const promptValue = cleanOptionalMultilineText(raw.prompt, MAX_PROSE_CHARS);
+  const helpTextValue = cleanOptionalMultilineText(
+    raw.helpText,
+    MAX_PROSE_CHARS,
+  );
   const typedAnswerLabelValue = cleanOptionalText(raw.typedAnswerLabel, 120);
   const placeholderValue = cleanOptionalText(raw.placeholder, 200);
   const defaultTextValue = cleanOptionalMultilineText(
@@ -495,7 +501,10 @@ function normalizeChoices(
 ): AgentQuestionChoice[] {
   return (rawChoices ?? []).slice(0, MAX_CHOICES).map((choice, index) => {
     const label = cleanText(choice.label, 200) || `Option ${index + 1}`;
-    const descriptionValue = cleanOptionalText(choice.description, 500);
+    const descriptionValue = cleanOptionalMultilineText(
+      choice.description,
+      MAX_CHOICE_DESCRIPTION_CHARS,
+    );
     return {
       id: slug(choice.id || label) || `option_${index + 1}`,
       label,
