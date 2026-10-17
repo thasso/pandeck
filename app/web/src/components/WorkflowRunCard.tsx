@@ -1,3 +1,4 @@
+import { Markdown } from "./Markdown.tsx";
 import { runtimeLabel } from "./common/runtimeLabel.ts";
 import {
   ChevronRight,
@@ -174,7 +175,7 @@ function ReviewList({
             className="break-words"
           >
             {typeof item === "string" ? (
-              item
+              <Markdown text={item} inline />
             ) : (
               <>
                 <span className="font-medium text-foreground">
@@ -187,7 +188,7 @@ function ReviewList({
                     {item.line ? `:${item.line}` : ""}
                   </span>
                 ) : null}{" "}
-                — {item.text}
+                — <Markdown text={item.text} inline />
               </>
             )}
           </li>
@@ -571,7 +572,9 @@ export function WorkflowRunCard({
                 </span>
               ) : null}
             </span>
-            <span className="break-words">{item.reason}</span>
+            <span className="break-words">
+              <Markdown text={item.reason} inline />
+            </span>
           </li>
         ))}
       </ul>
@@ -1135,9 +1138,9 @@ export function WorkflowRunCard({
           {assessment || decision ? (
             <RunSection storageKey="workflow-run-review" title="Review">
               {assessment?.summary ? (
-                <p className="break-words whitespace-pre-line text-muted-foreground">
-                  {assessment.summary}
-                </p>
+                <div className="min-w-0 text-muted-foreground">
+                  <Markdown text={assessment.summary} density="compact" />
+                </div>
               ) : null}
               <ReviewList
                 label="Findings — must be addressed before delivery"

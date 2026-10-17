@@ -610,6 +610,12 @@ body {
   line-height: var(--text-xs--line-height);
 }
 
+/* A one-line field (a title, a choice label) keeps its host's type. */
+.prose-inline {
+  font-size: inherit;
+  line-height: inherit;
+}
+
 @keyframes blink {
   0%,
   100% {

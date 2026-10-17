@@ -72,6 +72,47 @@ describe("AgentQuestionToolCard", () => {
     expect(html).not.toContain("Deployment check</span><ul");
   });
 
+  it("renders agent-written fields as Markdown", () => {
+    const html = renderToStaticMarkup(
+      <AgentQuestionToolCard
+        block={block}
+        pendingQuestion={{
+          ...pending,
+          toolCallId: block.toolId,
+          title: "Task → `Initiative` membership",
+          intro: "**Objective:** ship it.\n\n1. Query\n2. Context",
+          questions: [
+            {
+              ...pending.questions[0]!,
+              title: "Keep `TaskItem` current",
+              prompt: "Should a change *notify*?",
+              helpText: "See `holdersOf`.",
+              choices: [
+                {
+                  id: "yes",
+                  label: "Yes, **notify**",
+                  description: "Correct.\n\n- live\n- scales",
+                },
+              ],
+            },
+            pending.questions[1]!,
+          ],
+        }}
+        onRespond={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Task → <code>Initiative</code> membership");
+    expect(html).toContain("<strong>Objective:</strong> ship it.");
+    expect(html).toContain("<li>Query</li>");
+    expect(html).toContain("Keep <code>TaskItem</code> current");
+    expect(html).toContain("<em>notify</em>");
+    expect(html).toContain("See <code>holdersOf</code>.");
+    expect(html).toContain("Yes, <strong>notify</strong>");
+    expect(html).toContain("<li>scales</li>");
+    expect(html).not.toContain("**");
+  });
+
   it("renders recorded answers for Claude SDK MCP numeric request ids", () => {
     const answered: AnsweredAgentQuestion = {
       ...pending,

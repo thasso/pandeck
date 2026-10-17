@@ -108,6 +108,12 @@ interface MarkdownProps {
    */
   density?: "prose" | "compact";
   /**
+   * Render a one-line field — a title, a label — as phrasing content inside
+   * its host: emphasis, code and links apply, block syntax (lists, headings,
+   * quotes, fences) stays literal text, and the host's size and color hold.
+   */
+  inline?: boolean;
+  /**
    * `breakout` lets a wide table use the chat pane beyond the prose column.
    * Its scroll viewport remains bounded by the pane; other Markdown blocks keep
    * their normal line length.
@@ -238,6 +244,7 @@ export const Markdown = memo(function Markdown({
   documentTarget,
   sourcePositions = false,
   density = "prose",
+  inline = false,
   tableLayout = "contained",
 }: MarkdownProps) {
   const sessionsById = useMemo(() => {
@@ -301,8 +308,9 @@ export const Markdown = memo(function Markdown({
       [remarkMath, REMARK_MATH_OPTIONS],
       remarkPaObjectLinks(),
       remarkChatReferences(sessionsById, sortedFiles),
+      ...(inline ? [remarkInlineOnly] : []),
     ],
-    [sessionsById, sortedFiles],
+    [sessionsById, sortedFiles, inline],
   );
 
   // The handlers are held in a ref and reached through fixed wrappers: a caller
@@ -382,18 +390,23 @@ export const Markdown = memo(function Markdown({
         rehypePlugins={rehypePlugins as never}
         urlTransform={urlTransform}
         components={MARKDOWN_COMPONENTS}
+        {...(inline ? INLINE_UNWRAP : {})}
       >
         {text}
       </ReactMarkdown>
     ),
-    [remarkPlugins, rehypePlugins, text],
+    [remarkPlugins, rehypePlugins, text, inline],
   );
 
+  const body = (
+    <MarkdownRenderContext.Provider value={renderContext}>
+      {rendered}
+    </MarkdownRenderContext.Provider>
+  );
+  if (inline) return <span className="prose prose-inline">{body}</span>;
   return (
     <div className={density === "compact" ? "prose prose-compact" : "prose"}>
-      <MarkdownRenderContext.Provider value={renderContext}>
-        {rendered}
-      </MarkdownRenderContext.Provider>
+      {body}
     </div>
   );
 });
@@ -1098,6 +1111,33 @@ function hastHasMath(node: any): boolean {
     return true;
   if (!Array.isArray(node.children)) return false;
   return node.children.some((child: any) => hastHasMath(child));
+}
+
+/**
+ * Inline mode: switch off every block construct so a field like "1. Foo" or
+ * "# 3" reads as written, and the lone paragraph left is unwrapped below.
+ */
+const INLINE_DISABLED_CONSTRUCTS = [
+  "blockQuote",
+  "codeFenced",
+  "codeIndented",
+  "definition",
+  "gfmFootnoteDefinition",
+  "headingAtx",
+  "htmlFlow",
+  "list",
+  "mathFlow",
+  "setextUnderline",
+  "table",
+  "thematicBreak",
+];
+const INLINE_UNWRAP = { disallowedElements: ["p"], unwrapDisallowed: true };
+
+function remarkInlineOnly(this: any) {
+  const data = this.data();
+  (data.micromarkExtensions ??= []).push({
+    disable: { null: INLINE_DISABLED_CONSTRUCTS },
+  });
 }
 
 function remarkPaObjectLinks() {

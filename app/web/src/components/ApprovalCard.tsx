@@ -199,8 +199,6 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-const CLAMPED = "line-clamp-6 whitespace-pre-wrap";
-
 /** A replaced value beside its replacement, the way Jira field edits read. */
 function Replaced({ from, to }: { from: string | undefined; to: string }) {
   if (from === undefined || from === to) return <>{to}</>;
@@ -666,9 +664,14 @@ function ManagedCommitOverrideBody({
         ))}
       />
       <div>
-        <Fact label="Agent's reason">
-          <span className="whitespace-pre-wrap">{body.reason}</span>
-        </Fact>
+        <p className="mb-1 text-xs font-medium text-muted-foreground">
+          Agent's reason
+        </p>
+        <div className="min-w-0 text-foreground">
+          <Markdown text={body.reason} density="compact" />
+        </div>
+      </div>
+      <div>
         <Fact label="Branch">
           <span className="font-mono">{body.branch}</span>
         </Fact>
@@ -895,9 +898,9 @@ function SpawnRow({
             {showPrompt ? "Hide opening message" : "more…"}
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <p className="rounded-md bg-muted p-2 whitespace-pre-wrap text-foreground">
-              {item.prompt}
-            </p>
+            <div className="min-w-0 rounded-md bg-muted p-2 text-foreground">
+              <Markdown text={item.prompt} density="compact" />
+            </div>
           </CollapsibleContent>
         </Collapsible>
         {item.resultSessionId && (
@@ -1133,7 +1136,7 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
         </Row>
       ) : null}
       {project.description ? (
-        <p className={CLAMPED}>{project.description}</p>
+        <ClippedMarkdown text={project.description} />
       ) : null}
     </>
   );
