@@ -15,16 +15,16 @@ sizes only.
 
 | Persona | Harness | System prompt | Eager tools | First request |
 | --- | --- | ---: | ---: | ---: |
-| assistant | pi | 6,208 | 10,694 | 16,902 |
-| assistant | claude | 6,188 | 9,991 | 16,179 |
-| personal-assistant | pi | 5,542 | 18,554 | 24,096 |
-| personal-assistant | claude | 5,522 | 9,991 | 15,513 |
-| workshop | pi | 13,145 | 20,472 | 33,617 |
-| workshop | claude | 6,892 | 11,954 | 18,846 |
+| assistant | pi | 6,208 | 10,695 | 16,903 |
+| assistant | claude | 6,188 | 9,992 | 16,180 |
+| personal-assistant | pi | 5,542 | 18,555 | 24,097 |
+| personal-assistant | claude | 5,522 | 9,992 | 15,514 |
+| workshop | pi | 13,145 | 20,473 | 33,618 |
+| workshop | claude | 6,892 | 11,955 | 18,847 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
 | workflow-coordinator | claude | 3,366 | 1,475 | 4,841 |
-| developer | pi | 13,590 | 19,985 | 33,575 |
-| developer | claude | 7,337 | 11,458 | 18,795 |
+| developer | pi | 13,590 | 19,986 | 33,576 |
+| developer | claude | 7,337 | 11,459 | 18,796 |
 
 ## assistant — pi
 
@@ -48,8 +48,8 @@ sizes only.
 | `project-context` | prompt | yes | 0 |
 | `assembly-overhead` | prompt | yes | 14 |
 | `tools:eager:names` | tools | yes | 112 |
-| `tools:eager:descriptions` | tools | yes | 2,146 |
-| `tools:eager:schemas` | tools | yes | 8,436 |
+| `tools:eager:descriptions` | tools | yes | 2,084 |
+| `tools:eager:schemas` | tools | yes | 8,499 |
 | `tools:eager:harness-builtin` | tools | yes | 0 |
 | `tools:deferred:universe` | tools | no | 146,572 |
 
@@ -70,8 +70,8 @@ sizes only.
 | `project-context` | prompt | no | 0 |
 | `assembly-overhead` | prompt | yes | 14 |
 | `tools:eager:names` | tools | yes | 174 |
-| `tools:eager:descriptions` | tools | yes | 1,774 |
-| `tools:eager:schemas` | tools | yes | 8,043 |
+| `tools:eager:descriptions` | tools | yes | 1,712 |
+| `tools:eager:schemas` | tools | yes | 8,106 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
 | `tools:deferred:universe` | tools | no | 147,472 |
 
@@ -96,8 +96,8 @@ sizes only.
 | `project-context` | prompt | yes | 0 |
 | `assembly-overhead` | prompt | yes | 48 |
 | `tools:eager:names` | tools | yes | 123 |
-| `tools:eager:descriptions` | tools | yes | 5,268 |
-| `tools:eager:schemas` | tools | yes | 9,580 |
+| `tools:eager:descriptions` | tools | yes | 5,206 |
+| `tools:eager:schemas` | tools | yes | 9,643 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
 | `tools:deferred:universe` | tools | no | 155,084 |
 
@@ -117,8 +117,8 @@ sizes only.
 | `project-context` | prompt | no | 0 |
 | `assembly-overhead` | prompt | yes | 48 |
 | `tools:eager:names` | tools | yes | 174 |
-| `tools:eager:descriptions` | tools | yes | 1,774 |
-| `tools:eager:schemas` | tools | yes | 8,043 |
+| `tools:eager:descriptions` | tools | yes | 1,712 |
+| `tools:eager:schemas` | tools | yes | 8,106 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
 | `tools:deferred:universe` | tools | no | 156,074 |
 
@@ -142,8 +142,8 @@ sizes only.
 | `project-context` | prompt | yes | 3,769 |
 | `assembly-overhead` | prompt | yes | 35 |
 | `tools:eager:names` | tools | yes | 214 |
-| `tools:eager:descriptions` | tools | yes | 5,947 |
-| `tools:eager:schemas` | tools | yes | 10,728 |
+| `tools:eager:descriptions` | tools | yes | 5,885 |
+| `tools:eager:schemas` | tools | yes | 10,791 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
 | `tools:deferred:universe` | tools | no | 179,299 |
 
@@ -162,8 +162,8 @@ sizes only.
 | `project-context` | prompt | no | 3,613 |
 | `assembly-overhead` | prompt | yes | 10 |
 | `tools:eager:names` | tools | yes | 310 |
-| `tools:eager:descriptions` | tools | yes | 2,453 |
-| `tools:eager:schemas` | tools | yes | 9,191 |
+| `tools:eager:descriptions` | tools | yes | 2,391 |
+| `tools:eager:schemas` | tools | yes | 9,254 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
 | `tools:deferred:universe` | tools | no | 180,568 |
 
@@ -222,8 +222,8 @@ sizes only.
 | `project-context` | prompt | yes | 3,769 |
 | `assembly-overhead` | prompt | yes | 35 |
 | `tools:eager:names` | tools | yes | 187 |
-| `tools:eager:descriptions` | tools | yes | 5,773 |
-| `tools:eager:schemas` | tools | yes | 10,442 |
+| `tools:eager:descriptions` | tools | yes | 5,711 |
+| `tools:eager:schemas` | tools | yes | 10,505 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
 | `tools:deferred:universe` | tools | no | 180,459 |
 
@@ -242,7 +242,7 @@ sizes only.
 | `project-context` | prompt | no | 3,613 |
 | `assembly-overhead` | prompt | yes | 10 |
 | `tools:eager:names` | tools | yes | 274 |
-| `tools:eager:descriptions` | tools | yes | 2,279 |
-| `tools:eager:schemas` | tools | yes | 8,905 |
+| `tools:eager:descriptions` | tools | yes | 2,217 |
+| `tools:eager:schemas` | tools | yes | 8,968 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
 | `tools:deferred:universe` | tools | no | 181,737 |

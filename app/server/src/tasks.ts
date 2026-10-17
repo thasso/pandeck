@@ -1394,8 +1394,17 @@ function resolveStatusWrite(
     statusSuggestionReason: null,
   };
   const claimed = byAgent ? claimableStatus(patch.status) : undefined;
+  // Repeating the current status is a decision only when it settles an
+  // opposing pending claim; otherwise preserve absent or answered provenance.
+  const hasOpposingPendingSuggestion =
+    current.statusSuggestion !== undefined &&
+    current.statusSuggestion.to !== current.status;
 
-  if (claimed && (!patch.suggestOnly || claimed !== current.status)) {
+  if (
+    claimed &&
+    (claimed !== current.status ||
+      (!patch.suggestOnly && hasOpposingPendingSuggestion))
+  ) {
     const recorded: StatusSuggestionColumns = {
       statusSuggestionTo: claimed,
       statusSuggestionAt: Date.now(),

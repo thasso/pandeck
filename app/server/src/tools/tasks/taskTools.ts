@@ -157,7 +157,11 @@ const taskManageSchema = {
               },
             },
           },
-          status: { type: "string", enum: TASK_STATUS_VALUES },
+          status: {
+            type: "string",
+            enum: TASK_STATUS_VALUES,
+            description: "Send status only to decide it; omit otherwise.",
+          },
           statusReason: { type: "string", description: "One short line." },
           suggestOnly: {
             type: "boolean",
@@ -455,7 +459,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
     label: coordinatorCreateOnly ? "Tasks: Create Follow-ups" : "Tasks: Manage",
     description: coordinatorCreateOnly
       ? "Create durable follow-up Tasks only when the user's current message explicitly asks. This coordinator-only variant cannot update, archive, or delete Tasks. Every created Task lands untriaged, is linked under this Workflow Run's Task, and carries its pull request as a source link when present."
-      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Set status directly. Record a dependency as an addLinks blocks link, never only in prose. Set dates, priority, project and ticket only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, ticket, dueDate or scheduledFor and resets priority.",
+      : "Batch-create, update, archive, restore, or delete Tasks; delete only on explicit user request. Create only durable follow-ups not to be done in this session: new Tasks land untriaged in the Inbox. Dependencies need addLinks blocks links, not prose alone. Set dates, priority, project, and ticket only from explicit or strong evidence; ask before ambiguous bulk changes. On update, empty strings clear projectId, parentId, ticket, dueDate, or scheduledFor; priority resets.",
     parameters: coordinatorCreateOnly
       ? coordinatorTaskCreateSchema
       : taskManageSchema,
@@ -675,11 +679,12 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
 
       // The RESULT shape is a contract (a web card renders it), so it says the
       // whole outcome once: every entry's `status` is the status after the
-      // write, `statusWrite` says whether the requested status was applied or
-      // only suggested, `descriptionEditsApplied` counts the targeted edits that
-      // landed, and a `statusSuggestion` is the claim recorded with the status —
-      // still waiting for the user only while its `to` differs from `status`. Nothing about a suggestion
-      // goes in `warnings` — the server did exactly what an agent's status
+      // write, `statusWrite` says whether a status decision was applied or only
+      // suggested (no-op status fields omit it), `descriptionEditsApplied`
+      // counts the targeted edits that landed, and a `statusSuggestion` is the
+      // claim recorded with the status — still waiting for the user only while
+      // its `to` differs from `status`. Nothing about a suggestion goes in
+      // `warnings` — the server did exactly what an agent's status
       // write means, so phrasing it as a warning made a correct outcome read
       // like a failure.
       return compactJsonResult({
@@ -1197,8 +1202,9 @@ function taskDescendants(
  * What one update did with its requested `status`, read off the Task before and
  * after rather than re-deriving `resolveStatusWrite`. A `suggestOnly` done/todo
  * the Task is not already in is `suggested` even when it moved the Task out of
- * `doing`; a direct done/todo write is `applied` even when it confirms the
- * current status; other writes are `applied` when they changed the status.
+ * `doing`; direct done/todo writes are `applied` when they change status or
+ * answer an opposing pending suggestion. A same-status write without that
+ * decision is a no-op; other writes are `applied` when they changed status.
  */
 function statusWriteOf(
   op: ManageOperation,
@@ -1208,11 +1214,13 @@ function statusWriteOf(
   if (op.status === undefined || !before) return undefined;
   if (op.suggestOnly === true && (op.status === "done" || op.status === "todo"))
     return before.status === op.status ? undefined : "suggested";
-  if (
-    (op.status === "done" || op.status === "todo") &&
-    after.status === op.status
-  )
-    return "applied";
+  if (op.status === "done" || op.status === "todo") {
+    const decided =
+      before.status !== op.status ||
+      (before.statusSuggestion !== undefined &&
+        before.statusSuggestion.to !== before.status);
+    return decided && after.status === op.status ? "applied" : undefined;
+  }
   return after.status !== before.status ? "applied" : undefined;
 }
 

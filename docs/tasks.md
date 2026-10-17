@@ -220,12 +220,15 @@ Status is OBSERVED, not reported (`224be3de`). The rules follow from that:
   `done` or `todo` is applied (`tasks.ts` `resolveStatusWrite`) — `doing` to
   `done` in one write — and its claim (`to`, `at`, session, reason) is recorded
   beside it as ANSWERED provenance: `statusSuggestion.to` equals the status. A
-  same-status direct write still records the latest decision and reports it as
-  applied. The Task page shows it under the status facts as "Set done by agent",
-  linking the session and rendering the reason as Markdown. Any status change by
-  the user clears it. When an agent moves the Task on to `doing`, an answered
-  claim for the status being left is cleared, while a PENDING suggestion is
-  preserved for the user to answer. An ordinary save keeps either claim.
+  same-status direct write answers an opposing PENDING suggestion, replacing it
+  with this write's provenance. Otherwise it is a no-op: with no claim, it adds
+  none; with answered provenance, it preserves the original reason, session and
+  timestamp. Its result omits `statusWrite`. The Task page shows provenance
+  under the status facts as "Set done by agent", linking the session and
+  rendering the reason as Markdown. Any status change by the user clears it.
+  When an agent moves the Task on to `doing`, an answered claim for the status
+  being left is cleared, while a PENDING suggestion is preserved for the user to
+  answer. An ordinary save without a status decision preserves either claim.
 - A SUGGESTION is the explicit opt-in: `task_manage`'s `suggestOnly` records the
   claim and leaves the status for the user to answer. It is for a finish the
   agent could not verify itself — the user testing on a device, a deploy,
@@ -243,9 +246,11 @@ Status is OBSERVED, not reported (`224be3de`). The rules follow from that:
 - A merged pull request is evidence, not authority: its linked Task gets a
   `done` SUGGESTION (`pullRequestMerge.ts`), answered by the PR card's Mark-done
   action or any surface below.
-- Each `task_manage` result entry says what happened to a requested status —
-  `statusWrite: "applied"` or `"suggested"` — and the transcript card reads it
-  as "set done" or "suggested done".
+- A `task_manage` result includes `statusWrite: "applied"` or `"suggested"` when
+  the status field made a decision; a same-status write that answered no
+  opposing pending suggestion omits it. The transcript card reads a decision as
+  "set done" or "suggested done", and a no-op status field does not claim it set
+  the status.
 - A suggestion is answered wherever it is READ: the Backlog's Focus row, the
   Task page, and the transcript card for the mutation that recorded it
   (`acceptStatusSuggestionSave` builds the save for each). Answering is an

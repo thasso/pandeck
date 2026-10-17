@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { createTask, deleteTask, readTask } from "../../tasks.ts";
+import { createTask, deleteTask, readTask, updateTask } from "../../tasks.ts";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
 import { affirmed, assertPromptRules } from "../../test/promptRules.ts";
 import { taskToolsForKind } from "./taskTools.ts";
@@ -252,32 +252,6 @@ test("task_manage same-status direct writes answer opposing suggestions", async 
       source: { createdBy: "user" },
     });
     try {
-      const directWrite = (statusReason: string) =>
-        manageTool().execute(
-          {
-            operations: [
-              {
-                operation: "update",
-                id: task.id,
-                status,
-                statusReason,
-              },
-            ],
-          },
-          ctx,
-        );
-      const firstDirect = (await directWrite("initial decision"))
-        .details as ManageResult;
-      assert.equal(firstDirect.changed[0]?.statusWrite, "applied");
-      assert.equal(firstDirect.changed[0]?.statusSuggestion?.to, status);
-      const repeatedDirect = (await directWrite("updated decision"))
-        .details as ManageResult;
-      assert.equal(repeatedDirect.changed[0]?.statusWrite, "applied");
-      assert.equal(
-        repeatedDirect.changed[0]?.statusSuggestion?.reason,
-        "updated decision",
-      );
-
       const opposite = status === "todo" ? "done" : "todo";
       await manageTool().execute(
         {
@@ -319,6 +293,73 @@ test("task_manage same-status direct writes answer opposing suggestions", async 
         readTask(task.id)?.statusSuggestion?.sessionId,
         ctx.session.sessionId,
       );
+    } finally {
+      deleteTask(task.id);
+    }
+  }
+});
+
+test("task_manage same-status writes without an opposing suggestion are no-ops", async () => {
+  for (const status of ["todo", "done"] as const) {
+    const task = createTask({
+      title: `Unchanged ${status}`,
+      status,
+      source: { createdBy: "user" },
+    });
+    try {
+      const noClaim = await manageTool().execute(
+        {
+          operations: [
+            {
+              operation: "update",
+              id: task.id,
+              status,
+              statusReason: "must not create provenance",
+            },
+          ],
+        },
+        ctx,
+      );
+      assert.equal(
+        (noClaim.details as ManageResult).changed[0]?.statusWrite,
+        undefined,
+      );
+      assert.equal(readTask(task.id)?.statusSuggestion, undefined);
+
+      const answeredTask = createTask({
+        title: `Answered ${status}`,
+        status: "doing",
+        source: { createdBy: "user" },
+      });
+      try {
+        updateTask(answeredTask.id, {
+          status,
+          statusReason: "original answered reason",
+          actor: { kind: "agent", id: "original-session" },
+        });
+        const original = readTask(answeredTask.id)?.statusSuggestion;
+        assert.ok(original);
+        const repeated = await manageTool().execute(
+          {
+            operations: [
+              {
+                operation: "update",
+                id: answeredTask.id,
+                status,
+                statusReason: "must not refresh provenance",
+              },
+            ],
+          },
+          ctx,
+        );
+        assert.equal(
+          (repeated.details as ManageResult).changed[0]?.statusWrite,
+          undefined,
+        );
+        assert.deepEqual(readTask(answeredTask.id)?.statusSuggestion, original);
+      } finally {
+        deleteTask(answeredTask.id);
+      }
     } finally {
       deleteTask(task.id);
     }
@@ -723,6 +764,20 @@ test("task_manage exposes exactly two Task tools", () => {
 });
 
 /** The rules that exist on NO other model-visible surface, pinned by substring. */
+test("task_manage status schema says when to include a status decision", () => {
+  const schema = manageTool().parameters as {
+    properties: {
+      operations: {
+        items: { properties: { status: { description?: string } } };
+      };
+    };
+  };
+  assert.match(
+    schema.properties.operations.items.properties.status.description ?? "",
+    /send status only to decide it; omit otherwise/i,
+  );
+});
+
 test("Task descriptions carry the rules no schema field states", () => {
   assertPromptRules({
     task_read: {
@@ -737,10 +792,10 @@ test("Task descriptions carry the rules no schema field states", () => {
     task_manage: {
       text: manageTool().description,
       rules: {
-        "create-only-for-later-work": /not (happen|be done) in this session/i,
+        "create-only-for-later-work":
+          /not (to )?(happen|be done|work) in this session/i,
         "created-lands-in-inbox":
           /Inbox[^.\n]*untriaged|untriaged[^.\n]*Inbox/i,
-        "status-is-set-directly": affirmed(/set status directly/i),
         "evidence-bar-for-fields": /(explicit|strong) evidence/i,
         // Folded up from six schema properties by Task-285.
         "delete-only-on-request": affirmed(
@@ -750,7 +805,7 @@ test("Task descriptions carry the rules no schema field states", () => {
         // A prose dependency is invisible to the Initiative map and blocked
         // state (docs/initiatives.md).
         "dependency-is-a-link":
-          /dependency[^.\n]*addLinks[^.\n]*blocks[^.\n]*never only in prose/i,
+          /dependenc(?:y|ies)[^.\n]*addLinks[^.\n]*blocks[^.\n]*(never only in prose|not prose alone)/i,
       },
     },
   });

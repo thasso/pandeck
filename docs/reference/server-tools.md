@@ -843,22 +843,23 @@ persona toolsets.
   through `compactJsonResult`. `changed` follows input op order and each entry's
   `status` is the status AFTER the write, with `statusSuggestion` the agent's
   claim (still waiting for the user only while its `to` differs from `status`),
-  `statusWrite` saying whether a requested status that differed was `applied` or
-  only `suggested` (`suggestOnly`), `descriptionEditsApplied` counting the
-  targeted body edits that landed, and `deduplicated` marking an entry a
-  `create` op resolved onto an EXISTING Task (the Slack source-link dedupe) —
-  flagged on the entry and not only in `warnings`, since a renderer taking the
-  verb from the op would otherwise call an existing Task "created". A suggestion
-  is never phrased as a warning: the server did exactly what an agent's status
-  write means, and `warnings` keeps its existing users (project-link resolution,
-  Slack dedupe). Failure still throws, so the payload has no error field; ops
-  before a throw stay applied. `task_read` stays a plain body with no
-  `renderKind`. The web card that renders this
-  (`components/TaskManageToolCard.tsx`) also reads the CALL's `operations` for
-  the verb per changed Task, since the payload states the outcome and not the
-  operation — so op order in `changed` is part of the contract, and both the
-  result and the call's input stay whole in a reloaded snapshot
-  (`session/log/timelinePayloadPolicy.ts`).
+  `statusWrite` saying whether a status decision changed the status or answered
+  an opposing pending suggestion (`applied`) or was only suggested
+  (`suggestOnly`); same-status writes without an opposing pending suggestion are
+  no-ops and omit `statusWrite`. `descriptionEditsApplied` counts the targeted
+  body edits that landed, and `deduplicated` marking an entry a `create` op
+  resolved onto an EXISTING Task (the Slack source-link dedupe) — flagged on the
+  entry and not only in `warnings`, since a renderer taking the verb from the op
+  would otherwise call an existing Task "created". A suggestion is never phrased
+  as a warning: the server did exactly what an agent's status write means, and
+  `warnings` keeps its existing users (project-link resolution, Slack dedupe).
+  Failure still throws, so the payload has no error field; ops before a throw
+  stay applied. `task_read` stays a plain body with no `renderKind`. The web
+  card that renders this (`components/TaskManageToolCard.tsx`) also reads the
+  CALL's `operations` for the verb per changed Task, since the payload states
+  the outcome and not the operation — so op order in `changed` is part of the
+  contract, and both the result and the call's input stay whole in a reloaded
+  snapshot (`session/log/timelinePayloadPolicy.ts`).
 - An agent cannot replace a whole Task description: `description` on an `update`
   operation THROWS, and the body changes only through `descriptionEdits`
   (`{oldText, newText}`, mirroring `kb_edit` — each `oldText` must occur exactly

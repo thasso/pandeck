@@ -231,7 +231,6 @@ describe("TaskManageToolCard", () => {
             title: "Done by the agent",
             status: "done",
             statusSuggestion: { to: "done", at: 5 },
-            statusWrite: "applied",
           },
         ],
       },
@@ -243,7 +242,8 @@ describe("TaskManageToolCard", () => {
       />,
     );
     expect(html).not.toContain("Confirm done");
-    expect(html).toContain("set done");
+    expect(html).toContain("updated");
+    expect(html).not.toContain("set done");
   });
 
   it("confirming sends the same save the Backlog's Focus row sends, with no title", () => {
