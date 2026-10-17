@@ -41,6 +41,7 @@ import {
   updateTask,
 } from "./tasks.ts";
 import { errorText } from "./errors.ts";
+import { markdownCodeSpan } from "./markdownCodeSpan.ts";
 import {
   sourceRequiresEnterprise,
   type HelperSourceContext,
@@ -622,7 +623,7 @@ function collectDeterministicFindings(args: {
   for (const line of conflictLines) {
     blockers.push({
       kind: "unsafe",
-      reason: `Unresolved merge conflict in status line: ${line}`,
+      reason: `Unresolved merge conflict in status line: ${markdownCodeSpan(line)}`,
     });
   }
 
@@ -671,7 +672,7 @@ function collectDeterministicFindings(args: {
     }
     if (!summary.included && summary.reason?.startsWith("binary")) {
       warnings.push(
-        `Untracked binary/non-text file will be included if committed: ${summary.path}`,
+        `Untracked binary/non-text file will be included if committed: ${markdownCodeSpan(summary.path)}`,
       );
     }
   }
