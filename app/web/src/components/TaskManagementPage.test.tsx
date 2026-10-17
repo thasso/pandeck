@@ -173,7 +173,8 @@ describe("TaskManagementPage status provenance", () => {
     to: "done" as const,
     at: 5,
     sessionId: "sess-1",
-    reason: "tests pass",
+    reason:
+      "Verified with **full suite** and `pnpm test` — [results](https://example.test/run)",
   };
 
   it("says an agent set the current status, why, and links its session", () => {
@@ -184,7 +185,9 @@ describe("TaskManagementPage status provenance", () => {
       taskDetails: { "7": done },
     });
     expect(html).toContain("Set done by agent");
-    expect(html).toContain("tests pass");
+    expect(html).toContain("<strong>full suite</strong>");
+    expect(html).toContain("<code>pnpm test</code>");
+    expect(html).toContain('href="https://example.test/run"');
     expect(html).toContain('href="/sessions/sess-1"');
     // Answered: no suggestion card asking the user to decide.
     expect(html).not.toContain("Mark done");

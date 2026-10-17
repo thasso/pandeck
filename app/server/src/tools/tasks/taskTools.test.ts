@@ -244,6 +244,87 @@ test("task_manage with suggestOnly reports a recorded suggestion, not a warning"
   }
 });
 
+test("task_manage same-status direct writes answer opposing suggestions", async () => {
+  for (const status of ["todo", "done"] as const) {
+    const task = createTask({
+      title: `Same-status ${status}`,
+      status,
+      source: { createdBy: "user" },
+    });
+    try {
+      const directWrite = (statusReason: string) =>
+        manageTool().execute(
+          {
+            operations: [
+              {
+                operation: "update",
+                id: task.id,
+                status,
+                statusReason,
+              },
+            ],
+          },
+          ctx,
+        );
+      const firstDirect = (await directWrite("initial decision"))
+        .details as ManageResult;
+      assert.equal(firstDirect.changed[0]?.statusWrite, "applied");
+      assert.equal(firstDirect.changed[0]?.statusSuggestion?.to, status);
+      const repeatedDirect = (await directWrite("updated decision"))
+        .details as ManageResult;
+      assert.equal(repeatedDirect.changed[0]?.statusWrite, "applied");
+      assert.equal(
+        repeatedDirect.changed[0]?.statusSuggestion?.reason,
+        "updated decision",
+      );
+
+      const opposite = status === "todo" ? "done" : "todo";
+      await manageTool().execute(
+        {
+          operations: [
+            {
+              operation: "update",
+              id: task.id,
+              status: opposite,
+              statusReason: "older suggestion",
+              suggestOnly: true,
+            },
+          ],
+        },
+        ctx,
+      );
+
+      const result = await manageTool().execute(
+        {
+          operations: [
+            {
+              operation: "update",
+              id: task.id,
+              status,
+              statusReason: "current verified decision",
+            },
+          ],
+        },
+        ctx,
+      );
+      const changed = (result.details as ManageResult).changed[0];
+      assert.equal(changed?.status, status);
+      assert.equal(changed?.statusWrite, "applied");
+      assert.equal(changed?.statusSuggestion?.to, status);
+      assert.equal(
+        changed?.statusSuggestion?.reason,
+        "current verified decision",
+      );
+      assert.equal(
+        readTask(task.id)?.statusSuggestion?.sessionId,
+        ctx.session.sessionId,
+      );
+    } finally {
+      deleteTask(task.id);
+    }
+  }
+});
+
 test("task_manage with suggestOnly todo leaves a doing Task alone", async () => {
   const task = createTask({
     title: "Todo suggestion probe",

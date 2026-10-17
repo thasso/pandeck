@@ -1449,7 +1449,10 @@ function StatusClaimLine({
       ) : null}
       {claim.reason ? (
         <span className="min-w-0 wrap-anywhere">
-          — <q className="italic">{claim.reason}</q>
+          —{" "}
+          <q className="italic">
+            <Markdown text={claim.reason} inline density="compact" />
+          </q>
         </span>
       ) : null}
     </p>

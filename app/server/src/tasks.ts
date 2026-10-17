@@ -1395,7 +1395,7 @@ function resolveStatusWrite(
   };
   const claimed = byAgent ? claimableStatus(patch.status) : undefined;
 
-  if (claimed && claimed !== current.status) {
+  if (claimed && (!patch.suggestOnly || claimed !== current.status)) {
     const recorded: StatusSuggestionColumns = {
       statusSuggestionTo: claimed,
       statusSuggestionAt: Date.now(),

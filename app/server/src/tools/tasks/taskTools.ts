@@ -1197,18 +1197,22 @@ function taskDescendants(
  * What one update did with its requested `status`, read off the Task before and
  * after rather than re-deriving `resolveStatusWrite`. A `suggestOnly` done/todo
  * the Task is not already in is `suggested` even when it moved the Task out of
- * `doing`; any other write that changed the status is `applied`; a status the
- * Task already had reports nothing.
+ * `doing`; a direct done/todo write is `applied` even when it confirms the
+ * current status; other writes are `applied` when they changed the status.
  */
 function statusWriteOf(
   op: ManageOperation,
   before: TaskItem | null,
   after: TaskItem,
 ): StatusWrite | undefined {
-  if (op.status === undefined || !before || before.status === op.status)
-    return undefined;
+  if (op.status === undefined || !before) return undefined;
   if (op.suggestOnly === true && (op.status === "done" || op.status === "todo"))
-    return "suggested";
+    return before.status === op.status ? undefined : "suggested";
+  if (
+    (op.status === "done" || op.status === "todo") &&
+    after.status === op.status
+  )
+    return "applied";
   return after.status !== before.status ? "applied" : undefined;
 }
 
