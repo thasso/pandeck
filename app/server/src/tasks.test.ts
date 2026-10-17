@@ -420,7 +420,7 @@ test("the scheduled filter buckets by the planned day, not the deadline", () => 
   }
 });
 
-test("an agent's done suggests completion and takes the Task out of doing", () => {
+test("a suggestOnly done records a suggestion and takes the Task out of doing", () => {
   const created = createTask({
     title: "Agent work",
     status: "doing",
@@ -432,6 +432,7 @@ test("an agent's done suggests completion and takes the Task out of doing", () =
       status: "done",
       statusReason: "tests pass",
       actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
     });
     // The claim is recorded; the Task is emphatically NOT done. It leaves
     // `doing` in the same write, so no corrective second mutation is needed.
@@ -448,7 +449,7 @@ test("an agent's done suggests completion and takes the Task out of doing", () =
   }
 });
 
-test("an agent handing work back suggests todo and leaves the status alone", () => {
+test("a suggestOnly todo records a suggestion and leaves the status alone", () => {
   const created = createTask({
     title: "Handed back",
     status: "doing",
@@ -460,6 +461,7 @@ test("an agent handing work back suggests todo and leaves the status alone", () 
       status: "todo",
       statusReason: "blocked on the API key",
       actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
     });
     // Unlike a `done` suggestion, this one moves nothing: until the user
     // answers, the honest state of paused work is still `doing`.
@@ -482,10 +484,12 @@ test("repeating a suggestion keeps its timestamp; changing it replaces it", () =
     const first = updateTask(created.id, {
       status: "todo",
       actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
     });
     const again = updateTask(created.id, {
       status: "todo",
       actor: { kind: "agent", id: "sess-2" },
+      suggestOnly: true,
     });
     // How long something has sat unanswered is the useful fact; a retrying
     // agent must not reset it.
@@ -496,6 +500,7 @@ test("repeating a suggestion keeps its timestamp; changing it replaces it", () =
     const changed = updateTask(created.id, {
       status: "done",
       actor: { kind: "agent", id: "sess-2" },
+      suggestOnly: true,
     });
     assert.equal(changed.statusSuggestion?.to, "done");
     assert.equal(changed.statusSuggestion?.sessionId, "sess-2");
@@ -516,6 +521,7 @@ test("only a real user decision clears a status suggestion", () => {
     updateTask(created.id, {
       status: "done",
       actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
     });
 
     // An ordinary save that leaves the status alone must NOT discard the claim
@@ -554,6 +560,7 @@ test("the user confirming completes the task and clears the suggestion", () => {
     updateTask(created.id, {
       status: "done",
       actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
     });
     const confirmed = updateTask(created.id, {
       status: "done",
@@ -577,6 +584,7 @@ test("moving a claimed task to another status is also a decision", () => {
     updateTask(created.id, {
       status: "done",
       actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
     });
     const moved = updateTask(created.id, {
       status: "doing",
@@ -589,9 +597,9 @@ test("moving a claimed task to another status is also a decision", () => {
   }
 });
 
-test("the user's explicit request lets an agent complete the Task", () => {
+test("an agent's done is applied and recorded as answered provenance", () => {
   const created = createTask({
-    title: "Completed at the user's request",
+    title: "Completed by an agent",
     status: "doing",
     source: { createdBy: "user" },
   });
@@ -599,15 +607,134 @@ test("the user's explicit request lets an agent complete the Task", () => {
   try {
     const done = updateTask(created.id, {
       status: "done",
-      userRequestedStatus: true,
-      statusReason: "you asked me to close it",
+      statusReason: "tests pass",
       actor: { kind: "agent", id: "sess-1" },
     });
-    // The status IS applied, and the claim is still recorded with agent
-    // provenance so it reads as "done at your request" and stays reversible.
+    // `doing` to `done` in one write — not parked in `todo` for an answer.
     assert.equal(done.status, "done");
     assert.equal(done.statusSuggestion?.to, "done");
     assert.equal(done.statusSuggestion?.sessionId, "sess-1");
+    assert.equal(done.statusSuggestion?.reason, "tests pass");
+    assert.ok((done.statusSuggestion?.at ?? 0) > 0);
+    // The status event says who moved it.
+    assert.equal(
+      taskStore.statusEventsForTask(Number(created.id)).at(-1)?.actorKind,
+      "agent",
+    );
+  } finally {
+    deleteTask(created.id);
+  }
+});
+
+test("an agent's todo is applied and recorded as answered provenance", () => {
+  const created = createTask({
+    title: "Handed back by an agent",
+    status: "doing",
+    source: { createdBy: "user" },
+  });
+
+  try {
+    const handed = updateTask(created.id, {
+      status: "todo",
+      statusReason: "blocked on the API key",
+      actor: { kind: "agent", id: "sess-1" },
+    });
+    assert.equal(handed.status, "todo");
+    assert.equal(handed.statusSuggestion?.to, "todo");
+    assert.equal(handed.statusSuggestion?.reason, "blocked on the API key");
+  } finally {
+    deleteTask(created.id);
+  }
+});
+
+test("an applied status records this write's claim over a pending suggestion", () => {
+  const created = createTask({
+    title: "Suggested, then applied",
+    status: "doing",
+    source: { createdBy: "user" },
+  });
+
+  try {
+    updateTask(created.id, {
+      status: "done",
+      statusReason: "PR merged",
+      actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
+    });
+    const done = updateTask(created.id, {
+      status: "done",
+      statusReason: "verified on device",
+      actor: { kind: "agent", id: "sess-2" },
+    });
+    assert.equal(done.status, "done");
+    assert.equal(done.statusSuggestion?.sessionId, "sess-2");
+    assert.equal(done.statusSuggestion?.reason, "verified on device");
+  } finally {
+    deleteTask(created.id);
+  }
+});
+
+test("answered provenance survives an ordinary save and clears on a status change", () => {
+  const created = createTask({
+    title: "Agent provenance lifecycle",
+    status: "doing",
+    source: { createdBy: "user" },
+  });
+
+  try {
+    updateTask(created.id, {
+      status: "done",
+      actor: { kind: "agent", id: "sess-1" },
+    });
+    const edited = updateTask(created.id, {
+      description: "notes",
+      status: "done",
+      actor: { kind: "user" },
+    });
+    assert.equal(edited.statusSuggestion?.to, "done");
+
+    const reopened = updateTask(created.id, {
+      status: "doing",
+      actor: { kind: "user" },
+    });
+    assert.equal(reopened.statusSuggestion, undefined);
+
+    // An agent moving it on to `doing` drops the stale claim too, or the old
+    // `done` would read as a question nobody asked.
+    updateTask(created.id, {
+      status: "done",
+      actor: { kind: "agent", id: "sess-1" },
+    });
+    const resumed = updateTask(created.id, {
+      status: "doing",
+      actor: { kind: "agent", id: "sess-2" },
+    });
+    assert.equal(resumed.status, "doing");
+    assert.equal(resumed.statusSuggestion, undefined);
+  } finally {
+    deleteTask(created.id);
+  }
+});
+
+test("an agent moving to doing leaves a pending suggestion standing", () => {
+  const created = createTask({
+    title: "Pending through doing",
+    status: "doing",
+    source: { createdBy: "user" },
+  });
+
+  try {
+    updateTask(created.id, {
+      status: "done",
+      actor: { kind: "agent", id: "sess-1" },
+      suggestOnly: true,
+    });
+    const resumed = updateTask(created.id, {
+      status: "doing",
+      actor: { kind: "agent", id: "sess-2" },
+    });
+    assert.equal(resumed.status, "doing");
+    assert.equal(resumed.statusSuggestion?.to, "done");
   } finally {
     deleteTask(created.id);
   }

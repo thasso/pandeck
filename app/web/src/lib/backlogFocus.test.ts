@@ -287,9 +287,9 @@ describe("the review bucket", () => {
   });
 
   it("ignores a suggestion the Task already agrees with", () => {
-    // Reached by the userRequestedStatus escape hatch: the agent applied the
-    // status the user asked for AND recorded the claim. That is provenance, not
-    // a pending question, so it must not sit here asking to be confirmed.
+    // An agent's default status write: it applied the status AND recorded the
+    // claim. That is provenance, not a pending question, so it must not sit
+    // here asking to be confirmed.
     const answered = task({
       id: "a",
       status: "done",

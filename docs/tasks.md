@@ -1,9 +1,9 @@
 # Task contract
 
 A Task is the USER's durable object. Agents read Tasks, may fold a decision into
-one, and may suggest a status — they do not use the backlog to keep track of the
-work they are doing right now, because the app deliberately gives them no place
-to do that.
+one, and set its status when they finish or hand work back — they do not use the
+backlog to keep track of the work they are doing right now, because the app
+deliberately gives them no place to do that.
 
 This document exists so that boundary stops being re-derived. It is the product
 contract for Tasks; the module detail lives in `docs/reference/server-tools.md`
@@ -240,23 +240,44 @@ Status is OBSERVED, not reported (`224be3de`). The rules follow from that:
 - The Backlog's "working" signal is derived from linked streaming sessions
   (`app/web/src/lib/taskActivity.ts`), not from the status field, precisely
   because the field goes stale.
-- A Task's status is the user's call. An agent writing `done` or `todo` records
-  a SUGGESTION instead (`tasks.ts` `resolveStatusWrite`); the Task keeps its
-  real status until the user answers, and an ordinary save never silently
-  discards a pending suggestion. Those are the only two suggestible values.
+- An agent SETS status. Initiatives are run end to end by agents, so an agent's
+  `done` or `todo` is applied (`tasks.ts` `resolveStatusWrite`) — `doing` to
+  `done` in one write — and its claim (`to`, `at`, session, reason) is recorded
+  beside it as ANSWERED provenance: `statusSuggestion.to` equals the status. A
+  same-status direct write answers an opposing PENDING suggestion, replacing it
+  with this write's provenance. Otherwise it is a no-op: with no claim, it adds
+  none; with answered provenance, it preserves the original reason, session and
+  timestamp. Its result omits `statusWrite`. The Task page shows provenance
+  under the status facts as "Set done by agent", linking the session and
+  rendering the reason as Markdown. Any status change by the user clears it.
+  When an agent moves the Task on to `doing`, an answered claim for the status
+  being left is cleared, while a PENDING suggestion is preserved for the user to
+  answer. An ordinary save without a status decision preserves either claim.
+- A SUGGESTION is the explicit opt-in: `task_manage`'s `suggestOnly` records the
+  claim and leaves the status for the user to answer. It is for a finish the
+  agent could not verify itself — the user testing on a device, a deploy,
+  someone else's decision — not for general uncertainty. A pending suggestion is
+  the claim whose `to` differs from the status; an ordinary save never silently
+  discards one. `done` and `todo` are the only two values.
 - A `done` suggestion ALSO takes the Task out of `doing`, into `todo`. Both
   halves of "I finished, and I am no longer working on it" are true at once, so
   a closeout says them in one call and never needs a corrective second write.
+  Repeating the same suggestion keeps its first timestamp; a different one
+  replaces it.
 - Nothing auto-reverts `doing` otherwise. Saying nothing means "leave it in
   doing", which is the truth when work is paused mid-flight, so a `todo`
-  suggestion moves nothing by itself — it is for genuinely handing work back.
-- The escape hatch is explicit rather than implicit: when the user asked for a
-  status in this session, an agent writes it with `userRequestedStatus` — the
-  status is applied AND the claim recorded, with agent provenance, so it reads
-  as "done at your request" and stays visible and reversible.
-- A suggestion is answered wherever it is READ: the Backlog's Focus row and the
-  transcript card for the mutation that recorded it
-  (`acceptStatusSuggestionSave` builds the save for both). Answering is an
+  suggestion moves nothing by itself.
+- A merged pull request is evidence, not authority: its linked Task gets a
+  `done` SUGGESTION (`pullRequestMerge.ts`), answered by the PR card's Mark-done
+  action or any surface below.
+- A `task_manage` result includes `statusWrite: "applied"` or `"suggested"` when
+  the status field made a decision; a same-status write that answered no
+  opposing pending suggestion omits it. The transcript card reads a decision as
+  "set done" or "suggested done", and a no-op status field does not claim it set
+  the status.
+- A suggestion is answered wherever it is READ: the Backlog's Focus row, the
+  Task page, and the transcript card for the mutation that recorded it
+  (`acceptStatusSuggestionSave` builds the save for each). Answering is an
   ordinary user save and never resumes a session, and it carries no title —
   confirming a status is not a rename, and the transcript's copy of the title is
   as old as the mutation.
@@ -393,11 +414,11 @@ the whole set rather than of the row the user touched:
   refusal offers exactly that as its escape hatch ("Archive all N", the whole
   subtree), because an abandoned epic must not become a Task the user can never
   get out of their list. Taking work nobody finished has to be ASKED for.
-- **An unanswered status suggestion.** A Task that is `done` only because an
-  agent said so is carrying a QUESTION, and the Focus view is the only surface
-  that can answer one. Archiving would delete the question with the row — a
-  subtask's claim included, since the cascade would take that row too rather
-  than leave it visible at the root.
+- **An unanswered status suggestion.** A Task an agent only SUGGESTED a status
+  for is carrying a QUESTION, and the Focus view is the only surface that can
+  answer one. Archiving would delete the question with the row — a subtask's
+  claim included, since the cascade would take that row too rather than leave it
+  visible at the root.
 - **A session running right now**, observed from the Task's linked sessions
   (`lib/taskActivity.ts`), never from the status field.
 

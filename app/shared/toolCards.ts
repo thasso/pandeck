@@ -389,7 +389,8 @@ export interface ChangedTaskPayload {
   title: string;
   status: TaskStatus;
   statusSuggestion?: TaskStatusSuggestion;
-  statusSetByRequest?: boolean;
+  /** What the update did with its status: moved the Task, or only suggested. */
+  statusWrite?: "applied" | "suggested";
   descriptionEditsApplied?: number;
   /** A create the server resolved onto an EXISTING Task (Slack dedupe). */
   deduplicated?: boolean;
@@ -432,7 +433,9 @@ function changedTaskOf(value: unknown): ChangedTaskPayload | null {
     title: typeof record.title === "string" ? record.title : `Task ${id}`,
     status,
     ...(suggestion ? { statusSuggestion: suggestion } : {}),
-    ...(record.statusSetByRequest === true ? { statusSetByRequest: true } : {}),
+    ...(record.statusWrite === "applied" || record.statusWrite === "suggested"
+      ? { statusWrite: record.statusWrite }
+      : {}),
     ...(record.deduplicated === true ? { deduplicated: true } : {}),
     ...(typeof record.descriptionEditsApplied === "number"
       ? { descriptionEditsApplied: record.descriptionEditsApplied }

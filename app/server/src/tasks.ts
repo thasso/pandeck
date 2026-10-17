@@ -118,15 +118,14 @@ export interface UpdateTaskInput {
   addLinks?: TaskLinkInput[];
   /** Task ids whose link with this Task, whatever its type, is removed. */
   removeLinks?: string[];
-  /** One short line recorded with an agent's status suggestion. */
+  /** One short line recorded with an agent's status claim. */
   statusReason?: string;
   /**
-   * The USER asked for this status in this session, so an `agent` actor's
-   * `done` is applied rather than only suggested. The suggestion is still
-   * recorded, and the status event still says `agent`: the escape hatch is
-   * explicit and stays visible and reversible, never silent.
+   * An `agent` actor's `done`/`todo` is only SUGGESTED, for the user to answer,
+   * instead of applied. The opt-in for a finish the agent could not verify
+   * itself; without it the agent's status is applied.
    */
-  userRequestedStatus?: boolean;
+  suggestOnly?: boolean;
   /** Explicitly mark processed / put back in the Inbox. */
   triaged?: boolean;
   commitHash?: string | null;
@@ -1425,40 +1424,41 @@ interface StatusSuggestionColumns {
 }
 
 /**
- * The two statuses an agent may SUGGEST. `doing` is deliberately not one of
- * them: saying nothing means "leave it in doing", which is the truth when work
- * is paused mid-flight, so there is nothing for a third value to express.
+ * The two statuses an agent's claim can name. `doing` is deliberately not one
+ * of them: saying nothing means "leave it in doing", which is the truth when
+ * work is paused mid-flight, so there is nothing for a third value to express.
  */
-function suggestibleStatus(
+function claimableStatus(
   status: TaskStatus | undefined,
 ): TaskStatusSuggestion["to"] | undefined {
   return status === "done" || status === "todo" ? status : undefined;
 }
 
 /**
- * Who may actually WRITE a Task's status, and what an agent's write becomes
- * instead. The one place that decides this.
+ * Who may actually WRITE a Task's status, and what an agent's write becomes.
+ * The one place that decides this.
  *
- * An agent reporting `done` is a claim, not evidence — the reported failure was
- * agents marking Tasks done eagerly, after which the Task vanished from every
- * open list with the work unfinished. So an `agent` actor's `done`/`todo` is
- * recorded as a SUGGESTION for the user to answer.
+ * An `agent` actor's `done`/`todo` is APPLIED, and the claim behind it — which
+ * status, when, which session, why — is recorded beside it. Its `to` equals the
+ * status, so it is ANSWERED provenance the Task page shows, never a pending
+ * question. Initiatives are run end to end by agents, so the default trusts
+ * them; the record keeps every agent status change visible and reversible.
  *
- * A `done` suggestion also moves the Task out of `doing`, because both halves
- * of "I finished, and I am no longer working on it" are true at once and an
- * agent should not need a second corrective write to say the second one. The
- * Task lands in `todo` — waiting for an answer, on nobody's plate — rather than
- * in `done`, which is still the user's call.
+ * `suggestOnly` is the explicit opt-in for a finish the agent could not verify
+ * itself: the claim is recorded as a SUGGESTION for the user to answer and the
+ * status is left alone — except that a `done` suggestion also moves the Task
+ * out of `doing`, because both halves of "I finished, and I am no longer
+ * working on it" are true at once and an agent should not need a second
+ * corrective write to say the second one. The Task lands in `todo` — waiting
+ * for an answer, on nobody's plate — rather than in `done`, which is then the
+ * user's call. The PR-merge `done` suggestion takes this path.
  *
- * `system` actors are deliberately NOT covered, and `userRequestedStatus` is
- * the explicit escape hatch: when the user asked for the status in this
- * session, the agent's write is applied AND recorded as the claim, so it reads
- * as "done at your request" and stays reversible.
+ * `system` actors are deliberately NOT covered.
  *
- * A suggestion is cleared when the user actually decides: moving the Task to
+ * A claim is cleared when the user actually decides: moving the Task to
  * another status, or dismissing it outright (`clearStatusSuggestion`). An
  * ordinary save that leaves the status untouched must NOT clear it, or editing
- * a link would silently discard the suggestion.
+ * a link would silently discard a pending suggestion.
  */
 function resolveStatusWrite(
   current: TaskItem,
@@ -1474,39 +1474,53 @@ function resolveStatusWrite(
     statusSuggestionBy: null,
     statusSuggestionReason: null,
   };
-  const suggested = byAgent ? suggestibleStatus(patch.status) : undefined;
+  const claimed = byAgent ? claimableStatus(patch.status) : undefined;
+  // Repeating the current status is a decision only when it settles an
+  // opposing pending claim; otherwise preserve absent or answered provenance.
+  const hasOpposingPendingSuggestion =
+    current.statusSuggestion !== undefined &&
+    current.statusSuggestion.to !== current.status;
 
-  if (suggested && suggested !== current.status) {
+  if (
+    claimed &&
+    (claimed !== current.status ||
+      (!patch.suggestOnly && hasOpposingPendingSuggestion))
+  ) {
     const recorded: StatusSuggestionColumns = {
-      statusSuggestionTo: suggested,
+      statusSuggestionTo: claimed,
       statusSuggestionAt: Date.now(),
       statusSuggestionBy: patch.actor?.id ?? null,
       statusSuggestionReason: cleanText(patch.statusReason ?? "", 200) || null,
     };
+    // An applied status is provenance of THIS write, so the claim is always
+    // this agent's own, even over a pending suggestion with the same target.
+    if (!patch.suggestOnly)
+      return { status: claimed, suggestionColumns: recorded };
     // Repeating the SAME suggestion keeps the first one's timestamp: how long
     // something has sat unanswered is the useful fact, and a retrying agent
     // would reset it. A DIFFERENT one replaces it — the agent changed its mind,
     // and the live statement is the newer one.
-    const columns = current.statusSuggestion?.to === suggested ? {} : recorded;
-    if (patch.userRequestedStatus)
-      return { status: suggested, suggestionColumns: columns };
     return {
       status:
-        suggested === "done" && current.status === "doing" ? "todo" : undefined,
-      suggestionColumns: columns,
+        claimed === "done" && current.status === "doing" ? "todo" : undefined,
+      suggestionColumns:
+        current.statusSuggestion?.to === claimed ? {} : recorded,
     };
   }
 
   if (patch.clearStatusSuggestion)
     return { status: patch.status, suggestionColumns: clear };
-  if (
-    patch.status !== undefined &&
-    !byAgent &&
-    patch.status !== current.status
-  ) {
-    return { status: patch.status, suggestionColumns: clear };
-  }
-  return { status: patch.status, suggestionColumns: {} };
+  if (patch.status === undefined || patch.status === current.status)
+    return { status: patch.status, suggestionColumns: {} };
+  if (!byAgent) return { status: patch.status, suggestionColumns: clear };
+  // An agent moving the Task to `doing` leaves a PENDING suggestion standing,
+  // but an ANSWERED claim described the status being left: kept, it would
+  // turn into a question nobody asked.
+  return {
+    status: patch.status,
+    suggestionColumns:
+      current.statusSuggestion?.to === current.status ? clear : {},
+  };
 }
 
 /* ------------------------------- ordering -------------------------------- */

@@ -258,39 +258,41 @@ facade.
   in the Inbox. The `tasks.status_suggestion_*` columns (migration
   `0033_task_status_suggestion.sql`, which RENAMES `0030`'s
   `done_proposed_at_ms`/`done_proposed_by` and adds `_to`/`_reason`) hold the
-  one pending agent suggestion — `done` or `todo`, when, which session, and one
-  short reason — because it generalized from an implicit `done` claim and a
-  second nullable claim column would have let two contradictory ones coexist;
-  every migrated row becomes a `done` suggestion. `taskStore` also owns durable
-  Task status-change provenance (`task_status_events`, migration
-  `0021_task_status_events.sql`: from/to status + actor kind/id per change,
-  recorded by `../tasks.ts` `updateTask` from the caller-supplied `actor`;
-  `statusEventsForTask` reads it). `setParent`/`setProject` are also where the
-  "a subtask lives in its parent's project" invariant is kept (`docs/tasks.md`):
-  a move inherits the new parent's project for the node and its subtree, and an
-  assignment cascades down it. They are the only seam all four write paths share
-  — the Backlog drag reaches `setParent` through `../tasks.ts` `reorderTasks`
-  without passing `applyRelations`. Both RETURN the other rows they moved (a
-  project cascade is a write to a whole subtree), so the caller can report them
-  through the change-notification seam. `nextSortOrder(parentId)` answers the
-  other half of joining a group: the free manual position a Task takes when
-  nobody stated one, so no row ever reaches the Backlog without a place of its
-  own and the client never has to infer one from a field a status change moves.
-  The two groups take opposite ends. A Task joining the ROOT is an arrival that
-  has to be seen, so it goes strictly below the smallest `sort_order` in the
-  table — a value no live row and no archived one still holding its old index
-  can collide with, at the cost of drifting negative until the next drag
-  renumbers the tree. A Task joining a PARENT is part of that parent's plan, and
-  a plan reads top-down, so it is appended after its siblings (archived ones
-  counted, for the same reason). `../tasks.ts` asks on create, on a reparent
-  that states no position, and on unarchive. `tasks.revision` (migration
-  `0040_task_revision.sql`) is the state-event revision: `stampRevisions(ids)`
-  allocates ONE value from the persisted `task_revision` sequence per
-  notification and stamps every touched row with it, including tombstoned ones
-  (a delete event carries a revision too), and `revisions()` reads the whole
-  `{id → revision, live}` index the broadcast flush diffs. The counter is
-  persisted because a restart that handed out numbers a client has already seen
-  would emit events every subscribed browser silently discards.
+  one agent status claim — `done` or `todo`, when, which session, and one short
+  reason; pending while `_to` differs from `status`, otherwise answered
+  provenance of an applied write — because it generalized from an implicit
+  `done` claim and a second nullable claim column would have let two
+  contradictory ones coexist; every migrated row becomes a `done` suggestion.
+  `taskStore` also owns durable Task status-change provenance
+  (`task_status_events`, migration `0021_task_status_events.sql`: from/to
+  status + actor kind/id per change, recorded by `../tasks.ts` `updateTask` from
+  the caller-supplied `actor`; `statusEventsForTask` reads it).
+  `setParent`/`setProject` are also where the "a subtask lives in its parent's
+  project" invariant is kept (`docs/tasks.md`): a move inherits the new parent's
+  project for the node and its subtree, and an assignment cascades down it. They
+  are the only seam all four write paths share — the Backlog drag reaches
+  `setParent` through `../tasks.ts` `reorderTasks` without passing
+  `applyRelations`. Both RETURN the other rows they moved (a project cascade is
+  a write to a whole subtree), so the caller can report them through the
+  change-notification seam. `nextSortOrder(parentId)` answers the other half of
+  joining a group: the free manual position a Task takes when nobody stated one,
+  so no row ever reaches the Backlog without a place of its own and the client
+  never has to infer one from a field a status change moves. The two groups take
+  opposite ends. A Task joining the ROOT is an arrival that has to be seen, so
+  it goes strictly below the smallest `sort_order` in the table — a value no
+  live row and no archived one still holding its old index can collide with, at
+  the cost of drifting negative until the next drag renumbers the tree. A Task
+  joining a PARENT is part of that parent's plan, and a plan reads top-down, so
+  it is appended after its siblings (archived ones counted, for the same
+  reason). `../tasks.ts` asks on create, on a reparent that states no position,
+  and on unarchive. `tasks.revision` (migration `0040_task_revision.sql`) is the
+  state-event revision: `stampRevisions(ids)` allocates ONE value from the
+  persisted `task_revision` sequence per notification and stamps every touched
+  row with it, including tombstoned ones (a delete event carries a revision
+  too), and `revisions()` reads the whole `{id → revision, live}` index the
+  broadcast flush diffs. The counter is persisted because a restart that handed
+  out numbers a client has already seen would emit events every subscribed
+  browser silently discards.
 - No store owns the `task_comments` rows (migration `0020_task_comments.sql`):
   Task comments were removed, and the table and its rows are kept untouched for
   the user to decide about. Only `../taskOverhead.ts` (the `measure:tasks`

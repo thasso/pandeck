@@ -886,6 +886,7 @@ function suggestLinkedTaskDoneOutcome(
       status: "done",
       actor: { kind: "agent", id: card.sessionId },
       statusReason: `PR #${card.number ?? "?"} merged`,
+      suggestOnly: true,
     });
     const summary = taskSummaryOf(updated);
     return { patch: { linkedTask: summary }, created: summary };

@@ -81,6 +81,7 @@ import {
 import {
   acceptStatusSuggestionSave,
   flattenTasks,
+  answeredStatusClaim,
   pendingStatusSuggestion,
   type Task,
 } from "../lib/backlogTree.ts";
@@ -1063,6 +1064,7 @@ function TaskTitleBlock({
   const suggestionSession = suggestion?.sessionId
     ? sessions.find((session) => session.id === suggestion.sessionId)
     : undefined;
+  const statusClaim = answeredStatusClaim(item);
   // The picker offers the active Projects; an archived one still names itself
   // when it is the current value (`ProjectSelector`).
   const activeProjects = useMemo(
@@ -1371,6 +1373,14 @@ function TaskTitleBlock({
           </span>
         ) : null}
       </div>
+      {statusClaim ? (
+        <StatusClaimLine
+          claim={statusClaim}
+          status={item.status}
+          sessions={sessions}
+          onOpenSession={onOpenSession}
+        />
+      ) : null}
       {statusError ? <ErrorNote message={statusError} /> : null}
       {/* Where it sits in the Backlog: the Task it belongs to, and — unfolded
           from the facts line — the ones that belong to it. */}
@@ -1403,6 +1413,59 @@ function TaskTitleBlock({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * How the Task got its current status when an agent set it: a muted line under
+ * the facts linking the agent's session (named when this tab knows it) and
+ * quoting its reason. Provenance, not a question — nothing to answer,
+ * and changing the status replaces it.
+ */
+function StatusClaimLine({
+  claim,
+  status,
+  sessions,
+  onOpenSession,
+}: {
+  claim: NonNullable<Task["statusSuggestion"]>;
+  status: Task["status"];
+  sessions: UIState["sessions"];
+  onOpenSession: (id: string) => void;
+}) {
+  const sessionId = claim.sessionId;
+  const title = sessionId
+    ? sessions.find((session) => session.id === sessionId)?.title.trim()
+    : undefined;
+  return (
+    <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-sm text-muted-foreground">
+      <Bot className="size-3.5 shrink-0" aria-hidden />
+      <span>Set {TASK_STATUS_LABEL[status].toLowerCase()} by agent</span>
+      {sessionId ? (
+        <>
+          <span>in</span>
+          <a
+            href={sessionPath(sessionId)}
+            className="font-medium text-foreground underline underline-offset-3 hover:text-primary"
+            onClick={(event) =>
+              followRowLink(event, sessionPath(sessionId), () =>
+                onOpenSession(sessionId),
+              )
+            }
+          >
+            {title || "its session"}
+          </a>
+        </>
+      ) : null}
+      {claim.reason ? (
+        <span className="min-w-0 wrap-anywhere">
+          —{" "}
+          <q className="italic">
+            <Markdown text={claim.reason} inline density="compact" />
+          </q>
+        </span>
+      ) : null}
+    </p>
   );
 }
 

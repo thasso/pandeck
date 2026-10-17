@@ -790,22 +790,23 @@ vocabulary, display projection, and normalized session model types.
 - Keep shared `pa://` object-link helpers runtime-light; resolution data is
   compact metadata and full object reads stay in domain-specific server/web
   surfaces.
-- A Task's status is the USER's call, and the protocol says so (the product
-  contract behind these shapes is `docs/tasks.md`):
-  `TaskSummary.statusSuggestion` is an AGENT's statement about where the Task
-  should stand — `to: "done"` (finished) or `to: "todo"` (handed back
-  unfinished), with an optional one-line `reason` — recorded INSTEAD of writing
-  the status, and `TaskSaveRequest.clearStatusSuggestion` is the dismissal. An
-  agent's "done" is a report rather than evidence — eagerly-completed Tasks used
-  to vanish from every open list with the work unfinished — so the Task keeps
-  its real status until the user answers. There is no third value: saying
-  nothing means "leave it in doing". Rejecting needs its own flag because it
-  changes no other field, and an ordinary save must never silently discard a
-  pending suggestion. `TaskSaveRequest.title` is therefore optional on an UPDATE
-  (required only on a create): the surfaces that answer a suggestion include a
-  recorded transcript Task card whose title is frozen at mutation time, and a
-  save that echoed it back would rename a Task renamed since. Omitting the field
-  leaves the stored title alone; sending a blank one is refused.
+- An agent's status write stays visible and reversible, and the protocol says so
+  (the product contract behind these shapes is `docs/tasks.md`):
+  `TaskSummary.statusSuggestion` is an AGENT's claim about where the Task should
+  stand — `to: "done"` (finished) or `to: "todo"` (handed back unfinished), with
+  session and an optional one-line `reason`. By default the status is applied
+  too, so the claim's `to` equals the status: ANSWERED provenance, never a
+  question. Only a `suggestOnly` write (or a PR merge's `done`) records it
+  INSTEAD of the status, for the user to answer, and
+  `TaskSaveRequest.clearStatusSuggestion` is the dismissal. There is no third
+  value: saying nothing means "leave it in doing". Rejecting needs its own flag
+  because it changes no other field, and an ordinary save must never silently
+  discard a pending suggestion. `TaskSaveRequest.title` is therefore optional on
+  an UPDATE (required only on a create): the surfaces that answer a suggestion
+  include a recorded transcript Task card whose title is frozen at mutation
+  time, and a save that echoed it back would rename a Task renamed since.
+  Omitting the field leaves the stored title alone; sending a blank one is
+  refused.
 - `TaskSummary.triagedAt` is when the USER processed a Task that arrived on its
   own (meeting minutes, Slack intake, an agent noticing work); unset means it is
   still in the Backlog's Inbox. `TaskSaveRequest.triaged` is the explicit

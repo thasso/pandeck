@@ -724,7 +724,8 @@ function readStorage(
       .all() as unknown as { at_ms: number }[]
   ).map((row) => Number(row.at_ms));
   const pending = rows(
-    "select count(*) c from tasks where deleted_at_ms is null and status_suggestion_at_ms is not null",
+    // An answered claim (`to` equals the status) is provenance, not pending.
+    "select count(*) c from tasks where deleted_at_ms is null and status_suggestion_at_ms is not null and status_suggestion_to is not status",
   );
 
   const lifetimeByCreator: Record<string, number | undefined> = {};

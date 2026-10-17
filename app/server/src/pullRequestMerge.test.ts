@@ -1238,6 +1238,8 @@ test("duplicate cards for one Task report a single suggestion", async () => {
         "done",
       );
     assert.equal(readTask(task.id)?.statusSuggestion?.to, "done");
+    // Evidence, not authority: the merge suggests and leaves the status alone.
+    assert.notEqual(readTask(task.id)?.status, "done");
   } finally {
     deleteTask(task.id);
   }

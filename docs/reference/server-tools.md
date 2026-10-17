@@ -841,9 +841,12 @@ persona toolsets.
   `version`, `changedCount` (mutated + deleted Tasks), `changed[]`, optional
   `deletedIds` and `warnings` — carried identically in the TEXT and `details`
   through `compactJsonResult`. `changed` follows input op order and each entry's
-  `status` is the status AFTER the write, with `statusSuggestion` stating what
-  is still waiting for the user, `statusSetByRequest` marking a status
-  `userRequestedStatus` applied, `descriptionEditsApplied` counting the targeted
+  `status` is the status AFTER the write, with `statusSuggestion` the agent's
+  claim (still waiting for the user only while its `to` differs from `status`),
+  `statusWrite` saying whether a status decision changed the status or answered
+  an opposing pending suggestion (`applied`) or was only suggested
+  (`suggestOnly`); same-status writes without an opposing pending suggestion are
+  no-ops and omit `statusWrite`. `descriptionEditsApplied` counts the targeted
   body edits that landed, and `deduplicated` marking an entry a `create` op
   resolved onto an EXISTING Task (the Slack source-link dedupe) — flagged on the
   entry and not only in `warnings`, since a renderer taking the verb from the op

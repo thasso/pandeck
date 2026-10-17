@@ -97,19 +97,22 @@ rich cards or disclosure bodies.
   the outcome and not the operation. When the two cannot be lined up (a lazily
   summarized input, a batch that partly threw) the verb is simply omitted, and
   an entry the server flagged `deduplicated` reads "already imported" rather
-  than the op's "created". A pending `statusSuggestion` gets a confirm button,
-  using `lib/backlogTree.ts`'s `pendingStatusSuggestion` so a suggestion the
-  status already satisfies stays provenance rather than a question, and
-  `acceptStatusSuggestionSave` so confirming here and confirming in the
-  Backlog's Focus row produce the same state. Confirming is an ordinary user
-  save routed through `ToolRenderContext.onApplyTaskStatusSuggestion` →
-  `App.tsx`: it resumes NO session, so answering costs no provider call, and it
-  carries only the id and the status — never the card's frozen copy of the
-  title, which is why `TaskSaveRequest.title` is optional on an update. Only the
-  confirm half lives here — disagreeing is a judgement about the Task, which is
-  Focus's job. The answer is remembered LOCALLY (the transcript holds no `tasks`
-  subscription), so a reload shows the recorded suggestion again and
-  re-confirming is a no-op save.
+  than the op's "created". An entry's `statusWrite` reads "set done" when the
+  status decision was applied and "suggested done" (named by the suggestion's
+  target) when it was only suggested; a same-status no-op omits it. A pending
+  `statusSuggestion` gets a confirm button, using `lib/backlogTree.ts`'s
+  `pendingStatusSuggestion` so a suggestion the status already satisfies stays
+  provenance rather than a question, and `acceptStatusSuggestionSave` so
+  confirming here and confirming in the Backlog's Focus row produce the same
+  state. Confirming is an ordinary user save routed through
+  `ToolRenderContext.onApplyTaskStatusSuggestion` → `App.tsx`: it resumes NO
+  session, so answering costs no provider call, and it carries only the id and
+  the status — never the card's frozen copy of the title, which is why
+  `TaskSaveRequest.title` is optional on an update. Only the confirm half lives
+  here — disagreeing is a judgement about the Task, which is Focus's job. The
+  answer is remembered LOCALLY (the transcript holds no `tasks` subscription),
+  so a reload shows the recorded suggestion again and re-confirming is a no-op
+  save.
 
 ## Contract notes and rationale
 
