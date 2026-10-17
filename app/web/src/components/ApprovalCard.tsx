@@ -59,7 +59,11 @@ import { approvalGrantKeys, approvalGrantLabel } from "@assistant/shared";
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
-import { CommitFiles } from "./CommitCard.tsx";
+import {
+  CommitFiles,
+  commitBlockerItems,
+  commitWarningItems,
+} from "./CommitCard.tsx";
 import { ConfluencePageApprovalBody } from "./ConfluencePageApprovalBody.tsx";
 import { JiraIssueApprovalBody } from "./JiraIssueApprovalBody.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -654,14 +658,7 @@ function ManagedCommitOverrideBody({
       <NoticeList
         variant="destructive"
         title="Review blockers"
-        items={commit.blockers.map((blocker) => (
-          <>
-            {blocker.file && (
-              <span className="font-mono">{blocker.file}: </span>
-            )}
-            {blocker.reason}
-          </>
-        ))}
+        items={commitBlockerItems(commit.blockers)}
       />
       <div>
         <p className="mb-1 text-xs font-medium text-muted-foreground">
@@ -693,7 +690,10 @@ function ManagedCommitOverrideBody({
         </div>
       ) : null}
       <CommitFiles files={commit.files} />
-      <NoticeList title="Warnings" items={commit.warnings} />
+      <NoticeList
+        title="Warnings"
+        items={commitWarningItems(commit.warnings)}
+      />
     </div>
   );
 }
@@ -800,7 +800,9 @@ function SpawnRow({
     >
       <ItemContent className="min-w-0">
         <ItemTitle className="w-full">
-          <span className="truncate">{item.title}</span>
+          <span className="truncate">
+            <Markdown text={item.title} inline />
+          </span>
         </ItemTitle>
         <ItemDescription className="truncate">
           {spawnTargetLine(item)}
@@ -1023,7 +1025,9 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
           after={effort(body.effort.after)}
         />
       </Row>
-      <Row label="Purpose">{body.description}</Row>
+      <Row label="Purpose">
+        <Markdown text={body.description} inline />
+      </Row>
       {body.resultCommit ? (
         <Row label="Commit">
           <span className="font-mono">{body.resultCommit}</span>

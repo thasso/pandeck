@@ -9,17 +9,43 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
-import type { CommitDisplay, CommitFileChange } from "@assistant/shared";
+import { useState, type ReactNode } from "react";
+import type {
+  CommitBlockerDisplay,
+  CommitDisplay,
+  CommitFileChange,
+} from "@assistant/shared";
 import { shortCommit } from "@assistant/shared/buildInfo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
 import { ErrorNote } from "./common/load.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { NoticeList } from "./tools/NoticeList.tsx";
 import { TaskLinkList } from "./TaskLinkList.tsx";
 
 const noop = () => {};
+
+/**
+ * The commit review's blockers as notice items. The review agent writes the
+ * reasons in Markdown, and the server's own checks quote paths in backticks,
+ * so a reason renders `inline`; the file it names stays verbatim.
+ */
+export function commitBlockerItems(
+  blockers: readonly CommitBlockerDisplay[],
+): ReactNode[] {
+  return blockers.map((blocker) => (
+    <>
+      {blocker.file && <span className="font-mono">{blocker.file}: </span>}
+      <Markdown text={blocker.reason} inline />
+    </>
+  ));
+}
+
+/** The commit review's warnings, written the same way as its blockers. */
+export function commitWarningItems(warnings: readonly string[]): ReactNode[] {
+  return warnings.map((warning) => <Markdown text={warning} inline />);
+}
 
 function statusIcon(commit: CommitDisplay) {
   if (commit.status === "committed") return <CheckCircle2 />;
@@ -178,14 +204,12 @@ export function CommitCard({
       <NoticeList
         variant="destructive"
         title="Blockers"
-        items={commit.blockers.map((b) => (
-          <>
-            {b.file && <span className="font-mono">{b.file}: </span>}
-            {b.reason}
-          </>
-        ))}
+        items={commitBlockerItems(commit.blockers)}
       />
-      <NoticeList title="Warnings" items={commit.warnings} />
+      <NoticeList
+        title="Warnings"
+        items={commitWarningItems(commit.warnings)}
+      />
 
       {commit.error && <ErrorNote message={commit.error} />}
     </AppCard>

@@ -7,7 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
  * @purpose The warnings or blockers a rich card carries, as one `Alert` with a
  * bulleted list.
  * @useWhen A card shows a list of server-reported warnings (`warning`) or
- * reasons it was refused (`destructive`).
+ * reasons it was refused (`destructive`). Items render as given: the caller
+ * passes an agent-written one as `<Markdown inline>` (`commitBlockerItems`).
  */
 export function NoticeList({
   variant = "warning",

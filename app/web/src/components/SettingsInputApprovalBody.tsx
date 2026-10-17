@@ -25,6 +25,7 @@ import {
 } from "../lib/credentialProfiles.ts";
 import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
 import { ErrorNote, Spinner } from "./common/load.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -305,7 +306,11 @@ export function SettingsInputApprovalBody({
   const controls = { body, active, busy, onDismiss };
   return (
     <div className="flex flex-col gap-2">
-      {body.reason && <p className="text-foreground">{body.reason}</p>}
+      {body.reason && (
+        <div className="min-w-0 text-foreground">
+          <Markdown text={body.reason} density="compact" />
+        </div>
+      )}
       {waiting &&
         (body.mode === "secret" ? (
           <SecretControls {...controls} onSubmit={onSubmit} />
