@@ -109,8 +109,11 @@ interface MarkdownProps {
   density?: "prose" | "compact";
   /**
    * Render a one-line field — a title, a label — as phrasing content inside
-   * its host: emphasis, code and links apply, block syntax (lists, headings,
-   * quotes, fences) stays literal text, and the host's size and color hold.
+   * its host: emphasis, code and links apply, line-start block syntax (lists,
+   * headings, quotes, tables) stays literal text, and the host's size and
+   * color hold. A fence or `$$` block reads as inline code or math, raw block
+   * HTML is unwrapped to its text, and an image shows its alt text, never an
+   * embed.
    */
   inline?: boolean;
   /**
@@ -372,10 +375,11 @@ export const Markdown = memo(function Markdown({
   const rehypePlugins = useMemo(
     () => [
       ...REHYPE_PLUGINS,
+      ...(inline ? [rehypeInlineOnly] : []),
       rehypeFlagMath(sawMath),
       ...(mathReady && mathKatexPlugin ? [mathKatexPlugin] : []),
     ],
-    [mathReady],
+    [mathReady, inline],
   );
 
   // The parse → sanitize → element-tree pipeline runs only when what it reads
@@ -390,12 +394,11 @@ export const Markdown = memo(function Markdown({
         rehypePlugins={rehypePlugins as never}
         urlTransform={urlTransform}
         components={MARKDOWN_COMPONENTS}
-        {...(inline ? INLINE_UNWRAP : {})}
       >
         {text}
       </ReactMarkdown>
     ),
-    [remarkPlugins, rehypePlugins, text, inline],
+    [remarkPlugins, rehypePlugins, text],
   );
 
   const body = (
@@ -1114,8 +1117,9 @@ function hastHasMath(node: any): boolean {
 }
 
 /**
- * Inline mode: switch off every block construct so a field like "1. Foo" or
- * "# 3" reads as written, and the lone paragraph left is unwrapped below.
+ * Inline mode, parse side: switch off every block construct so a field like
+ * "1. Foo" or "# 3" reads as written. {@link rehypeInlineOnly} then flattens
+ * what parsing cannot rule out.
  */
 const INLINE_DISABLED_CONSTRUCTS = [
   "blockQuote",
@@ -1131,7 +1135,54 @@ const INLINE_DISABLED_CONSTRUCTS = [
   "table",
   "thematicBreak",
 ];
-const INLINE_UNWRAP = { disallowedElements: ["p"], unwrapDisallowed: true };
+/** Phrasing elements inline mode keeps; KaTeX's MathML is added after it. */
+const INLINE_ELEMENTS = new Set([
+  "a",
+  "abbr",
+  "b",
+  "br",
+  "code",
+  "del",
+  "em",
+  "i",
+  "ins",
+  "kbd",
+  "mark",
+  "q",
+  "s",
+  "samp",
+  "small",
+  "span",
+  "strong",
+  "sub",
+  "sup",
+  "u",
+  "var",
+]);
+
+/**
+ * Inline mode, tree side, after sanitize: raw HTML (`<div>` is inline syntax
+ * to the parser) and the paragraph wrapper unwrap to their children, and an
+ * image becomes its alt text so a title never mounts an embed.
+ */
+function rehypeInlineOnly() {
+  return (tree: any) => {
+    tree.children = flattenToPhrasing(tree.children);
+  };
+}
+
+function flattenToPhrasing(nodes: any[]): any[] {
+  return nodes.flatMap((node) => {
+    if (node.type !== "element") return [node];
+    if (node.tagName === "img") {
+      const alt = node.properties?.alt;
+      return alt ? [{ type: "text", value: String(alt) }] : [];
+    }
+    const children = flattenToPhrasing(node.children ?? []);
+    if (INLINE_ELEMENTS.has(node.tagName)) return [{ ...node, children }];
+    return children;
+  });
+}
 
 function remarkInlineOnly(this: any) {
   const data = this.data();
