@@ -39,13 +39,13 @@ export function nextStatus(status: TaskStatus): TaskStatus {
 /**
  * The agent suggestion still WAITING for an answer, if any.
  *
- * A suggestion whose `to` already equals the Task's status has been answered:
- * it stays on the Task as provenance — how it got there — but it is no longer a
- * question, so nothing may paint it as one. That state is reached by the
- * `userRequestedStatus` escape hatch, where the agent applies the status the
- * user asked for AND records the claim; without this rule every "done at your
- * request" Task would carry a disputed-looking amber glyph forever, with no
- * surface offering to dismiss it.
+ * A claim whose `to` already equals the Task's status has been answered: it
+ * stays on the Task as provenance — how it got there — but it is no longer a
+ * question, so nothing may paint it as one. That is the DEFAULT state of an
+ * agent's status write, which applies the status AND records the claim; only a
+ * `suggestOnly` write (or a PR merge) leaves a pending one. Without this rule
+ * every Task an agent finished would carry a disputed-looking amber glyph
+ * forever, with no surface offering to dismiss it.
  */
 export function pendingStatusSuggestion(
   task: Pick<Task, "status" | "statusSuggestion">,
@@ -55,15 +55,27 @@ export function pendingStatusSuggestion(
 }
 
 /**
+ * The agent claim that SET the Task's current status, if any — the answered
+ * half of {@link pendingStatusSuggestion}. The Task page reads it as "set done
+ * by agent"; the user's next status change clears it on the server.
+ */
+export function answeredStatusClaim(
+  task: Pick<Task, "status" | "statusSuggestion">,
+): TaskSummary["statusSuggestion"] {
+  const claim = task.statusSuggestion;
+  return claim && claim.to === task.status ? claim : undefined;
+}
+
+/**
  * The save that ACCEPTS a status suggestion, wherever it is answered — the Focus
  * row and the transcript's Task card must produce the same state, so they build
  * the request here rather than each assembling their own.
  *
  * It is an ordinary user save (that is what makes the server clear the claim),
  * and it clears the suggestion explicitly rather than relying on the status
- * CHANGE doing it: an agent that already applied the status at the user's
- * request leaves a suggestion whose answer changes nothing, and that row must
- * still resolve.
+ * CHANGE doing it: a suggestion answered by a status that already got there
+ * (an agent applied it meanwhile) changes nothing, and that row must still
+ * resolve.
  *
  * It carries NO title. Confirming a status is not a rename, and one of the
  * surfaces answering a suggestion is a recorded transcript card whose title is

@@ -97,9 +97,11 @@ rich cards or disclosure bodies.
   the outcome and not the operation. When the two cannot be lined up (a lazily
   summarized input, a batch that partly threw) the verb is simply omitted, and
   an entry the server flagged `deduplicated` reads "already imported" rather
-  than the op's "created". A pending `statusSuggestion` gets a confirm button,
-  using `lib/backlogTree.ts`'s `pendingStatusSuggestion` so a suggestion the
-  status already satisfies stays provenance rather than a question, and
+  than the op's "created". An entry's `statusWrite` reads "set done" when the
+  status was applied and "suggested done" (named by the suggestion's target)
+  when it was only suggested. A pending `statusSuggestion` gets a confirm
+  button, using `lib/backlogTree.ts`'s `pendingStatusSuggestion` so a suggestion
+  the status already satisfies stays provenance rather than a question, and
   `acceptStatusSuggestionSave` so confirming here and confirming in the
   Backlog's Focus row produce the same state. Confirming is an ordinary user
   save routed through `ToolRenderContext.onApplyTaskStatusSuggestion` →

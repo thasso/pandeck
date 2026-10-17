@@ -294,36 +294,36 @@ capability logic.
   else its when-bucket relative to an explicit `today` —
   overdue/today/tomorrow/this-week/later/unscheduled). "Suggested" means
   `backlogTree.ts`'s `pendingStatusSuggestion`, not the raw wire field: a
-  suggestion whose `to` already equals the Task's status was ANSWERED (the
-  `userRequestedStatus` path records the claim on a Task it also moved), so it
-  is provenance — it neither buckets here nor lights the amber glyph anywhere
-  else. A pending suggestion outranks every date, because answering it is a
-  yes/no and burying it is how a Task ends up neither done nor being worked on;
-  both kinds share the bucket (they are the same question) and inside it the
-  OLDEST suggestion leads (priority does not override age there — the point is
-  what has been ignored longest), `compareFocusTasks`, `buildFocusBuckets`
-  (ordered, EMPTY buckets dropped) and the labels
-  `focusDateLabel`/`dueLabel`/`scheduledLabel`. A Task carries TWO dates that
-  mean different things — `scheduledFor` is the day you (or an agent planning
-  for you) chose to work on it, `dueDate` is what the outside world needs — and
-  `effectiveFocusDate` buckets on whichever comes FIRST. That is the only rule
-  that hides neither: taking the plan alone would let a near deadline sit
-  silently under "Later", and taking the deadline alone would make planning your
-  day change nothing on screen. The labels keep the two apart in words as well —
-  a missed DEADLINE is "3d late", a slipped plan is only "3d ago" — and
-  `scheduledLabel` returns null when the plan equals the deadline, so one fact
-  is never printed twice. Grouping is on TIME and sorting on priority happens
-  only INSIDE a group: a `high` Task due next month must not outrank an ordinary
-  one that is late today — the deadline is a fact and the priority an opinion.
-  The list it builds is FLAT, so a subtask sits in its own bucket rather than
-  under a parent that may fall in another one. `today` is a parameter rather
-  than a call to the clock, so the rules are testable without freezing time; the
-  labels use fixed weekday/month tables rather than `Intl` (uniform three
-  characters in a tight metadata line, and immune to an ICU version changing
-  "Sep" to "Sept"). The Backlog's manual `sortOrder` is deliberately NOT a
-  tiebreak here — a hand-arranged order is what the tree view is for, and
-  honouring it would make two rows swap for a reason this list gives no way to
-  see. Tested in `backlogFocus.test.ts`.
+  suggestion whose `to` already equals the Task's status was ANSWERED (an
+  agent's default status write records the claim on a Task it also moved;
+  `answeredStatusClaim` returns it for the Task page), so it is provenance — it
+  neither buckets here nor lights the amber glyph anywhere else. A pending
+  suggestion outranks every date, because answering it is a yes/no and burying
+  it is how a Task ends up neither done nor being worked on; both kinds share
+  the bucket (they are the same question) and inside it the OLDEST suggestion
+  leads (priority does not override age there — the point is what has been
+  ignored longest), `compareFocusTasks`, `buildFocusBuckets` (ordered, EMPTY
+  buckets dropped) and the labels `focusDateLabel`/`dueLabel`/`scheduledLabel`.
+  A Task carries TWO dates that mean different things — `scheduledFor` is the
+  day you (or an agent planning for you) chose to work on it, `dueDate` is what
+  the outside world needs — and `effectiveFocusDate` buckets on whichever comes
+  FIRST. That is the only rule that hides neither: taking the plan alone would
+  let a near deadline sit silently under "Later", and taking the deadline alone
+  would make planning your day change nothing on screen. The labels keep the two
+  apart in words as well — a missed DEADLINE is "3d late", a slipped plan is
+  only "3d ago" — and `scheduledLabel` returns null when the plan equals the
+  deadline, so one fact is never printed twice. Grouping is on TIME and sorting
+  on priority happens only INSIDE a group: a `high` Task due next month must not
+  outrank an ordinary one that is late today — the deadline is a fact and the
+  priority an opinion. The list it builds is FLAT, so a subtask sits in its own
+  bucket rather than under a parent that may fall in another one. `today` is a
+  parameter rather than a call to the clock, so the rules are testable without
+  freezing time; the labels use fixed weekday/month tables rather than `Intl`
+  (uniform three characters in a tight metadata line, and immune to an ICU
+  version changing "Sep" to "Sept"). The Backlog's manual `sortOrder` is
+  deliberately NOT a tiebreak here — a hand-arranged order is what the tree view
+  is for, and honouring it would make two rows swap for a reason this list gives
+  no way to see. Tested in `backlogFocus.test.ts`.
 - `backlogTree.ts` owns the Backlog tree's ORDER, in `compareTaskOrder` and the
   `flattenTasks`/`orderTasks` pair every tree surface goes through (the project
   layer and the drag adapters in `backlogTreeModel.ts` included, so there is one
@@ -338,16 +338,16 @@ capability logic.
   ones) or a position a caller stated itself through `task_manage`. Tested in
   `backlogTree.test.ts`.
 - `backlogTree.ts` also owns `acceptStatusSuggestionSave`, the ONE save that
-  accepts a suggestion. Both surfaces that answer one — the Focus row
-  (`useBacklog.ts`) and the transcript's `TaskManageToolCard` — build the
-  request here, because "confirming in chat produces the same state as
+  accepts a suggestion. The surfaces that answer one — the Focus row
+  (`useBacklog.ts`), the Task page and the transcript's `TaskManageToolCard` —
+  build the request here, because "confirming in chat produces the same state as
   confirming in Focus" is otherwise two literals that drift. It is an ordinary
   user save (that is what makes the server clear the claim) and clears the
-  suggestion explicitly, since the `userRequestedStatus` path leaves one whose
-  answer changes no status. It carries NO title: the card's copy is as old as
-  the mutation that recorded the suggestion, so echoing it back would rename a
-  Task renamed since — `TaskSaveRequest.title` is optional on an update for
-  this.
+  suggestion explicitly, since an agent may have applied the same status
+  meanwhile, leaving one whose answer changes no status. It carries NO title:
+  the card's copy is as old as the mutation that recorded the suggestion, so
+  echoing it back would rename a Task renamed since — `TaskSaveRequest.title` is
+  optional on an update for this.
 - `taskActivity.ts` owns what is HAPPENING to a Task, derived from its linked
   sessions instead of its status field: `isWorkingRef`, `isTaskWorking` and
   `taskStartSession` — the ONE session a row acts on (streaming first, otherwise

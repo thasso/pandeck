@@ -2569,33 +2569,33 @@ export interface TaskBackRef {
 }
 
 /**
- * An AGENT's suggestion about where a Task should stand, awaiting the user's
- * answer.
+ * An AGENT's claim about where a Task should stand: `done` or `todo`, when,
+ * which session, and why. The wire name predates the default it now carries.
  *
- * Recorded INSTEAD of the suggested status: an agent's "done" is a report, not
- * evidence, and eagerly-completed Tasks used to disappear from every open list
- * while the work was unfinished. The Task is never moved TO the suggested
- * status by the suggestion itself, so it is visible without being trusted.
+ * By default the agent's status is APPLIED and this claim recorded with it, so
+ * its `to` EQUALS the Task's status: it is ANSWERED provenance — how the Task
+ * got there, shown as "set done by agent" — and no surface may render it as a
+ * pending question. Agents run work end to end, so their status is trusted;
+ * the record keeps it visible and reversible.
  *
+ * Only an explicit `suggestOnly` write (and a PR merge's `done`) records it
+ * INSTEAD of the status, awaiting the user's answer: for a finish the agent
+ * could not verify itself. That suggestion never moves the Task TO its status.
  * A `done` suggestion does move a `doing` Task to `todo`, which is a different
- * statement: the agent stopped working on it. Both halves of "I finished, and I
- * am no longer working on it" are true at once, and saying them in one write is
- * what removes the corrective second call.
+ * statement: the agent stopped working on it. Both halves of "I finished, and
+ * I am no longer working on it" are true at once, and saying them in one write
+ * is what removes the corrective second call.
  *
  * There are exactly TWO values and no third. Saying nothing means "leave it in
  * doing", which is the truth when work is paused mid-flight.
- *
- * A suggestion whose `to` already EQUALS the Task's status has been answered:
- * it stays as provenance — how the Task got there, e.g. an agent completing it
- * at the user's request — and no surface may render it as a pending question.
  */
 export interface TaskStatusSuggestion {
   /** `done` = the agent says it is finished; `todo` = hand it back unfinished. */
   to: "done" | "todo";
   at: number;
-  /** The agent session that made the suggestion, for tracing it to its run. */
+  /** The agent session that made the claim, for tracing it to its run. */
   sessionId?: string;
-  /** One short line saying why, shown with the suggestion. */
+  /** One short line saying why, shown with the claim. */
   reason?: string;
 }
 
@@ -2656,7 +2656,10 @@ export interface TaskSummary {
   archivedAt?: number;
   /** Commit hash that included this completed task, when known. */
   commitHash?: string;
-  /** An agent suggests a status for this Task; the user has not answered yet. */
+  /**
+   * An agent's status claim: answered provenance when its `to` equals `status`,
+   * otherwise a suggestion still waiting for the user.
+   */
   statusSuggestion?: TaskStatusSuggestion;
   /**
    * When the USER processed this Task. Unset means it is still waiting in the

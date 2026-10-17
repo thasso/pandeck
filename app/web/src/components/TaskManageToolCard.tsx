@@ -91,8 +91,14 @@ export function changeSummary(
           ? "description updated"
           : `${task.descriptionEditsApplied} description edits`,
       );
-    if (task.statusSetByRequest)
+    if (task.statusWrite === "applied")
       parts.push(`set ${TASK_STATUS_LABEL[task.status].toLowerCase()}`);
+    // A suggestion names its target, not the status it left the Task in: a
+    // `done` suggestion parks a `doing` Task in `todo`.
+    else if (task.statusWrite === "suggested" && task.statusSuggestion)
+      parts.push(
+        `suggested ${TASK_STATUS_LABEL[task.statusSuggestion.to].toLowerCase()}`,
+      );
     if (parts.length === 0 && kind === "update") parts.push("updated");
   }
   return parts.join(" · ");

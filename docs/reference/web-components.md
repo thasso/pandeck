@@ -415,40 +415,44 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   dock's action row shows the state in the glyph you press to change it
   (`App.tsx` builds that row). A done Task still reads as done in the block —
   the title is struck through. The subtask progress moved into the title block,
-  where it is metadata among metadata. Its Description body is NOT in the Task
-  list payload (those are summaries — see `../hooks/CLAUDE.md`): the page
-  fetches the open Task through `requestTaskDetail` and passes the whole cached
-  `TaskItem` down as `detail`. `undefined` means "still on its way" and is
-  deliberately distinct from `""` — in that state the section shows a
-  placeholder (the row's `descriptionPreview`) instead of its empty-state text,
-  and the edit pencil is ABSENT, because the editor is `allowEmpty` and an empty
-  editor must never be savable over a body that had simply not loaded. Its
-  `CollapsibleSection`s are ONE pattern: the body is FLUSH with the page column
-  (title, section labels, description prose and comments all share one left
-  edge, and only the chevron marker sits inside it — an indented paragraph reads
-  as a nested level the section does not have), and editing a prose body is
-  triggered ONLY by that section's ghost pencil in the header's `trailing` slot.
-  No prose body is itself a click target: a full-width button fought selecting
-  text, following `pa://` links and scrolling on touch, and needed inner padding
-  that broke the column. Between `TaskTitleBlock` and Description, runs stack
-  newest-first: `WorkflowRunCard.tsx` renders each non-terminal run's phase,
-  activity, iteration, visible pause reason, the stopped step's own
-  `blockedReason` under it (skipped when it repeats the banner or the next
-  action), reviewed commit, the latest assessment's
-  summary/findings/observations, the coordinator's newest accepted review
-  decision (deliver or another pass, after which pass, its rationale and focus),
-  one button per review pass beside the other role sessions, and the next action
-  plus pause/resume/retry/cancel tap targets. A cancelled card adds **Delete
-  run…**: one permanent-history confirmation with independently selectable,
-  default-on worktree/branch deletion and workflow-session archival. A refused
-  worktree cleanup leaves the card in place. `repeatedAttempts` turns the
-  control into "Retry again" behind a confirmation and adds what another retry
-  would DO — re-run the same assignment, which a repair outside the run or an
-  agent step's fresh session can still end differently. The count itself stays
-  the pause reason's, which the banner already renders, so this line follows the
-  same "only where it adds something" dedup as `blockedReason`. Session buttons
-  navigate through the screens model; cancel confirms that sessions, worktree
-  and PR remain. Terminal runs collapse to subdued lifecycle/date rows.
+  where it is metadata among metadata. Under the facts line, `StatusClaimLine`
+  says when an agent set the current status (`answeredStatusClaim`): "Set done
+  by agent", a link to its session and the quoted reason — provenance with
+  nothing to answer, unlike the pending suggestion's warning card above it. Its
+  Description body is NOT in the Task list payload (those are summaries — see
+  `../hooks/CLAUDE.md`): the page fetches the open Task through
+  `requestTaskDetail` and passes the whole cached `TaskItem` down as `detail`.
+  `undefined` means "still on its way" and is deliberately distinct from `""` —
+  in that state the section shows a placeholder (the row's `descriptionPreview`)
+  instead of its empty-state text, and the edit pencil is ABSENT, because the
+  editor is `allowEmpty` and an empty editor must never be savable over a body
+  that had simply not loaded. Its `CollapsibleSection`s are ONE pattern: the
+  body is FLUSH with the page column (title, section labels, description prose
+  and comments all share one left edge, and only the chevron marker sits inside
+  it — an indented paragraph reads as a nested level the section does not have),
+  and editing a prose body is triggered ONLY by that section's ghost pencil in
+  the header's `trailing` slot. No prose body is itself a click target: a
+  full-width button fought selecting text, following `pa://` links and scrolling
+  on touch, and needed inner padding that broke the column. Between
+  `TaskTitleBlock` and Description, runs stack newest-first:
+  `WorkflowRunCard.tsx` renders each non-terminal run's phase, activity,
+  iteration, visible pause reason, the stopped step's own `blockedReason` under
+  it (skipped when it repeats the banner or the next action), reviewed commit,
+  the latest assessment's summary/findings/observations, the coordinator's
+  newest accepted review decision (deliver or another pass, after which pass,
+  its rationale and focus), one button per review pass beside the other role
+  sessions, and the next action plus pause/resume/retry/cancel tap targets. A
+  cancelled card adds **Delete run…**: one permanent-history confirmation with
+  independently selectable, default-on worktree/branch deletion and
+  workflow-session archival. A refused worktree cleanup leaves the card in
+  place. `repeatedAttempts` turns the control into "Retry again" behind a
+  confirmation and adds what another retry would DO — re-run the same
+  assignment, which a repair outside the run or an agent step's fresh session
+  can still end differently. The count itself stays the pause reason's, which
+  the banner already renders, so this line follows the same "only where it adds
+  something" dedup as `blockedReason`. Session buttons navigate through the
+  screens model; cancel confirms that sessions, worktree and PR remain. Terminal
+  runs collapse to subdued lifecycle/date rows.
 - `initiative/` holds the Initiative surfaces (`docs/initiatives.md`):
   `InitiativesIndexPage` (by state), `InitiativeDetailPage` (header from the
   live summary, members from the keyed read, the five load states, Map/List

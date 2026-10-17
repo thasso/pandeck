@@ -6,17 +6,17 @@
   origins.
 - Prefer additive evolution and explicit discriminated unions; keep provider
   capability flags additive so older clients can ignore them.
-- A Task is the USER's object, so an agent's judgement about it stays a
-  SUGGESTION with provenance and never a state the user must undo: a status
-  travels as `TaskSummary.statusSuggestion` (`done` or `todo`, no third value),
-  recorded INSTEAD of moving the Task there and dismissed through
-  `TaskSaveRequest.clearStatusSuggestion`; an ordinary save must never silently
-  discard a pending one, and one whose `to` already equals the Task's status is
-  ANSWERED provenance, never a pending question. `TaskSummary.triagedAt` is the
-  same shape for arrivals: unset means still in the Inbox, and
-  `TaskSaveRequest.triaged` is the explicit dismiss/restore. Model every further
-  agent-written Task field on that seam — `docs/tasks.md` is the contract, and
-  the wire model must not grow a way for an agent to assert Task state.
+- A Task is the USER's object, so an agent's write to it stays visible and
+  reversible. An agent's `done`/`todo` is APPLIED and its claim recorded as
+  `TaskSummary.statusSuggestion` (`done` or `todo`, no third value) with `to`
+  equal to the status: ANSWERED provenance, never a pending question. Only an
+  explicit `suggestOnly` write leaves it PENDING instead of moving the Task,
+  dismissed through `TaskSaveRequest.clearStatusSuggestion`; an ordinary save
+  never silently discards a pending one, and a user status change clears either.
+  `TaskSummary.triagedAt` is the pending shape for arrivals: unset means still
+  in the Inbox, and `TaskSaveRequest.triaged` is the explicit dismiss/restore.
+  Status is the one Task field an agent sets directly; model any further
+  agent-written field on the pending seam — `docs/tasks.md` is the contract.
 - Integration settings projections stay minimal and secret-free.
 - Viewed-chat run state belongs to runtime snapshots and events; `SessionState`
   stays session metadata and must not carry a working-indicator field.

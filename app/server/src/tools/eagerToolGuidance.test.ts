@@ -86,13 +86,13 @@ test("the eager tools keep the guidance that no other surface carries", () => {
       ...surface("task_manage.operations.scheduledFor"),
       rules: { "is-when-work-happens": /WORK/, "set-when-planning": /plan/i },
     },
-    // The flag turns a suggestion into an applied status; nothing else says when.
-    "task_manage.operations.userRequestedStatus": {
-      ...surface("task_manage.operations.userRequestedStatus"),
+    // Status applies by default; this flag is the one way back to a
+    // suggestion, and nothing else says when it is warranted.
+    "task_manage.operations.suggestOnly": {
+      ...surface("task_manage.operations.suggestOnly"),
       rules: {
-        "only-on-user-request": affirmed(
-          /only when the user (asked|requested|asks)/i,
-        ),
+        "only-when-unverifiable": affirmed(/only when[^.\n]*could not verify/i),
+        "not-for-general-uncertainty": /(never|not) for general uncertainty/i,
       },
     },
     // 'source' is what Slack intake and minutes processing deduplicate on, and

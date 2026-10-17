@@ -109,7 +109,7 @@ type ManageResult = {
     id: string;
     status: string;
     statusSuggestion?: { to: string; at: number; reason?: string };
-    statusSetByRequest?: boolean;
+    statusWrite?: "applied" | "suggested";
     descriptionEditsApplied?: number;
     deduplicated?: boolean;
   }>;
@@ -128,7 +128,7 @@ function readTool() {
   )!;
 }
 
-test("task_manage reports a done write as a recorded suggestion, not a warning", async () => {
+test("task_manage applies a done write and says it did", async () => {
   const task = createTask({
     title: "Closeout probe",
     status: "doing",
@@ -153,12 +153,11 @@ test("task_manage reports a done write as a recorded suggestion, not a warning",
     assert.equal(payload.renderKind, "taskManage");
     assert.equal(payload.version, 1);
     assert.equal(payload.changedCount, 1);
-    // The entry answers "what is it now" by itself: out of `doing`, with the
-    // suggestion still waiting. Nothing about it reads as a failure.
-    assert.equal(payload.changed[0]?.status, "todo");
+    // `doing` to `done` in one write, with the claim kept as provenance.
+    assert.equal(payload.changed[0]?.status, "done");
+    assert.equal(payload.changed[0]?.statusWrite, "applied");
     assert.equal(payload.changed[0]?.statusSuggestion?.to, "done");
     assert.equal(payload.changed[0]?.statusSuggestion?.reason, "tests pass");
-    assert.equal(payload.changed[0]?.statusSetByRequest, undefined);
     assert.equal(payload.warnings, undefined);
     if (result.content[0]?.type === "text")
       assert.equal(result.content[0].text, JSON.stringify(payload));
@@ -167,9 +166,30 @@ test("task_manage reports a done write as a recorded suggestion, not a warning",
   }
 });
 
-test("task_manage applies a status the user asked for and says it did", async () => {
+test("task_manage applies a todo write and says it did", async () => {
   const task = createTask({
-    title: "Escape hatch probe",
+    title: "Hand-back probe",
+    status: "doing",
+    source: { createdBy: "user" },
+  });
+  try {
+    const result = await manageTool().execute(
+      { operations: [{ operation: "update", id: task.id, status: "todo" }] },
+      ctx,
+    );
+    const payload = result.details as ManageResult;
+
+    assert.equal(payload.changed[0]?.status, "todo");
+    assert.equal(payload.changed[0]?.statusWrite, "applied");
+    assert.equal(payload.changed[0]?.statusSuggestion?.to, "todo");
+  } finally {
+    deleteTask(task.id);
+  }
+});
+
+test("task_manage with suggestOnly reports a recorded suggestion, not a warning", async () => {
+  const task = createTask({
+    title: "Suggestion probe",
     status: "doing",
     source: { createdBy: "user" },
   });
@@ -181,7 +201,8 @@ test("task_manage applies a status the user asked for and says it did", async ()
             operation: "update",
             id: task.id,
             status: "done",
-            userRequestedStatus: true,
+            statusReason: "needs a device test",
+            suggestOnly: true,
           },
         ],
       },
@@ -189,16 +210,71 @@ test("task_manage applies a status the user asked for and says it did", async ()
     );
     const payload = result.details as ManageResult;
 
-    assert.equal(payload.changed[0]?.status, "done");
-    assert.equal(payload.changed[0]?.statusSetByRequest, true);
-    // The claim is still recorded, so it stays visible and reversible.
+    // Out of `doing`, with the suggestion still waiting. Nothing about it
+    // reads as a failure.
+    assert.equal(payload.changed[0]?.status, "todo");
+    assert.equal(payload.changed[0]?.statusWrite, "suggested");
     assert.equal(payload.changed[0]?.statusSuggestion?.to, "done");
+    assert.equal(
+      payload.changed[0]?.statusSuggestion?.reason,
+      "needs a device test",
+    );
+    assert.equal(payload.warnings, undefined);
+
+    const handBack = await manageTool().execute(
+      {
+        operations: [
+          {
+            operation: "update",
+            id: task.id,
+            status: "todo",
+            suggestOnly: true,
+          },
+        ],
+      },
+      ctx,
+    );
+    // Already `todo`: nothing to suggest, and nothing claimed.
+    assert.equal(
+      (handBack.details as ManageResult).changed[0]?.statusWrite,
+      undefined,
+    );
   } finally {
     deleteTask(task.id);
   }
 });
 
-test("task_manage closes a Task out in ONE call: edit and suggestion", async () => {
+test("task_manage with suggestOnly todo leaves a doing Task alone", async () => {
+  const task = createTask({
+    title: "Todo suggestion probe",
+    status: "doing",
+    source: { createdBy: "user" },
+  });
+  try {
+    const result = await manageTool().execute(
+      {
+        operations: [
+          {
+            operation: "update",
+            id: task.id,
+            status: "todo",
+            suggestOnly: true,
+          },
+        ],
+      },
+      ctx,
+    );
+    const payload = result.details as ManageResult;
+
+    assert.equal(payload.changed[0]?.status, "doing");
+    assert.equal(payload.changed[0]?.statusWrite, "suggested");
+    assert.equal(payload.changed[0]?.statusSuggestion?.to, "todo");
+  } finally {
+    deleteTask(task.id);
+  }
+});
+
+test("task_manage closes a Task out in ONE call: edit and status", async () => {
   const task = createTask({
     title: "One-call closeout",
     description: "Intro line.\n\nOutcome: unknown.\n\nTrailer.",
@@ -226,8 +302,8 @@ test("task_manage closes a Task out in ONE call: edit and suggestion", async () 
     const payload = result.details as ManageResult;
 
     assert.equal(payload.changedCount, 1);
-    assert.equal(payload.changed[0]?.status, "todo");
-    assert.equal(payload.changed[0]?.statusSuggestion?.to, "done");
+    assert.equal(payload.changed[0]?.status, "done");
+    assert.equal(payload.changed[0]?.statusWrite, "applied");
     assert.equal(payload.changed[0]?.descriptionEditsApplied, 2);
     if (result.content[0]?.type === "text")
       assert.equal(result.content[0].text, JSON.stringify(payload));
@@ -583,9 +659,7 @@ test("Task descriptions carry the rules no schema field states", () => {
         "create-only-for-later-work": /not (happen|be done) in this session/i,
         "created-lands-in-inbox":
           /Inbox[^.\n]*untriaged|untriaged[^.\n]*Inbox/i,
-        "status-is-a-suggestion": affirmed(
-          /(?<subject>status writes? (are|is))(?<what> (only )?(a )?suggestions?)[^.\n]*?\buser\b[^.\n]*?(?<verb>answer|decide|accept|confirm)/i,
-        ),
+        "status-is-set-directly": affirmed(/set status directly/i),
         "evidence-bar-for-fields": /(explicit|strong) evidence/i,
         // Folded up from six schema properties by Task-285.
         "delete-only-on-request": affirmed(

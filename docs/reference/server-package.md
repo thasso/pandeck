@@ -20,18 +20,19 @@ orchestration, MCP/tool integrations, and runtime persistence.
   not be committed.
 
 - `tasks.ts`'s `resolveStatusWrite` is the ONE place that decides who may write
-  a Task's status. An `agent` actor's `done` or `todo` becomes a
-  `statusSuggestion` (the two suggestible values; `doing` has none because
-  saying nothing already means "leave it in doing"). A `done` suggestion also
-  moves the Task out of `doing` into `todo`, so an agent's closeout needs no
-  corrective second write; a `todo` suggestion moves nothing, since paused work
-  is honestly still `doing` until the user answers. Repeating the same
-  suggestion keeps the first timestamp; a different one replaces it. A real user
-  status CHANGE or an explicit `clearStatusSuggestion` clears it, and a save
-  that leaves the status alone deliberately does NOT. `system` actors are
-  excluded on purpose, and `userRequestedStatus` is the explicit escape hatch:
-  the agent's write is applied AND recorded as the claim, with agent provenance.
-  One consequence to keep in mind: an unasked agent completion writes no `done`
+  a Task's status. An `agent` actor's `done` or `todo` is APPLIED (with an
+  `agent` `task_status_events` row) and recorded as the claim in
+  `statusSuggestion` with the same `to` — answered provenance (`doing` has no
+  claim because saying nothing already means "leave it in doing"). With
+  `suggestOnly` (the `task_manage` opt-in, and the PR-merge `done`) the claim is
+  a pending suggestion instead: a `done` suggestion also moves the Task out of
+  `doing` into `todo`, so a closeout needs no corrective second write; a `todo`
+  suggestion moves nothing, since paused work is honestly still `doing` until
+  the user answers. Repeating the same suggestion keeps the first timestamp; a
+  different one replaces it. A real user status CHANGE or an explicit
+  `clearStatusSuggestion` clears any claim, an agent's move to `doing` drops an
+  answered one, and a save that leaves the status alone deliberately does NOT.
+  `system` actors are excluded on purpose. A suggestion writes no `done`
   `task_status_events` row.
 
 - `tasks.ts`'s `resolveTriage` decides when a Task stops waiting in the Inbox.

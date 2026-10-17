@@ -157,16 +157,12 @@ const taskManageSchema = {
               },
             },
           },
-          status: {
-            type: "string",
-            enum: TASK_STATUS_VALUES,
-            description: "'done' also takes the Task out of 'doing'.",
-          },
+          status: { type: "string", enum: TASK_STATUS_VALUES },
           statusReason: { type: "string", description: "One short line." },
-          userRequestedStatus: {
+          suggestOnly: {
             type: "boolean",
             description:
-              "Set ONLY when the user asked for this status: it is then applied, not suggested.",
+              "Suggest done/todo instead of setting it: only when finishing depends on what you could not verify (a user's device test, a deploy, someone else's decision), never for general uncertainty.",
           },
           projectId: {
             type: "string",
@@ -317,13 +313,19 @@ interface DescriptionEdit {
 }
 
 /**
+ * What an update did with its `status`: `applied` moved the Task, `suggested`
+ * left the claim for the user to answer.
+ */
+type StatusWrite = "applied" | "suggested";
+
+/**
  * A Task touched by one operation, plus the per-operation facts the Task itself
- * cannot carry — whether the escape hatch applied a status the user asked for,
- * and how many targeted description edits landed.
+ * cannot carry — whether its status was applied or only suggested, and how many
+ * targeted description edits landed.
  */
 interface ChangedTask {
   task: TaskItem;
-  statusSetByRequest?: boolean;
+  statusWrite?: StatusWrite;
   descriptionEditsApplied?: number;
   /** A create that resolved to an EXISTING Task (Slack source-link dedupe). */
   deduplicated?: boolean;
@@ -337,7 +339,7 @@ interface ManageOperation {
   descriptionEdits?: DescriptionEdit[];
   status?: TaskStatus;
   statusReason?: string;
-  userRequestedStatus?: boolean;
+  suggestOnly?: boolean;
   projectId?: string;
   ticket?: string;
   externalLinks?: TaskExternalLink[];
@@ -453,7 +455,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
     label: coordinatorCreateOnly ? "Tasks: Create Follow-ups" : "Tasks: Manage",
     description: coordinatorCreateOnly
       ? "Create durable follow-up Tasks only when the user's current message explicitly asks. This coordinator-only variant cannot update, archive, or delete Tasks. Every created Task lands untriaged, is linked under this Workflow Run's Task, and carries its pull request as a source link when present."
-      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Status writes are SUGGESTIONS the user answers. Record a dependency as an addLinks blocks link, never only in prose. Set dates, priority, project and ticket only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, ticket, dueDate or scheduledFor and resets priority.",
+      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Set status directly. Record a dependency as an addLinks blocks link, never only in prose. Set dates, priority, project and ticket only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, ticket, dueDate or scheduledFor and resets priority.",
     parameters: coordinatorCreateOnly
       ? coordinatorTaskCreateSchema
       : taskManageSchema,
@@ -610,14 +612,6 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
               : {}),
             warnings,
           });
-          // Whether the escape hatch actually did anything is decided BEFORE the
-          // write: afterwards the Task simply has the requested status, which is
-          // also what an ordinary no-op write leaves behind.
-          const statusSetByRequest =
-            op.userRequestedStatus === true &&
-            (op.status === "done" || op.status === "todo") &&
-            current !== null &&
-            current.status !== op.status;
           const externalLinksValue = normalizeExternalLinksForTool(
             op.externalLinks,
           );
@@ -640,7 +634,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
             ...(op.statusReason !== undefined
               ? { statusReason: op.statusReason }
               : {}),
-            userRequestedStatus: op.userRequestedStatus === true,
+            ...(op.suggestOnly === true ? { suggestOnly: true } : {}),
             actor: { kind: "agent", id: session.sessionId },
             ...(links.projectId !== undefined
               ? { projectId: links.projectId }
@@ -664,9 +658,10 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
             ...(removeLinks ? { removeLinks } : {}),
             sessionRefs: addSessionRef(current?.sessionRefs, session),
           });
+          const statusWrite = statusWriteOf(op, current, updated);
           changed.push({
             task: updated,
-            statusSetByRequest,
+            ...(statusWrite ? { statusWrite } : {}),
             ...(descriptionEdits
               ? { descriptionEditsApplied: descriptionEdits.length }
               : {}),
@@ -680,9 +675,10 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
 
       // The RESULT shape is a contract (a web card renders it), so it says the
       // whole outcome once: every entry's `status` is the status after the
-      // write, `descriptionEditsApplied` counts the targeted edits that landed,
-      // and a recorded `statusSuggestion`
-      // states what is still waiting for the user. Nothing about a suggestion
+      // write, `statusWrite` says whether the requested status was applied or
+      // only suggested, `descriptionEditsApplied` counts the targeted edits that
+      // landed, and a `statusSuggestion` is the claim recorded with the status —
+      // still waiting for the user only while its `to` differs from `status`. Nothing about a suggestion
       // goes in `warnings` — the server did exactly what an agent's status
       // write means, so phrasing it as a warning made a correct outcome read
       // like a failure.
@@ -692,9 +688,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
         changedCount: changed.length + deletedIds.length,
         changed: changed.map((entry) =>
           taskForTool(toSummary(entry.task), false, {
-            ...(entry.statusSetByRequest !== undefined
-              ? { statusSetByRequest: entry.statusSetByRequest }
-              : {}),
+            ...(entry.statusWrite ? { statusWrite: entry.statusWrite } : {}),
             ...(entry.descriptionEditsApplied !== undefined
               ? { descriptionEditsApplied: entry.descriptionEditsApplied }
               : {}),
@@ -1200,6 +1194,25 @@ function taskDescendants(
 }
 
 /**
+ * What one update did with its requested `status`, read off the Task before and
+ * after rather than re-deriving `resolveStatusWrite`. A `suggestOnly` done/todo
+ * the Task is not already in is `suggested` even when it moved the Task out of
+ * `doing`; any other write that changed the status is `applied`; a status the
+ * Task already had reports nothing.
+ */
+function statusWriteOf(
+  op: ManageOperation,
+  before: TaskItem | null,
+  after: TaskItem,
+): StatusWrite | undefined {
+  if (op.status === undefined || !before || before.status === op.status)
+    return undefined;
+  if (op.suggestOnly === true && (op.status === "done" || op.status === "todo"))
+    return "suggested";
+  return after.status !== before.status ? "applied" : undefined;
+}
+
+/**
  * One Task in a tool result. `status` is always the status AFTER the write, so
  * a caller never has to reconstruct it from what it asked for.
  */
@@ -1207,7 +1220,7 @@ function taskForTool(
   summary: TaskSummary,
   includeDescription: boolean,
   applied: {
-    statusSetByRequest?: boolean;
+    statusWrite?: StatusWrite;
     descriptionEditsApplied?: number;
     deduplicated?: boolean;
   } = {},
@@ -1239,7 +1252,7 @@ function taskForTool(
           },
         }
       : {}),
-    ...(applied.statusSetByRequest ? { statusSetByRequest: true } : {}),
+    ...(applied.statusWrite ? { statusWrite: applied.statusWrite } : {}),
     ...(applied.deduplicated ? { deduplicated: true } : {}),
     ...(applied.descriptionEditsApplied !== undefined
       ? { descriptionEditsApplied: applied.descriptionEditsApplied }

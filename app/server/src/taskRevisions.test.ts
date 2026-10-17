@@ -323,13 +323,14 @@ test("a change linked Tasks cannot see reports only the Task itself", () => {
       ["dates", () => updateTask(subject.id, { scheduledFor: "2026-10-20" })],
       // Saving the title it already has is not a rename.
       ["same title", () => updateTask(subject.id, { title: "Quiet subject" })],
-      // An agent's status write is a SUGGESTION: the status does not move.
+      // A suggestOnly status write records a claim: the status does not move.
       [
         "agent suggestion",
         () =>
           updateTask(subject.id, {
             status: "done",
             actor: { kind: "agent", id: "session-1" },
+            suggestOnly: true,
           }),
       ],
       // Archiving an already archived Task changes nothing either.

@@ -168,6 +168,40 @@ describe("TaskManagementPage description", () => {
   });
 });
 
+describe("TaskManagementPage status provenance", () => {
+  const claim = {
+    to: "done" as const,
+    at: 5,
+    sessionId: "sess-1",
+    reason: "tests pass",
+  };
+
+  it("says an agent set the current status, why, and links its session", () => {
+    const done = task({ status: "done", statusSuggestion: claim });
+    const html = render({
+      items: [done],
+      selectedId: "7",
+      taskDetails: { "7": done },
+    });
+    expect(html).toContain("Set done by agent");
+    expect(html).toContain("tests pass");
+    expect(html).toContain('href="/sessions/sess-1"');
+    // Answered: no suggestion card asking the user to decide.
+    expect(html).not.toContain("Mark done");
+  });
+
+  it("shows a pending suggestion as a question, not as provenance", () => {
+    const pending = task({ status: "todo", statusSuggestion: claim });
+    const html = render({
+      items: [pending],
+      selectedId: "7",
+      taskDetails: { "7": pending },
+    });
+    expect(html).not.toContain("by agent");
+    expect(html).toContain("Mark done");
+  });
+});
+
 describe("TaskManagementPage links", () => {
   const blockerLinks = {
     blockedBy: [

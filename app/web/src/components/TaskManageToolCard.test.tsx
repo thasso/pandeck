@@ -48,7 +48,9 @@ const createBlock = manageBlock(
 
 const suggestionBlock = manageBlock(
   {
-    operations: [{ operation: "update", id: "297", status: "done" }],
+    operations: [
+      { operation: "update", id: "297", status: "done", suggestOnly: true },
+    ],
   },
   {
     changedCount: 1,
@@ -58,6 +60,7 @@ const suggestionBlock = manageBlock(
         title: "Render Task mutations",
         status: "todo",
         statusSuggestion: { to: "done", at: 5, reason: "tests pass" },
+        statusWrite: "suggested",
         descriptionEditsApplied: 1,
       },
     ],
@@ -69,6 +72,7 @@ describe("task_manage payload", () => {
     const payload = parseTaskManagePayload(suggestionBlock.output);
     expect(payload?.changed).toHaveLength(1);
     expect(payload?.changed[0]?.statusSuggestion?.to).toBe("done");
+    expect(payload?.changed[0]?.statusWrite).toBe("suggested");
     expect(payload?.warnings).toEqual([]);
   });
 
@@ -118,6 +122,46 @@ describe("task_manage payload", () => {
     expect(
       changeSummary({ id: "1", title: "T", status: "done" }, "create"),
     ).toBe("created");
+  });
+
+  it("says whether a status was set or only suggested", () => {
+    expect(
+      changeSummary(
+        { id: "1", title: "T", status: "done", statusWrite: "applied" },
+        "update",
+      ),
+    ).toBe("set done");
+    expect(
+      changeSummary(
+        { id: "1", title: "T", status: "todo", statusWrite: "applied" },
+        "update",
+      ),
+    ).toBe("set to do");
+    // Named by its target, not by the `todo` a `done` suggestion parks it in.
+    expect(
+      changeSummary(
+        {
+          id: "1",
+          title: "T",
+          status: "todo",
+          statusSuggestion: { to: "done", at: 5 },
+          statusWrite: "suggested",
+        },
+        "update",
+      ),
+    ).toBe("suggested done");
+    expect(
+      changeSummary(
+        {
+          id: "1",
+          title: "T",
+          status: "doing",
+          statusSuggestion: { to: "todo", at: 5 },
+          statusWrite: "suggested",
+        },
+        "update",
+      ),
+    ).toBe("suggested to do");
   });
 });
 
@@ -173,7 +217,7 @@ describe("TaskManageToolCard", () => {
     );
     expect(html).toContain("says done: tests pass");
     expect(html).toContain("Confirm done");
-    expect(html).toContain("description updated");
+    expect(html).toContain("description updated · suggested done");
   });
 
   it("shows no question for a suggestion the status already satisfies", () => {
@@ -184,10 +228,10 @@ describe("TaskManageToolCard", () => {
         changed: [
           {
             id: "297",
-            title: "Done at your request",
+            title: "Done by the agent",
             status: "done",
             statusSuggestion: { to: "done", at: 5 },
-            statusSetByRequest: true,
+            statusWrite: "applied",
           },
         ],
       },
