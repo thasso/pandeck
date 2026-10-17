@@ -19,6 +19,8 @@ describe("markdownCodeSpan", () => {
     "``x``",
     "a ``` b",
     " padded ",
+    " \t ",
+    "   ",
     "*bold* _em_",
   ])("reads %j back verbatim as one code span", (text) => {
     const children = parsed(text);
