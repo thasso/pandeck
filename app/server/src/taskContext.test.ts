@@ -129,6 +129,41 @@ test("later Initiative omission notes are included in the budget reservation", (
   assert.ok(body.includes("description is omitted"));
 });
 
+test("a short Initiative head does not displace a fitting parent description", () => {
+  const parent = task("Short-head parent", "p".repeat(2_000));
+  const child = task("Short-head child", "c".repeat(5_011), parent);
+  createInitiative({
+    title: "Short-head initiative",
+    description: "x",
+    taskIds: [parent],
+  });
+  const body = contextOf(child);
+  assert.ok(body.includes(`## Parent Task ${parent} — description`));
+  assert.ok(body.includes("p".repeat(2_000)));
+  assert.ok(body.includes("\nx\n"));
+  assert.ok(Buffer.byteLength(body, "utf8") <= BUDGET_BYTES);
+});
+
+test("short and long Unicode Initiative blocks are budgeted in bytes", () => {
+  const parent = task("Unicode parent", "p".repeat(1_500));
+  const child = task("Unicode child", "c".repeat(4_200), parent);
+  createInitiative({
+    title: "Short 🧭",
+    description: "x",
+    taskIds: [parent],
+  });
+  createInitiative({
+    title: "Long 🧭",
+    description: "𐍈".repeat(3_000),
+    taskIds: [parent],
+  });
+  const body = contextOf(child);
+  assert.ok(Buffer.byteLength(body, "utf8") <= BUDGET_BYTES);
+  assert.ok(body.includes(`## Parent Task ${parent} — description`));
+  assert.ok(body.includes("x"));
+  assert.ok(body.includes("description is omitted"));
+});
+
 test("an own description that spends the budget drops both heads but keeps the Initiative's header", () => {
   const held = heldChild("c".repeat(9_000), "p".repeat(6_000));
   const body = contextOf(held.child);

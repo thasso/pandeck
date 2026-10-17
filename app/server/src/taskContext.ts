@@ -114,24 +114,25 @@ function buildTaskContextBody(task: TaskItem): string {
     (section): section is BudgetedSection | FixedSection => section !== null,
   );
 
-  // A dropped block's replacement note is not itself charged: it is always far
-  // smaller than what it replaces, and saying nothing about missing content to
-  // save ~100 bytes would be the wrong trade against an already-soft budget.
-  // The fixed blocks AFTER a budgeted one are: they are kept whatever it
-  // costs, so a block before them may only spend what they leave.
+  // Each later section reserves the smaller of its actual block and its
+  // omission note. This gives earlier, higher-priority sections the room they
+  // need without charging a longer fallback when the real content is shorter.
+  // Fixed blocks are always kept, whatever they cost.
   const middle: string[] = [];
   sections.forEach((section, index) => {
     if (section.omittedNote === undefined) {
       middle.push("", ...section.block);
       return;
     }
-    const laterRequired = sections
-      .slice(index + 1)
-      .flatMap((later) =>
-        later.omittedNote === undefined
-          ? ["", ...later.block]
-          : ["", later.omittedNote],
-      );
+    const laterRequired = sections.slice(index + 1).flatMap((later) => {
+      if (later.omittedNote === undefined) return ["", ...later.block];
+      const block = ["", ...later.block];
+      const note = ["", later.omittedNote];
+      return Buffer.byteLength(block.join("\n"), "utf8") <=
+        Buffer.byteLength(note.join("\n"), "utf8")
+        ? block
+        : note;
+    });
     const candidate = [...middle, "", ...section.block, ...laterRequired];
     const fits =
       Buffer.byteLength([...head, ...candidate, ...tail].join("\n"), "utf8") <=
