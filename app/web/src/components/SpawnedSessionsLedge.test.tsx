@@ -121,8 +121,7 @@ describe("the composer's spawned-session ledge", () => {
     // The session you are typing into is usually quiet while its peers run, so
     // this strip is the only place that run is visible.
     // The spinner carries the accent; the line itself stays muted.
-    const accentSpinner =
-      /class="[^"]*text-primary[^"]*"[^>]*><path[^>]*animate-spin/;
+    const accentSpinner = /<svg[^>]*class="[^"]*animate-spin[^"]*text-primary/;
     expect(working).toMatch(accentSpinner);
     const idle = renderToStaticMarkup(ledge([session("a")]));
     expect(idle).not.toContain("animate-spin");

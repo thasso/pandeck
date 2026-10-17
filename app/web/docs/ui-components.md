@@ -29,9 +29,10 @@ the same parts a shadcn example would.
   - `dialog.tsx`: `overlayClassName` on `DialogContent`, so a full-screen
     takeover (the shortcuts help) puts its backdrop in band 100 with its popup.
   - `spinner.tsx`, `skeleton.tsx`: `motion-safe:` animations (R6). `spinner.tsx`
-    draws `LoaderCircle`'s path itself and rotates the path inside a still
-    `<svg>` (`origin-center [transform-box:view-box]`): WebKit wobbles a
-    rotating `<svg>` at a fractional offset (`loading-states.md`).
+    draws `LoaderCircle`'s path itself, turns the whole `<svg>` (composited;
+    never animate an element inside an `<svg>`) and snaps its box to device
+    pixels with margins: WebKit wobbles a turning box at a fractional offset
+    (`loading-states.md`).
   - `sonner.tsx`: reads the `.dark` class instead of `next-themes`, and its
     loading icon is the decorative `Spinner` (as in `button.tsx`), not a
     spinning `Loader2Icon`. Errors use `TriangleAlertIcon` so the close button
