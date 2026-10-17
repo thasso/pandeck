@@ -106,15 +106,17 @@ it("opens the carded file in the side panel or the Knowledge route", () => {
   expect(main).toEqual(["notes/alpha.md"]);
 });
 
-it("renders the title, the note and the summary as inline Markdown", () => {
+it("renders the note and summary as inline Markdown but the title as named", () => {
+  // A title can fall back to the file name, so it reads as written.
   renderCard(
     showEntryBlock({
       ...CARD,
-      title: "The `alpha` entry",
+      title: "__init__.py",
       note: "Rewrote **the summary**",
     }),
   );
-  expect(container!.innerHTML).toContain("The <code>alpha</code> entry");
+  expect(container!.textContent).toContain("__init__.py");
+  expect(container!.innerHTML).not.toContain("<strong>init</strong>");
   expect(container!.innerHTML).toContain(
     "Rewrote <strong>the summary</strong>",
   );

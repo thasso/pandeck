@@ -52,7 +52,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
     >
       <div className="flex min-w-0 flex-col gap-0.5">
         <p className="truncate font-medium" title={card.title}>
-          <Markdown text={card.title} inline />
+          {card.title}
         </p>
         {card.path ? (
           <p
