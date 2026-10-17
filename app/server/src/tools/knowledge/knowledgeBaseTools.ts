@@ -618,7 +618,7 @@ export const kbShowTool = defineAgentTool<{
       path: { type: "string", description: "File path inside the KB." },
       note: {
         type: "string",
-        description: `One short line on why you are showing this file, in plain text. Up to ${MAX_CARD_NOTE_CHARS} characters.`,
+        description: `One short line on why you are showing this file; inline Markdown renders. Up to ${MAX_CARD_NOTE_CHARS} characters.`,
       },
     },
   },

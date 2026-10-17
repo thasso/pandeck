@@ -19,6 +19,7 @@ import { relativeAge } from "../lib/relativeTime.ts";
 import { CARD_OUTER_ROW, type RowDensity } from "../lib/rowDensity.ts";
 import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { IconButton } from "./common/IconButton.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { Button } from "@/components/ui/button";
 import { Item } from "@/components/ui/item";
 import { Progress } from "@/components/ui/progress";
@@ -178,7 +179,7 @@ function InitiativeInboxCardImpl({
             )}
           </span>
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-            {initiative.title}
+            <Markdown text={initiative.title} inline />
           </span>
         </div>
 
@@ -234,7 +235,7 @@ function InitiativeInboxCardImpl({
               >
                 <Flag size={11} className="shrink-0" aria-hidden />
                 <span className="min-w-0 truncate">
-                  {initiative.nextMilestone.title}
+                  <Markdown text={initiative.nextMilestone.title} inline />
                 </span>
               </span>
             ) : null}

@@ -106,6 +106,28 @@ it("opens the carded file in the side panel or the Knowledge route", () => {
   expect(main).toEqual(["notes/alpha.md"]);
 });
 
+it("renders the title, the note and the summary as inline Markdown", () => {
+  renderCard(
+    showEntryBlock({
+      ...CARD,
+      title: "The `alpha` entry",
+      note: "Rewrote **the summary**",
+    }),
+  );
+  expect(container!.innerHTML).toContain("The <code>alpha</code> entry");
+  expect(container!.innerHTML).toContain(
+    "Rewrote <strong>the summary</strong>",
+  );
+  expect(container!.querySelector("p div, p p")).toBeNull();
+
+  act(() => root?.unmount());
+  container?.remove();
+  renderCard(
+    showEntryBlock({ ...CARD, note: undefined, summary: "A `beta` summary" }),
+  );
+  expect(container!.innerHTML).toContain("A <code>beta</code> summary");
+});
+
 it("offers the route alone where there is no side panel", () => {
   renderCard(showEntryBlock(CARD), { openInMain: () => {} });
   expect(container!.textContent).not.toContain("Open in side panel");

@@ -13,6 +13,7 @@ import {
 import { pendingStatusSuggestion } from "../lib/backlogTree.ts";
 import type { TaskStatusRecord } from "../hooks/useAssistant.ts";
 import { useTaskLiveSource } from "./TaskLiveState.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TASK_STATUS_LABEL, TaskStatusIcon } from "./TaskStatusIcon.tsx";
 import { NoticeList } from "./tools/NoticeList.tsx";
@@ -314,7 +315,11 @@ function SuggestionRow({
     <span className="ml-5 flex min-w-0 items-center gap-1.5">
       <span className="min-w-0 truncate text-xs text-warning">
         {done ? "says done" : "says not done"}
-        {suggestion.reason ? `: ${suggestion.reason}` : ""}
+        {suggestion.reason ? (
+          <>
+            : <Markdown text={suggestion.reason} inline />
+          </>
+        ) : null}
       </span>
       {onConfirm ? (
         <Button
@@ -346,7 +351,9 @@ function TaskChip({
 }) {
   const inner = (
     <>
-      <span className="min-w-0 truncate">{label}</span>
+      <span className="min-w-0 truncate">
+        <Markdown text={label} inline />
+      </span>
       <TaskIdBadge id={id} />
     </>
   );
