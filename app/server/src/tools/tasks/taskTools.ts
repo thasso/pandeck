@@ -160,7 +160,8 @@ const taskManageSchema = {
           status: {
             type: "string",
             enum: TASK_STATUS_VALUES,
-            description: "Send status only to decide it; omit otherwise.",
+            description:
+              "Applied directly; send only to decide it; omit otherwise.",
           },
           statusReason: { type: "string", description: "One short line." },
           suggestOnly: {
@@ -459,7 +460,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
     label: coordinatorCreateOnly ? "Tasks: Create Follow-ups" : "Tasks: Manage",
     description: coordinatorCreateOnly
       ? "Create durable follow-up Tasks only when the user's current message explicitly asks. This coordinator-only variant cannot update, archive, or delete Tasks. Every created Task lands untriaged, is linked under this Workflow Run's Task, and carries its pull request as a source link when present."
-      : "Batch-create, update, archive, restore, or delete Tasks; delete only on explicit user request. Create only durable follow-ups not to be done in this session: new Tasks land untriaged in the Inbox. Dependencies need addLinks blocks links, not prose alone. Set dates, priority, project, and ticket only from explicit or strong evidence; ask before ambiguous bulk changes. On update, empty strings clear projectId, parentId, ticket, dueDate, or scheduledFor; priority resets.",
+      : "Create/update/archive/restore/delete Tasks; delete only on explicit user request. Create durable follow-ups only for work outside this session; Tasks land untriaged in Inbox. Dependencies use addLinks blocks, not prose. Agents set status directly. Set dates, priority, project and ticket only on explicit or strong evidence; ask before ambiguous bulk changes. On update, empty strings clear projectId, parentId, ticket, dueDate and scheduledFor; priority resets.",
     parameters: coordinatorCreateOnly
       ? coordinatorTaskCreateSchema
       : taskManageSchema,

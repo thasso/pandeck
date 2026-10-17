@@ -774,7 +774,7 @@ test("task_manage status schema says when to include a status decision", () => {
   };
   assert.match(
     schema.properties.operations.items.properties.status.description ?? "",
-    /send status only to decide it; omit otherwise/i,
+    /applied directly; send only to decide it; omit otherwise/i,
   );
 });
 
@@ -793,9 +793,10 @@ test("Task descriptions carry the rules no schema field states", () => {
       text: manageTool().description,
       rules: {
         "create-only-for-later-work":
-          /not (to )?(happen|be done|work) in this session/i,
+          /follow-ups only for work outside this session/i,
         "created-lands-in-inbox":
           /Inbox[^.\n]*untriaged|untriaged[^.\n]*Inbox/i,
+        "status-is-set-directly": affirmed(/agents set status directly/i),
         "evidence-bar-for-fields": /(explicit|strong) evidence/i,
         // Folded up from six schema properties by Task-285.
         "delete-only-on-request": affirmed(
@@ -805,7 +806,7 @@ test("Task descriptions carry the rules no schema field states", () => {
         // A prose dependency is invisible to the Initiative map and blocked
         // state (docs/initiatives.md).
         "dependency-is-a-link":
-          /dependenc(?:y|ies)[^.\n]*addLinks[^.\n]*blocks[^.\n]*(never only in prose|not prose alone)/i,
+          /dependenc(?:y|ies)[^.\n]*addLinks[^.\n]*blocks[^.\n]*not prose/i,
       },
     },
   });
