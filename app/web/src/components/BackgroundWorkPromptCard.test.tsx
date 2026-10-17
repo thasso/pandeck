@@ -148,8 +148,51 @@ describe("BackgroundWorkPromptCard", () => {
     expect(container.textContent!.length).toBeLessThan(label.length);
     expect(container.textContent).not.toContain(outcomeSummary);
     act(() => toggle!.click());
-    expect(body(toggle!)?.textContent).toContain(label);
+    // The agent's description reads whole in the body, as Markdown.
+    expect(body(toggle!)?.querySelector("strong")?.textContent).toBe(
+      "Build bundle",
+    );
+    expect(body(toggle!)?.textContent).toContain(
+      "for the next release for the next release",
+    );
     expect(body(toggle!)?.textContent).toContain(outcomeSummary);
+  });
+
+  it("renders the agent's description and outcome as Markdown, a command title as written", () => {
+    const [described] = renderCard([
+      update({
+        label: "Rebuild `web` bundle",
+        description: "Rebuild `web` bundle",
+        status: "failed",
+        outcomeSummary: "Vite **ran out** of memory in `rollup`",
+      }),
+    ]);
+    const preview = described!.querySelector<HTMLElement>("span.truncate")!;
+    Object.defineProperty(preview, "scrollWidth", { value: 600 });
+    Object.defineProperty(preview, "clientWidth", { value: 200 });
+    act(() => described!.click());
+    const html = body(described!)!.innerHTML;
+    expect(html).toContain("Rebuild <code>web</code> bundle");
+    expect(html).toContain("Vite <strong>ran out</strong> of memory");
+    expect(html).toContain("<code>rollup</code>");
+
+    const command = "pnpm vitest run **/*.test.ts\necho __done__";
+    const [fromCommand] = renderCard([
+      update({
+        label: "pnpm vitest run **/*.test.ts",
+        description: "",
+        command,
+      }),
+    ]);
+    const commandPreview =
+      fromCommand!.querySelector<HTMLElement>("span.truncate")!;
+    Object.defineProperty(commandPreview, "scrollWidth", { value: 600 });
+    Object.defineProperty(commandPreview, "clientWidth", { value: 200 });
+    act(() => fromCommand!.click());
+    expect(body(fromCommand!)?.querySelector(".break-words")?.textContent).toBe(
+      "pnpm vitest run **/*.test.ts",
+    );
+    expect(body(fromCommand!)?.querySelector("strong, em")).toBeNull();
   });
 
   it("keeps a failure exit detail when the server supplied no outcome", () => {

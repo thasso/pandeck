@@ -111,6 +111,19 @@ function stepSummaryText(summary: string): string {
   return sentence(summary.replace(/^[\w -]+ phase (blocked|failed):\s*/i, ""));
 }
 
+/**
+ * The stopped step's report in the attention box. A step's summary is often
+ * the agent's own words, so it renders as Markdown, in a `div` because Markdown
+ * renders blocks.
+ */
+function StepSummary({ text }: { text: string }) {
+  return (
+    <div className="min-w-0 break-words">
+      <Markdown text={stepSummaryText(text)} density="compact" />
+    </div>
+  );
+}
+
 /** The runtime a carried-out decision named, whichever role it was for. */
 function routedRuntime(
   decision: NonNullable<WorkflowRunCardProjection["reviewDecision"]>,
@@ -686,16 +699,14 @@ export function WorkflowRunCard({
           ? "The run branch is as the triage left it."
           : "The server could not verify the run branch afterwards. Inspect the worktree first."}
       </p>
-      {blockedSummary ? (
-        <p className="break-words">{stepSummaryText(blockedSummary)}</p>
-      ) : null}
+      {blockedSummary ? <StepSummary text={blockedSummary} /> : null}
     </Attention>
   ) : blockedSummary && blocked ? (
     <Attention
       variant="warning"
       title={`${blocked.phase ? WORKFLOW_PHASE_LABEL[blocked.phase] : "Step"} ${blocked.status}`}
     >
-      <p className="break-words">{stepSummaryText(blockedSummary)}</p>
+      <StepSummary text={blockedSummary} />
       {repeatedAttempts ? (
         <p>The last {repeatedAttempts} attempts ended the same way.</p>
       ) : null}
@@ -1022,7 +1033,9 @@ export function WorkflowRunCard({
             {run.branch}
           </span>
         ) : null}
-        <p className="break-words text-foreground">{headline}</p>
+        <p className="break-words text-foreground">
+          <Markdown text={headline} inline />
+        </p>
       </div>
 
       {expanded ? (
@@ -1180,9 +1193,9 @@ export function WorkflowRunCard({
                       : ""}
                     .
                   </p>
-                  <p className="break-words text-muted-foreground">
-                    {decision.rationale}
-                  </p>
+                  <div className="min-w-0 text-muted-foreground">
+                    <Markdown text={decision.rationale} density="compact" />
+                  </div>
                   <ReviewList
                     label={
                       decision.decision === "fix"
@@ -1204,9 +1217,9 @@ export function WorkflowRunCard({
 
           {plan ? (
             <RunSection storageKey="workflow-run-plan" title="Why this plan">
-              <p className="break-words text-muted-foreground">
-                {plan.rationale}
-              </p>
+              <div className="min-w-0 text-muted-foreground">
+                <Markdown text={plan.rationale} density="compact" />
+              </div>
             </RunSection>
           ) : null}
 

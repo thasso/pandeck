@@ -3,6 +3,7 @@ import type { AgentType, DisplayBlock } from "@assistant/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AppCard } from "./common/AppCard.tsx";
+import { Markdown } from "./Markdown.tsx";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -74,7 +75,9 @@ export function WorkshopDraftHandoffToolCard({
       }
       contentClassName="text-muted-foreground"
     >
-      <p className="truncate font-medium text-foreground">{payload.title}</p>
+      <p className="truncate font-medium text-foreground">
+        <Markdown text={payload.title} inline />
+      </p>
       <p className="flex min-w-0 items-center gap-2">
         <FileText className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate font-mono">

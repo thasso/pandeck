@@ -1414,3 +1414,74 @@ it("names each role's model, thinking level and account", () => {
   // A role without a stored account names none.
   expect(document.body.textContent).toContain("Reviewersonnet · Medium");
 });
+
+it("renders the agents' rationales, the headline and a stopped step's summary as Markdown", () => {
+  const render = (summary: string) =>
+    act(() => {
+      root!.render(
+        <DialogProvider>
+          <WorkflowRunCard
+            run={{
+              ...run,
+              lifecycleReason: "verdict needs the `main` head",
+            }}
+            card={applyPatch(card, {
+              phase: "commit-sync",
+              nextAction: "verdict needs the `main` head",
+              workPlan: {
+                ...card.workPlan!,
+                rationale: "Touches the **wire model** in `app/shared`.",
+              },
+              reviewDecision: {
+                ...card.reviewDecision!,
+                rationale: "The `retry` path needs a *second* reader.",
+              },
+              blockedReason: {
+                phase: "commit-sync",
+                status: "blocked",
+                summary,
+              },
+            })}
+            sessions={[]}
+            onOpenSession={() => {}}
+            onPause={() => {}}
+            onResume={() => {}}
+            onRetry={() => {}}
+            onCancel={() => {}}
+            onDelete={() => {}}
+            onRebaseAndReview={() => {}}
+            onAnswerCeiling={() => {}}
+            onAnswerCommitCheck={() => {}}
+          />
+        </DialogProvider>,
+      );
+    });
+
+  // A pause the attention box explains: the box carries the step's summary.
+  render(
+    "commit-sync phase blocked: the hook rejected `pnpm-lock.yaml`:\n\n- **lint** failed\n- format",
+  );
+  const box = container!.querySelector('[role="note"]')!;
+  expect(box.innerHTML).toContain(
+    "The hook rejected <code>pnpm-lock.yaml</code>:",
+  );
+  expect(box.innerHTML).toContain("<li><strong>lint</strong> failed</li>");
+  expect(box.querySelector("p ul, p div")).toBeNull();
+
+  click("Review");
+  click("Why this plan");
+  const html = container!.innerHTML;
+  expect(html).toContain(
+    "Touches the <strong>wire model</strong> in <code>app/shared</code>.",
+  );
+  expect(html).toContain(
+    "The <code>retry</code> path needs a <em>second</em> reader.",
+  );
+
+  // A pause the box does not explain puts the run's own reason in the headline.
+  render("");
+  expect(container!.innerHTML).toContain(
+    "Verdict needs the <code>main</code> head",
+  );
+  expect(container!.textContent).not.toContain("`");
+});
