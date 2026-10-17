@@ -158,23 +158,26 @@ describe("BackgroundWorkPromptCard", () => {
     expect(body(toggle!)?.textContent).toContain(outcomeSummary);
   });
 
-  it("renders the agent's description and outcome as Markdown, a command title as written", () => {
+  it("renders the agent's description as Markdown, a command title and the outcome as written", () => {
+    const outcome =
+      'Background command "pnpm vitest run **/*.test.ts" failed: __generated__/api.ts is stale';
     const [described] = renderCard([
       update({
         label: "Rebuild `web` bundle",
         description: "Rebuild `web` bundle",
         status: "failed",
-        outcomeSummary: "Vite **ran out** of memory in `rollup`",
+        outcomeSummary: outcome,
       }),
     ]);
     const preview = described!.querySelector<HTMLElement>("span.truncate")!;
     Object.defineProperty(preview, "scrollWidth", { value: 600 });
     Object.defineProperty(preview, "clientWidth", { value: 200 });
     act(() => described!.click());
-    const html = body(described!)!.innerHTML;
-    expect(html).toContain("Rebuild <code>web</code> bundle");
-    expect(html).toContain("Vite <strong>ran out</strong> of memory");
-    expect(html).toContain("<code>rollup</code>");
+    expect(body(described!)!.innerHTML).toContain(
+      "Rebuild <code>web</code> bundle",
+    );
+    expect(body(described!)?.textContent).toContain(outcome);
+    expect(body(described!)?.querySelector("strong, em")).toBeNull();
 
     const command = "pnpm vitest run **/*.test.ts\necho __done__";
     const [fromCommand] = renderCard([

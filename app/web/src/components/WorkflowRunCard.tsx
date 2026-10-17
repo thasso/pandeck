@@ -106,22 +106,11 @@ const COMMIT_CHECK_KIND_LABEL: Record<
 /**
  * A stopped step's summary without the operation's own prefix ("commit phase
  * blocked: …"): the box around it already says which step stopped and how.
+ * Plain text, not Markdown: a summary is as often a raw host diagnostic (a git
+ * or hook error naming `__generated__` or a glob) as the agent's own words.
  */
 function stepSummaryText(summary: string): string {
   return sentence(summary.replace(/^[\w -]+ phase (blocked|failed):\s*/i, ""));
-}
-
-/**
- * The stopped step's report in the attention box. A step's summary is often
- * the agent's own words, so it renders as Markdown, in a `div` because Markdown
- * renders blocks.
- */
-function StepSummary({ text }: { text: string }) {
-  return (
-    <div className="min-w-0 break-words">
-      <Markdown text={stepSummaryText(text)} density="compact" />
-    </div>
-  );
 }
 
 /** The runtime a carried-out decision named, whichever role it was for. */
@@ -699,14 +688,16 @@ export function WorkflowRunCard({
           ? "The run branch is as the triage left it."
           : "The server could not verify the run branch afterwards. Inspect the worktree first."}
       </p>
-      {blockedSummary ? <StepSummary text={blockedSummary} /> : null}
+      {blockedSummary ? (
+        <p className="break-words">{stepSummaryText(blockedSummary)}</p>
+      ) : null}
     </Attention>
   ) : blockedSummary && blocked ? (
     <Attention
       variant="warning"
       title={`${blocked.phase ? WORKFLOW_PHASE_LABEL[blocked.phase] : "Step"} ${blocked.status}`}
     >
-      <StepSummary text={blockedSummary} />
+      <p className="break-words">{stepSummaryText(blockedSummary)}</p>
       {repeatedAttempts ? (
         <p>The last {repeatedAttempts} attempts ended the same way.</p>
       ) : null}
@@ -1033,9 +1024,7 @@ export function WorkflowRunCard({
             {run.branch}
           </span>
         ) : null}
-        <p className="break-words text-foreground">
-          <Markdown text={headline} inline />
-        </p>
+        <p className="break-words text-foreground">{headline}</p>
       </div>
 
       {expanded ? (

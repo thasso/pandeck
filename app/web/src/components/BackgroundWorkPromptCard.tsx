@@ -114,7 +114,9 @@ function BackgroundWorkPromptRow({
           ) : null}
           {(outcome ?? exitDetail) ? (
             <p className="text-sm text-muted-foreground">
-              {outcome ? <Markdown text={outcome} inline /> : exitDetail}
+              {/* Verbatim: the outcome is as often the provider's or host's
+                  own sentence, quoting a command or an error, as prose. */}
+              {outcome ?? exitDetail}
             </p>
           ) : null}
           {command ? (
