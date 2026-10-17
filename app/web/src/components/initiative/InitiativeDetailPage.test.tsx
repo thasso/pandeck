@@ -168,6 +168,53 @@ describe("InitiativeDetailPage views", () => {
     expect(onSelectTask).toHaveBeenCalledWith(T.SDC5);
   });
 
+  it("shows the description as Markdown over either view, folds it for the tab, and opens a linked Task", async () => {
+    const described: InitiativeRead = {
+      ...HELD,
+      item: {
+        ...HOSTED_LABS_DETAIL,
+        description: `Run **SDC** on hosted infrastructure.\n\n- First step: [quotas](pa://task/${T.SDC5})`,
+      },
+    };
+    const page = renderPage(ready(described));
+    const section = () =>
+      page.container.querySelector<HTMLElement>(
+        "section[aria-label='Description']",
+      );
+    expect(section()!.querySelector("strong")?.textContent).toBe("SDC");
+    expect(section()!.querySelector("li")).not.toBeNull();
+    await flushLazy(page.container);
+    expect(
+      page.container.querySelector("[aria-label='Initiative map']"),
+    ).not.toBeNull();
+    expect(section()).not.toBeNull();
+
+    const link = [...section()!.querySelectorAll("a")].find(
+      (el) => el.textContent === "quotas",
+    )!;
+    act(() => link.click());
+    expect(page.onSelectTask).toHaveBeenCalledWith(T.SDC5);
+
+    act(() => button(section()!, /^Description$/)!.click());
+    expect(section()!.querySelector("strong")).toBeNull();
+    act(() => button(page.container, /^List$/)!.click());
+    expect(section()!.querySelector("strong")).toBeNull();
+    act(() => button(section()!, /^Description$/)!.click());
+    expect(section()!.querySelector("strong")?.textContent).toBe("SDC");
+    // Shown once: the List no longer repeats it in its own body.
+    expect(page.container.querySelectorAll("strong")).toHaveLength(1);
+  });
+
+  it("leaves the description out when the Initiative has none", () => {
+    const { container } = renderPage(
+      ready({ ...HELD, item: { ...HOSTED_LABS_DETAIL, description: " " } }),
+      { mobile: true },
+    );
+    expect(
+      container.querySelector("section[aria-label='Description']"),
+    ).toBeNull();
+  });
+
   it("falls back to the List with the reason and a retry when no layout was drawn", () => {
     const { container, onLoadDetail } = renderPage(
       ready({
