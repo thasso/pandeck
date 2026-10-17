@@ -168,6 +168,40 @@ describe("Task keyed projections", () => {
       expect(dataOf(state.taskDetails[item.id]!)).toBe(item);
     });
 
+    it("re-reads a body whose Initiatives changed and adopts the new list", () => {
+      // An Initiative write reports the Tasks it holds: their revision moves,
+      // their summary does not.
+      const item = {
+        ...task("1", 1),
+        initiatives: [
+          { id: "3", title: "Hosted Labs", state: "active" as const },
+        ],
+      };
+      let state = listed(item, 4);
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item,
+        revision: 4,
+      });
+      state = reduceAssistantState(state, event(item, 5));
+      expect(state.taskDetails[item.id]?.status).toBe("refreshing");
+      expect(dataOf(state.taskDetails[item.id]!)?.initiatives).toEqual(
+        item.initiatives,
+      );
+
+      // The Task left the Initiative, so the new read carries none.
+      const reread = task("1", 1);
+      state = reduceAssistantState(state, {
+        kind: "taskDetailResult",
+        id: item.id,
+        item: reread,
+        revision: 5,
+      });
+      expect(state.taskDetails[item.id]?.status).toBe("ready");
+      expect(dataOf(state.taskDetails[item.id]!)?.initiatives).toBeUndefined();
+    });
+
     it("keeps a saved body ready when the save's own event echoes it", () => {
       const item = task("1", 1);
       let state = listed(item, 4);

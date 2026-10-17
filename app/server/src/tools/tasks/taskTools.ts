@@ -2,6 +2,7 @@ import type {
   AgentType,
   TaskDueFilter,
   TaskExternalLink,
+  TaskInitiativeRef,
   TaskItem,
   TaskLinkedTask,
   TaskLinkInput,
@@ -882,6 +883,9 @@ interface ToolTaskRelations {
   };
   /** Linked Tasks left out to fit the byte budget. */
   linksOmitted?: number;
+  initiatives?: TaskInitiativeRef[];
+  /** Initiatives left out to fit the byte budget, once no link was left. */
+  initiativesOmitted?: number;
   openBlockerCount?: number;
   blocked?: true;
 }
@@ -894,9 +898,16 @@ interface BoundedItems {
   descriptionsOmitted: boolean;
 }
 
-/** A single-Task read's links, grouped as they read from that Task. */
+/**
+ * A single-Task read's links, grouped as they read from that Task, and the
+ * Initiatives holding it.
+ */
 function linksForTool(task: TaskItem): ToolTaskRelations {
-  if (!task.links) return {};
+  // A copy: the budget trim pops entries off it.
+  const initiatives = task.initiatives?.length
+    ? { initiatives: [...task.initiatives] }
+    : {};
+  if (!task.links) return initiatives;
   const entries = (list: TaskLinkedTask[]): ToolLinkedTask[] =>
     list.map((linked) => ({
       id: linked.id,
@@ -912,6 +923,7 @@ function linksForTool(task: TaskItem): ToolTaskRelations {
       ...(blockedBy.length ? { blockedBy: entries(blockedBy) } : {}),
       ...(relates.length ? { relates: entries(relates) } : {}),
     },
+    ...initiatives,
     ...(task.blocked ? { blocked: true as const } : {}),
   };
 }
@@ -923,21 +935,28 @@ function openBlockersForTool(count: number | undefined): ToolTaskRelations {
 
 /**
  * The last resort for one Task too large for the budget on its own: drop
- * linked Tasks from the largest group until it fits, and count what went.
+ * linked Tasks from the largest group until it fits, then trailing
+ * Initiatives, and count what went.
  */
 function trimLinksToBudget(item: ToolTask, budgetBytes: number): void {
   const groups = item.links ? Object.values(item.links) : [];
   let omitted = 0;
+  let initiativesOmitted = 0;
   while (jsonBytes([item]) > budgetBytes) {
     const largest = groups.reduce<ToolLinkedTask[] | undefined>(
       (best, group) => (group.length > (best?.length ?? 0) ? group : best),
       undefined,
     );
-    if (!largest) break;
-    largest.pop();
-    omitted += 1;
+    if (largest) {
+      largest.pop();
+      omitted += 1;
+    } else if (item.initiatives?.length) {
+      item.initiatives.pop();
+      initiativesOmitted += 1;
+    } else break;
   }
   if (omitted) item.linksOmitted = omitted;
+  if (initiativesOmitted) item.initiativesOmitted = initiativesOmitted;
 }
 
 /**

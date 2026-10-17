@@ -486,6 +486,35 @@ export const INITIATIVE_STORE_SQL = {
     )
     SELECT DISTINCT l.from_id AS id FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
         ON l.to_type = 'task' AND l.to_id = a.id AND l.relation = 'member' AND l.from_type = 'initiative'`,
+  /**
+   * The live Initiatives holding each given Task: a member edge on the Task
+   * itself or on an ancestor, walked UP `subtask` edges from each seed. Unlike
+   * `holders`, nothing is seeded from the Tasks a seed blocks, so this is
+   * membership and nothing more. `depth` is how far up the edge sits (0 for
+   * the Task's own); the depth bound stops a stored hierarchy cycle.
+   */
+  memberships: `WITH RECURSIVE lineage(seed, id, depth) AS (
+      SELECT value, value, 0 FROM json_each(?)
+      UNION
+      SELECT a.seed, l.from_id, a.depth + 1 FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
+          ON l.to_type = 'task' AND l.to_id = a.id AND l.relation = 'subtask' AND l.from_type = 'task'
+       WHERE a.depth < 256
+    )
+    SELECT a.seed, a.id AS task_id, a.depth, i.id, i.title, i.state,
+           (SELECT t.title FROM tasks t WHERE t.id = CAST(a.id AS INTEGER)) AS task_title
+      FROM lineage a CROSS JOIN links m INDEXED BY links_to_idx
+          ON m.to_type = 'task' AND m.to_id = a.id AND m.relation = 'member' AND m.from_type = 'initiative'
+      CROSS JOIN initiatives i ON i.id = CAST(m.from_id AS INTEGER)
+     WHERE i.deleted_at_ms IS NULL AND i.archived_at_ms IS NULL
+     ORDER BY a.seed, i.id, a.depth`,
+  /** The given Tasks and every Task below them, walked DOWN `subtask` edges. */
+  subtrees: `WITH RECURSIVE below(id) AS (
+      SELECT value FROM json_each(?)
+      UNION
+      SELECT l.to_id FROM below d CROSS JOIN links l
+          ON l.from_type = 'task' AND l.from_id = d.id AND l.relation = 'subtask' AND l.to_type = 'task'
+    )
+    SELECT id FROM below`,
   /** The Tasks linked to the given sessions: where a session change lands. */
   sessionTasks: `SELECT DISTINCT l.from_id AS id
       FROM links l INDEXED BY links_to_idx
@@ -572,6 +601,73 @@ function holdersOf(taskIds: Iterable<number>): number[] {
     .prepare(INITIATIVE_STORE_SQL.holders)
     .all(ids, ids) as Array<{ id: string }>;
   return rows.map((row) => Number(row.id));
+}
+
+/** A live Initiative holding a Task, and the nearest Task its edge is on. */
+export interface InitiativeMembership {
+  initiativeId: number;
+  title: string;
+  state: InitiativeState;
+  /** The ancestor holding the member edge; absent when the Task holds its own. */
+  through?: { taskId: number; title: string };
+}
+
+/**
+ * The live Initiatives holding each of `taskIds`, directly or through an
+ * ancestor (`INITIATIVE_STORE_SQL.memberships`), by Initiative id. When edges
+ * sit at several levels — a milestone's own under a member epic — the nearest
+ * one names the path, as `coveringEdge` judges it. A Task held by none has no
+ * entry in the map.
+ */
+function membershipsOf(
+  taskIds: Iterable<number>,
+): Map<number, InitiativeMembership[]> {
+  const result = new Map<number, InitiativeMembership[]>();
+  const ids = JSON.stringify([...new Set(taskIds)].map(String));
+  if (ids === "[]") return result;
+  const rows = getDb()
+    .prepare(INITIATIVE_STORE_SQL.memberships)
+    .all(ids) as unknown as Array<{
+    seed: string;
+    task_id: string;
+    depth: number;
+    id: number;
+    title: string;
+    state: InitiativeState;
+    task_title: string | null;
+  }>;
+  for (const row of rows) {
+    const seed = Number(row.seed);
+    const list = result.get(seed) ?? [];
+    // Rows come nearest first per Initiative, so the first one names the path.
+    if (list.some((entry) => entry.initiativeId === row.id)) continue;
+    list.push({
+      initiativeId: row.id,
+      title: row.title,
+      state: row.state,
+      ...(row.depth > 0
+        ? {
+            through: {
+              taskId: Number(row.task_id),
+              title: row.task_title ?? "",
+            },
+          }
+        : {}),
+    });
+    result.set(seed, list);
+  }
+  return result;
+}
+
+/** `roots` and every Task below them, archived ones included. */
+function subtreeIds(roots: Iterable<number>): number[] {
+  const ids = JSON.stringify([...new Set(roots)].map(String));
+  if (ids === "[]") return [];
+  return (
+    getDb().prepare(INITIATIVE_STORE_SQL.subtrees).all(ids) as Array<{
+      id: string;
+    }>
+  ).map((row) => Number(row.id));
 }
 
 /**
@@ -691,6 +787,8 @@ export const initiativeStore = {
   memberSessions,
   blockersInto,
   holdersOf,
+  membershipsOf,
+  subtreeIds,
   touchHolders,
   // revisions
   revisions,

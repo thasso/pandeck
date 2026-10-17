@@ -79,3 +79,21 @@ test("the member walk and its session filter search by key", () => {
   }
   assertIndexed("blockersInto", ["[]"]);
 });
+
+test("a Task's memberships climb through links_to_idx and its subtrees descend by key", () => {
+  const memberships = assertIndexed("memberships", ["[]"]);
+  assert.match(
+    memberships,
+    /SEARCH l USING (COVERING )?INDEX links_to_idx \(to_type=\? AND to_id=\? AND relation=\?\)/,
+  );
+  assert.match(
+    memberships,
+    /SEARCH m USING (COVERING )?INDEX links_to_idx \(to_type=\? AND to_id=\? AND relation=\?\)/,
+  );
+  assert.match(memberships, /SEARCH i USING INTEGER PRIMARY KEY/);
+  const subtrees = assertIndexed("subtrees", ["[]"]);
+  assert.match(
+    subtrees,
+    /SEARCH l USING (COVERING )?INDEX \S+ \(from_type=\? AND from_id=\? AND relation=\?/,
+  );
+});

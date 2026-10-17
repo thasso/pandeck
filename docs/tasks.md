@@ -190,6 +190,30 @@ is routed on the Task's id, not on its Backlog row: an archived Task opened from
 a link is drawn from its body, says it is archived, and offers Restore; only the
 server's not-found answer makes the page say the Task does not exist.
 
+## A Task knows its Initiatives
+
+A single-Task read also carries `TaskItem.initiatives`: the live Initiatives
+holding the Task (`docs/initiatives.md`), absent when there are none, and never
+on a summary, list or broadcast, like `links`. Each entry is the Initiative's
+id, title and state, plus `through`, the id and title of the ancestor Task it
+holds the Task through when the Task has no membership edge of its own. When
+edges sit at several levels (a milestone's own edge under a member epic) the
+nearest one names the path. Archived and deleted Initiatives are left out.
+
+`initiativeStore.membershipsOf` answers it by walking UP `subtask` edges to
+`member` edges. It is not `holdersOf`, which also seeds from the Tasks a Task
+blocks and so names the Initiatives that merely draw it as an outside blocker.
+
+The list stays fresh through the revision rule above. Every write that changes
+what a Task lists reports that Task, member subtrees whole, through the Task
+seam (`notifyTaskChange`), and that notify is its revision bump: membership
+writes, an Initiative's title or state, archive, unarchive and delete, and a
+reparent, Backlog drag or delete that changes what a moved Task is held by. The
+Task page and the Task inspector list the Initiatives as links to their pages
+with their state chip and the ancestor they come through, read-only; agents
+manage membership through `initiative_manage`. An Initiative page's panel shows
+them once, in the Task detail.
+
 ## Where a piece of work belongs
 
 | The thing in front of you                                                     | Where it goes                                                      |
@@ -268,11 +292,19 @@ the attachment says so instead of asking to be re-read.
 - It carries the Task's title/status/description, the parent's title and a
   clipped description, and the grandparent's title as a breadcrumb. No siblings
   and no subtree — those are a `task_read` away, and so is a parent's full body.
+- It names the Initiatives holding the Task (`TaskItem.initiatives`): per
+  Initiative, `Initiative-<n>` linked as `pa://initiative/<n>`, its title and
+  state, whether the Task is a direct member or belongs through ancestor Task X,
+  the next open milestone, and `initiative_read` for the map, then the head of
+  its description clipped to ~800 characters. The membership is a snapshot of
+  the start: a session already running is not told when it changes.
 - The WHOLE attachment is budgeted (~8 KB) and spent in that priority order,
   because parents are epics and epics are the long bodies: injecting a parent in
   full systematically injects the worst case. Only the Task's own description is
   never clipped — it is the point — so a very long one may carry the total past
-  the budget and displaces the material below it. Whatever is dropped says so.
+  the budget and displaces the material below it. An Initiative's description
+  ranks below the parent's; its header is a fact like the ancestor titles and is
+  never budgeted away. Whatever is dropped says so in one line.
 - Attaching a Task on ANY prompt is a supported shape, not just on the first
   one: the web client only offers it before the first user prompt, and the
   server does not enforce that. The attachment is therefore worded "current as

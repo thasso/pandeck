@@ -70,6 +70,11 @@ An Initiative does not touch a Task's project. A subtask still lives in its
 parent's project (`docs/tasks.md`); the Initiative is the one thing that spans
 them.
 
+A Task knows the Initiatives holding it. Its single-Task read carries them as
+`TaskItem.initiatives` (live ones only, each with the ancestor it comes
+through), the Task page and inspector link them, and a session started from the
+Task is told about them (`docs/tasks.md`).
+
 Archived member Tasks stay members: they stay in the tree, the graph and the
 total. Deleting a Task drops its membership edges like every other edge, and
 notifies the Initiatives it belonged to.
@@ -167,6 +172,15 @@ the tool descriptions, never in a harness-specific prompt layer.
   member — in the same flush, and a session's liveness change reports the
   Initiatives listing it. A write is the only place that knows it changed, so no
   second path recomputes counts on a timer.
+- The other way round, an Initiative write that changes what a Task lists of it
+  (members added or removed, absorbed edges included; the title or state;
+  archive, unarchive or delete) reports every such Task through the Task seam
+  once it commits, the whole subtree of a member included; a Task move that
+  changes inherited membership does the same. That notify is the Task's revision
+  bump, so an open Task page re-reads its body. It skips the Task seam's own
+  Initiative fan-out, since no Task row changed. A description change or a
+  milestone mark rewritten in place reports no Task. The cost grows with the
+  subtree, which the user accepted.
 - Subscribing is the list read, every time. When a surface comes back to the
   list, or a gap or a Settle's refusal or deadline resubscribes, after an
   earlier snapshot answered in the same connection, the list held is refreshing:

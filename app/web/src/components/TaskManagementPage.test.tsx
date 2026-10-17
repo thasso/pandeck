@@ -69,6 +69,7 @@ interface PageOptions {
   taskMutations?: Record<string, LoadState<true>>;
   saveTask?: AssistantActions["saveTask"];
   onSelect?: (id: string) => void;
+  onNavigate?: (path: string) => void;
 }
 
 function render(options: PageOptions): string {
@@ -115,6 +116,7 @@ function page(options: PageOptions) {
       onUpdatePrefs={() => {}}
       selectedId={options.selectedId}
       onSelect={options.onSelect ?? (() => {})}
+      {...(options.onNavigate ? { onNavigate: options.onNavigate } : {})}
       onCloseDetail={() => {}}
       onClose={() => {}}
       onOpenSession={() => {}}
@@ -255,6 +257,77 @@ describe("TaskManagementPage links", () => {
       ].find((button) => button.textContent?.includes("Done blocker"));
       await act(async () => (row as HTMLButtonElement).click());
       expect(onSelect).toHaveBeenCalledWith("4");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+});
+
+/**
+ * The Initiatives holding the Task come with its full read, like its links,
+ * and an open page follows that read: a membership change bumps the Task's
+ * revision, the body is read again, and the page shows the new list.
+ */
+describe("TaskManagementPage Initiatives", () => {
+  const epic = task({ id: "5", title: "Renamed epic" });
+
+  it("lists each Initiative as a link with its state and the ancestor it comes through", async () => {
+    const onNavigate = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const show = (initiatives: TaskItem["initiatives"]) =>
+      act(async () =>
+        root.render(
+          page({
+            items: [task({ parentId: "5" }), epic],
+            selectedId: "7",
+            taskDetails: {
+              "7": task({
+                description: "Body",
+                parentId: "5",
+                ...(initiatives ? { initiatives } : {}),
+              }),
+            },
+            onNavigate,
+          }),
+        ),
+      );
+    const rows = () =>
+      [
+        ...container.querySelectorAll<HTMLAnchorElement>(
+          '[aria-label="Initiatives"] a',
+        ),
+      ].map((row) => [row.getAttribute("href"), row.textContent]);
+    try {
+      await show([{ id: "3", title: "Hosted Labs", state: "active" }]);
+      expect(rows()).toEqual([["/initiatives/3", "Hosted LabsActive"]]);
+
+      // The read after a membership change: another Initiative, through the
+      // epic, whose live Backlog title wins over the one the read carried.
+      await show([
+        { id: "3", title: "Hosted Labs", state: "paused" },
+        {
+          id: "4",
+          title: "Platform",
+          state: "done",
+          through: { id: "5", title: "Old epic title" },
+        },
+      ]);
+      expect(rows()).toEqual([
+        ["/initiatives/3", "Hosted LabsPaused"],
+        ["/initiatives/4", "PlatformThrough #5 Renamed epicDone"],
+      ]);
+
+      const link = container.querySelector<HTMLAnchorElement>(
+        'a[href="/initiatives/4"]',
+      )!;
+      await act(async () => link.click());
+      expect(onNavigate).toHaveBeenCalledWith("/initiatives/4");
+
+      await show(undefined);
+      expect(container.querySelector('[aria-label="Initiatives"]')).toBeNull();
     } finally {
       await act(async () => root.unmount());
       container.remove();

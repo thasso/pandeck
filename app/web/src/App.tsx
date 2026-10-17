@@ -45,6 +45,7 @@ import {
   type SettableSpawnOwnership,
   type SessionMode,
   type SessionState,
+  type TaskInitiativeRef,
   type TaskStatus,
   taskSummaryOf,
   type ThinkingLevel,
@@ -7197,7 +7198,11 @@ function AppContent() {
   // the Backlog, an Initiative page stays where it is.
   const taskInspectorFor = (
     task: Task | undefined,
-    options: { afterRemove?: () => void; noSessionRefs?: boolean } = {},
+    options: {
+      afterRemove?: () => void;
+      noSessionRefs?: boolean;
+      initiatives?: readonly TaskInitiativeRef[] | undefined;
+    } = {},
   ) => (
     <TaskInspector
       task={task}
@@ -7205,6 +7210,9 @@ function AppContent() {
       openers={inspectorOpeners}
       onStartSession={startSessionForTask}
       noSessionRefs={options.noSessionRefs ?? false}
+      initiatives={options.initiatives}
+      onNavigate={navigateFromInspector}
+      taskTitle={(id) => backlogTasks.find((t) => t.id === id)?.title}
       // Only a Task with a Project can have a run worktree provisioned; the
       // server still owns the real git-backed check and refuses with a
       // readable error inside the sheet.
@@ -7262,6 +7270,11 @@ function AppContent() {
     route.name === "tasks" && route.id ? (
       taskInspectorFor(inspectedTask, {
         afterRemove: () => openSidebarSection("tasks"),
+        // The Initiatives come with the full Task, like its links. On an
+        // Initiative page's panel the Task detail above lists them instead.
+        ...(inspectedBody?.id === route.id
+          ? { initiatives: inspectedBody.initiatives }
+          : {}),
       })
     ) : route.name === "initiatives" && route.id ? (
       initiativeSelectedTaskId ? (

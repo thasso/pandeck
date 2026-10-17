@@ -42,6 +42,7 @@ import type { InitiativeRead } from "../../hooks/useAssistant.ts";
 import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
 import { useListScroll } from "../../hooks/useListScroll.ts";
 import {
+  INITIATIVE_STATE_BADGE,
   INITIATIVE_STATE_LABEL,
   canonicalCollapsed,
   collapseRequest,
@@ -546,15 +547,7 @@ export function InitiativeDetailPage({
       {!missing ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2">
           {state ? (
-            <Badge
-              variant={
-                state === "done"
-                  ? "success"
-                  : state === "paused"
-                    ? "warning"
-                    : "secondary"
-              }
-            >
+            <Badge variant={INITIATIVE_STATE_BADGE[state]}>
               {INITIATIVE_STATE_LABEL[state]}
             </Badge>
           ) : null}

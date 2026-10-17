@@ -9,6 +9,12 @@
  * describe the Tasks as they are now; Task and session writes reach the
  * Initiatives that read them through the store's fan-out, called from their
  * own notification seams.
+ *
+ * The other way round, a write that changes which live Initiatives hold a Task,
+ * or what such a Task lists of one (its title, its state), reports every Task
+ * it changed, member subtrees whole, through the Task notification seam once
+ * it commits: that notify is their revision bump, so an open Task body re-reads
+ * its `initiatives` (docs/initiatives.md).
  */
 import {
   INITIATIVE_SUMMARY_SESSION_LIMIT,
@@ -33,6 +39,7 @@ import {
   type InitiativeRow,
 } from "./db/initiativeStore.ts";
 import { taskStore } from "./db/taskStore.ts";
+import { notifyTaskChange } from "./tasks.ts";
 
 /** A list entry: the summary, plus when it was archived for archived reads. */
 export interface InitiativeListItem extends InitiativeSummary {
@@ -107,7 +114,7 @@ export function createInitiative(
   input: CreateInitiativeInput,
 ): InitiativeMembershipWrite {
   const title = cleanTitle(input.title);
-  return initiativeStore.mutation((touch) => {
+  const write = initiativeStore.mutation((touch) => {
     const row = initiativeStore.create(touch, {
       title,
       description: input.description ?? "",
@@ -116,6 +123,8 @@ export function createInitiative(
     const absorbed = addMembersTo(touch, row.id, input.taskIds ?? []);
     return membershipWrite(row.id, absorbed, []);
   });
+  notifyHeldTasks(storedTaskIds(write.initiative.id));
+  return write;
 }
 
 export function updateInitiative(
@@ -124,7 +133,7 @@ export function updateInitiative(
 ): InitiativeRow {
   const current = requireInitiative(id);
   const title = patch.title !== undefined ? cleanTitle(patch.title) : undefined;
-  return initiativeStore.mutation((touch) => {
+  const row = initiativeStore.mutation((touch) => {
     initiativeStore.update(touch, current.id, {
       ...(title !== undefined ? { title } : {}),
       ...(patch.description !== undefined
@@ -134,6 +143,13 @@ export function updateInitiative(
     });
     return initiativeStore.get(current.id)!;
   });
+  // A Task lists the title and state; the description is not part of it.
+  if (
+    current.archivedAt === undefined &&
+    (row.title !== current.title || row.state !== current.state)
+  )
+    notifyHeldTasks(storedTaskIds(current.id));
+  return row;
 }
 
 /**
@@ -164,10 +180,14 @@ export function unarchiveInitiative(id: string): InitiativeRow {
 
 function setArchived(id: string, archived: boolean): InitiativeRow {
   const current = requireInitiative(id);
-  return initiativeStore.mutation((touch) => {
+  const row = initiativeStore.mutation((touch) => {
     initiativeStore.setArchived(touch, current.id, archived);
     return initiativeStore.get(current.id)!;
   });
+  // An archived Initiative is left out of its Tasks' lists.
+  if ((current.archivedAt !== undefined) !== archived)
+    notifyHeldTasks(storedTaskIds(current.id));
+  return row;
 }
 
 /**
@@ -176,9 +196,12 @@ function setArchived(id: string, archived: boolean): InitiativeRow {
  */
 export function deleteInitiative(id: string): string {
   const current = requireInitiative(id);
+  // Read before the write: the delete drops the edges that name them.
+  const held = storedTaskIds(current.id);
   initiativeStore.mutation((touch) => {
     initiativeStore.remove(touch, current.id);
   });
+  if (current.archivedAt === undefined) notifyHeldTasks(held);
   return String(current.id);
 }
 
@@ -199,7 +222,7 @@ export function addInitiativeMembers(
   taskIds: readonly string[],
 ): InitiativeMembershipWrite {
   const current = requireInitiative(id);
-  return initiativeStore.mutation((touch) => {
+  return membershipMutation(current, (touch) => {
     const absorbed = addMembersTo(touch, current.id, taskIds);
     return membershipWrite(current.id, absorbed, []);
   });
@@ -265,7 +288,7 @@ export function removeInitiativeMembers(
   taskIds: readonly string[],
 ): InitiativeMembershipWrite {
   const current = requireInitiative(id);
-  return initiativeStore.mutation((touch) => {
+  return membershipMutation(current, (touch) => {
     const requested: number[] = [];
     for (const raw of taskIds) {
       const taskId = parseId(raw);
@@ -310,7 +333,7 @@ export function setInitiativeMilestones(
   milestone: boolean,
 ): InitiativeMembershipWrite {
   const current = requireInitiative(id);
-  return initiativeStore.mutation((touch) => {
+  return membershipMutation(current, (touch) => {
     for (const raw of taskIds) {
       const taskId = requireTask(raw);
       const edges = initiativeStore.memberEdges(current.id);
@@ -334,6 +357,48 @@ export function setInitiativeMilestones(
     }
     return membershipWrite(current.id, [], []);
   });
+}
+
+/**
+ * One membership write whose stored edges change: the Tasks whose edge it
+ * added or removed — an absorbed one, a milestone's own edge under a member —
+ * are reported with their subtrees once it commits. Rewriting a mark in place
+ * changes no Task's list, so it reports none.
+ */
+function membershipMutation<T>(
+  current: InitiativeRow,
+  fn: (touch: Set<number>) => T,
+): T {
+  const before = storedTaskIds(current.id);
+  const value = initiativeStore.mutation(fn);
+  if (current.archivedAt === undefined) {
+    const after = storedTaskIds(current.id);
+    notifyHeldTasks([
+      ...[...before].filter((taskId) => !after.has(taskId)),
+      ...[...after].filter((taskId) => !before.has(taskId)),
+    ]);
+  }
+  return value;
+}
+
+function storedTaskIds(id: number): Set<number> {
+  return new Set(initiativeStore.memberEdges(id).map((edge) => edge.taskId));
+}
+
+/**
+ * Report `roots` and their subtrees to the Task seam, without its holder
+ * fan-out (`notifyTaskChange`). The Initiative write is durable already, so a
+ * failure here leaves those Task bodies behind until their next change, and
+ * says so instead of failing the write.
+ */
+function notifyHeldTasks(roots: Iterable<number>): void {
+  try {
+    const ids = initiativeStore.subtreeIds(roots);
+    if (ids.length) notifyTaskChange(ids.map(String), { holders: false });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(`[initiatives] Task fan-out failed: ${detail}`);
+  }
 }
 
 /** The stored edge whose subtree holds `taskId`, nearest ancestor first. */
@@ -498,6 +563,26 @@ export function getInitiative(id: string): InitiativeRow | undefined {
  */
 export function initiativeRevision(id: string): number | undefined {
   return getInitiative(id)?.revision;
+}
+
+/**
+ * What a Task-start context says of a live Initiative beyond the Task's own
+ * entry: its description and next open milestone. Null when it is archived or
+ * gone.
+ */
+export function initiativeBrief(
+  id: string,
+): { description: string; nextMilestone?: InitiativeMilestoneRef } | null {
+  const row = getInitiative(id);
+  if (!row || row.archivedAt !== undefined) return null;
+  const nextMilestone = nextOpenMilestone(
+    initiativeStore.memberEdges(row.id),
+    initiativeStore.members(row.id),
+  );
+  return {
+    description: row.description,
+    ...(nextMilestone ? { nextMilestone } : {}),
+  };
 }
 
 /** The `initiatives` topic projection of one live Initiative, or null. */
