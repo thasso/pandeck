@@ -32,6 +32,8 @@ import {
 import { initiativeStore } from "./db/initiativeStore.ts";
 import type { ToolCallContext, ToolResult } from "./mcp/tool.ts";
 import { taskToolsForKind } from "./tools/tasks/taskTools.ts";
+import { taskStore } from "./db/taskStore.ts";
+import { buildTaskContextAttachment } from "./taskContext.ts";
 
 function task(title: string, parentId?: string): string {
   return createTask({
@@ -55,6 +57,27 @@ function bumped(ids: string[], write: () => void): string[] {
   write();
   return ids.filter((id, index) => (taskRevision(id) ?? -1) > before[index]!);
 }
+
+test("membership traversal has no legal-depth cutoff", () => {
+  const root = task("Deep membership root");
+  const id = initiative("Deep membership", [root]);
+  let leaf = root;
+  for (let depth = 1; depth <= 257; depth += 1) {
+    const child = taskStore.create({
+      title: `Deep membership ${depth}`,
+      createdBy: "user",
+    });
+    taskStore.setParent(child.id, Number(leaf));
+    leaf = String(child.id);
+  }
+  assert.equal(initiativesOf(leaf)?.[0]?.id, id);
+  const attachment = buildTaskContextAttachment(readTask(leaf)!);
+  assert.ok(
+    Buffer.from(attachment.data, "base64")
+      .toString("utf8")
+      .includes(`pa://initiative/${id}`),
+  );
+});
 
 test("a direct member, a descendant of a member epic and a non-member read their Initiatives", () => {
   const epic = task("Membership epic");

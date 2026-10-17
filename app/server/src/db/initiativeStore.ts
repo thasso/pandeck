@@ -491,14 +491,15 @@ export const INITIATIVE_STORE_SQL = {
    * itself or on an ancestor, walked UP `subtask` edges from each seed. Unlike
    * `holders`, nothing is seeded from the Tasks a seed blocks, so this is
    * membership and nothing more. `depth` is how far up the edge sits (0 for
-   * the Task's own); the depth bound stops a stored hierarchy cycle.
+   * the Task's own); a visited-id path stops stored hierarchy cycles without limiting legal depth.
    */
-  memberships: `WITH RECURSIVE lineage(seed, id, depth) AS (
-      SELECT value, value, 0 FROM json_each(?)
-      UNION
-      SELECT a.seed, l.from_id, a.depth + 1 FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
+  memberships: `WITH RECURSIVE lineage(seed, id, depth, path) AS (
+      SELECT value, value, 0, ',' || value || ',' FROM json_each(?)
+      UNION ALL
+      SELECT a.seed, l.from_id, a.depth + 1, a.path || l.from_id || ','
+        FROM lineage a CROSS JOIN links l INDEXED BY links_to_idx
           ON l.to_type = 'task' AND l.to_id = a.id AND l.relation = 'subtask' AND l.from_type = 'task'
-       WHERE a.depth < 256
+       WHERE instr(a.path, ',' || l.from_id || ',') = 0
     )
     SELECT a.seed, a.id AS task_id, a.depth, i.id, i.title, i.state,
            (SELECT t.title FROM tasks t WHERE t.id = CAST(a.id AS INTEGER)) AS task_title

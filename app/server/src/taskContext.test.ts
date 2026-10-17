@@ -111,6 +111,24 @@ test("a large parent and a long Initiative description stay inside the budget, p
   assertHeader(body, held);
 });
 
+test("later Initiative omission notes are included in the budget reservation", () => {
+  const child = task("Multi-Initiative child", "c".repeat(2_750));
+  for (let index = 0; index < 10; index += 1) {
+    createInitiative({
+      title: `Multi initiative ${index}`,
+      description: "i".repeat(3_000),
+      taskIds: [child],
+    });
+  }
+  const body = contextOf(child);
+  assert.ok(Buffer.byteLength(body, "utf8") <= BUDGET_BYTES);
+  assert.ok(
+    body.includes("c".repeat(2_750)),
+    "the Task description has priority",
+  );
+  assert.ok(body.includes("description is omitted"));
+});
+
 test("an own description that spends the budget drops both heads but keeps the Initiative's header", () => {
   const held = heldChild("c".repeat(9_000), "p".repeat(6_000));
   const body = contextOf(held.child);

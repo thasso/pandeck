@@ -125,12 +125,14 @@ function buildTaskContextBody(task: TaskItem): string {
       middle.push("", ...section.block);
       return;
     }
-    const laterFixed = sections
+    const laterRequired = sections
       .slice(index + 1)
       .flatMap((later) =>
-        later.omittedNote === undefined ? ["", ...later.block] : [],
+        later.omittedNote === undefined
+          ? ["", ...later.block]
+          : ["", later.omittedNote],
       );
-    const candidate = [...middle, "", ...section.block, ...laterFixed];
+    const candidate = [...middle, "", ...section.block, ...laterRequired];
     const fits =
       Buffer.byteLength([...head, ...candidate, ...tail].join("\n"), "utf8") <=
       BUDGET_BYTES;
