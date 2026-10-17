@@ -106,6 +106,8 @@ const COMMIT_CHECK_KIND_LABEL: Record<
 /**
  * A stopped step's summary without the operation's own prefix ("commit phase
  * blocked: …"): the box around it already says which step stopped and how.
+ * Plain text, not Markdown: a summary is as often a raw host diagnostic (a git
+ * or hook error naming `__generated__` or a glob) as the agent's own words.
  */
 function stepSummaryText(summary: string): string {
   return sentence(summary.replace(/^[\w -]+ phase (blocked|failed):\s*/i, ""));
@@ -1180,9 +1182,9 @@ export function WorkflowRunCard({
                       : ""}
                     .
                   </p>
-                  <p className="break-words text-muted-foreground">
-                    {decision.rationale}
-                  </p>
+                  <div className="min-w-0 text-muted-foreground">
+                    <Markdown text={decision.rationale} density="compact" />
+                  </div>
                   <ReviewList
                     label={
                       decision.decision === "fix"
@@ -1204,9 +1206,9 @@ export function WorkflowRunCard({
 
           {plan ? (
             <RunSection storageKey="workflow-run-plan" title="Why this plan">
-              <p className="break-words text-muted-foreground">
-                {plan.rationale}
-              </p>
+              <div className="min-w-0 text-muted-foreground">
+                <Markdown text={plan.rationale} density="compact" />
+              </div>
             </RunSection>
           ) : null}
 

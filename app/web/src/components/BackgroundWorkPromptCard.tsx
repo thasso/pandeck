@@ -18,6 +18,7 @@ import { serverHttpOrigin, withToken } from "../lib/serverOrigin.ts";
 import { BackgroundWorkCommand } from "./BackgroundWorkCommand.tsx";
 import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
+import { Markdown } from "./Markdown.tsx";
 import { Button } from "@/components/ui/button";
 
 type BackgroundWorkPromptUpdate =
@@ -101,10 +102,20 @@ function BackgroundWorkPromptRow({
       >
         <div className="min-w-0">
           {clippedTitle ? (
-            <p className="font-medium break-words">{clippedTitle}</p>
+            <p className="font-medium break-words">
+              {/* The agent's description renders as Markdown; a title taken
+                  from the command stays as written. */}
+              {update.description ? (
+                <Markdown text={clippedTitle} inline />
+              ) : (
+                clippedTitle
+              )}
+            </p>
           ) : null}
           {(outcome ?? exitDetail) ? (
             <p className="text-sm text-muted-foreground">
+              {/* Verbatim: the outcome is as often the provider's or host's
+                  own sentence, quoting a command or an error, as prose. */}
               {outcome ?? exitDetail}
             </p>
           ) : null}

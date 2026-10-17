@@ -1414,3 +1414,93 @@ it("names each role's model, thinking level and account", () => {
   // A role without a stored account names none.
   expect(document.body.textContent).toContain("Reviewersonnet · Medium");
 });
+
+it("renders the agents' rationales as Markdown", () => {
+  act(() => {
+    root!.render(
+      <DialogProvider>
+        <WorkflowRunCard
+          run={run}
+          card={applyPatch(card, {
+            workPlan: {
+              ...card.workPlan!,
+              rationale: "Touches the **wire model** in `app/shared`.",
+            },
+            reviewDecision: {
+              ...card.reviewDecision!,
+              rationale: "The `retry` path needs a *second* reader.",
+            },
+          })}
+          sessions={[]}
+          onOpenSession={() => {}}
+          onPause={() => {}}
+          onResume={() => {}}
+          onRetry={() => {}}
+          onCancel={() => {}}
+          onDelete={() => {}}
+          onRebaseAndReview={() => {}}
+          onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
+        />
+      </DialogProvider>,
+    );
+  });
+  click("Review");
+  click("Why this plan");
+  const html = container!.innerHTML;
+  expect(html).toContain(
+    "Touches the <strong>wire model</strong> in <code>app/shared</code>.",
+  );
+  expect(html).toContain(
+    "The <code>retry</code> path needs a <em>second</em> reader.",
+  );
+});
+
+it("keeps a host failure verbatim in the step summary and the headline", () => {
+  const failure =
+    "commit phase failed: hook rejected **/*.test.ts and __generated__/api.ts";
+  const render = (summary: string) =>
+    act(() => {
+      root!.render(
+        <DialogProvider>
+          <WorkflowRunCard
+            run={{ ...run, lifecycleReason: `${failure} (step 12)` }}
+            card={applyPatch(card, {
+              phase: "commit-sync",
+              nextAction: `${failure} (step 12)`,
+              blockedReason: {
+                phase: "commit-sync",
+                status: "failed",
+                summary,
+              },
+            })}
+            sessions={[]}
+            onOpenSession={() => {}}
+            onPause={() => {}}
+            onResume={() => {}}
+            onRetry={() => {}}
+            onCancel={() => {}}
+            onDelete={() => {}}
+            onRebaseAndReview={() => {}}
+            onAnswerCeiling={() => {}}
+            onAnswerCommitCheck={() => {}}
+          />
+        </DialogProvider>,
+      );
+    });
+
+  // The attention box carries the step's own report, minus its prefix.
+  render(failure);
+  const box = container!.querySelector('[role="note"]')!;
+  expect(box.textContent).toContain(
+    "Hook rejected **/*.test.ts and __generated__/api.ts",
+  );
+  expect(box.querySelector("strong, em")).toBeNull();
+
+  // Without a step summary, the pause reason is the headline.
+  render("");
+  expect(container!.textContent).toContain(
+    "Commit phase failed: hook rejected **/*.test.ts and __generated__/api.ts (step 12)",
+  );
+  expect(container!.querySelector("strong, em")).toBeNull();
+});
