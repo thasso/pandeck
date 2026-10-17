@@ -146,3 +146,28 @@ describe("commit card Markdown", () => {
     expect(html).toContain("Keep `**raw**` in the message");
   });
 });
+
+/**
+ * The server's own findings quote a raw path with `markdownCodeSpan`
+ * (`app/server/src/markdownCodeSpan.ts`, whose test pins these spans). A path
+ * holding backticks or `__` must still read verbatim once it renders.
+ */
+describe("server-quoted paths in commit findings", () => {
+  const warning = (span: string) =>
+    `Untracked binary/non-text file will be included if committed: ${span}`;
+
+  it.each([
+    ["__init__.py", "`__init__.py`"],
+    ["a`__init__`b.bin", "``a`__init__`b.bin``"],
+    ["`__init__.bin`", "`` `__init__.bin` ``"],
+  ])("reads %j verbatim inside one code span", (path, span) => {
+    const html = renderToStaticMarkup(
+      <CommitCard
+        commit={{ ...commit, blockers: [], warnings: [warning(span)] }}
+      />,
+    );
+
+    expect(html).toContain(`committed: <code>${path}</code>`);
+    expect(html).not.toMatch(/<(strong|em)>/);
+  });
+});
