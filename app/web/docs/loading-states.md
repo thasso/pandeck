@@ -161,14 +161,17 @@ draw a dashed box:
 
 - `Spinner` — the one glyph (`LoaderCircle`), sizes `xs`/`sm`/`md`/`lg` =
   10/14/16/24px (`xs` fits inside `text-micro` chrome such as a card's state
-  badge), `motion-safe:animate-spin`, `aria-hidden`. The arc turns inside a
-  still `<svg>`: WebKit (Safari, the Tauri shell) snaps a rotating `<svg>` to
-  the pixel grid but turns it about its unsnapped center, so a spinning icon
-  wobbles there. `variant="ring"` draws the transcript's bordered circle at the
-  same tokens instead of the glyph: one element, no icon module, for the
-  streaming tool-call and thinking headers that render on every token. Task-390
-  folded that visual in rather than exempting those two files from the audit —
-  the ring is a variant of the app's spinner, not a second spinner.
+  badge), `motion-safe:animate-spin`, `aria-hidden`. The whole `<svg>` turns, so
+  the compositor runs it: a path turning inside a still `<svg>` is never
+  composited in Chrome and re-ran style, layout and paint every frame, ~35% of a
+  core at 120 Hz while a session was running. WebKit (Safari, the Tauri shell)
+  snaps a turning box to the pixel grid but turns it about its unsnapped center,
+  so the spinner moves its box onto the device-pixel grid with opposing margins
+  on mount and once per turn. `variant="ring"` draws the transcript's bordered
+  circle at the same tokens instead of the glyph: one element, no icon module,
+  for the streaming tool-call and thinking headers that render on every token.
+  Task-390 folded that visual in rather than exempting those two files from the
+  audit — the ring is a variant of the app's spinner, not a second spinner.
 - `PaneLoading` — centered spinner + label, `role="status"`, for whole-pane
   first loads. Announcing and NOT busy; see R6 above for why the two do not go
   on the same element.

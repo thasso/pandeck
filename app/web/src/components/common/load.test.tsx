@@ -40,16 +40,73 @@ it("hides the spinner glyph from assistive tech and animates motion-safely", () 
   const svg = host.querySelector("svg")!;
   expect(svg.getAttribute("aria-hidden")).toBe("true");
   expect(svg.getAttribute("class")).toContain("size-6");
-  // The arc turns, the box stays: WebKit snaps a rotating `<svg>` to the pixel
-  // grid but turns it about its unsnapped center, so a spinning root wobbles.
-  expect(svg.getAttribute("class")).not.toContain("animate-spin");
-  const pathClass = svg.querySelector("path")!.getAttribute("class");
-  expect(pathClass).toContain("motion-safe:animate-spin");
-  // Without the view box as reference, the path turns about its own bounding
-  // box's center, which is not the arc's center.
-  expect(pathClass).toContain("origin-center");
-  expect(pathClass).toContain("[transform-box:view-box]");
+  // The whole box turns: Chrome composites a turning `<svg>`, never a turning
+  // path inside one, which repainted the page every frame while anything span.
+  expect(svg.getAttribute("class")).toContain("motion-safe:animate-spin");
+  expect(svg.querySelector("path")!.getAttribute("class")).toBeNull();
 });
+
+// WebKit turns a spinning box about its unsnapped center while painting it
+// snapped, so a box at a fractional offset orbits; margins move it onto the
+// device-pixel grid without changing the space it takes.
+it("moves the spinner onto the device-pixel grid with opposing margins", () => {
+  const rect = { left: 10.3, top: 20.7, width: 16, height: 16 };
+  const restore = stubSvgGeometry(() => rect, 2);
+  try {
+    const host = render(<Spinner size="md" />);
+    const svg = host.querySelector("svg")!;
+    // At 2x, 10.3 snaps to 10.5 and 20.7 to 20.5.
+    expect(svg.style.margin).toBe("-0.2px -0.2px 0.2px 0.2px");
+    // The rect now includes the shift; snapping again must not drift.
+    rect.left = 10.5;
+    rect.top = 20.5;
+    act(() => {
+      svg.dispatchEvent(new Event("animationiteration", { bubbles: true }));
+    });
+    expect(svg.style.margin).toBe("-0.2px -0.2px 0.2px 0.2px");
+    // The row moved: the next turn re-snaps from the unshifted position.
+    rect.left = 40.6;
+    act(() => {
+      svg.dispatchEvent(new Event("animationiteration", { bubbles: true }));
+    });
+    expect(svg.style.margin).toBe("-0.2px -0.1px 0.2px 0.1px");
+  } finally {
+    restore();
+  }
+});
+
+function stubSvgGeometry(
+  rect: () => { left: number; top: number; width: number; height: number },
+  dpr: number,
+) {
+  const proto = SVGElement.prototype as unknown as Record<string, unknown>;
+  const saved = ["getBoundingClientRect", "clientWidth", "clientHeight"].map(
+    (key) => [key, Object.getOwnPropertyDescriptor(proto, key)] as const,
+  );
+  const savedDpr = window.devicePixelRatio;
+  Object.defineProperty(proto, "getBoundingClientRect", {
+    configurable: true,
+    value: () => {
+      const { left, top, width, height } = rect();
+      return { left, top, right: left + width, bottom: top + height };
+    },
+  });
+  Object.defineProperty(proto, "clientWidth", {
+    configurable: true,
+    get: () => rect().width,
+  });
+  Object.defineProperty(proto, "clientHeight", {
+    configurable: true,
+    get: () => rect().height,
+  });
+  window.devicePixelRatio = dpr;
+  return () => {
+    for (const [key, descriptor] of saved)
+      if (descriptor) Object.defineProperty(proto, key, descriptor);
+      else delete proto[key];
+    window.devicePixelRatio = savedDpr;
+  };
+}
 
 // The transcript's ring: one element, no icon module, the same size tokens as
 // the glyph — the reason Task-390 folded it in instead of exempting the two
