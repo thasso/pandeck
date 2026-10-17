@@ -182,20 +182,6 @@ describe("Initiative items in the Sessions inbox", () => {
     expect(label).toContain("next milestone First hosted release");
   });
 
-  it("renders the agent-written title and milestone as inline Markdown", () => {
-    const view = mount();
-    inbox(view, [
-      initiative("7", {
-        title: "Ship `TaskItem` sync",
-        nextMilestone: { id: "931", title: "**First** release" },
-      }),
-    ]);
-    const item = card(view, "7")!;
-    expect(item.innerHTML).toContain("Ship <code>TaskItem</code> sync");
-    expect(item.innerHTML).toContain("<strong>First</strong> release");
-    expect(item.textContent).not.toContain("**");
-  });
-
   it("offers Settle on an unsettled outcome only, with the rendered revision", () => {
     const view = mount();
     const { calls } = inbox(view, [

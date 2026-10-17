@@ -177,7 +177,7 @@ describe("TaskManageToolCard", () => {
     expect(html).toContain("description updated");
   });
 
-  it("renders the agent-written title and suggestion reason as Markdown", () => {
+  it("renders the suggestion reason as Markdown and keeps the title plain", () => {
     const html = renderToStaticMarkup(
       <TaskManageToolCard
         block={manageBlock(
@@ -202,9 +202,10 @@ describe("TaskManageToolCard", () => {
         onApplyTaskStatusSuggestion={() => {}}
       />,
     );
-    expect(html).toContain("Render <code>task_manage</code> mutations");
+    // A Task title is the user's object name, inside the chip's button.
+    expect(html).toContain("Render `task_manage` mutations");
     expect(html).toContain("<strong>tests</strong> pass");
-    expect(html).not.toContain("**");
+    expect(html).not.toContain("**tests**");
   });
 
   it("shows no question for a suggestion the status already satisfies", () => {

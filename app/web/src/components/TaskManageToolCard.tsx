@@ -351,9 +351,7 @@ function TaskChip({
 }) {
   const inner = (
     <>
-      <span className="min-w-0 truncate">
-        <Markdown text={label} inline />
-      </span>
+      <span className="min-w-0 truncate">{label}</span>
       <TaskIdBadge id={id} />
     </>
   );
