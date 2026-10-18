@@ -195,7 +195,11 @@ interface Props {
    * Dismiss a bubbled peer's failure without settling it. No exit plays: the
    * card it is shown on stays, and so does the peer.
    */
-  onDismissFailure: (id: string) => void;
+  onDismissFailure: (
+    id: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ) => void;
   onArchive: (id: string, archived: boolean) => void;
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string) => void;

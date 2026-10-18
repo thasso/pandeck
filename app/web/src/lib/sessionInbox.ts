@@ -1392,7 +1392,9 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
       ? `${card.cluster.bubbled.session.id}:${sessionClusterBubbleLabel(
           card.cluster.bubbled,
           now,
-        )}:${clusterBubbleDismissible(card.cluster.bubbled) ? "1" : ""}`
+        )}:${clusterBubbleDismissible(card.cluster.bubbled) ? "1" : ""}:${
+          card.cluster.bubbled.session.lastError?.at ?? ""
+        }:${card.cluster.bubbled.session.outcomeAttention?.revision ?? 0}`
       : "",
   ].join("\u0000");
 }
@@ -1941,6 +1943,8 @@ export function spawnedSessionsKey(
     view.bubbled
       ? `${spawnedPeerKey(view.bubbled)}:${
           clusterBubbleDismissible(view.bubbled) ? "1" : ""
+        }:${view.bubbled.session.lastError?.at ?? ""}:${
+          view.bubbled.session.outcomeAttention?.revision ?? 0
         }`
       : "",
     ...(open ? view.rows.map(spawnedPeerKey) : []),

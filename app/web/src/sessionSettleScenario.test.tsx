@@ -269,7 +269,9 @@ describe("dismissing a session failure", () => {
       }),
     );
     const before = current("s-1");
-    await act(async () => actions!.dismissSessionFailure("s-1"));
+    await act(async () =>
+      actions!.dismissSessionFailure("s-1", NOW - 1_000, 3),
+    );
 
     expect(
       socket.sent.filter((msg) => msg.type === "dismissSessionFailure"),
@@ -295,7 +297,9 @@ describe("dismissing a session failure", () => {
         lastError: { at: NOW - 2_000, message: "boom" },
       }),
     );
-    await act(async () => actions!.dismissSessionFailure("s-1"));
+    await act(async () =>
+      actions!.dismissSessionFailure("s-1", NOW - 2_000, 0),
+    );
     expect(
       socket.sent.find((msg) => msg.type === "dismissSessionFailure"),
     ).toEqual({
@@ -309,7 +313,7 @@ describe("dismissing a session failure", () => {
   it("omits the error time for a failed outcome whose record a run start cleared", async () => {
     const socket = await boot(row({ outcomeAttention: failedOutcome }));
     expect(classifySessionStatus(current("s-1"))).toBe("failed");
-    await act(async () => actions!.dismissSessionFailure("s-1"));
+    await act(async () => actions!.dismissSessionFailure("s-1", undefined, 3));
     expect(
       socket.sent.find((msg) => msg.type === "dismissSessionFailure"),
     ).toEqual({ type: "dismissSessionFailure", id: "s-1", outcomeRevision: 3 });
@@ -322,7 +326,9 @@ describe("dismissing a session failure", () => {
         outcomeAttention: failedOutcome,
       }),
     );
-    await act(async () => actions!.dismissSessionFailure("s-1"));
+    await act(async () =>
+      actions!.dismissSessionFailure("s-1", NOW - 1_000, 3),
+    );
     await act(async () => {
       socket.receive({
         type: "sessionUpdated",

@@ -104,8 +104,12 @@ interface Props {
    * bring it back. Distinct from archive: the session stays in the list.
    */
   onSettleSession: (id: string, settled: boolean) => void;
-  /** Dismiss a session's failure without settling it. */
-  onDismissSessionFailure: (id: string) => void;
+  /** Dismiss a session's rendered failure identity without settling it. */
+  onDismissSessionFailure: (
+    id: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ) => void;
   /** Rename a session from the inbox card's overflow menu. The caller prompts. */
   onRenameSession: (id: string) => void;
   /** Delete a session from the focused row (`#` / Delete). The caller confirms. */

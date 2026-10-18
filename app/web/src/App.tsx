@@ -2685,7 +2685,8 @@ function AppContent() {
    * The session stays where it is, so this neither navigates nor animates.
    */
   const dismissSessionFailure = useCallback(
-    (id: string) => actions.dismissSessionFailure(id),
+    (id: string, errorAt: number | undefined, outcomeRevision: number) =>
+      actions.dismissSessionFailure(id, errorAt, outcomeRevision),
     [actions],
   );
 

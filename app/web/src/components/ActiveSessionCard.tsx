@@ -155,8 +155,12 @@ export interface ActiveSessionCardProps {
    */
   onOpen: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
-  /** Dismiss the bubbled peer's failure without settling anything. */
-  onDismissFailure: (sessionId: string) => void;
+  /** Dismiss the bubbled peer's rendered failure identity. */
+  onDismissFailure: (
+    sessionId: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ) => void;
   onOpenProject?: (projectId: string) => void;
   onOpenTask?: (taskId: string) => void;
   onOpenWorktree?: (worktreeId: string) => void;
@@ -628,7 +632,12 @@ function ActiveSessionCardImpl({
                       aria-label={`Dismiss the failure in “${bubbleTitle}”`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (bubbled) onDismissFailure(bubbled.session.id);
+                        if (bubbled)
+                          onDismissFailure(
+                            bubbled.session.id,
+                            bubbled.session.lastError?.at,
+                            bubbled.session.outcomeAttention?.revision ?? 0,
+                          );
                       }}
                       className="cursor-pointer"
                     >

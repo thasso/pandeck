@@ -6731,7 +6731,11 @@ export interface AssistantActions {
    * Sends the failure the current row carries, so a newer one is never
    * dismissed by it; the authoritative list broadcast is the only update.
    */
-  dismissSessionFailure: (id: string) => void;
+  dismissSessionFailure: (
+    id: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ) => void;
   /**
    * Settle a formal Workflow Run out of the Sessions inbox (Task-677): the
    * command acknowledges `throughRevision` — the attention revision the
@@ -8924,19 +8928,15 @@ export function useAssistant({
           requestId,
         });
       },
-      dismissSessionFailure: (id) => {
-        // What the user SAW, read from the current rows as Settle reads its
-        // revision. Not optimistic: the server's list broadcast removes the
-        // failure, and a refusal re-sends the row that replaced it.
-        const row = stateRef.current.sessions.find(
-          (session) => session.id === id,
-        );
-        if (!row) return;
+      dismissSessionFailure: (id, errorAt, outcomeRevision) => {
+        // The rendered control supplies the identity it displayed. Never
+        // replace it with a newer row from stateRef: that would turn a stale
+        // click into an acknowledgement of a failure the user did not see.
         send({
           type: "dismissSessionFailure",
           id,
-          ...(row.lastError ? { errorAt: row.lastError.at } : {}),
-          outcomeRevision: row.outcomeAttention?.revision ?? 0,
+          ...(errorAt === undefined ? {} : { errorAt }),
+          outcomeRevision,
         });
       },
       settleWorkflowRun: (runId, throughRevision) => {

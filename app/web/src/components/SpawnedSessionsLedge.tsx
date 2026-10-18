@@ -95,7 +95,11 @@ export interface SpawnedSessionsLedgeProps {
    * bubbled failure the user has moved on from — the same dismissal the
    * cluster card offers, in the same place the failure is shown.
    */
-  onDismissSessionFailure: (sessionId: string) => void;
+  onDismissSessionFailure: (
+    sessionId: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ) => void;
 }
 
 /**
@@ -239,7 +243,13 @@ export function SpawnedSessionsLedge({
             <IconButton
               size="icon-xs"
               label={`Dismiss the failure in “${bubbleTitle}”`}
-              onClick={() => onDismissSessionFailure(bubbled.session.id)}
+              onClick={() =>
+                onDismissSessionFailure(
+                  bubbled.session.id,
+                  bubbled.session.lastError?.at,
+                  bubbled.session.outcomeAttention?.revision ?? 0,
+                )
+              }
             >
               <X aria-hidden />
             </IconButton>
