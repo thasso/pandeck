@@ -230,10 +230,10 @@ context as JSON, exactly as the old file did, plus the columns reads select by:
 `session_id`, `status`, `auto_approved` and `created_at_ms`. `seq` is insertion
 order for both tables, so a session's cards and grants come back oldest first.
 The pending cards have their own partial index. The attention set, a session's
-auto-approval batch and supersession read only pending rows, and showing a
-session reads only its own cards and grants. A patch that leaves a card
-unchanged writes nothing. Granting a key the session already holds keeps the
-original grant.
+auto-approval batch and supersession read only pending rows. Showing a session
+reads only its own cards, while its grant view also looks up live grants on
+inheriting ancestors. A patch that leaves a card unchanged writes nothing.
+Granting a key the session already holds keeps the original grant.
 
 Inheritance adds no table and no migration. The opt-out is
 `"inheritGrants": false` in the spawned edge's `session_links.metadata_json`,
