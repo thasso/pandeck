@@ -3,13 +3,10 @@ import {
   CalendarCheck,
   CalendarClock,
   Flag,
-  SignalHigh,
-  SignalLow,
-  SignalMedium,
-  TriangleAlert,
 } from "lucide-react";
 import type { TaskPriority, TaskSummary } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
+import { TaskPriorityValue } from "./TaskPriorityValue.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 import {
   Select,
@@ -88,12 +85,12 @@ export function TaskPlanningSection({
             aria-label="Task priority"
             className={PROPERTY_TRIGGER}
           >
-            <PriorityValue priority={priority} />
+            <TaskPriorityValue priority={priority} />
           </SelectTrigger>
           <SelectContent align="start">
             {PRIORITIES.map((value) => (
               <SelectItem key={value} value={value}>
-                <PriorityValue priority={value} />
+                <TaskPriorityValue priority={value} />
               </SelectItem>
             ))}
           </SelectContent>
@@ -122,26 +119,6 @@ export function TaskPlanningSection({
         />
       </PropertyList>
     </InspectorSection>
-  );
-}
-
-const PRIORITY_DISPLAY: Record<
-  TaskPriority,
-  { Icon: typeof SignalLow; tone: string }
-> = {
-  low: { Icon: SignalLow, tone: "text-muted-foreground" },
-  normal: { Icon: SignalMedium, tone: "text-muted-foreground" },
-  high: { Icon: SignalHigh, tone: "text-warning" },
-  urgent: { Icon: TriangleAlert, tone: "text-destructive" },
-};
-
-function PriorityValue({ priority }: { priority: TaskPriority }) {
-  const { Icon, tone } = PRIORITY_DISPLAY[priority];
-  return (
-    <span className="flex min-w-0 items-center gap-2">
-      <Icon className={`size-4 shrink-0 ${tone}`} aria-hidden />
-      <span className="capitalize">{priority}</span>
-    </span>
   );
 }
 

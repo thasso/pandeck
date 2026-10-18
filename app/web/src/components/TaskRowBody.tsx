@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
+import { TaskPriorityValue } from "./TaskPriorityValue.tsx";
 import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
 import { Spinner } from "./common/load.tsx";
 import {
@@ -597,7 +598,7 @@ function TaskMetaItems({
               : PLAIN_META
           }
         >
-          {meta.priority}
+          <TaskPriorityValue priority={meta.priority} compact />
         </Badge>
       ) : null}
     </>
