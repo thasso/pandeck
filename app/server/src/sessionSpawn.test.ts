@@ -2479,3 +2479,270 @@ test('operation "agents" lists definitions and stays available in Plan', async (
     ),
   ).rejects.toThrow(/operation "agents" takes no sessions/);
 });
+
+/* ---------------------- per-row enterprise requests ----------------------- */
+
+test.each(["spawn", "propose"] as const)(
+  "%s refuses a requiresEnterprise that is not a boolean",
+  async (operation) => {
+    approveRuntimes();
+    const runtime = operation === "spawn" ? { profileId: "pr_terra" } : {};
+    for (const value of ["yes", null, 1])
+      await expect(
+        runSpawnOperation(operation, [
+          row({ ...runtime, requiresEnterprise: value }),
+        ]),
+      ).rejects.toThrow(
+        "sessions[0].requiresEnterprise must be true or false.",
+      );
+    expect(recorded.pi).toHaveLength(0);
+  },
+);
+
+test("an ordinary proposer's enterprise row is sealed per row through approval", async () => {
+  patchCredentialProfile("default", { enterprise: true });
+  const { card } = await propose([
+    row({ title: "Enterprise", requiresEnterprise: true }),
+    row({ title: "Ordinary", requiresEnterprise: false }),
+  ]);
+
+  expect(bodyOf(card).requiresEnterprise).toBeUndefined();
+  const [enterprise, ordinary] = bodyOf(card).items;
+  expect(enterprise).toMatchObject({
+    requiresEnterprise: true,
+    credentialProfileId: "default",
+  });
+  expect(ordinary?.requiresEnterprise).toBeUndefined();
+
+  const { card: done } = await resolveApproval(card.id, "approved");
+  expect(done.status).toBe("executed");
+  expect(recorded.pi.map((created) => created.requiresEnterprise)).toEqual([
+    true,
+    false,
+  ]);
+  const [enterpriseChild, ordinaryChild] = bodyOf(done).items.map(
+    (item) => item.resultSessionId!,
+  );
+  expect(sessionStore.get(enterpriseChild!)?.requiresEnterprise).toBe(true);
+  expect(sessionStore.get(ordinaryChild!)?.requiresEnterprise).not.toBe(true);
+});
+
+test("an enterprise row with no enterprise account refuses the proposal clearly", async () => {
+  const before = approvalsForSession(SENDER).length;
+  await expect(propose([row({ requiresEnterprise: true })])).rejects.toThrow(
+    /No enabled enterprise account offers openai-codex\/gpt-5/,
+  );
+  expect(approvalsForSession(SENDER)).toHaveLength(before);
+});
+
+test("false cannot relax an enterprise source on either path", async () => {
+  patchCredentialProfile("default", { enterprise: true });
+  const sender = `enterprise-false-source-${(counter += 1)}`;
+  sessionStore.upsert({
+    id: sender,
+    harness: "pi",
+    agentType: "developer",
+    provider: "openai-codex",
+    model: "gpt-5",
+    thinkingLevel: "high",
+    requiresEnterprise: true,
+  });
+  const body = await buildSpawnProposal({
+    senderSessionId: sender,
+    rows: [row({ requiresEnterprise: false })],
+  });
+  expect(body.requiresEnterprise).toBe(true);
+  expect(body.items[0]?.requiresEnterprise).toBe(true);
+
+  patchCredentialProfile("default", { enterprise: false });
+  approveRuntimes();
+  const [result] = await spawnApprovedPeers({
+    senderSessionId: sender,
+    rows: [{ ...row(), profileId: "pr_terra", requiresEnterprise: false }],
+  });
+  expect(result?.error).toMatch(/requires an enterprise account/i);
+  expect(recorded.pi).toHaveLength(0);
+});
+
+test("a sealed enterprise row survives delayed approval and refuses a personal edit", async () => {
+  patchCredentialProfile("default", { enterprise: true });
+  const { card } = await propose([row({ requiresEnterprise: true })]);
+  const rowId = bodyOf(card).items[0]!.rowId;
+  const personal = createCredentialProfile({
+    name: "Personal codex",
+    provider: "openai-codex",
+  });
+  try {
+    await expect(
+      resolveApproval(card.id, "approved", {
+        kind: "sessionSpawn",
+        // A forged browser field cannot lift the sealed requirement either.
+        items: [
+          {
+            rowId,
+            credentialProfileId: personal.id,
+            requiresEnterprise: false,
+          } as never,
+        ],
+      }),
+    ).rejects.toThrow(/not marked as enterprise/);
+    expect(
+      approvalsForSession(SENDER).find(({ id }) => id === card.id)?.status,
+    ).toBe("pending");
+
+    const { card: done } = await resolveApproval(card.id, "approved", {
+      kind: "sessionSpawn",
+      items: [{ rowId, thinkingLevel: "low" }],
+    });
+    expect(done.status).toBe("executed");
+    expect(bodyOf(done).items[0]?.requiresEnterprise).toBe(true);
+    expect(recorded.pi[0]).toMatchObject({
+      credentialProfileId: "default",
+      thinkingLevel: "low",
+      requiresEnterprise: true,
+    });
+  } finally {
+    setCredentialProfileEnabled(personal.id, false);
+  }
+});
+
+test("an approved enterprise row refuses an account demoted before creation", async () => {
+  patchCredentialProfile("default", { enterprise: true });
+  const { card } = await propose([row({ requiresEnterprise: true })]);
+  duringPiLookup = () =>
+    patchCredentialProfile("default", { enterprise: false });
+
+  const { card: done } = await resolveApproval(card.id, "approved");
+
+  expect(done.status).toBe("failed");
+  expect(bodyOf(done).items[0]?.error).toMatch(
+    /requires an enterprise account/,
+  );
+  expect(recorded.pi).toHaveLength(0);
+});
+
+test("an ordinary sender's Automatic enterprise row routes within enterprise scope beside an ordinary row", async () => {
+  const target = createCredentialProfile({
+    name: "Enterprise codex",
+    provider: "openai-codex",
+  });
+  patchCredentialProfile(target.id, { enterprise: true });
+  approveRuntimes([
+    {
+      id: "pr_auto",
+      provider: "openai-codex",
+      modelId: "gpt-5",
+      thinkingLevel: "low",
+      enabled: true,
+    },
+  ]);
+  const picker = vi.spyOn(accountRouter, "pickAccount");
+  try {
+    const text = await spawnDirect([
+      row({
+        title: "Enterprise",
+        profileId: "pr_auto",
+        requiresEnterprise: true,
+      }),
+      row({ title: "Ordinary", profileId: "pr_auto" }),
+    ]);
+
+    expect(text).toContain("Started 2 sessions.");
+    expect(
+      picker.mock.calls.map(([request]) => request.requiresEnterprise),
+    ).toEqual([true, true, false, false]);
+    expect(recorded.pi[0]).toMatchObject({
+      credentialProfileId: target.id,
+      requiresEnterprise: true,
+    });
+    expect(recorded.pi[1]?.requiresEnterprise).toBe(false);
+  } finally {
+    setCredentialProfileEnabled(target.id, false);
+  }
+});
+
+test("an enterprise row refuses a personal pin without blocking its ordinary neighbour", async () => {
+  approveRuntimes();
+
+  const text = await spawnDirect([
+    row({
+      title: "Enterprise",
+      profileId: "pr_terra",
+      requiresEnterprise: true,
+    }),
+    row({ title: "Ordinary", profileId: "pr_terra" }),
+  ]);
+
+  expect(text).toMatch(
+    /"Enterprise" NOT started on profile pr_terra: This session requires an enterprise account/,
+  );
+  expect(text).toContain("Started 1 session.");
+  expect(recorded.pi).toHaveLength(1);
+  expect(recorded.pi[0]).toMatchObject({
+    title: "Ordinary",
+    requiresEnterprise: false,
+  });
+});
+
+test("an enterprise row runs on an enterprise pin and persists the requirement", async () => {
+  approveRuntimes();
+  patchCredentialProfile(accountFor("openai-codex"), { enterprise: true });
+
+  const [result] = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: [{ ...row(), profileId: "pr_terra", requiresEnterprise: true }],
+  });
+
+  expect(result?.error).toBeUndefined();
+  expect(recorded.pi[0]).toMatchObject({
+    credentialProfileId: accountFor("openai-codex"),
+    requiresEnterprise: true,
+  });
+  expect(sessionStore.get(result!.sessionId!)?.requiresEnterprise).toBe(true);
+});
+
+test("an enterprise Automatic row with no enterprise account is refused clearly", async () => {
+  approveRuntimes([
+    {
+      id: "pr_auto",
+      provider: "openai-codex",
+      modelId: "gpt-5",
+      thinkingLevel: "low",
+      enabled: true,
+    },
+  ]);
+
+  const text = await spawnDirect([
+    row({ profileId: "pr_auto", requiresEnterprise: true }),
+  ]);
+
+  expect(text).toContain("No session was started.");
+  expect(text).toContain(
+    "no enabled enterprise account is available for this peer runtime",
+  );
+  expect(recorded.pi).toHaveLength(0);
+});
+
+test("an ordinary sender's enterprise agent row routes its definition within enterprise scope", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", model: "gpt-5" });
+  const target = createCredentialProfile({
+    name: "Enterprise agent codex",
+    provider: "openai-codex",
+  });
+  patchCredentialProfile(target.id, { enterprise: true });
+  const picker = vi.spyOn(accountRouter, "pickAccount");
+  try {
+    const text = await spawnDirect([agentRow({ requiresEnterprise: true })]);
+
+    expect(text).toContain("Started 1 session.");
+    for (const [request] of picker.mock.calls)
+      expect(request.requiresEnterprise).toBe(true);
+    expect(recorded.pi[0]).toMatchObject({
+      credentialProfileId: target.id,
+      requiresEnterprise: true,
+    });
+  } finally {
+    setCredentialProfileEnabled(target.id, false);
+  }
+});

@@ -3994,6 +3994,11 @@ export interface SessionSpawnApprovalItem {
   thinkingLevel: ThinkingLevel;
   /** What the agent asked for and why it is not what resolved. */
   modelWarning?: string;
+  /**
+   * Server-sealed: this row needs an enterprise account, inherited from the
+   * source session or requested by the agent for this row. No edit clears it.
+   */
+  requiresEnterprise?: boolean;
   worktreeId?: string;
   worktreeName?: string;
   projectId?: string;

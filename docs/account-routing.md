@@ -180,30 +180,36 @@ before flushing memory or making its model call.
 
 Enterprise scope follows work the session starts automatically. Spawned peers
 inherit `requiresEnterprise: true`, including approval-delayed creation. An
-explicit approved runtime naming a personal account is refused with a clear
-reason, not replaced. Unpinned spawn proposals and named agent-definition spawns
-use the picker at their fixed model and effort, within enterprise accounts of
-the model's provider when the source requires it, without preferring the
-proposer's account. Named definitions capture scope before library awaits,
-re-resolve immediately before creation, and propagate it to the child. Approved
-peer runtime definitions may approve Automatic or a specific account. Automatic
-resolves at spawn time for the fixed provider, model and thinking level, within
-the source's enterprise requirement. A selected account must still offer that
-exact runtime, including after a degraded router pick. Explicit peer account
-pins never route or degrade to Automatic. Approval edits during account
-selection refuse the stale resolution; a new spawn reads the current approval.
-Tombstoned source rows retain their requirement; a missing source row fails
-closed. Automatic helpers reading its transcript, including naming, retitling,
-status, refinement and commit/PR context, also require enterprise accounts.
-Commit review override approvals retain the captured requirement in their
-server-side context; execution captures it again before worktree/git awaits and
-forwards it to the repeated review. A helper reading several sessions requires
-enterprise if any input session does. If no eligible enterprise account is
-available, skip that helper and keep its existing fallback, such as leaving the
-title unchanged. Source requirements cannot be cleared by omitting a child flag
-or passing false. Enterprise transcript helpers do not use degraded or
-disabled-default fallbacks. Below 100%, usage remains a ranking preference;
-exhausted windows with a future reset are hard-filtered as benches.
+agent may also request it per `session_spawn` row, on `spawn` and `propose`, for
+approved runtimes and named definitions alike. A row's effective requirement is
+the source's OR its own `requiresEnterprise: true`; `false` never relaxes an
+inherited one, and a batch may mix enterprise and ordinary rows. A proposal
+seals the effective value on each card item, so approval edits cannot clear it
+and both settlement and creation enforce it. An explicit approved runtime naming
+a personal account is refused with a clear reason, not replaced. Unpinned spawn
+proposals and named agent-definition spawns use the picker at their fixed model
+and effort, within enterprise accounts of the model's provider when the source
+requires it, without preferring the proposer's account. Named definitions
+capture scope before library awaits, re-resolve immediately before creation, and
+propagate it to the child. Approved peer runtime definitions may approve
+Automatic or a specific account. Automatic resolves at spawn time for the fixed
+provider, model and thinking level, within the source's enterprise requirement.
+A selected account must still offer that exact runtime, including after a
+degraded router pick. Explicit peer account pins never route or degrade to
+Automatic. Approval edits during account selection refuse the stale resolution;
+a new spawn reads the current approval. Tombstoned source rows retain their
+requirement; a missing source row fails closed. Automatic helpers reading its
+transcript, including naming, retitling, status, refinement and commit/PR
+context, also require enterprise accounts. Commit review override approvals
+retain the captured requirement in their server-side context; execution captures
+it again before worktree/git awaits and forwards it to the repeated review. A
+helper reading several sessions requires enterprise if any input session does.
+If no eligible enterprise account is available, skip that helper and keep its
+existing fallback, such as leaving the title unchanged. Source requirements
+cannot be cleared by omitting a child flag or passing false. Enterprise
+transcript helpers do not use degraded or disabled-default fallbacks. Below
+100%, usage remains a ranking preference; exhausted windows with a future reset
+are hard-filtered as benches.
 
 Enterprise-required sessions are excluded from memory capture entirely. Their
 transcripts produce no memory observations and never enter memory processing.
