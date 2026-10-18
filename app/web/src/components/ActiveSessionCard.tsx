@@ -1,5 +1,5 @@
 import { runtimeLabel } from "./common/runtimeLabel.ts";
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { Fragment, memo } from "react";
 import {
   Activity,
   Archive,
@@ -8,7 +8,6 @@ import {
   Check,
   ChevronRight,
   ClipboardList,
-  Ellipsis,
   FolderKanban,
   GitBranch,
   Hourglass,
@@ -16,7 +15,6 @@ import {
   Play,
   Trash2,
   Users,
-  X,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -54,12 +52,11 @@ import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowActions, type ListRowAction } from "./common/ListRowActions.tsx";
 import { Spinner } from "./common/load.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { TONE_BADGE } from "./common/statusBadge.ts";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { ListRow, ListRowContent } from "./common/ListRow.tsx";
 
 /** Object glyphs for the third line, matching the primary navigation's icons. */
@@ -68,16 +65,6 @@ const META_ICON: Partial<Record<SessionCardMetaKind, LucideIcon>> = {
   worktree: GitBranch,
   task: ClipboardList,
 };
-
-/** Settle and the actions flip, inline at the end of the status row. */
-const INLINE_ACTION_SIZE = {
-  tight: "icon-xs",
-  comfortable: "icon",
-} as const satisfies Record<RowDensity, string>;
-
-/** Hidden at rest under a fine pointer, shown on the card's hover or focus. */
-const CARD_ACTION_REVEAL =
-  "pointer-fine:opacity-0 pointer-fine:group-hover/item:opacity-100 pointer-fine:group-focus-within/item:opacity-100 focus-visible:opacity-100";
 
 /**
  * What the session's worktree holds that its base does not: uncommitted lines
@@ -112,16 +99,6 @@ function WorktreeChanges({ relations }: { relations: SessionCardRelations }) {
   );
 }
 
-/**
- * The rotator's own duration, written as a literal class below. Only a
- * FALLBACK: the turn ends on `transitionend`, and this covers the cases that
- * never send one — reduced motion (no transition at all), a background tab, a
- * turn interrupted before it starts. The margin keeps it clear of the real
- * event. Not "FLIP", which in this feature means First-Last-Invert-Play.
- */
-const TURN_MS = 300;
-const TURN_FALLBACK_MS = TURN_MS + 100;
-
 export interface ActiveSessionCardProps {
   card: SessionInboxCard;
   /** Shared ticker value; the card never owns a timer of its own. */
@@ -132,9 +109,8 @@ export interface ActiveSessionCardProps {
   /** Uncommitted changes in the session's worktree, from the existing status projection. */
   worktreeDirty?: boolean | undefined;
   /**
-   * The host's row density (`lib/rowDensity.ts`): `comfortable` on a phone
-   * screen, where the gutter controls have to be thumb targets; `tight` on the
-   * rail. A string prop, so the memo comparator covers it.
+   * The host's content density. Shared actions independently use touch-safe
+   * targets on mobile layouts and coarse-pointer devices.
    */
   density?: RowDensity;
   /**
@@ -176,9 +152,8 @@ export interface ActiveSessionCardProps {
  * @component ActiveSessionCard
  * @purpose The Sessions inbox's rich card for ONE unsettled session: title +
  * age, a coloured state badge with what it cannot say, and the objects the
- * session hangs off — plus a right gutter carrying Settle and the flip to this
- * card's own actions face. Worktree and Task jumps stay on that back face so
- * the front can spend its full width on identifying the linked objects.
+ * session hangs off, with shared Settle and overflow actions. Worktree and
+ * Task jumps live in the menu so context remains available while acting.
  * @useWhen Rendering the Sessions section's working set.
  * @avoidWhen Listing sessions UNDER another object (a worktree's or project's
  * related sessions); those stay one-line `SessionRow`s.
@@ -216,19 +191,6 @@ function ActiveSessionCardImpl({
     now,
   );
   const backgroundText = backgroundActivityText(session.backgroundActivity);
-  const [showActions, setShowActions] = useState(false);
-  // The card's 3D rendering context, and the actions face itself, exist only
-  // while it is turning or turned. The measured reason is DOM size: the face is
-  // 35 of a card's 82 elements, 43% of it, on every idle row of a list built to
-  // be scrolled (`ActiveSessionCard.test.tsx` holds the count). The 3D
-  // properties come and go with it because they are meaningless without a
-  // second face — NOT on a measured claim about compositing, which was never
-  // profiled. Both arrive in the SAME commit that starts the rotation, which is
-  // what keeps the transition itself intact, and leave on its `transitionend`.
-  const [turning, setTurning] = useState(false);
-  const turnTimer = useRef<number | undefined>(undefined);
-  const flipped = showActions || turning;
-  const rowRef = useRef<HTMLDivElement | null>(null);
   const title = session.title.trim() || "Untitled session";
   const badge = sessionStatusBadge(session, status, now);
   const detail = sessionStatusDetail(session, status);
@@ -257,8 +219,7 @@ function ActiveSessionCardImpl({
     ? bubbled.session.title.trim() || "Untitled session"
     : "";
   const dismissBubble = bubbled ? clusterBubbleDismissible(bubbled) : false;
-  // The card is one `role="button"`, so its `aria-label` REPLACES everything
-  // inside it: a chip that is not named here is not announced at all.
+  // The group label summarizes live state; its nested controls remain accessible.
   const delivery = sessionDelivery(session);
   // The signal row states the pull request when there is one, else the diff;
   // the card's label says the same.
@@ -292,35 +253,9 @@ function ActiveSessionCardImpl({
       ? "Idle"
       : (badge?.label ?? sessionStatusText(session, status, now));
 
-  const endTurn = () => {
-    window.clearTimeout(turnTimer.current);
-    turnTimer.current = undefined;
-    setTurning(false);
-  };
-  const turnTo = (next: boolean) => {
-    setShowActions(next);
-    setTurning(true);
-    window.clearTimeout(turnTimer.current);
-    // A timer started HERE cannot time the transition: the transition does not
-    // begin until the next style recalc, so any timer of exactly `TURN_MS`
-    // fires at least a frame early — and tearing the 3D context out mid-turn
-    // is a pop at the end of every close. `transitionend` is the real signal.
-    turnTimer.current = window.setTimeout(endTurn, TURN_FALLBACK_MS);
-  };
-  useEffect(() => () => window.clearTimeout(turnTimer.current), []);
-
-  const closeActions = () => {
-    turnTo(false);
-    rowRef.current?.focus({ preventScroll: true });
-  };
-  const runAction = (action: () => void) => {
-    turnTo(false);
-    action();
-  };
-
   /**
    * Where a metadata item leads; `undefined` renders it as plain text. Only the
-   * Project opens from the front. Worktree and Task actions live on the back so
+   * Project opens from context. Worktree and Task actions live in the menu so
    * the metadata line keeps the full card width without duplicating targets.
    */
   const openMetaItem = (
@@ -332,15 +267,28 @@ function ActiveSessionCardImpl({
     }
     return undefined;
   };
+  const rowActions: ListRowAction[] = [
+    { id: "settle", label: "Settle", accessibleLabel: settleLabel, icon: <Check />, primary: true, disabled: Boolean(card.settleBlocked), onSelect: () => onSettle(session.id) },
+    ...(session.worktreeId && onOpenWorktree ? [{
+      id: "worktree", label: "Open worktree",
+      accessibleLabel: worktreeDirty ? "Open worktree, uncommitted changes" : "Open worktree",
+      icon: <span className="relative"><GitBranch />{worktreeDirty ? <UnreadDot title="Uncommitted changes" placement="avatar" /> : null}</span>,
+      onSelect: () => onOpenWorktree(session.worktreeId as string),
+    }] : []),
+    ...(relations.taskId && onOpenTask ? [{ id: "task", label: `Open task #${relations.taskId}`, icon: <ClipboardList />, onSelect: () => onOpenTask(relations.taskId as string) }] : []),
+    { id: "rename", label: "Rename", icon: <Pencil />, onSelect: () => onRename(session.id) },
+    { id: "archive", label: session.archived ? "Restore" : "Archive", icon: session.archived ? <ArchiveRestore /> : <Archive />, onSelect: () => onArchive(session.id, !session.archived) },
+    { id: "delete", label: "Delete", icon: <Trash2 />, variant: "destructive", onSelect: () => onDelete(session.id) },
+  ];
   return (
     <ListRow
-      ref={rowRef}
+      interaction="content"
       active={active}
       divider={false}
       data-session-row
       data-list-row-id={session.id}
       data-session-row-active={active ? "true" : undefined}
-      role="button"
+      role="group"
       tabIndex={-1}
       aria-label={`Open ${identityLabel(session)} session: ${title} — ${sessionStatusText(session, status, now)}${
         delivery
@@ -353,17 +301,11 @@ function ActiveSessionCardImpl({
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
         card.stall ? ` — stalled: ${stallLabel(card.stall)}` : ""
       }`}
-      onOpen={showActions ? undefined : () => onOpen(session.id)}
+      onOpen={() => onOpen(session.id)}
       onFocusSibling={onFocusSibling}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
-        if (e.key === "Escape" && showActions) {
-          e.preventDefault();
-          turnTo(false);
-        } else if ((e.key === "Enter" || e.key === " ") && showActions) {
-          e.preventDefault();
-          turnTo(false);
-        } else if (e.key.toLowerCase() === "s" && !card.settleBlocked) {
+        if (e.key.toLowerCase() === "s" && !card.settleBlocked) {
           e.preventDefault();
           onSettle(session.id);
         } else if (e.key.toLowerCase() === "e") {
@@ -374,33 +316,7 @@ function ActiveSessionCardImpl({
           onDelete(session.id);
         }
       }}
-      className={flipped ? "[perspective:900px]" : ""}
     >
-      {/* One rotator, two faces: the front stays in flow so the card keeps its
-          content height, and the actions face is absolutely laid over it,
-          covering the shared row content, including its padding. `backface-visibility` hides the face
-          turned away; `inert` is what keeps it out of focus and hit-testing.
-          Both only matter once there IS a second face, so they come and go with
-          it rather than sitting on every idle card. */}
-      <div
-        onTransitionEnd={(e) => {
-          // Only this element's own rotation: a `transition-colors` finishing
-          // on a button inside the card bubbles through here too.
-          if (e.target !== e.currentTarget || e.propertyName !== "transform")
-            return;
-          endTurn();
-        }}
-        className={`relative w-full transition-transform duration-300 motion-reduce:transition-none ${
-          flipped ? "[transform-style:preserve-3d]" : ""
-        } ${showActions ? "[transform:rotateY(180deg)]" : ""}`}
-      >
-        <div
-          className={`flex ${flipped ? "[backface-visibility:hidden]" : ""}`}
-          inert={showActions}
-        >
-          {/* Every front is exactly three rows: context, identity, live state.
-              The row's own controls close the live-state row, so the front
-              has no gutter and every row spans the card's width. */}
           <ListRowContent
             density={density}
             context={
@@ -624,117 +540,8 @@ function ActiveSessionCardImpl({
                 ) : null}
               </>
             }
-            trailing={
-              <>
-                <IconButton
-                  label={settleLabel}
-                  size={INLINE_ACTION_SIZE[density]}
-                  className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
-                  disabled={Boolean(card.settleBlocked)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSettle(session.id);
-                  }}
-                >
-                  <Check />
-                </IconButton>
-                {/* Last, as every overflow is (`common/OverflowMenu`). */}
-                <IconButton
-                  label="Session actions"
-                  size={INLINE_ACTION_SIZE[density]}
-                  // With a mouse the row's buttons wait for a hover or focus
-                  // (or the open card), so resting cards stay calm; a phone,
-                  // with no hover, keeps them.
-                  className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
-                  aria-expanded={showActions}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    turnTo(true);
-                  }}
-                >
-                  <Ellipsis />
-                </IconButton>
-              </>
-            }
+            actions={<ListRowActions actions={rowActions} label="Session actions" />}
           />
-        </div>
-
-        {flipped ? (
-          <div
-            className="absolute inset-0 flex bg-muted [backface-visibility:hidden] [transform:rotateY(180deg)]"
-            inert={!showActions}
-            aria-label={`Actions for ${title}`}
-          >
-            {/* The face covers the shared content's padding too, so its tone fills the
-                card edge to edge instead of sitting in a frame. The tiles keep
-                ONE fixed height and sit centred in it: a hover tone that
-                changes shape with the card it is on reads as a different
-                control. They share one width and shrink together when a narrow
-                card cannot fit them all, rather than scrolling one out of
-                sight. */}
-            <div className="flex min-w-0 flex-1 items-center gap-0.5 px-1.5">
-              {/* Object jumps live only on this action face. The front keeps
-                  their names in context without spending width on controls. */}
-              {session.worktreeId && onOpenWorktree ? (
-                <ActionTile
-                  icon={GitBranch}
-                  label="Worktree"
-                  accessibleLabel={
-                    worktreeDirty
-                      ? "Open worktree — uncommitted changes"
-                      : "Open worktree"
-                  }
-                  dirty={worktreeDirty}
-                  onClick={() =>
-                    runAction(() =>
-                      onOpenWorktree(session.worktreeId as string),
-                    )
-                  }
-                />
-              ) : null}
-              {relations.taskId && onOpenTask ? (
-                <ActionTile
-                  icon={ClipboardList}
-                  label={`#${relations.taskId}`}
-                  onClick={() =>
-                    runAction(() => onOpenTask(relations.taskId as string))
-                  }
-                />
-              ) : null}
-              <ActionTile
-                icon={Pencil}
-                label="Rename"
-                onClick={() => runAction(() => onRename(session.id))}
-              />
-              <ActionTile
-                icon={session.archived ? ArchiveRestore : Archive}
-                label={session.archived ? "Restore" : "Archive"}
-                onClick={() =>
-                  runAction(() => onArchive(session.id, !session.archived))
-                }
-              />
-              <ActionTile
-                icon={Trash2}
-                label="Delete"
-                danger
-                onClick={() => runAction(() => onDelete(session.id))}
-              />
-            </div>
-
-            <IconButton
-              label="Close session actions"
-              size={INLINE_ACTION_SIZE[density]}
-              className="mr-1.5 self-center"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeActions();
-              }}
-            >
-              <X />
-            </IconButton>
-          </div>
-        ) : null}
-      </div>
     </ListRow>
   );
 }
@@ -758,10 +565,10 @@ export const ActiveSessionCard = memo(
 /**
  * One third-line item: its object glyph plus the label, as a BUTTON only for
  * the Project. Worktree and Task names stay as context on the front while their
- * actions live on the back.
+ * actions live in the menu.
  *
  * It states WHICH object, never that object's state. The dirty marker belongs
- * to the Worktree action on the back.
+ * to the Worktree action in the menu.
  */
 function MetaItem({
   item,
@@ -829,41 +636,3 @@ function MetaItem({
   );
 }
 
-/** One fixed-height target on the actions face; icon over label. */
-function ActionTile({
-  icon: Icon,
-  label,
-  onClick,
-  danger = false,
-  dirty = false,
-  accessibleLabel,
-}: {
-  icon: LucideIcon;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-  dirty?: boolean | undefined;
-  accessibleLabel?: string;
-}) {
-  return (
-    <Button
-      variant={danger ? "destructive" : "ghost"}
-      size="xs"
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      aria-label={accessibleLabel}
-      title={accessibleLabel}
-      className="h-14 w-16 min-w-0 shrink flex-col px-0.5"
-    >
-      <span className="relative">
-        <Icon className="size-5" />
-        {dirty ? (
-          <UnreadDot title="Uncommitted changes" placement="avatar" />
-        ) : null}
-      </span>
-      <span className="max-w-full truncate">{label}</span>
-    </Button>
-  );
-}

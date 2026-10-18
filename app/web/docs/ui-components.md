@@ -22,7 +22,8 @@ the same parts a shadcn example would.
 - A local edit to a vendored file is allowed only for an app contract, and is
   listed here:
   - `button.tsx`: `busy` prop (spinner, disabled, `aria-busy`;
-    `loading-states.md` R5). Its spinner is decorative (`role="presentation"`,
+    `loading-states.md` R5), plus `list-action` / `icon-list-overflow` sizes for
+    shared row controls with touch-safe targets. Its spinner is decorative (`role="presentation"`,
     `aria-hidden`, no label): the stock one is a `role="status"` live region,
     which R6 forbids inside a control. It takes the icon size of the button's
     size (`size-3` at `xs`/`icon-xs`, `size-3.5` at `sm`).
@@ -108,6 +109,18 @@ context line's right edge; otherwise `age` closes that line. `pinned` keeps
 important signals visible, and `trailing` keeps controls fixed at the end of the
 final line. Supporting lines show whole items or hide them; hidden controls
 become inert, and signals compact before dropping items.
+
+`actions` accepts `common/ListRowActions`. One or two actions are both direct;
+with more, explicitly primary actions stay direct and the rest use a labeled
+menu. Ordinary actions share the neutral ghost style and inherited icon tone;
+only destructive actions use a different tone. Buttons and menu items show a
+pointer cursor. Desktop mouse controls occupy the bottom-right slot and reveal on hover
+or focus without growing the content lines. Pending decisions remain visible.
+Mobile layout or a coarse pointer moves actions to a separate strip beneath
+the content: labeled targets at least 44px high, 12px gaps, and wrapping into
+stacked buttons when space is tight. The strip never opens the item. Shared
+`touch-ui:` styling follows either mobile layout or coarse input, independent
+of a forced Desktop choice.
 
 The row owns padding, typography, line spacing, selection, hover, focus and
 Enter/Space/arrow-key behavior. Its host supplies `density`, object data,

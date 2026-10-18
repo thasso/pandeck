@@ -24,6 +24,8 @@ type ContentProps = {
   pinned?: ReactNode;
   /** Fixed controls at the end of the last line, or title for a one-line row. */
   trailing?: ReactNode;
+  /** Shared item actions, inline at the end or in a separate touch strip. */
+  actions?: ReactNode;
 };
 
 type Props = ContentProps &
@@ -41,7 +43,7 @@ type Props = ContentProps &
     onOpen?: (() => void) | undefined;
     onFocusSibling?: ((delta: 1 | -1) => void) | undefined;
     onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
-    /** Custom presentation around ListRowContent, for a session's actions flip. */
+    /** Custom domain presentation around ListRowContent. */
     children?: ReactNode;
   };
 
@@ -76,6 +78,7 @@ export function ListRow({
   signals,
   pinned,
   trailing,
+  actions,
   ...props
 }: Props) {
   return (
@@ -121,6 +124,7 @@ export function ListRow({
           signals={signals}
           pinned={pinned}
           trailing={trailing}
+          actions={actions}
         />
       )}
     </Item>
@@ -142,6 +146,7 @@ export function ListRowContent({
   signals,
   pinned,
   trailing,
+  actions,
 }: ContentProps) {
   const contextRef = useInertOverflow<HTMLDivElement>();
   const signalsRef = useInertOverflow<HTMLDivElement>({ compact: true });
@@ -152,6 +157,14 @@ export function ListRowContent({
   const hasDetails = details !== undefined;
   const lines =
     1 + Number(hasContext) + Number(hasDetails) + Number(hasSignals);
+  const actionSlot = actions ? (
+    <div
+      className="-my-0.5 flex shrink-0 items-center touch-ui:my-0 touch-ui:mt-2 touch-ui:basis-full"
+      onClick={(event) => event.stopPropagation()}
+    >
+      {actions}
+    </div>
+  ) : null;
   return (
     <div
       data-list-row-lines={lines}
@@ -187,7 +200,7 @@ export function ListRowContent({
         </div>
       ) : null}
       <div
-        className={`flex min-w-0 items-center gap-1.5 ${lines > 1 ? "py-1" : ""}`}
+        className={`flex min-w-0 items-center gap-1.5 ${lines > 1 ? "py-1" : ""} ${actionSlot && !hasSignals && !hasDetails ? "touch-ui:flex-wrap" : ""}`}
       >
         {identity ?? (
           <>
@@ -207,10 +220,11 @@ export function ListRowContent({
         {!hasSignals && trailing ? (
           <span className="flex shrink-0 items-center gap-1.5">{trailing}</span>
         ) : null}
+        {!hasSignals && !hasDetails ? actionSlot : null}
       </div>
       {hasDetails ? (
         <div
-          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center text-xs text-muted-foreground`}
+          className={`flex ${actionSlot && !hasSignals ? `${CARD_OUTER_ROW[density].min} touch-ui:flex-wrap` : CARD_OUTER_ROW[density].row} min-w-0 items-center text-xs text-muted-foreground`}
         >
           <div
             ref={detailsRef}
@@ -218,11 +232,12 @@ export function ListRowContent({
           >
             {details}
           </div>
+          {!hasSignals ? actionSlot : null}
         </div>
       ) : null}
       {hasSignals ? (
         <div
-          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
+          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs ${actionSlot ? "touch-ui:flex-wrap" : ""}`}
         >
           <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5 text-muted-foreground">
             <div
@@ -242,6 +257,7 @@ export function ListRowContent({
               {trailing}
             </span>
           ) : null}
+          {actionSlot}
         </div>
       ) : null}
     </div>

@@ -17,6 +17,21 @@
     }
   }
 }
+/* Row actions use touch-safe geometry on mobile layouts or coarse pointers,
+   even when a phone explicitly chooses Desktop. */
+@custom-variant touch-ui {
+  &:where([data-layout="mobile"] *) {
+    @slot;
+  }
+  @media (pointer: coarse) {
+    @slot;
+  }
+  @media (width < 768px) {
+    &:where(:root:not([data-layout]) *) {
+      @slot;
+    }
+  }
+}
 /* While the phone keyboard is up (`App.tsx` sets `data-keyboard-open` on the
    root): chrome that should step aside while the user types. */
 @custom-variant keyboard-open (:where([data-keyboard-open]) &);
@@ -297,6 +312,13 @@ body {
   color: var(--foreground);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Mouse-only action reveal does not affect layout or keyboard reachability. */
+@media (hover: hover) and (pointer: fine) {
+  :root:not([data-layout="mobile"]) .group\/item:not(:hover):not(:focus-within):not([data-active]) .list-row-actions:not([data-always-visible]):not(:has([aria-expanded="true"])) {
+    opacity: 0;
+  }
 }
 
 /* New-session quick rows retain swipe/wheel scrolling without visual chrome. */

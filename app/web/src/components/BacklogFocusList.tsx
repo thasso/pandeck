@@ -1,5 +1,5 @@
-import { useMemo, type ReactNode } from "react";
-import { IconButton } from "./common/IconButton.tsx";
+import { useMemo } from "react";
+import { ListRowActions, type ListRowAction } from "./common/ListRowActions.tsx";
 import { ListRow } from "./common/ListRow.tsx";
 import {
   CalendarCheck,
@@ -24,7 +24,7 @@ import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TaskStatusIcon, TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
 import { projectPath } from "../hooks/useSessionRouting.ts";
 import { EmptyBox } from "./common/load.tsx";
-import type { Task } from "../lib/backlogTree.ts";
+import { nextStatus, type Task } from "../lib/backlogTree.ts";
 import { buildFocusBuckets, type FocusBucketId } from "../lib/backlogFocus.ts";
 import {
   buildTaskRowMeta,
@@ -66,6 +66,7 @@ export function BacklogFocusList({
   showProjectBadge,
   selectedId,
   onOpen,
+  onCycle,
   onAcceptSuggestion,
   onDismissSuggestion,
   onNavigate,
@@ -148,6 +149,7 @@ export function BacklogFocusList({
                 projectsById={projectsById}
                 selected={task.id === selectedId}
                 onOpen={onOpen}
+                onCycle={onCycle}
                 onAcceptSuggestion={onAcceptSuggestion}
                 onDismissSuggestion={onDismissSuggestion}
                 onNavigate={onNavigate}
@@ -213,6 +215,7 @@ function FocusRow({
   projectsById,
   selected,
   onOpen,
+  onCycle,
   onAcceptSuggestion,
   onDismissSuggestion,
   onNavigate,
@@ -223,12 +226,36 @@ function FocusRow({
   projectsById: Map<string, ProjectRecord>;
   selected: boolean;
   onOpen: (id: string) => void;
+  onCycle: (task: Task) => void;
   onAcceptSuggestion: (task: Task) => void;
   onDismissSuggestion: (task: Task) => void;
   onNavigate?: ((path: string) => void) | undefined;
   tight: boolean;
 }) {
   const suggestion = meta.suggestion;
+  const actions: ListRowAction[] = suggestion ? [
+    {
+      id: "accept",
+      label: `Confirm ${TASK_STATUS_LABEL[suggestion.to].toLowerCase()}`,
+      accessibleLabel: `Confirm "${task.title}" is ${TASK_STATUS_LABEL[suggestion.to].toLowerCase()}`,
+      icon: suggestion.to === "done" ? <Check /> : <Undo2 />,
+      onSelect: () => onAcceptSuggestion(task),
+    },
+    {
+      id: "dismiss",
+      label: task.status === "done" ? "Keep done" : "Keep open",
+      accessibleLabel: `Keep "${task.title}" ${TASK_STATUS_LABEL[task.status].toLowerCase()} and dismiss the suggestion`,
+      icon: <X />,
+      onSelect: () => onDismissSuggestion(task),
+    },
+  ] : [
+    {
+      id: "status",
+      label: `Mark ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`,
+      icon: <TaskStatusIcon status={nextStatus(task.status)} />,
+      onSelect: () => onCycle(task),
+    },
+  ];
 
   return (
     <li data-list-row-id={task.id}>
@@ -248,41 +275,8 @@ function FocusRow({
           ) : null
         }
         contextTrailing={<TaskIdBadge id={task.id} onNavigate={onNavigate} />}
-        identity={
-          <>
-            <TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />
-            {/* The suggestion is answered ON the row: it is a yes/no, and making it
-            a trip into the Task detail is what leaves these sitting for days. */}
-            {suggestion ? (
-              <span className="flex shrink-0 items-center gap-0.5">
-                <ClaimButton
-                  icon={
-                    suggestion.to === "done" ? (
-                      <Check size={13} />
-                    ) : (
-                      <Undo2 size={13} />
-                    )
-                  }
-                  label={
-                    suggestion.to === "done"
-                      ? `Confirm "${task.title}" is done`
-                      : `Put "${task.title}" back on the to-do pile`
-                  }
-                  variant={suggestion.to === "done" ? "secondary" : "ghost"}
-                  onClick={() => onAcceptSuggestion(task)}
-                  tight={tight}
-                />
-                <ClaimButton
-                  icon={<X size={13} />}
-                  label={`Disagree: dismiss the agent's suggestion on "${task.title}"`}
-                  variant="ghost"
-                  onClick={() => onDismissSuggestion(task)}
-                  tight={tight}
-                />
-              </span>
-            ) : null}
-          </>
-        }
+        identity={<TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />}
+        actions={<ListRowActions actions={actions} alwaysVisible={Boolean(suggestion)} />} 
         signals={
           <>
             <span
@@ -308,35 +302,6 @@ function FocusRow({
         }
       />
     </li>
-  );
-}
-
-function ClaimButton({
-  icon,
-  label,
-  variant,
-  onClick,
-  tight,
-}: {
-  icon: ReactNode;
-  label: string;
-  variant: "secondary" | "ghost";
-  onClick: () => void;
-  tight: boolean;
-}) {
-  return (
-    <IconButton
-      label={label}
-      size={tight ? "icon-xs" : "icon-sm"}
-      variant={variant}
-      className="shrink-0"
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick();
-      }}
-    >
-      {icon}
-    </IconButton>
   );
 }
 

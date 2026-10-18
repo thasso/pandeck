@@ -345,7 +345,9 @@ second is the title, led by one fixed slot: the session's type icon while it is
 Idle, otherwise the state's badge as an icon. The third holds what the work
 produced and what is moving — the pull request with its number, else the
 worktree's uncommitted lines and commits ahead of base; background work; a
-cluster's peers — with the actions flip and Settle at its right edge. A row
+cluster's peers — with shared `ListRowActions` for Settle and a labeled overflow menu. Touch
+layouts place those actions in a separate, generously spaced strip; the row's
+content stays visible while its menu is open. A row
 shows each item whole or drops it; only the branch shortens, into the width the
 others leave. The state's sentence — a failure message, "Unread response" — is
 part of the card's spoken label, not a visible line: the badge already says it.

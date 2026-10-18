@@ -36,7 +36,7 @@ import { ListRow, ListRowContent } from "./common/ListRow.tsx";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowActions } from "./common/ListRowActions.tsx";
 import { Spinner } from "./common/load.tsx";
 import { Button } from "@/components/ui/button";
 
@@ -75,12 +75,6 @@ function RunBadgeIcon({
   const Icon = RUN_BADGE_ICON[kind];
   return <Icon size={size} className="shrink-0" aria-hidden />;
 }
-
-/** Settle, inline at the end of the status row like a session card's. */
-const INLINE_ACTION_SIZE: Record<RowDensity, "icon-xs" | "icon-sm"> = {
-  tight: "icon-xs",
-  comfortable: "icon-sm",
-};
 
 export interface WorkflowRunInboxCardProps {
   item: WorkflowRunInboxItem;
@@ -180,10 +174,11 @@ function WorkflowRunInboxCardImpl({
 
   return (
     <ListRow
+      interaction="content"
       divider={false}
       data-session-row
       data-list-row-id={`run:${run.id}`}
-      role="button"
+      role="group"
       tabIndex={-1}
       aria-label={`Open workflow run on ${title} — ${workflowRunStatusText(item)}${
         roles ? ` — ${roles}` : ""
@@ -332,25 +327,12 @@ function WorkflowRunInboxCardImpl({
             ) : null}
           </>
         }
-        trailing={
-          settleOffered ? (
-            // `title` too: a disabled trigger opens no tooltip, and the
-            // reason Settle is refused must stay readable on hover.
-            <IconButton
-              size={INLINE_ACTION_SIZE[density]}
-              className="-my-0.5"
-              label={settleLabel}
-              title={settleLabel}
-              disabled={Boolean(item.settleBlocked)}
-              onClick={(e) => {
-                e.stopPropagation();
-                settle();
-              }}
-            >
-              <Check />
-            </IconButton>
-          ) : null
-        }
+        actions={settleOffered ? (
+          <ListRowActions actions={[{
+            id: "settle", label: "Settle", accessibleLabel: settleLabel,
+            icon: <Check />, disabled: Boolean(item.settleBlocked), onSelect: settle,
+          }]} />
+        ) : undefined}
       />
     </ListRow>
   );

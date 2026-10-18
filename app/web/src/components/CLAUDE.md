@@ -2,9 +2,9 @@
 
 # Web components
 
-- Flat browser rows use `common/ListRow`; trees keep `common/Tree`. Task rows
-  pass `interaction="content"` so real title and metadata links stay accessible.
-  Feature code supplies content and behavior, not row geometry.
+- Flat browser rows use `common/ListRow` and `common/ListRowActions`; trees keep
+  `common/Tree`. Interactive content uses `interaction="content"` so links and
+  controls stay accessible. Features supply content, not row geometry.
 
 - Markdown: `[x](target)` is a link, `![x](target)` a chrome-free lazy embed,
   and tool output the ONLY card. `[![x](y)](z)` keeps the authored link z and
