@@ -979,6 +979,12 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
       settled: BOOLEAN,
     },
   ),
+  // The failure the clicked row showed: its revision is required for the same
+  // reason, and an omitted `errorAt` matches only a row with no error record.
+  dismissSessionFailure: fields(
+    { id: STRING, outcomeRevision: COUNT },
+    { errorAt: COUNT },
+  ),
   // Same rule for a Workflow Run's Settle (Task-677): the observed revision is
   // required, so a stale item cannot acknowledge an outcome it never rendered.
   settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),

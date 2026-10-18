@@ -81,6 +81,7 @@ describe("the host-drawn Sessions bar", () => {
         density="tight"
         onSelect={() => {}}
         onSettle={() => {}}
+        onDismissFailure={() => {}}
         onArchive={() => {}}
         onDeleteSession={() => {}}
         onRenameSession={() => {}}

@@ -155,6 +155,8 @@ export interface ActiveSessionCardProps {
    */
   onOpen: (sessionId: string) => void;
   onSettle: (sessionId: string) => void;
+  /** Dismiss the bubbled peer's failure without settling anything. */
+  onDismissFailure: (sessionId: string) => void;
   onOpenProject?: (projectId: string) => void;
   onOpenTask?: (taskId: string) => void;
   onOpenWorktree?: (worktreeId: string) => void;
@@ -195,6 +197,7 @@ function ActiveSessionCardImpl({
   clusterExpanded = false,
   onOpen,
   onSettle,
+  onDismissFailure,
   onOpenProject,
   onOpenTask,
   onOpenWorktree,
@@ -621,11 +624,11 @@ function ActiveSessionCardImpl({
                     <Badge
                       variant="ghost"
                       render={<button type="button" />}
-                      title={`Dismiss — settle “${bubbleTitle}”`}
+                      title={`Dismiss the failure in “${bubbleTitle}”`}
                       aria-label={`Dismiss the failure in “${bubbleTitle}”`}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (bubbled) onSettle(bubbled.session.id);
+                        if (bubbled) onDismissFailure(bubbled.session.id);
                       }}
                       className="cursor-pointer"
                     >

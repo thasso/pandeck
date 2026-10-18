@@ -183,6 +183,7 @@ function Harness({
       density="tight"
       onSelect={() => {}}
       onSettle={() => {}}
+      onDismissFailure={() => {}}
       onArchive={() => {}}
       onDeleteSession={() => {}}
       onRenameSession={() => {}}

@@ -98,6 +98,7 @@ function CrowdedCardStory({
         density={density}
         onOpen={() => {}}
         onSettle={() => {}}
+        onDismissFailure={() => {}}
         onRename={() => {}}
         onArchive={() => {}}
         onDelete={() => {}}

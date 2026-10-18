@@ -933,6 +933,12 @@ export function SessionInboxStory({
                 return unsettled;
               })
             }
+            onDismissFailure={(id) =>
+              patchSession(id, (item) => {
+                const { lastError: _lastError, ...dismissed } = item;
+                return dismissed;
+              })
+            }
             onArchive={(id, archived) =>
               patchSession(id, (item) => ({ ...item, archived }))
             }

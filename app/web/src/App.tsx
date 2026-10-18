@@ -2680,6 +2680,15 @@ function AppContent() {
     [actions],
   );
 
+  /**
+   * Dismiss a session's failure without settling it; same stability contract.
+   * The session stays where it is, so this neither navigates nor animates.
+   */
+  const dismissSessionFailure = useCallback(
+    (id: string) => actions.dismissSessionFailure(id),
+    [actions],
+  );
+
   /** Settle a Workflow Run out of the inbox; same stability contract. */
   const settleWorkflowRun = useCallback(
     (runId: string, throughRevision: number) =>
@@ -5688,7 +5697,7 @@ function AppContent() {
           onToggle={toggleSpawnedLedge}
           onOpenSession={openSession}
           onToggleSettled={toggleSpawnedSettled}
-          onSettleSession={settleSession}
+          onDismissSessionFailure={dismissSessionFailure}
         />
       ) : undefined,
     [
@@ -5698,7 +5707,7 @@ function AppContent() {
       toggleSpawnedLedge,
       openSession,
       toggleSpawnedSettled,
-      settleSession,
+      dismissSessionFailure,
       describeSpawnedSession,
     ],
   );
@@ -6982,6 +6991,7 @@ function AppContent() {
         }
         onArchive={archiveSession}
         onSettleSession={settleSession}
+        onDismissSessionFailure={dismissSessionFailure}
         onRenameSession={promptRenameSession}
         onDeleteSession={confirmDeleteSession}
         onLoadArchivedSessions={actions.loadArchivedSessions}

@@ -560,3 +560,189 @@ test("spawnedDescendantIds searches by parent at both steps of its recursion", (
   assert.equal(searches.length, 2, plan);
   assert.doesNotMatch(plan, /SCAN (?:session_links|l)\b/, plan);
 });
+
+/**
+ * `dismissRunFailure`: one guarded write that clears the failure the clicked
+ * row showed — never a Settle, never a newer failure, never a completion.
+ */
+function seedFailure(label: string): string {
+  return seedSettled(`dismiss-${label}`);
+}
+
+function storedSettledAt(id: string): number | null {
+  const row = getDb()
+    .prepare("SELECT settled_at_ms FROM session_index WHERE id = ?")
+    .get(id) as { settled_at_ms: number | null };
+  return row.settled_at_ms;
+}
+
+test("dismissRunFailure clears a coordinator-owned failure that raised no revision", () => {
+  const id = seedFailure("peer");
+  sessionStore.recordRunFailure(id, "boom", 5_000);
+
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 4_999, outcomeRevision: 0 }),
+    "stale",
+    "a click that saw another timestamp dismisses nothing",
+  );
+  assert.equal(sessionStore.get(id)?.lastError?.at, 5_000);
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 1 }),
+    "stale",
+    "nor one that saw another revision",
+  );
+
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 0 }),
+    "dismissed",
+  );
+  const row = sessionStore.get(id);
+  assert.equal(row?.lastError, undefined);
+  assert.equal(row?.outcomeAttention, undefined, "no revision was invented");
+  assert.equal(storedSettledAt(id), null, "and nothing was settled");
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 0 }),
+    "unchanged",
+    "a second tab's click finds nothing left to dismiss",
+  );
+
+  // A later failure is a new one, and it resurfaces.
+  sessionStore.recordRunFailure(id, "again", 6_000);
+  assert.equal(sessionStore.get(id)?.lastError?.at, 6_000);
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 0 }),
+    "stale",
+    "the old click cannot dismiss it",
+  );
+  assert.equal(sessionStore.get(id)?.lastError?.message, "again");
+});
+
+test("dismissRunFailure acknowledges the failed outcome the row showed, and only that", () => {
+  const id = seedFailure("direct");
+  sessionStore.recordRunFailure(id, "boom", 5_000);
+  assert.equal(sessionStore.recordSessionOutcome(id, "failed", 5_001), 1);
+  const readAt = sessionStore.get(id)?.readAt;
+
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 0 }),
+    "stale",
+    "a row rendered before the failed outcome landed dismisses nothing",
+  );
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 1 }),
+    "dismissed",
+  );
+  const row = sessionStore.get(id);
+  assert.equal(row?.lastError, undefined);
+  assert.deepEqual(
+    [row?.outcomeAttention?.revision, row?.outcomeAttention?.settledRevision],
+    [1, 1],
+    "the failed outcome is acknowledged",
+  );
+  assert.equal(storedSettledAt(id), null, "without settling the session");
+  assert.equal(sessionStore.isSettled(id), false);
+  assert.equal(row?.readAt, readAt, "and without marking it read");
+
+  // The next failure raises a revision the dismissed click never saw.
+  sessionStore.recordRunFailure(id, "again", 5_000);
+  sessionStore.recordSessionOutcome(id, "failed", 5_002);
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 1 }),
+    "stale",
+    "a reused timestamp is told apart by its revision",
+  );
+  assert.equal(sessionStore.get(id)?.lastError?.message, "again");
+  assert.equal(sessionStore.get(id)?.outcomeAttention?.settledRevision, 1);
+});
+
+test("dismissRunFailure never acknowledges a completed outcome", () => {
+  const id = seedFailure("completed");
+  sessionStore.recordRunFailure(id, "boom", 5_000);
+  sessionStore.recordSessionOutcome(id, "completed", 5_001);
+
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 1 }),
+    "dismissed",
+  );
+  const row = sessionStore.get(id);
+  assert.equal(row?.lastError, undefined, "the error record is cleared");
+  assert.equal(
+    row?.outcomeAttention?.settledRevision,
+    0,
+    "but the completion stays the user's to acknowledge",
+  );
+});
+
+test("dismissRunFailure matches an open failed outcome whose error record a run start cleared", () => {
+  const id = seedFailure("cleared");
+  sessionStore.recordRunFailure(id, "boom", 5_000);
+  sessionStore.recordSessionOutcome(id, "failed", 5_001);
+  sessionStore.clearRunFailure(id);
+
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 1 }),
+    "stale",
+    "an error record the row no longer has is not the one shown",
+  );
+  assert.equal(
+    sessionStore.dismissRunFailure(id, {
+      errorAt: undefined,
+      outcomeRevision: 1,
+    }),
+    "dismissed",
+  );
+  assert.equal(sessionStore.get(id)?.outcomeAttention?.settledRevision, 1);
+});
+
+test("dismissRunFailure clears a settled stamp the failure superseded, keeping the session active", () => {
+  const now = Date.now();
+  const cutoff = now - 7 * DAY_MS;
+  // Settled long ago, then run from the shelf and failed: the stored stamp no
+  // longer holds, and acknowledging the failure must not revive it.
+  const id = seedSettled("dismiss-woken", { settledAt: cutoff - DAY_MS });
+  sessionStore.recordRunFailure(id, "boom", 5_000);
+  sessionStore.recordSessionOutcome(id, "failed", 5_001);
+  assert.equal(sessionStore.isSettled(id), false);
+
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 1 }),
+    "dismissed",
+  );
+  assert.equal(storedSettledAt(id), null, "the obsolete stamp is gone");
+  assert.equal(sessionStore.isSettled(id), false, "the session stays active");
+  assert.equal(sessionStore.get(id)?.outcomeAttention?.settledRevision, 1);
+  assert.deepEqual(
+    sessionStore.archiveSettledBatch([id], cutoff, now),
+    [],
+    "and is not retention-eligible",
+  );
+  assert.equal(sessionStore.get(id)?.archivedAt, undefined);
+});
+
+test("dismissRunFailure keeps a settled stamp that still holds", () => {
+  const id = seedFailure("held");
+  sessionStore.recordRunFailure(id, "boom", 5_000);
+  sessionStore.recordSessionOutcome(id, "failed", 5_001);
+  // The user settled AFTER the failure: the stamp holds, and the stored error
+  // outlives the Settle.
+  sessionStore.setSettled(id, true, 7_000, 1);
+  assert.equal(sessionStore.isSettled(id), true);
+
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 1 }),
+    "dismissed",
+  );
+  assert.equal(sessionStore.get(id)?.lastError, undefined);
+  assert.equal(storedSettledAt(id), 7_000, "the effective stamp is kept");
+  assert.equal(sessionStore.isSettled(id), true);
+});
+
+test("dismissRunFailure writes nothing for a deleted session", () => {
+  const id = seedFailure("deleted");
+  sessionStore.recordRunFailure(id, "boom", 5_000);
+  sessionStore.remove(id);
+  assert.equal(
+    sessionStore.dismissRunFailure(id, { errorAt: 5_000, outcomeRevision: 0 }),
+    "failed",
+  );
+});

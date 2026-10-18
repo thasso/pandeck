@@ -51,6 +51,9 @@ vocabulary, display projection, and normalized session model types.
   never rendered; it is REQUIRED, because acknowledging whatever the server
   holds now is a privilege only a server-side settlement may take and an
   optional field would hand it to any client that omitted it.
+  `dismissSessionFailure` is the same observation for a failure without a
+  Settle: `outcomeRevision` is required, and an omitted `errorAt` matches only a
+  row with no error record, so neither half grants more than the row showed.
   `SESSION_READ_DWELL_MS` is shared for the same reason: it is how long a
   session must stay OPEN before reading it counts as read, and BOTH the server's
   durable read mark and the browser's own "the session I am looking at is never

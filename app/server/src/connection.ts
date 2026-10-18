@@ -993,6 +993,12 @@ export class Connection implements Viewer {
           msg.settled ?? true,
           msg.throughRevision,
         );
+      case "dismissSessionFailure":
+        return this.onDismissSessionFailure(
+          msg.id,
+          msg.errorAt,
+          msg.outcomeRevision,
+        );
       case "settleWorkflowRun":
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
       case "settleInitiative":
@@ -5077,6 +5083,50 @@ export class Connection implements Viewer {
         target: { type: "session", id },
       });
     }
+  }
+
+  /**
+   * Dismiss the failure the clicked row showed, without settling the session
+   * (`sessionStore.dismissRunFailure` owns the identity match and the write).
+   * Deliberately NOT gated on `settleBlockedReason`: a failed peer with queued
+   * or background work still cannot be settled, but the user can say they have
+   * seen its failure. Nothing optimistic waits on this, so every answer that
+   * changed or contradicts the row re-sends the list and lets it converge.
+   */
+  private async onDismissSessionFailure(
+    id: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ): Promise<void> {
+    if (!this.resolveSessionRef(id)) {
+      this.send({
+        type: "error",
+        message: "Failed to dismiss the failure: session not found.",
+        target: { type: "session", id },
+      });
+      return;
+    }
+    const answer = sessionStore.dismissRunFailure(id, {
+      errorAt,
+      outcomeRevision,
+    });
+    if (answer === "dismissed") {
+      await hub.broadcastSessions();
+      return;
+    }
+    // Re-send the authoritative row either way, so the clicking tab shows
+    // what replaced the failure it dismissed.
+    await hub.broadcastSessionUpdated(id);
+    // Already gone (another tab, a run start): nothing went wrong.
+    if (answer === "unchanged") return;
+    this.send({
+      type: "error",
+      message:
+        answer === "stale"
+          ? "Failed to dismiss the failure: it changed since it was shown."
+          : "Failed to dismiss the failure: it could not be updated.",
+      target: { type: "session", id },
+    });
   }
 
   private async onForkSession(

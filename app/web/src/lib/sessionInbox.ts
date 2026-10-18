@@ -859,21 +859,20 @@ export function sessionClusterBubbleLabel(
 }
 
 /**
- * Whether the bubbled peer can be put down from the CLUSTER's card — a failure
- * the user has moved on from, dismissed where it is shown rather than by
- * hunting for the peer it belongs to. Dismissing is that peer's own Settle: it
- * acknowledges the failure and takes the peer to the Settled shelf, and the
- * bubble goes with it, while the coordinator stays in the working set.
+ * Whether the bubbled peer's failure can be dismissed from the CLUSTER's card —
+ * a failure the user has moved on from, dismissed where it is shown rather than
+ * by hunting for the peer it belongs to. Dismissing is NOT a Settle
+ * (`dismissSessionFailure`): it clears that one failure, the bubble goes with
+ * it, and the peer, its queue and the coordinator stay where they are.
  *
- * Only a FAILURE. A peer waiting on a human is the other half of the bubble and
- * has no dismissal: settling it is refused by the same rule everywhere
- * ({@link settleBlockedReason}), because the work cannot proceed without the
- * answer — that bubble is dealt with by opening it. A failure whose peer is
- * blocked for another reason (queued work, background work of its own) is not
- * offered either, for exactly the same reason.
+ * Only a FAILURE, and independent of {@link settleBlockedReason}: a failed peer
+ * that still has queued or background work cannot be put down, but its failure
+ * can be acknowledged. A peer waiting on a human is the other half of the
+ * bubble and has no dismissal — the work cannot proceed without the answer, so
+ * that bubble is dealt with by opening it.
  */
 export function clusterBubbleDismissible(bubbled: SessionInboxCard): boolean {
-  return holdsFailure(bubbled) && bubbled.settleBlocked === undefined;
+  return holdsFailure(bubbled);
 }
 
 /* --------------------------- formal Workflow Runs -------------------------- */

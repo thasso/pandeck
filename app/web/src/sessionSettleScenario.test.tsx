@@ -249,6 +249,114 @@ describe("settling a direct session", () => {
 });
 
 /**
+ * Dismissing a failure is NOT a Settle: the command names the failure the row
+ * showed (its error time and outcome revision), nothing moves optimistically,
+ * and the authoritative row decides what the card says next.
+ */
+describe("dismissing a session failure", () => {
+  const failedOutcome = {
+    revision: 3,
+    settledRevision: 2,
+    kind: "failed" as const,
+    at: NOW - 1_000,
+  };
+
+  it("names the error and revision the row showed, and moves nothing", async () => {
+    const socket = await boot(
+      row({
+        lastError: { at: NOW - 1_000, message: "boom" },
+        outcomeAttention: failedOutcome,
+      }),
+    );
+    const before = current("s-1");
+    await act(async () => actions!.dismissSessionFailure("s-1"));
+
+    expect(
+      socket.sent.filter((msg) => msg.type === "dismissSessionFailure"),
+    ).toEqual([
+      {
+        type: "dismissSessionFailure",
+        id: "s-1",
+        errorAt: NOW - 1_000,
+        outcomeRevision: 3,
+      },
+    ]);
+    expect(socket.sent.some((msg) => msg.type === "settleSession")).toBe(false);
+    // No optimistic state: the row is the one the server last sent.
+    expect(current("s-1")).toBe(before);
+    expect(classifySessionStatus(current("s-1"))).toBe("failed");
+  });
+
+  it("sends revision 0 for a coordinator-owned failure that raised none", async () => {
+    const socket = await boot(
+      row({
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        lastError: { at: NOW - 2_000, message: "boom" },
+      }),
+    );
+    await act(async () => actions!.dismissSessionFailure("s-1"));
+    expect(
+      socket.sent.find((msg) => msg.type === "dismissSessionFailure"),
+    ).toEqual({
+      type: "dismissSessionFailure",
+      id: "s-1",
+      errorAt: NOW - 2_000,
+      outcomeRevision: 0,
+    });
+  });
+
+  it("omits the error time for a failed outcome whose record a run start cleared", async () => {
+    const socket = await boot(row({ outcomeAttention: failedOutcome }));
+    expect(classifySessionStatus(current("s-1"))).toBe("failed");
+    await act(async () => actions!.dismissSessionFailure("s-1"));
+    expect(
+      socket.sent.find((msg) => msg.type === "dismissSessionFailure"),
+    ).toEqual({ type: "dismissSessionFailure", id: "s-1", outcomeRevision: 3 });
+  });
+
+  it("converges on the authoritative row, and a later failure resurfaces", async () => {
+    const socket = await boot(
+      row({
+        lastError: { at: NOW - 1_000, message: "boom" },
+        outcomeAttention: failedOutcome,
+      }),
+    );
+    await act(async () => actions!.dismissSessionFailure("s-1"));
+    await act(async () => {
+      socket.receive({
+        type: "sessionUpdated",
+        session: row({
+          unread: false,
+          outcomeAttention: { ...failedOutcome, settledRevision: 3 },
+        }),
+      });
+    });
+    const dismissed = current("s-1");
+    expect(classifySessionStatus(dismissed)).toBe("quiet");
+    expect(dismissed.settledAt).toBeUndefined();
+    expect(buildSessionInbox([dismissed]).active).toHaveLength(1);
+
+    await act(async () => {
+      socket.receive({
+        type: "sessionUpdated",
+        session: row({
+          unread: false,
+          lastError: { at: NOW, message: "again" },
+          outcomeAttention: {
+            ...failedOutcome,
+            revision: 4,
+            settledRevision: 3,
+            at: NOW,
+          },
+        }),
+      });
+    });
+    expect(classifySessionStatus(current("s-1"))).toBe("failed");
+  });
+});
+
+/**
  * A formal Workflow Run settles as ONE thing ([Task-677](pa://task/677)): the
  * command acknowledges the revision the run's summary showed, and the browser
  * shelves the run AND the roles its card names in the same dispatch, so no

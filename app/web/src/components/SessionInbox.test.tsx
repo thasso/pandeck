@@ -72,6 +72,7 @@ describe("SessionInbox bar", () => {
           density="tight"
           onSelect={() => {}}
           onSettle={() => {}}
+          onDismissFailure={() => {}}
           onArchive={() => {}}
           onDeleteSession={() => {}}
           onRenameSession={() => {}}
@@ -239,6 +240,7 @@ describe("SessionInbox clusters", () => {
   interface Handlers {
     onSelect?: (id: string) => void;
     onSettle?: (id: string, settled: boolean) => void;
+    onDismissFailure?: (id: string) => void;
     /** The real preference: a settle then leaves through its exit before it sends. */
     animate?: boolean;
   }
@@ -264,6 +266,7 @@ describe("SessionInbox clusters", () => {
           density="tight"
           onSelect={handlers.onSelect ?? (() => {})}
           onSettle={handlers.onSettle ?? (() => {})}
+          onDismissFailure={handlers.onDismissFailure ?? (() => {})}
           onArchive={() => {}}
           onDeleteSession={() => {}}
           onRenameSession={() => {}}
@@ -512,54 +515,70 @@ describe("SessionInbox clusters", () => {
     expect(settled).toEqual([["kid", true]]);
   });
 
-  it("dismisses a peer's failure from the collapsed card, keeping the coordinator", () => {
+  it("dismisses a peer's failure from the collapsed card without settling anything", () => {
     const settled: Array<[string, boolean]> = [];
+    const dismissed: string[] = [];
+    const handlers = {
+      onSettle: (id: string, value: boolean) => void settled.push([id, value]),
+      onDismissFailure: (id: string) => void dismissed.push(id),
+    };
     const rows = [
       session("root"),
       peer("kid", "root", { lastError: { at: NOW - 1_000, message: "boom" } }),
     ];
-    render(rows, { onSettle: (id, value) => void settled.push([id, value]) });
+    render(rows, handlers);
     // The failure never blocks the coordinator's own Settle: that settles the
     // peer with it, acknowledging the failure.
     expect(
       button("Settle — move out of the working set").hasAttribute("disabled"),
     ).toBe(false);
-    // Dismissing is the PEER's settle alone, sent from the card the failure is
-    // shown on — the cluster is collapsed, and the peer never had a row to aim
-    // at — and the coordinator stays where it is.
+    // Dismissing is the PEER's failure alone, sent from the card the failure
+    // is shown on — the cluster is collapsed, and the peer never had a row to
+    // aim at. It is no Settle, of the peer or of the coordinator.
     expect(rowIds()).toEqual(["root"]);
     click(button("Dismiss the failure in “Session kid”"));
-    expect(settled).toEqual([["kid", true]]);
+    expect(dismissed).toEqual(["kid"]);
+    expect(settled).toEqual([]);
+    // The authoritative row lands without the failure: the bubble goes, and
+    // the peer stays an unsettled member of the cluster.
     render(
-      rows.map((row) => (row.id === "kid" ? { ...row, settledAt: NOW } : row)),
-      { onSettle: (id, value) => void settled.push([id, value]) },
+      rows.map((row) => {
+        if (row.id !== "kid") return row;
+        const { lastError: _lastError, ...rest } = row;
+        return rest;
+      }),
+      handlers,
     );
     expect(rowIds()).toEqual(["root"]);
+    expect(
+      document.querySelector(
+        '[aria-label="Dismiss the failure in “Session kid”"]',
+      ),
+    ).toBeNull();
+    click(button("Show the 1 coordinated session"));
+    expect(rowIds()).toEqual(["root", "kid"]);
   });
 
-  it("dismisses through the settle exit, and sends the peer's id after it", () => {
+  it("dismisses at once, playing no settle exit", () => {
     vi.useFakeTimers();
-    const settled: Array<[string, boolean]> = [];
+    const dismissed: string[] = [];
     render(
       [
         session("root"),
         peer("kid", "root", {
+          queuedWork: true,
           lastError: { at: NOW - 1_000, message: "boom" },
         }),
       ],
       {
         animate: true,
-        onSettle: (id, value) => void settled.push([id, value]),
+        onDismissFailure: (id) => void dismissed.push(id),
       },
     );
-    // The real preference: dismissing takes the same exit every settle in this
-    // list takes — the peer's own row plays it when the cluster is open, and a
-    // collapsed cluster simply has none to play. Either way the command is the
-    // PEER's, and it is sent once, when the exit is over.
+    // Queued work blocks the peer's Settle, not its dismissal; and since
+    // nothing leaves the list, nothing waits for an exit to finish.
     click(button("Dismiss the failure in “Session kid”"));
-    expect(settled).toEqual([]);
-    act(() => void vi.advanceTimersByTime(400));
-    expect(settled).toEqual([["kid", true]]);
+    expect(dismissed).toEqual(["kid"]);
   });
 
   it("refuses to settle a cluster whose peer is still waiting for an answer", () => {
@@ -630,6 +649,7 @@ describe("SessionInbox density", () => {
           density={density}
           onSelect={() => {}}
           onSettle={() => {}}
+          onDismissFailure={() => {}}
           onArchive={() => {}}
           onDeleteSession={() => {}}
           onRenameSession={() => {}}
@@ -776,6 +796,7 @@ describe("SessionInbox swipe", () => {
 
   interface Handlers {
     onSettle?: (id: string, settled: boolean) => void;
+    onDismissFailure?: (id: string) => void;
     onArchive?: (id: string, archived: boolean) => void;
   }
 
@@ -800,6 +821,7 @@ describe("SessionInbox swipe", () => {
           density="tight"
           onSelect={() => {}}
           onSettle={handlers.onSettle ?? (() => {})}
+          onDismissFailure={handlers.onDismissFailure ?? (() => {})}
           onArchive={handlers.onArchive ?? (() => {})}
           onDeleteSession={() => {}}
           onRenameSession={() => {}}
@@ -1141,6 +1163,7 @@ describe("SessionInbox Workflow Run items", () => {
           density="tight"
           onSelect={handlers.onSelect ?? (() => {})}
           onSettle={() => {}}
+          onDismissFailure={() => {}}
           onArchive={() => {}}
           onDeleteSession={() => {}}
           onRenameSession={() => {}}
@@ -1517,6 +1540,7 @@ describe("SessionInbox drag-to-reorder", () => {
           density="tight"
           onSelect={onSelect}
           onSettle={() => {}}
+          onDismissFailure={() => {}}
           onArchive={() => {}}
           onDeleteSession={() => {}}
           onRenameSession={() => {}}

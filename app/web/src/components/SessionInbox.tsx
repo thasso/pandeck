@@ -191,6 +191,11 @@ interface Props {
   density: RowDensity;
   onSelect: (id: string) => void;
   onSettle: (id: string, settled: boolean) => void;
+  /**
+   * Dismiss a bubbled peer's failure without settling it. No exit plays: the
+   * card it is shown on stays, and so does the peer.
+   */
+  onDismissFailure: (id: string) => void;
   onArchive: (id: string, archived: boolean) => void;
   onDeleteSession: (id: string) => void;
   onRenameSession: (id: string) => void;
@@ -276,6 +281,7 @@ export function SessionInbox({
   density,
   onSelect,
   onSettle,
+  onDismissFailure,
   onArchive,
   onDeleteSession,
   onRenameSession,
@@ -1034,6 +1040,7 @@ export function SessionInbox({
               clusterExpanded={expandedClusters.has(id)}
               onOpen={onSelect}
               onSettle={settleCard}
+              onDismissFailure={onDismissFailure}
               onOpenProject={onOpenProject}
               onOpenTask={onOpenTask}
               onOpenWorktree={onOpenWorktree}

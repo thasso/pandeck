@@ -50,6 +50,7 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         onSelect={setCurrentId}
         onArchive={noop}
         onSettleSession={noop}
+        onDismissSessionFailure={noop}
         onRenameSession={noop}
         onDeleteSession={noop}
         onLoadArchivedSessions={noop}

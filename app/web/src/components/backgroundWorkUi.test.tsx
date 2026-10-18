@@ -113,6 +113,7 @@ function cardMarkup(row: SessionListItem): string {
       relations={{}}
       onOpen={() => {}}
       onSettle={() => {}}
+      onDismissFailure={() => {}}
       onRename={() => {}}
       onArchive={() => {}}
       onDelete={() => {}}
