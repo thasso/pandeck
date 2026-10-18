@@ -177,6 +177,8 @@ export interface TreeProps<T> {
   /** Tight single-line density for sidebar browsers: 28px rows and a smaller
    * chevron, matching the sidebar session rows. Defaults to `false`. */
   compact?: boolean;
+  /** Off when the rendered content owns its vertical padding. */
+  paddedContent?: boolean;
   /**
    * Edge-to-edge rows for a list that runs to its container's sides: square
    * fills divided by hairlines, as the sidebar's session list. Defaults to
@@ -280,6 +282,7 @@ export function Tree<T>({
   indentWidth = 24,
   showGuides = true,
   compact = false,
+  paddedContent = true,
   flush = false,
   rowAlign = "center",
   getRowAlign,
@@ -593,6 +596,7 @@ export function Tree<T>({
       indentWidth,
       showGuides,
       compact,
+      paddedContent,
       flush,
       rowAlign: getRowAlign?.(toNode(node)) ?? rowAlign,
       hasChildren,
@@ -684,6 +688,7 @@ interface RowProps<T> {
   indentWidth: number;
   showGuides: boolean;
   compact: boolean;
+  paddedContent: boolean;
   flush: boolean;
   rowAlign: "center" | "stretch";
   hasChildren: boolean;
@@ -708,6 +713,7 @@ function RowBody<T>({
   indentWidth,
   showGuides,
   compact,
+  paddedContent,
   flush,
   rowAlign,
   hasChildren,
@@ -724,6 +730,7 @@ function RowBody<T>({
   | "indentWidth"
   | "showGuides"
   | "compact"
+  | "paddedContent"
   | "flush"
   | "rowAlign"
   | "hasChildren"
@@ -789,16 +796,10 @@ function RowBody<T>({
             // Narrow and TALL when stretched: a wide chevron would carve swipe-
             // dead area out of the row (it stops `pointerdown`), and at depth ≥ 1
             // that strip is live area `SWIPE_EDGE_GUARD_PX` does not already take.
-            // The TARGET is the full height; the glyph is pinned to the first
-            // line, its centre on the status glyph's: `pt-3` is this button's
-            // own border away from that centre — the content wrapper's `py-1`
-            // (below), and `BacklogTreePane`'s 28px status button with its
-            // `pt-1` — so a change to either leaves the chevron a few pixels
-            // off rather than breaking anything. Eyeball it against the
-            // status glyph. `w-5`: the 14px glyph and no more, so the row
-            // spends its width on the title.
+            // The target is full-height, with the glyph near the first content
+            // line. `w-5` keeps the gutter narrow so the content keeps its width.
             stretch
-              ? "h-auto w-5 items-start pt-3"
+              ? "h-auto w-5 items-start pt-[var(--tree-toggle-offset,0.75rem)]"
               : compact
                 ? "size-4"
                 : "size-5",
@@ -821,7 +822,7 @@ function RowBody<T>({
           )}
         />
       )}
-      <div className={cx("min-w-0 flex-1", compact ? "py-0.5" : "py-1")}>
+      <div className={cx("min-w-0 flex-1", paddedContent && (compact ? "py-0.5" : "py-1"))}>
         {content}
       </div>
       {badge != null && (

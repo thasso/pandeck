@@ -116,6 +116,9 @@ menu. Ordinary actions share the neutral ghost style and inherited icon tone;
 only destructive actions use a different tone. Buttons and menu items show a
 pointer cursor. Desktop mouse controls occupy the bottom-right slot and reveal on hover
 or focus without growing the content lines. Pending decisions remain visible.
+The Backlog tree uses the same `ListRowContent` and actions inside its tree
+frame, keeping hierarchy and selection rather than nesting a clickable flat row.
+`Tree`'s `paddedContent={false}` lets that shared content own vertical spacing.
 Mobile layout or a coarse pointer moves actions to a separate strip beneath
 the content: labeled targets at least 44px high, 12px gaps, and wrapping into
 stacked buttons when space is tight. The strip never opens the item. Shared

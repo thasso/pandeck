@@ -347,7 +347,6 @@ function BacklogListImpl({
           today={today}
           selectedId={selectedId}
           onOpen={onOpenTask}
-          onCycle={c.cycleStatus}
           onReorder={c.reorderTasks}
           onAssignProjectsForRoots={c.assignProjectsForRoots}
           onArchive={c.archiveTasks}

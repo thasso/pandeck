@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TaskStatusIcon as StatusIcon } from "./TaskStatusIcon.tsx";
+import { TaskStatusIcon as StatusIcon, TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
 import {
   Archive,
   FolderKanban,
@@ -20,20 +20,21 @@ import {
   type TreeRowSwipe,
 } from "./common/Tree.tsx";
 import type { SwipeAction } from "./common/SwipeRow.tsx";
-import { useMobileLayout } from "./shell/useMobileLayout.ts";
 import { EmptyBox } from "./common/load.tsx";
 import { Button } from "./ui/button.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowContent } from "./common/ListRow.tsx";
+import { ListRowActions, type ListRowAction } from "./common/ListRowActions.tsx";
 import { ProjectBadge } from "./ProjectBadge.tsx";
-import { TaskRowBody } from "./TaskRowBody.tsx";
+import { TaskProjectMeta, TaskRowDetails, TaskRowTitle } from "./TaskRowBody.tsx";
+import { TaskIdBadge } from "./TaskIdBadge.tsx";
+import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
+import { projectPath } from "../hooks/useSessionRouting.ts";
 import {
-  nextStatus,
   pendingStatusSuggestion,
   type Task,
 } from "../lib/backlogTree.ts";
 import {
   buildTaskRowMeta,
-  type TaskRowMeta,
   type TaskRowMetaContext,
 } from "../lib/taskRowMeta.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -120,7 +121,6 @@ export function BacklogTreePane({
   today,
   selectedId,
   onOpen,
-  onCycle,
   onReorder,
   onAssignProjectsForRoots,
   onArchive,
@@ -160,7 +160,6 @@ export function BacklogTreePane({
   today: string;
   selectedId: string | null;
   onOpen: (id: string) => void;
-  onCycle: (task: Task) => void;
   onReorder: (placements: TaskPlacement[]) => void;
   onAssignProjectsForRoots: (
     rootIds: string[],
@@ -175,18 +174,15 @@ export function BacklogTreePane({
    */
   onArchive?: (ids: string[]) => string[] | null;
   /**
-   * Whether a row may be archived in ONE gesture: the swipe and the pointer
-   * button beside the title. Rows that answer false keep the `e` key and the
-   * inspector, which explain a refusal rather than doing nothing.
+   * Whether a row may be archived in one swipe. Rows that answer false keep
+   * the `e` key and inspector, which explain a refusal rather than doing nothing.
    */
   canQuickArchive?: (task: Task) => boolean;
   /** Gmail-style delete (with confirm) of the focused/selected task rows. */
   onDelete?: ((ids: string[]) => void) | undefined;
   /**
-   * The row's ONE gutter action, at `comfortable` density: open the session this
-   * Task's work happens in, or start one when it has none. Pass BOTH or neither
-   * — a gutter present on some rows and absent on others is the ragged right
-   * edge the two-line row exists to fix.
+   * The shared row's session action at `comfortable` density: open an existing
+   * session or start one when it has none. Pass BOTH or neither.
    */
   onOpenSession?: ((sessionId: string) => void) | undefined;
   onStartSession?: ((task: Task) => void) | undefined;
@@ -212,8 +208,8 @@ export function BacklogTreePane({
       ...(workflowIndicators !== undefined
         ? { workflowByTask: workflowIndicators }
         : {}),
-      // At `tight` density the chip stays on the single line it has always been
-      // on; at `comfortable` it is line 2's last item.
+      // Compact pickers keep a single line; full rows put the Project above
+      // the title, matching Focus.
       showProjectBadge: rowsShowProjectBadge,
     }),
     [
@@ -342,7 +338,6 @@ export function BacklogTreePane({
   // Not gated on the mobile breakpoint: `SwipeRow` ignores every pointer that
   // is not a finger, so this is inert on a mouse and still there on a tablet
   // wide enough to get the desktop layout.
-  const mobile = useMobileLayout();
   const quickArchive = onArchive && canQuickArchive;
   const rowSwipe = useMemo(() => {
     if (!quickArchive && !onDelete) return undefined;
@@ -428,10 +423,12 @@ export function BacklogTreePane({
       items={nodes}
       indentWidth={tight ? TIGHT_INDENT_WIDTH : INDENT_WIDTH}
       compact={tight}
+      paddedContent={false}
+      getRowClassName={(node) => !tight && node.data.kind === "task"
+        ? "group/item [--tree-toggle-offset:calc(0.375rem_+_var(--text-sm)*var(--text-sm--line-height)/2)]"
+        : "group/item"}
       flush={flush}
-      // Two-line rows give the chevron a full-height hit box beside the BLOCK
-      // instead of a 20px square centred on it — the glyph still sits between
-      // the lines, but the target is the row (see `rowAlign`).
+      // Keep the tree's full-height disclosure target beside shared row content.
       rowAlign={tight ? "center" : "stretch"}
       // A Project header is one line, so its chevron centres on it.
       getRowAlign={(node) =>
@@ -440,7 +437,7 @@ export function BacklogTreePane({
       // Flush (the sidebar), a Project header is the rail's group band — the
       // same one the Focus view and the Pull Requests rail draw.
       getRowBand={flush ? (node) => node.data.kind === "project" : undefined}
-      showGuides
+      showGuides={false}
       aria-label="Backlog"
       expandedIds={expandedIds}
       onExpandedChange={onExpandedChange}
@@ -468,14 +465,6 @@ export function BacklogTreePane({
           showProjectBadge={rowsShowProjectBadge}
           projectsById={projectsById}
           metaContext={metaContext}
-          onCycle={onCycle}
-          onQuickArchive={
-            !mobile && quickArchive && node.data.kind === "task"
-              ? canQuickArchive(node.data.task)
-                ? onArchive
-                : undefined
-              : undefined
-          }
           onOpenSession={onOpenSession}
           onStartSession={onStartSession}
           onNavigate={onNavigate}
@@ -625,8 +614,6 @@ function BacklogRowContent({
   showProjectBadge,
   projectsById,
   metaContext,
-  onCycle,
-  onQuickArchive,
   onOpenSession,
   onStartSession,
   onNavigate,
@@ -637,9 +624,6 @@ function BacklogRowContent({
   showProjectBadge: boolean;
   projectsById: Map<string, ProjectRecord>;
   metaContext: TaskRowMetaContext;
-  onCycle: (task: Task) => void;
-  /** Set only on rows a pointer may archive in one click; see `canQuickArchive`. */
-  onQuickArchive?: ((ids: string[]) => void) | undefined;
   onOpenSession?: ((sessionId: string) => void) | undefined;
   onStartSession?: ((task: Task) => void) | undefined;
   onNavigate?: ((path: string) => void) | undefined;
@@ -683,132 +667,41 @@ function BacklogRowContent({
       : "an agent says it is not finished"
     : null;
   const meta = tight ? null : buildTaskRowMeta(task, metaContext);
-  const gutter = Boolean(meta && onOpenSession && onStartSession);
-  // The pointer's half of the phone swipe. It holds its box on every row that
-  // offers it (rather than appearing on hover) so hovering the list does not
-  // shuffle the badges sideways — which is also why it goes on line 1: it is a
-  // FIXED width, and line 1's right edge is a column.
-  const archive = onQuickArchive ? (
-    <IconButton
-      label={`Archive “${task.title}”`}
-      size={tight ? "icon-xs" : "icon-sm"}
-      className="shrink-0 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => {
-        e.stopPropagation();
-        onQuickArchive([task.id]);
-      }}
-    >
-      <Archive />
-    </IconButton>
-  ) : null;
-  // A single line has no line 2 to move the chip to, so there it stays here.
-  const chip =
-    tight && showProjectBadge && task.projectId ? (
-      <ProjectBadge
-        projectId={task.projectId}
-        projectsById={projectsById}
-        size="sm"
-      />
-    ) : null;
-  return (
-    <div
-      className={`group/row flex min-w-0 ${tight ? "items-center gap-1" : "min-h-11 items-stretch gap-1.5"}`}
-    >
-      <IconButton
-        size={tight ? "icon-xs" : "icon-sm"}
-        className={`shrink-0 ${tight ? "" : "self-stretch pt-1"}`}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onCycle(task);
-        }}
-        label={`Status: ${task.status}${claim ? `, ${claim}` : ""}. Mark as ${nextStatus(task.status)}`}
-        // Two lines means the target can be TALL: full row height (well past the
-        // 44px a thumb needs) with the glyph on the title line rather than
-        // floating between the lines beside the chevron.
-      >
-        <StatusIcon
-          status={task.status}
-          size={tight ? 14 : 16}
-          claimed={Boolean(suggestion)}
-        />
-      </IconButton>
-      <div className="flex min-w-0 flex-1 flex-col justify-center">
-        <TaskRowBody
-          task={task}
-          meta={meta}
-          // The gutter names the session AND leads to it, so line 2 saying so
-          // again would cost the project chip its width on a clipping line.
-          sessionShownElsewhere={gutter}
-          projectsById={projectsById}
-          selected={state.selected}
-          dimmed={Boolean(context)}
-          onNavigate={onNavigate}
-          trailing={
-            archive || chip ? (
-              <>
-                {archive}
-                {chip}
-              </>
-            ) : undefined
-          }
-        />
-      </div>
-      {gutter && meta && onOpenSession && onStartSession ? (
-        <SessionGutterAction
-          task={task}
-          meta={meta}
-          onOpenSession={onOpenSession}
-          onStartSession={onStartSession}
-        />
-      ) : null}
-    </div>
+  const sessionAction = Boolean(meta && onOpenSession && onStartSession);
+  const session = meta?.session;
+  const signals = sessionAction && meta && !meta.working ? { ...meta, session: null } : meta;
+  const status = (
+    <span role="img" aria-label={`${TASK_STATUS_LABEL[task.status]}${claim ? `, ${claim}` : ""}`} title={TASK_STATUS_LABEL[task.status]} className="flex size-4 shrink-0 items-center justify-center">
+      <StatusIcon status={task.status} size={12} claimed={Boolean(suggestion)} />
+    </span>
   );
-}
-
-/**
- * The two-line row's ONE gutter action, and it is state-dependent: a Task whose
- * work already has a session opens it, a Task with none starts one. Two stacked
- * targets would be 26px each in a 52px row (`ActiveSessionCard` affords two
- * because each of its gutter controls keeps its own 36px or 44px floor and the
- * card grows around them — a Task row cannot grow past its two lines), so
- * archiving keeps the swipe, the hover button and `e` instead of a second slot
- * here.
- */
-function SessionGutterAction({
-  task,
-  meta,
-  onOpenSession,
-  onStartSession,
-}: {
-  task: Task;
-  meta: TaskRowMeta;
-  onOpenSession: (sessionId: string) => void;
-  onStartSession: (task: Task) => void;
-}) {
-  const session = meta.session;
-  const label = session
-    ? meta.working
-      ? `Open the session running on “${task.title}”`
-      : `Open the session started from “${task.title}”`
-    : `Start a session for “${task.title}”`;
+  const actions: ListRowAction[] = [
+    ...(sessionAction && onOpenSession && onStartSession ? [{
+      id: "session", label: session ? "Open session" : "Start session",
+      accessibleLabel: session ? `Open the session for "${task.title}"` : `Start a session for "${task.title}"`,
+      icon: session ? <MessageSquare /> : <MessageSquarePlus />,
+      onSelect: () => { if (session) onOpenSession(session.id); else onStartSession(task); },
+    }] : []),
+  ];
   return (
-    <IconButton
-      size="icon-sm"
-      className="w-9 shrink-0 self-stretch"
-      // The row is a drag activator (`Tree`), so a control inside it has to stop
-      // pointerdown as well as click or pressing it starts a drag.
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (session) onOpenSession(session.id);
-        else onStartSession(task);
-      }}
-      label={label}
-    >
-      {session ? <MessageSquare size={15} /> : <MessageSquarePlus size={15} />}
-    </IconButton>
+    <ListRowContent
+      density={density}
+      identity={
+        <>
+          {status}
+          <TaskRowTitle task={task} selected={state.selected} dimmed={Boolean(context)} />
+          {tight && showProjectBadge && task.projectId ? <ProjectBadge projectId={task.projectId} projectsById={projectsById} size="sm" /> : null}
+          {tight && task.openBlockerCount ? <TaskBlockedIndicator openBlockers={task.openBlockerCount} size={12} /> : null}
+          {tight ? <TaskIdBadge id={task.id} onNavigate={onNavigate} /> : null}
+        </>
+      }
+      signals={signals ? <>
+        <TaskIdBadge id={task.id} onNavigate={onNavigate} />
+        {signals.projectId ? <TaskProjectMeta projectId={signals.projectId} projectsById={projectsById} href={projectPath(signals.projectId)} onNavigate={onNavigate} /> : null}
+        <TaskRowDetails task={task} meta={signals} projectsById={projectsById} onNavigate={onNavigate} showContext={false} />
+      </> : undefined}
+      actions={actions.length ? <ListRowActions actions={actions} label="Task actions" alwaysVisible={state.selected} /> : undefined}
+    />
   );
 }
 

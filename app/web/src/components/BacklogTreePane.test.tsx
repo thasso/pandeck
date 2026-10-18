@@ -104,7 +104,6 @@ function render(
         today={TODAY}
         selectedId={null}
         onOpen={options.onOpen ?? (() => {})}
-        onCycle={() => {}}
         onReorder={() => {}}
         onAssignProjectsForRoots={() => {}}
         onArchive={onArchive}

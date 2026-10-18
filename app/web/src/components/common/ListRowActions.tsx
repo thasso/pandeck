@@ -35,6 +35,7 @@ export function ListRowActions({
       role="group"
       aria-label="Item actions"
       data-always-visible={alwaysVisible || undefined}
+      onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >

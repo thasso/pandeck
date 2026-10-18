@@ -264,8 +264,15 @@ status/suggestion/dismiss controls remain interactive inside a plain click
 surface (`interaction="content"`), not an ARIA button. Focus buckets use
 `ListGroupSection` in both hosts, including shared sticky headers and remembered
 disclosure state. Desktop sidebar Focus uses `tight` density like Attention and
-Pull Requests; phone and full-page Focus retain `comfortable`. The draggable
-Backlog tree keeps `common/Tree`.
+Pull Requests; phone and full-page Focus retain `comfortable`. The Backlog
+keeps `common/Tree` for hierarchy, selection, keyboard, swipe and drag behavior,
+with shared `ListRowContent` and `ListRowActions` inside each Task row. Full rows
+use two lines: plain status glyph and title above, then id, Project and metadata.
+The chevron aligns with the title; compact pickers stay single-line. The only
+row action opens or starts a session; status is informational, while archive
+retains its keyboard/swipe paths.
+The shared content owns its vertical padding, and action presses do not start
+a drag.
 
 Every Backlog surface states its own row DENSITY, and it is the host's decision
 rather than a breakpoint. Density controls spacing and control sizes, not the
