@@ -256,7 +256,10 @@ Tasks Focus and Inbox use `common/ListRow` in both the sidebar and full-page
 browser. Focus has three stable lines: Project left and Task id right above the
 title, the title in the middle, and a non-interactive status glyph with
 remaining Task metadata below. Inbox adds its description preview as a third
-line only when present. Their real title links, metadata links and inline
+line only when present. Inbox uses a single shared Accept action to triage an
+item into the task list without changing its status. Its metadata status glyph
+is informational, never a status-changing control.
+Their real title links, metadata links and inline
 status/suggestion/dismiss controls remain interactive inside a plain click
 surface (`interaction="content"`), not an ARIA button. Focus buckets use
 `ListGroupSection` in both hosts, including shared sticky headers and remembered

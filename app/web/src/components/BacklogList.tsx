@@ -300,7 +300,6 @@ function BacklogListImpl({
           showProjectBadge={!fixedFilter}
           selectedId={selectedId}
           onOpen={onOpenTask}
-          onCycle={c.cycleStatus}
           onDismiss={c.dismissFromInbox}
           density={density}
           flush={flush}

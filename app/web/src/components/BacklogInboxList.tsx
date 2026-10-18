@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { ListRow } from "./common/ListRow.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowActions } from "./common/ListRowActions.tsx";
 import type { ProjectRecord } from "@assistant/shared";
 import {
   TaskStatusIcon as StatusIcon,
@@ -14,7 +14,6 @@ import { EmptyBox } from "./common/load.tsx";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import {
-  nextStatus,
   pendingStatusSuggestion,
   type Task,
 } from "../lib/backlogTree.ts";
@@ -34,7 +33,8 @@ const RESTORE_AFTER_MS = 5000;
  * @avoidWhen Planning or arranging; those are the Focus and Backlog views.
  * @intent A triage queue, newest first, where the row carries what you need to
  * DECIDE with — where it came from and what it says — rather than the planning
- * metadata Focus shows. There is one control: dismiss. Everything else that
+ * metadata Focus shows. There is one control: accept into the task list without
+ * changing its status. Everything else that
  * would process a Task (open it and set a date, change its status, give it a
  * project) already counts as triage on the server, so the Inbox empties as a
  * side effect of doing the work rather than needing a second gesture.
@@ -46,7 +46,6 @@ export function BacklogInboxList({
   showProjectBadge,
   selectedId,
   onOpen,
-  onCycle,
   onDismiss,
   density,
   flush = false,
@@ -56,8 +55,7 @@ export function BacklogInboxList({
   showProjectBadge: boolean;
   selectedId: string | null;
   onOpen: (id: string) => void;
-  onCycle: (task: Task) => void;
-  /** Processed, nothing to do — take it out of the Inbox. */
+  /** Accept into the task list without changing status; take it out of Inbox. */
   onDismiss: (task: Task) => void;
   /** How much room a row gets, decided by the host (`BacklogDensity`). */
   density: BacklogDensity;
@@ -140,7 +138,6 @@ export function BacklogInboxList({
           showProjectBadge={showProjectBadge}
           selected={task.id === selectedId}
           onOpen={onOpen}
-          onCycle={onCycle}
           onDismiss={dismissWithExit}
           leaving={leaving.includes(task.id)}
           tight={tight}
@@ -156,7 +153,6 @@ function InboxRow({
   showProjectBadge,
   selected,
   onOpen,
-  onCycle,
   onDismiss,
   leaving,
   tight,
@@ -166,7 +162,6 @@ function InboxRow({
   showProjectBadge: boolean;
   selected: boolean;
   onOpen: (id: string) => void;
-  onCycle: (task: Task) => void;
   onDismiss: (task: Task) => void;
   /** Accepted, and on its way out (`ExitStage`). */
   leaving: boolean;
@@ -187,43 +182,26 @@ function InboxRow({
           active={selected}
           density={tight ? "tight" : "comfortable"}
           onOpen={() => onOpen(task.id)}
-          identity={
-            <>
-              <IconButton
-                label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
-                size={tight ? "icon-xs" : "icon-sm"}
-                className="shrink-0"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onCycle(task);
-                }}
-              >
-                <StatusIcon
-                  status={task.status}
-                  size={tight ? 14 : 16}
-                  claimed={Boolean(pendingStatusSuggestion(task))}
-                />
-              </IconButton>
-              <TaskRowTitle
-                task={task}
-                selected={selected}
-                onOpenTask={onOpen}
-              />
-              <IconButton
-                label={`Dismiss "${task.title}" from the Inbox`}
-                size={tight ? "icon-xs" : "icon-sm"}
-                className="shrink-0"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDismiss(task);
-                }}
-              >
-                <Check />
-              </IconButton>
-            </>
+          identity={<TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />}
+          actions={
+            <ListRowActions
+              alwaysVisible
+              actions={[
+                {
+                  id: "dismiss",
+                  label: "Accept",
+                  accessibleLabel: `Accept "${task.title}" into the task list`,
+                  icon: <Check />,
+                  onSelect: () => onDismiss(task),
+                },
+              ]}
+            />
           }
           details={
             <>
+              <span role="img" aria-label={TASK_STATUS_LABEL[task.status]} title={TASK_STATUS_LABEL[task.status]} className="flex shrink-0 items-center">
+                <StatusIcon status={task.status} size={12} claimed={Boolean(pendingStatusSuggestion(task))} />
+              </span>
               {showProjectBadge && task.projectId ? (
                 <TaskProjectMeta
                   projectId={task.projectId}

@@ -79,7 +79,6 @@ export const InboxRows: Story = {
         showProjectBadge
         selectedId={taskAreaTask.id}
         onOpen={() => {}}
-        onCycle={() => {}}
         onDismiss={() => {}}
         density="tight"
       />
