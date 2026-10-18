@@ -47,6 +47,8 @@ export interface TopicSurface {
    * today, since the subscription is what tells it about tomorrow's.
    */
   sessionTreeWorktreesVisible?: boolean;
+  /** The selected Task's inspector is showing its related worktrees. */
+  taskWorktreesVisible?: boolean;
   /** The composer's background ledge is expanded and listing rows. */
   backgroundLedgeOpen?: boolean;
   /**
@@ -69,8 +71,8 @@ export interface TopicSurface {
  * sidebar — subscribing on that would keep the large Task broadcasts flowing
  * into exactly the surface this is meant to keep quiet.
  *
- * A route-only Task detail reads Tasks, Projects and Workflow Runs but no
- * Worktree projection. A visible Sessions browser reads Workflow Runs alone. A visible Tasks sidebar retains Worktrees because its
+ * A route-only Task detail reads Tasks, Projects and Workflow Runs. Its
+ * inspector also subscribes to Worktrees while visible. A visible Sessions browser reads Workflow Runs alone. A visible Tasks sidebar retains Worktrees because its
  * comfortable/Focus rows render hosting and dirty-worktree facts. Project, Pull
  * Request and Worktree surfaces retain the same wider union — a pull request is
  * shown WITH the checkout, sessions and Tasks it is joined to, and those joins
@@ -96,6 +98,7 @@ export function topicsForSurface({
   sessionInspectorVisible = false,
   backgroundInspectorVisible = false,
   sessionTreeWorktreesVisible = false,
+  taskWorktreesVisible = false,
   backgroundLedgeOpen = false,
   settingsSection,
 }: TopicSurface): BroadcastTopic[] {
@@ -149,7 +152,8 @@ export function topicsForSurface({
     worktreeSurface ||
     selectedProjectSurface ||
     workflowStartOpen ||
-    sessionTreeWorktreesVisible
+    sessionTreeWorktreesVisible ||
+    taskWorktreesVisible
   )
     topics.add("worktrees");
   // A session's title bar names its project (and links to it).

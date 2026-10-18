@@ -57,10 +57,11 @@ export interface TaskRowMeta {
   working: boolean;
   /** The session started from this Task, when the browser holds one. */
   session: SessionListItem | null;
-  /** The primary session's worktree, retained for single-worktree consumers. */
+  /** The primary session's worktree if still present, otherwise another related
+   * worktree. Retained for single-worktree consumers. */
   worktreeId: string | null;
-  /** Distinct worktrees used by non-archived sessions started from this Task.
-   * Names come from a content-stable projection, never raw worktree records. */
+  /** Distinct current worktrees used by non-archived sessions started from this
+   * Task. Names and membership come from a content-stable projection. */
   worktrees?: Array<{
     id: string;
     name: string | null;
@@ -163,14 +164,21 @@ export function buildTaskRowMeta(
   ctx: TaskRowMetaContext,
 ): TaskRowMeta {
   const session = taskStartSession(task, ctx.sessionById);
-  const worktreeId = session?.worktreeId ?? null;
+  const worktreeIds = taskWorktreeIds(
+    [task],
+    ctx.sessionById,
+    ctx.worktreeNames ? new Set(Object.keys(ctx.worktreeNames)) : undefined,
+  );
+  const worktreeId = session?.worktreeId && worktreeIds.includes(session.worktreeId)
+    ? session.worktreeId
+    : worktreeIds[0] ?? null;
   const workflowIndicator = ctx.workflowByTask?.get(task.id);
   return {
     suggestion: pendingStatusSuggestion(task) ?? null,
     working: Boolean(session?.isStreaming),
     session,
     worktreeId,
-    worktrees: taskWorktreeIds([task], ctx.sessionById).map((id) => ({
+    worktrees: worktreeIds.map((id) => ({
       id,
       name: ctx.worktreeNames?.[id] ?? null,
       delivery: taskRowDelivery(id, ctx.hostingByWorktree),

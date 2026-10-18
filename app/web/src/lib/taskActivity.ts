@@ -36,7 +36,8 @@ export function isTaskWorking(
 
 /**
  * The distinct worktrees used by non-archived sessions started from these Tasks.
- * Rows and git-status watches use the same set, including multiple worktrees.
+ * Rows, inspectors and git-status watches restrict this to the current worktree
+ * collection when it is supplied. Session references can outlive removed worktrees.
  *
  * This is the Backlog's whole reach into worktree state, and both halves of it
  * read this one answer: what the app holds a live git-status WATCH for while
@@ -50,13 +51,17 @@ export function isTaskWorking(
 export function taskWorktreeIds(
   tasks: readonly Task[],
   sessionById: Map<string, SessionListItem>,
+  availableWorktrees?: ReadonlySet<string>,
 ): string[] {
   const ids = new Set<string>();
   for (const task of tasks) {
     for (const ref of task.sessionRefs ?? []) {
       if (!isWorkingRef(ref)) continue;
       const session = sessionById.get(ref.sessionId);
-      if (session?.worktreeId && !session.archived) ids.add(session.worktreeId);
+      if (
+        session?.worktreeId && !session.archived &&
+        (!availableWorktrees || availableWorktrees.has(session.worktreeId))
+      ) ids.add(session.worktreeId);
     }
   }
   return [...ids].sort();

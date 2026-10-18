@@ -280,8 +280,10 @@ The shared content owns its vertical padding, and action presses do not start
 a drag. Task metadata shows worktree navigation alongside PR/CI, never in its
 place. One worktree shows its branch name when space allows, then compacts to
 the icon. Several distinct worktrees show a count that opens their individual
-links. Count only worktrees of non-archived sessions started from the Task,
-not sessions that merely referenced it. Dirty dots belong to their worktrees;
+links. Count only worktrees present in the current worktree collection and
+used by non-archived sessions started from the Task, not sessions that merely
+referenced it. Old session references to removed worktrees do not count. The
+browser, inspector and git-status watches use this same filter. Dirty dots belong to their worktrees;
 PR/CI badges are deduplicated across worktrees. Worktree names reach memoized
 Backlog surfaces as a content-stable projection, not raw worktree records.
 
@@ -989,7 +991,12 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    but the worktree the session runs in, which Details names, draws no group.
    The panel holds the Worktrees topic whenever it shows a session. A group may
    bound its first page (a session's Tasks shows five) and reveal the rest on
-   demand.
+   demand. Task inspectors also list **Worktrees** as shared worktree rows,
+   deduplicated from the non-archived sessions started from that Task, using the
+   same association rule as its browser row. Each opens the worktree in the main
+   pane. While visible, the Task inspector holds the Worktrees topic, preserves
+   retained rows during refresh, and shows loading or retryable failure in the
+   group rather than claiming an unread collection is empty.
 
 An Initiative page is the one main-pane object whose panel can show ANOTHER
 object: selecting a node on its map, or a row of its list, opens that member

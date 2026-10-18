@@ -1453,6 +1453,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         // the subscription keeps fresh, and a session's FIRST worktree, made
         // after an empty read, would never arrive.
         sessionTreeWorktreesVisible: routedSessionInspectorShown,
+        taskWorktreesVisible:
+          route.name === "tasks" && Boolean(route.id) && inspectorOpen &&
+          (mobileLayout
+            ? !composerVisible && !commentActuation?.composerOpen
+            : inspectorTabVisible),
         // The ledge only exists on a session screen whose session owns work,
         // so an open flag left over from another session subscribes nothing.
         backgroundLedgeOpen:
@@ -1659,8 +1664,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     const sessionById = new Map(
       state.sessions.map((session) => [session.id, session]),
     );
-    return taskWorktreeIds(state.taskList?.items ?? [], sessionById);
-  }, [hostingActive.taskRows, state.sessions, state.taskList]);
+    return taskWorktreeIds(
+      state.taskList?.items ?? [],
+      sessionById,
+      new Set((state.worktrees ?? []).map((worktree) => worktree.id)),
+    );
+  }, [hostingActive.taskRows, state.sessions, state.taskList, state.worktrees]);
   // Watching is not free — the server answers each id with a coalesced git scan
   // and then keeps a watcher on it — so this is the set of ids the rows can
   // actually mark, and nothing while no such row is on screen.
@@ -7238,6 +7247,11 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     <TaskInspector
       task={task}
       sessions={state.sessions}
+      worktrees={state.worktrees}
+      worktreeStatuses={state.worktreeStatuses}
+      worktreesError={state.worktreeListError}
+      worktreesFresh={state.worktreesFresh}
+      onReloadWorktrees={actions.listWorktrees}
       openers={inspectorOpeners}
       onStartSession={startSessionForTask}
       noSessionRefs={options.noSessionRefs ?? false}
