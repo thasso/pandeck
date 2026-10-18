@@ -14,6 +14,7 @@ import { afterAll, beforeEach, test } from "vitest";
 const { getDb, closeDb } = await import("./index.ts");
 const { PULL_REQUEST_CARD_SQL } = await import("./pullRequestCardStore.ts");
 const { APPROVAL_SQL } = await import("./approvalStore.ts");
+const { SPAWN_GRANT_EDGE_SQL } = await import("./sessionStore.ts");
 const cards = await import("../pullRequestCards.ts");
 const approvals = await import("../pendingApprovals.ts");
 
@@ -93,6 +94,9 @@ const context = {
 const TARGETED = new Set<string>([
   ...Object.values(PULL_REQUEST_CARD_SQL),
   ...Object.values(APPROVAL_SQL),
+  // Showing a session lists the grants it inherits: one indexed spawn-edge
+  // read per ancestor (`sessionStore.test.ts` explains its plan).
+  SPAWN_GRANT_EDGE_SQL,
   "PRAGMA data_version",
 ]);
 
@@ -149,7 +153,7 @@ test("a watcher poll, a card update, a session show and a list build issue only 
     cards.patchPullRequestCard(id, { actionMessage: "working" });
     // Showing the session.
     approvals.approvalsForSession("s-hot");
-    approvals.approvalGrantsForSession("s-hot");
+    approvals.approvalGrantsPayload("s-hot");
     cards.cardsForSession("s-hot");
     // A session-list build after that write.
     cards.pullRequestSummariesBySession();

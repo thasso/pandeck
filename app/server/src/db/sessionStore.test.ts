@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-const { sessionStore, SPAWNED_DESCENDANTS_SQL } =
+const { sessionStore, SPAWNED_DESCENDANTS_SQL, SPAWN_GRANT_EDGE_SQL } =
   await import("./sessionStore.ts");
 const { getDb } = await import("./index.ts");
 
@@ -329,6 +329,156 @@ test("SQLite session store sets spawn ownership on the user's word", () => {
 
   for (const id of [parent, child, legacy, malformed, plain])
     getDb().prepare("DELETE FROM session_index WHERE id = ?").run(id);
+});
+
+/**
+ * Every metadata shape a spawn edge may hold, and whether it inherits
+ * approval grants: only SQL NULL (an edge older than inheritance) and a plain
+ * object without the property do. Writers only ever emit `false`, so any other
+ * value — even `true` — is corruption and fails closed.
+ */
+const INHERITANCE_SHAPES: Array<[string | null, boolean]> = [
+  [null, true],
+  ['{"ownership":"coordinator"}', true],
+  ['{"ownership":"coordinator","inheritGrants":false}', false],
+  ['{"inheritGrants":"no"}', false],
+  ['{"inheritGrants":true}', false],
+  ["not json", false],
+  ["null", false],
+  ["7", false],
+  ['"x"', false],
+  ["[]", false],
+];
+
+test("a spawn edge inherits grants only when its metadata says nothing against it", () => {
+  const suffix = `${Date.now()}-${Math.random()}`;
+  const parent = `inherit-parent-${suffix}`;
+  sessionStore.upsert({ id: parent, harness: "pi", agentType: "assistant" });
+  const inheritsOf = (id: string) => sessionStore.spawnGrantEdge(id)?.inherits;
+
+  INHERITANCE_SHAPES.forEach(([metadata, inherits], index) => {
+    const child = `inherit-child-${index}-${suffix}`;
+    sessionStore.upsert({ id: child, harness: "pi", agentType: "assistant" });
+    sessionStore.linkSpawned(parent, child, 10);
+    getDb()
+      .prepare(
+        `UPDATE session_links SET metadata_json = ?
+          WHERE child_session_id = ? AND relation_type = 'spawned'`,
+      )
+      .run(metadata, child);
+    assert.equal(inheritsOf(child), inherits, `read ${String(metadata)}`);
+
+    // Ownership changes rewrite the metadata and must carry the result.
+    assert.equal(
+      sessionStore.setSpawnedOwnership(child, "taken-over", 500),
+      true,
+    );
+    assert.equal(inheritsOf(child), inherits, `take over ${String(metadata)}`);
+    assert.equal(sessionStore.setSpawnedOwnership(child, "coordinator"), true);
+    assert.equal(inheritsOf(child), inherits, `hand back ${String(metadata)}`);
+    getDb().prepare("DELETE FROM session_index WHERE id = ?").run(child);
+  });
+
+  // The opt-out is written at creation, in the same insert, and only as false.
+  const optedOut = `inherit-opted-out-${suffix}`;
+  const plain = `inherit-plain-${suffix}`;
+  for (const id of [optedOut, plain])
+    sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  sessionStore.linkSpawned(parent, optedOut, 10, "taken-over", {
+    inheritGrants: false,
+  });
+  sessionStore.linkSpawned(parent, plain, 10, "coordinator", {
+    inheritGrants: true,
+  });
+  const metadataOf = (id: string) =>
+    (
+      getDb()
+        .prepare(
+          "SELECT metadata_json FROM session_links WHERE child_session_id = ?",
+        )
+        .get(id) as { metadata_json: string }
+    ).metadata_json;
+  assert.deepEqual(JSON.parse(metadataOf(optedOut)), {
+    ownership: "taken-over",
+    takenOverAt: 10,
+    inheritGrants: false,
+  });
+  assert.deepEqual(JSON.parse(metadataOf(plain)), { ownership: "coordinator" });
+  assert.deepEqual(
+    sessionStore.spawnedParentsByChildIds([optedOut]).get(optedOut),
+    {
+      parentSessionId: parent,
+      ownership: "taken-over",
+      takenOverAt: 10,
+    },
+  );
+  for (const id of [parent, optedOut, plain])
+    getDb().prepare("DELETE FROM session_index WHERE id = ?").run(id);
+});
+
+test("the grant walk climbs nearest first and stops at an opt-out, a deleted parent or a cycle", () => {
+  const suffix = `${Date.now()}-${Math.random()}`;
+  const id = (name: string) => `walk-${name}-${suffix}`;
+  for (const name of ["root", "mid", "leaf", "opted", "below", "x", "y"])
+    sessionStore.upsert({
+      id: id(name),
+      harness: "pi",
+      agentType: "assistant",
+    });
+  sessionStore.linkSpawned(id("root"), id("mid"));
+  sessionStore.linkSpawned(id("mid"), id("leaf"));
+  assert.deepEqual(sessionStore.spawnGrantAncestors(id("leaf")), [
+    id("mid"),
+    id("root"),
+  ]);
+  assert.deepEqual(sessionStore.spawnGrantAncestors(id("root")), []);
+
+  sessionStore.linkSpawned(id("leaf"), id("opted"), 1, "coordinator", {
+    inheritGrants: false,
+  });
+  sessionStore.linkSpawned(id("opted"), id("below"));
+  assert.deepEqual(sessionStore.spawnGrantAncestors(id("opted")), []);
+  assert.deepEqual(sessionStore.spawnGrantAncestors(id("below")), [
+    id("opted"),
+  ]);
+
+  // Archived still counts; soft-deleted ends the walk below it.
+  sessionStore.setArchived(id("root"), true);
+  assert.deepEqual(sessionStore.spawnGrantAncestors(id("leaf")), [
+    id("mid"),
+    id("root"),
+  ]);
+  sessionStore.markDeleted(id("mid"));
+  assert.deepEqual(sessionStore.spawnGrantAncestors(id("leaf")), []);
+
+  // A cycle terminates.
+  sessionStore.linkSpawned(id("x"), id("y"));
+  sessionStore.linkSpawned(id("y"), id("x"));
+  assert.deepEqual(sessionStore.spawnGrantAncestors(id("x")), [id("y")]);
+
+  for (const name of ["root", "mid", "leaf", "opted", "below", "x", "y"])
+    getDb().prepare("DELETE FROM session_index WHERE id = ?").run(id(name));
+});
+
+test("the grant walk's edge read searches the child index and the parent's key", () => {
+  const plan = (
+    getDb()
+      .prepare(`EXPLAIN QUERY PLAN ${SPAWN_GRANT_EDGE_SQL}`)
+      .all("x") as Array<{ detail: string }>
+  )
+    .map((row) => row.detail)
+    .join("\n");
+  assert.match(
+    plan,
+    /SEARCH l USING (?:COVERING )?INDEX session_links_child_idx/,
+    plan,
+  );
+  assert.match(
+    plan,
+    /SEARCH p USING (?:INTEGER PRIMARY KEY|INDEX sqlite_autoindex_session_index_1|PRIMARY KEY)/,
+    plan,
+  );
+  assert.doesNotMatch(plan, /\bSCAN\b/, plan);
 });
 
 test("SQLite session store does not constrain future persona names", () => {

@@ -1400,6 +1400,29 @@ function parseSpawnOwnership(raw: string | null | undefined): {
   return { ownership: "unknown" };
 }
 
+/**
+ * Whether a `spawned` edge passes its parent's approval grants down
+ * (`docs/approvals.md`, Inherited grants).
+ *
+ * Writers record only the opt-out, `"inheritGrants": false`. An edge written
+ * before inheritance existed (SQL NULL) or a well-formed object without the
+ * property inherits; every other shape — invalid JSON, JSON `null`, a scalar,
+ * an array, or any present value, even `true` — fails closed to NOT
+ * inheriting, so a corrupt edge never widens authority.
+ */
+function parseSpawnInheritance(raw: string | null | undefined): boolean {
+  if (raw === null || raw === undefined) return true;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+    return false;
+  return !Object.hasOwn(parsed, "inheritGrants");
+}
+
 function linkInternal(input: {
   parentSessionId: string;
   childSessionId: string;
@@ -1439,6 +1462,7 @@ function linkSpawned(
   childSessionId: string,
   createdAt = Date.now(),
   ownership: SettableSpawnOwnership = "coordinator",
+  options: { inheritGrants?: boolean } = {},
 ): void {
   const existing = getDb()
     .prepare(
@@ -1465,11 +1489,12 @@ function linkSpawned(
       parentSessionId,
       childSessionId,
       createdAt,
-      JSON.stringify(
-        ownership === "taken-over"
+      JSON.stringify({
+        ...(ownership === "taken-over"
           ? { ownership, takenOverAt: createdAt }
-          : { ownership },
-      ),
+          : { ownership }),
+        ...(options.inheritGrants === false ? { inheritGrants: false } : {}),
+      }),
     );
 }
 
@@ -1509,11 +1534,16 @@ function setSpawnedOwnership(
         WHERE parent_session_id = ? AND child_session_id = ? AND relation_type = 'spawned'`,
     )
     .run(
-      JSON.stringify(
-        ownership === "taken-over"
+      JSON.stringify({
+        ...(ownership === "taken-over"
           ? { ownership, takenOverAt: at }
-          : { ownership },
-      ),
+          : { ownership }),
+        // Ownership never changes inheritance: an edge that does not inherit,
+        // corrupt ones included, keeps not inheriting in the rewritten form.
+        ...(parseSpawnInheritance(row.metadata_json)
+          ? {}
+          : { inheritGrants: false }),
+      }),
       row.parent_session_id,
       childSessionId,
     );
@@ -1547,6 +1577,69 @@ function spawnedParentsByChildIds(
       },
     ]),
   );
+}
+
+/** One step up a spawn chain, as approval-grant inheritance reads it. */
+export interface SpawnGrantEdge {
+  parentSessionId: string;
+  /** Whether the edge passes the parent's grants down ({@link parseSpawnInheritance}). */
+  inherits: boolean;
+  /** A soft-deleted parent holds no authority and ends the walk. */
+  parentDeleted: boolean;
+}
+
+/**
+ * A child's spawn edge with its parent's deletion state: one search of
+ * `session_links_child_idx` and one primary-key read of the parent. Exported so
+ * the query-plan test explains the exact statement.
+ */
+export const SPAWN_GRANT_EDGE_SQL = `SELECT l.parent_session_id, l.metadata_json, p.deleted_at_ms
+    FROM session_links l
+    JOIN session_index p ON p.id = l.parent_session_id
+   WHERE l.child_session_id = ? AND l.relation_type = 'spawned'`;
+
+function spawnGrantEdge(childSessionId: string): SpawnGrantEdge | undefined {
+  const row = getDb().prepare(SPAWN_GRANT_EDGE_SQL).get(childSessionId) as
+    | {
+        parent_session_id: string;
+        metadata_json: string | null;
+        deleted_at_ms: number | null;
+      }
+    | undefined;
+  if (!row) return undefined;
+  return {
+    parentSessionId: row.parent_session_id,
+    inherits: parseSpawnInheritance(row.metadata_json),
+    parentDeleted: row.deleted_at_ms !== null,
+  };
+}
+
+/**
+ * The ancestors whose approval grants reach a session, nearest first. The walk
+ * climbs one edge at a time and stops at a session that was not spawned, at
+ * an edge that does not inherit, at a soft-deleted parent, or on a cycle. An
+ * archived parent still counts. `edgeOf` lets one caller share edge reads
+ * across many walks; it defaults to a live read.
+ */
+function spawnGrantAncestors(
+  sessionId: string,
+  edgeOf: (
+    childSessionId: string,
+  ) => SpawnGrantEdge | undefined = spawnGrantEdge,
+): string[] {
+  const chain: string[] = [];
+  const seen = new Set([sessionId]);
+  for (
+    let edge = edgeOf(sessionId);
+    edge;
+    edge = edgeOf(edge.parentSessionId)
+  ) {
+    if (!edge.inherits || edge.parentDeleted || seen.has(edge.parentSessionId))
+      break;
+    seen.add(edge.parentSessionId);
+    chain.push(edge.parentSessionId);
+  }
+  return chain;
 }
 
 /**
@@ -1881,6 +1974,8 @@ export const sessionStore = {
   spawnedParentsByChildIds,
   spawnedDescendantIds,
   spawnedParentByChild,
+  spawnGrantEdge,
+  spawnGrantAncestors,
   recordUsageTurn,
   replaceUsage,
   createInternalUsageSession,

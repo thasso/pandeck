@@ -25,6 +25,21 @@ export interface ApprovalGrant {
   sourceApprovalId: string;
 }
 
+/**
+ * A grant a spawned session inherits: held by `heldBy`, the nearest session up
+ * its spawn chain that holds the key. Nothing is copied, so it is revoked
+ * only on `heldBy`.
+ */
+export interface InheritedApprovalGrant extends ApprovalGrant {
+  heldBy: string;
+}
+
+/** Whether a spawned session inherits grants through its spawn edge. */
+export interface ApprovalGrantInheritance {
+  parentSessionId: string;
+  inherits: boolean;
+}
+
 /** One operation a session can be granted, as the inspector lists it. */
 export interface GrantableOperation {
   key: string;

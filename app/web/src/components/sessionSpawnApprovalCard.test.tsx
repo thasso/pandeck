@@ -122,6 +122,32 @@ test("shows every proposed session, its target and its runtime", () => {
   expect(host.textContent).toContain("is not available on any enabled account");
 });
 
+test("a row that opts out of grant inheritance says so; the others say nothing", () => {
+  const base = card();
+  if (base.body.kind !== "sessionSpawn") throw new Error("spawn card");
+  const [reviewer, implementer] = base.body.items;
+  render(
+    card({
+      body: {
+        ...base.body,
+        items: [{ ...reviewer!, inheritGrants: false }, implementer!],
+      },
+    }),
+  );
+
+  const rows = [...host.querySelectorAll("[data-slot='item']")];
+  const reviewerRow = rows.find((row) =>
+    row.textContent?.includes("Reviewer: auth"),
+  );
+  const implementerRow = rows.find((row) =>
+    row.textContent?.includes("Implementer: auth"),
+  );
+  expect(reviewerRow?.textContent).toContain("Won’t inherit your approvals");
+  expect(implementerRow?.textContent).not.toContain("inherit");
+  // Display only: the card offers no control to change it.
+  expect(button("Won’t inherit your approvals")).toBeUndefined();
+});
+
 test("a row naming an agent shows the role beside its persona", () => {
   const base = card();
   if (base.body.kind !== "sessionSpawn") throw new Error("spawn card");

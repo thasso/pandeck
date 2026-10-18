@@ -29,7 +29,11 @@ import type {
   InitiativeState,
   InitiativeSummary,
 } from "./initiatives.ts";
-import type { ApprovalGrant } from "./approvalGrants.ts";
+import type {
+  ApprovalGrant,
+  ApprovalGrantInheritance,
+  InheritedApprovalGrant,
+} from "./approvalGrants.ts";
 import type {
   CommentTarget,
   CommentThread,
@@ -3986,6 +3990,11 @@ export interface SessionSpawnApprovalItem {
   responseRequested: boolean;
   /** Choosing user ownership at approval withdrew the proposed awaited reply. */
   responseRequestWithdrawn?: boolean;
+  /**
+   * The session will not inherit the proposer's approval grants, nor will its
+   * own spawns through it; absent means it inherits. Fixed at proposal.
+   */
+  inheritGrants?: false;
   provider: string;
   modelId: string;
   modelName?: string;
@@ -4116,6 +4125,13 @@ export interface ApprovalCard {
    * it ran, which leaves an ordinary pending card.
    */
   autoApproved?: boolean;
+  /**
+   * On an auto-approved card, the operations an ANCESTOR's grant covered and
+   * the session holding each one; operations the session holds itself are
+   * not listed. Re-stamped when the card starts executing, cleared with
+   * `autoApproved`.
+   */
+  inheritedGrants?: Array<{ key: string; fromSessionId: string }>;
   /** The user chose "Approve for session", granting this card's operations. */
   grantedForSession?: boolean;
   /** Id of the newer card that replaced this one (status `superseded`). */
@@ -8820,8 +8836,18 @@ export type ServerMessage =
   | { type: "mutationSettled"; requestId: string }
   /** An approval card was created or updated; the client upserts it by id. */
   | { type: "approvalUpdate"; sessionId: string; approval: ApprovalCard }
-  /** The session's complete set of approval grants, replacing the last one. */
-  | { type: "approvalGrants"; sessionId: string; grants: ApprovalGrant[] }
+  /**
+   * The session's complete set of approval grants, replacing the last one.
+   * `grants` is the session's OWN list; `inherited` holds what it inherits
+   * from its spawn ancestors, and `inheritance` is present when it was spawned.
+   */
+  | {
+      type: "approvalGrants";
+      sessionId: string;
+      grants: ApprovalGrant[];
+      inherited?: InheritedApprovalGrant[];
+      inheritance?: ApprovalGrantInheritance;
+    }
   /** A pull-request card (stage 2 `/pr`) was created or updated; upsert by id. */
   | { type: "pullRequestCardUpdate"; sessionId: string; card: PullRequestCard }
   /**

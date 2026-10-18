@@ -313,7 +313,7 @@ import { mergeWorktree } from "./worktrees/worktreeMerge.ts";
 import { existsSync } from "node:fs";
 import {
   approvalForId,
-  approvalGrantsForSession,
+  approvalGrantsPayload,
   approvalsForSession,
   resolveApproval,
   revokeApprovalGrant,
@@ -5573,7 +5573,7 @@ export class Connection implements Viewer {
     this.send({
       type: "approvalGrants",
       sessionId: live.sessionId,
-      grants: approvalGrantsForSession(live.sessionId),
+      ...approvalGrantsPayload(live.sessionId),
     });
     // Same reasoning for pull-request cards: store-driven, so they must be
     // re-emitted after the atomic snapshot rather than assumed to be in it.

@@ -1094,7 +1094,11 @@ describe("useAssistant approval chronology", () => {
       { type: "approvalGrants", sessionId: "s1", grants: [grant] },
       state,
     );
-    expect(state.approvalGrants).toEqual({ sessionId: "s1", grants: [grant] });
+    expect(state.approvalGrants).toEqual({
+      sessionId: "s1",
+      grants: [grant],
+      inherited: [],
+    });
 
     state = apply(snapshotFor("s2"), state);
     state = apply(
@@ -1107,7 +1111,92 @@ describe("useAssistant approval chronology", () => {
       state,
     );
 
-    expect(state.approvalGrants).toEqual({ sessionId: "s1", grants: [] });
+    expect(state.approvalGrants).toEqual({
+      sessionId: "s1",
+      grants: [],
+      inherited: [],
+    });
+  });
+
+  /**
+   * The own list reaches every approval card in the transcript, so a frame is
+   * applied by content: what did not change keeps its identity, and a frame
+   * that changes nothing changes no state at all.
+   */
+  it("keeps each grant list's identity while its content is unchanged", () => {
+    const own = { key: "jira:edit", grantedAt: 1, sourceApprovalId: "a1" };
+    const inherited = {
+      key: "jira:comment",
+      grantedAt: 2,
+      sourceApprovalId: "",
+      heldBy: "parent",
+    };
+    const frame = (patch: Record<string, unknown> = {}) =>
+      ({
+        type: "approvalGrants",
+        sessionId: "s1",
+        grants: [{ ...own }],
+        inherited: [{ ...inherited }],
+        inheritance: { parentSessionId: "parent", inherits: true },
+        ...patch,
+      }) as Extract<ServerMessage, { type: "approvalGrants" }>;
+    const first = apply(frame(), approvalTimelineState());
+    expect(first.approvalGrants).toEqual({
+      sessionId: "s1",
+      grants: [own],
+      inherited: [inherited],
+      inheritance: { parentSessionId: "parent", inherits: true },
+    });
+
+    // An identical frame, in fresh objects, is a no-op.
+    expect(apply(frame(), first)).toBe(first);
+
+    // Only what an ancestor holds changed: the own list keeps its identity.
+    const ancestorOnly = apply(frame({ inherited: [] }), first);
+    expect(ancestorOnly).not.toBe(first);
+    expect(ancestorOnly.approvalGrants!.grants).toBe(
+      first.approvalGrants!.grants,
+    );
+    expect(ancestorOnly.approvalGrants!.inherited).toEqual([]);
+    expect(ancestorOnly.approvalGrants!.inheritance).toBe(
+      first.approvalGrants!.inheritance,
+    );
+
+    // An own change replaces the own list and keeps the inherited one.
+    const ownChange = apply(
+      frame({ inherited: [], grants: [{ ...own, grantedAt: 9 }] }),
+      ancestorOnly,
+    );
+    expect(ownChange.approvalGrants!.grants).not.toBe(
+      ancestorOnly.approvalGrants!.grants,
+    );
+    expect(ownChange.approvalGrants!.inherited).toBe(
+      ancestorOnly.approvalGrants!.inherited,
+    );
+
+    // The opt-out flips the inheritance object; a holder change is content.
+    const optedOut = apply(
+      frame({
+        inherited: [],
+        grants: [{ ...own, grantedAt: 9 }],
+        inheritance: { parentSessionId: "parent", inherits: false },
+      }),
+      ownChange,
+    );
+    expect(optedOut.approvalGrants!.grants).toBe(
+      ownChange.approvalGrants!.grants,
+    );
+    expect(optedOut.approvalGrants!.inheritance).toEqual({
+      parentSessionId: "parent",
+      inherits: false,
+    });
+    const moved = apply(
+      frame({ inherited: [{ ...inherited, heldBy: "grandparent" }] }),
+      first,
+    );
+    expect(moved.approvalGrants!.inherited).not.toBe(
+      first.approvalGrants!.inherited,
+    );
   });
 });
 

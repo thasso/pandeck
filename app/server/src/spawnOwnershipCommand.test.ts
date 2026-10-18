@@ -484,3 +484,45 @@ test("a peer cannot be handed back to a coordinator that was deleted", async () 
     for (const id of [coordinator, peer]) sessionStore.remove(id);
   }
 });
+
+test("Take over and Hand back keep a peer's grant opt-out", async () => {
+  const stamp = Date.now();
+  const coordinator = `own-cmd-optout-root-${stamp}`;
+  const peer = `own-cmd-optout-peer-${stamp}`;
+  for (const id of [coordinator, peer])
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      title: id,
+    });
+  sessionStore.linkSpawned(coordinator, peer, Date.now(), "coordinator", {
+    inheritGrants: false,
+  });
+  const sent: ServerMessage[] = [];
+  const connection = new Connection(fakeSocket(sent));
+  try {
+    for (const ownership of ["taken-over", "coordinator"] as const) {
+      await connection.handle({
+        type: "setSpawnOwnership",
+        id: peer,
+        ownership,
+      } as ClientMessage);
+      assert.equal(
+        sessionStore.spawnedParentsByChildIds([peer]).get(peer)?.ownership,
+        ownership,
+      );
+      assert.equal(sessionStore.spawnGrantEdge(peer)?.inherits, false);
+    }
+    assert.equal(
+      sent.some((message) => message.type === "error"),
+      false,
+      JSON.stringify(sent),
+    );
+  } finally {
+    connection.dispose();
+    for (const notice of agentHandoffStore.listForSession(coordinator))
+      agentHandoffStore.remove(notice.id);
+    for (const id of [coordinator, peer]) sessionStore.remove(id);
+  }
+});

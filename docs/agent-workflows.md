@@ -121,13 +121,19 @@ the outcome:
   Proposals default to no awaited reply as before; choosing user ownership in
   the card withdraws any proposed reply request. The approval result tells the
   proposer each row's final owner and whether its awaited reply was withdrawn;
-  the resolved card also records the withdrawal. Both owners receive the opening
-  prompt as a peer message from the spawner, retaining transcript provenance.
-  Either side exposes that parentage as navigable **Spawned by** / **Spawned
-  sessions** rows in the Session inspector, and the Sessions inbox folds a
-  coordinator and the peers it still owns into ONE card (below). An idle child
-  means nothing; chasing it is the coordinator's job. Choose it for
-  experimentation, where a cheap wrong answer is recoverable.
+  the resolved card also records the withdrawal. A row may also set
+  `inheritGrants: false`, for a session such as a reviewer that should ask for
+  everything itself: by default a spawned session's cards are covered by every
+  "Approve for session" grant its spawner and their spawn ancestors hold
+  (`docs/approvals.md`, Inherited grants). The choice is stored on the spawn
+  edge, shown on the proposal card and in the direct-spawn result, and cannot be
+  changed later. Both owners receive the opening prompt as a peer message from
+  the spawner, retaining transcript provenance. Either side exposes that
+  parentage as navigable **Spawned by** / **Spawned sessions** rows in the
+  Session inspector, and the Sessions inbox folds a coordinator and the peers it
+  still owns into ONE card (below). An idle child means nothing; chasing it is
+  the coordinator's job. Choose it for experimentation, where a cheap wrong
+  answer is recoverable.
 
   That spawn edge also carries WHO OWNS the child ([Task-637](pa://task/637)),
   as `SessionListItem.spawnOwnership`:

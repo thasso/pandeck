@@ -1125,12 +1125,12 @@ class SessionHub {
   /** Broadcast a session's approval grants to that session's viewers only. */
   broadcastApprovalGrants(
     sessionId: string,
-    grants: import("@assistant/shared").ApprovalGrant[],
+    payload: import("./pendingApprovals.ts").ApprovalGrantsPayload,
   ): void {
     this.sendToSessionViewers(sessionId, {
       type: "approvalGrants",
       sessionId,
-      grants,
+      ...payload,
     });
   }
 
