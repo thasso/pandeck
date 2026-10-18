@@ -122,6 +122,10 @@ frame, keeping hierarchy and selection rather than nesting a clickable flat row.
 `getRowDisclosure` hides the gutter for rows with an inline expansion control.
 Full Backlog Task rows use a leading Sub-tasks control in their bottom line,
 without a reserved chevron or leaf spacer; keyboard expansion stays with Tree.
+When there is no Sub-tasks control or metadata, omit the bottom line and move
+the session action beside the title. Task worktree and PR indicators remain
+separate. A single worktree's name hides in the signal row's compact form;
+multiple worktrees use a count menu with individual links.
 Mobile layout or a coarse pointer moves actions to a separate strip beneath
 the content: labeled targets at least 44px high, 12px gaps, and wrapping into
 stacked buttons when space is tight. The strip never opens the item. Shared

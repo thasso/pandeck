@@ -2813,6 +2813,15 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     }),
     [backlogTasks, backlogSessions],
   );
+  const backlogWorktreeNamesKey = JSON.stringify(
+    (state.worktrees ?? [])
+      .map((worktree) => [worktree.id, worktree.branch] as const)
+      .sort(([a], [b]) => a.localeCompare(b)),
+  );
+  const backlogWorktreeNames = useMemo<Readonly<Record<string, string>>>(
+    () => Object.fromEntries(JSON.parse(backlogWorktreeNamesKey)),
+    [backlogWorktreeNamesKey],
+  );
   const backlogState = useMemo<BacklogState>(
     () => ({
       connected: state.connected,
@@ -2823,6 +2832,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       taskProjectsAssignedSeq: state.taskProjectsAssignedSeq,
       worktreeMerge: state.worktreeMerge,
       sessions: backlogSessions,
+      worktreeNames: backlogWorktreeNames,
     }),
     [
       state.connected,
@@ -2833,6 +2843,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       state.taskProjectsAssignedSeq,
       state.worktreeMerge,
       backlogSessions,
+      backlogWorktreeNames,
     ],
   );
   const projectIdForWorktree = useCallback(

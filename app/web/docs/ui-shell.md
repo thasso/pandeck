@@ -268,14 +268,22 @@ Pull Requests; phone and full-page Focus retain `comfortable`. The Backlog
 keeps `common/Tree` for hierarchy, selection, keyboard, swipe and drag behavior,
 with shared `ListRowContent` and `ListRowActions` inside each Task row. Full rows
 put Project left and the status glyph immediately before Task id on the right
-above the title, then Sub-tasks disclosure and metadata on the bottom line. Sub-tasks is the first bottom-line item
-only for parents; it uses the existing persisted expansion state. Task rows
-reserve no chevron gutter or leaf spacer. Project headers and compact pickers
+above the title, then Sub-tasks disclosure and metadata on the bottom line.
+Omit that line when neither is present, placing the session action beside the
+title instead. Sub-tasks is the first bottom-line item only for parents; it
+uses the existing persisted expansion state. Task rows reserve no chevron
+gutter or leaf spacer. Project headers and compact pickers
 retain tree disclosure controls; compact pickers stay single-line. The only
 row action opens or starts a session; status is informational, while archive
 retains its keyboard/swipe paths.
 The shared content owns its vertical padding, and action presses do not start
-a drag.
+a drag. Task metadata shows worktree navigation alongside PR/CI, never in its
+place. One worktree shows its branch name when space allows, then compacts to
+the icon. Several distinct worktrees show a count that opens their individual
+links. Count only worktrees of non-archived sessions started from the Task,
+not sessions that merely referenced it. Dirty dots belong to their worktrees;
+PR/CI badges are deduplicated across worktrees. Worktree names reach memoized
+Backlog surfaces as a content-stable projection, not raw worktree records.
 
 Every Backlog surface states its own row DENSITY, and it is the host's decision
 rather than a breakpoint. Density controls spacing and control sizes, not the

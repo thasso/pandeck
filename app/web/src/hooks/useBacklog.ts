@@ -67,7 +67,10 @@ export type BacklogState = Pick<
   | "taskProjectsAssignedSeq"
   | "sessions"
   | "worktreeMerge"
->;
+> & {
+  /** Names only; unrelated worktree broadcasts must not repaint task rows. */
+  worktreeNames?: Readonly<Record<string, string>>;
+};
 
 /**
  * The Backlog's own writes, correlated by REQUEST rather than recognised by the

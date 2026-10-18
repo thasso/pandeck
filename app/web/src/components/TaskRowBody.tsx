@@ -1,6 +1,12 @@
 import type { ReactNode } from "react";
 import { Badge } from "./ui/badge.tsx";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
+import {
   CalendarCheck,
   Flag,
   FolderKanban,
@@ -375,6 +381,102 @@ function MetaLink({
   );
 }
 
+/** Worktree navigation and PR state remain separate, including on narrow rows. */
+function TaskCodeMeta({
+  meta,
+  onNavigate,
+}: {
+  meta: TaskRowMeta;
+  onNavigate?: ((path: string) => void) | undefined;
+}) {
+  const worktrees = meta.worktrees ?? (meta.worktreeId ? [{
+    id: meta.worktreeId,
+    name: null,
+    delivery: meta.delivery,
+    dirty: meta.dirty,
+  }] : []);
+  const single = worktrees.length === 1 ? worktrees[0] : undefined;
+  const deliveries = [...new Map(
+    (meta.worktrees ? worktrees.map((worktree) => worktree.delivery) : [meta.delivery])
+      .filter((delivery): delivery is TaskRowDelivery => delivery !== null)
+      .map((delivery) => [delivery.url ?? `${delivery.prNumber}:${delivery.state}`, delivery]),
+  ).values()];
+  return (
+    <>
+      {single ? (
+        <span className="inline-flex shrink-0 items-center gap-1">
+          <MetaLink
+            href={worktreePath(single.id)}
+            title={single.name ? `Worktree: ${single.name}` : "Has a worktree"}
+            className="inline-flex items-center gap-1 text-muted-foreground"
+            onNavigate={onNavigate}
+          >
+            <GitBranch size={10} aria-label="Has a worktree" />
+            {single.name ? <span className="max-w-48 truncate [[data-signals-compact]_&]:hidden">{single.name}</span> : null}
+          </MetaLink>
+          {single.dirty ? (
+            <MetaLink
+              href={worktreePath(single.id, "changes")}
+              title="Uncommitted changes"
+              className="-m-0.5 flex shrink-0 p-0.5"
+              onNavigate={onNavigate}
+            >
+              <span role="img" aria-label="Uncommitted changes" className="size-1.5 rounded-full bg-warning" />
+            </MetaLink>
+          ) : null}
+        </span>
+      ) : worktrees.length > 1 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={<Badge variant="ghost" render={<button type="button" />} />}
+            title={worktrees.map((worktree) => worktree.name ?? worktree.id).join(", ")}
+            aria-label={`${worktrees.length} worktrees`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground"
+          >
+            <GitBranch aria-hidden />
+            {worktrees.length} worktrees
+            {worktrees.some((worktree) => worktree.dirty) ? <span role="img" aria-label="Uncommitted changes in linked worktrees" className="size-1.5 rounded-full bg-warning" /> : null}
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-64" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+            {worktrees.map((worktree) => (
+              <DropdownMenuItem
+                key={worktree.id}
+                render={onNavigate ? <a href={worktreePath(worktree.id)} draggable={false} /> : <span />}
+                disabled={!onNavigate}
+                className="cursor-pointer touch-ui:min-h-11"
+                onClick={(event) => followRowLink(event, worktreePath(worktree.id), onNavigate)}
+              >
+                <GitBranch aria-hidden />
+                <span className="min-w-0 flex-1 truncate">{worktree.name ?? worktree.id}</span>
+                {worktree.dirty ? <span role="img" aria-label="Uncommitted changes" className="size-1.5 shrink-0 rounded-full bg-warning" /> : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+      {deliveries.map((delivery) => (
+        <MetaLink
+          key={delivery.url ?? `${delivery.prNumber}:${delivery.state}`}
+          href={delivery.url ?? ""}
+          external={delivery.url !== null}
+          title={deliveryTitle(delivery)}
+          className="inline-flex shrink-0"
+        >
+          <Badge variant={DELIVERY_VARIANT[delivery.state]}>
+            <GitPullRequest aria-hidden="true" />
+            {delivery.state === "open" && delivery.prNumber !== null
+              ? `PR #${delivery.prNumber}`
+              : DELIVERY_LABEL[delivery.state]}
+          </Badge>
+        </MetaLink>
+      ))}
+    </>
+  );
+}
+
 /**
  * The chips after the Project and the id, in the order they survive a narrow
  * row: what is true THIS SECOND first, then what was decided about the Task.
@@ -390,10 +492,6 @@ function TaskMetaItems({
   // session the browser holds, so there is always one behind it; the null case is
   // the type's, not a state a row can be in.
   const session = meta.session ? sessionPath(meta.session.id) : null;
-  const worktree = meta.worktreeId ? worktreePath(meta.worktreeId) : null;
-  const worktreeChanges = meta.worktreeId
-    ? worktreePath(meta.worktreeId, "changes")
-    : null;
   return (
     <>
       {/* WHAT the agent suggested, since the two kinds ask different questions
@@ -445,79 +543,7 @@ function TaskMetaItems({
       {meta.blockers ? (
         <TaskBlockedIndicator openBlockers={meta.blockers} />
       ) : null}
-      {/* The code, and what has become of it. One group, because the dirty dot
-          marks whichever chip stands for "there is code" — and either chip may
-          be the one that survives a narrow row. */}
-      {meta.delivery || meta.worktreeId ? (
-        <span className="inline-flex shrink-0 items-center gap-1">
-          {/* Where the branch stands with its PR and its checks — the one fact
-              on this line that neither the Task nor its session can tell you,
-              and the one most likely to be what the row is waiting on. It
-              REPLACES the worktree glyph rather than joining it: a PR is a
-              stronger statement of "there is code" than a branch, and the line
-              clips from the right. The glyph stays for a branch whose hosting
-              says nothing (or is not known — an absent projection is unknown,
-              never clean). */}
-          {meta.delivery ? (
-            /* The chip leads to where the state can be INSPECTED — the pull
-               request, or the checks' own page — which is off-site, so it opens
-               in a new tab. A projection that named neither states the same words
-               without a link rather than aiming somewhere it has not been told
-               about. */
-            <MetaLink
-              href={meta.delivery.url ?? ""}
-              external={meta.delivery.url !== null}
-              title={deliveryTitle(meta.delivery)}
-              className="inline-flex shrink-0"
-            >
-              <Badge variant={DELIVERY_VARIANT[meta.delivery.state]}>
-                <GitPullRequest aria-hidden="true" />
-                {meta.delivery.state === "open" &&
-                meta.delivery.prNumber !== null
-                  ? `PR #${meta.delivery.prNumber}`
-                  : DELIVERY_LABEL[meta.delivery.state]}
-              </Badge>
-            </MetaLink>
-          ) : (
-            /* A glyph alone: the worktree RECORDS (and so its branch name) are
-               not in the Backlog's state slice. That there is code for this
-               Task is still worth one character of width — and the glyph is the
-               way to the worktree it stands for. */
-            <MetaLink
-              href={worktree ?? ""}
-              title="Has a worktree"
-              className="inline-flex items-center text-muted-foreground"
-              onNavigate={worktree ? onNavigate : undefined}
-            >
-              <GitBranch size={10} aria-label="Has a worktree" />
-            </MetaLink>
-          )}
-          {/* Uncommitted changes, as a DOT rather than the inbox's
-              "Uncommitted" badge: this fact subsumes nothing — a branch can
-              have an open PR and unsaved work at once — so it has to fit
-              beside whatever chip is already there, and the words go in the
-              tooltip. Warning-toned, the same tier the Worktrees inbox gives a
-              dirty tree. It leads to the worktree's CHANGES, which is the one
-              place the dot's claim can be read — and the only route to that
-              worktree at all on a row whose branch glyph a PR chip took. The
-              negative margin buys the 6px dot a hittable box without moving
-              anything on the line. */}
-          {meta.dirty ? (
-            <MetaLink
-              href={worktreeChanges ?? ""}
-              title="Uncommitted changes"
-              className="-m-0.5 flex shrink-0 p-0.5"
-              onNavigate={worktreeChanges ? onNavigate : undefined}
-            >
-              <span
-                role="img"
-                aria-label="Uncommitted changes"
-                className="size-1.5 rounded-full bg-warning"
-              />
-            </MetaLink>
-          ) : null}
-        </span>
-      ) : null}
+      <TaskCodeMeta meta={meta} onNavigate={onNavigate} />
       {meta.workflow ? (
         <span
           role="img"

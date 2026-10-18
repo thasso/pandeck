@@ -60,6 +60,7 @@ export function BacklogFocusList({
   today,
   projectsById,
   sessionById,
+  worktreeNames,
   hosting,
   dirtyWorktrees,
   workflowIndicators,
@@ -79,6 +80,7 @@ export function BacklogFocusList({
   projectsById: Map<string, ProjectRecord>;
   /** Live sessions, for the OBSERVED "working" signal (`lib/taskActivity.ts`). */
   sessionById: Map<string, SessionListItem>;
+  worktreeNames?: TaskRowMetaContext["worktreeNames"];
   /** The app's PR/CI projection, for the row's delivery chip; see `TaskRowMeta`. */
   hosting?: WorktreeHostingMap | undefined;
   /** Worktrees with uncommitted changes, for the row's dirty dot; same rule. */
@@ -110,6 +112,7 @@ export function BacklogFocusList({
     () => ({
       today,
       sessionById,
+      worktreeNames,
       showProjectBadge,
       ...(hosting !== undefined ? { hostingByWorktree: hosting } : {}),
       ...(dirtyWorktrees !== undefined ? { dirtyWorktrees } : {}),
@@ -120,6 +123,7 @@ export function BacklogFocusList({
     [
       today,
       sessionById,
+      worktreeNames,
       showProjectBadge,
       hosting,
       dirtyWorktrees,

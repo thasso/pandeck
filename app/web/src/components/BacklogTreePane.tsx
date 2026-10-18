@@ -37,6 +37,7 @@ import {
 } from "../lib/backlogTree.ts";
 import {
   buildTaskRowMeta,
+  taskRowMetaEmpty,
   type TaskRowMetaContext,
 } from "../lib/taskRowMeta.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -117,6 +118,7 @@ export function BacklogTreePane({
   projectsById,
   activeProjects,
   sessionById,
+  worktreeNames,
   hosting,
   dirtyWorktrees,
   workflowIndicators,
@@ -152,6 +154,7 @@ export function BacklogTreePane({
   activeProjects: ProjectRecord[];
   /** Live sessions, for the OBSERVED row signals (`lib/taskActivity.ts`). */
   sessionById: Map<string, SessionListItem>;
+  worktreeNames?: TaskRowMetaContext["worktreeNames"];
   /** The app's PR/CI projection, for the row's delivery chip; see `TaskRowMeta`. */
   hosting?: WorktreeHostingMap | undefined;
   /** Worktrees with uncommitted changes, for the row's dirty dot; same rule. */
@@ -205,6 +208,7 @@ export function BacklogTreePane({
     () => ({
       today,
       sessionById,
+      worktreeNames,
       ...(hosting !== undefined ? { hostingByWorktree: hosting } : {}),
       ...(dirtyWorktrees !== undefined ? { dirtyWorktrees } : {}),
       ...(workflowIndicators !== undefined
@@ -217,6 +221,7 @@ export function BacklogTreePane({
     [
       today,
       sessionById,
+      worktreeNames,
       hosting,
       dirtyWorktrees,
       workflowIndicators,
@@ -703,7 +708,7 @@ function BacklogRowContent({
           {tight ? <TaskIdBadge id={task.id} onNavigate={onNavigate} /> : null}
         </>
       }
-      signals={signals ? <>
+      signals={signals && (state.hasChildren || !taskRowMetaEmpty({ ...signals, projectId: null })) ? <>
         {state.hasChildren ? (
           <Badge
             variant="ghost"

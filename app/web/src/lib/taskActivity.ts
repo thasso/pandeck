@@ -35,8 +35,8 @@ export function isTaskWorking(
 }
 
 /**
- * The DISTINCT worktrees a list of Tasks has work in, by the same rule a row
- * draws its worktree glyph from ({@link taskStartSession}).
+ * The distinct worktrees used by non-archived sessions started from these Tasks.
+ * Rows and git-status watches use the same set, including multiple worktrees.
  *
  * This is the Backlog's whole reach into worktree state, and both halves of it
  * read this one answer: what the app holds a live git-status WATCH for while
@@ -53,8 +53,11 @@ export function taskWorktreeIds(
 ): string[] {
   const ids = new Set<string>();
   for (const task of tasks) {
-    const worktreeId = taskStartSession(task, sessionById)?.worktreeId;
-    if (worktreeId) ids.add(worktreeId);
+    for (const ref of task.sessionRefs ?? []) {
+      if (!isWorkingRef(ref)) continue;
+      const session = sessionById.get(ref.sessionId);
+      if (session?.worktreeId && !session.archived) ids.add(session.worktreeId);
+    }
   }
   return [...ids].sort();
 }

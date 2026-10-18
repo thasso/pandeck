@@ -310,6 +310,7 @@ function BacklogListImpl({
           today={today}
           projectsById={c.projectsById}
           sessionById={c.sessionById}
+          worktreeNames={state.worktreeNames}
           hosting={hosting}
           dirtyWorktrees={dirtyWorktrees}
           workflowIndicators={workflowIndicators}
@@ -341,6 +342,7 @@ function BacklogListImpl({
           projectsById={c.projectsById}
           activeProjects={c.activeProjects}
           sessionById={c.sessionById}
+          worktreeNames={state.worktreeNames}
           hosting={hosting}
           dirtyWorktrees={dirtyWorktrees}
           workflowIndicators={workflowIndicators}
