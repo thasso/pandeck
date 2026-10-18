@@ -200,6 +200,8 @@ export interface TreeProps<T> {
    * single-line Project headers centre their chevron among two-line Task rows.
    */
   getRowAlign?: ((node: TreeNode<T>) => "center" | "stretch") | undefined;
+  /** Hide the disclosure gutter when content supplies its own expansion control. */
+  getRowDisclosure?: ((node: TreeNode<T>) => boolean) | undefined;
   /** Extra classes on a row, by node + state. */
   getRowClassName?: (node: TreeNode<T>, state: TreeNodeState) => string;
   /**
@@ -286,6 +288,7 @@ export function Tree<T>({
   flush = false,
   rowAlign = "center",
   getRowAlign,
+  getRowDisclosure,
   getRowClassName,
   getRowBand,
   className,
@@ -599,6 +602,7 @@ export function Tree<T>({
       paddedContent,
       flush,
       rowAlign: getRowAlign?.(toNode(node)) ?? rowAlign,
+      showDisclosure: getRowDisclosure?.(toNode(node)) ?? true,
       hasChildren,
       isExpanded,
       isFocused: (focusedId ?? flattened[0]?.id) === node.id,
@@ -691,6 +695,7 @@ interface RowProps<T> {
   paddedContent: boolean;
   flush: boolean;
   rowAlign: "center" | "stretch";
+  showDisclosure: boolean;
   hasChildren: boolean;
   isExpanded: boolean;
   isFocused: boolean;
@@ -716,6 +721,7 @@ function RowBody<T>({
   paddedContent,
   flush,
   rowAlign,
+  showDisclosure,
   hasChildren,
   isExpanded,
   selected,
@@ -733,6 +739,7 @@ function RowBody<T>({
   | "paddedContent"
   | "flush"
   | "rowAlign"
+  | "showDisclosure"
   | "hasChildren"
   | "isExpanded"
   | "selected"
@@ -781,7 +788,7 @@ function RowBody<T>({
             style={{ left: inset + i * indentWidth + indentWidth / 2 }}
           />
         ))}
-      {hasChildren ? (
+      {showDisclosure && hasChildren ? (
         <Button
           variant="ghost"
           size="icon-xs"
@@ -814,14 +821,14 @@ function RowBody<T>({
             )}
           />
         </Button>
-      ) : (
+      ) : showDisclosure ? (
         <span
           className={cx(
             "shrink-0",
             stretch ? "w-5" : compact ? "w-4" : "size-5",
           )}
         />
-      )}
+      ) : null}
       <div className={cx("min-w-0 flex-1", paddedContent && (compact ? "py-0.5" : "py-1"))}>
         {content}
       </div>

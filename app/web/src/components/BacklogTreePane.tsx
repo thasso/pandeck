@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { TaskStatusIcon as StatusIcon, TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
 import {
   Archive,
+  ChevronRight,
   FolderKanban,
   MessageSquare,
   MessageSquarePlus,
@@ -22,6 +23,7 @@ import {
 import type { SwipeAction } from "./common/SwipeRow.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import { Button } from "./ui/button.tsx";
+import { Badge } from "./ui/badge.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
 import { ListRowActions, type ListRowAction } from "./common/ListRowActions.tsx";
 import { ProjectBadge } from "./ProjectBadge.tsx";
@@ -424,11 +426,10 @@ export function BacklogTreePane({
       indentWidth={tight ? TIGHT_INDENT_WIDTH : INDENT_WIDTH}
       compact={tight}
       paddedContent={false}
-      getRowClassName={(node) => !tight && node.data.kind === "task"
-        ? "group/item [--tree-toggle-offset:calc(0.375rem_+_var(--text-sm)*var(--text-sm--line-height)/2)]"
-        : "group/item"}
+      getRowClassName={() => "group/item"}
+      getRowDisclosure={(node) => tight || node.data.kind === "project"}
       flush={flush}
-      // Keep the tree's full-height disclosure target beside shared row content.
+      // Only project headers and compact pickers retain a separate disclosure gutter.
       rowAlign={tight ? "center" : "stretch"}
       // A Project header is one line, so its chevron centres on it.
       getRowAlign={(node) =>
@@ -462,6 +463,9 @@ export function BacklogTreePane({
         <BacklogRowContent
           node={node}
           state={state}
+          onToggle={() => onExpandedChange(state.expanded
+            ? expandedIds.filter((id) => id !== node.id)
+            : [...expandedIds, node.id])}
           showProjectBadge={rowsShowProjectBadge}
           projectsById={projectsById}
           metaContext={metaContext}
@@ -611,6 +615,7 @@ function handleMoveResult(
 function BacklogRowContent({
   node,
   state,
+  onToggle,
   showProjectBadge,
   projectsById,
   metaContext,
@@ -621,6 +626,7 @@ function BacklogRowContent({
 }: {
   node: TreeNode<BacklogNodeData>;
   state: TreeNodeState;
+  onToggle: () => void;
   showProjectBadge: boolean;
   projectsById: Map<string, ProjectRecord>;
   metaContext: TaskRowMetaContext;
@@ -686,9 +692,11 @@ function BacklogRowContent({
   return (
     <ListRowContent
       density={density}
+      context={meta ? (meta.projectId ? <TaskProjectMeta projectId={meta.projectId} projectsById={projectsById} href={projectPath(meta.projectId)} onNavigate={onNavigate} /> : null) : undefined}
+      contextTrailing={meta ? <span className="flex items-center gap-1.5">{status}<TaskIdBadge id={task.id} onNavigate={onNavigate} /></span> : undefined}
       identity={
         <>
-          {status}
+          {tight ? status : null}
           <TaskRowTitle task={task} selected={state.selected} dimmed={Boolean(context)} />
           {tight && showProjectBadge && task.projectId ? <ProjectBadge projectId={task.projectId} projectsById={projectsById} size="sm" /> : null}
           {tight && task.openBlockerCount ? <TaskBlockedIndicator openBlockers={task.openBlockerCount} size={12} /> : null}
@@ -696,8 +704,21 @@ function BacklogRowContent({
         </>
       }
       signals={signals ? <>
-        <TaskIdBadge id={task.id} onNavigate={onNavigate} />
-        {signals.projectId ? <TaskProjectMeta projectId={signals.projectId} projectsById={projectsById} href={projectPath(signals.projectId)} onNavigate={onNavigate} /> : null}
+        {state.hasChildren ? (
+          <Badge
+            variant="ghost"
+            render={<button type="button" />}
+            aria-expanded={state.expanded}
+            aria-label={`${state.expanded ? "Hide" : "Show"} sub-tasks of "${task.title}"`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); onToggle(); }}
+            className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+          >
+            Sub-tasks <span>{node.children?.length}</span>
+            <ChevronRight size={12} className={state.expanded ? "rotate-90" : ""} aria-hidden />
+          </Badge>
+        ) : null}
         <TaskRowDetails task={task} meta={signals} projectsById={projectsById} onNavigate={onNavigate} showContext={false} />
       </> : undefined}
       actions={actions.length ? <ListRowActions actions={actions} label="Task actions" alwaysVisible={state.selected} /> : undefined}

@@ -267,8 +267,11 @@ disclosure state. Desktop sidebar Focus uses `tight` density like Attention and
 Pull Requests; phone and full-page Focus retain `comfortable`. The Backlog
 keeps `common/Tree` for hierarchy, selection, keyboard, swipe and drag behavior,
 with shared `ListRowContent` and `ListRowActions` inside each Task row. Full rows
-use two lines: plain status glyph and title above, then id, Project and metadata.
-The chevron aligns with the title; compact pickers stay single-line. The only
+put Project left and the status glyph immediately before Task id on the right
+above the title, then Sub-tasks disclosure and metadata on the bottom line. Sub-tasks is the first bottom-line item
+only for parents; it uses the existing persisted expansion state. Task rows
+reserve no chevron gutter or leaf spacer. Project headers and compact pickers
+retain tree disclosure controls; compact pickers stay single-line. The only
 row action opens or starts a session; status is informational, while archive
 retains its keyboard/swipe paths.
 The shared content owns its vertical padding, and action presses do not start
