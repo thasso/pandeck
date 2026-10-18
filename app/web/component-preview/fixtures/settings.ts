@@ -213,6 +213,7 @@ export const settingsFixture: AppSettings = {
 };
 export const settingsPrefs: Prefs = {
   theme: "light",
+  layoutMode: "automatic",
   textScale: 100,
   showThinking: false,
   showTools: true,

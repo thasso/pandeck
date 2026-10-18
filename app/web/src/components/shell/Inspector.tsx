@@ -584,7 +584,7 @@ export function Inspector({
     ) : null;
   return (
     <aside
-      className={`flex h-full w-full shrink-0 flex-col overflow-hidden surface-sidebar border-border ${desktopTabs ? "" : "sm:border-l"}`}
+      className={`flex h-full w-full shrink-0 flex-col overflow-hidden surface-sidebar border-border ${desktopTabs ? "" : "desktop:border-l"}`}
     >
       {showHeader && (
         <header className="flex min-h-11 items-center gap-2 border-b border-border px-3">

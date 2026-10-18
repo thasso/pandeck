@@ -4,6 +4,19 @@
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
+/* Shell presentation follows the browser-local layout choice, including portals.
+   Width-based utilities remain for content wrapping and physically sized dialogs. */
+@custom-variant desktop {
+  &:where([data-layout="desktop"] *) {
+    @slot;
+  }
+  /* Isolated components and previews without a shell retain Automatic. */
+  @media (width >= 768px) {
+    &:where(:root:not([data-layout]) *) {
+      @slot;
+    }
+  }
+}
 /* While the phone keyboard is up (`App.tsx` sets `data-keyboard-open` on the
    root): chrome that should step aside while the user types. */
 @custom-variant keyboard-open (:where([data-keyboard-open]) &);

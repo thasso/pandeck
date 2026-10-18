@@ -83,6 +83,7 @@ export const dirtyStatus = worktreeStatus({
 /** The diff-display prefs the page reads; the rest are the app defaults. */
 export const storyPrefs = {
   theme: "light",
+  layoutMode: "automatic",
   textScale: 100,
   worktreeChangesRailWidth: 280,
   worktreeChangesRailCollapsed: false,

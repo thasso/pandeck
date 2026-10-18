@@ -99,20 +99,25 @@ group-header palette.
 ### Browser rows
 
 `common/ListRow` is the shared edge-to-edge browser item, built on `Item`. A
-title with an optional leading icon is one line. Add either `context` above or
-`signals` below for two lines; provide both for three. Omitted lines take no
-space; passing `signals={null}` reserves an empty signal line. `age` closes the
-context line, `pinned` keeps important signals visible, and `trailing` keeps
-controls fixed at the end of the final line. Context and signals show whole
-items or hide them; hidden controls become inert, and signals compact before
-dropping items.
+title with an optional leading icon is one line. Add `context` above or
+`details` below for two lines. Three-line Attention and PR rows use context,
+title and `signals`; Task Inbox rows use title, details and a preview in
+`signals`. Omitted lines take no space; passing `signals={null}` reserves an
+empty signal line. `contextTrailing` pins content such as a Task id to the
+context line's right edge; otherwise `age` closes that line. `pinned` keeps
+important signals visible, and `trailing` keeps controls fixed at the end of the
+final line. Supporting lines show whole items or hide them; hidden controls
+become inert, and signals compact before dropping items.
 
 The row owns padding, typography, line spacing, selection, hover, focus and
 Enter/Space/arrow-key behavior. Its host supplies `density`, object data,
 accessible names, domain shortcuts, and actions. Simple navigation renders a
 real button. Rows containing other controls use the default focusable container
-so buttons are never nested. A parent grouping a row with expanded children
-passes `divider={false}` and owns that group's separator.
+so buttons are never nested. Task rows use `interaction="content"`: the frame is
+a plain click surface, and real title and metadata links own keyboard access and
+modifier-click behavior. They must not be hidden behind `role="button"`. A
+parent grouping a row with expanded children passes `divider={false}` and owns
+that group's separator.
 
 `ListRowContent` provides the same geometry inside a domain-owned presentation
 wrapper, such as a session's actions flip. `identity` accepts an existing

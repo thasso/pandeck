@@ -33,13 +33,13 @@ export function AppHeaderBar({
     : "pt-0.5";
   const chromeClass =
     chrome === "transparent"
-      ? "border-b border-transparent bg-transparent sm:bg-transparent sm:backdrop-blur-none"
-      : "border-b border-border bg-background sm:bg-background/80 sm:backdrop-blur";
+      ? "border-b border-transparent bg-transparent desktop:bg-transparent desktop:backdrop-blur-none"
+      : "border-b border-border bg-background desktop:bg-background/80 desktop:backdrop-blur";
   return (
     <header
       aria-hidden={ariaHidden || undefined}
       data-tauri-drag-region={dragRegion || undefined}
-      className={`flex min-h-9 items-center px-2 pb-0.5 ${topPadding} sm:h-9 sm:py-0 ${chromeClass} ${className}`}
+      className={`flex min-h-9 items-center px-2 pb-0.5 ${topPadding} desktop:h-9 desktop:py-0 ${chromeClass} ${className}`}
     >
       {children}
     </header>

@@ -183,35 +183,21 @@ export function TaskRowBody({
    */
   onOpenTask?: (id: string) => void;
 }) {
-  const done = task.status === "done";
   // Dropped BEFORE the emptiness question, so a Task whose only signal was that
   // session falls back to status + age rather than saying nothing but its id.
   const line2 =
     meta && sessionShownElsewhere && !meta.working
       ? { ...meta, session: null }
       : meta;
-  // The Project leads line 2 on its own, so it does not count as something
-  // else to say: a Task with only a Project still gets the fallback.
-  const empty = !line2 || taskRowMetaEmpty({ ...line2, projectId: null });
-  const project = line2?.projectId ? projectPath(line2.projectId) : null;
-  const titleClass = `min-w-0 flex-1 truncate text-sm ${done ? "text-muted-foreground line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-foreground" : "text-foreground"}`;
   return (
     <>
       <span className="flex min-w-0 items-baseline gap-1.5">
-        {onOpenTask ? (
-          <a
-            href={taskPath(task.id)}
-            draggable={false}
-            className={titleClass}
-            onClick={(event) =>
-              followRowLink(event, taskPath(task.id), () => onOpenTask(task.id))
-            }
-          >
-            {task.title}
-          </a>
-        ) : (
-          <span className={titleClass}>{task.title}</span>
-        )}
+        <TaskRowTitle
+          task={task}
+          selected={selected}
+          dimmed={dimmed}
+          onOpenTask={onOpenTask}
+        />
         {/* Centred as a group rather than sitting on the title's baseline: a
             control or a chip aligned by ITS baseline hangs below the line and
             makes line 1 as tall as the control, which is how a row with an
@@ -239,27 +225,101 @@ export function TaskRowBody({
         // wraps, but is one line tall, so a wrapped item goes below the clip
         // (the session cards' signal row does the same).
         <span className="mt-0.5 flex h-5 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden whitespace-nowrap text-xs">
-          {/* The Project OPENS line 2, then the id, in every two-line view: a
-              left-hand column the eye scans down, and the items on a clipping
-              line that must never be the ones that clip (the Project's name
-              shortens before it goes). */}
-          {line2.projectId ? (
-            <TaskProjectMeta
-              projectId={line2.projectId}
-              projectsById={projectsById}
-              href={project}
-              onNavigate={onNavigate}
-            />
-          ) : null}
-          <TaskIdBadge id={task.id} onNavigate={onNavigate} />
-          {/* Nothing else to say leaves the line to the Project and the id:
-              the status is the glyph beside the title, and how long ago the
-              Task changed is not worth the space. */}
-          {!empty ? (
-            <TaskMetaItems meta={line2} onNavigate={onNavigate} />
-          ) : null}
+          <TaskRowDetails
+            task={task}
+            meta={line2}
+            projectsById={projectsById}
+            onNavigate={onNavigate}
+          />
         </span>
       ) : null}
+    </>
+  );
+}
+
+/** The Task title, including its real link and completed/context-only tone. */
+export function TaskRowTitle({
+  task,
+  selected,
+  dimmed = false,
+  onOpenTask,
+}: {
+  task: Task;
+  selected: boolean;
+  dimmed?: boolean;
+  onOpenTask?: ((id: string) => void) | undefined;
+}) {
+  const titleClass = `min-w-0 flex-1 truncate text-sm ${task.status === "done" ? "text-muted-foreground line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-foreground" : "text-foreground"}`;
+  return onOpenTask ? (
+    <a
+      href={taskPath(task.id)}
+      draggable={false}
+      className={titleClass}
+      onClick={(event) =>
+        followRowLink(event, taskPath(task.id), () => onOpenTask(task.id))
+      }
+    >
+      {task.title}
+    </a>
+  ) : (
+    <span className={titleClass}>{task.title}</span>
+  );
+}
+
+/** Project and durable Task id for a combined Task metadata line. */
+function TaskRowContext({
+  task,
+  meta,
+  projectsById,
+  onNavigate,
+}: {
+  task: Task;
+  meta: TaskRowMeta;
+  projectsById: Map<string, ProjectRecord>;
+  onNavigate?: ((path: string) => void) | undefined;
+}) {
+  return (
+    <>
+      {meta.projectId ? (
+        <TaskProjectMeta
+          projectId={meta.projectId}
+          projectsById={projectsById}
+          href={projectPath(meta.projectId)}
+          onNavigate={onNavigate}
+        />
+      ) : null}
+      <TaskIdBadge id={task.id} onNavigate={onNavigate} />
+    </>
+  );
+}
+
+/** Shared Task metadata content; the tree or ListRow owns its line geometry. */
+export function TaskRowDetails({
+  task,
+  meta,
+  projectsById,
+  onNavigate,
+  showContext = true,
+}: {
+  task: Task;
+  meta: TaskRowMeta;
+  projectsById: Map<string, ProjectRecord>;
+  onNavigate?: ((path: string) => void) | undefined;
+  /** Off when the project and id already appear above the title. */
+  showContext?: boolean;
+}) {
+  const empty = taskRowMetaEmpty({ ...meta, projectId: null });
+  return (
+    <>
+      {showContext ? (
+        <TaskRowContext
+          task={task}
+          meta={meta}
+          projectsById={projectsById}
+          onNavigate={onNavigate}
+        />
+      ) : null}
+      {!empty ? <TaskMetaItems meta={meta} onNavigate={onNavigate} /> : null}
     </>
   );
 }

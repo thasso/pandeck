@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { IconButton } from "./common/IconButton.tsx";
-import { Item } from "./ui/item.tsx";
+import { ListRow } from "./common/ListRow.tsx";
 import {
   CalendarCheck,
   CalendarClock,
@@ -16,12 +16,15 @@ import {
 import { ListGroupSection } from "./ListGroupSection.tsx";
 import type { ProjectRecord, SessionListItem } from "@assistant/shared";
 import {
-  TaskStatusIcon as StatusIcon,
-  TASK_STATUS_LABEL,
-} from "./TaskStatusIcon.tsx";
-import { TaskRowBody } from "./TaskRowBody.tsx";
+  TaskProjectMeta,
+  TaskRowDetails,
+  TaskRowTitle,
+} from "./TaskRowBody.tsx";
+import { TaskIdBadge } from "./TaskIdBadge.tsx";
+import { TaskStatusIcon, TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
+import { projectPath } from "../hooks/useSessionRouting.ts";
 import { EmptyBox } from "./common/load.tsx";
-import { nextStatus, type Task } from "../lib/backlogTree.ts";
+import type { Task } from "../lib/backlogTree.ts";
 import { buildFocusBuckets, type FocusBucketId } from "../lib/backlogFocus.ts";
 import {
   buildTaskRowMeta,
@@ -41,19 +44,15 @@ import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
  * @useWhen The Backlog list's view is `focus`.
  * @avoidWhen Arranging or restructuring the Backlog; that is the tree view
  * (`BacklogTreePane`), which owns hierarchy, manual order and drag editing.
- * @intent A row here stands ALONE, so it gets two lines: the title takes the
- * first and `TaskRowBody` carries the id and answers "why is this here" on the
- * second — the same line, from the same derivation, as the tree's `comfortable`
- * rows, because a row that says different things about one Task in two views is
- * worse than a row that says less. Focus differs in one thing only: a Task with
- * nothing to report keeps its id and stops there, where a tree row falls back to
- * its status and age, since these rows are read as a GROUP and a line of filler
- * repeated down a list is noise rather than context. There is no drag here on
+ * @intent Three stable lines, like Attention and Pull Requests: Project and
+ * Task id above, title in the middle, then a non-interactive status glyph,
+ * planning, priority and live signals below. The metadata comes from the same derivation
+ * as the tree, but its identity moves to the context line. An empty signal line
+ * stays empty rather than repeating status and age as filler. There is no drag here on
  * purpose: a list that sorts itself cannot also be hand-arranged, and offering
  * both would make every drop silently snap back. The row's own click surface
- * opens the Task and its TITLE is the anchor that does so by name; every control
- * inside stops the click, so answering a suggestion or cycling a status never
- * also opens the row it sits on.
+ * opens the Task and its TITLE is the anchor that does so by name; suggestion
+ * controls stop the click so answering one never also opens the row.
  * @related lib/backlogFocus.ts, lib/taskRowMeta.ts, TaskRowBody.tsx
  */
 export function BacklogFocusList({
@@ -67,7 +66,6 @@ export function BacklogFocusList({
   showProjectBadge,
   selectedId,
   onOpen,
-  onCycle,
   onAcceptSuggestion,
   onDismissSuggestion,
   onNavigate,
@@ -138,10 +136,7 @@ export function BacklogFocusList({
   }
 
   return (
-    <div
-      data-flush-list={flush || undefined}
-      className={`flex flex-col ${flush ? "" : "gap-3"}`}
-    >
+    <div data-flush-list={flush || undefined} className="flex flex-col">
       {buckets.map((bucket) => {
         const rows = (
           <ul className="flex flex-col">
@@ -153,44 +148,28 @@ export function BacklogFocusList({
                 projectsById={projectsById}
                 selected={task.id === selectedId}
                 onOpen={onOpen}
-                onCycle={onCycle}
                 onAcceptSuggestion={onAcceptSuggestion}
                 onDismissSuggestion={onDismissSuggestion}
                 onNavigate={onNavigate}
                 tight={tight}
-                flush={flush}
               />
             ))}
           </ul>
         );
-        // Flush (the sidebar), a bucket is a band over its rows — the same
-        // folding group the Pull Requests rail uses — so the rail's groups
-        // read alike wherever they are. The act-now tone moves to the icon.
-        if (flush)
-          return (
-            <ListGroupSection
-              key={bucket.id}
-              id={`focus:${bucket.id}`}
-              title={bucket.label}
-              count={bucket.tasks.length}
-              emphasis={BUCKET_EMPHASIS.has(bucket.id)}
-              icon={<BucketIcon id={bucket.id} />}
-              containsSelected={bucket.tasks.some(
-                (task) => task.id === selectedId,
-              )}
-            >
-              {rows}
-            </ListGroupSection>
-          );
         return (
-          <section key={bucket.id} aria-label={bucket.label}>
-            <h3
-              className={`px-1 pb-1 font-medium uppercase tracking-wide ${tight ? "text-xs" : "text-sm"} ${BUCKET_TONE[bucket.id]}`}
-            >
-              {bucket.label}
-            </h3>
+          <ListGroupSection
+            key={bucket.id}
+            id={`focus:${bucket.id}`}
+            title={bucket.label}
+            count={bucket.tasks.length}
+            emphasis={BUCKET_EMPHASIS.has(bucket.id)}
+            icon={<BucketIcon id={bucket.id} />}
+            containsSelected={bucket.tasks.some(
+              (task) => task.id === selectedId,
+            )}
+          >
             {rows}
-          </section>
+          </ListGroupSection>
         );
       })}
     </div>
@@ -215,8 +194,7 @@ const BUCKET_ICON: Record<FocusBucketId, typeof CalendarDays> = {
 };
 
 /**
- * A bucket's glyph on its band, carrying the act-now tone the page heading
- * carries in its text — coloured text on the band's grey would not read.
+ * A bucket's glyph carries the act-now tone on the shared group header.
  */
 function BucketIcon({ id }: { id: FocusBucketId }) {
   const Icon = BUCKET_ICON[id];
@@ -229,123 +207,106 @@ function BucketIcon({ id }: { id: FocusBucketId }) {
   return <Icon size={14} className={`shrink-0 ${tone}`} aria-hidden />;
 }
 
-/**
- * Only the two buckets that mean "act" are toned. Colouring every heading would
- * make the list a rainbow in which nothing stands out, which is the opposite of
- * what a heading tone is for.
- */
-const BUCKET_TONE: Record<FocusBucketId, string> = {
-  review: "text-warning",
-  overdue: "text-destructive",
-  today: "text-primary",
-  tomorrow: "text-muted-foreground",
-  week: "text-muted-foreground",
-  later: "text-muted-foreground",
-  unscheduled: "text-muted-foreground",
-};
-
 function FocusRow({
   task,
   meta,
   projectsById,
   selected,
   onOpen,
-  onCycle,
   onAcceptSuggestion,
   onDismissSuggestion,
   onNavigate,
   tight,
-  flush,
 }: {
   task: Task;
   meta: TaskRowMeta;
   projectsById: Map<string, ProjectRecord>;
   selected: boolean;
   onOpen: (id: string) => void;
-  onCycle: (task: Task) => void;
   onAcceptSuggestion: (task: Task) => void;
   onDismissSuggestion: (task: Task) => void;
   onNavigate?: ((path: string) => void) | undefined;
   tight: boolean;
-  flush: boolean;
 }) {
   const suggestion = meta.suggestion;
 
   return (
-    <li
-      data-list-row-id={task.id}
-      className={flush ? "border-b border-border/60" : undefined}
-    >
-      {/* The row is a plain CLICK SURFACE and the TITLE is the button — an
-          anchor to the Task (`TaskRowBody`'s `onOpenTask`). It is deliberately
-          not the session shelf's `role="button"` row: that role makes every
-          descendant presentational, so the links line 2 now draws would be
-          announced by nothing, and ARIA forbids focusable descendants inside it
-          anyway. This way the whole two-line block still opens the Task under a
-          finger, the keyboard gets a real named target, and a modifier click
-          opens the Task in a tab. */}
-      <Item
-        size={tight ? "xs" : "sm"}
-        variant={selected ? "muted" : "default"}
-        onClick={() => onOpen(task.id)}
-        className={`group/row min-w-0 cursor-pointer items-start gap-1.5 text-left ${tight ? "py-1" : "py-1.5"} ${flush ? "rounded-none border-0 pr-2 pl-1 hover:bg-muted" : "px-1"}`}
-      >
-        <IconButton
-          label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
-          size={tight ? "icon-xs" : "icon-sm"}
-          className="shrink-0"
-          onClick={(event) => {
-            event.stopPropagation();
-            onCycle(task);
-          }}
-        >
-          <StatusIcon
-            status={task.status}
-            size={tight ? 14 : 16}
-            claimed={Boolean(suggestion)}
-          />
-        </IconButton>
-        <div className="min-w-0 flex-1">
-          <TaskRowBody
-            task={task}
-            meta={meta}
-            projectsById={projectsById}
-            selected={selected}
-            onNavigate={onNavigate}
-            onOpenTask={onOpen}
-          />
-        </div>
-        {/* The suggestion is answered ON the row: it is a yes/no, and making it
+    <li data-list-row-id={task.id}>
+      <ListRow
+        interaction="content"
+        active={selected}
+        density={tight ? "tight" : "comfortable"}
+        onOpen={() => onOpen(task.id)}
+        context={
+          meta.projectId ? (
+            <TaskProjectMeta
+              projectId={meta.projectId}
+              projectsById={projectsById}
+              href={projectPath(meta.projectId)}
+              onNavigate={onNavigate}
+            />
+          ) : null
+        }
+        contextTrailing={<TaskIdBadge id={task.id} onNavigate={onNavigate} />}
+        identity={
+          <>
+            <TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />
+            {/* The suggestion is answered ON the row: it is a yes/no, and making it
             a trip into the Task detail is what leaves these sitting for days. */}
-        {suggestion ? (
-          <span className="flex shrink-0 items-center gap-0.5">
-            <ClaimButton
-              icon={
-                suggestion.to === "done" ? (
-                  <Check size={13} />
-                ) : (
-                  <Undo2 size={13} />
-                )
-              }
-              label={
-                suggestion.to === "done"
-                  ? `Confirm "${task.title}" is done`
-                  : `Put "${task.title}" back on the to-do pile`
-              }
-              variant={suggestion.to === "done" ? "secondary" : "ghost"}
-              onClick={() => onAcceptSuggestion(task)}
-              tight={tight}
+            {suggestion ? (
+              <span className="flex shrink-0 items-center gap-0.5">
+                <ClaimButton
+                  icon={
+                    suggestion.to === "done" ? (
+                      <Check size={13} />
+                    ) : (
+                      <Undo2 size={13} />
+                    )
+                  }
+                  label={
+                    suggestion.to === "done"
+                      ? `Confirm "${task.title}" is done`
+                      : `Put "${task.title}" back on the to-do pile`
+                  }
+                  variant={suggestion.to === "done" ? "secondary" : "ghost"}
+                  onClick={() => onAcceptSuggestion(task)}
+                  tight={tight}
+                />
+                <ClaimButton
+                  icon={<X size={13} />}
+                  label={`Disagree: dismiss the agent's suggestion on "${task.title}"`}
+                  variant="ghost"
+                  onClick={() => onDismissSuggestion(task)}
+                  tight={tight}
+                />
+              </span>
+            ) : null}
+          </>
+        }
+        signals={
+          <>
+            <span
+              role="img"
+              aria-label={TASK_STATUS_LABEL[task.status]}
+              title={TASK_STATUS_LABEL[task.status]}
+              className="flex shrink-0 items-center"
+            >
+              <TaskStatusIcon
+                status={task.status}
+                size={12}
+                claimed={Boolean(suggestion)}
+              />
+            </span>
+            <TaskRowDetails
+              task={task}
+              meta={meta}
+              projectsById={projectsById}
+              onNavigate={onNavigate}
+              showContext={false}
             />
-            <ClaimButton
-              icon={<X size={13} />}
-              label={`Disagree: dismiss the agent's suggestion on "${task.title}"`}
-              variant="ghost"
-              onClick={() => onDismissSuggestion(task)}
-              tight={tight}
-            />
-          </span>
-        ) : null}
-      </Item>
+          </>
+        }
+      />
     </li>
   );
 }
@@ -380,7 +341,7 @@ function ClaimButton({
 }
 
 /**
- * What a Focus row's second line keeps of the shared meta. Focus is for
+ * What a Focus row keeps of the shared metadata across its supporting lines. Focus is for
  * picking what to work on, so it drops the plumbing: the "Session" item, and
  * the bare worktree glyph with its dirty dot, which said "there is code" in a
  * way nobody could read. What stays is what bears on the choice — planning,

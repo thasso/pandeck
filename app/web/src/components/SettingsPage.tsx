@@ -1191,6 +1191,30 @@ function AppearanceSection({
       </SettingsCard>
 
       <SettingsCard className="mt-5">
+        <h3 className="text-sm font-semibold text-foreground">Layout</h3>
+        <p className="text-sm text-muted-foreground">
+          Automatic follows the window width. Desktop keeps the header and side
+          panels when you resize; Mobile uses one pane with bottom navigation.
+          Saved for this browser only.
+        </p>
+        <Field label="Layout">
+          <NativeSelect
+            value={prefs.layoutMode}
+            onChange={(event) =>
+              onUpdate({
+                layoutMode: event.target.value as Prefs["layoutMode"],
+              })
+            }
+            className="w-full"
+          >
+            <option value="automatic">Automatic</option>
+            <option value="desktop">Desktop</option>
+            <option value="mobile">Mobile</option>
+          </NativeSelect>
+        </Field>
+      </SettingsCard>
+
+      <SettingsCard className="mt-5">
         <h3 className="text-sm font-semibold text-foreground">Text size</h3>
         <p className="text-sm text-muted-foreground">
           Scale the interface typography for this browser only. Larger sizes

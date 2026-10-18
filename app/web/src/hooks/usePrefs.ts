@@ -28,6 +28,13 @@ import {
 
 type Theme = "dark" | "light";
 
+/** Browser-local shell presentation, independent of input capabilities. */
+export type LayoutMode = "automatic" | "desktop" | "mobile";
+
+function normalizeLayoutMode(value: unknown): LayoutMode {
+  return value === "desktop" || value === "mobile" ? value : "automatic";
+}
+
 /** Supported browser-local text-scale percentages. Typography only — never a
  *  UI-density or geometry setting. */
 export type TextScale = 100 | 110 | 120 | 130;
@@ -81,6 +88,8 @@ export function normalizeWorkflowRoleRuntimes(
 
 export interface Prefs {
   theme: Theme;
+  /** Automatic follows window width; explicit layouts do not switch on resize. */
+  layoutMode: LayoutMode;
   /** Browser-local text size (percent). Scales the six typography roles only. */
   textScale: TextScale;
   showThinking: boolean;
@@ -206,6 +215,7 @@ const PAINT_KEY = "assistant.prefs.paint";
 
 const defaults: Prefs = {
   theme: "dark",
+  layoutMode: "automatic",
   textScale: 100,
   showThinking: false,
   showTools: false,
@@ -250,6 +260,7 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
   );
   return {
     ...applyPatch(defaults, known),
+    layoutMode: normalizeLayoutMode(known.layoutMode),
     textScale: normalizeTextScale(known.textScale),
     navSlots: normalizeNavSlots(known.navSlots),
     backlogView: normalizeBacklogView(known.backlogView),

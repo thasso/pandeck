@@ -31,7 +31,7 @@ export const OneLine: Story = {
 };
 
 export const TwoLines: Story = {
-  args: { signals: <span>Ready for review</span> },
+  args: { details: <span>Ready for review</span> },
 };
 
 export const ThreeLines: Story = {

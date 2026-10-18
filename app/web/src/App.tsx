@@ -353,6 +353,7 @@ import {
 } from "./components/TaskLiveState.tsx";
 import { useWorktreeCommentWatch } from "./hooks/useCommentWatch.ts";
 import { useMobileLayout } from "./components/shell/useMobileLayout.ts";
+import { LayoutProvider } from "./components/shell/LayoutProvider.tsx";
 import {
   decodeBoolean,
   useSessionStorageState,
@@ -895,8 +896,20 @@ function PullRequestIndexPlaceholder({
   );
 }
 
-function AppContent() {
+export default function App() {
+  const preferences = usePrefs();
+  return (
+    <LayoutProvider mode={preferences.prefs.layoutMode}>
+      <CommentActuationProvider>
+        <AppContent {...preferences} />
+      </CommentActuationProvider>
+    </LayoutProvider>
+  );
+}
+
+function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   usePerfRenderCount("App");
+  const mobileLayout = useMobileLayout();
   useMobileKeyboardInset();
   // The app's own confirm/prompt surface. Native dialogs are banned: the Tauri
   // shell's webview never shows them, so the action they guard silently does
@@ -910,7 +923,6 @@ function AppContent() {
   const documentNavigation = useDocumentNavigationRegistration();
 
   const { state, actions, socket } = useAssistant();
-  const { prefs, update } = usePrefs();
   const credentialProfileFetch = useCredentialProfileProjection({
     connected: state.connected,
     ...(state.credentialProfileProjection != null
@@ -1004,9 +1016,7 @@ function AppContent() {
   const memory = useMemory(socket);
   const [sidebarOpen, setSidebarOpen] = useSessionStorageState(
     "assistant.shell.sidebar-open.v1",
-    typeof window === "undefined"
-      ? true
-      : window.matchMedia("(min-width: 768px)").matches,
+    !mobileLayout,
     decodeBoolean,
   );
   /**
@@ -1019,9 +1029,7 @@ function AppContent() {
   // never disabled by the route, at most empty (ui-shell.md).
   const [inspectorOpen, setInspectorOpen] = useSessionStorageState(
     "assistant.shell.right-panel-open.v1",
-    typeof window === "undefined"
-      ? true
-      : window.matchMedia("(min-width: 768px)").matches,
+    !mobileLayout,
     decodeBoolean,
   );
   // The desktop tab host owns which panel is actually visible; mobile has no
@@ -1095,7 +1103,6 @@ function AppContent() {
   /** Changes whenever the URL's fragment moves, which no route change reports. */
   const locationHash = useLocationHash();
   const [sessionIdCopied, setSessionIdCopied] = useState(false);
-  const mobileLayout = useMobileLayout();
   // The boot route's cached transcript, read synchronously so a reload or deep
   // link paints in the first frame. It is never re-read for a later route:
   // `previewForSessionRoute` below drops it the moment the app navigates, so an
@@ -8340,13 +8347,5 @@ function AppContent() {
         </DocumentCommentHostProvider>
       </RoutePrimaryActionProvider>
     </UserTimeZoneContext.Provider>
-  );
-}
-
-export default function App() {
-  return (
-    <CommentActuationProvider>
-      <AppContent />
-    </CommentActuationProvider>
   );
 }

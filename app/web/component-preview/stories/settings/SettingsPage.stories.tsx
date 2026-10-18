@@ -3,6 +3,7 @@ import { useLayoutEffect, useState } from "react";
 import { applyPatch, type AppSettings } from "@assistant/shared";
 import type { Prefs } from "../../../src/hooks/usePrefs.ts";
 import { SettingsPage } from "../../../src/components/SettingsPage.tsx";
+import { LayoutProvider } from "../../../src/components/shell/LayoutProvider.tsx";
 import {
   settingsFixture,
   settingsMemory,
@@ -104,19 +105,21 @@ function SettingsPreview(args: React.ComponentProps<typeof SettingsPage>) {
     };
   }, []);
   return (
-    <div className="h-dvh">
-      <SettingsPage
-        {...args}
-        settings={settings}
-        prefs={prefs}
-        onUpdate={(patch: Partial<AppSettings>) =>
-          setSettings((current) => applyPatch(current, patch))
-        }
-        onUpdatePrefs={(patch: Partial<Prefs>) =>
-          setPrefs((current) => ({ ...current, ...patch }))
-        }
-      />
-    </div>
+    <LayoutProvider mode={prefs.layoutMode}>
+      <div className="h-dvh">
+        <SettingsPage
+          {...args}
+          settings={settings}
+          prefs={prefs}
+          onUpdate={(patch: Partial<AppSettings>) =>
+            setSettings((current) => applyPatch(current, patch))
+          }
+          onUpdatePrefs={(patch: Partial<Prefs>) =>
+            setPrefs((current) => ({ ...current, ...patch }))
+          }
+        />
+      </div>
+    </LayoutProvider>
   );
 }
 const meta = {

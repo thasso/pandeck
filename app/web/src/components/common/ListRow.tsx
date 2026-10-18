@@ -7,6 +7,8 @@ type ContentProps = {
   density?: RowDensity | undefined;
   /** Optional first line. Omit for a one- or two-line row. */
   context?: ReactNode;
+  /** Fixed right-hand context, such as a durable object id. */
+  contextTrailing?: ReactNode;
   age?: string | undefined;
   ageTitle?: string | undefined;
   leading?: ReactNode;
@@ -14,6 +16,8 @@ type ContentProps = {
   title?: ReactNode;
   /** A domain-owned identity, such as SessionTitleRow, including its glyph. */
   identity?: ReactNode;
+  /** Supporting line below the title, such as Task metadata. */
+  details?: ReactNode;
   /** Optional last line. Passing null reserves the line without content. */
   signals?: ReactNode;
   /** Important signals that must not wrap out of sight. */
@@ -28,6 +32,8 @@ type Props = ContentProps &
     "title" | "children" | "onClick" | "onKeyDown" | "variant" | "size"
   > & {
     active?: boolean;
+    /** Content owns real links and controls; the frame is not an ARIA button. */
+    interaction?: "row" | "content";
     /** Off when a parent separates a row together with its expanded children. */
     divider?: boolean;
     ariaLabel?: string;
@@ -48,6 +54,7 @@ type Props = ContentProps &
  */
 export function ListRow({
   active = false,
+  interaction = "row",
   divider = true,
   ariaLabel,
   rowProps,
@@ -58,12 +65,14 @@ export function ListRow({
   className,
   density,
   context,
+  contextTrailing,
   age,
   ageTitle,
   leading,
   leadingTitle,
   title,
   identity,
+  details,
   signals,
   pinned,
   trailing,
@@ -73,8 +82,8 @@ export function ListRow({
     <Item
       variant="list"
       size="list"
-      role="button"
-      tabIndex={onFocusSibling ? -1 : 0}
+      role={interaction === "row" ? "button" : undefined}
+      tabIndex={interaction === "row" ? (onFocusSibling ? -1 : 0) : undefined}
       {...props}
       {...rowProps}
       aria-label={ariaLabel ?? props["aria-label"]}
@@ -101,12 +110,14 @@ export function ListRow({
         <ListRowContent
           density={density}
           context={context}
+          contextTrailing={contextTrailing}
           age={age}
           ageTitle={ageTitle}
           leading={leading}
           leadingTitle={leadingTitle}
           title={title}
           identity={identity}
+          details={details}
           signals={signals}
           pinned={pinned}
           trailing={trailing}
@@ -120,21 +131,27 @@ export function ListRow({
 export function ListRowContent({
   density = "tight",
   context,
+  contextTrailing,
   age,
   ageTitle,
   leading,
   leadingTitle,
   title,
   identity,
+  details,
   signals,
   pinned,
   trailing,
 }: ContentProps) {
   const contextRef = useInertOverflow<HTMLDivElement>();
   const signalsRef = useInertOverflow<HTMLDivElement>({ compact: true });
-  const hasContext = context !== undefined || age !== undefined;
+  const detailsRef = useInertOverflow<HTMLDivElement>();
+  const hasContext =
+    context !== undefined || contextTrailing !== undefined || age !== undefined;
   const hasSignals = signals !== undefined || pinned !== undefined;
-  const lines = 1 + Number(hasContext) + Number(hasSignals);
+  const hasDetails = details !== undefined;
+  const lines =
+    1 + Number(hasContext) + Number(hasDetails) + Number(hasSignals);
   return (
     <div
       data-list-row-lines={lines}
@@ -158,7 +175,11 @@ export function ListRowContent({
           >
             {context}
           </div>
-          {age ? (
+          {contextTrailing !== undefined ? (
+            <span className="flex shrink-0 items-center">
+              {contextTrailing}
+            </span>
+          ) : age ? (
             <span className="shrink-0 tabular-nums" title={ageTitle}>
               {age}
             </span>
@@ -187,6 +208,18 @@ export function ListRowContent({
           <span className="flex shrink-0 items-center gap-1.5">{trailing}</span>
         ) : null}
       </div>
+      {hasDetails ? (
+        <div
+          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center text-xs text-muted-foreground`}
+        >
+          <div
+            ref={detailsRef}
+            className="flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden whitespace-nowrap"
+          >
+            {details}
+          </div>
+        </div>
+      ) : null}
       {hasSignals ? (
         <div
           className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}

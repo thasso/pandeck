@@ -47,6 +47,22 @@ Shell layout state is scoped to the browser tab through `sessionStorage`: left
 and right panel openness, the selected left-sidebar section, and desktop
 right-panel tabs survive reloads without leaking into another tab.
 
+Settings → Appearance → Layout selects a browser-local `layoutMode`, persisted
+with `usePrefs` in the browser store, never in server settings. `automatic` is
+the default and follows the existing 767px maximum-width breakpoint. `desktop`
+keeps the app header, inline resizable panels and desktop header actions at any
+window width; `mobile` uses the single-pane screens and bottom dock even in a
+wide window. A forced mode never changes on resize. On a narrow Desktop window,
+users can close side panels with the header toggles to leave more room.
+
+`LayoutProvider` resolves that preference once for `useMobileLayout` consumers
+and writes the same result to the root's `data-layout` attribute. Shell CSS uses
+the semantic `desktop:` variant instead of viewport breakpoints, including
+body-portaled controls. Content wrapping, dialog widths, physical safe areas and
+keyboard/input capabilities still follow the actual viewport or device. Layout
+does not change touch/Enter behavior or reset tab-local panel and navigation
+state. Isolated components outside the provider retain Automatic behavior.
+
 The main pane renders exactly one current object or view. The right sidebar is
 the **object panel** for the main-pane object, never a second navigation tree.
 It is a single **Details** inspector — summary, related objects, and
@@ -236,12 +252,24 @@ needs projects and worktrees, while either route subscribes to Tasks only for
 the interval in which the staged-context Task field is expanded. A visible Tasks
 sidebar still subscribes independently.
 
+Tasks Focus and Inbox use `common/ListRow` in both the sidebar and full-page
+browser. Focus has three stable lines: Project left and Task id right above the
+title, the title in the middle, and a non-interactive status glyph with
+remaining Task metadata below. Inbox adds its description preview as a third
+line only when present. Their real title links, metadata links and inline
+status/suggestion/dismiss controls remain interactive inside a plain click
+surface (`interaction="content"`), not an ARIA button. Focus buckets use
+`ListGroupSection` in both hosts, including shared sticky headers and remembered
+disclosure state. Desktop sidebar Focus uses `tight` density like Attention and
+Pull Requests; phone and full-page Focus retain `comfortable`. The draggable
+Backlog tree keeps `common/Tree`.
+
 Every Backlog surface states its own row DENSITY, and it is the host's decision
-rather than a breakpoint: the desktop sidebar rail and the composer's task
-picker are `tight` (one line, hover for what the row cannot hold), while the
-Backlog and Project pages — and the same sidebar when it is a phone SCREEN — are
-`comfortable` (two lines, thumb-sized secondary controls). Width and pointer
-coarseness are independent, and the mobile browser is where they disagree.
+rather than a breakpoint. Density controls spacing and control sizes, not the
+number of lines. The sidebar tree retains `comfortable` density so its metadata
+stays visible; the composer's task picker is `tight` and single-line. Backlog
+and Project pages, and the sidebar on a phone, use `comfortable` density. Width
+and pointer coarseness are independent.
 
 The Sessions browser takes the same decision from the same host
 (`lib/rowDensity.ts`, one type for both browsers): its cards and shelf rows are

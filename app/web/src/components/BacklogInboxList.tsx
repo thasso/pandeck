@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
-import { Item } from "./ui/item.tsx";
+import { ListRow } from "./common/ListRow.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import type { ProjectRecord } from "@assistant/shared";
 import {
   TaskStatusIcon as StatusIcon,
   TASK_STATUS_LABEL,
 } from "./TaskStatusIcon.tsx";
-import { TaskProjectMeta } from "./TaskRowBody.tsx";
+import { TaskProjectMeta, TaskRowTitle } from "./TaskRowBody.tsx";
 import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { EmptyBox } from "./common/load.tsx";
@@ -19,8 +19,6 @@ import {
   type Task,
 } from "../lib/backlogTree.ts";
 import { buildInboxList, taskOrigin } from "../lib/backlogInbox.ts";
-import { taskPath } from "../hooks/useSessionRouting.ts";
-import { followRowLink } from "../lib/rowLink.ts";
 import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 
 /** How long an accepted row stays hidden waiting for the save to take it
@@ -146,7 +144,6 @@ export function BacklogInboxList({
           onDismiss={dismissWithExit}
           leaving={leaving.includes(task.id)}
           tight={tight}
-          flush={flush}
         />
       ))}
     </ul>
@@ -163,7 +160,6 @@ function InboxRow({
   onDismiss,
   leaving,
   tight,
-  flush,
 }: {
   task: Task;
   projectsById: Map<string, ProjectRecord>;
@@ -175,7 +171,6 @@ function InboxRow({
   /** Accepted, and on its way out (`ExitStage`). */
   leaving: boolean;
   tight: boolean;
-  flush: boolean;
 }) {
   const origin = taskOrigin(task);
   // The preview is what the row is FOR — deciding about a Task you did not
@@ -187,82 +182,70 @@ function InboxRow({
     <li data-list-row-id={task.id}>
       {/* The hairline rides inside the exit, so it leaves with its row. */}
       <ExitStage leaving={leaving}>
-        <div className={flush ? "border-b border-border/60" : undefined}>
-          {/* The Focus row's shape: the row is the click surface, the TITLE the
-          link to the Task; the status glyph and the one action (dismiss) sit
-          on the title line. */}
-          <Item
-            size={tight ? "xs" : "sm"}
-            variant={selected ? "muted" : flush ? "default" : "outline"}
-            onClick={() => onOpen(task.id)}
-            className={`min-w-0 cursor-pointer flex-nowrap items-start gap-1.5 text-left ${tight ? "py-1" : "py-1.5"} ${
-              flush ? "rounded-none border-0 pr-2 pl-1 hover:bg-muted" : "px-1"
-            }`}
-          >
-            <IconButton
-              label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
-              size={tight ? "icon-xs" : "icon-sm"}
-              className="shrink-0"
-              onClick={(event) => {
-                event.stopPropagation();
-                onCycle(task);
-              }}
-            >
-              <StatusIcon
-                status={task.status}
-                size={tight ? 14 : 16}
-                claimed={Boolean(pendingStatusSuggestion(task))}
-              />
-            </IconButton>
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <a
-                href={taskPath(task.id)}
-                draggable={false}
-                className={`min-w-0 truncate text-sm ${selected ? "font-medium" : ""} text-foreground`}
+        <ListRow
+          interaction="content"
+          active={selected}
+          density={tight ? "tight" : "comfortable"}
+          onOpen={() => onOpen(task.id)}
+          identity={
+            <>
+              <IconButton
+                label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
+                size={tight ? "icon-xs" : "icon-sm"}
+                className="shrink-0"
                 onClick={(event) => {
                   event.stopPropagation();
-                  followRowLink(event, taskPath(task.id), () =>
-                    onOpen(task.id),
-                  );
+                  onCycle(task);
                 }}
               >
-                {task.title}
-              </a>
-              {/* Where it came from — what you decide with — after the id, as
-              every Task row's second line. */}
-              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs whitespace-nowrap text-muted-foreground">
-                {showProjectBadge && task.projectId ? (
-                  <TaskProjectMeta
-                    projectId={task.projectId}
-                    projectsById={projectsById}
-                    href={null}
-                  />
-                ) : null}
-                <TaskIdBadge id={task.id} />
-                {task.openBlockerCount ? (
-                  <TaskBlockedIndicator openBlockers={task.openBlockerCount} />
-                ) : null}
-                <span className="shrink-0">{origin}</span>
-              </span>
-              {preview ? (
-                <p className="truncate text-xs text-muted-foreground">
-                  {preview}
-                </p>
+                <StatusIcon
+                  status={task.status}
+                  size={tight ? 14 : 16}
+                  claimed={Boolean(pendingStatusSuggestion(task))}
+                />
+              </IconButton>
+              <TaskRowTitle
+                task={task}
+                selected={selected}
+                onOpenTask={onOpen}
+              />
+              <IconButton
+                label={`Dismiss "${task.title}" from the Inbox`}
+                size={tight ? "icon-xs" : "icon-sm"}
+                className="shrink-0"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDismiss(task);
+                }}
+              >
+                <Check />
+              </IconButton>
+            </>
+          }
+          details={
+            <>
+              {showProjectBadge && task.projectId ? (
+                <TaskProjectMeta
+                  projectId={task.projectId}
+                  projectsById={projectsById}
+                  href={null}
+                />
               ) : null}
-            </div>
-            <IconButton
-              label={`Dismiss "${task.title}" from the Inbox`}
-              size={tight ? "icon-xs" : "icon-sm"}
-              className="shrink-0"
-              onClick={(event) => {
-                event.stopPropagation();
-                onDismiss(task);
-              }}
-            >
-              <Check />
-            </IconButton>
-          </Item>
-        </div>
+              <TaskIdBadge id={task.id} />
+              {task.openBlockerCount ? (
+                <TaskBlockedIndicator openBlockers={task.openBlockerCount} />
+              ) : null}
+              <span className="shrink-0">{origin}</span>
+            </>
+          }
+          signals={
+            preview ? (
+              <span className="min-w-0 flex-1 basis-0 truncate" title={preview}>
+                {preview}
+              </span>
+            ) : undefined
+          }
+        />
       </ExitStage>
     </li>
   );

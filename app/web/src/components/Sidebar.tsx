@@ -794,7 +794,7 @@ function SidebarImpl({
     // its own last rows clear of it.
     <aside
       ref={containerRef}
-      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden surface-sidebar border-border sm:border-r"
+      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden surface-sidebar border-border desktop:border-r"
     >
       {/* The attention list's counts bar (or the Tasks toolbar), above the
           scroll container: it stays put without the scrollbar running through
@@ -871,13 +871,14 @@ function SidebarImpl({
             hosting={worktreeHosting}
             dirtyWorktrees={dirtyWorktrees}
             workflowIndicators={workflowIndicators}
-            // The same two-line row on a phone and on the rail: this aside is
-            // never short of HEIGHT, and a single line there spent a narrow
-            // column on the id and the project chip
-            // (`SIDEBAR_BACKLOG_DENSITY`). App asks the same question of the
-            // same predicate (`taskRowsHaveMeta`) before polling or watching
-            // for what those rows state.
-            density={SIDEBAR_BACKLOG_DENSITY}
+            // Focus keeps three lines at either density; the desktop rail
+            // uses the same tight spacing as Attention and Pull Requests.
+            // Other Task views retain their existing metadata-bearing density.
+            density={
+              !mobile && prefs.backlogView === "focus"
+                ? "tight"
+                : SIDEBAR_BACKLOG_DENSITY
+            }
             flush
             externalToolbar
           />
