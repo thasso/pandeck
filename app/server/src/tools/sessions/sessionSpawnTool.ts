@@ -140,6 +140,11 @@ function makeSessionSpawnTool() {
                 description:
                   'Record an awaited answer. Defaults to true on coordinator-owned "spawn", false on "propose" and user-owned rows.',
               },
+              inheritGrants: {
+                type: "boolean",
+                description:
+                  "Defaults to true: the new session's cards are covered by every Approve-for-session grant you or your spawn ancestors hold. Set false for a session that should ask for everything itself, such as a reviewer; nothing reaches it, or its own spawns, from above it.",
+              },
               provider: {
                 type: "string",
                 description:
@@ -341,6 +346,9 @@ async function runDirectSpawn(
       ...(row.responseRequested === undefined
         ? {}
         : { responseRequested: row.responseRequested }),
+      ...(row.inheritGrants === undefined
+        ? {}
+        : { inheritGrants: row.inheritGrants }),
       ...(row.worktreeId ? { worktreeId: row.worktreeId } : {}),
       ...(row.projectId ? { projectId: row.projectId } : {}),
       ...(row.taskId ? { taskId: row.taskId } : {}),
@@ -385,6 +393,8 @@ function directSpawnText(results: DirectSpawnRowResult[]): string {
     if (!row.sessionId)
       return `- "${row.title}" NOT started on ${runtime}: ${row.error ?? "unknown error"}`;
     return `- "${row.title}" → session ${row.sessionId} on ${runtime}, owner ${row.owner}${
+      row.inheritGrants === false ? ", doesn't inherit your approvals" : ""
+    }${
       row.error ? ` — created, but its opening prompt failed: ${row.error}` : ""
     }`;
   });
@@ -495,6 +505,7 @@ const ROW_PROPERTIES = [
   "projectId",
   "taskId",
   "responseRequested",
+  "inheritGrants",
   "owner",
   "provider",
   "modelId",
@@ -572,7 +583,11 @@ function checkRawRow(
   for (const key of ROW_PROPERTIES) {
     if (!stated(row, key)) continue;
     const value = row[key];
-    if (key === "responseRequested" || key === "requiresEnterprise") {
+    if (
+      key === "responseRequested" ||
+      key === "requiresEnterprise" ||
+      key === "inheritGrants"
+    ) {
       if (typeof value !== "boolean")
         throw new Error(`${where}.${key} must be true or false.`);
       continue;
@@ -614,6 +629,9 @@ function readRows(
         : {}),
       ...(typeof row.requiresEnterprise === "boolean"
         ? { requiresEnterprise: row.requiresEnterprise }
+        : {}),
+      ...(typeof row.inheritGrants === "boolean"
+        ? { inheritGrants: row.inheritGrants }
         : {}),
       ...optional(row, "owner"),
       ...optional(row, "profileId"),

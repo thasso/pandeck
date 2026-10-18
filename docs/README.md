@@ -207,7 +207,8 @@ only binding rules; everything else lives here.
 - `approvals.md` — the approval cards every agent-proposed mutation goes
   through, which tool raises which card, and "Approve for session" grants:
   operation-level keys, full-coverage rule, idle-edge execution, revocation,
-  lifetime and where the user sees them; and their SQLite storage.
+  lifetime, inheritance by spawned peers and where the user sees them; and their
+  SQLite storage.
 - `projects.md` — how a Project comes into existence: the user directly, an
   agent only through the `project_create` approval card, what approval creates
   on GitHub/Forgejo, registers and clones, and why a repository never stays

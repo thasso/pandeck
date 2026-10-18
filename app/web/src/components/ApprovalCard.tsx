@@ -66,7 +66,13 @@ import {
 } from "./CommitCard.tsx";
 import { ConfluencePageApprovalBody } from "./ConfluencePageApprovalBody.tsx";
 import { JiraIssueApprovalBody } from "./JiraIssueApprovalBody.tsx";
+import {
+  formatPaObjectLink,
+  type PaObjectLinkResolution,
+} from "@assistant/shared/objectLinks";
 import { Markdown } from "./Markdown.tsx";
+import { useMentionedPaObjectReferences } from "./PaObjectLinks.tsx";
+import { usePerfRenderCount } from "../lib/perfStats.ts";
 import {
   ClippedMarkdown,
   DialogSection,
@@ -889,6 +895,11 @@ function SpawnRow({
         {item.responseRequestWithdrawn && (
           <p className="text-muted-foreground">Awaited reply withdrawn</p>
         )}
+        {item.inheritGrants === false && (
+          <p className="text-muted-foreground">
+            Won&rsquo;t inherit your approvals
+          </p>
+        )}
         {warning && (
           <p className="flex items-start gap-1.5 text-warning">
             <AlertTriangle className="mt-0.5 size-3 shrink-0" />
@@ -1247,6 +1258,47 @@ function Body({
   );
 }
 
+// Shared, so a render without a link source hands Markdown the same array.
+const NO_PA_REFERENCES: PaObjectLinkResolution[] = [];
+
+/**
+ * The audit line of a card an ancestor's grant covered: which session's grant
+ * it ran under, for which operations. Each holder is a `pa://` session link,
+ * so it reads as that session's title.
+ */
+function InheritedGrantsNote({
+  grants,
+}: {
+  grants: NonNullable<ApprovalCardData["inheritedGrants"]>;
+}) {
+  const byHolder = new Map<string, string[]>();
+  for (const grant of grants)
+    byHolder.set(grant.fromSessionId, [
+      ...(byHolder.get(grant.fromSessionId) ?? []),
+      approvalGrantLabel(grant.key),
+    ]);
+  const text = [...byHolder]
+    .map(
+      ([holder, labels]) =>
+        `Covered by [](${formatPaObjectLink({ objectType: "session", id: holder })})’s grant: ${labels.join(", ")}`,
+    )
+    .join("; ");
+  const linked = useMentionedPaObjectReferences(text);
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <CheckCheck className="size-3 shrink-0" />
+      <span className="min-w-0 truncate">
+        <Markdown
+          text={text}
+          inline
+          paObjectReferences={linked.references ?? NO_PA_REFERENCES}
+          onOpenPaObject={linked.onOpen}
+        />
+      </span>
+    </span>
+  );
+}
+
 /** Which button is waiting on the server's echo. */
 type BusyDecision = ApprovalDecision | "approvedForSession";
 
@@ -1274,6 +1326,7 @@ export function ApprovalCard({
   accountModels?: readonly AccountModelOption[] | undefined;
   onOpenSession?: ((id: string) => void) | undefined;
 }) {
+  usePerfRenderCount("ApprovalCard");
   const [busy, setBusy] = useState<null | BusyDecision>(null);
   // The stored card stays the agent's proposal: adjustments live here until
   // Approve carries them, so a reload shows what was proposed, not a half-edit.
@@ -1349,6 +1402,8 @@ export function ApprovalCard({
             Approved for this session:{" "}
             {ownGrants.map((grant) => approvalGrantLabel(grant.key)).join(", ")}
           </span>
+        ) : approval.inheritedGrants?.length ? (
+          <InheritedGrantsNote grants={approval.inheritedGrants} />
         ) : null
       }
       actions={

@@ -783,11 +783,10 @@ export interface UIState {
   /**
    * The viewed session's "Approve for session" grants, keyed by the session
    * they belong to so a list for the session just left never shows here.
+   * `grants` is its own list, the one the transcript's cards revoke from;
+   * `inherited` and `inheritance` are for the inspector only.
    */
-  approvalGrants: {
-    sessionId: string;
-    grants: import("@assistant/shared").ApprovalGrant[];
-  } | null;
+  approvalGrants: ApprovalGrantsState | null;
   /** The runtime's authoritative run state (drives the working indicator). */
   runState: SnapshotRunState;
   /** Session-level "is a turn running" — derived from {@link runState}. */
@@ -2967,6 +2966,76 @@ function userEntryText(entry: ClientTimelineEntry): string {
     )
     .map((block) => block.text)
     .join("\n");
+}
+
+interface ApprovalGrantsState {
+  sessionId: string;
+  grants: import("@assistant/shared").ApprovalGrant[];
+  inherited: import("@assistant/shared").InheritedApprovalGrant[];
+  inheritance?: import("@assistant/shared").ApprovalGrantInheritance;
+}
+
+/** Whether two grant lists say the same thing, in the same order. */
+function sameGrantList(
+  a: readonly (import("@assistant/shared").ApprovalGrant & {
+    heldBy?: string;
+  })[],
+  b: readonly (import("@assistant/shared").ApprovalGrant & {
+    heldBy?: string;
+  })[],
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every(
+      (grant, index) =>
+        grant.key === b[index]!.key &&
+        grant.grantedAt === b[index]!.grantedAt &&
+        grant.sourceApprovalId === b[index]!.sourceApprovalId &&
+        grant.heldBy === b[index]!.heldBy,
+    )
+  );
+}
+
+/**
+ * An `approvalGrants` frame applied by CONTENT: each list keeps its previous
+ * array object while it says the same thing, and an identical frame returns
+ * `prev` itself. The own list reaches every approval card in the transcript,
+ * so a frame that only changed what an ancestor holds must not redraw them.
+ */
+function reconcileApprovalGrants(
+  prev: ApprovalGrantsState | null,
+  msg: Extract<ServerMessage, { type: "approvalGrants" }>,
+): ApprovalGrantsState {
+  const inherited = msg.inherited ?? [];
+  if (prev?.sessionId !== msg.sessionId)
+    return {
+      sessionId: msg.sessionId,
+      grants: msg.grants,
+      inherited,
+      ...(msg.inheritance ? { inheritance: msg.inheritance } : {}),
+    };
+  const next: ApprovalGrantsState = {
+    sessionId: msg.sessionId,
+    grants: sameGrantList(prev.grants, msg.grants) ? prev.grants : msg.grants,
+    inherited: sameGrantList(prev.inherited, inherited)
+      ? prev.inherited
+      : inherited,
+    ...(msg.inheritance
+      ? {
+          inheritance:
+            prev.inheritance?.parentSessionId ===
+              msg.inheritance.parentSessionId &&
+            prev.inheritance.inherits === msg.inheritance.inherits
+              ? prev.inheritance
+              : msg.inheritance,
+        }
+      : {}),
+  };
+  return next.grants === prev.grants &&
+    next.inherited === prev.inherited &&
+    next.inheritance === prev.inheritance
+    ? prev
+    : next;
 }
 
 function upsertApproval(
@@ -6407,12 +6476,13 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return withChat(state, {
         approvals: upsertApproval(state.approvals, msg.approval),
       });
-    case "approvalGrants":
+    case "approvalGrants": {
       if (msg.sessionId !== state.session?.sessionId) return state;
-      return {
-        ...state,
-        approvalGrants: { sessionId: msg.sessionId, grants: msg.grants },
-      };
+      const approvalGrants = reconcileApprovalGrants(state.approvalGrants, msg);
+      return approvalGrants === state.approvalGrants
+        ? state
+        : { ...state, approvalGrants };
+    }
     case "pullRequestCardUpdate":
       if (msg.sessionId !== state.session?.sessionId) return state;
       return withChat(state, {

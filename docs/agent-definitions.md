@@ -177,7 +177,10 @@ and its coordinator, which has no watchdog, would otherwise wait on silence.
 
 Removing a deny entry gives back a tool the persona has anyway, so it is not an
 escalation. Approvals, Plan mode, and every other gate apply to the spawned
-session exactly as they apply to any session of that persona.
+session exactly as they apply to any session of that persona. That includes
+"Approve for session" grants its spawn ancestors hold, which cover its cards
+unless it was spawned with `inheritGrants: false`
+([approvals.md](approvals.md#inherited-grants)).
 
 ## Authoring tools
 

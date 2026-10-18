@@ -19,7 +19,9 @@ import { approvalGrantLabel, GRANTABLE_OPERATIONS } from "@assistant/shared";
 import { useDialogs } from "./common/dialogs.tsx";
 import type {
   ApprovalGrant,
+  ApprovalGrantInheritance,
   BrowserRuntimeInfo,
+  InheritedApprovalGrant,
   PendingPostReloadContinuation,
   SessionAgentRuntimeSource,
   SessionAgentSummary,
@@ -29,6 +31,8 @@ import type {
   EntryLibraryList,
 } from "@assistant/shared";
 import { relativeTime } from "../lib/sessionRows.ts";
+import { sessionPath } from "../lib/sessionRoutes.ts";
+import { LinkButton } from "./common/LinkButton.tsx";
 import { artifactHttpUrl } from "../lib/serverOrigin.ts";
 import { formatFileSize } from "../lib/servedFiles.ts";
 import { parseDocumentTarget } from "@assistant/shared/documentTargets";
@@ -104,6 +108,13 @@ interface SessionContextSectionsProps {
   onCancelPostReloadContinuation?: () => void;
   /** Operations the user approved for the rest of this session. */
   approvalGrants?: readonly ApprovalGrant[] | undefined;
+  /** What it inherits from its spawn ancestors; revoked only on the holder. */
+  inheritedApprovalGrants?: readonly InheritedApprovalGrant[] | undefined;
+  /** Present for a spawned session: whether its spawn edge inherits. */
+  approvalGrantInheritance?: ApprovalGrantInheritance | undefined;
+  /** Session titles, to name the session holding an inherited grant. */
+  sessions?: readonly { id: string; title: string }[] | undefined;
+  onOpenSession?: ((id: string) => void) | undefined;
   onRevokeApprovalGrant?: (sessionId: string, key: string) => void;
   /** Grant one operation for the rest of this session, before a card asks. */
   onGrantApproval?: (sessionId: string, key: string) => void;
@@ -122,6 +133,10 @@ export function SessionContextSections({
   browserRuntimes = [],
   onCancelPostReloadContinuation,
   approvalGrants = [],
+  inheritedApprovalGrants = [],
+  approvalGrantInheritance,
+  sessions,
+  onOpenSession,
   onRevokeApprovalGrant,
   onGrantApproval,
 }: SessionContextSectionsProps) {
@@ -157,10 +172,16 @@ export function SessionContextSections({
         <ToolsSection sessionId={sessionId} exposure={toolExposure} />
       )}
 
-      {approvalGrants.length > 0 || onGrantApproval ? (
+      {approvalGrants.length > 0 ||
+      inheritedApprovalGrants.length > 0 ||
+      onGrantApproval ? (
         <ApprovalGrantsSection
           sessionId={sessionId}
           grants={approvalGrants}
+          inherited={inheritedApprovalGrants}
+          inheritance={approvalGrantInheritance}
+          sessions={sessions}
+          onOpenSession={onOpenSession}
           onRevoke={onRevokeApprovalGrant}
           onGrant={onGrantApproval}
         />
@@ -589,26 +610,48 @@ function ToolsSection({
  * the ones that still ask, then those only ever approved on their own card.
  * A row opens to what the operation covers and its status, with Revoke or
  * Allow… under that; allowing ahead of a card asks for confirmation.
+ *
+ * A spawned session also lists what it inherits from its spawn ancestors,
+ * read-only and naming the holder: such a grant is revoked on that session.
  */
 function ApprovalGrantsSection({
   sessionId,
   grants,
+  inherited,
+  inheritance,
+  sessions,
+  onOpenSession,
   onRevoke,
   onGrant,
 }: {
   sessionId: string;
   grants: readonly ApprovalGrant[];
+  inherited: readonly InheritedApprovalGrant[];
+  inheritance: ApprovalGrantInheritance | undefined;
+  sessions: readonly { id: string; title: string }[] | undefined;
+  onOpenSession: ((id: string) => void) | undefined;
   onRevoke?: ((sessionId: string, key: string) => void) | undefined;
   onGrant?: ((sessionId: string, key: string) => void) | undefined;
 }) {
   const dialogs = useDialogs();
   const byKey = new Map(grants.map((grant) => [grant.key, grant]));
+  const inheritedByKey = new Map(inherited.map((grant) => [grant.key, grant]));
+  const allowed = (key: string) => byKey.has(key) || inheritedByKey.has(key);
+  const allowedCount = new Set([...byKey.keys(), ...inheritedByKey.keys()])
+    .size;
   const listed = new Set(
     GRANTABLE_OPERATIONS.map((operation) => operation.key),
   );
+  const holder = (id: string) => (
+    <HolderSessionLink
+      sessionId={id}
+      title={sessions?.find((session) => session.id === id)?.title}
+      onOpenSession={onOpenSession}
+    />
+  );
   // A grant the list does not name (one tag, from its card) still shows.
   const rows = [
-    ...grants
+    ...[...grants, ...inherited.filter((grant) => !byKey.has(grant.key))]
       .filter((grant) => !listed.has(grant.key))
       .map((grant) => ({
         key: grant.key,
@@ -619,7 +662,7 @@ function ApprovalGrantsSection({
     ...GRANTABLE_OPERATIONS,
   ].sort(
     (a, b) =>
-      Number(byKey.has(b.key)) - Number(byKey.has(a.key)) ||
+      Number(allowed(b.key)) - Number(allowed(a.key)) ||
       Number(a.cardOnly) - Number(b.cardOnly),
   );
   const allow = async (key: string) => {
@@ -637,12 +680,20 @@ function ApprovalGrantsSection({
       storageScope={`session:${sessionId}`}
       title="Approvals"
       icon={<ShieldCheck size={13} />}
-      summary={grants.length ? `${grants.length} allowed` : "All ask first"}
-      defaultOpen={grants.length > 0}
+      summary={allowedCount ? `${allowedCount} allowed` : "All ask first"}
+      defaultOpen={allowedCount > 0}
     >
+      {inheritance && !inheritance.inherits ? (
+        <p className="mb-1.5 px-1 text-xs text-muted-foreground">
+          Doesn&rsquo;t inherit approvals from the session that spawned it,{" "}
+          {holder(inheritance.parentSessionId)}.
+        </p>
+      ) : null}
       <ul className="-mx-3 divide-y" aria-label="Approvals for this session">
         {rows.map((operation) => {
-          const grant = byKey.get(operation.key);
+          const own = byKey.get(operation.key);
+          const fromAncestor = inheritedByKey.get(operation.key);
+          const grant = own ?? fromAncestor;
           return (
             <DisclosureRow
               key={operation.key}
@@ -676,12 +727,25 @@ function ApprovalGrantsSection({
               <PropertyList size="sm" align="start">
                 <PropertyLabel>Status</PropertyLabel>
                 <PropertyText className="text-foreground">
-                  {grant
-                    ? `Allowed since ${new Date(grant.grantedAt).toLocaleString()}`
-                    : operation.cardOnly
-                      ? "Approved on its card, every time"
-                      : "Asks first"}
+                  {own ? (
+                    `Allowed since ${new Date(own.grantedAt).toLocaleString()}`
+                  ) : fromAncestor ? (
+                    <>Inherited from {holder(fromAncestor.heldBy)}</>
+                  ) : operation.cardOnly ? (
+                    "Approved on its card, every time"
+                  ) : (
+                    "Asks first"
+                  )}
                 </PropertyText>
+                {own && fromAncestor ? (
+                  <>
+                    <PropertyLabel>Also</PropertyLabel>
+                    <PropertyText className="text-foreground">
+                      Still covered by {holder(fromAncestor.heldBy)}&rsquo;s
+                      grant until revoked there
+                    </PropertyText>
+                  </>
+                ) : null}
                 <PropertyLabel>Covers</PropertyLabel>
                 <PropertyText className="text-foreground">
                   {operation.covers}
@@ -691,7 +755,7 @@ function ApprovalGrantsSection({
                   {operation.key}
                 </PropertyText>
               </PropertyList>
-              {grant && onRevoke ? (
+              {own && onRevoke ? (
                 <div className="mt-1.5 flex justify-end">
                   <Button
                     variant="ghost"
@@ -726,6 +790,40 @@ function ApprovalGrantsSection({
         and merge into a non-default branch.
       </p>
     </InspectorSection>
+  );
+}
+
+/** The session holding an inherited grant, opened in the app on click. */
+function HolderSessionLink({
+  sessionId,
+  title,
+  onOpenSession,
+}: {
+  sessionId: string;
+  title: string | undefined;
+  onOpenSession: ((id: string) => void) | undefined;
+}) {
+  return (
+    <LinkButton
+      variant="link"
+      size="xs"
+      className="h-auto px-0 align-baseline"
+      href={sessionPath(sessionId)}
+      onClick={(event) => {
+        if (
+          !onOpenSession ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        )
+          return;
+        event.preventDefault();
+        onOpenSession(sessionId);
+      }}
+    >
+      {title || "another session"}
+    </LinkButton>
   );
 }
 

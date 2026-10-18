@@ -114,6 +114,8 @@ interface Recorded {
   pi: Array<Record<string, unknown>>;
   delivered: Array<Record<string, unknown>>;
   events: string[];
+  /** Whether each child's spawn edge inherited grants when its prompt was delivered. */
+  inheritsAtDelivery?: boolean[];
 }
 let recorded: Recorded;
 let createFails: string | undefined;
@@ -250,6 +252,9 @@ beforeEach(() => {
         .get(input.targetSessionId);
       recorded.events.push(
         `deliver:${spawn ? `${spawn.parentSessionId}:${spawn.ownership}` : "unlinked"}`,
+      );
+      (recorded.inheritsAtDelivery ??= []).push(
+        sessionStore.spawnGrantEdge(input.targetSessionId)?.inherits ?? false,
       );
       if (deliverFails) throw new Error("delivery exploded");
       recorded.delivered.push({ ...input });
@@ -1559,6 +1564,79 @@ test("approval can hand a proposed user-owned row to the coordinator without cre
       .get(String(delivered.targetSessionId))?.ownership,
   ).toBe("coordinator");
 });
+
+test("a direct row may opt out of grant inheritance, fixed on its edge before delivery", async () => {
+  approveRuntimes();
+
+  const text = await spawnDirect([
+    { ...row({ title: "Implementer" }), profileId: "pr_terra" },
+    {
+      ...row({ title: "Reviewer" }),
+      profileId: "pr_terra",
+      inheritGrants: false,
+    },
+    {
+      ...row({ title: "Own work", owner: "user" }),
+      profileId: "pr_terra",
+      inheritGrants: false,
+    },
+  ]);
+
+  expect(recorded.inheritsAtDelivery).toEqual([true, false, false]);
+  const [inheriting, reviewer, user] = recorded.delivered.map((delivered) =>
+    String(delivered.targetSessionId),
+  );
+  expect(sessionStore.spawnGrantEdge(inheriting!)?.inherits).toBe(true);
+  expect(sessionStore.spawnGrantEdge(reviewer!)?.inherits).toBe(false);
+  expect(sessionStore.spawnGrantEdge(user!)?.inherits).toBe(false);
+  expect(text).toMatch(
+    /"Reviewer" → session \S+ on .*, owner coordinator, doesn't inherit your approvals/,
+  );
+  expect(text).not.toMatch(/"Implementer" .*doesn't inherit/);
+});
+
+test("a proposed row's opt-out shows on the card and holds through approval", async () => {
+  const { card } = await propose([
+    row({ title: "Reviewer", inheritGrants: false }),
+    row({ title: "Helper" }),
+  ]);
+  expect(bodyOf(card).items[0]?.inheritGrants).toBe(false);
+  expect(bodyOf(card).items[1]).not.toHaveProperty("inheritGrants");
+
+  const { card: done } = await resolveApproval(card.id, "approved", {
+    kind: "sessionSpawn",
+    items: [{ rowId: bodyOf(card).items[0]!.rowId, owner: "user" }],
+  });
+  expect(recorded.inheritsAtDelivery).toEqual([false, true]);
+  const [reviewer, helper] = bodyOf(done).items.map(
+    (item) => item.resultSessionId!,
+  );
+  expect(sessionStore.spawnGrantEdge(reviewer!)?.inherits).toBe(false);
+  expect(sessionStore.spawnGrantEdge(helper!)?.inherits).toBe(true);
+  expect(done.resultSummary).toContain(
+    `"Reviewer" (${reviewer}, owner user, doesn't inherit your approvals)`,
+  );
+});
+
+test.each(["spawn", "propose"] as const)(
+  "%s refuses an inheritGrants that is not a boolean, before effects",
+  async (operation) => {
+    approveRuntimes();
+    for (const value of ["no", null, 0]) {
+      await expect(
+        runSpawnOperation(operation, [
+          {
+            ...row({ inheritGrants: value }),
+            ...(operation === "spawn" ? { profileId: "pr_terra" } : {}),
+          },
+        ]),
+      ).rejects.toThrow(/inheritGrants must be true or false/);
+    }
+    expect(recorded.delivered).toHaveLength(0);
+    expect(recorded.pi).toHaveLength(0);
+    expect(recorded.claude).toHaveLength(0);
+  },
+);
 
 test("a direct row awaits an answer unless it explicitly says otherwise", async () => {
   approveRuntimes();

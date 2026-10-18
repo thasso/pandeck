@@ -152,7 +152,7 @@ test("a covered card blocks nobody and runs on the idle edge", async () => {
   expect(drained).toEqual([session]);
 });
 
-test("a grant never reaches another session", async () => {
+test("a grant never reaches an unrelated session", async () => {
   const session = `grant-${randomUUID()}`;
   await resolveApproval(commitCard(session).id, "approved", undefined, {
     forSession: true,

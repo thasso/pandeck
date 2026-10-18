@@ -107,6 +107,8 @@ interface SpawnRequestRowFields {
   prompt: string;
   owner?: "coordinator" | "user";
   responseRequested?: boolean;
+  /** `false` spawns a session that inherits no approval grants. */
+  inheritGrants?: boolean;
   worktreeId?: string;
   projectId?: string;
   taskId?: string;
@@ -408,6 +410,7 @@ interface StructuralRow {
   agentType: SpawnAgentType;
   prompt: string;
   owner: "coordinator" | "user";
+  inheritGrants?: false;
   worktree?: SpawnWorktree;
   projectId?: string;
   projectName?: string;
@@ -432,6 +435,8 @@ async function validateStructure(
     throw new SpawnProposalError(
       'owner "user" cannot request a reply; omit responseRequested or set it to false.',
     );
+  if (row.inheritGrants !== undefined && typeof row.inheritGrants !== "boolean")
+    throw new SpawnProposalError("inheritGrants must be true or false.");
   const title = row.title?.trim() ?? "";
   if (!title) throw new SpawnProposalError("Every session needs a title.");
   if (title.length > MAX_SPAWN_TITLE_CHARS)
@@ -482,6 +487,7 @@ async function validateStructure(
     agentType: row.agentType,
     prompt,
     owner,
+    ...(row.inheritGrants === false ? { inheritGrants: false as const } : {}),
     ...(worktree ? { worktree } : {}),
     ...(project?.id ? { projectId: project.id } : {}),
     ...(project?.name ? { projectName: project.name } : {}),
@@ -599,6 +605,7 @@ function approvalItemOf(
     agentType: structural.agentType,
     prompt: structural.prompt,
     owner: structural.owner,
+    ...(structural.inheritGrants === false ? { inheritGrants: false } : {}),
     ...(structural.worktree
       ? {
           worktreeId: structural.worktree.id,
@@ -980,6 +987,7 @@ async function spawnOne(
     sessionId,
     sessionStore.get(sessionId)!.createdAt,
     item.owner === "user" ? "taken-over" : "coordinator",
+    { inheritGrants: item.inheritGrants !== false },
   );
   // A worktree record names its holders' coordinators (`treeSessionIds`), and
   // creation broadcast the child's checkout BEFORE this edge existed: say the
@@ -1122,7 +1130,7 @@ registerApprovalExecutor("sessionSpawn", {
     const named = created
       .map(
         (item) =>
-          `"${item.title}" (${item.resultSessionId}, owner ${item.owner ?? "coordinator"}${item.responseRequestWithdrawn ? ", awaited reply withdrawn" : ""})${
+          `"${item.title}" (${item.resultSessionId}, owner ${item.owner ?? "coordinator"}${item.responseRequestWithdrawn ? ", awaited reply withdrawn" : ""}${item.inheritGrants === false ? ", doesn't inherit your approvals" : ""})${
             item.error ? " — created, but its opening prompt failed" : ""
           }`,
       )
@@ -1171,6 +1179,7 @@ interface DirectSpawnRowFields {
   prompt: string;
   owner?: "coordinator" | "user";
   responseRequested?: boolean;
+  inheritGrants?: boolean;
   worktreeId?: string;
   projectId?: string;
   taskId?: string;
@@ -1182,6 +1191,7 @@ interface DirectSpawnRowFields {
 export interface DirectSpawnRowResult {
   title: string;
   owner: "coordinator" | "user";
+  inheritGrants?: false;
   /** The approved runtime it named, or the agent definition. */
   profileId?: string;
   agent?: string;
@@ -1283,6 +1293,7 @@ export async function spawnApprovedPeers(input: {
       const result: DirectSpawnRowResult = {
         title: structural.title,
         owner: structural.owner,
+        ...(structural.inheritGrants === false ? { inheritGrants: false } : {}),
         ...(row.agent !== undefined
           ? { agent: row.agent.trim() }
           : { profileId: row.profileId.trim() }),

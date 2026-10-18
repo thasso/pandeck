@@ -461,6 +461,73 @@ describe("what a broadcast re-renders", () => {
     }
   });
 
+  it("re-renders no approval card when only an ancestor's grants change", async () => {
+    const socket = await openChat();
+    const receive = (message: ServerMessage) =>
+      act(async () => socket.receive(message));
+    await receive(snapshotMessage());
+    await receive({
+      type: "approvalUpdate",
+      sessionId: sessionId(0),
+      approval: {
+        renderKind: "approval",
+        id: "appr_granted",
+        sessionId: sessionId(0),
+        kind: "commit",
+        status: "executed",
+        decision: "approved",
+        grantedForSession: true,
+        title: "Commit wip",
+        createdAt: 1_700_000_000_500,
+        body: { kind: "commit", message: "wip", files: ["a.ts"] },
+      },
+    } as unknown as ServerMessage);
+    // Fresh objects every time, as the server sends them.
+    const grants = (patch: Record<string, unknown> = {}) =>
+      ({
+        type: "approvalGrants",
+        sessionId: sessionId(0),
+        grants: [
+          { key: "commit", grantedAt: 1, sourceApprovalId: "appr_granted" },
+        ],
+        inherited: [],
+        inheritance: { parentSessionId: sessionId(1), inherits: true },
+        ...patch,
+      }) as unknown as ServerMessage;
+    await receive(grants());
+    await settle();
+    // The card is there to begin with: zero must mean "did not re-render".
+    expect(container!.textContent).toContain("Approved for this session");
+    setPerfStatsEnabled(true);
+    try {
+      await receive(
+        grants({
+          inherited: [
+            {
+              key: "jira:comment",
+              grantedAt: 2,
+              sourceApprovalId: "",
+              heldBy: sessionId(1),
+            },
+          ],
+        }),
+      );
+      await settle();
+      expect(countOf(perfSnapshot(), "ApprovalCard")).toBe(0);
+      expect(countOf(perfSnapshot(), "MessageRow")).toBe(0);
+
+      // The card's own grant changed: that is what it shows, so it redraws.
+      setPerfStatsEnabled(false);
+      setPerfStatsEnabled(true);
+      await receive(grants({ grants: [] }));
+      await settle();
+      expect(countOf(perfSnapshot(), "ApprovalCard")).toBeGreaterThan(0);
+      expect(container!.textContent).not.toContain("Approved for this session");
+    } finally {
+      setPerfStatsEnabled(false);
+    }
+  });
+
   it("re-renders neither for a streamed token", async () => {
     const socket = await openChat();
     await act(async () =>

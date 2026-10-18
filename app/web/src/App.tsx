@@ -2138,11 +2138,13 @@ function AppContent() {
   const displaySession =
     shownOptimisticSession ??
     (usePreview ? sessionPreview!.session : (pendingSession ?? state.session));
-  // Only the list that belongs to the session on screen.
-  const approvalGrants =
+  // Only the list that belongs to the session on screen. The transcript gets
+  // the OWN grants alone; what it inherits is for the inspector.
+  const shownApprovalGrants =
     state.approvalGrants?.sessionId === displaySession?.sessionId
-      ? state.approvalGrants?.grants
+      ? state.approvalGrants
       : undefined;
+  const approvalGrants = shownApprovalGrants?.grants;
   // …and it is only ever a STAGED surface's row: a real session's transcript
   // never carries it, so it cannot end up on top of an unrelated conversation.
   const sessionMessages = useMemo(
@@ -7505,6 +7507,13 @@ function AppContent() {
           browserRuntimes={browserRuntimes}
           onCancelPostReloadContinuation={actions.cancelPostReloadContinuation}
           approvalGrants={approvalGrants}
+          inheritedApprovalGrants={shownApprovalGrants?.inherited}
+          approvalGrantInheritance={shownApprovalGrants?.inheritance}
+          sessions={state.sessions}
+          onOpenSession={(id) => {
+            actions.warmSessionTimeline(id);
+            navigateFromInspector(sessionPath(id));
+          }}
           onRevokeApprovalGrant={actions.revokeApprovalGrant}
           onGrantApproval={actions.grantApprovalForSession}
         />

@@ -126,3 +126,39 @@ test("the card that granted an operation can revoke it", () => {
   expect(onRevokeGrant).toHaveBeenCalledTimes(1);
   expect(onRevokeGrant).toHaveBeenCalledWith("session-1", "github:comment");
 });
+
+test("a card an ancestor's grant covered names the session that holds it", () => {
+  render(
+    <ApprovalCard
+      approval={{
+        ...pending,
+        status: "executed",
+        decision: "approved",
+        autoApproved: true,
+        inheritedGrants: [{ key: "github:comment", fromSessionId: "parent-1" }],
+      }}
+    />,
+  );
+
+  expect(container!.textContent).toContain("Covered by");
+  expect(container!.textContent).toContain("’s grant: GitHub");
+  const holder = container!.querySelector('a[href="/sessions/parent-1"]');
+  expect(holder, "the holder links to its session").not.toBeNull();
+  // Nothing to revoke here: the grant belongs to the holder.
+  expect(buttonLabels()).not.toContain("Revoke");
+});
+
+test("a card covered by its own session's grant names no other session", () => {
+  render(
+    <ApprovalCard
+      approval={{
+        ...pending,
+        status: "executed",
+        decision: "approved",
+        autoApproved: true,
+      }}
+    />,
+  );
+
+  expect(container!.textContent).not.toContain("Covered by");
+});

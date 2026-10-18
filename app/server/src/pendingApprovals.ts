@@ -24,7 +24,9 @@
  * (`@assistant/shared` `approvalGrants.ts`), stored beside the cards. A later
  * card whose operations are all granted is still created and shown, but it is
  * approved by the server instead of blocking the session, and its outcome
- * reaches the agent through the same handoff as a clicked decision.
+ * reaches the agent through the same handoff as a clicked decision. A spawned
+ * session's cards are also covered by its spawn ancestors' grants, looked up
+ * live on every check and never copied.
  */
 import { randomUUID } from "node:crypto";
 import { notifySessionBlocked } from "./webPush.ts";
@@ -44,15 +46,18 @@ import type {
   ApprovalCard,
   ApprovalDecision,
   ApprovalGrant,
+  ApprovalGrantInheritance,
   ApprovalKind,
   ApprovalResolutionEdits,
   DisplayMessage,
+  InheritedApprovalGrant,
   Patch,
   ThinkingLevel,
 } from "@assistant/shared";
 import { AGENT_DEFAULT_EFFORT } from "./agents/agentLibrary.ts";
 import { inDbTransaction } from "./db/index.ts";
 import { approvalStore, type StoredApproval } from "./db/approvalStore.ts";
+import { sessionStore, type SpawnGrantEdge } from "./db/sessionStore.ts";
 
 /** Hidden-prompt lead line handed to the agent when an approval resolves. */
 const APPROVAL_OUTCOME_MARKER = "[approval decision]";
@@ -354,7 +359,8 @@ export async function proposalSnapshot<T>(
  */
 export function createApproval(input: CreateApprovalInput): ApprovalCard {
   const now = Date.now();
-  const autoApproved = coveredByGrants(input.sessionId, input.body);
+  const coverage = grantCoverage(input.sessionId, input.body);
+  const autoApproved = coverage !== undefined;
   const card: ApprovalCard = {
     renderKind: "approval",
     id: `appr_${now}_${randomUUID().slice(0, 8)}`,
@@ -368,6 +374,7 @@ export function createApproval(input: CreateApprovalInput): ApprovalCard {
       ? { sourceToolCallId: input.sourceToolCallId }
       : {}),
     ...(autoApproved ? { autoApproved: true } : {}),
+    ...(coverage?.length ? { inheritedGrants: coverage } : {}),
     body: input.body,
   };
   const superseded = inDbTransaction(() => {
@@ -533,7 +540,11 @@ async function resolveApprovalExclusive(
     }
     // Again after `prepare`: it can await a network or model lookup, and a
     // revoke that landed meanwhile must still stop what has not started.
-    if (options.underGrant) requireGrant(getRecord(approvalId)!.card);
+    // Its holders are what the audit records: an ancestor's revoke meanwhile
+    // can leave the card covered by a farther one.
+    const inherited = options.underGrant
+      ? requireGrant(getRecord(approvalId)!.card)
+      : [];
 
     // Granted once the decision is settled, before execution: the grant is
     // permission for the operation, not a verdict on how this run turns out.
@@ -545,6 +556,7 @@ async function resolveApprovalExclusive(
       status: "executing",
       decision: "approved",
       error: undefined,
+      inheritedGrants: inherited.length > 0 ? inherited : undefined,
       ...(forSession ? { grantedForSession: true } : {}),
     });
     emitChange(sessionId); // no longer pending → clears the attention indicator
@@ -639,19 +651,128 @@ function outcomePromptFor(card: ApprovalCard): string {
 
 /* ----------------------------- session grants ---------------------------- */
 
-/** True when `body` performs at least one operation and every one is granted. */
-function coveredByGrants(sessionId: string, body: ApprovalBody): boolean {
-  const keys = approvalGrantKeys(body);
-  if (keys.length === 0) return false;
-  const held = new Set(
-    approvalStore.grantsForSession(sessionId).map((g) => g.key),
-  );
-  return keys.every((key) => held.has(key));
+/** One operation an ancestor's grant covered on a card, and who holds it. */
+type InheritedCoverage = NonNullable<ApprovalCard["inheritedGrants"]>;
+
+/**
+ * The reads a grant lookup makes. Coverage checks always read live; only one
+ * grant-list fan-out shares a memo ({@link memoGrantReads}), so no authority is
+ * ever cached from one check to the next.
+ */
+interface GrantReads {
+  grantsOf(sessionId: string): ApprovalGrant[];
+  edgeOf(childSessionId: string): SpawnGrantEdge | undefined;
 }
 
-/** The session's grants, oldest first. */
+const liveGrantReads: GrantReads = {
+  grantsOf: (sessionId) => approvalStore.grantsForSession(sessionId),
+  edgeOf: (childSessionId) => sessionStore.spawnGrantEdge(childSessionId),
+};
+
+/**
+ * One read per session and per edge for the life of the returned object, so a
+ * fan-out over a spawn tree reads each shared ancestor once, not once per
+ * descendant.
+ */
+function memoGrantReads(): GrantReads {
+  const grants = new Map<string, ApprovalGrant[]>();
+  const edges = new Map<string, SpawnGrantEdge | undefined>();
+  return {
+    grantsOf(sessionId) {
+      let list = grants.get(sessionId);
+      if (!list)
+        grants.set(sessionId, (list = liveGrantReads.grantsOf(sessionId)));
+      return list;
+    },
+    edgeOf(childSessionId) {
+      if (!edges.has(childSessionId))
+        edges.set(childSessionId, liveGrantReads.edgeOf(childSessionId));
+      return edges.get(childSessionId);
+    },
+  };
+}
+
+/**
+ * Every key held by the session or an ancestor it inherits from, mapped to its
+ * NEAREST holder: the session itself first, then up the spawn chain. Always
+ * read live.
+ */
+function grantHolders(sessionId: string): Map<string, string> {
+  const holders = new Map<string, string>();
+  for (const id of [sessionId, ...sessionStore.spawnGrantAncestors(sessionId)])
+    for (const grant of approvalStore.grantsForSession(id))
+      if (!holders.has(grant.key)) holders.set(grant.key, id);
+  return holders;
+}
+
+/**
+ * When `body` performs at least one operation and every one is held by the
+ * session or an ancestor: the operations an ancestor's grant covered. Otherwise
+ * undefined. Creation and every re-check share this one live lookup.
+ */
+function grantCoverage(
+  sessionId: string,
+  body: ApprovalBody,
+): InheritedCoverage | undefined {
+  const keys = approvalGrantKeys(body);
+  if (keys.length === 0) return undefined;
+  const holders = grantHolders(sessionId);
+  const inherited: InheritedCoverage = [];
+  for (const key of keys) {
+    const holder = holders.get(key);
+    if (holder === undefined) return undefined;
+    if (holder !== sessionId) inherited.push({ key, fromSessionId: holder });
+  }
+  return inherited;
+}
+
+/** The session's own grants, oldest first. */
 export function approvalGrantsForSession(sessionId: string): ApprovalGrant[] {
   return approvalStore.grantsForSession(sessionId);
+}
+
+/** The session's grant lists as the inspector shows them. */
+export interface ApprovalGrantsPayload {
+  /** Its OWN grants, the only ones it can revoke. */
+  grants: ApprovalGrant[];
+  /** Each key an ancestor holds, with the nearest holder, own keys included. */
+  inherited: InheritedApprovalGrant[];
+  /** Present when the session was spawned. */
+  inheritance?: ApprovalGrantInheritance;
+}
+
+/** What the inspector shows for a session's grants, read live. */
+export function approvalGrantsPayload(
+  sessionId: string,
+): ApprovalGrantsPayload {
+  return grantsPayload(sessionId, liveGrantReads);
+}
+
+function grantsPayload(
+  sessionId: string,
+  reads: GrantReads,
+): ApprovalGrantsPayload {
+  const edge = reads.edgeOf(sessionId);
+  const inherited: InheritedApprovalGrant[] = [];
+  const seen = new Set<string>();
+  for (const id of sessionStore.spawnGrantAncestors(sessionId, reads.edgeOf))
+    for (const grant of reads.grantsOf(id))
+      if (!seen.has(grant.key)) {
+        seen.add(grant.key);
+        inherited.push({ ...grant, heldBy: id });
+      }
+  return {
+    grants: reads.grantsOf(sessionId),
+    inherited,
+    ...(edge
+      ? {
+          inheritance: {
+            parentSessionId: edge.parentSessionId,
+            inherits: edge.inherits,
+          },
+        }
+      : {}),
+  };
 }
 
 /** Grant every operation `card` performs for the rest of its session. */
@@ -697,9 +818,12 @@ export function revokeApprovalGrant(sessionId: string, key: string): void {
 /** The session grant an auto-approval relied on is gone. */
 class GrantWithdrawnError extends Error {}
 
-function requireGrant(card: ApprovalCard): void {
-  if (!coveredByGrants(card.sessionId, card.body))
+/** The card's coverage now, or a {@link GrantWithdrawnError}. */
+function requireGrant(card: ApprovalCard): InheritedCoverage {
+  const coverage = grantCoverage(card.sessionId, card.body);
+  if (!coverage)
     throw new GrantWithdrawnError("The session grant was revoked.");
+  return coverage;
 }
 
 /**
@@ -772,6 +896,7 @@ async function autoApprove(approvalId: string): Promise<boolean> {
 function handBackToUser(card: ApprovalCard, error?: string): void {
   const updated = patchCard(card.id, {
     autoApproved: undefined,
+    inheritedGrants: undefined,
     ...(error ? { error } : {}),
   });
   emitChange(card.sessionId);
@@ -834,7 +959,11 @@ async function drainOutcomes(sessionId: string): Promise<void> {
 
 type BroadcastFn = (sessionId: string, approval: ApprovalCard) => void;
 let broadcastImpl: BroadcastFn | null = null;
-type GrantsBroadcastFn = (sessionId: string, grants: ApprovalGrant[]) => void;
+type GrantsBroadcastFn = (
+  sessionId: string,
+  grants: ApprovalGrant[],
+  payload: ApprovalGrantsPayload,
+) => void;
 let broadcastGrantsImpl: GrantsBroadcastFn | null = null;
 
 /** Test seam: replace the hub broadcast. */
@@ -846,15 +975,27 @@ export function setApprovalBroadcastForTests(
   broadcastGrantsImpl = grantsFn;
 }
 
+/**
+ * Re-send the grant lists of `sessionId` and of every session spawned below
+ * it, whose inherited lists may have changed with it. The lists are built
+ * before anything is awaited, sharing one memo so each session's grants and
+ * each edge are read once.
+ */
 async function broadcastGrants(sessionId: string): Promise<void> {
-  const grants = approvalGrantsForSession(sessionId);
+  const reads = memoGrantReads();
+  const payloads = [
+    sessionId,
+    ...sessionStore.spawnedDescendantIds(sessionId),
+  ].map((id) => [id, grantsPayload(id, reads)] as const);
   if (broadcastImpl) {
-    broadcastGrantsImpl?.(sessionId, grants);
+    for (const [id, payload] of payloads)
+      broadcastGrantsImpl?.(id, payload.grants, payload);
     return;
   }
   try {
     const { hub } = await import("./hub.ts");
-    hub.broadcastApprovalGrants(sessionId, grants);
+    for (const [id, payload] of payloads)
+      hub.broadcastApprovalGrants(id, payload);
   } catch {
     // best-effort; the list is re-sent whenever the session is viewed.
   }
