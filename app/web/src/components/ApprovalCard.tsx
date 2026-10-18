@@ -754,6 +754,7 @@ function spawnTargetLine(item: SessionSpawnApprovalItem): string {
  */
 function SpawnRow({
   item,
+  requiresEnterprise,
   editable,
   models,
   edit,
@@ -761,6 +762,8 @@ function SpawnRow({
   onOpenSession,
 }: {
   item: SessionSpawnApprovalItem;
+  /** The source's or the row's sealed requirement; the server enforces it. */
+  requiresEnterprise: boolean;
   editable: boolean;
   models: readonly AccountModelOption[];
   edit: SpawnRowEdit | undefined;
@@ -880,6 +883,9 @@ function SpawnRow({
             ? "User's inbox · No report owed"
             : "Coordinator's helpers"}
         </p>
+        {requiresEnterprise && (
+          <p className="text-muted-foreground">Requires enterprise</p>
+        )}
         {item.responseRequestWithdrawn && (
           <p className="text-muted-foreground">Awaited reply withdrawn</p>
         )}
@@ -956,6 +962,9 @@ function SessionSpawnBody({
         <SpawnRow
           key={item.rowId}
           item={item}
+          requiresEnterprise={
+            body.requiresEnterprise === true || item.requiresEnterprise === true
+          }
           editable={editable}
           models={models}
           edit={edits[item.rowId]}

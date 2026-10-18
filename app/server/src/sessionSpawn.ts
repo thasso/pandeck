@@ -113,6 +113,8 @@ interface SpawnRequestRowFields {
   provider?: string;
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
+  /** The agent's own request; it can only add to the source's requirement. */
+  requiresEnterprise?: boolean;
 }
 
 /** Raised for a proposal the AGENT can fix; no card is created. */
@@ -519,7 +521,7 @@ export async function buildSpawnProposal(
   // Freeze the transitive requirement before the first structural/model await;
   // approval can happen after the source session has been removed.
   const sender = sessionStore.getIncludingDeleted(input.senderSessionId);
-  const requiresEnterprise = sourceRequiresEnterprise([input.senderSessionId]);
+  const sourceRequires = sourceRequiresEnterprise([input.senderSessionId]);
   const fallback = fallbackRuntimeOf(sender);
 
   const items: SessionSpawnApprovalItem[] = [];
@@ -553,11 +555,16 @@ export async function buildSpawnProposal(
           thinkingLevel: runtime.thinkingLevel,
         };
     }
+    // Sealed per row: a batch may mix enterprise and ordinary sessions, and
+    // only the source's requirement applies to every row.
+    const requiresEnterprise =
+      sourceRequires || row.requiresEnterprise === true;
     const structural = await validateStructure({ ...row, agentType });
     const runtime = await resolveRuntime(row, rowFallback, requiresEnterprise);
     items.push({
       ...approvalItemOf(structural),
       ...(row.agent !== undefined ? { agent: row.agent.trim() } : {}),
+      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       responseRequested: row.responseRequested === true,
       provider: runtime.provider,
       modelId: runtime.modelId,
@@ -570,7 +577,7 @@ export async function buildSpawnProposal(
   }
   return {
     kind: "sessionSpawn",
-    ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
+    ...(sourceRequires ? { requiresEnterprise: true } : {}),
     items,
   };
 }
@@ -722,7 +729,7 @@ export async function prepareSpawnApproval(
     items.push(
       item.skipped
         ? item
-        : await settledItem(item, card.body.requiresEnterprise === true),
+        : await settledItem(item, rowRequiresEnterprise(card.body, original)),
     );
   }
   return {
@@ -730,6 +737,17 @@ export async function prepareSpawnApproval(
     ...(card.body.requiresEnterprise ? { requiresEnterprise: true } : {}),
     items,
   };
+}
+
+/**
+ * A sealed row's requirement: the card's source requirement or the row's own.
+ * Both are server-written; no approval edit carries either.
+ */
+function rowRequiresEnterprise(
+  body: SessionSpawnApprovalBody,
+  item: SessionSpawnApprovalItem,
+): boolean {
+  return body.requiresEnterprise === true || item.requiresEnterprise === true;
 }
 
 /* -------------------------------- execution ------------------------------- */
@@ -1076,7 +1094,7 @@ registerApprovalExecutor("sessionSpawn", {
       delete item.error;
       try {
         await spawnOne(card.sessionId, item, {
-          requiresEnterprise: card.body.requiresEnterprise === true,
+          requiresEnterprise: rowRequiresEnterprise(card.body, item),
         });
       } catch (err) {
         // One row's failure is not the batch's: the others are still worth
@@ -1156,6 +1174,8 @@ interface DirectSpawnRowFields {
   worktreeId?: string;
   projectId?: string;
   taskId?: string;
+  /** The agent's own request; it can only add to the source's requirement. */
+  requiresEnterprise?: boolean;
 }
 
 /** What one direct row did, whether or not it worked. */
@@ -1198,7 +1218,9 @@ export async function spawnApprovedPeers(input: {
   rows: DirectSpawnRequestRow[];
 }): Promise<DirectSpawnRowResult[]> {
   // Capture before structural validation, roster discovery, and other awaits.
-  const requiresEnterprise = sourceRequiresEnterprise([input.senderSessionId]);
+  const sourceRequires = sourceRequiresEnterprise([input.senderSessionId]);
+  const rowRequires = (row: DirectSpawnRequestRow) =>
+    sourceRequires || row.requiresEnterprise === true;
   assertBatchSize(input.rows);
   const structurals: StructuralRow[] = [];
   // One scan resolves every agent row; each is resolved again before use.
@@ -1222,7 +1244,7 @@ export async function spawnApprovedPeers(input: {
       let early: AgentSpawnRuntime;
       try {
         early = await resolveAgentSpawn(row.agent.trim(), agents, {
-          requiresEnterprise,
+          requiresEnterprise: rowRequires(row),
           ...(row.modelId !== undefined ? { model: row.modelId } : {}),
         });
       } catch (err) {
@@ -1257,6 +1279,7 @@ export async function spawnApprovedPeers(input: {
   try {
     for (const [index, row] of input.rows.entries()) {
       const structural = structurals[index]!;
+      const requiresEnterprise = rowRequires(row);
       const result: DirectSpawnRowResult = {
         title: structural.title,
         owner: structural.owner,

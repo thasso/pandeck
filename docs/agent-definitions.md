@@ -142,9 +142,10 @@ creation read use that policy. The model and effort never change to suit an
 account. A selected account that does not offer the model refuses the spawn.
 
 The sender's enterprise requirement is captured before library or structural
-awaits. It constrains both picks and is persisted on the child. A personal
-account is refused, never substituted, and no enabled enterprise account means
-no spawn. Explicit approved peer runtimes still use their named accounts; see
+awaits; a row's own `requiresEnterprise: true` adds to it. It constrains both
+picks and is persisted on the child. A personal account is refused, never
+substituted, and no enabled enterprise account means no spawn. Explicit approved
+peer runtimes still use their named accounts; see
 [Account routing](account-routing.md).
 
 ## Tools

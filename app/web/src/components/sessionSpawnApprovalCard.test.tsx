@@ -136,6 +136,39 @@ test("a row naming an agent shows the role beside its persona", () => {
   expect(host.textContent).toContain("Agent reviewer (Assistant)");
 });
 
+test("a row requested as enterprise is labeled, and a source requirement labels every row", () => {
+  const base = card();
+  if (base.body.kind !== "sessionSpawn") throw new Error("spawn card");
+  const [reviewer, implementer] = base.body.items;
+  const labels = () =>
+    host.textContent!.split("Requires enterprise").length - 1;
+
+  render(card());
+  expect(labels()).toBe(0);
+
+  render(
+    card({
+      body: {
+        ...base.body,
+        items: [{ ...reviewer!, requiresEnterprise: true }, implementer!],
+      },
+    }),
+  );
+  expect(labels()).toBe(1);
+  const rows = [...host.querySelectorAll('[data-slot="item"]')];
+  expect(
+    rows.find((row) => row.textContent?.includes("Reviewer: auth"))
+      ?.textContent,
+  ).toContain("Requires enterprise");
+  expect(
+    rows.find((row) => row.textContent?.includes("Implementer: auth"))
+      ?.textContent,
+  ).not.toContain("Requires enterprise");
+
+  render(card({ body: { ...base.body, requiresEnterprise: true } }));
+  expect(labels()).toBe(2);
+});
+
 test("the opening message is collapsed until asked for", () => {
   render(card());
 

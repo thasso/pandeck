@@ -164,6 +164,11 @@ function makeSessionSpawnTool() {
                 description:
                   'Only for "propose": optional thinking hint, lowered to what the resolved model supports. Defaults to yours.',
               },
+              requiresEnterprise: {
+                type: "boolean",
+                description:
+                  "true runs this session only on an account marked enterprise: Automatic and agent rows route among enterprise accounts, and a personal account pin is refused, never replaced. If your session requires enterprise, every child does and false cannot relax it.",
+              },
             },
           },
         },
@@ -339,6 +344,9 @@ async function runDirectSpawn(
       ...(row.worktreeId ? { worktreeId: row.worktreeId } : {}),
       ...(row.projectId ? { projectId: row.projectId } : {}),
       ...(row.taskId ? { taskId: row.taskId } : {}),
+      ...(row.requiresEnterprise === undefined
+        ? {}
+        : { requiresEnterprise: row.requiresEnterprise }),
     };
   });
 
@@ -491,6 +499,7 @@ const ROW_PROPERTIES = [
   "provider",
   "modelId",
   "thinkingLevel",
+  "requiresEnterprise",
 ] as const;
 
 /** The runtime fields only a PROPOSAL may carry: the user picks them in the card. */
@@ -563,9 +572,9 @@ function checkRawRow(
   for (const key of ROW_PROPERTIES) {
     if (!stated(row, key)) continue;
     const value = row[key];
-    if (key === "responseRequested") {
+    if (key === "responseRequested" || key === "requiresEnterprise") {
       if (typeof value !== "boolean")
-        throw new Error(`${where}.responseRequested must be true or false.`);
+        throw new Error(`${where}.${key} must be true or false.`);
       continue;
     }
     if (typeof value !== "string" || !value.trim())
@@ -602,6 +611,9 @@ function readRows(
       prompt: text(row.prompt),
       ...(typeof row.responseRequested === "boolean"
         ? { responseRequested: row.responseRequested }
+        : {}),
+      ...(typeof row.requiresEnterprise === "boolean"
+        ? { requiresEnterprise: row.requiresEnterprise }
         : {}),
       ...optional(row, "owner"),
       ...optional(row, "profileId"),
