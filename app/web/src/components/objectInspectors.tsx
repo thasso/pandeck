@@ -1621,6 +1621,7 @@ const PEER_PROMPT_STATE_LABEL: Record<PeerPromptState, string> = {
   completed: "Completed",
   awaiting_response: "Awaiting response",
   replied: "Replied",
+  settled: "Settled",
   retrying: "Retrying",
   interrupted: "Interrupted",
   cancelled: "Cancelled",

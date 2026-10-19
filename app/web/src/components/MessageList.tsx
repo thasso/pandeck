@@ -40,7 +40,7 @@ import type {
 } from "@assistant/shared";
 import type { LazyBlockKind, LiveBodyKey } from "@assistant/shared/session";
 import type { ClientTimelineEntry } from "@assistant/shared/runtime";
-import { peerPromptCardOf } from "@assistant/shared/toolCards";
+import { peerPromptToolRowsOf } from "@assistant/shared/toolCards";
 import {
   AssistantMessage,
   canRenderAssistantMessage,
@@ -1069,7 +1069,7 @@ function isSideActivityMessage(message: DisplayMessage): boolean {
     message.blocks.every(
       (block) =>
         block.kind === "compaction" ||
-        (block.kind === "tool" && peerPromptCardOf(block) !== null),
+        (block.kind === "tool" && peerPromptToolRowsOf(block) !== null),
     )
   );
 }

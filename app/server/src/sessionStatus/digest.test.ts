@@ -135,6 +135,42 @@ describe("buildSessionDigest", () => {
     assert.ok(digest.trimEnd().endsWith(DIGEST_END_MARKER));
   });
 
+  it("summarizes a session_send_prompt call's rows, tolerating malformed ones", () => {
+    const id = session("Coordinator");
+    writeLog(id, [
+      run("run.started", 1),
+      human("Report back to the reviewers.", 1),
+      assistant(2, {
+        type: "toolCall",
+        toolCallId: "s1",
+        name: "session_send_prompt",
+        input: {
+          rows: [
+            { targetSessionId: "reviewer-a", prompt: "Fixed, re-check" },
+            "not a row",
+            { targetSessionId: "reviewer-b", prompt: "Also fixed" },
+            { inReplyTo: ["k1"], settle: "applied the body" },
+          ],
+        },
+      }),
+      {
+        type: "message",
+        role: "toolResult",
+        toolCallId: "s1",
+        content: [{ type: "text", text: "{}" }],
+      },
+      run("run.ended", 2),
+    ]);
+    const { prompt: digest } = buildSessionDigest(
+      sessionStore.get(id)!,
+      Date.UTC(2026, 9, 8, 16),
+    );
+    assert.match(
+      digest,
+      /sent peer message to `reviewer-a`, `reviewer-b`: Fixed, re-check \/ Also fixed; settled 1 request row\(s\)/,
+    );
+  });
+
   it("reports the Tasks a session created with their sessions' latest outcome", () => {
     const id = session("Labs port");
     writeLog(id, [run("run.started", 1), human("Plan it.", 1)]);

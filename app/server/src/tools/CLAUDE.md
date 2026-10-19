@@ -7,8 +7,12 @@
   persona's whole toolset.
 - Rich web cards parse a JSON payload out of the tool's TEXT output, so keep
   result text byte-stable unless the web renderer changes with it.
-- Failure THROWS — never encode an error in the result content. Long-running
-  tools honour `ctx.signal` and stream partials via `ctx.progress?.(…)`.
+- Failure THROWS — never encode an error in the result content. Exception: a
+  tool of independent rows reports each row's failure in its result, throwing
+  only for bad top-level input or when every row failed; its row schema is
+  typeless (types in prose, checked in `execute`), so no harness refuses the
+  call over one row. Long-running tools honour `ctx.signal` and stream partials
+  via `ctx.progress?.(…)`.
 - A tool's rules live in its `description` and `parameters` prose — the only
   surfaces BOTH harnesses render, eager or deferred. There is no prompt-extras
   channel: never add one, and never restate a rule another prompt layer, the

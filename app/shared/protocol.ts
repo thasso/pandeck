@@ -3006,6 +3006,7 @@ export type PeerPromptState =
   | "completed"
   | "awaiting_response"
   | "replied"
+  | "settled"
   | "retrying"
   | "interrupted"
   | "cancelled"
@@ -3059,8 +3060,35 @@ export interface PeerPromptCard {
   failureReason?: string;
   /** Why its turn never finished, while that still explains the state. */
   interruption?: PeerPromptInterruption;
+  /** The reason its recipient gave for closing it without an answer (`settled`). */
+  settledReason?: string;
+  /**
+   * An excerpt of the request this message answers, with " (+N more)" when it
+   * answered several. Fixed when the card is created.
+   */
+  replyTo?: string;
   state: PeerPromptState;
 }
+
+/** A request a `session_send_prompt` settle row closed, as its card names it. */
+export interface PeerPromptSettledRequest {
+  /** The requester's title. */
+  senderTitle: string;
+  /** The requester's session, so the row can link to it. */
+  peerSessionId?: string;
+  /** An excerpt of the request. */
+  message: string;
+}
+
+/**
+ * One row of a `session_send_prompt` result (payload `version: 2`): a message
+ * it sent, the requests a settle closed, or why that row failed. Rows are
+ * independent, so a failed row sits beside the ones that went through.
+ */
+export type PeerPromptToolRow =
+  | { kind: "message"; card: PeerPromptCard }
+  | { kind: "settle"; reason: string; settled: PeerPromptSettledRequest[] }
+  | { kind: "error"; index: number; error: string };
 
 /**
  * The peer prompts between one session and one other session, summed up: how
@@ -3108,6 +3136,8 @@ export interface PeerPromptThreadMessage {
   failureReason?: string;
   /** Why its turn never finished, while that still explains the state. */
   interruption?: PeerPromptInterruption;
+  /** The reason its recipient gave for closing it without an answer (`settled`). */
+  settledReason?: string;
   createdAt: number;
 }
 
@@ -8918,6 +8948,7 @@ export type ServerMessage =
       state: PeerPromptState;
       failureReason?: string;
       interruption?: PeerPromptInterruption;
+      settledReason?: string;
     }
   /**
    * Response to `resolveTimelineAnchor`. `anchor` is absent when the target no

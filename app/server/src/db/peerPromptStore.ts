@@ -25,6 +25,7 @@ export type PeerPromptStatus =
   | "completed"
   | "awaiting_response"
   | "replied"
+  | "settled"
   | "retryable_failed"
   | "interrupted"
   | "cancelled"
@@ -58,10 +59,22 @@ type PeerPromptInterruptionKind = "restart" | "failure" | "stopped";
 const TERMINAL_STATUSES: PeerPromptStatus[] = [
   "completed",
   "replied",
+  "settled",
   "failed",
   "interrupted",
   "cancelled",
   "expired",
+];
+
+/**
+ * A delivered request not yet closed: what an answer marks `replied` and a
+ * settle marks `settled`. Its turn may still be running.
+ */
+const OPEN_REQUEST_STATUSES: PeerPromptStatus[] = [
+  "admitted",
+  "acknowledged",
+  "completed",
+  "awaiting_response",
 ];
 
 /** One recorded status transition, for the audit trail. */
@@ -99,6 +112,8 @@ export interface PeerPromptRecord {
   taskLabel?: string;
   replyToMessageId?: string;
   repliedByMessageId?: string;
+  /** Why the recipient closed this request without answering it (`settled`). */
+  settleReason?: string;
   nextAttemptAt?: number;
   /** The id of this delivery batch's head row (set on every member, including the head itself) once admitted. */
   batchHeadId?: string;
@@ -150,6 +165,7 @@ interface Row {
   task_label: string | null;
   reply_to_message_id: string | null;
   replied_by_message_id: string | null;
+  settle_reason: string | null;
   created_at_ms: number;
   updated_at_ms: number;
   accepted_at_ms: number | null;
@@ -220,6 +236,7 @@ function map(r: Row): PeerPromptRecord {
     ...(r.replied_by_message_id
       ? { repliedByMessageId: r.replied_by_message_id }
       : {}),
+    ...(r.settle_reason ? { settleReason: r.settle_reason } : {}),
     createdAt: r.created_at_ms,
     updatedAt: r.updated_at_ms,
     ...(r.accepted_at_ms != null ? { acceptedAt: r.accepted_at_ms } : {}),
@@ -433,6 +450,19 @@ export class PeerPromptHopLimitError extends Error {
   }
 }
 
+/**
+ * Thrown when a request named explicitly (an `inReplyTo` answer or a settle)
+ * is no longer open when the write commits. Nothing was written.
+ */
+export class PeerPromptRequestClosedError extends Error {
+  readonly ids: string[];
+  constructor(ids: string[]) {
+    super(`peer-prompt request(s) no longer open: ${ids.join(", ")}`);
+    this.name = "PeerPromptRequestClosedError";
+    this.ids = ids;
+  }
+}
+
 interface RoutedEnqueueInput {
   conversationId: string;
   /** Preferred chain to continue. */
@@ -453,8 +483,15 @@ interface RoutedEnqueueInput {
   senderLabel?: string;
   taskLabel?: string;
   replyToMessageId?: string;
-  /** Mark this earlier message replied atomically with this enqueue. */
-  markRepliedId?: string;
+  /** Earlier requests this message answers, marked replied atomically with this enqueue. */
+  markRepliedIds?: string[];
+  /**
+   * Every request in `markRepliedIds` must still be open, or the whole enqueue
+   * rolls back with {@link PeerPromptRequestClosedError}: an explicit
+   * `inReplyTo`. Without it a request closed meanwhile is skipped and the
+   * message still goes out, as an inferred reply always did.
+   */
+  strictReplies?: boolean;
   expiresAt?: number;
   /** Extra chain participants to accumulate atomically (sender/recipient/etc.). */
   participants: string[];
@@ -491,9 +528,9 @@ function ensureChain(
  * and reroute to `fallbackChainId` if so, reject when the reserved hop would
  * exceed `maxHops` except for reports to the immediate spawner (WITHOUT
  * incrementing a refused hop), reserve+increment every accepted hop,
- * accumulate participants, insert the message, and (if `markRepliedId` is set)
- * mark that earlier message replied. A rollback leaves no partial chain/
- * participant/message/hop/reply state. This is the only enqueue path for sends.
+ * accumulate participants, insert the message, and mark the requests in
+ * `markRepliedIds` replied. A rollback leaves no partial chain/participant/
+ * message/hop/reply state. This is the only enqueue path for sends.
  */
 function enqueueRouted(
   input: RoutedEnqueueInput,
@@ -546,16 +583,19 @@ function enqueueRouted(
       input.expiresAt ?? null,
       JSON.stringify([{ to: "queued", at: now }]),
     );
-    if (input.markRepliedId) {
-      transitionInTxn(
-        db,
-        input.markRepliedId,
-        ["admitted", "acknowledged", "completed", "awaiting_response"],
-        "replied",
-        { repliedAt: now, repliedByMessageId: id },
-        now,
-      );
-    }
+    const closed = (input.markRepliedIds ?? []).filter(
+      (requestId) =>
+        !transitionInTxn(
+          db,
+          requestId,
+          OPEN_REQUEST_STATUSES,
+          "replied",
+          { repliedAt: now, repliedByMessageId: id },
+          now,
+        ),
+    );
+    if (input.strictReplies && closed.length > 0)
+      throw new PeerPromptRequestClosedError(closed);
     db.exec("COMMIT");
     return map(getRow(id)!);
   } catch (err) {
@@ -623,6 +663,7 @@ type TransitionPatch = Partial<{
   completedAt: number;
   repliedAt: number;
   repliedByMessageId: string;
+  settleReason: string;
   bumpAttempts: boolean;
   /** Give back the attempt a claim took, for a delivery that never failed. */
   refundAttempt: boolean;
@@ -702,6 +743,10 @@ function transitionInTxn(
   if (patch.repliedByMessageId !== undefined) {
     sets.push("replied_by_message_id = ?");
     params.push(patch.repliedByMessageId);
+  }
+  if (patch.settleReason !== undefined) {
+    sets.push("settle_reason = ?");
+    params.push(patch.settleReason);
   }
   if (patch.bumpAttempts) sets.push("attempts = attempts + 1");
   if (patch.refundAttempt) sets.push("attempts = MAX(attempts - 1, 0)");
@@ -1303,11 +1348,52 @@ function markReplied(
 ): PeerPromptRecord | undefined {
   return transition(
     originalId,
-    ["admitted", "acknowledged", "completed", "awaiting_response"],
+    OPEN_REQUEST_STATUSES,
     "replied",
     { repliedAt: now, repliedByMessageId: replyMessageId },
     now,
   );
+}
+
+/**
+ * The recipient closes requests addressed to it without answering in a
+ * message: each moves to `settled` with `reason`. All or nothing, in one
+ * transaction: a request that is not addressed to `recipientSessionId`, was
+ * not a request, or is no longer open rolls every one back with
+ * {@link PeerPromptRequestClosedError}.
+ */
+function markSettled(
+  recipientSessionId: string,
+  ids: readonly string[],
+  reason: string,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const closed = ids.filter((id) => {
+      const row = getRow(id);
+      return (
+        !row ||
+        row.recipient_session_id !== recipientSessionId ||
+        row.response_requested !== 1 ||
+        !transitionInTxn(
+          db,
+          id,
+          OPEN_REQUEST_STATUSES,
+          "settled",
+          { settleReason: reason },
+          now,
+        )
+      );
+    });
+    if (closed.length > 0) throw new PeerPromptRequestClosedError(closed);
+    db.exec("COMMIT");
+    return ids.map((id) => map(getRow(id)!));
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 /* ------------------------------- reads ----------------------------------- */
@@ -1386,6 +1472,43 @@ function openForRecipient(recipientSessionId: string): PeerPromptRecord[] {
           ORDER BY queue_seq`,
       )
       .all(recipientSessionId) as unknown as Row[]
+  ).map(map);
+}
+
+/**
+ * The open requests addressed to a session, oldest first: what it may answer
+ * with `inReplyTo` or settle. Served by the recipient FIFO index.
+ */
+function openRequestsTo(
+  recipientSessionId: string,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  const statuses = OPEN_REQUEST_STATUSES.map(() => "?").join(", ");
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM peer_prompts
+          WHERE recipient_session_id = ? AND status IN (${statuses})
+            AND response_requested = 1
+            AND (expires_at_ms IS NULL OR expires_at_ms > ?)
+          ORDER BY queue_seq`,
+      )
+      .all(
+        recipientSessionId,
+        ...(OPEN_REQUEST_STATUSES as never[]),
+        now,
+      ) as unknown as Row[]
+  ).map(map);
+}
+
+/** The requests one message answered, oldest first (`peer_prompts_replied_by_idx`). */
+function listRepliedBy(messageId: string): PeerPromptRecord[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT * FROM peer_prompts WHERE replied_by_message_id = ? ORDER BY queue_seq",
+      )
+      .all(messageId) as unknown as Row[]
   ).map(map);
 }
 
@@ -2052,6 +2175,7 @@ export const peerPromptStore = {
   reserveAdmission,
   recordAdmission,
   markReplied,
+  markSettled,
   markInterrupted,
   interruptAsTold,
   markRetryable,
@@ -2066,6 +2190,8 @@ export const peerPromptStore = {
   pendingDeliveryRecipientIds,
   interruptedOwingSenderNotice,
   openForRecipient,
+  openRequestsTo,
+  listRepliedBy,
   latestBetween,
   senderIdsOwingNotice,
   listPendingForRecipient,

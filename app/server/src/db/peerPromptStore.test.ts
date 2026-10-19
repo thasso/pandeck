@@ -5,6 +5,7 @@ import {
   OUTSTANDING_REPLIES_SQL,
   peerPromptStore as store,
   PeerPromptHopLimitError,
+  PeerPromptRequestClosedError,
 } from "./peerPromptStore.ts";
 
 let seq = 0;
@@ -295,7 +296,7 @@ describe("peerPromptStore", () => {
         recipientSessionId: c,
         prompt: "report",
         responseRequested: false,
-        markRepliedId: request.id,
+        markRepliedIds: [request.id],
         participants: [p, c],
         maxHops: 100,
       });
@@ -435,7 +436,7 @@ describe("peerPromptStore", () => {
           recipientSessionId: c,
           prompt: "my report",
           responseRequested: false,
-          markRepliedId: request.id,
+          markRepliedIds: [request.id],
           participants: [p, c],
           maxHops: 100,
         });
@@ -710,7 +711,7 @@ describe("peerPromptStore", () => {
       maxHops: 8,
       prompt: "here you go",
       responseRequested: false,
-      markRepliedId: original.id,
+      markRepliedIds: [original.id],
     });
     assert.equal(
       reply.chainId,
@@ -971,5 +972,197 @@ describe("peerPromptStore", () => {
         .map((r) => r.status),
       ["queued"],
     );
+  });
+
+  describe("explicit replies and settles (Task-942)", () => {
+    /** Three delivered requests from `asker` to `me`, awaiting their answers, oldest first. */
+    function threeOpenRequests(me: string, asker: string) {
+      return [0, 1, 2].map(() => {
+        const r = enqueue(me, { sender: asker, responseRequested: true });
+        store.claimOne(r.id, "lease");
+        store.markAdmitted(r.id);
+        return store.markCompleted(r.id)!;
+      });
+    }
+    const snapshot = (id: string) => {
+      const r = store.getById(id)!;
+      return {
+        status: r.status,
+        repliedAt: r.repliedAt,
+        repliedByMessageId: r.repliedByMessageId,
+        settleReason: r.settleReason,
+        transitions: r.transitions,
+      };
+    };
+    const tableCount = (table: string) =>
+      (
+        getDb().prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as {
+          n: number;
+        }
+      ).n;
+
+    it("rolls a strict reply back whole when one named request closed meanwhile", () => {
+      const me = `me-${seq++}`;
+      const asker = `asker-${seq++}`;
+      const [k1, k2, k3] = threeOpenRequests(me, asker);
+      assert.equal(k3!.status, "awaiting_response");
+      // k3 closes between the tool's lookup and the write.
+      store.markReplied(k3!.id, "elsewhere");
+      const before = [k1!, k2!].map((r) => snapshot(r.id));
+      const chainId = `strict-${seq++}`;
+      const fallbackChainId = `strict-fallback-${seq++}`;
+      const counts = [
+        "peer_prompts",
+        "peer_prompt_chains",
+        "peer_prompt_chain_participants",
+      ].map(tableCount);
+      assert.throws(
+        () =>
+          store.enqueueRouted({
+            conversationId: "c",
+            chainId,
+            fallbackChainId,
+            senderSessionId: me,
+            recipientSessionId: asker,
+            participants: [me, asker],
+            maxHops: 8,
+            prompt: "answers",
+            responseRequested: false,
+            replyToMessageId: k3!.id,
+            markRepliedIds: [k1!.id, k2!.id, k3!.id],
+            strictReplies: true,
+          }),
+        (err: unknown) =>
+          err instanceof PeerPromptRequestClosedError &&
+          err.ids.length === 1 &&
+          err.ids[0] === k3!.id,
+      );
+      assert.deepEqual(
+        [k1!, k2!].map((r) => snapshot(r.id)),
+        before,
+        "no partial marks",
+      );
+      assert.deepEqual(
+        [
+          "peer_prompts",
+          "peer_prompt_chains",
+          "peer_prompt_chain_participants",
+        ].map(tableCount),
+        counts,
+        "no message, chain, fallback chain or participant row",
+      );
+      assert.equal(store.getChain(chainId), undefined);
+      assert.equal(store.getChain(fallbackChainId), undefined);
+    });
+
+    it("keeps an inferred reply lenient: a request closed meanwhile still lets the message go", () => {
+      const me = `me-${seq++}`;
+      const asker = `asker-${seq++}`;
+      const [k1] = threeOpenRequests(me, asker);
+      store.markReplied(k1!.id, "elsewhere");
+      const m = store.enqueueRouted({
+        conversationId: "c",
+        chainId: `lenient-${seq++}`,
+        senderSessionId: me,
+        recipientSessionId: asker,
+        participants: [me, asker],
+        maxHops: 8,
+        prompt: "answer",
+        responseRequested: false,
+        replyToMessageId: k1!.id,
+        markRepliedIds: [k1!.id],
+      });
+      assert.equal(store.getById(m.id)?.status, "queued");
+      assert.equal(store.getById(k1!.id)?.repliedByMessageId, "elsewhere");
+    });
+
+    it("settles all or nothing, only requests addressed to the settler", () => {
+      const me = `me-${seq++}`;
+      const asker = `asker-${seq++}`;
+      const [k1, k2, k3] = threeOpenRequests(me, asker);
+      store.markReplied(k3!.id, "elsewhere");
+      const before = [k1!, k2!].map((r) => snapshot(r.id));
+      assert.throws(
+        () => store.markSettled(me, [k1!.id, k2!.id, k3!.id], "done"),
+        PeerPromptRequestClosedError,
+      );
+      assert.deepEqual(
+        [k1!, k2!].map((r) => snapshot(r.id)),
+        before,
+      );
+      // Someone else cannot settle them, and a fire-and-forget row is no request.
+      assert.throws(
+        () => store.markSettled("intruder", [k1!.id], "mine now"),
+        PeerPromptRequestClosedError,
+      );
+      const told = enqueue(me, { sender: asker });
+      store.claimOne(told.id, "lease");
+      store.markAdmitted(told.id);
+      assert.throws(
+        () => store.markSettled(me, [told.id], "nothing to do"),
+        PeerPromptRequestClosedError,
+      );
+      const settled = store.markSettled(
+        me,
+        [k1!.id, k2!.id],
+        "applied the body",
+      );
+      assert.deepEqual(
+        settled.map((r) => [r.status, r.settleReason]),
+        [
+          ["settled", "applied the body"],
+          ["settled", "applied the body"],
+        ],
+      );
+    });
+
+    it("treats settled as terminal: owed by nobody, never moved by a turn end, pruned", () => {
+      const me = `me-${seq++}`;
+      const asker = `asker-${seq++}`;
+      // Settled while its turn still runs (`admitted`).
+      const running = enqueue(me, { sender: asker, responseRequested: true });
+      store.claimOne(running.id, "lease");
+      store.markAdmitted(running.id);
+      const [waiting] = threeOpenRequests(me, asker);
+      assert.equal(store.outstandingResponseRequestCount(asker), 4);
+      store.markSettled(me, [running.id, waiting!.id], "superseded");
+      assert.equal(store.outstandingResponseRequestCount(asker), 2);
+      assert.equal(
+        store.openForRecipient(me).some((r) => r.id === running.id),
+        false,
+      );
+      assert.equal(
+        store
+          .unrepliedRequestsBetween(asker, me)
+          .some((r) => r.id === running.id || r.id === waiting!.id),
+        false,
+      );
+      assert.equal(
+        store.openRequestsTo(me).some((r) => r.status === "settled"),
+        false,
+      );
+      // Every turn-end path leaves it settled.
+      assert.equal(store.markCompleted(running.id), undefined);
+      assert.equal(store.markStopped(running.id), undefined);
+      assert.equal(
+        store.markInterrupted(running.id, "boom", "failure"),
+        undefined,
+      );
+      store.interruptAsTold([running.id], "told");
+      assert.equal(store.getById(running.id)?.status, "settled");
+      // Nobody owes a settled request (the session list's read).
+      store.markReplied(threeOpenRequests(me, asker)[0]!.id, "irrelevant");
+      const owed = store.outstandingRepliesBySender().get(asker) ?? [];
+      assert.equal(owed.includes(me), true, "the two untouched requests");
+      store.markSettled(
+        me,
+        store.openRequestsTo(me).map((r) => r.id),
+        "all handled",
+      );
+      assert.equal(store.outstandingRepliesBySender().has(asker), false);
+      // Terminal rows age out with the rest.
+      assert.ok(store.pruneTerminal(Date.now() + 1) >= 2);
+      assert.equal(store.getById(running.id), undefined);
+    });
   });
 });

@@ -6614,6 +6614,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             ...(msg.interruption !== undefined
               ? { interruption: msg.interruption }
               : {}),
+            ...(msg.settledReason !== undefined
+              ? { settledReason: msg.settledReason }
+              : {}),
           },
         },
       };

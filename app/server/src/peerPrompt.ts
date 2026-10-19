@@ -33,6 +33,7 @@ import type {
   PeerPromptThread,
   PeerPromptThreadMessage,
   PeerPromptPeerSummary,
+  PeerPromptSettledRequest,
   PeerPromptThreadsProjection,
   QueuedPeerPrompt,
 } from "@assistant/shared";
@@ -69,6 +70,7 @@ import {
 import {
   peerPromptStore,
   PeerPromptHopLimitError,
+  PeerPromptRequestClosedError,
   type PeerPromptRecord,
   type PeerPromptRecoveryDecision,
   type PeerPromptStatus,
@@ -97,10 +99,12 @@ import {
 } from "./tools/sessions/sessionInspection.ts";
 
 export const MAX_PEER_PROMPT_CHARS = 8_000;
+/** The longest reason a settle may give; it is shown on the requester's card. */
+export const MAX_SETTLE_REASON_CHARS = 200;
 export const BATCH_MAX_MESSAGES = 5;
 const BATCH_MAX_CHARS = 16_000;
 /** Non-message overhead budget for the delivered envelope. */
-export const ENVELOPE_OVERHEAD_MAX = 300;
+export const ENVELOPE_OVERHEAD_MAX = 500;
 const SENDER_TITLE_MAX = 80;
 /** How much of an interrupted prompt an interruption notice quotes back. */
 const NOTICE_PROMPT_EXCERPT_MAX = 120;
@@ -165,6 +169,7 @@ export interface PeerPromptHub {
       state: PeerPromptState;
       failureReason?: string;
       interruption?: PeerPromptInterruption;
+      settledReason?: string;
     },
   ): void;
   /** Tell a recipient's viewers what still waits for it; optional for test hubs. */
@@ -190,6 +195,12 @@ export interface SendPeerPromptInput {
   prompt: string;
   responseRequested: boolean;
   taskId?: string;
+  /**
+   * Request keys ({@link peerRequestKey}) of the target's open requests this
+   * message answers. When given they decide the link and the conversation;
+   * without them the reply is inferred ({@link resolveConversation}).
+   */
+  inReplyTo?: readonly string[];
 }
 
 export interface SendPeerPromptResult {
@@ -220,7 +231,11 @@ export async function sendPeerPrompt(
   // accumulation, the message insert, and the reply-mark all happen in ONE
   // store transaction so a rejected over-limit send neither persists a message
   // nor consumes a hop, and a concurrent human-reset close can't be raced.
-  const routing = resolveConversation(input.senderSessionId, target.id);
+  const routing = input.inReplyTo?.length
+    ? explicitRouting(
+        resolveRequestKeys(input.senderSessionId, input.inReplyTo, target.id),
+      )
+    : resolveConversation(input.senderSessionId, target.id);
   let message: PeerPromptRecord;
   try {
     message = peerPromptStore.enqueueRouted({
@@ -241,9 +256,10 @@ export async function sendPeerPrompt(
       ...(routing.replyToMessageId
         ? { replyToMessageId: routing.replyToMessageId }
         : {}),
-      ...(routing.markRepliedId
-        ? { markRepliedId: routing.markRepliedId }
+      ...(routing.markRepliedIds
+        ? { markRepliedIds: routing.markRepliedIds }
         : {}),
+      ...(routing.strictReplies ? { strictReplies: true } : {}),
       ...(input.responseRequested
         ? { expiresAt: Date.now() + RESPONSE_TTL_MS }
         : {}),
@@ -272,23 +288,72 @@ export async function sendPeerPrompt(
         `This agent-to-agent chain (${err.chainId}) reached its ${err.maxHops}-hop limit without a human in the loop. This send was not queued. Wait for a human prompt to a chain participant or involve the user before sending again.`,
       );
     }
+    if (err instanceof PeerPromptRequestClosedError)
+      throw requestClosedError(err, "Nothing was sent.");
     throw err;
   }
 
-  const card = cardFor(message, "sent", target.title);
+  const card = {
+    ...cardFor(message, "sent", target.title),
+    ...replyToField([message]),
+  };
   void broadcastParticipants([message]);
   void broadcastCardUpdateFor(message);
-  // enqueueRouted marks the original request replied atomically, but that
+  // enqueueRouted marks the original requests replied atomically, but each
   // original row's own card (a different messageKey, possibly rendered in the
   // sender's OR recipient's session) never gets its own update unless we
   // explicitly re-fetch and broadcast it here.
-  if (routing.markRepliedId) {
-    const original = peerPromptStore.getById(routing.markRepliedId);
+  for (const id of routing.markRepliedIds ?? []) {
+    const original = peerPromptStore.getById(id);
     if (original) void broadcastCardUpdateFor(original);
   }
   // Fire-and-forget delivery; the send call never blocks on the recipient turn.
   if (autoDeliver) void drainRecipient(target.id).catch(() => {});
   return { message, card };
+}
+
+export interface SettlePeerRequestsInput {
+  /** The session closing requests addressed to it. */
+  settlerSessionId: string;
+  /** Request keys ({@link peerRequestKey}) of its open requests. */
+  keys: readonly string[];
+  reason: string;
+}
+
+/**
+ * Close open requests addressed to the settler without answering them: each
+ * becomes `settled` with the reason, which the requester's card shows. Nothing
+ * reaches the requester's model and no hop is spent. All or nothing.
+ */
+export function settlePeerRequests(
+  input: SettlePeerRequestsInput,
+): PeerPromptSettledRequest[] {
+  const reason = input.reason.trim();
+  if (!reason) throw new Error("settle needs a short reason.");
+  if (reason.length > MAX_SETTLE_REASON_CHARS)
+    throw new Error(
+      `settle reason exceeds the ${MAX_SETTLE_REASON_CHARS}-character limit (${reason.length}).`,
+    );
+  const requests = resolveRequestKeys(input.settlerSessionId, input.keys);
+  let settled: PeerPromptRecord[];
+  try {
+    settled = peerPromptStore.markSettled(
+      input.settlerSessionId,
+      requests.map((r) => r.id),
+      reason,
+    );
+  } catch (err) {
+    if (err instanceof PeerPromptRequestClosedError)
+      throw requestClosedError(err, "Nothing was settled.");
+    throw err;
+  }
+  void broadcastParticipants(settled);
+  for (const m of settled) void broadcastCardUpdateFor(m);
+  return settled.map((m) => ({
+    senderTitle: otherPartyTitle(m, "received"),
+    peerSessionId: m.senderSessionId,
+    message: peerPromptExcerpt(m.prompt),
+  }));
 }
 
 export interface CancelQueuedPeerPromptsInput {
@@ -641,7 +706,9 @@ interface Routing {
    */
   fallbackChainId?: string;
   replyToMessageId?: string;
-  markRepliedId?: string;
+  markRepliedIds?: string[];
+  /** Named by the sender: every request must still be open, or nothing is sent. */
+  strictReplies?: boolean;
 }
 
 /**
@@ -660,7 +727,7 @@ function resolveConversation(senderId: string, targetId: string): Routing {
     const reply = active.primaryRequestMessageId
       ? {
           replyToMessageId: active.primaryRequestMessageId,
-          markRepliedId: active.primaryRequestMessageId,
+          markRepliedIds: [active.primaryRequestMessageId],
         }
       : {};
     return {
@@ -692,10 +759,75 @@ function resolveConversation(senderId: string, targetId: string): Routing {
       chainId: one.chainId,
       fallbackChainId: newChainId(),
       replyToMessageId: one.id,
-      markRepliedId: one.id,
+      markRepliedIds: [one.id],
     };
   }
   return { conversationId: newId("conv"), chainId: newChainId() };
+}
+
+/**
+ * An answer that names its requests: it continues the NEWEST one's
+ * conversation and chain, whatever turn it is sent from, and marks every one
+ * replied. A chain a human prompt closed moves it to a fresh one, as for any
+ * reply. Each request can be answered once, so naming one cannot reset a
+ * loop's hop budget.
+ */
+function explicitRouting(requests: PeerPromptRecord[]): Routing {
+  const newest = requests.reduce((a, b) => (b.queueSeq > a.queueSeq ? b : a));
+  return {
+    conversationId: newest.conversationId,
+    chainId: newest.chainId,
+    fallbackChainId: newChainId(),
+    replyToMessageId: newest.id,
+    markRepliedIds: requests.map((r) => r.id),
+    strictReplies: true,
+  };
+}
+
+/**
+ * The open requests addressed to `recipientId` that `keys` name, de-duplicated.
+ * Throws a model-facing error naming the first key that is not one, or — with
+ * `fromSessionId` — that another session asked: an answer goes to the session
+ * that asked, and closing a request without answering it is a settle.
+ */
+function resolveRequestKeys(
+  recipientId: string,
+  keys: readonly string[],
+  fromSessionId?: string,
+): PeerPromptRecord[] {
+  const open = peerPromptStore.openRequestsTo(recipientId);
+  // A message can still go out unlinked; a settle has nothing else to do.
+  const instead = fromSessionId ? " Send without inReplyTo instead." : "";
+  const resolved: PeerPromptRecord[] = [];
+  for (const key of new Set(keys)) {
+    const matches = open.filter((r) => peerRequestKey(r) === key);
+    if (matches.length === 0)
+      throw new Error(
+        `Request key \`${key}\` is not an open request to you: it is unknown, did not ask for a reply, or was already answered, settled or closed.${instead}`,
+      );
+    if (matches.length > 1)
+      throw new Error(
+        `Request key \`${key}\` matches more than one open request.${instead}`,
+      );
+    const request = matches[0]!;
+    if (fromSessionId && request.senderSessionId !== fromSessionId)
+      throw new Error(
+        `Request key \`${key}\` came from session \`${request.senderSessionId}\`, not \`${fromSessionId}\`. Answer it in a row to that session, or settle it to close it without answering.`,
+      );
+    resolved.push(request);
+  }
+  return resolved;
+}
+
+/** A request that closed between its lookup and the write, in the model's terms. */
+function requestClosedError(
+  err: PeerPromptRequestClosedError,
+  outcome: string,
+): Error {
+  const keys = err.ids.map((id) => `\`${opaqueKey(id)}\``).join(", ");
+  return new Error(
+    `Request ${keys} was answered, settled or closed meanwhile. ${outcome}`,
+  );
 }
 
 function newChainId(): string {
@@ -1451,6 +1583,7 @@ function deliveryParts(batch: PeerPromptRecord[]): {
     // broadcast can never bleed into the head's own individual sender-side card.
     receivedCard: {
       ...cardFor(head, "received", undefined, batchMessage(batch)),
+      ...replyToField(batch),
       messageKey: batchCardKey(head.id),
       responseRequested: batch.some((m) => m.responseRequested),
       state: "delivered",
@@ -1932,15 +2065,32 @@ function batchMessage(batch: PeerPromptRecord[]): string {
  * stops at the first sender or conversation mismatch. It is model-facing only
  * — the transcript renders the sanitized card, never this envelope — and stays
  * inside the conditional cue so fire-and-forget notifications stay minimal.
+ *
+ * Each request carries its reply key ({@link peerRequestKey}) next to its own
+ * text: in the cue when it is the batch's only message, otherwise on a label
+ * line before each member, so every body sits between its own label and the
+ * next one. A batch without requests keeps the plain shape.
  */
 export function buildEnvelope(batch: PeerPromptRecord[]): string {
   const head = batch[0]!;
   const title = clip(head.senderLabel ?? "another session", SENDER_TITLE_MAX);
   const header = `Peer message from ${title}:`;
-  const cue = batch.some((m) => m.responseRequested)
-    ? `\n\nReply with session_send_prompt to session \`${head.senderSessionId}\` if a response is needed, then end your turn — further messages arrive while you are idle.`
-    : "";
-  return `${header}\n\n${batchMessage(batch)}${cue}`;
+  if (!batch.some((m) => m.responseRequested))
+    return `${header}\n\n${batchMessage(batch)}`;
+  const reply = `Reply with session_send_prompt to session \`${head.senderSessionId}\``;
+  const idle =
+    "then end your turn — further messages arrive while you are idle.";
+  if (batch.length === 1)
+    return `${header}\n\n${head.prompt}\n\n${reply}, inReplyTo \`${peerRequestKey(head)}\` (or settle it if acting answers it), ${idle}`;
+  const body = batch
+    .map((m, i) => {
+      const label = m.responseRequested
+        ? `reply key \`${peerRequestKey(m)}\``
+        : "no reply asked";
+      return `[${i + 1}/${batch.length} · ${label}]\n${m.prompt}`;
+    })
+    .join("\n\n");
+  return `${header}\n\n${body}\n\n${reply}, inReplyTo naming the keys each reply answers (or settle those acting answers), ${idle}`;
 }
 
 /* ------------------------------- cards ----------------------------------- */
@@ -1960,6 +2110,8 @@ function cardState(status: PeerPromptStatus): PeerPromptState {
       return "awaiting_response";
     case "replied":
       return "replied";
+    case "settled":
+      return "settled";
     case "retryable_failed":
       return "retrying";
     case "interrupted":
@@ -1995,8 +2147,34 @@ function cardFor(
     ...(message.taskLabel ? { taskTitle: message.taskLabel } : {}),
     ...(message.failureReason ? { failureReason: message.failureReason } : {}),
     ...interruptionField(message),
+    ...(message.settleReason ? { settledReason: message.settleReason } : {}),
     state: cardState(message.status),
   };
+}
+
+/**
+ * The request these messages answer, as a card excerpt: the newest one,
+ * " (+N more)" when they answered several. A message answers the requests it
+ * marked replied, or failing that the one it was correlated to.
+ */
+function replyToField(messages: readonly PeerPromptRecord[]): {
+  replyTo?: string;
+} {
+  const answered = new Map<string, PeerPromptRecord>();
+  for (const m of messages) {
+    const marked = peerPromptStore.listRepliedBy(m.id);
+    const linked = m.replyToMessageId
+      ? peerPromptStore.getById(m.replyToMessageId)
+      : undefined;
+    for (const r of marked.length > 0 ? marked : linked ? [linked] : [])
+      answered.set(r.id, r);
+  }
+  const [newest, ...rest] = [...answered.values()].sort(
+    (a, b) => b.queueSeq - a.queueSeq,
+  );
+  if (!newest) return {};
+  const more = rest.length > 0 ? ` (+${rest.length} more)` : "";
+  return { replyTo: `${peerPromptExcerpt(newest.prompt)}${more}` };
 }
 
 /**
@@ -2038,6 +2216,7 @@ async function broadcastCardKeyUpdate(
   state: PeerPromptState,
   failureReason?: string,
   interruption?: PeerPromptInterruption,
+  settledReason?: string,
 ): Promise<void> {
   try {
     const hub = await getHub();
@@ -2046,6 +2225,7 @@ async function broadcastCardKeyUpdate(
       state,
       ...(failureReason ? { failureReason } : {}),
       ...(interruption ? { interruption } : {}),
+      ...(settledReason ? { settledReason } : {}),
     });
   } catch {
     // Best-effort UI refresh only; the durable Peer prompts history stays authoritative.
@@ -2069,6 +2249,7 @@ const AGGREGATE_STATE_PRIORITY: PeerPromptState[] = [
   "delivered",
   "acknowledged",
   "replied",
+  "settled",
   "completed",
 ];
 
@@ -2103,6 +2284,9 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
   const aggregateFailureReason = rowsForAggregate.find(
     (r) => r.failureReason,
   )?.failureReason;
+  const aggregateSettleReason = rowsForAggregate.find(
+    (r) => r.settleReason,
+  )?.settleReason;
   await Promise.all([
     broadcastCardKeyUpdate(
       m.senderSessionId,
@@ -2110,6 +2294,7 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
       cardState(m.status),
       m.failureReason,
       interruptionOf(m),
+      m.settleReason,
     ),
     broadcastCardKeyUpdate(
       m.recipientSessionId,
@@ -2117,6 +2302,7 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
       aggregateState,
       aggregateFailureReason,
       aggregateInterruption(rowsForAggregate, aggregateState),
+      aggregateSettleReason,
     ),
   ]);
 }
@@ -2231,6 +2417,7 @@ export function peerPromptThreadsFor(
       ...(r.taskLabel ? { taskTitle: r.taskLabel } : {}),
       ...(r.failureReason ? { failureReason: r.failureReason } : {}),
       ...interruptionField(r),
+      ...(r.settleReason ? { settledReason: r.settleReason } : {}),
       createdAt: r.createdAt,
     };
     thread.messages.push(message);
@@ -2248,6 +2435,7 @@ function buildReceivedGroupMessage(
   const aggregateState = aggregateCardState(rows);
   const sorted = [...rows].sort((a, b) => a.queueSeq - b.queueSeq);
   const failureReason = rows.find((r) => r.failureReason)?.failureReason;
+  const settledReason = rows.find((r) => r.settleReason)?.settleReason;
   const interruption = aggregateInterruption(rows, aggregateState);
   return {
     id: batchCardKey(effectiveHeadId),
@@ -2258,6 +2446,7 @@ function buildReceivedGroupMessage(
     ...(sorted[0]?.taskLabel ? { taskTitle: sorted[0].taskLabel } : {}),
     ...(failureReason ? { failureReason } : {}),
     ...(interruption ? { interruption } : {}),
+    ...(settledReason ? { settledReason } : {}),
     createdAt: Math.min(...rows.map((r) => r.createdAt)),
   };
 }
@@ -2326,6 +2515,15 @@ function entryCarriesCardKey(entry: SessionLogEntry, key: string): boolean {
   return entry.content.some(
     (block) => block.type === "text" && block.text.includes(key),
   );
+}
+
+/**
+ * A request's reply key: the recipient sees it next to the request's text
+ * and names it in `inReplyTo` to answer or settle that request. It is the
+ * requester card's `messageKey`, never the raw id.
+ */
+export function peerRequestKey(request: Pick<PeerPromptRecord, "id">): string {
+  return opaqueKey(request.id);
 }
 
 /** Stable opaque key for reconciliation that is not the raw routing/thread id. */

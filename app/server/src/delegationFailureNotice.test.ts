@@ -2589,6 +2589,21 @@ describe("a journaled failure replays only what it was owed when it happened", (
     );
   });
 
+  it("a request the child settled ends its notice like an answer", () => {
+    freshJournal();
+    const child = piChild(undefined, "Settles instead");
+    const { id: asker } = coordinator("Asker");
+    awaitingRow(asker, child.sessionId);
+    const [request] = peerPromptStore.openForRecipient(child.sessionId);
+    recordRunFailureNotices(
+      failureOf(child.sessionId, "settled-request", Date.now() + 5),
+    );
+    assert.equal(delegationFailureNoticeStore.pendingFor(asker).length, 1);
+    peerPromptStore.markSettled(child.sessionId, [request!.id], "applied it");
+    assert.equal(deliverableNotices(asker).length, 0);
+    assert.equal(delegationFailureNoticeStore.pendingFor(asker).length, 0);
+  });
+
   it("a plan of any size is journaled whole in parts, and one missing a part is no plan at all", () => {
     freshJournal();
     const child = piChild(undefined, "Asked very often");

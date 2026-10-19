@@ -19,6 +19,8 @@ interface PeerPromptCardOverride {
   failureReason?: string | undefined;
   /** Cleared the same way: an answered request no longer shows its Stop. */
   interruption?: PeerPromptInterruption | undefined;
+  /** Why its recipient settled it; cleared the same way. */
+  settledReason?: string | undefined;
 }
 
 export type PeerPromptCardOverrides = Record<string, PeerPromptCardOverride>;
@@ -48,6 +50,7 @@ export function seedPeerPromptCardOverridesFromHistory(
         state: message.state,
         failureReason: message.failureReason,
         interruption: message.interruption,
+        settledReason: message.settledReason,
       };
     }
   }
@@ -66,12 +69,13 @@ export function applyPeerPromptCardOverride(
     state: override.state,
     failureReason: override.failureReason,
     interruption: override.interruption,
+    settledReason: override.settledReason,
   });
 }
 
 function parseSessionPeerPromptPayload(
   output: string,
-): { renderKind?: unknown; card?: unknown; [k: string]: unknown } | null {
+): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(output);
     return parsed && typeof parsed === "object"
@@ -80,6 +84,37 @@ function parseSessionPeerPromptPayload(
   } catch {
     return null;
   }
+}
+
+/** One card of a tool payload, merged; anything that is not a card stays as it is. */
+function mergeCard(card: unknown, overrides: PeerPromptCardOverrides): unknown {
+  if (!card || typeof card !== "object") return card;
+  return applyPeerPromptCardOverride(card as PeerPromptCard, overrides);
+}
+
+/**
+ * The `session_send_prompt` payload with every card merged: each message row
+ * of a `version: 2` payload, or the one card of a `version: 1` payload. The
+ * same object when nothing changed.
+ */
+function patchToolPayload(
+  payload: Record<string, unknown>,
+  overrides: PeerPromptCardOverrides,
+): Record<string, unknown> {
+  if (Array.isArray(payload.rows)) {
+    let changed = false;
+    const rows = payload.rows.map((row: unknown) => {
+      if (!row || typeof row !== "object" || !("card" in row)) return row;
+      const card = (row as { card: unknown }).card;
+      const merged = mergeCard(card, overrides);
+      if (merged === card) return row;
+      changed = true;
+      return { ...row, card: merged };
+    });
+    return changed ? { ...payload, rows } : payload;
+  }
+  const merged = mergeCard(payload.card, overrides);
+  return merged === payload.card ? payload : { ...payload, card: merged };
 }
 
 /**
@@ -107,21 +142,12 @@ export function applyPeerPromptCardOverridesToMessages(
       }
       if (block.kind === "tool" && block.done && !block.isError) {
         const payload = parseSessionPeerPromptPayload(block.output);
-        if (
-          !payload ||
-          payload.renderKind !== "sessionPeerPrompt" ||
-          !payload.card ||
-          typeof payload.card !== "object"
-        )
+        if (!payload || payload.renderKind !== "sessionPeerPrompt")
           return block;
-        const card = payload.card as PeerPromptCard;
-        const merged = applyPeerPromptCardOverride(card, overrides);
-        if (merged === card) return block;
+        const patched = patchToolPayload(payload, overrides);
+        if (patched === payload) return block;
         changed = true;
-        return {
-          ...block,
-          output: JSON.stringify({ ...payload, card: merged }, null, 2),
-        };
+        return { ...block, output: JSON.stringify(patched, null, 2) };
       }
       return block;
     });

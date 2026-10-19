@@ -199,12 +199,13 @@ function neitherSettled(coordinator: SessionMeta, child: SessionMeta): boolean {
 
 /**
  * A request still waiting for its reply: asked for one, and neither answered,
- * withdrawn nor expired since.
+ * settled, withdrawn nor expired since.
  */
 function unanswered(m: PeerPromptRecord): boolean {
   return (
     m.responseRequested &&
     m.status !== "replied" &&
+    m.status !== "settled" &&
     m.status !== "cancelled" &&
     m.status !== "expired" &&
     m.status !== "completed"
@@ -682,7 +683,9 @@ function noLongerOwed(n: DelegationFailureNotice): string | undefined {
     .map((id) => peerPromptStore.getById(id))
     .some((m) => m !== undefined && unanswered(m));
   if (n.route === "request")
-    return waiting ? undefined : "the request was answered or withdrawn";
+    return waiting
+      ? undefined
+      : "the request was answered, settled or withdrawn";
   if (!ownsChild(n.coordinatorSessionId, n.childSessionId))
     return "the child is no longer the coordinator's";
   if (!waiting && !neitherSettled(coordinator, child))

@@ -230,6 +230,22 @@ card, which the commands address it by.
   only rows that were never admitted. Rows completed before this distinction
   existed are not relabeled.
 
+- **Reply keys.** A delivered request carries its reply key — the requester
+  card's `messageKey` (`peerRequestKey`) — next to its own text, so the
+  recipient can answer or settle it by `inReplyTo` from any later turn
+  (`agent-workflows.md`, peer sessions lane). A batch of one names the key in
+  the reply cue. A larger batch with a request in it starts every member with a
+  label line, ``[1/3 · reply key `k…`]`` or `[2/3 · no reply asked]`, so each
+  body sits between its own label and the next. A batch without requests keeps
+  the plain shape. Labels are model-facing only: the transcript card shows the
+  plain messages. The envelope's non-message overhead stays under
+  `ENVELOPE_OVERHEAD_MAX` (500; five labelled requests with the longest title
+  measure 471).
+- **Settled.** The recipient may close a request without a message (a settle
+  row): `settled` is terminal and recipient-written, carries the reason in
+  `settle_reason`, and is owed by nobody. Like `replied`, it can be written
+  while the request's own turn still runs, and a turn end never overwrites
+  either: every settlement moves only from the admitted states.
 - Agent handoffs are not listed: they steer themselves into a turn that takes
   one and queue only behind a turn that cannot.
 

@@ -5,6 +5,7 @@ import {
   Check,
   CheckCheck,
   CircleCheck,
+  CircleCheckBig,
   CircleSlash,
   CircleStop,
   CircleX,
@@ -16,7 +17,11 @@ import {
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
-import type { PeerPromptCard, PeerPromptState } from "@assistant/shared";
+import type {
+  PeerPromptCard,
+  PeerPromptState,
+  PeerPromptToolRow,
+} from "@assistant/shared";
 import { activityPreview } from "../lib/activityPreview.ts";
 import { isPeerPromptState } from "../lib/peerPromptCard.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
@@ -39,6 +44,7 @@ const STATE_MARK: Record<
   completed: { label: "Completed", icon: CircleCheck },
   awaiting_response: { label: "Awaiting response", icon: MessageCircle },
   replied: { label: "Replied", icon: MessagesSquare },
+  settled: { label: "Settled", icon: CircleCheckBig },
   retrying: {
     label: "Retrying",
     icon: RefreshCw,
@@ -121,7 +127,23 @@ export function PeerPromptCardView({
       <p className="mb-1 break-words text-sm text-muted-foreground">
         {prefix} {title}
       </p>
+      {typeof card.replyTo === "string" && card.replyTo ? (
+        <p className="mb-1 break-words text-xs text-muted-foreground">
+          In reply to:{" "}
+          <Markdown inline text={card.replyTo} onOpenSession={onOpenSession} />
+        </p>
+      ) : null}
       <Markdown text={message} onOpenSession={onOpenSession} />
+      {typeof card.settledReason === "string" && card.settledReason ? (
+        <p className="mt-1 break-words text-xs text-muted-foreground">
+          Settled:{" "}
+          <Markdown
+            inline
+            text={card.settledReason}
+            onOpenSession={onOpenSession}
+          />
+        </p>
+      ) : null}
       {typeof card.failureReason === "string" && card.failureReason ? (
         <ErrorNote className="mt-1" message={card.failureReason} />
       ) : null}
@@ -139,6 +161,115 @@ export function PeerPromptCardView({
         {card.responseRequested ? <span>Response requested</span> : null}
       </div>
       {actions}
+    </ChatActivityRow>
+  );
+}
+
+/**
+ * A `session_send_prompt` result: one card per message it sent, one row per
+ * settle naming the requests it closed, and each failed row's error in place.
+ */
+export function PeerPromptToolRowsView({
+  rows,
+  onOpenSession,
+}: {
+  rows: PeerPromptToolRow[];
+  onOpenSession?: ((id: string) => void) | undefined;
+}) {
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-1">
+      {rows.map((row, i) => {
+        if (row.kind === "message")
+          return (
+            <PeerPromptCardView
+              key={row.card.messageKey || i}
+              card={row.card}
+              onOpenSession={onOpenSession}
+            />
+          );
+        if (row.kind === "error")
+          return (
+            <ErrorNote
+              key={`error-${row.index}`}
+              message={`Row ${row.index + 1} not sent: ${row.error}`}
+            />
+          );
+        return (
+          <PeerPromptSettleRow
+            key={`settle-${i}`}
+            row={row}
+            onOpenSession={onOpenSession}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function PeerPromptSettleRow({
+  row,
+  onOpenSession,
+}: {
+  row: Extract<PeerPromptToolRow, { kind: "settle" }>;
+  onOpenSession?: ((id: string) => void) | undefined;
+}) {
+  const only = row.settled.length === 1 ? row.settled[0] : undefined;
+  const sessionId = only?.peerSessionId;
+  return (
+    <ChatActivityRow
+      icon={CircleCheckBig}
+      prefix="Settled"
+      title={
+        only
+          ? `request from ${only.senderTitle}`
+          : `${row.settled.length} requests`
+      }
+      {...(sessionId ? { href: sessionPath(sessionId) } : {})}
+      onOpenSource={
+        sessionId && onOpenSession ? () => onOpenSession(sessionId) : undefined
+      }
+      preview={activityPreview(row.reason)}
+    >
+      <p className="mb-1 break-words text-xs text-muted-foreground">
+        Settled:{" "}
+        <Markdown inline text={row.reason} onOpenSession={onOpenSession} />
+      </p>
+      <ul className="flex flex-col gap-1">
+        {row.settled.map((request, i) => (
+          <li key={i} className="break-words">
+            <span className="text-xs">From </span>
+            {request.peerSessionId ? (
+              <a
+                href={sessionPath(request.peerSessionId)}
+                className="text-xs font-medium underline-offset-4 hover:text-primary hover:underline"
+                onClick={(event) => {
+                  const id = request.peerSessionId;
+                  if (
+                    !id ||
+                    !onOpenSession ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey
+                  )
+                    return;
+                  event.preventDefault();
+                  onOpenSession(id);
+                }}
+              >
+                {request.senderTitle}
+              </a>
+            ) : (
+              <span className="text-xs font-medium">{request.senderTitle}</span>
+            )}
+            <Markdown
+              density="compact"
+              text={request.message}
+              onOpenSession={onOpenSession}
+            />
+          </li>
+        ))}
+      </ul>
     </ChatActivityRow>
   );
 }

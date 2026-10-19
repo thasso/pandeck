@@ -16,7 +16,9 @@ import type {
   KnowledgeEntryCard,
   PeerPromptCard,
   PeerPromptInterruption,
+  PeerPromptSettledRequest,
   PeerPromptState,
+  PeerPromptToolRow,
   PushDisplay,
   TaskStatus,
   TaskStatusSuggestion,
@@ -152,6 +154,7 @@ const PEER_PROMPT_STATES: Record<PeerPromptState, true> = {
   completed: true,
   awaiting_response: true,
   replied: true,
+  settled: true,
   retrying: true,
   interrupted: true,
   cancelled: true,
@@ -219,20 +222,79 @@ export function parsePeerPromptCard(value: unknown): PeerPromptCard | null {
     ...(isPeerPromptInterruption(raw.interruption)
       ? { interruption: raw.interruption }
       : {}),
+    ...(typeof raw.settledReason === "string" && raw.settledReason
+      ? { settledReason: raw.settledReason }
+      : {}),
+    ...(typeof raw.replyTo === "string" && raw.replyTo
+      ? { replyTo: raw.replyTo }
+      : {}),
     state: raw.state,
   };
 }
 
+function parseSettledRequest(value: unknown): PeerPromptSettledRequest | null {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.message !== "string") return null;
+  return {
+    senderTitle:
+      typeof raw.senderTitle === "string" && raw.senderTitle
+        ? raw.senderTitle
+        : "another session",
+    ...(typeof raw.peerSessionId === "string" && raw.peerSessionId
+      ? { peerSessionId: raw.peerSessionId }
+      : {}),
+    message: raw.message,
+  };
+}
+
+function parsePeerPromptToolRow(value: unknown): PeerPromptToolRow | null {
+  const raw = asRecord(value);
+  if (!raw) return null;
+  if (raw.kind === "message") {
+    const card = parsePeerPromptCard(raw.card);
+    return card ? { kind: "message", card } : null;
+  }
+  if (raw.kind === "settle") {
+    if (typeof raw.reason !== "string" || !Array.isArray(raw.settled))
+      return null;
+    const settled = raw.settled
+      .map(parseSettledRequest)
+      .filter((r): r is PeerPromptSettledRequest => r !== null);
+    return settled.length > 0
+      ? { kind: "settle", reason: raw.reason, settled }
+      : null;
+  }
+  if (raw.kind === "error") {
+    if (typeof raw.index !== "number" || typeof raw.error !== "string")
+      return null;
+    return { kind: "error", index: raw.index, error: raw.error };
+  }
+  return null;
+}
+
 /**
- * Only a payload that yields a VALID card matches: a partial, streaming or
- * malformed one has no card to show, so it stays an ordinary tool block rather
- * than a half-rendered card.
+ * The rows a `session_send_prompt` result renders: each row of a `version: 2`
+ * payload, or the one card of a `version: 1` payload from an older
+ * transcript. Malformed rows are dropped; a payload with no renderable row is
+ * not a card, so a partial, streaming or malformed one stays an ordinary tool
+ * block rather than a half-rendered card.
  */
-export function peerPromptCardOf(c: ToolCardCandidate): PeerPromptCard | null {
+export function peerPromptToolRowsOf(
+  c: ToolCardCandidate,
+): PeerPromptToolRow[] | null {
   if (c.isError || normalizedToolName(c.name) !== "session_send_prompt")
     return null;
   if (!outputHasRenderKind(c.output, "sessionPeerPrompt")) return null;
-  return parsePeerPromptCard(asRecord(parseJsonValue(c.output))?.card);
+  const payload = asRecord(parseJsonValue(c.output));
+  if (!payload) return null;
+  const rows = Array.isArray(payload.rows)
+    ? payload.rows
+        .map(parsePeerPromptToolRow)
+        .filter((r): r is PeerPromptToolRow => r !== null)
+    : [parsePeerPromptCard(payload.card)]
+        .filter((card): card is PeerPromptCard => card !== null)
+        .map((card) => ({ kind: "message" as const, card }));
+  return rows.length > 0 ? rows : null;
 }
 
 /* ------------------------------- show_files ------------------------------- */
@@ -545,7 +607,7 @@ export function toolCardOf(
   if (acceptsJiraCard(c)) return "jira";
   if (acceptsWorkshopDraftHandoffCard(c)) return "workshopDraftHandoff";
   if (taskManagePayloadOf(c) !== null) return "taskManage";
-  if (peerPromptCardOf(c) !== null) return "peerPrompt";
+  if (peerPromptToolRowsOf(c) !== null) return "peerPrompt";
   if (worktreeCommitDisplayOf(c) !== null) return "worktreeCommit";
   if (worktreePushDisplayOf(c) !== null) return "worktreePush";
   if (showFilesCardRowsOf(c, resolveShowFilesTarget) !== null)

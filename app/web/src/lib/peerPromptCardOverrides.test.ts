@@ -125,6 +125,54 @@ describe("applyPeerPromptCardOverridesToMessages", () => {
     expect(parsed?.card?.state).toBe("replied");
   });
 
+  it("patches every message row of a rows payload, leaving the other rows alone", () => {
+    const payload = {
+      renderKind: "sessionPeerPrompt",
+      version: 2,
+      rows: [
+        { kind: "message", card: card({ messageKey: "k4" }) },
+        { kind: "settle", reason: "done", settled: [] },
+        { kind: "message", card: card({ messageKey: "k5" }) },
+        { kind: "error", index: 3, error: "bad" },
+      ],
+    };
+    const messages: DisplayMessage[] = [
+      {
+        id: "m3",
+        role: "assistant",
+        blocks: [
+          {
+            kind: "tool",
+            toolId: "t2",
+            name: "session_send_prompt",
+            args: {},
+            output: JSON.stringify(payload, null, 2),
+            isError: false,
+            done: true,
+          },
+        ],
+      },
+    ];
+    const next = applyPeerPromptCardOverridesToMessages(messages, {
+      k5: { state: "settled", settledReason: "applied it" },
+    });
+    const block = next[0]!.blocks[0]!;
+    const parsed = block.kind === "tool" ? JSON.parse(block.output) : null;
+    expect(parsed.rows[0]).toEqual(payload.rows[0]);
+    expect(parsed.rows[1]).toEqual(payload.rows[1]);
+    expect(parsed.rows[2].card).toMatchObject({
+      state: "settled",
+      settledReason: "applied it",
+    });
+    expect(parsed.rows[3]).toEqual(payload.rows[3]);
+    // Nothing to patch keeps the very same list.
+    expect(
+      applyPeerPromptCardOverridesToMessages(messages, {
+        other: { state: "replied" },
+      }),
+    ).toBe(messages);
+  });
+
   it("degrades gracefully for malformed tool output and non-matching tool payloads", () => {
     const messages: DisplayMessage[] = [
       {
@@ -235,8 +283,9 @@ describe("seedPeerPromptCardOverridesFromHistory", () => {
               id: "m3",
               direction: "sent",
               message: "yo",
-              state: "queued",
-              responseRequested: false,
+              state: "settled",
+              responseRequested: true,
+              settledReason: "applied the body",
               createdAt: 3,
             },
           ],
@@ -247,7 +296,7 @@ describe("seedPeerPromptCardOverridesFromHistory", () => {
     expect(overrides).toEqual({
       m1: { state: "completed", failureReason: undefined },
       m2: { state: "failed", failureReason: "provider error" },
-      m3: { state: "queued", failureReason: undefined },
+      m3: { state: "settled", settledReason: "applied the body" },
     });
   });
 });

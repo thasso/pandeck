@@ -2314,6 +2314,22 @@ describe("useAssistant peer-prompt card update / history expansion reducer", () 
       "k1",
       "k2",
     ]);
+
+    // A settled request carries its reason onto the requester's card.
+    state = apply(
+      {
+        type: "peerPromptCardUpdate",
+        sessionId: "s1",
+        messageKey: "k3",
+        state: "settled",
+        settledReason: "applied the body",
+      },
+      state,
+    );
+    expect(state.peerPromptCardOverrides.k3).toEqual({
+      state: "settled",
+      settledReason: "applied the body",
+    });
   });
 
   it("resets peerPromptCardOverrides when a new session snapshot loads", () => {

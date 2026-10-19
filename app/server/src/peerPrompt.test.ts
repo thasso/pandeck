@@ -48,6 +48,7 @@ const {
     messageKey: string;
     state: string;
     failureReason?: string;
+    settledReason?: string;
   }> = [];
   // A trivial ALWAYS-SUCCEEDING adapter/driver for ids no test explicitly
   // registered via `driverFor()` — self-contained (no external class
@@ -150,6 +151,7 @@ const {
   peerPromptAnchorFor,
   peerPromptQueueField,
   peerPromptThreadsFor,
+  peerRequestKey,
   recoverPeerPromptsOnBoot,
   runPeerPromptRetention,
   sendPeerPrompt,
@@ -183,6 +185,9 @@ setHubForTests(fakeHub as any);
 let n = 0;
 const created: string[] = [];
 const tool = () => sessionSendPromptTools()[0]!;
+/** One message row through the real tool. */
+const sendRow = (row: Record<string, unknown>, c: ReturnType<typeof ctx>) =>
+  tool().execute({ rows: [row] }, c);
 
 beforeAll(() => setPeerPromptAutoDeliverForTests(false));
 
@@ -243,63 +248,86 @@ const ctx = (sessionId: string, title = "Sender") => ({
 });
 
 describe("session_send_prompt tool", () => {
-  it("exposes exactly the four public fields", () => {
-    const props = (tool().parameters as any).properties;
-    assert.deepEqual(Object.keys(props).sort(), [
+  it("takes only rows, whose shape no harness can refuse before execute", () => {
+    const params = tool().parameters as any;
+    assert.deepEqual(Object.keys(params.properties), ["rows"]);
+    // The top level stays permissive too: the old single-message shape and an
+    // out-of-range count reach execute, which answers them itself.
+    for (const key of ["required", "additionalProperties"])
+      assert.equal(key in params, false, key);
+    const rows = params.properties.rows;
+    assert.equal(rows.type, "array");
+    for (const key of ["minItems", "maxItems"])
+      assert.equal(key in rows, false, key);
+    const row = rows.items;
+    assert.deepEqual(Object.keys(row.properties).sort(), [
+      "inReplyTo",
       "prompt",
       "responseRequested",
+      "settle",
       "targetSessionId",
       "taskId",
     ]);
-    assert.deepEqual((tool().parameters as any).required.sort(), [
-      "prompt",
-      "targetSessionId",
-    ]);
+    const constraints = [
+      "type",
+      "required",
+      "additionalProperties",
+      "minLength",
+      "maxLength",
+      "minItems",
+      "maxItems",
+    ];
+    for (const node of [row, ...Object.values(row.properties)])
+      for (const key of constraints)
+        assert.equal(key in (node as object), false, key);
+    // The types live in the prose, along with both row shapes.
+    assert.match(row.description, /targetSessionId, prompt/);
+    assert.match(row.description, /\{ inReplyTo, settle \}/);
+    assert.match(
+      row.properties.inReplyTo.description,
+      /^array of request keys/,
+    );
   });
 
   it("validates before enqueue", async () => {
     const target = seed();
     await assert.rejects(
-      () => tool().execute({ targetSessionId: "  ", prompt: "hi" }, ctx("me")),
+      () => sendRow({ targetSessionId: "  ", prompt: "hi" }, ctx("me")),
       /required/,
     );
     await assert.rejects(
-      () =>
-        tool().execute({ targetSessionId: target, prompt: "  " }, ctx("me")),
+      () => sendRow({ targetSessionId: target, prompt: "  " }, ctx("me")),
       /prompt is required/,
     );
     await assert.rejects(
       () =>
-        tool().execute(
+        sendRow(
           { targetSessionId: target, prompt: "x".repeat(8001) },
           ctx("me"),
         ),
       /8000-character/,
     );
     await assert.rejects(
-      () => tool().execute({ targetSessionId: "me", prompt: "hi" }, ctx("me")),
+      () => sendRow({ targetSessionId: "me", prompt: "hi" }, ctx("me")),
       /current session/,
     );
     await assert.rejects(
-      () =>
-        tool().execute({ targetSessionId: "ghost", prompt: "hi" }, ctx("me")),
+      () => sendRow({ targetSessionId: "ghost", prompt: "hi" }, ctx("me")),
       /No session found/,
     );
     const archived = seed("Archived", { archived: true });
     await assert.rejects(
-      () =>
-        tool().execute({ targetSessionId: archived, prompt: "hi" }, ctx("me")),
+      () => sendRow({ targetSessionId: archived, prompt: "hi" }, ctx("me")),
       /archived/,
     );
     const internal = seed("Internal", { scope: "internal" });
     await assert.rejects(
-      () =>
-        tool().execute({ targetSessionId: internal, prompt: "hi" }, ctx("me")),
+      () => sendRow({ targetSessionId: internal, prompt: "hi" }, ctx("me")),
       /internal/,
     );
     await assert.rejects(
       () =>
-        tool().execute(
+        sendRow(
           { targetSessionId: target, prompt: "hi", taskId: "999999" },
           ctx("me"),
         ),
@@ -311,7 +339,7 @@ describe("session_send_prompt tool", () => {
     const dead = seed("Evicted");
     deadIds.add(dead);
     await assert.rejects(
-      () => tool().execute({ targetSessionId: dead, prompt: "hi" }, ctx("me")),
+      () => sendRow({ targetSessionId: dead, prompt: "hi" }, ctx("me")),
       /cannot currently be prompted/,
     );
     assert.equal(
@@ -323,12 +351,16 @@ describe("session_send_prompt tool", () => {
 
   it("returns a sanitized queued card carrying only the linkable peer session id", async () => {
     const target = seed("Reviewer");
-    const result = await tool().execute(
+    const result = await sendRow(
       { targetSessionId: target, prompt: "please review" },
       ctx("me", "Implementer"),
     );
     const payload = result.details as any;
     assert.equal(payload.renderKind, "sessionPeerPrompt");
+    assert.equal(payload.version, 2);
+    assert.equal(payload.rows.length, 1);
+    assert.equal(payload.rows[0].kind, "message");
+    payload.card = payload.rows[0].card;
     assert.equal(payload.card.direction, "sent");
     assert.equal(payload.card.recipientTitle, "Reviewer");
     assert.equal(payload.card.state, "queued");
@@ -384,8 +416,11 @@ describe("peer prompt engine", () => {
         responseRequested,
         senderLabel: "Implementer",
       });
-    const asked = buildEnvelope([enqueue(true)]);
+    const request = enqueue(true);
+    const asked = buildEnvelope([request]);
     assert.match(asked, /session_send_prompt to session `sender-abc`/);
+    // A lone request's reply key rides in the cue.
+    assert.ok(asked.includes(`inReplyTo \`${peerRequestKey(request)}\``));
     assert.match(asked, /end your turn/);
     const told = buildEnvelope([enqueue(false)]);
     assert.equal(told.includes("sender-abc"), false);
@@ -3591,5 +3626,543 @@ describe("a Stop holds automatic delivery", () => {
     await sendQueuedPeerPromptNow(recipient, key);
     await until(() => statusOf(chosen!) === "completed", "the chosen prompt");
     assert.equal(hold.automaticTurnsHeld(recipient), false);
+  });
+});
+
+describe("explicit reply tracking (Task-942)", () => {
+  async function until(check: () => boolean, label: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error(`${label} was not reached`);
+      await new Promise((r) => setTimeout(r, 2));
+    }
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  /** A request from `from` to `to`, delivered and now awaiting its answer. */
+  async function deliveredRequest(from: string, to: string, prompt: string) {
+    const { message } = await sendPeerPrompt({
+      senderSessionId: from,
+      senderTitle: sessionStore.get(from)?.title ?? "",
+      targetSessionId: to,
+      prompt,
+      responseRequested: true,
+    });
+    await drainRecipient(to);
+    const row = peerPromptStore.getById(message.id)!;
+    assert.equal(row.status, "awaiting_response");
+    return row;
+  }
+  const rowsOf = (result: { details?: unknown }) =>
+    (result.details as { rows: any[] }).rows;
+  const sentBy = (sender: string, recipient: string) =>
+    peerPromptStore
+      .listByParticipant(sender)
+      .filter(
+        (m) =>
+          m.senderSessionId === sender && m.recipientSessionId === recipient,
+      );
+
+  it("links an explicit reply from a later turn where inference would start fresh", async () => {
+    const me = seed("Me");
+    const other = seed("Other");
+    const r1 = await deliveredRequest(other, me, "first question");
+    const r2 = await deliveredRequest(other, me, "second question");
+    const nextHop = peerPromptStore.getChain(r1.chainId)!.nextHop;
+
+    const result = await sendRow(
+      {
+        targetSessionId: other,
+        prompt: "answer to the first",
+        inReplyTo: [peerRequestKey(r1)],
+      },
+      ctx(me, "Me"),
+    );
+    const [reply] = sentBy(me, other);
+    assert.ok(reply);
+    const answered = peerPromptStore.getById(r1.id)!;
+    assert.equal(answered.status, "replied");
+    assert.equal(answered.repliedByMessageId, reply.id);
+    assert.equal(reply.replyToMessageId, r1.id);
+    assert.equal(reply.conversationId, r1.conversationId);
+    assert.equal(reply.chainId, r1.chainId);
+    assert.equal(reply.hop, nextHop);
+    assert.equal(peerPromptStore.getById(r2.id)!.status, "awaiting_response");
+    assert.equal(rowsOf(result)[0].card.replyTo, "first question");
+
+    // The requester's delivered card says what it answers too.
+    await drainRecipient(other);
+    const log = readFileSync(canonicalSessionLogPath(other), "utf8");
+    assert.ok(log.includes('"replyTo":"first question"'));
+  });
+
+  it("an explicit link beats the active delivery context", async () => {
+    const me = seed("Me");
+    const asker = seed("Asker");
+    const deliverer = seed("Deliverer");
+    const driver = driverFor(me);
+    const fromAsker = await deliveredRequest(asker, me, "asker's question");
+    const release = driver.holdTurns();
+    const { message: fromDeliverer } = await sendPeerPrompt({
+      senderSessionId: deliverer,
+      targetSessionId: me,
+      prompt: "deliverer's question",
+      responseRequested: true,
+    });
+    const drain = drainRecipient(me);
+    try {
+      await until(() => driver.isRunning, "the deliverer's turn");
+      // Sent from inside the turn the deliverer's message started.
+      await sendRow(
+        {
+          targetSessionId: asker,
+          prompt: "your answer",
+          inReplyTo: [peerRequestKey(fromAsker)],
+        },
+        ctx(me),
+      );
+    } finally {
+      release();
+      await drain;
+    }
+    const [reply] = sentBy(me, asker);
+    assert.equal(
+      peerPromptStore.getById(fromAsker.id)!.repliedByMessageId,
+      reply!.id,
+    );
+    assert.equal(reply!.conversationId, fromAsker.conversationId);
+    assert.equal(reply!.chainId, fromAsker.chainId);
+    assert.equal(
+      peerPromptStore.getById(fromDeliverer.id)!.status,
+      "awaiting_response",
+      "the delivering request is not the one answered",
+    );
+  });
+
+  it("answers several requests with one message, continuing the newest", async () => {
+    const me = seed("Me");
+    const other = seed("Other");
+    const r1 = await deliveredRequest(other, me, "first question");
+    const r2 = await deliveredRequest(other, me, "second question");
+    const result = await sendRow(
+      {
+        targetSessionId: other,
+        prompt: "both answered",
+        inReplyTo: [peerRequestKey(r1), peerRequestKey(r2), peerRequestKey(r1)],
+      },
+      ctx(me),
+    );
+    const [reply] = sentBy(me, other);
+    for (const r of [r1, r2]) {
+      const row = peerPromptStore.getById(r.id)!;
+      assert.equal(row.status, "replied");
+      assert.equal(row.repliedByMessageId, reply!.id);
+    }
+    assert.equal(reply!.conversationId, r2.conversationId);
+    assert.equal(reply!.replyToMessageId, r2.id);
+    assert.equal(rowsOf(result)[0].card.replyTo, "second question (+1 more)");
+  });
+
+  it("refuses a key that is not an open request from the row's target, persisting nothing", async () => {
+    const me = seed("Me");
+    const other = seed("Other");
+    const third = seed("Third");
+    const request = await deliveredRequest(other, me, "question");
+    const fromThird = await deliveredRequest(third, me, "third's question");
+    const { message: told } = await sendPeerPrompt({
+      senderSessionId: other,
+      targetSessionId: me,
+      prompt: "just so you know",
+      responseRequested: false,
+    });
+    await drainRecipient(me);
+    const answered = await deliveredRequest(other, me, "answered already");
+    peerPromptStore.markReplied(answered.id, "elsewhere");
+    const settled = await deliveredRequest(other, me, "settled already");
+    peerPromptStore.markSettled(me, [settled.id], "done");
+    const before = peerPromptStore.listByParticipant(me).length;
+    const hops = [request, fromThird].map(
+      (r) => peerPromptStore.getChain(r.chainId)!.nextHop,
+    );
+    const attempt = (inReplyTo: unknown) =>
+      sendRow({ targetSessionId: other, prompt: "answer", inReplyTo }, ctx(me));
+
+    await assert.rejects(
+      attempt(["kunknown"]),
+      /`kunknown` is not an open request/,
+    );
+    await assert.rejects(
+      attempt([peerRequestKey(fromThird)]),
+      new RegExp(`came from session \`${third}\`.*settle it`),
+    );
+    for (const closed of [told, answered, settled])
+      await assert.rejects(
+        attempt([peerRequestKey(request), peerRequestKey(closed)]),
+        /is not an open request to you/,
+      );
+    await assert.rejects(attempt([]), /non-empty array of request keys/);
+    assert.equal(peerPromptStore.listByParticipant(me).length, before);
+    assert.deepEqual(
+      [request, fromThird].map(
+        (r) => peerPromptStore.getChain(r.chainId)!.nextHop,
+      ),
+      hops,
+    );
+    assert.equal(
+      peerPromptStore.getById(request.id)!.status,
+      "awaiting_response",
+    );
+  });
+
+  it("settles requests from several sessions without sending anything or spending a hop", async () => {
+    const me = seed("Me");
+    const coordinator = seed("Coordinator");
+    const reviewer = seed("Reviewer");
+    const a = await deliveredRequest(coordinator, me, "apply the PR body");
+    const b = await deliveredRequest(reviewer, me, "re-run the checks");
+    const coordinatorDriver = driverFor(coordinator);
+    const prompted = coordinatorDriver.promptOptions.length;
+    const rows = peerPromptStore.listByParticipant(me).length;
+    const hops = [a, b].map(
+      (r) => peerPromptStore.getChain(r.chainId)!.nextHop,
+    );
+    cardUpdates.length = 0;
+
+    const result = await tool().execute(
+      {
+        rows: [
+          {
+            inReplyTo: [peerRequestKey(a), peerRequestKey(b)],
+            settle: " applied the body ",
+          },
+        ],
+      },
+      ctx(me),
+    );
+    await flush();
+    const [row] = rowsOf(result);
+    assert.equal(row.kind, "settle");
+    assert.equal(row.reason, "applied the body");
+    assert.deepEqual(
+      row.settled.map((r: any) => [r.senderTitle, r.peerSessionId, r.message]),
+      [
+        ["Coordinator", coordinator, "apply the PR body"],
+        ["Reviewer", reviewer, "re-run the checks"],
+      ],
+    );
+    for (const r of [a, b]) {
+      const settled = peerPromptStore.getById(r.id)!;
+      assert.equal(settled.status, "settled");
+      assert.equal(settled.settleReason, "applied the body");
+    }
+    assert.equal(peerPromptStore.listByParticipant(me).length, rows);
+    assert.deepEqual(
+      [a, b].map((r) => peerPromptStore.getChain(r.chainId)!.nextHop),
+      hops,
+    );
+    await drainRecipient(coordinator);
+    assert.equal(coordinatorDriver.promptOptions.length, prompted);
+    assert.equal(
+      peerPromptStore.outstandingResponseRequestCount(coordinator),
+      0,
+    );
+    assert.ok(
+      cardUpdates.some(
+        (u) =>
+          u.sessionId === coordinator &&
+          u.messageKey === peerRequestKey(a) &&
+          u.state === "settled" &&
+          u.settledReason === "applied the body",
+      ),
+      "the requester's card shows the settle and its reason",
+    );
+    const message = peerPromptThreadsFor(coordinator)
+      .threads.flatMap((t) => t.messages)
+      .find((m) => m.id === peerRequestKey(a));
+    assert.equal(message?.state, "settled");
+    assert.equal(message?.settledReason, "applied the body");
+    // Settled once, never again; and a settle has no unlinked fallback to offer.
+    await assert.rejects(
+      tool().execute(
+        { rows: [{ inReplyTo: [peerRequestKey(a)], settle: "again" }] },
+        ctx(me),
+      ),
+      (err: Error) =>
+        /not an open request/.test(err.message) &&
+        !err.message.includes("Send without inReplyTo"),
+    );
+    const c = await deliveredRequest(reviewer, me, "one more");
+    await assert.rejects(
+      tool().execute(
+        { rows: [{ inReplyTo: [peerRequestKey(c)], settle: "x".repeat(201) }] },
+        ctx(me),
+      ),
+      /200-character limit \(201\)/,
+    );
+    assert.equal(peerPromptStore.getById(c.id)!.status, "awaiting_response");
+  });
+
+  it("answers two sessions and settles a third in one call", async () => {
+    const me = seed("Me");
+    const [a, b, c] = ["A", "B", "C"].map((t) => seed(t));
+    const ra = await deliveredRequest(a!, me, "from A");
+    const rb = await deliveredRequest(b!, me, "from B");
+    const rc = await deliveredRequest(c!, me, "from C");
+    const result = await tool().execute(
+      {
+        rows: [
+          {
+            targetSessionId: a,
+            prompt: "for A",
+            inReplyTo: [peerRequestKey(ra)],
+          },
+          {
+            targetSessionId: b,
+            prompt: "for B",
+            inReplyTo: [peerRequestKey(rb)],
+          },
+          {
+            inReplyTo: [peerRequestKey(rc)],
+            settle: "superseded by the report",
+          },
+        ],
+      },
+      ctx(me),
+    );
+    assert.deepEqual(
+      rowsOf(result).map((r) => r.kind),
+      ["message", "message", "settle"],
+    );
+    assert.deepEqual(
+      [ra, rb, rc].map((r) => peerPromptStore.getById(r.id)!.status),
+      ["replied", "replied", "settled"],
+    );
+    assert.equal(
+      peerPromptStore.getById(ra.id)!.repliedByMessageId,
+      sentBy(me, a!)[0]!.id,
+    );
+    assert.equal(
+      peerPromptStore.getById(rb.id)!.repliedByMessageId,
+      sentBy(me, b!)[0]!.id,
+    );
+  });
+
+  it("fails only the bad rows, and throws when every row failed", async () => {
+    const me = seed("Me");
+    const a = seed("A");
+    const b = seed("B");
+    const result = await tool().execute(
+      {
+        rows: [
+          { targetSessionId: a, prompt: "fine" },
+          { targetSessionId: b, prompt: "x", inReplyTo: 7 },
+          { targetSessionId: b, prompt: "x", responseRequested: "true" },
+          "not a row",
+          null,
+          { targetSessionId: b, prompt: "x", settle: "mixed" },
+          { targetSessionId: b, prompt: "x", extra: 1 },
+          { targetSessionId: b, prompt: null },
+          { targetSessionId: b, prompt: "also fine", responseRequested: true },
+        ],
+      },
+      ctx(me),
+    );
+    const rows = rowsOf(result);
+    assert.deepEqual(
+      rows.map((r) => (r.kind === "error" ? r.index : r.kind)),
+      ["message", 1, 2, 3, 4, 5, 6, 7, "message"],
+    );
+    assert.match(rows[1].error, /inReplyTo must be a non-empty array/);
+    assert.match(rows[2].error, /responseRequested must be a boolean/);
+    assert.match(rows[3].error, /must be an object/);
+    assert.match(rows[5].error, /settle row takes only inReplyTo and settle/);
+    assert.match(rows[6].error, /Unknown row field\(s\) extra/);
+    assert.match(rows[7].error, /prompt must be a string/);
+    assert.equal(sentBy(me, a).length, 1);
+    assert.equal(sentBy(me, b).length, 1);
+    assert.equal(sentBy(me, b)[0]!.responseRequested, true);
+
+    await assert.rejects(
+      tool().execute(
+        {
+          rows: [
+            { targetSessionId: me, prompt: "self" },
+            { prompt: "no target" },
+          ],
+        },
+        ctx(me),
+      ),
+      /rows\[0\]: Cannot send a peer prompt to the current session[\s\S]*rows\[1\]: A message row needs targetSessionId/,
+    );
+  });
+
+  it("answers misuse above the rows before any effect", async () => {
+    const me = seed("Me");
+    const target = seed("Target");
+    await assert.rejects(
+      tool().execute({ targetSessionId: target, prompt: "old shape" }, ctx(me)),
+      /takes only rows; got targetSessionId, prompt\. Pass rows: \[/,
+    );
+    await assert.rejects(tool().execute({}, ctx(me)), /rows is required/);
+    await assert.rejects(
+      tool().execute({ rows: "x" }, ctx(me)),
+      /rows is required/,
+    );
+    await assert.rejects(
+      tool().execute({ rows: [] }, ctx(me)),
+      /1 to 10 rows; got 0/,
+    );
+    const eleven = Array.from({ length: 11 }, () => ({
+      targetSessionId: target,
+      prompt: "hi",
+    }));
+    await assert.rejects(
+      tool().execute({ rows: eleven }, ctx(me)),
+      /1 to 10 rows; got 11/,
+    );
+    assert.equal(peerPromptStore.listByParticipant(me).length, 0);
+  });
+
+  it("reserves one hop per message row and none for a settle", async () => {
+    const originalMaxHops = getSettings().sessionPeerPromptMaxHops;
+    const me = seed("Me");
+    const asker = seed("Asker");
+    const other = seed("Other");
+    // Two requests on one chain, delivered together: hops 1 and 2.
+    const chainId = peerPromptStore.createChain();
+    const conversationId = `hops-${n++}`;
+    const [r1, r2] = [1, 2].map((i) =>
+      peerPromptStore.enqueue({
+        conversationId,
+        chainId,
+        hop: peerPromptStore.reserveHop(chainId),
+        senderSessionId: asker,
+        recipientSessionId: me,
+        prompt: `request ${i}`,
+        responseRequested: true,
+      }),
+    );
+    await drainRecipient(me);
+    const fromOther = await deliveredRequest(other, me, "other's request");
+    const limit = peerPromptStore.getChain(chainId)!.nextHop;
+    updateSettings({ sessionPeerPromptMaxHops: limit });
+    try {
+      const result = await tool().execute(
+        {
+          rows: [
+            {
+              targetSessionId: asker,
+              prompt: "one",
+              inReplyTo: [peerRequestKey(r1!)],
+            },
+            {
+              targetSessionId: asker,
+              prompt: "two",
+              inReplyTo: [peerRequestKey(r2!)],
+            },
+            { inReplyTo: [peerRequestKey(fromOther)], settle: "covered" },
+          ],
+        },
+        ctx(me),
+      );
+      const rows = rowsOf(result);
+      assert.deepEqual(
+        rows.map((r) => r.kind),
+        ["message", "error", "settle"],
+      );
+      assert.match(rows[1].error, new RegExp(`${limit}-hop limit`));
+      assert.equal(peerPromptStore.getChain(chainId)!.nextHop, limit + 1);
+      assert.equal(
+        peerPromptStore.getById(r2!.id)!.status,
+        "awaiting_response",
+      );
+      assert.equal(peerPromptStore.getById(fromOther.id)!.status, "settled");
+    } finally {
+      updateSettings({ sessionPeerPromptMaxHops: originalMaxHops });
+    }
+  });
+
+  it("labels each request in a batch with its own key, so one can be answered and another settled", async () => {
+    const me = seed("Me");
+    const sender = seed("Sender");
+    const chainId = peerPromptStore.createChain();
+    const conversationId = `labelled-${n++}`;
+    const enqueue = (prompt: string, responseRequested: boolean) =>
+      peerPromptStore.enqueue({
+        conversationId,
+        chainId,
+        hop: peerPromptStore.reserveHop(chainId),
+        senderSessionId: sender,
+        recipientSessionId: me,
+        prompt,
+        responseRequested,
+        senderLabel: "Sender",
+      });
+    const a = enqueue("A asks\n\nwith a second paragraph", true);
+    const b = enqueue("B just tells", false);
+    const c = enqueue("C asks", true);
+    const [ka, kb, kc] = [a, b, c].map(peerRequestKey);
+
+    const envelope = buildEnvelope([a, b, c]);
+    const labelA = `[1/3 · reply key \`${ka}\`]\n${a.prompt}`;
+    const labelB = `[2/3 · no reply asked]\n${b.prompt}`;
+    const labelC = `[3/3 · reply key \`${kc}\`]\n${c.prompt}\n\n`;
+    const at = [labelA, labelB, labelC].map((l) => envelope.indexOf(l));
+    assert.ok(
+      at.every((i) => i >= 0),
+      envelope,
+    );
+    assert.ok(at[0]! < at[1]! && at[1]! < at[2]!, envelope);
+    assert.equal(envelope.includes(kb!), false);
+    assert.match(envelope.slice(at[2]!), /inReplyTo naming the keys/);
+
+    await drainRecipient(me);
+    assert.equal(peerPromptStore.getById(a.id)!.batchHeadId, a.id);
+    assert.equal(peerPromptStore.getById(c.id)!.batchHeadId, a.id);
+    // The card keeps the plain text; labels are for the model only.
+    const card = readFileSync(canonicalSessionLogPath(me), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line).peerPrompt)
+      .find(Boolean);
+    assert.equal(card.message, [a, b, c].map((m) => m.prompt).join("\n\n"));
+
+    await sendRow(
+      { targetSessionId: sender, prompt: "answer to A", inReplyTo: [ka] },
+      ctx(me),
+    );
+    assert.equal(peerPromptStore.getById(a.id)!.status, "replied");
+    assert.equal(peerPromptStore.getById(c.id)!.status, "awaiting_response");
+    await tool().execute(
+      { rows: [{ inReplyTo: [kc], settle: "covered by the answer to A" }] },
+      ctx(me),
+    );
+    assert.equal(peerPromptStore.getById(c.id)!.status, "settled");
+    assert.equal(peerPromptStore.getById(a.id)!.status, "replied");
+  });
+
+  it("a turn end never overwrites a request settled during its own turn", async () => {
+    const me = seed("Me");
+    const asker = seed("Asker");
+    const driver = driverFor(me);
+    const release = driver.holdTurns();
+    const { message } = await sendPeerPrompt({
+      senderSessionId: asker,
+      targetSessionId: me,
+      prompt: "do the thing",
+      responseRequested: true,
+    });
+    const drain = drainRecipient(me);
+    try {
+      await until(() => driver.isRunning, "the request's turn");
+      await tool().execute(
+        { rows: [{ inReplyTo: [peerRequestKey(message)], settle: "did it" }] },
+        ctx(me),
+      );
+    } finally {
+      release();
+      await drain;
+    }
+    assert.equal(peerPromptStore.getById(message.id)!.status, "settled");
   });
 });
