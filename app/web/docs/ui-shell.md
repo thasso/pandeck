@@ -589,8 +589,10 @@ its own shows their count, and any peer running background jobs shows how many.
 The button states what the click will do, and closing it returns to the
 cluster's single row. Listed that way, folded peers are ordinary rows of the
 browser: focusable, swipeable, and openable. When the coordinator's tree also
-holds settled peers, the open fold ends in a compact `ListGroupSection` named
-"Settled", with its count and leading chevron. Expanding it reveals only settled
+holds settled peers, the open fold ends in a plain `ListExpansionRow` named
+"Settled", with its count and leading chevron. It shares the session rows' height
+and typography with Initiative Show more, rather than using a category band.
+Expanding it reveals only settled
 peers beneath that header, leaving the live peer rows unchanged. Peer and Task
 sub-task disclosures also put their chevrons before their labels. Settled peers
 stay on the Settled shelf (listed here under a prefixed row id, so the two rows never
@@ -750,18 +752,17 @@ alone, with no empty claim beside it, while sessions already held still show.
 
 The disclosure lists the sessions started from its member Tasks. The summary
 carries at most 50 of their ids (the DATA bound, newest first, with the full
-count); the open disclosure shows at most FIVE of those this browser holds (the
-DISPLAY bound), those needing the user first — waiting on a human or holding an
-unresolved failure, what lifts a Workflow Run's line — then newest created, ties
-by id. Whatever it does not show — past five, past the 50 ids, or not held here
-— is ONE "and N more" row, N being the full count minus the rows shown, which
-opens the Initiative's page; it is never shown when every session fits. Unlike a
+count); the open disclosure initially shows five of those this browser holds,
+those needing the user first, then newest created, ties by id. Show more expands
+the remaining known sessions inline. Sessions beyond the summary's ids or not
+held here have a non-interactive "not loaded" count. Embedded session rows share
+`ListRow` and `SessionTitleRow` with the other compact session lists. Unlike a
 run's roles they are NOT folded: each keeps its own card, and a session may be
 listed under several Initiatives. The listed rows are compact `working` rows
 that open the session; they carry no Settle, Archive or Delete, which stay on
 the session's own card. The disclosure and Settle never open the Initiative, a
-session row opens only its session, and the more row only the Initiative; all of
-them are rows of the list for the arrow keys.
+session row opens only its session, and Show more stays in the list; interactive
+entries are reachable with the list's arrow keys.
 
 ## Pull Requests
 

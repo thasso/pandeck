@@ -4,7 +4,6 @@ import {
   Check,
   ChevronRight,
   CirclePause,
-  ArrowRight,
   Flag,
   Users,
   Waypoints,
@@ -18,9 +17,9 @@ import {
 import { relativeAge } from "../lib/relativeTime.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import { ListRow } from "./common/ListRow.tsx";
+import { ListExpansionRow } from "./common/ListExpansionRow.tsx";
 import { ListRowActions } from "./common/ListRowActions.tsx";
 import { Badge } from "@/components/ui/badge";
-import { Item } from "@/components/ui/item";
 import { Progress } from "@/components/ui/progress";
 
 export interface InitiativeInboxCardProps {
@@ -244,62 +243,31 @@ export const InitiativeInboxCard = memo(
   sameInitiativeItemProps,
 );
 
-/**
- * @component InitiativeMoreRow
- * @purpose The last row of an open Initiative disclosure: how many of the
- * sessions working on its Tasks the rows above do not list, as ONE row that
- * opens the Initiative's page, where all of its work is.
- * @useWhen An open disclosure lists fewer sessions than the summary counts —
- * past the five-row display bound, past the summary's 50 ids, or not held by
- * this browser.
- * @intent The disclosure is bounded so an open card never pushes the inbox off
- * screen; the count stays truthful, and the rest is one step away rather than
- * an ever longer list. It is a row of the list like the session rows above it:
- * reached by the arrow keys, opened by Enter or a click, and it opens the
- * Initiative alone — never a session, never the fold.
- * @related InitiativeInboxCard, ClusterChildRow, SessionInbox
- */
+/** Reveal the remaining known sessions inline, without leaving Attention. */
 export const InitiativeMoreRow = memo(function InitiativeMoreRow({
   initiativeId,
   title,
   more,
   density = "tight",
-  onOpen,
+  onShowMore,
   onFocusSibling,
 }: {
   initiativeId: string;
-  /** The Initiative's title, for the row's spoken label. */
   title: string;
-  /** The sessions not listed above; the row renders only when positive. */
   more: number;
   density?: RowDensity;
-  onOpen: (initiativeId: string) => void;
+  onShowMore: (initiativeId: string) => void;
   onFocusSibling?: (delta: 1 | -1) => void;
 }) {
   return (
-    <Item
-      size="xs"
-      render={<button type="button" />}
-      data-session-row
-      data-list-row-id={`initiative:${initiativeId}:more`}
-      tabIndex={-1}
-      aria-label={`Open Initiative ${title} for the ${initiativeSessionsLabel(more)} not listed here`}
-      onClick={() => onOpen(initiativeId)}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen(initiativeId);
-        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          e.preventDefault();
-          onFocusSibling?.(e.key === "ArrowDown" ? 1 : -1);
-        }
-      }}
-      style={{ paddingLeft: "0.75rem" }}
-      className={`cursor-pointer select-none flex-nowrap gap-1.5 rounded-none border-0 border-t border-border/60 py-0 pr-2.5 text-left text-xs text-muted-foreground hover:bg-muted dark:hover:bg-muted/50 ${density === "comfortable" ? "h-10" : "h-7"}`}
-    >
-      <span className="min-w-0 flex-1 truncate">and {more} more</span>
-      <ArrowRight className="size-3 shrink-0" aria-hidden />
-    </Item>
+    <ListExpansionRow
+      density={density}
+      rowId={`initiative:${initiativeId}:more`}
+      label={`Show ${more} more`}
+      accessibleLabel={`Show ${more} more sessions for Initiative ${title}`}
+      expanded={false}
+      onToggle={() => onShowMore(initiativeId)}
+      onFocusSibling={onFocusSibling}
+    />
   );
 });

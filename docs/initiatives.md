@@ -382,13 +382,12 @@ count; both come from one rule in the query, a session started from several
 member Tasks counts once, and the query returns no more than that. That is the
 data bound.
 
-Those sessions are listed in a disclosure on the card, and its display bound is
-FIVE rows: those needing the user first (waiting on a human, or holding an
-unresolved failure), then newest by creation, ties by id, among the listed ids
-the browser holds. Everything not shown — past five, past the 50 ids, or not
-held by the browser — is ONE "and N more" row, N being the full count minus the
-rows shown, which opens the Initiative's page; with nothing left over there is
-no such row. The sessions keep their own inbox cards. Unlike a Workflow Run's
+Those sessions initially show five rows: those needing the user first, then
+newest by creation, ties by id, among the listed ids the browser holds. Show more
+reveals the remaining known sessions inline, without navigating. Sessions beyond
+the summary's 50 ids or not held by the browser are counted in a non-interactive
+"not loaded" note, not offered as an expansion the browser cannot fulfill.
+Session entries use the shared compact `ListRow` presentation and open their chats. The sessions keep their own inbox cards. Unlike a Workflow Run's
 role sessions they are not folded away: a Task can belong to several
 Initiatives, so no single card owns a session, and a session that needs the user
 must stay visible on its own. Membership is structural: sessions linked to

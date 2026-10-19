@@ -67,6 +67,7 @@ import {
 import type { InitiativeSettleError } from "../hooks/useAssistant.ts";
 import { Button } from "@/components/ui/button";
 import { ListGroupSection } from "./ListGroupSection.tsx";
+import { ListExpansionRow } from "./common/ListExpansionRow.tsx";
 import { SwipeRow, type SwipeAction } from "./common/SwipeRow.tsx";
 import {
   MOUSE_DRAG_DISTANCE_PX,
@@ -331,6 +332,7 @@ export function SessionInbox({
   // by default: the fold is about what is going on now, and its history is a
   // request.
   const [settledHistory, setSettledHistory] = useState<string[]>([]);
+  const [expandedInitiativeSessions, setExpandedInitiativeSessions] = useState<string[]>([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Cards on their way out: they stay in the list, playing the exit, until the
   // settle command is actually sent — the row is the animation's subject, so it
@@ -658,9 +660,11 @@ export function SessionInbox({
   // a minute-granularity age and no elapsed label, so only the SESSIONS under it
   // can ask for the faster clock.
   const initiativeRows = (item: InitiativeInboxItem): SessionInboxCard[] =>
-    expandedClusters.has(initiativeItemId(item.initiative.id))
-      ? item.sessions
-      : [];
+    !expandedClusters.has(initiativeItemId(item.initiative.id))
+      ? []
+      : expandedInitiativeSessions.includes(item.initiative.id)
+        ? [...item.sessions, ...(item.additionalSessions ?? [])]
+        : item.sessions;
   const anyRunning =
     [...view.needsYou, ...view.active].some(
       (item) =>
@@ -796,6 +800,7 @@ export function SessionInbox({
             item,
             expandedClusters.has(initiativeItemId(item.initiative.id)),
             now,
+            expandedInitiativeSessions.includes(item.initiative.id),
           ),
         ),
         filters.byProject ? JSON.stringify(projectOrder) : "",
@@ -826,6 +831,7 @@ export function SessionInbox({
       childRows,
       initiativeItems,
       expandedClusters,
+      expandedInitiativeSessions,
       filters.byProject,
       projectOrder,
       projectForItem,
@@ -984,6 +990,9 @@ export function SessionInbox({
     (initiativeId: string) => toggleCluster(initiativeItemId(initiativeId)),
     [toggleCluster],
   );
+  const showMoreInitiativeSessions = useCallback((initiativeId: string) => {
+    setExpandedInitiativeSessions((ids) => ids.includes(initiativeId) ? ids : [...ids, initiativeId]);
+  }, []);
 
   const focusSibling = useCallback((delta: 1 | -1) => {
     const container = containerRef.current;
@@ -1154,20 +1163,17 @@ export function SessionInbox({
             dragging,
           )}
           {expandedClusters.has(id) && settledRows.length > 0 ? (
-            <ListGroupSection
-              id={`session-peers-settled-${id}`}
-              title="Settled"
+            <ListExpansionRow
+              rowId={`session-peers-settled-${id}`}
+              label="Settled"
               count={settledRows.length}
-              icon={<Check size={12} aria-hidden />}
-              compact
-              sticky={false}
-              open={settledHistory.includes(id)}
-              onOpenChange={(open) => {
-                if (open !== settledHistory.includes(id)) toggleSettledHistory(id);
-              }}
+              density={density}
+              expanded={settledHistory.includes(id)}
+              onToggle={() => toggleSettledHistory(id)}
+              onFocusSibling={focusSibling}
             >
               {renderChildRows(settledRows, "coordinated", liveIds, dragging)}
-            </ListGroupSection>
+            </ListExpansionRow>
           ) : null}
         </div>
       </ExitStage>
@@ -1185,6 +1191,9 @@ export function SessionInbox({
     const id = initiativeItemId(item.initiative.id);
     const open = expandedClusters.has(id);
     const rows = initiativeRows(item);
+    const additionalCount = item.additionalSessions?.length ?? 0;
+    const unavailableCount = Math.max(0, item.more - additionalCount);
+    const showMore = expandedInitiativeSessions.includes(item.initiative.id);
     // Said about the outcome the card showed when the Settle failed; a newer
     // outcome is a different item.
     const settleError = initiativeSettleErrors?.[item.initiative.id];
@@ -1224,15 +1233,20 @@ export function SessionInbox({
                 onFocusSibling={focusSibling}
               />
             ))}
-            {open && item.more > 0 ? (
+            {open && !showMore && additionalCount > 0 ? (
               <InitiativeMoreRow
                 initiativeId={item.initiative.id}
                 title={item.initiative.title}
-                more={item.more}
+                more={additionalCount}
                 density={density}
-                onOpen={onOpenInitiative}
+                onShowMore={showMoreInitiativeSessions}
                 onFocusSibling={focusSibling}
               />
+            ) : null}
+            {open && unavailableCount > 0 ? (
+              <p className="border-t border-border/60 px-3 py-1 text-xs text-muted-foreground">
+                {unavailableCount} more session{unavailableCount === 1 ? " is" : "s are"} not loaded
+              </p>
             ) : null}
           </div>
         </ExitStage>

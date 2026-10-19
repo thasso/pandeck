@@ -32,9 +32,8 @@ import {
 
 /**
  * How many sessions an opened disclosure lists. The summary carries up to 50
- * ids (the data bound); this is the display bound, so an open card never
- * pushes the rest of the inbox off screen. The rest are one "and N more" row
- * that opens the Initiative.
+ * ids (the data bound); this is the initial display bound. Show more reveals
+ * the remaining locally available sessions inline.
  */
 export const INITIATIVE_DISCLOSURE_ROWS = 5;
 
@@ -53,10 +52,13 @@ export interface InitiativeInboxItem {
    * {@link INITIATIVE_DISCLOSURE_ROWS}.
    */
   sessions: SessionInboxCard[];
+  /** Remaining known sessions, revealed inline by Show more. */
+  additionalSessions?: SessionInboxCard[];
   /**
    * Qualifying sessions the disclosure does not list — past the display
    * bound, past the summary's page of 50, or not among this browser's rows:
-   * the full count minus the rows actually shown, stated as "and N more".
+   * the full count minus the initial rows. Known additional rows can expand;
+   * the remainder is informational because its session details are not loaded.
    */
   more: number;
 }
@@ -126,14 +128,15 @@ export function buildInitiativeInbox(
       const session = byId.get(id);
       if (session) known.push(inboxCard(session, readCurrentId));
     }
-    const shown = known
-      .sort(compareSessionsNeedingUserFirst)
-      .slice(0, INITIATIVE_DISCLOSURE_ROWS);
+    known.sort(compareSessionsNeedingUserFirst);
+    const shown = known.slice(0, INITIATIVE_DISCLOSURE_ROWS);
+    const additionalSessions = known.slice(INITIATIVE_DISCLOSURE_ROWS);
     const settleRevision = initiativeSettleRevision(initiative);
     const item: InitiativeInboxItem = {
       initiative,
       ...(settleRevision !== undefined ? { settleRevision } : {}),
       sessions: shown,
+      ...(additionalSessions.length ? { additionalSessions } : {}),
       more: Math.max(0, initiative.sessionCount - shown.length),
     };
     (settleRevision !== undefined ? inbox.outcomes : inbox.active).push(item);
@@ -239,6 +242,7 @@ export function initiativeItemKey(
     String(item.settleRevision ?? ""),
     relativeAge(initiative.updatedAt, now),
     ...item.sessions.map((card) => card.session.id),
+    ...(item.additionalSessions ?? []).map((card) => card.session.id),
   ].join("\u0000");
 }
 
@@ -267,9 +271,11 @@ export function initiativeLayoutKey(
   item: InitiativeInboxItem,
   expanded: boolean,
   now: number,
+  showMore = false,
 ): string {
+  const rows = showMore ? [...item.sessions, ...(item.additionalSessions ?? [])] : item.sessions;
   return [
     initiativeItemKey(item, now),
-    ...(expanded ? item.sessions.map((card) => sessionCardKey(card, now)) : []),
+    ...(expanded ? rows.map((card) => sessionCardKey(card, now)) : []),
   ].join("\u0000");
 }

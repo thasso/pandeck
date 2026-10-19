@@ -4,16 +4,14 @@ import { awaitedBackgroundCount } from "@assistant/shared";
 import {
   sameClusterChildProps,
   sessionClusterSummary,
-  sessionStatusBadge,
   sessionStatusText,
   type SessionInboxCard,
 } from "../lib/sessionInbox.ts";
 import { relativeAge } from "../lib/relativeTime.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
-import { SessionStatusBadge } from "./SessionStatusBadge.tsx";
-import { SessionTitleText } from "./SessionTitleText.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
+import { ListRow } from "./common/ListRow.tsx";
 import { identityLabel } from "./SessionRow.tsx";
-import { Item, ItemActions } from "@/components/ui/item";
 
 export interface ClusterChildRowProps {
   card: SessionInboxCard;
@@ -99,7 +97,6 @@ function ClusterChildRowImpl({
 }: ClusterChildRowProps) {
   const { session, status } = card;
   const title = session.title.trim() || "Untitled session";
-  const badge = sessionStatusBadge(session, status, now);
   // The badge counts every process; the words keep the fold's split between
   // jobs somebody waits on and services nobody does.
   const jobs = Math.max(0, session.backgroundActivity?.activeCount ?? 0);
@@ -124,9 +121,10 @@ function ClusterChildRowImpl({
   const indent = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);
 
   return (
-    <Item
-      size="xs"
-      variant={active ? "muted" : "default"}
+    <ListRow
+      density={density}
+      active={active}
+      divider={false}
       render={<button type="button" />}
       data-session-row
       data-list-row-id={listRowId ?? session.id}
@@ -139,7 +137,7 @@ function ClusterChildRowImpl({
       ]
         .filter(Boolean)
         .join(", ")}`}
-      onClick={() => onOpen(session.id)}
+      onOpen={() => onOpen(session.id)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
@@ -163,32 +161,11 @@ function ClusterChildRowImpl({
           onDelete(session.id);
         }
       }}
-      // The parent fold and slight indent carry the relationship in both the
-      // inbox cluster and composer ledge; a vertical rail adds a needless edge.
-      style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
-      // The composer strip's session row (`SpawnedSessionsLedge`): one
-      // compact line under a hairline, its fill square and across the whole
-      // row — a phone gets a thumb's height.
-      className={`cursor-pointer select-none flex-nowrap gap-1.5 rounded-none border-0 border-t border-border/60 py-0 pr-2.5 text-left hover:bg-muted dark:hover:bg-muted/50 ${density === "comfortable" ? "h-10" : "h-7"}`}
-    >
-      {/* The state reads before the title; a quiet row keeps the slot empty
-          so every sibling's title starts at the same x. */}
-      {badge ? (
-        <SessionStatusBadge badge={badge} status={status} display="icon-only" />
-      ) : (
-        <span aria-hidden className="size-5 shrink-0" />
-      )}
-      <span
-        // As the card's title: bright only when unread or needing the user,
-        // muted once read.
-        className={`min-w-0 flex-1 truncate text-sm ${status === "unread" ? "font-semibold" : ""} ${status === "unread" || card.tier === "needs-you" ? "text-foreground" : "text-muted-foreground"}`}
-      >
-        <SessionTitleText
-          title={title}
-          pending={session.titleGenerationPending}
-        />
-      </span>
-      <ItemActions className="gap-1.5">
+      // Shared content supplies the remaining half-rem inset.
+      style={{ paddingLeft: `${0.75 * indent + 0.25}rem` }}
+      className="border-t border-border/60"
+      identity={<SessionTitleRow session={session} status={status} />}
+      trailing={
         <span className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
           {jobs > 0 ? (
             <span title={jobsText} className="flex items-center gap-0.5">
@@ -207,8 +184,8 @@ function ClusterChildRowImpl({
           ) : null}
           <span>{relativeAge(session.updatedAt, now)}</span>
         </span>
-      </ItemActions>
-    </Item>
+      }
+    />
   );
 }
 

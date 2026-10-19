@@ -117,6 +117,11 @@ Initiative Attention items also use `common/ListRow`: progress and age in contex
 state and title in identity, and session disclosure, readiness, blockers and the
 next milestone in signals. Their session chevron leads the label. Unacknowledged
 paused/done outcomes use the shared Settle action; active Initiatives have none.
+Embedded peer, Workflow Run role and Initiative session rows share `ListRow` and
+`SessionTitleRow` through `ClusterChildRow`. Initiative Show more expands known
+sessions inline instead of navigating to the Initiative. Show more and the peer
+list's Settled toggle share `common/ListExpansionRow`, a plain disclosure with
+the same height and font size as the compact session rows, not a category band.
 
 `actions` accepts `common/ListRowActions`. One or two actions are both direct;
 with more, at most two explicitly primary actions stay direct and the rest use a
