@@ -278,6 +278,70 @@ describe("launchServerTask", () => {
   });
 });
 
+describe("Stop-all across backends", () => {
+  test("a watch started while another backend's Stop-all is pending is not this Stop's", async () => {
+    // A native backend whose Stop-all answers only when the test says so.
+    let release: (() => void) | undefined;
+    const nativeStopAlls: string[][] = [];
+    backgroundWorkSupervisor.registerBackend({
+      backend: "host-process",
+      launch: async () => ({ launched: true }),
+      stop: async () => ({ acknowledged: true }),
+      stopAll: async (request) => {
+        nativeStopAlls.push([...request.itemIds]);
+        await new Promise<void>((resolve) => (release = resolve));
+        return {
+          acknowledgedItemIds: [...request.itemIds],
+          unconfirmedItemIds: [],
+        };
+      },
+    });
+    const sessionId = owner();
+    const old = controlledJob();
+    const oldWatch = await launch(sessionId, old.run);
+    // Newer, so the Stop-all visits the native backend first.
+    const admission = backgroundWorkSupervisor.admit({
+      ownerSessionId: sessionId,
+      backend: "host-process",
+      kind: "shell",
+      label: "pnpm run test",
+      sourceRequestId: "native-shell",
+    });
+    if (!admission.admitted) throw new Error(admission.message);
+    const native = await backgroundWorkSupervisor.launch(admission);
+    await settle();
+
+    const stopping = backgroundWorkSupervisor.stopAllOwner({
+      ownerSessionId: sessionId,
+      sourceRequestId: "human-stop-all",
+      reason: "Stopped from the Background tasks view",
+    });
+    await settle();
+    expect(nativeStopAlls).toEqual([[native!.id]]);
+    // The agent starts another watch before the native answer arrives.
+    const fresh = controlledJob();
+    const freshWatch = await launch(sessionId, fresh.run);
+    await settle();
+    release!();
+    await stopping;
+
+    expect(backgroundWorkStore.getItem(oldWatch.taskId)?.state).toBe("stopped");
+    expect(old.budgets[0]!.signal.aborted).toBe(true);
+    expect(backgroundWorkStore.getItem(native!.id)?.state).toBe("stopped");
+    expect(fresh.budgets[0]!.signal.aborted).toBe(false);
+    expect(backgroundWorkStore.getItem(freshWatch.taskId)).toMatchObject({
+      state: "running",
+      stopState: "none",
+    });
+    // And it still delivers its own result.
+    fresh.result.resolve({ payload: { ok: true }, summary: "done" });
+    await settle();
+    expect(backgroundWorkStore.getItem(freshWatch.taskId)?.state).toBe(
+      "completed",
+    );
+  });
+});
+
 describe("ServerTaskBackend", () => {
   function events(): BackgroundWorkBackendEvents & {
     completions: string[];
@@ -336,6 +400,7 @@ describe("ServerTaskBackend", () => {
       port.stopAll({
         ownerSessionId: "owner-a",
         sourceRequestId: "drain-a",
+        itemIds: ["a-1", "a-2"],
         attempt: 1,
         reason: "deployment",
         protectOrdinaryTurn: false,
@@ -343,6 +408,7 @@ describe("ServerTaskBackend", () => {
       port.stopAll({
         ownerSessionId: "owner-b",
         sourceRequestId: "drain-b",
+        itemIds: ["b-1"],
         attempt: 1,
         reason: "deployment",
         protectOrdinaryTurn: false,
@@ -351,6 +417,20 @@ describe("ServerTaskBackend", () => {
     expect(a.acknowledgedItemIds.sort()).toEqual(["a-1", "a-2"]);
     expect(b.acknowledgedItemIds).toEqual(["b-1"]);
     expect(signals.get("c-1")?.aborted).toBe(false);
+    // Only the items named: owner-a's job started after the reservation stays.
+    await start(port, "a-3", "owner-a", signals);
+    await settle();
+    expect(
+      await port.stopAll({
+        ownerSessionId: "owner-a",
+        sourceRequestId: "drain-a-again",
+        itemIds: [],
+        attempt: 1,
+        reason: "deployment",
+        protectOrdinaryTurn: false,
+      }),
+    ).toEqual({ acknowledgedItemIds: [], unconfirmedItemIds: [] });
+    expect(signals.get("a-3")?.aborted).toBe(false);
     // A stopped job reports nothing.
     expect(sink.completions).toEqual([]);
     // Another owner cannot reach c-1 by its id.

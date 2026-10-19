@@ -481,10 +481,12 @@ with a lifetime of the requested timeout plus `SERVER_TASK_DEADLINE_MARGIN_MS`
 `timeoutMs` fitted inside the frozen lifetime, stores the job's JSON result as
 its artifact and reports `completed`. A Stop aborts the job's own signal and
 discards whatever it returns. The port is registered on first use and has no
-host epoch. Migration `0090_background_work_server_tasks.sql` rebuilt
-`background_work_items` to accept the backend and the `check-watch`,
-`image-pull` and `merge-when-ready` kinds, with a `server-task` row hostless.
-The store owes a server task's fact a retained `wake` receipt when it is
-recorded while draining (`TerminalizeBackgroundWorkInput.draining`) or ended by
-`reconcileBoot` (`owesRestartNotice`), and `activityByOwner` counts it as
-`serverTaskCount`.
+host epoch. Every `stopAll` request names the items the supervisor reserved
+(`itemIds`), and each port stops only those: a Stop-all over several backends
+awaits them in turn, and work admitted meanwhile is not that Stop's. Migration
+`0090_background_work_server_tasks.sql` rebuilt `background_work_items` to
+accept the backend and the `check-watch`, `image-pull` and `merge-when-ready`
+kinds, with a `server-task` row hostless. The store owes a server task's fact a
+retained `wake` receipt when it is recorded while draining
+(`TerminalizeBackgroundWorkInput.draining`) or ended by `reconcileBoot`
+(`owesRestartNotice`), and `activityByOwner` counts it as `serverTaskCount`.

@@ -295,6 +295,7 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
     const acknowledgedItemIds: string[] = [];
     const unconfirmedItemIds: string[] = [];
     const ownerRequested = request.callerSessionId === request.ownerSessionId;
+    const reserved = new Set(request.itemIds);
     await Promise.all(
       hosts.map(async (host) => {
         // The latch closes the host at the owner's next turn boundary. The
@@ -312,19 +313,21 @@ class ClaudeBackgroundWorkBackend implements BackgroundWorkBackendPort {
             .interruptBackgroundTurn(request.reason)
             .catch(() => undefined);
         await Promise.all(
-          [...host.items.values()].map(async (binding) => {
-            if (!binding.providerTaskId) {
-              unconfirmedItemIds.push(binding.itemId);
-              return;
-            }
-            try {
-              await host.controller.stopProviderTask(binding.providerTaskId);
-              this.removeBinding(host, binding);
-              acknowledgedItemIds.push(binding.itemId);
-            } catch {
-              unconfirmedItemIds.push(binding.itemId);
-            }
-          }),
+          [...host.items.values()]
+            .filter((binding) => reserved.has(binding.itemId))
+            .map(async (binding) => {
+              if (!binding.providerTaskId) {
+                unconfirmedItemIds.push(binding.itemId);
+                return;
+              }
+              try {
+                await host.controller.stopProviderTask(binding.providerTaskId);
+                this.removeBinding(host, binding);
+                acknowledgedItemIds.push(binding.itemId);
+              } catch {
+                unconfirmedItemIds.push(binding.itemId);
+              }
+            }),
         );
       }),
     );

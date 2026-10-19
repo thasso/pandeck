@@ -2065,6 +2065,8 @@ function countKind(
     case "check-watch":
       // Counted by its backend (`serverTaskCount`) only.
       return;
+    default:
+      return kind satisfies never;
   }
 }
 

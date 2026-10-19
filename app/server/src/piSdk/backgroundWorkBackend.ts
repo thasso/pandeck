@@ -636,8 +636,10 @@ export class PiBackgroundWorkBackend implements BackgroundWorkBackendPort {
   async stopAll(
     request: BackgroundWorkStopAllRequest,
   ): Promise<BackgroundWorkStopAllAck> {
+    const reserved = new Set(request.itemIds);
     const targets = [...this.running.entries()].filter(
-      ([, work]) => work.ownerSessionId === request.ownerSessionId,
+      ([itemId, work]) =>
+        reserved.has(itemId) && work.ownerSessionId === request.ownerSessionId,
     );
     const acknowledgedItemIds: string[] = [];
     const unconfirmedItemIds: string[] = [];

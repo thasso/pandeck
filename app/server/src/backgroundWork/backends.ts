@@ -96,6 +96,13 @@ export interface BackgroundWorkStopAllRequest {
   attempt: 1 | 2;
   reason: string;
   /**
+   * The items whose Stop this Stop-all reserved; the backend stops only these.
+   * Work the owner started since is not this Stop's to end: a Stop-all over
+   * several backends awaits each in turn, and an item admitted meanwhile has no
+   * reservation, so stopping it would leave its row running with nothing left.
+   */
+  itemIds: readonly string[];
+  /**
    * True while an ordinary prompted turn is inside its protected boundary. The
    * backend may reserve Stop-all now, but must not close that turn's host until
    * the boundary exits.

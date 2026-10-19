@@ -496,6 +496,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
           sourceRequestId: request.sourceRequestId,
           attempt: attempt as 1 | 2,
           reason: request.reason,
+          itemIds: effectTargets.map((item) => item.id),
           protectOrdinaryTurn:
             request.callerSessionId === request.ownerSessionId ||
             this.ordinaryTurnActive(request.ownerSessionId),
