@@ -542,6 +542,71 @@ async function githubPullRequestConversation(
   };
 }
 
+/** Resolve or reopen only a review thread belonging to the approved repository and PR. */
+export async function githubSetReviewThreadResolved(
+  ref: Pick<RemoteRepoRef, "owner" | "repo">,
+  config: GithubApiConfig,
+  prNumber: number,
+  threadId: string,
+  resolved: boolean,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!Number.isSafeInteger(prNumber) || prNumber < 1)
+    throw new Error("number must be a valid pull-request number.");
+  if (typeof threadId !== "string" || !threadId.trim())
+    throw new Error("threadId must be a non-empty review-thread id.");
+  if (typeof resolved !== "boolean")
+    throw new Error("resolved must be a boolean.");
+  const data = await githubGraphql<{
+    node?: {
+      __typename?: string;
+      id?: string;
+      isResolved?: boolean;
+      pullRequest?: {
+        number?: number;
+        repository?: { nameWithOwner?: string };
+      };
+    } | null;
+  }>(
+    config,
+    `query($id: ID!) {
+    node(id: $id) { __typename ... on PullRequestReviewThread {
+      id isResolved pullRequest { number repository { nameWithOwner } }
+    } }
+  }`,
+    { id: threadId },
+    requestSignal(signal),
+  );
+  const node = data.node;
+  if (
+    node?.__typename !== "PullRequestReviewThread" ||
+    node.id !== threadId ||
+    node.pullRequest?.number !== prNumber ||
+    node.pullRequest.repository?.nameWithOwner?.toLowerCase() !==
+      `${ref.owner}/${ref.repo}`.toLowerCase()
+  )
+    throw new Error(
+      `Review thread does not belong to pull request ${ref.owner}/${ref.repo}#${prNumber}, or is unavailable.`,
+    );
+  if (node.isResolved === resolved) return;
+  const field = resolved ? "resolveReviewThread" : "unresolveReviewThread";
+  const result = await githubGraphql<
+    Record<string, { thread?: { id?: string; isResolved?: boolean } } | null>
+  >(
+    config,
+    `mutation($threadId: ID!) { ${field}(input: {threadId: $threadId}) { thread { id isResolved } } }`,
+    { threadId },
+    requestSignal(signal),
+  );
+  if (
+    result[field]?.thread?.id !== threadId ||
+    result[field]?.thread?.isResolved !== resolved
+  )
+    throw new Error(
+      "GitHub did not confirm the requested review-thread state; read the thread again before retrying.",
+    );
+}
+
 /* ------------------------ Forgejo conversation (REST) ---------------------- */
 
 interface ForgejoComment {

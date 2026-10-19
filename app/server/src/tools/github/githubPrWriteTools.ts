@@ -23,6 +23,7 @@ import { invalidateGithubPullRequestWrite } from "../../pullRequestInventorySync
 import {
   githubProvider,
   githubPullRequestDescription,
+  githubSetReviewThreadResolved,
 } from "../../gitHosting.ts";
 import { resolveRepo } from "./githubTools.ts";
 import { applyPullRequestEdit, pullRequestEdit } from "../pullRequestEdit.ts";
@@ -60,6 +61,12 @@ type CommentPullRequestParams = {
   number: number;
   body: string;
   replyToCommentId?: number;
+};
+type ResolveReviewThreadParams = {
+  repo: string;
+  number: number;
+  threadId: string;
+  resolved: boolean;
 };
 type AssignPullRequestParams = {
   repo: string;
@@ -429,6 +436,67 @@ export const githubCommentPullRequestTool =
     },
   });
 
+export const githubResolveReviewThreadTool =
+  defineAgentTool<ResolveReviewThreadParams>({
+    name: "github_resolve_review_thread",
+    label: "GitHub: Resolve or Reopen Review Thread",
+    description:
+      "Resolve or reopen a GitHub pull-request review thread. Read github_get_pull_request with includeReviewThreads for its GraphQL thread id, not a comment id. Stages an approval card covered by the github:comment session grant, including inherited grants; writes only after approval. Forgejo's API does not support resolving or reopening review conversations.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["repo", "number", "threadId", "resolved"],
+      properties: {
+        repo: { type: "string", description: "Repository as 'owner/repo'." },
+        number: { type: "number", description: "Pull-request number." },
+        threadId: {
+          type: "string",
+          description:
+            "GraphQL review-thread id from github_get_pull_request, not the numeric comment id.",
+        },
+        resolved: {
+          type: "boolean",
+          description: "true to resolve, false to reopen.",
+        },
+      },
+    },
+    async execute(params, ctx) {
+      getGithubToolConfig();
+      const { owner, repo } = resolveRepo(params.repo);
+      if (!Number.isSafeInteger(params.number) || params.number < 1)
+        throw new Error("number must be a valid pull-request number.");
+      if (typeof params.threadId !== "string" || !params.threadId.trim())
+        throw new Error("threadId must be a non-empty review-thread id.");
+      if (typeof params.resolved !== "boolean")
+        throw new Error("resolved must be a boolean.");
+      const action = params.resolved ? "Resolve" : "Reopen";
+      const card = createApproval({
+        sessionId: ctx.session.sessionId,
+        kind: "githubPullRequest",
+        title: `${action} review thread`,
+        summary: `${owner}/${repo}#${params.number}`,
+        sourceToolCallId: ctx.toolCallId,
+        body: {
+          kind: "githubPullRequest",
+          operation: "resolveThread",
+          repo: `${owner}/${repo}`,
+          pullNumber: params.number,
+          threadId: params.threadId.trim(),
+          resolved: params.resolved,
+        },
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Prepared a proposal to ${action.toLowerCase()} a review thread on ${owner}/${repo}#${params.number}. ${PENDING_NOTE} ${approvalCardReference(card)}`,
+          },
+        ],
+        terminate: true,
+      };
+    },
+  });
+
 /**
  * Shape each value, THEN drop empties and de-duplicate: shaping is what turns
  * `org/` into nothing and makes `org/platform` and `platform` the same team, so
@@ -699,6 +767,20 @@ async function executeApprovedWrite(b: GithubPullRequestApprovalBody) {
     };
   }
 
+  if (b.operation === "resolveThread") {
+    await githubSetReviewThreadResolved(
+      { owner: owner!, repo: repoName! },
+      config,
+      b.pullNumber!,
+      b.threadId!,
+      b.resolved!,
+    );
+    return {
+      resultSummary: `${b.resolved ? "Resolved" : "Reopened"} review thread on #${b.pullNumber}`,
+      resultUrl: `https://github.com/${b.repo}/pull/${b.pullNumber}`,
+    };
+  }
+
   if (b.operation === "ready") {
     if (!Number.isInteger(b.pullNumber) || (b.pullNumber ?? 0) < 1)
       throw new Error("Ready proposal is missing its pull-request number.");
@@ -856,5 +938,6 @@ export const githubPrWriteTools = [
   githubReadyPullRequestTool,
   githubReviewPullRequestTool,
   githubCommentPullRequestTool,
+  githubResolveReviewThreadTool,
   githubAssignPullRequestTool,
 ];

@@ -1339,6 +1339,35 @@ The client (`hooks/usePullRequestConversation.ts`) reads again, fresh, when the
 inventory reports a new head, a newer `updatedAt` or a different CI summary —
 the last because a check finishing does not move the pull request's `updatedAt`.
 
+### Resolving provider review threads
+
+`github_get_pull_request` with `includeReviewThreads: true` reads GitHub's
+conversation through `gitHosting.ts`. Each thread includes its GraphQL `id`,
+`resolved` state and comment ids. Use the thread id with
+`github_resolve_review_thread` and the numeric comment id with
+`github_comment_pull_request`'s `replyToCommentId`. The read returns at most the
+last 50 threads, keeping the newest when `maxReviews` limits them further, with
+the first 20 comments per thread. Returned threads stay oldest first within that
+retained window. `reviewThreadsTruncated` flags omitted threads; a thread's
+`truncated` flags omitted comments.
+
+`github_resolve_review_thread` takes `repo`, PR `number`, `threadId`, and
+`resolved`: `true` resolves, `false` reopens. It stages a visible
+`githubPullRequest` approval with operation `resolveThread`. Both actions reuse
+`github:comment`, so an existing or inherited comment grant covers them. The
+executor checks the thread's repository and PR by node id before calling GraphQL
+`resolveReviewThread` or `unresolveReviewThread`. A thread already in the
+requested state is a read-only success. The approval card shows the PR, thread
+id and requested action; the tool does not claim completion before the approval
+outcome.
+
+Forgejo's API v1 exposes review comments and their resolver but no operation to
+resolve or reopen conversations, so there is no equivalent Forgejo write tool.
+This was checked against
+[Codeberg's Forgejo OpenAPI specification](https://codeberg.org/swagger.v1.json).
+Resolving a thread does not guarantee an external review check immediately turns
+green. A review app may react later or start another review round.
+
 ### Merge & clean up
 
 The object panel's Actions list carries ONE row for the whole end of a pull

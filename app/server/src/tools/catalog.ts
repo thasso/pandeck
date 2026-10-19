@@ -298,6 +298,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   github_ready_pull_request: "external",
   github_review_pull_request: "external",
   github_comment_pull_request: "external",
+  github_resolve_review_thread: "external",
   github_assign_pull_request: "external",
   github_mutate_issue: "external",
   github_rerun_actions_run: "external",

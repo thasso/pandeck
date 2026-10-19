@@ -59,6 +59,28 @@ const card = (
   ...patch,
 });
 
+test.each([true, false])(
+  "a review-thread proposal shows its target and resolved=%s action",
+  (resolved) => {
+    const html = renderToStaticMarkup(
+      <ApprovalCard
+        approval={card({
+          kind: "githubPullRequest",
+          operation: "resolveThread",
+          repo: "acme/app",
+          pullNumber: 42,
+          threadId: "PRRT_one",
+          resolved,
+        })}
+      />,
+    );
+    expect(html).toContain(resolved ? "Resolve" : "Reopen");
+    expect(html).toContain("review thread");
+    expect(html).toContain("acme/app#42");
+    expect(html).toContain("PRRT_one");
+  },
+);
+
 test("an edit renders the new description as Markdown and offers the change", () => {
   const html = renderToStaticMarkup(<ApprovalCard approval={card(editBody)} />);
   expect(html).toContain("<strong>2.1.6</strong>");
