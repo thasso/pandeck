@@ -638,9 +638,7 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
   // The first case pays for the COLD import: `vi.resetModules()` re-evaluates
   // the whole Markdown chain and the 266 KB KaTeX chunk on top. Under a second
   // on an idle machine, but a CI runner that is also running the server suite,
-  // linting and building has pushed it past the 5 s default — and a case
-  // abandoned by its timeout keeps polling inside `act`, so every later case in
-  // the file fails on "overlapping act() calls". Nothing asserted here depends
+  // linting and building has pushed it past the 5 s default. Nothing here depends
   // on time; the budget only has to be generous enough that a slow run is still
   // a run.
   let container: HTMLDivElement;
@@ -654,7 +652,10 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
     ({ container, root: reactRoot } = mount());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // The placeholder case deliberately leaves the import pending. Settle it
+    // before removing its mock or resetting the next case's module registry.
+    await settleMath();
     vi.doUnmock("rehype-katex");
   });
 
@@ -662,28 +663,19 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
     return (await import("./Markdown.tsx")).Markdown;
   }
 
-  /** One macrotask inside `act`, so a resolved import can commit its re-render. */
-  async function flush(): Promise<void> {
+  // Timer ticks cannot tell us whether Vite has finished loading a chunk.
+  // Wait for the imports, including their rejection handlers, then let React
+  // commit the resulting state update before inspecting the DOM.
+  async function settleMath(): Promise<void> {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.dynamicImportSettled();
     });
   }
 
-  /**
-   * Render, then wait for KaTeX to land.
-   *
-   * Polls rather than flushing a fixed number of times: the first of these imports
-   * in a worker has 266 KB to transform and takes many macrotasks, while a later
-   * one is already cached and takes one. A fixed flush count therefore passes or
-   * fails according to whether some other test file happened to run first.
-   */
   async function renderMath(text: string): Promise<HTMLElement> {
     const Markdown = await loadMarkdown();
     await act(async () => reactRoot.render(<Markdown text={text} />));
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (container.querySelector("math, .katex-error")) break;
-      await flush();
-    }
+    await settleMath();
     return container;
   }
 
@@ -783,11 +775,14 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
   });
 
   it("catches up a formula that was on screen when an import failed", async () => {
+    // Vitest does not track async mock factories in dynamicImportSettled().
+    // Load the real plugin before mocking, so the retry's factory is synchronous.
+    const katex = await vi.importActual("rehype-katex");
     let attempts = 0;
-    vi.doMock("rehype-katex", async () => {
+    vi.doMock("rehype-katex", () => {
       attempts += 1;
       if (attempts === 1) throw new Error("chunk load failed");
-      return await vi.importActual("rehype-katex");
+      return katex;
     });
     const Markdown = await loadMarkdown();
 
@@ -799,7 +794,8 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
         </div>,
       ),
     );
-    for (let attempt = 0; attempt < 10; attempt += 1) await flush();
+    await settleMath();
+    expect(attempts).toBe(1);
     expect(container.querySelector("math")).toBeNull();
 
     // A second formula mounts and retries. `Markdown` is memoized and the first
@@ -814,10 +810,7 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
         </div>,
       ),
     );
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (container.querySelectorAll("math").length >= 2) break;
-      await flush();
-    }
+    await settleMath();
 
     expect(attempts).toBe(2);
     expect(container.querySelectorAll("math")).toHaveLength(2);
@@ -838,9 +831,7 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
     await act(async () =>
       reactRoot.render(<Markdown text="It costs $5, on sale for $3." />),
     );
-    // Generous on purpose: this asserts an ABSENCE, so it has to outlast the
-    // window in which a load kicked off by this render could still commit.
-    for (let attempt = 0; attempt < 10; attempt += 1) await flush();
+    await settleMath();
 
     expect(imports).toBe(0);
     expect(container.querySelector("math")).toBeNull();
@@ -848,7 +839,7 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
 
     // The counter is wired up: the same module DOES import for real math.
     await act(async () => reactRoot.render(<Markdown text="$$x^2$$" />));
-    for (let attempt = 0; attempt < 10; attempt += 1) await flush();
+    await settleMath();
     expect(imports).toBe(1);
   });
 });

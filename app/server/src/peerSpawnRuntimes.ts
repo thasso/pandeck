@@ -57,14 +57,13 @@ export function directPeerTurnCapOf(sessionId: string): number {
 /**
  * User/approval-only domain writer, never an agent tool. Validation and persistence
  * do not yield: approval executors can compare and set in one synchronous step.
+ * The caller owns session-list notification, so this writer never loads the hub.
  */
 export function setSessionPeerTurnCap(
   sessionId: string,
   cap: number | null,
 ): void {
   sessionStore.setPeerTurnCap(sessionId, cap);
-  // Dynamic to avoid the hub -> catalog -> spawn initialization cycle.
-  void import("./hub.ts").then(({ hub }) => hub.broadcastSessions());
 }
 
 /** Every model one account can actually run, mirroring the settings projection. */
