@@ -135,6 +135,20 @@ the outcome:
   the coordinator's job. Choose it for experimentation, where a cheap wrong
   answer is recoverable.
 
+  Direct `spawn` batches admit at most four concurrent counted peer turns per
+  spawner. A counted child holds a slot while running or while a prompt from its
+  spawner is queued or being dispatched. Runtimes the user marked
+  `relativeCost: "low"` neither need nor hold a slot, with no bound on low-cost
+  turns. A profile row uses its own cost label. An agent-definition row is low
+  only when at least one enabled approved runtime matches its provider, model
+  and thinking level, and every match is low. Account pins do not affect that
+  match. Unknown or conflicting cost counts. The admitted class stays fixed for
+  the child. A low-to-counted change before creation refuses that row; a
+  counted-to-low change still counts. A batch reserves only its counted rows and
+  refuses as a whole if those exceed available slots. Card-approved `propose`
+  spawns are outside this admission gate. Each batch still has at most eight
+  rows.
+
   #### Peer-message hop limit
 
   Peer prompts share a server-owned causal chain. A chain permits

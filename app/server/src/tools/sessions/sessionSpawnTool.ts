@@ -84,7 +84,7 @@ function makeSessionSpawnTool() {
           type: "array",
           minItems: 1,
           maxItems: MAX_SPAWN_ROWS,
-          description: `The sessions, at most ${MAX_SPAWN_ROWS} — one card has to stay readable, and at most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} directly spawned peer turns may run at once. Required for "spawn" and "propose", forbidden for "profiles" and "agents".`,
+          description: `The sessions, at most ${MAX_SPAWN_ROWS}. At most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} directly spawned peer turns may run at once; runtimes the user marked low cost don't count and have no bound. Required for "spawn" and "propose", forbidden for "profiles" and "agents".`,
           items: {
             type: "object",
             additionalProperties: false,
