@@ -152,7 +152,10 @@ and the reason for any substitution. The frozen session-agent record stores
 `modelFallbackReason` beside that runtime. A reason can include the selected
 account's bench reset time, in UTC; it does not claim that every account resets
 at that time. Health is read again immediately before creation. This is only a
-spawn-time model choice, not cross-provider failover for a running session.
+spawn-time model choice, not cross-provider failover for a running session. Only
+direct `session_spawn` and that tool's `agents` preview opt into health
+fallback. Browser agent listings and first sends retain their default-model
+policy, so temporary benches do not silently change the new-session prefill.
 
 ### The account
 

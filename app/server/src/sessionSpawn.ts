@@ -1256,6 +1256,7 @@ export async function spawnApprovedPeers(input: {
       let early: AgentSpawnRuntime;
       try {
         early = await resolveAgentSpawn(row.agent.trim(), agents, {
+          allowModelFallback: true,
           requiresEnterprise: rowRequires(row),
           ...(row.modelId !== undefined ? { model: row.modelId } : {}),
         });
@@ -1393,6 +1394,7 @@ function rowRuntime(
     const model = row.modelId;
     return () =>
       resolveAgentSpawn(name, undefined, {
+        allowModelFallback: true,
         requiresEnterprise,
         ...(model !== undefined ? { model } : {}),
       });

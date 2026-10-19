@@ -241,7 +241,9 @@ async function rosterText(): Promise<string> {
 
 /** The definitions as the coordinator reads them, with why any cannot run. */
 async function agentsText(): Promise<string> {
-  return spawnableAgentsText(await listSpawnableAgents());
+  return spawnableAgentsText(
+    await listSpawnableAgents(undefined, { allowModelFallback: true }),
+  );
 }
 
 /** A description longer than this is cut; `agent_get` reads it whole. */

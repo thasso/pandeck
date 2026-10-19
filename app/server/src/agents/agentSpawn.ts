@@ -2,8 +2,8 @@
  * Resolving an agent definition for a spawn (`docs/agent-definitions.md`
  * "Spawning by name"): read the definition the library holds NOW, pick the
  * listed model the caller named or the first, check that it can run, pick its
- * account, and produce the frozen copy the session will run as. An unpinned
- * default whose router pick is degraded may use the next healthy listed model.
+ * account, and produce the frozen copy the session will run as. Direct spawn
+ * callers may opt into using the next healthy listed model for a degraded default.
  * Explicit model and account choices never substitute another model.
  */
 import {
@@ -340,8 +340,10 @@ export async function resolveAgentSpawn(
     /** An account the caller picked, in place of the automatic one. */
     profileId?: string;
     requiresEnterprise?: boolean;
-    /** One of the listed models; absent permits account-health fallback. */
+    /** One of the listed models; absent selects the default. */
     model?: string;
+    /** Direct session_spawn only; first sends and browser prefill stay exact. */
+    allowModelFallback?: boolean;
   } = {},
 ): Promise<AgentSpawnRuntime> {
   const read = await readAgentDefinition(name, scanned);
@@ -359,6 +361,7 @@ export async function resolveAgentSpawn(
       : await pick(chosen.runtime);
     let modelFallbackReason: string | undefined;
     if (
+      options.allowModelFallback === true &&
       options.model === undefined &&
       options.profileId === undefined &&
       account.profileId &&
@@ -498,10 +501,10 @@ export type SpawnableAgent =
  * Every definition and whether it can be spawned now: the valid ones with
  * what they would run on, the rest with the reason they cannot.
  */
-export async function listSpawnableAgents(scanned?: {
-  library: LibraryStore;
-  scan: LibraryScan;
-}): Promise<SpawnableAgent[]> {
+export async function listSpawnableAgents(
+  scanned?: { library: LibraryStore; scan: LibraryScan },
+  options: { allowModelFallback?: boolean } = {},
+): Promise<SpawnableAgent[]> {
   scanned ??= await scanAgentsForSpawn();
   const rows: SpawnableAgent[] = [];
   for (const entry of scanned.scan.entries) {
@@ -509,7 +512,7 @@ export async function listSpawnableAgents(scanned?: {
       rows.push({
         name: entry.name,
         description: entry.description,
-        runtime: await resolveAgentSpawn(entry.name, scanned),
+        runtime: await resolveAgentSpawn(entry.name, scanned, options),
       });
     } catch (error) {
       if (!(error instanceof AgentSpawnRefusedError)) throw error;

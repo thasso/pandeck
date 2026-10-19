@@ -204,7 +204,9 @@ test("health fallback follows definition order and skips unresolved or degraded 
     },
   });
 
-  const runtime = await resolveAgentSpawn("test-reviewer");
+  const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
+    allowModelFallback: true,
+  });
 
   assert.equal(runtime.modelId, "sonnet");
   assert.deepEqual(picks, ["gpt-6.1-sol", "opus", "sonnet"]);
@@ -212,7 +214,16 @@ test("health fallback follows definition order and skips unresolved or degraded 
     runtime.agent.modelFallbackReason,
     "sol has no eligible account; missing does not resolve; opus has no eligible account; used sonnet",
   );
-  const text = spawnableAgentsText(await listSpawnableAgents());
+  const [browser] = await listSpawnableAgents();
+  assert.ok(browser && "runtime" in browser);
+  assert.equal(
+    browser.runtime.modelId,
+    "gpt-6.1-sol",
+    "browser prefill does not follow temporary health",
+  );
+  const text = spawnableAgentsText(
+    await listSpawnableAgents(undefined, { allowModelFallback: true }),
+  );
   assert.match(text, /developer on claude-sdk\/sonnet/);
   assert.match(
     text,
@@ -232,7 +243,9 @@ test("without a healthy alternative the router's degraded default still runs", a
       degraded: "no-eligible-account",
     }),
   });
-  const runtime = await resolveAgentSpawn("test-reviewer");
+  const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
+    allowModelFallback: true,
+  });
   assert.equal(runtime.modelId, "gpt-6.1-sol");
   assert.equal(runtime.agent.modelFallbackReason, undefined);
 });
@@ -241,6 +254,7 @@ test("an account pin never causes model fallback", async () => {
   write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
   const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
     profileId: "pinned",
+    allowModelFallback: true,
   });
   assert.equal(runtime.modelId, "gpt-6.1-sol");
   assert.equal(runtime.credentialProfileId, "pinned");
@@ -249,7 +263,9 @@ test("an account pin never causes model fallback", async () => {
 
 test("a healthy default never probes later listed accounts", async () => {
   write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
-  const runtime = await resolveAgentSpawn("test-reviewer");
+  const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
+    allowModelFallback: true,
+  });
   assert.equal(runtime.modelId, "gpt-6.1-sol");
   assert.deepEqual(accounts, ["openai-codex"]);
   assert.equal(runtime.agent.modelFallbackReason, undefined);
