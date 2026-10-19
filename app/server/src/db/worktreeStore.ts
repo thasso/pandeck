@@ -305,6 +305,13 @@ export function liveSessionIdsForWorktree(worktreeId: string): string[] {
   });
 }
 
+/** Task-linked worktrees in any status, including removed deliveries. */
+export function worktreeIdsForTask(taskId: string): string[] {
+  return outgoing(taskNode(taskId), "in_worktree")
+    .filter((link) => link.toType === "worktree")
+    .map((link) => link.toId);
+}
+
 export function taskIdsForWorktree(worktreeId: string): string[] {
   return incoming(worktreeNode(worktreeId), "in_worktree")
     .filter((link) => link.fromType === "task")

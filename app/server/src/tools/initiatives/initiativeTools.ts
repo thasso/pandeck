@@ -1,3 +1,5 @@
+import { readInitiativeActivity } from "../../initiativeActivityRead.ts";
+import type { MemberActivity } from "../../initiativeActivity.ts";
 import {
   INITIATIVE_STATES,
   type InitiativeDetail,
@@ -63,7 +65,7 @@ const HEAD_DROP = [
   ["milestoneIds", "milestonesOmitted"],
 ] as const;
 const HEAD_CLIP = ["title", "id"] as const;
-const NODE_DROP = [["projectId"], ["blockedBy"]] as const;
+const NODE_DROP = [["activity"], ["projectId"], ["blockedBy"]] as const;
 const NODE_CLIP = ["title", "parentId", "id"] as const;
 const EXTERNAL_BLOCKER_DROP = [["projectId"]] as const;
 const EXTERNAL_BLOCKER_CLIP = ["title", "id"] as const;
@@ -106,6 +108,12 @@ const initiativeReadSchema = {
     },
     state: { type: "string", enum: INITIATIVE_STATES },
     query: { type: "string", description: "Search titles and descriptions." },
+    includeActivity: {
+      type: "boolean",
+      default: false,
+      description:
+        "With id only: live sessions rooted by task-start, Task-linked worktrees or Workflow Run roles, plus coordinator-owned descendants unless attached to another Task. Passive references do not qualify. Includes state, last activity, owed replies, stalled, worktrees and PR observations, including settled sessions' PRs and removed worktrees. At most 5 sessions, 3 worktrees, 3 PRs and 3 owed ids per session; true counts when capped. Activity is omitted before other member fields or required-string clipping. PR head/checks/review are last observed, not a provider refresh.",
+    },
     includeArchived: { type: "boolean", default: false },
     maxResults: { type: "integer", minimum: 1, maximum: 100, default: 50 },
   },
@@ -154,6 +162,7 @@ type ReadParams = {
   state?: InitiativeState;
   query?: string;
   includeArchived?: boolean;
+  includeActivity?: boolean;
   maxResults?: number;
 };
 
@@ -177,7 +186,7 @@ function makeInitiativeReadTool() {
     name: "initiative_read",
     label: "Initiatives: Read",
     description:
-      "List Initiatives, or read one by id: its member Tasks as a tree with status and blocked state, its milestones, and progress counts. Task descriptions are a task_read away. Results are byte-bounded: when a read by id is truncated, read on with its nextOffset; an omitted outside blocker is still named in its member's blockedBy.",
+      "List Initiatives, or read one by id: its member Tasks as a tree with status and blocked state, its milestones, and progress counts. Opt in with includeActivity for live delivery sessions, worktrees and PR state per member. Task descriptions are a task_read away. Results are byte-bounded: when a read by id is truncated, read on with its nextOffset; an omitted outside blocker is still named in its member's blockedBy.",
     searchHint:
       "initiative initiatives milestone epic cross-project progress map dependencies",
     parameters: initiativeReadSchema,
@@ -186,8 +195,19 @@ function makeInitiativeReadTool() {
       if (id) {
         const detail = readInitiative(id);
         if (!detail) throw new Error(`Initiative not found: ${shortText(id)}`);
-        return compactJsonResult(detailForTool(detail, params.offset ?? 0));
+        const activity =
+          params.includeActivity === true
+            ? await readInitiativeActivity(
+                detail.id,
+                detail.nodes.map((node) => node.id),
+              )
+            : undefined;
+        return compactJsonResult(
+          detailForTool(detail, params.offset ?? 0, activity),
+        );
       }
+      if (params.includeActivity !== undefined)
+        throw new Error("includeActivity applies only to a read by id.");
       if (params.offset !== undefined)
         throw new Error("offset applies only to a read by id.");
       const query = cleanOptional(params.query);
@@ -379,6 +399,7 @@ interface ToolMember {
   /** How many open blockers there are, when `blockedBy` was capped. */
   blockedByCount?: number;
   children?: ToolMember[];
+  activity?: MemberActivity;
 }
 
 /** What `fitRecord` left out of a record or cut, named in the record. */
@@ -397,6 +418,7 @@ interface FitNote {
 function detailForTool(
   detail: InitiativeDetail,
   offset: number,
+  activity?: ReadonlyMap<string, MemberActivity>,
 ): Record<string, unknown> {
   const start = Math.max(0, Math.trunc(offset));
   const open = new Set<string>();
@@ -417,6 +439,7 @@ function detailForTool(
     ...(detail.archivedAt !== undefined ? { archived: true } : {}),
     progress: detail.progress,
     totalMembers: detail.nodes.length,
+    ...(activity ? { activityAsOf: new Date().toISOString() } : {}),
   };
   if (start === 0) {
     const description = clipSerialized(
@@ -463,6 +486,7 @@ function detailForTool(
         id: node.id,
         title: node.title,
         status: node.status,
+        ...(activity?.has(node.id) ? { activity: activity.get(node.id)! } : {}),
         ...(node.blocked ? { blocked: true as const } : {}),
         ...(node.projectId ? { projectId: node.projectId } : {}),
         ...(node.milestone ? { milestone: true as const } : {}),
