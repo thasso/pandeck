@@ -7569,7 +7569,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       <SessionInspector
         sessionId={displayCurrentId}
         onSetPeerTurnCap={
-          runtimeHasStarted ? actions.setSessionPeerTurnCap : undefined
+          displaySessionListItem ? actions.setSessionPeerTurnCap : undefined
         }
         originTask={sessionOriginTask}
         relatedTasks={relatedGlobalTasks}
