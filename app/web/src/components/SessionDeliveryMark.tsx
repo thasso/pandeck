@@ -140,7 +140,9 @@ export function SessionDeliveryMark({
         </span>
       )}
       {number !== undefined ? (
-        <span className={`tabular-nums ${variant === "responsive" && collapseNumber ? "session-status-badge-label" : ""}`}>
+        <span
+          className={`tabular-nums ${variant === "responsive" && collapseNumber ? "session-status-badge-label" : ""}`}
+        >
           {collapseNumber ? `PR #${number}` : `#${number}`}
         </span>
       ) : null}

@@ -13,10 +13,7 @@ import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
-import {
-  pendingStatusSuggestion,
-  type Task,
-} from "../lib/backlogTree.ts";
+import { pendingStatusSuggestion, type Task } from "../lib/backlogTree.ts";
 import { buildInboxList, taskOrigin } from "../lib/backlogInbox.ts";
 import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 
@@ -182,7 +179,9 @@ function InboxRow({
           active={selected}
           density={tight ? "tight" : "comfortable"}
           onOpen={() => onOpen(task.id)}
-          identity={<TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />}
+          identity={
+            <TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />
+          }
           actions={
             <ListRowActions
               alwaysVisible
@@ -199,8 +198,17 @@ function InboxRow({
           }
           details={
             <>
-              <span role="img" aria-label={TASK_STATUS_LABEL[task.status]} title={TASK_STATUS_LABEL[task.status]} className="flex shrink-0 items-center">
-                <StatusIcon status={task.status} size={12} claimed={Boolean(pendingStatusSuggestion(task))} />
+              <span
+                role="img"
+                aria-label={TASK_STATUS_LABEL[task.status]}
+                title={TASK_STATUS_LABEL[task.status]}
+                className="flex shrink-0 items-center"
+              >
+                <StatusIcon
+                  status={task.status}
+                  size={12}
+                  claimed={Boolean(pendingStatusSuggestion(task))}
+                />
               </span>
               {showProjectBadge && task.projectId ? (
                 <TaskProjectMeta

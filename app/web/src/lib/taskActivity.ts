@@ -59,9 +59,11 @@ export function taskWorktreeIds(
       if (!isWorkingRef(ref)) continue;
       const session = sessionById.get(ref.sessionId);
       if (
-        session?.worktreeId && !session.archived &&
+        session?.worktreeId &&
+        !session.archived &&
         (!availableWorktrees || availableWorktrees.has(session.worktreeId))
-      ) ids.add(session.worktreeId);
+      )
+        ids.add(session.worktreeId);
     }
   }
   return [...ids].sort();

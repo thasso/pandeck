@@ -20,7 +20,11 @@ import {
 } from "../lib/backlogTreeModel.ts";
 import { localStore } from "../lib/localStore.ts";
 import { persistentStore } from "../lib/persistentStore.ts";
-import { DEFAULT_ATTENTION_FILTERS, normalizeAttentionFilters, type AttentionFilters } from "../lib/attentionFilters.ts";
+import {
+  DEFAULT_ATTENTION_FILTERS,
+  normalizeAttentionFilters,
+  type AttentionFilters,
+} from "../lib/attentionFilters.ts";
 import {
   DEFAULT_NAV_SLOTS,
   normalizeNavSlots,
@@ -200,6 +204,7 @@ type OptionalPrefKey = {
 
 // Adding an optional preference must also add it to the persisted-key inventory.
 const OPTIONAL_PREF_KEYS = {
+  attentionFilters: true,
   worktreeReviewMode: true,
   lastModelKey: true,
   lastThinkingLevel: true,

@@ -316,7 +316,11 @@ body {
 
 /* Mouse-only action reveal does not affect layout or keyboard reachability. */
 @media (hover: hover) and (pointer: fine) {
-  :root:not([data-layout="mobile"]) .group\/item:not(:hover):not(:focus-within):not([data-active]) .list-row-actions:not([data-always-visible]):not(:has([aria-expanded="true"])) {
+  :root:not([data-layout="mobile"])
+    .group\/item:not(:hover):not(:focus-within):not([data-active])
+    .list-row-actions:not([data-always-visible]):not(
+      :has([aria-expanded="true"])
+    ) {
     opacity: 0;
   }
 }

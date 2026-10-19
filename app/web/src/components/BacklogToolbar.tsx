@@ -20,10 +20,7 @@ import {
   BacklogProjectFilterPicker,
   type BacklogProjectFilterOption,
 } from "./BacklogFilters.tsx";
-import {
-  PROPERTY_TRIGGER,
-  PropertyLabel,
-} from "./common/PropertyList.tsx";
+import { PROPERTY_TRIGGER, PropertyLabel } from "./common/PropertyList.tsx";
 import {
   BacklogStatusFilter,
   BacklogStatusFilterPicker,
@@ -350,46 +347,44 @@ function BacklogFilterPopover({
     (view !== "inbox" && statusFilterActive(statuses) ? 1 : 0);
   return (
     <ListFilterPopover active={active}>
-          <PropertyLabel>Project</PropertyLabel>
-          <BacklogProjectFilterPicker
-            filter={projectFilter}
-            options={projectFilterOptions}
-            projectsById={projectsById}
-            onChange={onProjectFilterChange}
-            disabled={!projectsLoaded}
+      <PropertyLabel>Project</PropertyLabel>
+      <BacklogProjectFilterPicker
+        filter={projectFilter}
+        options={projectFilterOptions}
+        projectsById={projectsById}
+        onChange={onProjectFilterChange}
+        disabled={!projectsLoaded}
+        className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
+      />
+      {view !== "inbox" ? (
+        <>
+          <PropertyLabel>Status</PropertyLabel>
+          <BacklogStatusFilterPicker
+            statuses={statuses}
+            onChange={onStatusFilterChange}
+            options={view === "focus" ? FOCUS_STATUS_OPTIONS : undefined}
             className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
           />
-          {view !== "inbox" ? (
-            <>
-              <PropertyLabel>Status</PropertyLabel>
-              <BacklogStatusFilterPicker
-                statuses={statuses}
-                onChange={onStatusFilterChange}
-                options={view === "focus" ? FOCUS_STATUS_OPTIONS : undefined}
-                className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
-              />
-            </>
-          ) : null}
-          {view === "backlog" ? (
-            <>
-              <PropertyLabel>Group</PropertyLabel>
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`${PROPERTY_TRIGGER} justify-start`}
-                onClick={() =>
-                  onViewModeChange(byProject ? "normal" : "project")
-                }
-                disabled={!projectsLoaded}
-                aria-pressed={byProject}
-              >
-                <FolderTree className="text-muted-foreground" />
-                <span className={byProject ? "" : "text-muted-foreground"}>
-                  {byProject ? "By Project" : "None"}
-                </span>
-              </Button>
-            </>
-          ) : null}
+        </>
+      ) : null}
+      {view === "backlog" ? (
+        <>
+          <PropertyLabel>Group</PropertyLabel>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${PROPERTY_TRIGGER} justify-start`}
+            onClick={() => onViewModeChange(byProject ? "normal" : "project")}
+            disabled={!projectsLoaded}
+            aria-pressed={byProject}
+          >
+            <FolderTree className="text-muted-foreground" />
+            <span className={byProject ? "" : "text-muted-foreground"}>
+              {byProject ? "By Project" : "None"}
+            </span>
+          </Button>
+        </>
+      ) : null}
     </ListFilterPopover>
   );
 }

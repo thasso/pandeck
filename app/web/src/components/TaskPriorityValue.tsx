@@ -1,4 +1,9 @@
-import { SignalHigh, SignalLow, SignalMedium, TriangleAlert } from "lucide-react";
+import {
+  SignalHigh,
+  SignalLow,
+  SignalMedium,
+  TriangleAlert,
+} from "lucide-react";
 import type { TaskPriority } from "@assistant/shared";
 
 const PRIORITY_DISPLAY: Record<
@@ -21,8 +26,13 @@ export function TaskPriorityValue({
 }) {
   const { Icon, tone } = PRIORITY_DISPLAY[priority];
   return (
-    <span className={`inline-flex min-w-0 items-center ${compact ? "gap-1" : "gap-2"}`}>
-      <Icon className={`${compact ? "size-3" : "size-4"} shrink-0 ${tone}`} aria-hidden />
+    <span
+      className={`inline-flex min-w-0 items-center ${compact ? "gap-1" : "gap-2"}`}
+    >
+      <Icon
+        className={`${compact ? "size-3" : "size-4"} shrink-0 ${tone}`}
+        aria-hidden
+      />
       <span className="capitalize">{priority}</span>
     </span>
   );

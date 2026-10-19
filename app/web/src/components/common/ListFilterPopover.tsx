@@ -17,10 +17,21 @@ export function ListFilterPopover({
   return (
     <Popover>
       <PopoverTrigger
-        render={<Button variant="ghost" size="sm" className="ml-auto cursor-pointer gap-1 text-muted-foreground" aria-label={active ? `Filters (${active} active)` : label} />}
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto cursor-pointer gap-1 text-muted-foreground"
+            aria-label={active ? `Filters (${active} active)` : label}
+          />
+        }
       >
         <SlidersHorizontal />
-        {active ? <span className="min-w-4 rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums">{active}</span> : null}
+        {active ? (
+          <span className="min-w-4 rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums">
+            {active}
+          </span>
+        ) : null}
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72">
         <PropertyList>{children}</PropertyList>

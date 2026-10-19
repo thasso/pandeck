@@ -64,6 +64,6 @@ export const Comfortable: Story = {
 };
 
 export const Dark: Story = {
-  args: ThreeLines.args,
+  args: { ...ThreeLines.args },
   globals: { theme: "dark" },
 };

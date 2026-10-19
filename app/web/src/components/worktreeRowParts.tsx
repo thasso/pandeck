@@ -6,7 +6,12 @@
  */
 import { memo, useEffect, useMemo, useState } from "react";
 import { GitBranch, House, MessageSquarePlus } from "lucide-react";
-import type { SessionPullRequestSummary, WorktreeGitStatus, WorktreeHostingStatusResponse, WorktreeRecord } from "@assistant/shared";
+import type {
+  SessionPullRequestSummary,
+  WorktreeGitStatus,
+  WorktreeHostingStatusResponse,
+  WorktreeRecord,
+} from "@assistant/shared";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import { followRowLink } from "../lib/rowLink.ts";
 import { useInertOverflow } from "../hooks/useInertOverflow.ts";
@@ -57,17 +62,32 @@ function WorktreeRowSummary({
   const branch = status?.branch ?? worktree.branch;
   const axes = worktreeAxes(worktree, status, now);
   const metaRef = useInertOverflow<HTMLSpanElement>({ compact: true });
-  const pullRequest: SessionPullRequestSummary | undefined = hosting?.pr ? {
-    status: hosting.pr.state,
-    number: hosting.pr.number,
-    ...(hosting.ci ? { ci: hosting.ci } : {}),
-    ...(hosting.review ? { review: hosting.review } : {}),
-    ...(worktree.pullRequest?.number === hosting.pr.number ? {
-      ...(worktree.pullRequest.draft !== undefined ? { draft: worktree.pullRequest.draft } : {}),
-      ...(worktree.pullRequest.conflicts !== undefined ? { conflicts: worktree.pullRequest.conflicts } : {}),
-    } : {}),
-  } : worktree.pullRequest;
-  const prMark = pullRequest ? <SessionDeliveryMark session={{ pullRequest }} variant="responsive" showNumber collapseNumber /> : null;
+  const pullRequest: SessionPullRequestSummary | undefined = hosting?.pr
+    ? {
+        status: hosting.pr.state,
+        number: hosting.pr.number,
+        ...(hosting.ci ? { ci: hosting.ci } : {}),
+        ...(hosting.review ? { review: hosting.review } : {}),
+        ...(worktree.pullRequest?.number === hosting.pr.number
+          ? {
+              ...(worktree.pullRequest.draft !== undefined
+                ? { draft: worktree.pullRequest.draft }
+                : {}),
+              ...(worktree.pullRequest.conflicts !== undefined
+                ? { conflicts: worktree.pullRequest.conflicts }
+                : {}),
+            }
+          : {}),
+      }
+    : worktree.pullRequest;
+  const prMark = pullRequest ? (
+    <SessionDeliveryMark
+      session={{ pullRequest }}
+      variant="responsive"
+      showNumber
+      collapseNumber
+    />
+  ) : null;
   return (
     <>
       {/* A plain glyph, not a tinted tile: the row's text carries it. */}
@@ -87,21 +107,30 @@ function WorktreeRowSummary({
           <WorktreeLineDelta status={status} />
           <WorktreeMergedBadge status={status} />
         </span>
-        <span ref={metaRef} className="flex h-5 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden whitespace-nowrap text-xs">
-          {prMark ? hosting?.pr?.url ? (
-            <a
-              href={hosting.pr.url}
-              target="_blank"
-              rel="noreferrer"
-              draggable={false}
-              aria-label={`Open PR #${hosting.pr.number}`}
-              className="inline-flex shrink-0 hover:underline"
-              onClick={(event) => followRowLink(event, event.currentTarget.href)}
-              onKeyDown={(event) => event.stopPropagation()}
-            >
-              {prMark}
-            </a>
-          ) : <span className="inline-flex shrink-0">{prMark}</span> : null}
+        <span
+          ref={metaRef}
+          className="flex h-5 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden whitespace-nowrap text-xs"
+        >
+          {prMark ? (
+            hosting?.pr?.url ? (
+              <a
+                href={hosting.pr.url}
+                target="_blank"
+                rel="noreferrer"
+                draggable={false}
+                aria-label={`Open PR #${hosting.pr.number}`}
+                className="inline-flex shrink-0 hover:underline"
+                onClick={(event) =>
+                  followRowLink(event, event.currentTarget.href)
+                }
+                onKeyDown={(event) => event.stopPropagation()}
+              >
+                {prMark}
+              </a>
+            ) : (
+              <span className="inline-flex shrink-0">{prMark}</span>
+            )
+          ) : null}
           <span className="flex min-w-0 flex-1 basis-0">
             {hasAxes(axes) ? (
               <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />

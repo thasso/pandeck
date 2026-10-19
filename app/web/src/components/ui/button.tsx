@@ -34,7 +34,8 @@ const buttonVariants = cva(
         "icon-lg": "size-9",
         "list-action":
           "size-6 cursor-pointer rounded-[min(var(--radius-md),10px)] [&_svg]:text-current touch-ui:h-auto touch-ui:min-h-11 touch-ui:w-auto touch-ui:gap-2 touch-ui:px-3 touch-ui:py-2",
-        "icon-list-overflow": "size-6 cursor-pointer rounded-[min(var(--radius-md),10px)] touch-ui:size-11",
+        "icon-list-overflow":
+          "size-6 cursor-pointer rounded-[min(var(--radius-md),10px)] touch-ui:size-11",
       },
     },
     defaultVariants: {

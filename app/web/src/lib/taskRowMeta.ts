@@ -157,9 +157,10 @@ export function buildTaskRowMeta(
     ctx.sessionById,
     ctx.worktreeNames ? new Set(Object.keys(ctx.worktreeNames)) : undefined,
   );
-  const worktreeId = session?.worktreeId && worktreeIds.includes(session.worktreeId)
-    ? session.worktreeId
-    : worktreeIds[0] ?? null;
+  const worktreeId =
+    session?.worktreeId && worktreeIds.includes(session.worktreeId)
+      ? session.worktreeId
+      : (worktreeIds[0] ?? null);
   const workflowIndicator = ctx.workflowByTask?.get(task.id);
   return {
     suggestion: pendingStatusSuggestion(task) ?? null,

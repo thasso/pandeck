@@ -428,12 +428,16 @@ export function taskRelationGroups(
   worktrees: readonly WorktreeRecord[] | null = null,
   worktreeStatuses: Record<string, WorktreeGitStatus> = {},
 ): ObjectRefGroup[] {
-  const worktreeIds = new Set(taskWorktreeIds(
-    [task],
-    new Map(sessions.map((session) => [session.id, session])),
-    worktrees ? new Set(worktrees.map((worktree) => worktree.id)) : undefined,
-  ));
-  const relatedWorktrees = (worktrees ?? []).filter((worktree) => worktreeIds.has(worktree.id));
+  const worktreeIds = new Set(
+    taskWorktreeIds(
+      [task],
+      new Map(sessions.map((session) => [session.id, session])),
+      worktrees ? new Set(worktrees.map((worktree) => worktree.id)) : undefined,
+    ),
+  );
+  const relatedWorktrees = (worktrees ?? []).filter((worktree) =>
+    worktreeIds.has(worktree.id),
+  );
   const sessionRefs = new Map<string, ObjectRef>();
   for (const ref of task.sessionRefs ?? []) {
     sessionRefs.set(ref.sessionId, {
@@ -464,8 +468,12 @@ export function taskRelationGroups(
       id: "task-worktrees",
       label: "Worktrees",
       icon: <GitBranch size={13} />,
-      ...(relatedWorktrees.length ? { summary: `${relatedWorktrees.length}` } : {}),
-      refs: relatedWorktrees.map((worktree) => worktreeObjectRef(worktree, [], worktreeStatuses[worktree.id])),
+      ...(relatedWorktrees.length
+        ? { summary: `${relatedWorktrees.length}` }
+        : {}),
+      refs: relatedWorktrees.map((worktree) =>
+        worktreeObjectRef(worktree, [], worktreeStatuses[worktree.id]),
+      ),
     },
   ];
 }
@@ -1187,7 +1195,11 @@ export function TaskInspector({
               {
                 groupId: "task-worktrees",
                 label: "Worktrees",
-                awaited: taskWorktreeIds([task], new Map(sessions.map((session) => [session.id, session]))).length > 0,
+                awaited:
+                  taskWorktreeIds(
+                    [task],
+                    new Map(sessions.map((session) => [session.id, session])),
+                  ).length > 0,
                 answered: worktrees !== null,
                 refreshing: worktrees !== null && worktreesFresh === false,
                 error: worktreesError ?? null,

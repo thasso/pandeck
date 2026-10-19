@@ -23,10 +23,11 @@ the same parts a shadcn example would.
   listed here:
   - `button.tsx`: `busy` prop (spinner, disabled, `aria-busy`;
     `loading-states.md` R5), plus `list-action` / `icon-list-overflow` sizes for
-    shared row controls with touch-safe targets. Its spinner is decorative (`role="presentation"`,
-    `aria-hidden`, no label): the stock one is a `role="status"` live region,
-    which R6 forbids inside a control. It takes the icon size of the button's
-    size (`size-3` at `xs`/`icon-xs`, `size-3.5` at `sm`).
+    shared row controls with touch-safe targets. Its spinner is decorative
+    (`role="presentation"`, `aria-hidden`, no label): the stock one is a
+    `role="status"` live region, which R6 forbids inside a control. It takes the
+    icon size of the button's size (`size-3` at `xs`/`icon-xs`, `size-3.5` at
+    `sm`).
   - `dialog.tsx`: `overlayClassName` on `DialogContent`, so a full-screen
     takeover (the shortcuts help) puts its backdrop in band 100 with its popup.
   - `spinner.tsx`, `skeleton.tsx`: `motion-safe:` animations (R6). `spinner.tsx`
@@ -76,7 +77,7 @@ the same parts a shadcn example would.
 | A page or settings section that groups rows                                     | `Card`                                                                                                                             |
 | Collapsible list sections, including Pull Requests and Tasks grouped by project | [`ListGroupSection`](../src/components/ListGroupSection.tsx) (sticky header with chevron, icon, title, count and optional actions) |
 | Status or count                                                                 | `Badge`                                                                                                                            |
-| Text an agent wrote (a title, a label, a reason, a summary) | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card |
+| Text an agent wrote (a title, a label, a reason, a summary)                     | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card                                                 |
 | Menu of actions                                                                 | `DropdownMenu`, `ContextMenu`                                                                                                      |
 | Secondary actions behind a `⋯`                                                  | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)                                                   |
 | Floating panel or hint                                                          | `Popover`, `HoverCard`, `Tooltip`                                                                                                  |
@@ -114,38 +115,37 @@ become inert, and signals compact before dropping items.
 with more, explicitly primary actions stay direct and the rest use a labeled
 menu. Ordinary actions share the neutral ghost style and inherited icon tone;
 only destructive actions use a different tone. Buttons and menu items show a
-pointer cursor. Desktop mouse controls occupy the bottom-right slot and reveal on hover
-or focus without growing the content lines. Pending decisions remain visible.
-The Backlog tree uses the same `ListRowContent` and actions inside its tree
-frame, keeping hierarchy and selection rather than nesting a clickable flat row.
-`Tree`'s `paddedContent={false}` lets shared content own all padding; the frame
-adds only hierarchy indentation, not another horizontal inset.
+pointer cursor. Desktop mouse controls occupy the bottom-right slot and reveal
+on hover or focus without growing the content lines. Pending decisions remain
+visible. The Backlog tree uses the same `ListRowContent` and actions inside its
+tree frame, keeping hierarchy and selection rather than nesting a clickable flat
+row. `Tree`'s `paddedContent={false}` lets shared content own all padding; the
+frame adds only hierarchy indentation, not another horizontal inset.
 `getRowDisclosure` hides the gutter for rows with an inline expansion control.
 Full Backlog Task rows use a leading Sub-tasks control in their bottom line,
 without a reserved chevron or leaf spacer; keyboard expansion stays with Tree.
 Browser hosts share `browserRowDensity` for Desktop/Mobile spacing. Density
 never selects different content. Task tree `presentation="picker"` is the
 explicit single-line variant; `presentation="browser"` keeps metadata at either
-density.
-When there is no Sub-tasks control or metadata, omit the bottom line and move
-the session action beside the title. Task worktree and PR indicators remain
-separate. A single worktree's name hides in the signal row's compact form;
-multiple worktrees use a count menu with individual links. Task priority badges
-and the inspector selector share `TaskPriorityValue` for the same icons and
-capitalized names; row badges use its compact sizing.
+density. When there is no Sub-tasks control or metadata, omit the bottom line
+and move the session action beside the title. Task worktree and PR indicators
+remain separate. A single worktree's name hides in the signal row's compact
+form; multiple worktrees use a count menu with individual links. Task priority
+badges and the inspector selector share `TaskPriorityValue` for the same icons
+and capitalized names; row badges use its compact sizing.
 
 Shared `WorktreeRow` content keeps the branch and change counts on the first
 line. Its second line starts with the actual PR number linked to the provider
-URL supplied by the shared hosting projection, followed by git metadata. The
-PR badge collapses to its state icon only when the full badge does not fit;
-the icon retains the same link and accessible name. A card summary without a
-known provider URL remains informational rather than guessing a link.
+URL supplied by the shared hosting projection, followed by git metadata. The PR
+badge collapses to its state icon only when the full badge does not fit; the
+icon retains the same link and accessible name. A card summary without a known
+provider URL remains informational rather than guessing a link.
 
-Mobile layout or a coarse pointer moves actions to a separate strip beneath
-the content: labeled targets at least 44px high, 12px gaps, and wrapping into
+Mobile layout or a coarse pointer moves actions to a separate strip beneath the
+content: labeled targets at least 44px high, 12px gaps, and wrapping into
 stacked buttons when space is tight. The strip never opens the item. Shared
-`touch-ui:` styling follows either mobile layout or coarse input, independent
-of a forced Desktop choice.
+`touch-ui:` styling follows either mobile layout or coarse input, independent of
+a forced Desktop choice.
 
 The row owns padding, typography, line spacing, selection, hover, focus and
 Enter/Space/arrow-key behavior. Its host supplies `density`, object data,

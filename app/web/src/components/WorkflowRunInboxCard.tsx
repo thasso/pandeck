@@ -327,12 +327,22 @@ function WorkflowRunInboxCardImpl({
             ) : null}
           </>
         }
-        actions={settleOffered ? (
-          <ListRowActions actions={[{
-            id: "settle", label: "Settle", accessibleLabel: settleLabel,
-            icon: <Check />, disabled: Boolean(item.settleBlocked), onSelect: settle,
-          }]} />
-        ) : undefined}
+        actions={
+          settleOffered ? (
+            <ListRowActions
+              actions={[
+                {
+                  id: "settle",
+                  label: "Settle",
+                  accessibleLabel: settleLabel,
+                  icon: <Check />,
+                  disabled: Boolean(item.settleBlocked),
+                  onSelect: settle,
+                },
+              ]}
+            />
+          ) : undefined
+        }
       />
     </ListRow>
   );

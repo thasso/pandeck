@@ -1,9 +1,5 @@
 import { useState, type ReactNode } from "react";
-import {
-  CalendarCheck,
-  CalendarClock,
-  Flag,
-} from "lucide-react";
+import { CalendarCheck, CalendarClock, Flag } from "lucide-react";
 import type { TaskPriority, TaskSummary } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import { TaskPriorityValue } from "./TaskPriorityValue.tsx";

@@ -27,8 +27,10 @@ export function ListRowActions({
   alwaysVisible?: boolean;
 }) {
   if (actions.length === 0) return null;
-  const direct = actions.length <= 2 ? actions : actions.filter((action) => action.primary);
-  const overflow = actions.length <= 2 ? [] : actions.filter((action) => !action.primary);
+  const direct =
+    actions.length <= 2 ? actions : actions.filter((action) => action.primary);
+  const overflow =
+    actions.length <= 2 ? [] : actions.filter((action) => !action.primary);
   return (
     <div
       className="list-row-actions flex min-w-0 flex-1 items-center justify-end gap-1.5 touch-ui:flex-wrap touch-ui:gap-3"
@@ -51,7 +53,9 @@ export function ListRowActions({
           onClick={action.onSelect}
         >
           {action.icon}
-          <span className="hidden min-w-0 whitespace-normal touch-ui:inline">{action.label}</span>
+          <span className="hidden min-w-0 whitespace-normal touch-ui:inline">
+            {action.label}
+          </span>
         </IconButton>
       ))}
       {overflow.length ? (
@@ -65,7 +69,9 @@ export function ListRowActions({
               key={action.id}
               disabled={action.disabled}
               className="cursor-pointer"
-              variant={action.variant === "destructive" ? "destructive" : "default"}
+              variant={
+                action.variant === "destructive" ? "destructive" : "default"
+              }
               onClick={action.onSelect}
               title={action.accessibleLabel}
             >

@@ -830,7 +830,12 @@ function RowBody<T>({
           )}
         />
       ) : null}
-      <div className={cx("min-w-0 flex-1", paddedContent && (compact ? "py-0.5" : "py-1"))}>
+      <div
+        className={cx(
+          "min-w-0 flex-1",
+          paddedContent && (compact ? "py-0.5" : "py-1"),
+        )}
+      >
         {content}
       </div>
       {badge != null && (

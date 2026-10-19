@@ -45,7 +45,15 @@ import {
 } from "./InitiativeInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
-import { attentionFilterCount, attentionHistoryMatches, attentionProjectsBySession, DEFAULT_ATTENTION_FILTERS, filterAttentionInbox, groupAttentionByProject, type AttentionFilters } from "../lib/attentionFilters.ts";
+import {
+  attentionFilterCount,
+  attentionHistoryMatches,
+  attentionProjectsBySession,
+  DEFAULT_ATTENTION_FILTERS,
+  filterAttentionInbox,
+  groupAttentionByProject,
+  type AttentionFilters,
+} from "../lib/attentionFilters.ts";
 import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
@@ -565,16 +573,43 @@ export function SessionInbox({
         workflowCards,
         taskTitles,
       }),
-    [sessions, currentId, readCurrentId, workflowRuns, workflowCards, taskTitles],
+    [
+      sessions,
+      currentId,
+      readCurrentId,
+      workflowRuns,
+      workflowCards,
+      taskTitles,
+    ],
   );
-  const filterProjects = useMemo(() => attentionProjectsBySession(sessions, worktrees), [sessions, worktrees]);
-  const projectOrder = useMemo(() => projects.map((project) => project.id), [projects]);
-  const projectForItem = useCallback((item: SessionInboxItem): string | null => item.kind === "run" ? item.run.projectId || null : filterProjects.get(item.card.session.id) ?? null, [filterProjects]);
+  const filterProjects = useMemo(
+    () => attentionProjectsBySession(sessions, worktrees),
+    [sessions, worktrees],
+  );
+  const projectOrder = useMemo(
+    () => projects.map((project) => project.id),
+    [projects],
+  );
+  const projectForItem = useCallback(
+    (item: SessionInboxItem): string | null =>
+      item.kind === "run"
+        ? item.run.projectId || null
+        : (filterProjects.get(item.card.session.id) ?? null),
+    [filterProjects],
+  );
   const filtersActive = attentionFilterCount(filters) > 0;
-  const view = useMemo(() => filterAttentionInbox(
-    inbox, filters, filterProjects, settledLimit, currentId,
-    new Set([...settling, ...swipeCommit.current.keys()]),
-  ), [inbox, filters, filterProjects, settledLimit, currentId, settling]);
+  const view = useMemo(
+    () =>
+      filterAttentionInbox(
+        inbox,
+        filters,
+        filterProjects,
+        settledLimit,
+        currentId,
+        new Set([...settling, ...swipeCommit.current.keys()]),
+      ),
+    [inbox, filters, filterProjects, settledLimit, currentId, settling],
+  );
   useEffect(() => setSettledLimit(SETTLED_PAGE_SIZE), [filters]);
 
   // Initiatives are items of their own, read off their summaries alone: an
@@ -741,7 +776,10 @@ export function SessionInbox({
   // The consequence is milder than a frozen card — a pass that should have run
   // is skipped — but it is the same silent kind.
   const [projectDisclosureVersion, setProjectDisclosureVersion] = useState(0);
-  const onProjectDisclosure = useCallback(() => setProjectDisclosureVersion((version) => version + 1), []);
+  const onProjectDisclosure = useCallback(
+    () => setProjectDisclosureVersion((version) => version + 1),
+    [],
+  );
   const cardLayoutKey = useMemo(
     () =>
       [
@@ -777,7 +815,19 @@ export function SessionInbox({
           ].join("\u0000"),
         ),
       ].join("\u0000"),
-    [density, view, now, relationsById, childRows, initiativeItems, expandedClusters, filters.byProject, projectOrder, projectForItem, projectDisclosureVersion],
+    [
+      density,
+      view,
+      now,
+      relationsById,
+      childRows,
+      initiativeItems,
+      expandedClusters,
+      filters.byProject,
+      projectOrder,
+      projectForItem,
+      projectDisclosureVersion,
+    ],
   );
 
   // A card MOVES when its state changes — read, finished, started running — and
@@ -818,9 +868,16 @@ export function SessionInbox({
   // filtered-out urgent item is still reachable from the count that names it.
   const focusNeedsYou = useCallback(() => {
     const focus = () => {
-      const section = containerRef.current?.querySelector<HTMLElement>("[data-inbox-needs-you]");
-      const focusRow = () => section?.querySelector<HTMLElement>("[data-session-row]")?.focus({ preventScroll: false });
-      const toggle = filters.byProject ? section?.querySelector<HTMLElement>("h2 button[aria-expanded]") : null;
+      const section = containerRef.current?.querySelector<HTMLElement>(
+        "[data-inbox-needs-you]",
+      );
+      const focusRow = () =>
+        section
+          ?.querySelector<HTMLElement>("[data-session-row]")
+          ?.focus({ preventScroll: false });
+      const toggle = filters.byProject
+        ? section?.querySelector<HTMLElement>("h2 button[aria-expanded]")
+        : null;
       if (toggle?.getAttribute("aria-expanded") === "false") {
         toggle.click();
         window.requestAnimationFrame(focusRow);
@@ -866,17 +923,26 @@ export function SessionInbox({
     [sessions],
   );
   const archivedSessions = useMemo(
-    () => allArchivedSessions.filter((session) => attentionHistoryMatches(session, "archived", filters, filterProjects)),
+    () =>
+      allArchivedSessions.filter((session) =>
+        attentionHistoryMatches(session, "archived", filters, filterProjects),
+      ),
     [allArchivedSessions, filters, filterProjects],
   );
   const archivedAvailableCount = Math.max(
     archivedSessionCount,
     allArchivedSessions.length,
   );
-  const showArchivedShelf = filters.statuses.length === 0 || filters.statuses.includes("archived");
+  const showArchivedShelf =
+    filters.statuses.length === 0 || filters.statuses.includes("archived");
 
   useEffect(() => {
-    if (showArchived && showArchivedShelf && !archivedSessionsLoaded && archivedAvailableCount > 0)
+    if (
+      showArchived &&
+      showArchivedShelf &&
+      !archivedSessionsLoaded &&
+      archivedAvailableCount > 0
+    )
       onLoadArchivedSessions();
   }, [
     showArchived,
@@ -1192,7 +1258,6 @@ export function SessionInbox({
       );
     });
 
-<<<<<<< HEAD
   const renderNeedsYou = (entries: NeedsYouEntry[]) =>
     entries.map((entry) =>
       entry.kind === "initiative" ? (
@@ -1207,48 +1272,87 @@ export function SessionInbox({
       ),
     );
 
-||||||| parent of 0aea46bd (Add Project grouping to the attention inbox)
-=======
-  const itemIsSelected = (item: SessionInboxItem) => item.kind === "run"
-    ? item.roles.some((role) => role.session.id === currentId)
-    : item.card.session.id === currentId || Boolean(item.card.cluster?.childrenWithSettled.some((child) => child.session.id === currentId));
-  const sessionProject = (session: SessionListItem) => filterProjects.get(session.id) ?? null;
-  const sessionIsSelected = (session: SessionListItem) => session.id === currentId;
+  const itemIsSelected = (item: SessionInboxItem) =>
+    item.kind === "run"
+      ? item.roles.some((role) => role.session.id === currentId)
+      : item.card.session.id === currentId ||
+        Boolean(
+          item.card.cluster?.childrenWithSettled.some(
+            (child) => child.session.id === currentId,
+          ),
+        );
+  const sessionProject = (session: SessionListItem) =>
+    filterProjects.get(session.id) ?? null;
+  const sessionIsSelected = (session: SessionListItem) =>
+    session.id === currentId;
   const renderProjectGroups = <T,>(
-    scope: string, items: T[], projectFor: (item: T) => string | null,
-    render: (items: T[]) => ReactNode, selected: (item: T) => boolean, nested = false,
+    scope: string,
+    items: T[],
+    projectFor: (item: T) => string | null,
+    render: (items: T[]) => ReactNode,
+    selected: (item: T) => boolean,
+    nested = false,
   ): ReactNode => {
     if (!filters.byProject) return render(items);
-    return groupAttentionByProject(items, projectFor, projectOrder).map((group) => (
-      <ListGroupSection
-        key={group.projectId === null ? "unassigned" : `project-${group.projectId}`}
-        id={`session-inbox-${scope}-${group.projectId === null ? "unassigned" : `project-${group.projectId}`}`}
-        title={group.projectId ? runProjectById.get(group.projectId)?.name ?? group.projectId : "Unassigned"}
-        icon={<Folder size={14} className="shrink-0" aria-hidden />}
-        containsSelected={group.items.some(selected)}
-        onOpenChange={onProjectDisclosure}
-        sticky={!nested}
-        compact={nested}
-      >
-        {render(group.items)}
-      </ListGroupSection>
-    ));
+    return groupAttentionByProject(items, projectFor, projectOrder).map(
+      (group) => (
+        <ListGroupSection
+          key={
+            group.projectId === null
+              ? "unassigned"
+              : `project-${group.projectId}`
+          }
+          id={`session-inbox-${scope}-${group.projectId === null ? "unassigned" : `project-${group.projectId}`}`}
+          title={
+            group.projectId
+              ? (runProjectById.get(group.projectId)?.name ?? group.projectId)
+              : "Unassigned"
+          }
+          icon={<Folder size={14} className="shrink-0" aria-hidden />}
+          containsSelected={group.items.some(selected)}
+          onOpenChange={onProjectDisclosure}
+          sticky={!nested}
+          compact={nested}
+        >
+          {render(group.items)}
+        </ListGroupSection>
+      ),
+    );
   };
-  const activeProjects = useMemo(() => new Map(inbox.active.map((item) => [inboxItemId(item), projectForItem(item)])), [inbox.active, projectForItem]);
-  const detectInboxCollisions = useCallback<CollisionDetection>((args) => {
-    if (!filters.byProject) return closestCenter(args);
-    const projectId = activeProjects.get(String(args.active.id));
-    return closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((container) => activeProjects.get(String(container.id)) === projectId) });
-  }, [filters.byProject, activeProjects]);
+  const activeProjects = useMemo(
+    () =>
+      new Map(
+        inbox.active.map((item) => [inboxItemId(item), projectForItem(item)]),
+      ),
+    [inbox.active, projectForItem],
+  );
+  const detectInboxCollisions = useCallback<CollisionDetection>(
+    (args) => {
+      if (!filters.byProject) return closestCenter(args);
+      const projectId = activeProjects.get(String(args.active.id));
+      return closestCenter({
+        ...args,
+        droppableContainers: args.droppableContainers.filter(
+          (container) => activeProjects.get(String(container.id)) === projectId,
+        ),
+      });
+    },
+    [filters.byProject, activeProjects],
+  );
 
->>>>>>> 0aea46bd (Add Project grouping to the attention inbox)
   const dropItem = useCallback(
     ({ active, over }: DragEndEvent) => {
       setDragging(false);
       if (!over || !onSetInboxPositions) return;
       const projectId = activeProjects.get(String(active.id));
-      if (filters.byProject && projectId !== activeProjects.get(String(over.id))) return;
-      const items = filters.byProject ? inbox.active.filter((item) => projectForItem(item) === projectId) : inbox.active;
+      if (
+        filters.byProject &&
+        projectId !== activeProjects.get(String(over.id))
+      )
+        return;
+      const items = filters.byProject
+        ? inbox.active.filter((item) => projectForItem(item) === projectId)
+        : inbox.active;
       const positions = planInboxDrop(
         items,
         String(active.id),
@@ -1267,11 +1371,25 @@ export function SessionInbox({
       }
       onSetInboxPositions(positions);
     },
-    [inbox.active, onSetInboxPositions, filters.byProject, activeProjects, projectForItem],
+    [
+      inbox.active,
+      onSetInboxPositions,
+      filters.byProject,
+      activeProjects,
+      projectForItem,
+    ],
   );
-  const activeIds = useMemo(() => filters.byProject
-    ? groupAttentionByProject(view.active, projectForItem, projectOrder).flatMap((group) => group.items.map(inboxItemId))
-    : view.active.map(inboxItemId), [view.active, filters.byProject, projectForItem, projectOrder]);
+  const activeIds = useMemo(
+    () =>
+      filters.byProject
+        ? groupAttentionByProject(
+            view.active,
+            projectForItem,
+            projectOrder,
+          ).flatMap((group) => group.items.map(inboxItemId))
+        : view.active.map(inboxItemId),
+    [view.active, filters.byProject, projectForItem, projectOrder],
+  );
 
   // The cold-start message claims this browser has NOTHING, so a live Workflow
   // Run has to count against it: a run in `starting` owns no session yet, and a
@@ -1327,9 +1445,25 @@ export function SessionInbox({
       ) : !initiativesFresh ? null : coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
       ) : nothingToShow ? (
-        filtersActive ? <EmptyBox action={onClearFilters ? <Button variant="ghost" size="sm" onClick={onClearFilters}>Clear filters</Button> : undefined}>
-          {showArchivedShelf && archivedAvailableCount > 0 && !archivedSessionsLoaded ? "No loaded items match these filters. Archived history loads when opened." : "No items match these filters."}
-        </EmptyBox> : <EmptyBox>Nothing needs you right now.</EmptyBox>
+        filtersActive ? (
+          <EmptyBox
+            action={
+              onClearFilters ? (
+                <Button variant="ghost" size="sm" onClick={onClearFilters}>
+                  Clear filters
+                </Button>
+              ) : undefined
+            }
+          >
+            {showArchivedShelf &&
+            archivedAvailableCount > 0 &&
+            !archivedSessionsLoaded
+              ? "No loaded items match these filters. Archived history loads when opened."
+              : "No items match these filters."}
+          </EmptyBox>
+        ) : (
+          <EmptyBox>Nothing needs you right now.</EmptyBox>
+        )
       ) : null}
 
       {/* A failed Initiative list read is stated above both places its
@@ -1352,11 +1486,22 @@ export function SessionInbox({
           data-inbox-needs-you
           className="flex flex-col"
         >
-<<<<<<< HEAD
-          {filters.byProject ? <>
-            {renderNeedsYou(needsYouEntries.filter((entry) => entry.kind === "initiative"))}
-            {renderProjectGroups("needs-you", view.needsYou, projectForItem, renderCardList, itemIsSelected)}
-          </> : renderNeedsYou(needsYouEntries)}
+          {filters.byProject ? (
+            <>
+              {renderNeedsYou(
+                needsYouEntries.filter((entry) => entry.kind === "initiative"),
+              )}
+              {renderProjectGroups(
+                "needs-you",
+                view.needsYou,
+                projectForItem,
+                renderCardList,
+                itemIsSelected,
+              )}
+            </>
+          ) : (
+            renderNeedsYou(needsYouEntries)
+          )}
         </section>
       ) : null}
 
@@ -1370,11 +1515,6 @@ export function SessionInbox({
           className="flex flex-col"
         >
           {initiativeInbox.active.map(renderInitiativeItem)}
-||||||| parent of 0aea46bd (Add Project grouping to the attention inbox)
-          {renderCardList(view.needsYou)}
-=======
-          {renderProjectGroups("needs-you", view.needsYou, projectForItem, renderCardList, itemIsSelected)}
->>>>>>> 0aea46bd (Add Project grouping to the attention inbox)
         </section>
       ) : null}
 
@@ -1390,18 +1530,31 @@ export function SessionInbox({
             items={activeIds}
             strategy={verticalListSortingStrategy}
           >
-            {renderProjectGroups("active", view.active, projectForItem, (items) => items.map((item) => (
-              <DraggableInboxItem
-                key={inboxItemId(item)}
-                id={inboxItemId(item)}
-              >
-                {(lifted) => renderItem(item, lifted)}
-              </DraggableInboxItem>
-            )), itemIsSelected)}
+            {renderProjectGroups(
+              "active",
+              view.active,
+              projectForItem,
+              (items) =>
+                items.map((item) => (
+                  <DraggableInboxItem
+                    key={inboxItemId(item)}
+                    id={inboxItemId(item)}
+                  >
+                    {(lifted) => renderItem(item, lifted)}
+                  </DraggableInboxItem>
+                )),
+              itemIsSelected,
+            )}
           </SortableContext>
         </DndContext>
       ) : (
-        renderProjectGroups("active", view.active, projectForItem, renderCardList, itemIsSelected)
+        renderProjectGroups(
+          "active",
+          view.active,
+          projectForItem,
+          renderCardList,
+          itemIsSelected,
+        )
       )}
 
       {view.settledTotal > 0 ? (
@@ -1414,21 +1567,29 @@ export function SessionInbox({
         >
           {/* History totals do not inform a decision; paging says how much
               more there is once the shelf is open. */}
-          {renderProjectGroups("settled", view.settled, sessionProject, (items) => items.map((session) => (
-            <InboxShelfRow
-              key={session.id}
-              session={session}
-              kind="settled"
-              active={session.id === currentId}
-              now={now}
-              density={density}
-              onOpen={() => onSelect(session.id)}
-              onRestore={() => onSettle(session.id, false)}
-              onArchive={() => onArchive(session.id, true)}
-              onDelete={() => onDeleteSession(session.id)}
-              onFocusSibling={focusSibling}
-            />
-          )), sessionIsSelected, true)}
+          {renderProjectGroups(
+            "settled",
+            view.settled,
+            sessionProject,
+            (items) =>
+              items.map((session) => (
+                <InboxShelfRow
+                  key={session.id}
+                  session={session}
+                  kind="settled"
+                  active={session.id === currentId}
+                  now={now}
+                  density={density}
+                  onOpen={() => onSelect(session.id)}
+                  onRestore={() => onSettle(session.id, false)}
+                  onArchive={() => onArchive(session.id, true)}
+                  onDelete={() => onDeleteSession(session.id)}
+                  onFocusSibling={focusSibling}
+                />
+              )),
+            sessionIsSelected,
+            true,
+          )}
           {view.settledHidden > 0 ? (
             <Button
               variant="ghost"
@@ -1456,22 +1617,32 @@ export function SessionInbox({
         >
           {archivedSessionsLoaded ? (
             <div className="flex flex-col">
-              {archivedSessions.length === 0 ? <EmptyBox>No archived sessions match these filters.</EmptyBox> : null}
-              {renderProjectGroups("archived", archivedSessions, sessionProject, (items) => items.map((session) => (
-                <InboxShelfRow
-                  key={session.id}
-                  session={session}
-                  kind="archived"
-                  active={session.id === currentId}
-                  now={now}
-                  density={density}
-                  onOpen={() => onSelect(session.id)}
-                  onRestore={() => onArchive(session.id, false)}
-                  onArchive={() => onArchive(session.id, false)}
-                  onDelete={() => onDeleteSession(session.id)}
-                  onFocusSibling={focusSibling}
-                />
-              )), sessionIsSelected, true)}
+              {archivedSessions.length === 0 ? (
+                <EmptyBox>No archived sessions match these filters.</EmptyBox>
+              ) : null}
+              {renderProjectGroups(
+                "archived",
+                archivedSessions,
+                sessionProject,
+                (items) =>
+                  items.map((session) => (
+                    <InboxShelfRow
+                      key={session.id}
+                      session={session}
+                      kind="archived"
+                      active={session.id === currentId}
+                      now={now}
+                      density={density}
+                      onOpen={() => onSelect(session.id)}
+                      onRestore={() => onArchive(session.id, false)}
+                      onArchive={() => onArchive(session.id, false)}
+                      onDelete={() => onDeleteSession(session.id)}
+                      onFocusSibling={focusSibling}
+                    />
+                  )),
+                sessionIsSelected,
+                true,
+              )}
             </div>
           ) : (
             <PaneLoading

@@ -390,18 +390,32 @@ function TaskCodeMeta({
   meta: TaskRowMeta;
   onNavigate?: ((path: string) => void) | undefined;
 }) {
-  const worktrees = meta.worktrees ?? (meta.worktreeId ? [{
-    id: meta.worktreeId,
-    name: null,
-    delivery: meta.delivery,
-    dirty: meta.dirty,
-  }] : []);
+  const worktrees =
+    meta.worktrees ??
+    (meta.worktreeId
+      ? [
+          {
+            id: meta.worktreeId,
+            name: null,
+            delivery: meta.delivery,
+            dirty: meta.dirty,
+          },
+        ]
+      : []);
   const single = worktrees.length === 1 ? worktrees[0] : undefined;
-  const deliveries = [...new Map(
-    (meta.worktrees ? worktrees.map((worktree) => worktree.delivery) : [meta.delivery])
-      .filter((delivery): delivery is TaskRowDelivery => delivery !== null)
-      .map((delivery) => [delivery.url ?? `${delivery.prNumber}:${delivery.state}`, delivery]),
-  ).values()];
+  const deliveries = [
+    ...new Map(
+      (meta.worktrees
+        ? worktrees.map((worktree) => worktree.delivery)
+        : [meta.delivery]
+      )
+        .filter((delivery): delivery is TaskRowDelivery => delivery !== null)
+        .map((delivery) => [
+          delivery.url ?? `${delivery.prNumber}:${delivery.state}`,
+          delivery,
+        ]),
+    ).values(),
+  ];
   return (
     <>
       {single ? (
@@ -413,7 +427,11 @@ function TaskCodeMeta({
             onNavigate={onNavigate}
           >
             <GitBranch size={10} aria-label="Has a worktree" />
-            {single.name ? <span className="max-w-48 truncate [[data-signals-compact]_&]:hidden">{single.name}</span> : null}
+            {single.name ? (
+              <span className="max-w-48 truncate [[data-signals-compact]_&]:hidden">
+                {single.name}
+              </span>
+            ) : null}
           </MetaLink>
           {single.dirty ? (
             <MetaLink
@@ -422,7 +440,11 @@ function TaskCodeMeta({
               className="-m-0.5 flex shrink-0 p-0.5"
               onNavigate={onNavigate}
             >
-              <span role="img" aria-label="Uncommitted changes" className="size-1.5 rounded-full bg-warning" />
+              <span
+                role="img"
+                aria-label="Uncommitted changes"
+                className="size-1.5 rounded-full bg-warning"
+              />
             </MetaLink>
           ) : null}
         </span>
@@ -430,7 +452,9 @@ function TaskCodeMeta({
         <DropdownMenu>
           <DropdownMenuTrigger
             render={<Badge variant="ghost" render={<button type="button" />} />}
-            title={worktrees.map((worktree) => worktree.name ?? worktree.id).join(", ")}
+            title={worktrees
+              .map((worktree) => worktree.name ?? worktree.id)
+              .join(", ")}
             aria-label={`${worktrees.length} worktrees`}
             onPointerDown={(event) => event.stopPropagation()}
             onKeyDown={(event) => event.stopPropagation()}
@@ -439,20 +463,47 @@ function TaskCodeMeta({
           >
             <GitBranch aria-hidden />
             {worktrees.length} worktrees
-            {worktrees.some((worktree) => worktree.dirty) ? <span role="img" aria-label="Uncommitted changes in linked worktrees" className="size-1.5 rounded-full bg-warning" /> : null}
+            {worktrees.some((worktree) => worktree.dirty) ? (
+              <span
+                role="img"
+                aria-label="Uncommitted changes in linked worktrees"
+                className="size-1.5 rounded-full bg-warning"
+              />
+            ) : null}
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-64" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+          <DropdownMenuContent
+            align="start"
+            className="w-64"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
             {worktrees.map((worktree) => (
               <DropdownMenuItem
                 key={worktree.id}
-                render={onNavigate ? <a href={worktreePath(worktree.id)} draggable={false} /> : <span />}
+                render={
+                  onNavigate ? (
+                    <a href={worktreePath(worktree.id)} draggable={false} />
+                  ) : (
+                    <span />
+                  )
+                }
                 disabled={!onNavigate}
                 className="cursor-pointer touch-ui:min-h-11"
-                onClick={(event) => followRowLink(event, worktreePath(worktree.id), onNavigate)}
+                onClick={(event) =>
+                  followRowLink(event, worktreePath(worktree.id), onNavigate)
+                }
               >
                 <GitBranch aria-hidden />
-                <span className="min-w-0 flex-1 truncate">{worktree.name ?? worktree.id}</span>
-                {worktree.dirty ? <span role="img" aria-label="Uncommitted changes" className="size-1.5 shrink-0 rounded-full bg-warning" /> : null}
+                <span className="min-w-0 flex-1 truncate">
+                  {worktree.name ?? worktree.id}
+                </span>
+                {worktree.dirty ? (
+                  <span
+                    role="img"
+                    aria-label="Uncommitted changes"
+                    className="size-1.5 shrink-0 rounded-full bg-warning"
+                  />
+                ) : null}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

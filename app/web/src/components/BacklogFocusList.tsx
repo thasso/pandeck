@@ -1,5 +1,8 @@
 import { useMemo } from "react";
-import { ListRowActions, type ListRowAction } from "./common/ListRowActions.tsx";
+import {
+  ListRowActions,
+  type ListRowAction,
+} from "./common/ListRowActions.tsx";
 import { ListRow } from "./common/ListRow.tsx";
 import {
   CalendarCheck,
@@ -237,29 +240,31 @@ function FocusRow({
   tight: boolean;
 }) {
   const suggestion = meta.suggestion;
-  const actions: ListRowAction[] = suggestion ? [
-    {
-      id: "accept",
-      label: `Confirm ${TASK_STATUS_LABEL[suggestion.to].toLowerCase()}`,
-      accessibleLabel: `Confirm "${task.title}" is ${TASK_STATUS_LABEL[suggestion.to].toLowerCase()}`,
-      icon: suggestion.to === "done" ? <Check /> : <Undo2 />,
-      onSelect: () => onAcceptSuggestion(task),
-    },
-    {
-      id: "dismiss",
-      label: task.status === "done" ? "Keep done" : "Keep open",
-      accessibleLabel: `Keep "${task.title}" ${TASK_STATUS_LABEL[task.status].toLowerCase()} and dismiss the suggestion`,
-      icon: <X />,
-      onSelect: () => onDismissSuggestion(task),
-    },
-  ] : [
-    {
-      id: "status",
-      label: `Mark ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`,
-      icon: <TaskStatusIcon status={nextStatus(task.status)} />,
-      onSelect: () => onCycle(task),
-    },
-  ];
+  const actions: ListRowAction[] = suggestion
+    ? [
+        {
+          id: "accept",
+          label: `Confirm ${TASK_STATUS_LABEL[suggestion.to].toLowerCase()}`,
+          accessibleLabel: `Confirm "${task.title}" is ${TASK_STATUS_LABEL[suggestion.to].toLowerCase()}`,
+          icon: suggestion.to === "done" ? <Check /> : <Undo2 />,
+          onSelect: () => onAcceptSuggestion(task),
+        },
+        {
+          id: "dismiss",
+          label: task.status === "done" ? "Keep done" : "Keep open",
+          accessibleLabel: `Keep "${task.title}" ${TASK_STATUS_LABEL[task.status].toLowerCase()} and dismiss the suggestion`,
+          icon: <X />,
+          onSelect: () => onDismissSuggestion(task),
+        },
+      ]
+    : [
+        {
+          id: "status",
+          label: `Mark ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`,
+          icon: <TaskStatusIcon status={nextStatus(task.status)} />,
+          onSelect: () => onCycle(task),
+        },
+      ];
 
   return (
     <li data-list-row-id={task.id}>
@@ -279,8 +284,15 @@ function FocusRow({
           ) : null
         }
         contextTrailing={<TaskIdBadge id={task.id} onNavigate={onNavigate} />}
-        identity={<TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />}
-        actions={<ListRowActions actions={actions} alwaysVisible={Boolean(suggestion)} />} 
+        identity={
+          <TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />
+        }
+        actions={
+          <ListRowActions
+            actions={actions}
+            alwaysVisible={Boolean(suggestion)}
+          />
+        }
         signals={
           <>
             <span

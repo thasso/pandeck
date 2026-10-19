@@ -1426,7 +1426,8 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     (mobileLayout
       ? !composerVisible && !commentActuation?.composerOpen
       : inspectorTabVisible) &&
-    route.name === "tasks" && Boolean(route.id);
+    route.name === "tasks" &&
+    Boolean(route.id);
   const activeTopics = useMemo(
     () =>
       topicsForSurface({
@@ -1568,17 +1569,15 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         // Browser rows keep metadata at either spacing density; pickers do not.
         sidebarTaskRowsHaveMeta: taskRowsHaveMeta("browser"),
       }),
-    [
-      sidebarPanelOpen,
-      sidebarSection,
-      route.name,
-      projectPageOpen,
-    ],
+    [sidebarPanelOpen, sidebarSection, route.name, projectPageOpen],
   );
   const worktreeHosting = useWorktreeHosting({
     worktrees: state.worktrees,
     statuses: state.worktreeStatuses,
-    active: hostingActive.hosting || routedTaskInspectorShown || sessionTreeWorktreeIds.length > 0,
+    active:
+      hostingActive.hosting ||
+      routedTaskInspectorShown ||
+      sessionTreeWorktreeIds.length > 0,
   });
 
   // The Pull Requests view's own projection, polled ONCE for the whole app: the
