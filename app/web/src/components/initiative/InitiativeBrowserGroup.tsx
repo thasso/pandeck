@@ -1,12 +1,14 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { Waypoints } from "lucide-react";
 import type { InitiativeSummary, ProjectRecord } from "@assistant/shared";
 import type { InitiativeRead } from "../../hooks/useAssistant.ts";
-import type { LoadState } from "../../lib/loadState.ts";
+import { dataOf, type LoadState } from "../../lib/loadState.ts";
+import { initiativeBrowserCounts } from "../../lib/initiativeBrowserCounts.ts";
 import type { RowDensity } from "../../lib/rowDensity.ts";
 import { ErrorNote, RefreshIndicator, Skeleton } from "../common/load.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
 import { InitiativeBrowserRow, type InitiativeBrowserWorktrees } from "./InitiativeBrowserRow.tsx";
+import type { InitiativeBrowserSessions } from "./InitiativeCoordinatorRows.tsx";
 
 const NO_PROJECTS: readonly ProjectRecord[] = [];
 
@@ -33,6 +35,7 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   density = "tight",
   onLoadDetail,
   worktrees,
+  sessions,
 }: {
   initiatives: readonly InitiativeSummary[];
   /** A snapshot answered the current subscription. */
@@ -54,13 +57,23 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   selectedProjectId?: string | null | undefined;
   density?: RowDensity;
   worktrees?: InitiativeBrowserWorktrees | undefined;
+  sessions?: InitiativeBrowserSessions | undefined;
   /** Present when this host offers inline membership browsing. */
   onLoadDetail?: (id: string, collapsed?: readonly string[]) => void;
 }) {
-  const open = initiatives.filter((initiative) => initiative.state !== "done");
-  const progressCountChars = Math.max(3, ...open.map(({ progress }) =>
-    progress.total > 0 ? `${progress.done}/${progress.total}`.length : "0 Tasks".length,
-  ));
+  const open = useMemo(() => initiatives.filter((initiative) => initiative.state !== "done"), [initiatives]);
+  const progressCountChars = useMemo(() => Math.max(9, ...open.map((initiative) => {
+    const detailState = initiativeDetails?.[initiative.id];
+    const read = detailState ? dataOf(detailState) : undefined;
+    if (read) {
+      const counts = initiativeBrowserCounts(read.item.nodes);
+      return `${counts.startable}/${counts.doing}/${counts.blocked}/${counts.done}/${counts.total}`.length;
+    }
+    // Until the graph answers, these summary facts bound each column's width;
+    // they must not be presented as a mutually exclusive partition themselves.
+    const { progress } = initiative;
+    return `${progress.startable}/${progress.doing}/${progress.blocked}/${progress.total}/${progress.total}`.length;
+  })), [open, initiativeDetails]);
   return (
     <ListGroupSection
       id="initiatives"
@@ -94,6 +107,7 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
               density={density}
               progressCountChars={progressCountChars}
               worktrees={worktrees}
+              sessions={sessions}
               onLoadDetail={onLoadDetail}
               onNavigate={onNavigate}
             />

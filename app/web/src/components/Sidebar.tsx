@@ -61,6 +61,7 @@ import type {
 } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
 import type { InitiativeBrowserWorktrees } from "./initiative/InitiativeBrowserRow.tsx";
+import type { InitiativeBrowserSessions } from "./initiative/InitiativeCoordinatorRows.tsx";
 import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 import type { LoadState } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -763,6 +764,13 @@ function SidebarImpl({
     onVisible: onVisibleInitiativeWorktrees,
   }), [worktrees, worktreesFresh, projectRowStatuses, worktreeHosting, selectedWorktreeId, onOpenWorktree, onVisibleInitiativeWorktrees]);
 
+  const initiativeSessions = useMemo<InitiativeBrowserSessions>(() => ({
+    items: sessions,
+    runs: workflowRuns,
+    cards: workflowCards,
+    selectedId: currentId ?? null,
+  }), [sessions, workflowRuns, workflowCards, currentId]);
+
   // While the Projects or Worktrees browser is visible, subscribe to every
   // listed worktree so dirty-file indicators stay current instead of only
   // updating for the currently open worktree detail page. The Sessions inbox
@@ -945,6 +953,7 @@ function SidebarImpl({
               onNavigate={onNavigate}
               initiativeDetails={initiativeDetails}
               worktrees={initiativeWorktrees}
+              sessions={initiativeSessions}
               projects={projects}
               selectedProjectId={selectedProjectId}
               density={browserRowDensity(mobile)}

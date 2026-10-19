@@ -196,12 +196,27 @@ the tool descriptions, never in a harness-specific prompt layer.
 
 The Initiatives group above Projects uses compact browser rows rather than the
 urgency-oriented Attention card. An Initiative shows its title, Task progress,
-and a Contents disclosure; Paused and blocked badges occupy an optional first
-line. The heading opens its detail, while Contents expands inline, with state
+and a Contents disclosure; Paused occupies an optional first line. Initiative
+and Project counters show ready/in-progress/blocked/done/total
+with mild colours, shared reserved space and aligned progress bars. In progress
+is blue, nonzero blocked is yellow, and done is green. These are state counts,
+not warning badges; meanings are supplied in the tooltip and accessible name.
+Every member belongs to exactly one bucket: completed or archived first, then
+blocked, then unblocked doing, then ready todo. Done includes every archived
+Task, regardless of stored status; counters and bars treat shelved work as out
+of the user's way without changing Task status. The first four counters sum to
+total. This browser partition is distinct from the summary DTO's overlapping
+doing/blocked facts.
+The heading opens its detail, while Contents expands inline, with state
 remembered per Initiative for the tab.
 
-The first expansion level reads the existing keyed membership graph on demand
-and groups member Tasks by Project. It does not infer membership from names or
+A visible Initiative header reuses the existing keyed membership graph read to
+derive an exact partition; the summary alone cannot separate doing/blocked
+overlap or include all archived Tasks in browser completion. Before that read answers, the bar retains
+known done/total and the split uses shared loading chrome, never guessed zeros.
+Small derived counts survive graph-LRU eviction without retaining the graph or
+re-fetching an idle eviction repeatedly. Errors expose a retry even when
+Contents is closed. The first expansion level groups member Tasks by Project. It does not infer membership from names or
 from the summary's bounded active-session ids. Project counts and progress are
 scoped to member Tasks, archived members included. A missing registry record
 keeps its Project id visible; Tasks with no Project appear in a No Project row.
@@ -211,8 +226,28 @@ Contents disclosure, remembered within its Initiative, for non-removed Worktrees
 whose explicit `in_worktree` Task links intersect that Project's member Tasks.
 A Project without a matching Worktree stays visible. Shared Worktree rows retain
 PR/Integrated badges and Git metadata; only the expanded rows hold live status
-watches. Opening a Worktree navigates normally. Session rows and coordinator/Task
-context are left for the next interactive iteration.
+watches. Opening a Worktree navigates normally. Worktree session rows are left
+for the next interactive iteration.
+
+A remembered Known coordinators fold precedes the Projects. It reuses shared
+session identity and age without Archive or Settle. Candidates come only from
+the bounded Task-start session ids, scoped Worktrees' server-projected creator,
+holder and full ancestry ids, and explicit coordinator roles of member-Task
+Workflow Runs. Only complete loaded spawn chains can identify a root: a missing
+parent or a cycle never promotes the last visible peer. Positive roots are
+deduplicated; missing session details or clipped summary membership are stated
+as incomplete, not as absence of a coordinator. The fold does not fetch the
+whole archived-session collection. These are recorded coordinating relationships,
+not an explicit Initiative owner; takeover does not erase provenance or change
+the shared current-ownership presentation.
+
+Inside a Worktree, Task context includes only linked member Tasks whose status
+is doing and which are not archived. One Task is a canonical link in the row's
+metadata. Several expand through an In progress Tasks disclosure into shared
+Tree rows, with canonical links and muted blocked glyphs where the graph says
+so, never warning chips.
+This is optional context, not a mandatory Task level above sessions. Task doing
+is distinct from a session currently running a turn.
 
 ## The Initiative page
 

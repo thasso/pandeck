@@ -246,9 +246,14 @@ and no view of an Initiative inside a Project page.
 
 `InitiativeBrowserRow` is the quieter, structure-oriented counterpart to its
 Attention card: title and compact Task progress, then a leading Contents
-control, with Paused/blocked badges in an optional context line. Contents
-remembers its expansion per Initiative and lazily reuses the keyed membership
-read. Its first level lists only Projects of member Tasks, with progress scoped
+control, with a Paused badge in an optional context line. Initiative and Project
+progress share quiet ready/in-progress/blocked/done/total counters with aligned
+bars. Done includes completed and archived Tasks for display, without changing
+stored Task status. In progress is blue; blocked is mild yellow state
+rather than warning chrome. Buckets are disjoint and sum to total, with meanings
+in the tooltip and accessible name. Visible headers reuse the keyed membership
+read for the exact split, retaining only derived counts across graph-cache
+eviction. Contents remembers its expansion per Initiative. Its first level lists only Projects of member Tasks, with progress scoped
 to those Tasks, not the Project as a whole. Unassigned members have a No Project
 row, and unresolved registry ids remain visible. These rows navigate to their
 Projects. Their own Contents disclosure remembers a separate per-Initiative
@@ -256,8 +261,13 @@ Project expansion and shows only non-removed Worktrees explicitly linked to
 those member Tasks, never all Worktrees in the Project. This layer reuses
 `WorktreeList`/`WorktreeRow`, with their PR/Integrated badges, Git signals and
 route highlight, but no creation actions. Only visible Worktrees join the
-browser's shared status-watch demand. Session expansion is a subsequent UI
-iteration.
+browser's shared status-watch demand. A remembered Known coordinators fold
+precedes Projects, using recorded spawn/Workflow relationships and the server's
+Worktree ancestry projection; only verified roots appear, with missing session
+details stated rather than guessed. In-progress member Tasks appear within
+Worktrees, one as an inline link or several behind a disclosure. This context
+is not a required Task tier above sessions. Worktree session expansion is a
+subsequent UI iteration.
 
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached

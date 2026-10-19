@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useMemo } from "react";
-import { Ban, ChevronRight, CirclePause, FolderKanban, Waypoints } from "lucide-react";
-import type { InitiativeSummary, ProjectRecord, WorktreeGitStatus, WorktreeRecord } from "@assistant/shared";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { ChevronRight, CirclePause, FolderKanban, Waypoints } from "lucide-react";
+import type { InitiativeGraphNode, InitiativeSummary, ProjectRecord, WorktreeGitStatus, WorktreeRecord } from "@assistant/shared";
 import type { WorktreeHostingMap } from "../../lib/worktreeHosting.ts";
 import { compareWorktrees, WorktreeList } from "../worktreeRowParts.tsx";
 
@@ -8,13 +8,15 @@ import type { InitiativeRead } from "../../hooks/useAssistant.ts";
 import { decodeBoolean, useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
 import { dataOf, errorOf, type LoadState } from "../../lib/loadState.ts";
 import { projectColor } from "../../lib/projectDisplay.ts";
+import { initiativeBrowserCounts, type InitiativeBrowserCounts } from "../../lib/initiativeBrowserCounts.ts";
 import type { RowDensity } from "../../lib/rowDensity.ts";
 import { followRowLink } from "../../lib/rowLink.ts";
 import { initiativePath, projectPath } from "../../hooks/useSessionRouting.ts";
 import { ListRow } from "../common/ListRow.tsx";
 import { EmptyBox, ErrorNote, RefreshIndicator, Skeleton } from "../common/load.tsx";
 import { Badge } from "../ui/badge.tsx";
-import { Progress } from "../ui/progress.tsx";
+import { InitiativeBrowserProgress } from "./InitiativeBrowserProgress.tsx";
+import { InitiativeCoordinatorRows, type InitiativeBrowserSessions } from "./InitiativeCoordinatorRows.tsx";
 
 export interface InitiativeBrowserWorktrees {
   items: readonly WorktreeRecord[] | null;
@@ -35,6 +37,7 @@ interface Props {
   density: RowDensity;
   progressCountChars: number;
   worktrees: InitiativeBrowserWorktrees | undefined;
+  sessions: InitiativeBrowserSessions | undefined;
   onLoadDetail: ((id: string, collapsed?: readonly string[]) => void) | undefined;
   onNavigate: (path: string) => void;
 }
@@ -56,6 +59,7 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
   density,
   progressCountChars,
   worktrees,
+  sessions,
   onLoadDetail,
   onNavigate,
 }: Props) {
@@ -74,8 +78,13 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
   const error = detailState ? errorOf(detailState) : undefined;
   const status = detailState?.status ?? "idle";
   const href = initiativePath(initiative.id);
-  const { progress } = initiative;
-  const showContext = initiative.state === "paused" || progress.blocked > 0;
+  const counts = useMemo(() => read ? initiativeBrowserCounts(read.item.nodes) : undefined, [read]);
+  // Retain only the small derived counters when the shared graph LRU evicts
+  // this read. Never copy the graph or re-fetch an idle eviction in a loop.
+  const heldCounts = useRef<InitiativeBrowserCounts | undefined>(undefined);
+  const requestedSummary = useRef<InitiativeSummary | undefined>(undefined);
+  if (counts) heldCounts.current = counts;
+  const browserCounts = counts ?? heldCounts.current;
 
   const load = useCallback(() => {
     // Preserve a map page's layout choice when reusing its keyed graph read.
@@ -83,36 +92,51 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
   }, [initiative.id, onLoadDetail, read?.requestedCollapsed]);
 
   useEffect(() => {
-    if (!expanded) return;
-    // The selected Initiative's page owns refreshes of its map read. Other
-    // open browsers re-read stale graphs; the action deduplicates in-flight reads.
-    if (status === "idle" || (!selected && (status === "loading" || status === "refreshing")))
+    if (!onLoadDetail) return;
+    // The header now needs the member graph to partition doing/blocked and
+    // archived Tasks exactly. Read once per summary even before expansion.
+    if (!expanded && status === "idle" && heldCounts.current && requestedSummary.current === initiative) return;
+    // The selected map page still owns refreshes of its layout choice.
+    if (status === "idle" || (!selected && (status === "loading" || status === "refreshing"))) {
+      requestedSummary.current = initiative;
       load();
-  }, [expanded, selected, status, detailState, load]);
+    }
+  }, [expanded, selected, status, detailState, load, initiative, onLoadDetail]);
 
   const groups = useMemo(() => {
     if (!read) return [];
-    const byProject = new Map<string | undefined, { total: number; done: number; taskIds: Set<string> }>();
+    const byProject = new Map<string | undefined, { members: InitiativeGraphNode[]; taskIds: Set<string> }>();
     for (const node of read.item.nodes) {
-      const group = byProject.get(node.projectId) ?? { total: 0, done: 0, taskIds: new Set<string>() };
-      group.total += 1;
-      if (node.status === "done") group.done += 1;
+      const group = byProject.get(node.projectId) ?? { members: [], taskIds: new Set<string>() };
+      group.members.push(node);
       group.taskIds.add(node.id);
       byProject.set(node.projectId, group);
     }
     const registry = new Map(projects.map((project, index) => [project.id, { project, index }]));
-    return Array.from(byProject, ([id, counts]) => ({
+    return Array.from(byProject, ([id, group]) => ({
       id,
-      ...counts,
+      ...initiativeBrowserCounts(group.members),
       project: id ? registry.get(id)?.project : undefined,
       order: id ? (registry.get(id)?.index ?? projects.length) : projects.length + 1,
       worktrees: (worktrees?.items ?? []).filter((worktree) =>
         worktree.projectId === id && worktree.status !== "removed" &&
-        worktree.taskIds.some((taskId) => counts.taskIds.has(taskId)),
+        worktree.taskIds.some((taskId) => group.taskIds.has(taskId)),
       ).sort(compareWorktrees),
     })).sort((a, b) => a.order - b.order || (a.id ?? "").localeCompare(b.id ?? ""));
   }, [read, projects, worktrees?.items]);
   const projectCount = groups.filter((group) => group.id !== undefined).length;
+  const scopedWorktrees = useMemo(() => groups.flatMap((group) => group.worktrees), [groups]);
+  const inProgressByWorktree = useMemo(() => {
+    const tasks = new Map((read?.item.nodes ?? [])
+      .filter((node) => node.status === "doing" && !node.archived)
+      .map((node) => [node.id, node]));
+    return new Map((worktrees?.items ?? []).map((worktree) => [worktree.id,
+      worktree.taskIds.flatMap((id) => {
+        const task = tasks.get(id);
+        return task ? [task] : [];
+      }),
+    ] as const));
+  }, [read, worktrees?.items]);
   const visibleWorktreeIds = useMemo(() => expanded ? groups
     .filter((group) => expandedProjects.includes(group.id ? `project:${group.id}` : "unassigned"))
     .flatMap((group) => group.worktrees.map((worktree) => worktree.id)).sort() : [],
@@ -132,15 +156,8 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
         active={selected}
         data-list-row-id={`initiative:${initiative.id}`}
         onOpen={() => onNavigate(href)}
-        context={showContext ? (
-          <>
-            {initiative.state === "paused" ? (
-              <Badge variant="secondary"><CirclePause aria-hidden />Paused</Badge>
-            ) : null}
-            {progress.blocked > 0 ? (
-              <Badge variant="warning"><Ban aria-hidden />{progress.blocked} blocked</Badge>
-            ) : null}
-          </>
+        context={initiative.state === "paused" ? (
+          <Badge variant="secondary"><CirclePause aria-hidden />Paused</Badge>
         ) : undefined}
         identity={
           <>
@@ -153,22 +170,7 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
             >
               {initiative.title}
             </a>
-            <span
-              className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums text-muted-foreground"
-              title={`${progress.done} of ${progress.total} Tasks done`}
-            >
-              {progress.total > 0 ? (
-                <Progress
-                  value={(progress.done / progress.total) * 100}
-                  className={`w-10 ${progress.done === progress.total ? "[&_[data-slot=progress-indicator]]:bg-success" : ""}`}
-                  aria-hidden
-                />
-              ) : null}
-              <span className="shrink-0 whitespace-nowrap text-right" style={{ width: `${progressCountChars}ch` }}>
-                {progress.total > 0 ? `${progress.done}/${progress.total}` : "0 Tasks"}
-                {progress.total > 0 ? <span className="sr-only"> Tasks done</span> : null}
-              </span>
-            </span>
+            <InitiativeBrowserProgress progress={initiative.progress} counts={browserCounts} countChars={progressCountChars} label={initiative.title} loading={Boolean(onLoadDetail) && !error && status !== "ready"} />
           </>
         }
         signals={onLoadDetail ? (
@@ -191,13 +193,13 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
               Contents
             </Badge>
             {read && (expanded || status !== "refreshing") ? <span>{projectCount} Project{projectCount === 1 ? "" : "s"}</span> : null}
-            {expanded && status === "refreshing" ? <RefreshIndicator label="Refreshing Initiative contents" /> : null}
+            {status === "refreshing" || (status === "loading" && heldCounts.current) ? <RefreshIndicator label="Refreshing Initiative counts and contents" /> : null}
           </>
         ) : undefined}
       />
+      {error ? <ErrorNote className="mx-2 my-1" message={error} onRetry={load} /> : null}
       {expanded ? (
         <div id={`initiative-browser-contents:${initiative.id}`}>
-          {error ? <ErrorNote className="mx-2 my-1" message={error} onRetry={load} /> : null}
           {read === undefined && !error ? (
             <div role="status" aria-label="Loading Initiative Projects" className="flex flex-col gap-2 px-5 py-2">
               <Skeleton className="h-7 w-4/5" />
@@ -209,6 +211,8 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
           ) : read && groups.length === 0 ? (
             <div className="mx-2 my-1"><EmptyBox>No member Tasks yet.</EmptyBox></div>
           ) : read ? (
+            <>
+            {sessions ? <InitiativeCoordinatorRows initiative={initiative} members={read.item.nodes} worktrees={scopedWorktrees} sessions={sessions} density={density} onNavigate={onNavigate} /> : null}
             <ul>
               {groups.map((group) => {
                 const project = group.project;
@@ -237,17 +241,7 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
                             ) : title}
                             {project ? <span className="ml-1.5 text-xs font-normal text-muted-foreground">{project.key}</span> : null}
                           </span>
-                          <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums text-muted-foreground" title={`${group.done} of ${group.total} Initiative Tasks done in ${title}`}>
-                            <Progress
-                              value={(group.done / group.total) * 100}
-                              className={`w-10 ${group.done === group.total ? "[&_[data-slot=progress-indicator]]:bg-success" : ""}`}
-                              aria-hidden
-                            />
-                            <span className="shrink-0 whitespace-nowrap text-right" style={{ width: `${progressCountChars}ch` }}>
-                              {group.done}/{group.total}
-                              <span className="sr-only"> Initiative Tasks done</span>
-                            </span>
-                          </span>
+                          <InitiativeBrowserProgress progress={group} counts={group} countChars={progressCountChars} label={`${title} Initiative Tasks`} />
                         </>
                       }
                       signals={worktrees ? (
@@ -286,7 +280,7 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
                             <Skeleton className="h-8 w-3/5" />
                           </div>
                         ) : group.worktrees.length > 0 ? (
-                          <WorktreeList worktrees={group.worktrees} statuses={worktrees.statuses} hosting={worktrees.hosting} selectedWorktreeId={worktrees.selectedId} onOpen={worktrees.onOpen} />
+                          <WorktreeList worktrees={group.worktrees} statuses={worktrees.statuses} hosting={worktrees.hosting} selectedWorktreeId={worktrees.selectedId} onOpen={worktrees.onOpen} density={density} tasksByWorktree={inProgressByWorktree} onNavigate={onNavigate} />
                         ) : worktrees.fresh ? (
                           <div className="mx-2 my-1"><EmptyBox>No linked Worktrees for these member Tasks.</EmptyBox></div>
                         ) : null}
@@ -296,6 +290,7 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
                 );
               })}
             </ul>
+            </>
           ) : null}
         </div>
       ) : null}

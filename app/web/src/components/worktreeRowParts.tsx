@@ -4,10 +4,11 @@
  * relation surfaces also share line deltas, the Integrated badge, linked-session
  * paging and expansion memory. The hosts still own their density and hierarchy.
  */
-import { memo, useEffect, useMemo, useState } from "react";
-import { ChevronRight, GitBranch, House, MessageSquarePlus } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { Ban, ChevronRight, GitBranch, House, MessageSquarePlus } from "lucide-react";
 import type {
   SessionPullRequestSummary,
+  TaskBackRef,
   WorktreeGitStatus,
   WorktreeHostingStatusResponse,
   WorktreeRecord,
@@ -20,7 +21,10 @@ import { Badge } from "./ui/badge.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
 import { ListRowActions } from "./common/ListRowActions.tsx";
 import type { RowDensity } from "../lib/rowDensity.ts";
-import { Tree } from "./common/Tree.tsx";
+import { Tree, type TreeNode } from "./common/Tree.tsx";
+import { taskPath } from "../hooks/useSessionRouting.ts";
+import { TaskStatusIcon } from "./TaskStatusIcon.tsx";
+import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { IntegratedBadge } from "./IntegratedBadge.tsx";
 import { persistentStore } from "../lib/persistentStore.ts";
@@ -51,6 +55,10 @@ function WorktreeRowSummary({
   expanded = false,
   onToggleSessions,
   onStartSession,
+  tasks,
+  tasksExpanded = false,
+  onToggleTasks,
+  onNavigate,
 }: WorktreeRowProps) {
   const branch = status?.branch ?? worktree.branch;
   const axes = worktreeAxes(worktree, status, now);
@@ -120,6 +128,26 @@ function WorktreeRowSummary({
           </span>
         </>
       }
+      details={tasks?.length === 1 ? (
+        <WorktreeTaskLink task={tasks[0]!} onNavigate={onNavigate} />
+      ) : tasks && tasks.length > 1 && onToggleTasks ? (
+        <Badge
+          variant="ghost"
+          render={<button type="button" />}
+          aria-expanded={tasksExpanded}
+          aria-label={`${tasksExpanded ? "Hide" : "Show"} ${tasks.length} in-progress Tasks in ${branch}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleTasks(worktree.id);
+          }}
+          className="h-auto cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+        >
+          <ChevronRight size={12} className={tasksExpanded ? "rotate-90" : ""} aria-hidden />
+          In progress <span>{tasks.length} Tasks</span>
+        </Badge>
+      ) : undefined}
       signals={
         <>
           {sessionCount > 0 && onToggleSessions ? (
@@ -354,6 +382,28 @@ export function persistExpandedWorktreeIds(ids: Set<string>) {
   }
 }
 
+type WorktreeContextTask = TaskBackRef & { blocked?: boolean };
+
+function WorktreeTaskLink({ task, onNavigate }: {
+  task: WorktreeContextTask;
+  onNavigate: ((path: string) => void) | undefined;
+}) {
+  const href = taskPath(task.id);
+  return (
+    <a
+      href={href}
+      className="flex min-w-0 flex-1 items-center gap-1.5 hover:underline"
+      title={`In progress: Task-${task.id} ${task.title}${task.blocked ? " · Blocked" : ""}`}
+      onClick={(event) => followRowLink(event, href, onNavigate)}
+    >
+      <span className="shrink-0" aria-label="In progress" role="img"><TaskStatusIcon status={task.status} size={12} /></span>
+      <TaskIdBadge id={task.id} />
+      <span className="min-w-0 flex-1 truncate">{task.title}</span>
+      {task.blocked ? <Ban size={12} role="img" aria-label="Blocked" className="shrink-0 text-muted-foreground" /> : null}
+    </a>
+  );
+}
+
 interface WorktreeRowProps {
   worktree: WorktreeRecord;
   status?: WorktreeGitStatus | undefined;
@@ -365,6 +415,11 @@ interface WorktreeRowProps {
   expanded?: boolean;
   onToggleSessions?: (id: string) => void;
   onStartSession?: ((id: string) => void) | undefined;
+  /** In-progress, unarchived Tasks, scoped by the host. */
+  tasks?: readonly WorktreeContextTask[] | undefined;
+  tasksExpanded?: boolean;
+  onToggleTasks?: ((id: string) => void) | undefined;
+  onNavigate?: ((path: string) => void) | undefined;
 }
 
 function WorktreeRowImpl(props: WorktreeRowProps) {
@@ -402,13 +457,21 @@ export const WorktreeRow = memo(
     previous.expanded === next.expanded &&
     previous.onToggleSessions === next.onToggleSessions &&
     previous.onStartSession === next.onStartSession &&
+    previous.tasks === next.tasks &&
+    previous.tasksExpanded === next.tasksExpanded &&
+    previous.onToggleTasks === next.onToggleTasks &&
+    previous.onNavigate === next.onNavigate &&
     worktreeAxes(previous.worktree, previous.status, previous.now).stale ===
       worktreeAxes(next.worktree, next.status, next.now).stale,
 );
 
+type WorktreeListNode =
+  | { kind: "worktree"; worktree: WorktreeRecord }
+  | { kind: "task"; task: WorktreeContextTask };
+
 /**
  * @component WorktreeList
- * @purpose A flat list of worktrees on the same `Tree` and with the same
+ * @purpose A list of worktrees on the same `Tree` and with the same
  *   `WorktreeRow` as the sidebar's Projects browser — compact, flush, in its
  *   order — wherever worktrees are listed outside it (the Project page, the
  *   inspectors), so they are one component, not several that look alike.
@@ -421,23 +484,41 @@ export function WorktreeList({
   selectedWorktreeId,
   onOpen,
   onStartSession,
+  density = "tight",
+  tasksByWorktree,
+  onNavigate,
 }: {
   worktrees: WorktreeRecord[];
   statuses: Record<string, WorktreeGitStatus>;
   hosting?: WorktreeHostingMap | undefined;
   selectedWorktreeId?: string | null | undefined;
+  density?: RowDensity;
+  tasksByWorktree?: ReadonlyMap<string, readonly WorktreeContextTask[]> | undefined;
+  onNavigate?: ((path: string) => void) | undefined;
   onOpen?: ((id: string) => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
 }) {
   // One coarse wall clock serves every row; `WorktreeRow`'s memo folds it down
   // to the rendered stale/fresh bit, so minute ticks do not redraw siblings.
   const now = useCoarseNow(60_000);
-  const items = useMemo(
-    () =>
-      [...worktrees]
-        .sort(compareWorktrees)
-        .map((worktree) => ({ id: worktree.id, data: worktree })),
-    [worktrees],
+  const [expandedTaskIds, setExpandedTaskIds] = useState<string[]>([]);
+  // Id-addressed so unchanged WorktreeRow memos survive another row's toggle.
+  const onToggleTasks = useCallback((id: string) => {
+    setExpandedTaskIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
+  }, []);
+  const items = useMemo<TreeNode<WorktreeListNode>[]>(
+    () => [...worktrees].sort(compareWorktrees).map((worktree) => {
+      const tasks = tasksByWorktree?.get(worktree.id);
+      return {
+        id: worktree.id,
+        data: { kind: "worktree" as const, worktree },
+        children: tasks && tasks.length > 1 ? tasks.map((task) => ({
+          id: `task:${worktree.id}:${task.id}`,
+          data: { kind: "task" as const, task },
+        })) : [],
+      };
+    }),
+    [worktrees, tasksByWorktree],
   );
   return (
     <Tree
@@ -448,20 +529,33 @@ export function WorktreeList({
       flush
       showGuides={false}
       aria-label="Worktrees"
+      indentWidth={12}
+      expandedIds={expandedTaskIds}
+      onExpandedChange={setExpandedTaskIds}
       // The last row drops its hairline: the action row under the list draws
       // the one that closes it.
       className="[&>li:last-child_.border-b]:border-b-0"
       selectedIds={selectedWorktreeId ? [selectedWorktreeId] : NO_SELECTION}
       onSelectionChange={(ids) => {
-        if (ids.length === 1) onOpen?.(ids[0]!);
+        if (ids.length !== 1) return;
+        const taskNode = items.flatMap((node) => node.children ?? []).find((node) => node.id === ids[0]);
+        if (taskNode?.data.kind === "task") onNavigate?.(taskPath(taskNode.data.task.id));
+        else onOpen?.(ids[0]!);
       }}
-      renderNode={(node) => (
+      renderNode={(node, state) => node.data.kind === "task" ? (
+        <ListRowContent density={density} identity={<WorktreeTaskLink task={node.data.task} onNavigate={onNavigate} />} />
+      ) : (
         <WorktreeRow
-          worktree={node.data}
+          worktree={node.data.worktree}
           status={statuses[node.id]}
           hosting={hosting?.[node.id]}
           now={now}
           selected={node.id === selectedWorktreeId}
+          density={density}
+          tasks={tasksByWorktree?.get(node.id)}
+          tasksExpanded={state.expanded}
+          onToggleTasks={onToggleTasks}
+          onNavigate={onNavigate}
           onStartSession={onStartSession}
         />
       )}

@@ -11,6 +11,7 @@ export function ListExpansionRow({
   count,
   expanded,
   density,
+  tabbable = false,
   onToggle,
   onFocusSibling,
   children,
@@ -21,6 +22,8 @@ export function ListExpansionRow({
   count?: number;
   expanded: boolean;
   density: RowDensity;
+  /** For hosts without roving keyboard focus. */
+  tabbable?: boolean;
   onToggle: () => void;
   onFocusSibling?: ((delta: 1 | -1) => void) | undefined;
   children?: ReactNode;
@@ -33,7 +36,7 @@ export function ListExpansionRow({
         render={<button type="button" />}
         data-session-row
         data-list-row-id={rowId}
-        tabIndex={-1}
+        tabIndex={tabbable ? 0 : -1}
         ariaLabel={accessibleLabel}
         aria-expanded={expanded}
         onOpen={onToggle}

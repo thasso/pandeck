@@ -240,9 +240,20 @@ session-row and card memo keys so takeover updates every list immediately.
   containment, not merely because the PR is merged. Missing status shows no
   integration claim.
 - **Initiative browser items:** `InitiativeBrowserRow` uses title plus compact
-  Task progress and a Contents disclosure, with an optional Paused/blocked badge
+  Task progress and a Contents disclosure, with an optional Paused badge
   line. It has no action column. Contents lazily reads membership and lists
-  member Projects with Initiative-scoped progress bars and counts. Nonempty
+  member Projects with Initiative-scoped progress bars and quiet
+  ready/in-progress/blocked/done/total counters from
+  `InitiativeBrowserProgress`. `lib/initiativeBrowserCounts.ts` partitions the
+  member graph exactly once per Task: completed or archived, blocked, unblocked
+  doing, then ready. Done includes all archived Tasks in both the counters and
+  progress bars, without changing stored status. The first four sum to total.
+  In progress is blue;
+  nonzero blocked is mild yellow, not a warning badge. Counter meanings are
+  in the tooltip and accessible name. Visible headers read membership for this
+  split; tiny derived counts survive shared graph-cache eviction without a
+  re-fetch loop. Pending splits use shared loading chrome rather than invented
+  counts. Nonempty
   bars turn success-green when all their Tasks are done, without changing the
   Initiative's explicit state. Initiative and Project progress counts share a
   reserved column sized to the widest Initiative count, keeping bars aligned.
@@ -251,8 +262,12 @@ session-row and card memo keys so takeover updates every list immediately.
   explicit member-Task links and excluding removed Worktrees, with no creation
   action. The host unions its visible rows with the ordinary Project tree's
   status-watch demand. Initiative and Project expansions are remembered
-  separately per Initiative. First reads, refreshing data, failures and empty
-  membership use shared load chrome.
+  separately per Initiative. A remembered Known coordinators fold precedes
+  Projects, reusing `SessionRowContent`; missing ancestry/details remain
+  informational, never guessed roots or false empty claims. Worktrees accept
+  member-scoped in-progress Task context: one canonical link inline, several
+  behind a disclosure, with blocked state independent of doing. First reads,
+  refreshing data, failures and empty membership use shared load chrome.
 - **Initiative Attention items:** Progress and age in context, state/title in
   identity, and session disclosure, readiness, blockers and next milestone in
   signals. Only unacknowledged paused/done outcomes offer Settle.
@@ -264,7 +279,12 @@ session-row and card memo keys so takeover updates every list immediately.
   together on the left. Omit that line when neither exists. Branch identity sits
   above the final signal line, which starts with a Sessions disclosure when
   linked sessions exist, followed by git metadata. The session-start action
-  spans every available line with `actionSpan="all"`. There is no separate
+  spans every available line with `actionSpan="all"`. Optional host-scoped Task
+  context occupies details: a single Task link or an In progress Tasks
+  disclosure. Blocked Tasks use a muted glyph, not a warning chip.
+  `WorktreeList` renders the latter's children in its shared Tree;
+  it does not introduce Tasks as parents of sessions. Task arrays, expansion
+  state and stable id-addressed callbacks participate in the row memo. There is no separate
   worktree-chevron gutter or extra tree padding. Local branch containment uses
   a yellow Integrated badge with a merge icon, distinct from the PR's state;
   it does not claim that the checkout is clean or safe to delete. Worktree PR
