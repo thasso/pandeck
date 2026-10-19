@@ -165,14 +165,14 @@ export function ListRowContent({
   return (
     <div
       data-list-row-lines={lines}
-      className={`grid min-w-0 flex-1 content-center gap-x-1.5 gap-y-0.5 px-2 ${actions ? "grid-cols-[minmax(0,1fr)_auto]" : "grid-cols-[minmax(0,1fr)]"} ${
+      className={`grid min-w-0 flex-1 content-center gap-x-1.5 gap-y-0 px-2 ${actions ? "grid-cols-[minmax(0,1fr)_auto]" : "grid-cols-[minmax(0,1fr)]"} ${
         lines === 1
           ? density === "comfortable"
             ? "min-h-11 py-0"
             : "min-h-7 py-0.5"
           : density === "comfortable"
-            ? "py-2.5"
-            : "pt-1.5 pb-2.5"
+            ? "py-1"
+            : "py-0.5"
       }`}
     >
       {hasContext ? (

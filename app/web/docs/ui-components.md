@@ -154,8 +154,9 @@ retain their own square size. Accessible names and tooltips identify the icons. 
 `touch-ui:` sizing follows either mobile layout or coarse input, independent of
 a forced Desktop choice.
 
-The row owns padding, typography, line spacing, selection, hover, focus and
-Enter/Space/arrow-key behavior. Its host supplies `density`, object data,
+Multi-line rows use compact outer vertical padding and no vertical grid gap;
+text and action touch-target sizes stay unchanged. The row owns padding,
+typography, line spacing, selection, hover, focus and Enter/Space/arrow-key behavior. Its host supplies `density`, object data,
 accessible names, domain shortcuts, and actions. Simple navigation renders a
 real button. Rows containing other controls use the default focusable container
 so buttons are never nested. Task rows use `interaction="content"`: the frame is
