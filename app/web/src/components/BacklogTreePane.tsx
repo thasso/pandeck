@@ -693,8 +693,8 @@ function BacklogRowContent({
           }}
           className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
         >
-          Sub-tasks <span>{node.children?.length}</span>
           <ChevronRight size={12} className={state.expanded ? "rotate-90" : ""} aria-hidden />
+          Sub-tasks <span>{node.children?.length}</span>
         </Badge>
       ) : undefined}
     />

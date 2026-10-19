@@ -589,9 +589,11 @@ its own shows their count, and any peer running background jobs shows how many.
 The button states what the click will do, and closing it returns to the
 cluster's single row. Listed that way, folded peers are ordinary rows of the
 browser: focusable, swipeable, and openable. When the coordinator's tree also
-holds settled peers, the open fold ends in a "Show N settled" row that puts them
-back in the tree where they were spawned, after their live siblings; they stay
-on the Settled shelf (listed here under a prefixed row id, so the two rows never
+holds settled peers, the open fold ends in a compact `ListGroupSection` named
+"Settled", with its count and leading chevron. Expanding it reveals only settled
+peers beneath that header, leaving the live peer rows unchanged. Peer and Task
+sub-task disclosures also put their chevrons before their labels. Settled peers
+stay on the Settled shelf (listed here under a prefixed row id, so the two rows never
 share one), offer no Settle, and count for nothing on the card. No other settled
 session listed in the tree offers a Settle either — a bridge kept by live work
 below it, a settled peer running again, or a settled role of a Workflow Run: it

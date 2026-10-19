@@ -642,9 +642,12 @@ export function SessionInbox({
       if (item.kind === "run") return item.roles;
       const cluster = item.card.cluster;
       if (!cluster) return [];
-      return settledHistory.includes(item.card.session.id)
-        ? cluster.childrenWithSettled
-        : cluster.children;
+      if (!settledHistory.includes(item.card.session.id)) return cluster.children;
+      const liveIds = new Set(cluster.children.map((child) => child.session.id));
+      return [
+        ...cluster.children,
+        ...cluster.childrenWithSettled.filter((child) => !liveIds.has(child.session.id)),
+      ];
     },
     [expandedClusters, settledHistory],
   );
@@ -1090,6 +1093,10 @@ export function SessionInbox({
     const card = item.card;
     const id = card.session.id;
     const rows = childRows(item);
+    const liveIds = new Set(card.cluster?.children.map((child) => child.session.id));
+    const settledRows = card.cluster?.childrenWithSettled.filter(
+      (child) => !liveIds.has(child.session.id),
+    ) ?? [];
     return (
       <ExitStage leaving={settling.includes(id)}>
         {/* The separator wraps the card AND its disclosed peers. It stays
@@ -1141,32 +1148,26 @@ export function SessionInbox({
             />
           </SwipeRow>
           {renderChildRows(
-            rows,
+            rows.filter((child) => liveIds.has(child.session.id)),
             "coordinated",
-            card.cluster && settledHistory.includes(id)
-              ? new Set(card.cluster.children.map((c) => c.session.id))
-              : undefined,
+            undefined,
             dragging,
           )}
-          {/* The fold's history, on request: the peers already settled,
-                  put back in the tree where they were spawned. Offered only
-                  while the fold is open and has any. */}
-          {expandedClusters.has(id) && (card.cluster?.settledCount ?? 0) > 0 ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-expanded={settledHistory.includes(id)}
-              onClick={() => toggleSettledHistory(id)}
-              className="w-full justify-start rounded-none bg-clip-border"
+          {expandedClusters.has(id) && settledRows.length > 0 ? (
+            <ListGroupSection
+              id={`session-peers-settled-${id}`}
+              title="Settled"
+              count={settledRows.length}
+              icon={<Check size={12} aria-hidden />}
+              compact
+              sticky={false}
+              open={settledHistory.includes(id)}
+              onOpenChange={(open) => {
+                if (open !== settledHistory.includes(id)) toggleSettledHistory(id);
+              }}
             >
-              <ChevronRight
-                data-icon="inline-start"
-                className={`transition-transform ${settledHistory.includes(id) ? "rotate-90" : ""}`}
-              />
-              {settledHistory.includes(id)
-                ? "Hide settled"
-                : `Show ${card.cluster?.settledCount} settled`}
-            </Button>
+              {renderChildRows(settledRows, "coordinated", liveIds, dragging)}
+            </ListGroupSection>
           ) : null}
         </div>
       </ExitStage>

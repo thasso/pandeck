@@ -2,10 +2,10 @@
 
 # Web components
 
-- Rows use `common/ListRow`/`common/ListRowActions`; trees use `common/Tree`.
-  Task views share `TaskListRowContent`; only actions/hierarchy vary. Attention
-  rows offer only Settle. Interactive content uses `interaction="content"`.
-  Features own content, not geometry.
+- `common/ListRow`/`common/ListRowActions` own flat-row geometry; trees use
+  `common/Tree`. Task views share `TaskListRowContent`; only actions/hierarchy
+  vary. Attention offers only Settle. Disclosures lead with chevrons. Interactive
+  content uses `interaction="content"`.
 
 - Markdown: `[x](target)` is a link, `![x](target)` a chrome-free lazy embed,
   and tool output the ONLY card. `[![x](y)](z)` keeps the authored link z and

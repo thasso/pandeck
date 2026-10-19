@@ -151,8 +151,7 @@ export interface ActiveSessionCardProps {
  * @component ActiveSessionCard
  * @purpose The Sessions inbox's rich card for ONE unsettled session: title +
  * age, a coloured state badge with what it cannot say, and the objects the
- * session hangs off, with shared Settle and overflow actions. Worktree and
- * Task jumps live in the menu so context remains available while acting.
+ * session hangs off, with Settle as its only row action.
  * @useWhen Rendering the Sessions section's working set.
  * @avoidWhen Listing sessions UNDER another object (a worktree's or project's
  * related sessions); those stay one-line `SessionRow`s.
@@ -365,6 +364,10 @@ function ActiveSessionCardImpl({
                 // keeps a badge's chrome.
                 className={`cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
               >
+                <ChevronRight
+                  aria-hidden
+                  className={`transition-transform ${clusterExpanded ? "rotate-90" : ""}`}
+                />
                 {clusterWorking ? <Spinner size="xs" /> : <Users aria-hidden />}
                 {/* On a narrow card the word goes, like every label on
                         this line, so the live counts keep room. */}
@@ -394,10 +397,6 @@ function ActiveSessionCardImpl({
                     {cluster.counts.jobs}
                   </span>
                 ) : null}
-                <ChevronRight
-                  aria-hidden
-                  className={`transition-transform ${clusterExpanded ? "rotate-90" : ""}`}
-                />
               </Badge>
             ) : null}
             {backgroundChip ? (
