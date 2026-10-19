@@ -38,7 +38,7 @@ import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { ListRowActions } from "./common/ListRowActions.tsx";
 import { Spinner } from "./common/load.tsx";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 /** The run state's glyph colour, by the same semantic tones the session cards use. */
 const TONE_TEXT: Record<SessionStatusTone, string> = {
@@ -209,7 +209,7 @@ function WorkflowRunInboxCardImpl({
                 title={projectName ?? projectKey}
               >
                 <FolderKanban
-                  size={11}
+                  size={12}
                   className="shrink-0"
                   style={projectColor ? { color: projectColor } : undefined}
                   aria-hidden
@@ -222,12 +222,12 @@ function WorkflowRunInboxCardImpl({
                 className="flex min-w-0 max-w-max flex-1 basis-0 items-center gap-1"
                 title={run.branch}
               >
-                <GitBranch size={11} className="shrink-0" aria-hidden />
+                <GitBranch size={12} className="shrink-0" aria-hidden />
                 <span className="min-w-0 truncate">{run.branch}</span>
               </span>
             ) : null}
             <span className="flex shrink-0 items-center gap-1">
-              <ClipboardList size={11} aria-hidden />#{run.taskId}
+              <ClipboardList size={12} aria-hidden />#{run.taskId}
             </span>
           </>
         }
@@ -262,12 +262,10 @@ function WorkflowRunInboxCardImpl({
         signals={
           <>
             {item.counts.total > 0 ? (
-              <Button
+              <Badge
                 variant="ghost"
-                size="xs"
-                className={
-                  item.counts.working > 0 ? "-mx-1 text-primary" : "-mx-1"
-                }
+                render={<button type="button" />}
+                className={`cursor-pointer gap-1 rounded-none border-0 px-0 hover:bg-transparent hover:text-foreground dark:hover:bg-transparent ${item.counts.working > 0 ? "text-primary" : "text-muted-foreground"}`}
                 title={roles ?? undefined}
                 aria-expanded={expanded}
                 aria-label={`${expanded ? "Hide" : "Show"} the ${item.counts.total} workflow session${
@@ -278,6 +276,10 @@ function WorkflowRunInboxCardImpl({
                   onToggleRoles?.(run.id);
                 }}
               >
+                <ChevronRight
+                  aria-hidden
+                  className={expanded ? "rotate-90" : ""}
+                />
                 {item.counts.working > 0 ? (
                   <Spinner size="xs" />
                 ) : (
@@ -287,17 +289,13 @@ function WorkflowRunInboxCardImpl({
                   {item.counts.total} session
                   {item.counts.total === 1 ? "" : "s"}
                 </span>
-                <ChevronRight
-                  aria-hidden
-                  className={expanded ? "rotate-90" : ""}
-                />
-              </Button>
+              </Badge>
             ) : null}
             {bubbled ? (
-              <Button
+              <Badge
+                render={<button type="button" />}
                 variant={bubbleTone === "danger" ? "destructive" : "secondary"}
-                size="xs"
-                className="session-status-responsive-badge min-w-0"
+                className="session-status-responsive-badge min-w-0 cursor-pointer"
                 title={`Open “${bubbled.session.title.trim() || "Untitled session"}”`}
                 aria-label={bubbleLabel ?? undefined}
                 onClick={(e) => {
@@ -309,7 +307,7 @@ function WorkflowRunInboxCardImpl({
                 <span className="session-status-badge-label min-w-0 truncate">
                   {bubbleLabel}
                 </span>
-              </Button>
+              </Badge>
             ) : null}
             {prSession ? (
               <span className="flex shrink-0 items-center">

@@ -7,7 +7,7 @@ import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleText } from "./SessionTitleText.tsx";
 import { identityLabel } from "./SessionRow.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowActions } from "./common/ListRowActions.tsx";
 import { ListRow } from "./common/ListRow.tsx";
 
 export type InboxShelfKind = "settled" | "archived";
@@ -74,16 +74,16 @@ export function InboxShelfRow({
   // opened can still be waiting for a review. The row's own `aria-label`
   // replaces its content, so the state is named there as well as shown.
   const delivery = sessionDelivery(session);
-  const comfortable = density === "comfortable";
 
   return (
     <ListRow
+      interaction="content"
       active={active}
       density={density}
       data-session-row
       data-list-row-id={session.id}
       data-session-row-active={active ? "true" : undefined}
-      role="button"
+      role="group"
       tabIndex={-1}
       aria-label={`Open ${settled ? "settled" : "archived"} ${identityLabel(session)} session: ${title}${
         delivery ? ` — pull request: ${delivery.title}` : ""
@@ -116,17 +116,18 @@ export function InboxShelfRow({
           <span className="text-xs tabular-nums text-muted-foreground">
             {relativeAge(at, now)}
           </span>
-          <IconButton
-            label={restoreLabel}
-            size={comfortable ? "icon-lg" : "icon-xs"}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRestore();
-            }}
-          >
-            <RestoreIcon />
-          </IconButton>
         </>
+      }
+      actions={
+        <ListRowActions actions={[
+          {
+            id: "restore",
+            label: "Restore",
+            accessibleLabel: restoreLabel,
+            icon: <RestoreIcon />,
+            onSelect: onRestore,
+          },
+        ]} />
       }
     />
   );

@@ -90,7 +90,7 @@ function WorktreeChanges({ relations }: { relations: SessionCardRelations }) {
       ) : null}
       {ahead ? (
         <span className="flex items-center text-muted-foreground">
-          <ArrowUp size={10} aria-hidden />
+          <ArrowUp size={12} aria-hidden />
           {ahead}
         </span>
       ) : null}
@@ -316,9 +316,9 @@ function ActiveSessionCardImpl({
               // the card keeps three filled rows.
               <span className="flex min-w-0 items-center gap-1">
                 {session.model ? (
-                  <ProviderIcon provider={session.model.provider} size={11} />
+                  <ProviderIcon provider={session.model.provider} size={12} />
                 ) : (
-                  <AgentIcon size={11} className="shrink-0" aria-hidden />
+                  <AgentIcon size={12} className="shrink-0" aria-hidden />
                 )}
                 <span className="min-w-0 truncate">{identity}</span>
               </span>
@@ -572,7 +572,7 @@ function MetaItem({
   const Icon = META_ICON[item.kind];
   const icon = Icon ? (
     <Icon
-      size={11}
+      size={12}
       className={`shrink-0 ${item.missing ? "text-warning" : ""}`}
       style={item.color ? { color: item.color } : undefined}
       aria-hidden

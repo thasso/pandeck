@@ -216,14 +216,14 @@ export function ListRowContent({
             </span>
           </>
         )}
-        {!hasSignals && trailing ? (
+        {!hasSignals && !hasDetails && trailing ? (
           <span className="flex shrink-0 items-center gap-1.5">{trailing}</span>
         ) : null}
       </div>
       {hasDetails ? (
         <div
           style={lineStyle(2 + Number(hasContext))}
-          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center text-xs text-muted-foreground`}
+          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-1.5 text-xs text-muted-foreground`}
         >
           <div
             ref={detailsRef}
@@ -231,6 +231,9 @@ export function ListRowContent({
           >
             {details}
           </div>
+          {!hasSignals && trailing ? (
+            <span className="flex shrink-0 items-center gap-1.5">{trailing}</span>
+          ) : null}
         </div>
       ) : null}
       {hasSignals ? (

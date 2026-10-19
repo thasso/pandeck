@@ -100,86 +100,122 @@ group-header palette.
 
 ### Browser rows
 
-`common/ListRow` is the shared edge-to-edge browser item, built on `Item`. A
-title with an optional leading icon is one line. Add `context` above or
-`details` below for two lines. Three-line Attention and PR rows use context,
-title and `signals`. Task Backlog, Focus and Inbox share `TaskListRowContent`,
-using Backlog's project/status/id context, title and metadata signals. Only
-actions and tree hierarchy differ. Backlog and ordinary Focus rows open or start
-a session; Focus suggestions keep their decision controls and Inbox keeps Accept. Omitted lines take no space; passing `signals={null}` reserves an
-empty signal line. `contextTrailing` pins content such as a Task id to the
-context line's right edge; otherwise `age` closes that line. `pinned` keeps
-important signals visible, and `trailing` keeps controls fixed at the end of the
-final line. Supporting lines show whole items or hide them; hidden controls
-become inert, and signals compact before dropping items.
+Use `common/ListRow` for flat, edge-to-edge browser items. It owns geometry,
+selection, hover, focus and keyboard activation. Features supply domain content,
+not copies of the row's CSS. Trees retain `common/Tree` and put the same
+`ListRowContent` inside their tree frame. `identity` accepts a composition such
+as `SessionTitleRow` without recreating its state semantics.
 
-Initiative Attention items also use `common/ListRow`: progress and age in context,
-state and title in identity, and session disclosure, readiness, blockers and the
-next milestone in signals. Their session chevron leads the label. Unacknowledged
-paused/done outcomes use the shared Settle action; active Initiatives have none.
-Embedded peer, Workflow Run role and Initiative session rows share `ListRow` and
-`SessionTitleRow` through `ClusterChildRow`. Initiative Show more expands known
-sessions inline instead of navigating to the Initiative. Show more and the peer
-list's Settled toggle share `common/ListExpansionRow`, a plain disclosure with
-the same height and font size as the compact session rows, not a category band.
+#### Content slots
 
-`actions` accepts `common/ListRowActions`. One or two actions are both direct;
-with more, at most two explicitly primary actions stay direct and the rest use a
-labeled menu. There are never more than three buttons including the menu. Ordinary actions share the neutral ghost style and inherited icon tone;
-only destructive actions use a different tone. Buttons and menu items show a
-pointer cursor. Actions occupy a right-aligned column spanning the final two
-content lines for items with three or more lines. Two-line items place actions
-only beside the second line, keeping their context full-width; one-line items
-place them beside the title. This geometry is shared by every layout. Desktop mouse controls reveal on hover or focus without
-growing the content lines. Pending decisions remain
-visible. Attention session rows expose only Settle, with no overflow menu;
-other session actions remain in the session. The Backlog tree uses the same `ListRowContent` and actions inside its
-tree frame, keeping hierarchy and selection rather than nesting a clickable flat
-row. `Tree`'s `paddedContent={false}` lets shared content own all padding; the
-frame adds only hierarchy indentation, not another horizontal inset.
-`getRowDisclosure` hides the gutter for rows with an inline expansion control.
-Full Backlog Task rows use a leading Sub-tasks control in their bottom line,
-without a reserved chevron or leaf spacer; keyboard expansion stays with Tree.
-Browser hosts share `browserRowDensity` for Desktop/Mobile spacing. Density
-never selects different content. Task tree `presentation="picker"` is the
-explicit single-line variant; `presentation="browser"` keeps metadata at either
-density. When there is no Sub-tasks control or metadata, omit the bottom line
-and move the session action beside the title. Task worktree and PR indicators
-remain separate. A single worktree's name hides in the signal row's compact
-form; multiple worktrees use a count menu with individual links. Task priority
-badges and the inspector selector share `TaskPriorityValue` for the same icons
-and capitalized names; row badges use its compact sizing.
+Rows spend space only on facts they have. Choose one title line, context plus
+title, title plus details, or context plus title plus signals as appropriate.
+Supporting lines do not repeat the absence of information as filler.
 
-Shared `WorktreeRow` content keeps the branch and change counts on the first
-line. Its second line starts with the actual PR number linked to the provider
-URL supplied by the shared hosting projection, followed by git metadata. The PR
-badge collapses to its state icon only when the full badge does not fit; the
-icon retains the same link and accessible name. A card summary without a known
-provider URL remains informational rather than guessing a link.
+| Slot | Content and behavior |
+| --- | --- |
+| `context` | Supporting facts above the title, such as Project and branch. |
+| `contextTrailing` / `age` | Fixed right edge of context. Explicit trailing content takes precedence over age. |
+| `leading` + `title` | A 16px identity-icon slot and a truncated 14px title. |
+| `identity` | Domain-owned identity composition instead of `leading` + `title`. |
+| `details` | Optional supporting line below the title. |
+| `signals` | Optional final line, with important facts first. |
+| `pinned` | Important signals kept outside the clipping region. |
+| `trailing` | Fixed indicators or controls at the end of the final content line, not an action-menu substitute. |
+| `actions` | `ListRowActions`, only when a meaningful row action exists. |
 
-Mobile layout or a coarse pointer keeps the same icon-only action column, with
-44px-wide targets at least 44px high and no separate strip or visible button
-labels. Buttons stretch to fill their content-line span on every layout; icons
-retain their own square size. Accessible names and tooltips identify the icons. Actions never open the item. Shared
-`touch-ui:` sizing follows either mobile layout or coarse input, independent of
-a forced Desktop choice.
+Pass `undefined` to omit a supporting line. `signals={null}` deliberately
+reserves one; use it only when that stable line is needed. Supporting lines
+show whole facts or hide them, and hidden controls become inert. Signals
+compact their labels before dropping items. Use the existing overflow handling
+rather than wrapping rows taller or clipping partial badges.
 
-Multi-line rows use compact outer vertical padding and no vertical grid gap;
-text and action touch-target sizes stay unchanged. The row owns padding,
-typography, line spacing, selection, hover, focus and Enter/Space/arrow-key behavior. Its host supplies `density`, object data,
-accessible names, domain shortcuts, and actions. Simple navigation renders a
-real button. Rows containing other controls use the default focusable container
-so buttons are never nested. Task rows use `interaction="content"`: the frame is
-a plain click surface, and real title and metadata links own keyboard access and
-modifier-click behavior. They must not be hidden behind `role="button"`. A
-parent grouping a row with expanded children passes `divider={false}` and owns
-that group's separator.
+Hosts use `browserRowDensity(mobile)` for spacing; density changes neither
+content nor actions. Titles are `text-sm`, supporting content is `text-xs`,
+and metadata glyphs are 12px. The shared identity slot is 16px. Multi-line rows
+have no vertical grid gap and compact outer padding, 2px per side in tight
+mode and 4px in comfortable mode. Single-line rows retain their shared minimum
+height. Keep all geometry in the common components.
 
-`ListRowContent` provides the same geometry inside a domain-owned presentation
-wrapper, such as a session's actions flip. `identity` accepts an existing
-identity composition such as `SessionTitleRow`, preserving its status semantics.
-Do not recreate the frame or line spacing in feature components. Storybook's
-`Common/ListRow` shows the one-, two-, and three-line layouts.
+#### Actions
+
+Mobile and desktop use the same icon-only, right-aligned action column:
+
+- One-line items put actions beside the title.
+- Two-line items put actions only beside the second line. The first line keeps
+  its full width, including right-aligned ids or age.
+- Items with three or more lines span actions across their final two lines.
+- Buttons fill that span vertically; icons keep their own square size and stay
+  centered. Touch controls are 44px wide and at least 44px high. `touch-ui:`
+  follows mobile layout or coarse input, even with a forced Desktop layout.
+- There is no extra mobile action strip, visible action label or placeholder
+  action. An item may have no action at all. Omit the `actions` slot entirely
+  rather than passing a component that renders nothing.
+
+`ListRowActions` renders one or two supplied actions directly. With more, at
+most two explicitly primary actions remain direct and the rest use one `…`
+menu. Thus there are at most three buttons including overflow. Ordinary actions
+use neutral ghost styling; only destructive actions differ. Give every icon an
+accessible name and tooltip. Actions stop row activation. Desktop mouse actions
+reveal on hover or focus without changing geometry; `alwaysVisible` keeps a
+pending decision visible. Buttons and menu entries use pointer cursors.
+
+#### Expansion and grouping
+
+Chevrons precede disclosure labels, including sub-tasks and peer/session counts.
+Expansion changes the list in place; opening the object's main surface is a
+separate interaction. Use `common/ListExpansionRow` for in-list Show more and
+Settled toggles. It shares compact session rows' height and font size, without
+category-header styling. Use `ListGroupSection` for actual category boundaries,
+not for every nested expansion. A parent containing an expanded item owns the
+separator beneath the whole item and passes `divider={false}` to its row.
+
+Embedded peer, Workflow Run role and Initiative sessions share `ListRow` and
+`SessionTitleRow` through `ClusterChildRow`. Initiative Show more reveals known
+sessions inline. Sessions not loaded are counted informationally, not offered
+as a misleading navigation or expansion.
+
+#### Interaction and list state
+
+Simple navigation uses a real button or anchor. A row containing links or other
+controls uses `interaction="content"`, so no nested buttons or presentational
+links inside `role="button"` are introduced. Supply real title/metadata links
+where those own navigation and modifier-click behavior. Preserve the host's
+roving focus, arrow keys, domain shortcuts, swipe and drag behavior.
+
+List hosts preserve scroll with `useListScroll` and a stable `listKey`; each
+row has `data-list-row-id`. Keep callbacks and memoized content stable while
+their visible values are unchanged, as required by `src/CLAUDE.md`.
+
+#### Existing domain compositions
+
+- **Tasks:** Backlog, Focus and Inbox share `TaskListRowContent`. Backlog's
+  Project/status/id context, title and metadata are the common presentation;
+  only actions and hierarchy vary. Backlog and ordinary Focus rows open/start
+  a session, Focus suggestions keep decision controls, and Inbox keeps Accept.
+  Browser presentation retains metadata at both densities; the explicit picker
+  presentation is single-line. Omit empty signal lines. Task Sub-tasks controls
+  live in the bottom line, with no reserved tree-chevron or leaf gutter;
+  `getRowDisclosure` suppresses that gutter and keyboard expansion stays with
+  Tree. `paddedContent={false}` leaves padding to shared content. Task worktree
+  and PR indicators stay separate. One worktree's name compacts away; multiple
+  worktrees use a count menu. Priority uses `TaskPriorityValue` everywhere.
+- **Attention sessions and runs:** Settle is the only row action, with no
+  overflow; other actions stay in the object's surface. Settled/archived shelf
+  rows use shared actions for Restore. Session and role disclosures share the
+  neutral inline style and leading chevron.
+- **Initiative Attention items:** Progress and age in context, state/title in
+  identity, and session disclosure, readiness, blockers and next milestone in
+  signals. Only unacknowledged paused/done outcomes offer Settle.
+- **Pull requests:** Context, title and signals use `ListRow`. Local-checkout
+  and CI indicators use `trailing`; these rows currently need no action.
+- **Worktrees:** `WorktreeRow` keeps branch/change counts first, then the actual
+  PR number linked to the provider URL and git metadata. PR badges compact to
+  their state icon while retaining their link and accessible name. Without a
+  known provider URL, summaries stay informational rather than guessing links.
+
+Use these compositions as examples, not as permission to copy their geometry.
+Storybook's `Common/ListRow` demonstrates the one-, two-, and three-line layouts.
 
 `common/ListFilterPopover` owns browser filter chrome: the shared trigger,
 active-filter count, panel width and property-list layout. Tasks and Attention
@@ -191,7 +227,7 @@ An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
 of its action group — after a card footer's primary button, at a header's right
 end. A menu is `common/OverflowMenu`; an overflow that opens something else (a
-sheet, the inbox card's action face) is an `IconButton` with the same icon in
+sheet, an object-specific details panel) is an `IconButton` with the same icon in
 the same place. An action that is the object's next step never hides in it.
 
 A clickable row is an `Item` rendered as the element it is:
