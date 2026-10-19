@@ -267,9 +267,18 @@ Status is OBSERVED, not reported (`224be3de`). The rules follow from that:
 - Nothing auto-reverts `doing` otherwise. Saying nothing means "leave it in
   doing", which is the truth when work is paused mid-flight, so a `todo`
   suggestion moves nothing by itself.
-- A merged pull request is evidence, not authority: its linked Task gets a
+- A merged pull request alone is evidence, not authority: its linked Task gets a
   `done` SUGGESTION (`pullRequestMerge.ts`), answered by the PR card's Mark-done
-  action or any surface below.
+  action or any surface below. An explicit `markTaskDone: true` on
+  `worktree_finish_pull_request` instead authorizes an ordinary agent `done`
+  write after the confirmed merge. It applies status and records answered
+  provenance attributed to the requesting session, including when a human
+  approves the default-branch merge. The unique Task comes from the managed PR
+  cards, is frozen on the approval card, and must still match at execution.
+  Without the flag, merge-time suggestions are unchanged. A failed completion
+  write is reported alongside the successful merge, never as a failed merge. The
+  independent `removeWorktree` flag changes no Task status. See
+  [managed merge and close](pull-requests.md#agent-facing-managed-merge-and-close).
 - A `task_manage` result includes `statusWrite: "applied"` or `"suggested"` when
   the status field made a decision; a same-status write that answered no
   opposing pending suggestion omits it. The transcript card reads a decision as

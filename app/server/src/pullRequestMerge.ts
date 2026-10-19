@@ -607,12 +607,27 @@ async function mergeAndProject(
     );
   // The worktree page reads PR/CI through a 15s TTL cache; without this it can
   // keep offering Merge for a pull request that is already in.
-  for (const worktreeId of invalidated) invalidateWorktreeHosting(worktreeId);
-  operations.inventoryChanged?.(input);
+  const warnings: string[] = [];
+  for (const worktreeId of invalidated) {
+    try {
+      invalidateWorktreeHosting(worktreeId);
+    } catch (error) {
+      warnings.push(
+        `The worktree hosting cache could not be refreshed: ${errorText(error)}.`,
+      );
+    }
+  }
+  try {
+    operations.inventoryChanged?.(input);
+  } catch (error) {
+    warnings.push(
+      `The PR inventory could not be refreshed: ${errorText(error)}.`,
+    );
+  }
 
   return {
     result,
-    message,
+    message: [message, ...warnings].join(" "),
     // The cards this projection WROTE, not the ones it matched: a card whose
     // patch failed above is still open, and reporting it as merged is how a
     // caller stops patching the one card it can still fix.
@@ -846,6 +861,10 @@ async function cardsForMergedPullRequest(
     providerKind: input.provider.kind,
     number: input.number,
   });
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /* ------------------------------- linked Task ------------------------------- */

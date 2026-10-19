@@ -653,6 +653,15 @@ function ManagedMergeBody({
           Task-{body.linkedTask.id}: {body.linkedTask.title}
         </p>
       ) : null}
+      <p>
+        {body.markTaskDone && body.linkedTask
+          ? `Mark Task-${body.linkedTask.id} done after merging`
+          : "Suggest Task completion only"}
+        {" · "}
+        {body.removeWorktree
+          ? "Remove the worktree if clean and idle"
+          : "Keep the worktree"}
+      </p>
     </>
   );
 }

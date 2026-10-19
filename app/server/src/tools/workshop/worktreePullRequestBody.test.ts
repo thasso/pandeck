@@ -165,6 +165,7 @@ function operations(
     approve: () => {
       throw new Error("not used");
     },
+    followUps: async () => ({ warnings: [] }),
     taskIds: () => [],
     task: () => undefined,
     invalidate: () => {},

@@ -62,6 +62,22 @@ test("states the default-branch merge, its head and its evidence", () => {
   expect(html).toContain("Task-588");
 });
 
+test("shows the requested post-merge choices", () => {
+  const html = renderToStaticMarkup(
+    <ApprovalCard
+      approval={{
+        ...card,
+        body: { ...body, markTaskDone: true, removeWorktree: true },
+      }}
+    />,
+  );
+  expect(html).toContain("Mark Task-588 done after merging");
+  expect(html).toContain("Remove the worktree if clean and idle");
+  const defaults = renderToStaticMarkup(<ApprovalCard approval={card} />);
+  expect(defaults).toContain("Suggest Task completion only");
+  expect(defaults).toContain("Keep the worktree");
+});
+
 // Absence is unknown, never "nobody objected": a review the provider could not
 // be asked about must not read as a clean one.
 test("an unavailable review reads as unknown", () => {

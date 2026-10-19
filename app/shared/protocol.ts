@@ -3977,6 +3977,10 @@ export interface ManagedPullRequestMergeApprovalBody {
   /** Methods the repository allowed when the card was created. */
   supportedMethods: PullRequestMergeMethod[];
   deleteRemoteBranch: boolean;
+  /** Apply an ordinary agent done write to the frozen linked Task after merge. */
+  markTaskDone?: boolean;
+  /** Attempt guarded local checkout and branch removal after merge. */
+  removeWorktree?: boolean;
   /** Exact-head check verdict, in the check watcher's vocabulary. */
   checks: {
     state: "success" | "failure" | "pending" | "none";
@@ -3993,6 +3997,11 @@ export interface ManagedPullRequestMergeApprovalBody {
   resultMerged?: boolean;
   /** Set once the approved merge landed and reported the branch outcome. */
   resultBranchDeleted?: boolean;
+  /** Task whose completion succeeded, attributed to the requesting agent. */
+  resultTaskDone?: string;
+  resultWorktreeRemoved?: boolean;
+  /** Follow-up failures never change a confirmed merge into a failed approval. */
+  resultFollowUpWarnings?: string[];
 }
 
 /**

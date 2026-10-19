@@ -89,6 +89,27 @@ afterEach(() => {
   resetWorkflowStoreForTests();
 });
 
+test("inventory failure after a provider-confirmed merge stays a successful projection", async () => {
+  const result = await mergePullRequestAndProject(
+    {
+      provider: fakeProvider(),
+      repoPath: repo(),
+      number: 91,
+      headBranch: "feature",
+      baseBranch: "main",
+      method: "squash",
+    },
+    {
+      refreshBaseCheckout: async () => undefined,
+      inventoryChanged: () => {
+        throw new Error("inventory unavailable");
+      },
+    },
+  );
+  assert.equal(result.result.number, 91);
+  assert.match(result.message, /Merged #91.*inventory unavailable/);
+});
+
 // The worktree page's merge must reach the card, or the card stays `open` until
 // the watcher's slow poll — or forever, past its lifetime cap.
 test("a merge issued from another checkout of the repo still closes the card", async () => {
