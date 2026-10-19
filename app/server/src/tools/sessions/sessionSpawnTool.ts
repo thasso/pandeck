@@ -112,7 +112,7 @@ function makeSessionSpawnTool() {
               agent: {
                 type: "string",
                 description:
-                  'Instead of profileId and agentType: the name of an agent definition from `operation: "agents"`. The session runs as that agent — its persona, instructions, denied tools and skills — and a developer agent still needs worktreeId. On "spawn" it runs on the definition\'s first model at its effort, or on another model it lists named as modelId. On "propose" the user picks any runtime for it in the card. The prompt names the target and the task; the definition is the role.',
+                  'Instead of profileId and agentType: the name of an agent definition from `operation: "agents"`. The session runs as that agent — its persona, instructions, denied tools and skills — and a developer agent still needs worktreeId. On "spawn" it tries the definition\'s first model at its effort, then the next listed model with eligible accounts if the first is benched or unhealthy. An explicit modelId selects exactly that listed model, never a fallback. On "propose" the user picks any runtime for it in the card. The prompt names the target and the task; the definition is the role.',
               },
               worktreeId: {
                 type: "string",
@@ -272,7 +272,13 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
     }
     const { runtime } = agent;
     // The other listed models, as a caller names them in modelId.
-    const others = runtime.listed.slice(1).map(listedText);
+    const others = runtime.listed
+      .filter(
+        (choice) =>
+          choice.runtime?.model.provider !== runtime.provider ||
+          choice.runtime.model.id !== runtime.modelId,
+      )
+      .map(listedText);
     return [
       `- ${agent.name}: ${clip(agent.description, "agent_get reads it whole")}`,
       `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
@@ -282,12 +288,15 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
       }, ${runtime.thinkingLevel} effort${
         runtime.accountName ? `, account ${runtime.accountName}` : ""
       }${runtime.agent.persona === "developer" ? "; needs a worktreeId" : ""}`,
+      ...(runtime.agent.modelFallbackReason
+        ? [`  ${runtime.agent.modelFallbackReason}`]
+        : []),
       ...(others.length > 0 ? [`  also runs on: ${others.join("; ")}`] : []),
     ].join("\n");
   });
   const omitted = agents.length - shown.length;
   return [
-    `Agent definitions (${agents.length}${omitted > 0 ? `, the first ${shown.length} listed` : ""}). Spawn one with a row naming it as agent (no profileId, no agentType); it runs on its first model, or on another it lists named as modelId. Any other runtime needs operation "propose" with the agent. The prompt still states the target and the task.`,
+    `Agent definitions (${agents.length}${omitted > 0 ? `, the first ${shown.length} listed` : ""}). Spawn one with a row naming it as agent (no profileId, no agentType); it tries its first model, then the next listed model with eligible accounts if the first is benched or unhealthy. An explicit modelId never falls back. Any other runtime needs operation "propose" with the agent. The prompt still states the target and the task.`,
     ...lines,
     ...(omitted > 0
       ? [
@@ -394,7 +403,7 @@ function directSpawnText(results: DirectSpawnRowResult[]): string {
       return `- "${row.title}" NOT started on ${runtime}: ${row.error ?? "unknown error"}`;
     return `- "${row.title}" → session ${row.sessionId} on ${runtime}, owner ${row.owner}${
       row.inheritGrants === false ? ", doesn't inherit your approvals" : ""
-    }${
+    }${row.runtime?.modelFallbackReason ? `; ${row.runtime.modelFallbackReason}` : ""}${
       row.error ? ` — created, but its opening prompt failed: ${row.error}` : ""
     }`;
   });

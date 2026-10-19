@@ -1207,6 +1207,8 @@ export interface DirectSpawnRowResult {
     relativeCost?: string;
     /** For an agent row: the `AGENT.md` blob it froze. */
     blob?: string;
+    /** Why an automatic agent spawn used a later listed model. */
+    modelFallbackReason?: string;
   };
   sessionId?: string;
   error?: string;
@@ -1418,6 +1420,9 @@ function reportedRuntime(
       }`,
       family: peerRuntimeFamilyOf(runtime.provider, runtime.modelId),
       blob: runtime.agent.blob,
+      ...(runtime.agent.modelFallbackReason
+        ? { modelFallbackReason: runtime.agent.modelFallbackReason }
+        : {}),
     };
   return {
     ...common,
