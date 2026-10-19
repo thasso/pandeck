@@ -232,6 +232,27 @@ test("special-cases the permanent assistant and only sends for user-visible sess
   ]);
 });
 
+test("a peer hop refusal notifies even for a coordinator-owned sender", async () => {
+  clearBlockedCompletionMarks();
+  const sent: AppWebPushNotification[] = [];
+  await notifySessionBlocked(
+    "child",
+    "peer-limit",
+    "Chain chain-123 needs a human reset",
+    {
+      getSession: () => session({ id: "child", title: "Reviewer" }),
+      isDirectlyOwned: () => false,
+      send: async (notification) => {
+        sent.push(notification);
+      },
+    },
+  );
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0]?.title, "Peer messaging needs you");
+  assert.equal(sent[0]?.navigatePath, "/sessions/child");
+  assert.match(sent[0]!.body, /chain-123/);
+});
+
 test("keeps coordinator-owned children and intermediate parent wakes quiet", async () => {
   clearBlockedCompletionMarks();
   const sent: AppWebPushNotification[] = [];

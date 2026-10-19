@@ -135,6 +135,38 @@ the outcome:
   the coordinator's job. Choose it for experimentation, where a cheap wrong
   answer is recoverable.
 
+  #### Peer-message hop limit
+
+  Peer prompts share a server-owned causal chain. A chain permits
+  `sessionPeerPromptMaxHops` accepted sends since human intervention, default
+  50, configurable from 1 to 200. Hops are reserved at enqueue, not delivery, so
+  queued and concurrent sends count too. A refusal queues nothing and does not
+  mark an awaited request replied or consume another hop.
+
+  A session can always send a report to its immediate spawner, identified by the
+  durable `session_links` `spawned` edge. This exception applies regardless of
+  ownership, reply correlation, or `responseRequested`. It does not apply to a
+  grandparent, a sibling, a fork parent, or a downward send. Exempt reports
+  still increment the chain's hop count. They preserve an honest send count and
+  cannot create a budget for the next downward or sideways send. Every loop in a
+  spawn tree contains such a non-upward send, so upward reports cannot sustain a
+  loop after the limit.
+
+  A refused send raises a durable condition on its sending session. The Sessions
+  inbox shows **Reset chain** in `needs-you`, including through a folded
+  coordinator tree. The session shows the chain id, limit, and reset
+  instructions above its composer. The first refusal per sender and chain also
+  notifies the user when away, even for a coordinator-owned child. Repeated
+  attempts do not repeat that notification. Reading, settling, agent turns,
+  restarts, and time do not resolve the condition.
+
+  Any human-origin prompt to any participant closes all open chains that session
+  participates in and resolves their refusal conditions. Future sends use a
+  fresh chain. Already queued messages retain their old chain and hop, but their
+  replies cannot reopen it. Resume, restart, Task attachment, and agent or
+  system prompts do not reset chains. The refused message is not automatically
+  retried, so the human should ask the agent to retry it.
+
   That spawn edge also carries WHO OWNS the child ([Task-637](pa://task/637)),
   as `SessionListItem.spawnOwnership`:
 

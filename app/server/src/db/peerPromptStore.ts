@@ -14,6 +14,8 @@
 import { randomUUID } from "node:crypto";
 import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
+import { sessionStore } from "./sessionStore.ts";
+import type { PeerPromptHopRefusal } from "@assistant/shared";
 
 export type PeerPromptStatus =
   | "queued"
@@ -343,10 +345,63 @@ function closeChainsForSession(sessionId: string, now = Date.now()): string[] {
     "UPDATE peer_prompt_chains SET closed = 1, updated_at_ms = ? WHERE chain_id = ? AND closed = 0",
   );
   const closed: string[] = [];
+  const clearRefusals = db.prepare(
+    "DELETE FROM peer_prompt_hop_refusals WHERE chain_id = ?",
+  );
   for (const id of ids) {
     if (stmt.run(now, id).changes > 0) closed.push(id);
+    clearRefusals.run(id);
   }
   return closed;
+}
+
+/** Persist one condition per sender/chain. A reset racing the refusal wins. */
+function recordHopRefusal(
+  senderSessionId: string,
+  chainId: string,
+  maxHops: number,
+  now = Date.now(),
+): boolean {
+  return (
+    getDb()
+      .prepare(
+        `
+    INSERT OR IGNORE INTO peer_prompt_hop_refusals
+      (chain_id, sender_session_id, max_hops, created_at_ms)
+    SELECT chain_id, ?, ?, ? FROM peer_prompt_chains
+     WHERE chain_id = ? AND closed = 0
+  `,
+      )
+      .run(senderSessionId, maxHops, now, chainId).changes > 0
+  );
+}
+
+/** One bounded condition per sender for the list; all resolve with their chain. */
+function hopRefusalsBySender(): Map<string, PeerPromptHopRefusal> {
+  const rows = getDb()
+    .prepare(
+      `
+    SELECT r.sender_session_id, r.chain_id, r.max_hops
+      FROM peer_prompt_hop_refusals r
+      JOIN peer_prompt_chains c ON c.chain_id = r.chain_id
+     WHERE c.closed = 0
+     ORDER BY r.created_at_ms, r.chain_id
+  `,
+    )
+    .all() as Array<{
+    sender_session_id: string;
+    chain_id: string;
+    max_hops: number;
+  }>;
+  return new Map(
+    rows.map((row) => [
+      row.sender_session_id,
+      {
+        chainId: row.chain_id,
+        maxHops: row.max_hops,
+      },
+    ]),
+  );
 }
 
 /* ------------------------------- writes ---------------------------------- */
@@ -369,10 +424,12 @@ interface EnqueueInput {
 /** Thrown by {@link enqueueRouted} when the causal-chain hop limit is reached. */
 export class PeerPromptHopLimitError extends Error {
   readonly maxHops: number;
-  constructor(maxHops: number) {
+  readonly chainId: string;
+  constructor(maxHops: number, chainId: string) {
     super(`peer-prompt chain hop limit (${maxHops}) reached`);
     this.name = "PeerPromptHopLimitError";
     this.maxHops = maxHops;
+    this.chainId = chainId;
   }
 }
 
@@ -432,7 +489,8 @@ function ensureChain(
 /**
  * Atomically (one transaction): re-check whether the preferred chain is closed
  * and reroute to `fallbackChainId` if so, reject when the reserved hop would
- * exceed `maxHops` (WITHOUT incrementing), reserve+increment the hop,
+ * exceed `maxHops` except for reports to the immediate spawner (WITHOUT
+ * incrementing a refused hop), reserve+increment every accepted hop,
  * accumulate participants, insert the message, and (if `markRepliedId` is set)
  * mark that earlier message replied. A rollback leaves no partial chain/
  * participant/message/hop/reply state. This is the only enqueue path for sends.
@@ -451,9 +509,14 @@ function enqueueRouted(
       chain = ensureChain(db, chainId, now);
     }
     const hop = chain.nextHop;
-    if (hop > input.maxHops) {
+    // Only the reverse of a persisted spawn edge is exempt. Reports still
+    // reserve a hop, so they cannot replenish the budget for a return trip.
+    const spawner = sessionStore
+      .spawnedParentsByChildIds([input.senderSessionId])
+      .get(input.senderSessionId)?.parentSessionId;
+    if (hop > input.maxHops && spawner !== input.recipientSessionId) {
       db.exec("ROLLBACK");
-      throw new PeerPromptHopLimitError(input.maxHops);
+      throw new PeerPromptHopLimitError(input.maxHops, chainId);
     }
     db.prepare(
       "UPDATE peer_prompt_chains SET next_hop = next_hop + 1, updated_at_ms = ? WHERE chain_id = ?",
@@ -1973,6 +2036,8 @@ export const peerPromptStore = {
   // writes / transitions
   enqueue,
   enqueueRouted,
+  recordHopRefusal,
+  hopRefusalsBySender,
   transition,
   claimNext,
   claimBatch,

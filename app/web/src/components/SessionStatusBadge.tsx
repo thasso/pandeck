@@ -20,6 +20,7 @@ const STATUS_ICON: Partial<Record<SessionInboxStatus, LucideIcon>> = {
   question: CircleHelp,
   approval: CircleCheck,
   "task-choice": ListChecks,
+  "peer-limit": CircleStop,
   failed: X,
   interrupted: CircleStop,
   unread: Check,

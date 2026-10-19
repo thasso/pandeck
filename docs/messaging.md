@@ -376,8 +376,19 @@ cancelled. There is no `pa://question/<id>` link: the agent ends its turn right
 after asking, so the form sits directly above its last words, and the ledge
 finds every open flow.
 
-This qualifies for push because the work has stopped until the user acts.
-Account login failures are the explicit additional condition below.
+A peer send refused at the causal-chain hop limit is another condition, not an
+ephemeral tool failure. It stays on the sending session until a human prompt to
+any participant resets the chain. The inbox shows **Reset chain** in
+`needs-you`, and the note above the session's composer names the chain and says
+that any message from the user resets it. Folded children lift their
+coordinator's card so the refusal stays discoverable. One push per sending
+session and chain also reaches the user when away, including for a
+coordinator-owned child. A refused send was not queued and needs an explicit
+retry after the reset. See
+[Peer-message hop limit](agent-workflows.md#peer-message-hop-limit).
+
+These qualify for push because work cannot continue until the user acts. Account
+login failures are the explicit additional condition below.
 
 ## Push
 

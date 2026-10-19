@@ -51,6 +51,42 @@ test("a session row lists the peers it awaits a reply from", async () => {
   }
 });
 
+test("an unresolved hop refusal stays on the sending session across list rebuilds", async () => {
+  const id = `hop-refusal-${Date.now()}`;
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    title: id,
+    messageCount: 2,
+  });
+  const chainId = peerPromptStore.createChain();
+  peerPromptStore.addParticipant(chainId, id);
+  peerPromptStore.addParticipant(chainId, "other-participant");
+  try {
+    assert.equal(peerPromptStore.recordHopRefusal(id, chainId, 3), true);
+    assert.equal(peerPromptStore.recordHopRefusal(id, chainId, 3), false);
+    for (let i = 0; i < 2; i++) {
+      const row = (await listSessions([], () => Date.now())).find(
+        (item) => item.id === id,
+      );
+      assert.deepEqual(row?.peerPromptHopRefusal, { chainId, maxHops: 3 });
+    }
+    peerPromptStore.closeChainsForSession("other-participant");
+    assert.equal(
+      peerPromptStore.recordHopRefusal(id, chainId, 3),
+      false,
+      "a reset racing a refusal wins",
+    );
+    const row = (await listSessions([], () => Date.now())).find(
+      (item) => item.id === id,
+    );
+    assert.equal(row?.peerPromptHopRefusal, undefined);
+  } finally {
+    sessionStore.remove(id);
+  }
+});
+
 test("a report still being delivered or retried keeps the row's queued work", async () => {
   const stamp = `${Date.now()}-${Math.random()}`;
   const coordinator = `retry-root-${stamp}`;

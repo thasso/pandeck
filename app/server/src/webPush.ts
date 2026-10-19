@@ -260,11 +260,16 @@ export function sessionTurnNotification(
 function sessionBlockedNotification(
   sessionId: string,
   sessionTitle: string,
-  blocked: "approval" | "question",
+  blocked: "approval" | "question" | "peer-limit",
   detail?: string,
 ): AppWebPushNotification {
   return {
-    title: blocked === "approval" ? "Approval needed" : "Question waiting",
+    title:
+      blocked === "approval"
+        ? "Approval needed"
+        : blocked === "peer-limit"
+          ? "Peer messaging needs you"
+          : "Question waiting",
     // The session is what the user has to pick between; what it is asking is
     // the second line's job where the caller knows it.
     body: boundedText(
@@ -283,14 +288,18 @@ function sessionBlockedNotification(
  */
 export async function notifySessionBlocked(
   sessionId: string,
-  blocked: "approval" | "question",
+  blocked: "approval" | "question" | "peer-limit",
   detail?: string,
   dependencies: CompletionDependencies = {},
 ): Promise<void> {
   const session = (dependencies.getSession ?? sessionStore.get)(sessionId);
   if (!session || session.scope !== "user" || session.deletedAt !== undefined)
     return;
-  if (!(dependencies.isDirectlyOwned ?? sessionIsDirectlyOwned)(sessionId))
+  // A peer send refusal needs the human even for a coordinator-owned child.
+  if (
+    blocked !== "peer-limit" &&
+    !(dependencies.isDirectlyOwned ?? sessionIsDirectlyOwned)(sessionId)
+  )
     return;
   // The run this block ends is about to report completion for the same wait —
   // possibly before the delivery below resolves — so the mark goes down FIRST.
