@@ -55,6 +55,7 @@ import { ownedBySessionTree } from "@assistant/shared/sessionTreeWorktrees";
 import { useCommentActuation } from "./review/CommentActuation.tsx";
 import type { Task } from "../lib/backlogTree.ts";
 import { taskWorktreeIds } from "../lib/taskActivity.ts";
+import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import {
   Inspector,
   InspectorFacts,
@@ -522,6 +523,7 @@ function InspectorTaskRows({
  */
 function InspectorWorktreeRows({
   rows,
+  hosting,
   onOpenWorktree,
 }: {
   rows: Array<{
@@ -529,6 +531,7 @@ function InspectorWorktreeRows({
     status?: WorktreeGitStatus | undefined;
   }>;
   onOpenWorktree: (id: string) => void;
+  hosting?: WorktreeHostingMap | undefined;
 }) {
   const onAct = useInspectorAct();
   const statuses: Record<string, WorktreeGitStatus> = {};
@@ -538,6 +541,7 @@ function InspectorWorktreeRows({
       <WorktreeList
         worktrees={rows.map((row) => row.record)}
         statuses={statuses}
+        hosting={hosting}
         onOpen={(id) => {
           onOpenWorktree(id);
           onAct?.();
@@ -916,6 +920,7 @@ function toInspectorGroups(
   open: ObjectOpeners,
   /** The session list, to draw a group of sessions with their own rows. */
   sessions: SessionListItem[],
+  hosting?: WorktreeHostingMap,
 ): InspectorRelationGroup[] {
   const opener = (ref: ObjectRef) =>
     ref.kind === "task"
@@ -991,6 +996,7 @@ function toInspectorGroups(
         content: (
           <InspectorWorktreeRows
             rows={worktreeRows}
+            hosting={hosting}
             onOpenWorktree={open.onOpenWorktree}
           />
         ),
@@ -1057,6 +1063,7 @@ export function TaskInspector({
   sessions,
   worktrees = null,
   worktreeStatuses = {},
+  worktreeHosting,
   worktreesError,
   worktreesFresh,
   onReloadWorktrees,
@@ -1076,6 +1083,7 @@ export function TaskInspector({
   sessions: SessionListItem[];
   worktrees?: WorktreeRecord[] | null;
   worktreeStatuses?: Record<string, WorktreeGitStatus>;
+  worktreeHosting?: WorktreeHostingMap;
   worktreesError?: string | null | undefined;
   worktreesFresh?: boolean | undefined;
   onReloadWorktrees?: (() => void) | undefined;
@@ -1174,6 +1182,7 @@ export function TaskInspector({
                 taskRelationGroups(task, sessions, worktrees, worktreeStatuses),
                 openers,
                 sessions,
+                worktreeHosting,
               ),
               {
                 groupId: "task-worktrees",
@@ -1441,6 +1450,7 @@ export function SessionInspector({
   worktreeStatus,
   worktrees,
   worktreeStatuses,
+  worktreeHosting,
   worktreesError,
   worktreesFresh,
   onReloadWorktrees,
@@ -1474,6 +1484,7 @@ export function SessionInspector({
   worktrees?: readonly WorktreeRecord[] | null | undefined;
   /** Live git status of the tree's worktrees, which the app watches while shown. */
   worktreeStatuses?: Record<string, WorktreeGitStatus> | undefined;
+  worktreeHosting?: WorktreeHostingMap;
   /** The worktree list's last read failed (`worktreeListError`). */
   worktreesError?: string | null | undefined;
   /**
@@ -1554,7 +1565,7 @@ export function SessionInspector({
           ),
         },
         ...withTreeWorktreesLoadState(
-          toInspectorGroups(groups, openers, sessions),
+          toInspectorGroups(groups, openers, sessions, worktreeHosting),
           {
             awaited:
               sessionId !== undefined &&

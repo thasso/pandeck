@@ -4,7 +4,6 @@ import type {
   TaskStatusSuggestion,
 } from "@assistant/shared";
 import { pendingStatusSuggestion, type Task } from "./backlogTree.ts";
-import type { BacklogDensity, BacklogView } from "./backlogTreeModel.ts";
 import { dueLabel, scheduledLabel } from "./backlogFocus.ts";
 import { taskStartSession, taskWorktreeIds } from "./taskActivity.ts";
 import { relativeAge } from "./relativeTime.ts";
@@ -90,23 +89,12 @@ export interface TaskRowMeta {
   age: string;
 }
 
-/**
- * Whether a Backlog surface's rows have a SECOND LINE at all — the line
- * everything above is stated on. A `tight` TREE row is one line (the desktop
- * rail, which reveals on hover instead), while Focus rows carry their second
- * line at either density.
- *
- * It is one predicate rather than an expression per caller because two costs
- * hang off it and both fail silently: the app polls a provider for PR/CI
- * (`lib/worktreeHosting.ts`) and watches git status per worktree only for rows
- * that can state them. Too wide is invisible traffic, too narrow is a row that
- * renders perfectly and says nothing.
- */
-export function taskRowsHaveMeta(
-  density: BacklogDensity,
-  view: BacklogView,
-): boolean {
-  return density === "comfortable" || view === "focus";
+export type TaskRowPresentation = "browser" | "picker";
+
+/** Browser rows keep metadata at either density. Pickers stay single-line and
+ * do not cause provider polling or git-status watches for invisible metadata. */
+export function taskRowsHaveMeta(presentation: TaskRowPresentation): boolean {
+  return presentation === "browser";
 }
 
 export interface TaskRowMetaContext {

@@ -75,17 +75,21 @@ const STATE_ICON: Record<
  * `glyph` on a one-line row, where the SHAPE carries it and the words move into
  * the accessible name. It is deliberately NOT a link: the card lives in the
  * session, so the ROW is what opens it, and a second target inside the row
- * would compete with the one that already leads there.
+ * would compete with the one that already leads there. Worktree hosts may wrap
+ * the mark in a link when their hosting projection supplies the actual PR URL.
  * @related lib/sessionDelivery.ts, ActiveSessionCard, SessionRow, InboxShelfRow
  */
 export function SessionDeliveryMark({
   session,
   variant = "chip",
   showNumber = false,
+  collapseNumber = false,
 }: {
   session: Pick<SessionListItem, "pullRequest">;
-  /** Append the pull request's number; it survives the icon-only collapse. */
+  /** Append the PR number; retained during collapse unless `collapseNumber` is set. */
   showNumber?: boolean;
+  /** Worktree rows may collapse the number along with the label when narrow. */
+  collapseNumber?: boolean;
   /** `chip` states the state in words; `glyph` is icon-only; `responsive` yields to a narrow card container. */
   variant?: "chip" | "glyph" | "responsive";
 }) {
@@ -116,9 +120,8 @@ export function SessionDeliveryMark({
     <Badge
       variant={TONE_BADGE[delivery.tone]}
       className={
-        // The square collapse would clip the number, so a numbered mark only
-        // hides its label.
-        variant === "responsive" && number === undefined
+        // Numbered marks retain their number unless the host permits collapse.
+        variant === "responsive" && (number === undefined || collapseNumber)
           ? "session-status-responsive-badge"
           : undefined
       }
@@ -137,7 +140,9 @@ export function SessionDeliveryMark({
         </span>
       )}
       {number !== undefined ? (
-        <span className="tabular-nums">#{number}</span>
+        <span className={`tabular-nums ${variant === "responsive" && collapseNumber ? "session-status-badge-label" : ""}`}>
+          {collapseNumber ? `PR #${number}` : `#${number}`}
+        </span>
       ) : null}
     </Badge>
   );

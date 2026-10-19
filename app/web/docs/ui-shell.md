@@ -263,8 +263,9 @@ Their real title links, metadata links and inline
 status/suggestion/dismiss controls remain interactive inside a plain click
 surface (`interaction="content"`), not an ARIA button. Focus buckets use
 `ListGroupSection` in both hosts, including shared sticky headers and remembered
-disclosure state. Desktop sidebar Focus uses `tight` density like Attention and
-Pull Requests; phone and full-page Focus retain `comfortable`. The Backlog
+disclosure state. Tasks, Attention and Pull Requests share `browserRowDensity`:
+`tight` in Desktop layout and `comfortable` in Mobile layout, including the
+full-page Task browser. The Backlog
 keeps `common/Tree` for hierarchy, selection, keyboard, swipe and drag behavior,
 with shared `ListRowContent` and `ListRowActions` inside each Task row. Full rows
 put Project left and the status glyph immediately before Task id on the right
@@ -276,8 +277,8 @@ gutter or leaf spacer. Project headers and compact pickers
 retain tree disclosure controls; compact pickers stay single-line. The only
 row action opens or starts a session; status is informational, while archive
 retains its keyboard/swipe paths.
-The shared content owns its vertical padding, and action presses do not start
-a drag. Task metadata shows worktree navigation alongside PR/CI, never in its
+The shared content owns all row padding; Tree adds only hierarchy indentation.
+Action presses do not start a drag. Task metadata shows worktree navigation alongside PR/CI, never in its
 place. One worktree shows its branch name when space allows, then compacts to
 the icon. Several distinct worktrees show a count that opens their individual
 links. Count only worktrees present in the current worktree collection and
@@ -287,12 +288,14 @@ browser, inspector and git-status watches use this same filter. Dirty dots belon
 PR/CI badges are deduplicated across worktrees. Worktree names reach memoized
 Backlog surfaces as a content-stable projection, not raw worktree records.
 
-Every Backlog surface states its own row DENSITY, and it is the host's decision
-rather than a breakpoint. Density controls spacing and control sizes, not the
-number of lines. The sidebar tree retains `comfortable` density so its metadata
-stays visible; the composer's task picker is `tight` and single-line. Backlog
-and Project pages, and the sidebar on a phone, use `comfortable` density. Width
-and pointer coarseness are independent.
+Browser hosts use the shared `browserRowDensity` policy from `lib/rowDensity.ts`
+with the resolved layout, not per-view spacing exceptions. Density controls
+spacing and control sizes, never the number of lines or metadata visibility.
+Task tree `presentation="browser"` retains context, title, optional metadata
+and session actions at either density. `presentation="picker"` explicitly
+selects single-line content and standard tree disclosure without polling for
+hidden metadata. Width and pointer coarseness remain independent; shared touch
+actions retain their separate labeled targets of at least 44px.
 
 The Sessions browser takes the same decision from the same host
 (`lib/rowDensity.ts`, one type for both browsers): its cards and shelf rows are

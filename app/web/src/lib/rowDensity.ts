@@ -15,6 +15,11 @@
  */
 export type RowDensity = "tight" | "comfortable";
 
+/** One spacing policy for browser lists, independent of their content or hierarchy. */
+export function browserRowDensity(mobile: boolean): RowDensity {
+  return mobile ? "comfortable" : "tight";
+}
+
 /**
  * The height of an inbox card's rows above and below its title: what the
  * inline actions take in that density (`size-6`/`size-8`, less their `-my-0.5`).

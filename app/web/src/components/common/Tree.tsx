@@ -177,7 +177,7 @@ export interface TreeProps<T> {
   /** Tight single-line density for sidebar browsers: 28px rows and a smaller
    * chevron, matching the sidebar session rows. Defaults to `false`. */
   compact?: boolean;
-  /** Off when the rendered content owns its vertical padding. */
+  /** Off when rendered content owns its padding; Tree then adds only indentation. */
   paddedContent?: boolean;
   /**
    * Edge-to-edge rows for a list that runs to its container's sides: square
@@ -748,8 +748,8 @@ function RowBody<T>({
   | "band"
 > & { badge?: number | undefined; elevated?: boolean }) {
   const stretch = rowAlign === "stretch";
-  // A flush row has no container inset to sit in, so it keeps its own.
-  const inset = flush ? 4 : 0;
+  // Content-owned padding must not be applied again by the tree frame.
+  const inset = paddedContent && flush ? 4 : 0;
   return (
     <div
       className={cx(
@@ -762,7 +762,8 @@ function RowBody<T>({
         // The indent animates (`index.css`) so a row promoted out of a vanished
         // parent moves to its new depth rather than appearing at it.
         !elevated && "tree-row-indent",
-        compact ? "min-h-7 pl-0.5 pr-1" : "min-h-9 pl-1 pr-2",
+        compact ? "min-h-7" : "min-h-9",
+        paddedContent && (compact ? "pl-0.5 pr-1" : "pl-1 pr-2"),
         // While dragging, the row reads as a lifted card; otherwise a subtle
         // selection tint (no text recolor, so the hierarchy stays legible).
         elevated

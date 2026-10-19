@@ -54,10 +54,7 @@ import type {
   InitiativeSettleError,
 } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
-import {
-  SIDEBAR_BACKLOG_DENSITY,
-  type BacklogDensity,
-} from "../lib/backlogTreeModel.ts";
+import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 import type { LoadState } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";
@@ -73,7 +70,7 @@ import { createSessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
 import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
-import type { RowDensity } from "../lib/rowDensity.ts";
+import { browserRowDensity, type RowDensity } from "../lib/rowDensity.ts";
 import {
   initiativePath,
   type SettingsSection,
@@ -552,9 +549,7 @@ function SidebarImpl({
   // The Backlog's filters are a row of chips, so what they are short of is
   // WIDTH: on the rail they wrap into four lines at page sizing and two at the
   // rail's own, above rows that are two-line either way.
-  const backlogToolbarDensity: BacklogDensity = mobile
-    ? "comfortable"
-    : "tight";
+  const backlogToolbarDensity: BacklogDensity = browserRowDensity(mobile);
 
   // Fetch Backlog Tasks, Projects, or Worktrees the first time the matching
   // section is shown. The Projects browser also embeds worktrees, so it needs
@@ -853,7 +848,7 @@ function SidebarImpl({
       >
         {section === "settings" ? (
           <SettingsSectionList
-            density={mobile ? "comfortable" : "tight"}
+            density={browserRowDensity(mobile)}
             activeSection={activeSection}
             onOpenSection={onOpenSection}
           />
@@ -871,14 +866,7 @@ function SidebarImpl({
             hosting={worktreeHosting}
             dirtyWorktrees={dirtyWorktrees}
             workflowIndicators={workflowIndicators}
-            // Focus keeps three lines at either density; the desktop rail
-            // uses the same tight spacing as Attention and Pull Requests.
-            // Other Task views retain their existing metadata-bearing density.
-            density={
-              !mobile && prefs.backlogView === "focus"
-                ? "tight"
-                : SIDEBAR_BACKLOG_DENSITY
-            }
+            density={browserRowDensity(mobile)}
             flush
             externalToolbar
           />
@@ -924,7 +912,7 @@ function SidebarImpl({
             onOpen={onOpenPullRequest}
             // The host's call, as everywhere else: a phone screen gets
             // thumb-sized rows, the rail keeps its tight ones.
-            density={mobile ? "comfortable" : "tight"}
+            density={browserRowDensity(mobile)}
             idle={idleWorktrees}
             listView={pullRequestListView}
           />
@@ -958,7 +946,7 @@ function SidebarImpl({
             animateListChanges={prefs.animateListChanges}
             // The host's call, like the Backlog toolbar's: a phone screen gets
             // thumb-sized rows, the rail keeps its tight ones.
-            density={mobile ? "comfortable" : "tight"}
+            density={browserRowDensity(mobile)}
             onSelect={onSelect}
             onSettle={onSettleSession}
             onDismissFailure={onDismissSessionFailure}

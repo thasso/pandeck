@@ -118,16 +118,29 @@ pointer cursor. Desktop mouse controls occupy the bottom-right slot and reveal o
 or focus without growing the content lines. Pending decisions remain visible.
 The Backlog tree uses the same `ListRowContent` and actions inside its tree
 frame, keeping hierarchy and selection rather than nesting a clickable flat row.
-`Tree`'s `paddedContent={false}` lets that shared content own vertical spacing.
+`Tree`'s `paddedContent={false}` lets shared content own all padding; the frame
+adds only hierarchy indentation, not another horizontal inset.
 `getRowDisclosure` hides the gutter for rows with an inline expansion control.
 Full Backlog Task rows use a leading Sub-tasks control in their bottom line,
 without a reserved chevron or leaf spacer; keyboard expansion stays with Tree.
+Browser hosts share `browserRowDensity` for Desktop/Mobile spacing. Density
+never selects different content. Task tree `presentation="picker"` is the
+explicit single-line variant; `presentation="browser"` keeps metadata at either
+density.
 When there is no Sub-tasks control or metadata, omit the bottom line and move
 the session action beside the title. Task worktree and PR indicators remain
 separate. A single worktree's name hides in the signal row's compact form;
 multiple worktrees use a count menu with individual links. Task priority badges
 and the inspector selector share `TaskPriorityValue` for the same icons and
 capitalized names; row badges use its compact sizing.
+
+Shared `WorktreeRow` content keeps the branch and change counts on the first
+line. Its second line starts with the actual PR number linked to the provider
+URL supplied by the shared hosting projection, followed by git metadata. The
+PR badge collapses to its state icon only when the full badge does not fit;
+the icon retains the same link and accessible name. A card summary without a
+known provider URL remains informational rather than guessing a link.
+
 Mobile layout or a coarse pointer moves actions to a separate strip beneath
 the content: labeled targets at least 44px high, 12px gaps, and wrapping into
 stacked buttons when space is tight. The strip never opens the item. Shared

@@ -240,7 +240,6 @@ import { useFetchState, useReloadOnToken } from "./hooks/useFetchState.ts";
 import { hostingSurfaces } from "./lib/worktreeHosting.ts";
 import { rowWorktreeStatus } from "./lib/worktreeRowStatuses.ts";
 import { taskRowsHaveMeta } from "./lib/taskRowMeta.ts";
-import { SIDEBAR_BACKLOG_DENSITY } from "./lib/backlogTreeModel.ts";
 import { useWorktreeHosting } from "./hooks/useWorktreeHosting.ts";
 import { useIdleWorktrees } from "./hooks/useIdleWorktrees.ts";
 import { usePullRequestInventory } from "./hooks/usePullRequestInventory.ts";
@@ -1422,6 +1421,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       : inspectorTabVisible) &&
     route.name === "session" &&
     state.session?.sessionId === route.id;
+  const routedTaskInspectorShown =
+    inspectorOpen &&
+    (mobileLayout
+      ? !composerVisible && !commentActuation?.composerOpen
+      : inspectorTabVisible) &&
+    route.name === "tasks" && Boolean(route.id);
   const activeTopics = useMemo(
     () =>
       topicsForSurface({
@@ -1453,11 +1458,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         // the subscription keeps fresh, and a session's FIRST worktree, made
         // after an empty read, would never arrive.
         sessionTreeWorktreesVisible: routedSessionInspectorShown,
-        taskWorktreesVisible:
-          route.name === "tasks" && Boolean(route.id) && inspectorOpen &&
-          (mobileLayout
-            ? !composerVisible && !commentActuation?.composerOpen
-            : inspectorTabVisible),
+        taskWorktreesVisible: routedTaskInspectorShown,
         // The ledge only exists on a session screen whose session owns work,
         // so an open flag left over from another session subscribes nothing.
         backgroundLedgeOpen:
@@ -1503,6 +1504,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       state.session,
       state.sessions,
       routedSessionInspectorShown,
+      routedTaskInspectorShown,
       backgroundLedgeOpen,
     ],
   );
@@ -1563,25 +1565,20 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         sidebarSection,
         routeName: route.name,
         projectOpen: projectPageOpen,
-        // The sidebar's rows are two-line on a phone and on the rail alike
-        // (`SIDEBAR_BACKLOG_DENSITY`); the predicate answers what they state.
-        sidebarTaskRowsHaveMeta: taskRowsHaveMeta(
-          SIDEBAR_BACKLOG_DENSITY,
-          prefs.backlogView,
-        ),
+        // Browser rows keep metadata at either spacing density; pickers do not.
+        sidebarTaskRowsHaveMeta: taskRowsHaveMeta("browser"),
       }),
     [
       sidebarPanelOpen,
       sidebarSection,
       route.name,
       projectPageOpen,
-      prefs.backlogView,
     ],
   );
   const worktreeHosting = useWorktreeHosting({
     worktrees: state.worktrees,
     statuses: state.worktreeStatuses,
-    active: hostingActive.hosting,
+    active: hostingActive.hosting || routedTaskInspectorShown || sessionTreeWorktreeIds.length > 0,
   });
 
   // The Pull Requests view's own projection, polled ONCE for the whole app: the
@@ -7249,6 +7246,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       sessions={state.sessions}
       worktrees={state.worktrees}
       worktreeStatuses={state.worktreeStatuses}
+      worktreeHosting={worktreeHosting.hosting}
       worktreesError={state.worktreeListError}
       worktreesFresh={state.worktreesFresh}
       onReloadWorktrees={actions.listWorktrees}
@@ -7526,6 +7524,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         worktreeStatus={displayWorktreeStatus}
         worktrees={state.worktrees}
         worktreeStatuses={state.worktreeStatuses}
+        worktreeHosting={worktreeHosting.hosting}
         worktreesError={state.worktreeListError}
         worktreesFresh={state.worktreesFresh}
         onReloadWorktrees={actions.listWorktrees}

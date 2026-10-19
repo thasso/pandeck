@@ -86,6 +86,7 @@ import {
   type Task,
 } from "../lib/backlogTree.ts";
 import { BacklogList } from "./BacklogList.tsx";
+import { browserRowDensity } from "../lib/rowDensity.ts";
 import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
 import { todayIso } from "../lib/taskDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
@@ -464,7 +465,7 @@ export function TaskManagementPage({
                   onOpenTask={onSelect}
                   onNavigate={onNavigate}
                   workflowIndicators={workflowIndicators}
-                  density="comfortable"
+                  density={browserRowDensity(mobile)}
                   showAddTask
                 />
               </div>

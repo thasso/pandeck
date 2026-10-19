@@ -114,6 +114,7 @@ function render(
         onNavigate={options.onNavigate}
         onClearFilters={() => {}}
         density={options.density ?? "comfortable"}
+        presentation={options.density === "tight" ? "picker" : "browser"}
       />,
     );
   });

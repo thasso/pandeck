@@ -38,7 +38,9 @@ import {
 import {
   buildTaskRowMeta,
   taskRowMetaEmpty,
+  taskRowsHaveMeta,
   type TaskRowMetaContext,
+  type TaskRowPresentation,
 } from "../lib/taskRowMeta.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";
@@ -135,6 +137,7 @@ export function BacklogTreePane({
   onClearFilters,
   onNavigate,
   density,
+  presentation = "browser",
   flush = false,
   showProjectBadge,
 }: {
@@ -186,7 +189,7 @@ export function BacklogTreePane({
   /** Gmail-style delete (with confirm) of the focused/selected task rows. */
   onDelete?: ((ids: string[]) => void) | undefined;
   /**
-   * The shared row's session action at `comfortable` density: open an existing
+   * The browser row's session action at either density: open an existing
    * session or start one when it has none. Pass BOTH or neither.
    */
   onOpenSession?: ((sessionId: string) => void) | undefined;
@@ -197,11 +200,13 @@ export function BacklogTreePane({
   onNavigate?: ((path: string) => void) | undefined;
   /** How much room a row gets, decided by the host (`BacklogDensity`). */
   density: BacklogDensity;
+  /** Picker content is single-line; browser content keeps metadata at either density. */
+  presentation?: TaskRowPresentation;
   /** Edge-to-edge, hairline-divided rows (`Tree`'s `flush`). */
   flush?: boolean;
 }) {
   const statusActive = statusFilterActive(statuses);
-  const tight = density === "tight";
+  const picker = presentation === "picker";
   const rowsShowProjectBadge = showProjectBadge ?? viewMode === "normal";
   // The second line's facts, bound once for the whole list and asked per row.
   const metaContext = useMemo<TaskRowMetaContext>(
@@ -428,17 +433,17 @@ export function BacklogTreePane({
   return (
     <Tree<BacklogNodeData>
       items={nodes}
-      indentWidth={tight ? TIGHT_INDENT_WIDTH : INDENT_WIDTH}
-      compact={tight}
+      indentWidth={picker ? TIGHT_INDENT_WIDTH : INDENT_WIDTH}
+      compact={density === "tight"}
       paddedContent={false}
       getRowClassName={() => "group/item"}
-      getRowDisclosure={(node) => tight || node.data.kind === "project"}
+      getRowDisclosure={(node) => picker || node.data.kind === "project"}
       flush={flush}
       // Only project headers and compact pickers retain a separate disclosure gutter.
-      rowAlign={tight ? "center" : "stretch"}
+      rowAlign={picker ? "center" : "stretch"}
       // A Project header is one line, so its chevron centres on it.
       getRowAlign={(node) =>
-        tight || node.data.kind === "project" ? "center" : "stretch"
+        picker || node.data.kind === "project" ? "center" : "stretch"
       }
       // Flush (the sidebar), a Project header is the rail's group band — the
       // same one the Focus view and the Pull Requests rail draw.
@@ -478,6 +483,7 @@ export function BacklogTreePane({
           onStartSession={onStartSession}
           onNavigate={onNavigate}
           density={density}
+          presentation={presentation}
         />
       )}
     />
@@ -628,6 +634,7 @@ function BacklogRowContent({
   onStartSession,
   onNavigate,
   density,
+  presentation,
 }: {
   node: TreeNode<BacklogNodeData>;
   state: TreeNodeState;
@@ -639,13 +646,14 @@ function BacklogRowContent({
   onStartSession?: ((task: Task) => void) | undefined;
   onNavigate?: ((path: string) => void) | undefined;
   density: BacklogDensity;
+  presentation: TaskRowPresentation;
 }) {
-  const tight = density === "tight";
+  const picker = presentation === "picker";
   if (node.data.kind === "project") {
     const data = node.data;
     return (
       <div
-        className={`flex min-w-0 items-center gap-2 ${tight ? "" : "py-0.5"}`}
+        className={`flex min-w-0 items-center gap-2 px-2 ${density === "tight" ? "" : "py-0.5"}`}
       >
         {/* The Project glyph every other surface uses — its folder in its
             colour — rather than a colour dot; muted for Unassigned and for a
@@ -677,7 +685,7 @@ function BacklogRowContent({
       ? "an agent says it is finished"
       : "an agent says it is not finished"
     : null;
-  const meta = tight ? null : buildTaskRowMeta(task, metaContext);
+  const meta = taskRowsHaveMeta(presentation) ? buildTaskRowMeta(task, metaContext) : null;
   const sessionAction = Boolean(meta && onOpenSession && onStartSession);
   const session = meta?.session;
   const signals = sessionAction && meta && !meta.working ? { ...meta, session: null } : meta;
@@ -701,11 +709,11 @@ function BacklogRowContent({
       contextTrailing={meta ? <span className="flex items-center gap-1.5">{status}<TaskIdBadge id={task.id} onNavigate={onNavigate} /></span> : undefined}
       identity={
         <>
-          {tight ? status : null}
+          {picker ? status : null}
           <TaskRowTitle task={task} selected={state.selected} dimmed={Boolean(context)} />
-          {tight && showProjectBadge && task.projectId ? <ProjectBadge projectId={task.projectId} projectsById={projectsById} size="sm" /> : null}
-          {tight && task.openBlockerCount ? <TaskBlockedIndicator openBlockers={task.openBlockerCount} size={12} /> : null}
-          {tight ? <TaskIdBadge id={task.id} onNavigate={onNavigate} /> : null}
+          {picker && showProjectBadge && task.projectId ? <ProjectBadge projectId={task.projectId} projectsById={projectsById} size="sm" /> : null}
+          {picker && task.openBlockerCount ? <TaskBlockedIndicator openBlockers={task.openBlockerCount} size={12} /> : null}
+          {picker ? <TaskIdBadge id={task.id} onNavigate={onNavigate} /> : null}
         </>
       }
       signals={signals && (state.hasChildren || !taskRowMetaEmpty({ ...signals, projectId: null })) ? <>
