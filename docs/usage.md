@@ -29,7 +29,9 @@ Usage fetch outcomes also feed account health, owned by `accountHealth.ts`.
 OpenAI's `unavailableCode` distinguishes missing credentials and rejected 401
 logins from an expired read-only access token or a forbidden 403 usage endpoint.
 The latter two do not prove a dead login. Claude timeouts likewise change no
-health. See `account-routing.md` for transitions and alerts.
+health. See `account-routing.md` for transitions and alerts. Only the included
+windows feed limit benches; OpenAI spend control and credits are display-only,
+because a spend budget governs extra credits, not the included allowance.
 
 ## Ownership
 

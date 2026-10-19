@@ -342,22 +342,27 @@ Opus or Sonnet limit. The exact pipe-form literal is not present in that build;
 it is covered separately as provider error input.
 
 Freshly fetched OpenAI/Claude windows at or above 100% with a future reset also
-bench. Cold cached snapshots never hydrate bench state. Generic windows and
-OpenAI spend control affect the whole account. OpenAI's missing-label mapper
-fallback `Model limit`, generic counter titles and numeric-only labels also
-affect the whole account. Counter words and units are removed before normalizing
-named windows, so `Codex Spark weekly limit` still names Spark. Named windows
-and active named Claude limits affect only that model. Multiple exhausted
-windows of one scope use the latest reset. Missing percentages or resets cannot
-create a usage bench. This consumes existing fetch results; it adds no fetching.
-Each bench records its source: `usage`, `quota` or `rate_limit`. Fresh usage
-clears only a usage-sourced scope, and only when all its present windows show
-valid room below 100%, not when a cap disappears or data is unavailable. Usage
-cannot clear, re-label or replace an active failure-sourced bench, even at
-98–99% usage; those benches end at their reset or on a later successful
-own-provider run on that account/model. A failure upgrades a usage bench's
-source even if its reset is unchanged. Absent generic Claude windows are not
-fabricated as unknown windows.
+bench. Cold cached snapshots never hydrate bench state. Generic windows affect
+the whole account. OpenAI spend control never benches: it budgets only
+extra-credit usage beyond the included windows, which the provider consumes
+first, so a reached or zero budget is no evidence the subscription is out. An
+account whose included windows are exhausted is still benched by those windows,
+which leaves its extra credits as the degraded last resort below. A usage bench
+persisted from an earlier spend-control reading clears like any usage bench.
+OpenAI's missing-label mapper fallback `Model limit`, generic counter titles and
+numeric-only labels also affect the whole account. Counter words and units are
+removed before normalizing named windows, so `Codex Spark weekly limit` still
+names Spark. Named windows and active named Claude limits affect only that
+model. Multiple exhausted windows of one scope use the latest reset. Missing
+percentages or resets cannot create a usage bench. This consumes existing fetch
+results; it adds no fetching. Each bench records its source: `usage`, `quota` or
+`rate_limit`. Fresh usage clears only a usage-sourced scope, and only when all
+its present windows show valid room below 100%, not when a cap disappears or
+data is unavailable. Usage cannot clear, re-label or replace an active
+failure-sourced bench, even at 98–99% usage; those benches end at their reset or
+on a later successful own-provider run on that account/model. A failure upgrades
+a usage bench's source even if its reset is unchanged. Absent generic Claude
+windows are not fabricated as unknown windows.
 
 Failures refresh their order at report time while retaining the run-start
 credential generation check, just like login-death reports. Success and usage
