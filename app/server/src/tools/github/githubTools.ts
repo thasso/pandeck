@@ -731,8 +731,7 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
         ...(reviewThreads
           ? {
               reviewThreads: reviewThreads.threads.slice(
-                0,
-                clamp(params.maxReviews, 30, 1, 100),
+                -clamp(params.maxReviews, 30, 1, 100),
               ),
               ...((reviewThreads.threadsTotal ?? reviewThreads.threads.length) >
                 clamp(params.maxReviews, 30, 1, 100) ||

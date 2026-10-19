@@ -1346,9 +1346,10 @@ conversation through `gitHosting.ts`. Each thread includes its GraphQL `id`,
 `resolved` state and comment ids. Use the thread id with
 `github_resolve_review_thread` and the numeric comment id with
 `github_comment_pull_request`'s `replyToCommentId`. The read returns at most the
-last 50 threads, limited further by `maxReviews`, with the first 20 comments per
-thread. `reviewThreadsTruncated` flags omitted threads; a thread's `truncated`
-flags omitted comments.
+last 50 threads, keeping the newest when `maxReviews` limits them further, with
+the first 20 comments per thread. Returned threads stay oldest first within that
+retained window. `reviewThreadsTruncated` flags omitted threads; a thread's
+`truncated` flags omitted comments.
 
 `github_resolve_review_thread` takes `repo`, PR `number`, `threadId`, and
 `resolved`: `true` resolves, `false` reopens. It stages a visible

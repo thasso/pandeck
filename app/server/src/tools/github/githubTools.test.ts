@@ -735,6 +735,53 @@ describe("github_get_pull_request", () => {
     expect(pr.reviewThreadsTruncated).toBe(true);
     expect(urls.some((url) => /\/pulls\/42\/comments/.test(url))).toBe(false);
   });
+  test.each([undefined, 2, 50])(
+    "keeps the newest threads when maxReviews=%s limits the provider window",
+    async (maxReviews) => {
+      vi.mocked(getGithubToolConfig).mockReturnValue(config);
+      globalThis.fetch = vi.fn(async (input) =>
+        jsonResponse(
+          String(input).endsWith("/graphql")
+            ? {
+                data: {
+                  repository: {
+                    pullRequest: {
+                      reviewThreads: {
+                        totalCount: 40,
+                        nodes: Array.from({ length: 40 }, (_, index) => ({
+                          id: `PRRT_${index + 1}`,
+                          path: "src/a.ts",
+                          isResolved: false,
+                          comments: { totalCount: 0, nodes: [] },
+                        })),
+                      },
+                    },
+                  },
+                },
+              }
+            : { number: 42 },
+        ),
+      ) as typeof fetch;
+      const { pullRequest } = parse(
+        await githubGetPullRequestTool.execute(
+          {
+            repo: "acme/app",
+            number: 42,
+            includeReviewThreads: true,
+            ...(maxReviews !== undefined ? { maxReviews } : {}),
+          },
+          ctxFor("get-pr-newest"),
+        ),
+      );
+      const count = Math.min(maxReviews ?? 30, 40);
+      expect(pullRequest.reviewThreads).toHaveLength(count);
+      expect(pullRequest.reviewThreads[0].id).toBe(`PRRT_${41 - count}`);
+      expect(pullRequest.reviewThreads.at(-1).id).toBe("PRRT_40");
+      expect(pullRequest.reviewThreadsTruncated).toBe(
+        count < 40 ? true : undefined,
+      );
+    },
+  );
 });
 
 describe("github_watch_pull_request_checks", () => {
