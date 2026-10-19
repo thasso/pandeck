@@ -11,15 +11,15 @@ export const INITIATIVE_STATES = ["active", "paused", "done"] as const;
 export type InitiativeState = (typeof INITIATIVE_STATES)[number];
 
 /**
- * Durable attention state for a paused or done Initiative, the same shape and
- * rules as `WorkflowRunAttention`. Present only once a revision was raised.
+ * Durable attention state for an Initiative. Settle acknowledges the rendered
+ * revision; later Initiative, member Task or related session activity raises it.
  */
 export interface InitiativeAttention {
-  /** Monotonic, one bump per meaningful state change. */
+  /** Monotonic, one bump per activity notification or Initiative mutation. */
   revision: number;
   /** The revision an explicit Settle acknowledged; 0 when never settled. */
   settledRevision: number;
-  kind: Exclude<InitiativeState, "active">;
+  kind: "activity" | "paused" | "done";
   at: number;
 }
 
@@ -60,6 +60,8 @@ export interface InitiativeSummary {
   title: string;
   state: InitiativeState;
   attention?: InitiativeAttention;
+  /** Manual Attention position, otherwise ordered by creation time. */
+  inboxPosition?: number;
   progress: InitiativeProgress;
   /** Absent when the Initiative has no open milestone. */
   nextMilestone?: InitiativeMilestoneRef;
@@ -78,11 +80,7 @@ export interface InitiativeSummary {
    * when it was cut.
    */
   sessionCount: number;
-  /**
-   * When the Initiative was created: where a paused or done outcome sits in
-   * the Sessions inbox's Needs you, on the creation scale sessions and runs
-   * are ordered by there (it is never dragged).
-   */
+  /** Creation time is the default Attention position, as for sessions and runs. */
   createdAt: number;
   updatedAt: number;
 }

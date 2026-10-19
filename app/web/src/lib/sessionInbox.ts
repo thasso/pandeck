@@ -2051,29 +2051,47 @@ export function planInboxDrop(
   activeId: string,
   overId: string,
 ): InboxPositionEntry[] | undefined {
-  const from = items.findIndex((item) => inboxItemId(item) === activeId);
-  const to = items.findIndex((item) => inboxItemId(item) === overId);
+  return planPositionedInboxDrop(items, activeId, overId, {
+    id: inboxItemId,
+    position: itemPosition,
+    entry: inboxPositionEntry,
+  });
+}
+
+/** The shared drop algorithm, including item kinds built by other inbox hosts. */
+export function planPositionedInboxDrop<T>(
+  items: readonly T[],
+  activeId: string,
+  overId: string,
+  order: {
+    id: (item: T) => string;
+    position: (item: T) => number;
+    entry: (item: T, position: number) => InboxPositionEntry;
+  },
+): InboxPositionEntry[] | undefined {
+  const from = items.findIndex((item) => order.id(item) === activeId);
+  const to = items.findIndex((item) => order.id(item) === overId);
   if (from < 0 || to < 0 || from === to) return undefined;
   const moved = [...items];
-  const [item] = moved.splice(from, 1) as [SessionInboxItem];
+  const [item] = moved.splice(from, 1) as [T];
   moved.splice(to, 0, item);
   const above = moved[to - 1];
   const below = moved[to + 1];
   const between = (
-    upper: SessionInboxItem,
-    lower: SessionInboxItem | undefined,
+    upper: T,
+    lower: T | undefined,
   ): number | undefined => {
-    const high = itemPosition(upper);
+    const high = order.position(upper);
     const position = lower
-      ? (high + itemPosition(lower)) / 2
+      ? (high + order.position(lower)) / 2
       : high - INBOX_POSITION_STEP;
-    return position < high && (!lower || position > itemPosition(lower))
+    return position < high && (!lower || position > order.position(lower))
       ? position
       : undefined;
   };
   if (above) {
     const position = between(above, below);
-    if (position !== undefined) return [inboxPositionEntry(item, position)];
+    if (position !== undefined) return [order.entry(item, position)];
   } else {
     // `below` is the old top: the dragged item takes its number, and it moves
     // down between that number and the item that was second.
@@ -2081,13 +2099,13 @@ export function planInboxDrop(
     const lowered = between(top, moved[to + 2]);
     if (lowered !== undefined)
       return [
-        inboxPositionEntry(item, itemPosition(top)),
-        inboxPositionEntry(top, lowered),
+        order.entry(item, order.position(top)),
+        order.entry(top, lowered),
       ];
   }
-  const top = Math.max(...items.map(itemPosition));
+  const top = Math.max(...items.map(order.position));
   return moved.map((each, index) =>
-    inboxPositionEntry(each, top - index * INBOX_POSITION_STEP),
+    order.entry(each, top - index * INBOX_POSITION_STEP),
   );
 }
 

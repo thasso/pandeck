@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Archive, Check, ChevronRight, Folder } from "lucide-react";
+import { Archive, Check, Folder } from "lucide-react";
 import {
   closestCenter,
   DndContext,
@@ -82,7 +82,6 @@ import {
   classifySessionStatus,
   inboxItemId,
   planCardReorder,
-  planInboxDrop,
   sessionCardKey,
   sessionRelationsKey,
   SETTLED_PAGE_SIZE,
@@ -100,6 +99,7 @@ import {
   initiativeLayoutKey,
   mergeNeedsYou,
   needsYouEntryId,
+  planInitiativeInboxDrop,
   type InitiativeInboxItem,
   type NeedsYouEntry,
 } from "../lib/initiativeInbox.ts";
@@ -248,8 +248,7 @@ interface Props {
   /** Open one Initiative's page, where its map is. */
   onOpenInitiative: (initiativeId: string) => void;
   /**
-   * Settle a paused or done Initiative through the revision its clicked card
-   * rendered: the one Initiative write the UI makes.
+   * Settle any Initiative through the revision its clicked card rendered.
    */
   onSettleInitiative: (initiativeId: string, throughRevision: number) => void;
   /**
@@ -614,9 +613,8 @@ export function SessionInbox({
   );
   useEffect(() => setSettledLimit(SETTLED_PAGE_SIZE), [filters]);
 
-  // Initiatives are items of their own, read off their summaries alone: an
-  // active one in its block above the working set, an unsettled paused or done
-  // one in Needs you, ordered and counted with everything else there. Their
+  // Unsettled Initiatives share the working set while active, or Needs you
+  // while paused/done. Their summaries supply every fact, and their
   // sessions are LISTED under them and keep their own cards, so nothing here
   // takes a session out of `view`.
   const initiativeInbox = useMemo(
@@ -630,6 +628,19 @@ export function SessionInbox({
   const needsYouEntries = useMemo(
     () => mergeNeedsYou(view.needsYou, initiativeInbox.outcomes),
     [view.needsYou, initiativeInbox],
+  );
+  const allActiveEntries = useMemo(
+    () => mergeNeedsYou(inbox.active, initiativeInbox.active),
+    [inbox.active, initiativeInbox],
+  );
+  const activeEntries = useMemo(
+    () => mergeNeedsYou(view.active, initiativeInbox.active),
+    [view.active, initiativeInbox],
+  );
+  const projectForEntry = useCallback(
+    (entry: NeedsYouEntry): string | null =>
+      entry.kind === "initiative" ? null : projectForItem(entry.item),
+    [projectForItem],
   );
 
   // Which peers a cluster card is showing under it. The disclosure is the
@@ -1206,7 +1217,6 @@ export function SessionInbox({
         ? settleError.message
         : null;
     return (
-      <div key={id} data-inbox-card={id}>
         <ExitStage leaving={settling.includes(id)}>
           <div className={`border-b border-border/60 ${open ? "pb-2" : ""}`}>
             <InitiativeInboxCard
@@ -1254,7 +1264,6 @@ export function SessionInbox({
             ) : null}
           </div>
         </ExitStage>
-      </div>
     );
   };
 
@@ -1277,19 +1286,16 @@ export function SessionInbox({
       );
     });
 
+  const renderEntry = (entry: NeedsYouEntry, lifted: boolean) =>
+    entry.kind === "initiative"
+      ? renderInitiativeItem(entry.item)
+      : renderItem(entry.item, lifted);
   const renderNeedsYou = (entries: NeedsYouEntry[]) =>
-    entries.map((entry) =>
-      entry.kind === "initiative" ? (
-        renderInitiativeItem(entry.item)
-      ) : (
-        <div
-          key={needsYouEntryId(entry)}
-          data-inbox-card={needsYouEntryId(entry)}
-        >
-          {renderItem(entry.item, false)}
-        </div>
-      ),
-    );
+    entries.map((entry) => (
+      <div key={needsYouEntryId(entry)} data-inbox-card={needsYouEntryId(entry)}>
+        {renderEntry(entry, false)}
+      </div>
+    ));
 
   const itemIsSelected = (item: SessionInboxItem) =>
     item.kind === "run"
@@ -1300,6 +1306,8 @@ export function SessionInbox({
             (child) => child.session.id === currentId,
           ),
         );
+  const entryIsSelected = (entry: NeedsYouEntry) =>
+    entry.kind === "inbox" && itemIsSelected(entry.item);
   const sessionProject = (session: SessionListItem) =>
     filterProjects.get(session.id) ?? null;
   const sessionIsSelected = (session: SessionListItem) =>
@@ -1341,9 +1349,9 @@ export function SessionInbox({
   const activeProjects = useMemo(
     () =>
       new Map(
-        inbox.active.map((item) => [inboxItemId(item), projectForItem(item)]),
+        allActiveEntries.map((entry) => [needsYouEntryId(entry), projectForEntry(entry)]),
       ),
-    [inbox.active, projectForItem],
+    [allActiveEntries, projectForEntry],
   );
   const detectInboxCollisions = useCallback<CollisionDetection>(
     (args) => {
@@ -1370,9 +1378,9 @@ export function SessionInbox({
       )
         return;
       const items = filters.byProject
-        ? inbox.active.filter((item) => projectForItem(item) === projectId)
-        : inbox.active;
-      const positions = planInboxDrop(
+        ? allActiveEntries.filter((entry) => projectForEntry(entry) === projectId)
+        : allActiveEntries;
+      const positions = planInitiativeInboxDrop(
         items,
         String(active.id),
         String(over.id),
@@ -1391,23 +1399,23 @@ export function SessionInbox({
       onSetInboxPositions(positions);
     },
     [
-      inbox.active,
+      allActiveEntries,
       onSetInboxPositions,
       filters.byProject,
       activeProjects,
-      projectForItem,
+      projectForEntry,
     ],
   );
   const activeIds = useMemo(
     () =>
       filters.byProject
         ? groupAttentionByProject(
-            view.active,
-            projectForItem,
+            activeEntries,
+            projectForEntry,
             projectOrder,
-          ).flatMap((group) => group.items.map(inboxItemId))
-        : view.active.map(inboxItemId),
-    [view.active, filters.byProject, projectForItem, projectOrder],
+          ).flatMap((group) => group.items.map(needsYouEntryId))
+        : activeEntries.map(needsYouEntryId),
+    [activeEntries, filters.byProject, projectForEntry, projectOrder],
   );
 
   // The cold-start message claims this browser has NOTHING, so a live Workflow
@@ -1524,19 +1532,6 @@ export function SessionInbox({
         </section>
       ) : null}
 
-      {/* Active Initiatives head the working set, newest first and never
-          dragged: their order is creation alone, and Settle is the one
-          Initiative write the UI makes. */}
-      {initiativeInbox.active.length > 0 ? (
-        <section
-          aria-label="Initiatives"
-          data-inbox-initiatives
-          className="flex flex-col"
-        >
-          {initiativeInbox.active.map(renderInitiativeItem)}
-        </section>
-      ) : null}
-
       {onSetInboxPositions ? (
         <DndContext
           sensors={sensors}
@@ -1551,28 +1546,28 @@ export function SessionInbox({
           >
             {renderProjectGroups(
               "active",
-              view.active,
-              projectForItem,
-              (items) =>
-                items.map((item) => (
+              activeEntries,
+              projectForEntry,
+              (entries) =>
+                entries.map((entry) => (
                   <DraggableInboxItem
-                    key={inboxItemId(item)}
-                    id={inboxItemId(item)}
+                    key={needsYouEntryId(entry)}
+                    id={needsYouEntryId(entry)}
                   >
-                    {(lifted) => renderItem(item, lifted)}
+                    {(lifted) => renderEntry(entry, lifted)}
                   </DraggableInboxItem>
                 )),
-              itemIsSelected,
+              entryIsSelected,
             )}
           </SortableContext>
         </DndContext>
       ) : (
         renderProjectGroups(
           "active",
-          view.active,
-          projectForItem,
-          renderCardList,
-          itemIsSelected,
+          activeEntries,
+          projectForEntry,
+          renderNeedsYou,
+          entryIsSelected,
         )
       )}
 

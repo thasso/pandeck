@@ -15,9 +15,17 @@ export function parseInboxPlacement(
 ): InboxPlacement | { error: string } {
   const sessions = new Map<string, number>();
   const runs = new Map<number, number>();
+  const initiatives = new Map<number, number>();
   for (const entry of positions) {
     if (entry.kind === "session") {
       sessions.set(entry.id, entry.position);
+      continue;
+    }
+    if (entry.kind === "initiative") {
+      const id = Number(entry.id);
+      if (!Number.isSafeInteger(id) || id <= 0)
+        return { error: `Initiative ${JSON.stringify(entry.id)} does not exist` };
+      initiatives.set(id, entry.position);
       continue;
     }
     const id = Number(entry.runId);
@@ -30,5 +38,8 @@ export function parseInboxPlacement(
   return {
     sessions: [...sessions].map(([id, position]) => ({ id, position })),
     runs: [...runs].map(([id, position]) => ({ id, position })),
+    ...(initiatives.size > 0
+      ? { initiatives: [...initiatives].map(([id, position]) => ({ id, position })) }
+      : {}),
   };
 }

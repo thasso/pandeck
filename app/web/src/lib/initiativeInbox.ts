@@ -2,13 +2,10 @@
  * Initiatives as Sessions inbox items (`docs/initiatives.md`, The attention
  * list; `app/web/docs/ui-shell.md`).
  *
- * An ACTIVE Initiative is always an item, with nothing to settle: it is
- * ongoing work, not an outcome, and it stands in its own block above the
- * working set. A paused or done one is an OUTCOME while its attention cursor
- * holds a revision the user has not settled: it is an item of **Needs you**,
- * counted there like an ended Workflow Run, and Settle acknowledges exactly
- * that rendered revision. Everything here reads the `initiatives` topic
- * summary alone, so an item never asks for the graph.
+ * Any Initiative with unsettled attention is an item. Active ones share the
+ * draggable working set; paused and done ones stand in Needs you. Settle
+ * acknowledges the rendered revision, and later activity brings the item back.
+ * All facts come from summaries; no card requests the graph.
  *
  * The sessions an item discloses are the summary's own — started from a
  * member Task, live, at most 50 — resolved against the rows this browser
@@ -18,13 +15,14 @@
  *
  * Framework-free by the `lib/` contract.
  */
-import type { InitiativeSummary, SessionListItem } from "@assistant/shared";
+import { inboxPositionOf, type InboxPositionEntry, type InitiativeSummary, type SessionListItem } from "@assistant/shared";
 import { relativeAge } from "./relativeTime.ts";
 import {
   compareSessionsNeedingUserFirst,
   inboxCard,
   inboxItemId,
   itemPosition,
+  planPositionedInboxDrop,
   sessionCardKey,
   type SessionInboxCard,
   type SessionInboxItem,
@@ -41,8 +39,8 @@ export interface InitiativeInboxItem {
   initiative: InitiativeSummary;
   /**
    * The attention revision Settle acknowledges, present exactly while the
-   * Initiative is an unsettled paused or done OUTCOME — which is also what
-   * puts it in Needs you. Captured into the click, never re-read when the
+   * Initiative has unsettled attention. Paused/done items stand in Needs you.
+   * Captured into the click, never re-read when the
    * command leaves.
    */
   settleRevision?: number;
@@ -65,17 +63,16 @@ export interface InitiativeInboxItem {
 
 /** The two places Initiative items stand in the inbox. */
 export interface InitiativeInbox {
-  /** Active Initiatives: their own block above the working set. */
+  /** Unsettled active Initiatives, mixed into the working set. */
   active: InitiativeInboxItem[];
   /** Unsettled paused or done outcomes: items of Needs you. */
   outcomes: InitiativeInboxItem[];
 }
 
-/** The pending revision of a paused or done Initiative, else undefined. */
+/** The pending attention revision, regardless of Initiative state. */
 export function initiativeSettleRevision(
   initiative: InitiativeSummary,
 ): number | undefined {
-  if (initiative.state === "active") return undefined;
   const attention = initiative.attention;
   return attention && attention.revision > attention.settledRevision
     ? attention.revision
@@ -84,10 +81,7 @@ export function initiativeSettleRevision(
 
 /** Whether the Initiative is a Sessions inbox item at all. */
 export function initiativeInInbox(initiative: InitiativeSummary): boolean {
-  return (
-    initiative.state === "active" ||
-    initiativeSettleRevision(initiative) !== undefined
-  );
+  return initiativeSettleRevision(initiative) !== undefined;
 }
 
 /** The item's identity for React keys, layout measurement and focus. */
@@ -95,9 +89,9 @@ export function initiativeItemId(initiativeId: string): string {
   return `initiative:${initiativeId}`;
 }
 
-/** Newest created first, the inbox's order for an item nobody dragged. */
+/** Manual position first, otherwise newest created, as for sessions and runs. */
 function newestFirst(a: InitiativeInboxItem, b: InitiativeInboxItem): number {
-  const created = b.initiative.createdAt - a.initiative.createdAt;
+  const created = inboxPositionOf(b.initiative) - inboxPositionOf(a.initiative);
   if (created !== 0) return created;
   const left = initiativeItemId(a.initiative.id);
   const right = initiativeItemId(b.initiative.id);
@@ -106,8 +100,7 @@ function newestFirst(a: InitiativeInboxItem, b: InitiativeInboxItem): number {
 
 /**
  * The Initiative items, split by where they stand. A state change moves an
- * item only between those two places, never within one: each is ordered by
- * creation alone, since an Initiative is never dragged.
+ * item between those two places; activity does not change its manual position.
  */
 export function buildInitiativeInbox(
   initiatives: readonly InitiativeSummary[],
@@ -139,14 +132,14 @@ export function buildInitiativeInbox(
       ...(additionalSessions.length ? { additionalSessions } : {}),
       more: Math.max(0, initiative.sessionCount - shown.length),
     };
-    (settleRevision !== undefined ? inbox.outcomes : inbox.active).push(item);
+    (initiative.state === "active" ? inbox.active : inbox.outcomes).push(item);
   }
   inbox.active.sort(newestFirst);
   inbox.outcomes.sort(newestFirst);
   return inbox;
 }
 
-/** One row of Needs you: a session or run item, or an Initiative outcome. */
+/** One Attention row, used in both Needs you and the working set. */
 export type NeedsYouEntry =
   | { kind: "inbox"; item: SessionInboxItem }
   | { kind: "initiative"; item: InitiativeInboxItem };
@@ -160,13 +153,12 @@ export function needsYouEntryId(entry: NeedsYouEntry): string {
 function entryPosition(entry: NeedsYouEntry): number {
   return entry.kind === "inbox"
     ? itemPosition(entry.item)
-    : entry.item.initiative.createdAt;
+    : inboxPositionOf(entry.item.initiative);
 }
 
 /**
- * Needs you with the Initiative outcomes in it, ordered as the block always
- * is: highest position first — an Initiative's is its creation time, the
- * position of any item nobody dragged — then by item id.
+ * Merge session/run rows with Initiative rows on their common position scale.
+ * Used for Needs you and for the draggable working set.
  */
 export function mergeNeedsYou(
   needsYou: readonly SessionInboxItem[],
@@ -183,6 +175,26 @@ export function mergeNeedsYou(
     const left = needsYouEntryId(a);
     const right = needsYouEntryId(b);
     return left < right ? -1 : left > right ? 1 : 0;
+  });
+}
+
+/** Plan a mixed Initiative/session/run drop with the shared ordering rules. */
+export function planInitiativeInboxDrop(
+  entries: readonly NeedsYouEntry[],
+  activeId: string,
+  overId: string,
+): InboxPositionEntry[] | undefined {
+  return planPositionedInboxDrop(entries, activeId, overId, {
+    id: needsYouEntryId,
+    position: entryPosition,
+    entry: (entry, position) => {
+      if (entry.kind === "initiative")
+        return { kind: "initiative", id: entry.item.initiative.id, position };
+      const item = entry.item;
+      return item.kind === "run"
+        ? { kind: "run", runId: item.run.id, position }
+        : { kind: "session", id: item.card.session.id, position };
+    },
   });
 }
 
@@ -240,6 +252,7 @@ export function initiativeItemKey(
     String(initiative.sessionCount),
     String(item.more),
     String(item.settleRevision ?? ""),
+    String(inboxPositionOf(initiative)),
     relativeAge(initiative.updatedAt, now),
     ...item.sessions.map((card) => card.session.id),
     ...(item.additionalSessions ?? []).map((card) => card.session.id),

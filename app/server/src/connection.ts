@@ -2503,7 +2503,7 @@ export class Connection implements Viewer {
     const placement = parseInboxPlacement(positions);
     if ("error" in placement) return refuse(placement.error);
     if (!setInboxPositions(placement))
-      return refuse("a session or run no longer exists");
+      return refuse("a session, run or Initiative no longer exists");
     if (placement.runs.length > 0) broadcastWorkflowRuns();
     if (placement.sessions.length > 0) await hub.broadcastSessions();
   }

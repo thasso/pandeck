@@ -1899,10 +1899,11 @@ export function inboxPositionOf(item: {
   return item.inboxPosition ?? item.createdAt;
 }
 
-/** One item `setInboxPositions` places: a session, or a Workflow Run. */
+/** One item `setInboxPositions` places in the shared Attention order. */
 export type InboxPositionEntry =
   | { kind: "session"; id: string; position: number }
-  | { kind: "run"; runId: string; position: number };
+  | { kind: "run"; runId: string; position: number }
+  | { kind: "initiative"; id: string; position: number };
 
 /** The most entries one `setInboxPositions` may carry. */
 export const MAX_INBOX_POSITIONS = 1000;

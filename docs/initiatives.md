@@ -419,22 +419,29 @@ re-reads the graph.
 An Initiative is a Sessions inbox item, following the Workflow Run precedent
 (`docs/agent-workflows.md`, `app/web/docs/ui-shell.md`).
 
-- **While active**, it is always an item, in a block of active Initiatives above
-  the working set. Settle is not offered: there is no outcome to acknowledge,
-  only ongoing work.
-- **Once paused or done**, it stays an item with that outcome until the user
-  settles it. The change of state raises the attention cursor
-  (`attention_revision` / `attention_settled_revision`, the same shape and rules
-  as a Workflow Run's) in the same write; an Initiative created paused or done
-  arrives raised, while re-stating its state, or setting it active, raises
-  nothing. Settle acknowledges exactly the revision the clicked item rendered
-  (`settleInitiative`, whose `throughRevision` is required): the server clamps
-  it to the stored revision and only ever moves the acknowledgement forward, so
-  an outcome raised after the render stays an item. While unsettled, the outcome
-  is an item of **Needs you** and counts toward its waiting-on-you number, like
-  an ended Workflow Run. A settled Initiative leaves the inbox, and setting it
-  active again brings it back to the active block. A row that never raised a
-  revision (created before this cursor) is not an outcome.
+- An Initiative in **any state** can settle. New Initiatives arrive with an
+  attention revision. Unsettled active Initiatives share the draggable working
+  set with sessions and Workflow Runs. Unsettled paused/done Initiatives stand
+  in **Needs you**, counted by its bar like an ended Workflow Run.
+- Settle acknowledges exactly the revision the clicked item rendered
+  (`settleInitiative`, whose `throughRevision` is required). The server clamps
+  it to the stored revision and only moves the acknowledgement forward. A
+  settled Initiative leaves Attention without changing its state, membership,
+  or visibility in the Project browser and detail pages.
+- Later activity automatically brings it back. Initiative edits and membership
+  writes, member Task notifications, and linked session creation, turn starts
+  and outcomes raise attention in the same transaction as the Initiative's
+  state-event revision. The existing holder fan-out also covers external
+  blocker changes. Repeating unchanged Initiative fields does not raise it.
+  Session read marks, settlement, archival and deletion refresh summaries but
+  do not raise attention. Settling or reordering the Initiative does not raise
+  it either. Newer activity after the rendered revision survives a stale Settle.
+- Active Initiative cards use the same drag activation and position scale as
+  sessions and runs. A drop moves the whole card and any expanded session rows.
+  `inboxPosition` overrides creation time; activity preserves that position.
+  Mixed-kind drops persist atomically through `setInboxPositions`. Needs you
+  remains non-draggable for every kind. With Project grouping enabled,
+  Initiatives are Unassigned and can reorder within that group.
 - A Settle is the user's acknowledgement, not an effect of the card being on
   screen: leaving the inbox while the card plays its exit still sends it, once,
   with the revision the card rendered. Its refusal or unanswered deadline is the
@@ -475,6 +482,11 @@ role sessions they are not folded away: a Task can belong to several
 Initiatives, so no single card owns a session, and a session that needs the user
 must stay visible on its own. Membership is structural: sessions linked to
 member Tasks, nothing parsed from titles.
+
+Migration `0086_initiative_inbox.sql` preserves existing Initiative data and
+paused/done acknowledgements, initializes active attention, and adds manual
+positions. `attention_kind` also accepts `activity`. Only the deployed server
+applies this migration; a production-backed web preview alone cannot enable it.
 
 ## Phases
 

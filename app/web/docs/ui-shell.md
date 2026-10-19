@@ -751,12 +751,11 @@ scrolls the card into view and focuses it, once per address, honouring reduced
 motion.
 
 An **Initiative** is a Sessions inbox item too (`docs/initiatives.md`, The
-attention list), following the run's precedent where it can. An ACTIVE
-Initiative is always an item and offers no Settle, since ongoing work has no
-outcome to acknowledge; a paused or done one is an item while its attention
-revision is unsettled, and Settle — the one Initiative write the UI makes —
-sends exactly the revision the clicked card rendered, captured at the click and
-sent after the settle exit, so an outcome raised meanwhile stays an item. The
+attention list). Every state supports Settle. An Initiative is an item while
+its attention revision is unsettled. Initiative edits, member Task changes,
+and linked session creation, turn starts and outcomes raise that revision.
+Settle sends exactly the revision the clicked card rendered, captured at the
+click and sent after the settle exit, so newer activity stays an item. The
 send belongs to the click, not to the list: leaving the Sessions section during
 the exit sends it then, as a swipe's does, and never twice. A refused or
 unanswered Settle is said under its card while the visible inbox draws that card
@@ -772,15 +771,16 @@ the next milestone's title included, so no card reads a graph, a layout or the
 Tasks topic, and a member Task's change reaches it as the Initiative's own
 event.
 
-WHERE an Initiative stands follows what it asks of the user. An ACTIVE one is in
-its own block at the top of the working set, below **Needs you**, newest first.
-An unsettled paused or done outcome is an item OF **Needs you**, like an ended
-Workflow Run: ordered among its items on their creation scale (the summary's
-`createdAt`, since nobody drags it), counted by the bar's waiting-on-you number,
-and the first row that number moves to when it leads the block. Settled, it
-leaves both places; active again, it goes back to the block. Each Initiative is
-exactly ONE card in exactly one place, and neither place drags: dragging would
-be a second Initiative write, and there is no Initiative inbox position. Nothing
+An unsettled ACTIVE Initiative shares the draggable working set below
+**Needs you**. An unsettled paused/done Initiative stands in Needs you and
+counts toward its waiting-on-you number. Both use the same position scale as
+sessions and runs: `inboxPosition` when manually placed, otherwise `createdAt`.
+Dragging picks up the Initiative and its expanded rows as one block, and mixed
+placements persist atomically. With Project grouping enabled, Initiatives
+belong to Unassigned. Needs you remains non-draggable, as for sessions. Settle
+takes an Initiative out of Attention until new activity, without changing its
+state or its Project browser entry. Neither settling nor dragging raises its
+attention revision. Each Initiative has one card in one place. Nothing
 above the cards holds a loading placeholder for Initiatives, but neither the
 cold-start nor the "nothing needs you" claim is made before the Initiative list
 has answered — an inbox whose only item is an Initiative is not empty — and a

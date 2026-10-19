@@ -33,7 +33,7 @@ export interface InitiativeInboxCardProps {
   /** Open the Initiative's page, where the map is. */
   onOpen: (initiativeId: string) => void;
   /**
-   * Acknowledge a paused or done Initiative's outcome. `throughRevision` is
+   * Acknowledge the Initiative's activity. `throughRevision` is
    * the revision THIS card rendered, captured at the click: a newer outcome
    * landing before the command leaves stays awake.
    */
@@ -49,15 +49,13 @@ export interface InitiativeInboxCardProps {
  * @purpose The Sessions inbox's card for ONE Initiative: its title and state,
  * how far it has come, what can start now and what is blocked, the next open
  * milestone, and the sessions working on its Tasks.
- * @useWhen The Sessions inbox is rendering an active Initiative, or a paused or
- * done one whose outcome the user has not settled.
+ * @useWhen The Sessions inbox is rendering an Initiative with unsettled activity.
  * @avoidWhen Reading or steering the Initiative itself; that is its page
  * (`/initiatives/:id`), which this card opens. Agents manage Initiatives, so
  * the card offers no edit.
  * @intent An Initiative is the long view over many sessions, so the card says
  * where the whole stands in the session card's three rows, and Settle is its
- * one verb — offered only while a paused or done outcome is unacknowledged,
- * never on an active one, which is work in progress. Its sessions are listed
+ * one verb, offered in every state while activity is unacknowledged. Its sessions are listed
  * on request but keep their own cards: a Task may belong to several
  * Initiatives, so no Initiative owns a session.
  * @related SessionInbox, WorkflowRunInboxCard, ClusterChildRow,
@@ -86,9 +84,7 @@ function InitiativeInboxCardImpl({
       : initiative.state === "done"
         ? "Done"
         : undefined;
-  const settleLabel = `Settle — acknowledge that “${initiative.title}” is ${
-    initiative.state === "done" ? "done" : "paused"
-  }`;
+  const settleLabel = `Settle activity for “${initiative.title}”`;
 
   return (
     <ListRow

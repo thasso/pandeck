@@ -83,5 +83,6 @@
   "0082_session_interrupted_run_detail.sql": "9969281315c26152e1a32e7871aeb95cda13e52c4b44c6a8d140e623c3e3d78c",
   "0083_background_delivery_handling.sql": "97d23263c0a0a38e95d21e5b6d2355acb345e739e30cdd052b183b2915b835ac",
   "0084_background_delivery_prior_receipt.sql": "d2dc3e72e6074951d37eb260cf04c8e274b7f93139444c2cd07b5e72e9883a7b",
-  "0085_initiatives.sql": "6e41fcf3c9c3842fcdd7925f2a2cfbf7e110aea2dea435c367cfd3b413ad8151"
+  "0085_initiatives.sql": "6e41fcf3c9c3842fcdd7925f2a2cfbf7e110aea2dea435c367cfd3b413ad8151",
+  "0086_initiative_inbox.sql": "a599227357571b4df11d4f274c0f1c9e14e045a5cb409aa907c6572a8448e690"
 }

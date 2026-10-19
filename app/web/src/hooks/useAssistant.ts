@@ -5163,9 +5163,12 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   if (action.kind === "optimisticInboxPositions") {
     const sessionPositions = new Map<string, number>();
     const runPositions = new Map<string, number>();
+    const initiativePositions = new Map<string, number>();
     for (const entry of action.positions)
       if (entry.kind === "session")
         sessionPositions.set(entry.id, entry.position);
+      else if (entry.kind === "initiative")
+        initiativePositions.set(entry.id, entry.position);
       else runPositions.set(entry.runId, entry.position);
     return {
       ...state,
@@ -5187,6 +5190,12 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
                 : { ...run, inboxPosition };
             })
           : state.workflowRuns,
+      initiatives: initiativePositions.size > 0
+        ? state.initiatives.map((initiative) => {
+            const inboxPosition = initiativePositions.get(initiative.id);
+            return inboxPosition === undefined ? initiative : { ...initiative, inboxPosition };
+          })
+        : state.initiatives,
       error: null,
     };
   }
@@ -6814,7 +6823,7 @@ export interface AssistantActions {
    */
   settleWorkflowRun: (runId: string, throughRevision: number) => void;
   /**
-   * Settle a paused or done Initiative from its Sessions inbox card: the
+   * Settle an Initiative from its Sessions inbox card: the
    * command acknowledges `throughRevision`, the attention revision the CLICKED
    * card rendered, captured by the caller at the click.
    */
@@ -9086,7 +9095,7 @@ export function useAssistant({
         });
       },
       setInboxPositions: (positions) => {
-        // Both domains, because one renumbering can place sessions and runs.
+        // One drop can place sessions, runs and Initiatives together.
         const requestId = trackMutation(
           {
             topic: "sessions",
@@ -9100,6 +9109,12 @@ export function useAssistant({
                   entry.kind === "run" ? [entry.runId] : [],
                 ),
               },
+              {
+                topic: "initiatives",
+                objectIds: positions.flatMap((entry) =>
+                  entry.kind === "initiative" ? [entry.id] : [],
+                ),
+              },
             ],
           },
           // A refusal re-reads BOTH lists rather than undoing the drop
@@ -9110,6 +9125,11 @@ export function useAssistant({
           () => {
             refetchSessions();
             refetchWorkflowRuns();
+            if (topicsRef.current.has("initiatives")) {
+              dispatch({ kind: "initiativeListSubscribed" });
+              send({ type: "unsubscribe", topics: ["initiatives"] });
+              send(taskSubscribeMessage(["initiatives"], stateRef.current, pendingMutationsRef.current));
+            }
           },
         );
         dispatch({ kind: "optimisticInboxPositions", positions });
