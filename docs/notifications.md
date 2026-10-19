@@ -14,21 +14,26 @@ for (an owned turn finishing, CI concluding, a workflow reaching a merge
 decision) or an agent that has STOPPED and cannot continue without them (an
 approval it proposed, a question it asked). Session alerts use the same
 ownership and outcome rule as the Sessions inbox. A coordinator-owned
-`session_spawn` child never alerts the user. When a peer report wakes its
-parent, a successful parent turn also stays quiet while another
-`responseRequested` peer reply remains outstanding; its first run after the
-final expected report alerts normally. A direct human turn and a parent failure
-remain their own results during orchestration, and a user-aborted turn is not
-news. The Sessions inbox follows the same rule: an intermediate parent wake
-creates neither an outcome revision nor a new **Done / Unread response** state,
-but unread state from before that wake remains. This distinction is structural:
-prompt origin and durable peer-request state decide it, never titles or
-transcript text.
+`session_spawn` child's ordinary question, approval or completed turn does not
+alert the user. A peer send refused at the hop limit is the exception below.
+When a peer report wakes its parent, a successful parent turn also stays quiet
+while another `responseRequested` peer reply remains outstanding; its first run
+after the final expected report alerts normally. A direct human turn and a
+parent failure remain their own results during orchestration, and a user-aborted
+turn is not news. The Sessions inbox follows the same rule: an intermediate
+parent wake creates neither an outcome revision nor a new **Done / Unread
+response** state, but unread state from before that wake remains. This
+distinction is structural: prompt origin and durable peer-request state decide
+it, never titles or transcript text.
 
 A blocked agent is pushed once when the block appears. The durable card and the
 inbox's `needs-you` tier carry it after that. Coordinator-owned children stay
-quiet here too; their parent owns the loop. No single route reaches every
-client:
+quiet here too; their parent owns the loop. A peer send refused at the
+causal-chain hop limit needs the human even when its sender is
+coordinator-owned: it pushes once per sender and chain, links to that sender,
+and leaves a durable `needs-you` condition until a human resets the chain.
+Repeated refusals of the same chain do not push again. No single route reaches
+every client:
 
 | Route                               | Reaches                                 | When the app is closed |
 | ----------------------------------- | --------------------------------------- | ---------------------- |

@@ -115,6 +115,32 @@ describe("classifySessionStatus", () => {
     );
   });
 
+  it("keeps a hop refusal in needs-you until the chain resets, including folded peers", () => {
+    const root = session({ id: "root", settledAt: NOW - 1000 });
+    const child = session({
+      id: "child",
+      spawnedBySessionId: "root",
+      spawnOwnership: "coordinator",
+      settledAt: NOW - 1000,
+      isStreaming: true,
+      peerPromptHopRefusal: { chainId: "chain-limit", maxHops: 3 },
+    });
+    expect(classifySessionStatus(child)).toBe("peer-limit");
+    expect(isShelvedSession(child)).toBe(false);
+    expect(tierForStatus(classifySessionStatus(child))).toBe("needs-you");
+    expect(sessionStatusDetail(child, classifySessionStatus(child))).toContain(
+      "chain-limit",
+    );
+    expect(sessionStatusDetail(child, classifySessionStatus(child))).toContain(
+      "message from you",
+    );
+    expect(
+      buildSessionInbox([root, child]).needsYou.some(
+        (item) => item.kind === "session" && item.card.tier === "needs-you",
+      ),
+    ).toBe(true);
+  });
+
   it("treats a bare awaitingInput row as a question", () => {
     expect(
       classifySessionStatus(session({ id: "a", awaitingInput: true })),

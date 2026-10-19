@@ -414,6 +414,7 @@ export async function listSessions(
   const queuedRecipients = queuedWorkRecipients();
   const unhandledBackground = unhandledBackgroundBySession();
   const awaitingReplies = awaitingRepliesBySender();
+  const hopRefusals = peerPromptStore.hopRefusalsBySender();
   const delegationBySession = subagentStore.delegationSummaries();
   // A separate component from `isStreaming`/`runStartedAt`: background work is
   // the session's, not its provider turn's, so an idle session can own active
@@ -562,6 +563,9 @@ export async function listSessions(
         : {}),
       ...(queuedRecipients.has(row.id) ? { queuedWork: true } : {}),
       ...backgroundHandlingFields(unhandledBackground.get(row.id)),
+      ...(hopRefusals.has(row.id)
+        ? { peerPromptHopRefusal: hopRefusals.get(row.id)! }
+        : {}),
       ...(awaitingReplies.has(row.id)
         ? { awaitingRepliesFrom: awaitingReplies.get(row.id)! }
         : {}),
@@ -653,6 +657,9 @@ export async function listSessions(
       ),
       ...(queuedRecipients.has(key) ? { queuedWork: true } : {}),
       ...backgroundHandlingFields(unhandledBackground.get(key)),
+      ...(hopRefusals.has(key)
+        ? { peerPromptHopRefusal: hopRefusals.get(key)! }
+        : {}),
       ...(awaitingReplies.has(key)
         ? { awaitingRepliesFrom: awaitingReplies.get(key)! }
         : {}),

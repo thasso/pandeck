@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   isDormantInSpawnTree,
   isShelvedSession,
+  settleBlockedReason,
+  peerPromptHopRefusalMessage,
   spawnClusterDescendantIds,
   spawnClusterForest,
   spawnClusterMembers,
@@ -313,6 +315,26 @@ describe("spawnClusterSettleBlockedReasons", () => {
       ),
     ];
     for (const rows of fixtures) expect(bulk(rows)).toEqual(oneByOne(rows));
+  });
+});
+
+describe("peer hop refusal", () => {
+  test("survives settlement and names the chain and human reset", () => {
+    const refusal = { chainId: "chain-exhausted", maxHops: 150 };
+    const session = row({
+      id: "child",
+      settledAt: 1,
+      peerPromptHopRefusal: refusal,
+    });
+    expect(isShelvedSession(session)).toBe(false);
+    expect(settleBlockedReason(session)).toContain("hop limit");
+    expect(peerPromptHopRefusalMessage(refusal)).toContain("chain-exhausted");
+    expect(peerPromptHopRefusalMessage(refusal)).toContain("150-hop limit");
+    expect(peerPromptHopRefusalMessage(refusal)).toContain(
+      "Any message from you",
+    );
+    expect(peerPromptHopRefusalMessage(refusal)).toContain("not queued");
+    expect(isShelvedSession(row({ id: "child", settledAt: 1 }))).toBe(true);
   });
 });
 

@@ -1613,6 +1613,18 @@ export interface SessionObjectRef {
  */
 export type SessionAttentionKind = "question" | "approval" | "task-choice";
 
+/** A refused peer send, unresolved until a human closes this causal chain. */
+export interface PeerPromptHopRefusal {
+  chainId: string;
+  maxHops: number;
+}
+
+export function peerPromptHopRefusalMessage(
+  refusal: PeerPromptHopRefusal,
+): string {
+  return `Peer send refused: chain ${refusal.chainId} reached its ${refusal.maxHops}-hop limit. Any message from you to a participant resets the chain. The refused send was not queued; ask the agent to retry it.`;
+}
+
 /** The last run failure on a session, kept until a new run starts. */
 export interface SessionRunFailure {
   at: number;
@@ -1780,6 +1792,8 @@ export interface SessionListItem {
   backgroundActivity?: SessionBackgroundActivity;
   /** True when the session is paused on a pending question and needs the user to answer. */
   awaitingInput?: boolean;
+  /** A peer send needs a human chain reset. Survives agent turns and settlement. */
+  peerPromptHopRefusal?: PeerPromptHopRefusal;
   /** Which kind of human decision `awaitingInput` is waiting for. */
   attention?: SessionAttentionKind;
   /** The last run failure, cleared as soon as a new run starts. */
@@ -1954,6 +1968,8 @@ export function settleBlockedReason(
     session.backgroundActivity,
   );
   if (backgroundReason) return backgroundReason;
+  if (session.peerPromptHopRefusal)
+    return "a peer send reached the hop limit; send a message to reset its chain.";
   if (session.attention === "approval")
     return "it is waiting for your approval.";
   if (session.attention === "task-choice")
@@ -2100,7 +2116,8 @@ export function isShelvedSession(session: SessionListItem): boolean {
     session.attention === "approval" ||
     session.attention === "task-choice" ||
     session.attention === "question" ||
-    session.awaitingInput
+    session.awaitingInput ||
+    session.peerPromptHopRefusal
   );
 }
 

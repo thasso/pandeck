@@ -30,6 +30,7 @@ import {
   isShelvedSession,
   isTerminalWorkflowRunLifecycle,
   pendingSessionOutcome,
+  peerPromptHopRefusalMessage,
   pendingWorkflowRunAttention,
   settleBlockedReason,
   spawnClusterDescendantIds,
@@ -53,6 +54,8 @@ export type SessionInboxStatus =
   | "approval"
   /** A `/pr` card is waiting for the user to pick which Task the PR is for. */
   | "task-choice"
+  /** A refused peer send needs a human to reset the chain. */
+  | "peer-limit"
   /** The last run failed and nothing has superseded it. */
   | "failed"
   /** A turn was cut off mid-flight by a restart and is waiting to be continued. */
@@ -74,6 +77,7 @@ const TIER_BY_STATUS: Record<SessionInboxStatus, SessionInboxTier> = {
   question: "needs-you",
   approval: "needs-you",
   "task-choice": "needs-you",
+  "peer-limit": "needs-you",
   failed: "attention",
   interrupted: "attention",
   unread: "attention",
@@ -154,6 +158,7 @@ function isMoving(session: SessionListItem): boolean {
 /** Whether a session is waiting on a human decision (its own bubble says so). */
 function waitsOnHuman(session: SessionListItem): boolean {
   return Boolean(
+    session.peerPromptHopRefusal ||
     session.awaitingInput ||
     session.attention === "question" ||
     session.attention === "approval" ||
@@ -342,6 +347,7 @@ const GATE_STATUSES: ReadonlySet<SessionInboxStatus> = new Set([
   "question",
   "approval",
   "task-choice",
+  "peer-limit",
 ]);
 
 /**
@@ -631,6 +637,7 @@ export function classifySessionStatus(
 ): SessionInboxStatus {
   if (session.attention === "approval") return "approval";
   if (session.attention === "task-choice") return "task-choice";
+  if (session.peerPromptHopRefusal) return "peer-limit";
   if (session.attention === "question" || session.awaitingInput)
     return "question";
   if (session.isStreaming) return "running";
@@ -705,6 +712,8 @@ export function sessionStatusBadge(
       return { label: "Approve", tone: "warning" };
     case "task-choice":
       return { label: "Pick task", tone: "accent" };
+    case "peer-limit":
+      return { label: "Reset chain", tone: "warning" };
     case "failed":
       return { label: "Failed", tone: "danger" };
     // `warning`, not `danger`: nothing is broken and nothing needs deciding —
@@ -741,6 +750,10 @@ export function sessionStatusDetail(
       return "Waiting for your approval";
     case "task-choice":
       return "Waiting for you to pick a Task for the pull request";
+    case "peer-limit":
+      return session.peerPromptHopRefusal
+        ? peerPromptHopRefusalMessage(session.peerPromptHopRefusal)
+        : undefined;
     case "failed":
       return bounded(session.lastError?.message ?? "The last run failed.");
     case "interrupted":

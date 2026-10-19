@@ -133,6 +133,10 @@ const {
 });
 
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
+vi.mock("./webPush.ts", () => ({
+  notifySessionBlocked: vi.fn(async () => {}),
+}));
+const { notifySessionBlocked } = await import("./webPush.ts");
 
 const {
   BATCH_MAX_MESSAGES,
@@ -1012,10 +1016,47 @@ describe("peer prompt engine", () => {
             prompt: "reply",
             responseRequested: false,
           }),
-        /3-hop limit/,
+        (error: Error) => {
+          assert.match(error.message, /3-hop limit/);
+          assert.match(error.message, /Wait for a human prompt/);
+          assert.doesNotMatch(
+            error.message,
+            /Any message from you|ask the agent/,
+          );
+          return true;
+        },
       );
       // Rejected before persisting: the original request is NOT marked replied.
       assert.equal(peerPromptStore.getById(req.id)?.status, "admitted");
+      assert.deepEqual(peerPromptStore.hopRefusalsBySender().get(me), {
+        chainId,
+        maxHops: configuredMaxHops,
+      });
+      assert.equal(
+        vi.mocked(notifySessionBlocked).mock.calls.filter(([id]) => id === me)
+          .length,
+        1,
+      );
+      await assert.rejects(
+        () =>
+          sendPeerPrompt({
+            senderSessionId: me,
+            targetSessionId: other,
+            prompt: "retry",
+            responseRequested: false,
+          }),
+        /not queued/,
+      );
+      assert.equal(
+        vi.mocked(notifySessionBlocked).mock.calls.filter(([id]) => id === me)
+          .length,
+        1,
+        "retries do not push the same unresolved condition again",
+      );
+      // The condition survives reads and agent activity, but a human prompt to
+      // ANY participant resolves it, including a different session.
+      closeChainsForHumanPrompt(other);
+      assert.equal(peerPromptStore.hopRefusalsBySender().has(me), false);
     } finally {
       updateSettings({ sessionPeerPromptMaxHops: originalMaxHops });
     }
@@ -1033,6 +1074,102 @@ describe("peer prompt engine", () => {
     });
     assert.notEqual(message.chainId, chainId);
     assert.equal(message.hop, 1);
+  });
+
+  it("lets reports climb the spawn tree beyond the limit without sustaining a loop", async () => {
+    const original = getSettings().sessionPeerPromptMaxHops;
+    updateSettings({ sessionPeerPromptMaxHops: 1 });
+    try {
+      const root = seed("ReportRoot");
+      const parent = seed("ReportParent");
+      const child = seed("ReportChild");
+      sessionStore.linkSpawned(root, parent);
+      sessionStore.linkSpawned(parent, child);
+      const { message: assignment } = await sendPeerPrompt({
+        senderSessionId: parent,
+        targetSessionId: child,
+        prompt: "implement",
+        responseRequested: true,
+      });
+      peerPromptStore.markAdmitted(
+        peerPromptStore.claimNext(child, "d", 1000)!.id,
+      );
+      const { message: report } = await sendPeerPrompt({
+        senderSessionId: child,
+        targetSessionId: parent,
+        prompt: "done",
+        responseRequested: true,
+      });
+      assert.equal(report.chainId, assignment.chainId);
+      assert.equal(report.hop, 2, "exempt reports still count");
+      assert.equal(peerPromptStore.getById(assignment.id)?.status, "replied");
+      peerPromptStore.markAdmitted(
+        peerPromptStore.claimNext(parent, "d", 1000)!.id,
+      );
+      // A downward reply would close the loop and is still refused.
+      await assert.rejects(
+        () =>
+          sendPeerPrompt({
+            senderSessionId: parent,
+            targetSessionId: child,
+            prompt: "do it again",
+            responseRequested: false,
+          }),
+        /1-hop limit/,
+      );
+      assert.equal(peerPromptStore.getChain(report.chainId)?.nextHop, 3);
+      assert.equal(peerPromptStore.hopRefusalsBySender().has(child), false);
+      // An older assignment on this same chain lets the report climb again.
+      const rootRequest = peerPromptStore.enqueue({
+        conversationId: "root-report",
+        chainId: report.chainId,
+        hop: 1,
+        senderSessionId: root,
+        recipientSessionId: parent,
+        prompt: "report to me",
+        responseRequested: true,
+      });
+      peerPromptStore.markAdmitted(
+        peerPromptStore.claimNext(parent, "d", 1000)!.id,
+      );
+      const { message: rootReport } = await sendPeerPrompt({
+        senderSessionId: parent,
+        targetSessionId: root,
+        prompt: "child finished",
+        responseRequested: false,
+      });
+      assert.equal(rootReport.chainId, report.chainId);
+      assert.equal(rootReport.hop, 3);
+      assert.equal(peerPromptStore.getById(rootRequest.id)?.status, "replied");
+      // A sibling is not an ancestor and gets no exemption.
+      const sibling = seed("ReportSibling");
+      sessionStore.linkSpawned(parent, sibling);
+      const request = peerPromptStore.enqueue({
+        conversationId: "sibling-report",
+        chainId: report.chainId,
+        hop: 2,
+        senderSessionId: sibling,
+        recipientSessionId: child,
+        prompt: "ping",
+        responseRequested: true,
+      });
+      peerPromptStore.markAdmitted(
+        peerPromptStore.claimNext(child, "d", 1000)!.id,
+      );
+      await assert.rejects(
+        () =>
+          sendPeerPrompt({
+            senderSessionId: child,
+            targetSessionId: sibling,
+            prompt: "sideways",
+            responseRequested: false,
+          }),
+        /1-hop limit/,
+      );
+      assert.equal(peerPromptStore.getById(request.id)?.status, "admitted");
+    } finally {
+      updateSettings({ sessionPeerPromptMaxHops: original });
+    }
   });
 
   it("projects a bounded, sanitized sender+recipient history with opaque keys", async () => {

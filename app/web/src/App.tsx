@@ -37,6 +37,7 @@ import {
   isCodingAgentType,
   KNOWLEDGE_WORKTREE_ID,
   modelKey,
+  peerPromptHopRefusalMessage,
   type ModelOption,
   type PromptAttachment,
   type PullRequestCheckoutOutcome,
@@ -6777,6 +6778,15 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             dismiss below, and the session's own next send (which dispatches
             `clearSessionFailure` — the SEND does it, not its echo, because an
             attachments-only prompt echoes nothing). */}
+        {displaySessionListItem?.peerPromptHopRefusal ? (
+          <div className="mx-auto w-full max-w-3xl px-4 pb-2">
+            <ErrorNote
+              message={peerPromptHopRefusalMessage(
+                displaySessionListItem.peerPromptHopRefusal,
+              )}
+            />
+          </div>
+        ) : null}
         {sessionFailure ? (
           <div className="mx-auto w-full max-w-3xl px-4 pb-2">
             <ErrorNote

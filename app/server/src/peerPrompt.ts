@@ -36,7 +36,11 @@ import type {
   PeerPromptThreadsProjection,
   QueuedPeerPrompt,
 } from "@assistant/shared";
-import { peerPromptExcerpt } from "@assistant/shared";
+import {
+  peerPromptExcerpt,
+  peerPromptHopRefusalMessage,
+} from "@assistant/shared";
+import { notifySessionBlocked } from "./webPush.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import {
   delegationFailureNoticeStore,
@@ -246,8 +250,26 @@ export async function sendPeerPrompt(
     });
   } catch (err) {
     if (err instanceof PeerPromptHopLimitError) {
+      const refusal = { chainId: err.chainId, maxHops: err.maxHops };
+      const detail = peerPromptHopRefusalMessage(refusal);
+      if (
+        peerPromptStore.recordHopRefusal(
+          input.senderSessionId,
+          err.chainId,
+          err.maxHops,
+        )
+      ) {
+        void notifySessionBlocked(
+          input.senderSessionId,
+          "peer-limit",
+          detail,
+        ).catch(() => {});
+      }
+      void getHub()
+        .then((hub) => hub.broadcastSessions?.())
+        .catch(() => {});
       throw new Error(
-        `This agent-to-agent conversation reached its ${err.maxHops}-hop limit without a human in the loop. Wait for a human prompt or involve the user before sending again.`,
+        `This agent-to-agent chain (${err.chainId}) reached its ${err.maxHops}-hop limit without a human in the loop. This send was not queued. Wait for a human prompt to a chain participant or involve the user before sending again.`,
       );
     }
     throw err;
@@ -2412,7 +2434,11 @@ function newId(prefix: string): string {
  */
 export function closeChainsForHumanPrompt(sessionId: string): void {
   try {
-    peerPromptStore.closeChainsForSession(sessionId);
+    const closed = peerPromptStore.closeChainsForSession(sessionId);
+    if (closed.length)
+      void getHub()
+        .then((hub) => hub.broadcastSessions?.())
+        .catch(() => {});
   } catch {
     // Best-effort; a failed close only leaves a chain open, not corrupted.
   }
