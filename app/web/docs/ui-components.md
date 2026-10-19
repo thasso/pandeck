@@ -112,11 +112,13 @@ final line. Supporting lines show whole items or hide them; hidden controls
 become inert, and signals compact before dropping items.
 
 `actions` accepts `common/ListRowActions`. One or two actions are both direct;
-with more, explicitly primary actions stay direct and the rest use a labeled
-menu. Ordinary actions share the neutral ghost style and inherited icon tone;
+with more, at most two explicitly primary actions stay direct and the rest use a
+labeled menu. There are never more than three buttons including the menu. Ordinary actions share the neutral ghost style and inherited icon tone;
 only destructive actions use a different tone. Buttons and menu items show a
-pointer cursor. Desktop mouse controls occupy the bottom-right slot and reveal
-on hover or focus without growing the content lines. Pending decisions remain
+pointer cursor. Actions occupy a right-aligned column spanning the final two
+content lines, or the title for a one-line item, on every layout. Earlier lines
+retain the full width. Desktop mouse controls reveal on hover or focus without
+growing the content lines. Pending decisions remain
 visible. The Backlog tree uses the same `ListRowContent` and actions inside its
 tree frame, keeping hierarchy and selection rather than nesting a clickable flat
 row. `Tree`'s `paddedContent={false}` lets shared content own all padding; the
@@ -141,10 +143,11 @@ badge collapses to its state icon only when the full badge does not fit; the
 icon retains the same link and accessible name. A card summary without a known
 provider URL remains informational rather than guessing a link.
 
-Mobile layout or a coarse pointer moves actions to a separate strip beneath the
-content: labeled targets at least 44px high, 12px gaps, and wrapping into
-stacked buttons when space is tight. The strip never opens the item. Shared
-`touch-ui:` styling follows either mobile layout or coarse input, independent of
+Mobile layout or a coarse pointer keeps the same icon-only action column, with
+44px-wide targets at least 44px high and no separate strip or visible button
+labels. Buttons stretch to fill their content-line span on every layout; icons
+retain their own square size. Accessible names and tooltips identify the icons. Actions never open the item. Shared
+`touch-ui:` sizing follows either mobile layout or coarse input, independent of
 a forced Desktop choice.
 
 The row owns padding, typography, line spacing, selection, hover, focus and

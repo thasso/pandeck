@@ -33,9 +33,9 @@ const buttonVariants = cva(
           "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
         "icon-lg": "size-9",
         "list-action":
-          "size-6 cursor-pointer rounded-[min(var(--radius-md),10px)] [&_svg]:text-current touch-ui:h-auto touch-ui:min-h-11 touch-ui:w-auto touch-ui:gap-2 touch-ui:px-3 touch-ui:py-2",
+          "h-auto min-h-6 w-6 cursor-pointer rounded-[min(var(--radius-md),10px)] [&_svg]:text-current touch-ui:min-h-11 touch-ui:w-11",
         "icon-list-overflow":
-          "size-6 cursor-pointer rounded-[min(var(--radius-md),10px)] touch-ui:size-11",
+          "h-auto min-h-6 w-6 cursor-pointer rounded-[min(var(--radius-md),10px)] touch-ui:min-h-11 touch-ui:w-11",
       },
     },
     defaultVariants: {
