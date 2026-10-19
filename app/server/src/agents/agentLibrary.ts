@@ -70,6 +70,7 @@ const KNOWN_KEYS = new Set([
   "peer-turns",
   "tools",
   "skills",
+  "inheritGrants",
 ]);
 
 /** A valid `AGENT.md`, typed. */
@@ -91,6 +92,12 @@ export interface AgentManifest {
   denyTools: string[];
   /** Library skills to mount on top of the enabled set; developer only. */
   skills: string[];
+  /**
+   * Whether a session spawned as this agent inherits its spawner's
+   * inheritable approval grants when the spawn row does not say; present only
+   * when written. Absent means it inherits.
+   */
+  inheritGrants?: boolean;
 }
 
 type AgentFields = Omit<AgentManifest, "name" | "description" | "body">;
@@ -122,6 +129,9 @@ export function parseAgentManifest(content: string, path: string) {
         bad("Frontmatter peer-turns must be an integer from 1 to 16.");
       const denyTools = parseDenyList(fields.tools, issues);
       const skills = parseNameList(fields.skills, "skills", issues);
+      const inheritGrants = fields.inheritGrants;
+      if (inheritGrants !== undefined && typeof inheritGrants !== "boolean")
+        bad("Frontmatter inheritGrants must be true or false.");
       // Skills mount only where a session has a workspace to mount them in.
       if (skills.length > 0 && !isCodingAgentType(persona as AgentPersona))
         bad("Frontmatter skills may be set only for persona developer.");
@@ -134,6 +144,7 @@ export function parseAgentManifest(content: string, path: string) {
         ...(isSessionPeerTurnCap(peerTurns) ? { peerTurns } : {}),
         denyTools,
         skills,
+        ...(typeof inheritGrants === "boolean" ? { inheritGrants } : {}),
       };
     },
   );
@@ -276,6 +287,7 @@ export interface AgentDefinitionInput {
   peerTurns?: number;
   denyTools?: string[];
   skills?: string[];
+  inheritGrants?: boolean;
   body: string;
 }
 
@@ -303,5 +315,7 @@ export function formatAgentManifest(input: AgentDefinitionInput): string {
   if (input.denyTools?.length)
     lines.push("tools:", `  deny: ${yamlList(input.denyTools)}`);
   if (input.skills?.length) lines.push(`skills: ${yamlList(input.skills)}`);
+  if (input.inheritGrants !== undefined)
+    lines.push(`inheritGrants: ${input.inheritGrants}`);
   return formatManifest(lines, input.body);
 }

@@ -75,16 +75,17 @@ tools:
 You are a test reviewer. ...
 ```
 
-| Key           | Required | Meaning                                                                                                                                                                      |
-| ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`        | yes      | Declared name; same rule as skills (`isSafeEntryName` in `app/shared/library.ts`).                                                                                           |
-| `description` | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description.                                                                           |
-| `persona`     | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                                                                                          |
-| `model`       | yes      | One model, or a list of 1-8; the first is the default. See [Model and effort](#model-and-effort).                                                                            |
-| `effort`      | no       | A `ThinkingLevel`. Fitted to the levels each model supports. Defaults to `medium`, fitted the same way.                                                                      |
-| `peer-turns`  | no       | Initial concurrent counted peer-turn cap, an integer 1-16. Omitted means 4. Applied only at creation, including first sends and approved proposals; forks do not inherit it. |
-| `tools.deny`  | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).                                                                                    |
-| `skills`      | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.                                                                                |
+| Key             | Required | Meaning                                                                                                                                                                      |
+| --------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | yes      | Declared name; same rule as skills (`isSafeEntryName` in `app/shared/library.ts`).                                                                                           |
+| `description`   | yes      | When to use this agent. What callers see when they choose one. Same bounds as a skill description.                                                                           |
+| `persona`       | yes      | `developer` or `assistant`, the same values `session_spawn` accepts as `agentType`.                                                                                          |
+| `model`         | yes      | One model, or a list of 1-8; the first is the default. See [Model and effort](#model-and-effort).                                                                            |
+| `effort`        | no       | A `ThinkingLevel`. Fitted to the levels each model supports. Defaults to `medium`, fitted the same way.                                                                      |
+| `peer-turns`    | no       | Initial concurrent counted peer-turn cap, an integer 1-16. Omitted means 4. Applied only at creation, including first sends and approved proposals; forks do not inherit it. |
+| `tools.deny`    | no       | Tools this agent must not have. Can only narrow the persona's tools. See [Tools](#tools).                                                                                    |
+| `skills`        | no       | Library skills to mount for this agent, on top of the globally enabled set. `developer` only.                                                                                |
+| `inheritGrants` | no       | `true` or `false`: whether a session spawned as it inherits approvals when the spawn row does not say.                                                                       |
 
 The body is the role instructions. It must be non-empty, and the whole
 `AGENT.md` has a size bound (`maxManifestBytes`, 16 KiB) so a definition cannot
@@ -209,9 +210,19 @@ and its coordinator, which has no watchdog, would otherwise wait on silence.
 Removing a deny entry gives back a tool the persona has anyway, so it is not an
 escalation. Approvals, Plan mode, and every other gate apply to the spawned
 session exactly as they apply to any session of that persona. That includes
-"Approve for session" grants its spawn ancestors hold, which cover its cards
-unless it was spawned with `inheritGrants: false`
-([approvals.md](approvals.md#inherited-grants)).
+"Approve for session" grants its spawn ancestors passed down to the sessions
+they start, which cover its cards unless it was spawned with
+`inheritGrants: false` ([approvals.md](approvals.md#inherited-grants)).
+
+`inheritGrants` is that spawn choice's default for this agent. The precedence is
+row, then definition, then inherit: an explicit `inheritGrants` on the
+`session_spawn` row always wins, even `true` over a definition's `false`. A
+direct spawn takes the value from the definition read the session is created
+from (the second read below). A propose card fixes it at proposal and shows it
+("Won't inherit your approvals"); approval executes what the card showed, even
+if the definition changed meanwhile. The value is not frozen in `session_agent`:
+it only decides the spawn edge. Set it to `false` for roles that should ask for
+everything themselves, such as reviewers, verifiers and explorers.
 
 ## Authoring tools
 
@@ -230,12 +241,12 @@ it declares before doing anything (`withCheckedArguments` in
 wrong shape is refused rather than coerced into the file.
 
 `agent_create` takes the definition as fields (`persona`, `models`, `effort`,
-`peerTurns`, `denyTools`, `skills`, `body`) and renders `AGENT.md`
-deterministically (`formatAgentManifest`): one model as a plain value, several
-as a list. Before anything reaches the user, the definition must satisfy the
-content rule and the runtime check (`agents/agentRuntime.ts`): every model
-resolves against the enabled accounts, the denied tools are the persona's own or
-native, the skills are valid library skills.
+`peerTurns`, `denyTools`, `skills`, `inheritGrants`, `body`) and renders
+`AGENT.md` deterministically (`formatAgentManifest`): one model as a plain
+value, several as a list. Before anything reaches the user, the definition must
+satisfy the content rule and the runtime check (`agents/agentRuntime.ts`): every
+model resolves against the enabled accounts, the denied tools are the persona's
+own or native, the skills are valid library skills.
 
 ### Persona, model, effort and peer-turn cap changes need approval
 
@@ -264,11 +275,13 @@ before its card exists leaves none, so no grant can execute it later.
   directly; inside the locked write it is judged again (`editEntrySource`'s
   `check`), and the file must still hold the bytes that were judged when the
   write starts: persona, models, effort and peer-turn cap must still be
-  unchanged, and the denied tools and skills must still exist. Every locked
-  agent edit, approved or direct, also re-reads the file after its check and
-  refuses if a hand edit landed meanwhile, leaving that edit in place. A direct
-  edit does not re-resolve the model, so a definition whose account went away
-  can still have its instructions fixed.
+  unchanged, and the denied tools and skills must still exist. An
+  `inheritGrants` edit commits directly too: a spawn row can set the same thing,
+  and only grants the user passed down can reach the session either way. Every
+  locked agent edit, approved or direct, also re-reads the file after its check
+  and refuses if a hand edit landed meanwhile, leaving that edit in place. A
+  direct edit does not re-resolve the model, so a definition whose account went
+  away can still have its instructions fixed.
 - Rename, delete and supporting files never change what a definition runs on and
   commit directly; `AGENT.md` itself is refused by `agent_manage_files` under
   any case, since a case-insensitive filesystem opens `agent.md` as the
@@ -304,7 +317,8 @@ before its card exists leaves none, so no grant can execute it later.
   unless the row hints another; the user picks any runtime there. Approval reads
   the definition again (`approvedAgentOf` in `sessionSpawn.ts`) and refuses,
   leaving the card pending, when it is gone, cannot run, or now has another
-  persona. The session runs the role on exactly the approved runtime.
+  persona. The session runs the role on exactly the approved runtime, with the
+  grant inheritance the card showed.
 
 The opening prompt still carries the coordinator's session id and the
 instruction to report back, as for any spawn.

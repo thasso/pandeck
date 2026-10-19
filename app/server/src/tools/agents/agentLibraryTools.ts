@@ -316,6 +316,11 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         description:
           "Optional declared library skill names to mount for this agent (developer only).",
       },
+      inheritGrants: {
+        type: "boolean",
+        description:
+          "Optional spawn default: false means sessions spawned as this agent inherit none of the spawner's approvals unless the spawn row says so.",
+      },
       body: {
         type: "string",
         description: `The role instructions, in Markdown, below the frontmatter. The whole file is bounded at ${agentKind.maxManifestBytes} bytes (and ${MAX_ENTRY_SOURCE_BYTES} for any manifest).`,
@@ -341,6 +346,9 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
           : {}),
         ...(params.skills !== undefined
           ? { skills: params.skills as string[] }
+          : {}),
+        ...(params.inheritGrants !== undefined
+          ? { inheritGrants: params.inheritGrants as boolean }
           : {}),
         body: params.body as string,
       };

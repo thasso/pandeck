@@ -17,6 +17,7 @@ import {
   Archive,
   Bot,
   CheckCheck,
+  ChevronDown,
   CircleDot,
   ExternalLink,
   FileText,
@@ -87,6 +88,13 @@ import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -1340,6 +1348,7 @@ export function ApprovalCard({
         decision: ApprovalDecision,
         edits?: ApprovalResolutionEdits,
         forSession?: boolean,
+        grantInheritable?: boolean,
       ) => void)
     | undefined;
   /** The session's active grants; this card offers Revoke for the ones it made. */
@@ -1370,7 +1379,9 @@ export function ApprovalCard({
     const timeout = window.setTimeout(() => setBusy(null), 15_000);
     return () => window.clearTimeout(timeout);
   }, [busy]);
-  const decide = (decision: BusyDecision) => {
+  // `inheritable` is the deliberate second choice of "Approve for session":
+  // its grants also cover the sessions this one starts.
+  const decide = (decision: BusyDecision, inheritable = false) => {
     setBusy(decision);
     if (decision === "rejected") {
       onResolve?.(approval.id, decision);
@@ -1381,6 +1392,7 @@ export function ApprovalCard({
       "approved",
       spawnResolutionEdits(spawnEdits),
       decision === "approvedForSession",
+      decision === "approvedForSession" && inheritable,
     );
   };
   // The secret travels only in this decision; the card never stores it.
@@ -1422,7 +1434,9 @@ export function ApprovalCard({
         ownGrants.length > 0 ? (
           <span className="inline-flex items-center gap-1">
             <CheckCheck className="size-3 shrink-0" />
-            Approved for this session:{" "}
+            {ownGrants.every((grant) => grant.inheritable)
+              ? "Approved for this session and the sessions it starts:"
+              : "Approved for this session:"}{" "}
             {ownGrants.map((grant) => approvalGrantLabel(grant.key)).join(", ")}
           </span>
         ) : approval.inheritedGrants?.length ? (
@@ -1455,16 +1469,53 @@ export function ApprovalCard({
                 Reject
               </Button>
               {grantable ? (
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => decide("approvedForSession")}
-                  disabled={busy !== null}
-                  busy={busy === "approvedForSession"}
-                  title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
-                >
-                  Approve for session
-                </Button>
+                <ButtonGroup aria-label="Approve for session">
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => decide("approvedForSession")}
+                    disabled={busy !== null}
+                    busy={busy === "approvedForSession"}
+                    title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session; sessions it starts still ask`}
+                  >
+                    Approve for session
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="outline"
+                          size="icon-xs"
+                          aria-label="Approve for session: choose who it covers"
+                          title="Choose who it covers"
+                          disabled={busy !== null}
+                        />
+                      }
+                    >
+                      <ChevronDown />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-72">
+                      <DropdownMenuItem
+                        className="flex-col items-start gap-0"
+                        onClick={() => decide("approvedForSession")}
+                      >
+                        This session only
+                        <span className="text-xs text-muted-foreground">
+                          Sessions it starts still ask you.
+                        </span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="flex-col items-start gap-0"
+                        onClick={() => decide("approvedForSession", true)}
+                      >
+                        This session and the sessions it starts
+                        <span className="text-xs text-muted-foreground">
+                          They also run {operations.join(", ")} without asking.
+                        </span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </ButtonGroup>
               ) : null}
               <Button
                 size="xs"

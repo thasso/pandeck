@@ -884,6 +884,7 @@ interface Props {
     decision: import("@assistant/shared").ApprovalDecision,
     edits?: import("@assistant/shared").ApprovalResolutionEdits,
     forSession?: boolean,
+    grantInheritable?: boolean,
   ) => void;
   /** The viewed session's "Approve for session" grants. */
   approvalGrants?:
@@ -1009,6 +1010,7 @@ interface MessageRowProps {
         decision: import("@assistant/shared").ApprovalDecision,
         edits?: import("@assistant/shared").ApprovalResolutionEdits,
         forSession?: boolean,
+        grantInheritable?: boolean,
       ) => void)
     | undefined;
   approvalGrants?:

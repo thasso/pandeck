@@ -33,6 +33,7 @@ const grants: ApprovalGrant[] = [
     key: "github:comment",
     grantedAt: Date.now() - 4 * 60_000,
     sourceApprovalId: "appr-comment-granted",
+    inheritable: false,
   },
 ];
 

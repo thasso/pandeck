@@ -2999,6 +2999,7 @@ function sameGrantList(
         grant.key === b[index]!.key &&
         grant.grantedAt === b[index]!.grantedAt &&
         grant.sourceApprovalId === b[index]!.sourceApprovalId &&
+        grant.inheritable === b[index]!.inheritable &&
         grant.heldBy === b[index]!.heldBy,
     )
   );
@@ -7062,11 +7063,25 @@ export interface AssistantActions {
     decision: import("@assistant/shared").ApprovalDecision,
     edits?: import("@assistant/shared").ApprovalResolutionEdits,
     forSession?: boolean,
+    grantInheritable?: boolean,
   ) => void;
   /** Withdraw one of a session's "Approve for session" grants. */
   revokeApprovalGrant: (sessionId: string, key: string) => void;
-  /** Grant one operation for the rest of a session, from the inspector. */
-  grantApprovalForSession: (sessionId: string, key: string) => void;
+  /**
+   * Grant one operation for the rest of a session, from the inspector;
+   * `inheritable` also covers the sessions it starts.
+   */
+  grantApprovalForSession: (
+    sessionId: string,
+    key: string,
+    inheritable?: boolean,
+  ) => void;
+  /** Set the scope of a session's own grants named in `keys`. */
+  setApprovalGrantScope: (
+    sessionId: string,
+    keys: string[],
+    inheritable: boolean,
+  ) => void;
   /** Answer a `choosing-task` pull-request card's Task-disambiguation prompt. */
   choosePullRequestTask: (cardId: string, taskId: string | null) => void;
   /**
@@ -9639,18 +9654,32 @@ export function useAssistant({
         }),
       dismissObjectFailure: (type, id) =>
         dispatch({ kind: "clearObjectFailure", type, id }),
-      resolveApproval: (approvalId, decision, edits, forSession) =>
+      resolveApproval: (
+        approvalId,
+        decision,
+        edits,
+        forSession,
+        grantInheritable,
+      ) =>
         send({
           type: "resolveApproval",
           approvalId,
           decision,
           ...(edits ? { edits } : {}),
           ...(forSession ? { forSession: true } : {}),
+          ...(forSession && grantInheritable ? { grantInheritable: true } : {}),
         }),
       revokeApprovalGrant: (sessionId, key) =>
         send({ type: "revokeApprovalGrant", sessionId, key }),
-      grantApprovalForSession: (sessionId, key) =>
-        send({ type: "grantApprovalForSession", sessionId, key }),
+      grantApprovalForSession: (sessionId, key, inheritable) =>
+        send({
+          type: "grantApprovalForSession",
+          sessionId,
+          key,
+          ...(inheritable ? { inheritable: true } : {}),
+        }),
+      setApprovalGrantScope: (sessionId, keys, inheritable) =>
+        send({ type: "setApprovalGrantScope", sessionId, keys, inheritable }),
       choosePullRequestTask: (cardId, taskId) =>
         send({ type: "resolvePullRequestCardTask", cardId, taskId }),
       runPullRequestCardAction: (cardId, action, options) => {

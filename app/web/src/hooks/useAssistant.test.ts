@@ -1088,6 +1088,7 @@ describe("useAssistant approval chronology", () => {
       key: "github:comment",
       grantedAt: 1,
       sourceApprovalId: "appr-1",
+      inheritable: false,
     };
     let state = approvalTimelineState();
     state = apply(
@@ -1124,12 +1125,18 @@ describe("useAssistant approval chronology", () => {
    * that changes nothing changes no state at all.
    */
   it("keeps each grant list's identity while its content is unchanged", () => {
-    const own = { key: "jira:edit", grantedAt: 1, sourceApprovalId: "a1" };
+    const own = {
+      key: "jira:edit",
+      grantedAt: 1,
+      sourceApprovalId: "a1",
+      inheritable: false,
+    };
     const inherited = {
       key: "jira:comment",
       grantedAt: 2,
       sourceApprovalId: "",
       heldBy: "parent",
+      inheritable: true,
     };
     const frame = (patch: Record<string, unknown> = {}) =>
       ({
@@ -1196,6 +1203,60 @@ describe("useAssistant approval chronology", () => {
     );
     expect(moved.approvalGrants!.inherited).not.toBe(
       first.approvalGrants!.inherited,
+    );
+  });
+
+  it("applies a frame that only changed a grant's scope", () => {
+    const own = {
+      key: "jira:edit",
+      grantedAt: 1,
+      sourceApprovalId: "a1",
+      inheritable: false,
+    };
+    const inherited = {
+      key: "jira:comment",
+      grantedAt: 2,
+      sourceApprovalId: "",
+      heldBy: "grandparent",
+      inheritable: true,
+    };
+    const frame = (ownInheritable: boolean, inheritedList = [inherited]) =>
+      ({
+        type: "approvalGrants",
+        sessionId: "s1",
+        grants: [{ ...own, inheritable: ownInheritable }],
+        inherited: inheritedList.map((grant) => ({ ...grant })),
+      }) as Extract<ServerMessage, { type: "approvalGrants" }>;
+    const first = apply(frame(false), approvalTimelineState());
+
+    // Widened: same key, time and source, so only the scope says it changed.
+    const widened = apply(frame(true), first);
+    expect(widened).not.toBe(first);
+    expect(widened.approvalGrants!.grants).toEqual([
+      { ...own, inheritable: true },
+    ]);
+    expect(widened.approvalGrants!.inherited).toBe(
+      first.approvalGrants!.inherited,
+    );
+    expect(apply(frame(true), widened)).toBe(widened);
+
+    // Narrowed again.
+    const narrowed = apply(frame(false), widened);
+    expect(narrowed.approvalGrants!.grants).toEqual([own]);
+    expect(narrowed.approvalGrants!.inherited).toBe(
+      widened.approvalGrants!.inherited,
+    );
+
+    // An ancestor's scope change reaches the inherited list alone.
+    const ancestor = apply(
+      frame(false, [{ ...inherited, inheritable: false }]),
+      narrowed,
+    );
+    expect(ancestor.approvalGrants!.inherited).toEqual([
+      { ...inherited, inheritable: false },
+    ]);
+    expect(ancestor.approvalGrants!.grants).toBe(
+      narrowed.approvalGrants!.grants,
     );
   });
 });

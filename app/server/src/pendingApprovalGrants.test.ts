@@ -11,6 +11,8 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
+import { getDb } from "./db/index.ts";
+import { validateClientMessage } from "./validateClientMessage.ts";
 import type {
   ApprovalBody,
   ApprovalCard,
@@ -21,6 +23,7 @@ import {
   approvalForId,
   approvalGrantsForSession,
   createApproval,
+  grantApprovalForSession,
   hasPendingApproval,
   registerApprovalExecutor,
   resolveApproval,
@@ -123,9 +126,92 @@ test("approving for the session grants the card's operations", async () => {
       key: "commit",
       grantedAt: expect.any(Number),
       sourceApprovalId: first.id,
+      inheritable: false,
     },
   ]);
   expect(grantBroadcasts.at(-1)?.sessionId).toBe(session);
+});
+
+test("Approve for session can pass the grants to the sessions it starts", async () => {
+  const session = `grant-${randomUUID()}`;
+  const first = jiraCard(session, ["comment", "edit"]);
+
+  await resolveApproval(first.id, "approved", undefined, {
+    forSession: true,
+    grantInheritable: true,
+  });
+
+  expect(approvalGrantsForSession(session)).toEqual([
+    expect.objectContaining({ key: "jira:comment", inheritable: true }),
+    expect.objectContaining({ key: "jira:edit", inheritable: true }),
+  ]);
+});
+
+test("a scope without forSession grants nothing", async () => {
+  const session = `grant-${randomUUID()}`;
+  const card = commitCard(session);
+  await resolveApproval(card.id, "approved", undefined, {
+    grantInheritable: true,
+  });
+  expect(approvalGrantsForSession(session)).toEqual([]);
+});
+
+test("re-approving a held key only ever widens its scope", async () => {
+  const session = `grant-${randomUUID()}`;
+  const first = jiraCard(session, ["comment"]);
+  await resolveApproval(first.id, "approved", undefined, { forSession: true });
+  const [original] = approvalGrantsForSession(session);
+  expect(original).toMatchObject({ inheritable: false });
+
+  // A card the grant already covers runs on its own, so re-approving a held
+  // key comes from a card that also asks for something new.
+  const widening = jiraCard(session, ["comment", "edit"]);
+  await resolveApproval(widening.id, "approved", undefined, {
+    forSession: true,
+    grantInheritable: true,
+  });
+  expect(approvalGrantsForSession(session)).toEqual([
+    { ...original, inheritable: true },
+    expect.objectContaining({
+      key: "jira:edit",
+      sourceApprovalId: widening.id,
+      inheritable: true,
+    }),
+  ]);
+
+  const narrowing = jiraCard(session, ["comment", "edit", "create"]);
+  await resolveApproval(narrowing.id, "approved", undefined, {
+    forSession: true,
+  });
+  expect(approvalGrantsForSession(session)).toEqual([
+    expect.objectContaining({ key: "jira:comment", inheritable: true }),
+    expect.objectContaining({ key: "jira:edit", inheritable: true }),
+    expect.objectContaining({ key: "jira:create", inheritable: false }),
+  ]);
+});
+
+test("the inspector grants this session only unless asked, and never a card-only key", () => {
+  const session = `grant-${randomUUID()}`;
+  grantApprovalForSession(session, "jira:comment");
+  grantApprovalForSession(session, "jira:edit", true);
+  grantApprovalForSession(session, "managedPullRequestMerge", true);
+  grantApprovalForSession(session, "jira:comment");
+
+  expect(approvalGrantsForSession(session)).toEqual([
+    {
+      key: "jira:comment",
+      grantedAt: expect.any(Number),
+      sourceApprovalId: "",
+      inheritable: false,
+    },
+    expect.objectContaining({ key: "jira:edit", inheritable: true }),
+  ]);
+
+  grantApprovalForSession(session, "jira:comment", true);
+  expect(approvalGrantsForSession(session)[0]).toMatchObject({
+    key: "jira:comment",
+    inheritable: true,
+  });
 });
 
 test("a covered card blocks nobody and runs on the idle edge", async () => {
@@ -344,4 +430,55 @@ test("an outcome the queue refuses is reported on the card, which stays executed
   expect(card?.error).toMatch(/could not be told the outcome: SQLITE_FULL/);
   expect(broadcasts.at(-1)?.error).toBe(card?.error);
   expect(drained).toEqual([]);
+});
+
+test("a grant stored before scopes existed reads as this session only", () => {
+  const session = `grant-${randomUUID()}`;
+  // The column list every grant row was written with before migration 0091.
+  getDb()
+    .prepare(
+      `INSERT INTO approval_grants
+        (session_id, key, granted_at_ms, source_approval_id) VALUES (?, ?, ?, ?)`,
+    )
+    .run(session, "jira:comment", 1, "appr-old");
+  expect(approvalGrantsForSession(session)).toEqual([
+    {
+      key: "jira:comment",
+      grantedAt: 1,
+      sourceApprovalId: "appr-old",
+      inheritable: false,
+    },
+  ]);
+});
+
+test("the wire accepts a scope only as a boolean and bounds a scope change", () => {
+  const ok = (msg: Record<string, unknown>) => validateClientMessage(msg).ok;
+  const resolve = {
+    type: "resolveApproval",
+    approvalId: "appr_1",
+    decision: "approved",
+    forSession: true,
+  };
+  expect(ok({ ...resolve, grantInheritable: true })).toBe(true);
+  expect(ok({ ...resolve, grantInheritable: "yes" })).toBe(false);
+
+  const grant = { type: "grantApprovalForSession", sessionId: "s", key: "k" };
+  expect(ok(grant)).toBe(true);
+  expect(ok({ ...grant, inheritable: false })).toBe(true);
+  expect(ok({ ...grant, inheritable: 1 })).toBe(false);
+
+  const scope = {
+    type: "setApprovalGrantScope",
+    sessionId: "s",
+    keys: ["jira:comment", "jira:edit"],
+    inheritable: true,
+  };
+  expect(ok(scope)).toBe(true);
+  expect(ok({ ...scope, inheritable: undefined })).toBe(false);
+  expect(ok({ ...scope, keys: [] })).toBe(false);
+  expect(ok({ ...scope, keys: [""] })).toBe(false);
+  expect(ok({ ...scope, keys: "jira:comment" })).toBe(false);
+  expect(
+    ok({ ...scope, keys: Array.from({ length: 257 }, (_, i) => `k${i}`) }),
+  ).toBe(false);
 });

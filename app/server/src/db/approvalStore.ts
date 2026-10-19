@@ -40,10 +40,13 @@ export const APPROVAL_SQL = {
     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   update: `UPDATE approvals SET session_id = ?, status = ?, auto_approved = ?,
     created_at_ms = ?, card_json = ?, context_json = ? WHERE id = ?`,
-  grantsForSession: `SELECT key, granted_at_ms, source_approval_id FROM approval_grants
-    WHERE session_id = ? ORDER BY seq`,
+  grantsForSession: `SELECT key, granted_at_ms, source_approval_id, inheritable
+    FROM approval_grants WHERE session_id = ? ORDER BY seq`,
   insertGrant: `INSERT OR IGNORE INTO approval_grants
-    (session_id, key, granted_at_ms, source_approval_id) VALUES (?, ?, ?, ?)`,
+    (session_id, key, granted_at_ms, source_approval_id, inheritable)
+    VALUES (?, ?, ?, ?, ?)`,
+  setGrantInheritable: `UPDATE approval_grants SET inheritable = ?
+    WHERE session_id = ? AND key = ? AND inheritable != ?`,
   deleteGrant: "DELETE FROM approval_grants WHERE session_id = ? AND key = ?",
 } as const;
 
@@ -148,11 +151,13 @@ export const approvalStore = {
       key: string;
       granted_at_ms: number;
       source_approval_id: string;
+      inheritable: number;
     }>;
     return rows.map((row) => ({
       key: row.key,
       grantedAt: row.granted_at_ms,
       sourceApprovalId: row.source_approval_id,
+      inheritable: row.inheritable !== 0,
     }));
   },
 
@@ -160,7 +165,29 @@ export const approvalStore = {
   insertGrant(sessionId: string, grant: ApprovalGrant): boolean {
     const result = getDb()
       .prepare(APPROVAL_SQL.insertGrant)
-      .run(sessionId, grant.key, grant.grantedAt, grant.sourceApprovalId);
+      .run(
+        sessionId,
+        grant.key,
+        grant.grantedAt,
+        grant.sourceApprovalId,
+        grant.inheritable ? 1 : 0,
+      );
+    return Number(result.changes) > 0;
+  },
+
+  /**
+   * Set the scope of a grant the session holds; `false` when it holds no such
+   * key or the grant already has that scope.
+   */
+  setGrantInheritable(
+    sessionId: string,
+    key: string,
+    inheritable: boolean,
+  ): boolean {
+    const value = inheritable ? 1 : 0;
+    const result = getDb()
+      .prepare(APPROVAL_SQL.setGrantInheritable)
+      .run(value, sessionId, key, value);
     return Number(result.changes) > 0;
   },
 

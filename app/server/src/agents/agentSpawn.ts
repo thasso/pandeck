@@ -62,6 +62,11 @@ export interface AgentSpawnRuntime {
   thinkingLevel: ThinkingLevel;
   /** Every model the definition lists, in order, as each resolves now. */
   listed: AgentModelChoice[];
+  /**
+   * The definition's `inheritGrants` spawn default, when it sets one. Not part
+   * of the frozen {@link SessionAgent}: it only decides the spawn edge.
+   */
+  inheritGrants?: boolean;
 }
 
 /** The outside state a spawn reads besides the runtime check; for tests. */
@@ -284,6 +289,7 @@ export async function resolveAgentRole(
   role: AgentRole;
   listed: AgentModelChoice[];
   peerTurnCap?: number;
+  inheritGrants?: boolean;
 }> {
   const read = await readAgentDefinition(name, scanned);
   return {
@@ -292,7 +298,15 @@ export async function resolveAgentRole(
     ...(read.manifest.peerTurns !== undefined
       ? { peerTurnCap: read.manifest.peerTurns }
       : {}),
+    ...inheritGrantsOf(read.manifest),
   };
+}
+
+/** A definition's `inheritGrants` spawn default, spread only when it sets one. */
+function inheritGrantsOf(manifest: AgentManifest): { inheritGrants?: boolean } {
+  return manifest.inheritGrants === undefined
+    ? {}
+    : { inheritGrants: manifest.inheritGrants };
 }
 
 /**
@@ -498,6 +512,7 @@ async function spawnRuntimeOf(
     ...(accountName ? { accountName } : {}),
     thinkingLevel,
     listed,
+    ...inheritGrantsOf(manifest),
   };
 }
 

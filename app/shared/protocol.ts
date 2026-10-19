@@ -4052,7 +4052,8 @@ export interface SessionSpawnApprovalItem {
   responseRequestWithdrawn?: boolean;
   /**
    * The session will not inherit the proposer's approval grants, nor will its
-   * own spawns through it; absent means it inherits. Fixed at proposal.
+   * own spawns through it; absent means it inherits. Fixed at proposal from
+   * the row, else the agent definition's `inheritGrants`.
    */
   inheritGrants?: false;
   provider: string;
@@ -7624,7 +7625,9 @@ export type ClientMessage =
    * Approve or reject a pending card. `edits` are the user's per-row changes to
    * an editable body (today only `sessionSpawn`); they are applied as part of
    * the approval, and ignored on reject. `forSession` also grants the card's
-   * operations for the rest of its session (`approvalGrants.ts`).
+   * operations for the rest of its session (`approvalGrants.ts`);
+   * `grantInheritable` makes those grants reach the sessions it starts too
+   * (absent: this session only). It is ignored without `forSession`.
    */
   | {
       type: "resolveApproval";
@@ -7632,16 +7635,34 @@ export type ClientMessage =
       decision: ApprovalDecision;
       edits?: ApprovalResolutionEdits;
       forSession?: boolean;
+      grantInheritable?: boolean;
     }
   /** Withdraw one session approval grant; later cards wait for a click again. */
   | { type: "revokeApprovalGrant"; sessionId: string; key: string }
   /**
    * Grant one operation for the rest of a session from the inspector, before
    * any card asked — only keys `grantableAheadOfTime` allows. Covers cards
-   * proposed from now on.
+   * proposed from now on. `inheritable` also covers the sessions it starts;
+   * absent means this session only.
    */
-  | { type: "grantApprovalForSession"; sessionId: string; key: string }
+  | {
+      type: "grantApprovalForSession";
+      sessionId: string;
+      key: string;
+      inheritable?: boolean;
+    }
   | { type: "setSessionPeerTurnCap"; sessionId: string; cap: number | null }
+  /**
+   * Set the scope of the session's OWN grants named in `keys`: true also
+   * covers the sessions it starts, false keeps them to this session. Keys the
+   * session does not hold are ignored.
+   */
+  | {
+      type: "setApprovalGrantScope";
+      sessionId: string;
+      keys: string[];
+      inheritable: boolean;
+    }
   /**
    * Answer a `choosing-task` pull-request card's Task-disambiguation prompt.
    * `taskId: null` means "none of these" (an agent-written title, no linked Task).

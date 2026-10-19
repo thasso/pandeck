@@ -140,6 +140,7 @@ interface Props {
         decision: import("@assistant/shared").ApprovalDecision,
         edits?: import("@assistant/shared").ApprovalResolutionEdits,
         forSession?: boolean,
+        grantInheritable?: boolean,
       ) => void)
     | undefined;
   /** The viewed session's "Approve for session" grants. */

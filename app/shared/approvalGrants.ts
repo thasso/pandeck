@@ -23,12 +23,18 @@ export interface ApprovalGrant {
    * granted it from the session inspector, before any card asked.
    */
   sourceApprovalId: string;
+  /**
+   * The grant's scope: false covers only the holder ("This session only", the
+   * default for every new grant), true also covers every session spawned
+   * below it through inheriting edges ("Also sessions it starts").
+   */
+  inheritable: boolean;
 }
 
 /**
  * A grant a spawned session inherits: held by `heldBy`, the nearest session up
- * its spawn chain that holds the key. Nothing is copied, so it is revoked
- * only on `heldBy`.
+ * its spawn chain that holds the key as inheritable. Nothing is copied, so it
+ * is revoked or narrowed only on `heldBy`. Always `inheritable: true`.
  */
 export interface InheritedApprovalGrant extends ApprovalGrant {
   heldBy: string;
