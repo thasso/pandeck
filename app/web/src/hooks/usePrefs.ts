@@ -21,12 +21,24 @@ import {
 import { localStore } from "../lib/localStore.ts";
 import { persistentStore } from "../lib/persistentStore.ts";
 import {
+  DEFAULT_ATTENTION_FILTERS,
+  normalizeAttentionFilters,
+  type AttentionFilters,
+} from "../lib/attentionFilters.ts";
+import {
   DEFAULT_NAV_SLOTS,
   normalizeNavSlots,
   type NavSlot,
 } from "./useSidebarSection.ts";
 
 type Theme = "dark" | "light";
+
+/** Browser-local shell presentation, independent of input capabilities. */
+export type LayoutMode = "automatic" | "desktop" | "mobile";
+
+function normalizeLayoutMode(value: unknown): LayoutMode {
+  return value === "desktop" || value === "mobile" ? value : "automatic";
+}
 
 /** Supported browser-local text-scale percentages. Typography only — never a
  *  UI-density or geometry setting. */
@@ -81,6 +93,8 @@ export function normalizeWorkflowRoleRuntimes(
 
 export interface Prefs {
   theme: Theme;
+  /** Automatic follows window width; explicit layouts do not switch on resize. */
+  layoutMode: LayoutMode;
   /** Browser-local text size (percent). Scales the six typography roles only. */
   textScale: TextScale;
   showThinking: boolean;
@@ -126,6 +140,8 @@ export interface Prefs {
   backlogViewMode: BacklogViewMode;
   /** Backlog project filter: which project(s) the list is narrowed to. */
   backlogProjectFilter: BacklogProjectFilter;
+  /** Independent browser-local filters for the Attention list. */
+  attentionFilters?: AttentionFilters;
   /** Pull Requests list: how rows are grouped. */
   pullRequestGroupBy: PullRequestGroupBy;
   /** Pull Requests list: the one project shown, or null for all. */
@@ -188,6 +204,7 @@ type OptionalPrefKey = {
 
 // Adding an optional preference must also add it to the persisted-key inventory.
 const OPTIONAL_PREF_KEYS = {
+  attentionFilters: true,
   worktreeReviewMode: true,
   lastModelKey: true,
   lastThinkingLevel: true,
@@ -206,6 +223,7 @@ const PAINT_KEY = "assistant.prefs.paint";
 
 const defaults: Prefs = {
   theme: "dark",
+  layoutMode: "automatic",
   textScale: 100,
   showThinking: false,
   showTools: false,
@@ -223,6 +241,7 @@ const defaults: Prefs = {
   backlogView: "backlog",
   backlogViewMode: "normal",
   backlogProjectFilter: ALL_PROJECT_FILTER,
+  attentionFilters: DEFAULT_ATTENTION_FILTERS,
   pullRequestGroupBy: "reason",
   pullRequestProjectFilter: null,
   pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
@@ -250,9 +269,11 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
   );
   return {
     ...applyPatch(defaults, known),
+    layoutMode: normalizeLayoutMode(known.layoutMode),
     textScale: normalizeTextScale(known.textScale),
     navSlots: normalizeNavSlots(known.navSlots),
     backlogView: normalizeBacklogView(known.backlogView),
+    attentionFilters: normalizeAttentionFilters(known.attentionFilters),
     pullRequestGroupBy: normalizePullRequestGroupBy(known.pullRequestGroupBy),
     ...(workflowRoleRuntimes !== undefined ? { workflowRoleRuntimes } : {}),
   };

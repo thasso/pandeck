@@ -142,6 +142,8 @@ const SANCTIONED_SINKS: readonly string[] = [
   "App.tsx: PullRequestInspector.worktreeStatuses={state.worktreeStatuses}",
   // The session inspector's spawn-tree rows, whose ids the app watches.
   "App.tsx: SessionInspector.worktreeStatuses={state.worktreeStatuses}",
+  // Task inspectors show related checkout rows and use live status only.
+  "App.tsx: TaskInspector.worktreeStatuses={state.worktreeStatuses}",
   "App.tsx: PullRequestDetailPage.status={pullRequestWorktreeId ? state.worktreeStatuses[pullRequestWorktreeId] : undefined}",
   "App.tsx: WorktreeInspector.status={state.worktreeStatuses[route.id]}",
   "App.tsx: WorktreeDetailPage.status={state.worktreeStatuses[worktree.id]}",

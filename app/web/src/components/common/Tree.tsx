@@ -177,6 +177,8 @@ export interface TreeProps<T> {
   /** Tight single-line density for sidebar browsers: 28px rows and a smaller
    * chevron, matching the sidebar session rows. Defaults to `false`. */
   compact?: boolean;
+  /** Off when rendered content owns its padding; Tree then adds only indentation. */
+  paddedContent?: boolean;
   /**
    * Edge-to-edge rows for a list that runs to its container's sides: square
    * fills divided by hairlines, as the sidebar's session list. Defaults to
@@ -198,11 +200,14 @@ export interface TreeProps<T> {
    * single-line Project headers centre their chevron among two-line Task rows.
    */
   getRowAlign?: ((node: TreeNode<T>) => "center" | "stretch") | undefined;
+  /** Hide the disclosure gutter when content supplies its own expansion control. */
+  getRowDisclosure?: ((node: TreeNode<T>) => boolean) | undefined;
   /** Extra classes on a row, by node + state. */
   getRowClassName?: (node: TreeNode<T>, state: TreeNodeState) => string;
   /**
    * Rows drawn as a GROUP BAND — the `ListGroupSection` look: the theme's
-   * `band` colour, pinned while its rows scroll under it. For a
+   * `border` colour over an opaque `background`, pinned while its rows scroll
+   * under it. For a
    * tree whose top level groups the rest (the Backlog by Project, flush).
    * Everything under a band is drawn one level shallower: the band already
    * says the rows belong to it, so an indent would only spend width.
@@ -279,9 +284,11 @@ export function Tree<T>({
   indentWidth = 24,
   showGuides = true,
   compact = false,
+  paddedContent = true,
   flush = false,
   rowAlign = "center",
   getRowAlign,
+  getRowDisclosure,
   getRowClassName,
   getRowBand,
   className,
@@ -592,8 +599,10 @@ export function Tree<T>({
       indentWidth,
       showGuides,
       compact,
+      paddedContent,
       flush,
       rowAlign: getRowAlign?.(toNode(node)) ?? rowAlign,
+      showDisclosure: getRowDisclosure?.(toNode(node)) ?? true,
       hasChildren,
       isExpanded,
       isFocused: (focusedId ?? flattened[0]?.id) === node.id,
@@ -683,8 +692,10 @@ interface RowProps<T> {
   indentWidth: number;
   showGuides: boolean;
   compact: boolean;
+  paddedContent: boolean;
   flush: boolean;
   rowAlign: "center" | "stretch";
+  showDisclosure: boolean;
   hasChildren: boolean;
   isExpanded: boolean;
   isFocused: boolean;
@@ -707,8 +718,10 @@ function RowBody<T>({
   indentWidth,
   showGuides,
   compact,
+  paddedContent,
   flush,
   rowAlign,
+  showDisclosure,
   hasChildren,
   isExpanded,
   selected,
@@ -723,8 +736,10 @@ function RowBody<T>({
   | "indentWidth"
   | "showGuides"
   | "compact"
+  | "paddedContent"
   | "flush"
   | "rowAlign"
+  | "showDisclosure"
   | "hasChildren"
   | "isExpanded"
   | "selected"
@@ -733,29 +748,30 @@ function RowBody<T>({
   | "band"
 > & { badge?: number | undefined; elevated?: boolean }) {
   const stretch = rowAlign === "stretch";
-  // A flush row has no container inset to sit in, so it keeps its own.
-  const inset = flush ? 4 : 0;
+  // Content-owned padding must not be applied again by the tree frame.
+  const inset = paddedContent && flush ? 4 : 0;
   return (
     <div
       className={cx(
         "relative z-10 flex gap-1 transition-colors",
-        band && !elevated ? "bg-band text-band-foreground" : "text-foreground",
+        band && !elevated
+          ? "group-header-surface text-foreground"
+          : "text-foreground",
         flush ? "rounded-none border-b border-border/60" : "rounded-md",
         stretch ? "items-stretch" : "items-center",
         // The indent animates (`index.css`) so a row promoted out of a vanished
         // parent moves to its new depth rather than appearing at it.
         !elevated && "tree-row-indent",
-        compact ? "min-h-7 pl-0.5 pr-1" : "min-h-9 pl-1 pr-2",
+        compact ? "min-h-7" : "min-h-9",
+        paddedContent && (compact ? "pl-0.5 pr-1" : "pl-1 pr-2"),
         // While dragging, the row reads as a lifted card; otherwise a subtle
         // selection tint (no text recolor, so the hierarchy stays legible).
         elevated
           ? "border border-border bg-card shadow-lg"
           : band
-            ? // A band is never "selected-looking": its tint would be lost on
-              // the dark neutral, and a hover lightens it instead.
-              selected
-              ? "bg-band-active"
-              : "hover:bg-band-hover"
+            ? selected
+              ? "bg-accent bg-none text-accent-foreground"
+              : "hover:bg-accent hover:bg-none hover:text-accent-foreground"
             : selected
               ? flush
                 ? "bg-muted"
@@ -773,7 +789,7 @@ function RowBody<T>({
             style={{ left: inset + i * indentWidth + indentWidth / 2 }}
           />
         ))}
-      {hasChildren ? (
+      {showDisclosure && hasChildren ? (
         <Button
           variant="ghost"
           size="icon-xs"
@@ -788,14 +804,8 @@ function RowBody<T>({
             // Narrow and TALL when stretched: a wide chevron would carve swipe-
             // dead area out of the row (it stops `pointerdown`), and at depth ≥ 1
             // that strip is live area `SWIPE_EDGE_GUARD_PX` does not already take.
-            // The TARGET is the full height; the glyph is pinned to the first
-            // line, its centre on the status glyph's: `pt-3` is this button's
-            // own border away from that centre — the content wrapper's `py-1`
-            // (below), and `BacklogTreePane`'s 28px status button with its
-            // `pt-1` — so a change to either leaves the chevron a few pixels
-            // off rather than breaking anything. Eyeball it against the
-            // status glyph. `w-5`: the 14px glyph and no more, so the row
-            // spends its width on the title.
+            // The target is full-height, with the glyph near the first content
+            // line. `w-5` keeps the gutter narrow so the content keeps its width.
             stretch
               ? "h-auto w-5 items-start pt-3"
               : compact
@@ -808,19 +818,24 @@ function RowBody<T>({
             className={cx(
               "transition-transform",
               isExpanded && "rotate-90",
-              band && "text-band-foreground/70",
+              band && "text-foreground/70",
             )}
           />
         </Button>
-      ) : (
+      ) : showDisclosure ? (
         <span
           className={cx(
             "shrink-0",
             stretch ? "w-5" : compact ? "w-4" : "size-5",
           )}
         />
-      )}
-      <div className={cx("min-w-0 flex-1", compact ? "py-0.5" : "py-1")}>
+      ) : null}
+      <div
+        className={cx(
+          "min-w-0 flex-1",
+          paddedContent && (compact ? "py-0.5" : "py-1"),
+        )}
+      >
         {content}
       </div>
       {badge != null && (

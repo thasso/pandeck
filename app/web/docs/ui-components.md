@@ -22,10 +22,12 @@ the same parts a shadcn example would.
 - A local edit to a vendored file is allowed only for an app contract, and is
   listed here:
   - `button.tsx`: `busy` prop (spinner, disabled, `aria-busy`;
-    `loading-states.md` R5). Its spinner is decorative (`role="presentation"`,
-    `aria-hidden`, no label): the stock one is a `role="status"` live region,
-    which R6 forbids inside a control. It takes the icon size of the button's
-    size (`size-3` at `xs`/`icon-xs`, `size-3.5` at `sm`).
+    `loading-states.md` R5), plus `list-action` / `icon-list-overflow` sizes for
+    shared row controls with touch-safe targets. Its spinner is decorative
+    (`role="presentation"`, `aria-hidden`, no label): the stock one is a
+    `role="status"` live region, which R6 forbids inside a control. It takes the
+    icon size of the button's size (`size-3` at `xs`/`icon-xs`, `size-3.5` at
+    `sm`).
   - `dialog.tsx`: `overlayClassName` on `DialogContent`, so a full-screen
     takeover (the shortcuts help) puts its backdrop in band 100 with its popup.
   - `spinner.tsx`, `skeleton.tsx`: `motion-safe:` animations (R6). `spinner.tsx`
@@ -43,6 +45,9 @@ the same parts a shadcn example would.
     thumb) and one thumb for a scalar `value`.
   - `badge.tsx`, `alert.tsx`: `success` and `warning` variants on the app's
     status tokens.
+  - `item.tsx`: `list` variant and size for `common/ListRow`: square, flush,
+    full-strength selected fill and inset keyboard focus, with geometry owned by
+    the shared row content.
   - `select.tsx`: an `xs` trigger size matching `Button size="xs"`, so a select
     fits a card footer's options beside its buttons.
   - Overlays sit in the layer bands of `ui-shell.md` instead of `z-50`: dialog,
@@ -56,33 +61,113 @@ the same parts a shadcn example would.
 
 ## Which component
 
-| Need                                                                | Use                                                                                   |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Any clickable action                                                | `Button` (`variant`, `size`)                                                          |
-| An icon-only action                                                 | `common/IconButton` (`label` is the aria-label and the tooltip)                       |
-| A link that looks like a button                                     | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`) |
-| Grouped or segmented actions                                        | `ButtonGroup`, `ToggleGroup`                                                          |
-| Text entry                                                          | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                   |
-| Edit a shown text value in place                                    | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)          |
-| Choice                                                              | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`              |
-| Form rows, labels, help and errors                                  | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                 |
-| A list row (session, task, file, setting)                           | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                       |
-| An object or event card (transcript result, notice, card-list item) | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)   |
-| A page or settings section that groups rows                         | `Card`                                                                                |
-| Status or count                                                     | `Badge`                                                                               |
-| Text an agent wrote (a title, a label, a reason, a summary)         | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card    |
-| Menu of actions                                                     | `DropdownMenu`, `ContextMenu`                                                         |
-| Secondary actions behind a `⋯`                                      | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)      |
-| Floating panel or hint                                              | `Popover`, `HoverCard`, `Tooltip`                                                     |
-| Modal                                                               | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                   |
-| Edge panel                                                          | `Sheet`, `Drawer`                                                                     |
-| Show/hide a region                                                  | `Collapsible`, `Accordion`                                                            |
-| Views of one object                                                 | `Tabs`                                                                                |
-| Nothing to show yet                                                 | `Empty` (via `common/load.tsx` where an async region owns it)                         |
-| A failure on its object                                             | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)                  |
-| Transient notice                                                    | `showToast()` (`lib/toast.ts`), rendered by Sonner                                    |
-| Tables, separators, kbd hints, breadcrumbs                          | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                             |
-| Search-and-pick lists                                               | `Command`                                                                             |
+| Need                                                                            | Use                                                                                                                                |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Any clickable action                                                            | `Button` (`variant`, `size`)                                                                                                       |
+| An icon-only action                                                             | `common/IconButton` (`label` is the aria-label and the tooltip)                                                                    |
+| A link that looks like a button                                                 | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`)                                              |
+| Grouped or segmented actions                                                    | `ButtonGroup`, `ToggleGroup`                                                                                                       |
+| Text entry                                                                      | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                                                                |
+| Edit a shown text value in place                                                | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)                                                       |
+| Choice                                                                          | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`                                                           |
+| Form rows, labels, help and errors                                              | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                                                              |
+| A browser row with one, two or three lines                                      | [`common/ListRow`](../src/components/common/ListRow.tsx) (Settings, session history, Attention, Pull Requests, idle worktrees)     |
+| Other list rows and tree content                                                | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                                                                    |
+| An object or event card (transcript result, notice, card-list item)             | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)                                                |
+| A page or settings section that groups rows                                     | `Card`                                                                                                                             |
+| Collapsible list sections, including Pull Requests and Tasks grouped by project | [`ListGroupSection`](../src/components/ListGroupSection.tsx) (sticky header with chevron, icon, title, count and optional actions) |
+| Status or count                                                                 | `Badge`                                                                                                                            |
+| Text an agent wrote (a title, a label, a reason, a summary)                     | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card                                                 |
+| Menu of actions                                                                 | `DropdownMenu`, `ContextMenu`                                                                                                      |
+| Secondary actions behind a `⋯`                                                  | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)                                                   |
+| Floating panel or hint                                                          | `Popover`, `HoverCard`, `Tooltip`                                                                                                  |
+| Modal                                                                           | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                                                                |
+| Edge panel                                                                      | `Sheet`, `Drawer`                                                                                                                  |
+| Show/hide a region                                                              | `Collapsible`, `Accordion`                                                                                                         |
+| Views of one object                                                             | `Tabs`                                                                                                                             |
+| Nothing to show yet                                                             | `Empty` (via `common/load.tsx` where an async region owns it)                                                                      |
+| A failure on its object                                                         | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)                                                               |
+| Transient notice                                                                | `showToast()` (`lib/toast.ts`), rendered by Sonner                                                                                 |
+| Tables, separators, kbd hints, breadcrumbs                                      | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                                                                          |
+| Search-and-pick lists                                                           | `Command`                                                                                                                          |
+
+`ListGroupSection` and the tree's group headers use `border` over an opaque
+`background`, with `foreground` text in both themes. The shared
+`group-header-surface` class layers these existing tokens so dark mode's
+translucent border cannot expose rows beneath a sticky header. Hover and
+selection use `accent` with `accent-foreground` instead. There is no separate
+group-header palette.
+
+### Browser rows
+
+`common/ListRow` is the shared edge-to-edge browser item, built on `Item`. A
+title with an optional leading icon is one line. Add `context` above or
+`details` below for two lines. Three-line Attention and PR rows use context,
+title and `signals`; Task Inbox rows use title, details and a preview in
+`signals`. Omitted lines take no space; passing `signals={null}` reserves an
+empty signal line. `contextTrailing` pins content such as a Task id to the
+context line's right edge; otherwise `age` closes that line. `pinned` keeps
+important signals visible, and `trailing` keeps controls fixed at the end of the
+final line. Supporting lines show whole items or hide them; hidden controls
+become inert, and signals compact before dropping items.
+
+`actions` accepts `common/ListRowActions`. One or two actions are both direct;
+with more, explicitly primary actions stay direct and the rest use a labeled
+menu. Ordinary actions share the neutral ghost style and inherited icon tone;
+only destructive actions use a different tone. Buttons and menu items show a
+pointer cursor. Desktop mouse controls occupy the bottom-right slot and reveal
+on hover or focus without growing the content lines. Pending decisions remain
+visible. The Backlog tree uses the same `ListRowContent` and actions inside its
+tree frame, keeping hierarchy and selection rather than nesting a clickable flat
+row. `Tree`'s `paddedContent={false}` lets shared content own all padding; the
+frame adds only hierarchy indentation, not another horizontal inset.
+`getRowDisclosure` hides the gutter for rows with an inline expansion control.
+Full Backlog Task rows use a leading Sub-tasks control in their bottom line,
+without a reserved chevron or leaf spacer; keyboard expansion stays with Tree.
+Browser hosts share `browserRowDensity` for Desktop/Mobile spacing. Density
+never selects different content. Task tree `presentation="picker"` is the
+explicit single-line variant; `presentation="browser"` keeps metadata at either
+density. When there is no Sub-tasks control or metadata, omit the bottom line
+and move the session action beside the title. Task worktree and PR indicators
+remain separate. A single worktree's name hides in the signal row's compact
+form; multiple worktrees use a count menu with individual links. Task priority
+badges and the inspector selector share `TaskPriorityValue` for the same icons
+and capitalized names; row badges use its compact sizing.
+
+Shared `WorktreeRow` content keeps the branch and change counts on the first
+line. Its second line starts with the actual PR number linked to the provider
+URL supplied by the shared hosting projection, followed by git metadata. The PR
+badge collapses to its state icon only when the full badge does not fit; the
+icon retains the same link and accessible name. A card summary without a known
+provider URL remains informational rather than guessing a link.
+
+Mobile layout or a coarse pointer moves actions to a separate strip beneath the
+content: labeled targets at least 44px high, 12px gaps, and wrapping into
+stacked buttons when space is tight. The strip never opens the item. Shared
+`touch-ui:` styling follows either mobile layout or coarse input, independent of
+a forced Desktop choice.
+
+The row owns padding, typography, line spacing, selection, hover, focus and
+Enter/Space/arrow-key behavior. Its host supplies `density`, object data,
+accessible names, domain shortcuts, and actions. Simple navigation renders a
+real button. Rows containing other controls use the default focusable container
+so buttons are never nested. Task rows use `interaction="content"`: the frame is
+a plain click surface, and real title and metadata links own keyboard access and
+modifier-click behavior. They must not be hidden behind `role="button"`. A
+parent grouping a row with expanded children passes `divider={false}` and owns
+that group's separator.
+
+`ListRowContent` provides the same geometry inside a domain-owned presentation
+wrapper, such as a session's actions flip. `identity` accepts an existing
+identity composition such as `SessionTitleRow`, preserving its status semantics.
+Do not recreate the frame or line spacing in feature components. Storybook's
+`Common/ListRow` shows the one-, two-, and three-line layouts.
+
+`common/ListFilterPopover` owns browser filter chrome: the shared trigger,
+active-filter count, panel width and property-list layout. Tasks and Attention
+supply only their filter fields. Both use `BacklogProjectFilterPicker` for the
+same searchable Project selection; Attention supplies its own status choices
+without adopting Task statuses or Task view switching.
 
 An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
@@ -114,6 +199,9 @@ server that bounds such a field must not cut it mid-sentence at a small limit.
 - `className` on a `ui/` component is for layout only: margin, gap, width and
   height, flex and grid placement, position, responsive visibility. Colors,
   borders, radius, padding and font size come from the component.
+- Reuse existing theme colors by the same token name in light and dark mode.
+  Adding new colors, color tokens, or ad hoc color mixes requires explicit user
+  approval. A UI styling request alone is not permission to expand the palette.
 - Colors are theme tokens only: `background`, `foreground`, `card`, `popover`,
   `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`, `input`,
   `ring`, plus the app's `success` and `warning` (with `-soft` fills). No

@@ -47,6 +47,22 @@ Shell layout state is scoped to the browser tab through `sessionStorage`: left
 and right panel openness, the selected left-sidebar section, and desktop
 right-panel tabs survive reloads without leaking into another tab.
 
+Settings → Appearance → Layout selects a browser-local `layoutMode`, persisted
+with `usePrefs` in the browser store, never in server settings. `automatic` is
+the default and follows the existing 767px maximum-width breakpoint. `desktop`
+keeps the app header, inline resizable panels and desktop header actions at any
+window width; `mobile` uses the single-pane screens and bottom dock even in a
+wide window. A forced mode never changes on resize. On a narrow Desktop window,
+users can close side panels with the header toggles to leave more room.
+
+`LayoutProvider` resolves that preference once for `useMobileLayout` consumers
+and writes the same result to the root's `data-layout` attribute. Shell CSS uses
+the semantic `desktop:` variant instead of viewport breakpoints, including
+body-portaled controls. Content wrapping, dialog widths, physical safe areas and
+keyboard/input capabilities still follow the actual viewport or device. Layout
+does not change touch/Enter behavior or reset tab-local panel and navigation
+state. Isolated components outside the provider retain Automatic behavior.
+
 The main pane renders exactly one current object or view. The right sidebar is
 the **object panel** for the main-pane object, never a second navigation tree.
 It is a single **Details** inspector — summary, related objects, and
@@ -201,7 +217,12 @@ a design one — and a slot the user has never seen lands at its default positio
 rather than at the end, so a new action is not born behind More.
 
 Settings as a primary section shows its configuration pages in labeled groups in
-the object browser, with the most frequently oriented surfaces first. Model
+the object browser, with the most frequently oriented surfaces first. Each group
+uses `ListGroupSection`: an edge-to-edge sticky header with its icon, no count,
+and tab-local remembered disclosure state. Navigating to a settings page opens
+its group; the reader can collapse it again. Settings entries are one-line
+`common/ListRow` items, flush with the shared headers, using the same selected,
+hover and keyboard-focus treatment as Attention and Pull Requests. Model
 configuration and provider account setup share a Models & providers group, but
 each provider keeps its own page rather than mixing account types in one form. A
 section whose mapping is still unclear may ship with a minimal or empty browser
@@ -231,12 +252,49 @@ needs projects and worktrees, while either route subscribes to Tasks only for
 the interval in which the staged-context Task field is expanded. A visible Tasks
 sidebar still subscribes independently.
 
-Every Backlog surface states its own row DENSITY, and it is the host's decision
-rather than a breakpoint: the desktop sidebar rail and the composer's task
-picker are `tight` (one line, hover for what the row cannot hold), while the
-Backlog and Project pages — and the same sidebar when it is a phone SCREEN — are
-`comfortable` (two lines, thumb-sized secondary controls). Width and pointer
-coarseness are independent, and the mobile browser is where they disagree.
+Tasks Focus and Inbox use `common/ListRow` in both the sidebar and full-page
+browser. Focus has three stable lines: Project left and Task id right above the
+title, the title in the middle, and a non-interactive status glyph with
+remaining Task metadata below. Inbox adds its description preview as a third
+line only when present. Inbox uses a single shared Accept action to triage an
+item into the task list without changing its status. Its metadata status glyph
+is informational, never a status-changing control. Their real title links,
+metadata links and inline status/suggestion/dismiss controls remain interactive
+inside a plain click surface (`interaction="content"`), not an ARIA button.
+Focus buckets use `ListGroupSection` in both hosts, including shared sticky
+headers and remembered disclosure state. Tasks, Attention and Pull Requests
+share `browserRowDensity`: `tight` in Desktop layout and `comfortable` in Mobile
+layout, including the full-page Task browser. The Backlog keeps `common/Tree`
+for hierarchy, selection, keyboard, swipe and drag behavior, with shared
+`ListRowContent` and `ListRowActions` inside each Task row. Full rows put
+Project left and the status glyph immediately before Task id on the right above
+the title, then Sub-tasks disclosure and metadata on the bottom line. Omit that
+line when neither is present, placing the session action beside the title
+instead. Sub-tasks is the first bottom-line item only for parents; it uses the
+existing persisted expansion state. Task rows reserve no chevron gutter or leaf
+spacer. Project headers and compact pickers retain tree disclosure controls;
+compact pickers stay single-line. The only row action opens or starts a session;
+status is informational, while archive retains its keyboard/swipe paths. The
+shared content owns all row padding; Tree adds only hierarchy indentation.
+Action presses do not start a drag. Task metadata shows worktree navigation
+alongside PR/CI, never in its place. One worktree shows its branch name when
+space allows, then compacts to the icon. Several distinct worktrees show a count
+that opens their individual links. Count only worktrees present in the current
+worktree collection and used by non-archived sessions started from the Task, not
+sessions that merely referenced it. Old session references to removed worktrees
+do not count. The browser, inspector and git-status watches use this same
+filter. Dirty dots belong to their worktrees; PR/CI badges are deduplicated
+across worktrees. Worktree names reach memoized Backlog surfaces as a
+content-stable projection, not raw worktree records.
+
+Browser hosts use the shared `browserRowDensity` policy from `lib/rowDensity.ts`
+with the resolved layout, not per-view spacing exceptions. Density controls
+spacing and control sizes, never the number of lines or metadata visibility.
+Task tree `presentation="browser"` retains context, title, optional metadata and
+session actions at either density. `presentation="picker"` explicitly selects
+single-line content and standard tree disclosure without polling for hidden
+metadata. Width and pointer coarseness remain independent; shared touch actions
+retain their separate labeled targets of at least 44px.
 
 The Sessions browser takes the same decision from the same host
 (`lib/rowDensity.ts`, one type for both browsers): its cards and shelf rows are
@@ -268,9 +326,44 @@ such row, and background opens `/background-tasks`. The **Needs you** block
 keeps its label and gives up its count to the bar, which states it whether or
 not the block exists. The **Settled** and **Archived** shelves carry no count
 either: the size of the history is not a decision, and the open shelf's own
-paging says how much more there is. There is no session search: finding a
-session by title is the shelves' job, and the field cost a permanent row of
-chrome for it.
+paging says how much more there is. Both shelves use `ListGroupSection`, with
+the shared sticky group header and icon. Settled paging and lazy archive loading
+stay owned by `SessionInbox`. There is no session search: finding a session by
+title is the shelves' job, and the field cost a permanent row of chrome for it.
+
+Attention adds the same `ListFilterPopover` used by Tasks to that fixed bar. Its
+Project picker is shared with Tasks, including All projects and Unassigned.
+Status filters use attention groups: Needs you, Updates / issues, Working, Idle,
+Settled and Archived. Updates / issues includes unread replies, failures,
+interruptions and stalled work. Empty or all-selected status choices mean all.
+`Prefs.attentionFilters` is browser-local and independent of Task filters.
+Project resolution uses the session's Project, then its worktree's Project;
+Workflow Runs use their own Project. While Attention is visible it subscribes to
+Projects and Worktrees as well as Workflow Runs, using existing topics only.
+
+Filtering follows cluster/workflow folding: a matching member keeps its whole
+unit and its context, without changing the Needs-you boundary or item order.
+Settled history is filtered before paging; Archived remains lazy-loaded and
+filters only the history already read. Empty results say so and offer Clear
+filters rather than claiming there is no work. Header counts stay global; Needs
+you clears filters before focusing waiting work, opening the first Needs-you
+Project group if needed. Pending settle/swipe exits stay visible until their
+existing command sends. These controls filter sessions and Workflow Runs;
+Initiatives remain independent cross-Project items, including their Needs-you
+outcomes, and are never hidden by those filters.
+
+The same popover offers Group: None / By Project, saved independently of Task
+grouping in `Prefs.attentionFilters.byProject`. Grouping does not count as a
+filter, and clearing filters keeps it. Needs you stays before the working set;
+each gets its own shared `ListGroupSection` Project bands. Settled and loaded
+Archived history group inside their existing shelves, with non-sticky nested
+bands. Projects follow registry order, unknown Projects follow, and Unassigned
+is last. Each group keeps its existing item order. A cluster or Workflow Run
+belongs to its owner's Project and stays whole, including cross-Project peers.
+Group disclosure is remembered per tab; selected rows reopen their group.
+Reordering stays inside a Project when grouped and includes filtered-out items
+of that Project, so hidden items keep their positions and dragging never changes
+Project membership.
 
 The cards hold still: a card's state never moves it. **Needs you** and the
 working set below it are each ordered by one number per item, highest first —
@@ -311,24 +404,26 @@ second is the title, led by one fixed slot: the session's type icon while it is
 Idle, otherwise the state's badge as an icon. The third holds what the work
 produced and what is moving — the pull request with its number, else the
 worktree's uncommitted lines and commits ahead of base; background work; a
-cluster's peers — with the actions flip and Settle at its right edge. A row
-shows each item whole or drops it; only the branch shortens, into the width the
-others leave. The state's sentence — a failure message, "Unread response" — is
-part of the card's spoken label, not a visible line: the badge already says it.
-So is everything a row drops for lack of room; a control on a row's hidden
-overflow line is made `inert`, so keyboard focus never lands on what is not
-shown. Queued work is the one sentence still shown, beside an Idle card's empty
-slot. The expanded peer rows show type icon, state icon, title, its running
-background jobs, its own peers' count when it coordinates any, and time, with
-Idle as a neutral badge. The card's first and third rows are as tall as the
-inline actions take in that density (20px on the rail, 28px on a phone), so the
-title sits centred between them and no action's touch target reaches into the
-title row (`CARD_OUTER_ROW`). The card stays in the working set until Settle
-acknowledges the cursor; its presence there already states that it is unsettled.
-Every object is opened from exactly one target: Project from its front text
-item, Worktree and Task from the back action face. Their front metadata remains
-context, not a duplicate target. A latest failed outcome stays visibly
-**Failed** after reading, even if a later run start cleared its error record.
+cluster's peers — with shared `ListRowActions` for Settle and a labeled overflow
+menu. Touch layouts place those actions in a separate, generously spaced strip;
+the row's content stays visible while its menu is open. A row shows each item
+whole or drops it; only the branch shortens, into the width the others leave.
+The state's sentence — a failure message, "Unread response" — is part of the
+card's spoken label, not a visible line: the badge already says it. So is
+everything a row drops for lack of room; a control on a row's hidden overflow
+line is made `inert`, so keyboard focus never lands on what is not shown. Queued
+work is the one sentence still shown, beside an Idle card's empty slot. The
+expanded peer rows show type icon, state icon, title, its running background
+jobs, its own peers' count when it coordinates any, and time, with Idle as a
+neutral badge. The card's first and third rows are as tall as the inline actions
+take in that density (20px on the rail, 28px on a phone), so the title sits
+centred between them and no action's touch target reaches into the title row
+(`CARD_OUTER_ROW`). The card stays in the working set until Settle acknowledges
+the cursor; its presence there already states that it is unsettled. Every object
+is opened from exactly one target: Project from its front text item, Worktree
+and Task from the back action face. Their front metadata remains context, not a
+duplicate target. A latest failed outcome stays visibly **Failed** after
+reading, even if a later run start cleared its error record.
 
 A settled session runs its next turn from the Settled shelf and comes back when
 that turn produces a user-facing result. Reading it here or in another tab
@@ -713,18 +808,18 @@ every repository has a #1 and one project can hold two repositories (a spawned
 worktree publishing to a `pushurl` fork). Addressing on project and number would
 give two rows one URL, highlight both, and open whichever came first.
 
-A row is a `ListCardRow`, the attention inbox's three rows: the project, the
-author when it is not you, and the head branch, with the age closing the line;
-`#number` and the title under the state glyph; then the signals. The signals
-lead with WHY it is yours — **review**, **mine**, **assigned**, **team**, each
-with its group's icon — then merged or closed, draft, conflicts and an open
-review, with the local-checkout mark and CI closing the line on the right. When
-the line is too narrow every signal drops its words and keeps its icon before
-any signal is dropped. The whole vocabulary distinguishes UNKNOWN from a
-negative answer, because absence on the wire means the provider was not reached:
-an unread CI reads as unknown, never as passing, and an unread review as
-unknown, never as agreement. Threads are only counted when the provider actually
-counted them.
+A row is a `common/ListRow`, shared with the attention inbox, using three rows:
+the project, the author when it is not you, and the head branch, with the age
+closing the line; `#number` and the title under the state glyph; then the
+signals. The signals lead with WHY it is yours — **review**, **mine**,
+**assigned**, **team**, each with its group's icon — then merged or closed,
+draft, conflicts and an open review, with the local-checkout mark and CI closing
+the line on the right. When the line is too narrow every signal drops its words
+and keeps its icon before any signal is dropped. The whole vocabulary
+distinguishes UNKNOWN from a negative answer, because absence on the wire means
+the provider was not reached: an unread CI reads as unknown, never as passing,
+and an unread review as unknown, never as agreement. Threads are only counted
+when the provider actually counted them.
 
 One pull request opens at
 `/pull-requests/:projectId/:provider/:repositoryKey/:number` — the detail page.
@@ -932,7 +1027,12 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    but the worktree the session runs in, which Details names, draws no group.
    The panel holds the Worktrees topic whenever it shows a session. A group may
    bound its first page (a session's Tasks shows five) and reveal the rest on
-   demand.
+   demand. Task inspectors also list **Worktrees** as shared worktree rows,
+   deduplicated from the non-archived sessions started from that Task, using the
+   same association rule as its browser row. Each opens the worktree in the main
+   pane. While visible, the Task inspector holds the Worktrees topic, preserves
+   retained rows during refresh, and shows loading or retryable failure in the
+   group rather than claiming an unread collection is empty.
 
 An Initiative page is the one main-pane object whose panel can show ANOTHER
 object: selecting a node on its map, or a row of its list, opens that member

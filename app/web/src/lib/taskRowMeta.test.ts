@@ -101,11 +101,8 @@ describe("buildTaskRowMeta: workflow", () => {
 
 describe("taskRowsHaveMeta", () => {
   it("answers for the surfaces that pay for the second line", () => {
-    // The desktop rail's tree rows are the one surface with nowhere to state
-    // any of this — and so the one that must not make the app poll or watch.
-    expect(taskRowsHaveMeta("tight", "backlog")).toBe(false);
-    expect(taskRowsHaveMeta("tight", "focus")).toBe(true);
-    expect(taskRowsHaveMeta("comfortable", "backlog")).toBe(true);
-    expect(taskRowsHaveMeta("comfortable", "inbox")).toBe(true);
+    // Presentation controls metadata; spacing density does not.
+    expect(taskRowsHaveMeta("picker")).toBe(false);
+    expect(taskRowsHaveMeta("browser")).toBe(true);
   });
 });

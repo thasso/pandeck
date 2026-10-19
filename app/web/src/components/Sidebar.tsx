@@ -26,18 +26,18 @@ import {
   type IdleWorktreesProps,
 } from "./PullRequestBrowser.tsx";
 import { Badge } from "@/components/ui/badge";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
+import { ListRow } from "./common/ListRow.tsx";
 import type {
   PullRequestListView,
   PullRequestTarget,
 } from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
+import { AttentionFilterControl } from "./AttentionFilterControl.tsx";
+import {
+  DEFAULT_ATTENTION_FILTERS,
+  type AttentionFilters,
+} from "../lib/attentionFilters.ts";
+import { ListGroupSection } from "./ListGroupSection.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
 import { InitiativeBrowserGroup } from "./initiative/InitiativeBrowserGroup.tsx";
@@ -59,10 +59,7 @@ import type {
   InitiativeSettleError,
 } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
-import {
-  SIDEBAR_BACKLOG_DENSITY,
-  type BacklogDensity,
-} from "../lib/backlogTreeModel.ts";
+import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 import type { LoadState } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";
@@ -78,6 +75,7 @@ import { createSessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
 import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
+import { browserRowDensity, type RowDensity } from "../lib/rowDensity.ts";
 import {
   initiativePath,
   type SettingsSection,
@@ -296,6 +294,7 @@ function BrowserRow({
   current = false,
   selected = current,
   count = 0,
+  density = "tight",
   onClick,
 }: {
   icon: ReactNode;
@@ -303,29 +302,22 @@ function BrowserRow({
   current?: boolean;
   selected?: boolean;
   count?: number;
+  density?: RowDensity;
   onClick: () => void;
 }) {
   return (
-    <Item
-      size="xs"
-      variant={selected ? "muted" : "default"}
+    <ListRow
+      active={selected}
+      density={density}
       render={<button type="button" />}
       aria-current={current ? "page" : undefined}
-      onClick={onClick}
-      className="text-left hover:bg-muted"
-    >
-      <ItemMedia variant="icon">{icon}</ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="w-full">
-          <span className="truncate">{label}</span>
-        </ItemTitle>
-      </ItemContent>
-      {count > 0 ? (
-        <ItemActions>
-          <Badge variant="secondary">{count}</Badge>
-        </ItemActions>
-      ) : null}
-    </Item>
+      onOpen={onClick}
+      leading={icon}
+      title={label}
+      trailing={
+        count > 0 ? <Badge variant="secondary">{count}</Badge> : undefined
+      }
+    />
   );
 }
 
@@ -414,32 +406,37 @@ export function sidebarWorktreeWatchIds(
 function SettingsSectionList({
   activeSection,
   onOpenSection,
+  density,
 }: {
+  density: RowDensity;
   activeSection?: SettingsSection | null | undefined;
   onOpenSection?: ((section: SettingsSection) => void) | undefined;
 }) {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col">
       {navigableSettingsGroups().map((group) => (
-        <section key={group.id} aria-labelledby={`settings-group-${group.id}`}>
-          <h2
-            id={`settings-group-${group.id}`}
-            className="px-2.5 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            {group.label}
-          </h2>
-          <div className="flex flex-col gap-0.5">
+        <ListGroupSection
+          key={group.id}
+          id={`settings:${group.id}`}
+          title={group.label}
+          icon={group.icon}
+          containsSelected={group.sections.some(
+            (section) => section.id === activeSection,
+          )}
+        >
+          <div className="flex flex-col">
             {group.sections.map((section) => (
               <BrowserRow
                 key={section.id}
                 icon={section.icon}
                 label={section.label}
                 selected={activeSection === section.id}
+                density={density}
                 onClick={() => onOpenSection?.(section.id)}
               />
             ))}
           </div>
-        </section>
+        </ListGroupSection>
       ))}
     </div>
   );
@@ -554,12 +551,34 @@ function SidebarImpl({
   // draws above the scroll container (`SessionInboxBarSlot`). One store for the
   // sidebar's life, so the prop the list gets never changes.
   const [inboxBarStore] = useState(createSessionInboxBarStore);
+  const attentionFilters = prefs.attentionFilters ?? DEFAULT_ATTENTION_FILTERS;
+  const updateAttentionFilters = useCallback(
+    (filters: AttentionFilters) => onUpdatePrefs({ attentionFilters: filters }),
+    [onUpdatePrefs],
+  );
+  const clearAttentionFilters = useCallback(
+    () =>
+      updateAttentionFilters({
+        ...DEFAULT_ATTENTION_FILTERS,
+        byProject: Boolean(attentionFilters.byProject),
+      }),
+    [updateAttentionFilters, attentionFilters.byProject],
+  );
+  const attentionFilterControl = (
+    <AttentionFilterControl
+      filters={attentionFilters}
+      onChange={updateAttentionFilters}
+      projects={projects}
+      projectsLoaded={projectsLoaded}
+      sessions={sessions}
+      worktrees={worktrees}
+      workflowRuns={workflowRuns}
+    />
+  );
   // The Backlog's filters are a row of chips, so what they are short of is
   // WIDTH: on the rail they wrap into four lines at page sizing and two at the
   // rail's own, above rows that are two-line either way.
-  const backlogToolbarDensity: BacklogDensity = mobile
-    ? "comfortable"
-    : "tight";
+  const backlogToolbarDensity: BacklogDensity = browserRowDensity(mobile);
 
   // Fetch Backlog Tasks, Projects, or Worktrees the first time the matching
   // section is shown. The Projects browser also embeds worktrees, so it needs
@@ -799,7 +818,7 @@ function SidebarImpl({
     // its own last rows clear of it.
     <aside
       ref={containerRef}
-      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden surface-sidebar border-border sm:border-r"
+      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden surface-sidebar border-border desktop:border-r"
     >
       {/* The attention list's counts bar (or the Tasks toolbar), above the
           scroll container: it stays put without the scrollbar running through
@@ -808,6 +827,7 @@ function SidebarImpl({
         <div className="shrink-0">
           <SessionInboxBarSlot
             store={inboxBarStore}
+            filterControl={attentionFilterControl}
             onOpenBackgroundTasks={onOpenBackgroundTasks}
           />
         </div>
@@ -834,12 +854,13 @@ function SidebarImpl({
       <div
         ref={browserScrollRef}
         // The shared inset every browser reads its first row in — except the
-        // attention list and the Tasks and Projects trees, which run edge to
+        // attention list, Settings groups and the Tasks and Projects trees,
+        // which run edge to
         // edge: their
         // rows are divided by hairlines, which a side inset would leave
         // hanging in empty space.
         className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
-          section === "sessions"
+          section === "sessions" || section === "settings"
             ? ""
             : section === "pull-requests" ||
                 (section === "tasks" &&
@@ -857,6 +878,7 @@ function SidebarImpl({
       >
         {section === "settings" ? (
           <SettingsSectionList
+            density={browserRowDensity(mobile)}
             activeSection={activeSection}
             onOpenSection={onOpenSection}
           />
@@ -874,13 +896,7 @@ function SidebarImpl({
             hosting={worktreeHosting}
             dirtyWorktrees={dirtyWorktrees}
             workflowIndicators={workflowIndicators}
-            // The same two-line row on a phone and on the rail: this aside is
-            // never short of HEIGHT, and a single line there spent a narrow
-            // column on the id and the project chip
-            // (`SIDEBAR_BACKLOG_DENSITY`). App asks the same question of the
-            // same predicate (`taskRowsHaveMeta`) before polling or watching
-            // for what those rows state.
-            density={SIDEBAR_BACKLOG_DENSITY}
+            density={browserRowDensity(mobile)}
             flush
             externalToolbar
           />
@@ -926,7 +942,7 @@ function SidebarImpl({
             onOpen={onOpenPullRequest}
             // The host's call, as everywhere else: a phone screen gets
             // thumb-sized rows, the rail keeps its tight ones.
-            density={mobile ? "comfortable" : "tight"}
+            density={browserRowDensity(mobile)}
             idle={idleWorktrees}
             listView={pullRequestListView}
           />
@@ -946,6 +962,9 @@ function SidebarImpl({
         ) : (
           <SessionInbox
             barStore={inboxBarStore}
+            filters={attentionFilters}
+            filterControl={attentionFilterControl}
+            onClearFilters={clearAttentionFilters}
             sessions={sessions}
             archivedSessionCount={archivedSessionCount}
             archivedSessionsLoaded={archivedSessionsLoaded}
@@ -960,7 +979,7 @@ function SidebarImpl({
             animateListChanges={prefs.animateListChanges}
             // The host's call, like the Backlog toolbar's: a phone screen gets
             // thumb-sized rows, the rail keeps its tight ones.
-            density={mobile ? "comfortable" : "tight"}
+            density={browserRowDensity(mobile)}
             onSelect={onSelect}
             onSettle={onSettleSession}
             onDismissFailure={onDismissSessionFailure}

@@ -359,6 +359,7 @@ export function shellBacklogState(sessions: SessionListItem[]): BacklogState {
 /** The shipped preferences, as a fresh profile has them. */
 export const shellPrefs: Prefs = {
   theme: "light",
+  layoutMode: "automatic",
   textScale: 100,
   showThinking: false,
   showTools: false,

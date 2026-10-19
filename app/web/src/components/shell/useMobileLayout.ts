@@ -1,26 +1,32 @@
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
+
+/** Shared resolved layout. Null lets isolated previews follow window width. */
+export const MobileLayoutContext = createContext<boolean | null>(null);
 
 /**
- * The single breakpoint below which the shell collapses to the main pane and
- * side panels render as full-screen overlays (see app/web/docs/ui-shell.md).
+ * Automatic layout's breakpoint. Explicit Desktop and Mobile choices ignore
+ * it (see app/web/docs/ui-shell.md).
  */
 export const MOBILE_LAYOUT_QUERY = "(max-width: 767px)";
 
-/** Reactive flag for the shell's mobile (single-pane) layout mode. */
+/** Resolved shell layout, or reactive window width outside LayoutProvider. */
 export function useMobileLayout(): boolean {
-  const [mobile, setMobile] = useState(() =>
-    typeof window === "undefined"
-      ? false
-      : window.matchMedia(MOBILE_LAYOUT_QUERY).matches,
+  const provided = useContext(MobileLayoutContext);
+  const [mobile, setMobile] = useState(
+    () =>
+      provided ??
+      (typeof window !== "undefined" &&
+        window.matchMedia(MOBILE_LAYOUT_QUERY).matches),
   );
 
   useEffect(() => {
+    if (provided !== null) return;
     const media = window.matchMedia(MOBILE_LAYOUT_QUERY);
     const update = () => setMobile(media.matches);
     update();
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
-  }, []);
+  }, [provided]);
 
-  return mobile;
+  return provided ?? mobile;
 }

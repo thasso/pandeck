@@ -490,6 +490,11 @@ function allStatesFixture(
       updatedAt: now - 26 * 3_600_000,
       settledAt: now - 25 * 3_600_000,
     }),
+    // Both history shelves use the production ListGroupSection headers.
+    quiet("archived-1", "Archived session", {
+      updatedAt: now - 48 * 3_600_000,
+      archived: true,
+    }),
   );
   const projects: ProjectRecord[] = [
     {

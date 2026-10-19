@@ -15,6 +15,7 @@ interface Props {
   onNeedsYou: () => void;
   /** Open the background-work registry. */
   onOpenBackgroundTasks: () => void;
+  filterControl?: ReactNode;
 }
 
 /**
@@ -47,6 +48,7 @@ export function SessionInboxBar({
   background,
   onNeedsYou,
   onOpenBackgroundTasks,
+  filterControl,
 }: Props) {
   const { activeCount, ownerCount } = background;
   return (
@@ -96,6 +98,7 @@ export function SessionInboxBar({
       >
         <Activity aria-hidden />
       </Chip>
+      {filterControl}
     </div>
   );
 }
@@ -162,15 +165,18 @@ function Chip({
 export function SessionInboxBarSlot({
   store,
   onOpenBackgroundTasks,
+  filterControl,
 }: {
   store: SessionInboxBarStore;
   onOpenBackgroundTasks: () => void;
+  filterControl?: ReactNode;
 }) {
   const facts = useSyncExternalStore(store.subscribe, store.get);
   if (!facts) return null;
   return (
     <SessionInboxBar
       needsYou={facts.needsYou}
+      filterControl={filterControl}
       working={facts.working}
       background={facts.background}
       onNeedsYou={facts.onNeedsYou}

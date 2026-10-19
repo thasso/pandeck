@@ -4,7 +4,6 @@ import {
   FolderTree,
   Inbox,
   ListTree,
-  SlidersHorizontal,
 } from "lucide-react";
 import { Button } from "./ui/button.tsx";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
@@ -14,18 +13,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
+import { ListFilterPopover } from "./common/ListFilterPopover.tsx";
 import type { ProjectRecord, TaskStatus } from "@assistant/shared";
 import {
   BacklogProjectFilterControl,
   BacklogProjectFilterPicker,
   type BacklogProjectFilterOption,
 } from "./BacklogFilters.tsx";
-import {
-  PROPERTY_TRIGGER,
-  PropertyLabel,
-  PropertyList,
-} from "./common/PropertyList.tsx";
+import { PROPERTY_TRIGGER, PropertyLabel } from "./common/PropertyList.tsx";
 import {
   BacklogStatusFilter,
   BacklogStatusFilterPicker,
@@ -351,71 +346,45 @@ function BacklogFilterPopover({
     (projectFilter.kind !== "all" ? 1 : 0) +
     (view !== "inbox" && statusFilterActive(statuses) ? 1 : 0);
   return (
-    <Popover>
-      <PopoverTrigger
-        render={
+    <ListFilterPopover active={active}>
+      <PropertyLabel>Project</PropertyLabel>
+      <BacklogProjectFilterPicker
+        filter={projectFilter}
+        options={projectFilterOptions}
+        projectsById={projectsById}
+        onChange={onProjectFilterChange}
+        disabled={!projectsLoaded}
+        className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
+      />
+      {view !== "inbox" ? (
+        <>
+          <PropertyLabel>Status</PropertyLabel>
+          <BacklogStatusFilterPicker
+            statuses={statuses}
+            onChange={onStatusFilterChange}
+            options={view === "focus" ? FOCUS_STATUS_OPTIONS : undefined}
+            className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
+          />
+        </>
+      ) : null}
+      {view === "backlog" ? (
+        <>
+          <PropertyLabel>Group</PropertyLabel>
           <Button
             variant="ghost"
             size="sm"
-            className="ml-auto gap-1 text-muted-foreground"
-            aria-label={
-              active ? `Filters (${active} active)` : "Filters and grouping"
-            }
-          />
-        }
-      >
-        <SlidersHorizontal />
-        {active ? (
-          <span className="min-w-4 rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums">
-            {active}
-          </span>
-        ) : null}
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-72">
-        {/* The inspector's property list: muted labels, quiet values. */}
-        <PropertyList>
-          <PropertyLabel>Project</PropertyLabel>
-          <BacklogProjectFilterPicker
-            filter={projectFilter}
-            options={projectFilterOptions}
-            projectsById={projectsById}
-            onChange={onProjectFilterChange}
+            className={`${PROPERTY_TRIGGER} justify-start`}
+            onClick={() => onViewModeChange(byProject ? "normal" : "project")}
             disabled={!projectsLoaded}
-            className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
-          />
-          {view !== "inbox" ? (
-            <>
-              <PropertyLabel>Status</PropertyLabel>
-              <BacklogStatusFilterPicker
-                statuses={statuses}
-                onChange={onStatusFilterChange}
-                options={view === "focus" ? FOCUS_STATUS_OPTIONS : undefined}
-                className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
-              />
-            </>
-          ) : null}
-          {view === "backlog" ? (
-            <>
-              <PropertyLabel>Group</PropertyLabel>
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`${PROPERTY_TRIGGER} justify-start`}
-                onClick={() =>
-                  onViewModeChange(byProject ? "normal" : "project")
-                }
-                disabled={!projectsLoaded}
-                aria-pressed={byProject}
-              >
-                <FolderTree className="text-muted-foreground" />
-                <span className={byProject ? "" : "text-muted-foreground"}>
-                  {byProject ? "By Project" : "None"}
-                </span>
-              </Button>
-            </>
-          ) : null}
-        </PropertyList>
-      </PopoverContent>
-    </Popover>
+            aria-pressed={byProject}
+          >
+            <FolderTree className="text-muted-foreground" />
+            <span className={byProject ? "" : "text-muted-foreground"}>
+              {byProject ? "By Project" : "None"}
+            </span>
+          </Button>
+        </>
+      ) : null}
+    </ListFilterPopover>
   );
 }

@@ -2,6 +2,8 @@
 
 The three-pane shell of `app/web/docs/ui-shell.md`.
 
+- Shell behavior reads `useMobileLayout`; shell CSS uses `desktop:`. Viewport
+  queries remain for content sizing and physical input.
 - Width-clamped content anywhere in the main pane reads `--shell-main-width`
   (with a `100vw` fallback) and never measures the shell.
 - Layout and gesture math that can be pure belongs in `panelSizing.ts`,

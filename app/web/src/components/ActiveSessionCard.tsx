@@ -1,5 +1,5 @@
 import { runtimeLabel } from "./common/runtimeLabel.ts";
-import { Fragment, memo, useEffect, useRef, useState } from "react";
+import { Fragment, memo } from "react";
 import {
   Activity,
   Archive,
@@ -8,7 +8,6 @@ import {
   Check,
   ChevronRight,
   ClipboardList,
-  Ellipsis,
   FolderKanban,
   GitBranch,
   Hourglass,
@@ -46,22 +45,23 @@ import {
   backgroundActivityChip,
   backgroundActivityText,
 } from "../lib/backgroundWork.ts";
-import { CARD_OUTER_ROW, type RowDensity } from "../lib/rowDensity.ts";
+import type { RowDensity } from "../lib/rowDensity.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
-import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import {
+  ListRowActions,
+  type ListRowAction,
+} from "./common/ListRowActions.tsx";
 import { Spinner } from "./common/load.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { TONE_BADGE } from "./common/statusBadge.ts";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Item } from "@/components/ui/item";
+import { ListRow, ListRowContent } from "./common/ListRow.tsx";
 
 /** Object glyphs for the third line, matching the primary navigation's icons. */
 const META_ICON: Partial<Record<SessionCardMetaKind, LucideIcon>> = {
@@ -69,16 +69,6 @@ const META_ICON: Partial<Record<SessionCardMetaKind, LucideIcon>> = {
   worktree: GitBranch,
   task: ClipboardList,
 };
-
-/** Settle and the actions flip, inline at the end of the status row. */
-const INLINE_ACTION_SIZE = {
-  tight: "icon-xs",
-  comfortable: "icon",
-} as const satisfies Record<RowDensity, string>;
-
-/** Hidden at rest under a fine pointer, shown on the card's hover or focus. */
-const CARD_ACTION_REVEAL =
-  "pointer-fine:opacity-0 pointer-fine:group-hover/item:opacity-100 pointer-fine:group-focus-within/item:opacity-100 focus-visible:opacity-100";
 
 /**
  * What the session's worktree holds that its base does not: uncommitted lines
@@ -113,16 +103,6 @@ function WorktreeChanges({ relations }: { relations: SessionCardRelations }) {
   );
 }
 
-/**
- * The rotator's own duration, written as a literal class below. Only a
- * FALLBACK: the turn ends on `transitionend`, and this covers the cases that
- * never send one — reduced motion (no transition at all), a background tab, a
- * turn interrupted before it starts. The margin keeps it clear of the real
- * event. Not "FLIP", which in this feature means First-Last-Invert-Play.
- */
-const TURN_MS = 300;
-const TURN_FALLBACK_MS = TURN_MS + 100;
-
 export interface ActiveSessionCardProps {
   card: SessionInboxCard;
   /** Shared ticker value; the card never owns a timer of its own. */
@@ -133,9 +113,8 @@ export interface ActiveSessionCardProps {
   /** Uncommitted changes in the session's worktree, from the existing status projection. */
   worktreeDirty?: boolean | undefined;
   /**
-   * The host's row density (`lib/rowDensity.ts`): `comfortable` on a phone
-   * screen, where the gutter controls have to be thumb targets; `tight` on the
-   * rail. A string prop, so the memo comparator covers it.
+   * The host's content density. Shared actions independently use touch-safe
+   * targets on mobile layouts and coarse-pointer devices.
    */
   density?: RowDensity;
   /**
@@ -177,9 +156,8 @@ export interface ActiveSessionCardProps {
  * @component ActiveSessionCard
  * @purpose The Sessions inbox's rich card for ONE unsettled session: title +
  * age, a coloured state badge with what it cannot say, and the objects the
- * session hangs off — plus a right gutter carrying Settle and the flip to this
- * card's own actions face. Worktree and Task jumps stay on that back face so
- * the front can spend its full width on identifying the linked objects.
+ * session hangs off, with shared Settle and overflow actions. Worktree and
+ * Task jumps live in the menu so context remains available while acting.
  * @useWhen Rendering the Sessions section's working set.
  * @avoidWhen Listing sessions UNDER another object (a worktree's or project's
  * related sessions); those stay one-line `SessionRow`s.
@@ -217,19 +195,6 @@ function ActiveSessionCardImpl({
     now,
   );
   const backgroundText = backgroundActivityText(session.backgroundActivity);
-  const [showActions, setShowActions] = useState(false);
-  // The card's 3D rendering context, and the actions face itself, exist only
-  // while it is turning or turned. The measured reason is DOM size: the face is
-  // 35 of a card's 82 elements, 43% of it, on every idle row of a list built to
-  // be scrolled (`ActiveSessionCard.test.tsx` holds the count). The 3D
-  // properties come and go with it because they are meaningless without a
-  // second face — NOT on a measured claim about compositing, which was never
-  // profiled. Both arrive in the SAME commit that starts the rotation, which is
-  // what keeps the transition itself intact, and leave on its `transitionend`.
-  const [turning, setTurning] = useState(false);
-  const turnTimer = useRef<number | undefined>(undefined);
-  const flipped = showActions || turning;
-  const rowRef = useRef<HTMLDivElement | null>(null);
   const title = session.title.trim() || "Untitled session";
   const badge = sessionStatusBadge(session, status, now);
   const detail = sessionStatusDetail(session, status);
@@ -258,16 +223,11 @@ function ActiveSessionCardImpl({
     ? bubbled.session.title.trim() || "Untitled session"
     : "";
   const dismissBubble = bubbled ? clusterBubbleDismissible(bubbled) : false;
-  // The card is one `role="button"`, so its `aria-label` REPLACES everything
-  // inside it: a chip that is not named here is not announced at all.
+  // The group label summarizes live state; its nested controls remain accessible.
   const delivery = sessionDelivery(session);
   // The signal row states the pull request when there is one, else the diff;
   // the card's label says the same.
   const changesText = delivery ? undefined : worktreeChangesText(relations);
-  const metaRowRef = useInertOverflow<HTMLDivElement>();
-  const signalRowRef = useInertOverflow<HTMLDivElement>({
-    compact: true,
-  });
   const settleLabel = card.settleBlocked
     ? `Cannot settle: ${card.settleBlocked}`
     : "Settle — move out of the working set";
@@ -297,35 +257,9 @@ function ActiveSessionCardImpl({
       ? "Idle"
       : (badge?.label ?? sessionStatusText(session, status, now));
 
-  const endTurn = () => {
-    window.clearTimeout(turnTimer.current);
-    turnTimer.current = undefined;
-    setTurning(false);
-  };
-  const turnTo = (next: boolean) => {
-    setShowActions(next);
-    setTurning(true);
-    window.clearTimeout(turnTimer.current);
-    // A timer started HERE cannot time the transition: the transition does not
-    // begin until the next style recalc, so any timer of exactly `TURN_MS`
-    // fires at least a frame early — and tearing the 3D context out mid-turn
-    // is a pop at the end of every close. `transitionend` is the real signal.
-    turnTimer.current = window.setTimeout(endTurn, TURN_FALLBACK_MS);
-  };
-  useEffect(() => () => window.clearTimeout(turnTimer.current), []);
-
-  const closeActions = () => {
-    turnTo(false);
-    rowRef.current?.focus({ preventScroll: true });
-  };
-  const runAction = (action: () => void) => {
-    turnTo(false);
-    action();
-  };
-
   /**
    * Where a metadata item leads; `undefined` renders it as plain text. Only the
-   * Project opens from the front. Worktree and Task actions live on the back so
+   * Project opens from context. Worktree and Task actions live in the menu so
    * the metadata line keeps the full card width without duplicating targets.
    */
   const openMetaItem = (
@@ -337,15 +271,75 @@ function ActiveSessionCardImpl({
     }
     return undefined;
   };
+  const rowActions: ListRowAction[] = [
+    {
+      id: "settle",
+      label: "Settle",
+      accessibleLabel: settleLabel,
+      icon: <Check />,
+      primary: true,
+      disabled: Boolean(card.settleBlocked),
+      onSelect: () => onSettle(session.id),
+    },
+    ...(session.worktreeId && onOpenWorktree
+      ? [
+          {
+            id: "worktree",
+            label: "Open worktree",
+            accessibleLabel: worktreeDirty
+              ? "Open worktree, uncommitted changes"
+              : "Open worktree",
+            icon: (
+              <span className="relative">
+                <GitBranch />
+                {worktreeDirty ? (
+                  <UnreadDot title="Uncommitted changes" placement="avatar" />
+                ) : null}
+              </span>
+            ),
+            onSelect: () => onOpenWorktree(session.worktreeId as string),
+          },
+        ]
+      : []),
+    ...(relations.taskId && onOpenTask
+      ? [
+          {
+            id: "task",
+            label: `Open task #${relations.taskId}`,
+            icon: <ClipboardList />,
+            onSelect: () => onOpenTask(relations.taskId as string),
+          },
+        ]
+      : []),
+    {
+      id: "rename",
+      label: "Rename",
+      icon: <Pencil />,
+      onSelect: () => onRename(session.id),
+    },
+    {
+      id: "archive",
+      label: session.archived ? "Restore" : "Archive",
+      icon: session.archived ? <ArchiveRestore /> : <Archive />,
+      onSelect: () => onArchive(session.id, !session.archived),
+    },
+    {
+      id: "delete",
+      label: "Delete",
+      icon: <Trash2 />,
+      variant: "destructive",
+      onSelect: () => onDelete(session.id),
+    },
+  ];
   return (
-    <Item
-      ref={rowRef}
-      size="xs"
-      variant={active ? "muted" : "default"}
+    <ListRow
+      interaction="content"
+      active={active}
+      divider={false}
       data-session-row
       data-list-row-id={session.id}
       data-session-row-active={active ? "true" : undefined}
-      role="button"
+      role="group"
       tabIndex={-1}
       aria-label={`Open ${identityLabel(session)} session: ${title} — ${sessionStatusText(session, status, now)}${
         delivery
@@ -358,20 +352,11 @@ function ActiveSessionCardImpl({
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
         card.stall ? ` — stalled: ${stallLabel(card.stall)}` : ""
       }`}
-      onClick={showActions ? undefined : () => onOpen(session.id)}
+      onOpen={() => onOpen(session.id)}
+      onFocusSibling={onFocusSibling}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
-        if (e.key === "Escape" && showActions) {
-          e.preventDefault();
-          turnTo(false);
-        } else if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          if (showActions) turnTo(false);
-          else onOpen(session.id);
-        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          e.preventDefault();
-          onFocusSibling?.(e.key === "ArrowDown" ? 1 : -1);
-        } else if (e.key.toLowerCase() === "s" && !card.settleBlocked) {
+        if (e.key.toLowerCase() === "s" && !card.settleBlocked) {
           e.preventDefault();
           onSettle(session.id);
         } else if (e.key.toLowerCase() === "e") {
@@ -382,155 +367,74 @@ function ActiveSessionCardImpl({
           onDelete(session.id);
         }
       }}
-      // Square: the list's rows are divided by hairlines, and a rounded hover
-      // or selected fill would pull away from them at the corners.
-      // Less above than below: the top row's small text sits centred in its
-      // line box, with air over it, while the bottom row's pills and buttons
-      // fill theirs to the edge — equal padding read as a taller top.
-      // The actions face bleeds over this padding (see below): keep its
-      // offsets in step with `px-2.5` from `size="xs"` and `pt-1.5 pb-2.5`.
-      // Its transparent border would still frame the face, so it takes the
-      // face's tone while the actions show.
-      className={`cursor-pointer select-none overflow-hidden rounded-none pt-1.5 pb-2.5 text-left hover:bg-muted ${
-        flipped ? "[perspective:900px]" : ""
-      } ${showActions ? "border-muted" : ""}`}
     >
-      {/* One rotator, two faces: the front stays in flow so the card keeps its
-          content height, and the actions face is absolutely laid over it,
-          reaching past the card's padding to cover the whole card. `backface-visibility` is what hides the face
-          turned away; `inert` is what keeps it out of focus and hit-testing.
-          Both only matter once there IS a second face, so they come and go with
-          it rather than sitting on every idle card. */}
-      <div
-        onTransitionEnd={(e) => {
-          // Only this element's own rotation: a `transition-colors` finishing
-          // on a button inside the card bubbles through here too.
-          if (e.target !== e.currentTarget || e.propertyName !== "transform")
-            return;
-          endTurn();
-        }}
-        className={`relative w-full transition-transform duration-300 motion-reduce:transition-none ${
-          flipped ? "[transform-style:preserve-3d]" : ""
-        } ${showActions ? "[transform:rotateY(180deg)]" : ""}`}
-      >
-        <div
-          className={`flex ${flipped ? "[backface-visibility:hidden]" : ""}`}
-          inert={showActions}
-        >
-          {/* Every front is exactly three rows: context, identity, live state.
-              The row's own controls close the live-state row, so the front
-              has no gutter and every row spans the card's width. */}
-          <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
-            {/* Items keep `sessionCardMeta`'s priority order. The row is one
-                line tall and wraps, so an item that does not fit drops to the
-                hidden second line instead of being cut; only the branch
-                shortens, into whatever width the others leave. Worktree and
-                Task actions live on the back, leaving this whole line to
-                identify the objects. The time closes the row outside that
-                area. The row is as tall as the live-state row below the
-                title, so the title sits centred between the two. */}
-            <div
-              className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground`}
-            >
-              <div
-                ref={metaRowRef}
-                className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
-              >
-                {meta.length === 0 ? (
-                  // No linked object: the row names who the session is, so
-                  // the card keeps three filled rows.
-                  <span className="flex min-w-0 items-center gap-1">
-                    {session.model ? (
-                      <ProviderIcon
-                        provider={session.model.provider}
-                        size={11}
-                      />
-                    ) : (
-                      <AgentIcon size={11} className="shrink-0" aria-hidden />
-                    )}
-                    <span className="min-w-0 truncate">{identity}</span>
-                  </span>
+      <ListRowContent
+        density={density}
+        context={
+          <>
+            {meta.length === 0 ? (
+              // No linked object: the row names who the session is, so
+              // the card keeps three filled rows.
+              <span className="flex min-w-0 items-center gap-1">
+                {session.model ? (
+                  <ProviderIcon provider={session.model.provider} size={11} />
                 ) : (
-                  meta.map((item, index) => (
-                    <Fragment key={`${item.kind}:${item.label}`}>
-                      <MetaItem
-                        item={item}
-                        first={index === 0}
-                        onOpen={openMetaItem(item)}
-                      />
-                      {/* The worktree's own changes stand beside it — what it
+                  <AgentIcon size={11} className="shrink-0" aria-hidden />
+                )}
+                <span className="min-w-0 truncate">{identity}</span>
+              </span>
+            ) : (
+              meta.map((item, index) => (
+                <Fragment key={`${item.kind}:${item.label}`}>
+                  <MetaItem
+                    item={item}
+                    first={index === 0}
+                    onOpen={openMetaItem(item)}
+                  />
+                  {/* The worktree's own changes stand beside it — what it
                           holds that its base does not — unless a pull request
                           speaks for them on the status row. */}
-                      {item.kind === "worktree" && !delivery ? (
-                        <WorktreeChanges relations={relations} />
-                      ) : null}
-                    </Fragment>
-                  ))
-                )}
-              </div>
-              <span className="shrink-0 tabular-nums" title={age.title}>
-                {age.label}
-              </span>
-            </div>
-            {/* A little air above and below: the title is the card's line, and
-                the two small rows around it read as its context. */}
-            <div className="flex min-w-0 items-center gap-1.5 py-1">
-              <SessionTitleRow session={session} status={status} />
-            </div>
-
-            {/* Badges lead and time closes the row at the right edge; time
-                makes this row permanent. Every changing signal stays on this
-                one line, so activity can change without changing the card's
-                geometry. Fixed badges survive; prose yields and clips. */}
-            <div
-              className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
-            >
-              {/* Two groups on one line. The signals show whole or not at all:
-                  their area is one line tall, and whatever does not fit wraps
-                  onto a hidden second line, so DOM order is the drop order.
-                  What is addressed to the user — the peer that needs you, its
-                  dismiss, a stalled tree — never wraps: it sits after them,
-                  takes its width first and only truncates its own label. The
-                  row's controls sit outside both and never do. */}
-              <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5 text-muted-foreground">
-                <div
-                  ref={signalRowRef}
-                  className="flex h-5 min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-2.5 gap-y-4 overflow-hidden"
-                >
-                  {cluster ? (
-                    <Badge
-                      variant="ghost"
-                      render={<button type="button" />}
-                      title={clusterSummary}
-                      aria-expanded={clusterExpanded}
-                      aria-label={`${clusterExpanded ? "Hide" : "Show"} the ${cluster.counts.total} coordinated session${
-                        cluster.counts.total === 1 ? "" : "s"
-                      }${clusterLive ? ` — ${clusterLive}` : ""}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleCluster?.(session.id);
-                      }}
-                      // Plain, muted text like the context row above: a
-                      // neutral fact, not a pill. Only what needs the user
-                      // keeps a badge's chrome.
-                      className={`cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
-                    >
-                      {clusterWorking ? (
-                        <Spinner size="xs" />
-                      ) : (
-                        <Users aria-hidden />
-                      )}
-                      {/* On a narrow card the word goes, like every label on
+                  {item.kind === "worktree" && !delivery ? (
+                    <WorktreeChanges relations={relations} />
+                  ) : null}
+                </Fragment>
+              ))
+            )}
+          </>
+        }
+        age={age.label}
+        ageTitle={age.title}
+        identity={<SessionTitleRow session={session} status={status} />}
+        signals={
+          <>
+            {cluster ? (
+              <Badge
+                variant="ghost"
+                render={<button type="button" />}
+                title={clusterSummary}
+                aria-expanded={clusterExpanded}
+                aria-label={`${clusterExpanded ? "Hide" : "Show"} the ${cluster.counts.total} coordinated session${
+                  cluster.counts.total === 1 ? "" : "s"
+                }${clusterLive ? ` — ${clusterLive}` : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleCluster?.(session.id);
+                }}
+                // Plain, muted text like the context row above: a
+                // neutral fact, not a pill. Only what needs the user
+                // keeps a badge's chrome.
+                className={`cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
+              >
+                {clusterWorking ? <Spinner size="xs" /> : <Users aria-hidden />}
+                {/* On a narrow card the word goes, like every label on
                         this line, so the live counts keep room. */}
-                      <span>
-                        {cluster.counts.total}
-                        <span className="session-status-badge-label">
-                          {cluster.counts.total === 1
-                            ? " session"
-                            : " sessions"}
-                        </span>
-                      </span>
-                      {/* What the tree is doing right now — agents running a
+                <span>
+                  {cluster.counts.total}
+                  <span className="session-status-badge-label">
+                    {cluster.counts.total === 1 ? " session" : " sessions"}
+                  </span>
+                </span>
+                {/* What the tree is doing right now — agents running a
                         turn, and background jobs — over every peer at every
                         depth, so a quiet coordinator still says whether its
                         tree is moving. Inside the disclosure rather than after
@@ -538,260 +442,158 @@ function ActiveSessionCardImpl({
                         wraps out of sight, where anything behind a long named
                         badge would. Icon and number only; the words are in the
                         label and the tooltip. */}
-                      {cluster.counts.running > 0 ? (
-                        <span className="flex items-center gap-0.5">
-                          <Play className="size-3" aria-hidden />
-                          {cluster.counts.running}
-                        </span>
-                      ) : null}
-                      {cluster.counts.jobs > 0 ? (
-                        <span className="flex items-center gap-0.5">
-                          <Activity className="size-3" aria-hidden />
-                          {cluster.counts.jobs}
-                        </span>
-                      ) : null}
-                      <ChevronRight
-                        aria-hidden
-                        className={`transition-transform ${clusterExpanded ? "rotate-90" : ""}`}
-                      />
-                    </Badge>
-                  ) : null}
-                  {backgroundChip ? (
-                    // The count stays when the line compacts, as the cluster's
-                    // does: an icon alone said "something", not how much.
-                    <span
-                      role="img"
-                      aria-label={backgroundText}
-                      title={backgroundText}
-                      className="flex shrink-0 items-center gap-1 whitespace-nowrap"
-                    >
-                      <Activity aria-hidden="true" className="size-3" />
-                      <span>
-                        {backgroundChip.count}
-                        <span className="session-status-badge-label">
-                          {" running"}
-                          {backgroundChip.age ? ` · ${backgroundChip.age}` : ""}
-                        </span>
-                      </span>
-                    </span>
-                  ) : null}
-                  {/* What the work has produced, once it is a pull request;
+                {cluster.counts.running > 0 ? (
+                  <span className="flex items-center gap-0.5">
+                    <Play className="size-3" aria-hidden />
+                    {cluster.counts.running}
+                  </span>
+                ) : null}
+                {cluster.counts.jobs > 0 ? (
+                  <span className="flex items-center gap-0.5">
+                    <Activity className="size-3" aria-hidden />
+                    {cluster.counts.jobs}
+                  </span>
+                ) : null}
+                <ChevronRight
+                  aria-hidden
+                  className={`transition-transform ${clusterExpanded ? "rotate-90" : ""}`}
+                />
+              </Badge>
+            ) : null}
+            {backgroundChip ? (
+              // The count stays when the line compacts, as the cluster's
+              // does: an icon alone said "something", not how much.
+              <span
+                role="img"
+                aria-label={backgroundText}
+                title={backgroundText}
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap"
+              >
+                <Activity aria-hidden="true" className="size-3" />
+                <span>
+                  {backgroundChip.count}
+                  <span className="session-status-badge-label">
+                    {" running"}
+                    {backgroundChip.age ? ` · ${backgroundChip.age}` : ""}
+                  </span>
+                </span>
+              </span>
+            ) : null}
+            {/* What the work has produced, once it is a pull request;
                   until then the worktree's changes sit beside it above. */}
-                  {delivery ? (
-                    <span className="flex shrink-0 items-center">
-                      <SessionDeliveryMark
-                        session={session}
-                        variant="responsive"
-                        showNumber
-                      />
-                    </span>
-                  ) : null}
-                  {/* The badge already names the state; the sentences it
+            {delivery ? (
+              <span className="flex shrink-0 items-center">
+                <SessionDeliveryMark
+                  session={session}
+                  variant="responsive"
+                  showNumber
+                />
+              </span>
+            ) : null}
+            {/* The badge already names the state; the sentences it
                   cannot say are an Idle card's queued work and what a cut
                   turn needs from you. */}
-                  {sentence ? (
-                    <span
-                      className="min-w-0 flex-1 basis-0 truncate text-muted-foreground"
-                      title={sentenceTitle}
-                    >
-                      {sentence}
-                    </span>
-                  ) : null}
-                  {hasSignals ? null : (
-                    <span className="min-w-0 flex-1 basis-0 truncate">
-                      {stateWords}
-                    </span>
-                  )}
-                </div>
-                <div className="flex min-w-0 items-center gap-x-1.5">
-                  {bubbled ? (
-                    <Badge
-                      variant={TONE_BADGE[bubbleTone ?? "accent"]}
-                      render={<button type="button" />}
-                      title={`Open “${bubbleTitle}”`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onOpen(bubbled.session.id);
-                      }}
-                      aria-label={bubbleLabel}
-                      // Capped, so a long peer title truncates inside the badge
-                      // instead of wrapping the whole badge off the line.
-                      className="session-status-responsive-badge min-w-0 max-w-32 shrink cursor-pointer"
-                    >
-                      <SessionStatusIcon status={bubbled.status} />
-                      <span className="session-status-badge-label min-w-0 truncate">
-                        {bubbleLabel}
-                      </span>
-                    </Badge>
-                  ) : null}
-                  {dismissBubble ? (
-                    <Badge
-                      variant="ghost"
-                      render={<button type="button" />}
-                      title={`Dismiss the failure in “${bubbleTitle}”`}
-                      aria-label={`Dismiss the failure in “${bubbleTitle}”`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (bubbled)
-                          onDismissFailure(
-                            bubbled.session.id,
-                            bubbled.session.lastError?.at,
-                            bubbled.session.outcomeAttention?.revision ?? 0,
-                          );
-                      }}
-                      className="cursor-pointer"
-                    >
-                      <X aria-hidden />
-                    </Badge>
-                  ) : null}
-                  {/* The tree has stopped and a peer still owes a reply: the
+            {sentence ? (
+              <span
+                className="min-w-0 flex-1 basis-0 truncate text-muted-foreground"
+                title={sentenceTitle}
+              >
+                {sentence}
+              </span>
+            ) : null}
+            {hasSignals ? null : (
+              <span className="min-w-0 flex-1 basis-0 truncate">
+                {stateWords}
+              </span>
+            )}
+          </>
+        }
+        pinned={
+          <>
+            {bubbled ? (
+              <Badge
+                variant={TONE_BADGE[bubbleTone ?? "accent"]}
+                render={<button type="button" />}
+                title={`Open “${bubbleTitle}”`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen(bubbled.session.id);
+                }}
+                aria-label={bubbleLabel}
+                // Capped, so a long peer title truncates inside the badge
+                // instead of wrapping the whole badge off the line.
+                className="session-status-responsive-badge min-w-0 max-w-32 shrink cursor-pointer"
+              >
+                <SessionStatusIcon status={bubbled.status} />
+                <span className="session-status-badge-label min-w-0 truncate">
+                  {bubbleLabel}
+                </span>
+              </Badge>
+            ) : null}
+            {dismissBubble ? (
+              <Badge
+                variant="ghost"
+                render={<button type="button" />}
+                title={`Dismiss the failure in “${bubbleTitle}”`}
+                aria-label={`Dismiss the failure in “${bubbleTitle}”`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (bubbled)
+                    onDismissFailure(
+                      bubbled.session.id,
+                      bubbled.session.lastError?.at,
+                      bubbled.session.outcomeAttention?.revision ?? 0,
+                    );
+                }}
+                className="cursor-pointer"
+              >
+                <X aria-hidden />
+              </Badge>
+            ) : null}
+            {/* The tree has stopped and a peer still owes a reply: the
                       one fact that says "this needs a poke" rather than "this
                       is done". Named and openable, like the bubble; capped so a
                       long title truncates inside it. */}
-                  {card.stall ? (
-                    <Badge
-                      variant="warning"
-                      render={<button type="button" />}
-                      title={`Open “${stallTitle(card.stall)}”`}
-                      aria-label={`Stalled: ${stallLabel(card.stall)}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (card.stall) onOpen(stallTarget(card.stall).id);
-                      }}
-                      className="session-status-responsive-badge min-w-0 max-w-32 shrink cursor-pointer"
-                    >
-                      <Hourglass aria-hidden />
-                      {stallParts(card.stall).before ? (
-                        <span className="session-status-badge-label shrink-0">
-                          {stallParts(card.stall).before}
-                        </span>
-                      ) : null}
-                      <span className="session-status-badge-label min-w-0 truncate">
-                        {stallParts(card.stall).title}
-                      </span>
-                      {stallParts(card.stall).after ? (
-                        <span className="session-status-badge-label shrink-0">
-                          {stallParts(card.stall).after}
-                        </span>
-                      ) : null}
-                      {stallMore(card.stall) ? (
-                        <span className="session-status-badge-label shrink-0">
-                          {stallMore(card.stall)}
-                        </span>
-                      ) : null}
-                    </Badge>
-                  ) : null}
-                </div>
-              </div>
-              <IconButton
-                label={settleLabel}
-                size={INLINE_ACTION_SIZE[density]}
-                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
-                disabled={Boolean(card.settleBlocked)}
+            {card.stall ? (
+              <Badge
+                variant="warning"
+                render={<button type="button" />}
+                title={`Open “${stallTitle(card.stall)}”`}
+                aria-label={`Stalled: ${stallLabel(card.stall)}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSettle(session.id);
+                  if (card.stall) onOpen(stallTarget(card.stall).id);
                 }}
+                className="session-status-responsive-badge min-w-0 max-w-32 shrink cursor-pointer"
               >
-                <Check />
-              </IconButton>
-              {/* Last, as every overflow is (`common/OverflowMenu`). */}
-              <IconButton
-                label="Session actions"
-                size={INLINE_ACTION_SIZE[density]}
-                // With a mouse the row's buttons wait for a hover or focus
-                // (or the open card), so resting cards stay calm; a phone,
-                // with no hover, keeps them.
-                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
-                aria-expanded={showActions}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  turnTo(true);
-                }}
-              >
-                <Ellipsis />
-              </IconButton>
-            </div>
-          </div>
-        </div>
-
-        {flipped ? (
-          <div
-            className="absolute -inset-x-2.5 -top-1.5 -bottom-2.5 flex bg-muted [backface-visibility:hidden] [transform:rotateY(180deg)]"
-            inert={!showActions}
-            aria-label={`Actions for ${title}`}
-          >
-            {/* The face covers the card's padding too, so its tone fills the
-                card edge to edge instead of sitting in a frame. The tiles keep
-                ONE fixed height and sit centred in it: a hover tone that
-                changes shape with the card it is on reads as a different
-                control. They share one width and shrink together when a narrow
-                card cannot fit them all, rather than scrolling one out of
-                sight. */}
-            <div className="flex min-w-0 flex-1 items-center gap-0.5 px-1.5">
-              {/* Object jumps live only on this action face. The front keeps
-                  their names in context without spending width on controls. */}
-              {session.worktreeId && onOpenWorktree ? (
-                <ActionTile
-                  icon={GitBranch}
-                  label="Worktree"
-                  accessibleLabel={
-                    worktreeDirty
-                      ? "Open worktree — uncommitted changes"
-                      : "Open worktree"
-                  }
-                  dirty={worktreeDirty}
-                  onClick={() =>
-                    runAction(() =>
-                      onOpenWorktree(session.worktreeId as string),
-                    )
-                  }
-                />
-              ) : null}
-              {relations.taskId && onOpenTask ? (
-                <ActionTile
-                  icon={ClipboardList}
-                  label={`#${relations.taskId}`}
-                  onClick={() =>
-                    runAction(() => onOpenTask(relations.taskId as string))
-                  }
-                />
-              ) : null}
-              <ActionTile
-                icon={Pencil}
-                label="Rename"
-                onClick={() => runAction(() => onRename(session.id))}
-              />
-              <ActionTile
-                icon={session.archived ? ArchiveRestore : Archive}
-                label={session.archived ? "Restore" : "Archive"}
-                onClick={() =>
-                  runAction(() => onArchive(session.id, !session.archived))
-                }
-              />
-              <ActionTile
-                icon={Trash2}
-                label="Delete"
-                danger
-                onClick={() => runAction(() => onDelete(session.id))}
-              />
-            </div>
-
-            <IconButton
-              label="Close session actions"
-              size={INLINE_ACTION_SIZE[density]}
-              className="mr-1.5 self-center"
-              onClick={(e) => {
-                e.stopPropagation();
-                closeActions();
-              }}
-            >
-              <X />
-            </IconButton>
-          </div>
-        ) : null}
-      </div>
-    </Item>
+                <Hourglass aria-hidden />
+                {stallParts(card.stall).before ? (
+                  <span className="session-status-badge-label shrink-0">
+                    {stallParts(card.stall).before}
+                  </span>
+                ) : null}
+                <span className="session-status-badge-label min-w-0 truncate">
+                  {stallParts(card.stall).title}
+                </span>
+                {stallParts(card.stall).after ? (
+                  <span className="session-status-badge-label shrink-0">
+                    {stallParts(card.stall).after}
+                  </span>
+                ) : null}
+                {stallMore(card.stall) ? (
+                  <span className="session-status-badge-label shrink-0">
+                    {stallMore(card.stall)}
+                  </span>
+                ) : null}
+              </Badge>
+            ) : null}
+          </>
+        }
+        actions={
+          <ListRowActions actions={rowActions} label="Session actions" />
+        }
+      />
+    </ListRow>
   );
 }
 
@@ -814,10 +616,10 @@ export const ActiveSessionCard = memo(
 /**
  * One third-line item: its object glyph plus the label, as a BUTTON only for
  * the Project. Worktree and Task names stay as context on the front while their
- * actions live on the back.
+ * actions live in the menu.
  *
  * It states WHICH object, never that object's state. The dirty marker belongs
- * to the Worktree action on the back.
+ * to the Worktree action in the menu.
  */
 function MetaItem({
   item,
@@ -882,44 +684,5 @@ function MetaItem({
     >
       {body}
     </Badge>
-  );
-}
-
-/** One fixed-height target on the actions face; icon over label. */
-function ActionTile({
-  icon: Icon,
-  label,
-  onClick,
-  danger = false,
-  dirty = false,
-  accessibleLabel,
-}: {
-  icon: LucideIcon;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-  dirty?: boolean | undefined;
-  accessibleLabel?: string;
-}) {
-  return (
-    <Button
-      variant={danger ? "destructive" : "ghost"}
-      size="xs"
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      aria-label={accessibleLabel}
-      title={accessibleLabel}
-      className="h-14 w-16 min-w-0 shrink flex-col px-0.5"
-    >
-      <span className="relative">
-        <Icon className="size-5" />
-        {dirty ? (
-          <UnreadDot title="Uncommitted changes" placement="avatar" />
-        ) : null}
-      </span>
-      <span className="max-w-full truncate">{label}</span>
-    </Button>
   );
 }

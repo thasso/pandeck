@@ -47,6 +47,8 @@ export interface TopicSurface {
    * today, since the subscription is what tells it about tomorrow's.
    */
   sessionTreeWorktreesVisible?: boolean;
+  /** The selected Task's inspector is showing its related worktrees. */
+  taskWorktreesVisible?: boolean;
   /** The composer's background ledge is expanded and listing rows. */
   backgroundLedgeOpen?: boolean;
   /**
@@ -69,8 +71,10 @@ export interface TopicSurface {
  * sidebar — subscribing on that would keep the large Task broadcasts flowing
  * into exactly the surface this is meant to keep quiet.
  *
- * A route-only Task detail reads Tasks, Projects and Workflow Runs but no
- * Worktree projection. A visible Sessions browser reads Workflow Runs alone. A visible Tasks sidebar retains Worktrees because its
+ * A route-only Task detail reads Tasks, Projects and Workflow Runs. Its
+ * inspector also subscribes to Worktrees while visible. A visible Sessions
+ * browser reads Workflow Runs, Projects and Worktrees for its Project filter.
+ * A visible Tasks sidebar retains Worktrees because its
  * comfortable/Focus rows render hosting and dirty-worktree facts. Project, Pull
  * Request and Worktree surfaces retain the same wider union — a pull request is
  * shown WITH the checkout, sessions and Tasks it is joined to, and those joins
@@ -96,6 +100,7 @@ export function topicsForSurface({
   sessionInspectorVisible = false,
   backgroundInspectorVisible = false,
   sessionTreeWorktreesVisible = false,
+  taskWorktreesVisible = false,
   backgroundLedgeOpen = false,
   settingsSection,
 }: TopicSurface): BroadcastTopic[] {
@@ -117,17 +122,14 @@ export function topicsForSurface({
     topics.add("projects");
     topics.add("workflow");
   }
-  // A VISIBLE Sessions browser shows live Workflow Runs ([Task-676](pa://task/676))
-  // and Initiatives (`docs/initiatives.md`) as items of their own, so it holds
-  // those two topics and nothing else: the run summaries and cards and the
-  // Initiative summaries are what those items are made of — an Initiative's
-  // summary carries its next milestone's title for exactly this reason — while
-  // a run's Task title stays a best-effort join on whatever Backlog rows this
-  // tab already has. Subscribing to Tasks here would put the large Backlog
-  // broadcasts on the session list to spell out a name.
+  // Attention holds Workflow Runs and Initiatives as independent inbox items.
+  // Filters also need authoritative Project/worktree associations, while Task
+  // titles remain a best-effort join without subscribing to the Backlog.
   if (shownSection === "sessions") {
     topics.add("workflow");
     topics.add("initiatives");
+    topics.add("projects");
+    topics.add("worktrees");
   }
   if (projectBrowser || projectIndexSurface) topics.add("projects");
   // Initiatives are the group at the top of the Projects browser, and their
@@ -149,7 +151,8 @@ export function topicsForSurface({
     worktreeSurface ||
     selectedProjectSurface ||
     workflowStartOpen ||
-    sessionTreeWorktreesVisible
+    sessionTreeWorktreesVisible ||
+    taskWorktreesVisible
   )
     topics.add("worktrees");
   // A session's title bar names its project (and links to it).

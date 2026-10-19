@@ -1,6 +1,10 @@
-<!-- instruction-budget: bytes=2688 reason="The link/embed/card, agent-text and loading rules exceed 2048." task=markdown-card-fields date=2026-10-17 -->
+<!-- instruction-budget: bytes=2880 reason="Markdown, agent text, loading and browser rows." task=document-presentation date=2026-09-11 -->
 
 # Web components
+
+- Flat browser rows use `common/ListRow` and `common/ListRowActions`; trees keep
+  `common/Tree`. Interactive content uses `interaction="content"` so links and
+  controls stay accessible. Features supply content, not row geometry.
 
 - Markdown: `[x](target)` is a link, `![x](target)` a chrome-free lazy embed,
   and tool output the ONLY card. `[![x](y)](z)` keeps the authored link z and

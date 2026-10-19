@@ -4,6 +4,34 @@
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
+/* Shell presentation follows the browser-local layout choice, including portals.
+   Width-based utilities remain for content wrapping and physically sized dialogs. */
+@custom-variant desktop {
+  &:where([data-layout="desktop"] *) {
+    @slot;
+  }
+  /* Isolated components and previews without a shell retain Automatic. */
+  @media (width >= 768px) {
+    &:where(:root:not([data-layout]) *) {
+      @slot;
+    }
+  }
+}
+/* Row actions use touch-safe geometry on mobile layouts or coarse pointers,
+   even when a phone explicitly chooses Desktop. */
+@custom-variant touch-ui {
+  &:where([data-layout="mobile"] *) {
+    @slot;
+  }
+  @media (pointer: coarse) {
+    @slot;
+  }
+  @media (width < 768px) {
+    &:where(:root:not([data-layout]) *) {
+      @slot;
+    }
+  }
+}
 /* While the phone keyboard is up (`App.tsx` sets `data-keyboard-open` on the
    root): chrome that should step aside while the user types. */
 @custom-variant keyboard-open (:where([data-keyboard-open]) &);
@@ -19,10 +47,6 @@
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
   --color-info: var(--info);
-  --color-band: var(--band);
-  --color-band-foreground: var(--band-foreground);
-  --color-band-hover: var(--band-hover);
-  --color-band-active: var(--band-active);
 
   /* The composer card's corners: deliberately rounder than the theme radius
      and independent of it — the composer is the one object on the page meant
@@ -124,13 +148,6 @@
   /* A neutral, non-alarming hue for a fact that is just yours (a pull
      request you opened): green, amber and red already mean something. */
   --info: var(--ansi-blue);
-  /* The group band that separates a sidebar list into sections
-     (`ListGroupSection`, `Tree`'s band rows): the same dark teal in both
-     themes, so it reads as a divider on either sidebar. */
-  --band: var(--chart-3);
-  --band-foreground: oklch(1 0 0);
-  --band-hover: color-mix(in oklab, var(--band) 90%, white);
-  --band-active: color-mix(in oklab, var(--band) 85%, white);
   /* ANSI terminal palette (Catppuccin Latte) for colored tool output. */
   --ansi-black: #5c5f77;
   --ansi-red: #d20f39;
@@ -297,6 +314,17 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Mouse-only action reveal does not affect layout or keyboard reachability. */
+@media (hover: hover) and (pointer: fine) {
+  :root:not([data-layout="mobile"])
+    .group\/item:not(:hover):not(:focus-within):not([data-active])
+    .list-row-actions:not([data-always-visible]):not(
+      :has([aria-expanded="true"])
+    ) {
+    opacity: 0;
+  }
+}
+
 /* New-session quick rows retain swipe/wheel scrolling without visual chrome. */
 .new-session-quick-start [role="listbox"] {
   -ms-overflow-style: none;
@@ -320,6 +348,12 @@ body {
     --secondary: var(--sidebar-accent);
     --border: var(--sidebar-border);
     background-color: var(--sidebar);
+  }
+  /* Border is translucent in dark mode. Paint it over the opaque local
+     background so rows scrolling beneath a sticky group header cannot show. */
+  .group-header-surface {
+    background-color: var(--background);
+    background-image: linear-gradient(var(--border), var(--border));
   }
   /* `PropertyList`: one label column for every list, so labels and values
      line up the same wherever a list appears; narrower at the `sm` density. */

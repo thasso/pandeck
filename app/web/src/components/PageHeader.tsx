@@ -133,13 +133,13 @@ export function PageHeader({
       ? "pt-1.5"
       : "pt-3";
   const chromeClass = transparent
-    ? "pointer-events-none border-b border-transparent bg-transparent sm:bg-transparent sm:backdrop-blur-none"
-    : "border-b border-border bg-background sm:bg-background/80 sm:backdrop-blur";
+    ? "pointer-events-none border-b border-transparent bg-transparent desktop:bg-transparent desktop:backdrop-blur-none"
+    : "border-b border-border bg-background desktop:bg-background/80 desktop:backdrop-blur";
   const iconBoxClass = `flex size-8 shrink-0 items-center justify-center rounded-lg ${ICON_TONE_CLASS[iconTone]}`;
   return (
     <header
       aria-hidden={ariaHidden || transparent || undefined}
-      className={`flex items-center px-3 ${compact ? "min-h-11 gap-2 sm:h-11" : "min-h-16 gap-3 sm:h-16"} ${verticalPadding} ${topPadding} sm:py-0 ${chromeClass}`}
+      className={`flex items-center px-3 ${compact ? "min-h-11 gap-2 desktop:h-11" : "min-h-16 gap-3 desktop:h-16"} ${verticalPadding} ${topPadding} desktop:py-0 ${chromeClass}`}
     >
       {back ? <PageHeaderBackButton {...back} /> : null}
       {leading ??
@@ -214,7 +214,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
     ? (actuation?.commentLabel ?? "Add comment")
     : "Select text to comment";
   return (
-    <div className="hidden shrink-0 items-center gap-1 md:flex">
+    <div className="hidden shrink-0 items-center gap-1 desktop:flex">
       {showComment ? (
         // The title sits on a wrapper: a disabled button takes no pointer
         // events, and its tooltip is the one place the gesture is named.

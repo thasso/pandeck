@@ -62,9 +62,9 @@ describe("taskRelationGroups", () => {
     session({ id: "s3", title: "Mentioning session" }),
   ];
 
-  it("resolves only sessions (project and hierarchy live on the Task page)", () => {
+  it("resolves sessions and related worktrees, leaving project and hierarchy on the Task page", () => {
     const groups = taskRelationGroups(subject, sessions);
-    expect(groups.map((g) => g.label)).toEqual(["Sessions"]);
+    expect(groups.map((g) => g.label)).toEqual(["Sessions", "Worktrees"]);
     const sessionRefs = groups.find((g) => g.label === "Sessions")?.refs ?? [];
     expect(sessionRefs.map((r) => r.id)).toEqual(["s1", "s3"]);
     expect(sessionRefs.find((r) => r.id === "s1")).toMatchObject({

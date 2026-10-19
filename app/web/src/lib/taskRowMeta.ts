@@ -4,9 +4,8 @@ import type {
   TaskStatusSuggestion,
 } from "@assistant/shared";
 import { pendingStatusSuggestion, type Task } from "./backlogTree.ts";
-import type { BacklogDensity, BacklogView } from "./backlogTreeModel.ts";
 import { dueLabel, scheduledLabel } from "./backlogFocus.ts";
-import { taskStartSession } from "./taskActivity.ts";
+import { taskStartSession, taskWorktreeIds } from "./taskActivity.ts";
 import { relativeAge } from "./relativeTime.ts";
 import {
   hostingAttention,
@@ -43,15 +42,12 @@ export interface TaskRowDelivery {
  *
  * One derivation for every Backlog view, because a row that says different
  * things about the same Task depending on which view you are in is worse than a
- * row that says less. Everything here but `delivery`, `dirty`, and `workflow`
- * is FREE — already in the narrow `BacklogState` (`hooks/useBacklog.ts`) — and
- * that is still the rule for anything new. The three paid facts each arrive as
- * a content-stable slice: `delivery` is the app's PR/CI projection
- * (`hooks/useWorktreeHosting.ts`), `dirty` is one boolean lifted out of
- * `worktreeStatuses` (`lib/worktreeDirty.ts`), and `workflow` comes from the
- * run summaries (`lib/workflowIndicator.ts`). Their raw records still have no
- * business in `BacklogState`: frequent broadcasts would repaint every memoized
- * row.
+ * row that says less. Worktree names, delivery, dirty flags and workflow
+ * indicators arrive as content-stable projections. Names are the only worktree
+ * record fields added to `BacklogState`; PR/CI comes from `useWorktreeHosting`,
+ * dirty flags from `worktreeDirty`, and workflow from `workflowIndicator`.
+ * Raw worktree/status records stay out of the slice so frequent broadcasts
+ * do not repaint every memoized row.
  */
 export interface TaskRowMeta {
   /** An agent has claimed a status and nobody has answered. */
@@ -60,12 +56,18 @@ export interface TaskRowMeta {
   working: boolean;
   /** The session started from this Task, when the browser holds one. */
   session: SessionListItem | null;
-  /** The worktree that session runs in. An id, not a branch: the worktree
-   *  RECORDS are not in `BacklogState`, so the chip is a glyph, not a name. */
+  /** The primary session's worktree if still present, otherwise another related
+   * worktree. Retained for single-worktree consumers. */
   worktreeId: string | null;
-  /** That worktree's PR/CI, when a surface passes the projection and it says
-   *  something. It SUBSUMES the worktree glyph: a PR is a stronger statement of
-   *  "there is code" than a branch, and line 2 clips from the right. */
+  /** Distinct current worktrees used by non-archived sessions started from this
+   * Task. Names and membership come from a content-stable projection. */
+  worktrees?: Array<{
+    id: string;
+    name: string | null;
+    delivery: TaskRowDelivery | null;
+    dirty: boolean;
+  }>;
+  /** The primary worktree's PR/CI. Worktree navigation remains visible beside it. */
   delivery: TaskRowDelivery | null;
   /** That worktree has uncommitted changes. It subsumes NOTHING — work in
    *  progress on disk is true alongside any PR the branch already has — so it
@@ -87,23 +89,12 @@ export interface TaskRowMeta {
   age: string;
 }
 
-/**
- * Whether a Backlog surface's rows have a SECOND LINE at all — the line
- * everything above is stated on. A `tight` TREE row is one line (the desktop
- * rail, which reveals on hover instead), while Focus rows carry their second
- * line at either density.
- *
- * It is one predicate rather than an expression per caller because two costs
- * hang off it and both fail silently: the app polls a provider for PR/CI
- * (`lib/worktreeHosting.ts`) and watches git status per worktree only for rows
- * that can state them. Too wide is invisible traffic, too narrow is a row that
- * renders perfectly and says nothing.
- */
-export function taskRowsHaveMeta(
-  density: BacklogDensity,
-  view: BacklogView,
-): boolean {
-  return density === "comfortable" || view === "focus";
+export type TaskRowPresentation = "browser" | "picker";
+
+/** Browser rows keep metadata at either density. Pickers stay single-line and
+ * do not cause provider polling or git-status watches for invisible metadata. */
+export function taskRowsHaveMeta(presentation: TaskRowPresentation): boolean {
+  return presentation === "browser";
 }
 
 export interface TaskRowMetaContext {
@@ -111,6 +102,8 @@ export interface TaskRowMetaContext {
   today: string;
   /** Live sessions, for the observed "working" and session signals. */
   sessionById: Map<string, SessionListItem>;
+  /** Worktree names only, with identity stable while their content is unchanged. */
+  worktreeNames?: Readonly<Record<string, string>> | undefined;
   /** Whether the surface shows per-row project chips at all. */
   showProjectBadge: boolean;
   /**
@@ -159,13 +152,27 @@ export function buildTaskRowMeta(
   ctx: TaskRowMetaContext,
 ): TaskRowMeta {
   const session = taskStartSession(task, ctx.sessionById);
-  const worktreeId = session?.worktreeId ?? null;
+  const worktreeIds = taskWorktreeIds(
+    [task],
+    ctx.sessionById,
+    ctx.worktreeNames ? new Set(Object.keys(ctx.worktreeNames)) : undefined,
+  );
+  const worktreeId =
+    session?.worktreeId && worktreeIds.includes(session.worktreeId)
+      ? session.worktreeId
+      : (worktreeIds[0] ?? null);
   const workflowIndicator = ctx.workflowByTask?.get(task.id);
   return {
     suggestion: pendingStatusSuggestion(task) ?? null,
     working: Boolean(session?.isStreaming),
     session,
     worktreeId,
+    worktrees: worktreeIds.map((id) => ({
+      id,
+      name: ctx.worktreeNames?.[id] ?? null,
+      delivery: taskRowDelivery(id, ctx.hostingByWorktree),
+      dirty: Boolean(ctx.dirtyWorktrees?.has(id)),
+    })),
     delivery: taskRowDelivery(worktreeId, ctx.hostingByWorktree),
     dirty: Boolean(worktreeId && ctx.dirtyWorktrees?.has(worktreeId)),
     workflow: workflowIndicator
@@ -207,6 +214,7 @@ export function taskRowMetaEmpty(meta: TaskRowMeta): boolean {
     meta.working ||
     meta.session ||
     meta.worktreeId ||
+    meta.worktrees?.length ||
     meta.delivery ||
     meta.dirty ||
     meta.workflow ||

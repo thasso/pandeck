@@ -79,7 +79,7 @@ function BacklogListImpl({
   selectedId: string | null;
   onOpenTask: (id: string) => void;
   /**
-   * The tree row's gutter action at `comfortable` density: the session a Task's
+   * The browser row's action at either density: the session a Task's
    * work already happens in, or a new one for a Task with none. Both or neither
    * (see `BacklogTreePane`); a picker passes neither.
    */
@@ -96,9 +96,8 @@ function BacklogListImpl({
   onNavigate?: ((path: string) => void) | undefined;
   /**
    * The app's PR/CI projection (`hooks/useWorktreeHosting.ts`), for the delivery
-   * chip on a row's second line. Optional, and only two-line surfaces pass it: a
-   * `tight` list has no line 2 to put it on, and a picker states no delivery
-   * rather than making the app poll for one.
+   * chip on a row's metadata line. Browser rows keep that line at either
+   * density; pickers state no delivery rather than making the app poll for one.
    */
   hosting?: WorktreeHostingMap;
   /**
@@ -118,9 +117,8 @@ function BacklogListImpl({
   /**
    * How much room the TOOLBAR gets, when that is a different question. A row is
    * constrained by height and a row of chips by WIDTH, and the desktop rail is
-   * where the two disagree: it has all the height its two-line rows need and not
-   * nearly the width its filters would like, so it takes `comfortable` rows and a
-   * `tight` toolbar. Defaults to `density`.
+   * where the two disagree: the toolbar may need tighter controls without
+   * changing the rows' content. Defaults to `density`.
    */
   toolbarDensity?: BacklogDensity;
   showAddTask?: boolean;
@@ -300,7 +298,6 @@ function BacklogListImpl({
           showProjectBadge={!fixedFilter}
           selectedId={selectedId}
           onOpen={onOpenTask}
-          onCycle={c.cycleStatus}
           onDismiss={c.dismissFromInbox}
           density={density}
           flush={flush}
@@ -311,6 +308,7 @@ function BacklogListImpl({
           today={today}
           projectsById={c.projectsById}
           sessionById={c.sessionById}
+          worktreeNames={state.worktreeNames}
           hosting={hosting}
           dirtyWorktrees={dirtyWorktrees}
           workflowIndicators={workflowIndicators}
@@ -328,6 +326,7 @@ function BacklogListImpl({
         <BacklogTreePane
           tasks={c.ordered}
           density={density}
+          presentation="browser"
           flush={flush}
           viewMode={viewMode}
           statuses={c.statuses}
@@ -342,13 +341,13 @@ function BacklogListImpl({
           projectsById={c.projectsById}
           activeProjects={c.activeProjects}
           sessionById={c.sessionById}
+          worktreeNames={state.worktreeNames}
           hosting={hosting}
           dirtyWorktrees={dirtyWorktrees}
           workflowIndicators={workflowIndicators}
           today={today}
           selectedId={selectedId}
           onOpen={onOpenTask}
-          onCycle={c.cycleStatus}
           onReorder={c.reorderTasks}
           onAssignProjectsForRoots={c.assignProjectsForRoots}
           onArchive={c.archiveTasks}

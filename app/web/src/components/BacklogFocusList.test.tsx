@@ -150,9 +150,7 @@ describe("BacklogFocusList rows", () => {
     expect(recorded.opened).toEqual([]);
   });
 
-  it("links a Task's session only while it is working, and never its worktree", () => {
-    // Focus is for picking what to work on: an idle session and the bare
-    // worktree are plumbing there, a run in progress is not.
+  it("keeps worktree navigation while showing session links only for active work", () => {
     render(
       [
         task({
@@ -163,7 +161,7 @@ describe("BacklogFocusList rows", () => {
       { sessions: [session({ id: "s1", worktreeId: "wt1" })] },
     );
     expect(container!.querySelector('a[href="/sessions/s1"]')).toBeNull();
-    expect(container!.querySelector('a[href="/worktrees/wt1"]')).toBeNull();
+    expect(container!.querySelector('a[href="/worktrees/wt1"]')).not.toBeNull();
   });
 
   it("makes the title the anchor that opens the Task", () => {
@@ -171,7 +169,9 @@ describe("BacklogFocusList rows", () => {
     // every one of them presentational). The title is the named target instead —
     // and it opens in-app rather than reloading the page.
     const recorded = render([task({ id: "1" })]);
-    const title = link("/tasks/1");
+    const title = [
+      ...container!.querySelectorAll<HTMLAnchorElement>('a[href="/tasks/1"]'),
+    ].find((anchor) => anchor.textContent === "Task 1")!;
     expect(title.textContent).toBe("Task 1");
     expect(container!.querySelector('[role="button"]')).toBeNull();
 
@@ -194,7 +194,7 @@ describe("BacklogFocusList rows", () => {
   it("cycles the status without opening the Task", () => {
     const recorded = render([task({ id: "1" })]);
     const status = container!.querySelector<HTMLElement>(
-      'button[aria-label^="Status:"]',
+      'button[aria-label="Mark in progress"]',
     )!;
     clickOn(status);
     expect(recorded.cycled).toEqual(["1"]);
@@ -212,7 +212,7 @@ describe("BacklogFocusList rows", () => {
         button.getAttribute("aria-label")?.startsWith(prefix),
       )!;
     clickOn(claim("Confirm"));
-    clickOn(claim("Disagree"));
+    clickOn(claim("Keep"));
     expect(recorded.accepted).toEqual(["1"]);
     expect(recorded.dismissed).toEqual(["1"]);
     expect(recorded.opened).toEqual([]);

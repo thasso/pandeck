@@ -72,7 +72,6 @@ describe("TaskIdBadge", () => {
         showProjectBadge
         selectedId={null}
         onOpen={noop}
-        onCycle={noop}
         onDismiss={noop}
         density="comfortable"
       />,

@@ -1859,7 +1859,7 @@ export default function WorktreeDetailPage({
                   headerActions
                 ) : filePath ? (
                   <DocumentNavigationActions
-                    className="hidden md:flex"
+                    className="hidden desktop:flex"
                     showClose={false}
                   />
                 ) : undefined
@@ -1893,7 +1893,7 @@ export default function WorktreeDetailPage({
                 embedded ? (
                   headerActions
                 ) : filePath ? (
-                  <DocumentNavigationActions className="hidden md:flex" />
+                  <DocumentNavigationActions className="hidden desktop:flex" />
                 ) : undefined
               }
             />

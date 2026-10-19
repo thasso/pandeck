@@ -460,18 +460,16 @@ describe("topicsForSurface", () => {
     ).toEqual(["worktrees", "projects"]);
   });
 
-  it("holds Workflow Runs and Initiatives alone for a visible Sessions browser", () => {
-    // The run items are made of the run summaries and their cards, and the
-    // Initiative items of their summaries, which carry the next milestone's
-    // title themselves; a run's Task title stays a best-effort join, so the
-    // large Backlog broadcasts do not ride along on the session list.
+  it("holds Workflow Runs, Initiatives and Project-filter associations for a visible Sessions browser", () => {
+    // Initiatives keep their own topic. Project filters join sessions through
+    // worktrees; Task titles remain best-effort without Backlog broadcasts.
     expect(
       topicsForSurface({
         sidebarVisible: true,
         sidebarSection: "sessions",
         routeName: "session",
       }),
-    ).toEqual(["workflow", "initiatives", "projects"]);
+    ).toEqual(["workflow", "initiatives", "projects", "worktrees"]);
     // A hidden Sessions browser holds neither.
     const hidden = topicsForSurface({
       sidebarVisible: false,

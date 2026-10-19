@@ -34,7 +34,7 @@ export function OverflowMenu({
 }: {
   label: string;
   /** Match the buttons beside it: `icon-xs` in a card footer. */
-  size?: "icon-xs" | "icon-sm" | "icon" | "icon-lg";
+  size?: "icon-xs" | "icon-sm" | "icon" | "icon-lg" | "icon-list-overflow";
   disabled?: boolean;
   side?: "top" | "bottom";
   /** The menu's edge against the trigger; `start` where the group is left-aligned. */

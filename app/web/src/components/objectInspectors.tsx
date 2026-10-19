@@ -54,6 +54,8 @@ import {
 import { ownedBySessionTree } from "@assistant/shared/sessionTreeWorktrees";
 import { useCommentActuation } from "./review/CommentActuation.tsx";
 import type { Task } from "../lib/backlogTree.ts";
+import { taskWorktreeIds } from "../lib/taskActivity.ts";
+import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import {
   Inspector,
   InspectorFacts,
@@ -414,7 +416,7 @@ function mergeSessionTasks(
 }
 
 /**
- * Resolve a Task's references into inspector groups: the sessions linked to it.
+ * Resolve a Task's linked sessions and the worktrees used by its work sessions.
  * Neither its PROJECT (TaskContextSections owns that) nor its parent and
  * subtasks (the Task page's "Part of" line and subtasks list) are relation rows
  * here: the panel does not repeat what the page beside it shows.
@@ -423,7 +425,19 @@ function mergeSessionTasks(
 export function taskRelationGroups(
   task: Task,
   sessions: SessionListItem[],
+  worktrees: readonly WorktreeRecord[] | null = null,
+  worktreeStatuses: Record<string, WorktreeGitStatus> = {},
 ): ObjectRefGroup[] {
+  const worktreeIds = new Set(
+    taskWorktreeIds(
+      [task],
+      new Map(sessions.map((session) => [session.id, session])),
+      worktrees ? new Set(worktrees.map((worktree) => worktree.id)) : undefined,
+    ),
+  );
+  const relatedWorktrees = (worktrees ?? []).filter((worktree) =>
+    worktreeIds.has(worktree.id),
+  );
   const sessionRefs = new Map<string, ObjectRef>();
   for (const ref of task.sessionRefs ?? []) {
     sessionRefs.set(ref.sessionId, {
@@ -449,6 +463,17 @@ export function taskRelationGroups(
       label: "Sessions",
       icon: <MessageSquare size={13} />,
       refs: [...sessionRefs.values()],
+    },
+    {
+      id: "task-worktrees",
+      label: "Worktrees",
+      icon: <GitBranch size={13} />,
+      ...(relatedWorktrees.length
+        ? { summary: `${relatedWorktrees.length}` }
+        : {}),
+      refs: relatedWorktrees.map((worktree) =>
+        worktreeObjectRef(worktree, [], worktreeStatuses[worktree.id]),
+      ),
     },
   ];
 }
@@ -506,6 +531,7 @@ function InspectorTaskRows({
  */
 function InspectorWorktreeRows({
   rows,
+  hosting,
   onOpenWorktree,
 }: {
   rows: Array<{
@@ -513,6 +539,7 @@ function InspectorWorktreeRows({
     status?: WorktreeGitStatus | undefined;
   }>;
   onOpenWorktree: (id: string) => void;
+  hosting?: WorktreeHostingMap | undefined;
 }) {
   const onAct = useInspectorAct();
   const statuses: Record<string, WorktreeGitStatus> = {};
@@ -522,6 +549,7 @@ function InspectorWorktreeRows({
       <WorktreeList
         worktrees={rows.map((row) => row.record)}
         statuses={statuses}
+        hosting={hosting}
         onOpen={(id) => {
           onOpenWorktree(id);
           onAct?.();
@@ -682,8 +710,12 @@ function withTreeWorktreesLoadState(
     refreshing: boolean;
     error: string | null;
     onRetry?: () => void;
+    groupId?: string;
+    label?: string;
   },
 ): InspectorRelationGroup[] {
+  const groupId = state.groupId ?? "tree-worktrees";
+  const label = state.label ?? TREE_WORKTREES_LABEL;
   const note = state.error ? (
     <ErrorNote message={state.error} onRetry={state.onRetry} />
   ) : state.refreshing ? (
@@ -694,8 +726,8 @@ function withTreeWorktreesLoadState(
     return [
       ...groups,
       {
-        id: "tree-worktrees",
-        label: TREE_WORKTREES_LABEL,
+        id: groupId,
+        label,
         icon: <GitBranch size={13} />,
         items: [],
         alwaysShown: true,
@@ -709,9 +741,10 @@ function withTreeWorktreesLoadState(
   }
   if (!note) return groups;
   return groups.map((group) =>
-    group.id === "tree-worktrees"
+    group.id === groupId
       ? {
           ...group,
+          alwaysShown: true,
           content: (
             <>
               {group.content}
@@ -895,6 +928,7 @@ function toInspectorGroups(
   open: ObjectOpeners,
   /** The session list, to draw a group of sessions with their own rows. */
   sessions: SessionListItem[],
+  hosting?: WorktreeHostingMap,
 ): InspectorRelationGroup[] {
   const opener = (ref: ObjectRef) =>
     ref.kind === "task"
@@ -970,6 +1004,7 @@ function toInspectorGroups(
         content: (
           <InspectorWorktreeRows
             rows={worktreeRows}
+            hosting={hosting}
             onOpenWorktree={open.onOpenWorktree}
           />
         ),
@@ -1026,7 +1061,7 @@ function toInspectorGroups(
 /**
  * @component TaskInspector
  * @purpose Right-sidebar inspector for the Task open in the main pane: related
- * tasks/sessions, editable context via children (TaskContextSections), task
+ * tasks/sessions/worktrees, editable context via children (TaskContextSections), task
  * actions, and the quick composer.
  * @useWhen The main pane shows a Task detail route.
  * @related Inspector, TaskContextSections, ProjectInspector, SessionInspector.
@@ -1034,6 +1069,12 @@ function toInspectorGroups(
 export function TaskInspector({
   task,
   sessions,
+  worktrees = null,
+  worktreeStatuses = {},
+  worktreeHosting,
+  worktreesError,
+  worktreesFresh,
+  onReloadWorktrees,
   openers,
   onStartSession,
   onRunWorkflow,
@@ -1048,6 +1089,12 @@ export function TaskInspector({
 }: {
   task: Task | undefined;
   sessions: SessionListItem[];
+  worktrees?: WorktreeRecord[] | null;
+  worktreeStatuses?: Record<string, WorktreeGitStatus>;
+  worktreeHosting?: WorktreeHostingMap;
+  worktreesError?: string | null | undefined;
+  worktreesFresh?: boolean | undefined;
+  onReloadWorktrees?: (() => void) | undefined;
   openers: ObjectOpeners;
   onStartSession: (taskId: string, title: string) => void;
   /**
@@ -1138,10 +1185,26 @@ export function TaskInspector({
       loading={!task}
       relations={
         task
-          ? toInspectorGroups(
-              taskRelationGroups(task, sessions),
-              openers,
-              sessions,
+          ? withTreeWorktreesLoadState(
+              toInspectorGroups(
+                taskRelationGroups(task, sessions, worktrees, worktreeStatuses),
+                openers,
+                sessions,
+                worktreeHosting,
+              ),
+              {
+                groupId: "task-worktrees",
+                label: "Worktrees",
+                awaited:
+                  taskWorktreeIds(
+                    [task],
+                    new Map(sessions.map((session) => [session.id, session])),
+                  ).length > 0,
+                answered: worktrees !== null,
+                refreshing: worktrees !== null && worktreesFresh === false,
+                error: worktreesError ?? null,
+                ...(onReloadWorktrees ? { onRetry: onReloadWorktrees } : {}),
+              },
             ).map((group) =>
               noSessionRefs &&
               group.id === "sessions" &&
@@ -1399,6 +1462,7 @@ export function SessionInspector({
   worktreeStatus,
   worktrees,
   worktreeStatuses,
+  worktreeHosting,
   worktreesError,
   worktreesFresh,
   onReloadWorktrees,
@@ -1432,6 +1496,7 @@ export function SessionInspector({
   worktrees?: readonly WorktreeRecord[] | null | undefined;
   /** Live git status of the tree's worktrees, which the app watches while shown. */
   worktreeStatuses?: Record<string, WorktreeGitStatus> | undefined;
+  worktreeHosting?: WorktreeHostingMap;
   /** The worktree list's last read failed (`worktreeListError`). */
   worktreesError?: string | null | undefined;
   /**
@@ -1512,7 +1577,7 @@ export function SessionInspector({
           ),
         },
         ...withTreeWorktreesLoadState(
-          toInspectorGroups(groups, openers, sessions),
+          toInspectorGroups(groups, openers, sessions, worktreeHosting),
           {
             awaited:
               sessionId !== undefined &&

@@ -11,7 +11,7 @@ export type IconButtonProps = Omit<
   label: string;
   /** The icon; `Button` sizes it. */
   children: ReactNode;
-  size?: "icon" | "icon-xs" | "icon-sm" | "icon-lg";
+  size?: "icon" | "icon-xs" | "icon-sm" | "icon-lg" | "list-action";
   /** Where the tooltip opens; defaults to above. */
   tooltipSide?: ComponentProps<typeof TooltipContent>["side"];
 };

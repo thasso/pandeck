@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Archive, Check, ChevronRight } from "lucide-react";
+import { Archive, Check, ChevronRight, Folder } from "lucide-react";
 import {
   closestCenter,
   DndContext,
@@ -16,6 +16,7 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type CollisionDetection,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -44,6 +45,15 @@ import {
 } from "./InitiativeInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
+import {
+  attentionFilterCount,
+  attentionHistoryMatches,
+  attentionProjectsBySession,
+  DEFAULT_ATTENTION_FILTERS,
+  filterAttentionInbox,
+  groupAttentionByProject,
+  type AttentionFilters,
+} from "../lib/attentionFilters.ts";
 import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
@@ -56,11 +66,7 @@ import {
 } from "./common/load.tsx";
 import type { InitiativeSettleError } from "../hooks/useAssistant.ts";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { ListGroupSection } from "./ListGroupSection.tsx";
 import { SwipeRow, type SwipeAction } from "./common/SwipeRow.tsx";
 import {
   MOUSE_DRAG_DISTANCE_PX,
@@ -159,6 +165,9 @@ interface Props {
    * runs through (`Sidebar.tsx`). Absent, the bar is the list's first row.
    */
   barStore?: SessionInboxBarStore | undefined;
+  filters?: AttentionFilters;
+  filterControl?: ReactNode;
+  onClearFilters?: (() => void) | undefined;
   sessions: SessionListItem[];
   archivedSessionCount: number;
   archivedSessionsLoaded: boolean;
@@ -270,6 +279,9 @@ interface Props {
  */
 export function SessionInbox({
   barStore,
+  filters = DEFAULT_ATTENTION_FILTERS,
+  filterControl,
+  onClearFilters,
   sessions,
   archivedSessionCount,
   archivedSessionsLoaded,
@@ -550,12 +562,13 @@ export function SessionInbox({
     () => new Map(tasks.map((task) => [task.id, task.title])),
     [tasks],
   );
-  const view = useMemo(
+  const inbox = useMemo(
     () =>
       buildSessionInbox(sessions, {
         ...(currentId !== undefined ? { currentId } : {}),
         ...(readCurrentId !== undefined ? { readCurrentId } : {}),
-        settledLimit,
+        // All loaded history is filtered before its visible page is selected.
+        settledLimit: Number.MAX_SAFE_INTEGER,
         ...(workflowRuns ? { workflowRuns } : {}),
         workflowCards,
         taskTitles,
@@ -564,12 +577,40 @@ export function SessionInbox({
       sessions,
       currentId,
       readCurrentId,
-      settledLimit,
       workflowRuns,
       workflowCards,
       taskTitles,
     ],
   );
+  const filterProjects = useMemo(
+    () => attentionProjectsBySession(sessions, worktrees),
+    [sessions, worktrees],
+  );
+  const projectOrder = useMemo(
+    () => projects.map((project) => project.id),
+    [projects],
+  );
+  const projectForItem = useCallback(
+    (item: SessionInboxItem): string | null =>
+      item.kind === "run"
+        ? item.run.projectId || null
+        : (filterProjects.get(item.card.session.id) ?? null),
+    [filterProjects],
+  );
+  const filtersActive = attentionFilterCount(filters) > 0;
+  const view = useMemo(
+    () =>
+      filterAttentionInbox(
+        inbox,
+        filters,
+        filterProjects,
+        settledLimit,
+        currentId,
+        new Set([...settling, ...swipeCommit.current.keys()]),
+      ),
+    [inbox, filters, filterProjects, settledLimit, currentId, settling],
+  );
+  useEffect(() => setSettledLimit(SETTLED_PAGE_SIZE), [filters]);
 
   // Initiatives are items of their own, read off their summaries alone: an
   // active one in its block above the working set, an unsettled paused or done
@@ -734,6 +775,11 @@ export function SessionInbox({
   // a separator a title could contain would let two different lists agree here.
   // The consequence is milder than a frozen card — a pass that should have run
   // is skipped — but it is the same silent kind.
+  const [projectDisclosureVersion, setProjectDisclosureVersion] = useState(0);
+  const onProjectDisclosure = useCallback(
+    () => setProjectDisclosureVersion((version) => version + 1),
+    [],
+  );
   const cardLayoutKey = useMemo(
     () =>
       [
@@ -749,8 +795,11 @@ export function SessionInbox({
             now,
           ),
         ),
+        filters.byProject ? JSON.stringify(projectOrder) : "",
+        projectDisclosureVersion,
         ...[...view.needsYou, ...view.active].map((item) =>
           [
+            filters.byProject ? projectForItem(item) : "",
             item.kind === "run"
               ? workflowRunItemKey(item, now)
               : sessionCardKey(item.card, now),
@@ -774,6 +823,10 @@ export function SessionInbox({
       childRows,
       initiativeItems,
       expandedClusters,
+      filters.byProject,
+      projectOrder,
+      projectForItem,
+      projectDisclosureVersion,
     ],
   );
 
@@ -811,18 +864,35 @@ export function SessionInbox({
     [sessions],
   );
 
-  // The bar's counts are stats rather than filters, so the one with somewhere
-  // to go takes you to the first row it counts instead of hiding the rest.
+  // Counts stay global. Jumping to waiting work clears filters first so a
+  // filtered-out urgent item is still reachable from the count that names it.
   const focusNeedsYou = useCallback(() => {
-    containerRef.current
-      ?.querySelector<HTMLElement>("[data-inbox-needs-you] [data-session-row]")
-      ?.focus({ preventScroll: false });
-  }, []);
+    const focus = () => {
+      const section = containerRef.current?.querySelector<HTMLElement>(
+        "[data-inbox-needs-you]",
+      );
+      const focusRow = () =>
+        section
+          ?.querySelector<HTMLElement>("[data-session-row]")
+          ?.focus({ preventScroll: false });
+      const toggle = filters.byProject
+        ? section?.querySelector<HTMLElement>("h2 button[aria-expanded]")
+        : null;
+      if (toggle?.getAttribute("aria-expanded") === "false") {
+        toggle.click();
+        window.requestAnimationFrame(focusRow);
+      } else focusRow();
+    };
+    if (filtersActive && onClearFilters) {
+      onClearFilters();
+      window.requestAnimationFrame(focus);
+    } else focus();
+  }, [filtersActive, onClearFilters, filters.byProject]);
 
   // A host-drawn bar hears the counts before paint, so it never shows the
   // previous list's numbers; it hears nothing once this list is gone. Only a
   // changed count reaches it (the store drops an equal answer).
-  const needsYouCount = needsYouEntries.length;
+  const needsYouCount = inbox.needsYou.length + initiativeInbox.outcomes.length;
   const { activeCount: backgroundCount, ownerCount: backgroundOwners } =
     backgroundActive;
   useLayoutEffect(() => {
@@ -845,23 +915,38 @@ export function SessionInbox({
   ]);
   useLayoutEffect(() => () => barStore?.set(null), [barStore]);
 
-  const archivedSessions = useMemo(
+  const allArchivedSessions = useMemo(
     () =>
       sessions
         .filter((s) => s.archived)
         .sort((a, b) => b.updatedAt - a.updatedAt),
     [sessions],
   );
+  const archivedSessions = useMemo(
+    () =>
+      allArchivedSessions.filter((session) =>
+        attentionHistoryMatches(session, "archived", filters, filterProjects),
+      ),
+    [allArchivedSessions, filters, filterProjects],
+  );
   const archivedAvailableCount = Math.max(
     archivedSessionCount,
-    archivedSessions.length,
+    allArchivedSessions.length,
   );
+  const showArchivedShelf =
+    filters.statuses.length === 0 || filters.statuses.includes("archived");
 
   useEffect(() => {
-    if (showArchived && !archivedSessionsLoaded && archivedAvailableCount > 0)
+    if (
+      showArchived &&
+      showArchivedShelf &&
+      !archivedSessionsLoaded &&
+      archivedAvailableCount > 0
+    )
       onLoadArchivedSessions();
   }, [
     showArchived,
+    showArchivedShelf,
     archivedSessionsLoaded,
     archivedAvailableCount,
     onLoadArchivedSessions,
@@ -1187,12 +1272,89 @@ export function SessionInbox({
       ),
     );
 
+  const itemIsSelected = (item: SessionInboxItem) =>
+    item.kind === "run"
+      ? item.roles.some((role) => role.session.id === currentId)
+      : item.card.session.id === currentId ||
+        Boolean(
+          item.card.cluster?.childrenWithSettled.some(
+            (child) => child.session.id === currentId,
+          ),
+        );
+  const sessionProject = (session: SessionListItem) =>
+    filterProjects.get(session.id) ?? null;
+  const sessionIsSelected = (session: SessionListItem) =>
+    session.id === currentId;
+  const renderProjectGroups = <T,>(
+    scope: string,
+    items: T[],
+    projectFor: (item: T) => string | null,
+    render: (items: T[]) => ReactNode,
+    selected: (item: T) => boolean,
+    nested = false,
+  ): ReactNode => {
+    if (!filters.byProject) return render(items);
+    return groupAttentionByProject(items, projectFor, projectOrder).map(
+      (group) => (
+        <ListGroupSection
+          key={
+            group.projectId === null
+              ? "unassigned"
+              : `project-${group.projectId}`
+          }
+          id={`session-inbox-${scope}-${group.projectId === null ? "unassigned" : `project-${group.projectId}`}`}
+          title={
+            group.projectId
+              ? (runProjectById.get(group.projectId)?.name ?? group.projectId)
+              : "Unassigned"
+          }
+          icon={<Folder size={14} className="shrink-0" aria-hidden />}
+          containsSelected={group.items.some(selected)}
+          onOpenChange={onProjectDisclosure}
+          sticky={!nested}
+          compact={nested}
+        >
+          {render(group.items)}
+        </ListGroupSection>
+      ),
+    );
+  };
+  const activeProjects = useMemo(
+    () =>
+      new Map(
+        inbox.active.map((item) => [inboxItemId(item), projectForItem(item)]),
+      ),
+    [inbox.active, projectForItem],
+  );
+  const detectInboxCollisions = useCallback<CollisionDetection>(
+    (args) => {
+      if (!filters.byProject) return closestCenter(args);
+      const projectId = activeProjects.get(String(args.active.id));
+      return closestCenter({
+        ...args,
+        droppableContainers: args.droppableContainers.filter(
+          (container) => activeProjects.get(String(container.id)) === projectId,
+        ),
+      });
+    },
+    [filters.byProject, activeProjects],
+  );
+
   const dropItem = useCallback(
     ({ active, over }: DragEndEvent) => {
       setDragging(false);
       if (!over || !onSetInboxPositions) return;
+      const projectId = activeProjects.get(String(active.id));
+      if (
+        filters.byProject &&
+        projectId !== activeProjects.get(String(over.id))
+      )
+        return;
+      const items = filters.byProject
+        ? inbox.active.filter((item) => projectForItem(item) === projectId)
+        : inbox.active;
       const positions = planInboxDrop(
-        view.active,
+        items,
         String(active.id),
         String(over.id),
       );
@@ -1209,9 +1371,25 @@ export function SessionInbox({
       }
       onSetInboxPositions(positions);
     },
-    [view.active, onSetInboxPositions],
+    [
+      inbox.active,
+      onSetInboxPositions,
+      filters.byProject,
+      activeProjects,
+      projectForItem,
+    ],
   );
-  const activeIds = useMemo(() => view.active.map(inboxItemId), [view.active]);
+  const activeIds = useMemo(
+    () =>
+      filters.byProject
+        ? groupAttentionByProject(
+            view.active,
+            projectForItem,
+            projectOrder,
+          ).flatMap((group) => group.items.map(inboxItemId))
+        : view.active.map(inboxItemId),
+    [view.active, filters.byProject, projectForItem, projectOrder],
+  );
 
   // The cold-start message claims this browser has NOTHING, so a live Workflow
   // Run has to count against it: a run in `starting` owns no session yet, and a
@@ -1232,8 +1410,8 @@ export function SessionInbox({
   const coldStart =
     sessions.length === 0 &&
     archivedAvailableCount === 0 &&
-    needsYouEntries.length === 0 &&
-    view.active.length === 0 &&
+    inbox.needsYou.length === 0 &&
+    inbox.active.length === 0 &&
     initiativeItems.length === 0;
 
   return (
@@ -1247,7 +1425,8 @@ export function SessionInbox({
           session summaries alone — this surface holds no registry subscription. */}
       {barStore ? null : (
         <SessionInboxBar
-          needsYou={needsYouEntries.length}
+          needsYou={needsYouCount}
+          filterControl={filterControl}
           working={workingCount}
           background={backgroundActive}
           onNeedsYou={focusNeedsYou}
@@ -1266,7 +1445,25 @@ export function SessionInbox({
       ) : !initiativesFresh ? null : coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
       ) : nothingToShow ? (
-        <EmptyBox>Nothing needs you right now.</EmptyBox>
+        filtersActive ? (
+          <EmptyBox
+            action={
+              onClearFilters ? (
+                <Button variant="ghost" size="sm" onClick={onClearFilters}>
+                  Clear filters
+                </Button>
+              ) : undefined
+            }
+          >
+            {showArchivedShelf &&
+            archivedAvailableCount > 0 &&
+            !archivedSessionsLoaded
+              ? "No loaded items match these filters. Archived history loads when opened."
+              : "No items match these filters."}
+          </EmptyBox>
+        ) : (
+          <EmptyBox>Nothing needs you right now.</EmptyBox>
+        )
       ) : null}
 
       {/* A failed Initiative list read is stated above both places its
@@ -1289,7 +1486,22 @@ export function SessionInbox({
           data-inbox-needs-you
           className="flex flex-col"
         >
-          {renderNeedsYou(needsYouEntries)}
+          {filters.byProject ? (
+            <>
+              {renderNeedsYou(
+                needsYouEntries.filter((entry) => entry.kind === "initiative"),
+              )}
+              {renderProjectGroups(
+                "needs-you",
+                view.needsYou,
+                projectForItem,
+                renderCardList,
+                itemIsSelected,
+              )}
+            </>
+          ) : (
+            renderNeedsYou(needsYouEntries)
+          )}
         </section>
       ) : null}
 
@@ -1309,7 +1521,7 @@ export function SessionInbox({
       {onSetInboxPositions ? (
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCenter}
+          collisionDetection={detectInboxCollisions}
           onDragStart={() => setDragging(true)}
           onDragEnd={dropItem}
           onDragCancel={() => setDragging(false)}
@@ -1318,114 +1530,127 @@ export function SessionInbox({
             items={activeIds}
             strategy={verticalListSortingStrategy}
           >
-            {view.active.map((item) => (
-              <DraggableInboxItem
-                key={inboxItemId(item)}
-                id={inboxItemId(item)}
-              >
-                {(lifted) => renderItem(item, lifted)}
-              </DraggableInboxItem>
-            ))}
+            {renderProjectGroups(
+              "active",
+              view.active,
+              projectForItem,
+              (items) =>
+                items.map((item) => (
+                  <DraggableInboxItem
+                    key={inboxItemId(item)}
+                    id={inboxItemId(item)}
+                  >
+                    {(lifted) => renderItem(item, lifted)}
+                  </DraggableInboxItem>
+                )),
+              itemIsSelected,
+            )}
           </SortableContext>
         </DndContext>
       ) : (
-        renderCardList(view.active)
+        renderProjectGroups(
+          "active",
+          view.active,
+          projectForItem,
+          renderCardList,
+          itemIsSelected,
+        )
       )}
 
       {view.settledTotal > 0 ? (
-        <Collapsible
-          render={<section aria-labelledby="session-inbox-settled" />}
+        <ListGroupSection
+          id="session-inbox-settled"
+          title="Settled"
+          icon={<Check size={14} className="shrink-0" aria-hidden />}
           open={settledExpanded}
-          onOpenChange={() => setSettledOpen((value) => !value)}
-          className="mt-1 flex flex-col"
+          onOpenChange={setSettledOpen}
         >
-          <ShelfTrigger
-            id="session-inbox-settled"
-            open={settledExpanded}
-            density={density}
-          >
-            {/* No count: "Settled (1573)" stated the size of the history, a
-                number with no decision behind it. The shelf's own paging says
-                how much more there is once it is open. */}
-            Settled
-          </ShelfTrigger>
-          <CollapsibleContent className="flex flex-col">
-            {view.settled.map((session) => (
-              <InboxShelfRow
-                key={session.id}
-                session={session}
-                kind="settled"
-                active={session.id === currentId}
-                now={now}
-                density={density}
-                onOpen={() => onSelect(session.id)}
-                onRestore={() => onSettle(session.id, false)}
-                onArchive={() => onArchive(session.id, true)}
-                onDelete={() => onDeleteSession(session.id)}
-                onFocusSibling={focusSibling}
-              />
-            ))}
-            {view.settledHidden > 0 ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  setSettledLimit((limit) => limit + SETTLED_PAGE_STEP)
-                }
-                className="justify-start"
-              >
-                Show {Math.min(SETTLED_PAGE_STEP, view.settledHidden)} more
-                settled session
-                {Math.min(SETTLED_PAGE_STEP, view.settledHidden) === 1
-                  ? ""
-                  : "s"}
-              </Button>
-            ) : null}
-          </CollapsibleContent>
-        </Collapsible>
+          {/* History totals do not inform a decision; paging says how much
+              more there is once the shelf is open. */}
+          {renderProjectGroups(
+            "settled",
+            view.settled,
+            sessionProject,
+            (items) =>
+              items.map((session) => (
+                <InboxShelfRow
+                  key={session.id}
+                  session={session}
+                  kind="settled"
+                  active={session.id === currentId}
+                  now={now}
+                  density={density}
+                  onOpen={() => onSelect(session.id)}
+                  onRestore={() => onSettle(session.id, false)}
+                  onArchive={() => onArchive(session.id, true)}
+                  onDelete={() => onDeleteSession(session.id)}
+                  onFocusSibling={focusSibling}
+                />
+              )),
+            sessionIsSelected,
+            true,
+          )}
+          {view.settledHidden > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setSettledLimit((limit) => limit + SETTLED_PAGE_STEP)
+              }
+              className="justify-start"
+            >
+              Show {Math.min(SETTLED_PAGE_STEP, view.settledHidden)} more
+              settled session
+              {Math.min(SETTLED_PAGE_STEP, view.settledHidden) === 1 ? "" : "s"}
+            </Button>
+          ) : null}
+        </ListGroupSection>
       ) : null}
 
-      {archivedAvailableCount > 0 ? (
-        <Collapsible
-          render={<section aria-labelledby="session-inbox-archived" />}
+      {showArchivedShelf && archivedAvailableCount > 0 ? (
+        <ListGroupSection
+          id="session-inbox-archived"
+          title="Archived"
+          icon={<Archive size={14} className="shrink-0" aria-hidden />}
           open={showArchived}
           onOpenChange={setShowArchived}
-          className="mt-1 flex flex-col"
         >
-          <ShelfTrigger
-            id="session-inbox-archived"
-            open={showArchived}
-            density={density}
-          >
-            Archived
-          </ShelfTrigger>
-          <CollapsibleContent>
-            {archivedSessionsLoaded ? (
-              <div className="flex flex-col">
-                {archivedSessions.map((session) => (
-                  <InboxShelfRow
-                    key={session.id}
-                    session={session}
-                    kind="archived"
-                    active={session.id === currentId}
-                    now={now}
-                    density={density}
-                    onOpen={() => onSelect(session.id)}
-                    onRestore={() => onArchive(session.id, false)}
-                    onArchive={() => onArchive(session.id, false)}
-                    onDelete={() => onDeleteSession(session.id)}
-                    onFocusSibling={focusSibling}
-                  />
-                ))}
-              </div>
-            ) : (
-              <PaneLoading
-                label="Loading archived sessions…"
-                className="flex-none p-3"
-              />
-            )}
-          </CollapsibleContent>
-        </Collapsible>
+          {archivedSessionsLoaded ? (
+            <div className="flex flex-col">
+              {archivedSessions.length === 0 ? (
+                <EmptyBox>No archived sessions match these filters.</EmptyBox>
+              ) : null}
+              {renderProjectGroups(
+                "archived",
+                archivedSessions,
+                sessionProject,
+                (items) =>
+                  items.map((session) => (
+                    <InboxShelfRow
+                      key={session.id}
+                      session={session}
+                      kind="archived"
+                      active={session.id === currentId}
+                      now={now}
+                      density={density}
+                      onOpen={() => onSelect(session.id)}
+                      onRestore={() => onArchive(session.id, false)}
+                      onArchive={() => onArchive(session.id, false)}
+                      onDelete={() => onDeleteSession(session.id)}
+                      onFocusSibling={focusSibling}
+                    />
+                  )),
+                sessionIsSelected,
+                true,
+              )}
+            </div>
+          ) : (
+            <PaneLoading
+              label="Loading archived sessions…"
+              className="flex-none p-3"
+            />
+          )}
+        </ListGroupSection>
       ) : null}
     </div>
   );
@@ -1464,38 +1689,6 @@ function DraggableInboxItem({
     >
       {children(isDragging)}
     </div>
-  );
-}
-
-/** The heading of a history shelf (Settled, Archived): it opens the shelf. */
-function ShelfTrigger({
-  id,
-  open,
-  density,
-  children,
-}: {
-  id: string;
-  open: boolean;
-  density: RowDensity;
-  children: ReactNode;
-}) {
-  return (
-    <CollapsibleTrigger
-      id={id}
-      render={
-        <Button
-          variant="ghost"
-          size={density === "comfortable" ? "lg" : "sm"}
-          className={`justify-start ${density === "comfortable" ? "min-h-11" : ""}`}
-        />
-      }
-    >
-      <ChevronRight
-        data-icon="inline-start"
-        className={`transition-transform ${open ? "rotate-90" : ""}`}
-      />
-      {children}
-    </CollapsibleTrigger>
   );
 }
 

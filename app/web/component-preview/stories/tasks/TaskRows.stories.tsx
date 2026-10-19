@@ -5,6 +5,8 @@ import {
   ItemMedia,
 } from "../../../src/components/ui/item.tsx";
 import { TaskRowBody } from "../../../src/components/TaskRowBody.tsx";
+import { BacklogFocusList } from "../../../src/components/BacklogFocusList.tsx";
+import { BacklogInboxList } from "../../../src/components/BacklogInboxList.tsx";
 import { TaskStatusIcon } from "../../../src/components/TaskStatusIcon.tsx";
 import { buildTaskRowMeta } from "../../../src/lib/taskRowMeta.ts";
 import { taskAreaProjects, taskAreaTask } from "../../fixtures/tasks.ts";
@@ -25,6 +27,64 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<typeof meta>;
+
+export const FocusThreeLines: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "Project and right-aligned Task id, title, then a static status glyph and Task signals.",
+      },
+    },
+  },
+  render: () => (
+    <div className="w-80 surface-sidebar">
+      <BacklogFocusList
+        tasks={[taskAreaTask]}
+        today={
+          taskAreaTask.scheduledFor ?? new Date().toISOString().slice(0, 10)
+        }
+        projectsById={
+          new Map(taskAreaProjects.map((project) => [project.id, project]))
+        }
+        sessionById={new Map()}
+        showProjectBadge
+        selectedId={taskAreaTask.id}
+        onOpen={() => {}}
+        onCycle={() => {}}
+        onAcceptSuggestion={() => {}}
+        onDismissSuggestion={() => {}}
+        density="tight"
+      />
+    </div>
+  ),
+};
+
+export const InboxRows: Story = {
+  render: () => (
+    <div className="w-80 surface-sidebar">
+      <BacklogInboxList
+        tasks={[
+          taskAreaTask,
+          {
+            ...taskAreaTask,
+            id: "715",
+            title: "Arrival without a description",
+            descriptionPreview: "",
+          },
+        ]}
+        projectsById={
+          new Map(taskAreaProjects.map((project) => [project.id, project]))
+        }
+        showProjectBadge
+        selectedId={taskAreaTask.id}
+        onOpen={() => {}}
+        onDismiss={() => {}}
+        density="tight"
+      />
+    </div>
+  ),
+};
 
 export const StatusStates: Story = {
   render: () => (

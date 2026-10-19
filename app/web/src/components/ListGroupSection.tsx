@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   decodeBoolean,
@@ -19,9 +19,9 @@ import {
  * scroll under it, and folds them away.
  * @useWhen Grouping rows whose own hairlines divide them, so the band meets the
  * row above on that row's line and draws only its own lower one.
- * @intent The band is the theme's `band` colour (`index.css`), the same in both themes, so
- * it reads as a heading against the rail and never as a hovered or selected
- * row (those use `bg-muted`). Open or closed is remembered per group for the
+ * @intent The band uses `border` over an opaque `background`, with `foreground`
+ * text in both themes. Scrolling rows never show through the sticky header.
+ * Open or closed is remembered per group for the
  * tab. `containsSelected` unfolds the group ONCE so the open object's row is
  * visible; folding it again afterwards is still the reader's call. Actions sit
  * BESIDE the toggle, never in it: a button inside a button is invalid.
@@ -32,6 +32,8 @@ export function ListGroupSection({
   count,
   icon,
   defaultOpen = true,
+  open: controlledOpen,
+  onOpenChange,
   emphasis = false,
   containsSelected = false,
   actions,
@@ -47,6 +49,9 @@ export function ListGroupSection({
   count?: number | undefined;
   icon: ReactNode;
   defaultOpen?: boolean;
+  /** Controlled disclosure for hosts that coordinate loading or routed rows. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** Somebody is waiting on these: the title is set bolder. */
   emphasis?: boolean;
   containsSelected?: boolean;
@@ -68,10 +73,18 @@ export function ListGroupSection({
   card?: boolean;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useSessionStorageState(
+  const [storedOpen, setStoredOpen] = useSessionStorageState(
     `list-group-open:${id}`,
     defaultOpen,
     decodeBoolean,
+  );
+  const open = controlledOpen ?? storedOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (controlledOpen === undefined) setStoredOpen(next);
+      onOpenChange?.(next);
+    },
+    [controlledOpen, setStoredOpen, onOpenChange],
   );
   useEffect(() => {
     if (containsSelected) setOpen(true);
@@ -86,9 +99,9 @@ export function ListGroupSection({
     >
       <h2
         id={headingId}
-        // The hover lightens the WHOLE band, actions included: it is one
+        // The hover covers the WHOLE band, actions included: it is one
         // row, whichever part of it the pointer is over.
-        className={`${sticky ? "sticky top-0 z-10" : ""} flex min-w-0 items-center ${card ? "" : "border-b border-border/60"} bg-band text-band-foreground transition-colors hover:bg-band-hover ${compact ? "min-h-6" : "min-h-8"}`}
+        className={`${sticky ? "sticky top-0 z-10" : ""} flex min-w-0 items-center ${card ? "" : "border-b border-border/60"} group-header-surface text-foreground transition-colors hover:bg-accent hover:bg-none hover:text-accent-foreground ${compact ? "min-h-6" : "min-h-8"}`}
       >
         <CollapsibleTrigger
           className={`flex min-w-0 flex-1 items-center gap-2 self-stretch px-2 text-left ${compact ? "py-0.5 text-xs" : "py-1.5 text-sm"} ${emphasis ? "font-bold" : compact ? "font-medium" : "font-semibold"}`}

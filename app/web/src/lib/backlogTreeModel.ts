@@ -63,32 +63,8 @@ export const ALL_PROJECT_FILTER: BacklogProjectFilter = { kind: "all" };
 /** Backlog list layout: flat task hierarchy vs. grouped-by-project. */
 export type BacklogViewMode = "normal" | "project";
 
-/**
- * How much room a Backlog surface gives one Task, decided by the HOST rather
- * than read off the viewport.
- *
- * `tight` is a single 28px line for a surface with nothing else to hit — the
- * composer's Task picker, where width is the only real constraint. `comfortable`
- * is two lines — title, then the id and what is going on with the Task — with
- * every secondary control a full-height thumb target. Both exist because the two
- * things the old `compact` boolean stood for are independent: a picker is fine at
- * 28px however coarse the pointer is. Density therefore follows the affordances a
- * surface offers, not the screen it is on.
- */
+/** Task rows share browser spacing; picker presentation is a separate choice. */
 export type BacklogDensity = RowDensity;
-
-/**
- * What the sidebar's Backlog renders at — on a phone, where the aside IS the
- * screen, and on the desktop rail alike.
- *
- * It was `tight` on the rail, and that single line spent most of a narrow column
- * on the id and the project chip while truncating the title to a few words. The
- * rail is not short of HEIGHT, so the phone's two-line row is the better trade
- * there too. It is a named constant because `App.tsx` asks the same question of
- * `taskRowsHaveMeta` before polling for what those rows state, and the two
- * answers may not drift.
- */
-export const SIDEBAR_BACKLOG_DENSITY: BacklogDensity = "comfortable";
 
 /**
  * Which Backlog VIEW is on screen. One list surface, two orderings that cannot
@@ -110,7 +86,7 @@ export function normalizeBacklogView(value: unknown): BacklogView {
     : "backlog";
 }
 
-export function projectIdForFilter(item: Task): string {
+export function projectIdForFilter(item: Pick<Task, "projectId">): string {
   return item.projectId?.trim() ?? "";
 }
 

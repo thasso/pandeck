@@ -137,13 +137,17 @@ describe("ActiveSessionCard lines", () => {
 });
 
 describe("ActiveSessionCard density", () => {
-  it("grows the inline Settle and actions targets on a phone", () => {
+  it("keeps shared actions compact while reserving labeled touch targets", () => {
     const tight = markup({ id: "a", worktreeId: "wt" });
     const comfortable = markup({ id: "a", worktreeId: "wt" }, "comfortable");
     expect(tight).toContain("size-6");
     expect(tight).not.toContain("size-8");
-    expect(comfortable).toContain("size-8");
-    expect(comfortable).not.toContain("size-6");
+    expect(comfortable).toContain("size-6");
+    for (const html of [tight, comfortable]) {
+      expect(html).toContain("touch-ui:min-h-11");
+      expect(html).toContain("touch-ui:size-11");
+      expect(html).toContain("Settle</span>");
+    }
   });
 });
 
