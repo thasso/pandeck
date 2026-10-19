@@ -259,15 +259,22 @@ session-row and card memo keys so takeover updates every list immediately.
   reserved column sized to the widest Initiative count, keeping bars aligned.
   It never copies an entire Project's unrelated
   contents. Project Contents expands the shared `WorktreeList`, scoped by
-  explicit member-Task links and excluding removed Worktrees, with no creation
-  action. The host unions its visible rows with the ordinary Project tree's
+  explicit member-Task or positively Task-scoped session links and excluding
+  removed Worktrees, with no creation action. The host unions its visible rows with the ordinary Project tree's
   status-watch demand. Initiative and Project expansions are remembered
   separately per Initiative. A remembered Known coordinators fold precedes
   Projects, reusing `SessionRowContent`; missing ancestry/details remain
   informational, never guessed roots or false empty claims. Worktrees accept
   member-scoped in-progress Task context: one canonical link inline, several
-  behind a disclosure, with blocked state independent of doing. First reads,
-  refreshing data, failures and empty membership use shared load chrome.
+  behind a disclosure, with blocked state independent of doing. Sessions disclose
+  separately beneath Worktrees; direct Project sessions reuse
+  `InitiativeSessionRows`, initially five with inline Show more. Task context,
+  Task-start ids, Workflow roles and eligible owned descendants determine scope,
+  never a shared checkout alone. Unavailable placement stays in Other related
+  sessions, with incomplete coverage stated. Session expansion is remembered
+  per Initiative/Worktree and row ids are namespaced by Initiative/Project.
+  First reads, refreshing data, failures and empty membership use shared load
+  chrome.
 - **Initiative Attention items:** Progress and age in context, state/title in
   identity, and session disclosure, readiness, blockers and next milestone in
   signals. Only unacknowledged paused/done outcomes offer Settle.
@@ -282,8 +289,10 @@ session-row and card memo keys so takeover updates every list immediately.
   spans every available line with `actionSpan="all"`. Optional host-scoped Task
   context occupies details: a single Task link or an In progress Tasks
   disclosure. Blocked Tasks use a muted glyph, not a warning chip.
-  `WorktreeList` renders the latter's children in its shared Tree;
-  it does not introduce Tasks as parents of sessions. Task arrays, expansion
+  `WorktreeList` renders Task and Session children in its shared Tree, with
+  independent disclosures and five-session paging. Tasks never become parents
+  of sessions. Optional session expansion is host-controlled so Project
+  unmounts preserve it, and keyboard collapse retains other Projects' state. Task arrays, expansion
   state and stable id-addressed callbacks participate in the row memo. There is no separate
   worktree-chevron gutter or extra tree padding. Local branch containment uses
   a yellow Integrated badge with a merge icon, distinct from the PR's state;

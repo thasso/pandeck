@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { ChevronRight, CirclePause, FolderKanban, Waypoints } from "lucide-react";
-import type { InitiativeGraphNode, InitiativeSummary, ProjectRecord, WorktreeGitStatus, WorktreeRecord } from "@assistant/shared";
+import type { InitiativeGraphNode, InitiativeSummary, ProjectRecord, SessionListItem, WorktreeGitStatus, WorktreeRecord } from "@assistant/shared";
 import type { WorktreeHostingMap } from "../../lib/worktreeHosting.ts";
 import { compareWorktrees, WorktreeList } from "../worktreeRowParts.tsx";
 
@@ -9,10 +9,13 @@ import { decodeBoolean, useSessionStorageState } from "../../hooks/useSessionSto
 import { dataOf, errorOf, type LoadState } from "../../lib/loadState.ts";
 import { projectColor } from "../../lib/projectDisplay.ts";
 import { initiativeBrowserCounts, type InitiativeBrowserCounts } from "../../lib/initiativeBrowserCounts.ts";
+import { initiativeBrowserSessions } from "../../lib/initiativeBrowserSessions.ts";
 import type { RowDensity } from "../../lib/rowDensity.ts";
 import { followRowLink } from "../../lib/rowLink.ts";
 import { initiativePath, projectPath } from "../../hooks/useSessionRouting.ts";
 import { ListRow } from "../common/ListRow.tsx";
+import { ListExpansionRow } from "../common/ListExpansionRow.tsx";
+import { InitiativeSessionRows } from "./InitiativeSessionRows.tsx";
 import { EmptyBox, ErrorNote, RefreshIndicator, Skeleton } from "../common/load.tsx";
 import { Badge } from "../ui/badge.tsx";
 import { InitiativeBrowserProgress } from "./InitiativeBrowserProgress.tsx";
@@ -43,8 +46,9 @@ interface Props {
 }
 
 const PROJECT_INDENT = { paddingLeft: "0.75rem" };
+const NO_SESSION_ROWS: readonly SessionListItem[] = [];
 
-function decodeExpandedProjects(raw: string): string[] | null {
+function decodeExpandedIds(raw: string): string[] | null {
   const value: unknown = JSON.parse(raw);
   return Array.isArray(value) && value.every((id) => typeof id === "string") ? value : null;
 }
@@ -71,8 +75,21 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
   const [expandedProjects, setExpandedProjects] = useSessionStorageState<string[]>(
     `assistant.initiativeBrowser.projects.v1:${initiative.id}`,
     [],
-    decodeExpandedProjects,
+    decodeExpandedIds,
   );
+  const [expandedWorktreeSessions, setExpandedWorktreeSessions] = useSessionStorageState<string[]>(
+    `assistant.initiativeBrowser.sessions.v1:${initiative.id}`, [], decodeExpandedIds,
+  );
+  const [expandedOtherSessions, setExpandedOtherSessions] = useSessionStorageState(
+    `assistant.initiativeBrowser.otherSessions.v1:${initiative.id}`, false, decodeBoolean,
+  );
+  // Id-addressed callbacks remain stable across sibling disclosure changes.
+  const onToggleWorktreeSessions = useCallback((id: string) => {
+    setExpandedWorktreeSessions((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
+  }, [setExpandedWorktreeSessions]);
+  const sessionExpansion = useMemo(() => ({
+    ids: expandedWorktreeSessions, toggle: onToggleWorktreeSessions, change: setExpandedWorktreeSessions,
+  }), [expandedWorktreeSessions, onToggleWorktreeSessions, setExpandedWorktreeSessions]);
   const expanded = storedExpanded && Boolean(onLoadDetail);
   const read = detailState ? dataOf(detailState) : undefined;
   const error = detailState ? errorOf(detailState) : undefined;
@@ -103,7 +120,11 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
     }
   }, [expanded, selected, status, detailState, load, initiative, onLoadDetail]);
 
-  const groups = useMemo(() => {
+  const relations = useMemo(() => read && sessions ? initiativeBrowserSessions({
+    initiative, members: read.item.nodes, sessions: sessions.items, worktrees: worktrees?.items ?? [],
+    runs: sessions.runs, cards: sessions.cards,
+  }) : undefined, [read, initiative, sessions, worktrees?.items]);
+  const memberGroups = useMemo(() => {
     if (!read) return [];
     const byProject = new Map<string | undefined, { members: InitiativeGraphNode[]; taskIds: Set<string> }>();
     for (const node of read.item.nodes) {
@@ -116,14 +137,19 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
     return Array.from(byProject, ([id, group]) => ({
       id,
       ...initiativeBrowserCounts(group.members),
+      taskIds: group.taskIds,
       project: id ? registry.get(id)?.project : undefined,
       order: id ? (registry.get(id)?.index ?? projects.length) : projects.length + 1,
-      worktrees: (worktrees?.items ?? []).filter((worktree) =>
-        worktree.projectId === id && worktree.status !== "removed" &&
-        worktree.taskIds.some((taskId) => group.taskIds.has(taskId)),
-      ).sort(compareWorktrees),
     })).sort((a, b) => a.order - b.order || (a.id ?? "").localeCompare(b.id ?? ""));
-  }, [read, projects, worktrees?.items]);
+  }, [read, projects]);
+  const groups = useMemo(() => memberGroups.map((group) => ({
+    ...group,
+    worktrees: (worktrees?.items ?? []).filter((worktree) =>
+      worktree.projectId === group.id && worktree.status !== "removed" &&
+      (worktree.taskIds.some((taskId) => group.taskIds.has(taskId)) || relations?.byWorktree.has(worktree.id)),
+    ).sort(compareWorktrees),
+    directSessions: relations?.byProject.get(group.id) ?? NO_SESSION_ROWS,
+  })), [memberGroups, worktrees?.items, relations]);
   const projectCount = groups.filter((group) => group.id !== undefined).length;
   const scopedWorktrees = useMemo(() => groups.flatMap((group) => group.worktrees), [groups]);
   const inProgressByWorktree = useMemo(() => {
@@ -221,6 +247,7 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
                 const groupKey = group.id ? `project:${group.id}` : "unassigned";
                 const projectExpanded = expandedProjects.includes(groupKey);
                 const contentsId = `initiative:${initiative.id}:${groupKey}:contents`;
+                const sessionCount = group.directSessions.length + group.worktrees.reduce((count, worktree) => count + (relations?.byWorktree.get(worktree.id)?.length ?? 0), 0);
                 return (
                   <li key={groupKey}>
                     <ListRow
@@ -244,9 +271,9 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
                           <InitiativeBrowserProgress progress={group} counts={group} countChars={progressCountChars} label={`${title} Initiative Tasks`} />
                         </>
                       }
-                      signals={worktrees ? (
+                      signals={worktrees || sessions ? (
                         <>
-                          {group.worktrees.length > 0 || !worktrees.fresh || projectExpanded ? (
+                          {group.worktrees.length > 0 || sessionCount > 0 || !worktrees?.fresh || projectExpanded ? (
                             <Badge
                               variant="ghost"
                               render={<button type="button" />}
@@ -267,22 +294,29 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
                           ) : null}
                           {group.worktrees.length > 0 ? (
                             <span>{group.worktrees.length} Worktree{group.worktrees.length === 1 ? "" : "s"}</span>
-                          ) : worktrees.fresh ? <span>No linked Worktrees</span> : null}
-                          {!worktrees.fresh && projectExpanded ? <RefreshIndicator label="Refreshing Worktrees" /> : null}
+                          ) : null}
+                          {sessionCount > 0 ? <span>{sessionCount} Session{sessionCount === 1 ? "" : "s"}</span> : null}
+                          {worktrees?.fresh && group.worktrees.length === 0 && sessionCount === 0 ? <span>No linked Worktrees or known sessions</span> : null}
+                          {worktrees && !worktrees.fresh && projectExpanded ? <RefreshIndicator label="Refreshing Worktrees" /> : null}
                         </>
                       ) : undefined}
                     />
-                    {projectExpanded && worktrees ? (
+                    {projectExpanded ? (
                       <div id={contentsId} className="pl-6">
-                        {worktrees.items === null ? (
+                        {worktrees?.items === null ? (
                           <div role="status" aria-label="Loading Initiative Worktrees" className="flex flex-col gap-2 px-2 py-2">
                             <Skeleton className="h-8 w-4/5" />
                             <Skeleton className="h-8 w-3/5" />
                           </div>
-                        ) : group.worktrees.length > 0 ? (
-                          <WorktreeList worktrees={group.worktrees} statuses={worktrees.statuses} hosting={worktrees.hosting} selectedWorktreeId={worktrees.selectedId} onOpen={worktrees.onOpen} density={density} tasksByWorktree={inProgressByWorktree} onNavigate={onNavigate} />
-                        ) : worktrees.fresh ? (
-                          <div className="mx-2 my-1"><EmptyBox>No linked Worktrees for these member Tasks.</EmptyBox></div>
+                        ) : null}
+                        {group.worktrees.length > 0 && worktrees ? (
+                          <WorktreeList worktrees={group.worktrees} statuses={worktrees.statuses} hosting={worktrees.hosting} selectedWorktreeId={worktrees.selectedId} onOpen={worktrees.onOpen}
+                            density={density} tasksByWorktree={inProgressByWorktree} onNavigate={onNavigate}
+                            sessionsByWorktree={relations?.byWorktree} selectedSessionId={sessions?.selectedId} sessionExpansion={sessionExpansion} scopeId={`initiative:${initiative.id}:${groupKey}`} />
+                        ) : null}
+                        {sessions ? <InitiativeSessionRows sessions={group.directSessions} scopeId={`initiative:${initiative.id}:${groupKey}`} currentId={sessions.selectedId} density={density} onNavigate={onNavigate} /> : null}
+                        {worktrees?.fresh && group.worktrees.length === 0 && group.directSessions.length === 0 ? (
+                          <div className="mx-2 my-1"><EmptyBox>No linked Worktrees or known sessions for these member Tasks.</EmptyBox></div>
                         ) : null}
                       </div>
                     ) : null}
@@ -290,6 +324,15 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
                 );
               })}
             </ul>
+            {relations && relations.unplaced.length > 0 && sessions ? (
+              <ListExpansionRow rowId={`initiative:${initiative.id}:other-sessions`} label="Other related sessions" count={relations.unplaced.length}
+                accessibleLabel={`Related sessions whose Project or Worktree placement is unavailable for ${initiative.title}`}
+                expanded={expandedOtherSessions} density={density} tabbable onToggle={() => setExpandedOtherSessions((open) => !open)}>
+                <div className="pl-3"><InitiativeSessionRows sessions={relations.unplaced} scopeId={`initiative:${initiative.id}:unplaced`} currentId={sessions.selectedId} density={density} onNavigate={onNavigate} /></div>
+              </ListExpansionRow>
+            ) : null}
+            {relations?.incomplete ? <ListRow interaction="content" divider={false} density={density} data-list-row-id={`initiative:${initiative.id}:session-coverage`}
+              identity={<span className="min-w-0 text-xs text-muted-foreground">Some session relationships or details aren't loaded. Only known Task-related sessions are shown.</span>} /> : null}
             </>
           ) : null}
         </div>

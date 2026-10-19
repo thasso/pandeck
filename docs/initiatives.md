@@ -223,11 +223,37 @@ keeps its Project id visible; Tasks with no Project appear in a No Project row.
 External blockers do not make their Projects members. Project rows navigate
 normally and offer no creation or settlement action. Each Project has a separate
 Contents disclosure, remembered within its Initiative, for non-removed Worktrees
-whose explicit `in_worktree` Task links intersect that Project's member Tasks.
-A Project without a matching Worktree stays visible. Shared Worktree rows retain
+whose explicit `in_worktree` Task links intersect that Project's member Tasks,
+or which physically hold a positively Task-scoped session. A Project without
+a matching Worktree stays visible; its sessions without a Worktree appear
+directly beneath it. Shared Worktree rows retain
 PR/Integrated badges and Git metadata; only the expanded rows hold live status
-watches. Opening a Worktree navigates normally. Worktree session rows are left
-for the next interactive iteration.
+watches. Opening a Worktree navigates normally.
+
+Worktree Sessions and In progress Tasks disclose independently in the shared
+Tree. Session expansion is remembered per Initiative and Worktree, survives
+Project collapse, and cannot change another Project's folds. Session rows use
+shared identity, ownership styling, status, PR glyph and age, with canonical
+links and no Archive/Restore or creation actions. Worktree sessions initially
+show five and reveal five more per request; direct Project sessions initially
+show five and can reveal their known remainder. Row ids are namespaced to the
+Initiative and Project so overlapping membership does not confuse scroll restore.
+
+`lib/initiativeBrowserSessions.ts` scopes loaded sessions through explicit member
+Task object context, the summary's bounded Task-start ids, and member-Task
+Workflow Run roles. Coordinator-owned descendants may inherit a scoped spawn
+relationship; explicit Task context wholly outside the Initiative takes
+precedence, and taken-over or unknown ownership needs its own positive Task
+relationship. A shared Project/Worktree or coordinator ancestor alone never
+includes all its sessions. Actual `in_worktree` placement wins over direct
+Project placement. Missing/removed Worktrees or ambiguous Project context go to
+an Other related sessions fold, not a guessed Project or a direct-session claim.
+Archived inactive rows remain out of this working browser.
+
+Project metadata counts known scoped sessions, both direct and nested. Clipped
+summary membership and unavailable session details or relationships are stated
+as incomplete, never as a complete empty list. No archived-session collection
+is fetched, and Show more reveals only rows already known.
 
 A remembered Known coordinators fold precedes the Projects. It reuses shared
 session identity and age without Archive or Settle. Candidates come only from
