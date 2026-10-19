@@ -583,6 +583,10 @@ straight into retention, so that obsolete stamp is cleared with it; a stamp that
 still holds is kept. A peer waiting on a HUMAN is never dismissible: the work
 cannot proceed without the answer, so that bubble is dealt with by opening it.
 
+All session lists use the ownership-aware
+[session identity pattern](ui-components.md#session-identity), including peer
+folds, related-object lists and history shelves.
+
 The card's DISCLOSURE is the one way a folded peer is listed, and it lists every
 one of them as a TREE: each peer directly under the session that spawned it,
 indented by its depth, siblings in inbox order. A peer that coordinates peers of

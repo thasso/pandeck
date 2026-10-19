@@ -3,9 +3,8 @@ import type { SessionListItem } from "@assistant/shared";
 import { relativeAge } from "../lib/relativeTime.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
-import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
-import { SessionTitleText } from "./SessionTitleText.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { identityLabel } from "./SessionRow.tsx";
 import { ListRowActions } from "./common/ListRowActions.tsx";
 import { ListRow } from "./common/ListRow.tsx";
@@ -58,10 +57,6 @@ export function InboxShelfRow({
   onFocusSibling?: (delta: 1 | -1) => void;
 }) {
   const title = session.title.trim() || "Untitled session";
-  const agent =
-    AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
-    AGENT_TYPE_DISPLAY.assistant;
-  const AgentIcon = agent.Icon;
   const settled = kind === "settled";
   const restoreLabel = settled
     ? "Bring back into the working set"
@@ -103,13 +98,7 @@ export function InboxShelfRow({
           onDelete();
         }
       }}
-      leading={<AgentIcon className={agent.activeColor} aria-hidden />}
-      title={
-        <SessionTitleText
-          title={title}
-          pending={session.titleGenerationPending}
-        />
-      }
+      identity={<SessionTitleRow session={session} status="quiet" />}
       trailing={
         <>
           <SessionDeliveryMark session={session} variant="glyph" />

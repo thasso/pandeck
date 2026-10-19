@@ -1,10 +1,7 @@
 import { memo } from "react";
 import type { SessionListItem } from "@assistant/shared";
 import { relativeTime, sameSessionRowProps } from "../lib/sessionRows.ts";
-import {
-  classifySessionStatus,
-  type SessionInboxStatus,
-} from "../lib/sessionInbox.ts";
+import { classifySessionStatus } from "../lib/sessionInbox.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
@@ -39,13 +36,9 @@ function SessionRowContentImpl({
 }: SessionRowContentProps) {
   // The attention cards' state, with the host's word on unread: the open
   // session reads as read even before the server says so.
-  const classified = classifySessionStatus(session);
-  const status: SessionInboxStatus =
-    unread === false && classified === "unread"
-      ? "quiet"
-      : unread === true && classified === "quiet"
-        ? "unread"
-        : classified;
+  const status = classifySessionStatus(
+    unread === undefined ? session : { ...session, unread },
+  );
 
   return (
     <ListRowContent

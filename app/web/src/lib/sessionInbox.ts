@@ -644,7 +644,9 @@ export function classifySessionStatus(
   if (pendingSessionOutcome(session.outcomeAttention)?.kind === "failed")
     return "failed";
   if (session.interruptedRun) return "interrupted";
-  if (session.unread && session.id !== currentId) return "unread";
+  // A delegated peer's reply belongs to its coordinator, not the user's inbox.
+  if (session.unread && session.id !== currentId && session.spawnOwnership !== "coordinator")
+    return "unread";
   // Reading clears the visible successful-completion signal, not the durable
   // settlement cursor. The card becomes quiet but stays in the working set
   // until Settle acknowledges it.
@@ -1348,6 +1350,8 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     session.titleGenerationPending ? "1" : "",
     session.harness ?? "",
     session.agentType ?? "",
+    // Ownership changes the shared title's typography and sub-agent marker.
+    session.spawnOwnership === "coordinator" ? "peer" : "",
     // The context row names the runtime when no object is linked.
     session.model
       ? `${session.model.provider}:${session.model.id}:${session.model.name ?? ""}`

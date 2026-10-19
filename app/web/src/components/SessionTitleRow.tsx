@@ -1,4 +1,5 @@
 import type { SessionListItem } from "@assistant/shared";
+import { Network } from "lucide-react";
 import {
   sessionStatusBadge,
   tierForStatus,
@@ -19,16 +20,19 @@ import { SessionTitleText } from "./SessionTitleText.tsx";
  *   glyph), any other state shows what it needs (the coloured status badge).
  *   Fixed width, so every title starts at the same x. The title is bright only
  *   where it asks for the user — unread, or needing them; a read one recedes.
- *   Renders two flex children for the host's row.
+ *   Coordinator-owned peers follow the shared session-identity policy: italic
+ *   title and a trailing sub-agent marker, without unread emphasis.
  */
 export function SessionTitleRow({
   session,
-  status,
+  status: suppliedStatus,
 }: {
   session: SessionListItem;
   status: SessionInboxStatus;
 }) {
   const title = session.title.trim() || "Untitled session";
+  const delegated = session.spawnOwnership === "coordinator";
+  const status = delegated && suppliedStatus === "unread" ? "quiet" : suppliedStatus;
   // The badge's label never reads the clock, so no `now` is needed here.
   const badge = sessionStatusBadge(session, status, 0);
   const agent =
@@ -50,13 +54,23 @@ export function SessionTitleRow({
         )}
       </span>
       <span
-        className={`min-w-0 flex-1 truncate text-left text-sm ${status === "unread" ? "font-semibold" : "font-medium"} ${bright ? "text-foreground" : "text-muted-foreground"}`}
+        className={`min-w-0 flex-1 truncate text-left text-sm ${delegated ? "italic" : ""} ${status === "unread" ? "font-semibold" : "font-medium"} ${bright ? "text-foreground" : "text-muted-foreground"}`}
       >
         <SessionTitleText
           title={title}
           pending={session.titleGenerationPending}
         />
       </span>
+      {delegated ? (
+        <span
+          className="flex shrink-0 items-center text-muted-foreground"
+          title="Coordinator-owned sub-agent session"
+          aria-label="Coordinator-owned sub-agent session"
+          role="img"
+        >
+          <Network size={12} aria-hidden />
+        </span>
+      ) : null}
     </>
   );
 }

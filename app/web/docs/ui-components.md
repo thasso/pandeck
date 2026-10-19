@@ -192,6 +192,23 @@ List hosts preserve scroll with `useListScroll` and a stable `listKey`; each
 row has `data-list-row-id`. Keep callbacks and memoized content stable while
 their visible values are unchanged, as required by `src/CLAUDE.md`.
 
+#### Session identity
+
+Session list titles use `SessionTitleRow`, including Attention cards and history,
+expanded peer/Workflow/Initiative sessions, Project/Worktree rows, and inspector
+and composer disclosures. Ownership comes from the durable spawn edge, never
+from titles, personas, nesting or whether the user opened the session.
+
+A confirmed coordinator-owned session uses an italic title and a trailing 12px
+Network icon identifying it as a sub-agent. Its unread flag does not produce
+unread/Done styling or count as an unread Attention update. Running, questions,
+approvals, failures and interruptions retain their own status and visibility.
+This changes presentation only; no read marker is written or acknowledged.
+
+Taken-over sessions use ordinary title and unread behavior. Unknown ownership
+also remains ordinary, conservatively. Ownership changes are part of both
+session-row and card memo keys so takeover updates every list immediately.
+
 #### Existing domain compositions
 
 - **Tasks:** Backlog, Focus and Inbox share `TaskListRowContent`. Backlog's
