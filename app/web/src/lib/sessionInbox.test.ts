@@ -14,6 +14,8 @@ import {
   clusterLiveSummary,
   spawnTreeStall,
   stallLabel,
+  owedRepliesLabel,
+  owedRepliesTarget,
   sameClusterChildProps,
   sameWorkflowRunItemProps,
   sessionSettleCascade,
@@ -3702,5 +3704,118 @@ describe("the manual inbox order", () => {
     ]);
     expect(planInboxDrop(items, "a", "a")).toBeUndefined();
     expect(planInboxDrop(items, "a", "gone")).toBeUndefined();
+  });
+});
+
+describe("a reply owed after the last reminder", () => {
+  const all = (rows: SessionListItem[]) => {
+    const view = buildSessionInbox(rows);
+    return [...cards(view.needsYou), ...cards(view.active)];
+  };
+  const cardOf = (rows: SessionListItem[], id: string) =>
+    all(rows).find((card) => card.session.id === id) as SessionInboxCard;
+  const peer = (
+    id: string,
+    parent: string,
+    extra: Partial<SessionListItem> = {},
+  ): SessionListItem =>
+    session({
+      id,
+      spawnedBySessionId: parent,
+      spawnOwnership: "coordinator",
+      ...extra,
+    });
+
+  it("is the owing card's own chip, beside a stall chip, each opening its own session", () => {
+    const rows = [
+      session({ id: "coord", title: "Coordinator" }),
+      session({
+        id: "driver",
+        title: "Driver",
+        unansweredRequestsFrom: ["coord"],
+        awaitingRepliesFrom: ["rev"],
+      }),
+      peer("rev", "driver", { title: "Reviewer" }),
+    ];
+    const card = cardOf(rows, "driver");
+    expect(card.owedReplies?.map((s) => s.id)).toEqual(["coord"]);
+    expect(card.stall?.peers.map((s) => s.id)).toEqual(["rev"]);
+    expect(owedRepliesTarget(card.owedReplies!).id).toBe("coord");
+    expect(owedRepliesLabel(card.owedReplies!)).toBe(
+      "“Coordinator” awaits a reply",
+    );
+    expect(card.tier).toBe("attention");
+  });
+
+  it("lifts an idle card to attention and names further requesters as +N", () => {
+    const rows = [
+      session({ id: "a", title: "A" }),
+      session({ id: "b", title: "B" }),
+      session({ id: "owing", unansweredRequestsFrom: ["b", "a"] }),
+    ];
+    const card = cardOf(rows, "owing");
+    expect(card.tier).toBe("attention");
+    expect(owedRepliesLabel(card.owedReplies!)).toBe("“B” awaits a reply +1");
+    expect(cardOf(rows, "a").owedReplies).toBe(undefined);
+  });
+
+  it("collapses only into a stall chip that says exactly the same", () => {
+    const rows = [
+      session({ id: "root", unansweredRequestsFrom: ["impl"] }),
+      peer("impl", "root", {
+        title: "Implementer",
+        awaitingRepliesFrom: ["root"],
+      }),
+    ];
+    const card = cardOf(rows, "root");
+    expect(card.stall && stallLabel(card.stall)).toBe(
+      "“Implementer” awaits a reply",
+    );
+    expect(card.owedReplies).toBe(undefined);
+  });
+
+  it("lifts the cluster a folded owing peer sits in, naming it", () => {
+    const rows = [
+      session({ id: "asker", title: "Asker" }),
+      session({ id: "root", title: "Root" }),
+      peer("impl", "root", {
+        title: "Implementer",
+        unansweredRequestsFrom: ["asker"],
+      }),
+    ];
+    const card = cardOf(rows, "root");
+    expect(card.cluster?.bubbled?.session.id).toBe("impl");
+    expect(card.tier).toBe("attention");
+    expect(sessionClusterBubbleLabel(card.cluster!.bubbled!, NOW)).toBe(
+      "Reply owed in “Implementer”",
+    );
+  });
+
+  it("shows nothing on a session the user put down", () => {
+    const rows = [
+      session({ id: "asker" }),
+      session({
+        id: "shelved",
+        settledAt: NOW - 1_000,
+        unansweredRequestsFrom: ["asker"],
+      }),
+    ];
+    expect(cardOf(rows, "shelved")).toBe(undefined);
+    const shelved = session({
+      id: "shelved",
+      settledAt: NOW - 1_000,
+      unansweredRequestsFrom: ["asker"],
+    });
+    expect(isShelvedSession(shelved)).toBe(true);
+  });
+
+  it("is on the card's content key", () => {
+    const base = [session({ id: "asker", title: "Asker" })];
+    const owing = cardOf(
+      [...base, session({ id: "s", unansweredRequestsFrom: ["asker"] })],
+      "s",
+    );
+    const clear = cardOf([...base, session({ id: "s" })], "s");
+    expect(sessionCardKey(owing, NOW)).not.toBe(sessionCardKey(clear, NOW));
   });
 });

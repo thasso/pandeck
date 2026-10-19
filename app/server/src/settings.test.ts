@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
   DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS,
+  DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   MAX_SESSION_PEER_PROMPT_MAX_HOPS,
+  MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   MIN_SESSION_PEER_PROMPT_MAX_HOPS,
+  MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT,
 } from "@assistant/shared";
 import { getSettings, updateSettings } from "./settings.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
@@ -49,6 +52,37 @@ test("peer-prompt hop limit defaults high and persists a bounded runtime setting
     );
   } finally {
     updateSettings({ sessionPeerPromptMaxHops: original });
+  }
+});
+
+test("peer reply reminders default to 3 per request, bounded 1 to 10", () => {
+  const original = getSettings().sessionPeerPromptReminderLimit;
+  assert.equal(original, DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT);
+  assert.equal(DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT, 3);
+  try {
+    assert.equal(
+      updateSettings({ sessionPeerPromptReminderLimit: 0 })
+        .sessionPeerPromptReminderLimit,
+      MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+    );
+    assert.equal(
+      updateSettings({ sessionPeerPromptReminderLimit: 99 })
+        .sessionPeerPromptReminderLimit,
+      MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+    );
+    assert.equal(
+      getSettings().sessionPeerPromptReminderLimit,
+      MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+    );
+    assert.equal(
+      validateClientMessage({
+        type: "updateSettings",
+        patch: { sessionPeerPromptReminderLimit: "3" },
+      }).ok,
+      false,
+    );
+  } finally {
+    updateSettings({ sessionPeerPromptReminderLimit: original });
   }
 });
 

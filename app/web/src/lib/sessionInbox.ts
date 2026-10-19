@@ -123,6 +123,13 @@ export interface SessionInboxCard {
    * card; a stalled tree needs a poke, so it lifts the card to `attention`.
    */
   stall?: SpawnTreeStall;
+  /**
+   * The requesters this session still owes an answer after their last reply
+   * reminder (`unansweredRequestsFrom`), newest request first — its OWN
+   * condition, drawn beside any stall chip and lifting the card to
+   * `attention`. Absent when it owes nothing, or the user put it down.
+   */
+  owedReplies?: SessionListItem[];
 }
 
 /**
@@ -266,16 +273,97 @@ export function stallMore(stall: SpawnTreeStall): string {
   return more > 0 ? `+${more}` : "";
 }
 
-/** A top-level card with its tree's stall, if any, lifting its tier. */
+/**
+ * A top-level card with its tree's stall, if any, lifting its tier. A stall
+ * chip that would say exactly what the card's owed-reply chip says replaces
+ * it: the same words opening the same session are one fact.
+ */
 function withStall(
   card: SessionInboxCard,
   scope: readonly SessionListItem[],
   byId: ReadonlyMap<string, SessionListItem>,
 ): SessionInboxCard {
   const stall = spawnTreeStall(scope, byId);
-  return stall
-    ? { ...card, stall, tier: higherTier(card.tier, "attention") }
-    : card;
+  if (!stall) return card;
+  const { owedReplies, ...rest } = card;
+  const duplicate =
+    owedReplies !== undefined &&
+    stall.peers.length === 0 &&
+    stallLabel(stall) === owedRepliesLabel(owedReplies) &&
+    stallTarget(stall).id === owedRepliesTarget(owedReplies).id;
+  return {
+    ...(duplicate ? rest : card),
+    stall,
+    tier: higherTier(card.tier, "attention"),
+  };
+}
+
+/**
+ * Whether a session still owes a requester an answer after its last reply
+ * reminder, as the user should see it: not once they put the session down.
+ */
+function owesReplies(session: SessionListItem): boolean {
+  return (
+    (session.unansweredRequestsFrom?.length ?? 0) > 0 &&
+    !session.archived &&
+    !isShelvedSession(session)
+  );
+}
+
+/**
+ * The card with the requesters its session owes, as this browser lists them;
+ * one archived or outside the list waits on nothing the user can open.
+ */
+function withOwedReplies(
+  card: SessionInboxCard,
+  byId: ReadonlyMap<string, SessionListItem>,
+): SessionInboxCard {
+  if (!owesReplies(card.session)) return card;
+  const owedReplies = (card.session.unansweredRequestsFrom ?? []).flatMap(
+    (id) => {
+      const requester = byId.get(id);
+      return requester && !requester.archived ? [requester] : [];
+    },
+  );
+  return owedReplies.length > 0 ? { ...card, owedReplies } : card;
+}
+
+/** The requester an owed-reply chip names and opens: the newest. */
+export function owedRepliesTarget(
+  owed: readonly SessionListItem[],
+): SessionListItem {
+  return owed[0] as SessionListItem;
+}
+
+/** The owed-reply chip's words: "«Coordinator» awaits a reply", title apart. */
+export function owedRepliesParts(owed: readonly SessionListItem[]): {
+  before: string;
+  title: string;
+  after: string;
+} {
+  return {
+    before: "",
+    title: `“${owedRepliesTarget(owed).title.trim() || "a peer"}”`,
+    after: "awaits a reply",
+  };
+}
+
+/** "+N" for the further requesters, or "". */
+export function owedRepliesMore(owed: readonly SessionListItem[]): string {
+  return owed.length > 1 ? `+${owed.length - 1}` : "";
+}
+
+/** The whole owed-reply chip as one sentence, for its spoken label. */
+export function owedRepliesLabel(owed: readonly SessionListItem[]): string {
+  const { before, title, after } = owedRepliesParts(owed);
+  return [before, title, after, owedRepliesMore(owed)]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** What an owed-reply chip draws, as a content key. */
+function owedRepliesKey(owed: readonly SessionListItem[]): string {
+  return owed.map((peer) => `${peer.id}:${peer.title}`).join("\u001f");
 }
 
 /**
@@ -362,7 +450,11 @@ function holdsFailure(card: SessionInboxCard): boolean {
 
 /** Whether this folded child lifts its whole cluster. */
 function bubbles(card: SessionInboxCard): boolean {
-  return GATE_STATUSES.has(card.status) || holdsFailure(card);
+  return (
+    GATE_STATUSES.has(card.status) ||
+    holdsFailure(card) ||
+    owesReplies(card.session)
+  );
 }
 
 /**
@@ -386,10 +478,12 @@ export function inboxCard(
   const status =
     classified === "failed" && isShelvedSession(session) ? "quiet" : classified;
   const blocked = settleBlockedReason(session);
+  const tier = tierForCard(session, status);
   return {
     session,
     status,
-    tier: tierForCard(session, status),
+    // A requester still waits on it after every reminder: the user's to see.
+    tier: owesReplies(session) ? higherTier(tier, "attention") : tier,
     ...(blocked ? { settleBlocked: blocked } : {}),
   };
 }
@@ -872,8 +966,11 @@ export function sessionClusterBubbleLabel(
   child: SessionInboxCard,
   now: number,
 ): string {
-  const badge = sessionStatusBadge(child.session, child.status, now);
   const title = child.session.title.trim() || "Untitled session";
+  // Lifted only by a reply it still owes: its badge would just say Idle.
+  if (!GATE_STATUSES.has(child.status) && !holdsFailure(child))
+    return `Reply owed in “${title}”`;
+  const badge = sessionStatusBadge(child.session, child.status, now);
   return `${badge?.label ?? "Open"} in “${title}”`;
 }
 
@@ -1406,6 +1503,7 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     card.cluster ? String(card.cluster.settledCount) : "",
     // The stall chip: which peers it names, by what they are called.
     card.stall ? stallKey(card.stall) : "",
+    card.owedReplies ? owedRepliesKey(card.owedReplies) : "",
     // A tree row's place and its own peers, which the row draws.
     String(card.depth ?? ""),
     card.peers ? clusterCountsKey(card.peers) : "",
@@ -1593,12 +1691,16 @@ export function buildSessionInbox(
   );
   const runByRoleSession = workflowRunOwnerBySession(runs, runCards);
 
+  const allById = new Map(sessions.map((session) => [session.id, session]));
   const nodes = new Map<string, ClusterNode>();
   /** Role cards by run id, kept out of the forest the clusters are folded from. */
   const roleCards = new Map<string, SessionInboxCard[]>();
   for (const session of sessions) {
     if (session.archived) continue;
-    const card = inboxCard(session, options.readCurrentId);
+    const card = withOwedReplies(
+      inboxCard(session, options.readCurrentId),
+      allById,
+    );
     const runId = runByRoleSession.get(session.id);
     if (runId !== undefined) {
       // A run's own session belongs to the run, wherever it would otherwise
@@ -1611,11 +1713,7 @@ export function buildSessionInbox(
     nodes.set(session.id, { card, settled: isShelvedSession(session) });
   }
 
-  for (const card of foldSpawnClusters(
-    nodes,
-    settledRows,
-    new Map(sessions.map((session) => [session.id, session])),
-  )) {
+  for (const card of foldSpawnClusters(nodes, settledRows, allById)) {
     const item: SessionInboxItem = { kind: "session", card };
     if (card.tier === "needs-you") needsYou.push(item);
     else active.push(item);

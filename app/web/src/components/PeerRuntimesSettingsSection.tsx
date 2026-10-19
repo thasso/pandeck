@@ -18,7 +18,12 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
@@ -31,7 +36,9 @@ import {
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
   MAX_PEER_SPAWN_RUNTIMES,
   MAX_SESSION_PEER_PROMPT_MAX_HOPS,
+  MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   MIN_SESSION_PEER_PROMPT_MAX_HOPS,
+  MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   PEER_RUNTIME_RELATIVE_COSTS,
   peerRuntimeFamilyOf,
   peerRuntimeUnavailableReason,
@@ -137,31 +144,58 @@ export function PeerRuntimesSettingsSection({
 
       <Card className="mt-6">
         <CardContent>
-          <Field>
-            <FieldLabel htmlFor="peer-prompt-hops">
-              Maximum uninterrupted peer-prompt hops
-            </FieldLabel>
-            <Input
-              id="peer-prompt-hops"
-              type="number"
-              min={MIN_SESSION_PEER_PROMPT_MAX_HOPS}
-              max={MAX_SESSION_PEER_PROMPT_MAX_HOPS}
-              step={1}
-              value={settings.sessionPeerPromptMaxHops}
-              onChange={(event) => {
-                const value = event.target.valueAsNumber;
-                if (!Number.isFinite(value)) return;
-                onUpdate({ sessionPeerPromptMaxHops: value });
-              }}
-            />
-            <FieldDescription>
-              A causal agent-to-agent conversation is blocked after this many
-              sends without you in the loop. Your next prompt closes the chain.
-              Choose a value from {MIN_SESSION_PEER_PROMPT_MAX_HOPS} to{" "}
-              {MAX_SESSION_PEER_PROMPT_MAX_HOPS}; changes apply to the next peer
-              send, including an existing conversation.
-            </FieldDescription>
-          </Field>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="peer-prompt-hops">
+                Maximum uninterrupted peer-prompt hops
+              </FieldLabel>
+              <Input
+                id="peer-prompt-hops"
+                type="number"
+                min={MIN_SESSION_PEER_PROMPT_MAX_HOPS}
+                max={MAX_SESSION_PEER_PROMPT_MAX_HOPS}
+                step={1}
+                value={settings.sessionPeerPromptMaxHops}
+                onChange={(event) => {
+                  const value = event.target.valueAsNumber;
+                  if (!Number.isFinite(value)) return;
+                  onUpdate({ sessionPeerPromptMaxHops: value });
+                }}
+              />
+              <FieldDescription>
+                A causal agent-to-agent conversation is blocked after this many
+                sends without you in the loop. Your next prompt closes the
+                chain. Choose a value from {MIN_SESSION_PEER_PROMPT_MAX_HOPS} to{" "}
+                {MAX_SESSION_PEER_PROMPT_MAX_HOPS}; changes apply to the next
+                peer send, including an existing conversation.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="peer-prompt-reminders">
+                Reminders per unanswered peer request
+              </FieldLabel>
+              <Input
+                id="peer-prompt-reminders"
+                type="number"
+                min={MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT}
+                max={MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT}
+                step={1}
+                value={settings.sessionPeerPromptReminderLimit}
+                onChange={(event) => {
+                  const value = event.target.valueAsNumber;
+                  if (!Number.isFinite(value)) return;
+                  onUpdate({ sessionPeerPromptReminderLimit: value });
+                }}
+              />
+              <FieldDescription>
+                A session that goes idle with a request it has not answered is
+                reminded of it, up to this many times; after that the session's
+                inbox card shows who still awaits a reply. Choose a value from{" "}
+                {MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT} to{" "}
+                {MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT}.
+              </FieldDescription>
+            </Field>
+          </FieldGroup>
         </CardContent>
       </Card>
 

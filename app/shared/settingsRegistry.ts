@@ -21,7 +21,9 @@ import { MEMORY_LEARNING_MODES, MEMORY_SETTINGS_LIMITS } from "./memory.ts";
 import {
   MAX_PEER_SPAWN_RUNTIMES,
   MAX_SESSION_PEER_PROMPT_MAX_HOPS,
+  MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   MIN_SESSION_PEER_PROMPT_MAX_HOPS,
+  MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT,
 } from "./peerRuntimes.ts";
 import {
   BACKGROUND_WORK_SETTINGS_RANGES,
@@ -486,6 +488,15 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "peer-runtimes",
     "Agent-to-agent prompt chain limit",
     integer(MIN_SESSION_PEER_PROMPT_MAX_HOPS, MAX_SESSION_PEER_PROMPT_MAX_HOPS),
+  ),
+  setting(
+    "sessionPeerPromptReminderLimit",
+    "peer-runtimes",
+    "Reminders per unanswered peer request",
+    integer(
+      MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+      MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+    ),
   ),
   setting(
     "backgroundWork.enabled",

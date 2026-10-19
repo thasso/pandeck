@@ -70,13 +70,18 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
   );
   assert.match(
     source,
-    /const offerIdleEdge = [\s\S]{0,1200}?backgroundCompletionDelivery\.drain\(sessionId\)/,
-    "the idle chain must enter the peer-first background delivery gate",
+    /const idleEdge = createIdleEdge\(\{[\s\S]{0,600}?drainBackground:[\s\S]{0,200}?backgroundCompletionDelivery\.drain\(sessionId\)[\s\S]{0,100}?offerReplyReminders,/,
+    "the idle chain must enter the peer-first background delivery gate, then the reply reminder",
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*offerIdleEdge\(sessionId\)\s*\)/,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*idleEdge\.offer\(sessionId\)\s*\)/,
     "the idle hook must run that chain",
+  );
+  assert.match(
+    source,
+    /yieldToOthers:\s*\(sessionId\)\s*=>\s*idleEdge\.offerAfterQueue\(sessionId\)/,
+    "a queue that yields must offer what waited behind it",
   );
 });
 
@@ -90,7 +95,7 @@ test("a Stop's hold gates background delivery and Resume reruns the idle chain",
   );
   assert.match(
     source,
-    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*offerIdleEdge\(sessionId,\s*true\);\s*resumePermanentAssistantIntake\(sessionId\);/,
+    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*idleEdge\.offer\(sessionId,\s*true\);\s*resumePermanentAssistantIntake\(sessionId\);/,
     "Resume must offer the whole idle chain again, rerunning background delivery, and the Assistant's intake",
   );
 });

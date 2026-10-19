@@ -141,3 +141,48 @@ test("a report still being delivered or retried keeps the row's queued work", as
     for (const id of [coordinator, implementer]) sessionStore.remove(id);
   }
 });
+
+test("a session row lists who still awaits it after the last reminder", async () => {
+  const stamp = `${Date.now()}-${Math.random()}`;
+  const coordinator = `owed-root-${stamp}`;
+  const driver = `owed-driver-${stamp}`;
+  for (const id of [coordinator, driver])
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      title: id,
+      messageCount: 2,
+    });
+  const chainId = peerPromptStore.createChain(`chain-${stamp}`);
+  const request = peerPromptStore.enqueue({
+    conversationId: `conv-${stamp}`,
+    chainId,
+    hop: peerPromptStore.reserveHop(chainId),
+    senderSessionId: coordinator,
+    recipientSessionId: driver,
+    prompt: "merge once green",
+    responseRequested: true,
+  });
+  peerPromptStore.claimNext(driver, "drainer", 1_000);
+  peerPromptStore.markAdmitted(request.id);
+  peerPromptStore.markCompleted(request.id);
+  const row = async (id: string) =>
+    (await listSessions([], () => Date.now())).find((item) => item.id === id);
+  try {
+    // Reminders left: the session is reminded, not the user.
+    peerPromptStore.markReminded([request.id, request.id]);
+    assert.equal((await row(driver))?.unansweredRequestsFrom, undefined);
+    // The last one (default 3) ran and it is still open.
+    peerPromptStore.markReminded([request.id]);
+    assert.deepEqual((await row(driver))?.unansweredRequestsFrom, [
+      coordinator,
+    ]);
+    assert.equal((await row(coordinator))?.unansweredRequestsFrom, undefined);
+    // Settled: nothing is owed any more.
+    peerPromptStore.markSettled(driver, [request.id], "merged");
+    assert.equal((await row(driver))?.unansweredRequestsFrom, undefined);
+  } finally {
+    for (const id of [coordinator, driver]) sessionStore.remove(id);
+  }
+});

@@ -32,14 +32,17 @@ import {
   CLAUDE_SDK_PROVIDER,
   DEFAULT_HELPER_MODEL,
   DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS,
+  DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   isPeerRuntimeRelativeCost,
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
   MAX_PEER_SPAWN_RUNTIMES,
   MAX_SESSION_PEER_PROMPT_MAX_HOPS,
+  MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   MAX_WORKTREE_REMOTE_FETCH_MINUTES,
   MEMORY_LEARNING_MODES,
   MEMORY_SETTINGS_LIMITS,
   MIN_SESSION_PEER_PROMPT_MAX_HOPS,
+  MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   SPEECH_TO_TEXT_LIMITS,
   THINKING_LEVELS,
   clampInt,
@@ -344,6 +347,15 @@ function normalizeSessionPeerPromptMaxHops(value: unknown): number {
   );
 }
 
+function normalizeSessionPeerPromptReminderLimit(value: unknown): number {
+  return clampInt(
+    value,
+    MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+    MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+    DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
+  );
+}
+
 /**
  * Approved peer runtimes ([Task-595](pa://task/595)): exact rows, kept in the
  * user's order.
@@ -561,6 +573,9 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
     sessionPeerPromptMaxHops: normalizeSessionPeerPromptMaxHops(
       stored.sessionPeerPromptMaxHops,
     ),
+    sessionPeerPromptReminderLimit: normalizeSessionPeerPromptReminderLimit(
+      stored.sessionPeerPromptReminderLimit,
+    ),
     skills: normalizeSkillToggles(stored.skills),
     appearance: normalizeAppearanceSettings(stored.appearance),
     profile: profileSettingsProjection(stored.profile),
@@ -680,6 +695,14 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
           sessionPeerPromptMaxHops: normalizeSessionPeerPromptMaxHops(
             patch.sessionPeerPromptMaxHops,
           ),
+        }
+      : {}),
+    ...(patch.sessionPeerPromptReminderLimit !== undefined
+      ? {
+          sessionPeerPromptReminderLimit:
+            normalizeSessionPeerPromptReminderLimit(
+              patch.sessionPeerPromptReminderLimit,
+            ),
         }
       : {}),
     // The toggle map is replaced WHOLE — a control sends the map it wants,

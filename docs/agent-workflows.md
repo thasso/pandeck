@@ -299,22 +299,46 @@ the outcome:
   the answer and nothing from that peer, nor from a peer it handed the work to
   on that handoff's chain, has reached it since — and a card whose whole tree
   has stopped while a reply is still owed shows **No reply from «peer»**
-  (`app/web/docs/ui-shell.md`).
+  (`app/web/docs/ui-shell.md`). The other direction — a request the session
+  itself was sent and still has not answered after its last reminder — shows on
+  the owing session's card as **«requester» awaits a reply**, beside any stall
+  chip.
 
-  ONE automatic signal exists, and only one. When the server RESTARTS while a
-  delivered peer turn is still running, the sender of a prompt that asked for a
-  reply is woken once with a notice naming the recipient session. This is not a
-  report and not a retry: the prompt is never re-delivered (it is already in the
-  recipient's log) and the notice carries no instruction. It exists because
-  `interrupted` is terminal, so a coordinator holding `responseRequested` would
-  otherwise wait for an answer that no longer exists — a silence
-  indistinguishable from a child still working. A turn interrupted by a PROVIDER
-  refusal (usage limit, overload, harness exit) is told the same way
+  TWO automatic signals exist, and only two. The first: when the server RESTARTS
+  while a delivered peer turn is still running, the sender of a prompt that
+  asked for a reply is woken once with a notice naming the recipient session.
+  This is not a report and not a retry: the prompt is never re-delivered (it is
+  already in the recipient's log) and the notice carries no instruction. It
+  exists because `interrupted` is terminal, so a coordinator holding
+  `responseRequested` would otherwise wait for an answer that no longer exists —
+  a silence indistinguishable from a child still working. A turn interrupted by
+  a PROVIDER refusal (usage limit, overload, harness exit) is told the same way
   ([`delegation-failure-notices.md`](delegation-failure-notices.md)). A turn the
   user or the coordinator STOPPED is told nothing: its requested reply stays
   owed (`steering-and-queueing.md`). The notice is exactly-once across restarts,
   and it narrows nothing else: an idle child still means nothing, and chasing
   one is still the coordinator's job.
+
+  The second is on the RECIPIENT's side ([Task-943](pa://task/943)): a session
+  that goes idle holding requests it neither answered nor settled is reminded of
+  ALL of them in one server-generated turn, each with its request key, and asked
+  to answer (`inReplyTo`) or settle each one. One `session_send_prompt` call
+  still holds at most 10 rows, so the reminder says to use several calls when
+  more are needed. A request the session is deliberately waiting on (CI, another
+  session) can get a short holding reply that hands the follow-up back to the
+  requester. Nothing is stored for a reminder: the open requests are read again
+  right before the turn is accepted, so a reply or settle that lands meanwhile
+  drops out, and with nothing left no turn starts. Each request is reminded at
+  most `sessionPeerPromptReminderLimit` times (Settings → Peer runtimes, 1 to
+  10, default 3), counted when its reminder turn is appended; after the last one
+  it becomes the inbox condition above instead, which clears on a reply, a
+  settle or the request's expiry and never on a timer. The reminder is the idle
+  edge's LAST step: it never resumes a cold session, never runs at boot, waits
+  out a Stop (a stopped request is reminded after Resume), gives way to anything
+  else owed and offers the edge again after it, and is not followed by another
+  reminder until the session has taken some other turn. Its turn continues the
+  reminded request's causal chain and spends no hop itself, so it cannot carry a
+  loop past the hop limit.
 
 - **Subagents** ([Task-457](pa://task/457)) are PA-owned delegates with their
   own registry and lifecycle. Neither lane above may import that domain, and a

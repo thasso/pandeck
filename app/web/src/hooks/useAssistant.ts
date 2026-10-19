@@ -4,6 +4,7 @@ import {
   DEFAULT_BACKGROUND_WORK_SETTINGS,
   DEFAULT_HELPER_MODEL,
   DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS,
+  DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   MAX_OPEN_COMMENT_TARGETS,
   isPersonalAssistantAgentType,
   projectSummaryOf,
@@ -208,6 +209,7 @@ const defaultSettings: AppSettings = {
   models: { hidden: [], order: [] },
   peerSpawnRuntimes: [],
   sessionPeerPromptMaxHops: DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS,
+  sessionPeerPromptReminderLimit: DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
   // Sparse and empty until the Settings page fetches the real object: every
   // skill reads OFF, which is what an unanswered settings read may claim.
   skills: {},
@@ -1217,6 +1219,8 @@ function normalizeCachedSessions(
         // Who still owes a reply is live too: kept alone, it would read a
         // tree whose peers were working as stalled until the first list.
         awaitingRepliesFrom: _awaitingRepliesFrom,
+        // And who still waits on it: a reply sent since would clear it.
+        unansweredRequestsFrom: _unansweredRequestsFrom,
         ...rest
       } = session;
       return { ...rest, isStreaming: false };

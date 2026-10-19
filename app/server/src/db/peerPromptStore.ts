@@ -114,6 +114,8 @@ export interface PeerPromptRecord {
   repliedByMessageId?: string;
   /** Why the recipient closed this request without answering it (`settled`). */
   settleReason?: string;
+  /** Idle-edge reminder turns this request was listed in (`peerPrompt.ts`). */
+  reminderCount: number;
   nextAttemptAt?: number;
   /** The id of this delivery batch's head row (set on every member, including the head itself) once admitted. */
   batchHeadId?: string;
@@ -166,6 +168,7 @@ interface Row {
   reply_to_message_id: string | null;
   replied_by_message_id: string | null;
   settle_reason: string | null;
+  reminder_count: number;
   created_at_ms: number;
   updated_at_ms: number;
   accepted_at_ms: number | null;
@@ -237,6 +240,7 @@ function map(r: Row): PeerPromptRecord {
       ? { repliedByMessageId: r.replied_by_message_id }
       : {}),
     ...(r.settle_reason ? { settleReason: r.settle_reason } : {}),
+    reminderCount: r.reminder_count,
     createdAt: r.created_at_ms,
     updatedAt: r.updated_at_ms,
     ...(r.accepted_at_ms != null ? { acceptedAt: r.accepted_at_ms } : {}),
@@ -1501,6 +1505,83 @@ function openRequestsTo(
   ).map(map);
 }
 
+/**
+ * An open request a reminder may name: still awaiting its answer, unexpired,
+ * from a user session that is neither archived nor deleted. A stopped turn's
+ * request stays remindable; only the session's current hold pauses it.
+ */
+const REMINDABLE_WHERE = `p.status = 'awaiting_response' AND p.response_requested = 1
+    AND (p.expires_at_ms IS NULL OR p.expires_at_ms > ?)
+    AND EXISTS (
+      SELECT 1 FROM session_index s
+       WHERE s.id = p.sender_session_id AND s.scope = 'user'
+         AND s.archived_at_ms IS NULL AND s.deleted_at_ms IS NULL
+    )`;
+
+/**
+ * The requests addressed to a session that are due an idle-edge reminder:
+ * remindable and reminded fewer than `limit` times, oldest first. Served by
+ * the recipient FIFO index.
+ */
+function dueReminderRequests(
+  recipientSessionId: string,
+  limit: number,
+  now = Date.now(),
+): PeerPromptRecord[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT p.* FROM peer_prompts p
+          WHERE p.recipient_session_id = ? AND ${REMINDABLE_WHERE}
+            AND p.reminder_count < ?
+          ORDER BY p.queue_seq`,
+      )
+      .all(recipientSessionId, now, limit) as unknown as Row[]
+  ).map(map);
+}
+
+/** One more reminder turn named each of these requests. One transaction. */
+function markReminded(ids: readonly string[]): void {
+  if (ids.length === 0) return;
+  inDbTransaction(() => {
+    const stmt = getDb().prepare(
+      "UPDATE peer_prompts SET reminder_count = reminder_count + 1 WHERE id = ?",
+    );
+    for (const id of ids) stmt.run(id);
+  });
+}
+
+/**
+ * For every session, the requesters still waiting on it after their last
+ * reminder: remindable requests reminded `limit` times or more. Requesters
+ * newest first, each once. One read for the whole session list.
+ */
+function remindersExhaustedByRecipient(
+  limit: number,
+  now = Date.now(),
+): Map<string, string[]> {
+  const rows = getDb()
+    .prepare(
+      `SELECT p.recipient_session_id, p.sender_session_id,
+              MAX(p.queue_seq) AS newest
+         FROM peer_prompts p
+        WHERE ${REMINDABLE_WHERE} AND p.reminder_count >= ?
+        GROUP BY p.recipient_session_id, p.sender_session_id
+        ORDER BY p.recipient_session_id, newest DESC`,
+    )
+    .all(now, limit) as {
+    recipient_session_id: string;
+    sender_session_id: string;
+  }[];
+  const byRecipient = new Map<string, string[]>();
+  for (const row of rows) {
+    const requesters = byRecipient.get(row.recipient_session_id);
+    if (requesters) requesters.push(row.sender_session_id);
+    else byRecipient.set(row.recipient_session_id, [row.sender_session_id]);
+  }
+  return byRecipient;
+}
+
 /** The requests one message answered, oldest first (`peer_prompts_replied_by_idx`). */
 function listRepliedBy(messageId: string): PeerPromptRecord[] {
   return (
@@ -2184,6 +2265,7 @@ export const peerPromptStore = {
   cancelPending,
   cancelOne,
   markSenderNotified,
+  markReminded,
   // reads
   getById,
   queuedRecipientIds,
@@ -2191,6 +2273,8 @@ export const peerPromptStore = {
   interruptedOwingSenderNotice,
   openForRecipient,
   openRequestsTo,
+  dueReminderRequests,
+  remindersExhaustedByRecipient,
   listRepliedBy,
   latestBetween,
   senderIdsOwingNotice,

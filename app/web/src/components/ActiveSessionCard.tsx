@@ -10,6 +10,7 @@ import {
   GitBranch,
   Hourglass,
   Play,
+  Reply,
   Users,
   X,
   type LucideIcon,
@@ -26,6 +27,10 @@ import {
   sessionStatusBadge,
   sessionStatusDetail,
   interruptedRunTitle,
+  owedRepliesLabel,
+  owedRepliesMore,
+  owedRepliesParts,
+  owedRepliesTarget,
   stallLabel,
   stallMore,
   stallParts,
@@ -296,6 +301,10 @@ function ActiveSessionCardImpl({
         clusterSummary ? ` — coordinating ${clusterSummary}` : ""
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
         card.stall ? ` — stalled: ${stallLabel(card.stall)}` : ""
+      }${
+        card.owedReplies
+          ? ` — reply owed: ${owedRepliesLabel(card.owedReplies)}`
+          : ""
       }`}
       onOpen={() => onOpen(session.id)}
       onFocusSibling={onFocusSibling}
@@ -494,40 +503,32 @@ function ActiveSessionCardImpl({
             ) : null}
             {/* The tree has stopped and a peer still owes a reply: the
                       one fact that says "this needs a poke" rather than "this
-                      is done". Named and openable, like the bubble; capped so a
-                      long title truncates inside it. */}
+                      is done". Named and openable, like the bubble. */}
             {card.stall ? (
-              <Badge
-                variant="warning"
-                render={<button type="button" />}
-                title={`Open “${stallTitle(card.stall)}”`}
-                aria-label={`Stalled: ${stallLabel(card.stall)}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (card.stall) onOpen(stallTarget(card.stall).id);
-                }}
-                className="session-status-responsive-badge min-w-0 max-w-32 shrink cursor-pointer"
-              >
-                <Hourglass aria-hidden />
-                {stallParts(card.stall).before ? (
-                  <span className="session-status-badge-label shrink-0">
-                    {stallParts(card.stall).before}
-                  </span>
-                ) : null}
-                <span className="session-status-badge-label min-w-0 truncate">
-                  {stallParts(card.stall).title}
-                </span>
-                {stallParts(card.stall).after ? (
-                  <span className="session-status-badge-label shrink-0">
-                    {stallParts(card.stall).after}
-                  </span>
-                ) : null}
-                {stallMore(card.stall) ? (
-                  <span className="session-status-badge-label shrink-0">
-                    {stallMore(card.stall)}
-                  </span>
-                ) : null}
-              </Badge>
+              <PeerReplyChip
+                icon={Hourglass}
+                parts={stallParts(card.stall)}
+                more={stallMore(card.stall)}
+                title={stallTitle(card.stall)}
+                label={`Stalled: ${stallLabel(card.stall)}`}
+                targetId={stallTarget(card.stall).id}
+                onOpen={onOpen}
+              />
+            ) : null}
+            {/* This session's own condition: a requester still waits on
+                      it after every reminder it was given. */}
+            {card.owedReplies ? (
+              <PeerReplyChip
+                icon={Reply}
+                parts={owedRepliesParts(card.owedReplies)}
+                more={owedRepliesMore(card.owedReplies)}
+                title={
+                  owedRepliesTarget(card.owedReplies).title.trim() || "a peer"
+                }
+                label={`Reply owed: ${owedRepliesLabel(card.owedReplies)}`}
+                targetId={owedRepliesTarget(card.owedReplies).id}
+                onOpen={onOpen}
+              />
             ) : null}
           </>
         }
@@ -536,6 +537,61 @@ function ActiveSessionCardImpl({
         }
       />
     </ListRow>
+  );
+}
+
+/**
+ * A chip naming the session a reply is owed between, which it opens: the
+ * stalled tree's peer, or the requester this session still owes. Capped so
+ * a long title truncates inside it while the words around it and "+N" stay.
+ */
+function PeerReplyChip({
+  icon: Icon,
+  parts,
+  more,
+  title,
+  label,
+  targetId,
+  onOpen,
+}: {
+  icon: LucideIcon;
+  parts: { before: string; title: string; after: string };
+  more: string;
+  title: string;
+  label: string;
+  targetId: string;
+  onOpen: (sessionId: string) => void;
+}) {
+  return (
+    <Badge
+      variant="warning"
+      render={<button type="button" />}
+      title={`Open “${title}”`}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(targetId);
+      }}
+      className="session-status-responsive-badge min-w-0 max-w-32 shrink cursor-pointer"
+    >
+      <Icon aria-hidden />
+      {parts.before ? (
+        <span className="session-status-badge-label shrink-0">
+          {parts.before}
+        </span>
+      ) : null}
+      <span className="session-status-badge-label min-w-0 truncate">
+        {parts.title}
+      </span>
+      {parts.after ? (
+        <span className="session-status-badge-label shrink-0">
+          {parts.after}
+        </span>
+      ) : null}
+      {more ? (
+        <span className="session-status-badge-label shrink-0">{more}</span>
+      ) : null}
+    </Badge>
   );
 }
 

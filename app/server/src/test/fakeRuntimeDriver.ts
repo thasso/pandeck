@@ -29,7 +29,10 @@ class FakePromptableAdapter implements PromptableAdapter {
   private readonly listeners = new Set<(event: AdapterEvent) => void>();
   constructor(
     private readonly behavior: () => FakeTurnBehavior,
-    private readonly record: (options: PromptOptions | undefined) => void,
+    private readonly record: (
+      text: string,
+      options: PromptOptions | undefined,
+    ) => void,
     attachments = false,
     /** Resolves when the held turn may finish; absent means "finish now". */
     private readonly gate: () => Promise<void> | undefined = () => undefined,
@@ -45,12 +48,9 @@ class FakePromptableAdapter implements PromptableAdapter {
   getBinding() {
     return { provider: "fake" };
   }
-  async prompt(
-    _text: string,
-    options?: PromptOptions,
-  ): Promise<AgentRunResult> {
+  async prompt(text: string, options?: PromptOptions): Promise<AgentRunResult> {
     this.lastPromptOptions = options;
-    this.record(options);
+    this.record(text, options);
     // A held turn keeps the session RUNNING, which is what tests about busy
     // sessions (steering, queued handoffs, peer drains) are actually about.
     await this.gate();
@@ -78,6 +78,8 @@ export class FakeRuntimeDriver implements RuntimePromptDriver {
   behavior: FakeTurnBehavior = { mode: "success" };
   /** Options of every turn this driver has run, oldest first. */
   readonly promptOptions: Array<PromptOptions | undefined> = [];
+  /** The model text of every turn this driver has run, oldest first. */
+  readonly promptTexts: string[] = [];
   /** Opt in to attachment forwarding; off by default, as most fakes do not care. */
   acceptsAttachments = false;
   private gate: Promise<void> | undefined;
@@ -132,7 +134,10 @@ export class FakeRuntimeDriver implements RuntimePromptDriver {
   createRuntimeAdapter(): PromptableAdapter {
     return new FakePromptableAdapter(
       () => this.behavior,
-      (options) => this.promptOptions.push(options),
+      (text, options) => {
+        this.promptTexts.push(text);
+        this.promptOptions.push(options);
+      },
       this.acceptsAttachments,
       () => this.gate,
     );

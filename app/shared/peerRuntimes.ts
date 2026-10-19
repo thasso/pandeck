@@ -82,6 +82,14 @@ export const DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS = 50;
 export const MAX_SESSION_PEER_PROMPT_MAX_HOPS = 200;
 
 /**
+ * How many idle-edge reminders one unanswered peer request gets before it is
+ * left to the user as a condition on the owing session's inbox card.
+ */
+export const MIN_SESSION_PEER_PROMPT_REMINDER_LIMIT = 1;
+export const DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT = 3;
+export const MAX_SESSION_PEER_PROMPT_REMINDER_LIMIT = 10;
+
+/**
  * Conservative canonical model family. `unknown` is a real answer: an explicit
  * cross-family preference cannot be satisfied by a guess.
  */

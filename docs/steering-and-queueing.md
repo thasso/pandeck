@@ -77,10 +77,15 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   sends it as soon as the session is idle.
 - **One per idle edge, the user first.** The idle chain delivers agent handoffs
   (decisions the agent may be blocked on), then this queue, then peer prompts
-  and background completions. A peer drain started by any other trigger defers
-  while a queued message is owed (`promptQueueHasPriority`). A send counts once
-  its user entry is appended, so the drain returns before the turn ends and
-  every later step sees a busy session.
+  and background completions, and LAST a reminder of the peer requests the
+  session has not answered (`app/server/src/idleEdge.ts`). The reminder waits
+  for the background step to settle and gives way to anything above that is owed
+  when its turn is admitted, offering the edge again afterwards; a deferred
+  background fact rides it like any other turn. A peer drain started by any
+  other trigger defers while a queued message is owed
+  (`promptQueueHasPriority`). A send counts once its user entry is appended, so
+  the drain returns before the turn ends and every later step sees a busy
+  session.
 - **Stop means stop.** Stopping a turn that has messages queued pauses the queue
   (`session_prompt_queue_pause`), so its idle edge sends nothing. Sending a
   message of their own or "Send next" lifts the pause. A Stop also holds the
@@ -93,10 +98,10 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   Editing a noted row keeps its note: rewording it is not choosing to send it.
 - **A failed send pauses too.** The row keeps its error for the user to edit,
   retry or remove, rather than being dropped. The paused queue then hands the
-  idle edge on (peer prompts, background completions), since a peer drain that
-  deferred to it started no turn of its own. That hand-off is a `requestDrain`,
-  which runs once more after a drain already in flight rather than being
-  swallowed by it.
+  idle edge on (peer prompts, background completions, the reply reminder), since
+  a peer drain that deferred to it started no turn of its own. That hand-off is
+  a `requestDrain`, which runs once more after a drain already in flight rather
+  than being swallowed by it.
 - **Commands.** A queued host slash command (`/compact`, `/commit`) is stored
   with `command` and runs through the same host-command runner when its turn
   comes, under the same worktree guard as a typed one. It leaves the queue only

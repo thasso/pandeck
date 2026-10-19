@@ -769,14 +769,23 @@ test("index.ts drains handoffs on the idle edge, at boot, and stops for shutdown
     join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
     "utf8",
   );
+  const idleEdge = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "idleEdge.ts"),
+    "utf8",
+  );
   assert.match(
-    source,
-    /const offerIdleEdge = \(sessionId: string, resumed = false\): void => \{(?:\s*\/\/[^\n]*)*\s*void runAutoApprovals\(sessionId\)\s*\.catch\(\(\) => \{\}\)\s*\.then\(\(\) => drainAgentHandoffs\(sessionId\)\)/,
+    idleEdge,
+    /offer: \(sessionId, resumed = false\) => \{\s*void steps\s*\.runAutoApprovals\(sessionId\)\s*\.catch\(\(\) => \{\}\)\s*\.then\(\(\) => steps\.drainAgentHandoffs\(sessionId\)\)/,
     "session-granted approvals, then queued handoffs, must take the running→idle edge before the other drains",
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*offerIdleEdge\(sessionId\)\s*\)/,
+    /createIdleEdge\(\{\s*runAutoApprovals,\s*drainAgentHandoffs,/,
+    "index.ts must build that chain from the real steps",
+  );
+  assert.match(
+    source,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*idleEdge\.offer\(sessionId\)\s*\)/,
     "the running→idle edge must run that chain",
   );
   // Each inside its own boot step: a bare mention (a comment, an import) must

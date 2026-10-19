@@ -99,6 +99,7 @@ function render(
   const settings = {
     peerSpawnRuntimes: rows,
     sessionPeerPromptMaxHops: 50,
+    sessionPeerPromptReminderLimit: 3,
   } as AppSettings;
   const tree = (
     <CredentialProfilesContext.Provider value={options.profiles ?? []}>
@@ -177,6 +178,26 @@ test("changing the loop guard saves the runtime hop limit", () => {
 
   expect(onUpdate).toHaveBeenCalledWith({ sessionPeerPromptMaxHops: 75 });
   expect(text()).toContain("Your next prompt closes the chain");
+});
+
+test("changing the reminder limit saves it", () => {
+  const onUpdate = render([]);
+  const input = container?.querySelector<HTMLInputElement>(
+    "input#peer-prompt-reminders",
+  );
+
+  expect(input?.value).toBe("3");
+  if (!input) throw new Error("missing reminder-limit input");
+  act(() => {
+    Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set?.call(input, "5");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  expect(onUpdate).toHaveBeenCalledWith({ sessionPeerPromptReminderLimit: 5 });
+  expect(text()).toContain("who still awaits a reply");
 });
 
 test("an empty roster says agents must ask for every batch", () => {
