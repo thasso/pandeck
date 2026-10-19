@@ -93,7 +93,7 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   op(
     "github:comment",
     "GitHub: comment on pull requests",
-    "Post comments on pull requests.",
+    "Post comments on pull requests and resolve or reopen review threads.",
   ),
   op(
     "github:assign",
@@ -223,7 +223,9 @@ export function approvalGrantKeys(body: ApprovalBody): string[] {
   const keys = new Set<string>();
   switch (body.kind) {
     case "githubPullRequest":
-      keys.add(`github:${body.operation}`);
+      keys.add(
+        `github:${body.operation === "resolveThread" ? "comment" : body.operation}`,
+      );
       break;
     case "githubIssue":
       keys.add(`githubIssue:${body.operation}`);

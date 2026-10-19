@@ -23,10 +23,18 @@ const {
   githubReadyPullRequestTool,
   githubReviewPullRequestTool,
   githubCommentPullRequestTool,
+  githubResolveReviewThreadTool,
   githubAssignPullRequestTool,
 } = await import("./githubPrWriteTools.ts");
-const { resolveApproval, approvalsForSession, setApprovalBroadcastForTests } =
-  await import("../../pendingApprovals.ts");
+const {
+  resolveApproval,
+  approvalsForSession,
+  setApprovalBroadcastForTests,
+  grantApprovalForSession,
+  runAutoApprovals,
+  setAutoApprovalDrainForTests,
+} = await import("../../pendingApprovals.ts");
+const { sessionStore } = await import("../../db/sessionStore.ts");
 const { withHostedPullRequestMutation } =
   await import("../../pullRequestMerge.ts");
 
@@ -55,6 +63,133 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   setApprovalBroadcastForTests(null);
   vi.clearAllMocks();
+});
+
+describe("github review-thread resolution approvals", () => {
+  test.each([true, false])(
+    "stages resolved=%s without making provider calls, then executes on approval",
+    async (resolved) => {
+      const sessionId = `resolve-thread-${resolved}`;
+      const fetch = vi.fn(async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            data: body.query.startsWith("query")
+              ? {
+                  node: {
+                    __typename: "PullRequestReviewThread",
+                    id: "PRRT_one",
+                    isResolved: !resolved,
+                    pullRequest: {
+                      number: 42,
+                      repository: { nameWithOwner: "acme/app" },
+                    },
+                  },
+                }
+              : {
+                  [resolved ? "resolveReviewThread" : "unresolveReviewThread"]:
+                    { thread: { id: "PRRT_one", isResolved: resolved } },
+                },
+          }),
+          { status: 200 },
+        );
+      });
+      globalThis.fetch = fetch as typeof globalThis.fetch;
+      const result = await githubResolveReviewThreadTool.execute(
+        { repo: "acme/app", number: 42, threadId: " PRRT_one ", resolved },
+        ctxFor(sessionId),
+      );
+      expect(result.terminate).toBe(true);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(latest(sessionId).body).toMatchObject({
+        operation: "resolveThread",
+        pullNumber: 42,
+        threadId: "PRRT_one",
+        resolved,
+      });
+      const { card } = await resolveApproval(latest(sessionId).id, "approved");
+      expect(card.status).toBe("executed");
+      expect(card.resultSummary).toContain(resolved ? "Resolved" : "Reopened");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(invalidateGithubPullRequestWrite).toHaveBeenCalledWith(
+        "acme",
+        "app",
+        42,
+      );
+    },
+  );
+
+  test("an inherited github:comment grant covers resolution without a user click", async () => {
+    const parent = "resolve-thread-parent";
+    const child = "resolve-thread-child";
+    for (const id of [parent, child])
+      sessionStore.upsert({
+        id,
+        harness: "pi",
+        agentType: "developer",
+        title: id,
+      });
+    sessionStore.linkSpawned(parent, child);
+    grantApprovalForSession(parent, "github:comment");
+    setAutoApprovalDrainForTests(async () => {});
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              node: {
+                __typename: "PullRequestReviewThread",
+                id: "PRRT_one",
+                isResolved: true,
+                pullRequest: {
+                  number: 42,
+                  repository: { nameWithOwner: "acme/app" },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+    ) as typeof fetch;
+    try {
+      await githubResolveReviewThreadTool.execute(
+        { repo: "acme/app", number: 42, threadId: "PRRT_one", resolved: true },
+        ctxFor(child),
+      );
+      expect(latest(child)).toMatchObject({
+        status: "pending",
+        autoApproved: true,
+        inheritedGrants: [{ key: "github:comment", fromSessionId: parent }],
+      });
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      await runAutoApprovals(child);
+      expect(latest(child).status).toBe("executed");
+    } finally {
+      setAutoApprovalDrainForTests(null);
+    }
+  });
+
+  test.each([
+    { number: 0 },
+    { number: 1.5 },
+    { threadId: " " },
+    { resolved: undefined },
+  ])("rejects malformed proposals before creating a card", async (patch) => {
+    const sessionId = "resolve-thread-invalid";
+    await expect(
+      githubResolveReviewThreadTool.execute(
+        {
+          repo: "acme/app",
+          number: 42,
+          threadId: "PRRT_one",
+          resolved: true,
+          ...patch,
+        } as never,
+        ctxFor(sessionId),
+      ),
+    ).rejects.toThrow();
+    expect(approvalsForSession(sessionId)).toHaveLength(0);
+  });
 });
 
 describe("github PR write approvals (unified subsystem)", () => {

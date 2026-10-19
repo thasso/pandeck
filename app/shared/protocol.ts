@@ -3377,7 +3377,13 @@ export interface JiraIssueMutationItemDisplay {
 }
 
 export type GithubPrMutationOperation =
-  "create" | "edit" | "ready" | "review" | "comment" | "assign";
+  | "create"
+  | "edit"
+  | "ready"
+  | "review"
+  | "comment"
+  | "assign"
+  | "resolveThread";
 export type GithubPrReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
 
 /** One inline review comment in a `github_review_pull_request` proposal. */
@@ -3473,6 +3479,9 @@ export interface GithubPullRequestApprovalBody {
   inlineComments?: GithubPrInlineCommentDisplay[];
   commentBody?: string;
   replyToCommentId?: number;
+  /** resolveThread: GitHub GraphQL thread id and desired resolution state. */
+  threadId?: string;
+  resolved?: boolean;
   /**
    * assign: the people change proposed for `pullNumber`. Review requests
    * (`requested_reviewers`, users and org team SLUGS) and issue-level

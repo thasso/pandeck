@@ -26,6 +26,12 @@ hidden prompt through `agentHandoffs.ts`.
 | `agentDefinition`         | `agent_create`, `agent_edit` changing `persona`, `model` (the list) or `effort` | `agentDefinition`                                                      |
 | `settingsInput`           | `settings_request_input`, `accounts_sign_in`                                    | none: never granted                                                    |
 
+`github_resolve_review_thread` also raises a `githubPullRequest` card, with
+operation `resolveThread`. Resolving and reopening both use `github:comment`,
+including existing and inherited grants. The grant's displayed coverage includes
+these thread actions; no new grant key is required. See
+[pull-requests.md](pull-requests.md#resolving-provider-review-threads).
+
 The `commit` kind remains readable for stored cards; nothing creates it today.
 
 A `settingsInput` card asks the user for a secret or an account connection the

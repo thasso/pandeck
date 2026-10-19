@@ -247,6 +247,19 @@ function PullRequestBody({
       </>
     );
   }
+  if (body.kind === "githubPullRequest" && body.operation === "resolveThread") {
+    return (
+      <>
+        <Fact label="Action">
+          {body.resolved ? "Resolve" : "Reopen"} review thread
+        </Fact>
+        <Fact label="Pull request">{target}</Fact>
+        <Fact label="Thread">
+          <span className="font-mono break-all">{body.threadId}</span>
+        </Fact>
+      </>
+    );
+  }
   if (body.operation === "ready") {
     return (
       <p className="text-foreground">

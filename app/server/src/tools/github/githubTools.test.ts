@@ -635,26 +635,42 @@ describe("github_get_pull_request", () => {
           },
           { user: { login: "c" }, state: "PENDING" },
         ]);
-      if (/\/pulls\/42\/comments/.test(url))
-        return jsonResponse([
-          {
-            id: 1,
-            user: { login: "bob" },
-            path: "src/a.ts",
-            line: 5,
-            diff_hunk: "@@",
-            body: "nit",
-            created_at: "2026-07-20T10:00:00Z",
-            html_url: "https://github.com/acme/app/pull/42#c1",
+      if (url.endsWith("/graphql"))
+        return jsonResponse({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  totalCount: 51,
+                  nodes: [
+                    {
+                      id: "PRRT_one",
+                      path: "src/a.ts",
+                      line: 5,
+                      isResolved: false,
+                      comments: {
+                        totalCount: 21,
+                        nodes: [
+                          {
+                            databaseId: 1,
+                            author: { login: "bob" },
+                            body: "nit",
+                            diffHunk: "@@",
+                          },
+                          {
+                            databaseId: 2,
+                            author: { login: "alice" },
+                            body: "fixed",
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
           },
-          {
-            id: 2,
-            in_reply_to_id: 1,
-            user: { login: "alice" },
-            body: "fixed",
-            created_at: "2026-07-20T11:00:00Z",
-          },
-        ]);
+        });
       if (/\/pulls\/42$/.test(url))
         return jsonResponse({
           number: 42,
@@ -711,7 +727,13 @@ describe("github_get_pull_request", () => {
     // The reply is grouped under its root comment's file thread.
     expect(pr.reviewThreads).toHaveLength(1);
     expect(pr.reviewThreads[0].path).toBe("src/a.ts");
+    expect(pr.reviewThreads[0].id).toBe("PRRT_one");
+    expect(pr.reviewThreads[0].resolved).toBe(false);
     expect(pr.reviewThreads[0].comments).toHaveLength(2);
+    expect(pr.reviewThreads[0].comments[0].id).toBe("1");
+    expect(pr.reviewThreads[0].truncated).toBe(true);
+    expect(pr.reviewThreadsTruncated).toBe(true);
+    expect(urls.some((url) => /\/pulls\/42\/comments/.test(url))).toBe(false);
   });
 });
 

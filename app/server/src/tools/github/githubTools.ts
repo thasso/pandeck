@@ -588,7 +588,7 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
       includeReviewThreads: {
         type: "boolean",
         description:
-          "Include inline review comments grouped into per-file reply threads. Defaults to false.",
+          "Include review threads with GraphQL thread ids for resolve/reopen, numeric comment ids for replies, and resolved state. Last 50 threads, first 20 comments each; truncation flagged. Defaults to false.",
       },
       maxCommits: {
         type: "number",
@@ -671,12 +671,11 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
             )
           : Promise.resolve(null),
         params.includeReviewThreads === true
-          ? fetchPrReviewThreads(
+          ? githubProvider(
+              { host: "github.com", owner, repo },
               config,
-              prBase,
-              clamp(params.maxReviews, 30, 1, 100),
               ctx.signal,
-            )
+            ).pullRequestConversation(number)
           : Promise.resolve(null),
       ]);
 
@@ -729,7 +728,19 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
         ...(files ? { files } : {}),
         ...(comments ? { commentList: comments } : {}),
         ...(reviews ? { reviews } : {}),
-        ...(reviewThreads ? { reviewThreads } : {}),
+        ...(reviewThreads
+          ? {
+              reviewThreads: reviewThreads.threads.slice(
+                0,
+                clamp(params.maxReviews, 30, 1, 100),
+              ),
+              ...((reviewThreads.threadsTotal ?? reviewThreads.threads.length) >
+                clamp(params.maxReviews, 30, 1, 100) ||
+              reviewThreads.threadsTotal !== undefined
+                ? { reviewThreadsTruncated: true }
+                : {}),
+            }
+          : {}),
       }),
     };
     return {
@@ -815,70 +826,6 @@ async function fetchPrReviews(
         url: r.html_url ?? null,
       }),
     );
-}
-
-/** Inline PR review comments grouped into per-file reply threads (root + replies via in_reply_to_id). */
-async function fetchPrReviewThreads(
-  config: GithubApiConfig,
-  prBase: string,
-  maxThreads: number,
-  signal?: AbortSignal,
-) {
-  const { items } = await githubPaginate<Record<string, any>>(
-    config,
-    `${prBase}/comments`,
-    { maxItems: 100, ...(signal !== undefined ? { signal } : {}) },
-  );
-  const byId = new Map<number, Record<string, any>>();
-  for (const c of items) if (typeof c.id === "number") byId.set(c.id, c);
-  const threads = new Map<number, Array<Record<string, unknown>>>();
-  const rootOf = (c: Record<string, any>): number => {
-    let cur = c;
-    const seen = new Set<number>();
-    while (
-      typeof cur.in_reply_to_id === "number" &&
-      byId.has(cur.in_reply_to_id) &&
-      !seen.has(cur.in_reply_to_id)
-    ) {
-      seen.add(cur.in_reply_to_id);
-      cur = byId.get(cur.in_reply_to_id)!;
-    }
-    return typeof cur.id === "number" ? cur.id : (c.id as number);
-  };
-  const order: number[] = [];
-  for (const c of items) {
-    const root = rootOf(c);
-    if (!threads.has(root)) {
-      threads.set(root, []);
-      order.push(root);
-    }
-    threads.get(root)!.push(
-      dropNulls({
-        author: compactUser(c.user),
-        body: typeof c.body === "string" ? c.body : null,
-        createdAt: c.created_at ?? null,
-      }),
-    );
-  }
-  return order.slice(0, maxThreads).map((root) => {
-    const head = byId.get(root) ?? {};
-    return dropNulls({
-      path: head.path ?? null,
-      line:
-        typeof head.line === "number"
-          ? head.line
-          : typeof head.original_line === "number"
-            ? head.original_line
-            : null,
-      diffHunk:
-        typeof head.diff_hunk === "string"
-          ? head.diff_hunk.slice(0, 500)
-          : null,
-      url: head.html_url ?? null,
-      resolved: head.resolved === true ? true : null,
-      comments: threads.get(root) ?? [],
-    });
-  });
 }
 
 type RepoAggregate = {

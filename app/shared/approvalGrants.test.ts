@@ -19,6 +19,20 @@ test("a grant key is the operation, never the target", () => {
   ]);
 });
 
+test("resolving and reopening review threads reuse the comment grant", () => {
+  for (const resolved of [true, false])
+    expect(
+      approvalGrantKeys({
+        kind: "githubPullRequest",
+        operation: "resolveThread",
+        repo: "acme/app",
+        pullNumber: 42,
+        threadId: "PRRT_one",
+        resolved,
+      }),
+    ).toEqual(["github:comment"]);
+});
+
 test("a batch card needs every operation it mixes, once each", () => {
   expect(
     approvalGrantKeys({
