@@ -3,11 +3,10 @@ import type { SessionListItem } from "@assistant/shared";
 import { relativeAge } from "../lib/relativeTime.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
-import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
-import { SessionTitleText } from "./SessionTitleText.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { identityLabel } from "./SessionRow.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowActions } from "./common/ListRowActions.tsx";
 import { ListRow } from "./common/ListRow.tsx";
 
 export type InboxShelfKind = "settled" | "archived";
@@ -58,10 +57,6 @@ export function InboxShelfRow({
   onFocusSibling?: (delta: 1 | -1) => void;
 }) {
   const title = session.title.trim() || "Untitled session";
-  const agent =
-    AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
-    AGENT_TYPE_DISPLAY.assistant;
-  const AgentIcon = agent.Icon;
   const settled = kind === "settled";
   const restoreLabel = settled
     ? "Bring back into the working set"
@@ -74,16 +69,16 @@ export function InboxShelfRow({
   // opened can still be waiting for a review. The row's own `aria-label`
   // replaces its content, so the state is named there as well as shown.
   const delivery = sessionDelivery(session);
-  const comfortable = density === "comfortable";
 
   return (
     <ListRow
+      interaction="content"
       active={active}
       density={density}
       data-session-row
       data-list-row-id={session.id}
       data-session-row-active={active ? "true" : undefined}
-      role="button"
+      role="group"
       tabIndex={-1}
       aria-label={`Open ${settled ? "settled" : "archived"} ${identityLabel(session)} session: ${title}${
         delivery ? ` — pull request: ${delivery.title}` : ""
@@ -103,30 +98,27 @@ export function InboxShelfRow({
           onDelete();
         }
       }}
-      leading={<AgentIcon className={agent.activeColor} aria-hidden />}
-      title={
-        <SessionTitleText
-          title={title}
-          pending={session.titleGenerationPending}
-        />
-      }
+      identity={<SessionTitleRow session={session} status="quiet" />}
       trailing={
         <>
           <SessionDeliveryMark session={session} variant="glyph" />
           <span className="text-xs tabular-nums text-muted-foreground">
             {relativeAge(at, now)}
           </span>
-          <IconButton
-            label={restoreLabel}
-            size={comfortable ? "icon-lg" : "icon-xs"}
-            onClick={(e) => {
-              e.stopPropagation();
-              onRestore();
-            }}
-          >
-            <RestoreIcon />
-          </IconButton>
         </>
+      }
+      actions={
+        <ListRowActions
+          actions={[
+            {
+              id: "restore",
+              label: "Restore",
+              accessibleLabel: restoreLabel,
+              icon: <RestoreIcon />,
+              onSelect: onRestore,
+            },
+          ]}
+        />
       }
     />
   );

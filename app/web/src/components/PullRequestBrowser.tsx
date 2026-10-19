@@ -200,7 +200,7 @@ function Signal({
 }
 
 function CiIcon({ tone }: { tone: PullRequestCiTone }) {
-  const size = 11;
+  const size = 12;
   if (tone === "success") return <CircleCheck size={size} aria-hidden />;
   if (tone === "failure" || tone === "error")
     return <CircleX size={size} aria-hidden />;
@@ -262,7 +262,7 @@ const PullRequestRow = memo(function PullRequestRow({
               title={project.name}
             >
               <FolderKanban
-                size={11}
+                size={12}
                 className="shrink-0"
                 style={{ color: project.color }}
                 aria-hidden
@@ -275,7 +275,7 @@ const PullRequestRow = memo(function PullRequestRow({
               className="flex shrink-0 items-center gap-1"
               title={`Opened by ${item.author}`}
             >
-              <User size={11} className="shrink-0" aria-hidden />
+              <User size={12} className="shrink-0" aria-hidden />
               {item.author}
             </span>
           ) : null}
@@ -283,7 +283,7 @@ const PullRequestRow = memo(function PullRequestRow({
             className="flex min-w-0 max-w-max flex-1 basis-0 items-center gap-1"
             title={item.headBranch}
           >
-            <GitBranch size={11} className="shrink-0" aria-hidden />
+            <GitBranch size={12} className="shrink-0" aria-hidden />
             <span className="min-w-0 truncate">{item.headBranch}</span>
           </span>
         </>
@@ -342,7 +342,7 @@ const PullRequestRow = memo(function PullRequestRow({
           {open && item.mergeable === false ? (
             <Signal
               className="text-destructive"
-              icon={<GitMerge size={11} aria-hidden />}
+              icon={<GitMerge size={12} aria-hidden />}
               label="Conflicts"
             />
           ) : null}
@@ -351,7 +351,7 @@ const PullRequestRow = memo(function PullRequestRow({
             review.tone === "unresolved") ? (
             <Signal
               className={REVIEW_CLASS[review.tone]}
-              icon={<MessageSquare size={11} aria-hidden />}
+              icon={<MessageSquare size={12} aria-hidden />}
               label={
                 review.tone === "changes-requested"
                   ? "Changes requested"
@@ -372,7 +372,7 @@ const PullRequestRow = memo(function PullRequestRow({
               // which is what makes it actionable from here.
               <Signal
                 className="text-foreground"
-                icon={<HardDrive size={11} aria-hidden />}
+                icon={<HardDrive size={12} aria-hidden />}
                 label="local"
                 title="A local worktree holds this branch"
               />

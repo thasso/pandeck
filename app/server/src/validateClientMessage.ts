@@ -999,11 +999,11 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     for (const entry of positions as unknown[]) {
       if (!isPlainObject(entry)) return "each position must be an object";
       const missing =
-        entry.kind === "session"
+        entry.kind === "session" || entry.kind === "initiative"
           ? checkRequiredFields(entry, { id: STRING, position: NUMBER })
           : entry.kind === "run"
             ? checkRequiredFields(entry, { runId: STRING, position: NUMBER })
-            : 'each position\'s kind must be "session" or "run"';
+            : 'each position\'s kind must be "session", "run" or "initiative"';
       if (missing) return missing;
     }
     return checkOptionalFields(msg, { requestId: STRING });

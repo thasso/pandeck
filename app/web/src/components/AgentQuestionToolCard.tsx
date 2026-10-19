@@ -97,7 +97,7 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
   );
 }
 
-function questionRequestBelongsToBlock(
+export function questionRequestBelongsToBlock(
   request: AgentQuestionRequest,
   block: ToolBlock,
 ): boolean {

@@ -552,6 +552,12 @@ export interface UIState {
   /** The Initiative a page is showing; its read is never pruned. */
   openInitiativeId: string | null;
   /**
+   * Live consumers of a read, counted per id (`retainInitiativeDetail`): an
+   * expanded browser row draws the graph, so its read is never pruned while it
+   * is mounted open. Pins sit beside the idle LRU, never inside its bound.
+   */
+  initiativeDetailPins: Readonly<Record<string, number>>;
+  /**
    * Canonical bounded background-work registry. Held only while the topic is
    * subscribed; per-session activity travels on the session row instead, so no
    * surface has to hold this list to know a session is busy.
@@ -942,6 +948,7 @@ const emptyInitial: UIState = {
   initiativeDetailRevisions: {},
   initiativeDetailsLru: [],
   openInitiativeId: null,
+  initiativeDetailPins: {},
   backgroundWorkItems: [],
   backgroundWorkTruncated: false,
   backgroundStopPending: [],
@@ -1893,6 +1900,7 @@ type Action =
       error?: string;
     }
   | { kind: "setOpenInitiative"; id: string | null }
+  | { kind: "initiativeDetailPin"; id: string; delta: 1 | -1 }
   | { kind: "initiativeListRetry" }
   /** An `initiatives` subscribe went out: subscribing is the list read. */
   | { kind: "initiativeListSubscribed" }
@@ -4036,8 +4044,13 @@ function pruneInitiativeDetails(
   UIState,
   "initiativeDetails" | "initiativeDetailRevisions" | "initiativeDetailsLru"
 > {
+  // Pinned reads and the open page's are kept outside the idle bound, so
+  // seven open rows never take turns evicting each other.
+  const pinned = (id: string) =>
+    (state.initiativeDetailPins[id] ?? 0) > 0 || id === state.openInitiativeId;
   const keep = new Set([
-    ...lru.slice(-INITIATIVE_DETAIL_CACHE_LIMIT),
+    ...lru.filter((id) => !pinned(id)).slice(-INITIATIVE_DETAIL_CACHE_LIMIT),
+    ...lru.filter(pinned),
     ...(state.openInitiativeId ? [state.openInitiativeId] : []),
   ]);
   const kept = <T>(record: Record<string, T>) =>
@@ -5016,6 +5029,27 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ? state
       : { ...state, openInitiativeId: action.id };
   }
+  if (action.kind === "initiativeDetailPin") {
+    const count = (state.initiativeDetailPins[action.id] ?? 0) + action.delta;
+    const { [action.id]: _released, ...others } = state.initiativeDetailPins;
+    const pinned: UIState = {
+      ...state,
+      initiativeDetailPins:
+        count > 0 ? { ...others, [action.id]: count } : others,
+    };
+    // A released read rejoins the idle LRU, inside its bound again.
+    return action.delta < 0
+      ? {
+          ...pinned,
+          ...pruneInitiativeDetails(
+            pinned,
+            pinned.initiativeDetails,
+            pinned.initiativeDetailRevisions,
+            pinned.initiativeDetailsLru,
+          ),
+        }
+      : pinned;
+  }
   if (action.kind === "setOpenProjectProjection") {
     return state.openProjectProjectionId === action.id
       ? state
@@ -5163,9 +5197,12 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
   if (action.kind === "optimisticInboxPositions") {
     const sessionPositions = new Map<string, number>();
     const runPositions = new Map<string, number>();
+    const initiativePositions = new Map<string, number>();
     for (const entry of action.positions)
       if (entry.kind === "session")
         sessionPositions.set(entry.id, entry.position);
+      else if (entry.kind === "initiative")
+        initiativePositions.set(entry.id, entry.position);
       else runPositions.set(entry.runId, entry.position);
     return {
       ...state,
@@ -5187,6 +5224,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
                 : { ...run, inboxPosition };
             })
           : state.workflowRuns,
+      initiatives:
+        initiativePositions.size > 0
+          ? state.initiatives.map((initiative) => {
+              const inboxPosition = initiativePositions.get(initiative.id);
+              return inboxPosition === undefined
+                ? initiative
+                : { ...initiative, inboxPosition };
+            })
+          : state.initiatives,
       error: null,
     };
   }
@@ -6814,7 +6860,7 @@ export interface AssistantActions {
    */
   settleWorkflowRun: (runId: string, throughRevision: number) => void;
   /**
-   * Settle a paused or done Initiative from its Sessions inbox card: the
+   * Settle an Initiative from its Sessions inbox card: the
    * command acknowledges `throughRevision`, the attention revision the CLICKED
    * card rendered, captured by the caller at the click.
    */
@@ -6924,6 +6970,11 @@ export interface AssistantActions {
    * read in flight answers, dropping that answer.
    */
   requestInitiativeDetail: (id: string, collapsed?: readonly string[]) => void;
+  /**
+   * Hold `id`'s read in the cache while a surface draws it; call the returned
+   * release on collapse or unmount. Counted, so two holders need two releases.
+   */
+  retainInitiativeDetail: (id: string) => () => void;
   setOpenInitiative: (id: string | null) => void;
   /**
    * Ask for the Initiative list again after it failed: the subscription is
@@ -9086,7 +9137,7 @@ export function useAssistant({
         });
       },
       setInboxPositions: (positions) => {
-        // Both domains, because one renumbering can place sessions and runs.
+        // One drop can place sessions, runs and Initiatives together.
         const requestId = trackMutation(
           {
             topic: "sessions",
@@ -9100,6 +9151,12 @@ export function useAssistant({
                   entry.kind === "run" ? [entry.runId] : [],
                 ),
               },
+              {
+                topic: "initiatives",
+                objectIds: positions.flatMap((entry) =>
+                  entry.kind === "initiative" ? [entry.id] : [],
+                ),
+              },
             ],
           },
           // A refusal re-reads BOTH lists rather than undoing the drop
@@ -9110,6 +9167,17 @@ export function useAssistant({
           () => {
             refetchSessions();
             refetchWorkflowRuns();
+            if (topicsRef.current.has("initiatives")) {
+              dispatch({ kind: "initiativeListSubscribed" });
+              send({ type: "unsubscribe", topics: ["initiatives"] });
+              send(
+                taskSubscribeMessage(
+                  ["initiatives"],
+                  stateRef.current,
+                  pendingMutationsRef.current,
+                ),
+              );
+            }
           },
         );
         dispatch({ kind: "optimisticInboxPositions", positions });
@@ -9479,6 +9547,15 @@ export function useAssistant({
         });
         dispatch({ kind: "initiativeDetailLoad", id });
         send(initiativeReadMessage(id, requestId, wish));
+      },
+      retainInitiativeDetail: (id) => {
+        dispatch({ kind: "initiativeDetailPin", id, delta: 1 });
+        let held = true;
+        return () => {
+          if (!held) return;
+          held = false;
+          dispatch({ kind: "initiativeDetailPin", id, delta: -1 });
+        };
       },
       setOpenInitiative: (id) => dispatch({ kind: "setOpenInitiative", id }),
       retryInitiatives: () => {

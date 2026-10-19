@@ -357,6 +357,13 @@ the card's live status. Both reach the card the same way, through a
 card's row id (`approval-<id>`) and the index of the turn that proposed it, so a
 windowed transcript loads back far enough to show the card.
 
+Pending agent questions also have a composer-ledge shortcut
+(`PendingQuestionLedge`). It names the question and jumps to its transcript
+form, aligned above the composer and flashed. It uses the same tool-call
+matching as the question form, including the Claude MCP payload fallback, and
+loads earlier transcript pages when needed. Answering stays on the form; the
+shortcut disappears when the question is answered or cancelled.
+
 This qualifies for push because the work has stopped until the user acts.
 Account login failures are the explicit additional condition below.
 

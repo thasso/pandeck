@@ -1,28 +1,28 @@
-import { memo } from "react";
-import { ArrowRight, Waypoints } from "lucide-react";
-import type { InitiativeSummary } from "@assistant/shared";
-import { Item } from "../ui/item.tsx";
+import { memo, useMemo } from "react";
+import { Waypoints } from "lucide-react";
+import type { InitiativeSummary, ProjectRecord } from "@assistant/shared";
+import type { InitiativeRead } from "../../hooks/useAssistant.ts";
+import { dataOf, type LoadState } from "../../lib/loadState.ts";
+import { initiativeBrowserCounts } from "../../lib/initiativeBrowserCounts.ts";
+import type { RowDensity } from "../../lib/rowDensity.ts";
 import { ErrorNote, RefreshIndicator, Skeleton } from "../common/load.tsx";
-import { LinkButton } from "../common/LinkButton.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
 import {
-  initiativePath,
-  INITIATIVES_PATH,
-} from "../../hooks/useSessionRouting.ts";
-import { followRowLink } from "../../lib/rowLink.ts";
+  InitiativeBrowserRow,
+  type InitiativeBrowserWorktrees,
+} from "./InitiativeBrowserRow.tsx";
+import type { InitiativeBrowserSessions } from "./InitiativeCoordinatorRows.tsx";
+
+const NO_PROJECTS: readonly ProjectRecord[] = [];
 
 /**
  * @component InitiativeBrowserGroup
  * @purpose The Initiatives group at the top of the Projects browser, the
  *   canonical sidebar location of an Initiative (`app/web/docs/ui-shell.md`).
  * @useWhen The Projects section's browser, above the Project tree.
- * @intent Bounded: it lists the active and paused Initiatives, which are few;
- *   done ones and the grouping by state live on the index. It is the sidebar's
- *   one group band (`ListGroupSection`): its heading folds the rows like every
- *   other group, and the index is a link of its own beside it, so a modifier
- *   click opens it in a new tab. With nothing to list it shows the band alone,
- *   so the index stays one tap away without spending rows on an empty state.
- *   A new read over a list it held marks the band refreshing.
+ * @intent Bounded: it lists the active and paused Initiatives. Its separator
+ *   folds the rows without linking to an index page. With nothing to list it
+ *   shows the band alone. A new read over a list it held marks the band refreshing.
  */
 export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   initiatives,
@@ -32,6 +32,14 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   onRetry,
   selectedId,
   onNavigate,
+  initiativeDetails,
+  projects = NO_PROJECTS,
+  selectedProjectId,
+  density = "tight",
+  onLoadDetail,
+  onRetainDetail,
+  worktrees,
+  sessions,
 }: {
   initiatives: readonly InitiativeSummary[];
   /** A snapshot answered the current subscription. */
@@ -48,8 +56,43 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   selectedId: string | null;
   /** Stable host navigation; rows are links, so a modifier click opens a tab. */
   onNavigate: (path: string) => void;
+  initiativeDetails?:
+    Readonly<Record<string, LoadState<InitiativeRead | null>>> | undefined;
+  projects?: readonly ProjectRecord[];
+  selectedProjectId?: string | null | undefined;
+  density?: RowDensity;
+  worktrees?: InitiativeBrowserWorktrees | undefined;
+  sessions?: InitiativeBrowserSessions | undefined;
+  /** Present when this host offers inline membership browsing. */
+  onLoadDetail?: (id: string, collapsed?: readonly string[]) => void;
+  /** Stable: pin an open row's graph read (`retainInitiativeDetail`). */
+  onRetainDetail?: (id: string) => () => void;
 }) {
-  const open = initiatives.filter((initiative) => initiative.state !== "done");
+  const open = useMemo(
+    () => initiatives.filter((initiative) => initiative.state !== "done"),
+    [initiatives],
+  );
+  const progressCountChars = useMemo(
+    () =>
+      Math.max(
+        9,
+        ...open.map((initiative) => {
+          const detailState = initiativeDetails?.[initiative.id];
+          const read = detailState ? dataOf(detailState) : undefined;
+          if (read) {
+            const counts = initiativeBrowserCounts(read.item.nodes);
+            return `${counts.startable}/${counts.doing}/${counts.blocked}/${counts.done}/${counts.total}`
+              .length;
+          }
+          // Until the graph answers, these summary facts bound each column's width;
+          // they must not be presented as a mutually exclusive partition themselves.
+          const { progress } = initiative;
+          return `${progress.startable}/${progress.doing}/${progress.blocked}/${progress.total}/${progress.total}`
+            .length;
+        }),
+      ),
+    [open, initiativeDetails],
+  );
   return (
     <ListGroupSection
       id="initiatives"
@@ -58,22 +101,9 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
       icon={<Waypoints size={14} className="shrink-0" aria-hidden />}
       containsSelected={open.some((initiative) => initiative.id === selectedId)}
       actions={
-        <>
-          {refreshing ? (
-            <RefreshIndicator label="Refreshing Initiatives" />
-          ) : null}
-          <LinkButton
-            variant="ghost"
-            size="icon-xs"
-            label="Show all Initiatives"
-            href={INITIATIVES_PATH}
-            onClick={(event) =>
-              followRowLink(event, INITIATIVES_PATH, onNavigate)
-            }
-          >
-            <ArrowRight />
-          </LinkButton>
-        </>
+        refreshing ? (
+          <RefreshIndicator label="Refreshing Initiatives" />
+        ) : undefined
       }
     >
       {error ? (
@@ -87,44 +117,23 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
         </div>
       ) : (
         <ul className="flex flex-col">
-          {open.map((initiative) => {
-            const href = initiativePath(initiative.id);
-            const selected = initiative.id === selectedId;
-            return (
-              <li
-                key={initiative.id}
-                data-list-row-id={`initiative:${initiative.id}`}
-              >
-                <Item
-                  size="xs"
-                  variant={selected ? "muted" : "default"}
-                  aria-current={selected ? "page" : undefined}
-                  render={
-                    <a
-                      href={href}
-                      onClick={(event) =>
-                        followRowLink(event, href, onNavigate)
-                      }
-                    />
-                  }
-                >
-                  <span className="min-w-0 flex-1 truncate pl-5">
-                    {initiative.title}
-                  </span>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {initiative.state === "paused" ? (
-                      "Paused"
-                    ) : (
-                      <>
-                        {initiative.progress.done}/{initiative.progress.total}
-                        <span className="sr-only"> done</span>
-                      </>
-                    )}
-                  </span>
-                </Item>
-              </li>
-            );
-          })}
+          {open.map((initiative) => (
+            <InitiativeBrowserRow
+              key={initiative.id}
+              initiative={initiative}
+              detailState={initiativeDetails?.[initiative.id]}
+              projects={projects}
+              selected={initiative.id === selectedId}
+              selectedProjectId={selectedProjectId}
+              density={density}
+              progressCountChars={progressCountChars}
+              worktrees={worktrees}
+              sessions={sessions}
+              onLoadDetail={onLoadDetail}
+              onRetainDetail={onRetainDetail}
+              onNavigate={onNavigate}
+            />
+          ))}
         </ul>
       )}
     </ListGroupSection>

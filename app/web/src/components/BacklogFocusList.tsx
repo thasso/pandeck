@@ -1,8 +1,6 @@
 import { useMemo } from "react";
-import {
-  ListRowActions,
-  type ListRowAction,
-} from "./common/ListRowActions.tsx";
+import type { ListRowAction } from "./common/ListRowActions.tsx";
+import { TaskListRowContent } from "./TaskListRowContent.tsx";
 import { ListRow } from "./common/ListRow.tsx";
 import {
   CalendarCheck,
@@ -18,16 +16,9 @@ import {
 } from "lucide-react";
 import { ListGroupSection } from "./ListGroupSection.tsx";
 import type { ProjectRecord, SessionListItem } from "@assistant/shared";
-import {
-  TaskProjectMeta,
-  TaskRowDetails,
-  TaskRowTitle,
-} from "./TaskRowBody.tsx";
-import { TaskIdBadge } from "./TaskIdBadge.tsx";
-import { TaskStatusIcon, TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
-import { projectPath } from "../hooks/useSessionRouting.ts";
+import { TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
 import { EmptyBox } from "./common/load.tsx";
-import { nextStatus, type Task } from "../lib/backlogTree.ts";
+import type { Task } from "../lib/backlogTree.ts";
 import { buildFocusBuckets, type FocusBucketId } from "../lib/backlogFocus.ts";
 import {
   buildTaskRowMeta,
@@ -47,13 +38,9 @@ import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
  * @useWhen The Backlog list's view is `focus`.
  * @avoidWhen Arranging or restructuring the Backlog; that is the tree view
  * (`BacklogTreePane`), which owns hierarchy, manual order and drag editing.
- * @intent Three stable lines, like Attention and Pull Requests: Project and
- * Task id above, title in the middle, then a non-interactive status glyph,
- * planning, priority and live signals below. The metadata comes from the same derivation
- * as the tree, but its identity moves to the context line. An empty signal line
- * stays empty rather than repeating status and age as filler. There is no drag here on
- * purpose: a list that sorts itself cannot also be hand-arranged, and offering
- * both would make every drop silently snap back. The row's own click surface
+ * @intent Shares TaskListRowContent with Backlog and Inbox, including metadata
+ * and the open/start-session action. Pending suggestions replace that action
+ * with decision controls. No drag: Focus owns its sort order. The row's own click surface
  * opens the Task and its TITLE is the anchor that does so by name; suggestion
  * controls stop the click so answering one never also opens the row.
  * @related lib/backlogFocus.ts, lib/taskRowMeta.ts, TaskRowBody.tsx
@@ -70,7 +57,8 @@ export function BacklogFocusList({
   showProjectBadge,
   selectedId,
   onOpen,
-  onCycle,
+  onOpenSession,
+  onStartSession,
   onAcceptSuggestion,
   onDismissSuggestion,
   onNavigate,
@@ -93,7 +81,8 @@ export function BacklogFocusList({
   showProjectBadge: boolean;
   selectedId: string | null;
   onOpen: (id: string) => void;
-  onCycle: (task: Task) => void;
+  onOpenSession?: ((sessionId: string) => void) | undefined;
+  onStartSession?: ((task: Task) => void) | undefined;
   /** Accept an agent's status suggestion: move the Task where it says. */
   onAcceptSuggestion: (task: Task) => void;
   /** Dismiss the suggestion and leave the Task where it is. */
@@ -152,11 +141,12 @@ export function BacklogFocusList({
               <FocusRow
                 key={task.id}
                 task={task}
-                meta={focusRowMeta(buildTaskRowMeta(task, metaContext))}
+                meta={buildTaskRowMeta(task, metaContext)}
                 projectsById={projectsById}
                 selected={task.id === selectedId}
                 onOpen={onOpen}
-                onCycle={onCycle}
+                onOpenSession={onOpenSession}
+                onStartSession={onStartSession}
                 onAcceptSuggestion={onAcceptSuggestion}
                 onDismissSuggestion={onDismissSuggestion}
                 onNavigate={onNavigate}
@@ -222,7 +212,8 @@ function FocusRow({
   projectsById,
   selected,
   onOpen,
-  onCycle,
+  onOpenSession,
+  onStartSession,
   onAcceptSuggestion,
   onDismissSuggestion,
   onNavigate,
@@ -233,14 +224,15 @@ function FocusRow({
   projectsById: Map<string, ProjectRecord>;
   selected: boolean;
   onOpen: (id: string) => void;
-  onCycle: (task: Task) => void;
+  onOpenSession?: ((sessionId: string) => void) | undefined;
+  onStartSession?: ((task: Task) => void) | undefined;
   onAcceptSuggestion: (task: Task) => void;
   onDismissSuggestion: (task: Task) => void;
   onNavigate?: ((path: string) => void) | undefined;
   tight: boolean;
 }) {
   const suggestion = meta.suggestion;
-  const actions: ListRowAction[] = suggestion
+  const actions: ListRowAction[] | undefined = suggestion
     ? [
         {
           id: "accept",
@@ -257,83 +249,29 @@ function FocusRow({
           onSelect: () => onDismissSuggestion(task),
         },
       ]
-    : [
-        {
-          id: "status",
-          label: `Mark ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`,
-          icon: <TaskStatusIcon status={nextStatus(task.status)} />,
-          onSelect: () => onCycle(task),
-        },
-      ];
+    : undefined;
 
   return (
     <li data-list-row-id={task.id}>
       <ListRow
         interaction="content"
         active={selected}
-        density={tight ? "tight" : "comfortable"}
         onOpen={() => onOpen(task.id)}
-        context={
-          meta.projectId ? (
-            <TaskProjectMeta
-              projectId={meta.projectId}
-              projectsById={projectsById}
-              href={projectPath(meta.projectId)}
-              onNavigate={onNavigate}
-            />
-          ) : null
-        }
-        contextTrailing={<TaskIdBadge id={task.id} onNavigate={onNavigate} />}
-        identity={
-          <TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />
-        }
-        actions={
-          <ListRowActions
-            actions={actions}
-            alwaysVisible={Boolean(suggestion)}
-          />
-        }
-        signals={
-          <>
-            <span
-              role="img"
-              aria-label={TASK_STATUS_LABEL[task.status]}
-              title={TASK_STATUS_LABEL[task.status]}
-              className="flex shrink-0 items-center"
-            >
-              <TaskStatusIcon
-                status={task.status}
-                size={12}
-                claimed={Boolean(suggestion)}
-              />
-            </span>
-            <TaskRowDetails
-              task={task}
-              meta={meta}
-              projectsById={projectsById}
-              onNavigate={onNavigate}
-              showContext={false}
-            />
-          </>
-        }
-      />
+      >
+        <TaskListRowContent
+          task={task}
+          meta={meta}
+          projectsById={projectsById}
+          selected={selected}
+          density={tight ? "tight" : "comfortable"}
+          actions={actions}
+          alwaysVisible={selected || Boolean(suggestion)}
+          onOpenTask={onOpen}
+          onOpenSession={onOpenSession}
+          onStartSession={onStartSession}
+          onNavigate={onNavigate}
+        />
+      </ListRow>
     </li>
   );
-}
-
-/**
- * What a Focus row keeps of the shared metadata across its supporting lines. Focus is for
- * picking what to work on, so it drops the plumbing: the "Session" item, and
- * the bare worktree glyph with its dirty dot, which said "there is code" in a
- * way nobody could read. What stays is what bears on the choice — planning,
- * priority, a run in progress ("Working", still leading to its session), a
- * pull request's state, and the Project.
- */
-function focusRowMeta(meta: TaskRowMeta): TaskRowMeta {
-  return {
-    ...meta,
-    session: meta.working ? meta.session : null,
-    worktreeId: null,
-    dirty: false,
-  };
 }

@@ -123,19 +123,16 @@ function renderWorktrees(
   );
 }
 
-/**
- * One worktree's row in the page's tree, split into its two lines: the branch
- * with its line delta and merged badge, and under it the axes or the calm fact.
- */
+/** Shared worktree slots: optional badge/change context, branch, then git signals. */
 function worktreeLines(root: ParentNode, id: string) {
   const row = root.querySelector(`[data-list-row-id="worktree:${id}"]`);
-  // The row body carries the branch/path tooltip; its second child holds the
-  // two lines (the first is the glyph).
-  const body = row?.querySelector("[title]")?.children[1];
+  const content = row?.querySelector("[data-list-row-lines]");
+  const hasContext = content?.getAttribute("data-list-row-lines") === "3";
   return {
     row,
-    primary: body?.children[0] ?? null,
-    second: body?.children[1] ?? null,
+    context: hasContext ? (content?.children[0] ?? null) : null,
+    primary: content?.children[hasContext ? 1 : 0] ?? null,
+    second: content?.children[hasContext ? 2 : 1] ?? null,
   };
 }
 
@@ -224,7 +221,7 @@ describe("ProjectDetailPage load states", () => {
 });
 
 describe("ProjectDetailPage worktree rows", () => {
-  it("uses a second line for axes while keeping the dirty delta with the branch", () => {
+  it("groups dirty changes in left context above the branch and git signals", () => {
     const row = worktree({ id: "one" });
     const html = renderWorktrees([row], {
       one: git("one", {
@@ -237,8 +234,11 @@ describe("ProjectDetailPage worktree rows", () => {
       }),
     });
     const document = new DOMParser().parseFromString(html, "text/html");
-    const { primary, second } = worktreeLines(document, "one");
-    expect(primary?.textContent).toContain("+14−3");
+    const { context, primary, second } = worktreeLines(document, "one");
+    expect(context?.textContent).toContain("+14−3");
+    expect(context?.firstElementChild?.className).toContain("flex-1");
+    expect(primary?.textContent).toContain("live/one");
+    expect(primary?.textContent).not.toContain("+14−3");
     expect(second?.querySelector("[data-worktree-axes]")).not.toBeNull();
     expect(second?.textContent).toContain("main ↑2");
   });
@@ -254,8 +254,8 @@ describe("ProjectDetailPage worktree rows", () => {
     const lines = worktreeLines(document, "calm");
     const { primary, second } = lines;
     expect(primary?.textContent).toContain("live/calm");
-    // Every worktree row keeps two lines, so the rows are one height: with
-    // nothing to say on an axis, the second line says there is nothing to do.
+    // No empty context line when neither badges nor changes exist.
+    expect(lines.context).toBeNull();
     expect(lines.row?.querySelector("[data-worktree-axes]")).toBeNull();
     expect(second?.textContent).toBe("level with main");
   });
@@ -312,7 +312,7 @@ describe("ProjectDetailPage worktree rows", () => {
     expect(html).not.toContain("origin");
   });
 
-  it("keeps merged as a semantic badge", () => {
+  it("shows confirmed branch containment as the shared Integrated badge", () => {
     const row = worktree({ id: "merged" });
     const html = renderWorktrees([row], {
       merged: git("merged", {
@@ -322,9 +322,12 @@ describe("ProjectDetailPage worktree rows", () => {
       }),
     });
     const document = new DOMParser().parseFromString(html, "text/html");
-    const { primary } = worktreeLines(document, "merged");
-    expect(primary?.querySelector('[data-slot="badge"]')?.textContent).toBe(
-      "merged",
+    const { context } = worktreeLines(document, "merged");
+    const badge = context?.querySelector('[data-slot="badge"]');
+    expect(badge?.textContent).toBe("Integrated");
+    expect(badge?.getAttribute("data-variant")).toBe("warning");
+    expect(badge?.getAttribute("title")).toBe(
+      "Branch changes are already included in the base branch",
     );
   });
 

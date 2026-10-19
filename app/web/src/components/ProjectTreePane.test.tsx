@@ -10,6 +10,7 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
+import { ListGroupSection } from "./ListGroupSection.tsx";
 
 /** The sidebar Projects tab's R1 gate (`app/web/docs/loading-states.md`). */
 
@@ -125,14 +126,78 @@ describe("ProjectTreePane first load", () => {
       expect(seen.at(-1)).toEqual([worktree.id]);
       expect(container.textContent).toContain("live-one");
       expect(container.textContent).toContain("backup/live-one");
+      // The Project row's own disclosure, shared with the Initiative rows.
       const collapse = container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Collapse"]',
+        'button[aria-label="Hide contents of Project"]',
       );
-      await act(async () => collapse?.click());
+      expect(collapse).not.toBeNull();
+      await act(async () => collapse!.click());
       expect(seen.at(-1)).toEqual([]);
     } finally {
       await act(async () => root.unmount());
       container.remove();
+    }
+  });
+
+  it("withdraws its report when the Projects group folds or the pane unmounts", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const seen: string[][] = [];
+    const project: ProjectRecord = {
+      id: "project",
+      name: "Project",
+      key: "PR",
+    };
+    const worktree: WorktreeRecord = {
+      id: "folded-worktree",
+      projectId: project.id,
+      mainRepoRoot: "/repo",
+      path: "/repo/worktrees/folded",
+      branch: "folded",
+      baseBranch: "main",
+      baseCommit: "abc",
+      status: "active",
+      sessionIds: [],
+      taskIds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const report = (ids: string[]) => seen.push(ids);
+    const pane = (
+      <ProjectTreePane
+        projects={[project]}
+        loading={false}
+        worktrees={[worktree]}
+        onReorder={() => {}}
+        onOpenProject={() => {}}
+        onVisibleWorktreeIdsChange={report}
+      />
+    );
+    try {
+      // As the Sidebar hosts it: inside the top-level Projects fold.
+      await act(async () =>
+        root.render(
+          <ListGroupSection id="fold-projects" title="Projects" icon={null}>
+            {pane}
+          </ListGroupSection>,
+        ),
+      );
+      expect(seen.at(-1)).toEqual([worktree.id]);
+      const fold = container.querySelector<HTMLButtonElement>("h2 button")!;
+      await act(async () => fold.click());
+      expect(fold.getAttribute("aria-expanded")).toBe("false");
+      expect(seen.at(-1), "a folded group shows no worktree").toEqual([]);
+
+      await act(async () => fold.click());
+      expect(seen.at(-1), "unfolding reports it again").toEqual([worktree.id]);
+
+      await act(async () => root.render(<div />));
+      expect(seen.at(-1), "an unmounted pane shows no worktree").toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      window.sessionStorage.clear();
     }
   });
 

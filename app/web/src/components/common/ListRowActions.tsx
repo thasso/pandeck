@@ -16,7 +16,7 @@ export type ListRowAction = {
   variant?: "destructive";
 };
 
-/** Compact row actions with a separated, labeled touch presentation. */
+/** At most two quick actions and an overflow menu, shared by all layouts. */
 export function ListRowActions({
   actions,
   label = "More actions",
@@ -28,12 +28,13 @@ export function ListRowActions({
 }) {
   if (actions.length === 0) return null;
   const direct =
-    actions.length <= 2 ? actions : actions.filter((action) => action.primary);
-  const overflow =
-    actions.length <= 2 ? [] : actions.filter((action) => !action.primary);
+    actions.length <= 2
+      ? actions
+      : actions.filter((action) => action.primary).slice(0, 2);
+  const overflow = actions.filter((action) => !direct.includes(action));
   return (
     <div
-      className="list-row-actions flex min-w-0 flex-1 items-center justify-end gap-1.5 touch-ui:flex-wrap touch-ui:gap-3"
+      className="list-row-actions flex shrink-0 items-stretch justify-end gap-1.5"
       role="group"
       aria-label="Item actions"
       data-always-visible={alwaysVisible || undefined}
@@ -49,13 +50,9 @@ export function ListRowActions({
           title={action.accessibleLabel ?? action.label}
           variant={action.variant ?? "ghost"}
           disabled={action.disabled}
-          className="touch-ui:min-w-28 touch-ui:flex-1"
           onClick={action.onSelect}
         >
           {action.icon}
-          <span className="hidden min-w-0 whitespace-normal touch-ui:inline">
-            {action.label}
-          </span>
         </IconButton>
       ))}
       {overflow.length ? (

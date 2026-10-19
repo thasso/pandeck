@@ -106,7 +106,21 @@ const active: InitiativeSummary = {
   sessionCount: 1,
   createdAt: NOW - 600_000,
   updatedAt: NOW - 60_000,
+  attention: { revision: 1, settledRevision: 0, kind: "activity", at: NOW },
 };
+
+/** `active` at a later attention cursor. */
+function activeAt(
+  revision: number,
+  settledRevision: number,
+  extra: Partial<InitiativeSummary> = {},
+): InitiativeSummary {
+  return {
+    ...active,
+    attention: { revision, settledRevision, kind: "activity", at: NOW },
+    ...extra,
+  };
+}
 
 function paused(revision: number, settledRevision = 0): InitiativeSummary {
   return {
@@ -399,14 +413,11 @@ describe("Initiative inbox card", () => {
   it("settles exactly what the card rendered, and the event confirms it", async () => {
     const socket = await boot([active, paused(1)]);
     expect(card("7")).not.toBeNull();
-    expect(
-      settleButton("7"),
-      "an active Initiative offers no Settle",
-    ).toBeNull();
+    expect(settleButton("7"), "active work settles too").not.toBeNull();
     expect(settleButton("6")).not.toBeNull();
-    // The outcome is an item of Needs you; the active one heads the working set.
+    // The outcome is an item of Needs you; the active one is in the working set.
     expect(card("6")?.closest("[data-inbox-needs-you]")).not.toBeNull();
-    expect(card("7")?.closest("[data-inbox-initiatives]")).not.toBeNull();
+    expect(card("7")?.closest("[data-inbox-needs-you]")).toBeNull();
 
     await act(async () => settleButton("6")!.click());
     const [sent] = settles(socket);
@@ -426,11 +437,15 @@ describe("Initiative inbox card", () => {
     expect(card("7"), "the active one stays").not.toBeNull();
 
     // A member Task's change reaches the card as the Initiative's own event.
-    await events(socket, 3, 12, {
-      ...active,
-      progress: { total: 32, done: 6, doing: 4, startable: 6, blocked: 17 },
-      nextMilestone: { id: "932", title: "Second hosted release" },
-    });
+    await events(
+      socket,
+      3,
+      12,
+      activeAt(2, 0, {
+        progress: { total: 32, done: 6, doing: 4, startable: 6, blocked: 17 },
+        nextMilestone: { id: "932", title: "Second hosted release" },
+      }),
+    );
     expect(card("7")?.textContent).toContain("6/32");
     expect(card("7")?.textContent).toContain("6 ready");
     expect(card("7")?.textContent).toContain("Second hosted release");
@@ -438,6 +453,18 @@ describe("Initiative inbox card", () => {
     expect(
       socket.sent.some((message) => message.type === "getInitiative"),
     ).toBe(false);
+
+    // Settling the active one acknowledges what it rendered; the server's
+    // later activity brings it back with the newer revision to settle.
+    await act(async () => settleButton("7")!.click());
+    expect(settles(socket)[1]).toMatchObject({ id: "7", throughRevision: 2 });
+    expect(card("7"), "acknowledged optimistically").toBeNull();
+    await events(socket, 4, 13, activeAt(2, 2));
+    expect(card("7")).toBeNull();
+    await events(socket, 5, 14, activeAt(3, 2));
+    expect(card("7"), "new activity brings it back").not.toBeNull();
+    await act(async () => settleButton("7")!.click());
+    expect(settles(socket)[2]).toMatchObject({ id: "7", throughRevision: 3 });
   });
 
   it("keeps a newer outcome awake against an older click", async () => {
@@ -460,18 +487,19 @@ describe("Initiative inbox card", () => {
     expect(settles(socket)[1]).toMatchObject({ throughRevision: 2 });
     expect(card("6")).toBeNull();
 
-    // Active again: back as an item, with nothing to settle.
+    // Active again is activity: back in the working set, settling that.
     await events(socket, 4, 13, {
       ...paused(2, 2),
       state: "active",
+      attention: { revision: 3, settledRevision: 2, kind: "activity", at: NOW },
     });
     expect(card("6")).not.toBeNull();
-    expect(settleButton("6")).toBeNull();
     expect(
       card("6")?.closest("[data-inbox-needs-you]"),
       "active again leaves Needs you",
     ).toBeNull();
-    expect(card("6")?.closest("[data-inbox-initiatives]")).not.toBeNull();
+    await act(async () => settleButton("6")!.click());
+    expect(settles(socket)[2]).toMatchObject({ throughRevision: 3 });
   });
 
   it("re-reads the list after a refusal and names the Initiative", async () => {

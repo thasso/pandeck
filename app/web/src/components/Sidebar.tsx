@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FileDiff } from "lucide-react";
+import { FileDiff, FolderKanban } from "lucide-react";
 import type {
   InboxPositionEntry,
   InitiativeSummary,
@@ -57,8 +57,11 @@ import type { Task, TaskPlacement } from "../lib/backlogTree.ts";
 import type {
   AssistantActions,
   InitiativeSettleError,
+  UIState,
 } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
+import type { InitiativeBrowserWorktrees } from "./initiative/InitiativeBrowserRow.tsx";
+import type { InitiativeBrowserSessions } from "./initiative/InitiativeCoordinatorRows.tsx";
 import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 import type { LoadState } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -180,6 +183,8 @@ interface Props {
   onOpenProject: (id: string) => void;
   /** Live Initiative summaries, for the group atop the Projects browser. */
   initiatives: readonly InitiativeSummary[];
+  /** Keyed membership reads, separate from the Backlog-only state prop. */
+  initiativeDetails?: Readonly<UIState["initiativeDetails"]>;
   /** An Initiative snapshot answered the current subscription. */
   initiativesFresh: boolean;
   /** A new Initiative snapshot is out over the list an earlier one answered. */
@@ -499,6 +504,7 @@ function SidebarImpl({
   onReorderProjects,
   onOpenProject,
   initiatives,
+  initiativeDetails,
   initiativesFresh,
   initiativesRefreshing,
   initiativeListError,
@@ -671,9 +677,41 @@ function SidebarImpl({
         : ids,
     );
   }, []);
-  const visibleProjectWorktreeSet = useMemo(
-    () => new Set(visibleProjectWorktreeIds),
-    [visibleProjectWorktreeIds],
+  const [visibleInitiativeWorktrees, setVisibleInitiativeWorktrees] = useState<
+    Record<string, string[]>
+  >({});
+  // Stable, id-addressed reports keep sibling Initiative disclosures independent
+  // and add only their actually visible rows to the shared status-watch demand.
+  const onVisibleInitiativeWorktrees = useCallback(
+    (initiativeId: string, ids: string[]) => {
+      setVisibleInitiativeWorktrees((current) => {
+        const previous = current[initiativeId] ?? [];
+        if (
+          previous.length === ids.length &&
+          previous.every((id, index) => id === ids[index])
+        )
+          return current;
+        const next = { ...current };
+        if (ids.length > 0) next[initiativeId] = ids;
+        else delete next[initiativeId];
+        return next;
+      });
+    },
+    [],
+  );
+  const visibleBrowserWorktreeIds = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...visibleProjectWorktreeIds,
+          ...Object.values(visibleInitiativeWorktrees).flat(),
+        ]),
+      ].sort(),
+    [visibleProjectWorktreeIds, visibleInitiativeWorktrees],
+  );
+  const visibleBrowserWorktreeSet = useMemo(
+    () => new Set(visibleBrowserWorktreeIds),
+    [visibleBrowserWorktreeIds],
   );
   const projectSessionCache = useRef<{
     key: string;
@@ -711,7 +749,7 @@ function SidebarImpl({
   const projectRowStatus = (id: string) =>
     rowWorktreeStatus(worktreeStatuses, lastKnownWorktreeStatuses, id);
   const projectStatusKey = (worktrees ?? [])
-    .filter((worktree) => visibleProjectWorktreeSet.has(worktree.id))
+    .filter((worktree) => visibleBrowserWorktreeSet.has(worktree.id))
     .map((worktree) => [worktree.id, projectRowStatus(worktree.id)] as const)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([id, status]) => `${id}:${JSON.stringify(status ?? null)}`)
@@ -721,7 +759,7 @@ function SidebarImpl({
       key: projectStatusKey,
       value: Object.fromEntries(
         (worktrees ?? [])
-          .filter((worktree) => visibleProjectWorktreeSet.has(worktree.id))
+          .filter((worktree) => visibleBrowserWorktreeSet.has(worktree.id))
           .flatMap((worktree) => {
             const status = projectRowStatus(worktree.id);
             return status ? [[worktree.id, status] as const] : [];
@@ -729,6 +767,38 @@ function SidebarImpl({
       ),
     };
   }
+
+  const projectRowStatuses = projectStatusCache.current.value;
+  const initiativeWorktrees = useMemo<InitiativeBrowserWorktrees>(
+    () => ({
+      items: worktrees,
+      fresh: worktreesFresh,
+      statuses: projectRowStatuses,
+      hosting: worktreeHosting,
+      selectedId: selectedWorktreeId,
+      onOpen: onOpenWorktree,
+      onVisible: onVisibleInitiativeWorktrees,
+    }),
+    [
+      worktrees,
+      worktreesFresh,
+      projectRowStatuses,
+      worktreeHosting,
+      selectedWorktreeId,
+      onOpenWorktree,
+      onVisibleInitiativeWorktrees,
+    ],
+  );
+
+  const initiativeSessions = useMemo<InitiativeBrowserSessions>(
+    () => ({
+      items: sessions,
+      runs: workflowRuns,
+      cards: workflowCards,
+      selectedId: currentId ?? null,
+    }),
+    [sessions, workflowRuns, workflowCards, currentId],
+  );
 
   // While the Projects or Worktrees browser is visible, subscribe to every
   // listed worktree so dirty-file indicators stay current instead of only
@@ -740,7 +810,7 @@ function SidebarImpl({
     ids:
       section === "knowledge" && !knowledgeEnabled
         ? []
-        : sidebarWorktreeWatchIds(section, sessions, visibleProjectWorktreeIds),
+        : sidebarWorktreeWatchIds(section, sessions, visibleBrowserWorktreeIds),
     connected: state.connected,
     actions,
   });
@@ -910,28 +980,44 @@ function SidebarImpl({
               onRetry={onRetryInitiatives}
               selectedId={selectedInitiativeId}
               onNavigate={onNavigate}
+              initiativeDetails={initiativeDetails}
+              worktrees={initiativeWorktrees}
+              sessions={initiativeSessions}
+              projects={projects}
+              selectedProjectId={selectedProjectId}
+              density={browserRowDensity(mobile)}
+              onLoadDetail={actions.requestInitiativeDetail}
+              onRetainDetail={actions.retainInitiativeDetail}
             />
-            <ProjectTreePane
-              projects={activeProjects}
-              selectedId={selectedProjectId}
-              loading={!projectsLoaded}
-              reorderState={projectMutations["registry:reorder"]}
-              relationsLoading={worktrees === null}
-              sessions={projectSessionCache.current.value}
-              currentSessionId={currentId}
-              worktrees={worktrees}
-              worktreeStatuses={projectStatusCache.current.value}
-              selectedWorktreeId={selectedWorktreeId}
-              onReorder={onReorderProjects}
-              onOpenProject={onOpenProject}
-              onOpenSession={onSelect}
-              onArchiveSession={onArchive}
-              onOpenWorktree={onOpenWorktree}
-              onStartSession={onStartSessionForProject}
-              onStartSessionInWorktree={onStartSessionInWorktree}
-              onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
-              flush
-            />
+            <ListGroupSection
+              id="projects"
+              title="Projects"
+              count={projectsLoaded ? activeProjects.length : undefined}
+              icon={<FolderKanban size={14} className="shrink-0" aria-hidden />}
+              containsSelected={Boolean(selectedProjectId)}
+            >
+              <ProjectTreePane
+                projects={activeProjects}
+                selectedId={selectedProjectId}
+                density={browserRowDensity(mobile)}
+                loading={!projectsLoaded}
+                reorderState={projectMutations["registry:reorder"]}
+                relationsLoading={worktrees === null}
+                sessions={projectSessionCache.current.value}
+                currentSessionId={currentId}
+                worktrees={worktrees}
+                worktreeStatuses={projectStatusCache.current.value}
+                selectedWorktreeId={selectedWorktreeId}
+                onReorder={onReorderProjects}
+                onOpenProject={onOpenProject}
+                onOpenSession={onSelect}
+                onOpenWorktree={onOpenWorktree}
+                onStartSession={onStartSessionForProject}
+                onStartSessionInWorktree={onStartSessionInWorktree}
+                onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+                flush
+              />
+            </ListGroupSection>
           </>
         ) : section === "pull-requests" ? (
           <PullRequestBrowser

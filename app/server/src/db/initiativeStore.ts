@@ -15,7 +15,7 @@
  * read them through {@link touchHolders} and {@link touchSessionHolders}, the
  * same seam.
  */
-import type { InitiativeState } from "@assistant/shared";
+import type { InitiativeAttention, InitiativeState } from "@assistant/shared";
 import { getDb, inDbTransaction, withDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import {
@@ -38,7 +38,8 @@ export interface InitiativeRow {
   revision: number;
   attentionRevision: number;
   attentionSettledRevision: number;
-  attentionKind?: Exclude<InitiativeState, "active">;
+  attentionKind?: InitiativeAttention["kind"];
+  inboxPosition?: number;
   attentionAt?: number;
   createdAt: number;
   updatedAt: number;
@@ -96,13 +97,14 @@ function taskNode(id: number): NodeRef {
 /**
  * Run one Initiative write in its OWN transaction, stamp every Initiative it
  * touched with the next `initiative_revision` value before COMMIT, and notify
- * after it. A write that throws touches nothing and notifies nobody.
+ * after it. Activity also raises attention. Acknowledgement and ordering pass
+ * `activity = false`, preserving attention. A write that throws notifies nobody.
  *
  * Top-level only, like `createTask`: joined to a caller's transaction, a
  * failure the caller catches would leave half an operation in that commit with
  * no revision and no event. Refused before anything is written.
  */
-function mutation<T>(fn: (touch: Set<number>) => T): T {
+function mutation<T>(fn: (touch: Set<number>) => T, activity = true): T {
   if (getDb().isTransaction)
     throw new Error(
       "An Initiative write must not run inside an open database transaction.",
@@ -110,7 +112,7 @@ function mutation<T>(fn: (touch: Set<number>) => T): T {
   const { value, touched } = withDbTransaction(() => {
     const touched = new Set<number>();
     const value = fn(touched);
-    stampRevisions(touched);
+    stampRevisions(touched, activity);
     return { value, touched };
   });
   notifyListeners(touched);
@@ -125,14 +127,43 @@ function mutation<T>(fn: (touch: Set<number>) => T): T {
  * it. It only stamps — it writes nothing a caller could half-commit — and the
  * listeners only schedule a debounced flush that reads committed state.
  */
-function stampAndNotify(ids: ReadonlySet<number>): void {
+function stampAndNotify(
+  ids: ReadonlySet<number>,
+  activity: HolderActivity = true,
+): void {
   if (!ids.size) return;
-  inDbTransaction(() => stampRevisions(ids));
+  inDbTransaction(() => stampRevisions(ids, activity));
   notifyListeners(ids);
 }
 
-function stampRevisions(ids: ReadonlySet<number>): void {
+/**
+ * Which stamped Initiatives also raise attention: all of them, none (a
+ * refresh, preserving attention), or exactly the listed ones.
+ */
+type HolderActivity = boolean | ReadonlySet<number>;
+
+function stampRevisions(
+  ids: ReadonlySet<number>,
+  activity: HolderActivity,
+): void {
   if (!ids.size) return;
+  const raised =
+    activity === true
+      ? [...ids]
+      : activity === false
+        ? []
+        : [...ids].filter((id) => activity.has(id));
+  if (raised.length) {
+    const attention = getDb().prepare(
+      `UPDATE initiatives
+          SET attention_revision = attention_revision + 1,
+              attention_kind = CASE WHEN state = 'active' THEN 'activity' ELSE state END,
+              attention_at_ms = ?
+        WHERE id = ? AND archived_at_ms IS NULL AND deleted_at_ms IS NULL`,
+    );
+    const now = Date.now();
+    for (const id of raised) attention.run(now, id);
+  }
   const revision = nextId("initiative_revision");
   const stamp = getDb().prepare(
     "UPDATE initiatives SET revision = ? WHERE id = ?",
@@ -160,9 +191,7 @@ function create(
 ): InitiativeRow {
   const id = nextId("initiative");
   const now = Date.now();
-  // Created paused or done, it arrives with that outcome: the first revision is
-  // raised in the same row, so the inbox holds it until the user settles it.
-  const outcome = input.state === "active" ? null : input.state;
+  // The mutation's stamp raises the first attention revision in this write.
   getDb()
     .prepare(
       `INSERT INTO initiatives (id, title, description, state, attention_revision,
@@ -174,9 +203,9 @@ function create(
       input.title,
       input.description,
       input.state,
-      outcome ? 1 : 0,
-      outcome,
-      outcome ? now : null,
+      0,
+      null,
+      null,
       now,
       now,
     );
@@ -220,20 +249,8 @@ function update(
   }
   const now = Date.now();
   if (patch.state !== undefined) {
-    // The attention bump rides the state write itself: SQLite evaluates every
-    // SET expression against the row as it was, so `state <> ?` compares with
-    // the stored state in this one statement and no reader can slip between a
-    // check and the write. Only a real change TO paused or done raises;
-    // re-stating a state, or becoming active, raises nothing.
-    const raises = "(state <> ? AND ? <> 'active')";
-    sets.push(
-      "state = ?",
-      `attention_revision = attention_revision + CASE WHEN ${raises} THEN 1 ELSE 0 END`,
-      `attention_kind = CASE WHEN ${raises} THEN ? ELSE attention_kind END`,
-      `attention_at_ms = CASE WHEN ${raises} THEN ? ELSE attention_at_ms END`,
-    );
-    const s = patch.state;
-    params.push(s, s, s, s, s, s, s, s, now);
+    sets.push("state = ?");
+    params.push(patch.state);
   }
   sets.push("updated_at_ms = ?");
   params.push(now);
@@ -675,29 +692,50 @@ function subtreeIds(roots: Iterable<number>): number[] {
  * The Task notification seam's fan-out: bump and notify every Initiative that
  * reads one of `taskIds` now, plus `formerHolders` — the ones a delete or a
  * move took the Task away from, read before the write.
+ *
+ * Every one of them is stamped and notified. `activity` says which also raise
+ * attention: all (the default), none for a mechanical write, or only the
+ * holders of `activity.taskIds` plus `activity.formerHolders` — the Tasks a
+ * reorder actually reparented, against the siblings it merely renumbered.
  */
 function touchHolders(
   taskIds: Iterable<number>,
   formerHolders: Iterable<number> = [],
+  activity: TaskHolderActivity = true,
 ): void {
-  stampAndNotify(new Set([...holdersOf(taskIds), ...formerHolders]));
+  const ids = new Set([...holdersOf(taskIds), ...formerHolders]);
+  stampAndNotify(
+    ids,
+    typeof activity === "boolean"
+      ? activity
+      : new Set([...holdersOf(activity.taskIds), ...activity.formerHolders]),
+  );
 }
 
+export type TaskHolderActivity =
+  boolean | { taskIds: readonly number[]; formerHolders: readonly number[] };
+
 /**
- * A session's liveness changed, so the summaries listing the sessions of the
- * Tasks it is linked to may have to add or drop it.
+ * A linked session changed. Always refresh the summary, but raise attention
+ * only for actual activity, never for settlement, archival or deletion.
  */
-function touchSessionHolders(sessionIds: readonly string[]): void {
+function touchSessionHolders(
+  sessionIds: readonly string[],
+  activity: boolean,
+): void {
   if (!sessionIds.length) return;
   const rows = getDb()
     .prepare(INITIATIVE_STORE_SQL.sessionTasks)
     .all(JSON.stringify([...new Set(sessionIds)])) as Array<{ id: string }>;
-  touchHolders(rows.map((row) => Number(row.id)));
+  stampAndNotify(
+    new Set(holdersOf(rows.map((row) => Number(row.id)))),
+    activity,
+  );
 }
 
-sessionStore.subscribeLiveness((ids) => {
+sessionStore.subscribeLiveness((ids, activity) => {
   try {
-    touchSessionHolders(ids);
+    touchSessionHolders(ids, activity);
   } catch (error) {
     // The session write is durable already; say that the summaries listing
     // its sessions stay behind until their next write.
@@ -737,7 +775,8 @@ interface DbInitiativeRow {
   revision: number;
   attention_revision: number;
   attention_settled_revision: number;
-  attention_kind: Exclude<InitiativeState, "active"> | null;
+  attention_kind: InitiativeAttention["kind"] | null;
+  inbox_position: number | null;
   attention_at_ms: number | null;
   created_at_ms: number;
   updated_at_ms: number;
@@ -754,6 +793,9 @@ function fromRow(row: DbInitiativeRow): InitiativeRow {
     revision: row.revision,
     attentionRevision: row.attention_revision,
     attentionSettledRevision: row.attention_settled_revision,
+    ...(row.inbox_position !== null
+      ? { inboxPosition: row.inbox_position }
+      : {}),
     ...(row.attention_kind !== null
       ? { attentionKind: row.attention_kind }
       : {}),

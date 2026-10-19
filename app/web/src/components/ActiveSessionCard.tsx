@@ -2,18 +2,14 @@ import { runtimeLabel } from "./common/runtimeLabel.ts";
 import { Fragment, memo } from "react";
 import {
   Activity,
-  Archive,
   ArrowUp,
-  ArchiveRestore,
   Check,
   ChevronRight,
   ClipboardList,
   FolderKanban,
   GitBranch,
   Hourglass,
-  Pencil,
   Play,
-  Trash2,
   Users,
   X,
   type LucideIcon,
@@ -49,10 +45,10 @@ import type { RowDensity } from "../lib/rowDensity.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
+import { IntegratedBadge } from "./IntegratedBadge.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
-import { UnreadDot } from "./UnreadDot.tsx";
 import {
   ListRowActions,
   type ListRowAction,
@@ -95,7 +91,7 @@ function WorktreeChanges({ relations }: { relations: SessionCardRelations }) {
       ) : null}
       {ahead ? (
         <span className="flex items-center text-muted-foreground">
-          <ArrowUp size={10} aria-hidden />
+          <ArrowUp size={12} aria-hidden />
           {ahead}
         </span>
       ) : null}
@@ -112,6 +108,8 @@ export interface ActiveSessionCardProps {
   relations: SessionCardRelations;
   /** Uncommitted changes in the session's worktree, from the existing status projection. */
   worktreeDirty?: boolean | undefined;
+  /** Confirmed containment from the linked worktree's existing Git status. */
+  worktreeIntegrated?: boolean;
   /**
    * The host's content density. Shared actions independently use touch-safe
    * targets on mobile layouts and coarse-pointer devices.
@@ -156,8 +154,7 @@ export interface ActiveSessionCardProps {
  * @component ActiveSessionCard
  * @purpose The Sessions inbox's rich card for ONE unsettled session: title +
  * age, a coloured state badge with what it cannot say, and the objects the
- * session hangs off, with shared Settle and overflow actions. Worktree and
- * Task jumps live in the menu so context remains available while acting.
+ * session hangs off, with Settle as its only row action.
  * @useWhen Rendering the Sessions section's working set.
  * @avoidWhen Listing sessions UNDER another object (a worktree's or project's
  * related sessions); those stay one-line `SessionRow`s.
@@ -174,16 +171,13 @@ function ActiveSessionCardImpl({
   now,
   active,
   relations,
-  worktreeDirty,
+  worktreeIntegrated = false,
   density = "tight",
   clusterExpanded = false,
   onOpen,
   onSettle,
   onDismissFailure,
   onOpenProject,
-  onOpenTask,
-  onOpenWorktree,
-  onRename,
   onArchive,
   onDelete,
   onToggleCluster,
@@ -251,7 +245,9 @@ function ActiveSessionCardImpl({
   // The status line's fallback: with no signal to show, it says the state in
   // words (the title's glyph says it as an icon), so the row is not just the
   // row's buttons.
-  const hasSignals = Boolean(cluster || backgroundChip || delivery || sentence);
+  const hasSignals = Boolean(
+    cluster || backgroundChip || delivery || worktreeIntegrated || sentence,
+  );
   const stateWords =
     status === "quiet"
       ? "Idle"
@@ -259,8 +255,7 @@ function ActiveSessionCardImpl({
 
   /**
    * Where a metadata item leads; `undefined` renders it as plain text. Only the
-   * Project opens from context. Worktree and Task actions live in the menu so
-   * the metadata line keeps the full card width without duplicating targets.
+   * Project opens from context. Other object actions live in the session.
    */
   const openMetaItem = (
     item: SessionCardMetaItem,
@@ -277,58 +272,8 @@ function ActiveSessionCardImpl({
       label: "Settle",
       accessibleLabel: settleLabel,
       icon: <Check />,
-      primary: true,
       disabled: Boolean(card.settleBlocked),
       onSelect: () => onSettle(session.id),
-    },
-    ...(session.worktreeId && onOpenWorktree
-      ? [
-          {
-            id: "worktree",
-            label: "Open worktree",
-            accessibleLabel: worktreeDirty
-              ? "Open worktree, uncommitted changes"
-              : "Open worktree",
-            icon: (
-              <span className="relative">
-                <GitBranch />
-                {worktreeDirty ? (
-                  <UnreadDot title="Uncommitted changes" placement="avatar" />
-                ) : null}
-              </span>
-            ),
-            onSelect: () => onOpenWorktree(session.worktreeId as string),
-          },
-        ]
-      : []),
-    ...(relations.taskId && onOpenTask
-      ? [
-          {
-            id: "task",
-            label: `Open task #${relations.taskId}`,
-            icon: <ClipboardList />,
-            onSelect: () => onOpenTask(relations.taskId as string),
-          },
-        ]
-      : []),
-    {
-      id: "rename",
-      label: "Rename",
-      icon: <Pencil />,
-      onSelect: () => onRename(session.id),
-    },
-    {
-      id: "archive",
-      label: session.archived ? "Restore" : "Archive",
-      icon: session.archived ? <ArchiveRestore /> : <Archive />,
-      onSelect: () => onArchive(session.id, !session.archived),
-    },
-    {
-      id: "delete",
-      label: "Delete",
-      icon: <Trash2 />,
-      variant: "destructive",
-      onSelect: () => onDelete(session.id),
     },
   ];
   return (
@@ -347,7 +292,7 @@ function ActiveSessionCardImpl({
           : changesText
             ? ` — ${changesText}`
             : ""
-      }${backgroundText ? ` — ${backgroundText}` : ""}${
+      }${worktreeIntegrated ? " — branch changes integrated into base" : ""}${backgroundText ? ` — ${backgroundText}` : ""}${
         clusterSummary ? ` — coordinating ${clusterSummary}` : ""
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
         card.stall ? ` — stalled: ${stallLabel(card.stall)}` : ""
@@ -377,9 +322,9 @@ function ActiveSessionCardImpl({
               // the card keeps three filled rows.
               <span className="flex min-w-0 items-center gap-1">
                 {session.model ? (
-                  <ProviderIcon provider={session.model.provider} size={11} />
+                  <ProviderIcon provider={session.model.provider} size={12} />
                 ) : (
-                  <AgentIcon size={11} className="shrink-0" aria-hidden />
+                  <AgentIcon size={12} className="shrink-0" aria-hidden />
                 )}
                 <span className="min-w-0 truncate">{identity}</span>
               </span>
@@ -425,6 +370,10 @@ function ActiveSessionCardImpl({
                 // keeps a badge's chrome.
                 className={`cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
               >
+                <ChevronRight
+                  aria-hidden
+                  className={`transition-transform ${clusterExpanded ? "rotate-90" : ""}`}
+                />
                 {clusterWorking ? <Spinner size="xs" /> : <Users aria-hidden />}
                 {/* On a narrow card the word goes, like every label on
                         this line, so the live counts keep room. */}
@@ -454,10 +403,6 @@ function ActiveSessionCardImpl({
                     {cluster.counts.jobs}
                   </span>
                 ) : null}
-                <ChevronRight
-                  aria-hidden
-                  className={`transition-transform ${clusterExpanded ? "rotate-90" : ""}`}
-                />
               </Badge>
             ) : null}
             {backgroundChip ? (
@@ -483,13 +428,10 @@ function ActiveSessionCardImpl({
                   until then the worktree's changes sit beside it above. */}
             {delivery ? (
               <span className="flex shrink-0 items-center">
-                <SessionDeliveryMark
-                  session={session}
-                  variant="responsive"
-                  showNumber
-                />
+                <SessionDeliveryMark session={session} variant="reference" />
               </span>
             ) : null}
+            {worktreeIntegrated ? <IntegratedBadge /> : null}
             {/* The badge already names the state; the sentences it
                   cannot say are an Idle card's queued work and what a cut
                   turn needs from you. */}
@@ -633,7 +575,7 @@ function MetaItem({
   const Icon = META_ICON[item.kind];
   const icon = Icon ? (
     <Icon
-      size={11}
+      size={12}
       className={`shrink-0 ${item.missing ? "text-warning" : ""}`}
       style={item.color ? { color: item.color } : undefined}
       aria-hidden

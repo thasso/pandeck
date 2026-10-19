@@ -133,6 +133,13 @@ export function updateInitiative(
 ): InitiativeRow {
   const current = requireInitiative(id);
   const title = patch.title !== undefined ? cleanTitle(patch.title) : undefined;
+  if (
+    (title === undefined || title === current.title) &&
+    (patch.description === undefined ||
+      patch.description === current.description) &&
+    (patch.state === undefined || patch.state === current.state)
+  )
+    return current;
   const row = initiativeStore.mutation((touch) => {
     initiativeStore.update(touch, current.id, {
       ...(title !== undefined ? { title } : {}),
@@ -167,7 +174,7 @@ export function settleInitiative(
   return initiativeStore.mutation((touch) => {
     initiativeStore.settle(touch, current.id, throughRevision);
     return initiativeStore.get(current.id)!;
-  });
+  }, false);
 }
 
 export function archiveInitiative(id: string): InitiativeRow {
@@ -502,7 +509,7 @@ function attentionOf(row: InitiativeRow): InitiativeAttention | undefined {
   return {
     revision: row.attentionRevision,
     settledRevision: row.attentionSettledRevision,
-    kind: row.attentionKind ?? (row.state === "done" ? "done" : "paused"),
+    kind: row.attentionKind ?? "activity",
     at: row.attentionAt ?? row.updatedAt,
   };
 }
@@ -541,6 +548,9 @@ function summaryOf(
     id: String(row.id),
     title: row.title,
     state: row.state,
+    ...(row.inboxPosition !== undefined
+      ? { inboxPosition: row.inboxPosition }
+      : {}),
     ...(attention ? { attention } : {}),
     progress: progressOf(members),
     ...(nextMilestone ? { nextMilestone } : {}),

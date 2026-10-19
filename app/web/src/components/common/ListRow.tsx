@@ -1,5 +1,5 @@
 import type { ComponentProps, KeyboardEventHandler, ReactNode } from "react";
-import { Item } from "../ui/item.tsx";
+import { Item, ItemContent } from "../ui/item.tsx";
 import { useInertOverflow } from "../../hooks/useInertOverflow.ts";
 import { CARD_OUTER_ROW, type RowDensity } from "../../lib/rowDensity.ts";
 
@@ -24,8 +24,10 @@ type ContentProps = {
   pinned?: ReactNode;
   /** Fixed controls at the end of the last line, or title for a one-line row. */
   trailing?: ReactNode;
-  /** Shared item actions, inline at the end or in a separate touch strip. */
+  /** Right-aligned actions; two-line items keep their context line full-width. */
   actions?: ReactNode;
+  /** Include context in the action column instead of only the final content lines. */
+  actionSpan?: "content" | "all" | undefined;
 };
 
 type Props = ContentProps &
@@ -79,6 +81,7 @@ export function ListRow({
   pinned,
   trailing,
   actions,
+  actionSpan,
   ...props
 }: Props) {
   return (
@@ -125,6 +128,7 @@ export function ListRow({
           pinned={pinned}
           trailing={trailing}
           actions={actions}
+          actionSpan={actionSpan}
         />
       )}
     </Item>
@@ -147,6 +151,7 @@ export function ListRowContent({
   pinned,
   trailing,
   actions,
+  actionSpan = "content",
 }: ContentProps) {
   const contextRef = useInertOverflow<HTMLDivElement>();
   const signalsRef = useInertOverflow<HTMLDivElement>({ compact: true });
@@ -157,34 +162,34 @@ export function ListRowContent({
   const hasDetails = details !== undefined;
   const lines =
     1 + Number(hasContext) + Number(hasDetails) + Number(hasSignals);
-  const actionSlot = actions ? (
-    <div
-      className="-my-0.5 flex shrink-0 items-center touch-ui:my-0 touch-ui:mt-2 touch-ui:basis-full"
-      onClick={(event) => event.stopPropagation()}
-    >
-      {actions}
-    </div>
-  ) : null;
+  const actionStart =
+    actionSpan === "all" ? 1 : Math.max(hasContext ? 2 : 1, lines - 1);
+  const lineStyle = (line: number) => ({
+    gridRow: line,
+    gridColumn: actions && line >= actionStart ? "1" : "1 / -1",
+  });
   return (
-    <div
+    <ItemContent
+      layout={actions ? "list-actions" : "list"}
       data-list-row-lines={lines}
-      className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 px-2 ${
+      className={`min-w-0 content-center gap-x-1.5 gap-y-0 px-2 ${
         lines === 1
           ? density === "comfortable"
             ? "min-h-11 py-0"
             : "min-h-7 py-0.5"
           : density === "comfortable"
-            ? "py-2.5"
-            : "pt-1.5 pb-2.5"
+            ? "py-1"
+            : "py-0.5"
       }`}
     >
       {hasContext ? (
         <div
+          style={lineStyle(1)}
           className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground`}
         >
           <div
             ref={contextRef}
-            className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
+            className="flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
           >
             {context}
           </div>
@@ -200,7 +205,8 @@ export function ListRowContent({
         </div>
       ) : null}
       <div
-        className={`flex min-w-0 items-center gap-1.5 ${lines > 1 ? "py-1" : ""} ${actionSlot && !hasSignals && !hasDetails ? "touch-ui:flex-wrap" : ""}`}
+        style={lineStyle(1 + Number(hasContext))}
+        className={`flex min-w-0 items-center gap-1.5 ${lines > 1 ? "py-1" : ""}`}
       >
         {identity ?? (
           <>
@@ -217,14 +223,14 @@ export function ListRowContent({
             </span>
           </>
         )}
-        {!hasSignals && trailing ? (
+        {!hasSignals && !hasDetails && trailing ? (
           <span className="flex shrink-0 items-center gap-1.5">{trailing}</span>
         ) : null}
-        {!hasSignals && !hasDetails ? actionSlot : null}
       </div>
       {hasDetails ? (
         <div
-          className={`flex ${actionSlot && !hasSignals ? `${CARD_OUTER_ROW[density].min} touch-ui:flex-wrap` : CARD_OUTER_ROW[density].row} min-w-0 items-center text-xs text-muted-foreground`}
+          style={lineStyle(2 + Number(hasContext))}
+          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-1.5 text-xs text-muted-foreground`}
         >
           <div
             ref={detailsRef}
@@ -232,12 +238,17 @@ export function ListRowContent({
           >
             {details}
           </div>
-          {!hasSignals ? actionSlot : null}
+          {!hasSignals && trailing ? (
+            <span className="flex shrink-0 items-center gap-1.5">
+              {trailing}
+            </span>
+          ) : null}
         </div>
       ) : null}
       {hasSignals ? (
         <div
-          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs ${actionSlot ? "touch-ui:flex-wrap" : ""}`}
+          style={lineStyle(lines)}
+          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
         >
           <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5 text-muted-foreground">
             <div
@@ -257,9 +268,17 @@ export function ListRowContent({
               {trailing}
             </span>
           ) : null}
-          {actionSlot}
         </div>
       ) : null}
-    </div>
+      {actions ? (
+        <div
+          className="flex shrink-0 items-stretch justify-end self-stretch"
+          style={{ gridColumn: 2, gridRow: `${actionStart} / ${lines + 1}` }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {actions}
+        </div>
+      ) : null}
+    </ItemContent>
   );
 }

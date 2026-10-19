@@ -75,13 +75,19 @@ describe("ActiveSessionCard at rest", () => {
     expect(idle).not.toContain("backface-visibility:hidden");
   });
 
-  it("does not render the actions face until the card is turned", () => {
+  it("offers only Settle without an actions face or overflow", () => {
     const idle = markup({ id: "a" });
     expect(idle).not.toContain("Actions for");
     expect(idle).not.toContain("Close session actions");
-    // The front's own controls are always there — nothing here is hover-only.
-    expect(idle).toContain("Session actions");
-    expect(idle).toContain("Settle");
+    expect(idle).not.toContain("Session actions");
+    expect(idle).not.toContain("aria-haspopup");
+    const host = document.createElement("div");
+    host.innerHTML = idle;
+    const actions = host.querySelector('[aria-label="Item actions"]');
+    expect(actions?.querySelectorAll("button")).toHaveLength(1);
+    expect(actions?.querySelector("button")?.getAttribute("aria-label")).toBe(
+      "Settle — move out of the working set",
+    );
   });
 
   it("stays at the resting element count, without the face's share", () => {
@@ -137,16 +143,19 @@ describe("ActiveSessionCard lines", () => {
 });
 
 describe("ActiveSessionCard density", () => {
-  it("keeps shared actions compact while reserving labeled touch targets", () => {
+  it("keeps icon-only actions full-height with accessible touch targets", () => {
     const tight = markup({ id: "a", worktreeId: "wt" });
     const comfortable = markup({ id: "a", worktreeId: "wt" }, "comfortable");
-    expect(tight).toContain("size-6");
-    expect(tight).not.toContain("size-8");
-    expect(comfortable).toContain("size-6");
     for (const html of [tight, comfortable]) {
-      expect(html).toContain("touch-ui:min-h-11");
-      expect(html).toContain("touch-ui:size-11");
-      expect(html).toContain("Settle</span>");
+      const host = document.createElement("div");
+      host.innerHTML = html;
+      const action = host.querySelector('[aria-label="Item actions"] button');
+      expect(action?.className).toContain("h-auto min-h-6 w-6");
+      expect(action?.className).toContain("touch-ui:min-h-11 touch-ui:w-11");
+      expect(action?.getAttribute("aria-label")).toBe(
+        "Settle — move out of the working set",
+      );
+      expect(action?.textContent).toBe("");
     }
   });
 });
@@ -165,9 +174,10 @@ describe("ActiveSessionCard delivery", () => {
         ci: { state: "failure", total: 3 },
       },
     });
-    expect(html).toContain("CI failed");
-    // The card is ONE `role="button"`: unnamed in its `aria-label`, the chip is
-    // announced nowhere at all.
+    expect(html).toContain(">PR #12<");
+    expect(html).toContain(
+      'aria-label="Pull request: Checks failed · 3 checks · PR #12"',
+    );
     expect(html).toContain("pull request: Checks failed · 3 checks · PR #12");
   });
 });
@@ -387,7 +397,7 @@ describe("ActiveSessionCard worktree changes", () => {
       { worktreeAdditions: 12 },
     );
     expect(html).not.toContain("lines added");
-    expect(html).toContain(">#12<");
+    expect(html).toContain(">PR #12<");
   });
 });
 

@@ -20,7 +20,8 @@ import { Spinner } from "./common/load.tsx";
 import { TONE_BADGE, TONE_TEXT } from "./common/statusBadge.ts";
 
 /**
- * A SHAPE per state, not a tint per state. On a one-line row the glyph is the
+ * Outside the explicit `reference` variant, a SHAPE per state, not a tint per
+ * state. On a one-line row the glyph is the
  * whole indicator, so a mark that varied only in colour said nothing at all to
  * a reader with a colour-vision deficiency — the accessible name carried the
  * state and the screen carried none of it. The tone now rides on top of a glyph
@@ -90,13 +91,18 @@ export function SessionDeliveryMark({
   showNumber?: boolean;
   /** Worktree rows may collapse the number along with the label when narrow. */
   collapseNumber?: boolean;
+  /** `reference` shows PR/number with a fixed PR icon and state colour only. */
   /** `chip` states the state in words; `glyph` is icon-only; `responsive` yields to a narrow card container. */
-  variant?: "chip" | "glyph" | "responsive";
+  variant?: "chip" | "glyph" | "responsive" | "reference";
 }) {
   const delivery = sessionDelivery(session);
   if (!delivery) return null;
-  const Icon =
-    delivery.state === "creating" ? null : STATE_ICON[delivery.state];
+  const reference = variant === "reference";
+  const Icon = reference
+    ? GitPullRequest
+    : delivery.state === "creating"
+      ? null
+      : STATE_ICON[delivery.state];
 
   if (variant === "glyph") {
     return (
@@ -111,7 +117,8 @@ export function SessionDeliveryMark({
     );
   }
 
-  const number = showNumber ? session.pullRequest?.number : undefined;
+  const number =
+    showNumber || reference ? session.pullRequest?.number : undefined;
   // "PR #322" already names the number; with the number shown, the label
   // would say it twice.
   const labelIsNumber =
@@ -130,7 +137,7 @@ export function SessionDeliveryMark({
       role="img"
     >
       {Icon ? <Icon aria-hidden /> : <Spinner size="xs" />}
-      {labelIsNumber ? null : (
+      {labelIsNumber || reference ? null : (
         <span
           className={
             variant === "responsive" ? "session-status-badge-label" : undefined
@@ -143,8 +150,10 @@ export function SessionDeliveryMark({
         <span
           className={`tabular-nums ${variant === "responsive" && collapseNumber ? "session-status-badge-label" : ""}`}
         >
-          {collapseNumber ? `PR #${number}` : `#${number}`}
+          {reference || collapseNumber ? `PR #${number}` : `#${number}`}
         </span>
+      ) : reference ? (
+        <span>PR</span>
       ) : null}
     </Badge>
   );

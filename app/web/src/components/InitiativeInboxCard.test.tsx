@@ -2,8 +2,9 @@
 /**
  * Initiatives in the Sessions inbox, as the user meets them
  * (`docs/initiatives.md`, The attention list; `app/web/docs/ui-shell.md`): the
- * card's facts from the summary, Settle on a paused or done one only, the
- * session disclosure whose rows keep their own cards, controls that never
+ * card's facts from the summary, Settle on every unsettled item, active ones
+ * in the draggable working set and outcomes in Needs you, the session
+ * disclosure whose rows keep their own cards, controls that never
  * open the Initiative by accident, keyboard reach, and the inbox's loading,
  * error and empty claims with Initiatives counted.
  *   pnpm --filter @assistant/web test src/components/InitiativeInboxCard.test.tsx
@@ -51,6 +52,13 @@ function initiative(
     // Creation follows the id, as the sequence that allots both does.
     createdAt: NOW - 10_000_000 + Number(id),
     updatedAt: NOW - 120_000,
+    // Every Initiative arrives with unsettled activity (docs/initiatives.md).
+    attention: {
+      revision: 1,
+      settledRevision: 0,
+      kind: "activity",
+      at: NOW - 120_000,
+    },
     ...extra,
   };
 }
@@ -183,7 +191,7 @@ describe("Initiative items in the Sessions inbox", () => {
     expect(label).toContain("next milestone First hosted release");
   });
 
-  it("offers Settle on an unsettled outcome only, with the rendered revision", () => {
+  it("offers Settle on every unsettled item, with the rendered revision", () => {
     const view = mount();
     const { calls } = inbox(view, [
       initiative("1"),
@@ -195,15 +203,30 @@ describe("Initiative items in the Sessions inbox", () => {
         state: "done",
         attention: { revision: 1, settledRevision: 1, kind: "done", at: NOW },
       }),
-      // Active with an old, unsettled pause: still no Settle on active work.
+      // Active again after an unsettled pause: Settle takes that revision.
       initiative("4", {
-        attention: { revision: 1, settledRevision: 0, kind: "paused", at: NOW },
+        attention: { revision: 2, settledRevision: 0, kind: "paused", at: NOW },
+      }),
+      initiative("5", {
+        attention: {
+          revision: 4,
+          settledRevision: 4,
+          kind: "activity",
+          at: NOW,
+        },
       }),
     ]);
-    expect(card(view, "1")).not.toBeNull();
-    expect(within(view, "1", 'button[aria-label^="Settle"]')).toBeNull();
     expect(card(view, "3"), "a settled outcome is not an item").toBeNull();
-    expect(within(view, "4", 'button[aria-label^="Settle"]')).toBeNull();
+    expect(card(view, "5"), "settled activity is not an item").toBeNull();
+
+    // Active work settles like any other item, with the revision it rendered.
+    act(() => within(view, "1", 'button[aria-label^="Settle"]')!.click());
+    act(() => within(view, "4", 'button[aria-label^="Settle"]')!.click());
+    expect(calls.settled).toEqual([
+      ["1", 1],
+      ["4", 2],
+    ]);
+    calls.settled.length = 0;
 
     act(() => within(view, "2", 'button[aria-label^="Settle"]')!.click());
     expect(calls.settled).toEqual([["2", 3]]);
@@ -324,9 +347,11 @@ describe("Initiative items in the Sessions inbox", () => {
     expect([...listed].map((row) => row.dataset.listRowId)).toEqual([
       "initiative:7:s-a",
       "initiative:7:s-b",
-      "initiative:7:more",
     ]);
-    expect(listed[2]!.textContent).toContain("and 52 more");
+    // Every held session is listed; the rest are counted, not offered.
+    expect(card(view, "7")!.parentElement!.textContent).toContain(
+      "52 more sessions are not loaded",
+    );
 
     // The other Initiative lists the shared session as well.
     act(() => within(view, "8", "button[aria-expanded]")!.click());
@@ -359,7 +384,8 @@ describe("Initiative items in the Sessions inbox", () => {
     const rows = [
       ...view.container.querySelectorAll<HTMLElement>("[data-session-row]"),
     ].map((row) => row.dataset.listRowId);
-    expect(rows).toEqual(["initiative:7", "initiative:7:s-a", "s-a"]);
+    // The working set orders by position: the session is newer.
+    expect(rows).toEqual(["s-a", "initiative:7", "initiative:7:s-a"]);
     act(() => {
       card(view, "7")!.focus();
       card(view, "7")!.dispatchEvent(
@@ -391,16 +417,30 @@ describe("Initiative items in the Sessions inbox", () => {
     expect(card(view, "7")).toBeNull();
   });
 
-  it("orders active Initiatives newest first in their block above the sessions", () => {
+  it("orders active Initiatives with the sessions by position, as draggable items", () => {
     const view = mount();
-    inbox(view, [initiative("3"), initiative("12")], {
-      sessions: [session("s-a")],
-    });
-    expect(order(view)).toEqual(["initiative:12", "initiative:3", "s-a"]);
-    expect(
-      card(view, "12")!.closest("[data-inbox-initiatives]"),
-      "active work is its own block",
-    ).not.toBeNull();
+    inbox(
+      view,
+      [
+        initiative("3"),
+        initiative("12", { createdAt: NOW - 60_000 }),
+        // A manual position overrides creation time.
+        initiative("13", { inboxPosition: NOW - 1 }),
+      ],
+      { sessions: [session("s-a")], onSetInboxPositions: () => {} },
+    );
+    expect(order(view)).toEqual([
+      "initiative:13",
+      "initiative:12",
+      "s-a",
+      "initiative:3",
+    ]);
+    expect(needsYou(view), "active work is not an outcome").toEqual([]);
+    for (const id of ["3", "12", "13"])
+      expect(
+        card(view, id)!.closest("[data-inbox-card]")!.className,
+        "active Initiatives drag like sessions",
+      ).toContain("touch-manipulation");
   });
 
   it("is not empty with only an Initiative, and claims nothing before the list answers", () => {
@@ -514,13 +554,17 @@ describe("Initiative items in the Sessions inbox", () => {
       { sessions: [session("s-a")], density: "comfortable" },
     );
     const settle = within(view, "2", 'button[aria-label^="Settle"]')!;
-    // The comfortable inline action, a 28px target, as on a session card.
-    expect(settle.className).toContain("size-7");
+    // The shared list action: a 44px target under touch, as on a session card.
+    expect(settle.className).toContain("touch-ui:min-h-11");
+    expect(settle.className).toContain("touch-ui:w-11");
     act(() => within(view, "2", "button[aria-expanded]")!.click());
     const row = view.container.querySelector<HTMLElement>(
       '[data-list-row-id="initiative:2:s-a"]',
     )!;
-    expect(row.className).toContain("h-10");
+    // A one-line comfortable row is a 44px thumb target.
+    const line = row.querySelector<HTMLElement>("[data-list-row-lines]")!;
+    expect(line.dataset.listRowLines).toBe("1");
+    expect(line.className).toContain("min-h-11");
     expect(
       card(view, "2")!.closest("[data-inbox-needs-you]"),
       "a paused outcome is in Needs you on a phone too",
@@ -541,40 +585,44 @@ describe("Initiative items in the Sessions inbox", () => {
         view.container.querySelectorAll('[data-list-row-id="initiative:4"]'),
         "one card, never an active and an outcome copy",
       ).toHaveLength(1);
-      return item.closest("[data-inbox-needs-you]")
-        ? "needs-you"
-        : item.closest("[data-inbox-initiatives]")
-          ? "active"
-          : "elsewhere";
+      return item.closest("[data-inbox-needs-you]") ? "needs-you" : "active";
     };
     const count = () => barStore.get()?.needsYou;
     expect([placeOf(), count()]).toEqual(["active", 0]);
 
-    const outcome = (revision: number, settledRevision: number) =>
+    const at = (
+      state: "active" | "paused" | "done",
+      revision: number,
+      settledRevision: number,
+    ) =>
       initiative("4", {
-        state: revision === 2 ? "done" : "paused",
+        state,
         attention: {
           revision,
           settledRevision,
-          kind: revision === 2 ? "done" : "paused",
+          kind: state === "active" ? "activity" : state,
           at: NOW,
         },
       });
-    render([outcome(1, 0)]);
+    render([at("paused", 2, 0)]);
     expect([placeOf(), count()]).toEqual(["needs-you", 1]);
-    render([outcome(1, 1)]);
+    render([at("paused", 2, 2)]);
     expect([placeOf(), count()], "settled leaves both places").toEqual([
       "none",
       0,
     ]);
-    render([{ ...outcome(1, 1), state: "active" }]);
+    // New activity on active work brings it back to the working set.
+    render([at("active", 3, 2)]);
     expect([placeOf(), count()]).toEqual(["active", 0]);
-    expect(within(view, "4", 'button[aria-label^="Settle"]')).toBeNull();
+    act(() => within(view, "4", 'button[aria-label^="Settle"]')!.click());
     // A new outcome over the old cursor: back in Needs you, settling what it shows.
-    render([outcome(2, 1)]);
+    render([at("done", 4, 2)]);
     expect([placeOf(), count()]).toEqual(["needs-you", 1]);
     act(() => within(view, "4", 'button[aria-label^="Settle"]')!.click());
-    expect(calls.settled).toEqual([["4", 2]]);
+    expect(calls.settled).toEqual([
+      ["4", 3],
+      ["4", 4],
+    ]);
   });
 
   it("is a Needs you of its own with no session at all, and the count leads to it", () => {
@@ -639,11 +687,14 @@ describe("Initiative items in the Sessions inbox", () => {
     );
     expect(needsYou(view)).toEqual(["initiative:4", "asking", "initiative:5"]);
     expect(barStore.get()?.needsYou).toBe(3);
-    // Initiatives are never among the dragged items.
-    for (const id of ["4", "5", "6"])
+    // Needs you is never dragged; the active Initiative is.
+    for (const id of ["4", "5"])
       expect(
         card(view, id)!.closest("[data-inbox-card]")!.className,
       ).not.toContain("touch-manipulation");
+    expect(card(view, "6")!.closest("[data-inbox-card]")!.className).toContain(
+      "touch-manipulation",
+    );
     act(() => {
       card(view, "4")!.focus();
       card(view, "4")!.dispatchEvent(
@@ -656,7 +707,7 @@ describe("Initiative items in the Sessions inbox", () => {
     expect(positions).toEqual([]);
   });
 
-  it("lists at most five sessions, needing you first, then one more row to the Initiative", () => {
+  it("lists at most five sessions, needing you first, then reveals the rest inline", () => {
     const view = mount();
     const rows = Array.from({ length: 50 }, (_, index) =>
       session(`s${String(index).padStart(2, "0")}`, {
@@ -696,22 +747,11 @@ describe("Initiative items in the Sessions inbox", () => {
     const more = () =>
       view.container.querySelector<HTMLElement>(
         '[data-list-row-id="initiative:7:more"]',
-      )!;
-    expect(more().textContent).toContain("and 52 more");
-
-    // The more row opens the Initiative once per gesture, by click and by
-    // Enter, and neither closes the fold nor opens a session.
-    act(() => more().click());
-    act(() => {
-      more().dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
       );
-    });
-    expect(calls.opened).toEqual(["7", "7"]);
-    expect(calls.selected).toEqual([]);
-    expect(
-      within(view, "7", "button[aria-expanded]")!.getAttribute("aria-expanded"),
-    ).toBe("true");
+    // 50 held, 5 shown: 45 more can be revealed; 7 of 57 are not loaded.
+    expect(more()!.textContent).toContain("Show 45 more");
+    const notLoaded = () => card(view, "7")!.parentElement!.textContent;
+    expect(notLoaded()).toContain("7 more sessions are not loaded");
 
     // A newer session starts needing you: it moves up, and the list stays five.
     const asking = rows.map((row) =>
@@ -739,6 +779,18 @@ describe("Initiative items in the Sessions inbox", () => {
     act(() => within(view, "7", "button[aria-expanded]")!.click());
     expect(listed()).toHaveLength(6);
 
+    // Show more lists every held session in place: it opens nothing, keeps
+    // the fold open and goes away once there is nothing left to reveal.
+    act(() => more()!.click());
+    expect(calls.opened).toEqual([]);
+    expect(calls.selected).toEqual([]);
+    expect(
+      within(view, "7", "button[aria-expanded]")!.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(listed()).toHaveLength(49);
+    expect(more()).toBeNull();
+    expect(notLoaded()).toContain("8 more sessions are not loaded");
+
     // Every session still has its own card exactly once.
     for (const id of ["s00", "s48", "s49"])
       expect(
@@ -759,8 +811,11 @@ describe("Initiative items in the Sessions inbox", () => {
         ...view.container.querySelectorAll<HTMLElement>(
           '[data-list-row-id^="initiative:7:"]',
         ),
-      ].map((row) => [row.dataset.listRowId, row.textContent]);
-    expect(rows()).toEqual([["initiative:7:more", "and 57 more"]]);
+      ].map((row) => row.dataset.listRowId);
+    const note = () => card(view, "7")!.parentElement!.textContent;
+    // Nothing held: nothing to offer, every session counted as not loaded.
+    expect(rows()).toEqual([]);
+    expect(note()).toContain("57 more sessions are not loaded");
 
     render(
       [initiative("7", { sessionIds: ["a", "b", "x"], sessionCount: 57 })],
@@ -768,15 +823,13 @@ describe("Initiative items in the Sessions inbox", () => {
         sessions: [session("a"), session("b")],
       },
     );
-    expect(rows().at(-1)).toEqual(["initiative:7:more", "and 55 more"]);
-    expect(rows()).toHaveLength(3);
+    expect(rows()).toEqual(["initiative:7:a", "initiative:7:b"]);
+    expect(note()).toContain("55 more sessions are not loaded");
 
     render([initiative("7", { sessionIds: ["a", "b"], sessionCount: 2 })], {
       sessions: [session("a"), session("b")],
     });
-    expect(rows().map(([id]) => id)).toEqual([
-      "initiative:7:a",
-      "initiative:7:b",
-    ]);
+    expect(rows()).toEqual(["initiative:7:a", "initiative:7:b"]);
+    expect(note()).not.toContain("not loaded");
   });
 });

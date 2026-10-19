@@ -40,6 +40,8 @@ export function sessionRowKey(session: SessionListItem): string {
     relativeTime(session.updatedAt),
     session.harness ?? "",
     session.agentType ?? "",
+    // Takeover changes title styling even when the visible status stays quiet.
+    session.spawnOwnership === "coordinator" ? "peer" : "",
     session.isStreaming ? "1" : "",
     session.awaitingInput ? "1" : "",
     // The blocking badge is WORDED by the attention kind, so the kind is part

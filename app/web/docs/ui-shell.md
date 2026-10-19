@@ -233,15 +233,57 @@ section that reads a domain list subscribes only while the main pane RENDERS it
 — the browser listing its entry reads nothing — because for the skills library a
 subscribe is what makes the server rescan the user's working tree.
 
-Initiatives (`docs/initiatives.md`) have their canonical location in a group at
-the TOP of the Projects browser, because they sit above Projects. The group is
-bounded: it lists the active and paused Initiatives. It is a `ListGroupSection`
-band whose heading folds it like every group, and a link of its own in the
-band's actions opens `/initiatives`, the index page that lists every live
-Initiative by state (done ones included). It holds the `initiatives` topic only
-while the Projects browser is on screen; an Initiative's page holds it too, with
-Tasks and Projects for the live map. There is no Initiatives section of its own
-and no view of an Initiative inside a Project page.
+The Projects browser has two top-level `ListGroupSection` separator rows:
+Initiatives, then Projects. Each independently folds its own list and remembers
+its open state for the tab. Initiatives (`docs/initiatives.md`) have their
+canonical location in the first group, above the Project tree. That group is
+bounded: it lists the active and paused Initiatives. Its heading only folds the
+list; there is no link to the Initiatives index. Individual rows still open
+their Initiative. It holds the `initiatives` topic only while the Projects
+browser is on screen; an Initiative's page holds it too, with Tasks and Projects
+for the live map. There is no Initiatives section of its own and no view of an
+Initiative inside a Project page.
+
+`InitiativeBrowserRow` is the quieter, structure-oriented counterpart to its
+Attention card: title and compact Task progress, then a leading Contents
+control, with a Paused badge in an optional context line. Initiative and Project
+progress share quiet ready/in-progress/blocked/done/total counters with aligned
+bars. Done includes completed and archived Tasks for display, without changing
+stored Task status. In progress is blue; blocked is mild yellow state rather
+than warning chrome. Buckets are disjoint and sum to total, with meanings in the
+tooltip and accessible name. Visible headers reuse the keyed membership read for
+the exact split, retaining only derived counts across graph-cache eviction. The
+shared cache keeps six idle graph reads plus the open map page's. An open
+Contents draws the graph, so its row pins that read (`retainInitiativeDetail`,
+counted per Initiative) while it stays open and mounted; closing or unmounting
+releases the pin, and the read rejoins the idle bound without being read again.
+Seven open rows thus read once each instead of evicting each other. Contents
+remembers its expansion per Initiative. Its first level lists only Projects of
+member Tasks, with progress scoped to those Tasks, not the Project as a whole.
+Unassigned members have a No Project row, and unresolved registry ids remain
+visible. These rows navigate to their Projects. Their own Contents disclosure
+remembers a separate per-Initiative Project expansion and shows only non-removed
+Worktrees explicitly linked to those member Tasks or holding positively
+Task-scoped sessions, never all Worktrees in the Project. This layer reuses
+`WorktreeList`/`WorktreeRow`, with their PR/Integrated badges, Git signals and
+route highlight, but no creation actions. Only visible Worktrees join the
+browser's shared status-watch demand. Each host reports its own visible ids: an
+Initiative row and the Project tree each withdraw only their own report when
+folded away or unmounted, as when the top-level Projects group folds, leaving
+the other hosts' demand in place. A remembered Known coordinators fold precedes
+Projects, using recorded spawn/Workflow relationships and the server's Worktree
+ancestry projection; only verified roots appear, with missing session details
+stated rather than guessed. In-progress member Tasks appear within Worktrees,
+one as an inline link or several behind a disclosure. This context is not a
+required Task tier above sessions. Worktree Sessions expand separately from
+Tasks in the shared Tree, with five known rows initially and inline paging.
+Sessions without a Worktree appear directly under their member Project;
+ambiguous or unavailable placement stays in Other related sessions. Session
+scope comes from recorded Task context, bounded Task-start ids, Workflow roles
+and eligible owned descendants, never merely sharing a checkout or Project.
+Missing relationship coverage stays explicit. Session folds are remembered per
+Initiative/Worktree, preserve sibling Project folds, and add no lifecycle
+actions.
 
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached
@@ -582,6 +624,10 @@ straight into retention, so that obsolete stamp is cleared with it; a stamp that
 still holds is kept. A peer waiting on a HUMAN is never dismissible: the work
 cannot proceed without the answer, so that bubble is dealt with by opening it.
 
+All session lists use the ownership-aware
+[session identity pattern](ui-components.md#session-identity), including peer
+folds, related-object lists and history shelves.
+
 The card's DISCLOSURE is the one way a folded peer is listed, and it lists every
 one of them as a TREE: each peer directly under the session that spawned it,
 indented by its depth, siblings in inbox order. A peer that coordinates peers of
@@ -589,17 +635,21 @@ its own shows their count, and any peer running background jobs shows how many.
 The button states what the click will do, and closing it returns to the
 cluster's single row. Listed that way, folded peers are ordinary rows of the
 browser: focusable, swipeable, and openable. When the coordinator's tree also
-holds settled peers, the open fold ends in a "Show N settled" row that puts them
-back in the tree where they were spawned, after their live siblings; they stay
-on the Settled shelf (listed here under a prefixed row id, so the two rows never
-share one), offer no Settle, and count for nothing on the card. No other settled
-session listed in the tree offers a Settle either — a bridge kept by live work
-below it, a settled peer running again, or a settled role of a Workflow Run: it
-is already down, and the coordinator's (or the run's) own Settle is the one that
-reaches it. Those live rows still count on the card, though: in its total, and
-under running or jobs while they are busy. A session whose peers are ALL settled
-has no fold at all: the card is about live work, and that history is on the
-Settled shelf and in the session's own composer ledge.
+holds settled peers, the open fold ends in a plain `ListExpansionRow` named
+"Settled", with its count and leading chevron. It shares the session rows'
+height and typography with Initiative Show more, rather than using a category
+band. Expanding it reveals only settled peers beneath that header, leaving the
+live peer rows unchanged. Peer and Task sub-task disclosures also put their
+chevrons before their labels. Settled peers stay on the Settled shelf (listed
+here under a prefixed row id, so the two rows never share one), offer no Settle,
+and count for nothing on the card. No other settled session listed in the tree
+offers a Settle either — a bridge kept by live work below it, a settled peer
+running again, or a settled role of a Workflow Run: it is already down, and the
+coordinator's (or the run's) own Settle is the one that reaches it. Those live
+rows still count on the card, though: in its total, and under running or jobs
+while they are busy. A session whose peers are ALL settled has no fold at all:
+the card is about live work, and that history is on the Settled shelf and in the
+session's own composer ledge.
 
 A formal **Workflow Run** is one Sessions inbox item too
 ([Task-676](pa://task/676)). Every live run — active or paused — is a card of
@@ -709,57 +759,55 @@ scrolls the card into view and focuses it, once per address, honouring reduced
 motion.
 
 An **Initiative** is a Sessions inbox item too (`docs/initiatives.md`, The
-attention list), following the run's precedent where it can. An ACTIVE
-Initiative is always an item and offers no Settle, since ongoing work has no
-outcome to acknowledge; a paused or done one is an item while its attention
-revision is unsettled, and Settle — the one Initiative write the UI makes —
+attention list). Every state supports Settle. An Initiative is an item while its
+attention revision is unsettled. Initiative edits, member Task changes, and
+linked session creation, turn starts and outcomes raise that revision. Settle
 sends exactly the revision the clicked card rendered, captured at the click and
-sent after the settle exit, so an outcome raised meanwhile stays an item. The
-send belongs to the click, not to the list: leaving the Sessions section during
-the exit sends it then, as a swipe's does, and never twice. A refused or
-unanswered Settle is said under its card while the visible inbox draws that card
-with its Settle; otherwise, including when the optimistic Settle has taken the
-card away, it is announced naming the Initiative (`docs/messaging.md`). The card
-has the session card's three rows: "Initiative" with its done/total progress and
-the time; the title led by the Initiative glyph while active, else by its Paused
-or Done mark; then the disclosure of its sessions, how many Tasks are ready and
-how many blocked, and the next open milestone, with Settle at the right edge.
-Everything else is in its spoken label. Opening the card goes to
-`/initiatives/:id`, the map. Every fact comes from the `initiatives` summary,
-the next milestone's title included, so no card reads a graph, a layout or the
-Tasks topic, and a member Task's change reaches it as the Initiative's own
-event.
+sent after the settle exit, so newer activity stays an item. The send belongs to
+the click, not to the list: leaving the Sessions section during the exit sends
+it then, as a swipe's does, and never twice. A refused or unanswered Settle is
+said under its card while the visible inbox draws that card with its Settle;
+otherwise, including when the optimistic Settle has taken the card away, it is
+announced naming the Initiative (`docs/messaging.md`). The card has the session
+card's three rows: "Initiative" with its done/total progress and the time; the
+title led by the Initiative glyph while active, else by its Paused or Done mark;
+then the disclosure of its sessions, how many Tasks are ready and how many
+blocked, and the next open milestone, with Settle at the right edge. Everything
+else is in its spoken label. Opening the card goes to `/initiatives/:id`, the
+map. Every fact comes from the `initiatives` summary, the next milestone's title
+included, so no card reads a graph, a layout or the Tasks topic, and a member
+Task's change reaches it as the Initiative's own event.
 
-WHERE an Initiative stands follows what it asks of the user. An ACTIVE one is in
-its own block at the top of the working set, below **Needs you**, newest first.
-An unsettled paused or done outcome is an item OF **Needs you**, like an ended
-Workflow Run: ordered among its items on their creation scale (the summary's
-`createdAt`, since nobody drags it), counted by the bar's waiting-on-you number,
-and the first row that number moves to when it leads the block. Settled, it
-leaves both places; active again, it goes back to the block. Each Initiative is
-exactly ONE card in exactly one place, and neither place drags: dragging would
-be a second Initiative write, and there is no Initiative inbox position. Nothing
-above the cards holds a loading placeholder for Initiatives, but neither the
-cold-start nor the "nothing needs you" claim is made before the Initiative list
-has answered — an inbox whose only item is an Initiative is not empty — and a
-failed list read is stated above Needs you with a retry, over any items still
-held. A failed read is not that answer: before one arrives, the failure stands
-alone, with no empty claim beside it, while sessions already held still show.
+An unsettled ACTIVE Initiative shares the draggable working set below **Needs
+you**. An unsettled paused/done Initiative stands in Needs you and counts toward
+its waiting-on-you number. Both use the same position scale as sessions and
+runs: `inboxPosition` when manually placed, otherwise `createdAt`. Dragging
+picks up the Initiative and its expanded rows as one block, and mixed placements
+persist atomically. With Project grouping enabled, Initiatives belong to
+Unassigned. Needs you remains non-draggable, as for sessions. Settle takes an
+Initiative out of Attention until new activity, without changing its state or
+its Project browser entry. Neither settling nor dragging raises its attention
+revision. Each Initiative has one card in one place. Nothing above the cards
+holds a loading placeholder for Initiatives, but neither the cold-start nor the
+"nothing needs you" claim is made before the Initiative list has answered — an
+inbox whose only item is an Initiative is not empty — and a failed list read is
+stated above Needs you with a retry, over any items still held. A failed read is
+not that answer: before one arrives, the failure stands alone, with no empty
+claim beside it, while sessions already held still show.
 
 The disclosure lists the sessions started from its member Tasks. The summary
 carries at most 50 of their ids (the DATA bound, newest first, with the full
-count); the open disclosure shows at most FIVE of those this browser holds (the
-DISPLAY bound), those needing the user first — waiting on a human or holding an
-unresolved failure, what lifts a Workflow Run's line — then newest created, ties
-by id. Whatever it does not show — past five, past the 50 ids, or not held here
-— is ONE "and N more" row, N being the full count minus the rows shown, which
-opens the Initiative's page; it is never shown when every session fits. Unlike a
+count); the open disclosure initially shows five of those this browser holds,
+those needing the user first, then newest created, ties by id. Show more expands
+the remaining known sessions inline. Sessions beyond the summary's ids or not
+held here have a non-interactive "not loaded" count. Embedded session rows share
+`ListRow` and `SessionTitleRow` with the other compact session lists. Unlike a
 run's roles they are NOT folded: each keeps its own card, and a session may be
 listed under several Initiatives. The listed rows are compact `working` rows
 that open the session; they carry no Settle, Archive or Delete, which stay on
 the session's own card. The disclosure and Settle never open the Initiative, a
-session row opens only its session, and the more row only the Initiative; all of
-them are rows of the list for the arrow keys.
+session row opens only its session, and Show more stays in the list; interactive
+entries are reachable with the list's arrow keys.
 
 ## Pull Requests
 

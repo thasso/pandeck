@@ -40,8 +40,13 @@ import { getDb } from "./index.ts";
  * unarchived, settled or unsettled, a raised outcome, a tombstone, a new row.
  * Initiative summaries list a member Task's sessions only while they are live
  * (`initiativeStore`), so every such write reports here once it has landed.
+ * `activity` distinguishes new sessions, turn starts and outcomes from human
+ * acknowledgement or removal, which must not wake a settled Initiative.
  */
-type SessionLivenessListener = (ids: readonly string[]) => void;
+type SessionLivenessListener = (
+  ids: readonly string[],
+  activity: boolean,
+) => void;
 
 const livenessListeners = new Set<SessionLivenessListener>();
 
@@ -50,11 +55,11 @@ function subscribeLiveness(listener: SessionLivenessListener): () => void {
   return () => livenessListeners.delete(listener);
 }
 
-function noteLiveness(ids: readonly string[]): void {
+function noteLiveness(ids: readonly string[], activity = false): void {
   if (!ids.length) return;
   for (const listener of livenessListeners) {
     try {
-      listener(ids);
+      listener(ids, activity);
     } catch {
       // A listener cannot make an already durable session write fail.
     }
@@ -432,7 +437,7 @@ function upsert(input: SessionUpsert): boolean {
           ? 1
           : 0,
       );
-    if (!prev) noteLiveness([input.id]);
+    if (!prev) noteLiveness([input.id], true);
     return true;
   } catch (err) {
     console.warn(
@@ -621,11 +626,12 @@ function markReadThrough(id: string): void {
  */
 function touch(id: string, ts = Date.now()): void {
   try {
-    getDb()
+    const result = getDb()
       .prepare(
         "UPDATE session_index SET updated_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL AND updated_at_ms < ?",
       )
       .run(ts, id, ts);
+    if (result.changes > 0) noteLiveness([id], true);
   } catch {
     // best-effort mirror
   }
@@ -725,7 +731,7 @@ function recordSessionOutcome(
       RETURNING attention_revision AS revision`,
       )
       .get(kind, ts, id) as { revision: number } | undefined;
-    if (row) noteLiveness([id]);
+    if (row) noteLiveness([id], true);
     return row?.revision;
   } catch {
     return undefined;

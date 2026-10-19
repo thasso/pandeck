@@ -70,7 +70,7 @@ describe("InitiativeBrowserGroup", () => {
     ).not.toBeNull();
   });
 
-  it("is the app's group band: its heading folds the rows, and a link of its own opens the index (F051)", () => {
+  it("is the app's group band: its heading only folds the rows, with no index link (F051)", () => {
     const onNavigate = vi.fn();
     const labs = hostedLabsSummary();
     const { container } = mount(
@@ -90,15 +90,14 @@ describe("InitiativeBrowserGroup", () => {
     const fold = heading!.querySelector("button")!;
     expect(fold.textContent).toContain("Initiatives");
     expect(fold.getAttribute("aria-expanded")).toBe("true");
-    // The index link sits beside the fold, never inside it.
-    const index = heading!.querySelector<HTMLAnchorElement>(
-      'a[href="/initiatives"]',
-    )!;
-    expect(index.getAttribute("aria-label")).toBe("Show all Initiatives");
-    expect(index.closest("button")).toBeNull();
-    expect(fold.querySelector("a")).toBeNull();
+    expect(
+      container.querySelector('a[href="/initiatives"]'),
+      "the group links to no Initiatives index",
+    ).toBeNull();
     const row = () =>
-      container.querySelector(`a[href="/initiatives/${labs.id}"]`);
+      container.querySelector<HTMLAnchorElement>(
+        `a[href="/initiatives/${labs.id}"]`,
+      );
     expect(row()).not.toBeNull();
 
     // The heading folds and unfolds; it navigates nowhere.
@@ -110,17 +109,14 @@ describe("InitiativeBrowserGroup", () => {
     act(() => fold.click());
     expect(fold.getAttribute("aria-expanded")).toBe("true");
 
-    // The link navigates in the app on a plain click, and leaves a modifier
-    // click (a new tab) to the browser.
+    // A row still opens its Initiative in the app on a plain click, and leaves
+    // a modifier click (a new tab) to the browser.
     const click = (init: MouseEventInit) => {
       const event = new MouseEvent("click", {
         bubbles: true,
         cancelable: true,
         ...init,
       });
-      // What the app decided, read after React's root listener on the same
-      // container (the link stops the click there); then the browser's own
-      // navigation, which jsdom cannot do, is cancelled.
       let prevented: boolean | undefined;
       const observe = (seen: Event) => {
         prevented = seen.defaultPrevented;
@@ -128,15 +124,14 @@ describe("InitiativeBrowserGroup", () => {
       };
       container.addEventListener("click", observe, { once: true });
       act(() => {
-        index.dispatchEvent(event);
+        row()!.dispatchEvent(event);
       });
       return prevented;
     };
     expect(click({})).toBe(true);
-    expect(onNavigate).toHaveBeenCalledWith("/initiatives");
+    expect(onNavigate).toHaveBeenCalledWith(`/initiatives/${labs.id}`);
     onNavigate.mockClear();
     expect(click({ ctrlKey: true })).toBe(false);
-    expect(click({ metaKey: true })).toBe(false);
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
