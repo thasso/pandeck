@@ -184,14 +184,10 @@ export class AccountBenchStore {
     };
     if ("available" in snapshot) {
       if (!snapshot.available) return;
+      // Spend control budgets only extra credits beyond the included windows;
+      // a reached or zero budget is no evidence the subscription is out.
       for (const window of snapshot.windows)
         add(window.label, window.usedPercent, window.resetsAt);
-      if (snapshot.spendControl)
-        add(
-          null,
-          snapshot.spendControl.usedPercent,
-          snapshot.spendControl.resetsAt,
-        );
     } else {
       if (!snapshot.rateLimitsAvailable) return;
       for (const window of [snapshot.fiveHour, snapshot.weekly])

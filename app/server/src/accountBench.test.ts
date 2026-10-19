@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -598,9 +604,9 @@ it("persistence contains live benches only, with no cleared scope records", () =
   expect(f.restart().bench("acct", "opus")).toBeUndefined();
 });
 
-it("OpenAI named windows and spend limits are scoped correctly", () => {
+it("OpenAI named windows bench only their model", () => {
   const f = fixture("openai-codex");
-  const usage = {
+  f.store.usageSnapshot("acct", {
     fetchedAt: f.now(),
     available: true,
     windows: [
@@ -612,19 +618,141 @@ it("OpenAI named windows and spend limits are scoped correctly", () => {
       },
     ],
     spendControl: null,
-  } as OpenAiUsageSnapshot;
-  f.store.usageSnapshot("acct", usage);
+  } as OpenAiUsageSnapshot);
   expect(f.store.bench("acct", "gpt-5-3-codex-spark")).toBeDefined();
   expect(f.store.bench("acct", "gpt-6-sol")).toBeUndefined();
-  f.store.usageSnapshot("acct", {
-    ...usage,
-    spendControl: {
-      usedPercent: 100,
-      resetsAt: new Date(f.now() + 120_000).toISOString(),
-    },
-  } as OpenAiUsageSnapshot);
-  expect(f.store.bench("acct", "gpt-6-sol")?.until).toBe(f.now() + 120_000);
 });
+
+/** A live `/wham/usage` body: a Business seat whose extra-credit budget is zero. */
+function wham(now: number, weeklyUsed: number, weeklyResetMs: number) {
+  return mapOpenAiUsageResponse(
+    {
+      plan_type: "self_serve_business_prolite",
+      rate_limit: {
+        allowed: weeklyUsed < 100,
+        limit_reached: weeklyUsed >= 100,
+        primary_window: {
+          used_percent: weeklyUsed,
+          limit_window_seconds: 604800,
+          reset_at: weeklyResetMs / 1000,
+        },
+        secondary_window: null,
+      },
+      credits: {
+        has_credits: true,
+        unlimited: false,
+        overage_limit_reached: false,
+        balance: null,
+      },
+      spend_control: {
+        reached: true,
+        individual_limit: {
+          source: "workspace_spend_controls",
+          unit: "credit",
+          limit: "0",
+          used: "0.0",
+          remaining: "0.0",
+          used_percent: 100,
+          reset_at: (now + 30 * 86_400_000) / 1000,
+        },
+      },
+    },
+    now,
+  );
+}
+
+it("a reached extra-credit spend control does not bench included weekly room", () => {
+  const f = fixture("openai-codex");
+  const usage = wham(f.now(), 1, f.now() + 6 * 86_400_000);
+  expect(usage.spendControl).toMatchObject({ reached: true, usedPercent: 100 });
+  f.store.usageSnapshot("acct", usage);
+  expect(f.store.bench("acct", "gpt-6-sol")).toBeUndefined();
+  expect(f.store.read("acct", true).state).toBe("ok");
+  expect(
+    rankAccountCandidates(
+      [
+        {
+          profile: {
+            id: "acct",
+            provider: "openai-codex",
+            enabled: true,
+            enterprise: false,
+            health: f.store.read("acct", true),
+          },
+          offersModel: true,
+          usage: null,
+        },
+        {
+          profile: {
+            id: "exhausted",
+            provider: "openai-codex",
+            enabled: true,
+            enterprise: false,
+            health: { state: "ok", since: f.now() },
+          },
+          offersModel: true,
+          usage: null,
+          limited: { until: f.now() + 86_400_000 },
+        },
+      ],
+      { model: { provider: "openai-codex", modelId: "gpt-6-sol" } },
+      { fiveHourUsedThreshold: 90, weeklyUsedThreshold: 95 },
+      f.now(),
+      "openai-default",
+    ),
+  ).toEqual({ profileId: "acct" });
+});
+
+it("an exhausted included window still benches until its own reset, whatever the spend control says", () => {
+  const f = fixture("openai-codex");
+  const weeklyReset = f.now() + 86_400_000;
+  f.store.usageSnapshot("acct", wham(f.now(), 100, weeklyReset));
+  expect(f.store.bench("acct", "gpt-6-sol")).toMatchObject({
+    until: weeklyReset,
+    source: "usage",
+  });
+  f.store.usageSnapshot("acct", {
+    ...wham(f.now(), 100, weeklyReset),
+    spendControl: null,
+  });
+  expect(f.store.bench("acct", "gpt-6-sol")?.until).toBe(weeklyReset);
+});
+
+it("fresh weekly room clears a persisted usage bench a spend control created", () => {
+  const f = fixture("openai-codex");
+  const spendReset = f.now() + 30 * 86_400_000;
+  writeFileSync(
+    f.path,
+    JSON.stringify({
+      acct: { "": { since: f.now(), until: spendReset, source: "usage" } },
+    }),
+  );
+  const restarted = f.restart();
+  expect(restarted.bench("acct", "gpt-6-sol")?.until).toBe(spendReset);
+  restarted.usageSnapshot("acct", wham(f.now(), 1, f.now() + 86_400_000));
+  expect(restarted.bench("acct", "gpt-6-sol")).toBeUndefined();
+  expect(JSON.parse(readFileSync(f.path, "utf8"))).toEqual({});
+});
+
+it.each(["quota", "rate_limit"] as const)(
+  "weekly room beside a reached spend control cannot clear a %s bench",
+  (kind) => {
+    const f = fixture("openai-codex");
+    f.store.runFailure("acct", { kind }, "openai-codex");
+    const until = f.store.bench("acct", "gpt-6-sol")!.until;
+    f.store.usageSnapshot("acct", wham(f.now(), 1, f.now() + 86_400_000));
+    expect(f.store.bench("acct", "gpt-6-sol")).toMatchObject({
+      source: kind,
+      until,
+    });
+    const restarted = f.restart();
+    restarted.usageSnapshot("acct", wham(f.now(), 1, f.now() + 86_400_000));
+    expect(restarted.bench("acct", "gpt-6-sol")).toMatchObject({
+      source: kind,
+      until,
+    });
+  },
+);
 it("persistence is private, unchanged evidence does not rewrite, and expiry survives restart", () => {
   const f = fixture();
   const until = f.now() + 1000;
