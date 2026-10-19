@@ -148,6 +148,14 @@ describe("state and activity classification", () => {
         item({ id: "f", kind: "shell", intent: "service" }),
       ),
     ).toBe("Shell · service");
+    expect(
+      backgroundWorkBackendLabel(item({ id: "g", backend: "server-task" })),
+    ).toBe("PA server");
+    expect(
+      backgroundWorkKindLabel(
+        item({ id: "h", backend: "server-task", kind: "check-watch" }),
+      ),
+    ).toBe("Check watch");
   });
 });
 

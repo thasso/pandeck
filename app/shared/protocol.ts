@@ -6653,18 +6653,24 @@ export interface SubagentThreadRunDetail {
  *
  * `claude-query` work runs inside a retained Claude query and is addressed
  * through that vendor's task controls; `host-process` work is supervised by PA
- * itself (a process group or an owned socket). The distinction is a FACT about
- * the item, never a second capability model: every consumer addresses work by
- * its PA id whichever backend runs it.
+ * itself (a process group or an owned socket); `server-task` work is a job PA's
+ * own server process runs (a check watch), with no host epoch and nothing
+ * outside the process to address. The distinction is a FACT about the item,
+ * never a second capability model: every consumer addresses work by its PA id
+ * whichever backend runs it.
  */
-export type BackgroundWorkBackend = "claude-query" | "host-process";
+export type BackgroundWorkBackend =
+  "claude-query" | "host-process" | "server-task";
 
 /** How much of a command line the registry row keeps; the rest is cut. */
 export const BACKGROUND_WORK_COMMAND_MAX_CHARS = 4_096;
 
-/** What the item does. Both monitor kinds may outlive the provider turn. */
+/**
+ * What the item does. Both monitor kinds may outlive the provider turn. A
+ * `check-watch` is a `server-task` waiting on a pull request's checks.
+ */
 export type BackgroundWorkKind =
-  "shell" | "monitor-command" | "monitor-websocket";
+  "shell" | "monitor-command" | "monitor-websocket" | "check-watch";
 
 /**
  * Whether the owner WAITS on an item (`awaited`, the default: a build, a test
@@ -6790,6 +6796,8 @@ export interface SessionBackgroundActivity {
   shellCount: number;
   monitorCommandCount: number;
   monitorWebsocketCount: number;
+  /** Items PA's own server runs (`server-task`), any kind. Omitted when none. */
+  serverTaskCount?: number;
   /** Items reserved but not yet executing. */
   startingCount: number;
   /** Nonterminal items with an outstanding Stop request. */

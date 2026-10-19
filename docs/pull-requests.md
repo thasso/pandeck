@@ -761,6 +761,47 @@ visibly `none`), and no hosted changes-requested review. Its blockers are
 returned explicitly. It is not a dry-run merge: provider permissions and branch
 rules remain authoritative when a later merge is attempted.
 
+#### Background watches
+
+`background: true` turns the wait into PA background work instead of blocking
+the agent's turn for up to two hours, which is what led agents to start whole
+watcher sessions just to wait for CI. It implies `wait`.
+
+- **One observation in the call.** The tool polls once in the call itself. If
+  that already ends the wait (checks finished, the PR is not open, the page is
+  truncated, the rate limit is low), it returns that result inline, with
+  `observation.mode: "background"` and no task id, and starts nothing. Otherwise
+  it admits a `check-watch` item on the `server-task` backend
+  (`app/server/src/serverTasks.ts`) and returns
+  `{ taskId, state: "running", hint }` at once. No progress is streamed.
+- **Owned like any background work.** The item shows in the Background tasks
+  view as a "Check watch" run by "PA server". The owner stops it with
+  `background_tasks` (`stop`, `stop_all`), and a human with Stop. Ending or
+  stopping the turn that started it does not stop it: the job resolves its own
+  provider client, bound to its own abort signal. Only an interactive top-level
+  user session may start one, and a refusal throws `Background work denied: …`.
+- **Frozen budget.** Admission asks for a lifetime of `timeoutSeconds` plus one
+  minute, capped by Settings → Background processes (default 60 minutes). The
+  job's effective timeout is that lifetime minus the minute,
+  `min(timeoutSeconds, lifetime − 1 min)`. The watch therefore ends with its
+  normal `timeout` result, reporting the effective `timeoutSeconds`, before its
+  deadline Stop. The Stop only ends a job whose last provider call overran. Its
+  clock runs from before the call's own poll, so admission never restarts it: a
+  30-second watch with a 120-second interval polls twice and times out at 30
+  seconds.
+- **Delivery.** The final result, the same JSON a `wait: true` call returns
+  except for `observation.mode`, is the item's JSON artifact (its output file),
+  and its terminal fact reaches the owner through the unchanged completion
+  delivery: it wakes an idle session, steers into a running pi turn, and waits
+  for a running Claude turn to end, then wakes it. The row's one-line summary
+  names the stop reason, the verdict and the short head SHA.
+- **Restart.** A watch runs inside PA's server process and is never resumed.
+  When it ends during a deployment drain (naturally in the grace, by any Stop,
+  or by the drain's own Stop), or boot reconciliation ends it after a crash, its
+  owner is still woken after the restart (`steering-and-queueing.md`,
+  "Background facts survive a restart"). A watch the restart ended says so in
+  its summary; one that finished in the grace keeps its real result.
+
 ### The indicator on session rows
 
 A card is durable state of ONE session's transcript, so until you open that

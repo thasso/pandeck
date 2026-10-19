@@ -12,17 +12,15 @@ import type {
   PullRequestDetail,
   WorktreePullRequestReview,
 } from "@assistant/shared";
-import {
-  defineAgentTool,
-  jsonResult,
-  type AgentTool,
-  type ToolCallContext,
-} from "../mcp/tool.ts";
+import { defineAgentTool, jsonResult, type AgentTool } from "../mcp/tool.ts";
+
+import { launchServerTask } from "../serverTasks.ts";
 
 type PullRequestCheckWatchParams = {
   repo: string;
   number: number;
   wait?: boolean;
+  background?: boolean;
   timeoutSeconds?: number;
   pollIntervalSeconds?: number;
 };
@@ -50,13 +48,43 @@ type StopReason =
   | "rate_limited"
   | "timeout";
 
-interface WatchOutcome {
-  snapshot: PullRequestCheckSnapshot;
+/** What the caller asked for; `background` names the request, not the path. */
+type ObservationMode = "current" | "wait" | "background";
+
+interface WatchOutcome<Snapshot> {
+  snapshot: Snapshot;
   stopReason: StopReason;
   polls: number;
   elapsedMs: number;
   /** Provider requests left after the last poll, when it reports a budget. */
   rateLimitRemaining?: number;
+}
+
+/**
+ * One observation of whatever a watch waits on, before the generic stop rules
+ * judge it. The pull-request observation below is one; a ref observation can be
+ * another without forking the loop.
+ */
+interface CheckObservation<Snapshot> {
+  snapshot: Snapshot;
+  /** The commit whose checks were read; a new one restarts the no-checks grace. */
+  headSha: string;
+  checks: GitHostingRefChecks;
+  /** A stop the observation itself decides, judged before the generic ones. */
+  stopReason?: StopReason;
+  rateLimitRemaining?: number;
+}
+
+/**
+ * The state one watch carries from poll to poll. A background watch continues
+ * the SAME state its foreground first observation started, so its clock runs
+ * from before that first poll and never restarts at admission.
+ */
+interface CheckWatch {
+  startedAt: number;
+  polls: number;
+  /** When the CURRENT head was first seen without checks; a push restarts it. */
+  bare: { headSha: string; since: number } | null;
 }
 
 const DEFAULT_TIMEOUT_SECONDS = 30 * 60;
@@ -104,8 +132,8 @@ export function createPullRequestCheckWatchTool(options: {
   return defineAgentTool<PullRequestCheckWatchParams>({
     name: options.name,
     label: options.label,
-    description: `Report the current checks for one ${options.providerName} pull request, or wait until every observed check is terminal and then report. Returns exact-head check details, failure/log links and agent log-reader arguments when the provider exposes them, hosted-review state, the repository's reported default branch and supported merge methods, and a conservative canMergeNow preflight. Read-only. wait defaults to false; waiting polls every ${poll.default} seconds for up to 30 minutes by default and supports up to 2 hours.${options.providerName === "GitHub" ? ` A wait also stops early with rate_limited when fewer than ${MIN_RATE_LIMIT_REMAINING} REST requests remain.` : ""}`,
-    searchHint: `${options.providerName} pull request PR CI checks status wait watch pending complete failure logs mergeable merge readiness`,
+    description: `Report the current checks for one ${options.providerName} pull request, or wait until every observed check is terminal and then report. Returns exact-head check details, failure/log links and agent log-reader arguments when the provider exposes them, hosted-review state, the repository's reported default branch and supported merge methods, and a conservative canMergeNow preflight. Read-only. wait defaults to false; waiting polls every ${poll.default} seconds for up to 30 minutes by default and supports up to 2 hours.${options.providerName === "GitHub" ? ` A wait also stops early with rate_limited when fewer than ${MIN_RATE_LIMIT_REMAINING} REST requests remain.` : ""} background runs the wait as a PA background task and returns at once.`,
+    searchHint: `${options.providerName} pull request PR CI checks status wait watch pending complete failure logs mergeable merge readiness background`,
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -119,6 +147,11 @@ export function createPullRequestCheckWatchTool(options: {
         wait: {
           type: "boolean",
           description: `Wait for at least one check to appear and then until all observed checks finish. Defaults to false, which returns one current snapshot immediately. A closed or merged PR also stops the wait, and a head still without any check after ${NO_CHECKS_GRACE_SECONDS} seconds stops it with no_checks (state none).`,
+        },
+        background: {
+          type: "boolean",
+          description:
+            "Wait as PA background work instead of blocking this turn; implies wait. Returns a taskId at once, or the result itself when the first observation already ends the wait. The final result, the same JSON a wait returns, arrives automatically when the wait ends and is kept as its output file; ending your turn does not stop it, background_tasks stop does. Bounded by the Settings background lifetime (default 60 minutes), which shortens a longer timeoutSeconds. Only an interactive top-level session may start one.",
         },
         timeoutSeconds: {
           type: "number",
@@ -145,174 +178,378 @@ export function createPullRequestCheckWatchTool(options: {
         poll.min,
         MAX_POLL_INTERVAL_SECONDS,
       );
+      const background = params.background === true;
+      const wait = background || params.wait === true;
+      const mode: ObservationMode = background
+        ? "background"
+        : wait
+          ? "wait"
+          : "current";
+      const timeoutMs = timeoutSeconds * 1_000;
+      const pollIntervalMs = pollIntervalSeconds * 1_000;
       const resolved = await options.resolve(params.repo, ctx.signal);
-      const outcome = await observePullRequestChecks({
-        provider: resolved.provider,
+      const watch = startCheckWatch();
+      const observe = observePullRequest(
+        resolved.provider,
         number,
-        wait: params.wait === true,
-        timeoutMs: timeoutSeconds * 1_000,
-        pollIntervalMs: pollIntervalSeconds * 1_000,
-        ctx,
-        repo: resolved.repo,
-        providerName: options.providerName,
-      });
-      const { detail, checks } = outcome.snapshot;
-      const review =
-        detail.state === "open"
-          ? await resolved.provider.pullRequestReview(number)
-          : null;
-      // The SHARED verdict, identical to the one the managed finish tool
-      // re-derives before merging.
-      const { checksFinished, canMergeNow, mergeBlockers } =
-        evaluatePullRequestReadiness(detail, checks, review);
-      const compactChecks = checks.checks.map((check) =>
-        compactCheck(check, resolved.repo),
+        options.providerName,
       );
-      const failedChecks = compactChecks.filter((check) =>
-        isFailedGitCheckStatus(check.status),
-      );
-      // Capabilities travel with the readiness answer so an agent can pick a
-      // method the repository actually supports before it calls the finish
-      // tool, which revalidates them anyway.
-      const capabilities = await repositoryCapabilitiesFor(resolved.provider);
-      const payload = {
-        provider: resolved.provider.kind,
-        repo: resolved.repo,
-        pullRequest: {
+      const report = async (
+        outcome: WatchOutcome<PullRequestCheckSnapshot>,
+        provider: ResolvedWatchProvider,
+        effectiveTimeoutSeconds: number,
+      ) =>
+        pullRequestCheckPayload({
+          resolved: provider,
           number,
-          url: resolved.pullRequestUrl(number),
-          state: detail.state,
-          draft: detail.draft,
-          mergeable: detail.mergeable,
-          head: { ref: detail.headBranch, sha: detail.headSha },
-          base: { ref: detail.baseBranch },
-        },
-        checks: {
-          headSha: detail.headSha,
-          state: checks.state,
-          finished: checksFinished,
-          ...(checks.total !== undefined ? { total: checks.total } : {}),
-          returned: compactChecks.length,
-          truncated: checks.truncated === true,
-          checks: compactChecks,
-          failedChecks,
-          failureLinks: uniqueStrings(
-            failedChecks.flatMap((check) =>
-              [check.logUrl, check.url].filter(
-                (value): value is string => typeof value === "string",
-              ),
-            ),
-          ),
-        },
-        review: detail.state === "open" ? review : null,
-        repository: {
-          ...capabilities,
-          // Absent facts are UNKNOWN, never permission: a merge tool refuses
-          // rather than guessing a default branch or a method set.
-          capabilitiesKnown:
-            capabilities.defaultBranch !== undefined &&
-            capabilities.mergeMethods !== undefined,
-        },
-        canMergeNow,
-        mergeBlockers,
-        mergeabilityNote:
-          "Conservative preflight from open/draft state, provider mergeability, observed checks, and hosted changes-requested reviews. The provider remains authoritative for permissions and branch rules when merge is attempted.",
-        observation: {
-          mode: params.wait === true ? "wait" : "current",
-          stopReason: outcome.stopReason,
-          polls: outcome.polls,
-          elapsedSeconds: Math.round(outcome.elapsedMs / 100) / 10,
-          timeoutSeconds,
+          outcome,
+          mode,
+          timeoutSeconds: effectiveTimeoutSeconds,
           pollIntervalSeconds,
-          ...(outcome.rateLimitRemaining !== undefined
-            ? { rateLimitRemaining: outcome.rateLimitRemaining }
+        });
+
+      if (!background) {
+        const outcome = await continueCheckWatch(watch, {
+          observe,
+          wait,
+          timeoutMs,
+          pollIntervalMs,
+          signal: ctx.signal,
+          sleepFirst: false,
+          ...(ctx.progress
+            ? {
+                onWaiting: (step: CheckObservation<PullRequestCheckSnapshot>) =>
+                  ctx.progress!(
+                    jsonResult({
+                      provider: resolved.provider.kind,
+                      repo: resolved.repo,
+                      pullRequestNumber: number,
+                      status: "waiting",
+                      polls: watch.polls,
+                      elapsedSeconds: seconds(Date.now() - watch.startedAt),
+                      headSha: step.headSha,
+                      checks: {
+                        state: step.checks.state,
+                        finished: false,
+                        total: step.checks.total ?? step.checks.checks.length,
+                      },
+                    }),
+                  ),
+              }
             : {}),
+        });
+        return jsonResult(await report(outcome, resolved, timeoutSeconds));
+      }
+
+      // The first observation runs in this call, so a wait that is already
+      // over returns its answer inline and starts nothing.
+      throwIfAborted(ctx.signal);
+      const first = await pollCheckWatch(watch, {
+        observe,
+        wait: true,
+        timeoutMs,
+      });
+      if (first.outcome)
+        return jsonResult(
+          await report(first.outcome, resolved, timeoutSeconds),
+        );
+      const target = `${resolved.repo}#${number}`;
+      const started = await launchServerTask({
+        ctx,
+        kind: "check-watch",
+        label: `${options.providerName} PR checks ${target}`,
+        command: `${options.name} ${target}`,
+        sourceTool: options.name,
+        requestedTimeoutMs: timeoutMs,
+        async run(budget) {
+          // Its own provider, bound to the job's signal: the turn that started
+          // this wait may end, or be stopped, long before the wait does.
+          const jobProvider = await options.resolve(params.repo, budget.signal);
+          const outcome = await continueCheckWatch(watch, {
+            observe: observePullRequest(
+              jobProvider.provider,
+              number,
+              options.providerName,
+            ),
+            wait: true,
+            timeoutMs: budget.timeoutMs,
+            pollIntervalMs,
+            signal: budget.signal,
+            sleepFirst: true,
+          });
+          const payload = await report(
+            outcome,
+            jobProvider,
+            budget.timeoutMs / 1_000,
+          );
+          return {
+            payload,
+            summary: checkWatchSummary(
+              outcome,
+              options.providerName,
+              budget.timeoutMs,
+            ),
+          };
         },
-      };
-      return jsonResult(payload);
+      });
+      return jsonResult(started);
     },
   });
 }
 
-async function observePullRequestChecks(input: {
-  provider: GitHostingProvider;
+/** One bounded line naming why the background wait ended and what it saw. */
+function checkWatchSummary(
+  outcome: WatchOutcome<PullRequestCheckSnapshot>,
+  providerName: string,
+  timeoutMs: number,
+): string {
+  const { detail, checks } = outcome.snapshot;
+  const head = detail.headSha.slice(0, 7);
+  switch (outcome.stopReason) {
+    case "checks_finished": {
+      const total = checks.total ?? checks.checks.length;
+      const failed = checks.checks.filter((check) =>
+        isFailedGitCheckStatus(check.status),
+      ).length;
+      return failed > 0
+        ? `Checks finished: ${checks.state}, ${failed} of ${total} failed on ${head}`
+        : `Checks finished: ${checks.state}, ${total} ${total === 1 ? "check" : "checks"} on ${head}`;
+    }
+    case "timeout":
+      return `Timed out after ${seconds(timeoutMs)} s: ${checks.state} on ${head}`;
+    case "pull_request_not_open":
+      return `PR #${detail.number} is ${detail.state}`;
+    case "rate_limited":
+      return `Stopped early: ${providerName} rate limit (${outcome.rateLimitRemaining ?? 0} left)`;
+    case "no_checks":
+      return `No checks appeared on ${head} within ${NO_CHECKS_GRACE_SECONDS} s`;
+    case "checks_truncated":
+      return `Stopped: more checks on ${head} than one verdict covers`;
+    case "current_status":
+      return `Current checks: ${checks.state} on ${head}`;
+  }
+}
+
+/**
+ * The tool's JSON result, built ONE way for every mode, so a background
+ * wait's artifact can never drift from what the same wait returns in a turn.
+ */
+async function pullRequestCheckPayload(input: {
+  resolved: ResolvedWatchProvider;
   number: number;
-  wait: boolean;
-  timeoutMs: number;
-  pollIntervalMs: number;
-  ctx: ToolCallContext;
-  repo: string;
-  providerName: string;
-}): Promise<WatchOutcome> {
-  const startedAt = Date.now();
-  let polls = 0;
-  // When the CURRENT head was first seen without checks; a push restarts it.
-  // (Cast, not annotation: TS would narrow the loop's reads to `null`.)
-  let bare = null as { headSha: string; since: number } | null;
-  while (true) {
-    throwIfAborted(input.ctx.signal);
-    const polledAt = Date.now();
-    const detail = await input.provider.pullRequestDetail(input.number);
+  outcome: WatchOutcome<PullRequestCheckSnapshot>;
+  mode: ObservationMode;
+  timeoutSeconds: number;
+  pollIntervalSeconds: number;
+}) {
+  const { resolved, number, outcome } = input;
+  const { detail, checks } = outcome.snapshot;
+  const review =
+    detail.state === "open"
+      ? await resolved.provider.pullRequestReview(number)
+      : null;
+  // The SHARED verdict, identical to the one the managed finish tool
+  // re-derives before merging.
+  const { checksFinished, canMergeNow, mergeBlockers } =
+    evaluatePullRequestReadiness(detail, checks, review);
+  const compactChecks = checks.checks.map((check) =>
+    compactCheck(check, resolved.repo),
+  );
+  const failedChecks = compactChecks.filter((check) =>
+    isFailedGitCheckStatus(check.status),
+  );
+  // Capabilities travel with the readiness answer so an agent can pick a
+  // method the repository actually supports before it calls the finish
+  // tool, which revalidates them anyway.
+  const capabilities = await repositoryCapabilitiesFor(resolved.provider);
+  return {
+    provider: resolved.provider.kind,
+    repo: resolved.repo,
+    pullRequest: {
+      number,
+      url: resolved.pullRequestUrl(number),
+      state: detail.state,
+      draft: detail.draft,
+      mergeable: detail.mergeable,
+      head: { ref: detail.headBranch, sha: detail.headSha },
+      base: { ref: detail.baseBranch },
+    },
+    checks: {
+      headSha: detail.headSha,
+      state: checks.state,
+      finished: checksFinished,
+      ...(checks.total !== undefined ? { total: checks.total } : {}),
+      returned: compactChecks.length,
+      truncated: checks.truncated === true,
+      checks: compactChecks,
+      failedChecks,
+      failureLinks: uniqueStrings(
+        failedChecks.flatMap((check) =>
+          [check.logUrl, check.url].filter(
+            (value): value is string => typeof value === "string",
+          ),
+        ),
+      ),
+    },
+    review: detail.state === "open" ? review : null,
+    repository: {
+      ...capabilities,
+      // Absent facts are UNKNOWN, never permission: a merge tool refuses
+      // rather than guessing a default branch or a method set.
+      capabilitiesKnown:
+        capabilities.defaultBranch !== undefined &&
+        capabilities.mergeMethods !== undefined,
+    },
+    canMergeNow,
+    mergeBlockers,
+    mergeabilityNote:
+      "Conservative preflight from open/draft state, provider mergeability, observed checks, and hosted changes-requested reviews. The provider remains authoritative for permissions and branch rules when merge is attempted.",
+    observation: {
+      mode: input.mode,
+      stopReason: outcome.stopReason,
+      polls: outcome.polls,
+      elapsedSeconds: seconds(outcome.elapsedMs),
+      timeoutSeconds: input.timeoutSeconds,
+      pollIntervalSeconds: input.pollIntervalSeconds,
+      ...(outcome.rateLimitRemaining !== undefined
+        ? { rateLimitRemaining: outcome.rateLimitRemaining }
+        : {}),
+    },
+  };
+}
+
+/** One pull request's head and its checks; a PR that is not open stops the wait. */
+function observePullRequest(
+  provider: GitHostingProvider,
+  number: number,
+  providerName: string,
+): () => Promise<CheckObservation<PullRequestCheckSnapshot>> {
+  return async () => {
+    const detail = await provider.pullRequestDetail(number);
     if (!detail)
-      throw new Error(
-        `${input.providerName} returned no pull request #${input.number}.`,
-      );
+      throw new Error(`${providerName} returned no pull request #${number}.`);
     if (!detail.headSha)
       throw new Error(
-        `${input.providerName} pull request #${input.number} has no head commit SHA.`,
+        `${providerName} pull request #${number} has no head commit SHA.`,
       );
-    const checks = await input.provider.refChecks(detail.headSha);
-    const checksFinished = checksAreFinished(checks);
-    const snapshot = { detail, checks, checksFinished };
-    polls += 1;
-    const elapsedMs = Date.now() - startedAt;
-    const rateLimitRemaining = input.provider.rateLimit?.()?.remaining;
-    const stop = (stopReason: StopReason): WatchOutcome => ({
-      snapshot,
+    const checks = await provider.refChecks(detail.headSha);
+    const rateLimitRemaining = provider.rateLimit?.()?.remaining;
+    return {
+      snapshot: { detail, checks, checksFinished: checksAreFinished(checks) },
+      headSha: detail.headSha,
+      checks,
+      ...(detail.state !== "open"
+        ? { stopReason: "pull_request_not_open" as const }
+        : {}),
+      ...(rateLimitRemaining !== undefined ? { rateLimitRemaining } : {}),
+    };
+  };
+}
+
+function startCheckWatch(): CheckWatch {
+  return { startedAt: Date.now(), polls: 0, bare: null };
+}
+
+/**
+ * One observation and the stop rules over it: an outcome when the watch ends
+ * here, otherwise the observation it continues past.
+ */
+async function pollCheckWatch<Snapshot>(
+  watch: CheckWatch,
+  input: {
+    observe: () => Promise<CheckObservation<Snapshot>>;
+    wait: boolean;
+    timeoutMs: number;
+  },
+): Promise<
+  | { outcome: WatchOutcome<Snapshot> }
+  | { outcome?: undefined; observation: CheckObservation<Snapshot> }
+> {
+  const polledAt = Date.now();
+  const observation = await input.observe();
+  const { checks, headSha, rateLimitRemaining } = observation;
+  watch.polls += 1;
+  const elapsedMs = Date.now() - watch.startedAt;
+  const stop = (stopReason: StopReason) => ({
+    outcome: {
+      snapshot: observation.snapshot,
       stopReason,
-      polls,
+      polls: watch.polls,
       elapsedMs,
       ...(rateLimitRemaining !== undefined ? { rateLimitRemaining } : {}),
-    });
+    },
+  });
 
-    if (!input.wait) return stop("current_status");
-    if (detail.state !== "open") return stop("pull_request_not_open");
-    if (checks.truncated === true) return stop("checks_truncated");
-    if (checksFinished) return stop("checks_finished");
-    if (checks.state === "none") {
-      if (bare?.headSha !== detail.headSha)
-        bare = { headSha: detail.headSha, since: polledAt };
-      if (Date.now() - bare.since >= NO_CHECKS_GRACE_SECONDS * 1_000)
-        return stop("no_checks");
-    } else bare = null;
-    if (
-      rateLimitRemaining !== undefined &&
-      rateLimitRemaining < MIN_RATE_LIMIT_REMAINING
-    )
-      return stop("rate_limited");
-    if (elapsedMs >= input.timeoutMs) return stop("timeout");
+  if (!input.wait) return stop("current_status");
+  if (observation.stopReason) return stop(observation.stopReason);
+  if (checks.truncated === true) return stop("checks_truncated");
+  if (checksAreFinished(checks)) return stop("checks_finished");
+  if (checks.state === "none") {
+    if (watch.bare?.headSha !== headSha)
+      watch.bare = { headSha, since: polledAt };
+    if (Date.now() - watch.bare.since >= NO_CHECKS_GRACE_SECONDS * 1_000)
+      return stop("no_checks");
+  } else watch.bare = null;
+  if (
+    rateLimitRemaining !== undefined &&
+    rateLimitRemaining < MIN_RATE_LIMIT_REMAINING
+  )
+    return stop("rate_limited");
+  if (elapsedMs >= input.timeoutMs) return stop("timeout");
+  return { observation };
+}
 
-    input.ctx.progress?.(
-      jsonResult({
-        provider: input.provider.kind,
-        repo: input.repo,
-        pullRequestNumber: input.number,
-        status: "waiting",
-        polls,
-        elapsedSeconds: Math.round(elapsedMs / 100) / 10,
-        headSha: detail.headSha,
-        checks: {
-          state: checks.state,
-          finished: false,
-          total: checks.total ?? checks.checks.length,
-        },
-      }),
-    );
+/**
+ * The next sleep, capped by what is left of the timeout from the watch's own
+ * start. Zero once it is spent: the poll after it then ends with `timeout`.
+ */
+function nextSleepMs(
+  watch: CheckWatch,
+  timeoutMs: number,
+  pollIntervalMs: number,
+): number {
+  return Math.max(
+    0,
+    Math.min(pollIntervalMs, timeoutMs - (Date.now() - watch.startedAt)),
+  );
+}
+
+/**
+ * Poll, sleep, poll … until a stop rule ends the watch. `sleepFirst` continues
+ * a watch whose last poll ran elsewhere (the background job after the call's
+ * first observation) at the sleep that poll would have taken.
+ */
+async function continueCheckWatch<Snapshot>(
+  watch: CheckWatch,
+  input: {
+    observe: () => Promise<CheckObservation<Snapshot>>;
+    wait: boolean;
+    timeoutMs: number;
+    pollIntervalMs: number;
+    signal: AbortSignal | undefined;
+    sleepFirst: boolean;
+    onWaiting?: (observation: CheckObservation<Snapshot>) => void;
+  },
+): Promise<WatchOutcome<Snapshot>> {
+  if (input.sleepFirst)
     await abortableSleep(
-      Math.min(input.pollIntervalMs, input.timeoutMs - elapsedMs),
-      input.ctx.signal,
+      nextSleepMs(watch, input.timeoutMs, input.pollIntervalMs),
+      input.signal,
+    );
+  while (true) {
+    throwIfAborted(input.signal);
+    const step = await pollCheckWatch(watch, input);
+    if (step.outcome) return step.outcome;
+    input.onWaiting?.(step.observation);
+    await abortableSleep(
+      nextSleepMs(watch, input.timeoutMs, input.pollIntervalMs),
+      input.signal,
     );
   }
+}
+
+function seconds(ms: number): number {
+  return Math.round(ms / 100) / 10;
 }
 
 function allChecksFinished(checks: GitHostingCheck[]): boolean {

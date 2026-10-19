@@ -5,6 +5,7 @@
  * a repo-wide task feed — a reconstruction that must report "I could not see
  * that far back" rather than an empty job list, which reads as "nothing ran".
  */
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ForgejoApiConfig } from "../../forgejoClient.ts";
 import type { ToolCallContext } from "../../mcp/tool.ts";
@@ -25,6 +26,10 @@ const {
   forgejoListActionsRunsTool,
   forgejoGetActionsRunTool,
 } = await import("./forgejoCiTools.ts");
+const { sessionStore } = await import("../../db/sessionStore.ts");
+const { backgroundWorkStore } = await import("../../db/backgroundWorkStore.ts");
+const { sessionArtifactFile } =
+  await import("../../mcp/toolGroups/packRuntime.ts");
 
 const config: ForgejoApiConfig = {
   baseUrl: "https://git.example.com",
@@ -170,6 +175,107 @@ describe("forgejo_watch_pull_request_checks", () => {
     ]);
     expect(payload.canMergeNow).toBe(false);
     expect(payload.mergeBlockers).toContain("checks_failed");
+  });
+});
+
+describe("forgejo_watch_pull_request_checks in the background", () => {
+  let serial = 0;
+  function backgroundCtx(): ToolCallContext {
+    serial += 1;
+    const sessionId = `forgejo-background-${serial}`;
+    sessionStore.upsert({
+      id: sessionId,
+      scope: "user",
+      harness: "claude-sdk",
+      agentType: "developer",
+    });
+    return {
+      toolCallId: `forgejo-background-call-${serial}`,
+      session: { sessionId, harness: "claude-sdk", agentType: "developer" },
+      signal: new AbortController().signal,
+    };
+  }
+
+  /** PR #12 whose single status is pending, then pending, then success. */
+  function mockStatuses() {
+    const calls = { statuses: 0 };
+    globalThis.fetch = routedFetch([
+      ["/pulls/12/reviews", () => jsonResponse([])],
+      [
+        "/pulls/12",
+        () =>
+          jsonResponse({
+            number: 12,
+            state: "open",
+            merged: false,
+            mergeable: true,
+            head: { ref: "feature", sha: "abc1234def" },
+            base: { ref: "main" },
+          }),
+      ],
+      [
+        "/commits/abc1234def/status",
+        () => {
+          calls.statuses += 1;
+          return jsonResponse(
+            {
+              sha: "abc1234def",
+              statuses: [
+                {
+                  context: "ci",
+                  status: calls.statuses >= 3 ? "success" : "pending",
+                },
+              ],
+            },
+            { "x-total-count": "1" },
+          );
+        },
+      ],
+    ]) as unknown as typeof fetch;
+    return calls;
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  test("returns a running task after one observation, and its artifact is the wait's result", async () => {
+    vi.useFakeTimers();
+    mockStatuses();
+    const waiting = forgejoWatchPullRequestChecksTool.execute(
+      { repo: "acme/app", number: 12, wait: true },
+      backgroundCtx(),
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    const foreground = parse(await waiting);
+
+    const calls = mockStatuses();
+    const started = parse(
+      await forgejoWatchPullRequestChecksTool.execute(
+        { repo: "acme/app", number: 12, background: true },
+        backgroundCtx(),
+      ),
+    );
+    expect(started.state).toBe("running");
+    expect(calls.statuses).toBe(1);
+    expect(backgroundWorkStore.getItem(started.taskId)).toMatchObject({
+      backend: "server-task",
+      kind: "check-watch",
+      label: "Forgejo PR checks acme/app#12",
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(calls.statuses).toBe(3);
+    const ended = backgroundWorkStore.getItem(started.taskId)!;
+    expect(ended.state).toBe("completed");
+    const file = sessionArtifactFile(
+      ended.ownerSessionId,
+      ended.evidence!.artifactId!,
+    )!;
+    const artifact = JSON.parse(readFileSync(file.path, "utf8"));
+    expect(artifact.observation.mode).toBe("background");
+    expect({
+      ...artifact,
+      observation: { ...artifact.observation, mode: "wait" },
+    }).toEqual(foreground);
   });
 });
 

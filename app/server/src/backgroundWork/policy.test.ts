@@ -145,8 +145,12 @@ test("a session may own only the background backend its harness supports", () =>
 test("the harness capability predicate is the shared one", () => {
   assert.deepEqual(backgroundWorkBackendsForHarness("claude-sdk"), [
     "claude-query",
+    "server-task",
   ]);
-  assert.deepEqual(backgroundWorkBackendsForHarness("pi"), ["host-process"]);
+  assert.deepEqual(backgroundWorkBackendsForHarness("pi"), [
+    "host-process",
+    "server-task",
+  ]);
   assert.equal(
     harnessSupportsBackgroundWorkBackend("pi", "claude-query"),
     false,
@@ -155,6 +159,11 @@ test("the harness capability predicate is the shared one", () => {
     harnessSupportsBackgroundWorkBackend("claude-sdk", "claude-query"),
     true,
   );
+  for (const harness of ["pi", "claude-sdk"] as const)
+    assert.equal(
+      harnessSupportsBackgroundWorkBackend(harness, "server-task"),
+      true,
+    );
 });
 
 test("a user session executing a workflow step is workflow-owned", () => {

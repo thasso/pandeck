@@ -30,10 +30,11 @@
  * model never learns is not.
  */
 
+import type { BackgroundWorkBackend } from "@assistant/shared";
 import type { BackgroundWorkStopOrigin } from "../db/backgroundWorkStore.ts";
 
-/** Which provider executes the work, mirroring the durable row's `backend`. */
-export type BackgroundDeliveryBackend = "claude-query" | "host-process";
+/** Which runtime executes the work: the durable row's `backend`. */
+export type BackgroundDeliveryBackend = BackgroundWorkBackend;
 
 /**
  * `wake` means the fact must reach the model on its own account. Delivery
@@ -90,7 +91,10 @@ export interface BackgroundDeliveryDecision {
  * all — `supervisor.ts` suppresses `completionRecorded` while draining, and the
  * hub stops delivery with admission — so a branch for it would be unreachable
  * code claiming a guarantee the system does not make. Restart resumes nothing;
- * a drain fact lives in its row and the UI.
+ * a drain fact lives in its row and the UI. A `server-task` fact recorded while
+ * draining, or ended by boot, is the one exception, and it still never comes
+ * through here: the store owes it a retained `wake` receipt in its terminal
+ * transaction, which boot restores (`backgroundCompletionNotices.ts`).
  */
 export function backgroundCompletionDisposition(
   evidence: BackgroundDeliveryEvidence,

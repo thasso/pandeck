@@ -5,6 +5,7 @@
  */
 import {
   backgroundWorkBackendsForHarness,
+  harnessSupportsBackgroundWorkBackend,
   type BackgroundWorkBackend,
   type BackgroundWorkIntent,
   type Harness,
@@ -95,7 +96,11 @@ const backgroundTasksSchema = {
   },
 } as const;
 
-/** The backend a tool admits under: the harness's first (today its only) one. */
+/**
+ * The harness's native backend, its first: what eligibility is judged under.
+ * The owner may still inspect and Stop work on any backend its harness
+ * supports, such as a server task one of its tools started.
+ */
 function backendForHarness(harness: Harness): BackgroundWorkBackend {
   const [backend] = backgroundWorkBackendsForHarness(harness);
   if (!backend) throw new Error(`No background-work backend for ${harness}.`);
@@ -190,17 +195,13 @@ function ownerBackend(
   return backendForHarness(ctx.session.harness);
 }
 
-function assertOwner(
-  ctx: Parameters<AgentTool["execute"]>[1],
-): BackgroundWorkBackend {
-  const backend = ownerBackend(ctx);
+function assertOwner(ctx: Parameters<AgentTool["execute"]>[1]): void {
   const eligibility = backgroundWorkOwnerEligibility(
     ctx.session.sessionId,
-    backend,
+    ownerBackend(ctx),
   );
   if (!eligibility.eligible)
     throw new Error("Background tasks are not available to this session.");
-  return backend;
 }
 
 function assertOperationFields(
@@ -229,14 +230,13 @@ function assertOperationFields(
 
 function ownedItemOrThrow(
   taskId: string,
-  ownerSessionId: string,
-  backend: BackgroundWorkBackend,
+  ctx: Parameters<AgentTool["execute"]>[1],
 ) {
   const item = backgroundWorkStore.getItem(taskId);
   if (
     !item ||
-    item.ownerSessionId !== ownerSessionId ||
-    item.backend !== backend
+    item.ownerSessionId !== ctx.session.sessionId ||
+    !harnessSupportsBackgroundWorkBackend(ctx.session.harness, item.backend)
   )
     throw new Error("Background task not found or not owned by this session.");
   return item;
@@ -250,7 +250,7 @@ const backgroundTasksTool = defineAgentTool<BackgroundTasksParams>({
   parameters: backgroundTasksSchema,
   executionMode: "sequential",
   async execute(params, ctx) {
-    const backend = assertOwner(ctx);
+    assertOwner(ctx);
     const operation = params?.operation;
     assertOperationFields(params, operation);
     if (operation === "list") {
@@ -288,7 +288,7 @@ const backgroundTasksTool = defineAgentTool<BackgroundTasksParams>({
 
     if (operation === "status") {
       const taskId = requireString(params.taskId, "taskId", MAX_ID_CHARS);
-      const item = ownedItemOrThrow(taskId, ctx.session.sessionId, backend);
+      const item = ownedItemOrThrow(taskId, ctx);
       return jsonResult({
         operation,
         taskId,
@@ -299,7 +299,7 @@ const backgroundTasksTool = defineAgentTool<BackgroundTasksParams>({
 
     if (operation === "stop") {
       const taskId = requireString(params.taskId, "taskId", MAX_ID_CHARS);
-      const item = ownedItemOrThrow(taskId, ctx.session.sessionId, backend);
+      const item = ownedItemOrThrow(taskId, ctx);
       const reason =
         params.reason === undefined
           ? "Stop requested by the owner"
@@ -362,7 +362,7 @@ const backgroundTasksTool = defineAgentTool<BackgroundTasksParams>({
       const taskId = requireString(params.taskId, "taskId", MAX_ID_CHARS);
       if (params.intent !== "awaited" && params.intent !== "service")
         throw new Error("intent must be awaited or service.");
-      const item = ownedItemOrThrow(taskId, ctx.session.sessionId, backend);
+      const item = ownedItemOrThrow(taskId, ctx);
       if (item.terminalAt !== undefined)
         throw new Error("Background task has already finished.");
       const updated = backgroundWorkStore.setIntent({

@@ -138,3 +138,31 @@ test("no disposition ever discards a terminal fact", () => {
           );
         }
 });
+
+test("a server task's fact is delivered like any PA-supervised work", () => {
+  // It runs in PA's own server, so no provider transcript ever saw it end:
+  // a running turn is no reason to defer it.
+  for (const ownerTurnRunning of [false, true])
+    assert.deepEqual(
+      backgroundCompletionDisposition(
+        evidence({ backend: "server-task", ownerTurnRunning }),
+      ),
+      { disposition: "wake", reason: "awaited" },
+    );
+  assert.deepEqual(
+    backgroundCompletionDisposition(
+      evidence({ backend: "server-task", stopRequested: true }),
+    ),
+    { disposition: "defer", reason: "stop-requested" },
+  );
+  assert.deepEqual(
+    backgroundCompletionDisposition(
+      evidence({
+        backend: "server-task",
+        stopRequested: true,
+        stopOrigin: "deadline",
+      }),
+    ),
+    { disposition: "wake", reason: "deadline-expired" },
+  );
+});

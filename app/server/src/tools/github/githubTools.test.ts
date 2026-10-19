@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { GithubApiConfig } from "../../githubClient.ts";
 import type { ToolCallContext } from "../../mcp/tool.ts";
@@ -13,6 +14,11 @@ vi.mock("../../githubSettings.ts", async (importActual) => ({
 
 const { getGithubToolConfig, getGithubDefaultOwner } =
   await import("../../githubSettings.ts");
+const { sessionStore } = await import("../../db/sessionStore.ts");
+const { backgroundWorkStore } = await import("../../db/backgroundWorkStore.ts");
+const { sessionArtifactFile } =
+  await import("../../mcp/toolGroups/packRuntime.ts");
+const { getSettings } = await import("../../settings.ts");
 const {
   githubListNotificationsTool,
   githubSearchIssuesTool,
@@ -1173,5 +1179,254 @@ describe("github_get_actions_run", () => {
     expect(payload.run.jobs[0].steps[0].name).toBe("compile");
     expect(payload.run.jobs[0].annotations[0].message).toBe("type error");
     expect(urls.some((u) => /\/check-runs\/9\/annotations/.test(u))).toBe(true);
+  });
+});
+
+describe("github_watch_pull_request_checks in the background", () => {
+  let serial = 0;
+  /** A live interactive owner: only one may start background work. */
+  function backgroundCtx(signal = new AbortController().signal) {
+    serial += 1;
+    const sessionId = `pr-checks-background-${serial}`;
+    sessionStore.upsert({
+      id: sessionId,
+      scope: "user",
+      harness: "pi",
+      agentType: "developer",
+    });
+    return {
+      toolCallId: `background-call-${serial}`,
+      session: { sessionId, harness: "pi" as const, agentType: "developer" },
+      signal,
+    } satisfies ToolCallContext;
+  }
+
+  /**
+   * One open PR whose checks follow `states` poll by poll (the last repeats).
+   * `firstPollDelayMs` makes the first check read take fake time.
+   */
+  function mockChecks(
+    states: Array<"pending" | "success">,
+    options: { firstPollDelayMs?: number } = {},
+  ) {
+    const calls = { checks: 0, signals: [] as Array<AbortSignal | undefined> };
+    globalThis.fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        calls.signals.push(init?.signal ?? undefined);
+        if (url.includes("/pulls/42/reviews")) return jsonResponse([]);
+        if (url.endsWith("/pulls/42"))
+          return jsonResponse({
+            number: 42,
+            state: "open",
+            draft: false,
+            mergeable: true,
+            head: { ref: "feature", sha: "abc1234def" },
+            base: { ref: "main" },
+          });
+        if (url.includes("/check-runs")) {
+          calls.checks += 1;
+          if (calls.checks === 1 && options.firstPollDelayMs)
+            await new Promise((resolve) =>
+              setTimeout(resolve, options.firstPollDelayMs),
+            );
+          const state = states[Math.min(calls.checks, states.length) - 1];
+          return jsonResponse({
+            check_runs: [
+              state === "success"
+                ? { name: "test", status: "completed", conclusion: "success" }
+                : { name: "test", status: "in_progress", conclusion: null },
+            ],
+          });
+        }
+        if (url.includes("/status?")) return jsonResponse({ statuses: [] });
+        throw new Error(`unexpected url ${url}`);
+      },
+    ) as unknown as typeof fetch;
+    return calls;
+  }
+
+  function artifactJson(taskId: string) {
+    const item = backgroundWorkStore.getItem(taskId)!;
+    const file = sessionArtifactFile(
+      item.ownerSessionId,
+      item.evidence!.artifactId!,
+    )!;
+    return JSON.parse(readFileSync(file.path, "utf8"));
+  }
+
+  function withLifetime(minutes: number) {
+    updateSettings({
+      backgroundWork: {
+        ...getSettings().backgroundWork,
+        taskLifetimeMinutes: minutes,
+      },
+    });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    withLifetime(60);
+  });
+
+  test("returns a running task after one observation, and its artifact is the wait's result", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getGithubToolConfig).mockReturnValue(config);
+    const sequence: Array<"pending" | "success"> = [
+      "pending",
+      "pending",
+      "success",
+    ];
+
+    // The same sequence as a foreground wait, for the expected payload.
+    mockChecks(sequence);
+    const waiting = githubWatchPullRequestChecksTool.execute(
+      { repo: "acme/app", number: 42, wait: true },
+      backgroundCtx(),
+    );
+    await vi.advanceTimersByTimeAsync(120_000);
+    const foreground = parse(await waiting);
+
+    const calls = mockChecks(sequence);
+    const started = parse(
+      await githubWatchPullRequestChecksTool.execute(
+        { repo: "acme/app", number: 42, background: true },
+        backgroundCtx(),
+      ),
+    );
+    expect(started).toMatchObject({ state: "running" });
+    expect(started.hint).toContain(started.taskId);
+    expect(calls.checks, "exactly one observation in the call").toBe(1);
+    const item = backgroundWorkStore.getItem(started.taskId)!;
+    expect(item).toMatchObject({
+      backend: "server-task",
+      kind: "check-watch",
+      label: "GitHub PR checks acme/app#42",
+      command: "github_watch_pull_request_checks acme/app#42",
+      state: "running",
+    });
+
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(calls.checks).toBe(3);
+    const ended = backgroundWorkStore.getItem(started.taskId)!;
+    expect(ended.state).toBe("completed");
+    expect(ended.outcomeSummary).toBe(
+      "Checks finished: success, 1 check on abc1234",
+    );
+    const artifact = artifactJson(started.taskId);
+    expect(artifact.observation.mode).toBe("background");
+    expect({
+      ...artifact,
+      observation: { ...artifact.observation, mode: "wait" },
+    }).toEqual(foreground);
+  });
+
+  test("a wait already over returns its result inline and starts nothing", async () => {
+    vi.mocked(getGithubToolConfig).mockReturnValue(config);
+    mockChecks(["success"]);
+    const ctx = backgroundCtx();
+    const payload = parse(
+      await githubWatchPullRequestChecksTool.execute(
+        { repo: "acme/app", number: 42, background: true },
+        ctx,
+      ),
+    );
+    expect(payload.taskId).toBeUndefined();
+    expect(payload.observation).toMatchObject({
+      mode: "background",
+      stopReason: "checks_finished",
+      polls: 1,
+    });
+    expect(
+      backgroundWorkStore.listItems({
+        ownerSessionId: ctx.session.sessionId,
+        limit: 5,
+      }),
+    ).toEqual([]);
+  });
+
+  test("the job outlives the turn that started it, on its own signal", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getGithubToolConfig).mockReturnValue(config);
+    const calls = mockChecks(["pending", "success"]);
+    const turn = new AbortController();
+    const started = parse(
+      await githubWatchPullRequestChecksTool.execute(
+        { repo: "acme/app", number: 42, background: true },
+        backgroundCtx(turn.signal),
+      ),
+    );
+    const callRequests = calls.signals.length;
+    turn.abort(new Error("the turn was stopped"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(backgroundWorkStore.getItem(started.taskId)?.state).toBe(
+      "completed",
+    );
+    const jobSignals = calls.signals.slice(callRequests);
+    expect(jobSignals.length).toBeGreaterThan(0);
+    for (const signal of jobSignals) expect(signal?.aborted).not.toBe(true);
+  });
+
+  test("a timeout shorter than the poll interval ends by timeout, timed from before the first poll", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getGithubToolConfig).mockReturnValue(config);
+    mockChecks(["pending"], { firstPollDelayMs: 5_000 });
+    const execution = githubWatchPullRequestChecksTool.execute(
+      {
+        repo: "acme/app",
+        number: 42,
+        background: true,
+        timeoutSeconds: 30,
+        pollIntervalSeconds: 120,
+      },
+      backgroundCtx(),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    const started = parse(await execution);
+    expect(backgroundWorkStore.getItem(started.taskId)?.lifetimeMs).toBe(
+      90_000,
+    );
+    await vi.advanceTimersByTimeAsync(25_000);
+    const ended = backgroundWorkStore.getItem(started.taskId)!;
+    expect(ended.state).toBe("completed");
+    expect(ended.stopOrigin).toBeUndefined();
+    const { observation } = artifactJson(started.taskId);
+    expect(observation).toMatchObject({
+      mode: "background",
+      stopReason: "timeout",
+      timeoutSeconds: 30,
+      elapsedSeconds: 30,
+      polls: 2,
+    });
+  });
+
+  test("a timeout longer than the Settings lifetime reports the effective one", async () => {
+    vi.useFakeTimers();
+    withLifetime(5);
+    vi.mocked(getGithubToolConfig).mockReturnValue(config);
+    mockChecks(["pending"]);
+    const started = parse(
+      await githubWatchPullRequestChecksTool.execute(
+        {
+          repo: "acme/app",
+          number: 42,
+          background: true,
+          timeoutSeconds: 1_800,
+          pollIntervalSeconds: 120,
+        },
+        backgroundCtx(),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(240_000);
+    const ended = backgroundWorkStore.getItem(started.taskId)!;
+    expect(ended.state).toBe("completed");
+    expect(ended.stopOrigin).toBeUndefined();
+    expect(ended.outcomeSummary).toBe(
+      "Timed out after 240 s: pending on abc1234",
+    );
+    expect(artifactJson(started.taskId).observation).toMatchObject({
+      stopReason: "timeout",
+      timeoutSeconds: 240,
+    });
   });
 });

@@ -11,6 +11,7 @@ import {
   HARNESSES,
   harnessForAccountProvider,
   harnessForModelProvider,
+  harnessSupportsBackgroundWorkBackend,
   type Harness,
 } from "./harnesses.ts";
 
@@ -55,8 +56,16 @@ test("every harness owns at least one background-work backend", () => {
   for (const id of HARNESS_IDS) {
     expect(backgroundWorkBackendsForHarness(id).length).toBeGreaterThan(0);
   }
-  expect(backgroundWorkBackendsForHarness("pi")).toEqual(["host-process"]);
+  // The native backend first: it is the one each harness's own tools admit
+  // under. Both may own server tasks, which neither engine runs.
+  expect(backgroundWorkBackendsForHarness("pi")).toEqual([
+    "host-process",
+    "server-task",
+  ]);
   expect(backgroundWorkBackendsForHarness("claude-sdk")).toEqual([
     "claude-query",
+    "server-task",
   ]);
+  for (const id of HARNESS_IDS)
+    expect(harnessSupportsBackgroundWorkBackend(id, "server-task")).toBe(true);
 });
