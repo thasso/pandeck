@@ -116,8 +116,8 @@ function deliveryTitle(delivery: TaskRowDelivery): string {
  * `#id` and answers "what is going on with this Task" from `lib/taskRowMeta.ts`.
  * @useWhen Rendering a durable Task in a list — the tree's rows
  * (`BacklogTreePane`) and the Focus rows (`BacklogFocusList`).
- * @avoidWhen The Inbox, whose three-line row is about an ARRIVAL (origin,
- * first sentence) rather than about the Task's current state.
+ * @avoidWhen Composing browser row geometry; use TaskListRowContent so Backlog,
+ * Focus and Inbox share the same presentation.
  * @intent Shared so the views cannot drift: one order for the chips, one glyph
  * per fact, one truncation rule. A two-line row gives line 1 to the TITLE and
  * nothing else but `trailing`'s fixed-width controls, and states everything

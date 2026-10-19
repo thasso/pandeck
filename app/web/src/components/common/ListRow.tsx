@@ -24,7 +24,7 @@ type ContentProps = {
   pinned?: ReactNode;
   /** Fixed controls at the end of the last line, or title for a one-line row. */
   trailing?: ReactNode;
-  /** Shared item actions, right-aligned across the final two content lines. */
+  /** Right-aligned actions; two-line items keep their context line full-width. */
   actions?: ReactNode;
 };
 
@@ -157,7 +157,7 @@ export function ListRowContent({
   const hasDetails = details !== undefined;
   const lines =
     1 + Number(hasContext) + Number(hasDetails) + Number(hasSignals);
-  const actionStart = Math.max(1, lines - 1);
+  const actionStart = lines === 2 ? 2 : Math.max(1, lines - 1);
   const lineStyle = (line: number) => ({
     gridRow: line,
     gridColumn: actions && line >= actionStart ? "1" : "1 / -1",

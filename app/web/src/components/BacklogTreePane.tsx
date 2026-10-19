@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  TaskStatusIcon as StatusIcon,
-  TASK_STATUS_LABEL,
-} from "./TaskStatusIcon.tsx";
-import {
   Archive,
   ChevronRight,
   FolderKanban,
-  MessageSquare,
-  MessageSquarePlus,
   Trash2,
 } from "lucide-react";
 import type {
@@ -27,24 +21,10 @@ import type { SwipeAction } from "./common/SwipeRow.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { ListRowContent } from "./common/ListRow.tsx";
-import {
-  ListRowActions,
-  type ListRowAction,
-} from "./common/ListRowActions.tsx";
-import { ProjectBadge } from "./ProjectBadge.tsx";
-import {
-  TaskProjectMeta,
-  TaskRowDetails,
-  TaskRowTitle,
-} from "./TaskRowBody.tsx";
-import { TaskIdBadge } from "./TaskIdBadge.tsx";
-import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
-import { projectPath } from "../hooks/useSessionRouting.ts";
-import { pendingStatusSuggestion, type Task } from "../lib/backlogTree.ts";
+import { TaskListRowContent } from "./TaskListRowContent.tsx";
+import type { Task } from "../lib/backlogTree.ts";
 import {
   buildTaskRowMeta,
-  taskRowMetaEmpty,
   taskRowsHaveMeta,
   type TaskRowMetaContext,
   type TaskRowPresentation,
@@ -659,7 +639,6 @@ function BacklogRowContent({
   density: BacklogDensity;
   presentation: TaskRowPresentation;
 }) {
-  const picker = presentation === "picker";
   if (node.data.kind === "project") {
     const data = node.data;
     return (
@@ -688,146 +667,36 @@ function BacklogRowContent({
   }
 
   const { task, context } = node.data;
-  // An agent has suggested a status. The tree cannot ask the question (that is
-  // the Focus view's review bucket), but it must not hide it either.
-  const suggestion = pendingStatusSuggestion(task);
-  const claim = suggestion
-    ? suggestion.to === "done"
-      ? "an agent says it is finished"
-      : "an agent says it is not finished"
-    : null;
-  const meta = taskRowsHaveMeta(presentation)
-    ? buildTaskRowMeta(task, metaContext)
-    : null;
-  const sessionAction = Boolean(meta && onOpenSession && onStartSession);
-  const session = meta?.session;
-  const signals =
-    sessionAction && meta && !meta.working ? { ...meta, session: null } : meta;
-  const status = (
-    <span
-      role="img"
-      aria-label={`${TASK_STATUS_LABEL[task.status]}${claim ? `, ${claim}` : ""}`}
-      title={TASK_STATUS_LABEL[task.status]}
-      className="flex size-4 shrink-0 items-center justify-center"
-    >
-      <StatusIcon
-        status={task.status}
-        size={12}
-        claimed={Boolean(suggestion)}
-      />
-    </span>
-  );
-  const actions: ListRowAction[] = [
-    ...(sessionAction && onOpenSession && onStartSession
-      ? [
-          {
-            id: "session",
-            label: session ? "Open session" : "Start session",
-            accessibleLabel: session
-              ? `Open the session for "${task.title}"`
-              : `Start a session for "${task.title}"`,
-            icon: session ? <MessageSquare /> : <MessageSquarePlus />,
-            onSelect: () => {
-              if (session) onOpenSession(session.id);
-              else onStartSession(task);
-            },
-          },
-        ]
-      : []),
-  ];
   return (
-    <ListRowContent
+    <TaskListRowContent
+      task={task}
+      meta={taskRowsHaveMeta(presentation) ? buildTaskRowMeta(task, metaContext) : null}
+      projectsById={projectsById}
+      selected={state.selected}
+      dimmed={Boolean(context)}
       density={density}
-      context={
-        meta ? (
-          meta.projectId ? (
-            <TaskProjectMeta
-              projectId={meta.projectId}
-              projectsById={projectsById}
-              href={projectPath(meta.projectId)}
-              onNavigate={onNavigate}
-            />
-          ) : null
-        ) : undefined
-      }
-      contextTrailing={
-        meta ? (
-          <span className="flex items-center gap-1.5">
-            {status}
-            <TaskIdBadge id={task.id} onNavigate={onNavigate} />
-          </span>
-        ) : undefined
-      }
-      identity={
-        <>
-          {picker ? status : null}
-          <TaskRowTitle
-            task={task}
-            selected={state.selected}
-            dimmed={Boolean(context)}
-          />
-          {picker && showProjectBadge && task.projectId ? (
-            <ProjectBadge
-              projectId={task.projectId}
-              projectsById={projectsById}
-              size="sm"
-            />
-          ) : null}
-          {picker && task.openBlockerCount ? (
-            <TaskBlockedIndicator
-              openBlockers={task.openBlockerCount}
-              size={12}
-            />
-          ) : null}
-          {picker ? <TaskIdBadge id={task.id} onNavigate={onNavigate} /> : null}
-        </>
-      }
-      signals={
-        signals &&
-        (state.hasChildren ||
-          !taskRowMetaEmpty({ ...signals, projectId: null })) ? (
-          <>
-            {state.hasChildren ? (
-              <Badge
-                variant="ghost"
-                render={<button type="button" />}
-                aria-expanded={state.expanded}
-                aria-label={`${state.expanded ? "Hide" : "Show"} sub-tasks of "${task.title}"`}
-                onPointerDown={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onToggle();
-                }}
-                className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-              >
-                Sub-tasks <span>{node.children?.length}</span>
-                <ChevronRight
-                  size={12}
-                  className={state.expanded ? "rotate-90" : ""}
-                  aria-hidden
-                />
-              </Badge>
-            ) : null}
-            <TaskRowDetails
-              task={task}
-              meta={signals}
-              projectsById={projectsById}
-              onNavigate={onNavigate}
-              showContext={false}
-            />
-          </>
-        ) : undefined
-      }
-      actions={
-        actions.length ? (
-          <ListRowActions
-            actions={actions}
-            label="Task actions"
-            alwaysVisible={state.selected}
-          />
-        ) : undefined
-      }
+      showProjectBadge={showProjectBadge}
+      onOpenSession={onOpenSession}
+      onStartSession={onStartSession}
+      onNavigate={onNavigate}
+      disclosure={state.hasChildren ? (
+        <Badge
+          variant="ghost"
+          render={<button type="button" />}
+          aria-expanded={state.expanded}
+          aria-label={`${state.expanded ? "Hide" : "Show"} sub-tasks of "${task.title}"`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+          className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+        >
+          Sub-tasks <span>{node.children?.length}</span>
+          <ChevronRight size={12} className={state.expanded ? "rotate-90" : ""} aria-hidden />
+        </Badge>
+      ) : undefined}
     />
   );
 }

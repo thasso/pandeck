@@ -295,7 +295,16 @@ function BacklogListImpl({
         <BacklogInboxList
           tasks={inboxTasks}
           projectsById={c.projectsById}
-          showProjectBadge={!fixedFilter}
+          metaContext={{
+            today,
+            sessionById: c.sessionById,
+            worktreeNames: state.worktreeNames,
+            showProjectBadge: !fixedFilter,
+            ...(hosting !== undefined ? { hostingByWorktree: hosting } : {}),
+            ...(dirtyWorktrees !== undefined ? { dirtyWorktrees } : {}),
+            ...(workflowIndicators !== undefined ? { workflowByTask: workflowIndicators } : {}),
+          }}
+          onNavigate={onNavigate}
           selectedId={selectedId}
           onOpen={onOpenTask}
           onDismiss={c.dismissFromInbox}
@@ -315,7 +324,8 @@ function BacklogListImpl({
           showProjectBadge={!fixedFilter}
           selectedId={selectedId}
           onOpen={onOpenTask}
-          onCycle={c.cycleStatus}
+          onOpenSession={onOpenSession}
+          onStartSession={startSessionForRow}
           onAcceptSuggestion={c.acceptSuggestion}
           onDismissSuggestion={c.dismissSuggestion}
           onNavigate={onNavigate}

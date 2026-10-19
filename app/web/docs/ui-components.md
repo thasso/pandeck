@@ -103,8 +103,10 @@ group-header palette.
 `common/ListRow` is the shared edge-to-edge browser item, built on `Item`. A
 title with an optional leading icon is one line. Add `context` above or
 `details` below for two lines. Three-line Attention and PR rows use context,
-title and `signals`; Task Inbox rows use title, details and a preview in
-`signals`. Omitted lines take no space; passing `signals={null}` reserves an
+title and `signals`. Task Backlog, Focus and Inbox share `TaskListRowContent`,
+using Backlog's project/status/id context, title and metadata signals. Only
+actions and tree hierarchy differ. Backlog and ordinary Focus rows open or start
+a session; Focus suggestions keep their decision controls and Inbox keeps Accept. Omitted lines take no space; passing `signals={null}` reserves an
 empty signal line. `contextTrailing` pins content such as a Task id to the
 context line's right edge; otherwise `age` closes that line. `pinned` keeps
 important signals visible, and `trailing` keeps controls fixed at the end of the
@@ -116,8 +118,9 @@ with more, at most two explicitly primary actions stay direct and the rest use a
 labeled menu. There are never more than three buttons including the menu. Ordinary actions share the neutral ghost style and inherited icon tone;
 only destructive actions use a different tone. Buttons and menu items show a
 pointer cursor. Actions occupy a right-aligned column spanning the final two
-content lines, or the title for a one-line item, on every layout. Earlier lines
-retain the full width. Desktop mouse controls reveal on hover or focus without
+content lines for items with three or more lines. Two-line items place actions
+only beside the second line, keeping their context full-width; one-line items
+place them beside the title. This geometry is shared by every layout. Desktop mouse controls reveal on hover or focus without
 growing the content lines. Pending decisions remain
 visible. The Backlog tree uses the same `ListRowContent` and actions inside its
 tree frame, keeping hierarchy and selection rather than nesting a clickable flat

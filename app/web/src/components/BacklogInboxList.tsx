@@ -1,20 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { ListRow } from "./common/ListRow.tsx";
-import { ListRowActions } from "./common/ListRowActions.tsx";
+import { TaskListRowContent } from "./TaskListRowContent.tsx";
 import type { ProjectRecord } from "@assistant/shared";
-import {
-  TaskStatusIcon as StatusIcon,
-  TASK_STATUS_LABEL,
-} from "./TaskStatusIcon.tsx";
-import { TaskProjectMeta, TaskRowTitle } from "./TaskRowBody.tsx";
-import { TaskBlockedIndicator } from "./TaskBlockedIndicator.tsx";
-import { TaskIdBadge } from "./TaskIdBadge.tsx";
+import { buildTaskRowMeta, type TaskRowMeta, type TaskRowMetaContext } from "../lib/taskRowMeta.ts";
 import { EmptyBox } from "./common/load.tsx";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
-import { pendingStatusSuggestion, type Task } from "../lib/backlogTree.ts";
-import { buildInboxList, taskOrigin } from "../lib/backlogInbox.ts";
+import type { Task } from "../lib/backlogTree.ts";
+import { buildInboxList } from "../lib/backlogInbox.ts";
 import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 
 /** How long an accepted row stays hidden waiting for the save to take it
@@ -28,10 +22,9 @@ const RESTORE_AFTER_MS = 5000;
  * decision from you.
  * @useWhen The Backlog list's view is `inbox`.
  * @avoidWhen Planning or arranging; those are the Focus and Backlog views.
- * @intent A triage queue, newest first, where the row carries what you need to
- * DECIDE with — where it came from and what it says — rather than the planning
- * metadata Focus shows. There is one control: accept into the task list without
- * changing its status. Everything else that
+ * @intent A triage queue, newest first, using the same TaskListRowContent and
+ * metadata as Backlog and Focus. Its action accepts into the task list without
+ * changing status. Everything else that
  * would process a Task (open it and set a date, change its status, give it a
  * project) already counts as triage on the server, so the Inbox empties as a
  * side effect of doing the work rather than needing a second gesture.
@@ -40,7 +33,8 @@ const RESTORE_AFTER_MS = 5000;
 export function BacklogInboxList({
   tasks,
   projectsById,
-  showProjectBadge,
+  metaContext,
+  onNavigate,
   selectedId,
   onOpen,
   onDismiss,
@@ -49,7 +43,8 @@ export function BacklogInboxList({
 }: {
   tasks: Task[];
   projectsById: Map<string, ProjectRecord>;
-  showProjectBadge: boolean;
+  metaContext: TaskRowMetaContext;
+  onNavigate?: ((path: string) => void) | undefined;
   selectedId: string | null;
   onOpen: (id: string) => void;
   /** Accept into the task list without changing status; take it out of Inbox. */
@@ -132,7 +127,8 @@ export function BacklogInboxList({
           key={task.id}
           task={task}
           projectsById={projectsById}
-          showProjectBadge={showProjectBadge}
+          meta={buildTaskRowMeta(task, metaContext)}
+          onNavigate={onNavigate}
           selected={task.id === selectedId}
           onOpen={onOpen}
           onDismiss={dismissWithExit}
@@ -147,7 +143,8 @@ export function BacklogInboxList({
 function InboxRow({
   task,
   projectsById,
-  showProjectBadge,
+  meta,
+  onNavigate,
   selected,
   onOpen,
   onDismiss,
@@ -156,7 +153,8 @@ function InboxRow({
 }: {
   task: Task;
   projectsById: Map<string, ProjectRecord>;
-  showProjectBadge: boolean;
+  meta: TaskRowMeta;
+  onNavigate?: ((path: string) => void) | undefined;
   selected: boolean;
   onOpen: (id: string) => void;
   onDismiss: (task: Task) => void;
@@ -164,12 +162,6 @@ function InboxRow({
   leaving: boolean;
   tight: boolean;
 }) {
-  const origin = taskOrigin(task);
-  // The preview is what the row is FOR — deciding about a Task you did not
-  // write needs its first sentence, not just its title. It is dropped when the
-  // Task has no body rather than leaving an empty line.
-  const preview = task.descriptionPreview?.trim();
-
   return (
     <li data-list-row-id={task.id}>
       {/* The hairline rides inside the exit, so it leaves with its row. */}
@@ -177,61 +169,28 @@ function InboxRow({
         <ListRow
           interaction="content"
           active={selected}
-          density={tight ? "tight" : "comfortable"}
           onOpen={() => onOpen(task.id)}
-          identity={
-            <TaskRowTitle task={task} selected={selected} onOpenTask={onOpen} />
-          }
-          actions={
-            <ListRowActions
-              alwaysVisible
-              actions={[
-                {
-                  id: "dismiss",
-                  label: "Accept",
-                  accessibleLabel: `Accept "${task.title}" into the task list`,
-                  icon: <Check />,
-                  onSelect: () => onDismiss(task),
-                },
-              ]}
-            />
-          }
-          details={
-            <>
-              <span
-                role="img"
-                aria-label={TASK_STATUS_LABEL[task.status]}
-                title={TASK_STATUS_LABEL[task.status]}
-                className="flex shrink-0 items-center"
-              >
-                <StatusIcon
-                  status={task.status}
-                  size={12}
-                  claimed={Boolean(pendingStatusSuggestion(task))}
-                />
-              </span>
-              {showProjectBadge && task.projectId ? (
-                <TaskProjectMeta
-                  projectId={task.projectId}
-                  projectsById={projectsById}
-                  href={null}
-                />
-              ) : null}
-              <TaskIdBadge id={task.id} />
-              {task.openBlockerCount ? (
-                <TaskBlockedIndicator openBlockers={task.openBlockerCount} />
-              ) : null}
-              <span className="shrink-0">{origin}</span>
-            </>
-          }
-          signals={
-            preview ? (
-              <span className="min-w-0 flex-1 basis-0 truncate" title={preview}>
-                {preview}
-              </span>
-            ) : undefined
-          }
-        />
+        >
+          <TaskListRowContent
+            task={task}
+            meta={meta}
+            projectsById={projectsById}
+            selected={selected}
+            density={tight ? "tight" : "comfortable"}
+            onOpenTask={onOpen}
+            onNavigate={onNavigate}
+            alwaysVisible
+            actions={[
+              {
+                id: "dismiss",
+                label: "Accept",
+                accessibleLabel: `Accept "${task.title}" into the task list`,
+                icon: <Check />,
+                onSelect: () => onDismiss(task),
+              },
+            ]}
+          />
+        </ListRow>
       </ExitStage>
     </li>
   );
