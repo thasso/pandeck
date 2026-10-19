@@ -135,9 +135,11 @@ export function updateInitiative(
   const title = patch.title !== undefined ? cleanTitle(patch.title) : undefined;
   if (
     (title === undefined || title === current.title) &&
-    (patch.description === undefined || patch.description === current.description) &&
+    (patch.description === undefined ||
+      patch.description === current.description) &&
     (patch.state === undefined || patch.state === current.state)
-  ) return current;
+  )
+    return current;
   const row = initiativeStore.mutation((touch) => {
     initiativeStore.update(touch, current.id, {
       ...(title !== undefined ? { title } : {}),
@@ -546,7 +548,9 @@ function summaryOf(
     id: String(row.id),
     title: row.title,
     state: row.state,
-    ...(row.inboxPosition !== undefined ? { inboxPosition: row.inboxPosition } : {}),
+    ...(row.inboxPosition !== undefined
+      ? { inboxPosition: row.inboxPosition }
+      : {}),
     ...(attention ? { attention } : {}),
     progress: progressOf(members),
     ...(nextMilestone ? { nextMilestone } : {}),

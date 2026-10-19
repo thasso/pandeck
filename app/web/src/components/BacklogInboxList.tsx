@@ -3,7 +3,11 @@ import { Check } from "lucide-react";
 import { ListRow } from "./common/ListRow.tsx";
 import { TaskListRowContent } from "./TaskListRowContent.tsx";
 import type { ProjectRecord } from "@assistant/shared";
-import { buildTaskRowMeta, type TaskRowMeta, type TaskRowMetaContext } from "../lib/taskRowMeta.ts";
+import {
+  buildTaskRowMeta,
+  type TaskRowMeta,
+  type TaskRowMetaContext,
+} from "../lib/taskRowMeta.ts";
 import { EmptyBox } from "./common/load.tsx";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";

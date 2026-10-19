@@ -5190,12 +5190,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
                 : { ...run, inboxPosition };
             })
           : state.workflowRuns,
-      initiatives: initiativePositions.size > 0
-        ? state.initiatives.map((initiative) => {
-            const inboxPosition = initiativePositions.get(initiative.id);
-            return inboxPosition === undefined ? initiative : { ...initiative, inboxPosition };
-          })
-        : state.initiatives,
+      initiatives:
+        initiativePositions.size > 0
+          ? state.initiatives.map((initiative) => {
+              const inboxPosition = initiativePositions.get(initiative.id);
+              return inboxPosition === undefined
+                ? initiative
+                : { ...initiative, inboxPosition };
+            })
+          : state.initiatives,
       error: null,
     };
   }
@@ -9128,7 +9131,13 @@ export function useAssistant({
             if (topicsRef.current.has("initiatives")) {
               dispatch({ kind: "initiativeListSubscribed" });
               send({ type: "unsubscribe", topics: ["initiatives"] });
-              send(taskSubscribeMessage(["initiatives"], stateRef.current, pendingMutationsRef.current));
+              send(
+                taskSubscribeMessage(
+                  ["initiatives"],
+                  stateRef.current,
+                  pendingMutationsRef.current,
+                ),
+              );
             }
           },
         );

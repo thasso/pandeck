@@ -32,7 +32,8 @@ export function SessionTitleRow({
 }) {
   const title = session.title.trim() || "Untitled session";
   const delegated = session.spawnOwnership === "coordinator";
-  const status = delegated && suppliedStatus === "unread" ? "quiet" : suppliedStatus;
+  const status =
+    delegated && suppliedStatus === "unread" ? "quiet" : suppliedStatus;
   // The badge's label never reads the clock, so no `now` is needed here.
   const badge = sessionStatusBadge(session, status, 0);
   const agent =

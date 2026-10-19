@@ -15,7 +15,12 @@
  *
  * Framework-free by the `lib/` contract.
  */
-import { inboxPositionOf, type InboxPositionEntry, type InitiativeSummary, type SessionListItem } from "@assistant/shared";
+import {
+  inboxPositionOf,
+  type InboxPositionEntry,
+  type InitiativeSummary,
+  type SessionListItem,
+} from "@assistant/shared";
 import { relativeAge } from "./relativeTime.ts";
 import {
   compareSessionsNeedingUserFirst,
@@ -286,7 +291,9 @@ export function initiativeLayoutKey(
   now: number,
   showMore = false,
 ): string {
-  const rows = showMore ? [...item.sessions, ...(item.additionalSessions ?? [])] : item.sessions;
+  const rows = showMore
+    ? [...item.sessions, ...(item.additionalSessions ?? [])]
+    : item.sessions;
   return [
     initiativeItemKey(item, now),
     ...(expanded ? rows.map((card) => sessionCardKey(card, now)) : []),

@@ -61,35 +61,35 @@ the same parts a shadcn example would.
 
 ## Which component
 
-| Need                                                                            | Use                                                                                                                                |
-| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Any clickable action                                                            | `Button` (`variant`, `size`)                                                                                                       |
-| An icon-only action                                                             | `common/IconButton` (`label` is the aria-label and the tooltip)                                                                    |
-| A link that looks like a button                                                 | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`)                                              |
-| Grouped or segmented actions                                                    | `ButtonGroup`, `ToggleGroup`                                                                                                       |
-| Text entry                                                                      | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                                                                |
-| Edit a shown text value in place                                                | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)                                                       |
-| Choice                                                                          | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`                                                           |
-| Form rows, labels, help and errors                                              | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                                                              |
-| A browser row with one, two or three lines                                      | [`common/ListRow`](../src/components/common/ListRow.tsx) (Settings, session history, Attention, Pull Requests, idle worktrees, Projects and Initiatives)     |
-| Other list rows and tree content                                                | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                                                                    |
-| An object or event card (transcript result, notice, card-list item)             | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)                                                |
-| A page or settings section that groups rows                                     | `Card`                                                                                                                             |
-| Collapsible list sections, including Pull Requests and Tasks grouped by project | [`ListGroupSection`](../src/components/ListGroupSection.tsx) (sticky header with chevron, icon, title, count and optional actions) |
-| Status or count                                                                 | `Badge`                                                                                                                            |
-| Text an agent wrote (a title, a label, a reason, a summary)                     | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card                                                 |
-| Menu of actions                                                                 | `DropdownMenu`, `ContextMenu`                                                                                                      |
-| Secondary actions behind a `⋯`                                                  | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)                                                   |
-| Floating panel or hint                                                          | `Popover`, `HoverCard`, `Tooltip`                                                                                                  |
-| Modal                                                                           | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                                                                |
-| Edge panel                                                                      | `Sheet`, `Drawer`                                                                                                                  |
-| Show/hide a region                                                              | `Collapsible`, `Accordion`                                                                                                         |
-| Views of one object                                                             | `Tabs`                                                                                                                             |
-| Nothing to show yet                                                             | `Empty` (via `common/load.tsx` where an async region owns it)                                                                      |
-| A failure on its object                                                         | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)                                                               |
-| Transient notice                                                                | `showToast()` (`lib/toast.ts`), rendered by Sonner                                                                                 |
-| Tables, separators, kbd hints, breadcrumbs                                      | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                                                                          |
-| Search-and-pick lists                                                           | `Command`                                                                                                                          |
+| Need                                                                            | Use                                                                                                                                                      |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Any clickable action                                                            | `Button` (`variant`, `size`)                                                                                                                             |
+| An icon-only action                                                             | `common/IconButton` (`label` is the aria-label and the tooltip)                                                                                          |
+| A link that looks like a button                                                 | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`)                                                                    |
+| Grouped or segmented actions                                                    | `ButtonGroup`, `ToggleGroup`                                                                                                                             |
+| Text entry                                                                      | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                                                                                      |
+| Edit a shown text value in place                                                | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)                                                                             |
+| Choice                                                                          | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`                                                                                 |
+| Form rows, labels, help and errors                                              | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                                                                                    |
+| A browser row with one, two or three lines                                      | [`common/ListRow`](../src/components/common/ListRow.tsx) (Settings, session history, Attention, Pull Requests, idle worktrees, Projects and Initiatives) |
+| Other list rows and tree content                                                | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                                                                                          |
+| An object or event card (transcript result, notice, card-list item)             | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)                                                                      |
+| A page or settings section that groups rows                                     | `Card`                                                                                                                                                   |
+| Collapsible list sections, including Pull Requests and Tasks grouped by project | [`ListGroupSection`](../src/components/ListGroupSection.tsx) (sticky header with chevron, icon, title, count and optional actions)                       |
+| Status or count                                                                 | `Badge`                                                                                                                                                  |
+| Text an agent wrote (a title, a label, a reason, a summary)                     | `Markdown`: `inline` for a one-line field, `density="compact"` for prose in a card                                                                       |
+| Menu of actions                                                                 | `DropdownMenu`, `ContextMenu`                                                                                                                            |
+| Secondary actions behind a `⋯`                                                  | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)                                                                         |
+| Floating panel or hint                                                          | `Popover`, `HoverCard`, `Tooltip`                                                                                                                        |
+| Modal                                                                           | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                                                                                      |
+| Edge panel                                                                      | `Sheet`, `Drawer`                                                                                                                                        |
+| Show/hide a region                                                              | `Collapsible`, `Accordion`                                                                                                                               |
+| Views of one object                                                             | `Tabs`                                                                                                                                                   |
+| Nothing to show yet                                                             | `Empty` (via `common/load.tsx` where an async region owns it)                                                                                            |
+| A failure on its object                                                         | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)                                                                                     |
+| Transient notice                                                                | `showToast()` (`lib/toast.ts`), rendered by Sonner                                                                                                       |
+| Tables, separators, kbd hints, breadcrumbs                                      | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                                                                                                |
+| Search-and-pick lists                                                           | `Command`                                                                                                                                                |
 
 `ListGroupSection` and the tree's group headers use `border` over an opaque
 `background`, with `foreground` text in both themes. The shared
@@ -112,32 +112,31 @@ Rows spend space only on facts they have. Choose one title line, context plus
 title, title plus details, or context plus title plus signals as appropriate.
 Supporting lines do not repeat the absence of information as filler.
 
-| Slot | Content and behavior |
-| --- | --- |
-| `context` | Supporting facts above the title, such as Project and branch. |
-| `contextTrailing` / `age` | Fixed right edge of context. Explicit trailing content takes precedence over age. |
-| `leading` + `title` | A 16px identity-icon slot and a truncated 14px title. |
-| `identity` | Domain-owned identity composition instead of `leading` + `title`. |
-| `details` | Optional supporting line below the title. |
-| `signals` | Optional final line, with important facts first. |
-| `pinned` | Important signals kept outside the clipping region. |
-| `trailing` | Fixed indicators or controls at the end of the final content line, not an action-menu substitute. |
-| `actions` | `ListRowActions`, only when a meaningful row action exists. |
+| Slot                      | Content and behavior                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------- |
+| `context`                 | Supporting facts above the title, such as Project and branch.                                     |
+| `contextTrailing` / `age` | Fixed right edge of context. Explicit trailing content takes precedence over age.                 |
+| `leading` + `title`       | A 16px identity-icon slot and a truncated 14px title.                                             |
+| `identity`                | Domain-owned identity composition instead of `leading` + `title`.                                 |
+| `details`                 | Optional supporting line below the title.                                                         |
+| `signals`                 | Optional final line, with important facts first.                                                  |
+| `pinned`                  | Important signals kept outside the clipping region.                                               |
+| `trailing`                | Fixed indicators or controls at the end of the final content line, not an action-menu substitute. |
+| `actions`                 | `ListRowActions`, only when a meaningful row action exists.                                       |
 
 Pass `undefined` to omit a supporting line. `signals={null}` deliberately
-reserves one; use it only when that stable line is needed. Supporting lines
-show whole facts or hide them, and hidden controls become inert. Context,
-details and signals use a 20px clipping box so standard badges fit without
-vertical cropping. Signals
-compact their labels before dropping items. Use the existing overflow handling
-rather than wrapping rows taller or clipping partial badges.
+reserves one; use it only when that stable line is needed. Supporting lines show
+whole facts or hide them, and hidden controls become inert. Context, details and
+signals use a 20px clipping box so standard badges fit without vertical
+cropping. Signals compact their labels before dropping items. Use the existing
+overflow handling rather than wrapping rows taller or clipping partial badges.
 
 Hosts use `browserRowDensity(mobile)` for spacing; density changes neither
-content nor actions. Titles are `text-sm`, supporting content is `text-xs`,
-and metadata glyphs are 12px. The shared identity slot is 16px. Multi-line rows
-have no vertical grid gap and compact outer padding, 2px per side in tight
-mode and 4px in comfortable mode. Single-line rows retain their shared minimum
-height. Keep all geometry in the common components.
+content nor actions. Titles are `text-sm`, supporting content is `text-xs`, and
+metadata glyphs are 12px. The shared identity slot is 16px. Multi-line rows have
+no vertical grid gap and compact outer padding, 2px per side in tight mode and
+4px in comfortable mode. Single-line rows retain their shared minimum height.
+Keep all geometry in the common components.
 
 #### Actions
 
@@ -158,9 +157,9 @@ Mobile and desktop use the same icon-only, right-aligned action column:
   rather than passing a component that renders nothing.
 
 `ListRowActions` renders one or two supplied actions directly. With more, at
-most two explicitly primary actions remain direct and the rest use one `…`
-menu. Thus there are at most three buttons including overflow. Ordinary actions
-use neutral ghost styling; only destructive actions differ. Give every icon an
+most two explicitly primary actions remain direct and the rest use one `…` menu.
+Thus there are at most three buttons including overflow. Ordinary actions use
+neutral ghost styling; only destructive actions differ. Give every icon an
 accessible name and tooltip. Actions stop row activation. Desktop mouse actions
 reveal on hover or focus without changing geometry; `alwaysVisible` keeps a
 pending decision visible. Buttons and menu entries use pointer cursors.
@@ -177,8 +176,8 @@ separator beneath the whole item and passes `divider={false}` to its row.
 
 Embedded peer, Workflow Run role and Initiative sessions share `ListRow` and
 `SessionTitleRow` through `ClusterChildRow`. Initiative Show more reveals known
-sessions inline. Sessions not loaded are counted informationally, not offered
-as a misleading navigation or expansion.
+sessions inline. Sessions not loaded are counted informationally, not offered as
+a misleading navigation or expansion.
 
 #### Interaction and list state
 
@@ -188,16 +187,16 @@ links inside `role="button"` are introduced. Supply real title/metadata links
 where those own navigation and modifier-click behavior. Preserve the host's
 roving focus, arrow keys, domain shortcuts, swipe and drag behavior.
 
-List hosts preserve scroll with `useListScroll` and a stable `listKey`; each
-row has `data-list-row-id`. Keep callbacks and memoized content stable while
-their visible values are unchanged, as required by `src/CLAUDE.md`.
+List hosts preserve scroll with `useListScroll` and a stable `listKey`; each row
+has `data-list-row-id`. Keep callbacks and memoized content stable while their
+visible values are unchanged, as required by `src/CLAUDE.md`.
 
 #### Session identity
 
-Session list titles use `SessionTitleRow`, including Attention cards and history,
-expanded peer/Workflow/Initiative sessions, Project/Worktree rows, and inspector
-and composer disclosures. Ownership comes from the durable spawn edge, never
-from titles, personas, nesting or whether the user opened the session.
+Session list titles use `SessionTitleRow`, including Attention cards and
+history, expanded peer/Workflow/Initiative sessions, Project/Worktree rows, and
+inspector and composer disclosures. Ownership comes from the durable spawn edge,
+never from titles, personas, nesting or whether the user opened the session.
 
 A confirmed coordinator-owned session uses an italic title and a trailing 12px
 Network icon identifying it as a sub-agent. Its unread flag does not produce
@@ -213,8 +212,8 @@ session-row and card memo keys so takeover updates every list immediately.
 
 - **Tasks:** Backlog, Focus and Inbox share `TaskListRowContent`. Backlog's
   Project/status/id context, title and metadata are the common presentation;
-  only actions and hierarchy vary. Backlog and ordinary Focus rows open/start
-  a session, Focus suggestions keep decision controls, and Inbox keeps Accept.
+  only actions and hierarchy vary. Backlog and ordinary Focus rows open/start a
+  session, Focus suggestions keep decision controls, and Inbox keeps Accept.
   Browser presentation retains metadata at both densities; the explicit picker
   presentation is single-line. Omit empty signal lines. Task Sub-tasks controls
   live in the bottom line, with no reserved tree-chevron or leaf gutter;
@@ -229,8 +228,8 @@ session-row and card memo keys so takeover updates every list immediately.
   through `ListRowContent`, with `paddedContent={false}` on the tree.
 - **Related sessions:** `SessionRowContent` uses `ListRowContent` and
   `SessionTitleRow` for a single compact line. PR state and age remain visible
-  beside the title. These rows have no Archive/Restore or other row action.
-  Show more uses the same row geometry and density.
+  beside the title. These rows have no Archive/Restore or other row action. Show
+  more uses the same row geometry and density.
 - **Attention sessions and runs:** Settle is the only row action, with no
   overflow; other actions stay in the object's surface. Settled/archived shelf
   rows use shared actions for Restore. Session and role disclosures share the
@@ -240,41 +239,39 @@ session-row and card memo keys so takeover updates every list immediately.
   containment, not merely because the PR is merged. Missing status shows no
   integration claim.
 - **Initiative browser items:** `InitiativeBrowserRow` uses title plus compact
-  Task progress and a Contents disclosure, with an optional Paused badge
-  line. It has no action column. Contents lazily reads membership and lists
-  member Projects with Initiative-scoped progress bars and quiet
+  Task progress and a Contents disclosure, with an optional Paused badge line.
+  It has no action column. Contents lazily reads membership and lists member
+  Projects with Initiative-scoped progress bars and quiet
   ready/in-progress/blocked/done/total counters from
   `InitiativeBrowserProgress`. `lib/initiativeBrowserCounts.ts` partitions the
   member graph exactly once per Task: completed or archived, blocked, unblocked
   doing, then ready. Done includes all archived Tasks in both the counters and
-  progress bars, without changing stored status. The first four sum to total.
-  In progress is blue;
-  nonzero blocked is mild yellow, not a warning badge. Counter meanings are
-  in the tooltip and accessible name. Visible headers read membership for this
-  split; tiny derived counts survive shared graph-cache eviction without a
-  re-fetch loop. Pending splits use shared loading chrome rather than invented
-  counts. Nonempty
-  bars turn success-green when all their Tasks are done, without changing the
-  Initiative's explicit state. Initiative and Project progress counts share a
-  reserved column sized to the widest Initiative count, keeping bars aligned.
-  It never copies an entire Project's unrelated
-  contents. Project Contents expands the shared `WorktreeList`, scoped by
-  explicit member-Task or positively Task-scoped session links and excluding
-  removed Worktrees, with no creation action. The host unions its visible rows with the ordinary Project tree's
-  status-watch demand. Initiative and Project expansions are remembered
-  separately per Initiative. A remembered Known coordinators fold precedes
-  Projects, reusing `SessionRowContent`; missing ancestry/details remain
-  informational, never guessed roots or false empty claims. Worktrees accept
-  member-scoped in-progress Task context: one canonical link inline, several
-  behind a disclosure, with blocked state independent of doing. Sessions disclose
-  separately beneath Worktrees; direct Project sessions reuse
-  `InitiativeSessionRows`, initially five with inline Show more. Task context,
-  Task-start ids, Workflow roles and eligible owned descendants determine scope,
-  never a shared checkout alone. Unavailable placement stays in Other related
-  sessions, with incomplete coverage stated. Session expansion is remembered
-  per Initiative/Worktree and row ids are namespaced by Initiative/Project.
-  First reads, refreshing data, failures and empty membership use shared load
-  chrome.
+  progress bars, without changing stored status. The first four sum to total. In
+  progress is blue; nonzero blocked is mild yellow, not a warning badge. Counter
+  meanings are in the tooltip and accessible name. Visible headers read
+  membership for this split; tiny derived counts survive shared graph-cache
+  eviction without a re-fetch loop. Pending splits use shared loading chrome
+  rather than invented counts. Nonempty bars turn success-green when all their
+  Tasks are done, without changing the Initiative's explicit state. Initiative
+  and Project progress counts share a reserved column sized to the widest
+  Initiative count, keeping bars aligned. It never copies an entire Project's
+  unrelated contents. Project Contents expands the shared `WorktreeList`, scoped
+  by explicit member-Task or positively Task-scoped session links and excluding
+  removed Worktrees, with no creation action. The host unions its visible rows
+  with the ordinary Project tree's status-watch demand. Initiative and Project
+  expansions are remembered separately per Initiative. A remembered Known
+  coordinators fold precedes Projects, reusing `SessionRowContent`; missing
+  ancestry/details remain informational, never guessed roots or false empty
+  claims. Worktrees accept member-scoped in-progress Task context: one canonical
+  link inline, several behind a disclosure, with blocked state independent of
+  doing. Sessions disclose separately beneath Worktrees; direct Project sessions
+  reuse `InitiativeSessionRows`, initially five with inline Show more. Task
+  context, Task-start ids, Workflow roles and eligible owned descendants
+  determine scope, never a shared checkout alone. Unavailable placement stays in
+  Other related sessions, with incomplete coverage stated. Session expansion is
+  remembered per Initiative/Worktree and row ids are namespaced by
+  Initiative/Project. First reads, refreshing data, failures and empty
+  membership use shared load chrome.
 - **Initiative Attention items:** Progress and age in context, state/title in
   identity, and session disclosure, readiness, blockers and next milestone in
   signals. Only unacknowledged paused/done outcomes offer Settle.
@@ -282,28 +279,30 @@ session-row and card memo keys so takeover updates every list immediately.
   and CI indicators use `trailing`; these rows currently need no action.
 - **Worktrees:** `WorktreeRow` shares `ListRowContent` and `ListRowActions`
   across the Project browser, Project page and embedded lists. An optional
-  context line groups PR/Integrated badges and line-change counts
-  together on the left. Omit that line when neither exists. Branch identity sits
-  above the final signal line, which starts with a Sessions disclosure when
-  linked sessions exist, followed by git metadata. The session-start action
-  spans every available line with `actionSpan="all"`. Optional host-scoped Task
-  context occupies details: a single Task link or an In progress Tasks
-  disclosure. Blocked Tasks use a muted glyph, not a warning chip.
-  `WorktreeList` renders Task and Session children in its shared Tree, with
-  independent disclosures and five-session paging. Tasks never become parents
-  of sessions. Optional session expansion is host-controlled so Project
-  unmounts preserve it, and keyboard collapse retains other Projects' state. Task arrays, expansion
-  state and stable id-addressed callbacks participate in the row memo. There is no separate
-  worktree-chevron gutter or extra tree padding. Local branch containment uses
-  a yellow Integrated badge with a merge icon, distinct from the PR's state;
-  it does not claim that the checkout is clean or safe to delete. Worktree PR
-  badges use `SessionDeliveryMark`'s `reference` variant: fixed PR icon and
-  `PR #number`, with state conveyed by colour, tooltip and accessible name,
-  not a visible state word. Provider links remain intact. Without a
-  known provider URL, summaries stay informational rather than guessing links.
+  context line groups PR/Integrated badges and line-change counts together on
+  the left. Omit that line when neither exists. Branch identity sits above the
+  final signal line, which starts with a Sessions disclosure when linked
+  sessions exist, followed by git metadata. The session-start action spans every
+  available line with `actionSpan="all"`. Optional host-scoped Task context
+  occupies details: a single Task link or an In progress Tasks disclosure.
+  Blocked Tasks use a muted glyph, not a warning chip. `WorktreeList` renders
+  Task and Session children in its shared Tree, with independent disclosures and
+  five-session paging. Tasks never become parents of sessions. Optional session
+  expansion is host-controlled so Project unmounts preserve it, and keyboard
+  collapse retains other Projects' state. Task arrays, expansion state and
+  stable id-addressed callbacks participate in the row memo. There is no
+  separate worktree-chevron gutter or extra tree padding. Local branch
+  containment uses a yellow Integrated badge with a merge icon, distinct from
+  the PR's state; it does not claim that the checkout is clean or safe to
+  delete. Worktree PR badges use `SessionDeliveryMark`'s `reference` variant:
+  fixed PR icon and `PR #number`, with state conveyed by colour, tooltip and
+  accessible name, not a visible state word. Provider links remain intact.
+  Without a known provider URL, summaries stay informational rather than
+  guessing links.
 
 Use these compositions as examples, not as permission to copy their geometry.
-Storybook's `Common/ListRow` demonstrates the one-, two-, and three-line layouts.
+Storybook's `Common/ListRow` demonstrates the one-, two-, and three-line
+layouts.
 
 `common/ListFilterPopover` owns browser filter chrome: the shared trigger,
 active-filter count, panel width and property-list layout. Tasks and Attention
@@ -315,8 +314,8 @@ An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
 of its action group — after a card footer's primary button, at a header's right
 end. A menu is `common/OverflowMenu`; an overflow that opens something else (a
-sheet, an object-specific details panel) is an `IconButton` with the same icon in
-the same place. An action that is the object's next step never hides in it.
+sheet, an object-specific details panel) is an `IconButton` with the same icon
+in the same place. An action that is the object's next step never hides in it.
 
 A clickable row is an `Item` rendered as the element it is:
 `<Item render={<button type="button" onClick={…} />}>` (or an `<a>` for a link).

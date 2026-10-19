@@ -10,7 +10,11 @@ import { INITIAL_SESSION_LIMIT } from "../worktreeRowParts.tsx";
 
 /** Direct or unplaced Initiative sessions, without lifecycle actions. */
 export const InitiativeSessionRows = memo(function InitiativeSessionRows({
-  sessions, scopeId, currentId, density, onNavigate,
+  sessions,
+  scopeId,
+  currentId,
+  density,
+  onNavigate,
 }: {
   sessions: readonly SessionListItem[];
   scopeId: string;
@@ -34,14 +38,31 @@ export const InitiativeSessionRows = memo(function InitiativeSessionRows({
             density={density}
             active={active}
             data-list-row-id={`${scopeId}:session:${session.id}`}
-            render={<a href={href} onClick={(event) => followRowLink(event, href, onNavigate)} />}
+            render={
+              <a
+                href={href}
+                onClick={(event) => followRowLink(event, href, onNavigate)}
+              />
+            }
           >
-            <SessionRowContent session={session} density={density} unread={active ? false : undefined} />
+            <SessionRowContent
+              session={session}
+              density={density}
+              unread={active ? false : undefined}
+            />
           </ListRow>
         );
       })}
       {remaining > 0 ? (
-        <ListExpansionRow rowId={`${scopeId}:more-sessions`} label="Show more sessions" count={remaining} expanded={false} density={density} tabbable onToggle={() => setShowAll(true)} />
+        <ListExpansionRow
+          rowId={`${scopeId}:more-sessions`}
+          label="Show more sessions"
+          count={remaining}
+          expanded={false}
+          density={density}
+          tabbable
+          onToggle={() => setShowAll(true)}
+        />
       ) : null}
     </>
   );

@@ -108,15 +108,17 @@ export function InboxShelfRow({
         </>
       }
       actions={
-        <ListRowActions actions={[
-          {
-            id: "restore",
-            label: "Restore",
-            accessibleLabel: restoreLabel,
-            icon: <RestoreIcon />,
-            onSelect: onRestore,
-          },
-        ]} />
+        <ListRowActions
+          actions={[
+            {
+              id: "restore",
+              label: "Restore",
+              accessibleLabel: restoreLabel,
+              icon: <RestoreIcon />,
+              onSelect: onRestore,
+            },
+          ]}
+        />
       }
     />
   );

@@ -215,22 +215,28 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   );
 
   // Shared by memoized Project rows so unrelated broadcasts do not redraw them.
-  const onToggleProject = useCallback((id: string) => {
-    const next = new Set(collapsedProjects);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setCollapsedProjects(next);
-    persistCollapsedIds(next);
-  }, [collapsedProjects]);
+  const onToggleProject = useCallback(
+    (id: string) => {
+      const next = new Set(collapsedProjects);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setCollapsedProjects(next);
+      persistCollapsedIds(next);
+    },
+    [collapsedProjects],
+  );
 
   // Keep this id-based handler stable for memoized Worktree rows as well.
-  const onToggleWorktree = useCallback((id: string) => {
-    const next = new Set(expandedWorktreeIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setExpandedWorktreeIds(next);
-    persistExpandedWorktreeIds(next);
-  }, [expandedWorktreeIds]);
+  const onToggleWorktree = useCallback(
+    (id: string) => {
+      const next = new Set(expandedWorktreeIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setExpandedWorktreeIds(next);
+      persistExpandedWorktreeIds(next);
+    },
+    [expandedWorktreeIds],
+  );
 
   const onExpandedChange = (ids: string[]) => {
     const expanded = new Set(ids);
@@ -377,7 +383,10 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                   selected={state.selected}
                   density={density}
                   expanded={state.expanded}
-                  sessionCount={relationIndex.sessionsByWorktree.get(data.worktree.id)?.length ?? 0}
+                  sessionCount={
+                    relationIndex.sessionsByWorktree.get(data.worktree.id)
+                      ?.length ?? 0
+                  }
                   onToggleSessions={onToggleWorktree}
                   onStartSession={onStartSessionInWorktree}
                 />
@@ -416,10 +425,17 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                     density={density}
                     identity={
                       <>
-                        <ChevronRight size={16} className="shrink-0 text-muted-foreground" aria-hidden />
+                        <ChevronRight
+                          size={16}
+                          className="shrink-0 text-muted-foreground"
+                          aria-hidden
+                        />
                         <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-                          Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more session
-                          {Math.min(SESSION_LIMIT_STEP, data.remaining) === 1 ? "" : "s"}
+                          Show {Math.min(SESSION_LIMIT_STEP, data.remaining)}{" "}
+                          more session
+                          {Math.min(SESSION_LIMIT_STEP, data.remaining) === 1
+                            ? ""
+                            : "s"}
                         </span>
                       </>
                     }
@@ -477,24 +493,30 @@ const ProjectRowContent = memo(function ProjectRowContent({
           </span>
         </>
       }
-      signals={hasContents ? (
-        <Badge
-          variant="ghost"
-          render={<button type="button" />}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? "Hide" : "Show"} contents of ${project.name}`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle(project.id);
-          }}
-          className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-        >
-          <ChevronRight size={12} className={expanded ? "rotate-90" : ""} aria-hidden />
-          Contents
-        </Badge>
-      ) : null}
+      signals={
+        hasContents ? (
+          <Badge
+            variant="ghost"
+            render={<button type="button" />}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "Hide" : "Show"} contents of ${project.name}`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle(project.id);
+            }}
+            className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+          >
+            <ChevronRight
+              size={12}
+              className={expanded ? "rotate-90" : ""}
+              aria-hidden
+            />
+            Contents
+          </Badge>
+        ) : null
+      }
       actions={
         onStartSession ? (
           <ListRowActions

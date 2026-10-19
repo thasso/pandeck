@@ -645,7 +645,11 @@ export function classifySessionStatus(
     return "failed";
   if (session.interruptedRun) return "interrupted";
   // A delegated peer's reply belongs to its coordinator, not the user's inbox.
-  if (session.unread && session.id !== currentId && session.spawnOwnership !== "coordinator")
+  if (
+    session.unread &&
+    session.id !== currentId &&
+    session.spawnOwnership !== "coordinator"
+  )
     return "unread";
   // Reading clears the visible successful-completion signal, not the durable
   // settlement cursor. The card becomes quiet but stays in the working set
@@ -2077,10 +2081,7 @@ export function planPositionedInboxDrop<T>(
   moved.splice(to, 0, item);
   const above = moved[to - 1];
   const below = moved[to + 1];
-  const between = (
-    upper: T,
-    lower: T | undefined,
-  ): number | undefined => {
+  const between = (upper: T, lower: T | undefined): number | undefined => {
     const high = order.position(upper);
     const position = lower
       ? (high + order.position(lower)) / 2

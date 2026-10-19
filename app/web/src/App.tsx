@@ -5763,16 +5763,19 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     // oxlint-disable-next-line react/exhaustive-deps -- `pendingApprovalsLedgeKey` IS the strip's visible content of `pendingApprovals` (`lib/approvalCards.ts`); depending on the array would rebuild the strip on every snapshot
     [pendingApprovalsLedgeKey, actions.revealApproval],
   );
-  const pendingQuestion = route.name === "session"
-    ? displaySession?.pendingQuestion
-    : undefined;
+  const pendingQuestion =
+    route.name === "session" ? displaySession?.pendingQuestion : undefined;
   const pendingQuestionId = pendingQuestion?.requestId;
   const pendingQuestionSessionId = pendingQuestion?.sessionId;
   const pendingQuestionTitle = pendingQuestion?.title;
   const questionEntryId = pendingQuestion
-    ? displayMessages.findLast((message) => message.blocks.some(
-        (block) => block.kind === "tool" && questionRequestBelongsToBlock(pendingQuestion, block),
-      ))?.id
+    ? displayMessages.findLast((message) =>
+        message.blocks.some(
+          (block) =>
+            block.kind === "tool" &&
+            questionRequestBelongsToBlock(pendingQuestion, block),
+        ),
+      )?.id
     : undefined;
   const [questionJump, setQuestionJump] = useState<string | null>(null);
   const revealPendingQuestion = useCallback(() => {
@@ -5795,11 +5798,24 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     } else if (hasOlderTimelineEntries && state.timelineRangePending === null) {
       actions.loadOlderTimeline();
     }
-  }, [questionJump, pendingQuestionId, pendingQuestionSessionId, questionEntryId, hasOlderTimelineEntries, state.timelineStart, state.timelineRangePending, actions]);
+  }, [
+    questionJump,
+    pendingQuestionId,
+    pendingQuestionSessionId,
+    questionEntryId,
+    hasOlderTimelineEntries,
+    state.timelineStart,
+    state.timelineRangePending,
+    actions,
+  ]);
   const pendingQuestionLedge = useMemo(
-    () => pendingQuestionId && pendingQuestionTitle ? (
-      <PendingQuestionLedge title={pendingQuestionTitle} onReveal={revealPendingQuestion} />
-    ) : undefined,
+    () =>
+      pendingQuestionId && pendingQuestionTitle ? (
+        <PendingQuestionLedge
+          title={pendingQuestionTitle}
+          onReveal={revealPendingQuestion}
+        />
+      ) : undefined,
     [pendingQuestionId, pendingQuestionTitle, revealPendingQuestion],
   );
   // The user's own queue (`promptQueue.ts`) belongs to an ordinary session on

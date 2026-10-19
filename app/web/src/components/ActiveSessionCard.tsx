@@ -245,7 +245,9 @@ function ActiveSessionCardImpl({
   // The status line's fallback: with no signal to show, it says the state in
   // words (the title's glyph says it as an icon), so the row is not just the
   // row's buttons.
-  const hasSignals = Boolean(cluster || backgroundChip || delivery || worktreeIntegrated || sentence);
+  const hasSignals = Boolean(
+    cluster || backgroundChip || delivery || worktreeIntegrated || sentence,
+  );
   const stateWords =
     status === "quiet"
       ? "Idle"
@@ -426,10 +428,7 @@ function ActiveSessionCardImpl({
                   until then the worktree's changes sit beside it above. */}
             {delivery ? (
               <span className="flex shrink-0 items-center">
-                <SessionDeliveryMark
-                  session={session}
-                  variant="reference"
-                />
+                <SessionDeliveryMark session={session} variant="reference" />
               </span>
             ) : null}
             {worktreeIntegrated ? <IntegratedBadge /> : null}

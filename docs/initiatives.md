@@ -197,38 +197,38 @@ the tool descriptions, never in a harness-specific prompt layer.
 The Initiatives group above Projects uses compact browser rows rather than the
 urgency-oriented Attention card. An Initiative shows its title, Task progress,
 and a Contents disclosure; Paused occupies an optional first line. Initiative
-and Project counters show ready/in-progress/blocked/done/total
-with mild colours, shared reserved space and aligned progress bars. In progress
-is blue, nonzero blocked is yellow, and done is green. These are state counts,
-not warning badges; meanings are supplied in the tooltip and accessible name.
-Every member belongs to exactly one bucket: completed or archived first, then
-blocked, then unblocked doing, then ready todo. Done includes every archived
-Task, regardless of stored status; counters and bars treat shelved work as out
-of the user's way without changing Task status. The first four counters sum to
-total. This browser partition is distinct from the summary DTO's overlapping
-doing/blocked facts.
-The heading opens its detail, while Contents expands inline, with state
-remembered per Initiative for the tab.
+and Project counters show ready/in-progress/blocked/done/total with mild
+colours, shared reserved space and aligned progress bars. In progress is blue,
+nonzero blocked is yellow, and done is green. These are state counts, not
+warning badges; meanings are supplied in the tooltip and accessible name. Every
+member belongs to exactly one bucket: completed or archived first, then blocked,
+then unblocked doing, then ready todo. Done includes every archived Task,
+regardless of stored status; counters and bars treat shelved work as out of the
+user's way without changing Task status. The first four counters sum to total.
+This browser partition is distinct from the summary DTO's overlapping
+doing/blocked facts. The heading opens its detail, while Contents expands
+inline, with state remembered per Initiative for the tab.
 
 A visible Initiative header reuses the existing keyed membership graph read to
 derive an exact partition; the summary alone cannot separate doing/blocked
-overlap or include all archived Tasks in browser completion. Before that read answers, the bar retains
-known done/total and the split uses shared loading chrome, never guessed zeros.
-Small derived counts survive graph-LRU eviction without retaining the graph or
-re-fetching an idle eviction repeatedly. Errors expose a retry even when
-Contents is closed. The first expansion level groups member Tasks by Project. It does not infer membership from names or
-from the summary's bounded active-session ids. Project counts and progress are
-scoped to member Tasks, archived members included. A missing registry record
-keeps its Project id visible; Tasks with no Project appear in a No Project row.
-External blockers do not make their Projects members. Project rows navigate
-normally and offer no creation or settlement action. Each Project has a separate
-Contents disclosure, remembered within its Initiative, for non-removed Worktrees
-whose explicit `in_worktree` Task links intersect that Project's member Tasks,
-or which physically hold a positively Task-scoped session. A Project without
-a matching Worktree stays visible; its sessions without a Worktree appear
-directly beneath it. Shared Worktree rows retain
-PR/Integrated badges and Git metadata; only the expanded rows hold live status
-watches. Opening a Worktree navigates normally.
+overlap or include all archived Tasks in browser completion. Before that read
+answers, the bar retains known done/total and the split uses shared loading
+chrome, never guessed zeros. Small derived counts survive graph-LRU eviction
+without retaining the graph or re-fetching an idle eviction repeatedly. Errors
+expose a retry even when Contents is closed. The first expansion level groups
+member Tasks by Project. It does not infer membership from names or from the
+summary's bounded active-session ids. Project counts and progress are scoped to
+member Tasks, archived members included. A missing registry record keeps its
+Project id visible; Tasks with no Project appear in a No Project row. External
+blockers do not make their Projects members. Project rows navigate normally and
+offer no creation or settlement action. Each Project has a separate Contents
+disclosure, remembered within its Initiative, for non-removed Worktrees whose
+explicit `in_worktree` Task links intersect that Project's member Tasks, or
+which physically hold a positively Task-scoped session. A Project without a
+matching Worktree stays visible; its sessions without a Worktree appear directly
+beneath it. Shared Worktree rows retain PR/Integrated badges and Git metadata;
+only the expanded rows hold live status watches. Opening a Worktree navigates
+normally.
 
 Worktree Sessions and In progress Tasks disclose independently in the shared
 Tree. Session expansion is remembered per Initiative and Worktree, survives
@@ -237,14 +237,15 @@ shared identity, ownership styling, status, PR glyph and age, with canonical
 links and no Archive/Restore or creation actions. Worktree sessions initially
 show five and reveal five more per request; direct Project sessions initially
 show five and can reveal their known remainder. Row ids are namespaced to the
-Initiative and Project so overlapping membership does not confuse scroll restore.
+Initiative and Project so overlapping membership does not confuse scroll
+restore.
 
-`lib/initiativeBrowserSessions.ts` scopes loaded sessions through explicit member
-Task object context, the summary's bounded Task-start ids, and member-Task
-Workflow Run roles. Coordinator-owned descendants may inherit a scoped spawn
-relationship; explicit Task context wholly outside the Initiative takes
-precedence, and taken-over or unknown ownership needs its own positive Task
-relationship. A shared Project/Worktree or coordinator ancestor alone never
+`lib/initiativeBrowserSessions.ts` scopes loaded sessions through explicit
+member Task object context, the summary's bounded Task-start ids, and
+member-Task Workflow Run roles. Coordinator-owned descendants may inherit a
+scoped spawn relationship; explicit Task context wholly outside the Initiative
+takes precedence, and taken-over or unknown ownership needs its own positive
+Task relationship. A shared Project/Worktree or coordinator ancestor alone never
 includes all its sessions. Actual `in_worktree` placement wins over direct
 Project placement. Missing/removed Worktrees or ambiguous Project context go to
 an Other related sessions fold, not a guessed Project or a direct-session claim.
@@ -252,8 +253,8 @@ Archived inactive rows remain out of this working browser.
 
 Project metadata counts known scoped sessions, both direct and nested. Clipped
 summary membership and unavailable session details or relationships are stated
-as incomplete, never as a complete empty list. No archived-session collection
-is fetched, and Show more reveals only rows already known.
+as incomplete, never as a complete empty list. No archived-session collection is
+fetched, and Show more reveals only rows already known.
 
 A remembered Known coordinators fold precedes the Projects. It reuses shared
 session identity and age without Archive or Settle. Candidates come only from
@@ -263,17 +264,16 @@ Workflow Runs. Only complete loaded spawn chains can identify a root: a missing
 parent or a cycle never promotes the last visible peer. Positive roots are
 deduplicated; missing session details or clipped summary membership are stated
 as incomplete, not as absence of a coordinator. The fold does not fetch the
-whole archived-session collection. These are recorded coordinating relationships,
-not an explicit Initiative owner; takeover does not erase provenance or change
-the shared current-ownership presentation.
+whole archived-session collection. These are recorded coordinating
+relationships, not an explicit Initiative owner; takeover does not erase
+provenance or change the shared current-ownership presentation.
 
 Inside a Worktree, Task context includes only linked member Tasks whose status
 is doing and which are not archived. One Task is a canonical link in the row's
 metadata. Several expand through an In progress Tasks disclosure into shared
 Tree rows, with canonical links and muted blocked glyphs where the graph says
-so, never warning chips.
-This is optional context, not a mandatory Task level above sessions. Task doing
-is distinct from a session currently running a turn.
+so, never warning chips. This is optional context, not a mandatory Task level
+above sessions. Task doing is distinct from a session currently running a turn.
 
 ## The Initiative page
 
@@ -426,16 +426,16 @@ An Initiative is a Sessions inbox item, following the Workflow Run precedent
 - Settle acknowledges exactly the revision the clicked item rendered
   (`settleInitiative`, whose `throughRevision` is required). The server clamps
   it to the stored revision and only moves the acknowledgement forward. A
-  settled Initiative leaves Attention without changing its state, membership,
-  or visibility in the Project browser and detail pages.
+  settled Initiative leaves Attention without changing its state, membership, or
+  visibility in the Project browser and detail pages.
 - Later activity automatically brings it back. Initiative edits and membership
   writes, member Task notifications, and linked session creation, turn starts
   and outcomes raise attention in the same transaction as the Initiative's
-  state-event revision. The existing holder fan-out also covers external
-  blocker changes. Repeating unchanged Initiative fields does not raise it.
-  Session read marks, settlement, archival and deletion refresh summaries but
-  do not raise attention. Settling or reordering the Initiative does not raise
-  it either. Newer activity after the rendered revision survives a stale Settle.
+  state-event revision. The existing holder fan-out also covers external blocker
+  changes. Repeating unchanged Initiative fields does not raise it. Session read
+  marks, settlement, archival and deletion refresh summaries but do not raise
+  attention. Settling or reordering the Initiative does not raise it either.
+  Newer activity after the rendered revision survives a stale Settle.
 - Active Initiative cards use the same drag activation and position scale as
   sessions and runs. A drop moves the whole card and any expanded session rows.
   `inboxPosition` overrides creation time; activity preserves that position.
@@ -473,12 +473,13 @@ member Tasks counts once, and the query returns no more than that. That is the
 data bound.
 
 Those sessions initially show five rows: those needing the user first, then
-newest by creation, ties by id, among the listed ids the browser holds. Show more
-reveals the remaining known sessions inline, without navigating. Sessions beyond
-the summary's 50 ids or not held by the browser are counted in a non-interactive
-"not loaded" note, not offered as an expansion the browser cannot fulfill.
-Session entries use the shared compact `ListRow` presentation and open their chats. The sessions keep their own inbox cards. Unlike a Workflow Run's
-role sessions they are not folded away: a Task can belong to several
+newest by creation, ties by id, among the listed ids the browser holds. Show
+more reveals the remaining known sessions inline, without navigating. Sessions
+beyond the summary's 50 ids or not held by the browser are counted in a
+non-interactive "not loaded" note, not offered as an expansion the browser
+cannot fulfill. Session entries use the shared compact `ListRow` presentation
+and open their chats. The sessions keep their own inbox cards. Unlike a Workflow
+Run's role sessions they are not folded away: a Task can belong to several
 Initiatives, so no single card owns a session, and a session that needs the user
 must stay visible on its own. Membership is structural: sessions linked to
 member Tasks, nothing parsed from titles.

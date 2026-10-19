@@ -331,7 +331,9 @@ export function SessionInbox({
   // by default: the fold is about what is going on now, and its history is a
   // request.
   const [settledHistory, setSettledHistory] = useState<string[]>([]);
-  const [expandedInitiativeSessions, setExpandedInitiativeSessions] = useState<string[]>([]);
+  const [expandedInitiativeSessions, setExpandedInitiativeSessions] = useState<
+    string[]
+  >([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Cards on their way out: they stay in the list, playing the exit, until the
   // settle command is actually sent — the row is the animation's subject, so it
@@ -655,11 +657,16 @@ export function SessionInbox({
       if (item.kind === "run") return item.roles;
       const cluster = item.card.cluster;
       if (!cluster) return [];
-      if (!settledHistory.includes(item.card.session.id)) return cluster.children;
-      const liveIds = new Set(cluster.children.map((child) => child.session.id));
+      if (!settledHistory.includes(item.card.session.id))
+        return cluster.children;
+      const liveIds = new Set(
+        cluster.children.map((child) => child.session.id),
+      );
       return [
         ...cluster.children,
-        ...cluster.childrenWithSettled.filter((child) => !liveIds.has(child.session.id)),
+        ...cluster.childrenWithSettled.filter(
+          (child) => !liveIds.has(child.session.id),
+        ),
       ];
     },
     [expandedClusters, settledHistory],
@@ -1002,7 +1009,9 @@ export function SessionInbox({
     [toggleCluster],
   );
   const showMoreInitiativeSessions = useCallback((initiativeId: string) => {
-    setExpandedInitiativeSessions((ids) => ids.includes(initiativeId) ? ids : [...ids, initiativeId]);
+    setExpandedInitiativeSessions((ids) =>
+      ids.includes(initiativeId) ? ids : [...ids, initiativeId],
+    );
   }, []);
 
   const focusSibling = useCallback((delta: 1 | -1) => {
@@ -1093,7 +1102,9 @@ export function SessionInbox({
             item={item}
             now={now}
             density={density}
-            worktreeIntegrated={Boolean(worktreeStatus?.merged && worktreeStatus.ahead > 0)}
+            worktreeIntegrated={Boolean(
+              worktreeStatus?.merged && worktreeStatus.ahead > 0,
+            )}
             expanded={expandedClusters.has(id)}
             onOpen={onOpenWorkflowRun}
             onOpenSession={onSelect}
@@ -1120,10 +1131,13 @@ export function SessionInbox({
       ? worktreeStatuses[card.session.worktreeId]
       : undefined;
     const rows = childRows(item);
-    const liveIds = new Set(card.cluster?.children.map((child) => child.session.id));
-    const settledRows = card.cluster?.childrenWithSettled.filter(
-      (child) => !liveIds.has(child.session.id),
-    ) ?? [];
+    const liveIds = new Set(
+      card.cluster?.children.map((child) => child.session.id),
+    );
+    const settledRows =
+      card.cluster?.childrenWithSettled.filter(
+        (child) => !liveIds.has(child.session.id),
+      ) ?? [];
     return (
       <ExitStage leaving={settling.includes(id)}>
         {/* The separator wraps the card AND its disclosed peers. It stays
@@ -1155,7 +1169,9 @@ export function SessionInbox({
               active={id === currentId}
               relations={relationsById.get(id) ?? NO_RELATIONS}
               worktreeDirty={worktreeStatus?.dirty}
-              worktreeIntegrated={Boolean(worktreeStatus?.merged && worktreeStatus.ahead > 0)}
+              worktreeIntegrated={Boolean(
+                worktreeStatus?.merged && worktreeStatus.ahead > 0,
+              )}
               density={density}
               clusterExpanded={expandedClusters.has(id)}
               onOpen={onSelect}
@@ -1217,53 +1233,54 @@ export function SessionInbox({
         ? settleError.message
         : null;
     return (
-        <ExitStage leaving={settling.includes(id)}>
-          <div className={`border-b border-border/60 ${open ? "pb-2" : ""}`}>
-            <InitiativeInboxCard
-              item={item}
+      <ExitStage leaving={settling.includes(id)}>
+        <div className={`border-b border-border/60 ${open ? "pb-2" : ""}`}>
+          <InitiativeInboxCard
+            item={item}
+            now={now}
+            density={density}
+            expanded={open}
+            onOpen={onOpenInitiative}
+            onSettle={settleInitiativeItem}
+            onToggleSessions={toggleInitiativeSessions}
+            onFocusSibling={focusSibling}
+          />
+          {/* Its Settle's failure, on the card whose control was refused. */}
+          {settleNote ? (
+            <ErrorNote className="mx-2 my-1" message={settleNote} />
+          ) : null}
+          {rows.map((child) => (
+            <ClusterChildRow
+              key={child.session.id}
+              card={child}
               now={now}
               density={density}
-              expanded={open}
-              onOpen={onOpenInitiative}
-              onSettle={settleInitiativeItem}
-              onToggleSessions={toggleInitiativeSessions}
+              relation="working"
+              active={child.session.id === currentId}
+              // The session's own card already carries its id.
+              listRowId={`${id}:${child.session.id}`}
+              onOpen={onSelect}
               onFocusSibling={focusSibling}
             />
-            {/* Its Settle's failure, on the card whose control was refused. */}
-            {settleNote ? (
-              <ErrorNote className="mx-2 my-1" message={settleNote} />
-            ) : null}
-            {rows.map((child) => (
-              <ClusterChildRow
-                key={child.session.id}
-                card={child}
-                now={now}
-                density={density}
-                relation="working"
-                active={child.session.id === currentId}
-                // The session's own card already carries its id.
-                listRowId={`${id}:${child.session.id}`}
-                onOpen={onSelect}
-                onFocusSibling={focusSibling}
-              />
-            ))}
-            {open && !showMore && additionalCount > 0 ? (
-              <InitiativeMoreRow
-                initiativeId={item.initiative.id}
-                title={item.initiative.title}
-                more={additionalCount}
-                density={density}
-                onShowMore={showMoreInitiativeSessions}
-                onFocusSibling={focusSibling}
-              />
-            ) : null}
-            {open && unavailableCount > 0 ? (
-              <p className="border-t border-border/60 px-3 py-1 text-xs text-muted-foreground">
-                {unavailableCount} more session{unavailableCount === 1 ? " is" : "s are"} not loaded
-              </p>
-            ) : null}
-          </div>
-        </ExitStage>
+          ))}
+          {open && !showMore && additionalCount > 0 ? (
+            <InitiativeMoreRow
+              initiativeId={item.initiative.id}
+              title={item.initiative.title}
+              more={additionalCount}
+              density={density}
+              onShowMore={showMoreInitiativeSessions}
+              onFocusSibling={focusSibling}
+            />
+          ) : null}
+          {open && unavailableCount > 0 ? (
+            <p className="border-t border-border/60 px-3 py-1 text-xs text-muted-foreground">
+              {unavailableCount} more session
+              {unavailableCount === 1 ? " is" : "s are"} not loaded
+            </p>
+          ) : null}
+        </div>
+      </ExitStage>
     );
   };
 
@@ -1292,7 +1309,10 @@ export function SessionInbox({
       : renderItem(entry.item, lifted);
   const renderNeedsYou = (entries: NeedsYouEntry[]) =>
     entries.map((entry) => (
-      <div key={needsYouEntryId(entry)} data-inbox-card={needsYouEntryId(entry)}>
+      <div
+        key={needsYouEntryId(entry)}
+        data-inbox-card={needsYouEntryId(entry)}
+      >
         {renderEntry(entry, false)}
       </div>
     ));
@@ -1349,7 +1369,10 @@ export function SessionInbox({
   const activeProjects = useMemo(
     () =>
       new Map(
-        allActiveEntries.map((entry) => [needsYouEntryId(entry), projectForEntry(entry)]),
+        allActiveEntries.map((entry) => [
+          needsYouEntryId(entry),
+          projectForEntry(entry),
+        ]),
       ),
     [allActiveEntries, projectForEntry],
   );
@@ -1378,7 +1401,9 @@ export function SessionInbox({
       )
         return;
       const items = filters.byProject
-        ? allActiveEntries.filter((entry) => projectForEntry(entry) === projectId)
+        ? allActiveEntries.filter(
+            (entry) => projectForEntry(entry) === projectId,
+          )
         : allActiveEntries;
       const positions = planInitiativeInboxDrop(
         items,

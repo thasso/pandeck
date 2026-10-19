@@ -315,10 +315,7 @@ function WorkflowRunInboxCardImpl({
             ) : null}
             {prSession ? (
               <span className="flex shrink-0 items-center">
-                <SessionDeliveryMark
-                  session={prSession}
-                  variant="reference"
-                />
+                <SessionDeliveryMark session={prSession} variant="reference" />
               </span>
             ) : null}
             {worktreeIntegrated ? <IntegratedBadge /> : null}

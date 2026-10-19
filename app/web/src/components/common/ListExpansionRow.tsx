@@ -54,9 +54,13 @@ export function ListExpansionRow({
             </span>
           </>
         }
-        trailing={count !== undefined ? (
-          <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
-        ) : undefined}
+        trailing={
+          count !== undefined ? (
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {count}
+            </span>
+          ) : undefined
+        }
       />
       {expanded ? children : null}
     </>

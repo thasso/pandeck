@@ -677,23 +677,38 @@ function SidebarImpl({
         : ids,
     );
   }, []);
-  const [visibleInitiativeWorktrees, setVisibleInitiativeWorktrees] = useState<Record<string, string[]>>({});
+  const [visibleInitiativeWorktrees, setVisibleInitiativeWorktrees] = useState<
+    Record<string, string[]>
+  >({});
   // Stable, id-addressed reports keep sibling Initiative disclosures independent
   // and add only their actually visible rows to the shared status-watch demand.
-  const onVisibleInitiativeWorktrees = useCallback((initiativeId: string, ids: string[]) => {
-    setVisibleInitiativeWorktrees((current) => {
-      const previous = current[initiativeId] ?? [];
-      if (previous.length === ids.length && previous.every((id, index) => id === ids[index])) return current;
-      const next = { ...current };
-      if (ids.length > 0) next[initiativeId] = ids;
-      else delete next[initiativeId];
-      return next;
-    });
-  }, []);
-  const visibleBrowserWorktreeIds = useMemo(() => [...new Set([
-    ...visibleProjectWorktreeIds,
-    ...Object.values(visibleInitiativeWorktrees).flat(),
-  ])].sort(), [visibleProjectWorktreeIds, visibleInitiativeWorktrees]);
+  const onVisibleInitiativeWorktrees = useCallback(
+    (initiativeId: string, ids: string[]) => {
+      setVisibleInitiativeWorktrees((current) => {
+        const previous = current[initiativeId] ?? [];
+        if (
+          previous.length === ids.length &&
+          previous.every((id, index) => id === ids[index])
+        )
+          return current;
+        const next = { ...current };
+        if (ids.length > 0) next[initiativeId] = ids;
+        else delete next[initiativeId];
+        return next;
+      });
+    },
+    [],
+  );
+  const visibleBrowserWorktreeIds = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...visibleProjectWorktreeIds,
+          ...Object.values(visibleInitiativeWorktrees).flat(),
+        ]),
+      ].sort(),
+    [visibleProjectWorktreeIds, visibleInitiativeWorktrees],
+  );
   const visibleBrowserWorktreeSet = useMemo(
     () => new Set(visibleBrowserWorktreeIds),
     [visibleBrowserWorktreeIds],
@@ -754,22 +769,36 @@ function SidebarImpl({
   }
 
   const projectRowStatuses = projectStatusCache.current.value;
-  const initiativeWorktrees = useMemo<InitiativeBrowserWorktrees>(() => ({
-    items: worktrees,
-    fresh: worktreesFresh,
-    statuses: projectRowStatuses,
-    hosting: worktreeHosting,
-    selectedId: selectedWorktreeId,
-    onOpen: onOpenWorktree,
-    onVisible: onVisibleInitiativeWorktrees,
-  }), [worktrees, worktreesFresh, projectRowStatuses, worktreeHosting, selectedWorktreeId, onOpenWorktree, onVisibleInitiativeWorktrees]);
+  const initiativeWorktrees = useMemo<InitiativeBrowserWorktrees>(
+    () => ({
+      items: worktrees,
+      fresh: worktreesFresh,
+      statuses: projectRowStatuses,
+      hosting: worktreeHosting,
+      selectedId: selectedWorktreeId,
+      onOpen: onOpenWorktree,
+      onVisible: onVisibleInitiativeWorktrees,
+    }),
+    [
+      worktrees,
+      worktreesFresh,
+      projectRowStatuses,
+      worktreeHosting,
+      selectedWorktreeId,
+      onOpenWorktree,
+      onVisibleInitiativeWorktrees,
+    ],
+  );
 
-  const initiativeSessions = useMemo<InitiativeBrowserSessions>(() => ({
-    items: sessions,
-    runs: workflowRuns,
-    cards: workflowCards,
-    selectedId: currentId ?? null,
-  }), [sessions, workflowRuns, workflowCards, currentId]);
+  const initiativeSessions = useMemo<InitiativeBrowserSessions>(
+    () => ({
+      items: sessions,
+      runs: workflowRuns,
+      cards: workflowCards,
+      selectedId: currentId ?? null,
+    }),
+    [sessions, workflowRuns, workflowCards, currentId],
+  );
 
   // While the Projects or Worktrees browser is visible, subscribe to every
   // listed worktree so dirty-file indicators stay current instead of only

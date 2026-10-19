@@ -166,65 +166,69 @@ function InitiativeInboxCardImpl({
       }
       signals={
         <>
-            {initiative.sessionCount > 0 ? (
-              <Badge
-                variant="ghost"
-                render={<button type="button" />}
-                className="cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
-                aria-expanded={expanded}
-                aria-label={`${expanded ? "Hide" : "Show"} the ${initiativeSessionsLabel(
-                  initiative.sessionCount,
-                )} working on its Tasks`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleSessions(initiative.id);
-                }}
-              >
-                <ChevronRight
-                  aria-hidden
-                  className={expanded ? "rotate-90" : ""}
-                />
-                <Users aria-hidden />
-                <span>{initiativeSessionsLabel(initiative.sessionCount)}</span>
-              </Badge>
-            ) : null}
-            {progress.startable > 0 ? (
-              <span className="shrink-0 font-medium text-primary tabular-nums">
-                {progress.startable} ready
+          {initiative.sessionCount > 0 ? (
+            <Badge
+              variant="ghost"
+              render={<button type="button" />}
+              className="cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "Hide" : "Show"} the ${initiativeSessionsLabel(
+                initiative.sessionCount,
+              )} working on its Tasks`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSessions(initiative.id);
+              }}
+            >
+              <ChevronRight
+                aria-hidden
+                className={expanded ? "rotate-90" : ""}
+              />
+              <Users aria-hidden />
+              <span>{initiativeSessionsLabel(initiative.sessionCount)}</span>
+            </Badge>
+          ) : null}
+          {progress.startable > 0 ? (
+            <span className="shrink-0 font-medium text-primary tabular-nums">
+              {progress.startable} ready
+            </span>
+          ) : null}
+          {progress.blocked > 0 ? (
+            <span className="flex shrink-0 items-center gap-0.5 text-warning tabular-nums">
+              <Ban size={12} aria-hidden />
+              {progress.blocked} blocked
+            </span>
+          ) : null}
+          {initiative.nextMilestone ? (
+            // Shortens into the width the others leave, but never below a
+            // readable stub: under that it drops to the hidden line whole.
+            <span
+              className="flex min-w-16 flex-1 basis-16 items-center gap-1 text-muted-foreground"
+              title={`Next milestone: ${initiative.nextMilestone.title}`}
+            >
+              <Flag size={12} className="shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">
+                {initiative.nextMilestone.title}
               </span>
-            ) : null}
-            {progress.blocked > 0 ? (
-              <span className="flex shrink-0 items-center gap-0.5 text-warning tabular-nums">
-                <Ban size={12} aria-hidden />
-                {progress.blocked} blocked
-              </span>
-            ) : null}
-            {initiative.nextMilestone ? (
-              // Shortens into the width the others leave, but never below a
-              // readable stub: under that it drops to the hidden line whole.
-              <span
-                className="flex min-w-16 flex-1 basis-16 items-center gap-1 text-muted-foreground"
-                title={`Next milestone: ${initiative.nextMilestone.title}`}
-              >
-                <Flag size={12} className="shrink-0" aria-hidden />
-                <span className="min-w-0 truncate">
-                  {initiative.nextMilestone.title}
-                </span>
-              </span>
-            ) : null}
+            </span>
+          ) : null}
         </>
       }
-      actions={settle ? (
-        <ListRowActions actions={[
-          {
-            id: "settle",
-            label: "Settle",
-            accessibleLabel: settleLabel,
-            icon: <Check />,
-            onSelect: settle,
-          },
-        ]} />
-      ) : undefined}
+      actions={
+        settle ? (
+          <ListRowActions
+            actions={[
+              {
+                id: "settle",
+                label: "Settle",
+                accessibleLabel: settleLabel,
+                icon: <Check />,
+                onSelect: settle,
+              },
+            ]}
+          />
+        ) : undefined
+      }
     />
   );
 }

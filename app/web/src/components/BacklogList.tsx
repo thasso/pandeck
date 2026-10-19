@@ -302,7 +302,9 @@ function BacklogListImpl({
             showProjectBadge: !fixedFilter,
             ...(hosting !== undefined ? { hostingByWorktree: hosting } : {}),
             ...(dirtyWorktrees !== undefined ? { dirtyWorktrees } : {}),
-            ...(workflowIndicators !== undefined ? { workflowByTask: workflowIndicators } : {}),
+            ...(workflowIndicators !== undefined
+              ? { workflowByTask: workflowIndicators }
+              : {}),
           }}
           onNavigate={onNavigate}
           selectedId={selectedId}

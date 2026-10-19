@@ -162,7 +162,8 @@ export function ListRowContent({
   const hasDetails = details !== undefined;
   const lines =
     1 + Number(hasContext) + Number(hasDetails) + Number(hasSignals);
-  const actionStart = actionSpan === "all" ? 1 : Math.max(hasContext ? 2 : 1, lines - 1);
+  const actionStart =
+    actionSpan === "all" ? 1 : Math.max(hasContext ? 2 : 1, lines - 1);
   const lineStyle = (line: number) => ({
     gridRow: line,
     gridColumn: actions && line >= actionStart ? "1" : "1 / -1",
@@ -237,7 +238,9 @@ export function ListRowContent({
             {details}
           </div>
           {!hasSignals && trailing ? (
-            <span className="flex shrink-0 items-center gap-1.5">{trailing}</span>
+            <span className="flex shrink-0 items-center gap-1.5">
+              {trailing}
+            </span>
           ) : null}
         </div>
       ) : null}

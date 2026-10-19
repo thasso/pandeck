@@ -43,7 +43,10 @@ import { getDb } from "./index.ts";
  * `activity` distinguishes new sessions, turn starts and outcomes from human
  * acknowledgement or removal, which must not wake a settled Initiative.
  */
-type SessionLivenessListener = (ids: readonly string[], activity: boolean) => void;
+type SessionLivenessListener = (
+  ids: readonly string[],
+  activity: boolean,
+) => void;
 
 const livenessListeners = new Set<SessionLivenessListener>();
 

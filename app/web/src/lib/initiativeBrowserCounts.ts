@@ -10,7 +10,9 @@ export interface InitiativeBrowserCounts {
   total: number;
 }
 
-export function initiativeBrowserCounts(nodes: readonly InitiativeGraphNode[]): InitiativeBrowserCounts {
+export function initiativeBrowserCounts(
+  nodes: readonly InitiativeGraphNode[],
+): InitiativeBrowserCounts {
   const counts: InitiativeBrowserCounts = {
     startable: 0,
     doing: 0,

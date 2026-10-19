@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Archive,
-  ChevronRight,
-  FolderKanban,
-  Trash2,
-} from "lucide-react";
+import { Archive, ChevronRight, FolderKanban, Trash2 } from "lucide-react";
 import type {
   ProjectRecord,
   SessionListItem,
@@ -670,7 +665,11 @@ function BacklogRowContent({
   return (
     <TaskListRowContent
       task={task}
-      meta={taskRowsHaveMeta(presentation) ? buildTaskRowMeta(task, metaContext) : null}
+      meta={
+        taskRowsHaveMeta(presentation)
+          ? buildTaskRowMeta(task, metaContext)
+          : null
+      }
       projectsById={projectsById}
       selected={state.selected}
       dimmed={Boolean(context)}
@@ -679,24 +678,30 @@ function BacklogRowContent({
       onOpenSession={onOpenSession}
       onStartSession={onStartSession}
       onNavigate={onNavigate}
-      disclosure={state.hasChildren ? (
-        <Badge
-          variant="ghost"
-          render={<button type="button" />}
-          aria-expanded={state.expanded}
-          aria-label={`${state.expanded ? "Hide" : "Show"} sub-tasks of "${task.title}"`}
-          onPointerDown={(event) => event.stopPropagation()}
-          onKeyDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggle();
-          }}
-          className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-        >
-          <ChevronRight size={12} className={state.expanded ? "rotate-90" : ""} aria-hidden />
-          Sub-tasks <span>{node.children?.length}</span>
-        </Badge>
-      ) : undefined}
+      disclosure={
+        state.hasChildren ? (
+          <Badge
+            variant="ghost"
+            render={<button type="button" />}
+            aria-expanded={state.expanded}
+            aria-label={`${state.expanded ? "Hide" : "Show"} sub-tasks of "${task.title}"`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggle();
+            }}
+            className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+          >
+            <ChevronRight
+              size={12}
+              className={state.expanded ? "rotate-90" : ""}
+              aria-hidden
+            />
+            Sub-tasks <span>{node.children?.length}</span>
+          </Badge>
+        ) : undefined
+      }
     />
   );
 }

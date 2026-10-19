@@ -100,7 +100,9 @@ export function SessionDeliveryMark({
   const reference = variant === "reference";
   const Icon = reference
     ? GitPullRequest
-    : delivery.state === "creating" ? null : STATE_ICON[delivery.state];
+    : delivery.state === "creating"
+      ? null
+      : STATE_ICON[delivery.state];
 
   if (variant === "glyph") {
     return (
@@ -115,7 +117,8 @@ export function SessionDeliveryMark({
     );
   }
 
-  const number = showNumber || reference ? session.pullRequest?.number : undefined;
+  const number =
+    showNumber || reference ? session.pullRequest?.number : undefined;
   // "PR #322" already names the number; with the number shown, the label
   // would say it twice.
   const labelIsNumber =
@@ -149,7 +152,9 @@ export function SessionDeliveryMark({
         >
           {reference || collapseNumber ? `PR #${number}` : `#${number}`}
         </span>
-      ) : reference ? <span>PR</span> : null}
+      ) : reference ? (
+        <span>PR</span>
+      ) : null}
     </Badge>
   );
 }

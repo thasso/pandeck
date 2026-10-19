@@ -24,7 +24,9 @@ export function parseInboxPlacement(
     if (entry.kind === "initiative") {
       const id = Number(entry.id);
       if (!Number.isSafeInteger(id) || id <= 0)
-        return { error: `Initiative ${JSON.stringify(entry.id)} does not exist` };
+        return {
+          error: `Initiative ${JSON.stringify(entry.id)} does not exist`,
+        };
       initiatives.set(id, entry.position);
       continue;
     }
@@ -39,7 +41,12 @@ export function parseInboxPlacement(
     sessions: [...sessions].map(([id, position]) => ({ id, position })),
     runs: [...runs].map(([id, position]) => ({ id, position })),
     ...(initiatives.size > 0
-      ? { initiatives: [...initiatives].map(([id, position]) => ({ id, position })) }
+      ? {
+          initiatives: [...initiatives].map(([id, position]) => ({
+            id,
+            position,
+          })),
+        }
       : {}),
   };
 }

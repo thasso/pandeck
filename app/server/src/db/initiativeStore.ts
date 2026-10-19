@@ -686,12 +686,18 @@ function touchHolders(
  * A linked session changed. Always refresh the summary, but raise attention
  * only for actual activity, never for settlement, archival or deletion.
  */
-function touchSessionHolders(sessionIds: readonly string[], activity: boolean): void {
+function touchSessionHolders(
+  sessionIds: readonly string[],
+  activity: boolean,
+): void {
   if (!sessionIds.length) return;
   const rows = getDb()
     .prepare(INITIATIVE_STORE_SQL.sessionTasks)
     .all(JSON.stringify([...new Set(sessionIds)])) as Array<{ id: string }>;
-  stampAndNotify(new Set(holdersOf(rows.map((row) => Number(row.id)))), activity);
+  stampAndNotify(
+    new Set(holdersOf(rows.map((row) => Number(row.id)))),
+    activity,
+  );
 }
 
 sessionStore.subscribeLiveness((ids, activity) => {
@@ -754,7 +760,9 @@ function fromRow(row: DbInitiativeRow): InitiativeRow {
     revision: row.revision,
     attentionRevision: row.attention_revision,
     attentionSettledRevision: row.attention_settled_revision,
-    ...(row.inbox_position !== null ? { inboxPosition: row.inbox_position } : {}),
+    ...(row.inbox_position !== null
+      ? { inboxPosition: row.inbox_position }
+      : {}),
     ...(row.attention_kind !== null
       ? { attentionKind: row.attention_kind }
       : {}),
