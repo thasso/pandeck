@@ -261,6 +261,30 @@ the outcome:
   stop operation. Stopping leaves the ordinary session and its transcript
   intact.
 
+  Peers talk over `session_send_prompt`, which takes `rows`, 1 to 10
+  ([Task-942](pa://task/942)). Each row is its own message with its own result,
+  in order, and a bad row fails only itself; only bad top-level input, or a call
+  whose every row failed, throws. A message row may name the requests it answers
+  in `inReplyTo`: their reply keys, which the recipient sees next to each
+  delivered request's own text (`steering-and-queueing.md`). Every named request
+  must be open, addressed to the sender and from that row's target. The reply
+  marks each one `replied` and continues the NEWEST one's conversation and
+  chain, whatever turn it is sent from; a chain a human prompt closed moves it
+  to a fresh one, as for any reply. Each request can be answered once, so naming
+  one cannot reset a loop's hop budget. Without `inReplyTo` the link is inferred
+  as before: a reply sent in the turn that delivered the request, or the only
+  open request from that session; anything else starts a fresh conversation. A
+  settle row (`{ inReplyTo, settle }`) closes requests addressed to the caller,
+  from any requester, without a message: each becomes `settled` with the reason,
+  which the requester's card shows ("Settled: …"). Nothing reaches the
+  requester's model and no hop is spent, so a settle works at the hop limit too.
+  Each message row reserves its own hop, so near the limit the earlier rows go
+  out and the refused one says why. A reply or settle naming a request that
+  closed meanwhile writes nothing at all. The row schema is typeless on purpose:
+  pi validates a call against the schema before the tool runs and refuses the
+  whole call on one bad field, so the tool validates each row itself
+  (`app/server/src/tools/CLAUDE.md`).
+
   The same `responseRequested` rows tell the user when a tree needs a poke: each
   session row lists the peers that still owe it a reply — the turn ended without
   the answer and nothing from that peer, nor from a peer it handed the work to

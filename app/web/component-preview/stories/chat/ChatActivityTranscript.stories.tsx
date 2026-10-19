@@ -181,8 +181,14 @@ const timeline: ClientTimelineEntry[] = [
         toolCallId: "send-failed",
         name: "session_send_prompt",
         input: {
-          targetSessionId: "opus-review",
-          prompt: "Check the final screenshots.",
+          rows: [
+            {
+              targetSessionId: "opus-review",
+              prompt: "Check the final screenshots.",
+            },
+            { inReplyTo: ["k1a2b3c"], settle: "Applied the PR body." },
+            { targetSessionId: "sol-review", prompt: "Done", inReplyTo: 7 },
+          ],
         },
       },
     ],
@@ -198,16 +204,40 @@ const timeline: ClientTimelineEntry[] = [
         type: "text",
         text: JSON.stringify({
           renderKind: "sessionPeerPrompt",
-          version: 1,
-          card: {
-            ...sent,
-            messageKey: "failed-review",
-            recipientTitle: "Opus",
-            peerSessionId: "opus-review",
-            message: "Check the final screenshots.",
-            state: "failed",
-            failureReason: "The recipient session is no longer available.",
-          },
+          version: 2,
+          rows: [
+            {
+              kind: "message",
+              card: {
+                ...sent,
+                messageKey: "failed-review",
+                recipientTitle: "Opus",
+                peerSessionId: "opus-review",
+                message: "Check the final screenshots.",
+                replyTo:
+                  "Can you check the screenshots once the layout settles?",
+                state: "failed",
+                failureReason: "The recipient session is no longer available.",
+              },
+            },
+            {
+              kind: "settle",
+              reason: "Applied the PR body.",
+              settled: [
+                {
+                  senderTitle: "Delivery coordinator",
+                  peerSessionId: "coordinator",
+                  message: "Please apply the attached PR body.",
+                },
+              ],
+            },
+            {
+              kind: "error",
+              index: 2,
+              error:
+                'inReplyTo must be a non-empty array of request keys, e.g. ["k1x2y3z"].',
+            },
+          ],
         }),
       },
     ],

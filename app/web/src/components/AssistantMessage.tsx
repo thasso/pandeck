@@ -10,7 +10,7 @@ import {
 import { Bot, PackageCheck, Scissors } from "lucide-react";
 import { Badge } from "./ui/badge.tsx";
 import { AppCard } from "./common/AppCard.tsx";
-import { peerPromptCardOf } from "@assistant/shared/toolCards";
+import { peerPromptToolRowsOf } from "@assistant/shared/toolCards";
 import {
   displayBlockOffset,
   displayEntryId,
@@ -195,7 +195,9 @@ function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
 function isActivityRowBlock(block: DisplayBlock): boolean {
   if (block.kind === "thinking") return true;
   if (block.kind !== "tool") return false;
-  return peerPromptCardOf(block) !== null || !toolBlockIsVisible(block, false);
+  return (
+    peerPromptToolRowsOf(block) !== null || !toolBlockIsVisible(block, false)
+  );
 }
 
 /**

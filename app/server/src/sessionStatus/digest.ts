@@ -158,6 +158,26 @@ function asJson(value: unknown): Json {
     : {};
 }
 
+/** A `session_send_prompt` call: the message rows' targets and text, and how many rows settled. */
+function sendPromptLine(input: Json, callLimit: number): string {
+  const rows = (Array.isArray(input.rows) ? input.rows : []).filter(
+    (row): row is Json =>
+      !!row && typeof row === "object" && !Array.isArray(row),
+  );
+  const messages = rows.filter((row) => row.settle === undefined);
+  const settles = rows.length - messages.length;
+  const parts: string[] = [];
+  if (messages.length > 0) {
+    const targets = messages
+      .map((row) => `\`${str(row.targetSessionId) ?? ""}\``)
+      .join(", ");
+    const text = messages.map((row) => str(row.prompt) ?? "").join(" / ");
+    parts.push(`sent peer message to ${targets}: ${oneLine(text, callLimit)}`);
+  }
+  if (settles > 0) parts.push(`settled ${settles} request row(s)`);
+  return `- ${parts.length > 0 ? parts.join("; ") : "session_send_prompt with no rows"}`;
+}
+
 function str(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
@@ -393,8 +413,7 @@ function toolLine(
   const res = result ? oneLine(result, 220) : "(no result)";
   if (SHELL_TOOLS.has(name))
     return `- \`${name}\`: \`${oneLine(str(input.command), 200)}\` → ${res}`;
-  if (name === "session_send_prompt")
-    return `- sent peer message to \`${String(input.targetSessionId ?? "")}\`: ${oneLine(str(input.prompt), callLimit)}`;
+  if (name === "session_send_prompt") return sendPromptLine(input, callLimit);
   if (name === "session_spawn") {
     if (input.operation === "profiles") return undefined;
     const sessions = Array.isArray(input.sessions) ? input.sessions : [];

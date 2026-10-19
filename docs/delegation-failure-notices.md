@@ -97,9 +97,9 @@ append (`admit` in `runtimePrompt.ts`). A notice whose delegation the user ended
 meanwhile is retired as dropped: either session deleted or archived, the child
 taken over or no longer spawned by that coordinator, both sides settled with no
 request of the coordinator still unanswered, or a `request` notice whose
-requests were since answered, withdrawn or expired. If that changes the set
-while a turn is being admitted, the turn is refused before anything is appended
-and rebuilt.
+requests were since answered, settled, withdrawn or expired. If that changes the
+set while a turn is being admitted, the turn is refused before anything is
+appended and rebuilt.
 
 ## The durable boundary
 

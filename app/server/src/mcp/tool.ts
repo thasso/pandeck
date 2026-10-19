@@ -71,7 +71,9 @@ export type ToolSideEffects = "none" | "local" | "external";
 /**
  * A tool definition. `parameters` is plain JSON Schema (an object schema, as
  * all current tools already use). `label`/`executionMode` ride MCP `_meta` —
- * see `mcp/meta.ts`. Throw on failure instead of encoding errors in `content`.
+ * see `mcp/meta.ts`. Throw on failure instead of encoding errors in `content`;
+ * a tool of independent rows reports a failed row in its result and throws
+ * only for bad top-level input or when every row failed (`tools/CLAUDE.md`).
  *
  * `sideEffects` is assigned deliberately by the catalog. It remains optional
  * on the base interface because tool definitions are authored independently of

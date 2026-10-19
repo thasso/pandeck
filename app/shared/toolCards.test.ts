@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   knowledgeEntryCardOf,
   parsePeerPromptCard,
+  peerPromptToolRowsOf,
   toolCardOf,
   toolCardReadsInput,
   toolCardReadsOutput,
@@ -200,5 +201,98 @@ describe("parsePeerPromptCard", () => {
     expect(
       parsePeerPromptCard({ ...base, interruption: 1 }),
     ).not.toHaveProperty("interruption");
+  });
+});
+
+describe("peerPromptToolRowsOf", () => {
+  const candidate = (output: unknown, isError = false): ToolCardCandidate => ({
+    name: "session_send_prompt",
+    args: {},
+    output: JSON.stringify(output),
+    isError,
+  });
+  const sent = {
+    direction: "sent",
+    messageKey: "k1",
+    senderTitle: "Me",
+    message: "answer",
+    responseRequested: false,
+    replyTo: "the question (+1 more)",
+    state: "queued",
+  };
+
+  it("reads every row of a rows payload, dropping malformed ones", () => {
+    const rows = peerPromptToolRowsOf(
+      candidate({
+        renderKind: "sessionPeerPrompt",
+        version: 2,
+        rows: [
+          { kind: "message", card: sent },
+          { kind: "message", card: { ...sent, message: 42 } },
+          {
+            kind: "settle",
+            reason: "applied the body",
+            settled: [
+              { senderTitle: "Coordinator", peerSessionId: "c", message: "do" },
+              { senderTitle: "Broken" },
+            ],
+          },
+          { kind: "settle", reason: "nothing parsable", settled: [{}] },
+          { kind: "error", index: 3, error: "bad key" },
+          { kind: "error", index: "3", error: "bad index" },
+          "junk",
+        ],
+      }),
+    );
+    expect(rows).toEqual([
+      { kind: "message", card: sent },
+      {
+        kind: "settle",
+        reason: "applied the body",
+        settled: [
+          { senderTitle: "Coordinator", peerSessionId: "c", message: "do" },
+        ],
+      },
+      { kind: "error", index: 3, error: "bad key" },
+    ]);
+  });
+
+  it("reads an older transcript's single card as one message row", () => {
+    const { replyTo: _replyTo, ...v1Card } = sent;
+    expect(
+      peerPromptToolRowsOf(
+        candidate({
+          renderKind: "sessionPeerPrompt",
+          version: 1,
+          card: v1Card,
+        }),
+      ),
+    ).toEqual([{ kind: "message", card: v1Card }]);
+  });
+
+  it("is no card when no row renders, or the call failed", () => {
+    expect(
+      peerPromptToolRowsOf(
+        candidate({ renderKind: "sessionPeerPrompt", version: 2, rows: ["x"] }),
+      ),
+    ).toBeNull();
+    expect(
+      peerPromptToolRowsOf(
+        candidate(
+          { renderKind: "sessionPeerPrompt", version: 2, rows: [] },
+          true,
+        ),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps a settled reason and a reply excerpt only as strings", () => {
+    const base = { direction: "sent", message: "m", state: "settled" };
+    expect(
+      parsePeerPromptCard({ ...base, settledReason: "done", replyTo: "q" }),
+    ).toMatchObject({ settledReason: "done", replyTo: "q", state: "settled" });
+    const odd = parsePeerPromptCard({ ...base, settledReason: 1, replyTo: {} });
+    expect(odd).not.toHaveProperty("settledReason");
+    expect(odd).not.toHaveProperty("replyTo");
   });
 });

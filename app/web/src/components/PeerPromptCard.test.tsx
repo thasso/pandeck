@@ -462,3 +462,93 @@ describe("PeerPromptCardView on a card from another build", () => {
     }
   });
 });
+
+describe("a rows payload (Task-942)", () => {
+  const rowsBlock = (
+    rows: unknown[],
+  ): Extract<DisplayBlock, { kind: "tool" }> => ({
+    kind: "tool",
+    toolId: "call_rows",
+    name: "session_send_prompt",
+    args: { rows: [] },
+    output: JSON.stringify({
+      renderKind: "sessionPeerPrompt",
+      version: 2,
+      rows,
+    }),
+    isError: false,
+    done: true,
+  });
+  const answer = {
+    direction: "sent",
+    messageKey: "k1",
+    senderTitle: "Impl",
+    recipientTitle: "Reviewer",
+    message: "fixed in the latest commit",
+    responseRequested: false,
+    replyTo: "please fix the race (+1 more)",
+    state: "queued",
+  };
+
+  it("renders one card per message, a row per settle, and each failed row in place", () => {
+    const block = rowsBlock([
+      { kind: "message", card: answer },
+      {
+        kind: "settle",
+        reason: "applied the **PR body**",
+        settled: [
+          {
+            senderTitle: "Coordinator",
+            peerSessionId: "11111111-2222-3333-4444-555555555555",
+            message: "apply the body",
+          },
+        ],
+      },
+      { kind: "error", index: 2, error: "inReplyTo must be an array" },
+    ]);
+    expect(toolBlockIsVisible(block, false)).toBe(true);
+    act(() =>
+      root.render(
+        <>{renderToolBlock(block, { showTools: false, expandTools: false })}</>,
+      ),
+    );
+    const toggles = container.querySelectorAll("button[aria-expanded]");
+    expect(toggles.length).toBe(2);
+    expect(container.textContent).toContain("To");
+    expect(container.textContent).toContain("Reviewer");
+    expect(container.textContent).toContain("Settled");
+    expect(container.textContent).toContain("request from Coordinator");
+    // A failure stays visible without expanding anything.
+    expect(container.textContent).toContain(
+      "Row 3 not sent: inReplyTo must be an array",
+    );
+    act(() => (toggles[1] as HTMLButtonElement).click());
+    expect(container.querySelector("strong")?.textContent).toBe("PR body");
+    expect(container.textContent).toContain("apply the body");
+  });
+
+  it("shows what a reply answers and why a request was settled", () => {
+    renderCard(answer as PeerPromptCardType);
+    expandCard();
+    expect(container.textContent).toContain(
+      "In reply to: please fix the race (+1 more)",
+    );
+    const { replyTo: _replyTo, ...request } = answer;
+    act(() =>
+      root.render(
+        <PeerPromptCardView
+          card={{
+            ...(request as PeerPromptCardType),
+            state: "settled",
+            settledReason: "superseded by the 23:10 report",
+          }}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain("Settled");
+    expect(container.textContent).toContain(
+      "Settled: superseded by the 23:10 report",
+    );
+    expect(container.textContent).not.toContain("In reply to");
+  });
+});

@@ -193,6 +193,41 @@ describe("timeline payload policy", () => {
     ).toEqual({ type: "text", text: output });
   });
 
+  test("keeps a rows payload whole when any row renders", () => {
+    const output = JSON.stringify({
+      renderKind: "sessionPeerPrompt",
+      version: 2,
+      rows: [
+        {
+          kind: "message",
+          card: {
+            direction: "sent",
+            messageKey: "k1",
+            senderTitle: "Reviewer",
+            message: "x".repeat(4_000),
+            responseRequested: false,
+            replyTo: "the question",
+            state: "queued",
+          },
+        },
+        {
+          kind: "settle",
+          reason: "applied the body",
+          settled: [{ senderTitle: "Coordinator", message: "apply it" }],
+        },
+        { kind: "error", index: 2, error: "inReplyTo must be an array" },
+      ],
+    });
+    expect(
+      lazyToolResultContent(toolResult(output), {
+        entryId: "e1",
+        blockIndex: 0,
+        name: "session_send_prompt",
+        input: { rows: [] },
+      })[0],
+    ).toEqual({ type: "text", text: output });
+  });
+
   // The files a `show_files` call put in the chat ARE its cards: a clipped
   // payload replays as neither a card nor a usable snippet.
   test("keeps a show_files payload whole in both harnesses' spellings", () => {

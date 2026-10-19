@@ -18,7 +18,7 @@ import type {
   LiveBodyKey,
 } from "@assistant/shared/session";
 import { ToolCallBlock, type ToolStatus } from "../common/ToolCallBlock.tsx";
-import { PeerPromptCardView } from "../PeerPromptCard.tsx";
+import { PeerPromptToolRowsView } from "../PeerPromptCard.tsx";
 import { KnowledgeEntryToolCard } from "../KnowledgeEntryToolCard.tsx";
 import { ServedFileCard } from "../ServedFileCard.tsx";
 import { TaskManageToolCard } from "../TaskManageToolCard.tsx";
@@ -35,7 +35,7 @@ import {
   acceptsJiraCard,
   acceptsWorkshopDraftHandoffCard,
   knowledgeEntryCardOf,
-  peerPromptCardOf,
+  peerPromptToolRowsOf,
   showFilesCardRowsOf,
   taskManagePayloadOf,
   worktreeCommitDisplayOf,
@@ -176,17 +176,15 @@ function shouldRenderWorkshopDraftHandoffTool(block: ToolBlock): boolean {
 }
 
 /**
- * Only a payload that yields a VALID card matches: a partial, streaming or
- * malformed one has no card to show, so it stays an ordinary tool block rather
- * than a half-rendered card (the message is rendered as Markdown, and a
- * non-string there would throw inside the renderer). Unlike the other cards
- * this one also shows while the tool is still running — the sent half of a
- * peer exchange is a card from the moment it is queued.
+ * Only a payload that yields at least one VALID row matches: a partial,
+ * streaming or malformed one has nothing to show, so it stays an ordinary tool
+ * block rather than a half-rendered card (a message is rendered as Markdown,
+ * and a non-string there would throw inside the renderer).
  */
-function peerPromptCardFrom(
+function peerPromptRowsFrom(
   block: ToolBlock,
-): import("@assistant/shared").PeerPromptCard | null {
-  return peerPromptCardOf(candidateOf(block));
+): import("@assistant/shared").PeerPromptToolRow[] | null {
+  return peerPromptToolRowsOf(candidateOf(block));
 }
 
 /**
@@ -497,12 +495,12 @@ const TOOL_RENDERERS: ToolRenderer[] = [
     ),
   },
   {
-    match: (block) => peerPromptCardFrom(block) !== null,
+    match: (block) => peerPromptRowsFrom(block) !== null,
     variant: "card",
     render: (block, ctx) => {
-      const card = peerPromptCardFrom(block);
-      return card ? (
-        <PeerPromptCardView card={card} onOpenSession={ctx.onOpenSession} />
+      const rows = peerPromptRowsFrom(block);
+      return rows ? (
+        <PeerPromptToolRowsView rows={rows} onOpenSession={ctx.onOpenSession} />
       ) : null;
     },
   },
