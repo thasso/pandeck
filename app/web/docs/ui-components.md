@@ -113,6 +113,11 @@ important signals visible, and `trailing` keeps controls fixed at the end of the
 final line. Supporting lines show whole items or hide them; hidden controls
 become inert, and signals compact before dropping items.
 
+Initiative Attention items also use `common/ListRow`: progress and age in context,
+state and title in identity, and session disclosure, readiness, blockers and the
+next milestone in signals. Their session chevron leads the label. Unacknowledged
+paused/done outcomes use the shared Settle action; active Initiatives have none.
+
 `actions` accepts `common/ListRowActions`. One or two actions are both direct;
 with more, at most two explicitly primary actions stay direct and the rest use a
 labeled menu. There are never more than three buttons including the menu. Ordinary actions share the neutral ghost style and inherited icon tone;

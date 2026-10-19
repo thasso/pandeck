@@ -16,18 +16,12 @@ import {
   type InitiativeInboxItem,
 } from "../lib/initiativeInbox.ts";
 import { relativeAge } from "../lib/relativeTime.ts";
-import { CARD_OUTER_ROW, type RowDensity } from "../lib/rowDensity.ts";
-import { useInertOverflow } from "../hooks/useInertOverflow.ts";
-import { IconButton } from "./common/IconButton.tsx";
-import { Button } from "@/components/ui/button";
+import type { RowDensity } from "../lib/rowDensity.ts";
+import { ListRow } from "./common/ListRow.tsx";
+import { ListRowActions } from "./common/ListRowActions.tsx";
+import { Badge } from "@/components/ui/badge";
 import { Item } from "@/components/ui/item";
 import { Progress } from "@/components/ui/progress";
-
-/** Settle, inline at the end of the signal row like a session card's. */
-const INLINE_ACTION_SIZE: Record<RowDensity, "icon-xs" | "icon-sm"> = {
-  tight: "icon-xs",
-  comfortable: "icon-sm",
-};
 
 export interface InitiativeInboxCardProps {
   item: InitiativeInboxItem;
@@ -82,7 +76,6 @@ function InitiativeInboxCardImpl({
 }: InitiativeInboxCardProps) {
   const { initiative, settleRevision } = item;
   const { progress } = initiative;
-  const signalRowRef = useInertOverflow<HTMLDivElement>();
   const open = () => onOpen(initiative.id);
   const settle =
     settleRevision === undefined
@@ -99,13 +92,16 @@ function InitiativeInboxCardImpl({
   }`;
 
   return (
-    <div
+    <ListRow
+      interaction="content"
+      divider={false}
+      density={density}
       data-session-row
       data-list-row-id={`initiative:${initiative.id}`}
-      role="button"
+      role="group"
       tabIndex={-1}
       aria-label={`Open Initiative ${initiative.title} — ${initiativeItemSummary(item)}`}
-      onClick={open}
+      onOpen={open}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
@@ -119,18 +115,10 @@ function InitiativeInboxCardImpl({
           settle();
         }
       }}
-      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
-    >
-      {/* The session card's three rows: what it is with the time, the title
-          led by its state, then its signals with Settle at the right edge. */}
-      <div
-        className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 pl-2 pr-1 ${density === "comfortable" ? "py-2.5" : "py-2"}`}
-      >
-        <div
-          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground`}
-        >
+      context={
+        <>
           <span className="flex shrink-0 items-center gap-1">
-            <Waypoints size={11} aria-hidden />
+            <Waypoints size={12} aria-hidden />
             Initiative
           </span>
           {/* Progress is the Initiative's own measure, so it leads the
@@ -149,12 +137,11 @@ function InitiativeInboxCardImpl({
               {progress.done}/{progress.total}
             </span>
           </span>
-          <span className="shrink-0 tabular-nums">
-            {relativeAge(initiative.updatedAt, now)}
-          </span>
-        </div>
-
-        <div className="flex min-w-0 items-center gap-1.5">
+        </>
+      }
+      age={relativeAge(initiative.updatedAt, now)}
+      identity={
+        <>
           <span className="flex size-4 shrink-0 items-center justify-center">
             {stateLabel ? (
               <span
@@ -180,23 +167,15 @@ function InitiativeInboxCardImpl({
           <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {initiative.title}
           </span>
-        </div>
-
-        <div
-          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
-        >
-          {/* Signals show whole or not at all, in drop order: the sessions,
-              what can start, what is blocked, then the milestone. Everything
-              dropped is still in the card's spoken label. */}
-          <div
-            ref={signalRowRef}
-            className="session-card-status-line flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden"
-          >
+        </>
+      }
+      signals={
+        <>
             {initiative.sessionCount > 0 ? (
-              <Button
+              <Badge
                 variant="ghost"
-                size="xs"
-                className="-mx-1"
+                render={<button type="button" />}
+                className="cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent"
                 aria-expanded={expanded}
                 aria-label={`${expanded ? "Hide" : "Show"} the ${initiativeSessionsLabel(
                   initiative.sessionCount,
@@ -206,13 +185,13 @@ function InitiativeInboxCardImpl({
                   onToggleSessions(initiative.id);
                 }}
               >
-                <Users aria-hidden />
-                <span>{initiativeSessionsLabel(initiative.sessionCount)}</span>
                 <ChevronRight
                   aria-hidden
                   className={expanded ? "rotate-90" : ""}
                 />
-              </Button>
+                <Users aria-hidden />
+                <span>{initiativeSessionsLabel(initiative.sessionCount)}</span>
+              </Badge>
             ) : null}
             {progress.startable > 0 ? (
               <span className="shrink-0 font-medium text-primary tabular-nums">
@@ -221,7 +200,7 @@ function InitiativeInboxCardImpl({
             ) : null}
             {progress.blocked > 0 ? (
               <span className="flex shrink-0 items-center gap-0.5 text-warning tabular-nums">
-                <Ban size={11} aria-hidden />
+                <Ban size={12} aria-hidden />
                 {progress.blocked} blocked
               </span>
             ) : null}
@@ -232,30 +211,26 @@ function InitiativeInboxCardImpl({
                 className="flex min-w-16 flex-1 basis-16 items-center gap-1 text-muted-foreground"
                 title={`Next milestone: ${initiative.nextMilestone.title}`}
               >
-                <Flag size={11} className="shrink-0" aria-hidden />
+                <Flag size={12} className="shrink-0" aria-hidden />
                 <span className="min-w-0 truncate">
                   {initiative.nextMilestone.title}
                 </span>
               </span>
             ) : null}
-          </div>
-          {settle ? (
-            <IconButton
-              size={INLINE_ACTION_SIZE[density]}
-              className="-my-0.5"
-              label={settleLabel}
-              title={settleLabel}
-              onClick={(e) => {
-                e.stopPropagation();
-                settle();
-              }}
-            >
-              <Check />
-            </IconButton>
-          ) : null}
-        </div>
-      </div>
-    </div>
+        </>
+      }
+      actions={settle ? (
+        <ListRowActions actions={[
+          {
+            id: "settle",
+            label: "Settle",
+            accessibleLabel: settleLabel,
+            icon: <Check />,
+            onSelect: settle,
+          },
+        ]} />
+      ) : undefined}
+    />
   );
 }
 
