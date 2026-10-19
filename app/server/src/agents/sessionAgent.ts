@@ -44,6 +44,8 @@ export interface SessionAgent {
    * stored before this existed came from the definition.
    */
   runtimeSource: SessionAgentRuntimeSource;
+  /** Why an automatic spawn used a later listed model. Frozen with the runtime. */
+  modelFallbackReason?: string;
   denyTools: string[];
   skills: string[];
   body: string;
@@ -81,6 +83,8 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
       (SESSION_AGENT_RUNTIME_SOURCES as readonly unknown[]).includes(
         value.runtimeSource,
       )) &&
+    (value.modelFallbackReason === undefined ||
+      typeof value.modelFallbackReason === "string") &&
     isStringList(value.denyTools) &&
     isStringList(value.skills) &&
     typeof value.body === "string"
@@ -98,6 +102,9 @@ function parseSessionAgent(sessionId: string, raw: string): SessionAgent {
       runtimeSource:
         (value.runtimeSource as SessionAgentRuntimeSource | undefined) ??
         "definition",
+      ...(typeof value.modelFallbackReason === "string"
+        ? { modelFallbackReason: value.modelFallbackReason }
+        : {}),
       denyTools: value.denyTools,
       skills: value.skills,
       body: value.body,

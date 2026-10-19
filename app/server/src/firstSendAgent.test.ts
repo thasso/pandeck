@@ -272,6 +272,58 @@ test.each([
   },
 );
 
+test("an Automatic first send keeps its default even when spawn could fall back across providers", async () => {
+  const folder = join(AGENTS_LIBRARY_DIR, "spawn-fallback-only");
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, "AGENT.md"),
+    formatAgentManifest({
+      name: "spawn-fallback-only",
+      description: "Checks first-send routing.",
+      persona: "assistant",
+      models: ["gpt-5", "opus"],
+      effort: "low",
+      denyTools: [],
+      skills: [],
+      body: "Draft briefly.",
+    }),
+  );
+  const picker = vi
+    .spyOn(accountRouter, "pickAccount")
+    .mockImplementation(async (request) =>
+      request.model.provider === "openai-codex"
+        ? {
+            profileId: "default",
+            degraded: "no-eligible-account",
+            limited: { until: Date.now() + 60_000 },
+          }
+        : { profileId: claudeProfile.id },
+    );
+  try {
+    const { conn, sent } = makeConnection();
+    await conn.handleFirstSend({
+      harness: "pi",
+      id: "agent-no-spawn-fallback",
+      agentType: "assistant",
+      text: "Draft.",
+      agent: "spawn-fallback-only",
+    });
+    assert.equal(
+      sent.some((message) => message.type === "error"),
+      false,
+      JSON.stringify(sent),
+    );
+    assert.equal(piAcquired.length, 1);
+    assert.equal(acquired.length, 0);
+    assert.deepEqual(prompts, ["Draft."]);
+    assert.ok(
+      picker.mock.calls.every(([request]) => request.model.modelId === "gpt-5"),
+    );
+  } finally {
+    picker.mockRestore();
+  }
+});
+
 test("a send staged for another persona or an unknown agent is refused before anything exists", async () => {
   const { conn, sent } = makeConnection();
 

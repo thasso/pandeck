@@ -2320,6 +2320,134 @@ test("an agent row runs on another model its definition lists, with the same rol
   expect(text).toContain("on agent test-reviewer");
 });
 
+test("an agent spawn reports and freezes its account-health model fallback", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", models: ["gpt-5", "sonnet"] });
+  const until = Date.now() + 60_000;
+  const picker = vi
+    .spyOn(accountRouter, "pickAccount")
+    .mockImplementation(async (request) =>
+      request.model.provider === "openai-codex"
+        ? {
+            profileId: accountFor("openai-codex"),
+            degraded: "no-eligible-account",
+            limited: { until },
+          }
+        : { profileId: accountFor("claude") },
+    );
+
+  const text = await spawnDirect([agentRow()]);
+
+  expect(recorded.pi).toHaveLength(0);
+  expect(recorded.claude[0]).toMatchObject({
+    modelId: "sonnet",
+    thinkingLevel: "low",
+  });
+  const reason = `gpt-5 has no eligible account, selected account limited until ${new Date(until).toISOString()}; used sonnet`;
+  expect(text).toContain(reason);
+  expect(
+    sessionAgent(String(recorded.claude[0]!.id))?.modelFallbackReason,
+  ).toBe(reason);
+  expect(picker.mock.calls.map(([request]) => request.model.modelId)).toEqual([
+    "gpt-5",
+    "sonnet",
+    "gpt-5",
+    "sonnet",
+  ]);
+});
+
+test("model fallback keeps the inherited enterprise requirement on every pick", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", models: ["gpt-5", "sonnet"] });
+  const sender = `enterprise-fallback-${(counter += 1)}`;
+  sessionStore.upsert({
+    id: sender,
+    harness: "pi",
+    agentType: "developer",
+    requiresEnterprise: true,
+  });
+  const enterprise = createCredentialProfile({
+    name: "Enterprise fallback",
+    provider: "claude",
+  });
+  patchCredentialProfile(enterprise.id, { enterprise: true });
+  const picker = vi
+    .spyOn(accountRouter, "pickAccount")
+    .mockImplementation(async (request) =>
+      request.model.modelId === "gpt-5"
+        ? {
+            profileId: accountFor("openai-codex"),
+            degraded: "no-eligible-account",
+          }
+        : { profileId: enterprise.id },
+    );
+  try {
+    const results = await spawnApprovedPeers({
+      senderSessionId: sender,
+      rows: [
+        {
+          title: "Enterprise fallback",
+          prompt: "Review.",
+          agent: "test-reviewer",
+          requiresEnterprise: false,
+        },
+      ],
+    });
+    expect(results[0]?.sessionId).toBeTruthy();
+    expect(
+      picker.mock.calls.every(
+        ([request]) => request.requiresEnterprise === true,
+      ),
+    ).toBe(true);
+    expect(recorded.claude[0]).toMatchObject({
+      credentialProfileId: enterprise.id,
+      requiresEnterprise: true,
+    });
+  } finally {
+    setCredentialProfileEnabled(enterprise.id, false);
+  }
+});
+
+test("an explicit modelId never substitutes another listed model for a benched pick", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", models: ["gpt-5", "sonnet"] });
+  const picker = vi.spyOn(accountRouter, "pickAccount").mockResolvedValue({
+    profileId: accountFor("openai-codex"),
+    degraded: "no-eligible-account",
+    limited: { until: Date.now() + 60_000 },
+  });
+
+  const text = await spawnDirect([agentRow({ modelId: "gpt-5" })]);
+
+  expect(recorded.pi[0]).toMatchObject({ modelId: "gpt-5" });
+  expect(recorded.claude).toHaveLength(0);
+  expect(text).not.toContain("used sonnet");
+  expect(
+    picker.mock.calls.every(([request]) => request.model.modelId === "gpt-5"),
+  ).toBe(true);
+});
+
+test("the late routing read chooses the fallback, not the early healthy default", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", models: ["gpt-5", "sonnet"] });
+  let reads = 0;
+  vi.spyOn(accountRouter, "pickAccount").mockImplementation(async (request) => {
+    if (request.model.modelId === "sonnet")
+      return { profileId: accountFor("claude") };
+    reads += 1;
+    return {
+      profileId: accountFor("openai-codex"),
+      ...(reads > 1 ? { degraded: "no-eligible-account" as const } : {}),
+    };
+  });
+
+  const text = await spawnDirect([agentRow()]);
+
+  expect(recorded.pi).toHaveLength(0);
+  expect(recorded.claude[0]).toMatchObject({ modelId: "sonnet" });
+  expect(text).toContain("gpt-5 has no eligible account; used sonnet");
+});
+
 test("an unavailable default refuses and names the listed models that can run", async () => {
   await useAgents();
   writeAgent({ persona: "assistant", models: ["gemini", "gpt-5"] });

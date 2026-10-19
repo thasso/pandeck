@@ -1,7 +1,7 @@
 /**
  * Resolving a definition for a spawn (`docs/agent-definitions.md` "Spawning
  * by name"): the library's current bytes, the runtime check, the account
- * function, and never a fallback.
+ * function, and router-owned account-health fallback.
  *
  * Run with:
  *   pnpm --filter @assistant/server test src/agents/agentSpawn.test.ts
@@ -97,7 +97,7 @@ beforeEach(async () => {
     library: () => store,
     accountFor: ({ model: { provider } }) => {
       accounts.push(provider);
-      return `acct-${provider}`;
+      return { profileId: `acct-${provider}` };
     },
     offers: async () => offered,
     accountName: (id) => `Account ${id}`,
@@ -181,6 +181,94 @@ test("a caller picks a listed model by any name it resolves to; the role is the 
     ).modelId,
     "gpt-6.1-sol",
   );
+});
+
+test("health fallback follows definition order and skips unresolved or degraded alternatives", async () => {
+  models.push(model("claude-sdk", "sonnet"));
+  write(
+    "test-reviewer",
+    reviewer({ models: ["sol", "missing", "opus", "sonnet"] }),
+  );
+  const picks: string[] = [];
+  setAgentSpawnSourcesForTests({
+    library: () => new LibraryStore(agentKind, root),
+    offers: async () => true,
+    accountFor: ({ model: { provider, modelId } }) => {
+      picks.push(modelId);
+      return {
+        profileId: `acct-${provider}`,
+        ...(modelId !== "sonnet"
+          ? { degraded: "no-eligible-account" as const }
+          : {}),
+      };
+    },
+  });
+
+  const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
+    allowModelFallback: true,
+  });
+
+  assert.equal(runtime.modelId, "sonnet");
+  assert.deepEqual(picks, ["gpt-6.1-sol", "opus", "sonnet"]);
+  assert.equal(
+    runtime.agent.modelFallbackReason,
+    "sol has no eligible account; missing does not resolve; opus has no eligible account; used sonnet",
+  );
+  const [browser] = await listSpawnableAgents();
+  assert.ok(browser && "runtime" in browser);
+  assert.equal(
+    browser.runtime.modelId,
+    "gpt-6.1-sol",
+    "browser prefill does not follow temporary health",
+  );
+  const text = spawnableAgentsText(
+    await listSpawnableAgents(undefined, { allowModelFallback: true }),
+  );
+  assert.match(text, /developer on claude-sdk\/sonnet/);
+  assert.match(
+    text,
+    /sol has no eligible account; missing does not resolve; opus has no eligible account; used sonnet/,
+  );
+  assert.match(text, /also runs on: sol/);
+  assert.doesNotMatch(text, /also runs on: .*sonnet \(claude-sdk\/sonnet,/);
+});
+
+test("without a healthy alternative the router's degraded default still runs", async () => {
+  write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
+  setAgentSpawnSourcesForTests({
+    library: () => new LibraryStore(agentKind, root),
+    offers: async () => true,
+    accountFor: ({ model: { provider } }) => ({
+      profileId: `acct-${provider}`,
+      degraded: "no-eligible-account",
+    }),
+  });
+  const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
+    allowModelFallback: true,
+  });
+  assert.equal(runtime.modelId, "gpt-6.1-sol");
+  assert.equal(runtime.agent.modelFallbackReason, undefined);
+});
+
+test("an account pin never causes model fallback", async () => {
+  write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
+  const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
+    profileId: "pinned",
+    allowModelFallback: true,
+  });
+  assert.equal(runtime.modelId, "gpt-6.1-sol");
+  assert.equal(runtime.credentialProfileId, "pinned");
+  assert.deepEqual(accounts, []);
+});
+
+test("a healthy default never probes later listed accounts", async () => {
+  write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
+  const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
+    allowModelFallback: true,
+  });
+  assert.equal(runtime.modelId, "gpt-6.1-sol");
+  assert.deepEqual(accounts, ["openai-codex"]);
+  assert.equal(runtime.agent.modelFallbackReason, undefined);
 });
 
 test("a model the definition does not list is refused, never approximated", async () => {
@@ -360,7 +448,9 @@ test("the frozen blob id is the library repository's own, SHA-256 included", asy
   await store.ensureInitialized();
   setAgentSpawnSourcesForTests({
     library: () => store,
-    accountFor: ({ model: { provider } }) => `acct-${provider}`,
+    accountFor: ({ model: { provider } }) => ({
+      profileId: `acct-${provider}`,
+    }),
     offers: async () => true,
     accountName: () => undefined,
   });

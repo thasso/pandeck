@@ -98,8 +98,9 @@ the rule rejects shows up as a scan diagnostic. The tools refuse to write one.
 `model` is one model or a list of them (`model: [sol, opus]`). The list is the
 set of runtimes the user approved for this definition: a spawn may pick any
 listed model without asking, and the first is the one it runs on when the caller
-names none. A model listed twice, by the same spec in another case or by two
-specs that resolve to the same connected model, is refused.
+names none, subject to the spawn-time account-health fallback below. A model
+listed twice, by the same spec in another case or by two specs that resolve to
+the same connected model, is refused.
 
 Each entry takes:
 
@@ -130,8 +131,31 @@ Validation at write time checks that every listed model resolves against the
 accounts connected right now. A spawn resolves them again and needs only the one
 it runs on (`checkModel: "each"`). A model that stopped resolving, because an
 account was removed, refuses the spawn with the reason. There is no fallback to
-another model: an unavailable default refuses and names the listed models that
-can run, and the caller picks one explicitly.
+another model for a resolution failure: an unavailable default refuses and names
+the listed models that can run, and the caller picks one explicitly. A default
+that still resolves but whose router pick is `no-eligible-account`, because
+every enabled account in scope is benched, unhealthy or cannot offer the
+runtime, may instead use the next listed model with an eligible account.
+Alternatives are tried in definition order, skipping unresolved models and
+degraded picks. `requiresEnterprise` constrains every pick, so a healthy
+personal account never makes an enterprise-only alternative available.
+
+An explicit spawn-row `modelId` never falls back, even when its accounts are
+benched. A caller-selected account also stays exact. If no listed alternative
+has an eligible account, the original router's degraded default remains the
+choice, preserving its existing best-effort start policy. A missing or
+unresolvable default and a provider/model lookup failure still refuse, rather
+than trigger health fallback.
+
+The spawn result and `operation: "agents"` report the model actually selected
+and the reason for any substitution. The frozen session-agent record stores
+`modelFallbackReason` beside that runtime. A reason can include the selected
+account's bench reset time, in UTC; it does not claim that every account resets
+at that time. Health is read again immediately before creation. This is only a
+spawn-time model choice, not cross-provider failover for a running session. Only
+direct `session_spawn` and that tool's `agents` preview opt into health
+fallback. Browser agent listings and first sends retain their default-model
+policy, so temporary benches do not silently change the new-session prefill.
 
 ### The account
 

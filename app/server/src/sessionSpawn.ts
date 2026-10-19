@@ -1207,6 +1207,8 @@ export interface DirectSpawnRowResult {
     relativeCost?: string;
     /** For an agent row: the `AGENT.md` blob it froze. */
     blob?: string;
+    /** Why an automatic agent spawn used a later listed model. */
+    modelFallbackReason?: string;
   };
   sessionId?: string;
   error?: string;
@@ -1254,6 +1256,7 @@ export async function spawnApprovedPeers(input: {
       let early: AgentSpawnRuntime;
       try {
         early = await resolveAgentSpawn(row.agent.trim(), agents, {
+          allowModelFallback: true,
           requiresEnterprise: rowRequires(row),
           ...(row.modelId !== undefined ? { model: row.modelId } : {}),
         });
@@ -1391,6 +1394,7 @@ function rowRuntime(
     const model = row.modelId;
     return () =>
       resolveAgentSpawn(name, undefined, {
+        allowModelFallback: true,
         requiresEnterprise,
         ...(model !== undefined ? { model } : {}),
       });
@@ -1418,6 +1422,9 @@ function reportedRuntime(
       }`,
       family: peerRuntimeFamilyOf(runtime.provider, runtime.modelId),
       blob: runtime.agent.blob,
+      ...(runtime.agent.modelFallbackReason
+        ? { modelFallbackReason: runtime.agent.modelFallbackReason }
+        : {}),
     };
   return {
     ...common,

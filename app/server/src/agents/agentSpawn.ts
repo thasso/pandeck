@@ -2,9 +2,9 @@
  * Resolving an agent definition for a spawn (`docs/agent-definitions.md`
  * "Spawning by name"): read the definition the library holds NOW, pick the
  * listed model the caller named or the first, check that it can run, pick its
- * account, and produce the frozen copy the session will run as. Nothing here
- * falls back: a model that no longer resolves, or whose account does not
- * offer it, refuses the spawn, never moving on to the next listed one.
+ * account, and produce the frozen copy the session will run as. Direct spawn
+ * callers may opt into using the next healthy listed model for a degraded default.
+ * Explicit model and account choices never substitute another model.
  */
 import {
   isSafeEntryName,
@@ -15,7 +15,11 @@ import {
   credentialProfileById,
   listCredentialProfiles,
 } from "../credentialProfiles.ts";
-import { pickAccount, type AccountPickRequest } from "../accountRouter.ts";
+import {
+  pickAccount,
+  type AccountPickRequest,
+  type AccountPickResult,
+} from "../accountRouter.ts";
 import { accountOffersModel } from "../harnesses/models.ts";
 import { assertManifest } from "../library/entryManifest.ts";
 import { resolveEntrySource } from "../library/libraryAuthoring.ts";
@@ -63,7 +67,9 @@ export interface AgentSpawnRuntime {
 export interface AgentSpawnSources {
   library(): LibraryStore;
   /** The ONE place a definition's account is chosen. */
-  accountFor(request: AccountPickRequest): Promise<string> | string;
+  accountFor(
+    request: AccountPickRequest,
+  ): Promise<AccountPickResult> | AccountPickResult;
   offers(
     profileId: string,
     provider: string,
@@ -74,16 +80,7 @@ export interface AgentSpawnSources {
 
 const liveSources: AgentSpawnSources = {
   library: () => agentLibraryStore,
-  accountFor: async (request) => {
-    const picked = await pickAccount(request);
-    if (!picked.profileId)
-      throw new AgentSpawnRefusedError(
-        request.requiresEnterprise
-          ? "No enabled enterprise account is available for this agent definition."
-          : "No enabled account is available for this agent definition.",
-      );
-    return picked.profileId;
-  },
+  accountFor: (request) => pickAccount(request),
   offers: accountOffersModel,
   accountName: (profileId) =>
     listCredentialProfiles().find((profile) => profile.id === profileId)?.name,
@@ -255,7 +252,12 @@ async function readAgentDefinition(
 /** The role half of a frozen agent: everything a runtime choice never changes. */
 export type AgentRole = Omit<
   SessionAgent,
-  "provider" | "model" | "pinnedModel" | "effort" | "runtimeSource"
+  | "provider"
+  | "model"
+  | "pinnedModel"
+  | "effort"
+  | "runtimeSource"
+  | "modelFallbackReason"
 >;
 
 function roleOf({ manifest, blob }: AgentDefinitionRead): AgentRole {
@@ -338,15 +340,66 @@ export async function resolveAgentSpawn(
     /** An account the caller picked, in place of the automatic one. */
     profileId?: string;
     requiresEnterprise?: boolean;
-    /** One of the listed models; the first when absent. */
+    /** One of the listed models; absent selects the default. */
     model?: string;
+    /** Direct session_spawn only; first sends and browser prefill stay exact. */
+    allowModelFallback?: boolean;
   } = {},
 ): Promise<AgentSpawnRuntime> {
   const read = await readAgentDefinition(name, scanned);
   let chosen: { spec: string; runtime: AgentRuntime } | undefined;
   try {
     chosen = chosenModel(name, read.listed, options.model);
-    return await spawnRuntimeOf(read, name, chosen.runtime, options);
+    const pick = (runtime: AgentRuntime) =>
+      sources.accountFor({
+        model: { provider: runtime.model.provider, modelId: runtime.model.id },
+        thinkingLevel: runtime.thinkingLevel,
+        requiresEnterprise: options.requiresEnterprise === true,
+      });
+    let account = options.profileId
+      ? { profileId: options.profileId }
+      : await pick(chosen.runtime);
+    let modelFallbackReason: string | undefined;
+    if (
+      options.allowModelFallback === true &&
+      options.model === undefined &&
+      options.profileId === undefined &&
+      account.profileId &&
+      account.degraded === "no-eligible-account"
+    ) {
+      const skipped = [unavailableReason(chosen.spec, account)];
+      for (const alternative of read.listed.slice(1)) {
+        if (!alternative.runtime) {
+          skipped.push(`${alternative.spec} does not resolve`);
+          continue;
+        }
+        const next = await pick(alternative.runtime);
+        if (!next.profileId || next.degraded) {
+          skipped.push(unavailableReason(alternative.spec, next));
+          continue;
+        }
+        chosen = { spec: alternative.spec, runtime: alternative.runtime };
+        account = next;
+        modelFallbackReason = `${skipped.join("; ")}; used ${alternative.spec}`;
+        break;
+      }
+    }
+    if (!account.profileId)
+      throw new AgentSpawnRefusedError(
+        options.requiresEnterprise
+          ? "No enabled enterprise account is available for this agent definition."
+          : "No enabled account is available for this agent definition.",
+      );
+    return await spawnRuntimeOf(
+      read,
+      name,
+      chosen.runtime,
+      {
+        ...options,
+        profileId: account.profileId,
+      },
+      modelFallbackReason,
+    );
   } catch (error) {
     if (error instanceof AgentSpawnRefusedError) {
       error.persona ??= read.manifest.persona;
@@ -363,21 +416,25 @@ export async function resolveAgentSpawn(
   }
 }
 
+/** Router-owned eligibility, with its selected account's bench when present. */
+function unavailableReason(spec: string, picked: AccountPickResult): string {
+  const reason =
+    picked.degraded === "no-eligible-account"
+      ? "has no eligible account"
+      : "has no enabled account in scope";
+  return `${spec} ${reason}${picked.limited ? `, selected account limited until ${new Date(picked.limited.until).toISOString()}` : ""}`;
+}
+
 /** The chosen listed model of a read definition, on its account. */
 async function spawnRuntimeOf(
   read: AgentDefinitionRead,
   name: string,
   { model, pinnedModel, thinkingLevel }: AgentRuntime,
-  options: Parameters<typeof resolveAgentSpawn>[2] & {},
+  options: Parameters<typeof resolveAgentSpawn>[2] & { profileId: string },
+  modelFallbackReason?: string,
 ): Promise<AgentSpawnRuntime> {
   const { manifest, listed } = read;
-  const credentialProfileId =
-    options.profileId ??
-    (await sources.accountFor({
-      model: { provider: model.provider, modelId: model.id },
-      thinkingLevel,
-      requiresEnterprise: options.requiresEnterprise === true,
-    }));
+  const credentialProfileId = options.profileId;
   if (
     options.requiresEnterprise &&
     !credentialProfileById(credentialProfileId)?.enterprise
@@ -412,6 +469,7 @@ async function spawnRuntimeOf(
       ...(pinnedModel ? { pinnedModel } : {}),
       effort: thinkingLevel,
       runtimeSource: "definition",
+      ...(modelFallbackReason ? { modelFallbackReason } : {}),
     },
     description: manifest.description,
     provider: model.provider,
@@ -443,10 +501,10 @@ export type SpawnableAgent =
  * Every definition and whether it can be spawned now: the valid ones with
  * what they would run on, the rest with the reason they cannot.
  */
-export async function listSpawnableAgents(scanned?: {
-  library: LibraryStore;
-  scan: LibraryScan;
-}): Promise<SpawnableAgent[]> {
+export async function listSpawnableAgents(
+  scanned?: { library: LibraryStore; scan: LibraryScan },
+  options: { allowModelFallback?: boolean } = {},
+): Promise<SpawnableAgent[]> {
   scanned ??= await scanAgentsForSpawn();
   const rows: SpawnableAgent[] = [];
   for (const entry of scanned.scan.entries) {
@@ -454,7 +512,7 @@ export async function listSpawnableAgents(scanned?: {
       rows.push({
         name: entry.name,
         description: entry.description,
-        runtime: await resolveAgentSpawn(entry.name, scanned),
+        runtime: await resolveAgentSpawn(entry.name, scanned, options),
       });
     } catch (error) {
       if (!(error instanceof AgentSpawnRefusedError)) throw error;

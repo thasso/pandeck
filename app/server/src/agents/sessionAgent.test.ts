@@ -56,6 +56,23 @@ test("the first freeze wins for the session's life", () => {
   assert.deepEqual(sessionAgent("frozen"), reviewer);
 });
 
+test("a model fallback reason survives the frozen session record", () => {
+  const fallback = {
+    ...reviewer,
+    modelFallbackReason: "sol has no eligible account; used opus",
+  };
+  assert.deepEqual(freezeSessionAgent("model-fallback", fallback), fallback);
+  assert.deepEqual(sessionAgent("model-fallback"), fallback);
+  sessionStore.freezeAgent(
+    "bad-fallback",
+    JSON.stringify({ ...reviewer, modelFallbackReason: 1 }),
+  );
+  assert.throws(
+    () => sessionAgent("bad-fallback"),
+    SessionAgentUnreadableError,
+  );
+});
+
 test("an unreadable row refuses to run rather than run without the agent", () => {
   sessionStore.freezeAgent("corrupt", '{"name":"x"}');
   assert.throws(() => sessionAgent("corrupt"), SessionAgentUnreadableError);
