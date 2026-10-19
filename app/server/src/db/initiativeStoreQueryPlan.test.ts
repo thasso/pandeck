@@ -66,7 +66,11 @@ test("a session change finds its Tasks through links_to_idx", () => {
 test("the member walk and its session filter search by key", () => {
   const plan = assertIndexed("members", ["1"]);
   assert.match(plan, /SEARCH t USING INTEGER PRIMARY KEY/);
-  for (const name of ["memberSessions", "memberSessionCount"] as const) {
+  for (const name of [
+    "memberSessions",
+    "memberSessionCount",
+    "memberTaskStarts",
+  ] as const) {
     const sessions = assertIndexed(
       name,
       name === "memberSessions" ? ["1", "50"] : ["1"],

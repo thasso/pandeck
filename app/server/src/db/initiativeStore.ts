@@ -474,6 +474,15 @@ export const INITIATIVE_STORE_SQL = {
     SELECT id FROM live ORDER BY created_at_ms DESC, id LIMIT ?`,
   memberSessionCount: `${MEMBERS_CTE}${LIVE_MEMBER_SESSIONS}
     SELECT COUNT(*) AS n FROM live`,
+  memberTaskStarts: `${MEMBERS_CTE}
+    SELECT m.id AS task_id, s.id AS session_id
+      FROM member m
+      CROSS JOIN tasks t ON t.id = CAST(m.id AS INTEGER)
+      CROSS JOIN links l ON l.from_type = 'task' AND l.from_id = m.id AND l.relation = 'context' AND l.to_type = 'session'
+      CROSS JOIN session_index s ON s.id = l.to_id
+     WHERE t.deleted_at_ms IS NULL AND s.scope = 'user' AND s.deleted_at_ms IS NULL
+       AND CASE WHEN json_valid(l.metadata_json)
+                THEN json_extract(l.metadata_json, '$.origin') END = 'task-start'`,
   blockersInto: `SELECT b.from_id, b.to_id, t.title, t.status, t.archived_at_ms,
            (SELECT j.to_id FROM links j
              WHERE j.from_type = 'task' AND j.from_id = b.from_id AND j.relation = 'in_project'
@@ -562,6 +571,19 @@ function members(id: number): InitiativeMemberRow[] {
     ...(row.parent_id !== null ? { parentId: Number(row.parent_id) } : {}),
     ...(row.project_id !== null ? { projectId: row.project_id } : {}),
     openBlockers: row.open_blockers,
+  }));
+}
+
+/** All user-scope Task-start roots, including archived and settled sessions. */
+function memberTaskStarts(
+  id: number,
+): Array<{ taskId: string; sessionId: string }> {
+  const rows = getDb()
+    .prepare(INITIATIVE_STORE_SQL.memberTaskStarts)
+    .all(String(id)) as Array<{ task_id: string; session_id: string }>;
+  return rows.map((row) => ({
+    taskId: row.task_id,
+    sessionId: row.session_id,
   }));
 }
 
@@ -828,6 +850,7 @@ export const initiativeStore = {
   dropCoveredPlainEdges,
   members,
   memberSessions,
+  memberTaskStarts,
   blockersInto,
   holdersOf,
   membershipsOf,

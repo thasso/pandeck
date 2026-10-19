@@ -132,14 +132,41 @@ create or edit form, and its only Initiative write is Settle.
   read on (`nextOffset`). Each record is also capped whole, as serialized: the
   head (19 KB), a member (4 KB) and an outside blocker (2 KB). One over its cap
   gives up optional fields in a fixed order, naming each in `omitted`: the head
-  `externalBlockers`, `description`, then `milestoneIds`; a member `projectId`,
-  then `blockedBy`; a blocker `projectId`. Every other field is required. If the
-  record is still over, its required strings are cut in order (a member's
-  `title`, `parentId`, then `id`; elsewhere `title`, then `id`), each ending in
-  `…` and named in `clipped`. The caps leave every page room for its first
-  member, so a read always moves on, and the whole answer is measured once more
-  before it goes out. A Task's `projectId` is stored as written, so a long one
-  is the usual reason a member omits it.
+  `externalBlockers`, `description`, then `milestoneIds`; a member `activity`,
+  `projectId`, then `blockedBy`; a blocker `projectId`. Every other field is
+  required. If the record is still over, its required strings are cut in order
+  (a member's `title`, `parentId`, then `id`; elsewhere `title`, then `id`),
+  each ending in `…` and named in `clipped`. The caps leave every page room for
+  its first member, so a read always moves on, and the whole answer is measured
+  once more before it goes out. A Task's `projectId` is stored as written, so a
+  long one is the usual reason a member omits it. With `includeActivity: true`
+  on a read by id, members optionally carry live delivery `activity`. Roots are
+  Task-start sessions, sessions ever linked to a Task-linked worktree, and
+  Workflow Run role sessions. Coordinator-owned spawn descendants inherit the
+  association, except where another Task's root or explicit Task context cuts
+  the subtree. Passive references never create roots; epic members do not
+  aggregate their subtasks' activity. Sessions list only unarchived rows that
+  are unsettled, moving, or waiting on the user. A quiet settled session stays
+  hidden, but settlement does not hide resumed work or a pending human decision.
+  Listed sessions carry id, title, frozen agent name when available, state
+  (`waiting-on-user`, `running`, `failed`, `interrupted`, `idle`),
+  `lastActivityAt`, worktree id and `owedRepliesFrom`. A member is `stalled`
+  when a live peer owes a reply and neither its listed sessions nor owed peers
+  are moving or waiting on the user. Owed peers use the same working-set rule as
+  listed sessions. A reply owed by the caller still appears in `owedRepliesFrom`
+  even when the caller's current activity prevents `stalled`. Owed peers outside
+  the member's tree inform this flag but are not added to its sessions.
+  Worktrees carry id, branch and status, including removed worktrees. PRs carry
+  number, URL, status, draft, last observed `headSha`, conflicts, and checks and
+  review only while open. Settled sessions and removed worktrees still
+  contribute PRs. Session state is live at read time (`activityAsOf` on the
+  answer); PR observations come from stored cards, not a provider refresh. Each
+  member lists at most 5 sessions, 3 worktrees and 3 PRs, with `sessionCount`,
+  `worktreeCount` or `pullRequestCount` when capped. Sessions list at most 3
+  owed ids with `owedReplyCount` when capped; titles are clipped to 120 UTF-8
+  bytes. Activity is the first whole field dropped if a member exceeds 4 KB,
+  before other optional fields or required-string clipping. Paging and the 24 KB
+  whole-answer cap are unchanged. List reads do not accept `includeActivity`.
 - `initiative_manage`: a batch of `create`, `update` (title, description,
   state), `addMembers`, `removeMembers`, `setMilestone` / `clearMilestone`,
   `archive`, `unarchive` and `delete`. Each operation is all-or-nothing, like

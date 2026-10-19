@@ -525,6 +525,21 @@ test("Initiative tool descriptions carry their rules", () => {
         "no-task-descriptions": /Task descriptions are a task_read away/i,
         "byte-bounded": /byte-bounded/i,
         "read-on": /nextOffset/,
+        "opt-in-activity": /includeActivity/,
+      },
+    },
+    "initiative_read.includeActivity": {
+      text: JSON.stringify(readTool().parameters),
+      rules: {
+        "positive-roots":
+          /task-start.*Task-linked worktrees.*Workflow Run roles/,
+        "reference-exclusion": /Passive references do not qualify/,
+        "activity-drops-first":
+          /Activity is omitted before other member fields/,
+        "snapshot-pr": /last observed, not a provider refresh/,
+        "caller-owed-reply": /owedRepliesFrom names a reply owed by the caller/,
+        "settled-active-exception":
+          /Settled sessions still list while moving or waiting on the user/,
       },
     },
     initiative_manage: {

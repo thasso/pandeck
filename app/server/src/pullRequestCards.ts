@@ -148,6 +148,25 @@ export function pullRequestCardsForWorktree(
     .map((stored) => stored.card);
 }
 
+/** Indexed delivery observations, including cards held by settled sessions or removed worktrees. */
+export function pullRequestActivityRecords(
+  worktreeIds: readonly string[],
+  sessionIds: readonly string[],
+) {
+  const records = new Map<string, StoredPullRequestCard>();
+  for (const id of worktreeIds)
+    for (const record of pullRequestCardStore.forWorktree(id))
+      records.set(record.card.id, record);
+  for (const id of sessionIds)
+    for (const record of pullRequestCardStore.forSession(id))
+      records.set(record.card.id, record);
+  return [...records.values()].map((stored) => {
+    const { card, context } = asRecord(stored);
+    const headSha = context.observedHeadSha ?? context.acceptedHeadSha;
+    return { card, ...(headSha ? { headSha } : {}) };
+  });
+}
+
 /** Cards still claiming an action in flight — boot reconciliation reads this. */
 export function pullRequestCardsWithBusyAction(): PullRequestCard[] {
   return pullRequestCardStore.withBusyAction().map((stored) => stored.card);
