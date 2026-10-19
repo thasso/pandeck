@@ -104,7 +104,8 @@ import {
 } from "../session/adapters/nativeEvents.ts";
 import {
   getAnsweredAgentQuestions,
-  getPendingAgentQuestion,
+  getPendingAgentQuestions,
+  hasPendingAgentQuestion,
   QUESTION_ANSWERS_MARKER,
   subscribeAgentQuestionChanges,
 } from "../tools/core/questionTool.ts";
@@ -1765,14 +1766,14 @@ export class PiLiveSession implements LiveSession {
       this.kind,
       this.session.sessionManager,
     );
-    const idleReasonValue = getPendingAgentQuestion(this.session.sessionId)
+    const idleReasonValue = hasPendingAgentQuestion(this.session.sessionId)
       ? "awaiting_question"
       : hasPendingApproval(this.session.sessionId)
         ? "awaiting_approval"
         : hasChoosingTaskCard(this.session.sessionId)
           ? "awaiting_task_choice"
           : undefined;
-    const pendingQuestionValue = getPendingAgentQuestion(
+    const pendingQuestionsValue = getPendingAgentQuestions(
       this.session.sessionId,
     );
     const originTaskValue = this.safeOriginTask();
@@ -1800,8 +1801,8 @@ export class PiLiveSession implements LiveSession {
       ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       canSteer: this.canSteer,
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
-      ...(pendingQuestionValue !== undefined
-        ? { pendingQuestion: pendingQuestionValue }
+      ...(pendingQuestionsValue.length > 0
+        ? { pendingQuestions: pendingQuestionsValue }
         : {}),
       answeredQuestions: getAnsweredAgentQuestions(this.session.sessionId),
       tasks: this.safeSessionTasks(),
@@ -2006,7 +2007,7 @@ export class PiLiveSession implements LiveSession {
       messageCount: this.session.getSessionStats().totalMessages,
       isStreaming: this.running,
       awaitingInput:
-        Boolean(getPendingAgentQuestion(this.session.sessionId)) ||
+        hasPendingAgentQuestion(this.session.sessionId) ||
         hasPendingApproval(this.session.sessionId) ||
         hasChoosingTaskCard(this.session.sessionId),
       updatedAt: this.updatedAt,

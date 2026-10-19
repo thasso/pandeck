@@ -546,7 +546,7 @@ export class Connection implements Viewer {
    * engine's non-chat `broadcastState`/`contextInfo`/`notice` envelopes would not
    * reach the client through adapter-native events. This filtered viewer forwards
    * exactly those — so live `SessionState` changes the runtime doesn't drive
-   * (pendingQuestion cleared, tasks/toolGroups, the live token meter, notices)
+   * (pendingQuestions cleared, tasks/toolGroups, the live token meter, notices)
    * still update the UI. Detached on session switch / close.
    */
   private engineStateViewer:

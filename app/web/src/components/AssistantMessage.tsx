@@ -166,8 +166,8 @@ interface Props {
   /** The viewed session's worktree, and the other live sessions sharing it. */
   sessionWorktreeId?: string | undefined;
   worktreeLiveSiblings?: number;
-  /** Live pending question flow + recorded answers, for the in-band ask_questions card. */
-  pendingQuestion?: AgentQuestionRequest | undefined;
+  /** Live pending question flows + recorded answers, for the in-band ask_questions card. */
+  pendingQuestions?: AgentQuestionRequest[] | undefined;
   answeredQuestions?: AnsweredAgentQuestion[] | undefined;
   onRespondToQuestion?: ((response: AgentQuestionResponse) => void) | undefined;
   questionResponseNotice?: string | undefined;
@@ -475,7 +475,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   sessionBusy,
   sessionWorktreeId,
   worktreeLiveSiblings,
-  pendingQuestion,
+  pendingQuestions,
   answeredQuestions,
   onRespondToQuestion,
   questionResponseNotice,
@@ -513,7 +513,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     ...(models !== undefined ? { models } : {}),
     ...(defaultModel !== undefined ? { defaultModel } : {}),
     ...(defaultThinkingLevel !== undefined ? { defaultThinkingLevel } : {}),
-    ...(pendingQuestion !== undefined ? { pendingQuestion } : {}),
+    ...(pendingQuestions !== undefined ? { pendingQuestions } : {}),
     ...(answeredQuestions !== undefined ? { answeredQuestions } : {}),
     ...(onRespondToQuestion !== undefined ? { onRespondToQuestion } : {}),
     ...(questionResponseNotice !== undefined ? { questionResponseNotice } : {}),

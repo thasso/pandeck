@@ -65,7 +65,10 @@ test("engine state envelopes reach a runtime-viewing connection until it detache
   // The forwarder must relay the metadata without becoming a run-state source.
   captured!.send({
     type: "state",
-    state: { sessionId: "s1", pendingQuestion: { requestId: "q1" } } as never,
+    state: {
+      sessionId: "s1",
+      pendingQuestions: [{ requestId: "q1" }],
+    } as never,
   });
   // Then the question is answered → engine re-broadcasts state with it cleared.
   captured!.send({ type: "state", state: { sessionId: "s1" } as never });
@@ -118,11 +121,11 @@ test("engine state envelopes reach a runtime-viewing connection until it detache
     (m): m is Extract<ServerMessage, { type: "state" }> => m.type === "state",
   );
   assert.ok(
-    (states[0]!.state as { pendingQuestion?: unknown }).pendingQuestion,
+    (states[0]!.state as { pendingQuestions?: unknown }).pendingQuestions,
     "first state still carries the pending question",
   );
   assert.equal(
-    (states[1]!.state as { pendingQuestion?: unknown }).pendingQuestion,
+    (states[1]!.state as { pendingQuestions?: unknown }).pendingQuestions,
     undefined,
     "the cleared-question state reaches the client (panel hides)",
   );

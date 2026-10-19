@@ -899,7 +899,7 @@ interface Props {
     action: import("@assistant/shared").PullRequestCardAction,
     options?: import("@assistant/shared").PullRequestCardActionOptions,
   ) => void;
-  pendingQuestion?: AgentQuestionRequest | undefined;
+  pendingQuestions?: AgentQuestionRequest[] | undefined;
   answeredQuestions?: AnsweredAgentQuestion[] | undefined;
   onRespondToQuestion?: (response: AgentQuestionResponse) => void;
   sessionCanSteer?: boolean;
@@ -1029,7 +1029,7 @@ interface MessageRowProps {
         options?: import("@assistant/shared").PullRequestCardActionOptions,
       ) => void)
     | undefined;
-  pendingQuestion?: AgentQuestionRequest | undefined;
+  pendingQuestions?: AgentQuestionRequest[] | undefined;
   answeredQuestions?: AnsweredAgentQuestion[] | undefined;
   onRespondToQuestion?: ((response: AgentQuestionResponse) => void) | undefined;
   sessionCanSteer?: boolean;
@@ -1103,7 +1103,7 @@ const MessageRow = memo(function MessageRow({
   accountModels,
   onChoosePullRequestTask,
   onPullRequestCardAction,
-  pendingQuestion,
+  pendingQuestions,
   answeredQuestions,
   onRespondToQuestion,
   sessionCanSteer,
@@ -1194,7 +1194,7 @@ const MessageRow = memo(function MessageRow({
           sessionBusy={sessionStreaming}
           sessionWorktreeId={sessionWorktreeId}
           worktreeLiveSiblings={worktreeLiveSiblings}
-          pendingQuestion={pendingQuestion}
+          pendingQuestions={pendingQuestions}
           answeredQuestions={answeredQuestions}
           onRespondToQuestion={onRespondToQuestion}
           questionResponseNotice={
@@ -1285,7 +1285,7 @@ export function MessageList({
   accountModels,
   onChoosePullRequestTask,
   onPullRequestCardAction,
-  pendingQuestion,
+  pendingQuestions,
   answeredQuestions,
   onRespondToQuestion,
   onLoadTimelineBlock,
@@ -2000,7 +2000,7 @@ export function MessageList({
                   accountModels={accountModels}
                   onChoosePullRequestTask={onChoosePullRequestTask}
                   onPullRequestCardAction={onPullRequestCardAction}
-                  pendingQuestion={pendingQuestion}
+                  pendingQuestions={pendingQuestions}
                   answeredQuestions={answeredQuestions}
                   onRespondToQuestion={onRespondToQuestion}
                   sessionCanSteer={sessionCanSteer}

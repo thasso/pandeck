@@ -76,8 +76,8 @@ export interface ToolRenderContext {
   models?: ModelOption[];
   defaultModel?: ModelOption;
   defaultThinkingLevel?: ThinkingLevel;
-  /** Live pending question flow for this session (drives the in-band ask_questions form). */
-  pendingQuestion?: AgentQuestionRequest;
+  /** Live pending question flows for this session (drive the in-band ask_questions forms). */
+  pendingQuestions?: AgentQuestionRequest[];
   /** Resolved question flows, so an answered ask_questions card shows the recorded answers. */
   answeredQuestions?: AnsweredAgentQuestion[];
   onRespondToQuestion?: (response: AgentQuestionResponse) => void;
@@ -570,7 +570,7 @@ const TOOL_RENDERERS: ToolRenderer[] = [
       <Suspense fallback={<LazyCardFallback label="Opening question…" />}>
         <LazyAgentQuestionToolCard
           block={block}
-          pendingQuestion={ctx.pendingQuestion}
+          pendingQuestions={ctx.pendingQuestions}
           answeredQuestions={ctx.answeredQuestions}
           onRespond={ctx.onRespondToQuestion}
           notice={ctx.questionResponseNotice}
