@@ -1977,7 +1977,10 @@ test("removal recognises a pushed tip without treating an unpushed successor as 
   writeFileSync(join(record.path, "pushed.txt"), "pushed\n");
   sh(record.path, "add", "-A");
   sh(record.path, "commit", "-m", "pushed work");
-  sh(repoPath, "update-ref", "refs/remotes/backup/delivered", record.branch);
+  const remote = join(tmp, "pushed-proof.git");
+  sh(tmp, "init", "--bare", remote);
+  sh(repoPath, "remote", "add", "proof", remote);
+  sh(record.path, "push", "proof", `${record.branch}:refs/heads/delivered`);
   assert.equal(await hasUnmergedCommits(getWorktree(record.id)!), false);
   writeFileSync(join(record.path, "private.txt"), "private\n");
   sh(record.path, "add", "-A");
@@ -1988,7 +1991,57 @@ test("removal recognises a pushed tip without treating an unpushed successor as 
   );
   sh(record.path, "reset", "--hard", "HEAD~1");
   await removeWorktree(record.id, { deleteBranch: true });
-  sh(repoPath, "update-ref", "-d", "refs/remotes/backup/delivered");
+  sh(repoPath, "remote", "remove", "proof");
+});
+
+test("removal refuses a remotely deleted or unreachable backup despite a stale tracking ref", async () => {
+  const record = await createWorktree({
+    projectId: "wt-proj",
+    name: "stale-remote-proof",
+  });
+  const remote = join(tmp, "stale-proof.git");
+  sh(tmp, "init", "--bare", remote);
+  sh(repoPath, "remote", "add", "proof", remote);
+  writeFileSync(join(record.path, "unique-backup.txt"), "unique\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "only copy after remote deletion");
+  const head = sh(record.path, "rev-parse", "HEAD").trim();
+  sh(record.path, "push", "proof", `${record.branch}:refs/heads/delivered`);
+  // Delete on the provider side, leaving this repository's tracking ref stale.
+  sh(remote, "update-ref", "-d", "refs/heads/delivered");
+  assert.equal(
+    sh(repoPath, "rev-parse", "refs/remotes/proof/delivered").trim(),
+    head,
+  );
+  try {
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+    assert.ok(existsSync(record.path));
+    assert.equal(sh(repoPath, "rev-parse", record.branch).trim(), head);
+    sh(
+      repoPath,
+      "remote",
+      "set-url",
+      "proof",
+      join(tmp, "unavailable-remote.git"),
+    );
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+    // A self-remote must not certify the very branch we are deleting either.
+    sh(repoPath, "remote", "set-url", "proof", repoPath);
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+  } finally {
+    sh(repoPath, "remote", "remove", "proof");
+    if (getWorktree(record.id)?.status === "active")
+      await removeWorktree(record.id, { deleteBranch: true, force: true });
+  }
 });
 
 function mergedCleanupCard(
@@ -2089,6 +2142,7 @@ test("removal refreshes a stale base from its remote without moving the local br
     sh(record.path, "commit", "-m", "work for remote base");
     sh(remote, "fetch", repoPath, record.branch);
     sh(remote, "cherry-pick", "FETCH_HEAD");
+    sh(remote, "commit", "--amend", "-m", "squash delivered work");
     assert.equal(await hasUnmergedCommits(getWorktree(record.id)!), true);
     await removeWorktree(record.id, { deleteBranch: true });
     assert.equal(sh(repoPath, "rev-parse", "main").trim(), before);

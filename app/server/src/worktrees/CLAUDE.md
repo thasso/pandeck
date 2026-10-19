@@ -29,11 +29,12 @@
 - Spawned-worktree review comments are object-bounded: after checkout removal,
   atomically tombstone the row and purge comments under the repo lock, then
   broadcast empty before optional branch cleanup. A retry requires its persisted
-  expected ref oid, re-read under the repo lock; refuse a checked-out ref, use
-  base-branch semantic containment, and clear only on proven absence or
-  success/ref reuse. Ordinary tombstones are never retryable. Synthetic-main
-  root threads holding this worktree as their branch subject are purged when its
-  merge finishes or its identity-bound branch is proven deleted.
+  expected ref oid, re-read under the repo lock; refuse a checked-out ref;
+  require base semantic containment, merged-head ancestry or freshly verified
+  remote ancestry. Clear only on proven absence or success/ref reuse. Ordinary
+  tombstones are never retryable. Synthetic-main root threads holding this
+  worktree as their branch subject are purged when its merge finishes or its
+  identity-bound branch is proven deleted.
 - Live git state (dirty, ahead/behind, merged) is computed on demand, never
   persisted. Remote-only batches use ONE root map and one row-context read per
   invisible OWN branch; exact visible OWN targets and missing/stale baselines

@@ -56,7 +56,11 @@ import {
   type WorktreeRow,
 } from "../db/worktreeStore.ts";
 import { worktreeBroadcaster } from "./worktreeEvents.ts";
-import { fetchRepoIfDue, refreshRemovalBase } from "./worktreeFetch.ts";
+import {
+  fetchRepoIfDue,
+  refreshRemovalBase,
+  remoteDeliveryHeads,
+} from "./worktreeFetch.ts";
 import {
   broadcastComments,
   purgeMainCommentsForBranchSubject,
@@ -1175,12 +1179,27 @@ export async function removeWorktree(
   // Fetch only if the available receipts do not already prove safety. Never
   // move a local base, and never hold the repository lock across the network.
   let containmentBase = opts.branchContainmentBase;
-  if (
-    !opts.force &&
-    opts.deleteBranch &&
-    (await hasUnmergedCommits(row, containmentBase))
-  ) {
-    containmentBase ??= await refreshRemovalBase(row).catch(() => undefined);
+  let remoteHeads: string[] = [];
+  if (!opts.force && opts.deleteBranch) {
+    const branch = await probeLocalBranch(row);
+    if (
+      branch.kind === "present" &&
+      !(await worktreeBranchDelivered(row, branch.oid, containmentBase))
+    ) {
+      remoteHeads = await remoteDeliveryHeads(row);
+      if (
+        !(await worktreeBranchDelivered(
+          row,
+          branch.oid,
+          containmentBase,
+          remoteHeads,
+        ))
+      ) {
+        containmentBase ??= await refreshRemovalBase(row).catch(
+          () => undefined,
+        );
+      }
+    }
   }
 
   /**
@@ -1228,7 +1247,12 @@ export async function removeWorktree(
         if (
           !opts.force &&
           branch.kind === "present" &&
-          !(await worktreeBranchDelivered(row, branch.oid, containmentBase))
+          !(await worktreeBranchDelivered(
+            row,
+            branch.oid,
+            containmentBase,
+            remoteHeads,
+          ))
         ) {
           throw new WorktreeRemovalBlockedError(
             `Branch ${row.branch} has commits not merged into ${row.baseBranch} or preserved by a remote ref or merged pull request. Merge first, keep the branch, or force-remove to lose them.`,
@@ -1298,6 +1322,7 @@ export async function removeWorktree(
             branchCleanupOid,
             opts.force,
             containmentBase,
+            remoteHeads,
           );
         } catch (err) {
           // Both facts have to survive. The branch error owns the throw — it
@@ -1368,6 +1393,7 @@ async function deletePendingWorktreeBranch(
   expectedOid: string,
   force = false,
   containmentBase = row.baseBranch,
+  remoteHeads: readonly string[] = [],
 ): Promise<void> {
   let branch: LocalBranchProbe;
   try {
@@ -1432,6 +1458,7 @@ async function deletePendingWorktreeBranch(
         row,
         expectedOid,
         containmentBase,
+        remoteHeads,
       );
     } catch (cause) {
       throw new WorktreeBranchCleanupError(
@@ -1500,7 +1527,14 @@ export async function hasUnmergedCommits(
 ): Promise<boolean> {
   const branch = await probeLocalBranch(row);
   if (branch.kind === "absent") return false;
-  return !(await worktreeBranchDelivered(row, branch.oid, containmentBase));
+  if (await worktreeBranchDelivered(row, branch.oid, containmentBase))
+    return false;
+  return !(await worktreeBranchDelivered(
+    row,
+    branch.oid,
+    containmentBase,
+    await remoteDeliveryHeads(row),
+  ));
 }
 
 /* --------------------------------- listing -------------------------------- */

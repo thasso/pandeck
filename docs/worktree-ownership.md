@@ -102,7 +102,9 @@ Keeping the branch preserves its commits and needs no delivery proof. Deleting
 it without force requires one of these proofs for its exact current tip:
 
 - semantic containment in the recorded base or the refreshed remote base;
-- ancestry in a nonsymbolic remote-tracking ref;
+- ancestry in a head freshly advertised by another repository's named remote;
+  stale remote-tracking refs alone do not count, and an unavailable remote
+  supplies no proof;
 - ancestry in the provider-observed head of a merged PR card for this worktree,
   or for the implementation worktree named by its base branch in the same
   repository. Removed implementation rows still supply their PR receipts.
@@ -112,17 +114,25 @@ landed after a force-push, and a new local commit after the merged head stays
 protected. Semantic containment remains base-specific; an arbitrary sibling
 local branch or a matching patch on a remote branch is not a substitute.
 
+Remote preservation checks run before the repository lock and pass exact
+advertised heads into the locked rechecks. A remote pointing into the same Git
+common directory cannot certify the branch being deleted. Unknown remote head
+objects fail closed rather than assuming ancestry.
+
 When existing proofs fail, Remove fetches the named remote's base without moving
 the local base or writing `FETCH_HEAD`. An unavailable or deleted base supplies
-no new proof. Retire can still use an existing remote ref or merged receipt when
-refreshing the base fails. Both paths recheck the exact tip under the repository
-lock before removing the checkout, and again during oid-bound branch cleanup. A
-branch reused since removal is never deleted by a retry.
+no new proof. Retire can still use a freshly verified remote head or merged
+receipt when refreshing the base fails. Both paths recheck the exact tip under
+the repository lock before removing the checkout, and again during oid-bound
+branch cleanup. A branch reused since removal is never deleted by a retry.
 
 These proofs matter after squash merges: later changes to the same files can
 make `merge-tree` conflict even though the earlier branch was delivered. Review
 checkouts can also outlive a deleted or rebased implementation branch. Neither
-case justifies discarding commits outside the proven head.
+case justifies discarding commits outside the proven head. If a review tip
+predates a rebase and the implementation ref is gone, ancestry in the merged
+head may not hold. Without another proof, keep that branch or explicitly force
+its deletion.
 
 ## Idle worktrees: the cleanup queue's other half
 

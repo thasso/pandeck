@@ -10,29 +10,22 @@ export async function worktreeBranchDelivered(
   row: WorktreeRow,
   tip: string,
   containmentBase = row.baseBranch,
+  remoteHeads: readonly string[] = [],
 ): Promise<boolean> {
   // Keep semantic containment BASE-specific. Equal patches on an arbitrary
   // sibling or backup branch are not evidence of delivery into this base.
   if (await branchContainedInBase(row.mainRepoRoot, tip, containmentBase))
     return true;
 
-  const remoteRefs = await gitOptionalExit(
-    [
-      "for-each-ref",
-      `--contains=${tip}`,
-      "--format=%(refname)%09%(symref)",
-      "refs/remotes/",
-    ],
-    row.mainRepoRoot,
-  );
-  if (
-    remoteRefs.code === 0 &&
-    remoteRefs.stdout.split("\n").some((line) => {
-      const [ref, symref] = line.split("\t");
-      return Boolean(ref) && !symref;
-    })
-  )
-    return true;
+  // Only heads just advertised by another repository count. Tracking refs
+  // can be stale after remote deletion and vanish on our next pruning fetch.
+  for (const head of remoteHeads) {
+    const ancestor = await gitOptionalExit(
+      ["merge-base", "--is-ancestor", tip, head],
+      row.mainRepoRoot,
+    );
+    if (ancestor.code === 0) return true;
+  }
 
   // Review checkouts can outlive the implementation ref after a squash merge
   // or rebase. Its tombstone still identifies the merged PR receipt to check.

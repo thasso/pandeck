@@ -44,11 +44,14 @@
  * `--no-write-fetch-head` and reads `FETCH_HEAD` never. See
  * {@link backgroundFetchArgs}.
  */
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BACKGROUND_FETCH_ENABLED } from "../config.ts";
 import { gitOptional, repoLockKey } from "../gitExec.ts";
 import { getSettings } from "../settings.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
-import { baseBranchRemote } from "./worktreeRemote.ts";
+import { baseBranchRemote, remoteNames } from "./worktreeRemote.ts";
 
 const MINUTE_MS = 60_000;
 /**
@@ -78,6 +81,56 @@ const FETCH_ENV = {
   GIT_SSH_COMMAND:
     "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10",
 };
+
+/**
+ * Current remote preservation receipts. Call outside the repo lock; an
+ * unreachable remote or a head whose object is absent locally proves nothing.
+ */
+export async function remoteDeliveryHeads(row: WorktreeRow): Promise<string[]> {
+  const context = { ...row, path: row.mainRepoRoot };
+  const ownKey = await repoLockKey(context.path);
+  const heads = new Set<string>();
+  for (const remote of await remoteNames(context)) {
+    const url = (
+      await gitOptional(["remote", "get-url", remote], context.path)
+    ).stdout.trim();
+    let localPath: string | undefined;
+    if (url.startsWith("file://")) {
+      try {
+        localPath = fileURLToPath(url);
+      } catch {
+        continue;
+      }
+    } else if (!url.includes(":")) {
+      localPath = resolve(context.path, url);
+    }
+    // A remote that points back into this common object store cannot back up
+    // the ref we are about to delete, including linked-worktree aliases.
+    if (
+      localPath &&
+      existsSync(localPath) &&
+      (await repoLockKey(localPath)) === ownKey
+    )
+      continue;
+    const advertised = await gitOptional(
+      ["ls-remote", "--heads", "--", remote],
+      context.path,
+      AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      FETCH_ENV,
+    );
+    if (advertised.code !== 0) continue;
+    for (const line of advertised.stdout.split("\n")) {
+      const [oid, ref] = line.split("\t");
+      if (
+        oid &&
+        /^[a-f0-9]{40,64}$/i.test(oid) &&
+        ref?.startsWith("refs/heads/")
+      )
+        heads.add(oid);
+    }
+  }
+  return [...heads];
+}
 
 /**
  * Authoritative removal fallback, outside the repo lock. Update only a named
