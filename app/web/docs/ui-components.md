@@ -239,6 +239,20 @@ session-row and card memo keys so takeover updates every list immediately.
   yellow `IntegratedBadge` when their linked worktree's Git status confirms
   containment, not merely because the PR is merged. Missing status shows no
   integration claim.
+- **Initiative browser items:** `InitiativeBrowserRow` uses title plus compact
+  Task progress and a Contents disclosure, with an optional Paused/blocked badge
+  line. It has no action column. Contents lazily reads membership and lists
+  member Projects with Initiative-scoped progress bars and counts. Nonempty
+  bars turn success-green when all their Tasks are done, without changing the
+  Initiative's explicit state. Initiative and Project progress counts share a
+  reserved column sized to the widest Initiative count, keeping bars aligned.
+  It never copies an entire Project's unrelated
+  contents. Project Contents expands the shared `WorktreeList`, scoped by
+  explicit member-Task links and excluding removed Worktrees, with no creation
+  action. The host unions its visible rows with the ordinary Project tree's
+  status-watch demand. Initiative and Project expansions are remembered
+  separately per Initiative. First reads, refreshing data, failures and empty
+  membership use shared load chrome.
 - **Initiative Attention items:** Progress and age in context, state/title in
   identity, and session disclosure, readiness, blockers and next milestone in
   signals. Only unacknowledged paused/done outcomes offer Settle.

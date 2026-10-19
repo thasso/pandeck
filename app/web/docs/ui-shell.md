@@ -244,6 +244,21 @@ while the Projects browser is on screen; an Initiative's page holds it too, with
 Tasks and Projects for the live map. There is no Initiatives section of its own
 and no view of an Initiative inside a Project page.
 
+`InitiativeBrowserRow` is the quieter, structure-oriented counterpart to its
+Attention card: title and compact Task progress, then a leading Contents
+control, with Paused/blocked badges in an optional context line. Contents
+remembers its expansion per Initiative and lazily reuses the keyed membership
+read. Its first level lists only Projects of member Tasks, with progress scoped
+to those Tasks, not the Project as a whole. Unassigned members have a No Project
+row, and unresolved registry ids remain visible. These rows navigate to their
+Projects. Their own Contents disclosure remembers a separate per-Initiative
+Project expansion and shows only non-removed Worktrees explicitly linked to
+those member Tasks, never all Worktrees in the Project. This layer reuses
+`WorktreeList`/`WorktreeRow`, with their PR/Integrated badges, Git signals and
+route highlight, but no creation actions. Only visible Worktrees join the
+browser's shared status-watch demand. Session expansion is a subsequent UI
+iteration.
+
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached
 Task data, and mutation broadcasts update every subscribed tab/PWA instance. The

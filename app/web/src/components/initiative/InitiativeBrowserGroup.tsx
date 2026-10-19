@@ -1,11 +1,14 @@
 import { memo } from "react";
 import { Waypoints } from "lucide-react";
-import type { InitiativeSummary } from "@assistant/shared";
-import { ListRow } from "../common/ListRow.tsx";
+import type { InitiativeSummary, ProjectRecord } from "@assistant/shared";
+import type { InitiativeRead } from "../../hooks/useAssistant.ts";
+import type { LoadState } from "../../lib/loadState.ts";
+import type { RowDensity } from "../../lib/rowDensity.ts";
 import { ErrorNote, RefreshIndicator, Skeleton } from "../common/load.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
-import { initiativePath } from "../../hooks/useSessionRouting.ts";
-import { followRowLink } from "../../lib/rowLink.ts";
+import { InitiativeBrowserRow, type InitiativeBrowserWorktrees } from "./InitiativeBrowserRow.tsx";
+
+const NO_PROJECTS: readonly ProjectRecord[] = [];
 
 /**
  * @component InitiativeBrowserGroup
@@ -24,6 +27,12 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   onRetry,
   selectedId,
   onNavigate,
+  initiativeDetails,
+  projects = NO_PROJECTS,
+  selectedProjectId,
+  density = "tight",
+  onLoadDetail,
+  worktrees,
 }: {
   initiatives: readonly InitiativeSummary[];
   /** A snapshot answered the current subscription. */
@@ -40,8 +49,18 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   selectedId: string | null;
   /** Stable host navigation; rows are links, so a modifier click opens a tab. */
   onNavigate: (path: string) => void;
+  initiativeDetails?: Readonly<Record<string, LoadState<InitiativeRead | null>>> | undefined;
+  projects?: readonly ProjectRecord[];
+  selectedProjectId?: string | null | undefined;
+  density?: RowDensity;
+  worktrees?: InitiativeBrowserWorktrees | undefined;
+  /** Present when this host offers inline membership browsing. */
+  onLoadDetail?: (id: string, collapsed?: readonly string[]) => void;
 }) {
   const open = initiatives.filter((initiative) => initiative.state !== "done");
+  const progressCountChars = Math.max(3, ...open.map(({ progress }) =>
+    progress.total > 0 ? `${progress.done}/${progress.total}`.length : "0 Tasks".length,
+  ));
   return (
     <ListGroupSection
       id="initiatives"
@@ -64,41 +83,21 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
         </div>
       ) : (
         <ul className="flex flex-col">
-          {open.map((initiative) => {
-            const href = initiativePath(initiative.id);
-            const selected = initiative.id === selectedId;
-            return (
-              <li key={initiative.id}>
-                <ListRow
-                  interaction="content"
-                  active={selected}
-                  aria-current={selected ? "page" : undefined}
-                  rowProps={{ "data-list-row-id": `initiative:${initiative.id}` }}
-                  render={
-                    <a
-                      href={href}
-                      onClick={(event) =>
-                        followRowLink(event, href, onNavigate)
-                      }
-                    />
-                  }
-                  title={initiative.title}
-                  contextTrailing={
-                    <span className="tabular-nums">
-                      {initiative.state === "paused" ? (
-                        "Paused"
-                      ) : (
-                        <>
-                          {initiative.progress.done}/{initiative.progress.total}
-                          <span className="sr-only"> done</span>
-                        </>
-                      )}
-                    </span>
-                  }
-                />
-              </li>
-            );
-          })}
+          {open.map((initiative) => (
+            <InitiativeBrowserRow
+              key={initiative.id}
+              initiative={initiative}
+              detailState={initiativeDetails?.[initiative.id]}
+              projects={projects}
+              selected={initiative.id === selectedId}
+              selectedProjectId={selectedProjectId}
+              density={density}
+              progressCountChars={progressCountChars}
+              worktrees={worktrees}
+              onLoadDetail={onLoadDetail}
+              onNavigate={onNavigate}
+            />
+          ))}
         </ul>
       )}
     </ListGroupSection>

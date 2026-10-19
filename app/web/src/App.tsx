@@ -7095,6 +7095,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         onReorderProjects={reorderProjects}
         onOpenProject={openProject}
         initiatives={state.initiatives}
+        initiativeDetails={state.initiativeDetails}
         initiativesFresh={state.initiativesFresh}
         initiativesRefreshing={state.initiativesRefreshing}
         initiativeListError={state.initiativeListError}

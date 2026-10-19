@@ -412,18 +412,20 @@ export const WorktreeRow = memo(
  *   `WorktreeRow` as the sidebar's Projects browser — compact, flush, in its
  *   order — wherever worktrees are listed outside it (the Project page, the
  *   inspectors), so they are one component, not several that look alike.
- * @intent No selection (a click opens the worktree), no drag.
+ * @intent Optional route highlighting, click to open the worktree, no drag.
  */
 export function WorktreeList({
   worktrees,
   statuses,
   hosting,
+  selectedWorktreeId,
   onOpen,
   onStartSession,
 }: {
   worktrees: WorktreeRecord[];
   statuses: Record<string, WorktreeGitStatus>;
   hosting?: WorktreeHostingMap | undefined;
+  selectedWorktreeId?: string | null | undefined;
   onOpen?: ((id: string) => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
 }) {
@@ -449,7 +451,7 @@ export function WorktreeList({
       // The last row drops its hairline: the action row under the list draws
       // the one that closes it.
       className="[&>li:last-child_.border-b]:border-b-0"
-      selectedIds={NO_SELECTION}
+      selectedIds={selectedWorktreeId ? [selectedWorktreeId] : NO_SELECTION}
       onSelectionChange={(ids) => {
         if (ids.length === 1) onOpen?.(ids[0]!);
       }}
@@ -459,7 +461,7 @@ export function WorktreeList({
           status={statuses[node.id]}
           hosting={hosting?.[node.id]}
           now={now}
-          selected={false}
+          selected={node.id === selectedWorktreeId}
           onStartSession={onStartSession}
         />
       )}

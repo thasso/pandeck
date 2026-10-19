@@ -192,6 +192,28 @@ the tool descriptions, never in a harness-specific prompt layer.
   a later write to it still raises an event (a `delete` with the new revision,
   as for an archived Task), so its open graph re-reads too.
 
+## Project browser
+
+The Initiatives group above Projects uses compact browser rows rather than the
+urgency-oriented Attention card. An Initiative shows its title, Task progress,
+and a Contents disclosure; Paused and blocked badges occupy an optional first
+line. The heading opens its detail, while Contents expands inline, with state
+remembered per Initiative for the tab.
+
+The first expansion level reads the existing keyed membership graph on demand
+and groups member Tasks by Project. It does not infer membership from names or
+from the summary's bounded active-session ids. Project counts and progress are
+scoped to member Tasks, archived members included. A missing registry record
+keeps its Project id visible; Tasks with no Project appear in a No Project row.
+External blockers do not make their Projects members. Project rows navigate
+normally and offer no creation or settlement action. Each Project has a separate
+Contents disclosure, remembered within its Initiative, for non-removed Worktrees
+whose explicit `in_worktree` Task links intersect that Project's member Tasks.
+A Project without a matching Worktree stays visible. Shared Worktree rows retain
+PR/Integrated badges and Git metadata; only the expanded rows hold live status
+watches. Opening a Worktree navigates normally. Session rows and coordinator/Task
+context are left for the next interactive iteration.
+
 ## The Initiative page
 
 The route is `/initiatives/:id`; `/initiatives` is the section index listing
