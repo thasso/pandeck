@@ -130,6 +130,8 @@ import {
 } from "./components/PendingCommentsLedge.tsx";
 import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
 import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
+import { PendingQuestionLedge } from "./components/PendingQuestionLedge.tsx";
+import { questionRequestBelongsToBlock } from "./components/AgentQuestionToolCard.tsx";
 import {
   SessionRowDetailsContext,
   SpawnedSessionsLedge,
@@ -5761,6 +5763,45 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     // oxlint-disable-next-line react/exhaustive-deps -- `pendingApprovalsLedgeKey` IS the strip's visible content of `pendingApprovals` (`lib/approvalCards.ts`); depending on the array would rebuild the strip on every snapshot
     [pendingApprovalsLedgeKey, actions.revealApproval],
   );
+  const pendingQuestion = route.name === "session"
+    ? displaySession?.pendingQuestion
+    : undefined;
+  const pendingQuestionId = pendingQuestion?.requestId;
+  const pendingQuestionSessionId = pendingQuestion?.sessionId;
+  const pendingQuestionTitle = pendingQuestion?.title;
+  const questionEntryId = pendingQuestion
+    ? displayMessages.findLast((message) => message.blocks.some(
+        (block) => block.kind === "tool" && questionRequestBelongsToBlock(pendingQuestion, block),
+      ))?.id
+    : undefined;
+  const [questionJump, setQuestionJump] = useState<string | null>(null);
+  const revealPendingQuestion = useCallback(() => {
+    if (pendingQuestionId) setQuestionJump(pendingQuestionId);
+  }, [pendingQuestionId]);
+  useEffect(() => {
+    if (!questionJump) return;
+    if (questionJump !== pendingQuestionId || !pendingQuestionSessionId) {
+      setQuestionJump(null);
+      return;
+    }
+    if (questionEntryId) {
+      setMessageFocus((current) => ({
+        sessionId: pendingQuestionSessionId,
+        entryId: questionEntryId,
+        token: Math.max(Date.now(), (current?.token ?? 0) + 1),
+        align: "top",
+      }));
+      setQuestionJump(null);
+    } else if (hasOlderTimelineEntries && state.timelineRangePending === null) {
+      actions.loadOlderTimeline();
+    }
+  }, [questionJump, pendingQuestionId, pendingQuestionSessionId, questionEntryId, hasOlderTimelineEntries, state.timelineStart, state.timelineRangePending, actions]);
+  const pendingQuestionLedge = useMemo(
+    () => pendingQuestionId && pendingQuestionTitle ? (
+      <PendingQuestionLedge title={pendingQuestionTitle} onReveal={revealPendingQuestion} />
+    ) : undefined,
+    [pendingQuestionId, pendingQuestionTitle, revealPendingQuestion],
+  );
   // The user's own queue (`promptQueue.ts`) belongs to an ordinary session on
   // screen; the permanent Assistant queues its intake on its own.
   const queueSessionId =
@@ -6145,6 +6186,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   // with the next prompt.
   const composerLedge = useMemo(
     () =>
+      pendingQuestionLedge ||
       pendingApprovalsLedge ||
       spawnedLedge ||
       backgroundLedge ||
@@ -6154,6 +6196,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       reviewCommentsLedge ||
       pendingCommentsLedge ? (
         <>
+          {pendingQuestionLedge}
           {pendingApprovalsLedge}
           {spawnedLedge}
           {backgroundLedge}
@@ -6165,6 +6208,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         </>
       ) : undefined,
     [
+      pendingQuestionLedge,
       pendingApprovalsLedge,
       spawnedLedge,
       backgroundLedge,
