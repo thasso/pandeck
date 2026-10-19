@@ -7,7 +7,7 @@ import {
   CircleHelp,
   FolderTree,
   ListFilter,
-  LoaderCircle,
+  Activity,
 } from "lucide-react";
 import type {
   ProjectRecord,
@@ -50,7 +50,7 @@ const STATUS_META = {
   },
   working: {
     label: "Working",
-    Icon: LoaderCircle,
+    Icon: Activity,
     title: "Work currently running",
   },
   active: {

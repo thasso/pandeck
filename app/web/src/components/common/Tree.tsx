@@ -807,7 +807,7 @@ function RowBody<T>({
             // The target is full-height, with the glyph near the first content
             // line. `w-5` keeps the gutter narrow so the content keeps its width.
             stretch
-              ? "h-auto w-5 items-start pt-[var(--tree-toggle-offset,0.75rem)]"
+              ? "h-auto w-5 items-start pt-3"
               : compact
                 ? "size-4"
                 : "size-5",

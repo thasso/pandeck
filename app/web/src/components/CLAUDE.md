@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=2880 reason="Markdown presentation, agent-text, rendering/loading rules and the shared browser-row contract exceed 2048." task=document-presentation date=2026-09-11 -->
+<!-- instruction-budget: bytes=2880 reason="Markdown, agent text, loading and browser rows." task=document-presentation date=2026-09-11 -->
 
 # Web components
 

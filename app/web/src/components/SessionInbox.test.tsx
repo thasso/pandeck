@@ -694,10 +694,9 @@ describe("SessionInbox density", () => {
   /** The height classes of a card's first row and of its status row. */
   function outerRows(id: string): string[] {
     const card = row(id);
-    const first = card.querySelector<HTMLElement>(".whitespace-nowrap.text-xs");
-    const status = card.querySelector<HTMLElement>(
-      ".session-card-status-line",
-    )?.parentElement;
+    const content = card.querySelector<HTMLElement>("[data-list-row-lines]");
+    const first = content?.children[0] as HTMLElement | undefined;
+    const status = content?.children[2] as HTMLElement | undefined;
     const height = (node: HTMLElement | null | undefined) =>
       [...(node?.classList ?? [])].find((name) => /^(min-)?h-\d/.test(name));
     return [height(first) ?? "", height(status) ?? ""];
@@ -712,30 +711,29 @@ describe("SessionInbox density", () => {
   it("keeps primary rows thumb-sized while folded peers stay compact", () => {
     render("comfortable");
     openEverything();
-    // The status row's inline Settle and actions flip.
+    // Shared actions stay compact on desktop and expand to labeled touch
+    // targets independently of the host's row density.
     expect(button("Settle — move out of the working set").className).toContain(
-      "size-8",
+      "touch-ui:min-h-11",
     );
-    expect(button("Session actions").className).toContain("size-8");
-    // The rows above and below the title are as tall as those actions take
-    // (32px less the 2px margins: 28px), so the title sits centred and no
-    // action's touch target reaches into the title row — where a tap meant
-    // to open the card would settle it.
+    expect(button("Session actions").className).toContain("touch-ui:size-11");
     expect(outerRows("root")).toEqual(["h-7", "min-h-7"]);
-    expect(button("Settle — move out of the working set").className).toContain(
-      "-my-0.5",
-    );
+    expect(
+      button("Settle — move out of the working set").textContent,
+    ).toContain("Settle");
     // Folded peers are subordinate one-line rows, not another stack of cards.
     expect(row("kid").dataset.size).toBe("xs");
     expect(row("kid").className).not.toContain("min-h-11");
     // A shelf row and its one action.
-    expect(row("done").className).toContain("min-h-11");
+    expect(
+      row("done").querySelector("[data-list-row-lines]")?.className,
+    ).toContain("min-h-11");
     expect(button("Bring back into the working set").className).toContain(
       "size-9",
     );
-    // The shelf disclosures themselves.
-    expect(button("Settled").className).toContain("min-h-11");
-    expect(button("Archived").className).toContain("min-h-11");
+    // Both shelves use the shared group-header geometry.
+    expect(button("Settled").closest("h2")?.className).toContain("min-h-8");
+    expect(button("Archived").closest("h2")?.className).toContain("min-h-8");
   });
 
   it("keeps the rail's tight rows when the host says so", () => {
@@ -746,11 +744,13 @@ describe("SessionInbox density", () => {
     );
     expect(outerRows("root")).toEqual(["h-5", "min-h-5"]);
     expect(row("kid").dataset.size).toBe("xs");
-    expect(row("done").dataset.size).toBe("xs");
+    expect(row("done").dataset.size).toBe("list");
     expect(button("Bring back into the working set").className).toContain(
       "size-6",
     );
-    expect(view!.container.innerHTML).not.toContain("min-h-11");
+    expect(
+      row("done").querySelector("[data-list-row-lines]")?.className,
+    ).toContain("min-h-7");
   });
 
   it("heads both shelves without a count", () => {

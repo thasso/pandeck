@@ -239,7 +239,7 @@ describe("ProjectDetailPage worktree rows", () => {
     const document = new DOMParser().parseFromString(html, "text/html");
     const { primary, second } = worktreeLines(document, "one");
     expect(primary?.textContent).toContain("+14−3");
-    expect(second?.hasAttribute("data-worktree-axes")).toBe(true);
+    expect(second?.querySelector("[data-worktree-axes]")).not.toBeNull();
     expect(second?.textContent).toContain("main ↑2");
   });
 

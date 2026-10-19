@@ -1426,8 +1426,10 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     (mobileLayout
       ? !composerVisible && !commentActuation?.composerOpen
       : inspectorTabVisible) &&
-    route.name === "tasks" &&
-    Boolean(route.id);
+    ((route.name === "tasks" && Boolean(route.id)) ||
+      (route.name === "initiatives" &&
+        Boolean(route.id) &&
+        selectedTaskFromHash(locationHash) !== null));
   const activeTopics = useMemo(
     () =>
       topicsForSurface({

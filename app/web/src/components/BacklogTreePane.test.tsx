@@ -68,6 +68,7 @@ function render(
   onArchive: (ids: string[]) => string[] | null,
   options: {
     density?: BacklogDensity;
+    presentation?: "browser" | "picker";
     sessions?: SessionListItem[];
     projects?: ProjectRecord[];
     onOpen?: (id: string) => void;
@@ -114,7 +115,10 @@ function render(
         onNavigate={options.onNavigate}
         onClearFilters={() => {}}
         density={options.density ?? "comfortable"}
-        presentation={options.density === "tight" ? "picker" : "browser"}
+        presentation={
+          options.presentation ??
+          (options.density === "tight" ? "picker" : "browser")
+        }
       />,
     );
   });
@@ -367,43 +371,36 @@ function session(patch: Partial<SessionListItem> & { id: string }) {
 }
 
 describe("BacklogTreePane density", () => {
-  it("gives a comfortable row a second line and a tight row one line", () => {
+  it("keeps browser context above the title at either density", () => {
     const tasks = [task({ id: "1", title: "Two-line row" })];
-    const idLine = () =>
-      container!.querySelector<HTMLElement>('[title="Task-1"]')!.parentElement!;
-    render(tasks, (ids) => ids, { density: "comfortable" });
-    expect(idLine().previousElementSibling?.textContent).toBe("Two-line row");
-    // Nothing to report, and the line does not pad itself with the status the
-    // row's own control already shows.
-    expect(container!.textContent).not.toContain("To do");
-
-    render(tasks, (ids) => ids, { density: "tight" });
-    expect(idLine().previousElementSibling).toBeNull();
-    expect(idLine().textContent).toContain("Two-line row");
+    for (const density of ["comfortable", "tight"] as const) {
+      render(tasks, (ids) => ids, { density, presentation: "browser" });
+      const content = container!.querySelector("[data-list-row-lines]")!;
+      expect(content.children[0]!.textContent).toContain("#1");
+      expect(content.children[1]!.textContent).toBe("Two-line row");
+      expect(content.getAttribute("data-list-row-lines")).toBe("2");
+    }
   });
 
-  it("gives a two-line row's first line to the title alone", () => {
-    // Line 1 may end only in fixed-width controls, so BOTH the id and the
-    // project chip belong to line 2 — the id leading it, where a clipping line
-    // cannot take it. A single-line row is the one shape that keeps them up
-    // beside the title, having nowhere else to put them.
+  it("puts Project and Task ID in browser context and keeps the picker single-line", () => {
     const tasks = [task({ id: "1", projectId: "p1" })];
     const projects = [
       { id: "p1", key: "PA", name: "Pandeck" } as ProjectRecord,
     ];
-    // The line the id sits on, and the one above it.
-    const idLine = () =>
-      container!.querySelector<HTMLElement>('[title="Task-1"]')!.parentElement!;
-    const lineAbove = () => idLine().previousElementSibling;
-
     render(tasks, (ids) => ids, { density: "comfortable", projects });
-    expect(idLine().textContent).toContain("#1");
-    expect(idLine().textContent).toContain("PA");
-    expect(lineAbove()!.textContent).toBe("Task 1");
+    const content = container!.querySelector("[data-list-row-lines]")!;
+    expect(content.children[0]!.textContent).toContain("#1");
+    expect(content.children[0]!.textContent).toContain("PA");
+    expect(content.children[1]!.textContent).toBe("Task 1");
 
     render(tasks, (ids) => ids, { density: "tight", projects });
-    expect(idLine().textContent).toContain("PA");
-    expect(lineAbove()).toBeNull();
+    expect(
+      container!
+        .querySelector("[data-list-row-lines]")
+        ?.getAttribute("data-list-row-lines"),
+    ).toBe("1");
+    expect(container!.textContent).toContain("PA");
+    expect(container!.textContent).toContain("Task 1");
   });
 
   it("offers the gutter action only where the host gave it one", () => {
@@ -532,7 +529,7 @@ describe("BacklogTreePane density", () => {
     const worktreeGlyph = () =>
       container!.querySelector('[aria-label="Has a worktree"]');
 
-    it("states a red check where the branch glyph was", () => {
+    it("states a red check alongside the worktree glyph", () => {
       render(withWorktree(), (ids) => ids, {
         density: "comfortable",
         sessions,
@@ -550,9 +547,8 @@ describe("BacklogTreePane density", () => {
         },
       });
       expect(container!.textContent).toContain("CI failed");
-      // A PR is a stronger statement of "there is code" than a branch, and the
-      // line clips from the right: the chip REPLACES the glyph.
-      expect(worktreeGlyph()).toBeNull();
+      // Worktree navigation and delivery are separate facts.
+      expect(worktreeGlyph()).not.toBeNull();
       // Which PR and how many checks do not fit two words; the tooltip has them.
       expect(container!.innerHTML).toContain("PR #91");
       expect(container!.innerHTML).toContain("5 checks");
@@ -762,8 +758,8 @@ describe("BacklogTreePane density", () => {
       );
       const pr = linked("https://forge/pulls/91");
       expect(pr?.target).toBe("_blank");
-      // The chip REPLACED the worktree glyph, so its link went with it.
-      expect(linked("/worktrees/wt1")).toBeNull();
+      // The PR link leaves worktree navigation available independently.
+      expect(linked("/worktrees/wt1")).not.toBeNull();
     });
 
     it("sends the dirty dot to the changes it stands for", () => {
@@ -902,8 +898,10 @@ describe("BacklogTreePane blocked badge", () => {
     // The count is VISIBLE, not only in the tooltip.
     expect(badge?.textContent).toBe("2");
     expect(badge?.getAttribute("title")).toBe(blockedLabel);
-    // On line 2, beside the id — line 1 belongs to the title.
-    expect(badge!.parentElement!.textContent).toContain("#1");
+    // Supporting metadata follows context and title, without repeating the ID.
+    const content = badge!.closest("[data-list-row-lines]")!;
+    expect(content.children[2]!.contains(badge!)).toBe(true);
+    expect(content.children[0]!.textContent).toContain("#1");
     const free = container!.querySelector('[data-list-row-id="2"]')!;
     expect(free.querySelector('[aria-label^="Blocked by"]')).toBeNull();
   });

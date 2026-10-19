@@ -348,7 +348,9 @@ filters only the history already read. Empty results say so and offer Clear
 filters rather than claiming there is no work. Header counts stay global; Needs
 you clears filters before focusing waiting work, opening the first Needs-you
 Project group if needed. Pending settle/swipe exits stay visible until their
-existing command sends.
+existing command sends. These controls filter sessions and Workflow Runs;
+Initiatives remain independent cross-Project items, including their Needs-you
+outcomes, and are never hidden by those filters.
 
 The same popover offers Group: None / By Project, saved independently of Task
 grouping in `Prefs.attentionFilters.byProject`. Grouping does not count as a
