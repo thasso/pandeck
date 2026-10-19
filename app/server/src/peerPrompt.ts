@@ -268,7 +268,9 @@ export async function sendPeerPrompt(
       void getHub()
         .then((hub) => hub.broadcastSessions?.())
         .catch(() => {});
-      throw new Error(detail);
+      throw new Error(
+        `This agent-to-agent chain (${err.chainId}) reached its ${err.maxHops}-hop limit without a human in the loop. This send was not queued. Wait for a human prompt to a chain participant or involve the user before sending again.`,
+      );
     }
     throw err;
   }

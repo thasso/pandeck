@@ -1016,7 +1016,15 @@ describe("peer prompt engine", () => {
             prompt: "reply",
             responseRequested: false,
           }),
-        /3-hop limit/,
+        (error: Error) => {
+          assert.match(error.message, /3-hop limit/);
+          assert.match(error.message, /Wait for a human prompt/);
+          assert.doesNotMatch(
+            error.message,
+            /Any message from you|ask the agent/,
+          );
+          return true;
+        },
       );
       // Rejected before persisting: the original request is NOT marked replied.
       assert.equal(peerPromptStore.getById(req.id)?.status, "admitted");
