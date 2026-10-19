@@ -143,7 +143,7 @@ function TranscriptLocation() {
           <div data-role="assistant">
             <AgentQuestionToolCard
               block={questionBlock}
-              pendingQuestion={questionRequest}
+              pendingQuestions={[questionRequest]}
               onRespond={noop}
             />
           </div>

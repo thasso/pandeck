@@ -14,7 +14,7 @@ import {
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { curatedModelOption } from "./harnesses/curatedModels.ts";
-import { getPendingAgentQuestion } from "./tools/core/questionTool.ts";
+import { hasPendingAgentQuestion } from "./tools/core/questionTool.ts";
 import { pendingApprovalSessionIds } from "./pendingApprovals.ts";
 import {
   choosingTaskSessionIds,
@@ -311,7 +311,7 @@ function attentionFields(
   approvals: Set<string>,
   taskChoices: Set<string>,
 ): Pick<SessionListItem, "awaitingInput" | "attention"> {
-  const attention: SessionAttentionKind | undefined = getPendingAgentQuestion(
+  const attention: SessionAttentionKind | undefined = hasPendingAgentQuestion(
     sessionId,
   )
     ? "question"

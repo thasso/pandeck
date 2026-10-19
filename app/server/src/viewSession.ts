@@ -62,7 +62,8 @@ import {
 } from "./tasks.ts";
 import {
   getAnsweredAgentQuestions,
-  getPendingAgentQuestion,
+  getPendingAgentQuestions,
+  hasPendingAgentQuestion,
 } from "./tools/core/questionTool.ts";
 import { hasPendingApproval } from "./pendingApprovals.ts";
 import { hasChoosingTaskCard } from "./pullRequestCards.ts";
@@ -140,14 +141,14 @@ export class ViewSession implements HarnessDriver {
   }
 
   state(): SessionState {
-    const idleReasonValue = getPendingAgentQuestion(this.id)
+    const idleReasonValue = hasPendingAgentQuestion(this.id)
       ? "awaiting_question"
       : hasPendingApproval(this.id)
         ? "awaiting_approval"
         : hasChoosingTaskCard(this.id)
           ? "awaiting_task_choice"
           : undefined;
-    const pendingQuestionValue = getPendingAgentQuestion(this.id);
+    const pendingQuestionsValue = getPendingAgentQuestions(this.id);
     const pendingPostReloadContinuationValue = getPendingPostReloadContinuation(
       this.id,
     );
@@ -175,8 +176,8 @@ export class ViewSession implements HarnessDriver {
       // Steering needs a running turn, which a detached session cannot have.
       canSteer: false,
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
-      ...(pendingQuestionValue !== undefined
-        ? { pendingQuestion: pendingQuestionValue }
+      ...(pendingQuestionsValue.length > 0
+        ? { pendingQuestions: pendingQuestionsValue }
         : {}),
       answeredQuestions: getAnsweredAgentQuestions(this.id),
       tasks: this.safe(() => listSessionTasks(this.kind, this.id), []),

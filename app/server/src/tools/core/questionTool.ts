@@ -21,6 +21,12 @@ const MAX_PROSE_CHARS = 4000;
 const MAX_CHOICE_DESCRIPTION_CHARS = 1500;
 /** Keep the most recent resolved question flows per session for the in-band card. */
 const MAX_ANSWERED_PER_SESSION = 20;
+/**
+ * Open flows one session may hold at once. A driver relaying decisions from
+ * several children posts one flow per child in a turn; the bound only stops a
+ * looping agent from piling cards onto the user.
+ */
+const MAX_PENDING_PER_SESSION = 8;
 
 type QuestionToolParams = {
   title?: string;
@@ -43,32 +49,33 @@ type QuestionToolParams = {
 
 type QuestionChangeListener = (sessionId: string) => void;
 
-interface PendingQuestion {
-  request: AgentQuestionRequest;
-}
-
 const listeners = new Set<QuestionChangeListener>();
 
 /**
  * Pending questions persist across restarts/reloads so a session that's idle
  * waiting for an answer keeps its card (and its `idleReason`) when the server
  * comes back — the question is the reason it's idle, so losing it would strand
- * the session. Keyed by session id; the resume on answer works regardless of
- * agent kind (pi `prompt` / Claude `--resume`). Lives at
- * `<DATA_DIR>/pending-questions.json`.
+ * the session. Keyed by session id, each holding its open flows oldest first;
+ * the resume on answer works regardless of agent kind (pi `prompt` / Claude
+ * `--resume`). Lives at `<DATA_DIR>/pending-questions.json`.
  */
 const PENDING_FILE = join(DATA_DIR, "pending-questions.json");
 /** Resolved question flows per session, so the in-band card persists across reconnect/restart. */
 const ANSWERED_FILE = join(DATA_DIR, "answered-questions.json");
 
-function loadPersistedPending(): Map<string, PendingQuestion> {
+function loadPersistedPending(): Map<string, AgentQuestionRequest[]> {
   try {
     const raw = JSON.parse(readFileSync(PENDING_FILE, "utf8")) as Record<
       string,
-      AgentQuestionRequest
+      AgentQuestionRequest[] | AgentQuestionRequest
     >;
+    // A file written before a session could hold several flows stores one
+    // request per session; reading it keeps that question answerable.
     return new Map(
-      Object.entries(raw).map(([id, request]) => [id, { request }]),
+      Object.entries(raw).map(([id, value]) => [
+        id,
+        Array.isArray(value) ? value : [value],
+      ]),
     );
   } catch {
     return new Map();
@@ -80,9 +87,11 @@ const pendingBySession = loadPersistedPending();
 function persistPending(): void {
   try {
     if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    const obj: Record<string, AgentQuestionRequest> = {};
-    for (const [id, pending] of pendingBySession) obj[id] = pending.request;
-    writeFileSync(PENDING_FILE, `${JSON.stringify(obj, null, 2)}\n`, "utf8");
+    writeFileSync(
+      PENDING_FILE,
+      `${JSON.stringify(Object.fromEntries(pendingBySession), null, 2)}\n`,
+      "utf8",
+    );
   } catch {
     // Best-effort: a lost pending question only means the user must re-ask.
   }
@@ -195,7 +204,7 @@ const askQuestionsSchema = {
 
 /**
  * Subscribe a live web session to pending-question state changes for its session id.
- * The actual question payload is exposed through SessionState.pendingQuestion.
+ * The actual question payloads are exposed through SessionState.pendingQuestions.
  */
 export function subscribeAgentQuestionChanges(
   listener: QuestionChangeListener,
@@ -204,10 +213,16 @@ export function subscribeAgentQuestionChanges(
   return () => listeners.delete(listener);
 }
 
-export function getPendingAgentQuestion(
+/** The session's open question flows, oldest first; empty when there are none. */
+export function getPendingAgentQuestions(
   sessionId: string,
-): AgentQuestionRequest | undefined {
-  return pendingBySession.get(sessionId)?.request;
+): AgentQuestionRequest[] {
+  return pendingBySession.get(sessionId) ?? [];
+}
+
+/** Whether the session is waiting on at least one question flow. */
+export function hasPendingAgentQuestion(sessionId: string): boolean {
+  return (pendingBySession.get(sessionId)?.length ?? 0) > 0;
 }
 
 /**
@@ -225,10 +240,17 @@ export function relinkAgentQuestionToolCallId(
   let changed = false;
   const pending = pendingBySession.get(sessionId);
   if (
-    pending?.request.requestId === requestId &&
-    pending.request.toolCallId !== toolCallId
+    pending?.some(
+      (request) =>
+        request.requestId === requestId && request.toolCallId !== toolCallId,
+    )
   ) {
-    pending.request = { ...pending.request, toolCallId };
+    pendingBySession.set(
+      sessionId,
+      pending.map((request) =>
+        request.requestId === requestId ? { ...request, toolCallId } : request,
+      ),
+    );
     persistPending();
     changed = true;
   }
@@ -260,25 +282,34 @@ export function relinkAgentQuestionToolCallId(
  * prompt carrying the answers, which the caller injects (pi `prompt`, Claude
  * `submitLine`). Returns the resume prompt, or `undefined` to leave the session
  * idle (the user cancelled — they'll type their own message).
+ *
+ * A session may hold several flows; the response names its own by request id,
+ * and the others stay pending.
  */
 export function submitAgentQuestionResponse(
   sessionId: string,
   rawResponse: AgentQuestionResponse,
 ): { response: AgentQuestionResponse; resumePrompt?: string } {
-  const pending = pendingBySession.get(sessionId);
-  if (!pending) throw new Error("No pending question flow for this session.");
-  if (rawResponse.requestId !== pending.request.requestId) {
+  const pending = pendingBySession.get(sessionId) ?? [];
+  if (pending.length === 0)
+    throw new Error("No pending question flow for this session.");
+  const request = pending.find(
+    (candidate) => candidate.requestId === rawResponse.requestId,
+  );
+  if (!request) {
     throw new Error(
-      "Question response does not match the active question flow.",
+      "Question response does not match a pending question flow.",
     );
   }
 
-  const response = normalizeResponse(pending.request, rawResponse);
-  pendingBySession.delete(sessionId);
+  const response = normalizeResponse(request, rawResponse);
+  const remaining = pending.filter((candidate) => candidate !== request);
+  if (remaining.length > 0) pendingBySession.set(sessionId, remaining);
+  else pendingBySession.delete(sessionId);
   persistPending();
-  recordAnswered(sessionId, pending.request, response);
+  recordAnswered(sessionId, request, response);
   emitQuestionChange(sessionId);
-  const resumePromptValue = buildResumePrompt(pending.request, response);
+  const resumePromptValue = buildResumePrompt(request, response, remaining);
   return {
     response,
     ...(resumePromptValue !== undefined
@@ -321,58 +352,98 @@ export function clearPendingQuestion(sessionId: string): void {
   emitQuestionChange(sessionId);
 }
 
-/** The hidden prompt that hands the user's answers back to the agent. */
+/**
+ * The hidden prompt that hands the user's answers back to the agent. It names
+ * the flow by title and request id, so an agent waiting on several flows can
+ * tell which decision arrived, and lists the flows still open.
+ */
 function buildResumePrompt(
   request: AgentQuestionRequest,
   response: AgentQuestionResponse,
+  stillPending: readonly AgentQuestionRequest[],
 ): string | undefined {
   if (response.status === "cancelled") return undefined; // leave idle; the user will type
   const { text } = formatQuestionToolResult(request, response);
   return [
     QUESTION_ANSWERS_MARKER,
-    "The user answered the questions you asked in the question panel. Continue using these answers (do not re-ask):",
+    `The user answered the question flow ${flowLabel(request)} that you asked in the question panel. Continue using these answers (do not re-ask):`,
+    ...(stillPending.length > 0
+      ? [
+          `Still waiting on the user: ${stillPending.map(flowLabel).join(", ")}. Each answer arrives as its own follow-up message; do not re-ask these either.`,
+        ]
+      : []),
     "",
     text,
   ].join("\n");
+}
+
+/** How the agent is told which flow a message is about. */
+function flowLabel(request: AgentQuestionRequest): string {
+  return `${request.requestId} ("${request.title}")`;
+}
+
+/** The fixed lead of the tool result, ahead of any agent-written text. */
+const POSTED_FLOW_RE =
+  /^Posted \d+ questions? to the user in the app's question panel as flow (question-\d+-[a-z0-9]+) /;
+
+/**
+ * The request id an `ask_questions` result names as the flow it posted, so a
+ * harness that only learns the provider's tool-use id from the transcript can
+ * relink that flow ({@link relinkAgentQuestionToolCallId}).
+ */
+export function questionRequestIdFromToolResult(
+  output: string,
+): string | undefined {
+  return POSTED_FLOW_RE.exec(output)?.[1];
 }
 
 function emitQuestionChange(sessionId: string): void {
   for (const listener of listeners) listener(sessionId);
 }
 
-/** Register a pending question for a session (non-blocking) so the UI shows its card. */
+/**
+ * Register a pending question for a session (non-blocking) so the UI shows its
+ * card. Returns the flows that were already open, oldest first.
+ */
 function registerPendingQuestion(
   sessionId: string,
   request: AgentQuestionRequest,
-): void {
-  if (pendingBySession.has(sessionId)) {
-    throw new Error("A question flow is already pending for this session.");
+): AgentQuestionRequest[] {
+  const earlier = pendingBySession.get(sessionId) ?? [];
+  if (earlier.length >= MAX_PENDING_PER_SESSION) {
+    throw new Error(
+      `This session already has ${earlier.length} unanswered question flows, the most it may hold. End your turn and wait for the user's answers before asking more.`,
+    );
   }
-  pendingBySession.set(sessionId, { request });
+  pendingBySession.set(sessionId, [...earlier, request]);
   persistPending();
   emitQuestionChange(sessionId);
-  // Same rule as an approval: the agent cannot continue without an answer, so
-  // this is push-eligible even though nothing has finished. Once only, at
-  // registration — the card and the inbox tier carry it from here.
+  // Waiting on the user is one condition however many flows are open, so only
+  // the first flow alerts. Same rule as an approval: the agent cannot continue
+  // without an answer, so this is push-eligible even though nothing has
+  // finished. Once only, at registration — the card and the inbox tier carry
+  // it from here.
+  if (earlier.length > 0) return earlier;
   void notifySessionBlocked(
     sessionId,
     "question",
     request.title ?? request.questions[0]?.title,
   ).catch(() => {});
+  return earlier;
 }
 
 /**
  * @payload AgentQuestionRequest
  * @purpose Interactive composer-docked question flow requested by the ask_questions tool.
  * @renderWhen Use when multiple clarifications, choices, or mixed typed/choice answers are easier than prose.
- * @bounds Up to 12 questions and 20 choices per question; answer text is trimmed before returning to the agent.
+ * @bounds Up to 12 questions and 20 choices per question, and 8 open flows per session; answer text is trimmed before returning to the agent.
  * @client The web UI renders questions above the composer, supports cancel/discuss-later, and shows a review step before submit.
  */
 export const askQuestionsTool = defineAgentTool<QuestionToolParams>({
   name: "ask_questions",
   label: "Ask Questions",
   description:
-    "Ask the user an interactive question flow in the web UI: use it for more than one clarification or for structured choices, and keep prose for a single simple question. Every text field renders Markdown. A question they return with disposition=discuss is a request to continue that point in chat, not an answer.",
+    "Ask the user an interactive question flow in the web UI for several clarifications or structured choices, not one simple question. Separate calls suit unrelated decisions. Every text field renders Markdown. A question returned as disposition=discuss is a request to continue that point in chat, not an answer.",
   parameters: askQuestionsSchema,
   executionMode: "sequential",
   async execute(params, ctx) {
@@ -383,16 +454,20 @@ export const askQuestionsTool = defineAgentTool<QuestionToolParams>({
     // long human pauses — especially for Claude over MCP). The session goes idle
     // showing the question card; answering resumes it with a fresh hidden prompt.
     const request = buildRequest(sessionId, ctx.toolCallId, params);
-    registerPendingQuestion(sessionId, request);
+    const earlier = registerPendingQuestion(sessionId, request);
     const status = `Posted ${request.questions.length} question${request.questions.length === 1 ? "" : "s"} to the user; awaiting their response.`;
     ctx.progress?.({
       content: [{ type: "text", text: status }],
       details: { status },
     });
     const text = [
-      `Posted ${request.questions.length} question${request.questions.length === 1 ? "" : "s"} to the user in the app's question panel.`,
-      "STOP HERE: end your turn now and wait. Do NOT guess, assume, or fill in answers, and do not keep working.",
-      "The user's answers (or a cancellation) will arrive as a separate follow-up message that resumes this session.",
+      // Keep this lead in step with POSTED_FLOW_RE: it is how a flow is relinked.
+      `Posted ${request.questions.length} question${request.questions.length === 1 ? "" : "s"} to the user in the app's question panel as flow ${flowLabel(request)}.`,
+      ...(earlier.length > 0
+        ? [`Also still open: ${earlier.map(flowLabel).join(", ")}.`]
+        : []),
+      "STOP HERE: end your turn now and wait. Do NOT guess, assume, or fill in answers, and do not keep working; only an unrelated set of questions may still be posted first, as its own ask_questions call.",
+      "The user's answers (or a cancellation) will arrive as a separate follow-up message that resumes this session, one per flow.",
     ].join(" ");
     return {
       content: [{ type: "text", text }],

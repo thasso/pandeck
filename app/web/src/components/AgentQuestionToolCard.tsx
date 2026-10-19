@@ -6,6 +6,7 @@ import type {
   AgentQuestionResponse,
   AnsweredAgentQuestion,
   DisplayBlock,
+  DisplayMessage,
 } from "@assistant/shared";
 import { AgentQuestionForm, QuestionSubject } from "./AgentQuestionForm.tsx";
 import { Badge } from "@/components/ui/badge";
@@ -30,13 +31,13 @@ type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
  */
 export function AgentQuestionToolCard({
   block,
-  pendingQuestion,
+  pendingQuestions,
   answeredQuestions,
   onRespond,
   notice,
 }: {
   block: ToolBlock;
-  pendingQuestion?: AgentQuestionRequest | undefined;
+  pendingQuestions?: AgentQuestionRequest[] | undefined;
   answeredQuestions?: AnsweredAgentQuestion[] | undefined;
   onRespond?: ((response: AgentQuestionResponse) => void) | undefined;
   /** Where the answers go when the session cannot take them right now. */
@@ -45,12 +46,9 @@ export function AgentQuestionToolCard({
   const answered = answeredQuestions?.find((a) =>
     answeredQuestionBelongsToBlock(a, block),
   );
-  const pending =
-    pendingQuestion &&
-    !answered &&
-    questionRequestBelongsToBlock(pendingQuestion, block)
-      ? pendingQuestion
-      : undefined;
+  const pending = answered
+    ? undefined
+    : pendingQuestionForBlock(pendingQuestions, block);
 
   return pending && onRespond ? (
     <AgentQuestionForm
@@ -97,12 +95,40 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
   );
 }
 
-export function questionRequestBelongsToBlock(
-  request: AgentQuestionRequest,
+/**
+ * The pending flow a tool call posted. An exact tool-call id wins over the
+ * Claude MCP payload fallback, so two flows of the same shape still land on
+ * their own cards once their ids are relinked.
+ */
+export function pendingQuestionForBlock(
+  requests: readonly AgentQuestionRequest[] | undefined,
   block: ToolBlock,
-): boolean {
-  if (request.toolCallId === block.toolId) return true;
-  return mcpGeneratedToolCallMatchesBlock(request, block);
+): AgentQuestionRequest | undefined {
+  if (!requests?.length) return undefined;
+  return (
+    requests.find((request) => request.toolCallId === block.toolId) ??
+    requests.find((request) => mcpGeneratedToolCallMatchesBlock(request, block))
+  );
+}
+
+/**
+ * The transcript row holding a pending flow's form: the latest row with a tool
+ * call that {@link pendingQuestionForBlock} gives this flow, the same match the
+ * card makes, so a jump lands on the form that renders it.
+ */
+export function pendingQuestionEntryId(
+  messages: readonly DisplayMessage[],
+  requests: readonly AgentQuestionRequest[] | undefined,
+  request: AgentQuestionRequest,
+): string | undefined {
+  return messages.findLast((message) =>
+    message.blocks.some(
+      (block) =>
+        block.kind === "tool" &&
+        pendingQuestionForBlock(requests, block)?.requestId ===
+          request.requestId,
+    ),
+  )?.id;
 }
 
 function answeredQuestionBelongsToBlock(

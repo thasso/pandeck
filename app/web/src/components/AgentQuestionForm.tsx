@@ -53,7 +53,7 @@ const QUESTION_DRAFT_STORAGE_VERSION = 1;
 /**
  * @component AgentQuestionForm
  * @purpose In-band wizard for the ask_questions tool: answer multiple structured questions and review before submit.
- * @useWhen Rendered inside the in-band `ask_questions` chat card while its question flow is the session's active pendingQuestion.
+ * @useWhen Rendered inside the in-band `ask_questions` chat card while its question flow is one of the session's pendingQuestions.
  * @avoidWhen A simple one-line clarification in normal assistant text is enough.
  * @intent Compact step-by-step form with inline back/next/review/submit + cancel, selectable “discuss in chat”, and a final review step.
  * @related AgentQuestionToolCard, ask_questions server tool payload AgentQuestionRequest.

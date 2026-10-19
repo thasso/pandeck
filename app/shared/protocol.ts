@@ -4739,8 +4739,12 @@ export interface SessionState {
    * as a union so more reasons (e.g. awaiting approval) can be added.
    */
   idleReason?: SessionIdleReason;
-  /** Active interactive question flow requested by an agent tool, if any. */
-  pendingQuestion?: AgentQuestionRequest;
+  /**
+   * Interactive question flows an agent tool posted that the user has not
+   * answered or cancelled yet, oldest first. Each is answered on its own.
+   * Absent when there are none.
+   */
+  pendingQuestions?: AgentQuestionRequest[];
   /**
    * Resolved question flows for this session, keyed by their tool call, so the
    * in-band `ask_questions` card can render the user's recorded answers (and

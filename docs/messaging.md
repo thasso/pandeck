@@ -357,12 +357,24 @@ the card's live status. Both reach the card the same way, through a
 card's row id (`approval-<id>`) and the index of the turn that proposed it, so a
 windowed transcript loads back far enough to show the card.
 
+A session can hold several pending question flows at once (at most eight), for
+example a driver relaying decisions from several children in one turn. Each flow
+has its own request id and form and is answered or cancelled on its own; the
+others stay pending. Each submitted flow resumes the agent with that flow's
+answers, labelled with its request id and title, and names the flows still open.
+The session is in the `needs-you` tier while any flow is open, and only the
+first flow of that wait sends a push.
+
 Pending agent questions also have a composer-ledge shortcut
-(`PendingQuestionLedge`). It names the question and jumps to its transcript
-form, aligned above the composer and flashed. It uses the same tool-call
-matching as the question form, including the Claude MCP payload fallback, and
-loads earlier transcript pages when needed. Answering stays on the form; the
-shortcut disappears when the question is answered or cancelled.
+(`PendingQuestionLedge`). It names each pending flow, oldest first, folding past
+three behind "Show N more waiting", and each "Show question" jumps to that
+flow's transcript form, aligned above the composer and flashed. It uses the same
+tool-call matching as the question form (an exact tool-call id first, then the
+Claude MCP payload fallback) and loads earlier transcript pages when needed.
+Answering stays on the form; a flow leaves the shortcut when it is answered or
+cancelled. There is no `pa://question/<id>` link: the agent ends its turn right
+after asking, so the form sits directly above its last words, and the ledge
+finds every open flow.
 
 This qualifies for push because the work has stopped until the user acts.
 Account login failures are the explicit additional condition below.

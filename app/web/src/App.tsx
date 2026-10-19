@@ -130,8 +130,11 @@ import {
 } from "./components/PendingCommentsLedge.tsx";
 import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
 import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
-import { PendingQuestionLedge } from "./components/PendingQuestionLedge.tsx";
-import { questionRequestBelongsToBlock } from "./components/AgentQuestionToolCard.tsx";
+import {
+  PendingQuestionLedge,
+  pendingQuestionsLedgeKey,
+} from "./components/PendingQuestionLedge.tsx";
+import { pendingQuestionEntryId } from "./components/AgentQuestionToolCard.tsx";
 import {
   SessionRowDetailsContext,
   SpawnedSessionsLedge,
@@ -5763,45 +5766,45 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     // oxlint-disable-next-line react/exhaustive-deps -- `pendingApprovalsLedgeKey` IS the strip's visible content of `pendingApprovals` (`lib/approvalCards.ts`); depending on the array would rebuild the strip on every snapshot
     [pendingApprovalsLedgeKey, actions.revealApproval],
   );
-  const pendingQuestion =
-    route.name === "session" ? displaySession?.pendingQuestion : undefined;
-  const pendingQuestionId = pendingQuestion?.requestId;
-  const pendingQuestionSessionId = pendingQuestion?.sessionId;
-  const pendingQuestionTitle = pendingQuestion?.title;
-  const questionEntryId = pendingQuestion
-    ? displayMessages.findLast((message) =>
-        message.blocks.some(
-          (block) =>
-            block.kind === "tool" &&
-            questionRequestBelongsToBlock(pendingQuestion, block),
-        ),
-      )?.id
-    : undefined;
+  const pendingQuestions =
+    route.name === "session" ? displaySession?.pendingQuestions : undefined;
+  const pendingQuestionsKey = pendingQuestionsLedgeKey(pendingQuestions ?? []);
+  // The flow the user asked to see, while it is still pending: answering or
+  // cancelling it elsewhere ends the jump.
   const [questionJump, setQuestionJump] = useState<string | null>(null);
-  const revealPendingQuestion = useCallback(() => {
-    if (pendingQuestionId) setQuestionJump(pendingQuestionId);
-  }, [pendingQuestionId]);
+  const jumpQuestion = questionJump
+    ? pendingQuestions?.find((request) => request.requestId === questionJump)
+    : undefined;
+  const jumpQuestionSessionId = jumpQuestion?.sessionId;
+  const questionEntryId = jumpQuestion
+    ? pendingQuestionEntryId(displayMessages, pendingQuestions, jumpQuestion)
+    : undefined;
+  const revealPendingQuestion = useCallback((requestId: string) => {
+    setQuestionJump(requestId);
+  }, []);
   useEffect(() => {
     if (!questionJump) return;
-    if (questionJump !== pendingQuestionId || !pendingQuestionSessionId) {
+    if (!jumpQuestionSessionId) {
       setQuestionJump(null);
       return;
     }
     if (questionEntryId) {
       setMessageFocus((current) => ({
-        sessionId: pendingQuestionSessionId,
+        sessionId: jumpQuestionSessionId,
         entryId: questionEntryId,
         token: Math.max(Date.now(), (current?.token ?? 0) + 1),
         align: "top",
       }));
       setQuestionJump(null);
-    } else if (hasOlderTimelineEntries && state.timelineRangePending === null) {
+    } else if (!hasOlderTimelineEntries) {
+      // The whole transcript is loaded and holds no form for it.
+      setQuestionJump(null);
+    } else if (state.timelineRangePending === null) {
       actions.loadOlderTimeline();
     }
   }, [
     questionJump,
-    pendingQuestionId,
-    pendingQuestionSessionId,
+    jumpQuestionSessionId,
     questionEntryId,
     hasOlderTimelineEntries,
     state.timelineStart,
@@ -5810,13 +5813,14 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
   ]);
   const pendingQuestionLedge = useMemo(
     () =>
-      pendingQuestionId && pendingQuestionTitle ? (
+      pendingQuestions?.length ? (
         <PendingQuestionLedge
-          title={pendingQuestionTitle}
-          onReveal={revealPendingQuestion}
+          questions={pendingQuestions}
+          onRevealQuestion={revealPendingQuestion}
         />
       ) : undefined,
-    [pendingQuestionId, pendingQuestionTitle, revealPendingQuestion],
+    // oxlint-disable-next-line react/exhaustive-deps -- `pendingQuestionsKey` IS the strip's visible content of `pendingQuestions`; depending on the array would rebuild the strip on every state broadcast
+    [pendingQuestionsKey, revealPendingQuestion],
   );
   // The user's own queue (`promptQueue.ts`) belongs to an ordinary session on
   // screen; the permanent Assistant queues its intake on its own.
@@ -6940,7 +6944,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                     accountModels={settingsAccountModels}
                     onChoosePullRequestTask={actions.choosePullRequestTask}
                     onPullRequestCardAction={runPullRequestCardAction}
-                    pendingQuestion={displaySession?.pendingQuestion}
+                    pendingQuestions={displaySession?.pendingQuestions}
                     answeredQuestions={displaySession?.answeredQuestions}
                     onRespondToQuestion={respondToQuestion}
                     onLoadTimelineBlock={actions.loadTimelineBlock}

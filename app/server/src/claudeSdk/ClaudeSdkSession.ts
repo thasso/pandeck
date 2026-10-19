@@ -123,7 +123,9 @@ import { CWD } from "../config.ts";
 import { claudeProfileEnvironment } from "../credentialProfiles.ts";
 import {
   getAnsweredAgentQuestions,
-  getPendingAgentQuestion,
+  getPendingAgentQuestions,
+  hasPendingAgentQuestion,
+  questionRequestIdFromToolResult,
   relinkAgentQuestionToolCallId,
   subscribeAgentQuestionChanges,
 } from "../tools/core/questionTool.ts";
@@ -315,18 +317,6 @@ function normalizedToolName(name: string | undefined): string {
   return parts[0] === "mcp" && parts.length >= 3
     ? parts.slice(2).join("__")
     : value;
-}
-
-function questionRequestIdFromOutput(output: string): string | undefined {
-  try {
-    const parsed = JSON.parse(output) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      return undefined;
-    const requestId = (parsed as Record<string, unknown>).requestId;
-    return typeof requestId === "string" && requestId ? requestId : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function cloneTimelineEntry(entry: ClientTimelineEntry): ClientTimelineEntry {
@@ -1023,14 +1013,14 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   state(): SessionState {
-    const idleReasonValue = getPendingAgentQuestion(this.sessionId)
+    const idleReasonValue = hasPendingAgentQuestion(this.sessionId)
       ? "awaiting_question"
       : hasPendingApproval(this.sessionId)
         ? "awaiting_approval"
         : hasChoosingTaskCard(this.sessionId)
           ? "awaiting_task_choice"
           : undefined;
-    const pendingQuestionValue = getPendingAgentQuestion(this.sessionId);
+    const pendingQuestionsValue = getPendingAgentQuestions(this.sessionId);
     const pendingPostReloadContinuationValue = getPendingPostReloadContinuation(
       this.id,
     );
@@ -1055,8 +1045,8 @@ export class ClaudeSdkSession implements LiveSession {
       canSteer: this.canSteer,
       ...(this.forkOrigin ? { forkOrigin: this.forkOrigin } : {}),
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
-      ...(pendingQuestionValue !== undefined
-        ? { pendingQuestion: pendingQuestionValue }
+      ...(pendingQuestionsValue.length > 0
+        ? { pendingQuestions: pendingQuestionsValue }
         : {}),
       answeredQuestions: getAnsweredAgentQuestions(this.sessionId),
       tasks: this.safeSessionTasks(),
@@ -4018,7 +4008,7 @@ export class ClaudeSdkSession implements LiveSession {
     output: string,
   ): void {
     if (normalizedToolName(toolName) !== "ask_questions") return;
-    const requestId = questionRequestIdFromOutput(output);
+    const requestId = questionRequestIdFromToolResult(output);
     if (!requestId) return;
     relinkAgentQuestionToolCallId(this.id, requestId, toolCallId);
   }
@@ -4113,7 +4103,7 @@ export class ClaudeSdkSession implements LiveSession {
     const taskChoiceBlocked = taskChoices
       ? taskChoices.has(this.id)
       : hasChoosingTaskCard(this.id);
-    const attention = getPendingAgentQuestion(this.id)
+    const attention = hasPendingAgentQuestion(this.id)
       ? "question"
       : approvalBlocked
         ? "approval"

@@ -34,7 +34,7 @@ export function ToolCardsStory({ frameWidth, surface }: ToolCardsStoryProps) {
           <>
             <AgentQuestionToolCard
               block={questionBlock}
-              pendingQuestion={questionRequest}
+              pendingQuestions={[questionRequest]}
               onRespond={() => {}}
             />
             <AgentQuestionToolCard

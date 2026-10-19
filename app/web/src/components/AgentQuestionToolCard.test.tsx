@@ -4,8 +4,13 @@ import type {
   AgentQuestionRequest,
   AnsweredAgentQuestion,
   DisplayBlock,
+  DisplayMessage,
 } from "@assistant/shared";
-import { AgentQuestionToolCard } from "./AgentQuestionToolCard.tsx";
+import {
+  AgentQuestionToolCard,
+  pendingQuestionEntryId,
+  pendingQuestionForBlock,
+} from "./AgentQuestionToolCard.tsx";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -62,7 +67,7 @@ describe("AgentQuestionToolCard", () => {
     const html = renderToStaticMarkup(
       <AgentQuestionToolCard
         block={block}
-        pendingQuestion={pending}
+        pendingQuestions={[pending]}
         onRespond={() => {}}
       />,
     );
@@ -76,28 +81,30 @@ describe("AgentQuestionToolCard", () => {
     const html = renderToStaticMarkup(
       <AgentQuestionToolCard
         block={block}
-        pendingQuestion={{
-          ...pending,
-          toolCallId: block.toolId,
-          title: "Task → `Initiative` membership",
-          intro: "**Objective:** ship it.\n\n1. Query\n2. Context",
-          questions: [
-            {
-              ...pending.questions[0]!,
-              title: "Keep `TaskItem` current",
-              prompt: "Should a change *notify*?",
-              helpText: "See `holdersOf`.",
-              choices: [
-                {
-                  id: "yes",
-                  label: "Yes, **notify**",
-                  description: "Correct.\n\n- live\n- scales",
-                },
-              ],
-            },
-            pending.questions[1]!,
-          ],
-        }}
+        pendingQuestions={[
+          {
+            ...pending,
+            toolCallId: block.toolId,
+            title: "Task → `Initiative` membership",
+            intro: "**Objective:** ship it.\n\n1. Query\n2. Context",
+            questions: [
+              {
+                ...pending.questions[0]!,
+                title: "Keep `TaskItem` current",
+                prompt: "Should a change *notify*?",
+                helpText: "See `holdersOf`.",
+                choices: [
+                  {
+                    id: "yes",
+                    label: "Yes, **notify**",
+                    description: "Correct.\n\n- live\n- scales",
+                  },
+                ],
+              },
+              pending.questions[1]!,
+            ],
+          },
+        ]}
         onRespond={() => {}}
       />,
     );
@@ -139,5 +146,83 @@ describe("AgentQuestionToolCard", () => {
     // A question the response left out says so rather than vanishing.
     expect(html).toContain("No answer");
     expect(html).not.toContain("Question 1 of 2");
+  });
+
+  it("gives each of several pending flows its own form", () => {
+    const alpha = {
+      ...pending,
+      requestId: "question-a",
+      toolCallId: "toolu_A",
+      title: "Alpha",
+    };
+    const beta = {
+      ...pending,
+      requestId: "question-b",
+      toolCallId: "toolu_B",
+      title: "Beta",
+    };
+    const html = renderToStaticMarkup(
+      <AgentQuestionToolCard
+        block={{
+          ...block,
+          toolId: "toolu_B",
+          args: { ...(block.args as object), title: "Beta" },
+        }}
+        pendingQuestions={[alpha, beta]}
+        onRespond={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Beta");
+    expect(html).not.toContain("Alpha");
+    expect(html).toContain("Question 1 of 2");
+  });
+
+  it("prefers a flow posted by this exact tool call over a payload match", () => {
+    // Same title and questions: only the relinked tool-call id tells them apart.
+    const byShape = {
+      ...pending,
+      requestId: "question-shape",
+      toolCallId: "3",
+    };
+    const exact = {
+      ...pending,
+      requestId: "question-exact",
+      toolCallId: block.toolId,
+    };
+
+    expect(pendingQuestionForBlock([byShape, exact], block)?.requestId).toBe(
+      "question-exact",
+    );
+    expect(pendingQuestionForBlock([byShape], block)?.requestId).toBe(
+      "question-shape",
+    );
+    expect(pendingQuestionForBlock([], block)).toBeUndefined();
+  });
+
+  it("finds the transcript row holding each pending flow's form", () => {
+    const alpha = {
+      ...pending,
+      requestId: "question-a",
+      toolCallId: "toolu_A",
+    };
+    const beta = { ...pending, requestId: "question-b", toolCallId: "toolu_B" };
+    const row = (id: string, toolId: string) =>
+      ({
+        id,
+        role: "assistant",
+        blocks: [{ ...block, toolId }],
+      }) as unknown as DisplayMessage;
+    const messages = [row("m1", "toolu_A"), row("m2", "toolu_B")];
+
+    expect(pendingQuestionEntryId(messages, [alpha, beta], alpha)).toBe("m1");
+    expect(pendingQuestionEntryId(messages, [alpha, beta], beta)).toBe("m2");
+    expect(
+      pendingQuestionEntryId(messages, [alpha, beta], {
+        ...pending,
+        requestId: "question-gone",
+        toolCallId: "toolu_gone",
+      }),
+    ).toBeUndefined();
   });
 });
