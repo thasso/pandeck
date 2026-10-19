@@ -590,7 +590,22 @@ export async function worktreeSettleBlockedReason(
   });
   for (const sessionId of live) {
     const row = rows.find((item) => item.id === sessionId);
-    const blocked = row ? settleBlockedReason(row) : undefined;
+    // Removal stops tracked work before deleting the checkout. An empty host
+    // in its quiet grace is safe to close there, unlike ordinary Settle which
+    // does not close hosts. Every real job and all other blockers still apply.
+    const blocked = row
+      ? settleBlockedReason({
+          ...row,
+          ...(row.backgroundActivity?.activeCount === 0
+            ? {
+                backgroundActivity: {
+                  ...row.backgroundActivity,
+                  retainedHost: false,
+                },
+              }
+            : {}),
+        })
+      : undefined;
     if (blocked) return blocked;
   }
   return undefined;

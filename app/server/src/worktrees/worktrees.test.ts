@@ -11,6 +11,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  readFileSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -1879,7 +1880,7 @@ test("containment guards propagate git execution failures", async () => {
     removedAt: null,
   };
 
-  await assert.rejects(() => hasUnmergedCommits(row), /git rev-parse .*failed/);
+  await assert.rejects(() => hasUnmergedCommits(row), /git show-ref .*failed/);
   await assert.rejects(
     () => branchContainedInBase(missingRepo, "feature", "main"),
     /git merge-base .*failed/,
@@ -1966,6 +1967,228 @@ test("removeWorktree refuses dirty and unmerged worktrees unless forced", async 
   await removeWorktree(forced.id, { force: true, deleteBranch: true });
   assert.equal(getWorktree(forced.id)?.status, "removed");
   assert.ok(!existsSync(forced.path));
+});
+
+test("removal recognises a pushed tip without treating an unpushed successor as safe", async () => {
+  const record = await createWorktree({
+    projectId: "wt-proj",
+    name: "pushed-cleanup",
+  });
+  writeFileSync(join(record.path, "pushed.txt"), "pushed\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "pushed work");
+  const remote = join(tmp, "pushed-proof.git");
+  sh(tmp, "init", "--bare", remote);
+  sh(repoPath, "remote", "add", "proof", remote);
+  sh(record.path, "push", "proof", `${record.branch}:refs/heads/delivered`);
+  assert.equal(await hasUnmergedCommits(getWorktree(record.id)!), false);
+  writeFileSync(join(record.path, "private.txt"), "private\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "unpushed work");
+  await assert.rejects(
+    () => removeWorktree(record.id, { deleteBranch: true }),
+    /not merged/,
+  );
+  sh(record.path, "reset", "--hard", "HEAD~1");
+  await removeWorktree(record.id, { deleteBranch: true });
+  sh(repoPath, "remote", "remove", "proof");
+});
+
+test("removal refuses a remotely deleted or unreachable backup despite a stale tracking ref", async () => {
+  const record = await createWorktree({
+    projectId: "wt-proj",
+    name: "stale-remote-proof",
+  });
+  const remote = join(tmp, "stale-proof.git");
+  sh(tmp, "init", "--bare", remote);
+  sh(repoPath, "remote", "add", "proof", remote);
+  writeFileSync(join(record.path, "unique-backup.txt"), "unique\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "only copy after remote deletion");
+  const head = sh(record.path, "rev-parse", "HEAD").trim();
+  sh(record.path, "push", "proof", `${record.branch}:refs/heads/delivered`);
+  // Delete on the provider side, leaving this repository's tracking ref stale.
+  sh(remote, "update-ref", "-d", "refs/heads/delivered");
+  assert.equal(
+    sh(repoPath, "rev-parse", "refs/remotes/proof/delivered").trim(),
+    head,
+  );
+  try {
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+    assert.ok(existsSync(record.path));
+    assert.equal(sh(repoPath, "rev-parse", record.branch).trim(), head);
+    sh(
+      repoPath,
+      "remote",
+      "set-url",
+      "proof",
+      join(tmp, "unavailable-remote.git"),
+    );
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+    // A self-remote must not certify the very branch we are deleting either.
+    sh(repoPath, "remote", "set-url", "proof", repoPath);
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+  } finally {
+    sh(repoPath, "remote", "remove", "proof");
+    if (getWorktree(record.id)?.status === "active")
+      await removeWorktree(record.id, { deleteBranch: true, force: true });
+  }
+});
+
+function mergedCleanupCard(
+  record: { id: string; path: string; branch: string },
+  head: string,
+) {
+  return createPullRequestCard(
+    {
+      sessionId: "cleanup-card-owner",
+      status: "merged",
+      headBranch: record.branch,
+      baseBranch: "main",
+      title: "Delivered work",
+      worktreeId: record.id,
+    },
+    {
+      repoRoot: record.path,
+      sessionKind: "developer",
+      sessionId: "cleanup-card-owner",
+      headBranch: record.branch,
+      baseBranch: "main",
+      draft: false,
+      observedHeadSha: head,
+    },
+  );
+}
+
+test("merged card proves the delivered head after later same-file base changes, not later local commits", async () => {
+  const record = await createWorktree({
+    projectId: "wt-proj",
+    name: "merged-cleanup",
+  });
+  writeFileSync(join(record.path, "squashed.txt"), "delivered\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "delivered work");
+  const head = sh(record.path, "rev-parse", "HEAD").trim();
+  mergedCleanupCard(record, head);
+  sh(repoPath, "merge", "--squash", record.branch);
+  sh(repoPath, "commit", "-m", "squash delivered work");
+  writeFileSync(join(repoPath, "squashed.txt"), "newer work\n");
+  sh(repoPath, "add", "-A");
+  sh(repoPath, "commit", "-m", "move base onward");
+  assert.equal(
+    await branchContainedInBase(repoPath, record.branch, "main"),
+    false,
+  );
+  assert.equal(await hasUnmergedCommits(getWorktree(record.id)!), false);
+  writeFileSync(join(record.path, "after-merge.txt"), "not delivered\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "new private work");
+  await assert.rejects(
+    () => removeWorktree(record.id, { deleteBranch: true }),
+    /not merged/,
+  );
+  sh(record.path, "reset", "--hard", head);
+  await removeWorktree(record.id, { deleteBranch: true });
+});
+
+test("review cleanup follows the implementation's merged card after its base branch disappears", async () => {
+  const implementation = await createWorktree({
+    projectId: "wt-proj",
+    name: "reviewed-impl",
+  });
+  writeFileSync(join(implementation.path, "reviewed.txt"), "work\n");
+  sh(implementation.path, "add", "-A");
+  sh(implementation.path, "commit", "-m", "implementation");
+  const review = await createWorktree({
+    projectId: "wt-proj",
+    name: "review-delivered",
+    baseBranch: implementation.branch,
+  });
+  mergedCleanupCard(
+    implementation,
+    sh(implementation.path, "rev-parse", "HEAD").trim(),
+  );
+  await removeWorktree(implementation.id, { deleteBranch: true });
+  assert.equal(await hasUnmergedCommits(getWorktree(review.id)!), false);
+  const { retireWorktree } = await import("../worktreeRemoval.ts");
+  const retired = await retireWorktree(review.id, { deleteBranch: true });
+  assert.equal(retired.status, "retired");
+  assert.equal(retired.deliveryVerified, true);
+});
+
+test("removal refreshes a stale base from its remote without moving the local branch or FETCH_HEAD", async () => {
+  const remote = join(tmp, "removal-remote");
+  sh(tmp, "clone", repoPath, remote);
+  sh(repoPath, "remote", "add", "origin", remote);
+  const before = sh(repoPath, "rev-parse", "main").trim();
+  const fetchHead = join(repoPath, ".git", "FETCH_HEAD");
+  writeFileSync(fetchHead, "sentinel\n");
+  const record = await createWorktree({
+    projectId: "wt-proj",
+    name: "remote-base-proof",
+  });
+  try {
+    writeFileSync(join(record.path, "remote-delivered.txt"), "work\n");
+    sh(record.path, "add", "-A");
+    sh(record.path, "commit", "-m", "work for remote base");
+    sh(remote, "fetch", repoPath, record.branch);
+    sh(remote, "cherry-pick", "FETCH_HEAD");
+    sh(remote, "commit", "--amend", "-m", "squash delivered work");
+    assert.equal(await hasUnmergedCommits(getWorktree(record.id)!), true);
+    await removeWorktree(record.id, { deleteBranch: true });
+    assert.equal(sh(repoPath, "rev-parse", "main").trim(), before);
+    assert.equal(readFileSync(fetchHead, "utf8"), "sentinel\n");
+  } finally {
+    sh(repoPath, "remote", "remove", "origin");
+  }
+});
+
+test("removal does not accept a sibling local ref, symbolic remote alias, open PR or stale creation head", async () => {
+  const record = await createWorktree({
+    projectId: "wt-proj",
+    name: "private-proof",
+  });
+  writeFileSync(join(record.path, "private-proof.txt"), "private\n");
+  sh(record.path, "add", "-A");
+  sh(record.path, "commit", "-m", "private work");
+  const head = sh(record.path, "rev-parse", "HEAD").trim();
+  const card = mergedCleanupCard(record, head);
+  patchPullRequestCard(card.id, { status: "open" });
+  sh(repoPath, "branch", "private-sibling", head);
+  sh(
+    repoPath,
+    "symbolic-ref",
+    "refs/remotes/alias/private",
+    `refs/heads/${record.branch}`,
+  );
+  try {
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+    patchPullRequestCard(
+      card.id,
+      { status: "merged" },
+      { observedHeadSha: undefined, acceptedHeadSha: head },
+    );
+    await assert.rejects(
+      () => removeWorktree(record.id, { deleteBranch: true }),
+      /not merged/,
+    );
+  } finally {
+    sh(repoPath, "symbolic-ref", "--delete", "refs/remotes/alias/private");
+    sh(repoPath, "branch", "-D", "private-sibling");
+    await removeWorktree(record.id, { deleteBranch: true, force: true });
+  }
 });
 
 test("removeWorktree keeps an undelivered branch without force when asked to keep it", async () => {

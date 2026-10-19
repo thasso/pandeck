@@ -56,13 +56,17 @@ import {
   type WorktreeRow,
 } from "../db/worktreeStore.ts";
 import { worktreeBroadcaster } from "./worktreeEvents.ts";
-import { fetchRepoIfDue } from "./worktreeFetch.ts";
+import {
+  fetchRepoIfDue,
+  refreshRemovalBase,
+  remoteDeliveryHeads,
+} from "./worktreeFetch.ts";
 import {
   broadcastComments,
   purgeMainCommentsForBranchSubject,
 } from "./worktreeComments.ts";
 import { registerWorktree, unregisterWorktree } from "./worktreeWatcher.ts";
-import { branchContainedInBase } from "./worktreeStatus.ts";
+import { worktreeBranchDelivered } from "./worktreeDelivery.ts";
 import {
   isMainWorktreeId,
   noMainRepoMessage,
@@ -1128,9 +1132,8 @@ async function removeUnregisteredCheckout(
 }
 
 /**
- * Remove a worktree. Refused (unless `force`) while the working tree is dirty
- * or the branch has commits not contained in the base branch — both would lose
- * work. Optionally deletes the branch afterwards.
+ * Remove a worktree, refusing dirty files unless forced. Optional branch
+ * deletion also requires proof that the exact tip is delivered or preserved.
  */
 export async function removeWorktree(
   id: string,
@@ -1168,25 +1171,36 @@ export async function removeWorktree(
       );
     }
   }
-  // Containment guards the BRANCH DELETION, not the checkout: commits live on
-  // the branch ref, so removing the folder while keeping the branch loses none
-  // of them and has nothing to consent to. Refusing it anyway made an
-  // undelivered worktree unremovable without discarding the very work the user
-  // asked to keep.
-  if (!retryBranchOnly && !opts.force && opts.deleteBranch) {
-    const unmerged = await hasUnmergedCommits(row, opts.branchContainmentBase);
-    if (unmerged) {
-      throw new WorktreeRemovalBlockedError(
-        `Branch ${row.branch} has commits not merged into ${row.baseBranch}. Merge first, keep the branch, or force-remove to lose them.`,
-      );
-    }
-  }
-
-  // Deletability is checked for EVERY removal, forced or not: `force` consents
-  // to losing work, and no consent makes another user's files deletable. A
-  // reclaim is attempted first, so the common case never reaches the user.
+  // Deletability is checked for EVERY removal, forced or not, before fetching
+  // or mutating Git: force cannot make another user's files deletable.
   if (!retryBranchOnly && existsSync(row.path))
     await assertCheckoutDeletable(row);
+
+  // Fetch only if the available receipts do not already prove safety. Never
+  // move a local base, and never hold the repository lock across the network.
+  let containmentBase = opts.branchContainmentBase;
+  let remoteHeads: string[] = [];
+  if (!opts.force && opts.deleteBranch) {
+    const branch = await probeLocalBranch(row);
+    if (
+      branch.kind === "present" &&
+      !(await worktreeBranchDelivered(row, branch.oid, containmentBase))
+    ) {
+      remoteHeads = await remoteDeliveryHeads(row);
+      if (
+        !(await worktreeBranchDelivered(
+          row,
+          branch.oid,
+          containmentBase,
+          remoteHeads,
+        ))
+      ) {
+        containmentBase ??= await refreshRemovalBase(row).catch(
+          () => undefined,
+        );
+      }
+    }
+  }
 
   /**
    * Whatever still runs in the checkout goes before Git deletes it, or a dev
@@ -1228,6 +1242,22 @@ export async function removeWorktree(
         const branch = await probeLocalBranch(row);
         branchCleanupOid = branch.kind === "present" ? branch.oid : null;
         branchAlreadyAbsent = branch.kind === "absent";
+        // Re-prove the exact ref under the lock BEFORE checkout removal, not
+        // just at branch cleanup. A queued commit may have changed the tip.
+        if (
+          !opts.force &&
+          branch.kind === "present" &&
+          !(await worktreeBranchDelivered(
+            row,
+            branch.oid,
+            containmentBase,
+            remoteHeads,
+          ))
+        ) {
+          throw new WorktreeRemovalBlockedError(
+            `Branch ${row.branch} has commits not merged into ${row.baseBranch} or preserved by a remote ref or merged pull request. Merge first, keep the branch, or force-remove to lose them.`,
+          );
+        }
       }
       if (!retryBranchOnly) {
         // Historical malformed reply chains must be caught before Git removes
@@ -1291,7 +1321,8 @@ export async function removeWorktree(
             row,
             branchCleanupOid,
             opts.force,
-            opts.branchContainmentBase,
+            containmentBase,
+            remoteHeads,
           );
         } catch (err) {
           // Both facts have to survive. The branch error owns the throw — it
@@ -1362,6 +1393,7 @@ async function deletePendingWorktreeBranch(
   expectedOid: string,
   force = false,
   containmentBase = row.baseBranch,
+  remoteHeads: readonly string[] = [],
 ): Promise<void> {
   let branch: LocalBranchProbe;
   try {
@@ -1422,10 +1454,11 @@ async function deletePendingWorktreeBranch(
   if (!force) {
     let contained: boolean;
     try {
-      contained = await branchContainedInBase(
-        row.mainRepoRoot,
+      contained = await worktreeBranchDelivered(
+        row,
         expectedOid,
         containmentBase,
+        remoteHeads,
       );
     } catch (cause) {
       throw new WorktreeBranchCleanupError(
@@ -1485,27 +1518,22 @@ function clearPendingBranchClaim(row: WorktreeRow, expectedOid: string): void {
 }
 
 /**
- * Whether the worktree branch has WORK the base branch does not contain.
- * Ancestry covers real merges; for squash merges (any number of commits) the
- * branch is contained when merging it would change nothing: the
- * `git merge-tree --write-tree` result equals the base tree.
+ * Whether deleting the branch would lose work not proven delivered into the
+ * base, preserved on a remote ref, or covered by a merged PR's observed head.
  */
 export async function hasUnmergedCommits(
   row: WorktreeRow,
   containmentBase = row.baseBranch,
 ): Promise<boolean> {
-  const branchExists =
-    (
-      await gitOptionalExit(
-        ["rev-parse", "--verify", `refs/heads/${row.branch}`],
-        row.mainRepoRoot,
-      )
-    ).code === 0;
-  if (!branchExists) return false;
-  return !(await branchContainedInBase(
-    row.mainRepoRoot,
-    row.branch,
+  const branch = await probeLocalBranch(row);
+  if (branch.kind === "absent") return false;
+  if (await worktreeBranchDelivered(row, branch.oid, containmentBase))
+    return false;
+  return !(await worktreeBranchDelivered(
+    row,
+    branch.oid,
     containmentBase,
+    await remoteDeliveryHeads(row),
   ));
 }
 
