@@ -36,6 +36,21 @@ function callbackBody(name: string): string {
   return APP_SOURCE.slice(start, end === -1 ? undefined : end);
 }
 
+describe("App session peer cap control", () => {
+  test("availability uses the persisted session row, not a transcript-window prompt", () => {
+    // A long turn can open mid-turn with no user message in the visible window.
+    // The inspector must still offer the cap control; only uncreated drafts lack it.
+    const inspector = APP_SOURCE.slice(APP_SOURCE.indexOf("<SessionInspector"));
+    const gate = inspector.match(/onSetPeerTurnCap=\{([\s\S]*?)\}/)?.[1];
+    expect(gate).toMatch(
+      /displaySessionListItem\s*\?\s*actions\.setSessionPeerTurnCap\s*:\s*undefined/,
+    );
+    expect(gate).not.toMatch(
+      /runtimeHasStarted|displayHasUserPrompt|displayMessages/,
+    );
+  });
+});
+
 describe("App new-session drafts", () => {
   const starters = [...APP_SOURCE.matchAll(/const (start\w+) = useCallback\(/g)]
     .map((match) => match[1]!)

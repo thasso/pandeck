@@ -95,6 +95,7 @@ interface FirstSendEngine {
 
 /** What a first send starts as: the definition's role, on one runtime. */
 interface FirstSendAgent {
+  peerTurnCap?: number;
   agent: SessionAgent;
   provider: string;
   modelId: string;
@@ -149,7 +150,9 @@ async function agentAtCreation(
   req: FirstSendRequest,
   profileId: string,
   prepared: FirstSendAgent | undefined,
-): Promise<{ refusal: FirstSendRefusal } | { agent?: SessionAgent }> {
+): Promise<
+  { refusal: FirstSendRefusal } | { agent?: SessionAgent; peerTurnCap?: number }
+> {
   if (!prepared) return {};
   // The same checks as `prepare`: a persona or engine that no longer matches
   // the send refuses here, so only the runtime is left to compare below.
@@ -168,7 +171,10 @@ async function agentAtCreation(
       },
     };
   }
-  return { agent: now.agent };
+  return {
+    agent: now.agent,
+    ...(now.peerTurnCap !== undefined ? { peerTurnCap: now.peerTurnCap } : {}),
+  };
 }
 
 async function resolveFirstSendAgent(
@@ -182,7 +188,7 @@ async function resolveFirstSendAgent(
     agent = picked
       ? {
           ...picked,
-          agent: await resolveAgentOnRuntime(req.agent, picked, profileId),
+          ...(await resolveAgentOnRuntime(req.agent, picked, profileId)),
         }
       : await resolveAgentSpawn(req.agent, undefined, {
           profileId,
@@ -310,6 +316,9 @@ const engines: Record<Harness, FirstSendEngine> = {
           model,
           thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
           ...(frozen.agent ? { agent: frozen.agent } : {}),
+          ...(frozen.peerTurnCap !== undefined
+            ? { peerTurnCap: frozen.peerTurnCap }
+            : {}),
           mode: req.mode,
           ...(worktree ? { worktree } : {}),
           credentialProfileId: profileId,
@@ -356,6 +365,9 @@ const engines: Record<Harness, FirstSendEngine> = {
             modelId: agent?.modelId ?? req.modelId,
             thinkingLevel: agent?.thinkingLevel ?? req.thinkingLevel,
             ...(frozen.agent ? { agent: frozen.agent } : {}),
+            ...(frozen.peerTurnCap !== undefined
+              ? { peerTurnCap: frozen.peerTurnCap }
+              : {}),
             mode: req.mode,
             ...(worktree ? { worktree } : {}),
             credentialProfileId: profileId,

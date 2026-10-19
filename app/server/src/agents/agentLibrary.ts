@@ -12,6 +12,7 @@
  */
 import {
   isCodingAgentType,
+  isSessionPeerTurnCap,
   isSafeEntryName,
   isThinkingLevel,
   THINKING_LEVELS,
@@ -66,6 +67,7 @@ const KNOWN_KEYS = new Set([
   "persona",
   "model",
   "effort",
+  "peer-turns",
   "tools",
   "skills",
 ]);
@@ -84,6 +86,7 @@ export interface AgentManifest {
    */
   models: string[];
   effort?: ThinkingLevel;
+  peerTurns?: number;
   /** Tools the spawned session must not have; empty when none. */
   denyTools: string[];
   /** Library skills to mount on top of the enabled set; developer only. */
@@ -114,6 +117,9 @@ export function parseAgentManifest(content: string, path: string) {
       const effort = fields.effort;
       if (effort !== undefined && !isThinkingLevel(effort))
         bad(`Frontmatter effort must be one of ${THINKING_LEVELS.join(", ")}.`);
+      const peerTurns = fields["peer-turns"];
+      if (peerTurns !== undefined && !isSessionPeerTurnCap(peerTurns))
+        bad("Frontmatter peer-turns must be an integer from 1 to 16.");
       const denyTools = parseDenyList(fields.tools, issues);
       const skills = parseNameList(fields.skills, "skills", issues);
       // Skills mount only where a session has a workspace to mount them in.
@@ -125,6 +131,7 @@ export function parseAgentManifest(content: string, path: string) {
         persona: persona as AgentPersona,
         models,
         ...(isThinkingLevel(effort) ? { effort } : {}),
+        ...(isSessionPeerTurnCap(peerTurns) ? { peerTurns } : {}),
         denyTools,
         skills,
       };
@@ -266,6 +273,7 @@ export interface AgentDefinitionInput {
   /** Never empty; the first is the default. */
   models: string[];
   effort?: ThinkingLevel;
+  peerTurns?: number;
   denyTools?: string[];
   skills?: string[];
   body: string;
@@ -290,6 +298,8 @@ export function formatAgentManifest(input: AgentDefinitionInput): string {
     }`,
   ];
   if (input.effort !== undefined) lines.push(`effort: ${input.effort}`);
+  if (input.peerTurns !== undefined)
+    lines.push(`peer-turns: ${input.peerTurns}`);
   if (input.denyTools?.length)
     lines.push("tools:", `  deny: ${yamlList(input.denyTools)}`);
   if (input.skills?.length) lines.push(`skills: ${yamlList(input.skills)}`);

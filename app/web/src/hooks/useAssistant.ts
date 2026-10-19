@@ -6884,6 +6884,7 @@ export interface AssistantActions {
    * (carrying this requestId) triggers the recovery refetch.
    */
   setSpawnOwnership: (id: string, ownership: SettableSpawnOwnership) => void;
+  setSessionPeerTurnCap: (sessionId: string, cap: number | null) => void;
   /**
    * Stop one background item, or everything one session owns, under HUMAN
    * authorization. The server calls the supervisor's Stop service directly; the
@@ -9201,6 +9202,9 @@ export function useAssistant({
           ownerSessionId,
           requestId: createClientId(),
         });
+      },
+      setSessionPeerTurnCap: (sessionId, cap) => {
+        send({ type: "setSessionPeerTurnCap", sessionId, cap });
       },
       setSpawnOwnership: (id, ownership) => {
         const requestId = trackMutation(

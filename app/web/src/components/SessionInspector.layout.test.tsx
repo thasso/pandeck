@@ -64,6 +64,41 @@ afterEach(() => {
 });
 
 describe("SessionInspector layout", () => {
+  it("shows the cap and lets the user set or reset it", async () => {
+    const asked: Array<[string, number | null]> = [];
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { host, root };
+    const props = {
+      ...base,
+      sessions: [
+        { id: "s1", title: "Session", peerTurnCap: 6 } as SessionListItem,
+      ],
+      onSetPeerTurnCap: (id: string, cap: number | null) => {
+        asked.push([id, cap]);
+      },
+    };
+    await act(async () => root.render(<SessionInspector {...props} />));
+    const trigger = () =>
+      host.querySelector<HTMLButtonElement>(
+        '[aria-label="Peer turns at once"]',
+      )!;
+    expect(trigger().textContent).toContain("6");
+    await act(async () => trigger().click());
+    const option = (label: string) =>
+      [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+        (item) => item.textContent === label,
+      )!;
+    await act(async () => option("8").click());
+    expect(asked).toEqual([["s1", 8]]);
+    await act(async () => trigger().click());
+    await act(async () => option("Default (4)").click());
+    expect(asked).toEqual([
+      ["s1", 8],
+      ["s1", null],
+    ]);
+  });
   it("lists no actions: the session header's menu holds them", () => {
     const html = render({ ...base, relatedTasks: [task(1)] });
     expect(html).toContain("Tasks");

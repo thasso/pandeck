@@ -1058,6 +1058,16 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
           after={effort(body.effort.after)}
         />
       </Row>
+      {body.peerTurns ? (
+        <Row label="Peer turns at once">
+          <Change
+            {...(body.action === "edit"
+              ? { before: String(body.peerTurns.before ?? "Default (4)") }
+              : {})}
+            after={String(body.peerTurns.after ?? "Default (4)")}
+          />
+        </Row>
+      ) : null}
       <Row label="Purpose">
         <Markdown text={body.description} inline />
       </Row>

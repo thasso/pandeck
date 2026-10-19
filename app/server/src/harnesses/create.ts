@@ -6,6 +6,7 @@
  * whatever they do with the session once it exists.
  */
 import { randomUUID } from "node:crypto";
+import { isSessionPeerTurnCap } from "@assistant/shared";
 import type {
   AgentType,
   Harness,
@@ -115,6 +116,8 @@ type SessionPlace =
 /** What every new session starts with, whichever engine runs it. */
 type SessionStart = SessionPlace & {
   agentType: AgentType;
+  /** Creation-only default; forks deliberately do not inherit this. */
+  peerTurnCap?: number | undefined;
   thinkingLevel?: ThinkingLevel | undefined;
   mode?: SessionMode | undefined;
   credentialProfileId: string;
@@ -167,6 +170,8 @@ export type NewSession =
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
   assertEnterpriseProfile(spec);
+  if (spec.peerTurnCap !== undefined && !isSessionPeerTurnCap(spec.peerTurnCap))
+    throw new Error("Peer turn cap must be an integer from 1 to 16.");
   // Resolved here for both engines alike: Claude's store would read a
   // pathless worktree from its edge, but pi's `acquireNew` never looks.
   const cwd = spec.worktree
@@ -206,6 +211,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     // session exists; an existing freeze or a non-coding persona awaits
     // nothing either.
     const skillsFrozen = sessionSkills(id, spec.agentType, skills);
+    const alreadyExists = claudeSdkStore.exists(id);
     const session = claudeSdkStore.acquire(id, {
       agentType: spec.agentType,
       credentialProfileId: spec.credentialProfileId,
@@ -223,6 +229,9 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     sessionStore.upsert({
       id,
       harness: "claude-sdk",
+      ...(spec.peerTurnCap !== undefined && !alreadyExists
+        ? { peerTurnCap: spec.peerTurnCap }
+        : {}),
       agentType: spec.agentType,
       credentialProfileId: spec.credentialProfileId,
       ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),
@@ -255,6 +264,9 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
   sessionStore.upsert({
     id: live.sessionId,
     harness: "pi",
+    ...(spec.peerTurnCap !== undefined
+      ? { peerTurnCap: spec.peerTurnCap }
+      : {}),
     agentType: spec.agentType,
     credentialProfileId: spec.credentialProfileId,
     ...(spec.requiresEnterprise ? { requiresEnterprise: true } : {}),

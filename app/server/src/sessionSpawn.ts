@@ -23,6 +23,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   accountProviderForModelProvider,
+  isSessionPeerTurnCap,
   type ApprovalBody,
   type ApprovalCard,
   type ApprovalResolutionEdits,
@@ -51,6 +52,7 @@ import { getProject } from "./projectRegistry.ts";
 import { piModelForAccount } from "./harnesses/models.ts";
 import {
   admitDirectPeerTurns,
+  directPeerTurnCapOf,
   directPeerCostClass,
   modelsForProfile,
   recordDirectPeerChild,
@@ -888,6 +890,7 @@ async function spawnOne(
   // all. The only await left before `deps.create*` is a pi model lookup, and an
   // agent's definition is read again after it (below).
   let agent: SessionAgent | undefined;
+  let peerTurnCap = options.peerTurnCap;
   if (options.currentRuntime) {
     const runtime = await options.currentRuntime();
     // The row was validated for the persona the definition had then; one
@@ -897,6 +900,7 @@ async function spawnOne(
         `Agent definition "${runtime.agent.name}" changed persona to ${runtime.agent.persona} while "${item.title}" was being started; nothing was created.`,
       );
     agent = runtime.agent;
+    peerTurnCap ??= runtime.peerTurnCap;
     item.provider = runtime.provider;
     item.modelId = runtime.modelId;
     item.credentialProfileId = runtime.credentialProfileId;
@@ -918,6 +922,7 @@ async function spawnOne(
 
   const start = {
     agentType: item.agentType,
+    ...(peerTurnCap !== undefined ? { peerTurnCap } : {}),
     thinkingLevel: item.thinkingLevel,
     credentialProfileId: item.credentialProfileId,
     ...(options.requiresEnterprise ? { requiresEnterprise: true } : {}),
@@ -951,7 +956,7 @@ async function spawnOne(
   }
   // A card-approved row: the role read last, on the runtime the user approved.
   if (!options.currentRuntime && item.agent !== undefined)
-    spec = { ...spec, agent: await approvedAgentOf(item) };
+    spec = { ...spec, ...(await approvedAgentOf(item)) };
   // Pi model lookup is asynchronous, so make the enterprise check the final
   // account read before createSession claims the child row.
   if (
@@ -1028,10 +1033,11 @@ async function spawnOne(
  */
 async function approvedAgentOf(
   item: SessionSpawnApprovalItem,
-): Promise<SessionAgent> {
+): Promise<{ agent: SessionAgent; peerTurnCap?: number }> {
   let role: AgentRole;
+  let peerTurnCap: number | undefined;
   try {
-    ({ role } = await resolveAgentRole(item.agent!));
+    ({ role, peerTurnCap } = await resolveAgentRole(item.agent!));
   } catch (err) {
     if (err instanceof AgentSpawnRefusedError)
       throw new Error(`"${item.title}": ${err.message}`);
@@ -1042,11 +1048,14 @@ async function approvedAgentOf(
       `Agent definition "${role.name}" now runs as the ${role.persona} persona, not the ${item.agentType} this card was proposed for; nothing was created for "${item.title}".`,
     );
   return {
-    ...role,
-    provider: item.provider,
-    model: item.modelId,
-    effort: item.thinkingLevel,
-    runtimeSource: "approval",
+    ...(peerTurnCap !== undefined ? { peerTurnCap } : {}),
+    agent: {
+      ...role,
+      provider: item.provider,
+      model: item.modelId,
+      effort: item.thinkingLevel,
+      runtimeSource: "approval",
+    },
   };
 }
 
@@ -1080,6 +1089,7 @@ async function assertAgentUnchanged(
  * settings does.
  */
 interface SpawnOneOptions {
+  peerTurnCap?: number;
   requiresEnterprise?: boolean;
   /** Synchronous, after the last await and immediately before creation. */
   assertAdmittedCost?: (item: SessionSpawnApprovalItem) => void;
@@ -1092,6 +1102,7 @@ interface SpawnOneOptions {
     thinkingLevel: ThinkingLevel;
     /** The agent definition the session is spawned as, frozen at creation. */
     agent?: SessionAgent | undefined;
+    peerTurnCap?: number;
   }>;
 }
 
@@ -1180,6 +1191,7 @@ export type DirectSpawnRequestRow = DirectSpawnRowFields &
   );
 
 interface DirectSpawnRowFields {
+  peerTurnCap?: number;
   title: string;
   prompt: string;
   owner?: "coordinator" | "user";
@@ -1236,6 +1248,16 @@ export async function spawnApprovedPeers(input: {
 }): Promise<DirectSpawnRowResult[]> {
   // Capture before structural validation, roster discovery, and other awaits.
   const sourceRequires = sourceRequiresEnterprise([input.senderSessionId]);
+  const parentCap = directPeerTurnCapOf(input.senderSessionId);
+  for (const row of input.rows) {
+    if (
+      row.peerTurnCap !== undefined &&
+      (!isSessionPeerTurnCap(row.peerTurnCap) || row.peerTurnCap > parentCap)
+    )
+      throw new SpawnProposalError(
+        `peerTurnCap must be an integer from 1 to 16, no higher than your cap (${parentCap}). The user can raise it in the session inspector.`,
+      );
+  }
   const rowRequires = (row: DirectSpawnRequestRow) =>
     sourceRequires || row.requiresEnterprise === true;
   assertBatchSize(input.rows);
@@ -1358,6 +1380,9 @@ export async function spawnApprovedPeers(input: {
       try {
         await spawnOne(input.senderSessionId, item, {
           requiresEnterprise,
+          ...(row.peerTurnCap !== undefined
+            ? { peerTurnCap: row.peerTurnCap }
+            : {}),
           assertAdmittedCost: (current) => {
             if (
               admittedCost === "low" &&

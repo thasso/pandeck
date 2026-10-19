@@ -2288,38 +2288,45 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   degrades: an unknown id, a disabled row, a withdrawn model or a thinking level
   the model dropped each throw `PeerRuntimeRefusedError`, because every
   plausible recovery — nearest model, automatic account, "propose it instead" —
-  silently widens what an agent may spend on. `admitDirectPeerTurns` is a fixed
-  policy (`MAX_CONCURRENT_DIRECT_PEER_TURNS`, not a setting) and counts a
-  coordinator's own counted direct child while its runtime is RUNNING **or**
-  while a prompt that coordinator sent it is still queued or dispatching
-  (`peerPromptStore.unfinishedTurnCount`). Low-cost children never count and
-  have no separate bound. `directPeerCostClass` uses the profile's label, or,
-  for an agent runtime, requires at least one enabled provider/model/thinking
-  match with every match low, ignoring accounts. Unknown or conflicting cost
-  counts. The child keeps its admitted class; a synchronous re-check immediately
-  before creation refuses a low-to-counted change. Both halves of the counted
-  child's state check are load-bearing: delivery only ENQUEUES the opening
-  prompt and drains it in the background, so runtime state alone is blind for
-  the whole create-to-first-turn window and the next call would be handed a full
-  fresh quota, while the queue alone would miss a turn already under way. The
-  queue is a durable self-clearing signal rather than a timer — every delivery
-  ends terminal or post-turn, and a retry re-enters as `queued` — so no slot
-  leaks for a start that never happens, and an answered or forgotten child still
-  frees its slot. On top of that, admission CLAIMS the slots it grants and
-  returns them as a handle the caller releases, with the count-then-claim pair
-  in one per-coordinator critical section: the check awaits runtime state, and a
-  second batch arriving during that await would otherwise be told the same slots
-  are free. The claim covers the window before the children exist at all; the
-  queue covers the window after they do. The return route (`withReportingRoute`)
-  is server-owned in the same spirit: a caller's text can never suppress it — a
-  previously generated block is stripped and exactly one block naming the
-  CURRENT coordinator is appended, so quoting the marker sentence or pasting
-  another coordinator's suffix changes nothing. Nothing here imports the
-  subagent domain; `architecture.test.ts` holds that line. `peerSpawnRuntimes`
-  is also the one ARRAY-valued settings section, and a patch REPLACES the whole
-  roster, so `validateClientMessage.ts` checks it explicitly (array,
-  plain-object rows, `id`/`modelId` present, kind-checked leaves, `relativeCost`
-  in its four-value vocabulary, and `description` within
+  silently widens what an agent may spend on. `admitDirectPeerTurns` reads
+  `directPeerTurnCapOf` inside the admission critical section. The persisted
+  `session_index.peer_turn_cap` is nullable, default 4, bounded to integers 1-16
+  by the shared validator and the store. `setSessionPeerTurnCap` is the
+  synchronous validate-and-persist domain writer for existing sessions, with
+  fire-and-forget session-list notification. It has no actor parameter and is
+  not an agent tool; the inspector command calls it, and approval executors can
+  compare and set without yielding. A creation-only `createSession` option
+  carries spawn-row or definition defaults. Forks do not inherit the cap.
+  Admission counts a coordinator's own counted direct child while its runtime is
+  RUNNING **or** while a prompt that coordinator sent it is still queued or
+  dispatching (`peerPromptStore.unfinishedTurnCount`). Low-cost children never
+  count and have no separate bound. `directPeerCostClass` uses the profile's
+  label, or, for an agent runtime, requires at least one enabled
+  provider/model/thinking match with every match low, ignoring accounts. Unknown
+  or conflicting cost counts. The child keeps its admitted class; a synchronous
+  re-check immediately before creation refuses a low-to-counted change. Both
+  halves of the counted child's state check are load-bearing: delivery only
+  ENQUEUES the opening prompt and drains it in the background, so runtime state
+  alone is blind for the whole create-to-first-turn window and the next call
+  would be handed a full fresh quota, while the queue alone would miss a turn
+  already under way. The queue is a durable self-clearing signal rather than a
+  timer — every delivery ends terminal or post-turn, and a retry re-enters as
+  `queued` — so no slot leaks for a start that never happens, and an answered or
+  forgotten child still frees its slot. On top of that, admission CLAIMS the
+  slots it grants and returns them as a handle the caller releases, with the
+  count-then-claim pair in one per-coordinator critical section: the check
+  awaits runtime state, and a second batch arriving during that await would
+  otherwise be told the same slots are free. The claim covers the window before
+  the children exist at all; the queue covers the window after they do. The
+  return route (`withReportingRoute`) is server-owned in the same spirit: a
+  caller's text can never suppress it — a previously generated block is stripped
+  and exactly one block naming the CURRENT coordinator is appended, so quoting
+  the marker sentence or pasting another coordinator's suffix changes nothing.
+  Nothing here imports the subagent domain; `architecture.test.ts` holds that
+  line. `peerSpawnRuntimes` is also the one ARRAY-valued settings section, and a
+  patch REPLACES the whole roster, so `validateClientMessage.ts` checks it
+  explicitly (array, plain-object rows, `id`/`modelId` present, kind-checked
+  leaves, `relativeCost` in its four-value vocabulary, and `description` within
   `MAX_PEER_RUNTIME_DESCRIPTION_CHARS`). `thinkingLevel` is kind-checked only,
   because a patch replaces the WHOLE roster and a vocabulary check there cannot
   tell a client inventing a level from one preserving what a legacy row already

@@ -19,6 +19,7 @@
 import {
   type AgentType,
   DEFAULT_SESSION_SCOPE,
+  isSessionPeerTurnCap,
   sessionModeOrDefault,
   sessionScopeOrFailClosed,
   type Harness,
@@ -97,6 +98,7 @@ export interface SessionMeta {
   credentialProfileId?: string;
   /** Only enterprise accounts may run this session. Immutable after insertion. */
   requiresEnterprise?: boolean;
+  peerTurnCap?: number;
   /** Per-turn Build/Plan tool policy. */
   mode?: SessionMode;
   archivedAt?: number;
@@ -161,6 +163,7 @@ interface SessionUpsert {
   thinkingLevel?: string;
   credentialProfileId?: string;
   requiresEnterprise?: boolean;
+  peerTurnCap?: number;
   mode?: SessionMode;
   forkOrigin?: SessionForkOrigin;
   forkAutoRenamePending?: boolean;
@@ -201,6 +204,7 @@ interface DbSessionRow {
   thinking_level: string | null;
   credential_profile_id: string | null;
   requires_enterprise: number;
+  peer_turn_cap: number | null;
   mode: string;
   archived_at_ms: number | null;
   settled_at_ms: number | null;
@@ -243,6 +247,7 @@ function fromRow(row: DbSessionRow): SessionMeta {
       ? { credentialProfileId: row.credential_profile_id }
       : {}),
     ...(row.requires_enterprise ? { requiresEnterprise: true } : {}),
+    ...(row.peer_turn_cap !== null ? { peerTurnCap: row.peer_turn_cap } : {}),
     mode: sessionModeOrDefault(row.mode),
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
     ...(row.settled_at_ms !== null ? { settledAt: row.settled_at_ms } : {}),
@@ -348,7 +353,7 @@ function rawRow(id: string): DbSessionRow | undefined {
 
 const insertColumns =
   "id, scope, purpose, harness, agent_type, title, created_at_ms, updated_at_ms, " +
-  "message_count, provider, provider_session_id, model, thinking_level, credential_profile_id, requires_enterprise, mode, fork_origin_json, fork_auto_rename_pending";
+  "message_count, provider, provider_session_id, model, thinking_level, credential_profile_id, requires_enterprise, mode, fork_origin_json, fork_auto_rename_pending, peer_turn_cap";
 
 // A full-row write. We compute the merged values in TS (see `upsert`), so ON
 // CONFLICT can set every column unconditionally without ever nulling a field the
@@ -359,7 +364,7 @@ const insertColumns =
 // state.
 const upsertSql = `
   INSERT INTO session_index (${insertColumns})
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET
     scope = excluded.scope,
     purpose = excluded.purpose,
@@ -376,6 +381,7 @@ const upsertSql = `
     credential_profile_id = excluded.credential_profile_id,
     requires_enterprise = excluded.requires_enterprise,
     mode = excluded.mode,
+    peer_turn_cap = excluded.peer_turn_cap,
     fork_origin_json = excluded.fork_origin_json,
     fork_auto_rename_pending = excluded.fork_auto_rename_pending
   WHERE session_index.deleted_at_ms IS NULL
@@ -384,6 +390,11 @@ const upsertSql = `
 /** Insert-or-merge a metadata record. Omitted fields preserve stored values. */
 function upsert(input: SessionUpsert): boolean {
   try {
+    if (
+      input.peerTurnCap !== undefined &&
+      !isSessionPeerTurnCap(input.peerTurnCap)
+    )
+      throw new Error("Peer turn cap must be an integer from 1 to 16.");
     const prev = rawRow(input.id);
     if (prev?.deleted_at_ms) return false; // never resurrect a removed session
     const now = Date.now();
@@ -436,6 +447,7 @@ function upsert(input: SessionUpsert): boolean {
         (input.forkAutoRenamePending ?? Boolean(prev?.fork_auto_rename_pending))
           ? 1
           : 0,
+        input.peerTurnCap ?? prev?.peer_turn_cap ?? null,
       );
     if (!prev) noteLiveness([input.id], true);
     return true;
@@ -446,6 +458,19 @@ function upsert(input: SessionUpsert): boolean {
     );
     return false;
   }
+}
+
+/** Validated synchronous write; the domain API owns notification. */
+function setPeerTurnCap(id: string, cap: number | null): void {
+  if (cap !== null && !isSessionPeerTurnCap(cap))
+    throw new Error("Peer turn cap must be an integer from 1 to 16, or null.");
+  const result = getDb()
+    .prepare(
+      "UPDATE session_index SET peer_turn_cap = ? WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(cap, id);
+  if (result.changes !== 1)
+    throw new Error("Session does not exist or was deleted.");
 }
 
 /** Live failover only: refuse a stale binding or a session deleted during the move. */
@@ -2025,6 +2050,7 @@ export const sessionStore = {
   claimScope,
   countArchived,
   upsert,
+  setPeerTurnCap,
   switchCredentialProfile,
   markDeleted,
   remove,

@@ -8,23 +8,23 @@ hidden prompt through `agentHandoffs.ts`.
 
 ## The cards
 
-| Card kind                 | Raised by                                                                       | Grant keys                                                             |
-| ------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `githubPullRequest`       | `github_{create,edit,review,comment,assign}_pull_request`                       | `github:create` … `github:assign`                                      |
-| `githubIssue`             | `github_mutate_issue`                                                           | `githubIssue:create` … `githubIssue:label`                             |
-| `githubBranchDelete`      | `github_delete_branch`                                                          | `githubBranchDelete`                                                   |
-| `forgejoPullRequest`      | `forgejo_{create,edit,review,comment}_pull_request`                             | `forgejo:create` … `forgejo:comment`                                   |
-| `forgejoRelease`          | `forgejo_create_release`                                                        | `forgejoRelease`                                                       |
-| `jiraIssue`               | `jira_mutate_issue`                                                             | `jira:edit`, `jira:create`, `jira:comment`, `jira:rank`, `jira:sprint` |
-| `confluencePage`          | `confluence_mutate_page`                                                        | `confluence:create`, `…:edit`, `…:comment`, `…:delete`                 |
-| `tempoWorklog`            | `tempo_mutate_worklogs`                                                         | `tempo:create`, `tempo:update`                                         |
-| `gmailArchive`            | `google_gmail_archive`                                                          | `gmailArchive`                                                         |
-| `sessionSpawn`            | `session_spawn` with `operation: "propose"`                                     | `sessionSpawn`                                                         |
-| `managedPullRequestMerge` | `worktree_finish_pull_request` into the default branch                          | `managedPullRequestMerge`                                              |
-| `managedCommitOverride`   | `worktree_commit` with `force: true`                                            | none: never granted                                                    |
-| `projectCreate`           | `project_create`                                                                | `projectCreate`                                                        |
-| `agentDefinition`         | `agent_create`, `agent_edit` changing `persona`, `model` (the list) or `effort` | `agentDefinition`                                                      |
-| `settingsInput`           | `settings_request_input`, `accounts_sign_in`                                    | none: never granted                                                    |
+| Card kind                 | Raised by                                                                                     | Grant keys                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `githubPullRequest`       | `github_{create,edit,review,comment,assign}_pull_request`                                     | `github:create` … `github:assign`                                      |
+| `githubIssue`             | `github_mutate_issue`                                                                         | `githubIssue:create` … `githubIssue:label`                             |
+| `githubBranchDelete`      | `github_delete_branch`                                                                        | `githubBranchDelete`                                                   |
+| `forgejoPullRequest`      | `forgejo_{create,edit,review,comment}_pull_request`                                           | `forgejo:create` … `forgejo:comment`                                   |
+| `forgejoRelease`          | `forgejo_create_release`                                                                      | `forgejoRelease`                                                       |
+| `jiraIssue`               | `jira_mutate_issue`                                                                           | `jira:edit`, `jira:create`, `jira:comment`, `jira:rank`, `jira:sprint` |
+| `confluencePage`          | `confluence_mutate_page`                                                                      | `confluence:create`, `…:edit`, `…:comment`, `…:delete`                 |
+| `tempoWorklog`            | `tempo_mutate_worklogs`                                                                       | `tempo:create`, `tempo:update`                                         |
+| `gmailArchive`            | `google_gmail_archive`                                                                        | `gmailArchive`                                                         |
+| `sessionSpawn`            | `session_spawn` with `operation: "propose"`                                                   | `sessionSpawn`                                                         |
+| `managedPullRequestMerge` | `worktree_finish_pull_request` into the default branch                                        | `managedPullRequestMerge`                                              |
+| `managedCommitOverride`   | `worktree_commit` with `force: true`                                                          | none: never granted                                                    |
+| `projectCreate`           | `project_create`                                                                              | `projectCreate`                                                        |
+| `agentDefinition`         | `agent_create`, `agent_edit` changing `persona`, `model` (the list), `effort` or `peer-turns` | `agentDefinition`                                                      |
+| `settingsInput`           | `settings_request_input`, `accounts_sign_in`                                                  | none: never granted                                                    |
 
 `github_resolve_review_thread` also raises a `githubPullRequest` card, with
 operation `resolveThread`. Resolving and reopening both use `github:comment`,

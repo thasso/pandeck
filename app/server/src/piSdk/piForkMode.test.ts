@@ -85,6 +85,7 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
     harness: "pi",
     agentType: "workshop",
     mode: "plan",
+    peerTurnCap: 10,
   });
   sessionStore.freezeSkills(parentId, '["parent-skill"]');
   const parentAgent = {
@@ -146,6 +147,7 @@ test("a fork of a Plan session opens (and persists) in Plan", async () => {
     );
     const childId = forked.sessionId;
     assert.notEqual(childId, parentId);
+    assert.equal(sessionStore.get(childId)?.peerTurnCap, undefined);
     assert.equal(
       forked.sessionFile,
       canonicalPiSessionPath(childId),

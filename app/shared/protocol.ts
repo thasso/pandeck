@@ -1876,6 +1876,8 @@ export interface SessionListItem {
   credentialProfileId?: string;
   /** Only enterprise accounts may run this session; absent means no restriction. */
   requiresEnterprise?: boolean;
+  /** Explicit concurrent counted peer-turn cap; absent uses the default 4. */
+  peerTurnCap?: number;
   /** True when the user archived the session; hidden from the default sidebar list. */
   archived?: boolean;
   /** The primary Project context this session was started with, if linked. */
@@ -3791,6 +3793,7 @@ export interface AgentDefinitionApprovalBody {
     before?: ThinkingLevel;
     after?: ThinkingLevel;
   };
+  peerTurns?: { before?: number; after?: number };
   /** The complete `AGENT.md` the approval would write. */
   source: string;
   /** The commit subject. */
@@ -7630,6 +7633,7 @@ export type ClientMessage =
    * proposed from now on.
    */
   | { type: "grantApprovalForSession"; sessionId: string; key: string }
+  | { type: "setSessionPeerTurnCap"; sessionId: string; cap: number | null }
   /**
    * Answer a `choosing-task` pull-request card's Task-disambiguation prompt.
    * `taskId: null` means "none of these" (an agent-written title, no linked Task).

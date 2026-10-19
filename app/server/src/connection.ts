@@ -213,6 +213,7 @@ import {
   sendQueuedPromptNow,
   updateQueuedPrompt,
 } from "./promptQueue.ts";
+import { setSessionPeerTurnCap } from "./peerSpawnRuntimes.ts";
 import { settleSessionWithPeers } from "./sessionActivity.ts";
 import {
   setSpawnOwnership,
@@ -1198,6 +1199,17 @@ export class Connection implements Viewer {
           msg.edits,
           msg.forSession === true,
         );
+      case "setSessionPeerTurnCap":
+        try {
+          setSessionPeerTurnCap(msg.sessionId, msg.cap);
+        } catch (err) {
+          this.send({
+            type: "error",
+            message: errorText(err),
+            target: { type: "session", id: msg.sessionId },
+          });
+        }
+        return;
       case "grantApprovalForSession":
         grantApprovalForSession(msg.sessionId, msg.key);
         return;

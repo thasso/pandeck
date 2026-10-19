@@ -41,6 +41,27 @@ function issuesOf(source: string): string[] {
 }
 
 describe("the AGENT.md content rule", () => {
+  test("peer-turns is bounded and round-trips", () => {
+    for (const value of ["0", "17", "2.5", '"4"'])
+      assert.match(
+        issuesOf(valid.replace("effort: high", `peer-turns: ${value}`)).join(
+          " ",
+        ),
+        /peer-turns/,
+      );
+    const parsed = parseAgentManifest(
+      valid.replace("effort: high", "peer-turns: 10"),
+      "x/AGENT.md",
+    );
+    assert.ok(parsed.ok);
+    assert.equal(parsed.manifest.peerTurns, 10);
+    const roundTrip = parseAgentManifest(
+      formatAgentManifest(parsed.manifest),
+      "x/AGENT.md",
+    );
+    assert.ok(roundTrip.ok);
+    assert.equal(roundTrip.manifest.peerTurns, 10);
+  });
   test("a complete definition parses into typed fields", () => {
     const parsed = parseAgentManifest(valid, "test-reviewer/AGENT.md");
     assert.ok(parsed.ok);

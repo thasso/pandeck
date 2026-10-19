@@ -14,7 +14,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import type { ModelOption, PeerSpawnRuntime } from "@assistant/shared";
+import {
+  DEFAULT_SESSION_PEER_TURN_CAP as MAX_CONCURRENT_DIRECT_PEER_TURNS,
+  type ModelOption,
+  type PeerSpawnRuntime,
+} from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "peer-runtimes-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -73,7 +77,6 @@ vi.mock("./credentialProfiles.ts", async (importOriginal) => {
 const { getSettings, updateSettings } = await import("./settings.ts");
 const { pickAccount } = await import("./accountRouter.ts");
 const {
-  MAX_CONCURRENT_DIRECT_PEER_TURNS,
   PeerRuntimeRefusedError,
   admitDirectPeerTurns,
   directPeerCostClass,

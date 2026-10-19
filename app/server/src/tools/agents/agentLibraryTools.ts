@@ -4,7 +4,7 @@
  * factory with the agent kind's create fields, and one rule on top of it —
  * what a definition runs AS and ON is the user's call. A create always sets a
  * model, so it always becomes an approval card; an edit that changes
- * `persona`, the listed models or `effort` becomes one too. Every other edit commits directly, after the same
+ * `persona`, the listed models, `effort` or `peer-turns` becomes one too. Every other edit commits directly, after the same
  * runtime check, judged inside the locked write.
  */
 import { Buffer } from "node:buffer";
@@ -78,9 +78,10 @@ function runsOn(manifest: {
   persona: AgentPersona;
   models: string[];
   effort?: ThinkingLevel | undefined;
+  peerTurns?: number | undefined;
 }): string {
   // Order counts: the first model is the one a spawn runs without choosing.
-  return `${manifest.persona}\u0000${manifest.models.join("\u0001")}\u0000${manifest.effort ?? ""}`;
+  return `${manifest.persona}\u0000${manifest.models.join("\u0001")}\u0000${manifest.effort ?? ""}\u0000${manifest.peerTurns ?? ""}`;
 }
 
 function manifestPath(name: string): string {
@@ -127,6 +128,10 @@ async function propose(
     effort: {
       ...(before?.effort ? { before: before.effort } : {}),
       ...(after.effort ? { after: after.effort } : {}),
+    },
+    peerTurns: {
+      ...(before?.peerTurns !== undefined ? { before: before.peerTurns } : {}),
+      ...(after.peerTurns !== undefined ? { after: after.peerTurns } : {}),
     },
     source,
     reason: context.meta.reason,
@@ -202,7 +207,7 @@ function cardSummary(body: AgentDefinitionApprovalBody): string {
     .map((resolved) => `${resolved.model} at ${resolved.effort}`)
     .join(", ");
   if (body.action === "create")
-    return `a new ${body.persona} agent "${body.name}" on ${models}`;
+    return `a new ${body.persona} agent "${body.name}" on ${models}, peer turns ${body.peerTurns?.after ?? "default (4)"}`;
   const changes: string[] = [];
   if (body.personaBefore !== undefined)
     changes.push(`persona ${body.personaBefore} → ${body.persona}`);
@@ -213,6 +218,10 @@ function cardSummary(body: AgentDefinitionApprovalBody): string {
   if (body.effort.before !== body.effort.after)
     changes.push(
       `effort ${effort(body.effort.before)} → ${effort(body.effort.after)}`,
+    );
+  if (body.peerTurns?.before !== body.peerTurns?.after)
+    changes.push(
+      `peer turns ${body.peerTurns?.before ?? "default (4)"} → ${body.peerTurns?.after ?? "default (4)"}`,
     );
   return `a change to agent "${body.name}": ${changes.join(", ")}; it would run on ${models}`;
 }
@@ -288,6 +297,13 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
           "The models it may run on, the default first. Each a model alias or exact id from a connected account: opus, sonnet, haiku, fable, a unique short OpenAI name such as sol, or an exact id. A spawn may pick any of them without asking the user.",
       },
       effort: effortProperty,
+      peerTurns: {
+        type: "integer",
+        minimum: 1,
+        maximum: 16,
+        description:
+          "Optional concurrent peer turn cap for new sessions, default 4. Requires user approval.",
+      },
       denyTools: {
         type: "array",
         items: { type: "string" },
@@ -316,6 +332,9 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         ...(params.effort !== undefined
           ? { effort: params.effort as ThinkingLevel }
           : {}),
+        ...(params.peerTurns !== undefined
+          ? { peerTurns: params.peerTurns as number }
+          : {}),
         // Typed by the tool's schema, checked before `run` (`withCheckedArguments`).
         ...(params.denyTools !== undefined
           ? { denyTools: params.denyTools as string[] }
@@ -333,7 +352,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
     },
   },
   edit: {
-    note: "An edit that changes persona, the listed models or effort is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
+    note: "An edit that changes persona, the listed models, effort or peer-turns is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
     async run(input, meta, library, options, ctx) {
       if (ctx.signal?.aborted) throw new Error("Operation aborted");
       const current = await readEntrySource(input.name, library);
@@ -369,7 +388,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
           const now = definitionOf(lockedAfter, input.name);
           if (runsOn(was) !== runsOn(now))
             throw new EntryValidationError(
-              `${current.path} changed since this edit was checked, and the edit would now change its persona, model or effort; read it again and retry.`,
+              `${current.path} changed since this edit was checked, and the edit would now change its persona, model, effort or peer-turns; read it again and retry.`,
             );
           await checkAgentRuntime(now, { checkModel: false });
         },
