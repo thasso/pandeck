@@ -20,6 +20,7 @@ import {
 } from "../lib/backlogTreeModel.ts";
 import { localStore } from "../lib/localStore.ts";
 import { persistentStore } from "../lib/persistentStore.ts";
+import { DEFAULT_ATTENTION_FILTERS, normalizeAttentionFilters, type AttentionFilters } from "../lib/attentionFilters.ts";
 import {
   DEFAULT_NAV_SLOTS,
   normalizeNavSlots,
@@ -135,6 +136,8 @@ export interface Prefs {
   backlogViewMode: BacklogViewMode;
   /** Backlog project filter: which project(s) the list is narrowed to. */
   backlogProjectFilter: BacklogProjectFilter;
+  /** Independent browser-local filters for the Attention list. */
+  attentionFilters?: AttentionFilters;
   /** Pull Requests list: how rows are grouped. */
   pullRequestGroupBy: PullRequestGroupBy;
   /** Pull Requests list: the one project shown, or null for all. */
@@ -233,6 +236,7 @@ const defaults: Prefs = {
   backlogView: "backlog",
   backlogViewMode: "normal",
   backlogProjectFilter: ALL_PROJECT_FILTER,
+  attentionFilters: DEFAULT_ATTENTION_FILTERS,
   pullRequestGroupBy: "reason",
   pullRequestProjectFilter: null,
   pullRequestReasonFilter: [...PULL_REQUEST_GROUP_IDS],
@@ -264,6 +268,7 @@ export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
     textScale: normalizeTextScale(known.textScale),
     navSlots: normalizeNavSlots(known.navSlots),
     backlogView: normalizeBacklogView(known.backlogView),
+    attentionFilters: normalizeAttentionFilters(known.attentionFilters),
     pullRequestGroupBy: normalizePullRequestGroupBy(known.pullRequestGroupBy),
     ...(workflowRoleRuntimes !== undefined ? { workflowRoleRuntimes } : {}),
   };

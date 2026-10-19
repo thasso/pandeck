@@ -44,6 +44,7 @@ import {
 } from "./InitiativeInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
+import { attentionFilterCount, attentionHistoryMatches, attentionProjectsBySession, DEFAULT_ATTENTION_FILTERS, filterAttentionInbox, type AttentionFilters } from "../lib/attentionFilters.ts";
 import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
@@ -155,6 +156,9 @@ interface Props {
    * runs through (`Sidebar.tsx`). Absent, the bar is the list's first row.
    */
   barStore?: SessionInboxBarStore | undefined;
+  filters?: AttentionFilters;
+  filterControl?: ReactNode;
+  onClearFilters?: (() => void) | undefined;
   sessions: SessionListItem[];
   archivedSessionCount: number;
   archivedSessionsLoaded: boolean;
@@ -266,6 +270,9 @@ interface Props {
  */
 export function SessionInbox({
   barStore,
+  filters = DEFAULT_ATTENTION_FILTERS,
+  filterControl,
+  onClearFilters,
   sessions,
   archivedSessionCount,
   archivedSessionsLoaded,
@@ -546,26 +553,26 @@ export function SessionInbox({
     () => new Map(tasks.map((task) => [task.id, task.title])),
     [tasks],
   );
-  const view = useMemo(
+  const inbox = useMemo(
     () =>
       buildSessionInbox(sessions, {
         ...(currentId !== undefined ? { currentId } : {}),
         ...(readCurrentId !== undefined ? { readCurrentId } : {}),
-        settledLimit,
+        // All loaded history is filtered before its visible page is selected.
+        settledLimit: Number.MAX_SAFE_INTEGER,
         ...(workflowRuns ? { workflowRuns } : {}),
         workflowCards,
         taskTitles,
       }),
-    [
-      sessions,
-      currentId,
-      readCurrentId,
-      settledLimit,
-      workflowRuns,
-      workflowCards,
-      taskTitles,
-    ],
+    [sessions, currentId, readCurrentId, workflowRuns, workflowCards, taskTitles],
   );
+  const filterProjects = useMemo(() => attentionProjectsBySession(sessions, worktrees), [sessions, worktrees]);
+  const filtersActive = attentionFilterCount(filters) > 0;
+  const view = useMemo(() => filterAttentionInbox(
+    inbox, filters, filterProjects, settledLimit, currentId,
+    new Set([...settling, ...swipeCommit.current.keys()]),
+  ), [inbox, filters, filterProjects, settledLimit, currentId, settling]);
+  useEffect(() => setSettledLimit(SETTLED_PAGE_SIZE), [filters]);
 
   // Initiatives are items of their own, read off their summaries alone: an
   // active one in its block above the working set, an unsettled paused or done
@@ -807,18 +814,22 @@ export function SessionInbox({
     [sessions],
   );
 
-  // The bar's counts are stats rather than filters, so the one with somewhere
-  // to go takes you to the first row it counts instead of hiding the rest.
+  // Counts stay global. Jumping to waiting work clears filters first so a
+  // filtered-out urgent item is still reachable from the count that names it.
   const focusNeedsYou = useCallback(() => {
-    containerRef.current
+    const focus = () => containerRef.current
       ?.querySelector<HTMLElement>("[data-inbox-needs-you] [data-session-row]")
       ?.focus({ preventScroll: false });
-  }, []);
+    if (filtersActive && onClearFilters) {
+      onClearFilters();
+      window.requestAnimationFrame(focus);
+    } else focus();
+  }, [filtersActive, onClearFilters]);
 
   // A host-drawn bar hears the counts before paint, so it never shows the
   // previous list's numbers; it hears nothing once this list is gone. Only a
   // changed count reaches it (the store drops an equal answer).
-  const needsYouCount = needsYouEntries.length;
+  const needsYouCount = inbox.needsYou.length + initiativeInbox.outcomes.length;
   const { activeCount: backgroundCount, ownerCount: backgroundOwners } =
     backgroundActive;
   useLayoutEffect(() => {
@@ -841,23 +852,29 @@ export function SessionInbox({
   ]);
   useLayoutEffect(() => () => barStore?.set(null), [barStore]);
 
-  const archivedSessions = useMemo(
+  const allArchivedSessions = useMemo(
     () =>
       sessions
         .filter((s) => s.archived)
         .sort((a, b) => b.updatedAt - a.updatedAt),
     [sessions],
   );
+  const archivedSessions = useMemo(
+    () => allArchivedSessions.filter((session) => attentionHistoryMatches(session, "archived", filters, filterProjects)),
+    [allArchivedSessions, filters, filterProjects],
+  );
   const archivedAvailableCount = Math.max(
     archivedSessionCount,
-    archivedSessions.length,
+    allArchivedSessions.length,
   );
+  const showArchivedShelf = filters.statuses.length === 0 || filters.statuses.includes("archived");
 
   useEffect(() => {
-    if (showArchived && !archivedSessionsLoaded && archivedAvailableCount > 0)
+    if (showArchived && showArchivedShelf && !archivedSessionsLoaded && archivedAvailableCount > 0)
       onLoadArchivedSessions();
   }, [
     showArchived,
+    showArchivedShelf,
     archivedSessionsLoaded,
     archivedAvailableCount,
     onLoadArchivedSessions,
@@ -1188,7 +1205,7 @@ export function SessionInbox({
       setDragging(false);
       if (!over || !onSetInboxPositions) return;
       const positions = planInboxDrop(
-        view.active,
+        inbox.active,
         String(active.id),
         String(over.id),
       );
@@ -1205,7 +1222,7 @@ export function SessionInbox({
       }
       onSetInboxPositions(positions);
     },
-    [view.active, onSetInboxPositions],
+    [inbox.active, onSetInboxPositions],
   );
   const activeIds = useMemo(() => view.active.map(inboxItemId), [view.active]);
 
@@ -1228,8 +1245,8 @@ export function SessionInbox({
   const coldStart =
     sessions.length === 0 &&
     archivedAvailableCount === 0 &&
-    needsYouEntries.length === 0 &&
-    view.active.length === 0 &&
+    inbox.needsYou.length === 0 &&
+    inbox.active.length === 0 &&
     initiativeItems.length === 0;
 
   return (
@@ -1243,7 +1260,8 @@ export function SessionInbox({
           session summaries alone — this surface holds no registry subscription. */}
       {barStore ? null : (
         <SessionInboxBar
-          needsYou={needsYouEntries.length}
+          needsYou={needsYouCount}
+          filterControl={filterControl}
           working={workingCount}
           background={backgroundActive}
           onNeedsYou={focusNeedsYou}
@@ -1262,7 +1280,9 @@ export function SessionInbox({
       ) : !initiativesFresh ? null : coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
       ) : nothingToShow ? (
-        <EmptyBox>Nothing needs you right now.</EmptyBox>
+        filtersActive ? <EmptyBox action={onClearFilters ? <Button variant="ghost" size="sm" onClick={onClearFilters}>Clear filters</Button> : undefined}>
+          {showArchivedShelf && archivedAvailableCount > 0 && !archivedSessionsLoaded ? "No loaded items match these filters. Archived history loads when opened." : "No items match these filters."}
+        </EmptyBox> : <EmptyBox>Nothing needs you right now.</EmptyBox>
       ) : null}
 
       {/* A failed Initiative list read is stated above both places its
@@ -1370,7 +1390,7 @@ export function SessionInbox({
         </ListGroupSection>
       ) : null}
 
-      {archivedAvailableCount > 0 ? (
+      {showArchivedShelf && archivedAvailableCount > 0 ? (
         <ListGroupSection
           id="session-inbox-archived"
           title="Archived"
@@ -1380,6 +1400,7 @@ export function SessionInbox({
         >
           {archivedSessionsLoaded ? (
             <div className="flex flex-col">
+              {archivedSessions.length === 0 ? <EmptyBox>No archived sessions match these filters.</EmptyBox> : null}
               {archivedSessions.map((session) => (
                 <InboxShelfRow
                   key={session.id}

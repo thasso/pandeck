@@ -37,7 +37,7 @@ export type BacklogProjectFilterOption =
 
 /** Build the Project-filter popover options from the Backlog + registry. */
 export function buildBacklogProjectFilterOptions(
-  items: Task[],
+  items: readonly Pick<Task, "projectId">[],
   projects: ProjectRecord[],
   projectsById: Map<string, ProjectRecord>,
 ): BacklogProjectFilterOption[] {

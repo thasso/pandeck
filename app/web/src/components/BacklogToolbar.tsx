@@ -4,7 +4,6 @@ import {
   FolderTree,
   Inbox,
   ListTree,
-  SlidersHorizontal,
 } from "lucide-react";
 import { Button } from "./ui/button.tsx";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
@@ -14,7 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
+import { ListFilterPopover } from "./common/ListFilterPopover.tsx";
 import type { ProjectRecord, TaskStatus } from "@assistant/shared";
 import {
   BacklogProjectFilterControl,
@@ -24,7 +23,6 @@ import {
 import {
   PROPERTY_TRIGGER,
   PropertyLabel,
-  PropertyList,
 } from "./common/PropertyList.tsx";
 import {
   BacklogStatusFilter,
@@ -351,29 +349,7 @@ function BacklogFilterPopover({
     (projectFilter.kind !== "all" ? 1 : 0) +
     (view !== "inbox" && statusFilterActive(statuses) ? 1 : 0);
   return (
-    <Popover>
-      <PopoverTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto gap-1 text-muted-foreground"
-            aria-label={
-              active ? `Filters (${active} active)` : "Filters and grouping"
-            }
-          />
-        }
-      >
-        <SlidersHorizontal />
-        {active ? (
-          <span className="min-w-4 rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums">
-            {active}
-          </span>
-        ) : null}
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-72">
-        {/* The inspector's property list: muted labels, quiet values. */}
-        <PropertyList>
+    <ListFilterPopover active={active}>
           <PropertyLabel>Project</PropertyLabel>
           <BacklogProjectFilterPicker
             filter={projectFilter}
@@ -414,8 +390,6 @@ function BacklogFilterPopover({
               </Button>
             </>
           ) : null}
-        </PropertyList>
-      </PopoverContent>
-    </Popover>
+    </ListFilterPopover>
   );
 }

@@ -332,6 +332,25 @@ the shared sticky group header and icon. Settled paging and lazy archive loading
 stay owned by `SessionInbox`. There is no session search: finding a session by
 title is the shelves' job, and the field cost a permanent row of chrome for it.
 
+Attention adds the same `ListFilterPopover` used by Tasks to that fixed bar.
+Its Project picker is shared with Tasks, including All projects and Unassigned.
+Status filters use attention groups: Needs you, Updates / issues, Working, Idle,
+Settled and Archived. Updates / issues includes unread replies, failures,
+interruptions and stalled work. Empty or all-selected status choices mean all.
+`Prefs.attentionFilters` is browser-local and independent of Task filters.
+Project resolution uses the session's Project, then its worktree's Project;
+Workflow Runs use their own Project. While Attention is visible it subscribes
+to Projects and Worktrees as well as Workflow Runs, using existing topics only.
+
+Filtering follows cluster/workflow folding: a matching member keeps its whole
+unit and its context, without changing the Needs-you boundary or item order.
+Settled history is filtered before paging; Archived remains lazy-loaded and
+filters only the history already read. Empty results say so and offer Clear
+filters rather than claiming there is no work. Header counts stay global;
+Needs you clears filters before focusing waiting work. A filtered drag is
+planned against the full working set so hidden items retain their positions.
+Pending settle/swipe exits stay visible until their existing command sends.
+
 The cards hold still: a card's state never moves it. **Needs you** and the
 working set below it are each ordered by one number per item, highest first —
 `inboxPositionOf`: where the user dragged the item, else its creation time — so

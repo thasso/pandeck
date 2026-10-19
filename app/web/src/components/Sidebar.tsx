@@ -32,6 +32,8 @@ import type {
   PullRequestTarget,
 } from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
+import { AttentionFilterControl } from "./AttentionFilterControl.tsx";
+import { DEFAULT_ATTENTION_FILTERS, type AttentionFilters } from "../lib/attentionFilters.ts";
 import { ListGroupSection } from "./ListGroupSection.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
@@ -546,6 +548,10 @@ function SidebarImpl({
   // draws above the scroll container (`SessionInboxBarSlot`). One store for the
   // sidebar's life, so the prop the list gets never changes.
   const [inboxBarStore] = useState(createSessionInboxBarStore);
+  const attentionFilters = prefs.attentionFilters ?? DEFAULT_ATTENTION_FILTERS;
+  const updateAttentionFilters = useCallback((filters: AttentionFilters) => onUpdatePrefs({ attentionFilters: filters }), [onUpdatePrefs]);
+  const clearAttentionFilters = useCallback(() => updateAttentionFilters(DEFAULT_ATTENTION_FILTERS), [updateAttentionFilters]);
+  const attentionFilterControl = <AttentionFilterControl filters={attentionFilters} onChange={updateAttentionFilters} projects={projects} projectsLoaded={projectsLoaded} sessions={sessions} worktrees={worktrees} workflowRuns={workflowRuns} />;
   // The Backlog's filters are a row of chips, so what they are short of is
   // WIDTH: on the rail they wrap into four lines at page sizing and two at the
   // rail's own, above rows that are two-line either way.
@@ -798,6 +804,7 @@ function SidebarImpl({
         <div className="shrink-0">
           <SessionInboxBarSlot
             store={inboxBarStore}
+            filterControl={attentionFilterControl}
             onOpenBackgroundTasks={onOpenBackgroundTasks}
           />
         </div>
@@ -932,6 +939,9 @@ function SidebarImpl({
         ) : (
           <SessionInbox
             barStore={inboxBarStore}
+            filters={attentionFilters}
+            filterControl={attentionFilterControl}
+            onClearFilters={clearAttentionFilters}
             sessions={sessions}
             archivedSessionCount={archivedSessionCount}
             archivedSessionsLoaded={archivedSessionsLoaded}

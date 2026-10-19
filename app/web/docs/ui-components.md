@@ -163,6 +163,12 @@ identity composition such as `SessionTitleRow`, preserving its status semantics.
 Do not recreate the frame or line spacing in feature components. Storybook's
 `Common/ListRow` shows the one-, two-, and three-line layouts.
 
+`common/ListFilterPopover` owns browser filter chrome: the shared trigger,
+active-filter count, panel width and property-list layout. Tasks and Attention
+supply only their filter fields. Both use `BacklogProjectFilterPicker` for the
+same searchable Project selection; Attention supplies its own status choices
+without adopting Task statuses or Task view switching.
+
 An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
 (`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
 of its action group — after a card footer's primary button, at a header's right

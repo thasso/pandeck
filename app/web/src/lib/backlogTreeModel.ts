@@ -86,7 +86,7 @@ export function normalizeBacklogView(value: unknown): BacklogView {
     : "backlog";
 }
 
-export function projectIdForFilter(item: Task): string {
+export function projectIdForFilter(item: Pick<Task, "projectId">): string {
   return item.projectId?.trim() ?? "";
 }
 
