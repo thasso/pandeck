@@ -1061,6 +1061,9 @@ export function SessionInbox({
 
   const renderRunItem = (item: WorkflowRunInboxItem, dragging: boolean) => {
     const id = inboxItemId(item);
+    const worktreeStatus = item.run.worktreeId
+      ? worktreeStatuses[item.run.worktreeId]
+      : undefined;
     // Settle is the ONE verb a run carries here — archive, delete and every
     // run control live on the Workflow card on its Task — so the item has the
     // settle exit and no swipe. Its role rows keep both, because they are
@@ -1079,6 +1082,7 @@ export function SessionInbox({
             item={item}
             now={now}
             density={density}
+            worktreeIntegrated={Boolean(worktreeStatus?.merged && worktreeStatus.ahead > 0)}
             expanded={expandedClusters.has(id)}
             onOpen={onOpenWorkflowRun}
             onOpenSession={onSelect}
@@ -1101,6 +1105,9 @@ export function SessionInbox({
   ) => {
     const card = item.card;
     const id = card.session.id;
+    const worktreeStatus = card.session.worktreeId
+      ? worktreeStatuses[card.session.worktreeId]
+      : undefined;
     const rows = childRows(item);
     const liveIds = new Set(card.cluster?.children.map((child) => child.session.id));
     const settledRows = card.cluster?.childrenWithSettled.filter(
@@ -1136,11 +1143,8 @@ export function SessionInbox({
               now={now}
               active={id === currentId}
               relations={relationsById.get(id) ?? NO_RELATIONS}
-              worktreeDirty={
-                card.session.worktreeId
-                  ? worktreeStatuses[card.session.worktreeId]?.dirty
-                  : undefined
-              }
+              worktreeDirty={worktreeStatus?.dirty}
+              worktreeIntegrated={Boolean(worktreeStatus?.merged && worktreeStatus.ahead > 0)}
               density={density}
               clusterExpanded={expandedClusters.has(id)}
               onOpen={onSelect}

@@ -1,5 +1,4 @@
 import { memo } from "react";
-import { Archive, ArchiveRestore } from "lucide-react";
 import type { SessionListItem } from "@assistant/shared";
 import { relativeTime, sameSessionRowProps } from "../lib/sessionRows.ts";
 import {
@@ -8,15 +7,15 @@ import {
 } from "../lib/sessionInbox.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowContent } from "./common/ListRow.tsx";
+import type { RowDensity } from "../lib/rowDensity.ts";
 
 /**
  * @component SessionRowContent
  * @purpose Compact single-line session row chrome for sidebar trees.
- * @useWhen Rendering a session in the sidebar session tree or as a nested related-session row under another object: one truncated title line, inline
- * running/awaiting/unread indicators, and a relative timestamp that swaps to an
- * archive action on hover/focus. The host owns the row's tree chrome (depth
- * indent, expand/collapse chevron).
+ * @useWhen Rendering a session under a Project or worktree: one truncated title
+ * line, shared status mark, PR glyph and age, without row actions. The tree
+ * owns selection, navigation and indentation, without an empty chevron gutter.
  * @avoidWhen Rendering full chat headers or rich session detail panels; those need more
  * context-specific layout.
  * @intent Rows stay one line tall so deep hierarchies scan quickly; secondary detail
@@ -30,14 +29,13 @@ import { IconButton } from "./common/IconButton.tsx";
 interface SessionRowContentProps {
   session: SessionListItem;
   unread?: boolean | undefined;
-  /** When provided, hovering the row swaps the timestamp for an archive/restore action. */
-  onArchive?: ((id: string, archived: boolean) => void) | undefined;
+  density?: RowDensity;
 }
 
 function SessionRowContentImpl({
   session,
   unread,
-  onArchive,
+  density = "tight",
 }: SessionRowContentProps) {
   // The attention cards' state, with the host's word on unread: the open
   // session reads as read even before the server says so.
@@ -50,39 +48,18 @@ function SessionRowContentImpl({
         : classified;
 
   return (
-    <span className="group/session-content flex min-w-0 flex-1 items-center gap-1.5">
-      {/* The attention cards' title line: the agent's glyph when idle, the
-          coloured status badge when it is doing or needs anything. */}
-      <SessionTitleRow session={session} status={status} />
-      {/* The pull request the session opened. A GLYPH here: the row is one line
-          deep in a tree, so the state travels as tone and accessible name, and
-          the row itself is what opens the session holding the card. */}
-      <SessionDeliveryMark session={session} variant="glyph" />
-      {/* The age and the archive action share ONE slot: the button is laid
-          over the age and they trade places by opacity, so hovering never
-          changes the row's height or pushes the title (it used to swap a
-          16px line for a 24px button and the row wobbled). */}
-      <span className="relative flex h-5 min-w-5 shrink-0 items-center justify-end">
-        <span
-          className={`text-xs tabular-nums text-muted-foreground ${onArchive ? "group-hover/session-content:opacity-0 group-focus-within/session-content:opacity-0" : ""}`}
-        >
-          {relativeTime(session.updatedAt)}
-        </span>
-        {onArchive ? (
-          <IconButton
-            label={session.archived ? "Unarchive session" : "Archive session"}
-            size="icon-xs"
-            onClick={(e) => {
-              e.stopPropagation();
-              onArchive(session.id, !session.archived);
-            }}
-            className="absolute top-1/2 right-0 size-5 -translate-y-1/2 opacity-0 group-hover/session-content:opacity-100 group-focus-within/session-content:opacity-100 focus-visible:opacity-100"
-          >
-            {session.archived ? <ArchiveRestore /> : <Archive />}
-          </IconButton>
-        ) : null}
-      </span>
-    </span>
+    <ListRowContent
+      density={density}
+      identity={<SessionTitleRow session={session} status={status} />}
+      trailing={
+        <>
+          <SessionDeliveryMark session={session} variant="glyph" />
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {relativeTime(session.updatedAt)}
+          </span>
+        </>
+      }
+    />
   );
 }
 

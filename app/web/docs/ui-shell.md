@@ -233,12 +233,13 @@ section that reads a domain list subscribes only while the main pane RENDERS it
 — the browser listing its entry reads nothing — because for the skills library a
 subscribe is what makes the server rescan the user's working tree.
 
-Initiatives (`docs/initiatives.md`) have their canonical location in a group at
-the TOP of the Projects browser, because they sit above Projects. The group is
-bounded: it lists the active and paused Initiatives. It is a `ListGroupSection`
-band whose heading folds it like every group, and a link of its own in the
-band's actions opens `/initiatives`, the index page that lists every live
-Initiative by state (done ones included). It holds the `initiatives` topic only
+The Projects browser has two top-level `ListGroupSection` separator rows:
+Initiatives, then Projects. Each independently folds its own list and remembers
+its open state for the tab. Initiatives (`docs/initiatives.md`) have their
+canonical location in the first group, above the Project tree. That group is
+bounded: it lists the active and paused Initiatives. Its heading only folds the
+list; there is no link to the Initiatives index. Individual rows still open
+their Initiative. It holds the `initiatives` topic only
 while the Projects browser is on screen; an Initiative's page holds it too, with
 Tasks and Projects for the live map. There is no Initiatives section of its own
 and no view of an Initiative inside a Project page.

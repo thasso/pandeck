@@ -1,14 +1,10 @@
 import { memo } from "react";
-import { ArrowRight, Waypoints } from "lucide-react";
+import { Waypoints } from "lucide-react";
 import type { InitiativeSummary } from "@assistant/shared";
-import { Item } from "../ui/item.tsx";
+import { ListRow } from "../common/ListRow.tsx";
 import { ErrorNote, RefreshIndicator, Skeleton } from "../common/load.tsx";
-import { LinkButton } from "../common/LinkButton.tsx";
 import { ListGroupSection } from "../ListGroupSection.tsx";
-import {
-  initiativePath,
-  INITIATIVES_PATH,
-} from "../../hooks/useSessionRouting.ts";
+import { initiativePath } from "../../hooks/useSessionRouting.ts";
 import { followRowLink } from "../../lib/rowLink.ts";
 
 /**
@@ -16,13 +12,9 @@ import { followRowLink } from "../../lib/rowLink.ts";
  * @purpose The Initiatives group at the top of the Projects browser, the
  *   canonical sidebar location of an Initiative (`app/web/docs/ui-shell.md`).
  * @useWhen The Projects section's browser, above the Project tree.
- * @intent Bounded: it lists the active and paused Initiatives, which are few;
- *   done ones and the grouping by state live on the index. It is the sidebar's
- *   one group band (`ListGroupSection`): its heading folds the rows like every
- *   other group, and the index is a link of its own beside it, so a modifier
- *   click opens it in a new tab. With nothing to list it shows the band alone,
- *   so the index stays one tap away without spending rows on an empty state.
- *   A new read over a list it held marks the band refreshing.
+ * @intent Bounded: it lists the active and paused Initiatives. Its separator
+ *   folds the rows without linking to an index page. With nothing to list it
+ *   shows the band alone. A new read over a list it held marks the band refreshing.
  */
 export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   initiatives,
@@ -58,22 +50,7 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
       icon={<Waypoints size={14} className="shrink-0" aria-hidden />}
       containsSelected={open.some((initiative) => initiative.id === selectedId)}
       actions={
-        <>
-          {refreshing ? (
-            <RefreshIndicator label="Refreshing Initiatives" />
-          ) : null}
-          <LinkButton
-            variant="ghost"
-            size="icon-xs"
-            label="Show all Initiatives"
-            href={INITIATIVES_PATH}
-            onClick={(event) =>
-              followRowLink(event, INITIATIVES_PATH, onNavigate)
-            }
-          >
-            <ArrowRight />
-          </LinkButton>
-        </>
+        refreshing ? <RefreshIndicator label="Refreshing Initiatives" /> : undefined
       }
     >
       {error ? (
@@ -91,14 +68,12 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
             const href = initiativePath(initiative.id);
             const selected = initiative.id === selectedId;
             return (
-              <li
-                key={initiative.id}
-                data-list-row-id={`initiative:${initiative.id}`}
-              >
-                <Item
-                  size="xs"
-                  variant={selected ? "muted" : "default"}
+              <li key={initiative.id}>
+                <ListRow
+                  interaction="content"
+                  active={selected}
                   aria-current={selected ? "page" : undefined}
+                  rowProps={{ "data-list-row-id": `initiative:${initiative.id}` }}
                   render={
                     <a
                       href={href}
@@ -107,21 +82,20 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
                       }
                     />
                   }
-                >
-                  <span className="min-w-0 flex-1 truncate pl-5">
-                    {initiative.title}
-                  </span>
-                  <span className="text-xs text-muted-foreground tabular-nums">
-                    {initiative.state === "paused" ? (
-                      "Paused"
-                    ) : (
-                      <>
-                        {initiative.progress.done}/{initiative.progress.total}
-                        <span className="sr-only"> done</span>
-                      </>
-                    )}
-                  </span>
-                </Item>
+                  title={initiative.title}
+                  contextTrailing={
+                    <span className="tabular-nums">
+                      {initiative.state === "paused" ? (
+                        "Paused"
+                      ) : (
+                        <>
+                          {initiative.progress.done}/{initiative.progress.total}
+                          <span className="sr-only"> done</span>
+                        </>
+                      )}
+                    </span>
+                  }
+                />
               </li>
             );
           })}

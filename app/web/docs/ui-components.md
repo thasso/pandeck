@@ -71,7 +71,7 @@ the same parts a shadcn example would.
 | Edit a shown text value in place                                                | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)                                                       |
 | Choice                                                                          | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`                                                           |
 | Form rows, labels, help and errors                                              | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                                                              |
-| A browser row with one, two or three lines                                      | [`common/ListRow`](../src/components/common/ListRow.tsx) (Settings, session history, Attention, Pull Requests, idle worktrees)     |
+| A browser row with one, two or three lines                                      | [`common/ListRow`](../src/components/common/ListRow.tsx) (Settings, session history, Attention, Pull Requests, idle worktrees, Projects and Initiatives)     |
 | Other list rows and tree content                                                | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                                                                    |
 | An object or event card (transcript result, notice, card-list item)             | `common/AppCard` (tinted kind header + status, content, buttons only in the footer)                                                |
 | A page or settings section that groups rows                                     | `Card`                                                                                                                             |
@@ -126,7 +126,9 @@ Supporting lines do not repeat the absence of information as filler.
 
 Pass `undefined` to omit a supporting line. `signals={null}` deliberately
 reserves one; use it only when that stable line is needed. Supporting lines
-show whole facts or hide them, and hidden controls become inert. Signals
+show whole facts or hide them, and hidden controls become inert. Context,
+details and signals use a 20px clipping box so standard badges fit without
+vertical cropping. Signals
 compact their labels before dropping items. Use the existing overflow handling
 rather than wrapping rows taller or clipping partial badges.
 
@@ -142,9 +144,12 @@ height. Keep all geometry in the common components.
 Mobile and desktop use the same icon-only, right-aligned action column:
 
 - One-line items put actions beside the title.
-- Two-line items put actions only beside the second line. The first line keeps
-  its full width, including right-aligned ids or age.
-- Items with three or more lines span actions across their final two lines.
+- Two-line items with context put actions only beside the second line, keeping
+  context full-width, including right-aligned ids or age. Without context,
+  actions span both the title and supporting line.
+- Items with three or more lines span actions across their final two lines by
+  default. `actionSpan="all"` reserves the action column across every line,
+  including context, when the domain calls for it.
 - Buttons fill that span vertically; icons keep their own square size and stay
   centered. Touch controls are 44px wide and at least 44px high. `touch-ui:`
   follows mobile layout or coarse input, even with a forced Desktop layout.
@@ -200,18 +205,41 @@ their visible values are unchanged, as required by `src/CLAUDE.md`.
   Tree. `paddedContent={false}` leaves padding to shared content. Task worktree
   and PR indicators stay separate. One worktree's name compacts away; multiple
   worktrees use a count menu. Priority uses `TaskPriorityValue` everywhere.
+- **Projects:** Two lines: identity/name/key, then a leading Contents disclosure
+  with the session-start action spanning both lines. Contents folds all child
+  Projects, worktrees and direct sessions together. The browser has no separate
+  tree-chevron gutters or vertical hierarchy guides. All rows own their padding
+  through `ListRowContent`, with `paddedContent={false}` on the tree.
+- **Related sessions:** `SessionRowContent` uses `ListRowContent` and
+  `SessionTitleRow` for a single compact line. PR state and age remain visible
+  beside the title. These rows have no Archive/Restore or other row action.
+  Show more uses the same row geometry and density.
 - **Attention sessions and runs:** Settle is the only row action, with no
   overflow; other actions stay in the object's surface. Settled/archived shelf
   rows use shared actions for Restore. Session and role disclosures share the
-  neutral inline style and leading chevron.
+  neutral inline style and leading chevron. Session and Workflow Run PR badges
+  use the same numbered `reference` variant as Worktrees. Both show the shared
+  yellow `IntegratedBadge` when their linked worktree's Git status confirms
+  containment, not merely because the PR is merged. Missing status shows no
+  integration claim.
 - **Initiative Attention items:** Progress and age in context, state/title in
   identity, and session disclosure, readiness, blockers and next milestone in
   signals. Only unacknowledged paused/done outcomes offer Settle.
 - **Pull requests:** Context, title and signals use `ListRow`. Local-checkout
   and CI indicators use `trailing`; these rows currently need no action.
-- **Worktrees:** `WorktreeRow` keeps branch/change counts first, then the actual
-  PR number linked to the provider URL and git metadata. PR badges compact to
-  their state icon while retaining their link and accessible name. Without a
+- **Worktrees:** `WorktreeRow` shares `ListRowContent` and `ListRowActions`
+  across the Project browser, Project page and embedded lists. An optional
+  context line groups PR/Integrated badges and line-change counts
+  together on the left. Omit that line when neither exists. Branch identity sits
+  above the final signal line, which starts with a Sessions disclosure when
+  linked sessions exist, followed by git metadata. The session-start action
+  spans every available line with `actionSpan="all"`. There is no separate
+  worktree-chevron gutter or extra tree padding. Local branch containment uses
+  a yellow Integrated badge with a merge icon, distinct from the PR's state;
+  it does not claim that the checkout is clean or safe to delete. Worktree PR
+  badges use `SessionDeliveryMark`'s `reference` variant: fixed PR icon and
+  `PR #number`, with state conveyed by colour, tooltip and accessible name,
+  not a visible state word. Provider links remain intact. Without a
   known provider URL, summaries stay informational rather than guessing links.
 
 Use these compositions as examples, not as permission to copy their geometry.

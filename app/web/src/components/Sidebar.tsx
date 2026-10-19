@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FileDiff } from "lucide-react";
+import { FileDiff, FolderKanban } from "lucide-react";
 import type {
   InboxPositionEntry,
   InitiativeSummary,
@@ -911,27 +911,35 @@ function SidebarImpl({
               selectedId={selectedInitiativeId}
               onNavigate={onNavigate}
             />
-            <ProjectTreePane
-              projects={activeProjects}
-              selectedId={selectedProjectId}
-              loading={!projectsLoaded}
-              reorderState={projectMutations["registry:reorder"]}
-              relationsLoading={worktrees === null}
-              sessions={projectSessionCache.current.value}
-              currentSessionId={currentId}
-              worktrees={worktrees}
-              worktreeStatuses={projectStatusCache.current.value}
-              selectedWorktreeId={selectedWorktreeId}
-              onReorder={onReorderProjects}
-              onOpenProject={onOpenProject}
-              onOpenSession={onSelect}
-              onArchiveSession={onArchive}
-              onOpenWorktree={onOpenWorktree}
-              onStartSession={onStartSessionForProject}
-              onStartSessionInWorktree={onStartSessionInWorktree}
-              onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
-              flush
-            />
+            <ListGroupSection
+              id="projects"
+              title="Projects"
+              count={projectsLoaded ? activeProjects.length : undefined}
+              icon={<FolderKanban size={14} className="shrink-0" aria-hidden />}
+              containsSelected={Boolean(selectedProjectId)}
+            >
+              <ProjectTreePane
+                projects={activeProjects}
+                selectedId={selectedProjectId}
+                density={browserRowDensity(mobile)}
+                loading={!projectsLoaded}
+                reorderState={projectMutations["registry:reorder"]}
+                relationsLoading={worktrees === null}
+                sessions={projectSessionCache.current.value}
+                currentSessionId={currentId}
+                worktrees={worktrees}
+                worktreeStatuses={projectStatusCache.current.value}
+                selectedWorktreeId={selectedWorktreeId}
+                onReorder={onReorderProjects}
+                onOpenProject={onOpenProject}
+                onOpenSession={onSelect}
+                onOpenWorktree={onOpenWorktree}
+                onStartSession={onStartSessionForProject}
+                onStartSessionInWorktree={onStartSessionInWorktree}
+                onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+                flush
+              />
+            </ListGroupSection>
           </>
         ) : section === "pull-requests" ? (
           <PullRequestBrowser

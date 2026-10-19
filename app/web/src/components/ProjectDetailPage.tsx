@@ -90,7 +90,6 @@ function ProjectDetailPageView({
   sessions = NO_SESSIONS,
   currentSessionId,
   onOpenSession,
-  onArchiveSession,
 }: {
   /** Mobile screen back control (ui-shell.md, Small Screens). */
   back?: PageHeaderBack | undefined;
@@ -135,7 +134,6 @@ function ProjectDetailPageView({
   sessions?: SessionListItem[];
   currentSessionId?: string | undefined;
   onOpenSession?: (id: string) => void;
-  onArchiveSession?: (id: string, archived: boolean) => void;
 }) {
   useEffect(() => {
     onOpenProjection?.(selectedId);
@@ -268,7 +266,6 @@ function ProjectDetailPageView({
                 sessions={sessions}
                 currentSessionId={currentSessionId}
                 onOpenSession={onOpenSession}
-                onArchiveSession={onArchiveSession}
                 onSave={(patch) => onSave(selected.id, patch)}
                 onClone={() => onCloneRepo(selected.id)}
                 onRemoveClone={() => onRemoveClone(selected.id)}
@@ -372,7 +369,6 @@ function ProjectDetail({
   sessions,
   currentSessionId,
   onOpenSession,
-  onArchiveSession,
   onSave,
   onClone,
   onRemoveClone,
@@ -394,7 +390,6 @@ function ProjectDetail({
   sessions: SessionListItem[];
   currentSessionId?: string | undefined;
   onOpenSession?: ((id: string) => void) | undefined;
-  onArchiveSession?: ((id: string, archived: boolean) => void) | undefined;
   onSave: (patch: Partial<ProjectRecord>) => void;
   onClone: () => void;
   onRemoveClone: () => void;
@@ -614,7 +609,6 @@ function ProjectDetail({
                   worktrees={worktrees}
                   worktreeStatuses={worktreeStatuses}
                   onOpenSession={onOpenSession}
-                  onArchiveSession={onArchiveSession}
                   onOpenWorktree={onOpenWorktree}
                   onStartSessionInWorktree={onStartSessionInWorktree}
                   flush

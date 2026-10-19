@@ -35,6 +35,7 @@ import type { RowDensity } from "../lib/rowDensity.ts";
 import { ListRow, ListRowContent } from "./common/ListRow.tsx";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
+import { IntegratedBadge } from "./IntegratedBadge.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { ListRowActions } from "./common/ListRowActions.tsx";
 import { Spinner } from "./common/load.tsx";
@@ -82,6 +83,8 @@ export interface WorkflowRunInboxCardProps {
   now: number;
   /** The host's row density: a thumb-sized Settle on a phone screen. */
   density?: RowDensity;
+  /** Confirmed containment of the run's worktree, independent of PR state. */
+  worktreeIntegrated?: boolean;
   /**
    * Whether the user has OPENED this run's session list. Same contract as the
    * cluster card's disclosure: it says what the click does, and a search
@@ -140,6 +143,7 @@ function WorkflowRunInboxCardImpl({
   item,
   now,
   density = "tight",
+  worktreeIntegrated = false,
   expanded = false,
   onOpen,
   onOpenSession,
@@ -184,7 +188,7 @@ function WorkflowRunInboxCardImpl({
         roles ? ` — ${roles}` : ""
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
         prDelivery ? ` — pull request: ${prDelivery.title}` : ""
-      }${settleOffered && item.settleBlocked ? ` — ${settleLabel}` : ""}`}
+      }${worktreeIntegrated ? " — branch changes integrated into base" : ""}${settleOffered && item.settleBlocked ? ` — ${settleLabel}` : ""}`}
       onOpen={open}
       onFocusSibling={onFocusSibling}
       onKeyDown={(e) => {
@@ -313,11 +317,11 @@ function WorkflowRunInboxCardImpl({
               <span className="flex shrink-0 items-center">
                 <SessionDeliveryMark
                   session={prSession}
-                  variant="responsive"
-                  showNumber
+                  variant="reference"
                 />
               </span>
             ) : null}
+            {worktreeIntegrated ? <IntegratedBadge /> : null}
             {phase ? (
               <span className="min-w-0 flex-1 basis-0 truncate text-muted-foreground">
                 {phase}

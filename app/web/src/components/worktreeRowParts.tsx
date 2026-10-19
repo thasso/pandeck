@@ -1,11 +1,11 @@
 /**
  * Shared pieces of every worktree ROW: the Worktrees inbox card, the Project
  * page and the Projects browser all use the same three-axis summary, while the
- * relation surfaces also share line deltas, the merged badge, linked-session
+ * relation surfaces also share line deltas, the Integrated badge, linked-session
  * paging and expansion memory. The hosts still own their density and hierarchy.
  */
 import { memo, useEffect, useMemo, useState } from "react";
-import { GitBranch, House, MessageSquarePlus } from "lucide-react";
+import { ChevronRight, GitBranch, House, MessageSquarePlus } from "lucide-react";
 import type {
   SessionPullRequestSummary,
   WorktreeGitStatus,
@@ -14,22 +14,16 @@ import type {
 } from "@assistant/shared";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import { followRowLink } from "../lib/rowLink.ts";
-import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { worktreeAxes, type WorktreeAxes } from "../lib/worktreeAxes.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { Badge } from "./ui/badge.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ListRowContent } from "./common/ListRow.tsx";
+import { ListRowActions } from "./common/ListRowActions.tsx";
+import type { RowDensity } from "../lib/rowDensity.ts";
 import { Tree } from "./common/Tree.tsx";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
+import { IntegratedBadge } from "./IntegratedBadge.tsx";
 import { persistentStore } from "../lib/persistentStore.ts";
-
-/**
- * A row's action shows on hover or focus where there is a pointer to hover
- * with, always on touch — as the session cards' and Task rows' actions do.
- * The row carries `group/row`.
- */
-export const ROW_ACTION_REVEAL =
-  "pointer-fine:opacity-0 pointer-fine:group-hover/row:opacity-100 pointer-fine:group-focus-within/row:opacity-100 focus-visible:opacity-100";
 
 /** A Project's worktrees in display order: the main checkout, then the latest. */
 export function compareWorktrees(a: WorktreeRecord, b: WorktreeRecord): number {
@@ -42,26 +36,24 @@ export function compareWorktrees(a: WorktreeRecord, b: WorktreeRecord): number {
 
 /**
  * One worktree as a row reads, wherever it is listed (the Projects browser,
- * the Project page): a plain glyph, the branch with its line delta and merged
- * badge pushed right, and the three-axis summary under it. The host owns the
- * row around it — selection, the click, the revealed action.
+ * the Project page): branch above session disclosure and git signals, with an
+ * optional first line grouping badges and line changes. The host owns selection,
+ * navigation and hierarchy; ListRowActions owns action geometry.
  */
 function WorktreeRowSummary({
   worktree,
   status,
   hosting,
   now,
-  selected = false,
-}: {
-  worktree: WorktreeRecord;
-  status?: WorktreeGitStatus | undefined;
-  now: number;
-  selected?: boolean;
-  hosting?: WorktreeHostingStatusResponse | undefined;
-}) {
+  selected,
+  density = "tight",
+  sessionCount = 0,
+  expanded = false,
+  onToggleSessions,
+  onStartSession,
+}: WorktreeRowProps) {
   const branch = status?.branch ?? worktree.branch;
   const axes = worktreeAxes(worktree, status, now);
-  const metaRef = useInertOverflow<HTMLSpanElement>({ compact: true });
   const pullRequest: SessionPullRequestSummary | undefined = hosting?.pr
     ? {
         status: hosting.pr.state,
@@ -83,34 +75,17 @@ function WorktreeRowSummary({
   const prMark = pullRequest ? (
     <SessionDeliveryMark
       session={{ pullRequest }}
-      variant="responsive"
-      showNumber
-      collapseNumber
+      variant="reference"
     />
   ) : null;
+  const integrated = Boolean(status?.merged && status.ahead > 0);
+  const showContext = Boolean(pullRequest || status?.dirty || integrated);
   return (
-    <>
-      {/* A plain glyph, not a tinted tile: the row's text carries it. */}
-      <span
-        className={`flex h-5 shrink-0 items-center ${selected ? "text-foreground" : "text-muted-foreground"}`}
-        aria-hidden
-      >
-        {worktree.isMain ? <House size={16} /> : <GitBranch size={16} />}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
-        <span className="flex min-w-0 items-center gap-1">
-          <span
-            className={`min-w-0 flex-1 truncate text-sm text-foreground ${selected ? "font-medium" : ""}`}
-          >
-            {branch}
-          </span>
-          <WorktreeLineDelta status={status} />
-          <WorktreeMergedBadge status={status} />
-        </span>
-        <span
-          ref={metaRef}
-          className="flex h-5 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden whitespace-nowrap text-xs"
-        >
+    <ListRowContent
+      density={density}
+      actionSpan="all"
+      context={showContext ? (
+        <>
           {prMark ? (
             hosting?.pr?.url ? (
               <a
@@ -131,6 +106,40 @@ function WorktreeRowSummary({
               <span className="inline-flex shrink-0">{prMark}</span>
             )
           ) : null}
+          {integrated ? <IntegratedBadge /> : null}
+          <WorktreeLineDelta status={status} />
+        </>
+      ) : undefined}
+      identity={
+        <>
+          <span className={`flex size-4 shrink-0 items-center justify-center ${selected ? "text-foreground" : "text-muted-foreground"}`} aria-hidden>
+            {worktree.isMain ? <House size={16} /> : <GitBranch size={16} />}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {branch}
+          </span>
+        </>
+      }
+      signals={
+        <>
+          {sessionCount > 0 && onToggleSessions ? (
+            <Badge
+              variant="ghost"
+              render={<button type="button" />}
+              aria-expanded={expanded}
+              aria-label={`${expanded ? "Hide" : "Show"} sessions in ${branch}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleSessions(worktree.id);
+              }}
+              className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+            >
+              <ChevronRight size={12} className={expanded ? "rotate-90" : ""} aria-hidden />
+              Sessions <span>{sessionCount}</span>
+            </Badge>
+          ) : null}
           <span className="flex min-w-0 flex-1 basis-0">
             {hasAxes(axes) ? (
               <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
@@ -140,9 +149,20 @@ function WorktreeRowSummary({
               </span>
             )}
           </span>
-        </span>
-      </span>
-    </>
+        </>
+      }
+      actions={onStartSession ? (
+        <ListRowActions
+          alwaysVisible={selected}
+          actions={[{
+            id: "start-session",
+            label: `Start session in worktree: ${branch}`,
+            icon: <MessageSquarePlus />,
+            onSelect: () => onStartSession(worktree.id),
+          }]}
+        />
+      ) : undefined}
+    />
   );
 }
 
@@ -161,20 +181,6 @@ export function WorktreeLineDelta({
       <span className="text-success">+{status.additions}</span>
       <span className="text-destructive">−{status.deletions}</span>
     </span>
-  );
-}
-
-/** `merged` remains a badge; unlike ahead/behind it is one semantic state. */
-function WorktreeMergedBadge({
-  status,
-}: {
-  status: WorktreeGitStatus | undefined;
-}) {
-  if (!status?.merged || status.ahead <= 0) return null;
-  return (
-    <Badge variant="success" className="shrink-0">
-      merged
-    </Badge>
   );
 }
 
@@ -354,48 +360,22 @@ interface WorktreeRowProps {
   now: number;
   selected: boolean;
   hosting?: WorktreeHostingStatusResponse | undefined;
+  density?: RowDensity;
+  sessionCount?: number;
+  expanded?: boolean;
+  onToggleSessions?: (id: string) => void;
   onStartSession?: ((id: string) => void) | undefined;
 }
 
-function WorktreeRowImpl({
-  worktree,
-  status,
-  hosting,
-  now,
-  selected,
-  onStartSession,
-}: WorktreeRowProps) {
+function WorktreeRowImpl(props: WorktreeRowProps) {
   usePerfRenderCount("WorktreeRow");
-  const branch = status?.branch ?? worktree.branch;
+  const branch = props.status?.branch ?? props.worktree.branch;
   return (
-    // `py-0.5`: a worktree row is two lines and a little taller than the
-    // tree's other rows.
     <div
-      className="group/row flex min-w-0 items-start gap-1.5 py-0.5"
-      title={`${branch}\n${worktree.path}`}
+      className="group/item flex min-w-0"
+      title={`${branch}\n${props.worktree.path}`}
     >
-      <WorktreeRowSummary
-        worktree={worktree}
-        status={status}
-        hosting={hosting}
-        now={now}
-        selected={selected}
-      />
-      {onStartSession ? (
-        <IconButton
-          size="icon-sm"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onStartSession(worktree.id);
-          }}
-          label={`Start session in worktree: ${branch}`}
-          // Centred on the row's two lines, not pinned to the first.
-          className={`shrink-0 self-center ${ROW_ACTION_REVEAL}`}
-        >
-          <MessageSquarePlus />
-        </IconButton>
-      ) : null}
+      <WorktreeRowSummary {...props} />
     </div>
   );
 }
@@ -403,8 +383,8 @@ function WorktreeRowImpl({
 /**
  * @component WorktreeRow
  * @purpose One worktree as a `Tree` row's body, the same in the sidebar's
- *   Projects browser and on the Project page: `WorktreeRowSummary` and the
- *   start-session action revealed on hover, pinned to the first line.
+ *   Projects browser and on the Project page: `ListRowContent` and shared
+ *   actions spanning every line, including optional badge/change context.
  * @useWhen A `Tree` (compact, flush) lists worktrees; the tree owns the row's
  *   chrome — hover, selection, dividers, the click.
  * @intent The memo folds the shared wall clock down to the stale/fresh bit the
@@ -417,6 +397,10 @@ export const WorktreeRow = memo(
     previous.status === next.status &&
     previous.hosting === next.hosting &&
     previous.selected === next.selected &&
+    previous.density === next.density &&
+    previous.sessionCount === next.sessionCount &&
+    previous.expanded === next.expanded &&
+    previous.onToggleSessions === next.onToggleSessions &&
     previous.onStartSession === next.onStartSession &&
     worktreeAxes(previous.worktree, previous.status, previous.now).stale ===
       worktreeAxes(next.worktree, next.status, next.now).stale,
@@ -457,6 +441,8 @@ export function WorktreeList({
     <Tree
       items={items}
       compact
+      paddedContent={false}
+      getRowDisclosure={() => false}
       flush
       showGuides={false}
       aria-label="Worktrees"

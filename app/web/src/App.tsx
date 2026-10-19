@@ -7961,7 +7961,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
                         sessions={state.sessions}
                         currentSessionId={displayCurrentId}
                         onOpenSession={openSession}
-                        onArchiveSession={archiveSession}
                         paObjectReferences={paObjectReferences}
                         onOpenPaObject={openProjectPaObject}
                       />

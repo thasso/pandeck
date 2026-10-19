@@ -45,6 +45,7 @@ import type { RowDensity } from "../lib/rowDensity.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
+import { IntegratedBadge } from "./IntegratedBadge.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
@@ -107,6 +108,8 @@ export interface ActiveSessionCardProps {
   relations: SessionCardRelations;
   /** Uncommitted changes in the session's worktree, from the existing status projection. */
   worktreeDirty?: boolean | undefined;
+  /** Confirmed containment from the linked worktree's existing Git status. */
+  worktreeIntegrated?: boolean;
   /**
    * The host's content density. Shared actions independently use touch-safe
    * targets on mobile layouts and coarse-pointer devices.
@@ -168,6 +171,7 @@ function ActiveSessionCardImpl({
   now,
   active,
   relations,
+  worktreeIntegrated = false,
   density = "tight",
   clusterExpanded = false,
   onOpen,
@@ -241,7 +245,7 @@ function ActiveSessionCardImpl({
   // The status line's fallback: with no signal to show, it says the state in
   // words (the title's glyph says it as an icon), so the row is not just the
   // row's buttons.
-  const hasSignals = Boolean(cluster || backgroundChip || delivery || sentence);
+  const hasSignals = Boolean(cluster || backgroundChip || delivery || worktreeIntegrated || sentence);
   const stateWords =
     status === "quiet"
       ? "Idle"
@@ -286,7 +290,7 @@ function ActiveSessionCardImpl({
           : changesText
             ? ` — ${changesText}`
             : ""
-      }${backgroundText ? ` — ${backgroundText}` : ""}${
+      }${worktreeIntegrated ? " — branch changes integrated into base" : ""}${backgroundText ? ` — ${backgroundText}` : ""}${
         clusterSummary ? ` — coordinating ${clusterSummary}` : ""
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
         card.stall ? ` — stalled: ${stallLabel(card.stall)}` : ""
@@ -424,11 +428,11 @@ function ActiveSessionCardImpl({
               <span className="flex shrink-0 items-center">
                 <SessionDeliveryMark
                   session={session}
-                  variant="responsive"
-                  showNumber
+                  variant="reference"
                 />
               </span>
             ) : null}
+            {worktreeIntegrated ? <IntegratedBadge /> : null}
             {/* The badge already names the state; the sentences it
                   cannot say are an Idle card's queued work and what a cut
                   turn needs from you. */}

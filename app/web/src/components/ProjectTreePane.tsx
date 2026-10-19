@@ -1,6 +1,6 @@
 import { applyPatch } from "@assistant/shared";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { FolderKanban, MessageSquarePlus } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, FolderKanban, MessageSquarePlus } from "lucide-react";
 import type {
   ProjectRecord,
   SessionListItem,
@@ -8,8 +8,7 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { Tree, type TreeNode } from "./common/Tree.tsx";
-import { Button } from "./ui/button.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { Badge } from "./ui/badge.tsx";
 import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 import {
@@ -20,9 +19,11 @@ import {
 import { samePlacements, type Task } from "../lib/backlogTree.ts";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { SessionRowContent } from "./SessionRow.tsx";
+import { ListRowContent } from "./common/ListRow.tsx";
+import { ListRowActions } from "./common/ListRowActions.tsx";
+import type { RowDensity } from "../lib/rowDensity.ts";
 import {
   INITIAL_SESSION_LIMIT,
-  ROW_ACTION_REVEAL,
   SESSION_LIMIT_STEP,
   WorktreeRow,
   compareWorktrees,
@@ -65,12 +66,12 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onReorder,
   onOpenProject,
   onOpenSession,
-  onArchiveSession,
   onOpenWorktree,
   onStartSession,
   onStartSessionInWorktree,
   onVisibleWorktreeIdsChange,
   flush = false,
+  density = "tight",
   rootProjectId,
 }: {
   projects: ProjectRecord[];
@@ -90,7 +91,6 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   ) => void;
   onOpenProject?: (id: string) => void;
   onOpenSession?: ((id: string) => void) | undefined;
-  onArchiveSession?: ((id: string, archived: boolean) => void) | undefined;
   onOpenWorktree?: ((id: string) => void) | undefined;
   onStartSession?: (id: string) => void;
   onStartSessionInWorktree?: ((id: string) => void) | undefined;
@@ -100,6 +100,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
    * notes and placeholders around the tree keep their own inset.
    */
   flush?: boolean;
+  density?: RowDensity;
   /**
    * Show only what is UNDER this project — its worktrees with their sessions,
    * and its sessions outside any worktree — as the top level, without the
@@ -213,6 +214,24 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     [selectedId, selectedWorktreeId, currentSessionId],
   );
 
+  // Shared by memoized Project rows so unrelated broadcasts do not redraw them.
+  const onToggleProject = useCallback((id: string) => {
+    const next = new Set(collapsedProjects);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setCollapsedProjects(next);
+    persistCollapsedIds(next);
+  }, [collapsedProjects]);
+
+  // Keep this id-based handler stable for memoized Worktree rows as well.
+  const onToggleWorktree = useCallback((id: string) => {
+    const next = new Set(expandedWorktreeIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setExpandedWorktreeIds(next);
+    persistExpandedWorktreeIds(next);
+  }, [expandedWorktreeIds]);
+
   const onExpandedChange = (ids: string[]) => {
     const expanded = new Set(ids);
     const nextCollapsed = new Set(
@@ -305,8 +324,11 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         items={shownNodes}
         indentWidth={INDENT_WIDTH}
         compact
+        paddedContent={false}
+        getRowDisclosure={() => false}
+        getRowClassName={() => "group/item"}
         flush={flush}
-        showGuides
+        showGuides={false}
         aria-label={rootProjectId ? "Worktrees and sessions" : "Projects"}
         expandedIds={expandedIds}
         onExpandedChange={onExpandedChange}
@@ -339,6 +361,10 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                 <ProjectRowContent
                   project={data.project}
                   selected={state.selected}
+                  density={density}
+                  expanded={state.expanded}
+                  hasContents={state.hasChildren}
+                  onToggle={onToggleProject}
                   onStartSession={onStartSession}
                 />
               );
@@ -349,6 +375,10 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                   status={data.status}
                   now={now}
                   selected={state.selected}
+                  density={density}
+                  expanded={state.expanded}
+                  sessionCount={relationIndex.sessionsByWorktree.get(data.worktree.id)?.length ?? 0}
+                  onToggleSessions={onToggleWorktree}
                   onStartSession={onStartSessionInWorktree}
                 />
               );
@@ -356,20 +386,22 @@ export const ProjectTreePane = memo(function ProjectTreePane({
               return (
                 <SessionRowContent
                   session={data.session}
+                  density={density}
                   unread={
                     Boolean(data.session.unread) &&
                     data.session.id !== currentSessionId
                   }
-                  onArchive={onArchiveSession}
                 />
               );
             case "moreSessions":
               return (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start"
+                <button
+                  type="button"
+                  className="flex w-full min-w-0 cursor-pointer text-left"
                   onPointerDown={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+                  }}
                   onClick={(e) => {
                     e.stopPropagation();
                     setSessionLimits((prev) => ({
@@ -380,12 +412,19 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                     }));
                   }}
                 >
-                  Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more
-                  session
-                  {Math.min(SESSION_LIMIT_STEP, data.remaining) === 1
-                    ? ""
-                    : "s"}
-                </Button>
+                  <ListRowContent
+                    density={density}
+                    identity={
+                      <>
+                        <ChevronRight size={16} className="shrink-0 text-muted-foreground" aria-hidden />
+                        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                          Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more session
+                          {Math.min(SESSION_LIMIT_STEP, data.remaining) === 1 ? "" : "s"}
+                        </span>
+                      </>
+                    }
+                  />
+                </button>
               );
           }
         }}
@@ -405,48 +444,74 @@ type ProjectBrowserNode = TreeNode<ProjectBrowserNodeData>;
 const ProjectRowContent = memo(function ProjectRowContent({
   project,
   selected,
+  density,
+  expanded,
+  hasContents,
+  onToggle,
   onStartSession,
 }: {
   project: ProjectRecord;
   selected: boolean;
+  density: RowDensity;
+  expanded: boolean;
+  hasContents: boolean;
+  onToggle: (id: string) => void;
   onStartSession?: ((id: string) => void) | undefined;
 }) {
   const color = projectColor(project);
   return (
-    <div
-      className="group/row flex min-w-0 items-center gap-1.5"
-      title={`${project.key} · ${project.name}`}
-    >
-      {/* The Project glyph every surface uses: its folder, in its colour. */}
-      <FolderKanban
-        size={14}
-        className="shrink-0"
-        style={{ color: color.dot }}
-        aria-hidden
-      />
-      <span className="min-w-0 flex-1 truncate text-sm">
-        <span
-          className={`text-foreground ${selected ? "font-semibold" : "font-medium"}`}
-        >
-          {project.key}
-        </span>
-        <span className="text-muted-foreground"> · {project.name}</span>
-      </span>
-      {onStartSession ? (
-        <IconButton
-          size="icon-xs"
-          className={`shrink-0 ${ROW_ACTION_REVEAL}`}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onStartSession(project.id);
+    <ListRowContent
+      density={density}
+      leading={
+        <FolderKanban
+          className="shrink-0"
+          style={{ color: color.dot }}
+          aria-hidden
+        />
+      }
+      title={
+        <>
+          {project.name}
+          <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+            {project.key}
+          </span>
+        </>
+      }
+      signals={hasContents ? (
+        <Badge
+          variant="ghost"
+          render={<button type="button" />}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Hide" : "Show"} contents of ${project.name}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggle(project.id);
           }}
-          label={`Start session in project: ${project.key} ${project.name}`}
+          className="h-auto shrink-0 cursor-pointer border-0 px-0 py-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
         >
-          <MessageSquarePlus />
-        </IconButton>
+          <ChevronRight size={12} className={expanded ? "rotate-90" : ""} aria-hidden />
+          Contents
+        </Badge>
       ) : null}
-    </div>
+      actions={
+        onStartSession ? (
+          <ListRowActions
+            actions={[
+              {
+                id: "start-session",
+                label: `Start session in project: ${project.key} ${project.name}`,
+                icon: <MessageSquarePlus />,
+                onSelect: () => onStartSession(project.id),
+              },
+            ]}
+            label="More project actions"
+            alwaysVisible={selected}
+          />
+        ) : undefined
+      }
+    />
   );
 });
 

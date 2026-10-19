@@ -26,6 +26,8 @@ type ContentProps = {
   trailing?: ReactNode;
   /** Right-aligned actions; two-line items keep their context line full-width. */
   actions?: ReactNode;
+  /** Include context in the action column instead of only the final content lines. */
+  actionSpan?: "content" | "all" | undefined;
 };
 
 type Props = ContentProps &
@@ -79,6 +81,7 @@ export function ListRow({
   pinned,
   trailing,
   actions,
+  actionSpan,
   ...props
 }: Props) {
   return (
@@ -125,6 +128,7 @@ export function ListRow({
           pinned={pinned}
           trailing={trailing}
           actions={actions}
+          actionSpan={actionSpan}
         />
       )}
     </Item>
@@ -147,6 +151,7 @@ export function ListRowContent({
   pinned,
   trailing,
   actions,
+  actionSpan = "content",
 }: ContentProps) {
   const contextRef = useInertOverflow<HTMLDivElement>();
   const signalsRef = useInertOverflow<HTMLDivElement>({ compact: true });
@@ -157,7 +162,7 @@ export function ListRowContent({
   const hasDetails = details !== undefined;
   const lines =
     1 + Number(hasContext) + Number(hasDetails) + Number(hasSignals);
-  const actionStart = lines === 2 ? 2 : Math.max(1, lines - 1);
+  const actionStart = actionSpan === "all" ? 1 : Math.max(hasContext ? 2 : 1, lines - 1);
   const lineStyle = (line: number) => ({
     gridRow: line,
     gridColumn: actions && line >= actionStart ? "1" : "1 / -1",
@@ -182,7 +187,7 @@ export function ListRowContent({
         >
           <div
             ref={contextRef}
-            className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
+            className="flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
           >
             {context}
           </div>
