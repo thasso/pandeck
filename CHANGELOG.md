@@ -3,6 +3,37 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.60.0] - 2026-10-19
+
+### Other changes
+
+- Unify browser rows and add Attention filters and Project grouping
+  ([PR #167](https://github.com/thasso/pandeck/pull/167))
+- Stop extra-credit budgets from benching accounts
+  ([PR #166](https://github.com/thasso/pandeck/pull/166))
+- Dismiss session failures without settling
+  ([PR #165](https://github.com/thasso/pandeck/pull/165))
+- Clarify inherited grant reads in approvals docs
+  ([PR #164](https://github.com/thasso/pandeck/pull/164))
+- Let spawned peers inherit ancestor approval grants
+  ([PR #162](https://github.com/thasso/pandeck/pull/162))
+- Add per-row enterprise requirements to session spawning
+  ([PR #163](https://github.com/thasso/pandeck/pull/163))
+- Apply agent Task status directly with opt-in suggestions
+  ([PR #161](https://github.com/thasso/pandeck/pull/161))
+- Render Initiative descriptions in a shared Markdown band
+  ([PR #160](https://github.com/thasso/pandeck/pull/160))
+- Add Initiative membership to Task reads, start context, and UI
+  ([PR #159](https://github.com/thasso/pandeck/pull/159))
+- Render agent-authored workflow and task card text as Markdown
+  ([PR #158](https://github.com/thasso/pandeck/pull/158))
+- Render task suggestion reasons and knowledge notes as inline Markdown
+  ([PR #157](https://github.com/thasso/pandeck/pull/157))
+- Render approval and commit-review text as Markdown
+  ([PR #156](https://github.com/thasso/pandeck/pull/156))
+- Render agent-written card fields as Markdown
+  ([PR #155](https://github.com/thasso/pandeck/pull/155))
+
 ## [0.59.1] - 2026-10-17
 
 ### Other changes
