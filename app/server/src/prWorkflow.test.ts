@@ -346,6 +346,8 @@ function fakeProvider(impl: Partial<GitHostingProvider>): GitHostingProvider {
     },
     markPullRequestReady: async () => ({}),
     retargetPullRequest: async () => {},
+    pullRequestBody: async () => "",
+    editPullRequestBody: async () => {},
     listOpenPullRequests: async () => [],
     ciStatus: async () => null,
     refChecks: async () => ({ state: "none", checks: [] }),
@@ -620,6 +622,89 @@ test("an explicit title overrides only the title while the PR agent supplies bod
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test.each([
+  {
+    name: "title and body skip the PR agent entirely",
+    title: "STAR-1502: Caller title",
+    agentCalls: 0,
+    expectedTitle: "STAR-1502: Caller title",
+    warnings: [] as string[],
+  },
+  {
+    name: "a body alone keeps the agent's title and warnings",
+    title: undefined,
+    agentCalls: 1,
+    expectedTitle: "Generated default",
+    warnings: ["Generated warning"],
+  },
+])(
+  "an explicit body is published as given: $name",
+  async ({ title, agentCalls, expectedTitle, warnings }) => {
+    const repo = branchRepo();
+    try {
+      execFileSync("git", ["branch", "main", "HEAD"], { cwd: repo });
+      hoisted.generatePullRequestJson.mockResolvedValue({
+        title: "Generated default",
+        body: ["Generated body"],
+        warnings: ["Generated warning"],
+      });
+      let authored:
+        Parameters<GitHostingProvider["createPullRequest"]>[0] | undefined;
+      hoisted.hostingProviderForRepo.mockResolvedValue(
+        fakeProvider({
+          createPullRequest: async (input) => {
+            authored = input;
+            return {
+              number: 42,
+              url: "https://github.com/acme/repo/pull/42",
+              title: input.title,
+              state: "open",
+            };
+          },
+        }),
+      );
+      const body =
+        "## Summary\n\nCaller body.\n\n## Notes for Percy\n\n- Agreed.";
+      const result = await beginPullRequestCard({
+        repoRoot: repo,
+        sessionKind: "developer",
+        sessionId: `explicit-body-${agentCalls}`,
+        ...(title !== undefined ? { title } : {}),
+        body: `  ${body}\n`,
+        args: prArgs,
+      });
+
+      assert.equal(result.status, "created");
+      assert.equal(
+        hoisted.generatePullRequestJson.mock.calls.length,
+        agentCalls,
+      );
+      assert.equal(authored?.title, expectedTitle);
+      assert.equal(authored?.body, body);
+      const card = pullRequestCardRecord(result.cardId)!;
+      assert.deepEqual(card.card.body, [body]);
+      assert.deepEqual(card.card.warnings, warnings);
+      assert.equal(card.context.explicitBody, body);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  },
+);
+
+test("a credential in an explicit PR body refuses before any provider work", async () => {
+  await assert.rejects(
+    beginPullRequestCard({
+      repoRoot: "/nonexistent",
+      sessionKind: "developer",
+      sessionId: "explicit-body-secret",
+      body: `Token: ${"ghp_" + "a".repeat(36)}`,
+      args: prArgs,
+    }),
+    /body looks like it contains a credential/,
+  );
+  assert.equal(hoisted.hostingProviderForRepo.mock.calls.length, 0);
 });
 
 test("a PR landing after card reservation is adopted into that same card", async () => {

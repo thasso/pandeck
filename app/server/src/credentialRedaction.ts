@@ -1,11 +1,13 @@
 /**
  * Masking credentials a user pasted into a conversation before that text is
  * handed to a helper model: the commit agent's review context and the session
- * status digest both quote session prompts.
+ * status digest both quote session prompts. Also the narrower check that
+ * refuses PUBLISHING one: committed patches and caller-written commit messages
+ * and pull-request bodies.
  */
 
 /** Token shapes that are credentials wherever they appear. */
-export const CREDENTIAL_TOKEN_PATTERNS = [
+const CREDENTIAL_TOKEN_PATTERNS = [
   /\bxox[pbar]-[A-Za-z0-9-]{20,}/,
   /\bghp_[A-Za-z0-9_]{20,}/,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/,
@@ -14,6 +16,25 @@ export const CREDENTIAL_TOKEN_PATTERNS = [
   /\bA(?:KIA|SIA)[0-9A-Z]{16}\b/,
   /\bAIza[0-9A-Za-z_-]{20,}/,
 ];
+
+const PUBLISHED_CREDENTIAL_PATTERNS = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  ...CREDENTIAL_TOKEN_PATTERNS,
+  /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password)\b\s*[:=]\s*["'][^"']{12,}["']/i,
+];
+
+/**
+ * Whether text that is about to be PUBLISHED — an added patch line, a
+ * caller-written commit message or pull-request body — holds a private key, a
+ * known token shape, or a quoted credential assignment. Deliberately narrower
+ * than {@link redactCredentials}: a hit refuses publication with no override,
+ * so prose that merely mentions a token or password has to pass.
+ */
+export function textLooksLikeCredential(text: string): boolean {
+  return text
+    .split("\n")
+    .some((line) => PUBLISHED_CREDENTIAL_PATTERNS.some((re) => re.test(line)));
+}
 
 /**
  * Mask private keys, known token shapes, HTTP credentials (`Authorization:

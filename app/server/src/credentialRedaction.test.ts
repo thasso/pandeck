@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { redactCredentials } from "./credentialRedaction.ts";
+import {
+  redactCredentials,
+  textLooksLikeCredential,
+} from "./credentialRedaction.ts";
 
 const JWT =
   "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
@@ -27,4 +30,21 @@ test("masks pasted credentials and keeps the text around them", () => {
 test("leaves ordinary prose alone", () => {
   const prose = "The bearer of this note should check the token count.";
   assert.equal(redactCredentials(prose), prose);
+});
+
+test("flags credentials that would be published, not prose about them", () => {
+  for (const text of [
+    "Subject\n\n-----BEGIN RSA " + "PRIVATE KEY-----",
+    `Use ${"ghp_" + "a".repeat(36)} here`,
+    `key ${"AKIA" + "ABCDEFGHIJKLMNOP"}`,
+    `auth_token: ${'"' + "abcdefghijklmnop"}"`,
+  ])
+    assert.equal(textLooksLikeCredential(text), true, text);
+  for (const text of [
+    "Rotate the token and mask the password field.",
+    "The secret: check refuses on a hit.",
+    'password = "short"',
+    "## Notes for Percy\n\n- The `api_key` setting is read from the env.",
+  ])
+    assert.equal(textLooksLikeCredential(text), false, text);
 });

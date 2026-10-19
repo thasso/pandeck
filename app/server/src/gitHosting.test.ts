@@ -224,6 +224,46 @@ test("prefers the first open pull request, else the most recent terminal one", (
   assert.equal(pickBranchPull([]), undefined);
 });
 
+/* ------------------------------ description edit ----------------------------- */
+
+test.each([
+  {
+    name: "GitHub",
+    make: () =>
+      githubProvider(
+        { host: "github.com", owner: "acme", repo: "repo" },
+        { token: "t", apiBaseUrl: "https://api.github.com" },
+      ),
+    path: "/repos/acme/repo/pulls/7",
+  },
+  {
+    name: "Forgejo",
+    make: () =>
+      forgejoProvider(
+        { host: "git.example.com", owner: "acme", repo: "repo" },
+        { baseUrl: "https://git.example.com", token: "t" },
+      ),
+    path: "/api/v1/repos/acme/repo/pulls/7",
+  },
+])(
+  "$name reads and replaces only the pull request's body",
+  async ({ make, path }) => {
+    const provider = make();
+    const calls = await withRecordedFetch(
+      (req) => (req.method === "GET" ? { number: 7, body: null } : {}),
+      async () => {
+        assert.equal(await provider.pullRequestBody(7), "");
+        await provider.editPullRequestBody(7, "## Notes for Percy");
+      },
+    );
+    assert.deepEqual(
+      calls.map((call) => `${call.method} ${call.path}`),
+      [`GET ${path}`, `PATCH ${path}`],
+    );
+    assert.deepEqual(calls[1]!.body, { body: "## Notes for Percy" });
+  },
+);
+
 /* -------------------------- draft → ready lifecycle ------------------------- */
 
 test("GitHub marks a draft ready through GraphQL", async () => {

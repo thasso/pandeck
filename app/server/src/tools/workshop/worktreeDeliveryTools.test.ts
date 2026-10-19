@@ -15,6 +15,7 @@ import type {
 import type { WorktreeRow } from "../../db/worktreeStore.ts";
 import type { ToolCallContext } from "../../mcp/tool.ts";
 import {
+  assertMatchingManagedPullRequestBodyIntent,
   assertMatchingManagedPullRequestTitleIntent,
   createWorktreeCommitTool,
   defaultPullRequestOperations,
@@ -662,7 +663,125 @@ describe("worktree_commit", () => {
     assert.equal(ops.calls.released, 1);
   });
 
-  test("schema offers approval requests but no path, ref, message or subset escape", () => {
+  test("a caller message is trimmed, forwarded, and replaces only the generated message", async () => {
+    const ops = operations({
+      runCommit: async (options) => {
+        ops.calls.options = options;
+        return commitResult({ commitMessage: options.callerMessage! });
+      },
+    });
+    const message =
+      "STAR-1502: Add the checked delivery slice\n\nNotes for Percy: keep the retry.";
+    const result = await createWorktreeCommitTool(ops).execute(
+      { worktreeId: row.id, message: `\n  ${message}  \n` },
+      context(),
+    );
+    assert.equal(
+      (ops.calls.options as CommitWorkflowOptions).callerMessage,
+      message,
+    );
+    // The review still runs as an ordinary unforced commit.
+    assert.equal((ops.calls.options as CommitWorkflowOptions).force, false);
+    assert.equal(
+      (result.details as { commitMessage: string }).commitMessage,
+      message,
+    );
+    const omitted = operations();
+    await createWorktreeCommitTool(omitted).execute(
+      { worktreeId: row.id },
+      context(),
+    );
+    assert.equal(
+      "callerMessage" in (omitted.calls.options as CommitWorkflowOptions),
+      false,
+    );
+  });
+
+  test("a caller message with a credential, blank, or oversized refuses before the worktree is read", async () => {
+    let resolved = 0;
+    const ops = operations({
+      resolve: async () => {
+        resolved += 1;
+        return row;
+      },
+    });
+    for (const [message, error] of [
+      [
+        `Add deploy\n\nUse ${"ghp_" + "a".repeat(36)} for staging.`,
+        /message looks like it contains a credential.*cannot be overridden/,
+      ],
+      [
+        'Configure staging\n\napi_key = "sk_live_0123456789abcdef"',
+        /message looks like it contains a credential/,
+      ],
+      [
+        "Rotate keys\n\n-----BEGIN OPENSSH " + "PRIVATE KEY-----",
+        /message looks like it contains a credential/,
+      ],
+      ["  \n ", /message must not be blank/],
+      ["x".repeat(8_001), /message exceeds 8000 characters/],
+    ] as const) {
+      await assert.rejects(
+        createWorktreeCommitTool(ops).execute(
+          { worktreeId: row.id, message },
+          context(),
+        ),
+        error,
+      );
+      await assert.rejects(
+        createWorktreeCommitTool(ops).execute(
+          { worktreeId: row.id, message, force: true, reason: "Reviewed" },
+          context(),
+        ),
+        error,
+      );
+    }
+    assert.equal(resolved, 0);
+    // Prose about credentials is not a credential.
+    await createWorktreeCommitTool(ops).execute(
+      {
+        worktreeId: row.id,
+        message:
+          "Mask the token and password fields\n\nThe secret: check stays.",
+      },
+      context(),
+    );
+    assert.equal(resolved, 2);
+  });
+
+  test("a commit override proposes and commits the caller message", async () => {
+    const message = "STAR-1502: Keep the caller message";
+    const propose = operations({
+      runCommit: async (options) =>
+        commitResult({
+          status: "blocked",
+          dryRun: true,
+          changeFingerprint: "fp-caller",
+          commitMessage: options.callerMessage!,
+          blockers: [{ kind: "unsafe", reason: "Potential issue" }],
+        }),
+    });
+    const ctx = context();
+    ctx.session = { ...ctx.session, sessionId: `caller-message-${Date.now()}` };
+    const created = await createWorktreeCommitTool(propose).execute(
+      { worktreeId: row.id, force: true, reason: "Tested", message },
+      ctx,
+    );
+    const id = (created.details as { approvalId: string }).approvalId;
+    const card = approvalForId(id)!;
+    if (card.body.kind !== "managedCommitOverride")
+      throw new Error("wrong kind");
+    assert.equal(card.body.commit.commitMessage, message);
+    const exec = operations();
+    setCommitOverrideApprovalOperationsForTests(exec);
+    await resolveApproval(id, "approved");
+    assert.deepEqual(
+      (exec.calls.options as { approvedChange: unknown }).approvedChange,
+      { fingerprint: "fp-caller", message },
+    );
+  });
+
+  test("schema offers a caller message and approval requests but no path, ref or subset escape", () => {
     const properties = (
       createWorktreeCommitTool().parameters as {
         properties: Record<string, unknown>;
@@ -671,6 +790,7 @@ describe("worktree_commit", () => {
     assert.deepEqual(Object.keys(properties), [
       "worktreeId",
       "context",
+      "message",
       "stagedOnly",
       "force",
       "reason",
@@ -1299,6 +1419,82 @@ describe("worktree_create_pull_request", () => {
     assert.equal(resolved, 0);
   });
 
+  test("trims and forwards an explicit body through recovery and creation", async () => {
+    let recoveredBody: string | undefined;
+    const ops = pullRequestOperations({
+      recover: async (input) => {
+        recoveredBody = input.body;
+        return undefined;
+      },
+    });
+    const body =
+      "## Summary\n\nDone.\n\n## Notes for Percy\n\n- Agreed: keep the retry.";
+    await createWorktreePullRequestTool(ops).execute(
+      { worktreeId: row.id, body: `\n${body}\n\n` },
+      context(),
+    );
+    assert.equal(recoveredBody, body);
+    assert.equal(ops.calls.beginInput?.body, body);
+
+    const omitted = pullRequestOperations();
+    await createWorktreePullRequestTool(omitted).execute(
+      { worktreeId: row.id },
+      context(),
+    );
+    assert.equal(omitted.calls.beginInput?.body, undefined);
+  });
+
+  test("refuses a credential in the caller body or title before reading the worktree", async () => {
+    let resolved = 0;
+    const ops = pullRequestOperations({
+      resolve: async () => {
+        resolved += 1;
+        return row;
+      },
+    });
+    for (const [params, error] of [
+      [
+        { body: `Staging: ${"AKIA" + "ABCDEFGHIJKLMNOP"} is the key.` },
+        /body looks like it contains a credential.*cannot be overridden/,
+      ],
+      [
+        { title: `Use ${"xoxb-" + "1".repeat(24)} in CI` },
+        /title looks like it contains a credential/,
+      ],
+      [{ body: " \n " }, /body must not be blank/],
+      [{ body: "x".repeat(65_537) }, /body exceeds 65536 characters/],
+    ] as const)
+      await assert.rejects(
+        createWorktreePullRequestTool(ops).execute(
+          { worktreeId: row.id, ...params },
+          context(),
+        ),
+        error,
+      );
+    assert.equal(resolved, 0);
+  });
+
+  test("recovery refuses a conflicting explicit-body intent", () => {
+    assert.doesNotThrow(() =>
+      assertMatchingManagedPullRequestBodyIntent(undefined, undefined),
+    );
+    assert.doesNotThrow(() =>
+      assertMatchingManagedPullRequestBodyIntent("Body", "Body"),
+    );
+    assert.throws(
+      () => assertMatchingManagedPullRequestBodyIntent(undefined, "Body"),
+      /reserved an agent-generated body, but this retry requested an explicit body/,
+    );
+    assert.throws(
+      () => assertMatchingManagedPullRequestBodyIntent("Old", undefined),
+      /reserved an explicit body, but this retry requested an agent-generated body/,
+    );
+    assert.throws(
+      () => assertMatchingManagedPullRequestBodyIntent("Old", "New"),
+      /requested a different explicit body/,
+    );
+  });
+
   test("recovery refuses a conflicting explicit-title intent", () => {
     assert.doesNotThrow(() =>
       assertMatchingManagedPullRequestTitleIntent(undefined, undefined),
@@ -1685,7 +1881,7 @@ describe("worktree_create_pull_request", () => {
     assert.equal(failed.calls.invalidated, 1);
   });
 
-  test("schema exposes title but no repository, refs, SHA, or body", () => {
+  test("schema exposes title and body but no repository, refs, or SHA", () => {
     const schema = createWorktreePullRequestTool().parameters as {
       additionalProperties: boolean;
       properties: Record<string, unknown>;
@@ -1696,6 +1892,7 @@ describe("worktree_create_pull_request", () => {
       "taskId",
       "context",
       "title",
+      "body",
       "draft",
     ]);
     assert.deepEqual(schema.properties.title, {

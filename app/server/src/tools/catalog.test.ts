@@ -161,6 +161,7 @@ describe("tool catalog", () => {
           ["worktree_commit", "local"],
           ["worktree_push", "external"],
           ["worktree_create_pull_request", "external"],
+          ["worktree_update_pull_request_body", "external"],
           ["worktree_ready_pull_request", "external"],
           ["worktree_retarget_pull_request", "external"],
           ["worktree_finish_pull_request", "external"],

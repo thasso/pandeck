@@ -148,7 +148,7 @@ export interface WorktreeFinishPullRequestOperations {
   inventoryChanged(provider: GitHostingProvider, number: number): void;
 }
 
-const defaultFinishPullRequestOperations: WorktreeFinishPullRequestOperations =
+export const defaultFinishPullRequestOperations: WorktreeFinishPullRequestOperations =
   {
     resolve: async (worktreeId) => getWorktree(worktreeId),
     reserve: reserveWorktreeForMutation,
@@ -564,7 +564,7 @@ export function createWorktreeRetargetPullRequestTool(
  * Reserve an active spawned worktree, re-resolve it unchanged under the
  * reservation, derive its canonical pull request and run `act` on it.
  */
-async function withReservedManagedTarget<T>(
+export async function withReservedManagedTarget<T>(
   worktreeIdParam: string | undefined,
   ctx: ToolCallContext,
   operations: WorktreeFinishPullRequestOperations,
@@ -613,7 +613,7 @@ async function withReservedManagedTarget<T>(
  * response was lost. A failure here must not turn that write into a reported
  * provider failure, so it comes back as a warning.
  */
-function recordInventoryChange(
+export function recordInventoryChange(
   operations: WorktreeFinishPullRequestOperations,
   target: ManagedPullRequestTarget,
 ): string | undefined {
@@ -688,7 +688,7 @@ function validateRequest(
 /* --------------------------- common target resolution ---------------------- */
 
 /** The exact managed object this call may act on, proven from current state. */
-interface ManagedPullRequestTarget {
+export interface ManagedPullRequestTarget {
   row: WorktreeRow;
   target: ResolvedPushTarget;
   hosted: ManagedHostingTarget;
