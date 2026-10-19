@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Archive, Bell, Check, Circle, CircleHelp, ListFilter, LoaderCircle } from "lucide-react";
+import { Archive, Bell, Check, Circle, CircleHelp, FolderTree, ListFilter, LoaderCircle } from "lucide-react";
 import type { ProjectRecord, SessionListItem, WorkflowRunSummary, WorktreeRecord } from "@assistant/shared";
 import { ATTENTION_FILTER_STATUSES, attentionFilterCount, attentionProjectsBySession, DEFAULT_ATTENTION_FILTERS, type AttentionFilters, type AttentionFilterStatus } from "../lib/attentionFilters.ts";
 import { BacklogProjectFilterPicker, buildBacklogProjectFilterOptions } from "./BacklogFilters.tsx";
@@ -68,7 +68,19 @@ export function AttentionFilterControl({ filters, onChange, projects, projectsLo
           })}
         </DropdownMenuContent>
       </DropdownMenu>
-      {active ? <Button variant="ghost" size="sm" className="col-span-2 cursor-pointer justify-start" onClick={() => onChange(DEFAULT_ATTENTION_FILTERS)}>Clear filters</Button> : null}
+      <PropertyLabel>Group</PropertyLabel>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={`${PROPERTY_TRIGGER} cursor-pointer justify-start`}
+        disabled={!projectsLoaded || worktrees === null}
+        aria-pressed={Boolean(filters.byProject)}
+        onClick={() => onChange({ ...filters, byProject: !filters.byProject })}
+      >
+        <FolderTree className="text-muted-foreground" />
+        <span className={filters.byProject ? "" : "text-muted-foreground"}>{filters.byProject ? "By Project" : "None"}</span>
+      </Button>
+      {active ? <Button variant="ghost" size="sm" className="col-span-2 cursor-pointer justify-start" onClick={() => onChange({ ...DEFAULT_ATTENTION_FILTERS, byProject: Boolean(filters.byProject) })}>Clear filters</Button> : null}
     </ListFilterPopover>
   );
 }

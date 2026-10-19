@@ -550,7 +550,7 @@ function SidebarImpl({
   const [inboxBarStore] = useState(createSessionInboxBarStore);
   const attentionFilters = prefs.attentionFilters ?? DEFAULT_ATTENTION_FILTERS;
   const updateAttentionFilters = useCallback((filters: AttentionFilters) => onUpdatePrefs({ attentionFilters: filters }), [onUpdatePrefs]);
-  const clearAttentionFilters = useCallback(() => updateAttentionFilters(DEFAULT_ATTENTION_FILTERS), [updateAttentionFilters]);
+  const clearAttentionFilters = useCallback(() => updateAttentionFilters({ ...DEFAULT_ATTENTION_FILTERS, byProject: Boolean(attentionFilters.byProject) }), [updateAttentionFilters, attentionFilters.byProject]);
   const attentionFilterControl = <AttentionFilterControl filters={attentionFilters} onChange={updateAttentionFilters} projects={projects} projectsLoaded={projectsLoaded} sessions={sessions} worktrees={worktrees} workflowRuns={workflowRuns} />;
   // The Backlog's filters are a row of chips, so what they are short of is
   // WIDTH: on the rail they wrap into four lines at page sizing and two at the

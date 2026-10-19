@@ -347,9 +347,22 @@ unit and its context, without changing the Needs-you boundary or item order.
 Settled history is filtered before paging; Archived remains lazy-loaded and
 filters only the history already read. Empty results say so and offer Clear
 filters rather than claiming there is no work. Header counts stay global;
-Needs you clears filters before focusing waiting work. A filtered drag is
-planned against the full working set so hidden items retain their positions.
-Pending settle/swipe exits stay visible until their existing command sends.
+Needs you clears filters before focusing waiting work, opening the first
+Needs-you Project group if needed. Pending settle/swipe exits stay visible
+until their existing command sends.
+
+The same popover offers Group: None / By Project, saved independently of Task
+grouping in `Prefs.attentionFilters.byProject`. Grouping does not count as a
+filter, and clearing filters keeps it. Needs you stays before the working set;
+each gets its own shared `ListGroupSection` Project bands. Settled and loaded
+Archived history group inside their existing shelves, with non-sticky nested
+bands. Projects follow registry order, unknown Projects follow, and Unassigned
+is last. Each group keeps its existing item order. A cluster or Workflow Run
+belongs to its owner's Project and stays whole, including cross-Project peers.
+Group disclosure is remembered per tab; selected rows reopen their group.
+Reordering stays inside a Project when grouped and includes filtered-out items
+of that Project, so hidden items keep their positions and dragging never
+changes Project membership.
 
 The cards hold still: a card's state never moves it. **Needs you** and the
 working set below it are each ordered by one number per item, highest first —

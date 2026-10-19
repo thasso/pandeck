@@ -9,9 +9,10 @@ export interface AttentionFilters {
   project: BacklogProjectFilter;
   /** Empty or all-selected means all states, as in the Task status filter. */
   statuses: AttentionFilterStatus[];
+  byProject?: boolean;
 }
 
-export const DEFAULT_ATTENTION_FILTERS: AttentionFilters = { project: ALL_PROJECT_FILTER, statuses: [] };
+export const DEFAULT_ATTENTION_FILTERS: AttentionFilters = { project: ALL_PROJECT_FILTER, statuses: [], byProject: false };
 
 export function normalizeAttentionFilters(value: unknown): AttentionFilters {
   if (!value || typeof value !== "object") return DEFAULT_ATTENTION_FILTERS;
@@ -22,6 +23,7 @@ export function normalizeAttentionFilters(value: unknown): AttentionFilters {
       ? { kind: "project", projectId: project.projectId.trim() }
       : project?.kind === "unassigned" ? { kind: "unassigned" } : ALL_PROJECT_FILTER,
     statuses: ATTENTION_FILTER_STATUSES.filter((status) => Array.isArray(stored.statuses) && stored.statuses.includes(status)),
+    byProject: stored.byProject === true,
   };
 }
 
@@ -33,6 +35,22 @@ export function attentionFilterCount(filters: AttentionFilters): number {
 export function attentionProjectsBySession(sessions: readonly SessionListItem[], worktrees: readonly WorktreeRecord[] | null): Map<string, string | null> {
   const worktreeProjects = new Map((worktrees ?? []).map((worktree) => [worktree.id, worktree.projectId]));
   return new Map(sessions.map((session) => [session.id, session.projectId?.trim() || (session.worktreeId ? worktreeProjects.get(session.worktreeId) : null) || null]));
+}
+
+/** Group whole units, keeping their manual order inside each Project. Registry
+ * order comes first, then unknown Projects, with Unassigned last. */
+export function groupAttentionByProject<T>(items: readonly T[], projectFor: (item: T) => string | null, projectOrder: readonly string[]): { projectId: string | null; items: T[] }[] {
+  const groups = new Map<string | null, T[]>();
+  for (const item of items) {
+    const id = projectFor(item);
+    const group = groups.get(id);
+    if (group) group.push(item);
+    else groups.set(id, [item]);
+  }
+  const order = new Map(projectOrder.map((id, index) => [id, index]));
+  const rank = (id: string | null) => id === null ? order.size + 1 : order.get(id) ?? order.size;
+  return [...groups].sort(([a], [b]) => rank(a) - rank(b) || (a ?? "").localeCompare(b ?? ""))
+    .map(([projectId, members]) => ({ projectId, items: members }));
 }
 
 function matches(filters: AttentionFilters, projectId: string | null | undefined, status: AttentionFilterStatus): boolean {
