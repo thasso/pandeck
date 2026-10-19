@@ -51,6 +51,7 @@ export class AgentSpawnRefusedError extends Error {
 
 /** Everything a spawn needs from one definition. */
 export interface AgentSpawnRuntime {
+  peerTurnCap?: number;
   agent: SessionAgent;
   description: string;
   provider: string;
@@ -279,9 +280,19 @@ function roleOf({ manifest, blob }: AgentDefinitionRead): AgentRole {
 export async function resolveAgentRole(
   name: string,
   scanned?: { library: LibraryStore; scan: LibraryScan },
-): Promise<{ role: AgentRole; listed: AgentModelChoice[] }> {
+): Promise<{
+  role: AgentRole;
+  listed: AgentModelChoice[];
+  peerTurnCap?: number;
+}> {
   const read = await readAgentDefinition(name, scanned);
-  return { role: roleOf(read), listed: read.listed };
+  return {
+    role: roleOf(read),
+    listed: read.listed,
+    ...(read.manifest.peerTurns !== undefined
+      ? { peerTurnCap: read.manifest.peerTurns }
+      : {}),
+  };
 }
 
 /**
@@ -295,7 +306,7 @@ export async function resolveAgentOnRuntime(
   runtime: { provider: string; modelId: string; thinkingLevel: ThinkingLevel },
   /** The account it runs on, which must offer the model. */
   profileId: string,
-): Promise<SessionAgent> {
+): Promise<{ agent: SessionAgent; peerTurnCap?: number }> {
   const read = await readAgentDefinition(name);
   let offered: boolean;
   try {
@@ -320,12 +331,17 @@ export async function resolveAgentOnRuntime(
       choice.runtime.thinkingLevel === runtime.thinkingLevel,
   )?.runtime;
   return {
-    ...roleOf(read),
-    provider: runtime.provider,
-    model: runtime.modelId,
-    ...(listed?.pinnedModel ? { pinnedModel: listed.pinnedModel } : {}),
-    effort: runtime.thinkingLevel,
-    runtimeSource: listed ? "definition" : "user",
+    ...(read.manifest.peerTurns !== undefined
+      ? { peerTurnCap: read.manifest.peerTurns }
+      : {}),
+    agent: {
+      ...roleOf(read),
+      provider: runtime.provider,
+      model: runtime.modelId,
+      ...(listed?.pinnedModel ? { pinnedModel: listed.pinnedModel } : {}),
+      effort: runtime.thinkingLevel,
+      runtimeSource: listed ? "definition" : "user",
+    },
   };
 }
 
@@ -471,6 +487,9 @@ async function spawnRuntimeOf(
       runtimeSource: "definition",
       ...(modelFallbackReason ? { modelFallbackReason } : {}),
     },
+    ...(manifest.peerTurns !== undefined
+      ? { peerTurnCap: manifest.peerTurns }
+      : {}),
     description: manifest.description,
     provider: model.provider,
     modelId: model.id,

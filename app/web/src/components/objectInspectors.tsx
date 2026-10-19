@@ -33,6 +33,9 @@ import {
 } from "lucide-react";
 import {
   providerLabel,
+  MIN_SESSION_PEER_TURN_CAP,
+  MAX_SESSION_PEER_TURN_CAP,
+  DEFAULT_SESSION_PEER_TURN_CAP,
   type ProjectRecord,
   type ProjectStatus,
   type PullRequestInventoryItem,
@@ -65,6 +68,13 @@ import {
   type InspectorRelationGroup,
 } from "./shell/Inspector.tsx";
 import { TranscriptViewRows, type ChatViewPrefs } from "./ChatHeaderMenu.tsx";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "./ui/select.tsx";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { Button } from "./ui/button.tsx";
@@ -1449,6 +1459,7 @@ export function sessionInspectorActions({
  */
 export function SessionInspector({
   sessionId,
+  onSetPeerTurnCap,
   originTask,
   relatedTasks,
   sessionTasks,
@@ -1473,6 +1484,8 @@ export function SessionInspector({
   children,
 }: {
   sessionId: string | undefined;
+  onSetPeerTurnCap?:
+    ((sessionId: string, cap: number | null) => void) | undefined;
   originTask?: TaskBackRef | undefined;
   relatedTasks: TaskSummary[];
   /** Session-scoped task progress merged into the inspector's single Tasks section. */
@@ -1560,6 +1573,14 @@ export function SessionInspector({
           alwaysShown: true,
           content: (
             <SessionDetails
+              peerTurnCap={
+                sessions.find((item) => item.id === sessionId)?.peerTurnCap
+              }
+              onSetPeerTurnCap={
+                sessionId && onSetPeerTurnCap
+                  ? (cap) => onSetPeerTurnCap(sessionId, cap)
+                  : undefined
+              }
               project={
                 worktree?.projectId
                   ? projects.find(
@@ -1723,6 +1744,8 @@ function withPeerPrompts(
  * and thinking level it runs on now), as the Task inspector's property list.
  */
 function SessionDetails({
+  peerTurnCap,
+  onSetPeerTurnCap,
   project,
   worktree,
   worktreeStatus,
@@ -1731,6 +1754,8 @@ function SessionDetails({
   thinkingLevel,
   openers,
 }: {
+  peerTurnCap: number | undefined;
+  onSetPeerTurnCap: ((cap: number | null) => void) | undefined;
   project: ProjectRecord | undefined;
   worktree: WorktreeRelationSource | undefined;
   worktreeStatus: WorktreeGitStatus | undefined;
@@ -1747,6 +1772,40 @@ function SessionDetails({
   const branch = worktreeStatus?.branch ?? worktree?.branch;
   return (
     <PropertyList>
+      {onSetPeerTurnCap ? (
+        <>
+          <PropertyLabel>Peer turns at once</PropertyLabel>
+          <Select
+            value={peerTurnCap?.toString() ?? "default"}
+            onValueChange={(value) => {
+              if (value !== null)
+                onSetPeerTurnCap(value === "default" ? null : Number(value));
+            }}
+          >
+            <SelectTrigger size="sm" aria-label="Peer turns at once">
+              <SelectValue>
+                {peerTurnCap ?? `Default (${DEFAULT_SESSION_PEER_TURN_CAP})`}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">
+                Default ({DEFAULT_SESSION_PEER_TURN_CAP})
+              </SelectItem>
+              {Array.from(
+                {
+                  length:
+                    MAX_SESSION_PEER_TURN_CAP - MIN_SESSION_PEER_TURN_CAP + 1,
+                },
+                (_, i) => i + MIN_SESSION_PEER_TURN_CAP,
+              ).map((cap) => (
+                <SelectItem key={cap} value={String(cap)}>
+                  {cap}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </>
+      ) : null}
       <PropertyLabel>Project</PropertyLabel>
       {project ? (
         <Button

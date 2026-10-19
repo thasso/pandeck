@@ -120,6 +120,29 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("peer-turns creation and changes require approval and show the exact change", async () => {
+  await call("agent_create", { ...definition, peerTurns: 10 });
+  let card = latestCard();
+  assert.equal(card.body.kind, "agentDefinition");
+  if (card.body.kind !== "agentDefinition") return;
+  assert.deepEqual(card.body.peerTurns, { after: 10 });
+  assert.equal(existsSync(manifest()), false);
+  await resolveApproval(card.id, "approved");
+  await call("agent_edit", {
+    name: definition.name,
+    reason: "Change peer cap",
+    edits: [{ oldText: "peer-turns: 10", newText: "peer-turns: 12" }],
+  });
+  card = latestCard();
+  assert.equal(card.status, "pending");
+  assert.equal(card.body.kind, "agentDefinition");
+  if (card.body.kind !== "agentDefinition") return;
+  assert.deepEqual(card.body.peerTurns, { before: 10, after: 12 });
+  assert.match(readFileSync(manifest(), "utf8"), /peer-turns: 10/);
+  await resolveApproval(card.id, "approved");
+  assert.match(readFileSync(manifest(), "utf8"), /peer-turns: 12/);
+});
+
 describe("agent_create", () => {
   test("proposes a card naming the resolved model and writes nothing", async () => {
     const { result, text } = await call("agent_create", definition);
@@ -774,53 +797,68 @@ describe("agent tool races and pins", () => {
     assert.match(readFileSync(manifest(), "utf8"), /model: "claude-opus-5-5"/);
   });
 
-  test("a direct edit refuses when the locked file would now change the model", async () => {
-    await createApproved();
-    // Preview: the edit only touches the body.
-    await writeFile(
-      manifest(),
-      readFileSync(manifest(), "utf8").replace(
-        "You are a test reviewer.",
-        "You are a test reviewer for sonnet-fans.",
-      ),
-    );
-    await handCommit("Body mentions sonnet-fans");
-    let armed = true;
-    class RacingStore extends LibraryStore {
-      override async commitMutation<T>(
-        ...args: Parameters<LibraryStore["commitMutation"]>
-      ): Promise<{ value: T; commit: never; status: never }> {
-        if (armed) {
-          armed = false;
-          // Between the preview and the locked write, the target text moves
-          // into the model line.
-          await writeFile(
-            manifest(),
-            readFileSync(manifest(), "utf8")
-              .replace('model: "sonnet"', 'model: "sonnet-fans"')
-              .replace(" for sonnet-fans.", "."),
-          );
-          await handCommit("Model is now sonnet-fans");
+  test.each([
+    {
+      key: "model",
+      from: "sonnet-fans",
+      to: "opus-fans",
+      oldLine: 'model: "sonnet"',
+      nextLine: 'model: "sonnet-fans"',
+    },
+    {
+      key: "peer-turns",
+      from: "10",
+      to: "12",
+      oldLine: "effort: medium",
+      nextLine: "effort: medium\npeer-turns: 10",
+    },
+  ])(
+    "a direct edit refuses when the locked file would now change $key",
+    async ({ from, to, oldLine, nextLine }) => {
+      await createApproved();
+      // Preview changes the body only; a concurrent edit moves the target into frontmatter.
+      await writeFile(
+        manifest(),
+        readFileSync(manifest(), "utf8").replace(
+          "You are a test reviewer.",
+          `You are a test reviewer for ${from}.`,
+        ),
+      );
+      await handCommit("Body mentions target");
+      let armed = true;
+      class RacingStore extends LibraryStore {
+        override async commitMutation<T>(
+          ...args: Parameters<LibraryStore["commitMutation"]>
+        ): Promise<{ value: T; commit: never; status: never }> {
+          if (armed) {
+            armed = false;
+            await writeFile(
+              manifest(),
+              readFileSync(manifest(), "utf8")
+                .replace(oldLine, nextLine)
+                .replace(` for ${from}.`, "."),
+            );
+            await handCommit("Move target to frontmatter");
+          }
+          return super.commitMutation(...(args as [never, never])) as never;
         }
-        return super.commitMutation(...(args as [never, never])) as never;
       }
-    }
-    const racing = new RacingStore(agentKind, root);
-    setAgentToolLibraryForTests(() => racing);
-    await assert.rejects(
-      tool("agent_edit").execute(
-        {
-          name: "test-reviewer",
-          edits: [{ oldText: "sonnet-fans", newText: "opus-fans" }],
-          reason: "Retarget fans",
-        },
-        ctx(),
-      ),
-      /changed since this edit was checked, and the edit would now change its persona, model or effort/,
-    );
-    assert.equal(armed, false);
-    assert.match(readFileSync(manifest(), "utf8"), /model: "sonnet-fans"/);
-  });
+      setAgentToolLibraryForTests(() => new RacingStore(agentKind, root));
+      await assert.rejects(
+        tool("agent_edit").execute(
+          {
+            name: "test-reviewer",
+            edits: [{ oldText: from, newText: to }],
+            reason: "Change target",
+          },
+          ctx(),
+        ),
+        /changed since this edit was checked.*peer-turns/,
+      );
+      assert.equal(armed, false);
+      assert.ok(readFileSync(manifest(), "utf8").includes(nextLine));
+    },
+  );
 
   test("a hand edit made while the locked check awaits is refused, not overwritten", async () => {
     await createApproved();

@@ -363,7 +363,7 @@ test("a picked runtime that is a listed model at its effort runs as listed, pin 
       effort: "high",
     }),
   );
-  const listed = await resolveAgentOnRuntime(
+  const { agent: listed } = await resolveAgentOnRuntime(
     "test-reviewer",
     { provider: "claude-sdk", modelId: "opus", thinkingLevel: "high" },
     "acct-claude-sdk",
@@ -371,7 +371,7 @@ test("a picked runtime that is a listed model at its effort runs as listed, pin 
   assert.equal(listed.runtimeSource, "definition");
   assert.equal(listed.pinnedModel, "claude-opus-5-5");
   // Another effort is the user's own pick: no pin, and the role is the same.
-  const picked = await resolveAgentOnRuntime(
+  const { agent: picked } = await resolveAgentOnRuntime(
     "test-reviewer",
     { provider: "claude-sdk", modelId: "opus", thinkingLevel: "low" },
     "acct-claude-sdk",

@@ -93,6 +93,7 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
     promptEvidence: evidence,
     additionalSystemPrompt: "Be brief.",
     title: "Fix the build",
+    peerTurnCap: 10,
   });
 
   assert.equal(order[0], "link");
@@ -100,6 +101,7 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
   assert.equal(order[1], 'acquire:conditions=true:skills=["alpha"]');
   assert.equal(order[2], "title:Fix the build");
   assert.equal(sessionStore.get("claude-new")?.requiresEnterprise, true);
+  assert.equal(sessionStore.get("claude-new")?.peerTurnCap, 10);
   assert.deepEqual(acquire.mock.calls[0]?.[1], {
     agentType: "developer",
     credentialProfileId: enterpriseProfileId,
@@ -110,6 +112,27 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
     additionalSystemPrompt: "Be brief.",
     mode: "plan",
   });
+});
+
+test("reopening Claude never reapplies a creation cap after override or reset", async () => {
+  claudeStore([]);
+  const exists = vi.spyOn(claudeSdkStore, "exists").mockReturnValue(false);
+  const spec = {
+    harness: "claude-sdk" as const,
+    id: "cap-reopen",
+    agentType: "assistant" as const,
+    credentialProfileId: ordinaryProfileId,
+    peerTurnCap: 10,
+  };
+  await createSession(spec);
+  assert.equal(sessionStore.get(spec.id)?.peerTurnCap, 10);
+  exists.mockReturnValue(true);
+  sessionStore.setPeerTurnCap(spec.id, 12);
+  await createSession(spec);
+  assert.equal(sessionStore.get(spec.id)?.peerTurnCap, 12);
+  sessionStore.setPeerTurnCap(spec.id, null);
+  await createSession(spec);
+  assert.equal(sessionStore.get(spec.id)?.peerTurnCap, undefined);
 });
 
 test("enterprise sessions refuse missing or ordinary accounts before creating either harness", async () => {
@@ -261,6 +284,7 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
 
   await createSession({
     harness: "pi",
+    peerTurnCap: 10,
     agentType: "developer",
     thinkingLevel: "low",
     mode: "plan",
@@ -288,6 +312,7 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
     },
   ]);
   const row = sessionStore.get("pi-new");
+  assert.equal(row?.peerTurnCap, 10);
   assert.equal(row?.harness, "pi");
   assert.equal(row?.purpose, "draft");
   assert.equal(row?.mode, "plan");

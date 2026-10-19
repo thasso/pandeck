@@ -23,6 +23,7 @@ import {
   BROADCAST_TOPICS,
   INITIATIVE_LAYOUT_COLLAPSE_LIMIT,
   isHarness,
+  isSessionPeerTurnCap,
   isPeerRuntimeRelativeCost,
   MAX_INBOX_POSITIONS,
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
@@ -1138,6 +1139,11 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   resolveApproval: validateResolveApproval,
   revokeApprovalGrant: (msg) =>
     checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
+  setSessionPeerTurnCap: (msg) =>
+    checkRequiredFields(msg, { sessionId: STRING }) ??
+    (msg.cap === null || isSessionPeerTurnCap(msg.cap)
+      ? null
+      : "cap must be an integer from 1 to 16, or null"),
   grantApprovalForSession: (msg) =>
     checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
   resolvePullRequestCardTask: (msg) => {

@@ -135,19 +135,28 @@ the outcome:
   the coordinator's job. Choose it for experimentation, where a cheap wrong
   answer is recoverable.
 
-  Direct `spawn` batches admit at most four concurrent counted peer turns per
-  spawner. A counted child holds a slot while running or while a prompt from its
-  spawner is queued or being dispatched. Runtimes the user marked
-  `relativeCost: "low"` neither need nor hold a slot, with no bound on low-cost
-  turns. A profile row uses its own cost label. An agent-definition row is low
-  only when at least one enabled approved runtime matches its provider, model
-  and thinking level, and every match is low. Account pins do not affect that
-  match. Unknown or conflicting cost counts. The admitted class stays fixed for
-  the child. A low-to-counted change before creation refuses that row; a
-  counted-to-low change still counts. A batch reserves only its counted rows and
-  refuses as a whole if those exceed available slots. Card-approved `propose`
-  spawns are outside this admission gate. Each batch still has at most eight
-  rows.
+  Direct `spawn` batches use the spawner's persisted concurrent counted peer
+  turn cap, default 4, bounded to integers 1-16. The user can set or reset it
+  under **Peer turns at once** in any session's inspector. Agents cannot change
+  their own cap. Lowering it leaves existing turns alone and gates only new
+  starts. A refusal names the current cap and the inspector control. A `spawn`
+  row may set `peerTurnCap` for its child, no higher than the spawner's cap
+  captured before batch validation. `propose` rows refuse that field. Initial
+  precedence is row > definition `peer-turns` > default 4. Definition defaults
+  are user-authorized and may exceed the spawner's cap. The value is fixed at
+  creation, not reapplied on resume. Forks start unset; resetting a session
+  returns to 4, not to its definition's default. A counted child holds a slot
+  while running or while a prompt from its spawner is queued or being
+  dispatched. Runtimes the user marked `relativeCost: "low"` neither need nor
+  hold a slot, with no bound on low-cost turns. A profile row uses its own cost
+  label. An agent-definition row is low only when at least one enabled approved
+  runtime matches its provider, model and thinking level, and every match is
+  low. Account pins do not affect that match. Unknown or conflicting cost
+  counts. The admitted class stays fixed for the child. A low-to-counted change
+  before creation refuses that row; a counted-to-low change still counts. A
+  batch reserves only its counted rows and refuses as a whole if those exceed
+  available slots. Card-approved `propose` spawns are outside this admission
+  gate. Each batch still has at most eight rows.
 
   #### Peer-message hop limit
 

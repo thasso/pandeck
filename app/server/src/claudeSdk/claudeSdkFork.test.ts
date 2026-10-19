@@ -410,6 +410,7 @@ test("forking cuts the native transcript, the runtime log and the record alike",
     "first",
     "second",
   ]);
+  sessionStore.setPeerTurnCap("fork-parent", 10);
 
   // The id the CLIENT holds is a runtime log entry id — never the session
   // record's own `csa-*` id. Forking must accept exactly that.
@@ -516,6 +517,7 @@ test("forking cuts the native transcript, the runtime log and the record alike",
     parentAgent,
     "the child continues as the parent's frozen agent definition",
   );
+  assert.equal(sessionStore.get(child.id)?.peerTurnCap, undefined);
   assert.deepEqual(
     sessionRuntime
       .get("fork-parent")!

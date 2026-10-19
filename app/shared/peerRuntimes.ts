@@ -32,6 +32,19 @@ import {
  */
 export type StoredThinkingLevel = ThinkingLevel | (string & {});
 
+export const MIN_SESSION_PEER_TURN_CAP = 1;
+export const MAX_SESSION_PEER_TURN_CAP = 16;
+export const DEFAULT_SESSION_PEER_TURN_CAP = 4;
+
+export function isSessionPeerTurnCap(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= MIN_SESSION_PEER_TURN_CAP &&
+    value <= MAX_SESSION_PEER_TURN_CAP
+  );
+}
+
 /**
  * One approved runtime row as it is persisted in app settings.
  *

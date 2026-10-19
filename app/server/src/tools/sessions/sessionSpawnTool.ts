@@ -24,6 +24,7 @@
  * What either path creates is an ordinary session the user can read, re-prompt
  * and take over — never a subagent, and nothing here reaches that registry.
  */
+import { isSessionPeerTurnCap } from "@assistant/shared";
 import type { AgentModelChoice } from "../../agents/agentRuntime.ts";
 import {
   listSpawnableAgents,
@@ -41,7 +42,6 @@ import {
   directSpawnReportingSuffix,
   peerRuntimeRoster,
   PeerRuntimeRefusedError,
-  MAX_CONCURRENT_DIRECT_PEER_TURNS,
 } from "../../peerSpawnRuntimes.ts";
 import {
   buildSpawnProposal,
@@ -84,7 +84,7 @@ function makeSessionSpawnTool() {
           type: "array",
           minItems: 1,
           maxItems: MAX_SPAWN_ROWS,
-          description: `The sessions, at most ${MAX_SPAWN_ROWS}. At most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} directly spawned peer turns may run at once; runtimes the user marked low cost don't count and have no bound. Required for "spawn" and "propose", forbidden for "profiles" and "agents".`,
+          description: `The sessions, at most ${MAX_SPAWN_ROWS}. Your session's concurrent peer turn cap applies (default 4, user-set in the inspector); runtimes the user marked low cost don't count and have no bound. Required for "spawn" and "propose", forbidden for "profiles" and "agents".`,
           items: {
             type: "object",
             additionalProperties: false,
@@ -139,6 +139,13 @@ function makeSessionSpawnTool() {
                 type: "boolean",
                 description:
                   'Record an awaited answer. Defaults to true on coordinator-owned "spawn", false on "propose" and user-owned rows.',
+              },
+              peerTurnCap: {
+                type: "integer",
+                minimum: 1,
+                maximum: 16,
+                description:
+                  'Only for "spawn": child cap, no higher than your current cap. Overrides the definition default; otherwise default 4. Agents cannot change their own cap.',
               },
               inheritGrants: {
                 type: "boolean",
@@ -357,6 +364,9 @@ async function runDirectSpawn(
       ...(row.responseRequested === undefined
         ? {}
         : { responseRequested: row.responseRequested }),
+      ...(row.peerTurnCap !== undefined
+        ? { peerTurnCap: row.peerTurnCap }
+        : {}),
       ...(row.inheritGrants === undefined
         ? {}
         : { inheritGrants: row.inheritGrants }),
@@ -500,6 +510,7 @@ function readOperation(value: unknown): SpawnOperation {
  * `agentType` is absent exactly on an agent row.
  */
 type ParsedRow = Omit<SpawnRequestRow, "agentType" | "agent"> & {
+  peerTurnCap?: number;
   agentType?: "developer" | "assistant";
   profileId?: string;
   agent?: string;
@@ -517,6 +528,7 @@ const ROW_PROPERTIES = [
   "taskId",
   "responseRequested",
   "inheritGrants",
+  "peerTurnCap",
   "owner",
   "provider",
   "modelId",
@@ -584,6 +596,8 @@ function checkRawRow(
     throw new Error(
       `${where} names a profileId, which belongs to operation "spawn". A proposal lets the user pick the runtime, so drop it or spawn directly.`,
     );
+  if (operation !== "spawn" && stated(row, "peerTurnCap"))
+    throw new Error(`${where}.peerTurnCap belongs only to operation "spawn".`);
   if (stated(row, "agent") && stated(row, "agentType"))
     throw new Error(
       `${where} names an agent and sets agentType: the definition decides the persona, so drop agentType.`,
@@ -594,6 +608,13 @@ function checkRawRow(
   for (const key of ROW_PROPERTIES) {
     if (!stated(row, key)) continue;
     const value = row[key];
+    if (key === "peerTurnCap") {
+      if (!isSessionPeerTurnCap(value))
+        throw new Error(
+          `${where}.peerTurnCap must be an integer from 1 to 16.`,
+        );
+      continue;
+    }
     if (
       key === "responseRequested" ||
       key === "requiresEnterprise" ||
@@ -635,6 +656,9 @@ function readRows(
         ? { agentType: text(row.agentType) as ParsedRow["agentType"] }
         : {}),
       prompt: text(row.prompt),
+      ...(isSessionPeerTurnCap(row.peerTurnCap)
+        ? { peerTurnCap: row.peerTurnCap }
+        : {}),
       ...(typeof row.responseRequested === "boolean"
         ? { responseRequested: row.responseRequested }
         : {}),

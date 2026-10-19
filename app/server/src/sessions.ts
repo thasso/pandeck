@@ -522,6 +522,9 @@ export async function listSessions(
         ? { credentialProfileId: row.credentialProfileId }
         : {}),
       ...(row.requiresEnterprise ? { requiresEnterprise: true } : {}),
+      ...(row.peerTurnCap !== undefined
+        ? { peerTurnCap: row.peerTurnCap }
+        : {}),
       ...(spawnedParentByChild.has(key)
         ? {
             spawnedBySessionId: spawnedParentByChild.get(key)!.parentSessionId,

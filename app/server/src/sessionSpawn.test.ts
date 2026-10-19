@@ -94,6 +94,7 @@ const { resetDirectPeerChildrenForTests } =
   await import("./peerSpawnRuntimes.ts");
 const inspection = await import("./tools/sessions/sessionInspection.ts");
 const { createSession } = await import("./harnesses/create.ts");
+const { firstSendEngine } = await import("./harnesses/firstSend.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const skillResolver = await import("./skills/skillResolver.ts");
@@ -225,6 +226,9 @@ beforeEach(() => {
         credentialProfileId: spec.credentialProfileId,
         requiresEnterprise: spec.requiresEnterprise === true,
         title: spec.title,
+        ...(spec.peerTurnCap !== undefined
+          ? { peerTurnCap: spec.peerTurnCap }
+          : {}),
         ...(spec.agent ? { agent: spec.agent } : {}),
       };
       if (spec.harness === "claude-sdk")
@@ -2153,6 +2157,115 @@ const agentRow = (patch: Record<string, unknown> = {}) => ({
   prompt: "Review the auth refactor and report back.",
   agent: "test-reviewer",
   ...patch,
+});
+
+test.each(["sonnet", "gpt-5"])(
+  "%s definition cap is creation-only, overridden by a spawn row and stored before delivery",
+  async (model) => {
+    await useAgents();
+    writeAgent({ model, peerTurns: 10 });
+    const worktreeId = activeWorktree(`wt-cap-agent-${model}`);
+    sessionStore.setPeerTurnCap(SENDER, 6);
+    const caps: Array<number | undefined> = [];
+    setSessionSpawnDepsForTests({
+      deliver: async ({ targetSessionId }) => {
+        caps.push(sessionStore.get(targetSessionId)?.peerTurnCap);
+      },
+    });
+    const results = await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: [
+        { ...agentRow(), worktreeId },
+        { ...agentRow(), worktreeId, peerTurnCap: 3 },
+      ],
+    });
+    expect(results.every((result) => result.sessionId && !result.error)).toBe(
+      true,
+    );
+    expect(caps).toEqual([10, 3]);
+    expect(sessionStore.get(SENDER)?.peerTurnCap).toBe(6);
+    sessionStore.setPeerTurnCap(SENDER, null);
+  },
+);
+
+test("spawn row caps are validated for the whole batch before any creation and refused on proposals", async () => {
+  approveRuntimes();
+  sessionStore.setPeerTurnCap(SENDER, 6);
+  try {
+    for (const peerTurnCap of [7, 0, 17, 1.5, "4", null]) {
+      await expect(
+        spawnDirect([{ ...row(), profileId: "pr_terra", peerTurnCap }]),
+      ).rejects.toThrow(/peerTurnCap/);
+      expect(recorded.pi).toHaveLength(0);
+      expect(recorded.claude).toHaveLength(0);
+    }
+    await expect(propose([row({ peerTurnCap: 3 })])).rejects.toThrow(/spawn/);
+    const caps: Array<number | undefined> = [];
+    setSessionSpawnDepsForTests({
+      deliver: async ({ targetSessionId }) => {
+        caps.push(sessionStore.get(targetSessionId)?.peerTurnCap);
+      },
+    });
+    await spawnDirect([{ ...row(), profileId: "pr_terra", peerTurnCap: 6 }]);
+    expect(caps).toEqual([6]);
+    expect(sessionStore.get(SENDER)?.peerTurnCap).toBe(6);
+  } finally {
+    sessionStore.setPeerTurnCap(SENDER, null);
+  }
+});
+
+test.each([
+  ["claude-sdk", "sonnet", false],
+  ["claude-sdk", "sonnet", true],
+  ["pi", "gpt-5", false],
+  ["pi", "gpt-5", true],
+] as const)(
+  "%s first send picked=%s applies the creation-time definition cap",
+  async (harness, modelId, picked) => {
+    await useAgents();
+    writeAgent({ model: modelId, peerTurns: 10 });
+    const provider = harness === "pi" ? "openai-codex" : "claude-sdk";
+    const prepared = await firstSendEngine(harness).prepare(
+      {
+        type: "harnessSend",
+        harness,
+        id: `cap-first-${harness}-${picked}`,
+        agentType: "developer",
+        text: "Review",
+        agent: "test-reviewer",
+        ...(picked
+          ? { modelProvider: provider, modelId, thinkingLevel: "low" }
+          : {}),
+      },
+      accountFor(harness === "pi" ? "openai-codex" : "claude"),
+    );
+    expect("create" in prepared).toBe(true);
+    if (!("create" in prepared)) return;
+    writeAgent({ model: modelId, peerTurns: 12 });
+    const created = await prepared.create({
+      worktree: null,
+      evidence: { hasAttachments: false },
+    });
+    expect("live" in created).toBe(true);
+    if ("live" in created)
+      expect(sessionStore.get(created.live.sessionId)?.peerTurnCap).toBe(12);
+  },
+);
+
+test("card-approved agent creation takes the definition cap", async () => {
+  await useAgents();
+  writeAgent({ peerTurns: 10 });
+  activeWorktree("wt-card-cap");
+  const { card } = await propose([agentRow({ worktreeId: "wt-card-cap" })]);
+  const caps: Array<number | undefined> = [];
+  setSessionSpawnDepsForTests({
+    deliver: async ({ targetSessionId }) => {
+      caps.push(sessionStore.get(targetSessionId)?.peerTurnCap);
+    },
+  });
+  const resolved = await resolveApproval(card.id, "approved");
+  expect(resolved.card.status).toBe("executed");
+  expect(caps).toEqual([10]);
 });
 
 test("an agent row runs as its definition and freezes it for the session", async () => {

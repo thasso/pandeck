@@ -11,7 +11,7 @@
  *   (`resolveApprovedPeerRuntime`) — model and thinking never substitute; an
  *   account is routed only when the human approved Automatic, never for a pin;
  * - whether a coordinator may start another direct peer turn at this moment
- *   (`admitDirectPeerTurns`), a fixed cap excluding user-marked low-cost turns.
+ *   (`admitDirectPeerTurns`), a per-session cap excluding user-marked low-cost turns.
  *
  * It knows nothing about the subagent registry and must never import it: what
  * this roster starts is an ordinary `scope = "user"` session.
@@ -26,6 +26,7 @@ import type {
   ThinkingLevel,
 } from "@assistant/shared";
 import {
+  DEFAULT_SESSION_PEER_TURN_CAP,
   isThinkingLevel,
   peerRuntimeDisplayName,
   peerRuntimeFamilyOf,
@@ -37,6 +38,7 @@ import {
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
 import { pickAccount } from "./accountRouter.ts";
+import { sessionStore } from "./db/sessionStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { modelsForAccount } from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
@@ -46,7 +48,24 @@ import { runtimeStateFor } from "./tools/sessions/sessionInspection.ts";
  * How many counted peer turns one coordinator may have RUNNING at once through
  * the direct path. User-marked low-cost runtimes are exempt, with no bound.
  */
-export const MAX_CONCURRENT_DIRECT_PEER_TURNS = 4;
+export function directPeerTurnCapOf(sessionId: string): number {
+  return (
+    sessionStore.get(sessionId)?.peerTurnCap ?? DEFAULT_SESSION_PEER_TURN_CAP
+  );
+}
+
+/**
+ * User/approval-only domain writer, never an agent tool. Validation and persistence
+ * do not yield: approval executors can compare and set in one synchronous step.
+ */
+export function setSessionPeerTurnCap(
+  sessionId: string,
+  cap: number | null,
+): void {
+  sessionStore.setPeerTurnCap(sessionId, cap);
+  // Dynamic to avoid the hub -> catalog -> spawn initialization cycle.
+  void import("./hub.ts").then(({ hub }) => hub.broadcastSessions());
+}
 
 /** Every model one account can actually run, mirroring the settings projection. */
 export async function modelsForProfile(
@@ -445,10 +464,11 @@ export async function admitDirectPeerTurns(
 ): Promise<DirectPeerTurnClaim> {
   return withAdmissionLock(coordinatorSessionId, async () => {
     const held = await directPeerTurnsHeld(coordinatorSessionId);
-    const available = Math.max(0, MAX_CONCURRENT_DIRECT_PEER_TURNS - held);
+    const cap = directPeerTurnCapOf(coordinatorSessionId);
+    const available = Math.max(0, cap - held);
     if (counted > available)
       throw new PeerRuntimeRefusedError(
-        `You already have ${MAX_CONCURRENT_DIRECT_PEER_TURNS - available} directly spawned peer turn(s) running or starting; at most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} may run at once, so this batch of ${counted} counted turns was not started. Runtimes the user marked low cost don't count. Wait for results from the sessions you started, then spawn the rest.`,
+        `You already have ${held} directly spawned peer turn(s) running or starting; at most ${cap} may run at once, so this batch of ${counted} counted turns was not started. Runtimes the user marked low cost don't count. Wait for results from the sessions you started, then spawn the rest. The user can raise this cap in the session inspector.`,
       );
     reservedTurns.set(
       coordinatorSessionId,

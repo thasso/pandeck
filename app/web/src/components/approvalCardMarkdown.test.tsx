@@ -123,6 +123,7 @@ describe("approval card Markdown", () => {
       model: { after: ["opus"] },
       resolvedModels: [{ model: "claude-sdk/opus", effort: "high" }],
       effort: { after: "high" },
+      peerTurns: { before: 4, after: 10 },
       source: "---\nname: reviewer\n---\n**literal source**",
       reason: "Add the reviewer agent",
     };
@@ -132,6 +133,8 @@ describe("approval card Markdown", () => {
       "Reviews <code>diff</code> ranges <strong>independently</strong>.",
     );
     expect(html).toContain("**literal source**");
+    expect(html).toContain("Peer turns at once");
+    expect(html).toContain("10");
   });
 });
 
