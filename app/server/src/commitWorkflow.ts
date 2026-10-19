@@ -47,8 +47,8 @@ import {
   type HelperSourceContext,
 } from "./sessionEnterprise.ts";
 import {
-  CREDENTIAL_TOKEN_PATTERNS,
   redactCredentials,
+  textLooksLikeCredential,
 } from "./credentialRedaction.ts";
 
 const CUSTOM_TYPE = "workshop.commit";
@@ -106,6 +106,11 @@ export interface CommitWorkflowOptions {
    * untracked paths stay in the working tree and never enter the review.
    */
   stagedOnly?: boolean;
+  /**
+   * Caller-written message, committed as given instead of the generated one.
+   * The commit agent still reviews the change set; only its message is unused.
+   */
+  callerMessage?: string;
   /** One-shot user approval binds both the reviewed changes and the message. */
   approvedChange?: { fingerprint: string; message: string };
   signal?: AbortSignal;
@@ -579,12 +584,7 @@ function collectSessionContextSinceLastCommit(
 
 function lineLooksAddedSecret(line: string): boolean {
   if (!/^\+(?!\+)/.test(line)) return false;
-  const value = line.slice(1);
-  return [
-    /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-    ...CREDENTIAL_TOKEN_PATTERNS,
-    /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password)\b\s*[:=]\s*["'][^"']{12,}["']/i,
-  ].some((re) => re.test(value));
+  return textLooksLikeCredential(line.slice(1));
 }
 
 function suspiciousPath(path: string): string | undefined {
@@ -1365,7 +1365,11 @@ export async function runCommitWorkflow(
       return result;
     }
 
-    options.onProgress?.("Generating commit message…");
+    options.onProgress?.(
+      options.callerMessage === undefined
+        ? "Generating commit message…"
+        : "Reviewing changes…",
+    );
     const agentPrompt = composeAgentPrompt({
       repoRoot,
       headBefore,
@@ -1393,7 +1397,9 @@ export async function runCommitWorkflow(
           helperSource,
         );
     const commitMessage =
-      options.approvedChange?.message ?? formatCommitMessage(agent);
+      options.approvedChange?.message ??
+      options.callerMessage ??
+      formatCommitMessage(agent);
     const blockers = [...diffContext.blockers, ...agent.blockers];
     if (agent.status === "block" && agent.blockers.length === 0) {
       blockers.push({
@@ -1511,7 +1517,21 @@ export async function runCommitWorkflow(
         options.onProgress?.("Creating git commit…");
         const { dir, file } = await writeCommitMessageFile(commitMessage);
         try {
-          await git(["commit", "-F", file], repoRoot, options.signal);
+          // A caller's or user-approved message is the exact text: git's
+          // cleanup (or a configured `commit.cleanup=strip`) would drop `#`
+          // lines and blank runs the caller wrote. Generated ones keep it.
+          await git(
+            [
+              "commit",
+              ...(options.callerMessage !== undefined || options.approvedChange
+                ? ["--cleanup=verbatim"]
+                : []),
+              "-F",
+              file,
+            ],
+            repoRoot,
+            options.signal,
+          );
         } finally {
           rmSync(dir, { recursive: true, force: true });
         }

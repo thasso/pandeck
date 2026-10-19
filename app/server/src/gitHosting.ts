@@ -181,6 +181,14 @@ export interface GitHostingProvider {
    * with the provider's own message.
    */
   retargetPullRequest(prNumber: number, base: string): Promise<void>;
+  /** A pull request's current description, `""` when it has none. */
+  pullRequestBody(prNumber: number): Promise<string>;
+  /**
+   * Replace a pull request's description. Like a retarget it has no
+   * precondition, so the caller proves the pull request's identity before and
+   * reads {@link pullRequestBody} back after.
+   */
+  editPullRequestBody(prNumber: number, body: string): Promise<void>;
   /**
    * Merge one pull request and, when asked, delete its remote head branch — as
    * ONE call. Deleting the branch is part of merging, not a second step a
@@ -2183,6 +2191,21 @@ export function githubProvider(
         signal: signal(),
       });
     },
+    async pullRequestBody(prNumber) {
+      const res = await githubRequest<{ body?: string | null }>(
+        config,
+        "GET",
+        `${repoApi}/pulls/${prNumber}`,
+        { signal: signal() },
+      );
+      return res.data?.body ?? "";
+    },
+    async editPullRequestBody(prNumber, body) {
+      await githubRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
+        body: { body },
+        signal: signal(),
+      });
+    },
     async pullRequestDetail(prNumber) {
       const res = await githubRequest<GithubPull>(
         config,
@@ -2473,6 +2496,7 @@ export function githubProvider(
   provider.createPullRequest = forgetting(provider.createPullRequest);
   provider.markPullRequestReady = forgetting(provider.markPullRequestReady);
   provider.retargetPullRequest = forgetting(provider.retargetPullRequest);
+  provider.editPullRequestBody = forgetting(provider.editPullRequestBody);
   provider.mergePullRequest = forgetting(provider.mergePullRequest);
   provider.closePullRequest = forgetting(provider.closePullRequest);
   return provider;
@@ -2792,6 +2816,25 @@ export function forgejoProvider(
         );
       await forgejoRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
         body: { base },
+        signal: signal(),
+      });
+    },
+    async pullRequestBody(prNumber) {
+      const res = await forgejoRequest<{ body?: string | null }>(
+        config,
+        "GET",
+        `${repoApi}/pulls/${prNumber}`,
+        { signal: signal() },
+      );
+      return res.data?.body ?? "";
+    },
+    async editPullRequestBody(prNumber, body) {
+      if (!config.token)
+        throw new Error(
+          "A Forgejo access token is not configured. Add one in Settings → Forgejo.",
+        );
+      await forgejoRequest(config, "PATCH", `${repoApi}/pulls/${prNumber}`, {
+        body: { body },
         signal: signal(),
       });
     },

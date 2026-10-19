@@ -76,7 +76,10 @@ import {
 } from "../../worktrees/worktreeHosting.ts";
 import { isMainWorktreeId } from "../../worktrees/worktreeResolve.ts";
 import { patchPullRequestCard } from "../../pullRequestCards.ts";
-import { pullRequestIdentity } from "../../pullRequestIdentity.ts";
+import {
+  pullRequestIdentity,
+  repositoryKeyFromUrl,
+} from "../../pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "../../pullRequestInventory.ts";
 import { invalidatePullRequestInventorySnapshot } from "../../pullRequestInventorySync.ts";
 import { scheduleImmediatePoll } from "../../pullRequestWatcher.ts";
@@ -148,7 +151,7 @@ export interface WorktreeFinishPullRequestOperations {
   inventoryChanged(provider: GitHostingProvider, number: number): void;
 }
 
-const defaultFinishPullRequestOperations: WorktreeFinishPullRequestOperations =
+export const defaultFinishPullRequestOperations: WorktreeFinishPullRequestOperations =
   {
     resolve: async (worktreeId) => getWorktree(worktreeId),
     reserve: reserveWorktreeForMutation,
@@ -564,7 +567,7 @@ export function createWorktreeRetargetPullRequestTool(
  * Reserve an active spawned worktree, re-resolve it unchanged under the
  * reservation, derive its canonical pull request and run `act` on it.
  */
-async function withReservedManagedTarget<T>(
+export async function withReservedManagedTarget<T>(
   worktreeIdParam: string | undefined,
   ctx: ToolCallContext,
   operations: WorktreeFinishPullRequestOperations,
@@ -613,7 +616,7 @@ async function withReservedManagedTarget<T>(
  * response was lost. A failure here must not turn that write into a reported
  * provider failure, so it comes back as a warning.
  */
-function recordInventoryChange(
+export function recordInventoryChange(
   operations: WorktreeFinishPullRequestOperations,
   target: ManagedPullRequestTarget,
 ): string | undefined {
@@ -688,7 +691,7 @@ function validateRequest(
 /* --------------------------- common target resolution ---------------------- */
 
 /** The exact managed object this call may act on, proven from current state. */
-interface ManagedPullRequestTarget {
+export interface ManagedPullRequestTarget {
   row: WorktreeRow;
   target: ResolvedPushTarget;
   hosted: ManagedHostingTarget;
@@ -784,8 +787,18 @@ async function resolveManagedTarget(
     );
   // A live card that names ANOTHER worktree (or another branch pair) means this
   // number is being delivered by something else; refuse rather than project a
-  // finish onto it.
+  // finish onto it. Cards are matched by local checkout and number, so one
+  // checkout publishing to two repositories that both have this number would
+  // otherwise hand repository A's card to repository B's pull request.
+  const repository = repositoryKeyFromUrl(hosted.provider.repoWebUrl);
   for (const card of cards) {
+    const cardRepository = card.url
+      ? repositoryKeyFromUrl(card.url)
+      : undefined;
+    if (!repository || cardRepository !== repository)
+      throw new Error(
+        `Pull request #${pr.number} has a live card for ${cardRepository ?? "an unknown repository"}, not ${repository ?? hosted.provider.repoWebUrl}; nothing was done.`,
+      );
     if (card.worktreeId !== undefined && card.worktreeId !== row.id)
       throw new Error(
         `Pull request #${pr.number} has a live card owned by worktree ${card.worktreeId}, not ${row.id}; nothing was done.`,

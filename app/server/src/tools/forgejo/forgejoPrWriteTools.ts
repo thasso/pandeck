@@ -159,7 +159,7 @@ export const forgejoEditPullRequestTool =
     name: "forgejo_edit_pull_request",
     label: "Forgejo: Edit Pull Request",
     description:
-      "Prepare an edit of an existing Forgejo pull request: a replacement description, a new base branch (retarget), or both. An empty body clears the description. Never writes until the user approves the proposal. For managed worktrees, retarget with worktree_set_base and worktree_retarget_pull_request instead.",
+      "Prepare an edit of an existing Forgejo pull request: a replacement description, a new base branch (retarget), or both. An empty body clears the description. Never writes until the user approves the proposal. For managed worktrees, use worktree_update_pull_request_body for the description, or worktree_set_base and worktree_retarget_pull_request to retarget.",
     parameters: {
       type: "object",
       additionalProperties: false,

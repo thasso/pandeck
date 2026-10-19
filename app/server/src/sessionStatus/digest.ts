@@ -57,6 +57,7 @@ const KEY_TOOLS = new Set([
   "worktree_commit",
   "worktree_push",
   "worktree_create_pull_request",
+  "worktree_update_pull_request_body",
   "worktree_ready_pull_request",
   "worktree_retarget_pull_request",
   "worktree_finish_pull_request",
@@ -84,6 +85,7 @@ const KEY_TOOLS = new Set([
 /** The only key calls kept for old runs. */
 const MILESTONE_TOOLS = new Set([
   "worktree_create_pull_request",
+  "worktree_update_pull_request_body",
   "worktree_finish_pull_request",
   "session_spawn",
   "github_create_pull_request",

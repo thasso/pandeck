@@ -1,3 +1,5 @@
+import { refuseCredentialInCallerText } from "./callerAuthoredText.ts";
+
 export const MAX_PULL_REQUEST_TITLE_CHARS = 120;
 
 /** Validate an explicitly authored pull-request title without rewriting it. */
@@ -11,5 +13,6 @@ export function normalizeExplicitPullRequestTitle(value: string): string {
     throw new Error(
       `title exceeds ${MAX_PULL_REQUEST_TITLE_CHARS} characters after trimming whitespace.`,
     );
+  refuseCredentialInCallerText("title", title);
   return title;
 }

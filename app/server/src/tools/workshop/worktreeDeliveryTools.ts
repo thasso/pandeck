@@ -60,6 +60,7 @@ import {
   createWorktreeReadyPullRequestTool,
   createWorktreeRetargetPullRequestTool,
 } from "./worktreeFinishPullRequest.ts";
+import { createWorktreeUpdatePullRequestBodyTool } from "./worktreePullRequestBody.ts";
 import {
   beginPullRequestCard,
   finalizePullRequestCard,
@@ -79,6 +80,12 @@ import {
   MAX_PULL_REQUEST_TITLE_CHARS,
   normalizeExplicitPullRequestTitle,
 } from "../../pullRequestTitle.ts";
+import {
+  MAX_COMMIT_MESSAGE_CHARS,
+  MAX_PULL_REQUEST_BODY_CHARS,
+  normalizeCallerCommitMessage,
+  normalizeCallerPullRequestBody,
+} from "../../callerAuthoredText.ts";
 
 const MAX_CONTEXT_CHARS = 4_000;
 const BUSY_COMMIT_REFUSAL =
@@ -165,6 +172,7 @@ interface ManagedPullRequestRecoveryInput {
   provider: GitHostingProvider;
   taskId?: string;
   title?: string;
+  body?: string;
   onProgress?: (message: string) => void;
 }
 
@@ -245,6 +253,10 @@ export const defaultPullRequestOperations: WorktreePullRequestOperations = {
       assertMatchingManagedPullRequestTitleIntent(
         context?.explicitTitle,
         input.title,
+      );
+      assertMatchingManagedPullRequestBodyIntent(
+        context?.explicitBody,
+        input.body,
       );
       const finalized = await finalizePullRequestCard(card.id, input.taskId, {
         ...(input.onProgress ? { onProgress: input.onProgress } : {}),
@@ -335,7 +347,14 @@ const commitSchema = {
       type: "string",
       maxLength: MAX_CONTEXT_CHARS,
       description:
-        "Optional brief intent/context for checked message generation; it does not choose the message or files.",
+        "Optional brief intent/context for the review and message generation; it does not choose the message or files.",
+    },
+    message: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_COMMIT_MESSAGE_CHARS,
+      description:
+        "Optional exact commit message (subject line, blank line, body), committed as given instead of the generated one; outer whitespace is trimmed. The change set is reviewed either way. A message that looks like it contains a credential is refused.",
     },
     stagedOnly: {
       type: "boolean",
@@ -400,13 +419,20 @@ const pullRequestSchema = {
       type: "string",
       maxLength: MAX_CONTEXT_CHARS,
       description:
-        "Optional bounded intent for the configured pull-request authoring agent; it does not supply the body.",
+        "Optional bounded intent for the configured pull-request authoring agent when it writes the title or body.",
     },
     title: {
       type: "string",
       minLength: 1,
       maxLength: MAX_PULL_REQUEST_TITLE_CHARS,
       description: `Optional exact title for a newly created pull request. Outer whitespace is trimmed; the remainder must be nonblank, one line, and at most ${MAX_PULL_REQUEST_TITLE_CHARS} characters. Existing pull requests are adopted without renaming.`,
+    },
+    body: {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_PULL_REQUEST_BODY_CHARS,
+      description:
+        "Optional exact Markdown body for a newly created pull request, published as given instead of the generated one; outer whitespace is trimmed. Existing pull requests are adopted with their body; change it with worktree_update_pull_request_body.",
     },
     draft: {
       type: "boolean",
@@ -425,7 +451,7 @@ export function createWorktreeCommitTool(
     name: "worktree_commit",
     label: "Commit managed worktree",
     description:
-      "Create a normal checked commit in an active registered spawned worktree: the complete change set by default, or with stagedOnly only the index you staged yourself. Uses the same safety review and generated message as /commit and refuses a worktree another session may still be changing. If review blocks and you have a reason to proceed, force with reason requests a user approval card, never a silent bypass. It commits nothing until that exact proposal is approved; end your turn and wait for the outcome. Fix secrets or unresolved Git operations instead.",
+      "Create a normal checked commit in an active registered spawned worktree: the complete change set by default, or with stagedOnly only the index you staged yourself. Uses the same safety review as /commit, with the generated message unless you pass your own, and refuses a worktree another session may still be changing. If review blocks and you have a reason to proceed, force with reason requests a user approval card, never a silent bypass. It commits nothing until that exact proposal is approved; end your turn and wait for the outcome. Fix secrets or unresolved Git operations instead; a credential in your own message refuses outright.",
     parameters: commitSchema as unknown as Record<string, unknown>,
     async execute(params, ctx) {
       return executeWorktreeCommit(params, ctx, operations);
@@ -436,6 +462,7 @@ export function createWorktreeCommitTool(
 type WorktreeCommitParams = {
   worktreeId: string;
   context?: string;
+  message?: string;
   stagedOnly?: boolean;
   force?: boolean;
   reason?: string;
@@ -461,6 +488,10 @@ async function executeWorktreeCommit(
     throw new Error(`reason exceeds ${MAX_CONTEXT_CHARS} characters.`);
   if (reason && params.force !== true)
     throw new Error("reason is only used with force.");
+  const message =
+    params.message === undefined
+      ? undefined
+      : normalizeCallerCommitMessage(params.message);
 
   const initial = await operations.resolve(worktreeId);
   if (!initial || initial.status !== "active")
@@ -505,6 +536,7 @@ async function executeWorktreeCommit(
       requiresEnterprise,
       stagedOnly: params.stagedOnly === true,
       ...(context ? { additionalContext: context } : {}),
+      ...(message !== undefined ? { callerMessage: message } : {}),
       ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
       onProgress: (message) =>
         ctx.progress?.(jsonResult({ status: "running", message })),
@@ -818,6 +850,18 @@ export function assertMatchingManagedPullRequestTitleIntent(
   );
 }
 
+export function assertMatchingManagedPullRequestBodyIntent(
+  storedBody: string | undefined,
+  requestedBody: string | undefined,
+): void {
+  if (storedBody === requestedBody) return;
+  const describe = (body: string | undefined) =>
+    body === undefined ? "an agent-generated body" : "an explicit body";
+  throw new Error(
+    `The existing managed pull-request card reserved ${describe(storedBody)}, but this retry requested ${storedBody !== undefined && requestedBody !== undefined ? "a different explicit body" : describe(requestedBody)}. Retry with the original body intent or start a distinct delivery attempt.`,
+  );
+}
+
 function taskForManagedPullRequest(
   params: { taskId?: string },
   worktreeId: string,
@@ -858,6 +902,7 @@ export function createWorktreePullRequestTool(
   taskId?: string;
   context?: string;
   title?: string;
+  body?: string;
   draft?: boolean;
 }> &
   AgentTool {
@@ -866,12 +911,13 @@ export function createWorktreePullRequestTool(
     taskId?: string;
     context?: string;
     title?: string;
+    body?: string;
     draft?: boolean;
   }>({
     name: "worktree_create_pull_request",
     label: "Create managed pull request",
     description:
-      "Create or strictly adopt the canonical live pull-request card for a clean, fully pushed active registered spawned worktree. The server derives and verifies the target repository, same-named upstream, remote HEAD, head/base branches, body, and linked Task. The configured PR agent writes the default title; an optional title overrides it only for a new PR. Existing PRs are adopted without renaming. Default and non-default bases are pre-authorized. Use after worktree_commit and worktree_push, never generic provider PR creation. This creates but never merges.",
+      "Create or strictly adopt the canonical live pull-request card for a clean, fully pushed active registered spawned worktree. The server derives and verifies the target repository, same-named upstream, remote HEAD, head/base branches, and linked Task. The configured PR agent writes the title and body you do not pass; yours apply only to a new PR and are refused if they look like they contain a credential. Existing PRs are adopted unchanged. Default and non-default bases are pre-authorized. Use after worktree_commit and worktree_push, never generic provider PR creation. This creates but never merges.",
     parameters: pullRequestSchema as unknown as Record<string, unknown>,
     async execute(params, ctx) {
       return executeWorktreePullRequest(params, ctx, operations);
@@ -885,6 +931,7 @@ async function executeWorktreePullRequest(
     taskId?: string;
     context?: string;
     title?: string;
+    body?: string;
     draft?: boolean;
   },
   ctx: ToolCallContext,
@@ -902,6 +949,10 @@ async function executeWorktreePullRequest(
     params.title === undefined
       ? undefined
       : normalizeExplicitPullRequestTitle(params.title);
+  const explicitBody =
+    params.body === undefined
+      ? undefined
+      : normalizeCallerPullRequestBody(params.body);
 
   const initial = await operations.resolve(worktreeId);
   if (!initial || initial.status !== "active")
@@ -991,6 +1042,7 @@ async function executeWorktreePullRequest(
       provider: hosted.provider,
       ...(linkedTask ? { taskId: linkedTask.id } : {}),
       ...(explicitTitle !== undefined ? { title: explicitTitle } : {}),
+      ...(explicitBody !== undefined ? { body: explicitBody } : {}),
       onProgress,
     });
     const result =
@@ -1010,6 +1062,7 @@ async function executeWorktreePullRequest(
         },
         ...(linkedTask ? { taskId: linkedTask.id } : {}),
         ...(explicitTitle !== undefined ? { title: explicitTitle } : {}),
+        ...(explicitBody !== undefined ? { body: explicitBody } : {}),
         trustedTarget: {
           worktree: row,
           remote: target.remote,
@@ -1071,6 +1124,7 @@ export const worktreeDeliveryTools = [
   createWorktreeCommitTool(),
   createWorktreePushTool(),
   createWorktreePullRequestTool(),
+  createWorktreeUpdatePullRequestBodyTool(),
   createWorktreeReadyPullRequestTool(),
   createWorktreeRetargetPullRequestTool(),
   createWorktreeFinishPullRequestTool(),

@@ -49,6 +49,8 @@ export interface PullRequestCardContext {
   additionalContext?: string;
   /** Explicit caller-authored title for a new PR; absent means use the PR agent's title. */
   explicitTitle?: string;
+  /** Explicit caller-authored body for a new PR; absent means use the PR agent's body. */
+  explicitBody?: string;
   /** Named push remote that owns this PR; absent retains the ordinary origin path. */
   remote?: string;
   /** Exact managed-worktree HEAD accepted before provider creation/adoption. */

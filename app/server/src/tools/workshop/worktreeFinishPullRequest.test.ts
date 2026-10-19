@@ -143,6 +143,7 @@ function managedCard(patch: Partial<PullRequestCard> = {}): PullRequestCard {
     status: "open",
     provider: "github",
     number: 91,
+    url: "https://github.com/acme/project/pull/91",
     title: "Task-588: finish the loop",
     headBranch: row.branch,
     baseBranch: row.baseBranch,

@@ -82,11 +82,24 @@ holds changes the caller did not make; `worktree_push` still requires the whole
 tree clean, so the leftover changes have to be committed or moved before
 publication.
 
+An optional `message` is the caller's own commit message, committed as given
+(outer whitespace trimmed, at most 8,000 characters) instead of the generated
+one. It is committed with `--cleanup=verbatim`, as is an approved override's
+message, so git's default cleanup or a configured `commit.cleanup=strip` cannot
+drop `#` lines or blank runs the caller wrote. The commit-message agent still
+runs, because it is the safety review: its blockers and warnings apply unchanged
+and only its message goes unused. Without `message` the generated message is
+committed as before.
+
 The safety review judges secrets only by what the commit records: the patch,
 untracked file content and paths. Session prompts, Tasks and caller context are
 review context, never committed, so a credential pasted there (temporary AWS
 keys, tokens) is masked before the commit-message agent sees it and is not a
-blocker.
+blocker. A caller-written `message` is the opposite case: it is published as
+written, so it gets the same credential check as the patch's added lines
+(`textLooksLikeCredential` in `credentialRedaction.ts`: private keys, known
+token shapes, quoted `secret`/`token`/`password` assignments). A hit refuses
+before the worktree is read, and there is no override, `force` included.
 
 ### Commit review override
 
@@ -98,8 +111,9 @@ conflict or merge/rebase in progress refuses with an error and creates no card;
 those cannot be overridden. Any other blocker creates a one-shot
 `managedCommitOverride` card ([approvals.md](approvals.md#the-cards)) bound to
 the worktree, its path and branch, the change fingerprint, `stagedOnly`, and the
-proposed message, and the tool ends the agent's turn. A newer override from the
-same session for the same worktree supersedes a pending one.
+proposed message (the caller's `message` when given), and the tool ends the
+agent's turn. A newer override from the same session for the same worktree
+supersedes a pending one.
 
 On approval the server reserves the worktree (refusing while it is busy),
 re-checks that the managed row is still active at the same path and branch and
@@ -141,12 +155,19 @@ checked managed-delivery step after `worktree_commit` and `worktree_push`. It is
 an external side effect available in Build mode, not Plan mode, but requires no
 approval or extra confirmation: the server admits only an active registered
 spawned worktree and derives every dangerous value. The input has only its id,
-an optional exact linked Task id, bounded authoring context, an optional title,
-and `draft`; it has no path, provider/repository, remote, ref, SHA, or body
-escape. A supplied title is trimmed only at its outer whitespace and must remain
-nonblank, one line, and at most 120 characters. It is accepted as
-caller-authored policy — no Jira-key, conventional-commit, or
+an optional exact linked Task id, bounded authoring context, an optional title
+and body, and `draft`; it has no path, provider/repository, remote, ref, or SHA.
+A supplied title is trimmed only at its outer whitespace and must remain
+nonblank, one line, and at most 120 characters. A supplied body is trimmed the
+same way and may be up to 65,536 characters, GitHub's own cap. Both are accepted
+as caller-authored policy — no Jira-key, conventional-commit, or
 repository-specific rewriting or enforcement is applied.
+
+Caller text widens what an agent can publish very little: it already publishes
+whatever it writes into files and pushes. What guards publication is the secret
+check, so a caller title or body gets the same check as a caller commit message
+(see "Agent-facing managed commit scope"): a hit refuses before the worktree is
+read, with no override.
 
 The caller-aware worktree mutation reservation is held from revalidation through
 provider post-read. Under it the service requires the persisted path, project,
@@ -166,18 +187,21 @@ creates a human `choosing-task` interruption. The canonical card still belongs
 to the caller session and is anchored at the calling tool id, while its
 `worktreeId` names the target checkout so later card actions remain correct.
 Retry recovery is scoped to that caller timeline to preserve its tool-call
-anchor. An explicit title is persisted in the card's server-only authoring
-context before drafting/provider creation. While that card is still pending
-AUTHORING (`creating`), recovery requires the retry to carry the same title
-intent, including the distinction between omission and an explicit value, rather
-than silently replacing or dropping it. Once the card represents a provider pull
-request, later title input is ignored and the provider title is adopted without
-mutation. A later call from another session may project the same provider PR
-into that session too, matching repeated `/pr`; provider mutations remain
-serialized across cards. For a newly created pull request, the same bounded
-configured PR agent described below always generates body and warnings. Its
-title is the default when the caller omitted one; otherwise the validated caller
-title is used.
+anchor. An explicit title and body are persisted in the card's server-only
+authoring context before drafting/provider creation. While that card is still
+pending AUTHORING (`creating`), recovery requires the retry to carry the same
+title and body intent, including the distinction between omission and an
+explicit value, rather than silently replacing or dropping it. Once the card
+represents a provider pull request, later title input is ignored and the
+provider title is adopted without mutation. A later call from another session
+may project the same provider PR into that session too, matching repeated `/pr`;
+provider mutations remain serialized across cards. For a newly created pull
+request, the same bounded configured PR agent described below writes whatever
+the caller left out: the caller's title and body win where given. With both
+given the agent does not run at all, so the card carries no authoring warnings;
+with either missing it runs as before and its warnings are kept. An adopted pull
+request keeps its title and body; `worktree_update_pull_request_body` changes
+the body afterwards.
 
 Existing branch PRs are adopted only after provider detail proves the expected
 provider repository, head branch, base branch, and, for an open pull request,
@@ -207,6 +231,36 @@ closed or already-ready PR. GitHub uses its GraphQL ready-for-review mutation;
 Forgejo removes the `WIP: ` or `[WIP] ` title marker through the provider seam.
 Neither tool merges or promises green checks. `/pr` remains the human all-in-one
 commit/push/create command and keeps its session-derived Task chooser behavior.
+
+## Agent-facing managed body update
+
+`worktree_update_pull_request_body` replaces the description of a worktree's
+canonical open pull request after it exists, typically when a fix round changes
+a decision the body records. It takes an active spawned-worktree id and either a
+caller `body` (validated and secret-checked exactly like creation's) or nothing,
+which asks the PR draft agent to write the body again; an optional `context`
+guides only that regeneration. It is pre-authorized like the ready and retarget
+transitions and resolves its target the same way: the push repository, the ONE
+open pull request for the branch, and a live managed card anchored to this
+worktree, with no card owned by another worktree. It accepts no repository, PR
+number or ref, so it cannot reach another repository or pull request; the
+approval-gated `github_edit_pull_request`/`forgejo_edit_pull_request` remain the
+way to edit anything else.
+
+Regeneration reads the local branch, so it requires local HEAD to equal the pull
+request's head; otherwise it refuses and asks for a push. The draft agent sees
+the same sections as at creation, with the Task linked on the worktree's card.
+Its title is unused and its warnings are returned.
+
+Under the per-PR mutation lock the tool re-reads the pull request and refuses if
+its state, head, head branch or base moved, reads the current body (an identical
+one writes nothing but is still projected onto the cards, which repairs a card
+an earlier partial update left stale: `unchanged`), PATCHes the body, and reads
+it back. Neither provider has a precondition on that PATCH, so a failed write is
+judged like a retarget: a read-back showing the old body is the provider's
+refusal, the new body is success with a warning, anything else is an "outcome
+unknown" error. A successful write whose read-back differs or cannot be read is
+`updated-partial`. Only a confirmed body is projected onto the live cards.
 
 ## Repository pull-request capabilities
 
@@ -349,23 +403,27 @@ worktree is reserved with the caller-aware mutation reservation and its row
 identity re-resolved under it, hosting is resolved from the derived push
 remote's URL and asserted to describe that repository, and the branch must have
 exactly ONE open pull request whose provider, head, base and live-card identity
-match the managed row. That count comes from `findPullRequestsForBranch`, whose
-open set is PAGED until the provider is exhausted — a read that cannot be
-exhausted within its page cap throws instead of answering, because a truncated
-page could hide the second open pull request the invariant exists to catch, and
-a page whose body is not a LIST throws for the same reason: a response that
-could not be understood is not the same answer as "there are none" — and which
-reads the newest terminal pull request only when nothing is open, to say
-"already merged" rather than "no pull request". Both providers list pull
-requests opened from FORKS beside their own and a fork may carry an identically
-named branch, so the head REPOSITORY decides which are this branch's; a head
-repository that cannot be read (a deleted fork) proves nothing and is excluded.
-This multiplicity refusal is local to managed finishing: ordinary branch status,
-PR adoption and human merge reads keep using the tolerant bounded single-result
-lookup, which is subject to the same fork/head-repository rule. Provider detail
-is re-read for an exact non-empty head and the row-recorded base, and the
-outward transition runs under `withPullRequestMutation`, so a card click, an
-HTTP merge, a second tool call and an approval cannot both land.
+match the managed row. Live cards are found by local checkout and number, so
+each card's URL must also name the derived push repository: a checkout that
+publishes to two repositories with the same PR number cannot hand one
+repository's card to the other's pull request. That count comes from
+`findPullRequestsForBranch`, whose open set is PAGED until the provider is
+exhausted — a read that cannot be exhausted within its page cap throws instead
+of answering, because a truncated page could hide the second open pull request
+the invariant exists to catch, and a page whose body is not a LIST throws for
+the same reason: a response that could not be understood is not the same answer
+as "there are none" — and which reads the newest terminal pull request only when
+nothing is open, to say "already merged" rather than "no pull request". Both
+providers list pull requests opened from FORKS beside their own and a fork may
+carry an identically named branch, so the head REPOSITORY decides which are this
+branch's; a head repository that cannot be read (a deleted fork) proves nothing
+and is excluded. This multiplicity refusal is local to managed finishing:
+ordinary branch status, PR adoption and human merge reads keep using the
+tolerant bounded single-result lookup, which is subject to the same
+fork/head-repository rule. Provider detail is re-read for an exact non-empty
+head and the row-recorded base, and the outward transition runs under
+`withPullRequestMutation`, so a card click, an HTTP merge, a second tool call
+and an approval cannot both land.
 
 Closing is direct for a default or non-default base. It deliberately requires
 neither a clean checkout, remote/local equality, green checks nor mergeability —
@@ -461,9 +519,11 @@ agent's shipped model settings.
 The agent's generated title is the default whether or not a Task or Jira issue
 is linked. Linked Tasks remain prompt context and card metadata; their Jira keys
 and titles never compose, prefix, or otherwise dictate the pull-request title.
-The managed creation tool's optional explicit title overrides only the title for
-a newly created pull request; the agent still supplies body and warnings. An
-already-existing provider pull request is adopted without being renamed.
+The managed creation tool's optional explicit title and body replace the agent's
+for a newly created pull request; with both given the agent is not asked (see
+"Agent-facing managed creation"). An already-existing provider pull request is
+adopted without being renamed. `worktree_update_pull_request_body` without a
+body asks the same agent for a new body of an open managed pull request.
 
 Session-linked Tasks are candidates first, in their existing order;
 worktree-only Task links extend that list without reordering or duplicates. A
