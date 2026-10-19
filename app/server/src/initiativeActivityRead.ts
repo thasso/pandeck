@@ -21,6 +21,7 @@ import { pullRequestActivityRecords } from "./pullRequestCards.ts";
 import {
   associateInitiativeSessions,
   memberActivity,
+  isWorkingInitiativeSession,
   type MemberActivity,
 } from "./initiativeActivity.ts";
 
@@ -81,7 +82,7 @@ export async function readInitiativeActivity(
   for (const ids of associated.values())
     for (const id of ids) {
       const row = byId.get(id)!;
-      if (!row.archived && row.settledAt === undefined)
+      if (isWorkingInitiativeSession(row))
         for (const peer of row.awaitingRepliesFrom ?? [])
           if (!byId.has(peer)) owed.add(peer);
     }
@@ -98,7 +99,7 @@ export async function readInitiativeActivity(
       const treeId = row.worktreeId ?? heldTrees.get(row.id);
       const tree = treeId ? getWorktree(treeId) : undefined;
       if (tree) worktrees.set(tree.id, tree);
-      if (!row.archived && row.settledAt === undefined) {
+      if (isWorkingInitiativeSession(row)) {
         try {
           const agent = sessionAgent(row.id);
           if (agent) agents.set(row.id, agent.name);

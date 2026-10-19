@@ -92,7 +92,10 @@ const priority = [
   "interrupted",
   "idle",
 ];
-const live = (s: SessionListItem) => !s.archived && s.settledAt === undefined;
+/** Settlement hides quiet history, not resumed work or pending human decisions. */
+export function isWorkingInitiativeSession(s: SessionListItem): boolean {
+  return !s.archived && (!isShelvedSession(s) || moving(s));
+}
 
 export interface ActivityWorktree {
   id: string;
@@ -114,7 +117,7 @@ export function memberActivity(
   records: readonly ActivityPullRequestRecord[],
 ) {
   const listed = associated
-    .filter(live)
+    .filter(isWorkingInitiativeSession)
     .sort(
       (a, b) =>
         priority.indexOf(state(a)) - priority.indexOf(state(b)) ||
@@ -125,7 +128,7 @@ export function memberActivity(
     .flatMap((s) => s.awaitingRepliesFrom ?? [])
     .flatMap((id) => {
       const peer = peers.get(id);
-      return peer && !peer.archived && !isShelvedSession(peer) ? [peer] : [];
+      return peer && isWorkingInitiativeSession(peer) ? [peer] : [];
     });
   const stalled =
     owed.length > 0 && ![...listed, ...owed].some((s) => moving(s) || human(s));

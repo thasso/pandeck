@@ -131,6 +131,45 @@ test("session projection mirrors inbox precedence, timestamps, caps and stall hy
   assert.equal(states.sessionCount, 8);
 });
 
+test("settled sessions remain working while moving or waiting on a human", () => {
+  const asker = session("asker", { awaitingRepliesFrom: ["owed", "idle"] });
+  for (const overlay of [
+    { isStreaming: true },
+    { queuedWork: true },
+    { awaitingInput: true },
+    { attention: "approval" as const },
+    { peerPromptHopRefusal: { chainId: "chain", maxHops: 150 } },
+  ]) {
+    const active = session("active", { settledAt: 1, ...overlay });
+    const peers = new Map([
+      ["owed", session("owed")],
+      ["idle", session("idle")],
+    ]);
+    const activity = memberActivity(
+      [asker, active, session("quiet", { settledAt: 1 })],
+      peers,
+      new Map([["active", "implementer"]]),
+      [],
+      [],
+    );
+    assert.equal(activity.sessions.length, 2);
+    assert.equal(activity.sessions[0]!.id, "active");
+    assert.equal(activity.sessions[0]!.agent, "implementer");
+    assert.equal(activity.stalled, undefined);
+    const external = memberActivity(
+      [asker],
+      new Map([
+        ["owed", session("owed", { settledAt: 1, ...overlay })],
+        ["idle", session("idle")],
+      ]),
+      new Map(),
+      [],
+      [],
+    );
+    assert.equal(external.stalled, undefined);
+  }
+});
+
 test("a refused peer send waits on the user and suppresses stalls even after peer settlement", () => {
   const refusal = { chainId: "chain", maxHops: 150 };
   const asker = session("asker", { awaitingRepliesFrom: ["peer", "other"] });

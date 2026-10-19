@@ -112,7 +112,7 @@ const initiativeReadSchema = {
       type: "boolean",
       default: false,
       description:
-        "With id only: live sessions rooted by task-start, Task-linked worktrees or Workflow Run roles, plus coordinator-owned descendants unless attached to another Task. Passive references do not qualify. Includes state, last activity, owed replies, stalled, worktrees and PR observations, including settled sessions' PRs and removed worktrees. At most 5 sessions, 3 worktrees, 3 PRs and 3 owed ids per session; true counts when capped. Activity is omitted before other member fields or required-string clipping. PR head/checks/review are last observed, not a provider refresh.",
+        "With id only: live sessions rooted by task-start, Task-linked worktrees or Workflow Run roles, plus coordinator-owned descendants unless attached to another Task. Passive references do not qualify. Includes state, last activity, owed replies, stalled, worktrees and PR observations, including settled sessions' PRs and removed worktrees. Settled sessions still list while moving or waiting on the user. owedRepliesFrom names a reply owed by the caller even when its current activity prevents stalled. At most 5 sessions, 3 worktrees, 3 PRs and 3 owed ids per session; true counts when capped. Activity is omitted before other member fields or required-string clipping. PR head/checks/review are last observed, not a provider refresh.",
     },
     includeArchived: { type: "boolean", default: false },
     maxResults: { type: "integer", minimum: 1, maximum: 100, default: 50 },

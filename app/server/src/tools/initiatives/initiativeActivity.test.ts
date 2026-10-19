@@ -18,6 +18,7 @@ import {
   patchPullRequestCard,
 } from "../../pullRequestCards.ts";
 import { setInitiativeActivitySessionReaderForTests } from "../../initiativeActivityRead.ts";
+import { freezeSessionAgent } from "../../agents/sessionAgent.ts";
 import { listSessions } from "../../sessions.ts";
 import { listWorktreeRecords } from "../../worktrees/worktrees.ts";
 import { initiativeTools } from "./initiativeTools.ts";
@@ -131,7 +132,12 @@ async function read(id: string, includeActivity?: boolean, offset?: number) {
       title: string;
       activity?: {
         stalled?: boolean;
-        sessions: Array<{ id: string }>;
+        sessions: Array<{
+          id: string;
+          agent?: string;
+          state: string;
+          owedRepliesFrom: string[];
+        }>;
         sessionCount?: number;
         worktrees: Array<{ id: string; status: string }>;
         pullRequests: Array<{ status: string; headSha?: string }>;
@@ -187,10 +193,69 @@ test("opt-in keeps defaults identical, excludes references and hydrates outside 
       undefined,
     );
   }
+  overlay = { isStreaming: true };
+  const callerRead = await tool().execute(
+    { id, includeActivity: true },
+    { ...ctx, session: { ...ctx.session, sessionId: peer } },
+  );
+  const callerActivity = (
+    callerRead.details as Awaited<ReturnType<typeof read>>
+  ).members[0]!.activity!;
+  assert.equal(callerActivity.stalled, undefined);
+  assert.deepEqual(callerActivity.sessions[0]!.owedRepliesFrom, [peer]);
   await assert.rejects(
     tool().execute({ includeActivity: true }, ctx),
     /includeActivity/,
   );
+});
+
+test("settled active sessions hydrate their owed peers and frozen agents", async () => {
+  const t = task(),
+    id = initiative([t]);
+  const settled = session(t),
+    peer = session();
+  sessionStore.setSettled(settled, true);
+  freezeSessionAgent(settled, {
+    name: "test-implementer",
+    blob: "0".repeat(40),
+    persona: "developer",
+    provider: "claude-sdk",
+    model: "opus",
+    effort: "high",
+    runtimeSource: "definition",
+    denyTools: [],
+    skills: [],
+    body: "Implement the Task.",
+  });
+  let overlay: Partial<SessionListItem> = {};
+  const batches: string[][] = [];
+  setInitiativeActivitySessionReaderForTests(async (ids) => {
+    batches.push(ids);
+    return (
+      await listSessions([], () => 0, {
+        includeArchived: true,
+        onlyIds: new Set(ids),
+      })
+    ).map((row) =>
+      row.id === settled
+        ? { ...row, settledAt: 1, awaitingRepliesFrom: [peer], ...overlay }
+        : row,
+    );
+  });
+  for (const state of [{ isStreaming: true }, { awaitingInput: true }]) {
+    overlay = state;
+    batches.length = 0;
+    const activity = (await read(id, true)).members[0]!.activity!;
+    assert.equal(activity.sessions[0]!.id, settled);
+    assert.equal(activity.sessions[0]!.agent, "test-implementer");
+    assert.equal(
+      activity.sessions[0]!.state,
+      state.isStreaming ? "running" : "waiting-on-user",
+    );
+    assert.deepEqual(activity.sessions[0]!.owedRepliesFrom, [peer]);
+    assert.deepEqual(batches, [[settled], [peer]]);
+    assert.equal(activity.stalled, undefined);
+  }
 });
 
 test("settled sessions and removed task-linked worktrees preserve PR observations without changing store defaults", async () => {
