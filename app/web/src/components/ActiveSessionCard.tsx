@@ -2,18 +2,14 @@ import { runtimeLabel } from "./common/runtimeLabel.ts";
 import { Fragment, memo } from "react";
 import {
   Activity,
-  Archive,
   ArrowUp,
-  ArchiveRestore,
   Check,
   ChevronRight,
   ClipboardList,
   FolderKanban,
   GitBranch,
   Hourglass,
-  Pencil,
   Play,
-  Trash2,
   Users,
   X,
   type LucideIcon,
@@ -52,7 +48,6 @@ import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
-import { UnreadDot } from "./UnreadDot.tsx";
 import {
   ListRowActions,
   type ListRowAction,
@@ -174,16 +169,12 @@ function ActiveSessionCardImpl({
   now,
   active,
   relations,
-  worktreeDirty,
   density = "tight",
   clusterExpanded = false,
   onOpen,
   onSettle,
   onDismissFailure,
   onOpenProject,
-  onOpenTask,
-  onOpenWorktree,
-  onRename,
   onArchive,
   onDelete,
   onToggleCluster,
@@ -259,8 +250,7 @@ function ActiveSessionCardImpl({
 
   /**
    * Where a metadata item leads; `undefined` renders it as plain text. Only the
-   * Project opens from context. Worktree and Task actions live in the menu so
-   * the metadata line keeps the full card width without duplicating targets.
+   * Project opens from context. Other object actions live in the session.
    */
   const openMetaItem = (
     item: SessionCardMetaItem,
@@ -277,58 +267,8 @@ function ActiveSessionCardImpl({
       label: "Settle",
       accessibleLabel: settleLabel,
       icon: <Check />,
-      primary: true,
       disabled: Boolean(card.settleBlocked),
       onSelect: () => onSettle(session.id),
-    },
-    ...(session.worktreeId && onOpenWorktree
-      ? [
-          {
-            id: "worktree",
-            label: "Open worktree",
-            accessibleLabel: worktreeDirty
-              ? "Open worktree, uncommitted changes"
-              : "Open worktree",
-            icon: (
-              <span className="relative">
-                <GitBranch />
-                {worktreeDirty ? (
-                  <UnreadDot title="Uncommitted changes" placement="avatar" />
-                ) : null}
-              </span>
-            ),
-            onSelect: () => onOpenWorktree(session.worktreeId as string),
-          },
-        ]
-      : []),
-    ...(relations.taskId && onOpenTask
-      ? [
-          {
-            id: "task",
-            label: `Open task #${relations.taskId}`,
-            icon: <ClipboardList />,
-            onSelect: () => onOpenTask(relations.taskId as string),
-          },
-        ]
-      : []),
-    {
-      id: "rename",
-      label: "Rename",
-      icon: <Pencil />,
-      onSelect: () => onRename(session.id),
-    },
-    {
-      id: "archive",
-      label: session.archived ? "Restore" : "Archive",
-      icon: session.archived ? <ArchiveRestore /> : <Archive />,
-      onSelect: () => onArchive(session.id, !session.archived),
-    },
-    {
-      id: "delete",
-      label: "Delete",
-      icon: <Trash2 />,
-      variant: "destructive",
-      onSelect: () => onDelete(session.id),
     },
   ];
   return (

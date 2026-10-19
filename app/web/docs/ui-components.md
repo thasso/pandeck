@@ -122,7 +122,8 @@ content lines for items with three or more lines. Two-line items place actions
 only beside the second line, keeping their context full-width; one-line items
 place them beside the title. This geometry is shared by every layout. Desktop mouse controls reveal on hover or focus without
 growing the content lines. Pending decisions remain
-visible. The Backlog tree uses the same `ListRowContent` and actions inside its
+visible. Attention session rows expose only Settle, with no overflow menu;
+other session actions remain in the session. The Backlog tree uses the same `ListRowContent` and actions inside its
 tree frame, keeping hierarchy and selection rather than nesting a clickable flat
 row. `Tree`'s `paddedContent={false}` lets shared content own all padding; the
 frame adds only hierarchy indentation, not another horizontal inset.
