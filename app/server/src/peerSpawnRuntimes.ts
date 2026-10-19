@@ -11,7 +11,7 @@
  *   (`resolveApprovedPeerRuntime`) — model and thinking never substitute; an
  *   account is routed only when the human approved Automatic, never for a pin;
  * - whether a coordinator may start another direct peer turn at this moment
- *   (`admitDirectPeerTurns`), a fixed server policy rather than a setting.
+ *   (`admitDirectPeerTurns`), a fixed cap excluding user-marked low-cost turns.
  *
  * It knows nothing about the subagent registry and must never import it: what
  * this roster starts is an ordinary `scope = "user"` session.
@@ -43,10 +43,8 @@ import { getSettings } from "./settings.ts";
 import { runtimeStateFor } from "./tools/sessions/sessionInspection.ts";
 
 /**
- * How many peer turns one coordinator may have RUNNING at once through the
- * direct path. Fixed policy, not a setting: the point is that a coordinator
- * cannot turn a pre-approval into unbounded parallel spend, and a number the
- * user could raise would not be that.
+ * How many counted peer turns one coordinator may have RUNNING at once through
+ * the direct path. User-marked low-cost runtimes are exempt, with no bound.
  */
 export const MAX_CONCURRENT_DIRECT_PEER_TURNS = 4;
 
@@ -289,12 +287,48 @@ export async function resolveApprovedPeerRuntime(
 
 /* ------------------------- concurrency admission -------------------------- */
 
+export type DirectPeerCostClass = "low" | "counted";
+
+type DirectPeerCostTarget =
+  | { profileId: string }
+  | { provider: string; modelId: string; thinkingLevel: StoredThinkingLevel };
+
+/** Unknown cost counts. Agent runtimes require unanimous enabled low matches. */
+function classifyDirectPeerCost(
+  rows: readonly PeerSpawnRuntime[],
+  target: DirectPeerCostTarget,
+): DirectPeerCostClass {
+  if ("profileId" in target)
+    return rows.find((row) => row.id === target.profileId.trim())
+      ?.relativeCost === "low"
+      ? "low"
+      : "counted";
+  const matches = rows.filter(
+    (row) =>
+      row.enabled &&
+      row.provider === target.provider &&
+      row.modelId === target.modelId &&
+      row.thinkingLevel === target.thinkingLevel,
+  );
+  return matches.length > 0 &&
+    matches.every((row) => row.relativeCost === "low")
+    ? "low"
+    : "counted";
+}
+
+/** Classify against current Settings, ignoring accounts for agent runtimes. */
+export function directPeerCostClass(
+  target: DirectPeerCostTarget,
+): DirectPeerCostClass {
+  return classifyDirectPeerCost(getSettings().peerSpawnRuntimes, target);
+}
+
 /**
  * Which sessions each coordinator started through the direct path, this
  * process's lifetime. In memory on purpose: the limit bounds what is running
  * NOW, and a restart has by definition left nothing of those turns running.
  */
-const directChildren = new Map<string, Set<string>>();
+const directChildren = new Map<string, Map<string, DirectPeerCostClass>>();
 
 /**
  * Slots a batch has claimed while its sessions do not exist yet.
@@ -337,15 +371,13 @@ async function withAdmissionLock<T>(
 export function recordDirectPeerChild(
   coordinatorSessionId: string,
   sessionId: string,
+  costClass: DirectPeerCostClass,
 ): void {
-  const set = directChildren.get(coordinatorSessionId) ?? new Set<string>();
-  set.add(sessionId);
-  directChildren.set(coordinatorSessionId, set);
-}
-
-/** The direct children of one coordinator, oldest first. */
-function directPeerChildren(coordinatorSessionId: string): string[] {
-  return [...(directChildren.get(coordinatorSessionId) ?? [])];
+  const children =
+    directChildren.get(coordinatorSessionId) ??
+    new Map<string, DirectPeerCostClass>();
+  children.set(sessionId, costClass);
+  directChildren.set(coordinatorSessionId, children);
 }
 
 /** Test seam: forget the recorded children and claims of every coordinator. */
@@ -358,9 +390,9 @@ export function resetDirectPeerChildrenForTests(): void {
 /**
  * Turns this coordinator is currently accountable for.
  *
- * A child counts while its runtime is RUNNING **or** while a prompt this
- * coordinator sent it is still queued or being dispatched. Both halves are
- * needed and neither is sufficient:
+ * Low-cost children never count. Other children count while RUNNING or while
+ * a prompt from this coordinator is still queued or being dispatched. Both
+ * halves are needed and neither is sufficient:
  *
  * - runtime state alone misses the whole create-to-first-turn window. Delivery
  *   only ENQUEUES the opening prompt and drains it in the background, so a
@@ -380,7 +412,9 @@ async function directPeerTurnsHeld(
   coordinatorSessionId: string,
 ): Promise<number> {
   let held = 0;
-  for (const child of directPeerChildren(coordinatorSessionId)) {
+  for (const [child, costClass] of directChildren.get(coordinatorSessionId) ??
+    []) {
+    if (costClass === "low") continue;
     const queued = peerPromptStore.unfinishedTurnCount(
       coordinatorSessionId,
       child,
@@ -397,7 +431,8 @@ export interface DirectPeerTurnClaim {
 }
 
 /**
- * Claim `rows` concurrent turns for this coordinator, or refuse the batch.
+ * Claim `counted` concurrent turns for this coordinator, or refuse the batch.
+ * Low-only batches claim zero and are unbounded.
  *
  * The decision and the claim happen inside one critical section per
  * coordinator, so two overlapping batches cannot both be told the same slots
@@ -406,25 +441,26 @@ export interface DirectPeerTurnClaim {
  */
 export async function admitDirectPeerTurns(
   coordinatorSessionId: string,
-  rows: number,
+  counted: number,
 ): Promise<DirectPeerTurnClaim> {
   return withAdmissionLock(coordinatorSessionId, async () => {
     const held = await directPeerTurnsHeld(coordinatorSessionId);
     const available = Math.max(0, MAX_CONCURRENT_DIRECT_PEER_TURNS - held);
-    if (rows > available)
+    if (counted > available)
       throw new PeerRuntimeRefusedError(
-        `You already have ${MAX_CONCURRENT_DIRECT_PEER_TURNS - available} directly spawned peer turn(s) running or starting; at most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} may run at once, so this batch of ${rows} was not started. Wait for results from the sessions you started, then spawn the rest.`,
+        `You already have ${MAX_CONCURRENT_DIRECT_PEER_TURNS - available} directly spawned peer turn(s) running or starting; at most ${MAX_CONCURRENT_DIRECT_PEER_TURNS} may run at once, so this batch of ${counted} counted turns was not started. Runtimes the user marked low cost don't count. Wait for results from the sessions you started, then spawn the rest.`,
       );
     reservedTurns.set(
       coordinatorSessionId,
-      (reservedTurns.get(coordinatorSessionId) ?? 0) + rows,
+      (reservedTurns.get(coordinatorSessionId) ?? 0) + counted,
     );
     let released = false;
     return {
       release() {
         if (released) return;
         released = true;
-        const remaining = (reservedTurns.get(coordinatorSessionId) ?? 0) - rows;
+        const remaining =
+          (reservedTurns.get(coordinatorSessionId) ?? 0) - counted;
         if (remaining > 0) reservedTurns.set(coordinatorSessionId, remaining);
         else reservedTurns.delete(coordinatorSessionId);
       },

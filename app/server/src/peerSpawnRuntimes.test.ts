@@ -76,6 +76,7 @@ const {
   MAX_CONCURRENT_DIRECT_PEER_TURNS,
   PeerRuntimeRefusedError,
   admitDirectPeerTurns,
+  directPeerCostClass,
   peerRuntimeRoster,
   recordDirectPeerChild,
   resetDirectPeerChildrenForTests,
@@ -636,7 +637,89 @@ test("with an empty roster the refusal points at the approval path", async () =>
   );
 });
 
+/* ---------------------------- cost classification ------------------------- */
+
+test.each(["low", "unknown", "medium", "high"] as const)(
+  "a profile marked %s is exempt only for low cost",
+  (relativeCost) => {
+    approve([runtimeRow({ relativeCost })]);
+    expect(directPeerCostClass({ profileId: "pr_terra" })).toBe(
+      relativeCost === "low" ? "low" : "counted",
+    );
+    expect(directPeerCostClass({ profileId: "missing" })).toBe("counted");
+  },
+);
+
+const { credentialProfileId: _accountPin, ...automaticRuntimeRow } = runtimeRow(
+  {
+    id: "automatic",
+  },
+);
+
+test.each([
+  ["one low match", [runtimeRow()], "low"],
+  ["no match", [], "counted"],
+  ["disabled low match", [runtimeRow({ enabled: false })], "counted"],
+  ["different thinking", [runtimeRow({ thinkingLevel: "high" })], "counted"],
+  ["different model", [runtimeRow({ modelId: "other" })], "counted"],
+  ["different provider", [runtimeRow({ provider: "other" })], "counted"],
+  ["unknown cost", [runtimeRow({ relativeCost: "unknown" })], "counted"],
+  [
+    "conflicting costs",
+    [runtimeRow(), runtimeRow({ id: "other", relativeCost: "high" })],
+    "counted",
+  ],
+  [
+    "unknown alongside low",
+    [runtimeRow(), runtimeRow({ id: "other", relativeCost: "unknown" })],
+    "counted",
+  ],
+  ["account ignored", [runtimeRow(), automaticRuntimeRow], "low"],
+  [
+    "disabled conflict ignored",
+    [
+      runtimeRow(),
+      runtimeRow({ id: "other", relativeCost: "high", enabled: false }),
+    ],
+    "low",
+  ],
+] as const)("agent cost classification: %s", (_label, rows, expected) => {
+  approve([...rows]);
+  expect(
+    directPeerCostClass({
+      provider: "openai-codex",
+      modelId: "gpt-5.6-terra",
+      thinkingLevel: "medium",
+    }),
+  ).toBe(expected);
+});
+
 /* ------------------------------- admission -------------------------------- */
+
+test("running and queued low-cost children leave all counted slots free", async () => {
+  const state = vi
+    .spyOn(inspection, "runtimeStateFor")
+    .mockResolvedValue("running");
+  for (let i = 0; i < 16; i += 1) {
+    recordDirectPeerChild("coordinator", `low-${i}`, "low");
+    queuePromptTo(`low-${i}`);
+  }
+  (await admitDirectPeerTurns("coordinator", 4)).release();
+  expect(state).not.toHaveBeenCalled();
+});
+
+test("low-only batches are unbounded even with a full counted pool", async () => {
+  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
+  for (let i = 0; i < 4; i += 1)
+    recordDirectPeerChild("coordinator", `counted-${i}`, "counted");
+  for (let i = 0; i < 16; i += 1)
+    recordDirectPeerChild("coordinator", `low-${i}`, "low");
+  (await admitDirectPeerTurns("coordinator", 0)).release();
+  (await admitDirectPeerTurns("coordinator", 0)).release();
+  await expect(admitDirectPeerTurns("coordinator", 1)).rejects.toThrow(
+    /low.cost.*don't count/i,
+  );
+});
 
 test("only RUNNING direct children hold a concurrency slot", async () => {
   const states = new Map<string, string>();
@@ -644,7 +727,7 @@ test("only RUNNING direct children hold a concurrency slot", async () => {
     async (id: string) => (states.get(id) ?? "not_loaded") as never,
   );
   for (let i = 0; i < MAX_CONCURRENT_DIRECT_PEER_TURNS; i += 1) {
-    recordDirectPeerChild("coordinator", `child-${i}`);
+    recordDirectPeerChild("coordinator", `child-${i}`, "counted");
     states.set(`child-${i}`, "running");
   }
 
@@ -700,7 +783,7 @@ test("a child whose opening prompt is only QUEUED still holds its slot", async (
     async () => "not_loaded" as never,
   );
   for (let i = 0; i < MAX_CONCURRENT_DIRECT_PEER_TURNS; i += 1) {
-    recordDirectPeerChild("coordinator", `queued-child-${i}`);
+    recordDirectPeerChild("coordinator", `queued-child-${i}`, "counted");
     queuePromptTo(`queued-child-${i}`);
   }
 
@@ -725,7 +808,7 @@ test("another coordinator's queued turn does not spend this one's budget", async
   vi.spyOn(inspection, "runtimeStateFor").mockImplementation(
     async () => "not_loaded" as never,
   );
-  recordDirectPeerChild("coordinator", "shared-child");
+  recordDirectPeerChild("coordinator", "shared-child", "counted");
   queuePromptTo("shared-child", "someone-else");
 
   (

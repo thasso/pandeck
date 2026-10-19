@@ -92,6 +92,7 @@ const {
 const accountRouter = await import("./accountRouter.ts");
 const { resetDirectPeerChildrenForTests } =
   await import("./peerSpawnRuntimes.ts");
+const inspection = await import("./tools/sessions/sessionInspection.ts");
 const { createSession } = await import("./harnesses/create.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
@@ -1975,6 +1976,7 @@ test("a row re-pointed DURING the spawn runs on the current approval", async () 
     {
       id: "pr_terra",
       name: "Repointed",
+      relativeCost: "low",
       credentialProfileId: accountFor("claude"),
       provider: "claude-sdk",
       modelId: "sonnet",
@@ -2023,6 +2025,76 @@ test("a direct developer row carries its worktree, Project and Task", async () =
     promptEvidence: { hasAttachments: false, projectId: "spawn-proj" },
   });
   expect(recorded.delivered[0]?.taskId).toBe(task.id);
+});
+
+test("mixed batches spend only counted slots and low-only batches bypass a full pool", async () => {
+  approveRuntimes();
+  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
+  for (let batch = 0; batch < 2; batch += 1) {
+    const results = await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: ["pr_sonnet", "pr_sonnet", "pr_terra", "pr_terra"].map(
+        (profileId) => ({ ...row(), profileId }),
+      ),
+    });
+    expect(results.every((result) => result.sessionId && !result.error)).toBe(
+      true,
+    );
+  }
+  await expect(
+    spawnDirect([{ ...row(), profileId: "pr_sonnet" }]),
+  ).rejects.toThrow(/may run at once/);
+  await spawnDirect([{ ...row(), profileId: "pr_terra" }]);
+  expect(recorded.claude).toHaveLength(4);
+  expect(recorded.pi).toHaveLength(5);
+});
+
+test("a profile relabeled from low to counted during pi lookup refuses only that row", async () => {
+  approveRuntimes();
+  duringPiLookup = () =>
+    updateSettings({
+      peerSpawnRuntimes: getSettings().peerSpawnRuntimes.map((runtime) => ({
+        ...runtime,
+        relativeCost: "high",
+      })),
+    });
+  const results = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: [
+      { ...row(), profileId: "pr_terra" },
+      { ...row(), profileId: "pr_sonnet" },
+    ],
+  });
+  expect(results[0]?.error).toMatch(/cost.*changed.*nothing was created/i);
+  expect(results[0]?.sessionId).toBeUndefined();
+  expect(results[1]?.sessionId).toBeTruthy();
+  expect(recorded.pi).toHaveLength(0);
+  expect(recorded.delivered).toHaveLength(1);
+});
+
+test("a counted profile relabeled low during lookup keeps its admitted slot", async () => {
+  const runtimes = approveRuntimes();
+  updateSettings({
+    peerSpawnRuntimes: runtimes.map((runtime) => ({
+      ...runtime,
+      relativeCost: "high",
+    })),
+  });
+  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
+  duringPiLookup = () => updateSettings({ peerSpawnRuntimes: runtimes });
+  const results = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: Array.from({ length: 4 }, () => ({
+      ...row(),
+      profileId: "pr_terra",
+    })),
+  });
+  expect(results.every((result) => result.sessionId && !result.error)).toBe(
+    true,
+  );
+  await expect(
+    spawnDirect([{ ...row(), profileId: "pr_sonnet" }]),
+  ).rejects.toThrow(/may run at once/);
 });
 
 test("a proposal row may not name an approved runtime", async () => {
@@ -2448,6 +2520,63 @@ test("the late routing read chooses the fallback, not the early healthy default"
   expect(text).toContain("gpt-5 has no eligible account; used sonnet");
 });
 
+test("a late fallback from a low agent runtime to a counted one refuses creation", async () => {
+  await useAgents();
+  writeAgent({
+    persona: "assistant",
+    models: ["gpt-5", "sonnet"],
+    effort: "medium",
+  });
+  approveRuntimes();
+  let reads = 0;
+  vi.spyOn(accountRouter, "pickAccount").mockImplementation(async (request) => {
+    if (request.model.modelId === "sonnet")
+      return { profileId: accountFor("claude") };
+    reads += 1;
+    return {
+      profileId: accountFor("openai-codex"),
+      ...(reads > 1 ? { degraded: "no-eligible-account" as const } : {}),
+    };
+  });
+  const text = await spawnDirect([agentRow()]);
+  expect(text).toMatch(/cost.*changed.*nothing was created/i);
+  expect(recorded.pi).toHaveLength(0);
+  expect(recorded.claude).toHaveLength(0);
+  expect(recorded.delivered).toHaveLength(0);
+});
+
+test("an agent's low-cost fallback needs no slot even when its default model counts", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", models: ["gpt-5", "sonnet"] });
+  const runtimes = approveRuntimes();
+  updateSettings({
+    peerSpawnRuntimes: runtimes.map((runtime) => ({
+      ...runtime,
+      relativeCost: runtime.id === "pr_sonnet" ? "low" : "high",
+    })),
+  });
+  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
+  await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: Array.from({ length: 4 }, () => ({
+      ...row(),
+      profileId: "pr_terra",
+    })),
+  });
+  vi.spyOn(accountRouter, "pickAccount").mockImplementation(async (request) =>
+    request.model.modelId === "gpt-5"
+      ? {
+          profileId: accountFor("openai-codex"),
+          degraded: "no-eligible-account",
+        }
+      : { profileId: accountFor("claude") },
+  );
+  const text = await spawnDirect([agentRow()]);
+  expect(text).toContain("used sonnet");
+  expect(recorded.claude).toHaveLength(1);
+  expect(recorded.delivered).toHaveLength(5);
+});
+
 test("an unavailable default refuses and names the listed models that can run", async () => {
   await useAgents();
   writeAgent({ persona: "assistant", models: ["gemini", "gpt-5"] });
@@ -2558,6 +2687,23 @@ test.each([
     expect(recorded.pi).toHaveLength(0);
   },
 );
+
+test("an agent admitted low refuses a conflicting cost added during pi lookup", async () => {
+  await useAgents();
+  writeAgent({ persona: "assistant", model: "gpt-5", effort: "medium" });
+  const runtimes = approveRuntimes();
+  duringPiLookup = () =>
+    updateSettings({
+      peerSpawnRuntimes: [
+        ...runtimes,
+        { ...runtimes[0]!, id: "conflict", relativeCost: "high" },
+      ],
+    });
+  const text = await spawnDirect([agentRow()]);
+  expect(text).toMatch(/cost.*changed.*nothing was created/i);
+  expect(recorded.pi).toHaveLength(0);
+  expect(recorded.delivered).toHaveLength(0);
+});
 
 test("a card-approved agent is read after the pi lookup, not before it", async () => {
   await useAgents();

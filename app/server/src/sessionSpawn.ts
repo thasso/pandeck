@@ -51,6 +51,7 @@ import { getProject } from "./projectRegistry.ts";
 import { piModelForAccount } from "./harnesses/models.ts";
 import {
   admitDirectPeerTurns,
+  directPeerCostClass,
   modelsForProfile,
   recordDirectPeerChild,
   resolveApprovedPeerRuntime,
@@ -960,6 +961,8 @@ async function spawnOne(
     throw new Error(
       "The session requires an enterprise account. Select an account marked as enterprise.",
     );
+  // Binding admission check: nothing may yield between this and creation.
+  options.assertAdmittedCost?.(item);
   const sessionId = (await deps.create(spec)).sessionId;
   // From here the session is real: claim it on the result row immediately so
   // any later metadata, context, or delivery failure still reports the child.
@@ -1078,6 +1081,8 @@ async function assertAgentUnchanged(
  */
 interface SpawnOneOptions {
   requiresEnterprise?: boolean;
+  /** Synchronous, after the last await and immediately before creation. */
+  assertAdmittedCost?: (item: SessionSpawnApprovalItem) => void;
   currentRuntime?: () => Promise<{
     provider: string;
     modelId: string;
@@ -1279,6 +1284,13 @@ export async function spawnApprovedPeers(input: {
       );
     structurals.push(await validateStructure(row));
   }
+  const admittedCosts = input.rows.map((row, index) =>
+    directPeerCostClass(
+      row.agent !== undefined
+        ? earlyAgents.get(index)!
+        : { profileId: row.profileId },
+    ),
+  );
   // The fixed concurrency policy is a batch gate, not a per-row one: half a
   // batch admitted would leave the coordinator reasoning about a limit it
   // cannot see. The claim is held for the whole batch and released in the
@@ -1286,12 +1298,13 @@ export async function spawnApprovedPeers(input: {
   // while these sessions are still being created.
   const claim = await admitDirectPeerTurns(
     input.senderSessionId,
-    input.rows.length,
+    admittedCosts.filter((cost) => cost === "counted").length,
   );
   const results: DirectSpawnRowResult[] = [];
   try {
     for (const [index, row] of input.rows.entries()) {
       const structural = structurals[index]!;
+      const admittedCost = admittedCosts[index]!;
       const requiresEnterprise = rowRequires(row);
       const result: DirectSpawnRowResult = {
         title: structural.title,
@@ -1345,6 +1358,19 @@ export async function spawnApprovedPeers(input: {
       try {
         await spawnOne(input.senderSessionId, item, {
           requiresEnterprise,
+          assertAdmittedCost: (current) => {
+            if (
+              admittedCost === "low" &&
+              directPeerCostClass(
+                row.agent !== undefined
+                  ? current
+                  : { profileId: row.profileId },
+              ) !== "low"
+            )
+              throw new Error(
+                `The runtime's cost label changed while "${item.title}" was being started; nothing was created. Spawn it again.`,
+              );
+          },
           currentRuntime: async () => {
             // Throws if the row was disabled, deleted or made unrunnable while
             // this row was being prepared; a row edited to another runtime runs
@@ -1370,7 +1396,11 @@ export async function spawnApprovedPeers(input: {
       if (finalRuntime) result.runtime = reportedRuntime(finalRuntime);
       if (item.resultSessionId) {
         result.sessionId = item.resultSessionId;
-        recordDirectPeerChild(input.senderSessionId, item.resultSessionId);
+        recordDirectPeerChild(
+          input.senderSessionId,
+          item.resultSessionId,
+          admittedCost,
+        );
       }
     }
   } finally {
