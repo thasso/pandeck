@@ -274,7 +274,9 @@ persona toolsets.
   - `github-ci`: `github_watch_pull_request_checks` (one current PR-head check
     snapshot or a bounded wait for checks to appear and settle, with failed-job
     log-reader arguments, the repository's reported default branch and supported
-    merge methods, and conservative merge blockers), `github_get_ref_checks`
+    merge methods, and conservative merge blockers; `background: true` runs the
+    wait as a `server-task` background item through `../serverTasks.ts`, and the
+    shared loop lives in `pullRequestCheckWatch.ts`), `github_get_ref_checks`
     (aggregate Checks API check-runs + legacy commit statuses for a
     branch/tag/SHA into one success/failure/pending state — via the shared
     `githubClient.githubRefChecks` core that `gitHosting.ts`'s GitHub `ciStatus`
@@ -386,10 +388,10 @@ persona toolsets.
 
 - `forgejo/forgejoCiTools.ts` owns the Forgejo CI reads (catalog group
   `forgejo-ci`, deferred, gate `forgejo`), the twin of `github-ci`:
-  `forgejo_watch_pull_request_checks` (the same current/wait and merge preflight
-  contract as the GitHub twin, with status target/run web links as the only
-  authenticated-log handoff Forgejo supports), `forgejo_get_ref_checks`
-  (aggregate CI for a branch/tag/SHA via the shared
+  `forgejo_watch_pull_request_checks` (the same current/wait/background and
+  merge preflight contract as the GitHub twin, with status target/run web links
+  as the only authenticated-log handoff Forgejo supports),
+  `forgejo_get_ref_checks` (aggregate CI for a branch/tag/SHA via the shared
   `forgejoClient.forgejoRefChecks` core that `gitHosting.ts`'s Forgejo
   `ciStatus` reuses, plus opt-in `includeHistory` superseded status rows from
   `/commits/{ref}/statuses`), `forgejo_list_actions_runs` (`/actions/runs`

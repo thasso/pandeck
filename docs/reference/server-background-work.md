@@ -470,3 +470,23 @@ The Claude port lives under `../claudeSdk/backgroundWorkBackend.ts`; this folder
 keeps no provider import. The pi port is under
 `../piSdk/backgroundWorkBackend.ts`. The human registry, session-card chip and
 Settings card live in `app/web` (`docs/reference/web-*.md`).
+
+`../serverTasks.ts` is the third port, `server-task`: jobs PA's own server runs,
+first the background PR check watch (kind `check-watch`). Both harnesses list it
+after their native backend, so `background_tasks` keeps admitting under the
+native one while its owner checks (`status`, `stop`, `set_intent`) accept any
+backend the harness supports. `launchServerTask` admits through the supervisor
+with a lifetime of the requested timeout plus `SERVER_TASK_DEADLINE_MARGIN_MS`
+(one minute), hands the job `run({ signal, timeoutMs, deadlineAt })` with
+`timeoutMs` fitted inside the frozen lifetime, stores the job's JSON result as
+its artifact and reports `completed`. A Stop aborts the job's own signal and
+discards whatever it returns. The port is registered on first use and has no
+host epoch. Every `stopAll` request names the items the supervisor reserved
+(`itemIds`), and each port stops only those: a Stop-all over several backends
+awaits them in turn, and work admitted meanwhile is not that Stop's. Migration
+`0090_background_work_server_tasks.sql` rebuilt `background_work_items` to
+accept the backend and the `check-watch`, `image-pull` and `merge-when-ready`
+kinds, with a `server-task` row hostless. The store owes a server task's fact a
+retained `wake` receipt when it is recorded while draining
+(`TerminalizeBackgroundWorkInput.draining`) or ended by `reconcileBoot`
+(`owesRestartNotice`), and `activityByOwner` counts it as `serverTaskCount`.

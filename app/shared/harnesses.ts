@@ -35,7 +35,10 @@ export interface HarnessDescriptor {
    * Neither can run the other's work, so an admission whose backend is not
    * listed is a mismatch, not a preference. Widening a harness to a second
    * backend is a deliberate act: it means that runtime really can supervise
-   * both, and the admission service will then let it.
+   * both, and the admission service will then let it. Both list `server-task`
+   * second: that work runs in PA's own server, not in either engine, so any
+   * session may own it. The FIRST entry is the harness's native backend, the
+   * one its own tools admit under.
    */
   readonly backgroundWorkBackends: readonly BackgroundWorkBackend[];
 }
@@ -44,13 +47,13 @@ export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
   pi: {
     id: "pi",
     accountProvider: "openai-codex",
-    backgroundWorkBackends: ["host-process"],
+    backgroundWorkBackends: ["host-process", "server-task"],
   },
   "claude-sdk": {
     id: "claude-sdk",
     accountProvider: "claude",
     modelProvider: CLAUDE_SDK_PROVIDER,
-    backgroundWorkBackends: ["claude-query"],
+    backgroundWorkBackends: ["claude-query", "server-task"],
   },
 };
 

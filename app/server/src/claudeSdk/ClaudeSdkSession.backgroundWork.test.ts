@@ -787,6 +787,7 @@ test("compact refuses an outstanding denied provider result and drops its usage"
     sourceRequestId: "prepare-denied-provider-turn",
     attempt: 1,
     reason: "prepare denied provider turn",
+    itemIds: activeItemIds(session.id),
     protectOrdinaryTurn: true,
   });
   query.output.emit({
@@ -855,6 +856,7 @@ test("a missing foreign result leaves a reload-visible durable error entry", asy
     sourceRequestId: "timer-failure-stop-all",
     attempt: 1,
     reason: "test timer failure",
+    itemIds: activeItemIds(session.id),
     protectOrdinaryTurn: true,
   });
   query.output.emit({
@@ -912,6 +914,7 @@ test("compact stays loudly refused while armed and guarded auto-compaction is re
     sourceRequestId: "prepare-compact-reset",
     attempt: 1,
     reason: "prepare compact reset",
+    itemIds: activeItemIds(session.id),
     protectOrdinaryTurn: true,
   });
   query.output.emit({
@@ -1142,6 +1145,7 @@ test("trailing denied-provider content and result cannot corrupt a prompted turn
     sourceRequestId: "prepare-late-result",
     attempt: 1,
     reason: "prepare late denied result",
+    itemIds: activeItemIds(session.id),
     protectOrdinaryTurn: true,
   });
   query.output.emit({
@@ -2120,3 +2124,10 @@ test("a retained epoch's running totals are rebased across turns, not summed", a
   );
   session.dispose();
 });
+
+/** Every active item the owner has: what a supervisor Stop-all would reserve. */
+function activeItemIds(ownerSessionId: string): string[] {
+  return backgroundWorkStore
+    .listItems({ ownerSessionId, state: "active", limit: 200 })
+    .map((item) => item.id);
+}

@@ -3,7 +3,11 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, test } from "vitest";
-import type { Harness } from "@assistant/shared";
+import type {
+  BackgroundWorkBackend,
+  BackgroundWorkKind,
+  Harness,
+} from "@assistant/shared";
 import type {
   BackgroundWorkBackendPort,
   BackgroundWorkLaunchRequest,
@@ -84,7 +88,7 @@ class FakeClock implements BackgroundWorkClock {
 }
 
 class FakePort implements BackgroundWorkBackendPort {
-  readonly backend: "host-process" | "claude-query";
+  readonly backend: BackgroundWorkBackend;
   readonly launches: BackgroundWorkLaunchRequest[] = [];
   readonly stops: BackgroundWorkStopRequest[] = [];
   readonly stopAlls: BackgroundWorkStopAllRequest[] = [];
@@ -100,7 +104,7 @@ class FakePort implements BackgroundWorkBackendPort {
       unconfirmedItemIds: [] as string[],
     });
 
-  constructor(backend: "host-process" | "claude-query" = "host-process") {
+  constructor(backend: BackgroundWorkBackend = "host-process") {
     this.backend = backend;
   }
 
@@ -149,12 +153,15 @@ function supervisorFor(
 function admitRunning(
   supervisor: InstanceType<typeof BackgroundWorkSupervisor>,
   ownerSessionId: string,
+  backend: "host-process" | "server-task" = "host-process",
 ) {
   serial += 1;
+  const kind: BackgroundWorkKind =
+    backend === "server-task" ? "check-watch" : "shell";
   const admission = supervisor.admit({
     ownerSessionId,
-    backend: "host-process",
-    kind: "shell",
+    backend,
+    kind,
     label: "test command",
     sourceRequestId: `launch-${serial}`,
   });
@@ -1281,4 +1288,220 @@ test("deployment drain closes admission, waits grace, then records its distinct 
     backgroundWorkStore.getItem(item.id)?.terminalReason,
     BACKGROUND_DEPLOYMENT_STOP_REASON,
   );
+});
+
+/**
+ * A supervisor for drain tests. Drain samples EVERY active row in this file's
+ * database, including ones earlier tests left running, so each backend has a
+ * port; only the one under test acknowledges anything.
+ */
+function drainSupervisor(
+  clock: FakeClock,
+  backend: "host-process" | "server-task",
+) {
+  const port = new FakePort(backend);
+  const others = (["host-process", "claude-query", "server-task"] as const)
+    .filter((other) => other !== backend)
+    .map((other) => new FakePort(other));
+  const delivered: BackgroundWorkItem[] = [];
+  const supervisor = new BackgroundWorkSupervisor({
+    ports: [port, ...others],
+    clock,
+    naturalCompletionGraceMs: 100,
+    completionRecorded: (item) => void delivered.push(item),
+  });
+  return { supervisor, port, delivered };
+}
+
+/** The receipts visible the moment the item's terminal row is first observable. */
+function receiptsAtPublication(itemId: string): unknown[] {
+  const seen: unknown[] = [];
+  let published = false;
+  setBackgroundWorkStateChangeNotifier((change) => {
+    if (published || !change.itemIds.includes(itemId)) return;
+    const row = backgroundWorkStore.getItem(itemId);
+    if (!row || row.terminalAt === undefined) return;
+    published = true;
+    seen.push(...receipts(itemId));
+  });
+  return seen;
+}
+
+test("a server task finishing in the drain grace owes one retained wake with its real outcome", async () => {
+  for (const outcome of ["completed", "failed"] as const) {
+    const clock = new FakeClock();
+    const { supervisor, delivered } = drainSupervisor(clock, "server-task");
+    const item = await admitRunning(supervisor, owner(), "server-task");
+    const seen = receiptsAtPublication(item.id);
+    const draining = supervisor.drain();
+    supervisor.outputCaptured({
+      itemId: item.id,
+      eventId: `${item.id}:output`,
+      evidence: { artifactId: `artifact-${item.id}`, text: true },
+    });
+    supervisor.completed({
+      itemId: item.id,
+      state: outcome,
+      outcomeSummary: "Checks finished",
+      eventId: `${item.id}:result`,
+    });
+    await clock.advance(100);
+    await draining;
+    setBackgroundWorkStateChangeNotifier(undefined);
+    const ended = backgroundWorkStore.getItem(item.id)!;
+    assert.equal(ended.state, outcome);
+    assert.equal(
+      ended.drainReason,
+      undefined,
+      "it ended before the drain Stop",
+    );
+    assert.equal(ended.evidence?.artifactId, `artifact-${item.id}`);
+    assert.deepEqual(seen, [[ended.revision, "wake", true]]);
+    assert.deepEqual(receipts(item.id), [[ended.revision, "wake", true]]);
+    assert.deepEqual(delivered, [], "delivery is closed until the restart");
+    setBackgroundWorkAdmissionsOpenForTests(true);
+  }
+});
+
+test("a server task still running after the grace is drain-stopped and owes one retained wake", async () => {
+  const clock = new FakeClock();
+  const { supervisor, port, delivered } = drainSupervisor(clock, "server-task");
+  const item = await admitRunning(supervisor, owner(), "server-task");
+  port.stopAllImpl = () =>
+    Promise.resolve({ acknowledgedItemIds: [item.id], unconfirmedItemIds: [] });
+  const seen = receiptsAtPublication(item.id);
+  const draining = supervisor.drain();
+  await clock.advance(100);
+  await draining;
+  setBackgroundWorkStateChangeNotifier(undefined);
+  const stopped = backgroundWorkStore.getItem(item.id)!;
+  assert.equal(stopped.state, "stopped");
+  assert.equal(stopped.terminalReason, BACKGROUND_DEPLOYMENT_STOP_REASON);
+  assert.equal(stopped.drainReason, BACKGROUND_DEPLOYMENT_STOP_REASON);
+  assert.deepEqual(seen, [[stopped.revision, "wake", true]]);
+  assert.deepEqual(receipts(item.id), [[stopped.revision, "wake", true]]);
+  assert.deepEqual(delivered, []);
+});
+
+test("a targeted Stop of a server task while draining owes one retained wake, whoever sent it", async () => {
+  // Requester: the owner or a human stopping it in the drain window.
+  {
+    const clock = new FakeClock();
+    const { supervisor, delivered } = drainSupervisor(clock, "server-task");
+    const item = await admitRunning(supervisor, owner(), "server-task");
+    const seen = receiptsAtPublication(item.id);
+    supervisor.closeAdmissions();
+    const result = await supervisor.stopOne({
+      itemId: item.id,
+      ownerSessionId: item.ownerSessionId,
+      sourceRequestId: "owner-stop-while-draining",
+      reason: "owner stop",
+    });
+    setBackgroundWorkStateChangeNotifier(undefined);
+    assert.equal(result.state, "stopped");
+    const stopped = backgroundWorkStore.getItem(item.id)!;
+    assert.equal(stopped.stopOrigin, "requester");
+    assert.deepEqual(seen, [[stopped.revision, "wake", true]]);
+    assert.deepEqual(receipts(item.id), [[stopped.revision, "wake", true]]);
+    assert.deepEqual(delivered, []);
+    setBackgroundWorkAdmissionsOpenForTests(true);
+  }
+  // Deadline: its usual receipt is suppressed while draining; the restart
+  // receipt is the one, and there is exactly one.
+  {
+    const clock = new FakeClock();
+    const { supervisor, delivered } = drainSupervisor(clock, "server-task");
+    const item = await admitRunning(supervisor, owner(), "server-task");
+    const seen = receiptsAtPublication(item.id);
+    supervisor.closeAdmissions();
+    await clock.advance(item.deadlineAt - clock.now());
+    await settle();
+    setBackgroundWorkStateChangeNotifier(undefined);
+    const stopped = backgroundWorkStore.getItem(item.id)!;
+    assert.equal(stopped.state, "stopped");
+    assert.equal(stopped.stopOrigin, "deadline");
+    assert.deepEqual(seen, [[stopped.revision, "wake", true]]);
+    assert.deepEqual(receipts(item.id), [[stopped.revision, "wake", true]]);
+    assert.deepEqual(delivered, []);
+    setBackgroundWorkAdmissionsOpenForTests(true);
+  }
+});
+
+test("a server task's drain fact rolls back with a receipt that cannot be written", async () => {
+  const clock = new FakeClock();
+  const { supervisor, port } = drainSupervisor(clock, "server-task");
+  const natural = await admitRunning(supervisor, owner(), "server-task");
+  const drained = await admitRunning(supervisor, owner(), "server-task");
+  port.stopAllImpl = () =>
+    Promise.resolve({
+      acknowledgedItemIds: [drained.id],
+      unconfirmedItemIds: [],
+    });
+  getDb().exec(
+    `CREATE TEMP TRIGGER refuse_receipt BEFORE INSERT ON background_delivery_outbox
+     BEGIN SELECT RAISE(ABORT, 'outbox unavailable'); END`,
+  );
+  try {
+    const draining = supervisor.drain();
+    assert.throws(
+      () =>
+        supervisor.completed({
+          itemId: natural.id,
+          state: "completed",
+          eventId: `${natural.id}:result`,
+        }),
+      /outbox unavailable/,
+    );
+    await clock.advance(100);
+    await assert.rejects(draining, /outbox unavailable/);
+  } finally {
+    getDb().exec("DROP TRIGGER refuse_receipt");
+  }
+  for (const item of [natural, drained]) {
+    assert.equal(backgroundWorkStore.getItem(item.id)?.state, "running");
+    assert.deepEqual(receipts(item.id), [], "no receipt without its row");
+  }
+  // A later terminal transition, still while draining, owes exactly one.
+  for (const item of [natural, drained]) {
+    supervisor.completed({ itemId: item.id, state: "stopped" });
+    supervisor.completed({ itemId: item.id, state: "stopped" });
+    const ended = backgroundWorkStore.getItem(item.id)!;
+    assert.deepEqual(receipts(item.id), [[ended.revision, "wake", true]]);
+  }
+  setBackgroundWorkAdmissionsOpenForTests(true);
+});
+
+test("drained host-process work stays silent however it ends", async () => {
+  const clock = new FakeClock();
+  const { supervisor, port, delivered } = drainSupervisor(
+    clock,
+    "host-process",
+  );
+  const finished = await admitRunning(supervisor, owner());
+  const drained = await admitRunning(supervisor, owner());
+  const targeted = await admitRunning(supervisor, owner());
+  port.stopAllImpl = () =>
+    Promise.resolve({
+      acknowledgedItemIds: [drained.id],
+      unconfirmedItemIds: [],
+    });
+  const draining = supervisor.drain();
+  supervisor.completed({ itemId: finished.id, state: "completed" });
+  await supervisor.stopOne({
+    itemId: targeted.id,
+    ownerSessionId: targeted.ownerSessionId,
+    sourceRequestId: "host-process-stop-while-draining",
+    reason: "owner stop",
+  });
+  await clock.advance(100);
+  await draining;
+  for (const item of [finished, drained, targeted]) {
+    assert.notEqual(
+      backgroundWorkStore.getItem(item.id)?.terminalAt,
+      undefined,
+    );
+    assert.deepEqual(receipts(item.id), []);
+  }
+  assert.deepEqual(delivered, []);
+  setBackgroundWorkAdmissionsOpenForTests(true);
 });

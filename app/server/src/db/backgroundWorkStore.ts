@@ -220,6 +220,12 @@ interface TerminalizeBackgroundWorkInput extends BackgroundEvidenceInput {
    * the owner its notice in the same transaction. False while draining.
    */
   oweNotice?: boolean;
+  /**
+   * A deployment drain is under way, so delivery is closed until the restart.
+   * A server task's fact is then owed in this transaction
+   * ({@link owesRestartNotice}); other backends' stay silent.
+   */
+  draining?: boolean;
 }
 
 interface RequestBackgroundStopInput {
@@ -543,7 +549,7 @@ function requireHost(id: string): HostRow {
 interface PendingTouches {
   itemIds: Set<string>;
   hostIds: Set<string>;
-  /** Items whose terminal transition here owes their owner a deadline notice. */
+  /** Items whose terminal transition here owes their owner a retained notice. */
   owedNotices: Set<string>;
 }
 
@@ -667,6 +673,17 @@ function oweDeadlineNotice(touch: PendingTouches, itemId: string): void {
   const row = requireItem(itemId);
   if (row.stop_state !== "none" && row.stop_origin === "deadline")
     touch.owedNotices.add(itemId);
+}
+
+/**
+ * Whether a fact this backend's work records while delivery is closed — during
+ * a deployment drain, or when boot ends a row the previous process left — is
+ * still owed to its owner after the restart. Only work PA's own server runs:
+ * nothing resumes it, and unlike provider work no transcript ever mentioned
+ * how it ended, so silence would read as a wait still going.
+ */
+function owesRestartNotice(backend: BackgroundWorkBackend): boolean {
+  return backend === "server-task";
 }
 
 function recordOwedNotices(touch: PendingTouches): void {
@@ -1382,6 +1399,8 @@ function terminalize(
     recordEventIdentity(row, input.eventId, input.sequence);
     touch.itemIds.add(row.id);
     if (input.oweNotice) oweDeadlineNotice(touch, row.id);
+    if (input.draining && owesRestartNotice(row.backend))
+      touch.owedNotices.add(row.id);
     return () => itemOf(requireItem(row.id));
   });
 }
@@ -1756,11 +1775,12 @@ function reconcileBoot(input: { bootEpoch: string; now?: number }): {
     const bootEpoch = bounded(input.bootEpoch, ID_MAX_CHARS, "bootEpoch");
     const staleItems = getDb()
       .prepare(
-        `SELECT id, drain_reason, stop_state FROM background_work_items
+        `SELECT id, backend, drain_reason, stop_state FROM background_work_items
          WHERE is_member = 1 AND boot_epoch <> ? AND state IN ('pending-launch', 'running')`,
       )
       .all(bootEpoch) as Array<{
       id: string;
+      backend: BackgroundWorkBackend;
       drain_reason: string | null;
       stop_state: BackgroundWorkStopState;
     }>;
@@ -1783,6 +1803,7 @@ function reconcileBoot(input: { bootEpoch: string; now?: number }): {
         item.id,
       );
       touch.itemIds.add(item.id);
+      if (owesRestartNotice(item.backend)) touch.owedNotices.add(item.id);
     }
     const staleHosts = getDb()
       .prepare(
@@ -2026,6 +2047,29 @@ function listItems(
   return rows.map(itemOf);
 }
 
+/** Exhaustive, so a new kind is a type error here rather than a miscount. */
+function countKind(
+  activity: SessionBackgroundActivity,
+  kind: BackgroundWorkKind,
+): void {
+  switch (kind) {
+    case "shell":
+      activity.shellCount += 1;
+      return;
+    case "monitor-command":
+      activity.monitorCommandCount += 1;
+      return;
+    case "monitor-websocket":
+      activity.monitorWebsocketCount += 1;
+      return;
+    case "check-watch":
+      // Counted by its backend (`serverTaskCount`) only.
+      return;
+    default:
+      return kind satisfies never;
+  }
+}
+
 /**
  * Per-owner activity for the session list. Derived from durable rows only: it
  * never reads, sets or implies provider run state.
@@ -2033,13 +2077,14 @@ function listItems(
 function activityByOwner(): Map<string, SessionBackgroundActivity> {
   const rows = getDb()
     .prepare(
-      `SELECT owner_session_id, kind, state, stop_state, intent,
+      `SELECT owner_session_id, backend, kind, state, stop_state, intent,
               COALESCE(started_at_ms, created_at_ms) AS since
        FROM background_work_items
        WHERE is_member = 1 AND state IN ('pending-launch', 'running')`,
     )
     .all() as Array<{
     owner_session_id: string;
+    backend: BackgroundWorkBackend;
     kind: BackgroundWorkKind;
     state: BackgroundWorkState;
     stop_state: BackgroundWorkStopState;
@@ -2058,9 +2103,9 @@ function activityByOwner(): Map<string, SessionBackgroundActivity> {
       oldestStartedAt: row.since,
     };
     current.activeCount += 1;
-    if (row.kind === "shell") current.shellCount += 1;
-    else if (row.kind === "monitor-command") current.monitorCommandCount += 1;
-    else current.monitorWebsocketCount += 1;
+    countKind(current, row.kind);
+    if (row.backend === "server-task")
+      current.serverTaskCount = (current.serverTaskCount ?? 0) + 1;
     if (row.state === "pending-launch") current.startingCount += 1;
     if (row.stop_state !== "none") current.stoppingCount += 1;
     if (row.intent === "service")

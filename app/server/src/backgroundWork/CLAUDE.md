@@ -23,24 +23,25 @@
 - An owner's OWN Stop-all closes the host at its turn end only if a Stop it sent
   stayed unsettled; closing anyway kills the work started after it.
 - Persist terminal facts BEFORE delivery. Activity and completion share one
-  bounded lossy queue; raw output never enters the row or prompt. Completion
-  uses its stable PA artifact, activity a turn-scoped file. Put structured
-  detail in model-only context and render only the compact origin card. Await
-  peer FIFO, require idle, then use `promptRuntimeSession`; busy yields. Never
-  add another model path or count background execution in `hub.runningCount()`.
+  bounded lossy queue; raw output never enters row or prompt. Completion uses
+  its stable PA artifact, activity a turn-scoped file. Structured detail goes in
+  model-only context; render only the compact origin card. Await peer FIFO,
+  require idle, then use `promptRuntimeSession`; busy yields. Never add another
+  model path or count background execution in `hub.runningCount()`.
 - Only a MONITOR streams activity; a background shell command pushes nothing and
   is awaited at its EXIT. Both capture the artifact. A monitor's unit is a LINE,
-  never a clock tick, and exceeding its sustained rate STOPS the item: muting a
-  live monitor is forbidden, because silence then reads as nothing to report.
+  never a clock tick; exceeding its sustained rate STOPS the item, never mutes
+  it: silence reads as nothing to report.
 - `deliveryPolicy.ts` is the ONE decision on how a terminal fact reaches the
   model, and stays pure. It never discards: a requested Stop and a
   `claude-query` item settling in a live turn DEFER, everything else WAKES. A
   Stop nobody requested wakes: the row's typed `stopOrigin` (`deadline`,
   `system`) from the Stop that WON, never a reason match; a deadline fact's
-  outbox receipt commits WITH its terminal row. `backend` + turn-running is NOT
-  evidence the provider transcribed the fact — the Stop snapshot terminalizes
-  when the notification is missing. A deferred fact rides the next turn's
-  model-only context and never reads as that turn's instruction. Sample
+  outbox receipt commits WITH its terminal row, as does a retained `wake` for a
+  `server-task` fact recorded in drain or ended at boot. `backend` +
+  turn-running is NOT evidence the provider transcribed the fact: the Stop
+  snapshot terminalizes when the notification is missing. A deferred fact rides
+  the next turn's model-only context, never as its instruction. Sample
   turn-running at durability. A `wake` may join a running turn with `steerOnly`;
   a refusal is busy, never delivered.
 - DELIVERED is not HANDLED. Claim a fact in the outbox before its append, bind

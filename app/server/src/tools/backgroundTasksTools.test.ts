@@ -21,6 +21,7 @@ const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { backgroundWorkSupervisor } =
   await import("../backgroundWork/supervisor.ts");
 const { getSettings, updateSettings } = await import("../settings.ts");
+const { launchServerTask } = await import("../serverTasks.ts");
 
 const stopAllRequests: BackgroundWorkStopAllRequest[] = [];
 /** Whether the fake backend confirms the Stops a Stop-all sends. */
@@ -309,5 +310,92 @@ describe("background_tasks", () => {
         reason: "test cleanup",
       });
     }
+  });
+});
+
+describe("background_tasks over a server task", () => {
+  /** A check watch that runs until its signal aborts, as a real one does. */
+  async function startServerTask(owner: string, harness: "pi" | "claude-sdk") {
+    const job = { signal: undefined as AbortSignal | undefined, runs: 0 };
+    const started = await launchServerTask({
+      ctx: context(owner, harness),
+      kind: "check-watch",
+      label: "GitHub PR checks acme/app#42",
+      command: "github_watch_pull_request_checks acme/app#42",
+      sourceTool: "github_watch_pull_request_checks",
+      requestedTimeoutMs: 60_000,
+      run: (budget) => {
+        job.runs += 1;
+        job.signal = budget.signal;
+        return new Promise((_resolve, reject) =>
+          budget.signal.addEventListener("abort", () =>
+            reject(new Error("stopped")),
+          ),
+        );
+      },
+    });
+    for (let index = 0; index < 5; index += 1) await Promise.resolve();
+    return { taskId: started.taskId, job };
+  }
+
+  test.each(["pi", "claude-sdk"] as const)(
+    "a %s owner reads, classifies and Stops its own server task",
+    async (harness) => {
+      const owner = makeSession(harness);
+      const { taskId, job } = await startServerTask(owner, harness);
+      const status = details(
+        await backgroundTasksTool.execute(
+          { operation: "status", taskId },
+          context(owner, harness),
+        ),
+      );
+      expect(status.item).toMatchObject({
+        backend: "server-task",
+        kind: "check-watch",
+        state: "running",
+      });
+      const declared = details(
+        await backgroundTasksTool.execute(
+          { operation: "set_intent", taskId, intent: "service" },
+          context(owner, harness),
+        ),
+      );
+      expect(declared.item).toMatchObject({ intent: "service" });
+
+      const stopped = details(
+        await backgroundTasksTool.execute(
+          { operation: "stop", taskId },
+          context(owner, harness),
+        ),
+      );
+      expect(stopped.result).toBe("stopped");
+      expect(job.signal?.aborted).toBe(true);
+      const row = backgroundWorkStore.getItem(taskId)!;
+      expect(row.state).toBe("stopped");
+      expect(row.evidence).toBeUndefined();
+      expect(job.runs).toBe(1);
+    },
+  );
+
+  test("another session cannot reach it, and the owner's Stop-all stops it", async () => {
+    const owner = makeSession("claude-sdk");
+    const { taskId, job } = await startServerTask(owner, "claude-sdk");
+    await expect(
+      backgroundTasksTool.execute(
+        { operation: "stop", taskId },
+        context(makeSession("claude-sdk"), "claude-sdk"),
+      ),
+    ).rejects.toThrow("not owned by this session");
+    expect(job.signal?.aborted).toBe(false);
+
+    const result = details(
+      await backgroundTasksTool.execute(
+        { operation: "stop_all" },
+        context(owner, "claude-sdk"),
+      ),
+    );
+    expect(result.result).toBe("stopped");
+    expect(job.signal?.aborted).toBe(true);
+    expect(backgroundWorkStore.getItem(taskId)?.state).toBe("stopped");
   });
 });

@@ -22,6 +22,8 @@ const {
   setBackgroundWorkStateChangeNotifier,
 } = await import("./backgroundWorkStore.ts");
 const { sessionStore } = await import("./sessionStore.ts");
+const { backgroundDeliveryOutboxStore } =
+  await import("./backgroundDeliveryOutboxStore.ts");
 const { getDb } = await import("./index.ts");
 const { backgroundWorkItemSummaryOf } =
   await import("../backgroundWorkRegistry.ts");
@@ -1626,4 +1628,135 @@ test("the stop-origin migration describes history and leaves unstopped rows alon
     },
   );
   db.close();
+});
+
+/** The owed-fact receipts the store wrote for one item. */
+function receiptsFor(itemId: string) {
+  return backgroundDeliveryOutboxStore
+    .list()
+    .filter((row) => row.itemId === itemId)
+    .map((row) => [row.revision, row.disposition, row.retained]);
+}
+
+function staleServerTasks(bootEpoch: string) {
+  const owner = makeSession();
+  const serverTask = (sourceRequestId: string) =>
+    reserveInput(owner, {
+      backend: "server-task",
+      kind: "check-watch",
+      label: "GitHub PR checks acme/app#42",
+      sourceRequestId,
+      bootEpoch,
+    });
+  const crashed = backgroundWorkStore.reserveItem(serverTask(`${bootEpoch}-1`));
+  backgroundWorkStore.markRunning({ itemId: crashed.id });
+  const drained = backgroundWorkStore.reserveItem(serverTask(`${bootEpoch}-2`));
+  backgroundWorkStore.markRunning({ itemId: drained.id });
+  backgroundWorkStore.recordPlannedDrain({
+    itemId: drained.id,
+    reason: "stopped-for-deployment",
+  });
+  const process = backgroundWorkStore.reserveItem(
+    reserveInput(owner, { sourceRequestId: `${bootEpoch}-3`, bootEpoch }),
+  );
+  backgroundWorkStore.markRunning({ itemId: process.id });
+  return { crashed, drained, process };
+}
+
+test("boot owes a server task it ends one retained wake, in the reconciling transaction", () => {
+  const { crashed, drained, process } = staleServerTasks("boot-server-old");
+  const seen = new Map<string, unknown[]>();
+  setBackgroundWorkStateChangeNotifier((change) => {
+    for (const id of [crashed.id, drained.id, process.id])
+      if (change.itemIds.includes(id) && !seen.has(id))
+        seen.set(id, receiptsFor(id));
+  });
+  try {
+    backgroundWorkStore.reconcileBoot({ bootEpoch: "boot-server-new" });
+  } finally {
+    setBackgroundWorkStateChangeNotifier(undefined);
+  }
+  const lost = backgroundWorkStore.getItem(crashed.id)!;
+  const stopped = backgroundWorkStore.getItem(drained.id)!;
+  assert.equal(lost.state, "lost");
+  assert.equal(stopped.state, "stopped");
+  assert.equal(backgroundWorkStore.getItem(process.id)?.state, "lost");
+  assert.deepEqual(seen.get(crashed.id), [[lost.revision, "wake", true]]);
+  assert.deepEqual(seen.get(drained.id), [[stopped.revision, "wake", true]]);
+  assert.deepEqual(receiptsFor(crashed.id), [[lost.revision, "wake", true]]);
+  assert.deepEqual(receiptsFor(drained.id), [[stopped.revision, "wake", true]]);
+  assert.deepEqual(seen.get(process.id), [], "provider work stays silent");
+  assert.deepEqual(receiptsFor(process.id), []);
+
+  // A second pass finds only terminal rows and owes nothing more.
+  backgroundWorkStore.reconcileBoot({ bootEpoch: "boot-server-newer" });
+  assert.equal(receiptsFor(crashed.id).length, 1);
+  assert.equal(receiptsFor(drained.id).length, 1);
+});
+
+test("a boot pass whose receipt cannot be written ends nothing, and the next pass owes it once", () => {
+  const { crashed, drained, process } = staleServerTasks("boot-refused-old");
+  getDb().exec(
+    `CREATE TEMP TRIGGER refuse_receipt BEFORE INSERT ON background_delivery_outbox
+     BEGIN SELECT RAISE(ABORT, 'outbox unavailable'); END`,
+  );
+  try {
+    assert.throws(
+      () =>
+        backgroundWorkStore.reconcileBoot({ bootEpoch: "boot-refused-new" }),
+      /outbox unavailable/,
+    );
+  } finally {
+    getDb().exec("DROP TRIGGER refuse_receipt");
+  }
+  for (const item of [crashed, drained, process]) {
+    assert.equal(backgroundWorkStore.getItem(item.id)?.state, "running");
+    assert.deepEqual(receiptsFor(item.id), []);
+  }
+  backgroundWorkStore.reconcileBoot({ bootEpoch: "boot-refused-new" });
+  const lost = backgroundWorkStore.getItem(crashed.id)!;
+  const stopped = backgroundWorkStore.getItem(drained.id)!;
+  assert.deepEqual(receiptsFor(crashed.id), [[lost.revision, "wake", true]]);
+  assert.deepEqual(receiptsFor(drained.id), [[stopped.revision, "wake", true]]);
+  assert.deepEqual(receiptsFor(process.id), []);
+});
+
+test("an active server task counts by its backend, never as a monitor", () => {
+  const owner = makeSession();
+  const watch = backgroundWorkStore.reserveItem(
+    reserveInput(owner, {
+      backend: "server-task",
+      kind: "check-watch",
+      label: "GitHub PR checks acme/app#42",
+    }),
+  );
+  backgroundWorkStore.markRunning({ itemId: watch.id });
+  const activity = backgroundWorkStore.activityByOwner().get(owner);
+  assert.equal(activity?.activeCount, 1);
+  assert.equal(activity?.serverTaskCount, 1);
+  assert.equal(activity?.shellCount, 0);
+  assert.equal(activity?.monitorCommandCount, 0);
+  assert.equal(activity?.monitorWebsocketCount, 0);
+  // Omitted, not zero, for an owner with no server task.
+  const other = makeSession();
+  backgroundWorkStore.reserveItem(reserveInput(other));
+  assert.equal(
+    "serverTaskCount" in backgroundWorkStore.activityByOwner().get(other)!,
+    false,
+  );
+});
+
+test("a server task row never carries a host", () => {
+  const owner = makeSession();
+  assert.throws(
+    () =>
+      backgroundWorkStore.reserveItem(
+        reserveInput(owner, {
+          backend: "server-task",
+          kind: "check-watch",
+          host: { epochKey: `epoch-server-${owner}`, emptyGraceMs: 0 },
+        }),
+      ),
+    BackgroundWorkValidationError,
+  );
 });

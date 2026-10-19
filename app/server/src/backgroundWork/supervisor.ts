@@ -340,6 +340,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         ? { reason: TERMINAL_REASON_BY_ORIGIN[unrequestedStop] }
         : {}),
       oweNotice: !this.draining,
+      draining: this.draining,
       ...(completion.exitCode !== undefined
         ? { exitCode: completion.exitCode }
         : {}),
@@ -495,6 +496,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
           sourceRequestId: request.sourceRequestId,
           attempt: attempt as 1 | 2,
           reason: request.reason,
+          itemIds: effectTargets.map((item) => item.id),
           protectOrdinaryTurn:
             request.callerSessionId === request.ownerSessionId ||
             this.ordinaryTurnActive(request.ownerSessionId),
@@ -536,6 +538,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
             state: "stopped",
             reason: terminalReason,
             stopOrigin: "requester",
+            draining: this.draining,
             now: this.clock.now(),
           });
           this.cancelDeadline(item.id);
@@ -898,6 +901,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
           reason: TERMINAL_REASON_BY_ORIGIN[origin],
           stopOrigin: origin,
           oweNotice: !this.draining,
+          draining: this.draining,
           now: this.clock.now(),
         });
         this.cancelDeadline(current.id);

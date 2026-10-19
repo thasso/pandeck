@@ -7,9 +7,11 @@
  * a restart (`automaticTurnHold.ts`) until it is delivered — through a Resume
  * too — and likewise a frozen-deadline Stop, whose receipt the store writes in
  * the very transaction that ends the work (`backgroundWorkStore.ts`), since
- * nothing else would ever tell the owner. Any other fact keeps the old rule and
- * is forgotten at boot: the delivery queue never survived a restart, so no
- * historical job is announced again.
+ * nothing else would ever tell the owner. A server task's fact recorded during
+ * a deployment drain, or a row of one that boot ended, is owed the same way: it
+ * is never resumed, and delivery is closed until the restart. Any other fact
+ * keeps the old rule and is forgotten at boot: the delivery queue never
+ * survived a restart, so no historical job is announced again.
  *
  * A DELIVERED fact is not a handled one. Once a fact is exposed to the model
  * its row follows the run it was appended into, and only that run's clean end
@@ -70,6 +72,20 @@ function lifetimeText(ms: number): string {
 }
 
 /**
+ * A server task the restart ended rather than one that finished in the drain
+ * grace. Read from typed row fields: a hostless server task is `lost` only by
+ * boot reconciliation, and a `stopped` one with a drain reason was stopped for
+ * the deployment.
+ */
+function endedByRestart(item: BackgroundWorkItem): boolean {
+  if (item.backend !== "server-task") return false;
+  return (
+    item.state === "lost" ||
+    (item.state === "stopped" && item.drainReason !== undefined)
+  );
+}
+
+/**
  * The completion notice for a terminal row, or undefined for one that has not
  * ended. `ownerTurnRunning` is the caller's evidence, sampled when the fact
  * became durable (`deliveryPolicy.ts`).
@@ -114,17 +130,17 @@ function completionNoticeOf(
   // Said in words because the provider's own summary, when it has one, never
   // says WHO stopped the work, and "stopped" alone reads as a decision of the
   // agent's. Never a claim about what the work achieved before it ended.
-  const outcomeSummary =
+  const preface =
     item.state === "stopped" &&
     item.stopState !== "none" &&
     stopOrigin === "deadline"
-      ? [
-          `Stopped by PA at its frozen deadline (${lifetimeText(item.lifetimeMs)} lifetime): the work was ended, not completed, and nothing restarted it.`,
-          item.outcomeSummary,
-        ]
-          .filter(Boolean)
-          .join(" ")
-      : item.outcomeSummary;
+      ? `Stopped by PA at its frozen deadline (${lifetimeText(item.lifetimeMs)} lifetime): the work was ended, not completed, and nothing restarted it.`
+      : endedByRestart(item)
+        ? "A PA server restart stopped this task; nothing resumed it."
+        : undefined;
+  const outcomeSummary = preface
+    ? [preface, item.outcomeSummary].filter(Boolean).join(" ")
+    : item.outcomeSummary;
   return {
     itemId: item.id,
     revision: item.revision,

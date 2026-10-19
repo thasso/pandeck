@@ -277,18 +277,27 @@ export function backgroundWorkKindLabel(
       return `Command monitor${service}`;
     case "monitor-websocket":
       return `WebSocket monitor${service}`;
+    case "check-watch":
+      return `Check watch${service}`;
   }
 }
 
 /**
  * Which runtime supervises it, as a CAPABILITY rather than a vendor id: a
  * Claude item runs inside the retained query that issued it, a host-process item
- * is supervised by PA itself.
+ * is supervised by PA itself, and a server task runs inside PA's own server.
  */
 export function backgroundWorkBackendLabel(
   item: BackgroundWorkItemSummary,
 ): string {
-  return item.backend === "claude-query" ? "Claude query" : "PA process";
+  switch (item.backend) {
+    case "claude-query":
+      return "Claude query";
+    case "host-process":
+      return "PA process";
+    case "server-task":
+      return "PA server";
+  }
 }
 
 /** How long this item has been alive, or how long it ran before it ended. */
