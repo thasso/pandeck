@@ -47,6 +47,8 @@
 import { BACKGROUND_FETCH_ENABLED } from "../config.ts";
 import { gitOptional, repoLockKey } from "../gitExec.ts";
 import { getSettings } from "../settings.ts";
+import type { WorktreeRow } from "../db/worktreeStore.ts";
+import { baseBranchRemote } from "./worktreeRemote.ts";
 
 const MINUTE_MS = 60_000;
 /**
@@ -76,6 +78,41 @@ const FETCH_ENV = {
   GIT_SSH_COMMAND:
     "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10",
 };
+
+/**
+ * Authoritative removal fallback, outside the repo lock. Update only a named
+ * remote-tracking base and never FETCH_HEAD or a local branch. A deleted base
+ * or unreachable remote supplies no proof; the caller keeps protecting work.
+ */
+export async function refreshRemovalBase(
+  row: WorktreeRow,
+): Promise<string | undefined> {
+  const context = { ...row, path: row.mainRepoRoot };
+  const remote = await baseBranchRemote(context);
+  if (!remote) return undefined;
+  const names = await gitOptional(["remote"], context.path);
+  if (!names.stdout.split("\n").includes(remote)) return undefined;
+  const ref = `refs/remotes/${remote}/${row.baseBranch}`;
+  const fetched = await gitOptional(
+    [
+      "fetch",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--",
+      remote,
+      `+refs/heads/${row.baseBranch}:${ref}`,
+    ],
+    context.path,
+    AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    FETCH_ENV,
+  );
+  if (fetched.code !== 0) return undefined;
+  const target = await gitOptional(
+    ["rev-parse", "--verify", `${ref}^{commit}`],
+    context.path,
+  );
+  return target.code === 0 ? target.stdout.trim() : undefined;
+}
 
 interface RepoState {
   path: string;

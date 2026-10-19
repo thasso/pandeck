@@ -68,6 +68,7 @@ import {
 import { reserveWorktreeForRemoval } from "./session/sessionRunLease.ts";
 import {
   removeWorktree,
+  hasUnmergedCommits,
   WorktreeBranchCleanupError,
   WorktreeDirectoryResidueError,
   WorktreeRemovalBlockedError,
@@ -78,7 +79,6 @@ import {
   isMainWorktreeId,
   resolveWorktreeRow,
 } from "./worktrees/worktreeResolve.ts";
-import { branchContainedInBase } from "./worktrees/worktreeStatus.ts";
 import {
   invalidateIdleWorktrees,
   worktreeIdleRefusal,
@@ -167,9 +167,18 @@ export interface WorktreeRetireOperations {
 
 const defaultRetireOperations: WorktreeRetireOperations = {
   resolveWorktree: resolveWorktreeRow,
-  refreshBase: baseBranchTarget,
-  branchContained: (row, baseTarget) =>
-    branchContainedInBase(row.mainRepoRoot, row.branch, baseTarget),
+  async refreshBase(row) {
+    try {
+      return await baseBranchTarget(row);
+    } catch (error) {
+      // A review's implementation branch may already have been deleted.
+      // Its merged PR receipt or a remote ref can still prove preservation.
+      if (!(await hasUnmergedCommits(row))) return row.baseBranch;
+      throw error;
+    }
+  },
+  branchContained: async (row, baseTarget) =>
+    !(await hasUnmergedCommits(row, baseTarget)),
   async blockedReason(worktreeId) {
     const blocked = await worktreeSettleBlockedReason(worktreeId);
     return blocked ? retireRefusal(blocked) : undefined;

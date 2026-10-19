@@ -17,6 +17,7 @@ import { git, gitOptional, repoLockKey, withRepoLock } from "../gitExec.ts";
 import { getWorktree, type WorktreeRow } from "../db/worktreeStore.ts";
 import { invalidateWorktreeStatus } from "./worktreeStatus.ts";
 import { isMainWorktreeId, mainWorktreeId } from "./worktreeResolve.ts";
+import { baseBranchRemote, remoteNames } from "./worktreeRemote.ts";
 
 const REMOTE_ENV: NodeJS.ProcessEnv = {
   GIT_TERMINAL_PROMPT: "0",
@@ -395,37 +396,6 @@ export async function baseBranchTarget(
       `Cannot rebase: "${row.baseBranch}" exists neither on a remote nor locally.`,
     );
   return local.stdout.trim();
-}
-
-async function remoteNames(row: WorktreeRow): Promise<string[]> {
-  return (await gitOptional(["remote"], row.path)).stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-/** The remote that carries the base branch, if the repository has one. */
-export async function baseBranchRemote(
-  row: WorktreeRow,
-): Promise<string | undefined> {
-  const configured = (
-    await gitOptional(
-      ["config", "--get", `branch.${row.baseBranch}.remote`],
-      row.path,
-    )
-  ).stdout.trim();
-  if (configured) return configured;
-  const remotes = await remoteNames(row);
-  if (remotes.includes("origin")) return "origin";
-  if (remotes.length > 1) {
-    // A fork/upstream repository with neither `origin` nor a configured remote
-    // for the base branch: picking one would rewrite the branch against a
-    // history the user never named. Refuse and say how to settle it.
-    throw new Error(
-      `Cannot rebase: "${row.baseBranch}" has no configured remote and this repository has several (${remotes.join(", ")}). Set branch.${row.baseBranch}.remote to say which one is the truth.`,
-    );
-  }
-  return remotes[0];
 }
 
 async function fastForwardMain(

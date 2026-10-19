@@ -12,7 +12,8 @@ import {
   resolveWorktreeRow,
 } from "./worktreeResolve.ts";
 import { invalidateWorktreeStatus } from "./worktreeStatus.ts";
-import { baseBranchRemote, baseBranchTarget } from "./worktreeSync.ts";
+import { baseBranchTarget } from "./worktreeSync.ts";
+import { baseBranchRemote } from "./worktreeRemote.ts";
 
 const REMOTE_ENV: NodeJS.ProcessEnv = {
   GIT_TERMINAL_PROMPT: "0",

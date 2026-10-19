@@ -201,7 +201,12 @@ meantime:
 1. Tracked background work of every session linked to the worktree is stopped
    through the background-work supervisor, bounded at three seconds. A live
    session with running work already refuses the removal, so this reaches work
-   left behind by settled or archived sessions.
+   left behind by settled or archived sessions, plus an empty retained host in
+   its quiet grace. A host with no active background items does not block
+   checkout removal, since removal closes it through this supervisor. Ordinary
+   session Settle still blocks on that host because it does not close it.
+   Prompted turns, active background items, queued work, unanswered decisions
+   and unhandled background updates continue to block removal.
 2. Any remaining process whose working directory is inside the checkout gets
    SIGTERM, then SIGKILL after two seconds — only if the server provably started
    it: a descendant at least two levels down. The server's direct children are

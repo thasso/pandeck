@@ -736,6 +736,52 @@ test("removing a worktree settles the live sessions that ran in it", async () =>
   );
 });
 
+test("worktree removal ignores an empty retained host, but not active work or a prompted turn", async () => {
+  const { worktreeSettleBlockedReason } = await import("./sessionActivity.ts");
+  const { linkSessionToWorktree } = await import("./db/worktreeStore.ts");
+  const { hub } = await import("./hub.ts");
+  const id = (await liveSession()).id;
+  linkSessionToWorktree(id, "wt-finished-host");
+  const projected = {
+    file: "test.jsonl",
+    id,
+    harness: "pi",
+    agentType: "developer",
+    title: "Finished host",
+    createdAt: 1,
+    updatedAt: 1,
+    messageCount: 1,
+    isStreaming: false,
+    backgroundActivity: { activeCount: 0, retainedHost: true },
+  } as import("./sessions.ts").InternalSessionListItem;
+  const list = vi.spyOn(hub, "listSessions").mockResolvedValue([projected]);
+  try {
+    assert.equal(
+      await worktreeSettleBlockedReason("wt-finished-host"),
+      undefined,
+    );
+    projected.backgroundActivity!.activeCount = 1;
+    assert.match(
+      (await worktreeSettleBlockedReason("wt-finished-host"))!,
+      /background process running/,
+    );
+    projected.backgroundActivity!.activeCount = 0;
+    projected.isStreaming = true;
+    assert.equal(
+      await worktreeSettleBlockedReason("wt-finished-host"),
+      "it is still running.",
+    );
+    projected.isStreaming = false;
+    projected.unhandledBackgroundUpdates = 1;
+    assert.match(
+      (await worktreeSettleBlockedReason("wt-finished-host"))!,
+      /not handled/,
+    );
+  } finally {
+    list.mockRestore();
+  }
+});
+
 // The other inbox fact that is not a runtime event: a Workflow Run reached its
 // end. A session the run never linked to a checkout needs settlement from the
 // terminal run, because no checkout removal can reach it.

@@ -95,6 +95,35 @@ tree at once.
 Nothing here removes a worktree. A merged pull request leaves its checkout where
 it is; whether to keep working in it or retire it stays the user's call.
 
+## Safe branch removal
+
+Remove and Retire protect uncommitted files independently of branch deletion.
+Keeping the branch preserves its commits and needs no delivery proof. Deleting
+it without force requires one of these proofs for its exact current tip:
+
+- semantic containment in the recorded base or the refreshed remote base;
+- ancestry in a nonsymbolic remote-tracking ref;
+- ancestry in the provider-observed head of a merged PR card for this worktree,
+  or for the implementation worktree named by its base branch in the same
+  repository. Removed implementation rows still supply their PR receipts.
+
+A merged card alone is not sufficient. Its creation head is not proof of what
+landed after a force-push, and a new local commit after the merged head stays
+protected. Semantic containment remains base-specific; an arbitrary sibling
+local branch or a matching patch on a remote branch is not a substitute.
+
+When existing proofs fail, Remove fetches the named remote's base without moving
+the local base or writing `FETCH_HEAD`. An unavailable or deleted base supplies
+no new proof. Retire can still use an existing remote ref or merged receipt when
+refreshing the base fails. Both paths recheck the exact tip under the repository
+lock before removing the checkout, and again during oid-bound branch cleanup. A
+branch reused since removal is never deleted by a retry.
+
+These proofs matter after squash merges: later changes to the same files can
+make `merge-tree` conflict even though the earlier branch was delivered. Review
+checkouts can also outlive a deleted or rebased implementation branch. Neither
+case justifies discarding commits outside the proven head.
+
 ## Idle worktrees: the cleanup queue's other half
 
 The Pull Requests view's **Needs cleanup** group lists a merged or closed pull
