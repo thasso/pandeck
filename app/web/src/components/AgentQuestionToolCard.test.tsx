@@ -9,7 +9,7 @@ import type {
 import {
   AgentQuestionToolCard,
   pendingQuestionEntryId,
-  pendingQuestionForBlock,
+  questionFlowForBlock,
 } from "./AgentQuestionToolCard.tsx";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
@@ -191,13 +191,55 @@ describe("AgentQuestionToolCard", () => {
       toolCallId: block.toolId,
     };
 
-    expect(pendingQuestionForBlock([byShape, exact], block)?.requestId).toBe(
-      "question-exact",
+    expect(
+      questionFlowForBlock([byShape, exact], undefined, block)?.pending
+        ?.requestId,
+    ).toBe("question-exact");
+    expect(
+      questionFlowForBlock([byShape], undefined, block)?.pending?.requestId,
+    ).toBe("question-shape");
+    expect(questionFlowForBlock([], [], block)).toBeUndefined();
+  });
+
+  it("shows a new flow's form even beside an earlier answer of the same shape", () => {
+    // An answer recorded before relinking keeps the MCP id, so it still
+    // matches this block's payload; the new flow's exact id must win.
+    const earlier: AnsweredAgentQuestion = {
+      ...pending,
+      requestId: "question-old",
+      toolCallId: "1",
+      response: {
+        requestId: "question-old",
+        status: "submitted",
+        submittedAt: 2,
+        answers: [],
+      },
+    };
+    const current = {
+      ...pending,
+      requestId: "question-new",
+      toolCallId: block.toolId,
+    };
+    const html = renderToStaticMarkup(
+      <AgentQuestionToolCard
+        block={block}
+        pendingQuestions={[current]}
+        answeredQuestions={[earlier]}
+        onRespond={() => {}}
+      />,
     );
-    expect(pendingQuestionForBlock([byShape], block)?.requestId).toBe(
-      "question-shape",
-    );
-    expect(pendingQuestionForBlock([], block)).toBeUndefined();
+
+    expect(html).toContain("Question 1 of 2");
+    expect(html).not.toContain("Question answered");
+    const row = { id: "m1", role: "assistant", blocks: [block] };
+    expect(
+      pendingQuestionEntryId(
+        [row as unknown as DisplayMessage],
+        [current],
+        [earlier],
+        current,
+      ),
+    ).toBe("m1");
   });
 
   it("finds the transcript row holding each pending flow's form", () => {
@@ -215,10 +257,14 @@ describe("AgentQuestionToolCard", () => {
       }) as unknown as DisplayMessage;
     const messages = [row("m1", "toolu_A"), row("m2", "toolu_B")];
 
-    expect(pendingQuestionEntryId(messages, [alpha, beta], alpha)).toBe("m1");
-    expect(pendingQuestionEntryId(messages, [alpha, beta], beta)).toBe("m2");
+    expect(pendingQuestionEntryId(messages, [alpha, beta], [], alpha)).toBe(
+      "m1",
+    );
+    expect(pendingQuestionEntryId(messages, [alpha, beta], [], beta)).toBe(
+      "m2",
+    );
     expect(
-      pendingQuestionEntryId(messages, [alpha, beta], {
+      pendingQuestionEntryId(messages, [alpha, beta], [], {
         ...pending,
         requestId: "question-gone",
         toolCallId: "toolu_gone",

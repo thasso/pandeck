@@ -5777,7 +5777,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     : undefined;
   const jumpQuestionSessionId = jumpQuestion?.sessionId;
   const questionEntryId = jumpQuestion
-    ? pendingQuestionEntryId(displayMessages, pendingQuestions, jumpQuestion)
+    ? pendingQuestionEntryId(
+        displayMessages,
+        pendingQuestions,
+        displaySession?.answeredQuestions,
+        jumpQuestion,
+      )
     : undefined;
   const revealPendingQuestion = useCallback((requestId: string) => {
     setQuestionJump(requestId);
