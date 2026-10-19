@@ -214,21 +214,21 @@ derive an exact partition; the summary alone cannot separate doing/blocked
 overlap or include all archived Tasks in browser completion. Before that read
 answers, the bar retains known done/total and the split uses shared loading
 chrome, never guessed zeros. Small derived counts survive graph-LRU eviction
-without retaining the graph or re-fetching an idle eviction repeatedly. Errors
-expose a retry even when Contents is closed. The first expansion level groups
-member Tasks by Project. It does not infer membership from names or from the
-summary's bounded active-session ids. Project counts and progress are scoped to
-member Tasks, archived members included. A missing registry record keeps its
-Project id visible; Tasks with no Project appear in a No Project row. External
-blockers do not make their Projects members. Project rows navigate normally and
-offer no creation or settlement action. Each Project has a separate Contents
-disclosure, remembered within its Initiative, for non-removed Worktrees whose
-explicit `in_worktree` Task links intersect that Project's member Tasks, or
-which physically hold a positively Task-scoped session. A Project without a
-matching Worktree stays visible; its sessions without a Worktree appear directly
-beneath it. Shared Worktree rows retain PR/Integrated badges and Git metadata;
-only the expanded rows hold live status watches. Opening a Worktree navigates
-normally.
+without retaining the graph or re-fetching an idle eviction repeatedly; an open
+row pins its read instead (`app/web/docs/ui-shell.md`). Errors expose a retry
+even when Contents is closed. The first expansion level groups member Tasks by
+Project. It does not infer membership from names or from the summary's bounded
+active-session ids. Project counts and progress are scoped to member Tasks,
+archived members included. A missing registry record keeps its Project id
+visible; Tasks with no Project appear in a No Project row. External blockers do
+not make their Projects members. Project rows navigate normally and offer no
+creation or settlement action. Each Project has a separate Contents disclosure,
+remembered within its Initiative, for non-removed Worktrees whose explicit
+`in_worktree` Task links intersect that Project's member Tasks, or which
+physically hold a positively Task-scoped session. A Project without a matching
+Worktree stays visible; its sessions without a Worktree appear directly beneath
+it. Shared Worktree rows retain PR/Integrated badges and Git metadata; only the
+expanded rows hold live status watches. Opening a Worktree navigates normally.
 
 Worktree Sessions and In progress Tasks disclose independently in the shared
 Tree. Session expansion is remembered per Initiative and Worktree, survives
@@ -436,6 +436,17 @@ An Initiative is a Sessions inbox item, following the Workflow Run precedent
   marks, settlement, archival and deletion refresh summaries but do not raise
   attention. Settling or reordering the Initiative does not raise it either.
   Newer activity after the rendered revision survives a stale Settle.
+- A mechanical Task write refreshes its holders without raising attention: the
+  holder fan-out still stamps and notifies every Initiative reading the Task,
+  through the same `notify` seam, but passes `activity = false`. The list is
+  closed: unlinking a deleted session (`unlinkSessionEverywhere`), a pure
+  sibling renumber (a `reorderTasks` drop, or a sort-only `updateTask`), the
+  completed-work retention sweep, marking a Task processed, a deleted Project's
+  cascade, and the Knowledge link migration. A reorder that reparents a Task is
+  membership activity for the Initiatives holding that Task before or after the
+  move; the siblings it only renumbered refresh. Every other Task write —
+  content, status, archive by a person or agent, links, sessions, hierarchy — is
+  activity.
 - Active Initiative cards use the same drag activation and position scale as
   sessions and runs. A drop moves the whole card and any expanded session rows.
   `inboxPosition` overrides creation time; activity preserves that position.

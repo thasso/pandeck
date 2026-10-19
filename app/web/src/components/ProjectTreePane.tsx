@@ -203,6 +203,12 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   useEffect(() => {
     onVisibleWorktreeIdsChange?.(visibleWorktreeIds);
   }, [onVisibleWorktreeIdsChange, visibleWorktreeIds]);
+  // Folded away (the Projects group unmounts its rows) or gone, the pane shows
+  // no worktree: withdraw its report, and only its own, from the host's demand.
+  useEffect(
+    () => () => onVisibleWorktreeIdsChange?.([]),
+    [onVisibleWorktreeIdsChange],
+  );
 
   const selectedIds = useMemo(
     () =>

@@ -53,7 +53,6 @@ function session(patch: Partial<SessionListItem> & { id: string }) {
 
 interface Recorded {
   opened: string[];
-  cycled: string[];
   navigated: string[];
   accepted: string[];
   dismissed: string[];
@@ -69,7 +68,6 @@ function render(
 ): Recorded {
   const recorded: Recorded = {
     opened: [],
-    cycled: [],
     navigated: [],
     accepted: [],
     dismissed: [],
@@ -91,7 +89,6 @@ function render(
         showProjectBadge
         selectedId={null}
         onOpen={(id) => recorded.opened.push(id)}
-        onCycle={(item) => recorded.cycled.push(item.id)}
         onAcceptSuggestion={(item) => recorded.accepted.push(item.id)}
         onDismissSuggestion={(item) => recorded.dismissed.push(item.id)}
         onNavigate={
@@ -191,14 +188,16 @@ describe("BacklogFocusList rows", () => {
     expect(recorded.opened).toEqual(["1"]);
   });
 
-  it("cycles the status without opening the Task", () => {
+  it("states the status as a mark, not a control, so clicking it opens the Task", () => {
     const recorded = render([task({ id: "1" })]);
+    expect(
+      container!.querySelector('button[aria-label="Mark in progress"]'),
+    ).toBeNull();
     const status = container!.querySelector<HTMLElement>(
-      'button[aria-label="Mark in progress"]',
+      '[role="img"][aria-label="To do"]',
     )!;
     clickOn(status);
-    expect(recorded.cycled).toEqual(["1"]);
-    expect(recorded.opened).toEqual([]);
+    expect(recorded.opened).toEqual(["1"]);
   });
 
   it("answers a suggestion without opening the Task", () => {

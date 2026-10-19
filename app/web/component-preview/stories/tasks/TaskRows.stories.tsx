@@ -51,7 +51,6 @@ export const FocusThreeLines: Story = {
         showProjectBadge
         selectedId={taskAreaTask.id}
         onOpen={() => {}}
-        onCycle={() => {}}
         onAcceptSuggestion={() => {}}
         onDismissSuggestion={() => {}}
         density="tight"
@@ -76,7 +75,12 @@ export const InboxRows: Story = {
         projectsById={
           new Map(taskAreaProjects.map((project) => [project.id, project]))
         }
-        showProjectBadge
+        metaContext={{
+          today:
+            taskAreaTask.scheduledFor ?? new Date().toISOString().slice(0, 10),
+          sessionById: new Map(),
+          showProjectBadge: true,
+        }}
         selectedId={taskAreaTask.id}
         onOpen={() => {}}
         onDismiss={() => {}}

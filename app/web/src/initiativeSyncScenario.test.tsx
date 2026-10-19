@@ -389,10 +389,11 @@ describe("Initiative socket/reducer scenario", () => {
       [...container.querySelectorAll("li[data-list-row-id]")]
         .map((el) => el.getAttribute("data-list-row-id")!)
         .filter((id) => !id.startsWith("initiative:"));
+    // The group's Initiative rows themselves, not their nested contents.
     const groupRows = () =>
-      [...container.querySelectorAll("li[data-list-row-id]")]
+      [...container.querySelectorAll("li > [data-list-row-id]")]
         .map((el) => el.getAttribute("data-list-row-id")!)
-        .filter((id) => id.startsWith("initiative:"));
+        .filter((id) => /^initiative:[^:]+$/.test(id));
     const text = () => container.textContent ?? "";
     const snapshot = (socket: ScenarioSocket, items: InitiativeSummary[]) =>
       act(async () =>

@@ -252,30 +252,38 @@ bars. Done includes completed and archived Tasks for display, without changing
 stored Task status. In progress is blue; blocked is mild yellow state rather
 than warning chrome. Buckets are disjoint and sum to total, with meanings in the
 tooltip and accessible name. Visible headers reuse the keyed membership read for
-the exact split, retaining only derived counts across graph-cache eviction.
-Contents remembers its expansion per Initiative. Its first level lists only
-Projects of member Tasks, with progress scoped to those Tasks, not the Project
-as a whole. Unassigned members have a No Project row, and unresolved registry
-ids remain visible. These rows navigate to their Projects. Their own Contents
-disclosure remembers a separate per-Initiative Project expansion and shows only
-non-removed Worktrees explicitly linked to those member Tasks or holding
-positively Task-scoped sessions, never all Worktrees in the Project. This layer
-reuses `WorktreeList`/`WorktreeRow`, with their PR/Integrated badges, Git
-signals and route highlight, but no creation actions. Only visible Worktrees
-join the browser's shared status-watch demand. A remembered Known coordinators
-fold precedes Projects, using recorded spawn/Workflow relationships and the
-server's Worktree ancestry projection; only verified roots appear, with missing
-session details stated rather than guessed. In-progress member Tasks appear
-within Worktrees, one as an inline link or several behind a disclosure. This
-context is not a required Task tier above sessions. Worktree Sessions expand
-separately from Tasks in the shared Tree, with five known rows initially and
-inline paging. Sessions without a Worktree appear directly under their member
-Project; ambiguous or unavailable placement stays in Other related sessions.
-Session scope comes from recorded Task context, bounded Task-start ids, Workflow
-roles and eligible owned descendants, never merely sharing a checkout or
-Project. Missing relationship coverage stays explicit. Session folds are
-remembered per Initiative/Worktree, preserve sibling Project folds, and add no
-lifecycle actions.
+the exact split, retaining only derived counts across graph-cache eviction. The
+shared cache keeps six idle graph reads plus the open map page's. An open
+Contents draws the graph, so its row pins that read (`retainInitiativeDetail`,
+counted per Initiative) while it stays open and mounted; closing or unmounting
+releases the pin, and the read rejoins the idle bound without being read again.
+Seven open rows thus read once each instead of evicting each other. Contents
+remembers its expansion per Initiative. Its first level lists only Projects of
+member Tasks, with progress scoped to those Tasks, not the Project as a whole.
+Unassigned members have a No Project row, and unresolved registry ids remain
+visible. These rows navigate to their Projects. Their own Contents disclosure
+remembers a separate per-Initiative Project expansion and shows only non-removed
+Worktrees explicitly linked to those member Tasks or holding positively
+Task-scoped sessions, never all Worktrees in the Project. This layer reuses
+`WorktreeList`/`WorktreeRow`, with their PR/Integrated badges, Git signals and
+route highlight, but no creation actions. Only visible Worktrees join the
+browser's shared status-watch demand. Each host reports its own visible ids: an
+Initiative row and the Project tree each withdraw only their own report when
+folded away or unmounted, as when the top-level Projects group folds, leaving
+the other hosts' demand in place. A remembered Known coordinators fold precedes
+Projects, using recorded spawn/Workflow relationships and the server's Worktree
+ancestry projection; only verified roots appear, with missing session details
+stated rather than guessed. In-progress member Tasks appear within Worktrees,
+one as an inline link or several behind a disclosure. This context is not a
+required Task tier above sessions. Worktree Sessions expand separately from
+Tasks in the shared Tree, with five known rows initially and inline paging.
+Sessions without a Worktree appear directly under their member Project;
+ambiguous or unavailable placement stays in Other related sessions. Session
+scope comes from recorded Task context, bounded Task-start ids, Workflow roles
+and eligible owned descendants, never merely sharing a checkout or Project.
+Missing relationship coverage stays explicit. Session folds are remembered per
+Initiative/Worktree, preserve sibling Project folds, and add no lifecycle
+actions.
 
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached

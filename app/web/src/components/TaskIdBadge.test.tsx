@@ -54,7 +54,6 @@ describe("TaskIdBadge", () => {
         showProjectBadge
         selectedId={null}
         onOpen={noop}
-        onCycle={noop}
         onAcceptSuggestion={noop}
         onDismissSuggestion={noop}
         density="comfortable"
@@ -69,7 +68,11 @@ describe("TaskIdBadge", () => {
       <BacklogInboxList
         tasks={[task({ triagedAt: undefined })]}
         projectsById={new Map()}
-        showProjectBadge
+        metaContext={{
+          today: "2026-07-31",
+          sessionById: new Map(),
+          showProjectBadge: true,
+        }}
         selectedId={null}
         onOpen={noop}
         onDismiss={noop}

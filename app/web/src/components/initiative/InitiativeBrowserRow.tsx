@@ -69,6 +69,8 @@ interface Props {
   sessions: InitiativeBrowserSessions | undefined;
   onLoadDetail:
     ((id: string, collapsed?: readonly string[]) => void) | undefined;
+  /** Stable: hold the shared graph read while this row draws it open. */
+  onRetainDetail?: ((id: string) => () => void) | undefined;
   onNavigate: (path: string) => void;
 }
 
@@ -94,6 +96,7 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
   worktrees,
   sessions,
   onLoadDetail,
+  onRetainDetail,
   onNavigate,
 }: Props) {
   const [storedExpanded, setExpanded] = useSessionStorageState(
@@ -161,6 +164,14 @@ export const InitiativeBrowserRow = memo(function InitiativeBrowserRow({
     // Preserve a map page's layout choice when reusing its keyed graph read.
     onLoadDetail?.(initiative.id, read?.requestedCollapsed);
   }, [initiative.id, onLoadDetail, read?.requestedCollapsed]);
+
+  // An open row draws the graph, so it pins the shared read until it closes
+  // or unmounts: seven open rows would otherwise evict and re-read each other
+  // through the six-entry LRU forever.
+  useEffect(() => {
+    if (!expanded || !onRetainDetail) return;
+    return onRetainDetail(initiative.id);
+  }, [expanded, initiative.id, onRetainDetail]);
 
   useEffect(() => {
     if (!onLoadDetail) return;

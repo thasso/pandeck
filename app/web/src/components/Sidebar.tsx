@@ -987,6 +987,7 @@ function SidebarImpl({
               selectedProjectId={selectedProjectId}
               density={browserRowDensity(mobile)}
               onLoadDetail={actions.requestInitiativeDetail}
+              onRetainDetail={actions.retainInitiativeDetail}
             />
             <ListGroupSection
               id="projects"

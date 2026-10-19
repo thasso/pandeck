@@ -127,15 +127,33 @@ function mutation<T>(fn: (touch: Set<number>) => T, activity = true): T {
  * it. It only stamps — it writes nothing a caller could half-commit — and the
  * listeners only schedule a debounced flush that reads committed state.
  */
-function stampAndNotify(ids: ReadonlySet<number>, activity = true): void {
+function stampAndNotify(
+  ids: ReadonlySet<number>,
+  activity: HolderActivity = true,
+): void {
   if (!ids.size) return;
   inDbTransaction(() => stampRevisions(ids, activity));
   notifyListeners(ids);
 }
 
-function stampRevisions(ids: ReadonlySet<number>, activity: boolean): void {
+/**
+ * Which stamped Initiatives also raise attention: all of them, none (a
+ * refresh, preserving attention), or exactly the listed ones.
+ */
+type HolderActivity = boolean | ReadonlySet<number>;
+
+function stampRevisions(
+  ids: ReadonlySet<number>,
+  activity: HolderActivity,
+): void {
   if (!ids.size) return;
-  if (activity) {
+  const raised =
+    activity === true
+      ? [...ids]
+      : activity === false
+        ? []
+        : [...ids].filter((id) => activity.has(id));
+  if (raised.length) {
     const attention = getDb().prepare(
       `UPDATE initiatives
           SET attention_revision = attention_revision + 1,
@@ -144,7 +162,7 @@ function stampRevisions(ids: ReadonlySet<number>, activity: boolean): void {
         WHERE id = ? AND archived_at_ms IS NULL AND deleted_at_ms IS NULL`,
     );
     const now = Date.now();
-    for (const id of ids) attention.run(now, id);
+    for (const id of raised) attention.run(now, id);
   }
   const revision = nextId("initiative_revision");
   const stamp = getDb().prepare(
@@ -674,13 +692,28 @@ function subtreeIds(roots: Iterable<number>): number[] {
  * The Task notification seam's fan-out: bump and notify every Initiative that
  * reads one of `taskIds` now, plus `formerHolders` — the ones a delete or a
  * move took the Task away from, read before the write.
+ *
+ * Every one of them is stamped and notified. `activity` says which also raise
+ * attention: all (the default), none for a mechanical write, or only the
+ * holders of `activity.taskIds` plus `activity.formerHolders` — the Tasks a
+ * reorder actually reparented, against the siblings it merely renumbered.
  */
 function touchHolders(
   taskIds: Iterable<number>,
   formerHolders: Iterable<number> = [],
+  activity: TaskHolderActivity = true,
 ): void {
-  stampAndNotify(new Set([...holdersOf(taskIds), ...formerHolders]));
+  const ids = new Set([...holdersOf(taskIds), ...formerHolders]);
+  stampAndNotify(
+    ids,
+    typeof activity === "boolean"
+      ? activity
+      : new Set([...holdersOf(activity.taskIds), ...activity.formerHolders]),
+  );
 }
+
+export type TaskHolderActivity =
+  boolean | { taskIds: readonly number[]; formerHolders: readonly number[] };
 
 /**
  * A linked session changed. Always refresh the summary, but raise attention

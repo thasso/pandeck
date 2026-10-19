@@ -37,6 +37,7 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   selectedProjectId,
   density = "tight",
   onLoadDetail,
+  onRetainDetail,
   worktrees,
   sessions,
 }: {
@@ -64,6 +65,8 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
   sessions?: InitiativeBrowserSessions | undefined;
   /** Present when this host offers inline membership browsing. */
   onLoadDetail?: (id: string, collapsed?: readonly string[]) => void;
+  /** Stable: pin an open row's graph read (`retainInitiativeDetail`). */
+  onRetainDetail?: (id: string) => () => void;
 }) {
   const open = useMemo(
     () => initiatives.filter((initiative) => initiative.state !== "done"),
@@ -127,6 +130,7 @@ export const InitiativeBrowserGroup = memo(function InitiativeBrowserGroup({
               worktrees={worktrees}
               sessions={sessions}
               onLoadDetail={onLoadDetail}
+              onRetainDetail={onRetainDetail}
               onNavigate={onNavigate}
             />
           ))}
