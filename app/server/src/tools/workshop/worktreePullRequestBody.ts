@@ -233,7 +233,25 @@ async function writeBody(
       ...extra,
       ...(options.warnings.length ? { warnings: options.warnings } : {}),
     });
-  if (sameBody(before, body)) return result("unchanged");
+  // The provider is the authority: project the body it holds, which also
+  // repairs a card an earlier partial write (lost read-back) left stale.
+  const project = (notes: string[]) => {
+    try {
+      operations.projectBody(target.cards, body);
+    } catch (error) {
+      notes.push(
+        `The body is on the pull request, but its card could not be updated: ${errorText(error)}.`,
+      );
+    }
+  };
+  if (sameBody(before, body)) {
+    const notes: string[] = [];
+    project(notes);
+    return result(
+      "unchanged",
+      notes.length ? { message: notes.join(" ") } : {},
+    );
+  }
 
   let writeError: unknown;
   let inventoryWarning: string | undefined;
@@ -276,15 +294,7 @@ async function writeBody(
       "The provider accepted the write, but the body read back differs from the one sent; read the pull request before relying on it.",
     );
   if (inventoryWarning) notes.push(inventoryWarning);
-  if (landed) {
-    try {
-      operations.projectBody(target.cards, body);
-    } catch (error) {
-      notes.push(
-        `The body was updated, but its card could not be updated: ${errorText(error)}.`,
-      );
-    }
-  }
+  if (landed) project(notes);
   return result(notes.length ? "updated-partial" : "updated", {
     ...(notes.length ? { message: notes.join(" ") } : {}),
   });

@@ -53,6 +53,7 @@ function card(patch: Partial<PullRequestCard> = {}): PullRequestCard {
     status: "open",
     provider: "github",
     number: 91,
+    url: "https://github.com/acme/project/pull/91",
     title: "Task-947: caller bodies",
     headBranch: row.branch,
     baseBranch: row.baseBranch,
@@ -294,6 +295,34 @@ describe("worktree_update_pull_request_body", () => {
       tool(foreign).execute({ worktreeId: row.id, body: "Body" }, context()),
       /owned by worktree wt-other/,
     );
+    // One checkout publishing to two repositories that both have a #91: the
+    // card for acme/project must not authorize a write to acme/fork.
+    const otherRepository = operations({
+      overrides: {
+        cards: async () => [
+          card({ url: "https://github.com/acme/fork/pull/91" }),
+        ],
+      },
+    });
+    await assert.rejects(
+      tool(otherRepository).execute(
+        { worktreeId: row.id, body: "Body" },
+        context(),
+      ),
+      /live card for acme\/fork, not acme\/project; nothing was done/,
+    );
+    const urlless = card();
+    delete urlless.url;
+    const unknownRepository = operations({
+      overrides: { cards: async () => [urlless] },
+    });
+    await assert.rejects(
+      tool(unknownRepository).execute(
+        { worktreeId: row.id, body: "Body" },
+        context(),
+      ),
+      /live card for an unknown repository/,
+    );
     const unanchored = operations({ overrides: { cards: async () => [] } });
     await assert.rejects(
       tool(unanchored).execute({ worktreeId: row.id, body: "Body" }, context()),
@@ -310,6 +339,8 @@ describe("worktree_update_pull_request_body", () => {
     assert.deepEqual(
       [
         ...foreign.calls.writes,
+        ...otherRepository.calls.writes,
+        ...unknownRepository.calls.writes,
         ...unanchored.calls.writes,
         ...main.calls.writes,
       ],
@@ -359,7 +390,7 @@ describe("worktree_update_pull_request_body", () => {
     assert.deepEqual(ops.calls.writes, []);
   });
 
-  test("an identical body writes nothing", async () => {
+  test("an identical body writes nothing but repairs the cards", async () => {
     const ops = operations({ stored: "Same body\r\n" });
     const result = await tool(ops).execute(
       { worktreeId: row.id, body: "Same body" },
@@ -367,7 +398,44 @@ describe("worktree_update_pull_request_body", () => {
     );
     assert.equal(details(result).status, "unchanged");
     assert.deepEqual(ops.calls.writes, []);
+    assert.deepEqual(ops.calls.projected, [
+      { cardIds: ["card-managed"], body: "Same body" },
+    ]);
+  });
+
+  test("retrying a write whose read-back was lost repairs the stale card without another write", async () => {
+    let stored = "Old body";
+    let bodyReads = 0;
+    const ops = operations({
+      provider: {
+        pullRequestBody: async () => {
+          bodyReads += 1;
+          // The first call's read-back times out after its write landed.
+          if (bodyReads === 2) throw new Error("timeout");
+          return stored;
+        },
+        editPullRequestBody: async (_number, body) => {
+          ops.calls.writes.push({ number: 91, body });
+          stored = body;
+        },
+      },
+    });
+    const first = await tool(ops).execute(
+      { worktreeId: row.id, body: "New body" },
+      context(),
+    );
+    assert.equal(details(first).status, "updated-partial");
     assert.deepEqual(ops.calls.projected, []);
+
+    const retry = await tool(ops).execute(
+      { worktreeId: row.id, body: "New body" },
+      context(),
+    );
+    assert.equal(details(retry).status, "unchanged");
+    assert.equal(ops.calls.writes.length, 1);
+    assert.deepEqual(ops.calls.projected, [
+      { cardIds: ["card-managed"], body: "New body" },
+    ]);
   });
 
   test("a failed write is judged by its read-back", async () => {

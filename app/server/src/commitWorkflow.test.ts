@@ -218,6 +218,48 @@ test("a caller message is committed as given while the commit agent still review
   assert.equal(git(cwd, "log", "-1", "--format=%B"), message);
 });
 
+test("caller and approved messages survive git cleanup verbatim", async () => {
+  const cwd = repo();
+  // The strictest cleanup a user may configure: it drops `#` lines.
+  git(cwd, "config", "commit.cleanup", "strip");
+  const message =
+    "STAR-1502: Keep exact text\n\n# Notes for Percy\n\n\n- trailing space  \nend";
+  const lastMessage = () =>
+    execFileSync("git", ["log", "-1", "--format=%B"], {
+      cwd,
+      encoding: "utf8",
+    });
+  setCommitMessageGeneratorForTests(async () => generated);
+  writeFileSync(join(cwd, "file.txt"), "caller\n");
+  const committed = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    callerMessage: message,
+  });
+  assert.equal(committed.status, "committed");
+  assert.equal(lastMessage(), `${message}\n\n`);
+
+  writeFileSync(join(cwd, "file.txt"), "approved\n");
+  const proposal = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    dryRun: true,
+    callerMessage: message,
+  });
+  const approved = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    force: true,
+    forceRefusesSecrets: true,
+    approvedChange: {
+      fingerprint: proposal.changeFingerprint!,
+      message: proposal.commitMessage!,
+    },
+  });
+  assert.equal(approved.status, "committed");
+  assert.equal(lastMessage(), `${message}\n\n`);
+});
+
 test("tool callers contribute session prompts, touched paths, context and a checkpoint entry", async () => {
   const cwd = repo();
   writeFileSync(join(cwd, "file.txt"), "changed\n");

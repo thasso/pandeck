@@ -1517,7 +1517,21 @@ export async function runCommitWorkflow(
         options.onProgress?.("Creating git commit…");
         const { dir, file } = await writeCommitMessageFile(commitMessage);
         try {
-          await git(["commit", "-F", file], repoRoot, options.signal);
+          // A caller's or user-approved message is the exact text: git's
+          // cleanup (or a configured `commit.cleanup=strip`) would drop `#`
+          // lines and blank runs the caller wrote. Generated ones keep it.
+          await git(
+            [
+              "commit",
+              ...(options.callerMessage !== undefined || options.approvedChange
+                ? ["--cleanup=verbatim"]
+                : []),
+              "-F",
+              file,
+            ],
+            repoRoot,
+            options.signal,
+          );
         } finally {
           rmSync(dir, { recursive: true, force: true });
         }

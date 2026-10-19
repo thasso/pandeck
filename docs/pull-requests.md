@@ -84,9 +84,12 @@ publication.
 
 An optional `message` is the caller's own commit message, committed as given
 (outer whitespace trimmed, at most 8,000 characters) instead of the generated
-one. The commit-message agent still runs, because it is the safety review: its
-blockers and warnings apply unchanged and only its message goes unused. Without
-`message` the generated message is committed as before.
+one. It is committed with `--cleanup=verbatim`, as is an approved override's
+message, so git's default cleanup or a configured `commit.cleanup=strip` cannot
+drop `#` lines or blank runs the caller wrote. The commit-message agent still
+runs, because it is the safety review: its blockers and warnings apply unchanged
+and only its message goes unused. Without `message` the generated message is
+committed as before.
 
 The safety review judges secrets only by what the commit records: the patch,
 untracked file content and paths. Session prompts, Tasks and caller context are
@@ -251,12 +254,13 @@ Its title is unused and its warnings are returned.
 
 Under the per-PR mutation lock the tool re-reads the pull request and refuses if
 its state, head, head branch or base moved, reads the current body (an identical
-one writes nothing: `unchanged`), PATCHes the body, and reads it back. Neither
-provider has a precondition on that PATCH, so a failed write is judged like a
-retarget: a read-back showing the old body is the provider's refusal, the new
-body is success with a warning, anything else is an "outcome unknown" error. A
-successful write whose read-back differs or cannot be read is `updated-partial`.
-Only a confirmed body is projected onto the live cards.
+one writes nothing but is still projected onto the cards, which repairs a card
+an earlier partial update left stale: `unchanged`), PATCHes the body, and reads
+it back. Neither provider has a precondition on that PATCH, so a failed write is
+judged like a retarget: a read-back showing the old body is the provider's
+refusal, the new body is success with a warning, anything else is an "outcome
+unknown" error. A successful write whose read-back differs or cannot be read is
+`updated-partial`. Only a confirmed body is projected onto the live cards.
 
 ## Repository pull-request capabilities
 
@@ -399,23 +403,27 @@ worktree is reserved with the caller-aware mutation reservation and its row
 identity re-resolved under it, hosting is resolved from the derived push
 remote's URL and asserted to describe that repository, and the branch must have
 exactly ONE open pull request whose provider, head, base and live-card identity
-match the managed row. That count comes from `findPullRequestsForBranch`, whose
-open set is PAGED until the provider is exhausted — a read that cannot be
-exhausted within its page cap throws instead of answering, because a truncated
-page could hide the second open pull request the invariant exists to catch, and
-a page whose body is not a LIST throws for the same reason: a response that
-could not be understood is not the same answer as "there are none" — and which
-reads the newest terminal pull request only when nothing is open, to say
-"already merged" rather than "no pull request". Both providers list pull
-requests opened from FORKS beside their own and a fork may carry an identically
-named branch, so the head REPOSITORY decides which are this branch's; a head
-repository that cannot be read (a deleted fork) proves nothing and is excluded.
-This multiplicity refusal is local to managed finishing: ordinary branch status,
-PR adoption and human merge reads keep using the tolerant bounded single-result
-lookup, which is subject to the same fork/head-repository rule. Provider detail
-is re-read for an exact non-empty head and the row-recorded base, and the
-outward transition runs under `withPullRequestMutation`, so a card click, an
-HTTP merge, a second tool call and an approval cannot both land.
+match the managed row. Live cards are found by local checkout and number, so
+each card's URL must also name the derived push repository: a checkout that
+publishes to two repositories with the same PR number cannot hand one
+repository's card to the other's pull request. That count comes from
+`findPullRequestsForBranch`, whose open set is PAGED until the provider is
+exhausted — a read that cannot be exhausted within its page cap throws instead
+of answering, because a truncated page could hide the second open pull request
+the invariant exists to catch, and a page whose body is not a LIST throws for
+the same reason: a response that could not be understood is not the same answer
+as "there are none" — and which reads the newest terminal pull request only when
+nothing is open, to say "already merged" rather than "no pull request". Both
+providers list pull requests opened from FORKS beside their own and a fork may
+carry an identically named branch, so the head REPOSITORY decides which are this
+branch's; a head repository that cannot be read (a deleted fork) proves nothing
+and is excluded. This multiplicity refusal is local to managed finishing:
+ordinary branch status, PR adoption and human merge reads keep using the
+tolerant bounded single-result lookup, which is subject to the same
+fork/head-repository rule. Provider detail is re-read for an exact non-empty
+head and the row-recorded base, and the outward transition runs under
+`withPullRequestMutation`, so a card click, an HTTP merge, a second tool call
+and an approval cannot both land.
 
 Closing is direct for a default or non-default base. It deliberately requires
 neither a clean checkout, remote/local equality, green checks nor mergeability —
