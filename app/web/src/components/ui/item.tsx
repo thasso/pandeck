@@ -114,14 +114,27 @@ function ItemMedia({
   );
 }
 
-function ItemContent({ className, ...props }: React.ComponentProps<"div">) {
+const itemContentVariants = cva("flex-1", {
+  variants: {
+    layout: {
+      default:
+        "flex flex-col gap-1 group-data-[size=xs]/item:gap-0 [&+[data-slot=item-content]]:flex-none",
+      list: "grid grid-cols-[minmax(0,1fr)]",
+      "list-actions": "grid grid-cols-[minmax(0,1fr)_auto]",
+    },
+  },
+  defaultVariants: { layout: "default" },
+});
+
+function ItemContent({
+  className,
+  layout,
+  ...props
+}: React.ComponentProps<"div"> & VariantProps<typeof itemContentVariants>) {
   return (
     <div
       data-slot="item-content"
-      className={cn(
-        "flex flex-1 flex-col gap-1 group-data-[size=xs]/item:gap-0 [&+[data-slot=item-content]]:flex-none",
-        className,
-      )}
+      className={cn(itemContentVariants({ layout, className }))}
       {...props}
     />
   );

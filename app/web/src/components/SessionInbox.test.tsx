@@ -382,26 +382,26 @@ describe("SessionInbox clusters", () => {
       peer("done", "root", { settledAt: NOW - 5_000 }),
     ]);
     click(button("Show the 2 coordinated sessions"));
-    expect(rowIds()).toEqual(["root", "impl", "rev"]);
-    // A nested peer steps in under the one that spawned it.
-    expect(row("rev").style.paddingLeft).toBe("1.5rem");
-    const toggle = () =>
-      [...view!.container.querySelectorAll<HTMLElement>("button")].find(
-        (node) => /settled$/.test(node.textContent ?? ""),
-      ) as HTMLElement;
-    expect(toggle().textContent).toBe("Show 1 settled");
+    const liveRows = ["root", "impl", "rev", "session-peers-settled-root"];
+    expect(rowIds()).toEqual(liveRows);
+    // Shared content adds its own half-rem inset to the hierarchy indentation.
+    expect(row("rev").style.paddingLeft).toBe("1rem");
+    const toggle = () => row("session-peers-settled-root");
+    expect(toggle().getAttribute("aria-label")).toBe("Settled");
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(toggle().textContent).toBe("Settled1");
     click(toggle());
-    // The history row is on the Settled shelf too, so it lists under its own
-    // id there and a prefixed one here.
-    expect(rowIds()).toEqual(["root", "impl", "rev", "history:done"]);
-    expect(toggle().textContent).toBe("Hide settled");
+    // History uses a distinct id from the same session on the Settled shelf.
+    expect(rowIds()).toEqual([...liveRows, "history:done"]);
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
     click(toggle());
-    expect(rowIds()).toEqual(["root", "impl", "rev"]);
-    // Closing the fold forgets the toggle: it reopens on what is live.
+    expect(rowIds()).toEqual(liveRows);
+    // Closing the fold forgets the history expansion.
     click(toggle());
     click(button("Hide the 2 coordinated sessions"));
     click(button("Show the 2 coordinated sessions"));
-    expect(rowIds()).toEqual(["root", "impl", "rev"]);
+    expect(rowIds()).toEqual(liveRows);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 
   it("offers no Settle on a settled peer listed as history, by key or by swipe", () => {
@@ -416,12 +416,10 @@ describe("SessionInbox clusters", () => {
       { onSettle: (id, value) => void settled.push([id, value]) },
     );
     click(button("Show the 1 coordinated session"));
-    click(
-      [...view!.container.querySelectorAll<HTMLElement>("button")].find(
-        (node) => node.textContent === "Show 1 settled",
-      ) as HTMLElement,
-    );
+    click(row("session-peers-settled-root"));
     const history = row("history:done");
+    expect(history.querySelector('[aria-label="Item actions"]')).toBeNull();
+    expect(history.textContent).not.toMatch(/Archive|Restore/);
     act(() => {
       history.dispatchEvent(
         new KeyboardEvent("keydown", { key: "s", bubbles: true }),
@@ -711,25 +709,30 @@ describe("SessionInbox density", () => {
   it("keeps primary rows thumb-sized while folded peers stay compact", () => {
     render("comfortable");
     openEverything();
-    // Shared actions stay compact on desktop and expand to labeled touch
-    // targets independently of the host's row density.
+    // Icon-only actions expand their touch targets independently of density.
     expect(button("Settle — move out of the working set").className).toContain(
       "touch-ui:min-h-11",
     );
-    expect(button("Session actions").className).toContain("touch-ui:size-11");
-    expect(outerRows("root")).toEqual(["h-7", "min-h-7"]);
+    expect(button("Settle — move out of the working set").className).toContain(
+      "touch-ui:w-11",
+    );
     expect(
-      button("Settle — move out of the working set").textContent,
-    ).toContain("Settle");
-    // Folded peers are subordinate one-line rows, not another stack of cards.
-    expect(row("kid").dataset.size).toBe("xs");
-    expect(row("kid").className).not.toContain("min-h-11");
+      row("root").querySelectorAll('[aria-label="Item actions"] button'),
+    ).toHaveLength(1);
+    expect(outerRows("root")).toEqual(["h-7", "min-h-7"]);
+    expect(button("Settle — move out of the working set").textContent).toBe("");
+    // Related sessions share single-line geometry and have no row actions.
+    expect(row("kid").dataset.size).toBe("list");
+    expect(
+      row("kid").querySelector("[data-list-row-lines]")?.className,
+    ).toContain("min-h-11");
+    expect(row("kid").querySelector('[aria-label="Item actions"]')).toBeNull();
     // A shelf row and its one action.
     expect(
       row("done").querySelector("[data-list-row-lines]")?.className,
     ).toContain("min-h-11");
     expect(button("Bring back into the working set").className).toContain(
-      "size-9",
+      "touch-ui:min-h-11 touch-ui:w-11",
     );
     // Both shelves use the shared group-header geometry.
     expect(button("Settled").closest("h2")?.className).toContain("min-h-8");
@@ -740,13 +743,16 @@ describe("SessionInbox density", () => {
     render("tight");
     openEverything();
     expect(button("Settle — move out of the working set").className).toContain(
-      "size-6",
+      "h-auto min-h-6 w-6",
     );
     expect(outerRows("root")).toEqual(["h-5", "min-h-5"]);
-    expect(row("kid").dataset.size).toBe("xs");
+    expect(row("kid").dataset.size).toBe("list");
+    expect(
+      row("kid").querySelector("[data-list-row-lines]")?.className,
+    ).toContain("min-h-7");
     expect(row("done").dataset.size).toBe("list");
     expect(button("Bring back into the working set").className).toContain(
-      "size-6",
+      "h-auto min-h-6 w-6",
     );
     expect(
       row("done").querySelector("[data-list-row-lines]")?.className,

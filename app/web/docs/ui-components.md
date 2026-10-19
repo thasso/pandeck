@@ -47,7 +47,8 @@ the same parts a shadcn example would.
     status tokens.
   - `item.tsx`: `list` variant and size for `common/ListRow`: square, flush,
     full-strength selected fill and inset keyboard focus, with geometry owned by
-    the shared row content.
+    the shared row content. `ItemContent` has `list` / `list-actions` layouts
+    for its exact minmax content column and optional auto-width action column.
   - `select.tsx`: an `xs` trigger size matching `Button size="xs"`, so a select
     fits a card footer's options beside its buttons.
   - Overlays sit in the layer bands of `ui-shell.md` instead of `z-50`: dialog,

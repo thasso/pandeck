@@ -1,5 +1,5 @@
 import type { ComponentProps, KeyboardEventHandler, ReactNode } from "react";
-import { Item } from "../ui/item.tsx";
+import { Item, ItemContent } from "../ui/item.tsx";
 import { useInertOverflow } from "../../hooks/useInertOverflow.ts";
 import { CARD_OUTER_ROW, type RowDensity } from "../../lib/rowDensity.ts";
 
@@ -169,9 +169,10 @@ export function ListRowContent({
     gridColumn: actions && line >= actionStart ? "1" : "1 / -1",
   });
   return (
-    <div
+    <ItemContent
+      layout={actions ? "list-actions" : "list"}
       data-list-row-lines={lines}
-      className={`grid min-w-0 flex-1 content-center gap-x-1.5 gap-y-0 px-2 ${actions ? "grid-cols-[minmax(0,1fr)_auto]" : "grid-cols-[minmax(0,1fr)]"} ${
+      className={`min-w-0 content-center gap-x-1.5 gap-y-0 px-2 ${
         lines === 1
           ? density === "comfortable"
             ? "min-h-11 py-0"
@@ -278,6 +279,6 @@ export function ListRowContent({
           {actions}
         </div>
       ) : null}
-    </div>
+    </ItemContent>
   );
 }

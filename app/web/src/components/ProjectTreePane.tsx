@@ -9,6 +9,7 @@ import type {
 } from "@assistant/shared";
 import { Tree, type TreeNode } from "./common/Tree.tsx";
 import { Badge } from "./ui/badge.tsx";
+import { Item } from "./ui/item.tsx";
 import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 import {
@@ -410,9 +411,11 @@ export const ProjectTreePane = memo(function ProjectTreePane({
               );
             case "moreSessions":
               return (
-                <button
-                  type="button"
-                  className="flex w-full min-w-0 cursor-pointer text-left"
+                <Item
+                  variant="list"
+                  size="list"
+                  render={<button type="button" />}
+                  className="min-w-0"
                   onPointerDown={(e) => e.stopPropagation()}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") e.stopPropagation();
@@ -446,7 +449,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                       </>
                     }
                   />
-                </button>
+                </Item>
               );
           }
         }}

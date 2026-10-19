@@ -25,6 +25,7 @@ import { followRowLink } from "../lib/rowLink.ts";
 import { worktreeAxes, type WorktreeAxes } from "../lib/worktreeAxes.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { Badge } from "./ui/badge.tsx";
+import { Item } from "./ui/item.tsx";
 import { ListRowContent } from "./common/ListRow.tsx";
 import { ListRowActions } from "./common/ListRowActions.tsx";
 import type { RowDensity } from "../lib/rowDensity.ts";
@@ -730,9 +731,11 @@ export function WorktreeList({
         }
         if (data.kind === "moreSessions")
           return (
-            <button
-              type="button"
-              className="flex w-full min-w-0 cursor-pointer text-left"
+            <Item
+              variant="list"
+              size="list"
+              render={<button type="button" />}
+              className="min-w-0"
               onPointerDown={(event) => event.stopPropagation()}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ")
@@ -763,7 +766,7 @@ export function WorktreeList({
                   </span>
                 }
               />
-            </button>
+            </Item>
           );
         const id = data.worktree.id;
         return (

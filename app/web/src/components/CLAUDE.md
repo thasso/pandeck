@@ -17,9 +17,9 @@
   map at MODULE scope and per-render data in `MarkdownRenderContext`, or React
   remounts every element, losing scroll and re-running Shiki
   (`Markdown.test.tsx` re-renders; `docs/served-files.md`).
-- Settings and integration pages are end-user surfaces: deployment details,
-  protocol names, scopes, token diagnostics and test controls stay out of the
-  primary flow; tokens and raw credential files never enter the UI.
+- Settings/integrations are end-user surfaces: keep deployment details, protocol
+  names, scopes, token diagnostics and test controls outside the primary flow;
+  never show tokens or raw credential files.
 - Cards tolerate partial, streaming or malformed output (per the server
   `renderKind`) and render agent text via `Markdown`, `inline` for one-liners,
   never bare. A new card registers in `tools/` with a focused `shouldRender…`
@@ -29,13 +29,12 @@
   different object gets a placeholder). That chrome comes from `common/load.tsx`
   and `Button`'s `busy` (`loadingStateAudit.test.ts`;
   `../../docs/loading-states.md`).
-- A memoized row (session, worktree, task, message) takes ids in its callbacks,
-  never closes over the row, and gets stable handlers from its host; the parent
-  file says why.
+- Memoized rows (session, worktree, task, message) take ids in callbacks, never
+  close over the row, and get stable host handlers; the parent file says why.
 - Import `diff/`, `common/ChartBlock.tsx` and `rehype-katex` lazily — statically
   they pull pierre/Shiki, Chart.js and KaTeX into the main bundle — and never
   call `common/highlighter.ts` outside its cache on a render path.
-- Nothing in a transcript row may rely on overflowing its box. Rows use
+- Transcript rows never rely on overflowing their box. Rows use
   `content-visibility: auto` off iOS, `visible` on iOS; portal popovers to the
   body. Keep hit-testable overlays and sticky headers off the transcript's top
   edge: `useTranscriptScroll` hits that edge to hold the reader's row on iOS.

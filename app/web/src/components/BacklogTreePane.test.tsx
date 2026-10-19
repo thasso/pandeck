@@ -463,9 +463,7 @@ describe("BacklogTreePane density", () => {
     expect([opened, started]).toEqual([["s1"], ["1"]]);
   });
 
-  it("does not also spend line 2 saying the gutter's session exists", () => {
-    // The gutter names it and leads to it. Line 2 clips from the right, so the
-    // duplicate would be paid for by the project chip.
+  it("omits quiet session metadata and exposes the shared session action when supplied", () => {
     const tasks = [
       task({
         id: "1",
@@ -475,7 +473,8 @@ describe("BacklogTreePane density", () => {
     const sessions = [session({ id: "s1" })];
 
     render(tasks, (ids) => ids, { density: "comfortable", sessions });
-    expect(container!.textContent).toContain("Session");
+    expect(container!.textContent).not.toContain("Session");
+    expect(gutter("Open the session")).toBeNull();
 
     render(tasks, (ids) => ids, {
       density: "comfortable",
@@ -484,6 +483,7 @@ describe("BacklogTreePane density", () => {
       onStartSession: () => {},
     });
     expect(container!.textContent).not.toContain("Session");
+    expect(gutter("Open the session")).not.toBeNull();
   });
 
   it("keeps the worktree glyph when the session chip goes", () => {
@@ -701,7 +701,8 @@ describe("BacklogTreePane density", () => {
     const linked = (selector: string) =>
       container!.querySelector<HTMLAnchorElement>(`a[href="${selector}"]`);
 
-    it("leads to the Task, its session, its worktree and its Project", () => {
+    it("links the Task, worktree and Project and opens its session through the shared action", () => {
+      const opened: string[] = [];
       render(
         [
           task({
@@ -721,11 +722,15 @@ describe("BacklogTreePane density", () => {
               name: "Pandeck",
             } as ProjectRecord,
           ],
+          onOpenSession: (id) => void opened.push(id),
+          onStartSession: () => {},
           onNavigate: () => {},
         },
       );
       expect(linked("/tasks/1")).not.toBeNull();
-      expect(linked("/sessions/s1")).not.toBeNull();
+      expect(linked("/sessions/s1")).toBeNull();
+      act(() => gutter("Open the session")!.click());
+      expect(opened).toEqual(["s1"]);
       expect(linked("/worktrees/wt1")).not.toBeNull();
       expect(linked("/projects/p1")).not.toBeNull();
     });
@@ -835,7 +840,11 @@ describe("BacklogTreePane density", () => {
       );
       expect(container!.querySelector("a")).toBeNull();
       expect(container!.textContent).toContain("#1");
-      expect(container!.textContent).toContain("Session");
+      expect(container!.textContent).toContain("p1");
+      expect(container!.textContent).not.toContain("Session");
+      expect(
+        container!.querySelector('[aria-label="Has a worktree"]'),
+      ).not.toBeNull();
     });
   });
 
