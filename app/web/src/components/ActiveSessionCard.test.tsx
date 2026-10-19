@@ -50,6 +50,7 @@ function markup(
       density={density}
       onOpen={() => {}}
       onSettle={() => {}}
+      onDismissFailure={() => {}}
       onRename={() => {}}
       onArchive={() => {}}
       onDelete={() => {}}
@@ -202,6 +203,7 @@ describe("ActiveSessionCard clusters", () => {
         clusterExpanded={expanded}
         onOpen={() => {}}
         onSettle={() => {}}
+        onDismissFailure={() => {}}
         onRename={() => {}}
         onArchive={() => {}}
         onDelete={() => {}}
@@ -323,7 +325,28 @@ describe("ActiveSessionCard clusters", () => {
     });
     expect(html).toContain("Failed in “Implementer”");
     expect(html).toContain("Dismiss the failure in “Implementer”");
-    expect(html).toContain("Dismiss — settle “Implementer”");
+    // Dismissing is not a Settle, and the control never says it is.
+    expect(html).not.toContain("settle “Implementer”");
+  });
+
+  it("offers the dismissal while the failed peer's Settle is blocked", () => {
+    // Queued work keeps the peer from being put down; it does not keep the
+    // user from saying they have seen its failure.
+    const queued = {
+      ...child({
+        id: "kid",
+        title: "Implementer",
+        queuedWork: true,
+        lastError: { at: NOW - 1_000, message: "boom" },
+      }),
+      settleBlocked: "it has queued work.",
+    };
+    const html = clusterMarkup({
+      children: [queued],
+      counts: { total: 1, working: 0, waiting: 0, failed: 1 },
+      bubbled: queued,
+    });
+    expect(html).toContain("Dismiss the failure in “Implementer”");
   });
 
   it("says nothing about a cluster on a session that spawned nothing", () => {
@@ -376,6 +399,7 @@ describe("ActiveSessionCard stall", () => {
         relations={{}}
         onOpen={() => {}}
         onSettle={() => {}}
+        onDismissFailure={() => {}}
         onRename={() => {}}
         onArchive={() => {}}
         onDelete={() => {}}
@@ -404,6 +428,7 @@ describe("ActiveSessionCard stall chip fit", () => {
         relations={{}}
         onOpen={() => {}}
         onSettle={() => {}}
+        onDismissFailure={() => {}}
         onRename={() => {}}
         onArchive={() => {}}
         onDelete={() => {}}

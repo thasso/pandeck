@@ -91,11 +91,15 @@ export interface SpawnedSessionsLedgeProps {
    */
   onToggleSettled: () => void;
   /**
-   * Settle one peer. The strip's ONE lifecycle action, and only ever on a
+   * Dismiss one peer's failure. The strip's ONE write, and only ever on a
    * bubbled failure the user has moved on from — the same dismissal the
    * cluster card offers, in the same place the failure is shown.
    */
-  onSettleSession: (sessionId: string, settled: boolean) => void;
+  onDismissSessionFailure: (
+    sessionId: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ) => void;
 }
 
 /**
@@ -119,7 +123,7 @@ export interface SpawnedSessionsLedgeProps {
  * A peer waiting on a human or holding a failure is NAMED on the collapsed
  * line, because a summary may hide how much is running and never what needs
  * answering — and, when that is a failure the user has moved on from, dismissed
- * from here, which is the cluster card's own dismissal (that peer's Settle).
+ * from here, which is the cluster card's own dismissal (never a Settle).
  * Nothing else lifecycle-shaped is here: Archive, Delete and a peer's own
  * Settle stay in the inbox, and what this strip owns is the link.
  * @related ComposerLedge, ClusterChildRow, BackgroundWorkLedge, sessionInbox
@@ -132,7 +136,7 @@ export function SpawnedSessionsLedge({
   onToggle,
   onOpenSession,
   onToggleSettled,
-  onSettleSession,
+  onDismissSessionFailure,
   describeSession,
 }: SpawnedSessionsLedgeProps) {
   const working = view.counts.working > 0;
@@ -232,14 +236,20 @@ export function SpawnedSessionsLedge({
             </span>
           </Button>
           {/* A peer failure the user has moved on from is dismissed WHERE it is
-              shown, exactly as on the cluster card: it sends that peer's own
-              Settle, so the peer lands on the Settled shelf and the bubble goes
-              with it. Nothing is archived and nothing is deleted. */}
+              shown, exactly as on the cluster card: the failure goes and the
+              bubble with it, while the peer is neither settled, archived nor
+              deleted. */}
           {dismissBubble ? (
             <IconButton
               size="icon-xs"
               label={`Dismiss the failure in “${bubbleTitle}”`}
-              onClick={() => onSettleSession(bubbled.session.id, true)}
+              onClick={() =>
+                onDismissSessionFailure(
+                  bubbled.session.id,
+                  bubbled.session.lastError?.at,
+                  bubbled.session.outcomeAttention?.revision ?? 0,
+                )
+              }
             >
               <X aria-hidden />
             </IconButton>

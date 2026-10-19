@@ -70,7 +70,7 @@ function ledge(
     open?: boolean;
     onOpenSession?: (id: string) => void;
     onToggleSettled?: () => void;
-    onSettleSession?: (id: string, settled: boolean) => void;
+    onDismissSessionFailure?: (id: string) => void;
     includeSettled?: boolean;
   } = {},
 ) {
@@ -86,7 +86,7 @@ function ledge(
       onToggle={() => {}}
       onOpenSession={over.onOpenSession ?? (() => {})}
       onToggleSettled={over.onToggleSettled ?? (() => {})}
-      onSettleSession={over.onSettleSession ?? (() => {})}
+      onDismissSessionFailure={over.onDismissSessionFailure ?? (() => {})}
     />
   );
 }
@@ -127,21 +127,24 @@ describe("the composer's spawned-session ledge", () => {
     expect(idle).not.toContain("animate-spin");
   });
 
-  it("offers to dismiss a bubbled peer failure, and settles that peer", () => {
+  it("offers to dismiss a bubbled peer failure, even while that peer cannot settle", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
-    const settled: Array<[string, boolean]> = [];
+    const dismissed: string[] = [];
     act(() => {
       root?.render(
         ledge(
           [
+            // Queued work blocks the peer's Settle, never the dismissal: the
+            // command is the failure's own, not a Settle.
             session("kid", {
               title: "Implementer",
+              queuedWork: true,
               lastError: { at: NOW - 1_000, message: "boom" },
             }),
           ],
-          { onSettleSession: (id, value) => void settled.push([id, value]) },
+          { onDismissSessionFailure: (id) => void dismissed.push(id) },
         ),
       );
     });
@@ -149,7 +152,7 @@ describe("the composer's spawned-session ledge", () => {
       '[aria-label="Dismiss the failure in “Implementer”"]',
     );
     act(() => dismiss?.click());
-    expect(settled).toEqual([["kid", true]]);
+    expect(dismissed).toEqual(["kid"]);
   });
 
   it("never offers to dismiss a peer that is waiting on the user", () => {

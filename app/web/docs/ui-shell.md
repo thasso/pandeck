@@ -463,14 +463,29 @@ coordinator's own outcome is what brings the cluster back. The settled
 coordinator rule above is therefore for a peer that came back on its own, or was
 spawned after the coordinator was put down.
 
-A bubbled FAILURE is also dismissible from the card itself, which is where the
-user meets it: dismissing sends that peer's own Settle alone, so the peer lands
-on the Settled shelf and the bubble goes with it while the coordinator stays in
-the working set — nothing is archived and nothing is deleted. It is offered
-exactly while that peer's own settle would succeed, on the shared predicate
-every settle surface answers. A peer waiting on a HUMAN is never dismissible:
-settling it is refused by the same rule, because the work cannot proceed without
-the answer, so that bubble is dealt with by opening it.
+A bubbled FAILURE is also dismissible from the card itself and from the
+composer's spawned-sessions ledge, which is where the user meets it. Dismissing
+is NOT a Settle: it sends `dismissSessionFailure` for that peer alone, naming
+the failure the clicked row showed (its `lastError.at`, omitted when it showed
+none, and its outcome revision, 0 when it carried none). The click carries those
+rendered primitive values through the card/ledge callbacks; it must never
+replace them with a fresher session-list row from hook state. Both memoized
+content keys include the bubbled failure identity, so a newer timestamp or
+revision updates the control before it can dismiss that newer failure. In one
+store write the server clears that error record and acknowledges the latest
+outcome only if it is a pending FAILURE, never a completion. Nothing optimistic
+happens; the session-list broadcast takes the bubble away in every tab. The
+peer, its queued and background work, its own peers and the coordinator stay
+where they are — nothing is settled, archived, retried, cancelled or deleted —
+so it is offered whatever blocks that peer's Settle. A stale click (a newer
+failure, or a revision the row never showed) writes nothing and is re-sent the
+newer row. A coordinator-owned failure raises no revision, so only its timestamp
+tells two apart: a second failure in the same millisecond is indistinguishable,
+an accepted residual. Acknowledging a failure would make a stored Settle stamp
+it had superseded hold again, putting the session back on an old shelf and
+straight into retention, so that obsolete stamp is cleared with it; a stamp that
+still holds is kept. A peer waiting on a HUMAN is never dismissible: the work
+cannot proceed without the answer, so that bubble is dealt with by opening it.
 
 The card's DISCLOSURE is the one way a folded peer is listed, and it lists every
 one of them as a TREE: each peer directly under the session that spawned it,

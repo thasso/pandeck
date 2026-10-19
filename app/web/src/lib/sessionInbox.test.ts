@@ -1601,8 +1601,8 @@ describe("spawn clusters", () => {
         ]),
       ),
     ).toBe(true);
-    // Answering is the only way through a question: settling it is refused
-    // everywhere, so the card offers nothing that would be.
+    // Answering is the only way through a question, so the card offers
+    // nothing that would put it away.
     expect(
       clusterBubbleDismissible(
         bubbleOf([
@@ -1611,7 +1611,8 @@ describe("spawn clusters", () => {
         ]),
       ),
     ).toBe(false);
-    // A failure whose peer is blocked for a reason of its own, likewise.
+    // A failure whose peer cannot settle (queued work of its own) is still
+    // dismissible: dismissing is not a Settle.
     expect(
       clusterBubbleDismissible(
         bubbleOf([
@@ -1622,7 +1623,7 @@ describe("spawn clusters", () => {
           }),
         ]),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("takes a dismissed peer failure out of the cluster entirely", () => {
@@ -2740,18 +2741,16 @@ describe("spawnedSessionsView", () => {
     );
   });
 
-  it("keys the bubble's own dismissibility, which is a control on the strip", () => {
+  it("keys a failure's dismissal the same whatever blocks its Settle", () => {
     const failing = peer("a", "root", {
       lastError: { at: NOW, message: "boom" },
     });
     const blocked = { ...failing, queuedWork: true };
-    // Same failure, same label, but one of them can be dismissed and the other
-    // cannot — a difference the strip DRAWS.
+    // Same failure, same label, and both dismissible: dismissing is not a
+    // Settle, so a Settle blocker changes nothing the strip draws.
     expect(
       spawnedSessionsKey(view([session({ id: "root" }), blocked]), false),
-    ).not.toBe(
-      spawnedSessionsKey(view([session({ id: "root" }), failing]), false),
-    );
+    ).toBe(spawnedSessionsKey(view([session({ id: "root" }), failing]), false));
   });
 });
 
@@ -2904,7 +2903,7 @@ describe("peer trees without a depth cap", () => {
     expect(ledgeKey(true)).not.toBe(ledgeKey(false));
   });
 
-  it("refuses a ledge peer's dismissal for what its Settle would settle", () => {
+  it("offers a ledge peer's dismissal whatever its Settle would settle", () => {
     const sessions = [
       session({ id: "root" }),
       peer("helper", "root"),
@@ -2917,8 +2916,10 @@ describe("peer trees without a depth cap", () => {
     const view = spawnedSessionsView({ sessions, coordinatorId: "root" });
     expect(view.bubbled?.session.id).toBe("failed");
     expect(view.bubbled?.settleBlocked).toBe("it is still running.");
+    // Live work below the failed peer blocks its Settle, never the dismissal
+    // of its own failure.
     expect(clusterBubbleDismissible(view.bubbled as SessionInboxCard)).toBe(
-      false,
+      true,
     );
     expect(sessionSettleCascade("failed", sessions, null, {}).blocked).toBe(
       "it is still running.",

@@ -6796,6 +6796,17 @@ export interface AssistantActions {
    */
   settleSession: (id: string, settled?: boolean) => void;
   /**
+   * Dismiss the failure a session's row shows, without settling it: the
+   * session stays in the working set and its peers and queue are untouched.
+   * Sends the failure the current row carries, so a newer one is never
+   * dismissed by it; the authoritative list broadcast is the only update.
+   */
+  dismissSessionFailure: (
+    id: string,
+    errorAt: number | undefined,
+    outcomeRevision: number,
+  ) => void;
+  /**
    * Settle a formal Workflow Run out of the Sessions inbox (Task-677): the
    * command acknowledges `throughRevision` — the attention revision the
    * CLICKED item rendered, captured by the caller at the click — and the
@@ -8985,6 +8996,17 @@ export function useAssistant({
           settled,
           throughRevision: observed,
           requestId,
+        });
+      },
+      dismissSessionFailure: (id, errorAt, outcomeRevision) => {
+        // The rendered control supplies the identity it displayed. Never
+        // replace it with a newer row from stateRef: that would turn a stale
+        // click into an acknowledgement of a failure the user did not see.
+        send({
+          type: "dismissSessionFailure",
+          id,
+          ...(errorAt === undefined ? {} : { errorAt }),
+          outcomeRevision,
         });
       },
       settleWorkflowRun: (runId, throughRevision) => {

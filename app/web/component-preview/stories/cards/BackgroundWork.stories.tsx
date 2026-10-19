@@ -56,7 +56,7 @@ function ComposerLedges({ open }: { open: boolean }) {
         onToggle={noop}
         onOpenSession={noop}
         onToggleSettled={noop}
-        onSettleSession={noop}
+        onDismissSessionFailure={noop}
       />
       <BackgroundWorkLedge
         sessionId="session-dev"

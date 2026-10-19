@@ -949,6 +949,85 @@ function clearRunFailure(id: string): void {
   }
 }
 
+/** What the clicked row showed as its failure (`dismissSessionFailure`). */
+interface ObservedRunFailure {
+  /** `lastError.at`; undefined when the row showed no error record. */
+  errorAt: number | undefined;
+  /** `outcomeAttention.revision`; 0 when the row carried none. */
+  outcomeRevision: number;
+}
+
+/**
+ * `dismissed`: written. `unchanged`: the row holds no failure any more (another
+ * tab dismissed it, a run start cleared it). `stale`: it holds a failure the
+ * click did not observe, so nothing was written. `failed`: no live row, or DB
+ * trouble.
+ */
+type RunFailureDismissal = "dismissed" | "unchanged" | "stale" | "failed";
+
+/** The row's latest outcome is a failure no Settle has acknowledged. */
+const PENDING_FAILED_OUTCOME =
+  "(attention_kind = 'failed' AND attention_revision > attention_settled_revision)";
+
+/**
+ * Dismiss the failure the user saw on a session's row, WITHOUT settling it.
+ * ONE guarded statement, so the observation and the write cannot be split by
+ * a run outcome landing in between.
+ *
+ * It matches only when `last_error_at_ms` and `attention_revision` are still
+ * exactly what the row showed: every directly owned failure raises a revision,
+ * and a coordinator-owned one (no revision) is told apart by its timestamp.
+ * That pair is the whole identity — a coordinator-owned peer that failed again
+ * in the same millisecond, raising no revision, is indistinguishable, an
+ * accepted residual.
+ *
+ * It clears the error record and acknowledges the latest outcome ONLY when that
+ * is a pending FAILURE, so a completion is never acknowledged by it. A pending
+ * outcome is what withholds a stored `settled_at_ms` ({@link isSettled}), so
+ * acknowledging it would put the session back on the shelf under that OLD
+ * stamp, retention-eligible at once; the stamp is cleared with it, keeping the
+ * session as unsettled as it already was. A stamp that still holds (no pending
+ * outcome) is never touched. Read state, queued work and peers are untouched.
+ */
+function dismissRunFailure(
+  id: string,
+  observed: ObservedRunFailure,
+): RunFailureDismissal {
+  try {
+    const db = getDb();
+    const written = db
+      .prepare(
+        `UPDATE session_index
+            SET last_error_at_ms = NULL,
+                last_error_text = NULL,
+                settled_at_ms = CASE WHEN ${PENDING_FAILED_OUTCOME}
+                  THEN NULL ELSE settled_at_ms END,
+                attention_settled_revision = CASE WHEN ${PENDING_FAILED_OUTCOME}
+                  THEN attention_revision ELSE attention_settled_revision END
+          WHERE id = ? AND deleted_at_ms IS NULL
+            AND attention_revision = ?
+            AND last_error_at_ms IS ?
+            AND (last_error_at_ms IS NOT NULL OR ${PENDING_FAILED_OUTCOME})
+      RETURNING id`,
+      )
+      .get(id, observed.outcomeRevision, observed.errorAt ?? null);
+    if (written) {
+      noteLiveness([id]);
+      return "dismissed";
+    }
+    const row = db
+      .prepare(
+        `SELECT last_error_at_ms IS NOT NULL OR ${PENDING_FAILED_OUTCOME} AS holds
+           FROM session_index WHERE id = ? AND deleted_at_ms IS NULL`,
+      )
+      .get(id) as { holds: number } | undefined;
+    if (!row) return "failed";
+    return row.holds ? "stale" : "unchanged";
+  } catch {
+    return "failed";
+  }
+}
+
 function isArchived(id: string): boolean {
   const row = getDb()
     .prepare("SELECT archived_at_ms FROM session_index WHERE id = ?")
@@ -1958,6 +2037,7 @@ export const sessionStore = {
   worktreeMissingAckBySession,
   recordRunFailure,
   clearRunFailure,
+  dismissRunFailure,
   recordInterruptedRun,
   clearInterruptedRun,
   updateStats,

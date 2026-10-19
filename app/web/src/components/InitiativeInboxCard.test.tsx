@@ -100,6 +100,7 @@ function inbox(
         density={more.density ?? options.density ?? "tight"}
         onSelect={(id) => calls.selected.push(id)}
         onSettle={() => {}}
+        onDismissFailure={() => {}}
         onArchive={() => {}}
         onDeleteSession={() => {}}
         onRenameSession={() => {}}

@@ -7704,6 +7704,31 @@ export type ClientMessage =
       requestId?: string;
     }
   /**
+   * Dismiss the failure a session's row shows WITHOUT settling it: the user
+   * has moved on from a failed peer, which may still be blocked from Settle
+   * (queued work, background work). The server clears the stored error record
+   * and acknowledges a pending FAILED outcome, in one write; it never settles,
+   * archives, retries, cancels or touches the session's peers or queue. A
+   * stored Settle stamp that the failure had already superseded is cleared with
+   * it, so the session stays where it effectively is — in the working set —
+   * instead of falling back to an old shelf; a stamp that still holds is kept.
+   *
+   * The pair names the failure the CLICKED row showed, so a newer one is never
+   * dismissed by a stale click. `errorAt` is the row's `lastError.at`, omitted
+   * when it showed none (an open failed outcome whose error record a later run
+   * start cleared); `outcomeRevision` is its `outcomeAttention.revision`, 0
+   * when it carried none (a coordinator-owned peer raises no revision). Both
+   * must still match, or nothing is written. A completed outcome is never
+   * acknowledged by this command.
+   */
+  | {
+      type: "dismissSessionFailure";
+      id: string;
+      errorAt?: number;
+      outcomeRevision: number;
+      requestId?: string;
+    }
+  /**
    * Acknowledge a formal Workflow Run's latest event and take it out of the
    * Sessions inbox working set ([Task-677](pa://task/677)). The server refuses
    * a run whose current gate is an unresolved user decision
