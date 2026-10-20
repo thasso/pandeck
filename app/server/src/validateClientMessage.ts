@@ -94,6 +94,15 @@ const COLLAPSED_EPICS: FieldSpec = {
   kind: `at most ${INITIATIVE_LAYOUT_COLLAPSE_LIMIT} Task ids`,
 };
 const OBJECT: FieldSpec = { check: isPlainObject, kind: "an object" };
+/** The grant keys one scope change names: a session's own list, bounded. */
+const GRANT_KEYS: FieldSpec = {
+  check: (value: unknown) =>
+    isStringArray(value) &&
+    value.length >= 1 &&
+    value.length <= 256 &&
+    value.every((key) => key.length > 0 && key.length <= 4096),
+  kind: "1 to 256 grant keys",
+};
 
 /**
  * The background updates a Recover or Dismiss names: one Recover's worth at
@@ -219,7 +228,10 @@ function validateResolveApproval(msg: Record<string, unknown>): string | null {
     decision: STRING,
   });
   if (required) return required;
-  const forSession = checkOptionalFields(msg, { forSession: BOOLEAN });
+  const forSession = checkOptionalFields(msg, {
+    forSession: BOOLEAN,
+    grantInheritable: BOOLEAN,
+  });
   if (forSession) return forSession;
   if (!hasOwn(msg, "edits") || msg.edits === undefined) return null;
   if (!isPlainObject(msg.edits)) return "edits must be an object";
@@ -1144,8 +1156,15 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     (msg.cap === null || isSessionPeerTurnCap(msg.cap)
       ? null
       : "cap must be an integer from 1 to 16, or null"),
-  grantApprovalForSession: (msg) =>
-    checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
+  grantApprovalForSession: fields(
+    { sessionId: STRING, key: STRING },
+    { inheritable: BOOLEAN },
+  ),
+  setApprovalGrantScope: fields({
+    sessionId: STRING,
+    keys: GRANT_KEYS,
+    inheritable: BOOLEAN,
+  }),
   resolvePullRequestCardTask: (msg) => {
     if (!hasOwn(msg, "cardId") || !isString(msg.cardId))
       return "cardId is required and must be a string";

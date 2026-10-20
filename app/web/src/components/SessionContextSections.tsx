@@ -5,6 +5,7 @@ import {
   Download,
   FileText,
   Film,
+  GitFork,
   Image as ImageIcon,
   MonitorPlay,
   Lock,
@@ -61,6 +62,8 @@ import {
 } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Item,
   ItemActions,
@@ -116,8 +119,21 @@ interface SessionContextSectionsProps {
   sessions?: readonly { id: string; title: string }[] | undefined;
   onOpenSession?: ((id: string) => void) | undefined;
   onRevokeApprovalGrant?: (sessionId: string, key: string) => void;
-  /** Grant one operation for the rest of this session, before a card asks. */
-  onGrantApproval?: (sessionId: string, key: string) => void;
+  /**
+   * Grant one operation for the rest of this session, before a card asks;
+   * `inheritable` also covers the sessions it starts.
+   */
+  onGrantApproval?: (
+    sessionId: string,
+    key: string,
+    inheritable?: boolean,
+  ) => void;
+  /** Set the scope of this session's own grants named in `keys`. */
+  onSetApprovalGrantScope?: (
+    sessionId: string,
+    keys: string[],
+    inheritable: boolean,
+  ) => void;
 }
 
 export function SessionContextSections({
@@ -139,6 +155,7 @@ export function SessionContextSections({
   onOpenSession,
   onRevokeApprovalGrant,
   onGrantApproval,
+  onSetApprovalGrantScope,
 }: SessionContextSectionsProps) {
   // A fragment, not a box: these sections are siblings of the panel's other
   // sections, which is what gives them the shared separator and spacing.
@@ -184,6 +201,7 @@ export function SessionContextSections({
           onOpenSession={onOpenSession}
           onRevoke={onRevokeApprovalGrant}
           onGrant={onGrantApproval}
+          onSetScope={onSetApprovalGrantScope}
         />
       ) : null}
 
@@ -611,6 +629,10 @@ function ToolsSection({
  * A row opens to what the operation covers and its status, with Revoke or
  * Allow… under that; allowing ahead of a card asks for confirmation.
  *
+ * Each own grant has a scope: this session only (every new grant's default)
+ * or also the sessions it starts. A row changes one grant's scope and the
+ * section changes all of them at once; passing grants down always confirms.
+ *
  * A spawned session also lists what it inherits from its spawn ancestors,
  * read-only and naming the holder: such a grant is revoked on that session.
  */
@@ -623,6 +645,7 @@ function ApprovalGrantsSection({
   onOpenSession,
   onRevoke,
   onGrant,
+  onSetScope,
 }: {
   sessionId: string;
   grants: readonly ApprovalGrant[];
@@ -631,7 +654,12 @@ function ApprovalGrantsSection({
   sessions: readonly { id: string; title: string }[] | undefined;
   onOpenSession: ((id: string) => void) | undefined;
   onRevoke?: ((sessionId: string, key: string) => void) | undefined;
-  onGrant?: ((sessionId: string, key: string) => void) | undefined;
+  onGrant?:
+    | ((sessionId: string, key: string, inheritable?: boolean) => void)
+    | undefined;
+  onSetScope?:
+    | ((sessionId: string, keys: string[], inheritable: boolean) => void)
+    | undefined;
 }) {
   const dialogs = useDialogs();
   const byKey = new Map(grants.map((grant) => [grant.key, grant]));
@@ -667,13 +695,54 @@ function ApprovalGrantsSection({
   );
   const allow = async (key: string) => {
     if (!onGrant) return;
+    // Read when the dialog closes; the checkbox is the dialog's own state.
+    let inheritable = false;
     const confirmed = await dialogs.confirm({
       title: `Allow “${approvalGrantLabel(key)}” without asking?`,
-      body: "For the rest of this session, cards for this operation run without waiting for your click. You can revoke it here at any time.",
-      confirmLabel: "Allow for this session",
+      body: (
+        <div className="flex flex-col gap-3">
+          <p>
+            For the rest of this session, cards for this operation run without
+            waiting for your click. You can revoke it here at any time.
+          </p>
+          <div className="flex items-center gap-2 text-foreground">
+            <Checkbox
+              id="approval-grant-inheritable"
+              onCheckedChange={(checked) => {
+                inheritable = checked;
+              }}
+            />
+            <Label htmlFor="approval-grant-inheritable">
+              Also for the sessions it starts
+            </Label>
+          </div>
+        </div>
+      ),
+      confirmLabel: "Allow",
     });
-    if (confirmed) onGrant(sessionId, key);
+    if (confirmed) onGrant(sessionId, key, inheritable);
   };
+  // Passing grants down lets every session below this one use them without a
+  // click, so it is asked once; keeping them here never needs asking.
+  const passDown = async (keys: string[]) => {
+    if (!onSetScope || keys.length === 0) return;
+    const labels = keys.map(approvalGrantLabel).join(", ");
+    const confirmed = await dialogs.confirm({
+      title:
+        keys.length === 1
+          ? `Pass “${labels}” to the sessions it starts?`
+          : `Pass ${keys.length} approvals to the sessions it starts?`,
+      body: `Every session this one starts, and the ones they start, can then run ${labels} without asking you.`,
+      confirmLabel: "Pass down",
+    });
+    if (confirmed) onSetScope(sessionId, keys, true);
+  };
+  const sessionOnlyKeys = grants
+    .filter((grant) => !grant.inheritable)
+    .map((grant) => grant.key);
+  const inheritableKeys = grants
+    .filter((grant) => grant.inheritable)
+    .map((grant) => grant.key);
   return (
     <InspectorSection
       id="approval-grants"
@@ -717,6 +786,13 @@ function ApprovalGrantsSection({
                   >
                     {operation.label}
                   </span>
+                  {own?.inheritable ? (
+                    <GitFork
+                      size={12}
+                      className="shrink-0 text-muted-foreground"
+                      aria-label="Also the sessions it starts"
+                    />
+                  ) : null}
                 </>
               }
               age={grant ? relativeTime(grant.grantedAt) : ""}
@@ -737,6 +813,16 @@ function ApprovalGrantsSection({
                     "Asks first"
                   )}
                 </PropertyText>
+                {own ? (
+                  <>
+                    <PropertyLabel>Scope</PropertyLabel>
+                    <PropertyText className="text-foreground">
+                      {own.inheritable
+                        ? "This session and the sessions it starts"
+                        : "This session only"}
+                    </PropertyText>
+                  </>
+                ) : null}
                 {own && fromAncestor ? (
                   <>
                     <PropertyLabel>Also</PropertyLabel>
@@ -755,17 +841,43 @@ function ApprovalGrantsSection({
                   {operation.key}
                 </PropertyText>
               </PropertyList>
-              {own && onRevoke ? (
-                <div className="mt-1.5 flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-muted-foreground hover:text-destructive"
-                    onClick={() => onRevoke(sessionId, operation.key)}
-                  >
-                    <ShieldOff />
-                    Revoke — ask again next time
-                  </Button>
+              {own && (onRevoke || onSetScope) ? (
+                <div className="mt-1.5 flex flex-wrap justify-end gap-1">
+                  {onSetScope ? (
+                    own.inheritable ? (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-muted-foreground"
+                        onClick={() =>
+                          onSetScope(sessionId, [operation.key], false)
+                        }
+                      >
+                        Keep to this session
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-muted-foreground"
+                        onClick={() => void passDown([operation.key])}
+                      >
+                        <GitFork />
+                        Pass to sessions it starts…
+                      </Button>
+                    )
+                  ) : null}
+                  {onRevoke ? (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => onRevoke(sessionId, operation.key)}
+                    >
+                      <ShieldOff />
+                      Revoke — ask again next time
+                    </Button>
+                  ) : null}
                 </div>
               ) : !grant && !operation.cardOnly && onGrant ? (
                 <div className="mt-1.5 flex justify-end">
@@ -784,6 +896,31 @@ function ApprovalGrantsSection({
           );
         })}
       </ul>
+      {onSetScope && grants.length > 0 ? (
+        <div className="mt-1.5 flex flex-wrap justify-end gap-1">
+          {sessionOnlyKeys.length > 0 ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground"
+              onClick={() => void passDown(sessionOnlyKeys)}
+            >
+              <GitFork />
+              Pass all to sessions it starts…
+            </Button>
+          ) : null}
+          {inheritableKeys.length > 0 ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground"
+              onClick={() => onSetScope(sessionId, inheritableKeys, false)}
+            >
+              Keep all to this session
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {/* What the list cannot show: the steps that never raise a card. */}
       <p className="mt-2 px-1 text-xs text-muted-foreground">
         Never asks: a managed worktree&rsquo;s own commit, push, pull request

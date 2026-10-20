@@ -319,6 +319,7 @@ import {
   resolveApproval,
   revokeApprovalGrant,
   grantApprovalForSession,
+  setApprovalGrantScope,
 } from "./pendingApprovals.ts";
 import { approvalAnchorFor } from "./approvalAnchor.ts";
 import { cardsForSession, pullRequestCardById } from "./pullRequestCards.ts";
@@ -1198,6 +1199,7 @@ export class Connection implements Viewer {
           msg.decision,
           msg.edits,
           msg.forSession === true,
+          msg.grantInheritable === true,
         );
       case "setSessionPeerTurnCap":
         try {
@@ -1211,7 +1213,14 @@ export class Connection implements Viewer {
         }
         return;
       case "grantApprovalForSession":
-        grantApprovalForSession(msg.sessionId, msg.key);
+        grantApprovalForSession(
+          msg.sessionId,
+          msg.key,
+          msg.inheritable === true,
+        );
+        return;
+      case "setApprovalGrantScope":
+        setApprovalGrantScope(msg.sessionId, msg.keys, msg.inheritable);
         return;
       case "revokeApprovalGrant":
         revokeApprovalGrant(msg.sessionId, msg.key);
@@ -3282,13 +3291,14 @@ export class Connection implements Viewer {
     decision: import("@assistant/shared").ApprovalDecision,
     edits: import("@assistant/shared").ApprovalResolutionEdits | undefined,
     forSession: boolean,
+    grantInheritable: boolean,
   ): Promise<void> {
     try {
       const { card, outcomePrompt } = await resolveApproval(
         approvalId,
         decision,
         edits,
-        { forSession },
+        { forSession, grantInheritable },
       );
       const live = this.viewing;
       const driver =

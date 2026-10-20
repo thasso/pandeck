@@ -430,6 +430,8 @@ interface StructuralRow {
  */
 async function validateStructure(
   row: SpawnRequestRowFields & { agentType: SpawnAgentType },
+  /** The row's agent definition's `inheritGrants`, when it sets one. */
+  definitionInheritGrants?: boolean,
 ): Promise<StructuralRow> {
   const owner = row.owner ?? "coordinator";
   if (owner !== "coordinator" && owner !== "user")
@@ -490,13 +492,28 @@ async function validateStructure(
     agentType: row.agentType,
     prompt,
     owner,
-    ...(row.inheritGrants === false ? { inheritGrants: false as const } : {}),
+    ...(inheritsGrants(row.inheritGrants, definitionInheritGrants)
+      ? {}
+      : { inheritGrants: false as const }),
     ...(worktree ? { worktree } : {}),
     ...(project?.id ? { projectId: project.id } : {}),
     ...(project?.name ? { projectName: project.name } : {}),
     ...(taskId ? { taskId } : {}),
     ...(task?.title ? { taskTitle: task.title } : {}),
   };
+}
+
+/**
+ * Whether a spawned session inherits grants: the row's explicit choice, else
+ * its agent definition's `inheritGrants`, else it does. Decided from the RAW
+ * row, since the structural row keeps only `false` and would lose an explicit
+ * `true` over a definition's `false`.
+ */
+function inheritsGrants(
+  rowValue: boolean | undefined,
+  definitionValue: boolean | undefined,
+): boolean {
+  return rowValue ?? definitionValue ?? true;
 }
 
 /** The shared batch-size gate; both paths carry the same ceiling. */
@@ -539,6 +556,7 @@ export async function buildSpawnProposal(
   for (const row of input.rows) {
     let agentType: SpawnAgentType;
     let rowFallback = fallback;
+    let definitionInheritGrants: boolean | undefined;
     if (row.agent === undefined) agentType = row.agentType;
     else {
       const name = row.agent.trim();
@@ -554,6 +572,9 @@ export async function buildSpawnProposal(
         throw err;
       }
       agentType = resolved.role.persona;
+      // Fixed here, on the card: execution never reads the definition's
+      // default again, so the user approves what the card shows.
+      definitionInheritGrants = resolved.inheritGrants;
       // An un-hinted row starts from the definition's default, not from
       // the proposer's own runtime.
       const runtime = resolved.listed[0]?.runtime;
@@ -568,7 +589,10 @@ export async function buildSpawnProposal(
     // only the source's requirement applies to every row.
     const requiresEnterprise =
       sourceRequires || row.requiresEnterprise === true;
-    const structural = await validateStructure({ ...row, agentType });
+    const structural = await validateStructure(
+      { ...row, agentType },
+      definitionInheritGrants,
+    );
     const runtime = await resolveRuntime(row, rowFallback, requiresEnterprise);
     items.push({
       ...approvalItemOf(structural),
@@ -1296,7 +1320,10 @@ export async function spawnApprovedPeers(input: {
       // its worktree like any developer row.
       earlyAgents.set(index, early);
       structurals.push(
-        await validateStructure({ ...row, agentType: early.agent.persona }),
+        await validateStructure(
+          { ...row, agentType: early.agent.persona },
+          early.inheritGrants,
+        ),
       );
       continue;
     }
@@ -1409,12 +1436,24 @@ export async function spawnApprovedPeers(input: {
                 "This session requires an enterprise account. Select an approved runtime using an account marked as enterprise.",
               );
             finalRuntime = current;
+            // The definition the session is created from decides, unless the
+            // row did.
+            if (
+              inheritsGrants(
+                row.inheritGrants,
+                current.agent ? current.inheritGrants : undefined,
+              )
+            )
+              delete item.inheritGrants;
+            else item.inheritGrants = false;
             return current;
           },
         });
       } catch (err) {
         result.error = errorText(err);
       }
+      if (item.inheritGrants === false) result.inheritGrants = false;
+      else delete result.inheritGrants;
       // Report only the late resolution used for creation. If late resolution
       // refused the row, repeating the earlier runtime here would imply that a
       // stale or fallback runtime had been attempted when nothing was created.

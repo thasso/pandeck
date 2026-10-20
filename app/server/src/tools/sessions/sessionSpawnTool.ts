@@ -150,7 +150,7 @@ function makeSessionSpawnTool() {
               inheritGrants: {
                 type: "boolean",
                 description:
-                  "Defaults to true: the new session's cards are covered by every Approve-for-session grant you or your spawn ancestors hold. Set false for a session that should ask for everything itself, such as a reviewer; nothing reaches it, or its own spawns, from above it.",
+                  "Defaults to the agent definition's inheritGrants, else true: the new session's cards are covered by the grants you or your spawn ancestors hold that the user passed down to the sessions they start. Set false for a session that should ask for everything itself, such as a reviewer; nothing reaches it, or its own spawns, from above it.",
               },
               provider: {
                 type: "string",

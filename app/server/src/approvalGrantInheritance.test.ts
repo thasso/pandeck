@@ -3,9 +3,10 @@
  * Inherited grants).
  *
  * A spawned session's card is covered when every operation it performs is
- * held by the session or by an ancestor its spawn edges inherit from. The
- * lookup is live: no grant row is copied, so a revoke on the holder ends
- * coverage at the next check. Sessions and edges are REAL `sessionStore` rows;
+ * held by the session, or held as INHERITABLE ("Also sessions it starts") by
+ * an ancestor its spawn edges inherit from. The lookup is live: no grant row
+ * is copied, so a revoke or narrowing on the holder ends coverage at the next
+ * check. Sessions and edges are REAL `sessionStore` rows;
  * only the broadcasts and the outcome drain are stubbed.
  */
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -29,6 +30,7 @@ import {
   revokeApprovalGrant,
   runAutoApprovals,
   setApprovalBroadcastForTests,
+  setApprovalGrantScope,
   setAutoApprovalDrainForTests,
 } from "./pendingApprovals.ts";
 
@@ -87,11 +89,16 @@ function cardFor(sessionId: string, body: Record<string, unknown>) {
 }
 
 /** Grant a key the inspector cannot grant ahead of time, as its card would. */
-function grantFromCard(sessionId: string, key: string): void {
+function grantFromCard(
+  sessionId: string,
+  key: string,
+  inheritable: boolean,
+): void {
   approvalStore.insertGrant(sessionId, {
     key,
     grantedAt: Date.now(),
     sourceApprovalId: `appr-${key}`,
+    inheritable,
   });
 }
 
@@ -125,7 +132,7 @@ afterEach(() => {
 test("a grant covers the cards of every session spawned below its holder, and no other", async () => {
   const { a, b, c } = chain();
   const unrelated = session("unrelated");
-  grantApprovalForSession(a, "jira:comment");
+  grantApprovalForSession(a, "jira:comment", true);
 
   const onB = jiraCard(b, ["comment"]);
   const onC = jiraCard(c, ["comment"]);
@@ -154,8 +161,8 @@ test("a grant covers the cards of every session spawned below its holder, and no
 
 test("each operation may be held by a different ancestor", () => {
   const { a, b, c } = chain();
-  grantApprovalForSession(a, "jira:comment");
-  grantApprovalForSession(b, "jira:edit");
+  grantApprovalForSession(a, "jira:comment", true);
+  grantApprovalForSession(b, "jira:edit", true);
 
   const mixed = jiraCard(c, ["comment", "edit"]);
   expect(mixed.autoApproved).toBe(true);
@@ -170,8 +177,8 @@ test("each operation may be held by a different ancestor", () => {
 
 test("the nearest holder is recorded, and the run records the holder that still stands", async () => {
   const { a, b, c } = chain();
-  grantApprovalForSession(a, "jira:comment");
-  grantApprovalForSession(b, "jira:comment");
+  grantApprovalForSession(a, "jira:comment", true);
+  grantApprovalForSession(b, "jira:comment", true);
 
   const card = jiraCard(c, ["comment"]);
   expect(card.inheritedGrants).toEqual([
@@ -205,13 +212,13 @@ test("ownership never gates inheritance", () => {
   sessionStore.linkSpawned(a, bornTaken, Date.now(), "taken-over");
   sessionStore.linkSpawned(a, takenLater);
   sessionStore.setSpawnedOwnership(takenLater, "taken-over");
-  grantApprovalForSession(a, "jira:comment");
+  grantApprovalForSession(a, "jira:comment", true);
 
   for (const id of [owned, bornTaken, takenLater])
     expect(jiraCard(id, ["comment"]).autoApproved).toBe(true);
 });
 
-test("every grant key inherits, card-only ones included; keyless cards are never covered", () => {
+test("every grant key inherits once passed down, card-only ones included; keyless cards are never covered", () => {
   const { a, c } = chain();
   const tag = {
     kind: "gitTag",
@@ -222,9 +229,9 @@ test("every grant key inherits, card-only ones included; keyless cards are never
     tag: "v1",
     targetSha: "abc",
   };
-  grantFromCard(a, "githubBranchDelete");
-  grantFromCard(a, "managedPullRequestMerge");
-  grantFromCard(a, "gitTag:/repo:origin:main:fp:v1:abc");
+  grantFromCard(a, "githubBranchDelete", true);
+  grantFromCard(a, "managedPullRequestMerge", true);
+  grantFromCard(a, "gitTag:/repo:origin:main:fp:v1:abc", true);
 
   expect(cardFor(c, { kind: "githubBranchDelete" }).autoApproved).toBe(true);
   expect(cardFor(c, { kind: "managedPullRequestMerge" }).autoApproved).toBe(
@@ -237,9 +244,117 @@ test("every grant key inherits, card-only ones included; keyless cards are never
   ).toBeUndefined();
 });
 
+test("a session-only grant covers its holder and no session below it", () => {
+  const { a, b, c } = chain();
+  grantApprovalForSession(a, "jira:comment");
+  grantFromCard(a, "managedPullRequestMerge", false);
+
+  expect(jiraCard(a, ["comment"]).autoApproved).toBe(true);
+  for (const id of [b, c]) {
+    const card = jiraCard(id, ["comment"]);
+    expect(card.autoApproved).toBeUndefined();
+    expect(card.inheritedGrants).toBeUndefined();
+    expect(approvalForId(card.id)?.status).toBe("pending");
+    expect(
+      cardFor(id, { kind: "managedPullRequestMerge" }).autoApproved,
+    ).toBeUndefined();
+  }
+  expect(approvalGrantsPayload(b).inherited).toEqual([]);
+  expect(approvalGrantsPayload(c).inherited).toEqual([]);
+});
+
+test("a session-only grant on the way up does not hide a farther ancestor's inheritable one", () => {
+  const { a, b, c } = chain();
+  grantApprovalForSession(a, "jira:comment", true);
+  grantApprovalForSession(b, "jira:comment");
+
+  const card = jiraCard(c, ["comment"]);
+  expect(card.autoApproved).toBe(true);
+  expect(card.inheritedGrants).toEqual([
+    { key: "jira:comment", fromSessionId: a },
+  ]);
+  expect(approvalGrantsPayload(c).inherited).toEqual([
+    expect.objectContaining({
+      key: "jira:comment",
+      heldBy: a,
+      inheritable: true,
+    }),
+  ]);
+  // B's own card is covered by its own grant, whatever the scope.
+  expect(jiraCard(b, ["comment"]).inheritedGrants).toBeUndefined();
+});
+
+test("Approve for session keeps a merge grant with its session unless the user passes it down", async () => {
+  registerApprovalExecutor("managedPullRequestMerge", {
+    async execute() {
+      return { resultSummary: "merged" };
+    },
+  });
+  const { a, b } = chain();
+  const kept = cardFor(a, { kind: "managedPullRequestMerge" });
+  await resolveApproval(kept.id, "approved", undefined, { forSession: true });
+  expect(approvalStore.grantsForSession(a)).toEqual([
+    expect.objectContaining({
+      key: "managedPullRequestMerge",
+      inheritable: false,
+    }),
+  ]);
+  expect(cardFor(a, { kind: "managedPullRequestMerge" }).autoApproved).toBe(
+    true,
+  );
+  expect(
+    cardFor(b, { kind: "managedPullRequestMerge" }).autoApproved,
+  ).toBeUndefined();
+
+  const { a: driver, c: grandchild } = chain();
+  const passed = cardFor(driver, { kind: "managedPullRequestMerge" });
+  await resolveApproval(passed.id, "approved", undefined, {
+    forSession: true,
+    grantInheritable: true,
+  });
+  expect(approvalStore.grantsForSession(driver)).toEqual([
+    expect.objectContaining({ inheritable: true }),
+  ]);
+  expect(
+    cardFor(grandchild, { kind: "managedPullRequestMerge" }).inheritedGrants,
+  ).toEqual([{ key: "managedPullRequestMerge", fromSessionId: driver }]);
+});
+
+test("narrowing a grant on the holder hands a waiting card below it back", async () => {
+  const { a, c } = chain();
+  grantApprovalForSession(a, "jira:comment", true);
+  const card = jiraCard(c, ["comment"]);
+  expect(card.autoApproved).toBe(true);
+
+  setApprovalGrantScope(a, ["jira:comment"], false);
+  await runAutoApprovals(c);
+
+  expect(executions).toEqual([]);
+  expect(approvalForId(card.id)).toMatchObject({ status: "pending" });
+  expect(approvalForId(card.id)?.autoApproved).toBeUndefined();
+  // The holder keeps its grant and its own cards stay covered.
+  expect(approvalStore.grantsForSession(a)).toEqual([
+    expect.objectContaining({ key: "jira:comment", inheritable: false }),
+  ]);
+  expect(jiraCard(a, ["comment"]).autoApproved).toBe(true);
+});
+
+test("narrowing a grant while the card below prepares still stops it", async () => {
+  const { a, c } = chain();
+  grantApprovalForSession(a, "jira:comment", true);
+  const card = jiraCard(c, ["comment"]);
+  duringPrepare = () => setApprovalGrantScope(a, ["jira:comment"], false);
+
+  await runAutoApprovals(c);
+
+  expect(executions).toEqual([]);
+  expect(approvalForId(card.id)).toMatchObject({ status: "pending" });
+  expect(approvalForId(card.id)?.autoApproved).toBeUndefined();
+});
+
 test("a revoke on the holder hands a waiting card back, as a local revoke does", async () => {
   const { a, c } = chain();
-  grantApprovalForSession(a, "jira:comment");
+  grantApprovalForSession(a, "jira:comment", true);
   const card = jiraCard(c, ["comment"]);
   expect(card.inheritedGrants).toHaveLength(1);
 
@@ -260,7 +375,7 @@ test("a revoke on the holder hands a waiting card back, as a local revoke does",
 
 test("a revoke on the holder while the card prepares still stops it", async () => {
   const { a, c } = chain();
-  grantApprovalForSession(a, "jira:comment");
+  grantApprovalForSession(a, "jira:comment", true);
   const card = jiraCard(c, ["comment"]);
   duringPrepare = () => revokeApprovalGrant(a, "jira:comment");
 
@@ -279,8 +394,8 @@ test("an opted-out edge passes nothing down, while the opted-out session's own g
     inheritGrants: false,
   });
   sessionStore.linkSpawned(b, c);
-  grantApprovalForSession(a, "jira:comment");
-  grantApprovalForSession(b, "jira:edit");
+  grantApprovalForSession(a, "jira:comment", true);
+  grantApprovalForSession(b, "jira:edit", true);
 
   expect(jiraCard(b, ["comment"]).autoApproved).toBeUndefined();
   expect(jiraCard(c, ["comment"]).autoApproved).toBeUndefined();
@@ -299,8 +414,8 @@ test("an opted-out edge passes nothing down, while the opted-out session's own g
 
 test("a deleted ancestor's authority ends there; an archived one's does not", () => {
   const { a, b, c } = chain();
-  grantApprovalForSession(a, "jira:comment");
-  grantApprovalForSession(b, "jira:edit");
+  grantApprovalForSession(a, "jira:comment", true);
+  grantApprovalForSession(b, "jira:edit", true);
 
   sessionStore.setArchived(a, true);
   expect(jiraCard(c, ["comment"]).autoApproved).toBe(true);
@@ -316,14 +431,14 @@ test("a deleted ancestor's authority ends there; an archived one's does not", ()
   const leaf = session("leaf");
   sessionStore.linkSpawned(top, mid);
   sessionStore.linkSpawned(mid, leaf);
-  grantApprovalForSession(top, "jira:comment");
+  grantApprovalForSession(top, "jira:comment", true);
   sessionStore.markDeleted(mid);
   expect(jiraCard(leaf, ["comment"]).autoApproved).toBeUndefined();
 });
 
 test("a grant change re-sends the lists of the holder and of every session below it", () => {
   const { a, b, c } = chain();
-  grantApprovalForSession(a, "jira:comment");
+  grantApprovalForSession(a, "jira:comment", true);
   expect(grantBroadcasts.map((entry) => entry.sessionId)).toEqual([a, b, c]);
   const toC = grantBroadcasts.find((entry) => entry.sessionId === c)!;
   expect(toC.payload).toMatchObject({
@@ -337,6 +452,26 @@ test("a grant change re-sends the lists of the holder and of every session below
   expect(
     grantBroadcasts.find((entry) => entry.sessionId === a)!.payload.inheritance,
   ).toBeUndefined();
+
+  grantBroadcasts = [];
+  setApprovalGrantScope(a, ["jira:comment"], false);
+  expect(grantBroadcasts.map((entry) => entry.sessionId)).toEqual([a, b, c]);
+  expect(
+    grantBroadcasts.find((entry) => entry.sessionId === a)!.payload.grants,
+  ).toEqual([expect.objectContaining({ inheritable: false })]);
+  expect(
+    grantBroadcasts.find((entry) => entry.sessionId === c)!.payload.inherited,
+  ).toEqual([]);
+
+  // A change that changes nothing sends nothing; widening sends again.
+  grantBroadcasts = [];
+  setApprovalGrantScope(a, ["jira:comment", "jira:edit"], false);
+  expect(grantBroadcasts).toEqual([]);
+  setApprovalGrantScope(a, ["jira:comment"], true);
+  expect(grantBroadcasts.map((entry) => entry.sessionId)).toEqual([a, b, c]);
+  expect(
+    grantBroadcasts.find((entry) => entry.sessionId === c)!.payload.inherited,
+  ).toEqual([expect.objectContaining({ key: "jira:comment", heldBy: a })]);
 
   grantBroadcasts = [];
   revokeApprovalGrant(a, "jira:comment");
@@ -376,7 +511,7 @@ test("a grant-change fan-out reads each session's grants and each edge once", ()
   const tree = [a, b, c, d, e, f];
 
   const seen = statementsDuring(() =>
-    grantApprovalForSession(a, "jira:comment"),
+    grantApprovalForSession(a, "jira:comment", true),
   );
 
   expect(grantBroadcasts.map((entry) => entry.sessionId).sort()).toEqual(

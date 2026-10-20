@@ -7642,6 +7642,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           }}
           onRevokeApprovalGrant={actions.revokeApprovalGrant}
           onGrantApproval={actions.grantApprovalForSession}
+          onSetApprovalGrantScope={actions.setApprovalGrantScope}
         />
         <BackgroundWorkSection
           sessionId={displaySessionListItem?.id}

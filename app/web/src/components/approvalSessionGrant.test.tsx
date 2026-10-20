@@ -6,9 +6,10 @@ import type { ApprovalCard as ApprovalCardData } from "@assistant/shared";
 import { ApprovalCard } from "./ApprovalCard.tsx";
 
 /**
- * "Approve for session": the card offers it beside Approve, a card the
- * session's grants cover waits without buttons, and the card that created a
- * grant is where it can be revoked again.
+ * "Approve for session": the card offers it beside Approve, granting this
+ * session only unless the user picks "the sessions it starts" too from its
+ * menu; a card the session's grants cover waits without buttons, and the card
+ * that created a grant is where it can be revoked again.
  */
 
 (
@@ -71,10 +72,84 @@ test("Approve for session approves and asks for the session grant", () => {
   const onResolve = vi.fn();
   render(<ApprovalCard approval={pending} onResolve={onResolve} />);
 
-  expect(buttonLabels()).toEqual(["Reject", "Approve for session", "Approve"]);
+  // The unlabelled one is the scope menu beside "Approve for session".
+  expect(buttonLabels()).toEqual([
+    "Reject",
+    "Approve for session",
+    "",
+    "Approve",
+  ]);
   click("Approve for session");
 
-  expect(onResolve).toHaveBeenCalledWith("ap_1", "approved", undefined, true);
+  expect(onResolve).toHaveBeenCalledWith(
+    "ap_1",
+    "approved",
+    undefined,
+    true,
+    false,
+  );
+});
+
+/** Pick one scope from the menu beside "Approve for session". */
+function pickScope(label: string): void {
+  act(() =>
+    container!
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Approve for session: choose who it covers"]',
+      )!
+      .click(),
+  );
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((element) => element.textContent?.startsWith(label));
+  expect(item, `no menu item ${label}`).toBeDefined();
+  act(() => item!.click());
+}
+
+test.each([
+  ["This session only", false],
+  ["This session and the sessions it starts", true],
+] as const)(
+  "the scope menu's %s approves for the session with that scope",
+  (label, inheritable) => {
+    const onResolve = vi.fn();
+    render(<ApprovalCard approval={pending} onResolve={onResolve} />);
+
+    pickScope(label);
+
+    expect(onResolve).toHaveBeenCalledWith(
+      "ap_1",
+      "approved",
+      undefined,
+      true,
+      inheritable,
+    );
+  },
+);
+
+test("the card that passed its grants down says so", () => {
+  render(
+    <ApprovalCard
+      approval={{
+        ...pending,
+        status: "executed",
+        decision: "approved",
+        grantedForSession: true,
+      }}
+      grants={[
+        {
+          key: "github:comment",
+          grantedAt: 0,
+          sourceApprovalId: "ap_1",
+          inheritable: true,
+        },
+      ]}
+    />,
+  );
+
+  expect(container!.textContent).toContain(
+    "Approved for this session and the sessions it starts: GitHub: comment on pull requests",
+  );
 });
 
 test("plain Approve does not ask for a grant", () => {
@@ -83,7 +158,13 @@ test("plain Approve does not ask for a grant", () => {
 
   click("Approve");
 
-  expect(onResolve).toHaveBeenCalledWith("ap_1", "approved", undefined, false);
+  expect(onResolve).toHaveBeenCalledWith(
+    "ap_1",
+    "approved",
+    undefined,
+    false,
+    false,
+  );
 });
 
 test("an auto-approved card waits without decision buttons", () => {
@@ -109,8 +190,18 @@ test("the card that granted an operation can revoke it", () => {
         grantedForSession: true,
       }}
       grants={[
-        { key: "github:comment", grantedAt: 0, sourceApprovalId: "ap_1" },
-        { key: "jira:edit", grantedAt: 0, sourceApprovalId: "ap_other" },
+        {
+          key: "github:comment",
+          grantedAt: 0,
+          sourceApprovalId: "ap_1",
+          inheritable: false,
+        },
+        {
+          key: "jira:edit",
+          grantedAt: 0,
+          sourceApprovalId: "ap_other",
+          inheritable: false,
+        },
       ]}
       onRevokeGrant={onRevokeGrant}
     />,

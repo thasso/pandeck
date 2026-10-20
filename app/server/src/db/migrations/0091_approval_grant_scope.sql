@@ -1,0 +1,1 @@
+ALTER TABLE approval_grants ADD COLUMN inheritable INTEGER NOT NULL DEFAULT 0;

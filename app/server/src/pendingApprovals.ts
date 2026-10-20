@@ -25,8 +25,8 @@
  * card whose operations are all granted is still created and shown, but it is
  * approved by the server instead of blocking the session, and its outcome
  * reaches the agent through the same handoff as a clicked decision. A spawned
- * session's cards are also covered by its spawn ancestors' grants, looked up
- * live on every check and never copied.
+ * session's cards are also covered by its spawn ancestors' INHERITABLE grants
+ * ("Also sessions it starts"), looked up live on every check and never copied.
  */
 import { randomUUID } from "node:crypto";
 import { notifySessionBlocked } from "./webPush.ts";
@@ -482,7 +482,7 @@ export async function resolveApproval(
   approvalId: string,
   decision: ApprovalDecision,
   edits?: ApprovalResolutionEdits,
-  options: { forSession?: boolean } = {},
+  options: { forSession?: boolean; grantInheritable?: boolean } = {},
 ): Promise<{ card: ApprovalCard; outcomePrompt: string }> {
   return withDecisionLock(approvalId, () =>
     resolveApprovalExclusive(approvalId, decision, edits, options),
@@ -494,12 +494,14 @@ async function resolveApprovalExclusive(
   decision: ApprovalDecision,
   edits: ApprovalResolutionEdits | undefined,
   /**
-   * `underGrant`: approved by a session grant, which must still stand.
+   * `grantInheritable`: the `forSession` grants also cover the sessions it
+   * starts. `underGrant`: approved by a session grant, which must still stand.
    * `onSettled`: called synchronously right after the terminal state is
    * written, before anything is awaited — see {@link autoApprove}.
    */
   options: {
     forSession?: boolean;
+    grantInheritable?: boolean;
     underGrant?: boolean;
     onSettled?: (card: ApprovalCard, outcomePrompt: string) => void;
   },
@@ -551,7 +553,11 @@ async function resolveApprovalExclusive(
     const forSession =
       options.forSession === true &&
       approvalGrantKeys(getRecord(approvalId)!.card.body).length > 0;
-    if (forSession) grantOperations(getRecord(approvalId)!.card);
+    if (forSession)
+      grantOperations(
+        getRecord(approvalId)!.card,
+        options.grantInheritable === true,
+      );
     const executing = patchCard(approvalId, {
       status: "executing",
       decision: "approved",
@@ -693,15 +699,37 @@ function memoGrantReads(): GrantReads {
 }
 
 /**
- * Every key held by the session or an ancestor it inherits from, mapped to its
- * NEAREST holder: the session itself first, then up the spawn chain. Always
- * read live.
+ * The grants that reach `sessionId` from its spawn ancestors, each key once
+ * with its NEAREST holder. Only an ancestor's inheritable grant counts, and a
+ * session-only grant of a key does not hide a farther ancestor's inheritable
+ * one. Coverage and the inspector share this one rule.
+ */
+function inheritedGrants(
+  sessionId: string,
+  reads: GrantReads,
+): InheritedApprovalGrant[] {
+  const inherited: InheritedApprovalGrant[] = [];
+  const seen = new Set<string>();
+  for (const id of sessionStore.spawnGrantAncestors(sessionId, reads.edgeOf))
+    for (const grant of reads.grantsOf(id))
+      if (grant.inheritable && !seen.has(grant.key)) {
+        seen.add(grant.key);
+        inherited.push({ ...grant, heldBy: id });
+      }
+  return inherited;
+}
+
+/**
+ * Every key that covers the session's cards, mapped to its NEAREST holder: the
+ * session's own grants whatever their scope, then the inheritable ones up the
+ * spawn chain. Always read live.
  */
 function grantHolders(sessionId: string): Map<string, string> {
   const holders = new Map<string, string>();
-  for (const id of [sessionId, ...sessionStore.spawnGrantAncestors(sessionId)])
-    for (const grant of approvalStore.grantsForSession(id))
-      if (!holders.has(grant.key)) holders.set(grant.key, id);
+  for (const grant of liveGrantReads.grantsOf(sessionId))
+    holders.set(grant.key, sessionId);
+  for (const grant of inheritedGrants(sessionId, liveGrantReads))
+    if (!holders.has(grant.key)) holders.set(grant.key, grant.heldBy);
   return holders;
 }
 
@@ -735,7 +763,10 @@ export function approvalGrantsForSession(sessionId: string): ApprovalGrant[] {
 export interface ApprovalGrantsPayload {
   /** Its OWN grants, the only ones it can revoke. */
   grants: ApprovalGrant[];
-  /** Each key an ancestor holds, with the nearest holder, own keys included. */
+  /**
+   * Each key an ancestor passes down (its inheritable grants), with the
+   * nearest such holder, own keys included.
+   */
   inherited: InheritedApprovalGrant[];
   /** Present when the session was spawned. */
   inheritance?: ApprovalGrantInheritance;
@@ -753,17 +784,9 @@ function grantsPayload(
   reads: GrantReads,
 ): ApprovalGrantsPayload {
   const edge = reads.edgeOf(sessionId);
-  const inherited: InheritedApprovalGrant[] = [];
-  const seen = new Set<string>();
-  for (const id of sessionStore.spawnGrantAncestors(sessionId, reads.edgeOf))
-    for (const grant of reads.grantsOf(id))
-      if (!seen.has(grant.key)) {
-        seen.add(grant.key);
-        inherited.push({ ...grant, heldBy: id });
-      }
   return {
     grants: reads.grantsOf(sessionId),
-    inherited,
+    inherited: inheritedGrants(sessionId, reads),
     ...(edge
       ? {
           inheritance: {
@@ -775,35 +798,78 @@ function grantsPayload(
   };
 }
 
-/** Grant every operation `card` performs for the rest of its session. */
-function grantOperations(card: ApprovalCard): void {
+/**
+ * Grant `keys` for the rest of the session with the user's chosen scope, then
+ * re-send the lists. Callers decide which keys a decision authorizes; this
+ * writes them as given, card-only ones included. A key the session already
+ * holds keeps its original grant and is only WIDENED when `inheritable`: a
+ * grant is never narrowed here, only by {@link setApprovalGrantScope}.
+ */
+function writeGrants(
+  sessionId: string,
+  keys: readonly string[],
+  inheritable: boolean,
+  sourceApprovalId: string,
+): void {
   const now = Date.now();
   inDbTransaction(() => {
-    // A key the session already holds keeps its original grant.
-    for (const key of approvalGrantKeys(card.body))
-      approvalStore.insertGrant(card.sessionId, {
+    for (const key of keys) {
+      const added = approvalStore.insertGrant(sessionId, {
         key,
         grantedAt: now,
-        sourceApprovalId: card.id,
+        sourceApprovalId,
+        inheritable,
       });
+      if (!added && inheritable)
+        approvalStore.setGrantInheritable(sessionId, key, true);
+    }
   });
-  void broadcastGrants(card.sessionId);
+  void broadcastGrants(sessionId);
+}
+
+/** Grant every operation `card` performs for the rest of its session. */
+function grantOperations(card: ApprovalCard, inheritable: boolean): void {
+  writeGrants(
+    card.sessionId,
+    approvalGrantKeys(card.body),
+    inheritable,
+    card.id,
+  );
 }
 
 /**
  * Grant one operation from the inspector, before any card asked. Only a key
  * `grantableAheadOfTime` allows is accepted — never a card-only operation,
- * a tag, or settings input — and a key the session already holds keeps its
- * original grant. It covers cards proposed from now on.
+ * a tag, or settings input. Absent `inheritable` means this session only. It
+ * covers cards proposed from now on.
  */
-export function grantApprovalForSession(sessionId: string, key: string): void {
+export function grantApprovalForSession(
+  sessionId: string,
+  key: string,
+  inheritable = false,
+): void {
   if (!grantableAheadOfTime(key)) return;
-  approvalStore.insertGrant(sessionId, {
-    key,
-    grantedAt: Date.now(),
-    sourceApprovalId: "",
-  });
-  void broadcastGrants(sessionId);
+  writeGrants(sessionId, [key], inheritable, "");
+}
+
+/**
+ * Change the scope of the session's own grants named in `keys`; keys it does
+ * not hold are ignored. Narrowing works like a revoke for the sessions below
+ * it: an auto-approved card there that has not started is handed back to the
+ * user by {@link autoApprove}'s re-check.
+ */
+export function setApprovalGrantScope(
+  sessionId: string,
+  keys: readonly string[],
+  inheritable: boolean,
+): void {
+  const changed = inDbTransaction(
+    () =>
+      keys.filter((key) =>
+        approvalStore.setGrantInheritable(sessionId, key, inheritable),
+      ).length,
+  );
+  if (changed > 0) void broadcastGrants(sessionId);
 }
 
 /**

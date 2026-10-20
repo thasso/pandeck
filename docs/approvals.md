@@ -127,6 +127,21 @@ Every card kind with a grant key offers the button; `settingsInput` and
 `managedCommitOverride` have none, so their cards never do, and the server
 ignores a for-session decision on such a card.
 
+- **Scope.** Every grant has one (`ApprovalGrant.inheritable`). "This session
+  only" (false) covers the holder's own cards. "This session and the sessions it
+  starts" (true) also covers every session spawned below it (Inherited grants,
+  below). Every new grant is this session only, card-only keys included; passing
+  one down is always the user's explicit choice. The card's "Approve for
+  session" grants this session only, and the menu beside it offers both scopes;
+  that one choice applies to every key the card grants
+  (`resolveApproval.grantInheritable`, ignored without `forSession`). The
+  inspector's Allow… dialog has a box for the same choice, unticked by default
+  (`grantApprovalForSession.inheritable`).
+- **Re-granting only widens.** Approving for session a key the session already
+  holds keeps the original grant (its time and source card) and widens it when
+  the user chose "the sessions it starts". It never narrows one: that is an
+  explicit scope change in the inspector.
+
 - **Coverage.** A new card runs on its own only when EVERY key it performs is
   granted. A mixed Jira or Confluence batch with one ungranted operation waits
   for a click like any other card. A card that performs nothing is never
@@ -163,64 +178,80 @@ ignores a for-session decision on such a card.
   pending card. A `prepare` refusal does the same, with the reason on the card.
 - **Lifetime.** Grants are stored beside the cards (see Storage) on the session
   that was granted them, and last until revoked. They reach no unrelated
-  session. A session spawned below the holder inherits them through a live
-  lookup (Inherited grants, below); nothing is copied to it.
-- **Where the user sees them.** The card that created a grant shows it with
-  Revoke. The session inspector's "Approved for session" section lists them all.
-  The server sends the session's full list as `approvalGrants`, empty included,
-  when a session is viewed and after every change; `revokeApprovalGrant`
-  withdraws one key.
+  session. A session spawned below the holder inherits the ones passed down
+  through a live lookup (Inherited grants, below); nothing is copied to it.
+- **Where the user sees them.** The card that created a grant shows it, with its
+  scope, and Revoke. The session inspector's Approvals section lists them all,
+  each own grant with its scope and a control to pass it down (confirmed) or
+  keep it to this session; one section action does either for all of the
+  session's own grants at once. The server sends the session's full list as
+  `approvalGrants`, empty included, when a session is viewed and after every
+  change; `revokeApprovalGrant` withdraws one key, and
+  `setApprovalGrantScope { sessionId, keys, inheritable }` sets the scope of the
+  session's own grants named in `keys`, ignoring keys it does not hold.
+  Narrowing works like a revoke for the sessions below: a covered card there
+  that has not started is handed back by the same re-check.
 
 ### Inherited grants
 
 A spawned session's card is covered when every key it performs is held by the
-session itself or by an ancestor on its spawn chain. Each key may have a
-different holder, so a mixed Jira batch can be covered by one ancestor's
-`jira:comment` and another's `jira:edit`.
+session itself, whatever the scope, or held as inheritable ("the sessions it
+starts") by an ancestor on its spawn chain. Each key may have a different
+holder, so a mixed Jira batch can be covered by one ancestor's `jira:comment`
+and another's `jira:edit`.
 
 - **Live lookup, nothing copied.** Creation and both re-checks before a covered
   card runs (before and after `prepare`) call the same lookup (`grantCoverage`
   in `pendingApprovals.ts`), which walks the `spawned` edges up from the session
   (`sessionStore.spawnGrantAncestors`, one indexed edge read per level) and
   reads each session's grants. Nothing is cached between checks. No grant row is
-  ever written for a descendant, so revoking on the holder is the whole revoke:
-  the next check of every descendant sees it, and a covered card that has not
-  started is handed back exactly as for a local revoke.
-- **Every key, every owner.** Card-only keys inherit too
+  ever written for a descendant, so revoking or narrowing on the holder is the
+  whole change: the next check of every descendant sees it, and a covered card
+  that has not started is handed back exactly as for a local revoke.
+- **Only what the user passed down.** An ancestor's grant counts only when it is
+  inheritable. That holds for every key, card-only ones included
   (`managedPullRequestMerge`, `githubBranchDelete`, `forgejoRelease`, the
-  Confluence deletes, `gitTag:*`), and so do `sessionSpawn`, `projectCreate` and
-  `agentDefinition`: a descendant can merge into the default branch, spawn peers
-  or change an agent definition without asking whenever an ancestor holds that
-  key. Keyless kinds (`settingsInput`, `managedCommitOverride`) stay uncovered.
-  The edge's owner is never read: coordinator-owned, born user-owned and
-  taken-over children all inherit. An agent definition's denied tools still
-  apply.
-- **Nearest holder.** The session's own grant wins, then its parent's, and so on
-  up. That holder is what the inspector shows and what the card records.
+  Confluence deletes, `gitTag:*`) and `sessionSpawn`, `projectCreate` and
+  `agentDefinition`: a merge grant stays with the session that received it
+  unless the user passes it down, and then a descendant can merge into the
+  default branch without asking. Keyless kinds (`settingsInput`,
+  `managedCommitOverride`) stay uncovered. The edge's owner is never read:
+  coordinator-owned, born user-owned and taken-over children all inherit. An
+  agent definition's denied tools still apply.
+- **Nearest holder.** The session's own grant wins, then the nearest ancestor
+  holding the key as inheritable. An ancestor's session-only grant of the key is
+  skipped, not a stop: a farther ancestor's inheritable grant still covers. One
+  helper (`inheritedGrants` in `pendingApprovals.ts`) applies this rule for both
+  coverage and the inspector, so they cannot disagree. The holder it finds is
+  what the inspector shows and what the card records.
 - **Where the walk stops.** At a session nothing spawned, at an edge spawned
   with `inheritGrants: false`, at a soft-deleted parent (the user can no longer
   open it to revoke), or at a session already visited. An archived ancestor
   still counts. A purged session's edges go with it (FK cascade).
 - **Opting out.** A `session_spawn` row (`spawn` or `propose`) with
   `inheritGrants: false` creates a session nothing above it reaches, nor its own
-  spawns through it. Its OWN grants still reach its descendants. The choice is
-  fixed at spawn: the propose card shows "Won't inherit your approvals" on such
-  a row but does not offer to change it, and Take over / Hand back keep it.
+  spawns through it. Its OWN inheritable grants still reach its descendants. A
+  row that does not set it takes its agent definition's `inheritGrants`
+  ([agent-definitions.md](agent-definitions.md#the-file)), else inherits; an
+  explicit row value always wins. The choice is fixed at spawn: the propose card
+  shows "Won't inherit your approvals" on such a row but does not offer to
+  change it, and Take over / Hand back keep it.
 - **Edges from before inheritance inherit.** An edge with no flag inherits, so
   peers spawned before this shipped, reviewers included, started inheriting on
   deploy. Revoke on the ancestor to stop it.
 - **In the inspector.** The `approvalGrants` frame carries the session's OWN
-  list in `grants` (the only one its cards and the inspector revoke from),
-  `inherited` (each key an ancestor holds, with `heldBy` the nearest holder, own
-  keys included) and `inheritance` (`{ parentSessionId, inherits }`, for a
-  spawned session). An inherited row reads "Inherited from <session>" and has no
-  Revoke or Allow; an own grant an ancestor also holds keeps Revoke and says it
-  is still covered by that session's grant until revoked there; an opted-out
-  session says it does not inherit. Every grant change on a session re-sends the
-  lists of that session and of every session spawned below it, built from one
-  per-call memo so each session's grants and each edge are read once. Deleting
-  an ancestor sends nothing: coverage refuses at once, and the list catches up
-  on the next view or grant change.
+  list in `grants` (the only one its cards and the inspector revoke from or
+  rescope), `inherited` (each key an ancestor passes down, with `heldBy` the
+  nearest such holder, own keys included) and `inheritance`
+  (`{ parentSessionId, inherits }`, for a spawned session). An inherited row
+  reads "Inherited from <session>" and has no Revoke or Allow; an own grant an
+  ancestor also holds keeps Revoke and says it is still covered by that
+  session's grant until revoked there; an opted-out session says it does not
+  inherit. Every grant or scope change on a session that changes something
+  re-sends the lists of that session and of every session spawned below it,
+  built from one per-call memo so each session's grants and each edge are read
+  once. Deleting an ancestor sends nothing: coverage refuses at once, and the
+  list catches up on the next view or grant change.
 - **On the card.** An auto-approved card covered by an ancestor's grant carries
   `inheritedGrants: [{ key, fromSessionId }]`, one entry per key a session other
   than its own covered, and shows "Covered by <session>'s grant". It is set at
@@ -239,16 +270,24 @@ The pending cards have their own partial index. The attention set, a session's
 auto-approval batch and supersession read only pending rows. Showing a session
 reads only its own cards, while its grant view also looks up live grants on
 inheriting ancestors. A patch that leaves a card unchanged writes nothing.
-Granting a key the session already holds keeps the original grant.
+Granting a key the session already holds keeps the original grant, widening its
+scope when asked.
 
-Inheritance adds no table and no migration. The opt-out is
-`"inheritGrants": false` in the spawned edge's `session_links.metadata_json`,
-written only when false. `parseSpawnInheritance` (`db/sessionStore.ts`) fails
-closed: SQL NULL and a JSON object without the property inherit; invalid JSON,
-JSON `null`, a scalar, an array and any present value other than the written
-`false` (even `true`) do not. `setSpawnedOwnership`, the one metadata rewriter,
-writes the opt-out back whenever the old metadata did not inherit, so a corrupt
-edge becomes a well-formed non-inheriting one.
+A grant's scope is `approval_grants.inheritable` (migration 0091,
+`INTEGER NOT NULL DEFAULT 0`). No row was rewritten: a grant stored before the
+column existed reads as this session only, so after that deploy the descendants
+of older sessions stopped inheriting those grants until the user passes them
+down. `setGrantInheritable` updates one row by its `(session_id, key)` unique
+index.
+
+The spawn-edge opt-out adds no table. It is `"inheritGrants": false` in the
+spawned edge's `session_links.metadata_json`, written only when false.
+`parseSpawnInheritance` (`db/sessionStore.ts`) fails closed: SQL NULL and a JSON
+object without the property inherit; invalid JSON, JSON `null`, a scalar, an
+array and any present value other than the written `false` (even `true`) do not.
+`setSpawnedOwnership`, the one metadata rewriter, writes the opt-out back
+whenever the old metadata did not inherit, so a corrupt edge becomes a
+well-formed non-inheriting one.
 
 `reconcileLegacyPartialApprovalCard` still runs on every read, as it did on
 every read of the file, so a card stored in the old partial-failure shape reads

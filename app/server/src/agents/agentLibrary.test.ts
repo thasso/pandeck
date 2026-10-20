@@ -86,6 +86,28 @@ describe("the AGENT.md content rule", () => {
     assert.deepEqual(parsed.manifest.denyTools, []);
     assert.deepEqual(parsed.manifest.skills, []);
     assert.equal("effort" in parsed.manifest, false);
+    assert.equal("inheritGrants" in parsed.manifest, false);
+  });
+
+  test("inheritGrants is true or false, and nothing else", () => {
+    for (const value of [true, false]) {
+      const parsed = parseAgentManifest(
+        valid.replace("effort: high", `effort: high\ninheritGrants: ${value}`),
+        "x/AGENT.md",
+      );
+      assert.ok(parsed.ok, parsed.ok ? "" : JSON.stringify(parsed.issues));
+      assert.equal(parsed.manifest.inheritGrants, value);
+    }
+    for (const value of ['"no"', "no", "1", '"false"'])
+      assert.match(
+        issuesOf(
+          valid.replace(
+            "effort: high",
+            `effort: high\ninheritGrants: ${value}`,
+          ),
+        ).join(),
+        /inheritGrants must be true or false/,
+      );
   });
 
   test("every broken field is reported at once, and the name is still recovered", () => {
@@ -221,6 +243,7 @@ describe("the AGENT.md content rule", () => {
       effort: "xhigh" as const,
       denyTools: ["worktree_commit", "edit"],
       skills: ["castlabs-ui"],
+      inheritGrants: false,
       body: "\n\nRole instructions.\n\n",
     };
     const source = formatAgentManifest(input);
@@ -231,6 +254,7 @@ describe("the AGENT.md content rule", () => {
     assert.equal(parsed.manifest.effort, "xhigh");
     assert.deepEqual(parsed.manifest.denyTools, input.denyTools);
     assert.deepEqual(parsed.manifest.skills, input.skills);
+    assert.equal(parsed.manifest.inheritGrants, false);
     assert.equal(parsed.manifest.body.trim(), "Role instructions.");
     assert.equal(formatAgentManifest(input), source, "deterministic");
   });

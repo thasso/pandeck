@@ -130,7 +130,7 @@ describe("github review-thread resolution approvals", () => {
         title: id,
       });
     sessionStore.linkSpawned(parent, child);
-    grantApprovalForSession(parent, "github:comment");
+    grantApprovalForSession(parent, "github:comment", true);
     setAutoApprovalDrainForTests(async () => {});
     globalThis.fetch = vi.fn(
       async () =>

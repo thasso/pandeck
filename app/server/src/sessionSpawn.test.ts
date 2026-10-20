@@ -2894,6 +2894,111 @@ test("a definition edited during the spawn runs as the CURRENT one", async () =>
   });
 });
 
+test.each([
+  ["definition false, row unset", false, undefined, false],
+  ["row true over definition false", false, true, true],
+  ["row false over definition true", true, false, false],
+  ["no definition default, row unset", undefined, undefined, true],
+] as const)(
+  "a direct agent row's inheritance: %s",
+  async (label, definition, rowValue, inherits) => {
+    await useAgents();
+    writeAgent(definition === undefined ? {} : { inheritGrants: definition });
+    const worktreeId = `wt-agent-inherit-${label.replaceAll(" ", "-")}`;
+    activeWorktree(worktreeId);
+
+    const text = await spawnDirect([
+      agentRow({
+        worktreeId,
+        ...(rowValue === undefined ? {} : { inheritGrants: rowValue }),
+      }),
+    ]);
+
+    const id = String(recorded.claude[0]!.id);
+    expect(sessionStore.spawnGrantEdge(id)?.inherits).toBe(inherits);
+    expect(recorded.inheritsAtDelivery).toEqual([inherits]);
+    if (inherits) expect(text).not.toContain("doesn't inherit your approvals");
+    else expect(text).toContain("doesn't inherit your approvals");
+  },
+);
+
+test("a direct agent row takes its inheritance default from the definition it is created from", async () => {
+  await useAgents();
+  writeAgent({ inheritGrants: false });
+  activeWorktree("wt-agent-inherit-edit");
+  const real = worktreeResolve.resolveWorktreeRow;
+  let calls = 0;
+  vi.spyOn(worktreeResolve, "resolveWorktreeRow").mockImplementation(
+    async (id: string) => {
+      calls += 1;
+      if (calls === 2) writeAgent({ inheritGrants: true });
+      return await real(id);
+    },
+  );
+
+  const text = await spawnDirect([
+    agentRow({ worktreeId: "wt-agent-inherit-edit" }),
+  ]);
+
+  const id = String(recorded.claude[0]!.id);
+  expect(sessionStore.spawnGrantEdge(id)?.inherits).toBe(true);
+  expect(text).not.toContain("doesn't inherit your approvals");
+});
+
+test.each([
+  ["before approval", false],
+  ["before approval", true],
+  ["during the pi lookup", false],
+  ["during the pi lookup", true],
+] as const)(
+  "a proposed agent row's inheritance is fixed on the card: definition flipped %s from %s",
+  async (when, proposed) => {
+    await useAgents();
+    const researcher = { name: "researcher", persona: "assistant" };
+    writeAgent({ ...researcher, model: "sonnet", inheritGrants: proposed });
+    const { agentType: _persona, ...withoutPersona } = row();
+    const { card } = await propose([
+      {
+        ...withoutPersona,
+        agent: "researcher",
+        ...(when === "during the pi lookup"
+          ? { provider: "openai-codex", modelId: "gpt-5" }
+          : {}),
+      },
+    ]);
+    if (proposed)
+      expect(bodyOf(card).items[0]).not.toHaveProperty("inheritGrants");
+    else expect(bodyOf(card).items[0]?.inheritGrants).toBe(false);
+
+    const flip = () =>
+      writeAgent({ ...researcher, model: "sonnet", inheritGrants: !proposed });
+    if (when === "before approval") flip();
+    else duringPiLookup = flip;
+
+    const { card: done } = await resolveApproval(card.id, "approved");
+
+    expect(done.status).toBe("executed");
+    const child = bodyOf(done).items[0]!.resultSessionId!;
+    expect(sessionStore.spawnGrantEdge(child)?.inherits).toBe(proposed);
+    expect(recorded.inheritsAtDelivery).toEqual([proposed]);
+  },
+);
+
+test("an explicit row value beats a proposed agent's definition default", async () => {
+  await useAgents();
+  writeAgent({
+    name: "researcher",
+    persona: "assistant",
+    model: "sonnet",
+    inheritGrants: false,
+  });
+  const { agentType: _persona, ...withoutPersona } = row();
+  const { card } = await propose([
+    { ...withoutPersona, agent: "researcher", inheritGrants: true },
+  ]);
+  expect(bodyOf(card).items[0]).not.toHaveProperty("inheritGrants");
+});
+
 test('operation "agents" is bounded like agent_list, with the true total', () => {
   const agents = Array.from({ length: 260 }, (_, at) => ({
     name: `agent-${at}`,
