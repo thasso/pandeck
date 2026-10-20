@@ -181,13 +181,26 @@ export type RuntimeState = "running" | "idle" | "not_loaded";
 
 /** Best-effort live/running overlay (never opens a log or provider file). */
 export async function runtimeStateFor(id: string): Promise<RuntimeState> {
+  return (await runtimeStateReader())(id);
+}
+
+/**
+ * A SYNCHRONOUS runtime-state read, once the hub is loaded: for a caller that
+ * must read state in the same step as the decision it informs (the direct
+ * concurrency count), with no await between them.
+ */
+export async function runtimeStateReader(): Promise<
+  (id: string) => RuntimeState
+> {
   try {
     const { hub } = await import("../../hub.ts");
-    const live = hub.getLiveById(id);
-    if (!live) return "not_loaded";
-    return live.isRunning ? "running" : "idle";
+    return (id) => {
+      const live = hub.getLiveById(id);
+      if (!live) return "not_loaded";
+      return live.isRunning ? "running" : "idle";
+    };
   } catch {
-    return "not_loaded";
+    return () => "not_loaded";
   }
 }
 

@@ -39,6 +39,7 @@ import {
 } from "../../pendingApprovals.ts";
 import { MAX_PEER_PROMPT_CHARS } from "../../peerPrompt.ts";
 import {
+  directPeerTurnCapOf,
   directSpawnReportingSuffix,
   peerRuntimeRoster,
   PeerRuntimeRefusedError,
@@ -66,7 +67,7 @@ function makeSessionSpawnTool() {
     name: "session_spawn",
     label: "Spawn Sessions",
     description:
-      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, the models it may run on and an effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` starts sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions on a model it lists, and returns their session ids; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each child is an ordinary conversation the user can watch and take over. Use this for work that deserves its own session, not small tasks. Choose owner "user" for work the user will run or follow themselves; those sessions go to their inbox and owe you no reply. Default owner "coordinator" is for helpers whose results you need to continue, such as your implementer and reviewer. YOU own those helpers: keep their ids, expect peer replies, chase quiet ones, and use session_control to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
+      'Start NEW app sessions to work alongside you — an implementer and a reviewer, say. `operation: "profiles"` shows which runtimes the user pre-approved, each with its model family, user-set relative cost and optional selection hint; a second read-only operation shows the user\'s named role definitions (a test reviewer, say, each with its own instructions, the models it may run on and an effort; see `operation`); both are read-only and remain available in Plan mode. `operation: "spawn"` creates sessions IMMEDIATELY on those exact approved runtimes or as one of those definitions on a model it lists, and returns their session ids; a counted row over your concurrency cap is created but waits for a slot and starts by itself, in order; `spawn` and `propose` are Build-only. `operation: "propose"` is for anything else: it creates nothing, puts one card in front of the user who picks each runtime, and you end your turn and continue when the decision arrives. Each child is an ordinary conversation the user can watch and take over. Use this for work that deserves its own session, not small tasks. Choose owner "user" for work the user will run or follow themselves; those sessions go to their inbox and owe you no reply. Default owner "coordinator" is for helpers whose results you need to continue, such as your implementer and reviewer. YOU own those helpers: keep their ids, expect peer replies, chase quiet ones, and use session_control to stop a still-owned child or clear queued work. Route review findings back to the implementer and re-review until the reviewer passes the exact target or you escalate to the user. Never poll or sleep waiting for them, and never read a silent session as a success.',
     searchHint:
       "spawn start delegate implementer reviewer parallel helpers approved runtimes profiles cross-family review named role definitions",
     parameters: {
@@ -84,7 +85,7 @@ function makeSessionSpawnTool() {
           type: "array",
           minItems: 1,
           maxItems: MAX_SPAWN_ROWS,
-          description: `The sessions, at most ${MAX_SPAWN_ROWS}. Your session's concurrent peer turn cap applies (default 4, user-set in the inspector); runtimes the user marked low cost don't count and have no bound. Required for "spawn" and "propose", forbidden for "profiles" and "agents".`,
+          description: `The sessions, at most ${MAX_SPAWN_ROWS}. Your session's concurrent peer turn cap applies (default 4, user-set in the inspector); over-cap counted rows wait for a slot instead of being refused; runtimes the user marked low cost don't count and have no bound. Required for "spawn" and "propose", forbidden for "profiles" and "agents".`,
           items: {
             type: "object",
             additionalProperties: false,
@@ -394,13 +395,22 @@ async function runDirectSpawn(
     throw err;
   }
   return {
-    content: [{ type: "text" as const, text: directSpawnText(results) }],
+    content: [
+      {
+        type: "text" as const,
+        text: directSpawnText(
+          results,
+          directPeerTurnCapOf(ctx.session.sessionId),
+        ),
+      },
+    ],
   };
 }
 
 /** Every id and runtime, so the coordinator can address and compare them. */
-function directSpawnText(results: DirectSpawnRowResult[]): string {
-  const started = results.filter((row) => row.sessionId);
+function directSpawnText(results: DirectSpawnRowResult[], cap: number): string {
+  const created = results.filter((row) => row.sessionId);
+  const waiting = created.filter((row) => row.waitingForSlot);
   const lines = results.map((row) => {
     const runtime = row.runtime
       ? `${row.runtime.name} (${row.runtime.provider}/${row.runtime.modelId}, ${row.runtime.thinkingLevel} thinking, family ${row.runtime.family}${
@@ -416,22 +426,34 @@ function directSpawnText(results: DirectSpawnRowResult[]): string {
     return `- "${row.title}" → session ${row.sessionId} on ${runtime}, owner ${row.owner}${
       row.inheritGrants === false ? ", doesn't inherit your approvals" : ""
     }${row.runtime?.modelFallbackReason ? `; ${row.runtime.modelFallbackReason}` : ""}${
+      row.waitingForSlot
+        ? `, waiting for a slot (position ${row.waitingForSlot.position})`
+        : ""
+    }${
       row.error ? ` — created, but its opening prompt failed: ${row.error}` : ""
     }`;
   });
+  const started = created.length - waiting.length;
   const head =
-    started.length === 0
+    created.length === 0
       ? "No session was started."
-      : `Started ${started.length} session${started.length === 1 ? "" : "s"}.`;
+      : `Started ${started} session${started === 1 ? "" : "s"}${
+          waiting.length > 0 ? `; ${waiting.length} waiting for a slot` : ""
+        }.`;
   return [
     head,
     ...lines,
-    ...(started.some((row) => row.owner === "coordinator")
+    ...(waiting.length > 0
+      ? [
+          `Your cap is ${cap} concurrent counted peer turns; the user can raise it in the session inspector. Waiting sessions start by themselves, in order, as your running children finish or the cap is raised. One may instead be refused, with a notice to you, if its approval is withdrawn meanwhile. To cancel one, use session_control cancel_queued_prompts (or stop with clearQueue).`,
+        ]
+      : []),
+    ...(created.some((row) => row.owner === "coordinator")
       ? [
           "Coordinator-owned sessions were told to report back to you with session_send_prompt. Keep these ids: nothing else will tell you how they finish, an idle session is not a success, and closing the loop — chasing a quiet one, handing findings back, re-reviewing, or stopping a still-owned child with session_control — is yours.",
         ]
       : []),
-    ...(started.some((row) => row.owner === "user")
+    ...(created.some((row) => row.owner === "user")
       ? ["User-owned sessions are in the user's inbox; they owe you no report."]
       : []),
   ].join("\n");

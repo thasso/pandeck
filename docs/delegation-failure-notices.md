@@ -71,11 +71,12 @@ records them `stopped` and owes their senders nothing
 
 Only sessions with durable evidence that they wait on this child:
 
-| Route     | Evidence                                                                                              | Also required                                                                                            |
-| --------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `spawn`   | the child's `spawned` edge, ownership `coordinator`                                                   | neither side settled, unless the coordinator has a request open in the child (in its turn or unanswered) |
-| `request` | a peer prompt from that session the child holds as `awaiting_response` (its turn ended, no reply yet) | the failed turn was not itself a notice turn                                                             |
-| delivery  | the sender of the abandoned peer prompt                                                               | it asked for a reply, or it is the spawning coordinator that still owns the child                        |
+| Route         | Evidence                                                                                                | Also required                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `spawn`       | the child's `spawned` edge, ownership `coordinator`                                                     | neither side settled, unless the coordinator has a request open in the child (in its turn or unanswered) |
+| `request`     | a peer prompt from that session the child holds as `awaiting_response` (its turn ended, no reply yet)   | the failed turn was not itself a notice turn                                                             |
+| delivery      | the sender of the abandoned peer prompt                                                                 | it asked for a reply, or it is the spawning coordinator that still owns the child                        |
+| refused start | the spawner of a directly spawned child whose opening prompt waited for a slot and was refused at start | nothing else: any ownership, with or without `responseRequested`                                         |
 
 Never the grandparent or any other ancestor, never an arbitrary peer, never the
 child itself. A taken-over child (`taken-over` or `unknown` ownership) has no
@@ -101,7 +102,25 @@ requests were since answered, settled, withdrawn or expired. If that changes the
 set while a turn is being admitted, the turn is refused before anything is
 appended and rebuilt.
 
-## The durable boundary
+### A start refused for a child waiting for a slot
+
+A directly spawned child created over its spawner's concurrency cap waits with
+its opening prompt `held` (`docs/agent-workflows.md`). Its approval is checked
+again before it starts; one no longer allowed is refused, and its spawner is
+told — the user decided (2026-10-19) that a withdrawn pre-approval must not
+silently swallow a child the spawner is counting on. The notice is recorded in
+the same transaction that moves the row `held → failed`
+(`peerPromptStore.refuseHeld`), incident key `held-start:<peer prompt id>`,
+route `spawn`, for every such child whatever its ownership or
+`responseRequested`, as long as both sessions are live user sessions. At
+delivery it is dropped only when either session was deleted or archived since: a
+takeover, a Hand back, a settlement or a withdrawn reply request does not end
+it. Cancelling a waiting child is silent: the spawner's cancellation, the user's
+withdrawal, `stop` with `clearQueue`, and the cancellation that comes with
+deleting or archiving a session record no notice.
+
+A stored category this build does not know is never rendered; the notice is
+dropped as `unknown category`.
 
 The runtime calls its failure hook synchronously, once per run id, BEFORE
 anything else learns of the failure: on `runFailing` (before the harness's own
@@ -306,6 +325,23 @@ the user when unsure.
 | `content_policy` | provider kind `content_policy`                              |
 | `provider_error` | every other kind, and a harness that refused the prompt     |
 | `delivery`       | an abandoned delivery the reason does not name more closely |
+
+A refused start is worded apart from failures, under its own heading ("A session
+you spawned was waiting for a slot and was NOT started"), and never says a turn
+failed or a delivery was retried. One fixed sentence per category names the
+runtime by the roster row's current name (its id once the row is gone) or the
+definition by name, clipped, then says the opening prompt was not delivered and
+the session exists with no turn. The refused row carries a fixed reason of the
+same category.
+
+| Category                   | The child was not started because                                          |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `held_runtime_removed`     | the roster row it was spawned on is gone                                   |
+| `held_runtime_disabled`    | that row is disabled                                                       |
+| `held_runtime_changed`     | that row no longer approves its provider, model, thinking level or account |
+| `held_account_unavailable` | its account can no longer run its model, or no longer meets enterprise     |
+| `held_agent_removed`       | its agent definition is gone or unreadable                                 |
+| `held_agent_changed`       | its definition changed persona, or no longer lists its model at its effort |
 
 The kind comes from the harness as a structured field when it classified the
 error (`RunFailureFacts` on `runCompleted`, from `ProviderErrorInfo`); otherwise

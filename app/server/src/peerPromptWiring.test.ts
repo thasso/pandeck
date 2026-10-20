@@ -75,8 +75,8 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*idleEdge\.offer\(sessionId\)\s*\)/,
-    "the idle hook must run that chain",
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*idleEdge\.offer\(sessionId\);\s*\}\s*\)/,
+    "the idle hook must offer a freed direct slot, then run that chain",
   );
   assert.match(
     source,

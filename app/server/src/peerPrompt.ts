@@ -43,6 +43,7 @@ import {
 } from "@assistant/shared";
 import { notifySessionBlocked } from "./webPush.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { directPeerChildStore } from "./db/directPeerChildStore.ts";
 import {
   delegationFailureNoticeStore,
   type DelegationFailureNotice,
@@ -72,6 +73,7 @@ import {
   peerPromptStore,
   PeerPromptHopLimitError,
   PeerPromptRequestClosedError,
+  UNFINISHED_TURN_STATUSES,
   type PeerPromptRecord,
   type PeerPromptRecoveryDecision,
   type PeerPromptStatus,
@@ -113,7 +115,7 @@ const SENDER_TITLE_MAX = 80;
 const NOTICE_PROMPT_EXCERPT_MAX = 120;
 const LEASE_MS = 60_000;
 /** Unresolved reply expectations expire after 30 days. */
-const RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Completed/expired conversation detail is pruned after 90 days. */
 const PRUNE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 /** Bounds on the durable per-session history projection. */
@@ -204,6 +206,11 @@ export interface SendPeerPromptInput {
    * without them the reply is inferred ({@link resolveConversation}).
    */
   inReplyTo?: readonly string[];
+  /**
+   * A directly spawned child's opening prompt that waits for a slot: stored
+   * `held` at the queue position its admission allocated, and not drained.
+   */
+  hold?: { queueSeq: number };
 }
 
 export interface SendPeerPromptResult {
@@ -266,6 +273,7 @@ export async function sendPeerPrompt(
       ...(input.responseRequested
         ? { expiresAt: Date.now() + RESPONSE_TTL_MS }
         : {}),
+      ...(input.hold ? { held: input.hold } : {}),
     });
   } catch (err) {
     if (err instanceof PeerPromptHopLimitError) {
@@ -311,7 +319,9 @@ export async function sendPeerPrompt(
     if (original) void broadcastCardUpdateFor(original);
   }
   // Fire-and-forget delivery; the send call never blocks on the recipient turn.
-  if (autoDeliver) void drainRecipient(target.id).catch(() => {});
+  // A held prompt starts only through its coordinator's start pass.
+  if (autoDeliver && !input.hold)
+    void drainRecipient(target.id).catch(() => {});
   return { message, card };
 }
 
@@ -375,15 +385,35 @@ export interface CancelQueuedPeerPromptsInput {
 export function cancelQueuedPeerPrompts(
   input: CancelQueuedPeerPromptsInput,
 ): PeerPromptRecord[] {
+  const held = new Set(
+    peerPromptStore
+      .listUndeliveredForRecipient(input.recipientSessionId)
+      .filter((r) => r.status === "held")
+      .map((r) => r.id),
+  );
   const cancelled = peerPromptStore.cancelPending(
     input.recipientSessionId,
     input.reason,
     input.senderSessionId,
   );
-  if (cancelled.length === 0) return [];
-  void broadcastParticipants(cancelled);
-  for (const message of cancelled) void broadcastCardUpdateFor(message);
+  broadcastPeerPromptChanges(cancelled);
+  // A cancelled held opener was the drain's barrier for what queued behind it.
+  if (cancelled.some((r) => held.has(r.id)))
+    void drainRecipient(input.recipientSessionId).catch(() => {});
   return cancelled;
+}
+
+/**
+ * The projections every lifecycle change owes: both participants' session
+ * state and each row's cards. For transitions made outside this module (a held
+ * opening prompt started, refused or cancelled, `heldDirectPeers.ts`).
+ */
+export function broadcastPeerPromptChanges(
+  rows: readonly PeerPromptRecord[],
+): void {
+  if (rows.length === 0) return;
+  void broadcastParticipants([...rows]);
+  for (const message of rows) void broadcastCardUpdateFor(message);
 }
 
 /* ---------------------------- the composer queue ---------------------------- */
@@ -400,8 +430,9 @@ const LOG_UNREADABLE_REASON =
   "The recipient's log could not be read to check for an earlier delivery.";
 
 /**
- * What still waits for a recipient, as its composer queue shows it: queued,
- * retrying, or being dispatched (a steer the turn has not read yet).
+ * What still waits for a recipient, as its composer queue shows it: waiting for
+ * a slot, queued, retrying, or being dispatched (a steer the turn has not read
+ * yet).
  */
 function queuedPeerPromptsFor(recipientId: string): QueuedPeerPrompt[] {
   return peerPromptStore.listUndeliveredForRecipient(recipientId).map((r) => ({
@@ -413,6 +444,7 @@ function queuedPeerPromptsFor(recipientId: string): QueuedPeerPrompt[] {
     createdAt: r.createdAt,
     ...(r.status === "retryable_failed" ? { retrying: true as const } : {}),
     ...(r.status === "dispatching" ? { sending: true as const } : {}),
+    ...(r.status === "held" ? { waitingForSlot: true as const } : {}),
   }));
 }
 
@@ -471,12 +503,20 @@ export function withdrawQueuedPeerPrompt(
   if (!cancelled) throw new Error("That message is already being delivered.");
   void broadcastParticipants([cancelled]);
   void broadcastCardUpdateFor(cancelled);
+  // A withdrawn opening prompt that waited for a slot was the drain's barrier:
+  // what was queued behind it is deliverable now.
+  if (row.status === "held") void drainRecipient(recipientId).catch(() => {});
 }
 
 /**
  * The recipient's user sends a waiting peer prompt now: as a steer into a
  * running turn that takes one, else as the next turn of an idle session —
  * ahead of the user's own queue, because they asked for this one.
+ *
+ * An opening prompt waiting for a slot goes past its coordinator's cap and
+ * FIFO — the user's authority — but not past the approval it was spawned
+ * under: one no longer allowed is refused, with the coordinator's notice, and
+ * the user is told why.
  */
 export async function sendQueuedPeerPromptNow(
   recipientId: string,
@@ -491,6 +531,14 @@ export async function sendQueuedPeerPromptNow(
     if (deliveryStopped) return;
     const row = undeliveredByKey(recipientId, key);
     if (!row || row.status === "dispatching") return;
+    let expiresAt: number | null | undefined;
+    if (row.status === "held") {
+      // Dynamic: the held-start module drives this one.
+      const held = await import("./heldDirectPeers.ts");
+      await held.assertHeldStartAllowed(row);
+      // The reply deadline runs from the start, not from the spawn.
+      expiresAt = row.responseRequested ? Date.now() + RESPONSE_TTL_MS : null;
+    }
     const hub = await getHub();
     const live =
       hub.getLiveById(recipientId) ?? (await hub.acquireById(recipientId));
@@ -508,6 +556,8 @@ export async function sendQueuedPeerPromptNow(
     const claimed = peerPromptStore.claimOne(
       row.id,
       steer ? "steer" : "send-now",
+      Date.now(),
+      expiresAt,
     );
     if (!claimed) return;
     // Claimed as the next turn: the user's choice is accepted, and its turn's
@@ -1163,7 +1213,7 @@ export function installDelegationFailureNotices(): () => void {
   };
 }
 
-function wakeForNotice(sessionIds: Iterable<string>): void {
+export function wakeForNotice(sessionIds: Iterable<string>): void {
   for (const id of sessionIds) {
     if (drainLocks.has(id)) noticeWakesPending.add(id);
     void drainRecipient(id).catch(() => {});
@@ -2358,6 +2408,7 @@ export function buildEnvelope(batch: PeerPromptRecord[]): string {
 
 function cardState(status: PeerPromptStatus): PeerPromptState {
   switch (status) {
+    case "held":
     case "queued":
     case "dispatching":
       return "queued";
@@ -2535,6 +2586,8 @@ function aggregateCardState(rows: PeerPromptRecord[]): PeerPromptState {
 async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
   // Every transition passes here, so the recipient's composer queue follows.
   publishPeerQueue(m.recipientSessionId);
+  // ...and so does a slot freed for its coordinator's waiting children.
+  offerFreedDirectSlot(m);
   const effectiveHeadId = m.batchHeadId ?? m.id;
   const members = peerPromptStore.listByBatchHead(
     m.recipientSessionId,
@@ -2566,6 +2619,23 @@ async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
       aggregateSettleReason,
     ),
   ]);
+}
+
+/**
+ * A coordinator's row to its direct child left the statuses that occupy a slot
+ * (finished, failed, cancelled, withdrawn): its waiting children may start.
+ */
+function offerFreedDirectSlot(m: PeerPromptRecord): void {
+  if (m.status === "held" || UNFINISHED_TURN_STATUSES.includes(m.status))
+    return;
+  if (
+    directPeerChildStore.spawnerOf(m.recipientSessionId) !== m.senderSessionId
+  )
+    return;
+  // Dynamic: the held-start module drives this one.
+  void import("./heldDirectPeers.ts")
+    .then((held) => held.startHeldDirectPeers(m.senderSessionId))
+    .catch(() => {});
 }
 
 /** Broadcast every batched row's own (batch-aware) card update; see {@link broadcastCardUpdateFor}. */

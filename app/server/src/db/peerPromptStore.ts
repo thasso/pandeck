@@ -18,6 +18,13 @@ import { sessionStore } from "./sessionStore.ts";
 import type { PeerPromptHopRefusal } from "@assistant/shared";
 
 export type PeerPromptStatus =
+  /**
+   * A directly spawned child's opening prompt waiting for a slot under its
+   * coordinator's concurrency cap (`heldDirectPeers.ts`). Never drained, and no
+   * turn: it leaves only by promotion to `queued`, refusal to `failed`, or
+   * cancellation.
+   */
+  | "held"
   | "queued"
   | "dispatching"
   | "admitted"
@@ -501,6 +508,12 @@ interface RoutedEnqueueInput {
   participants: string[];
   /** Loop-guard bound; reservation exceeding this rolls back without incrementing. */
   maxHops: number;
+  /**
+   * Insert the row `held` at a queue position allocated when its spawn was
+   * admitted ({@link allocateQueueSeq}), not now: FIFO among a coordinator's
+   * waiting children follows admission order, whichever creation finishes first.
+   */
+  held?: { queueSeq: number };
 }
 
 const INSERT_MESSAGE_SQL = `
@@ -508,7 +521,7 @@ const INSERT_MESSAGE_SQL = `
     id, conversation_id, chain_id, hop, queue_seq, sender_session_id, recipient_session_id,
     task_id, prompt, response_requested, status, attempts, sender_label, task_label,
     reply_to_message_id, created_at_ms, updated_at_ms, expires_at_ms, transitions_json
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
 `;
 
 function ensureChain(
@@ -567,7 +580,8 @@ function enqueueRouted(
     );
     for (const p of input.participants) addParticipantStmt.run(chainId, p, now);
     const id = `pp_${now}_${randomUUID().slice(0, 8)}`;
-    const queueSeq = nextId("peer_prompt_seq");
+    const queueSeq = input.held?.queueSeq ?? nextId("peer_prompt_seq");
+    const status: PeerPromptStatus = input.held ? "held" : "queued";
     db.prepare(INSERT_MESSAGE_SQL).run(
       id,
       input.conversationId,
@@ -579,13 +593,14 @@ function enqueueRouted(
       input.taskId ?? null,
       input.prompt,
       input.responseRequested ? 1 : 0,
+      status,
       input.senderLabel ?? null,
       input.taskLabel ?? null,
       input.replyToMessageId ?? null,
       now,
       now,
       input.expiresAt ?? null,
-      JSON.stringify([{ to: "queued", at: now }]),
+      JSON.stringify([{ to: status, at: now }]),
     );
     const closed = (input.markRepliedIds ?? []).filter(
       (requestId) =>
@@ -668,6 +683,8 @@ type TransitionPatch = Partial<{
   repliedAt: number;
   repliedByMessageId: string;
   settleReason: string;
+  /** A request's reply deadline, restarted when a held opening prompt starts. */
+  expiresAt: number | null;
   bumpAttempts: boolean;
   /** Give back the attempt a claim took, for a delivery that never failed. */
   refundAttempt: boolean;
@@ -752,6 +769,10 @@ function transitionInTxn(
     sets.push("settle_reason = ?");
     params.push(patch.settleReason);
   }
+  if (patch.expiresAt !== undefined) {
+    sets.push("expires_at_ms = ?");
+    params.push(patch.expiresAt);
+  }
   if (patch.bumpAttempts) sets.push("attempts = attempts + 1");
   if (patch.refundAttempt) sets.push("attempts = MAX(attempts - 1, 0)");
   if (patch.clearBatchHead) sets.push("batch_head_id = NULL");
@@ -791,6 +812,16 @@ function transition(
 }
 
 /**
+ * The automatic drain's barrier: a `held` opening prompt is the first thing its
+ * child receives, so nothing queued after it is claimed until it starts (the
+ * user's out-of-order {@link claimOne} still is).
+ */
+const BEFORE_HELD = ` AND NOT EXISTS (
+  SELECT 1 FROM peer_prompts h
+   WHERE h.recipient_session_id = peer_prompts.recipient_session_id
+     AND h.status = 'held' AND h.queue_seq < peer_prompts.queue_seq)`;
+
+/**
  * Atomically claim the oldest queued prompt for a recipient into `dispatching`
  * with a lease. Returns undefined when the queue is empty.
  */
@@ -805,7 +836,7 @@ function claimNext(
   try {
     const row = db
       .prepare(
-        "SELECT id FROM peer_prompts WHERE recipient_session_id = ? AND status = 'queued' ORDER BY queue_seq LIMIT 1",
+        `SELECT id FROM peer_prompts WHERE recipient_session_id = ? AND status = 'queued'${BEFORE_HELD} ORDER BY queue_seq LIMIT 1`,
       )
       .get(recipientSessionId) as { id: string } | undefined;
     if (!row) {
@@ -847,7 +878,7 @@ function claimBatch(
   try {
     const rows = db
       .prepare(
-        "SELECT * FROM peer_prompts WHERE recipient_session_id = ? AND status = 'queued' ORDER BY queue_seq",
+        `SELECT * FROM peer_prompts WHERE recipient_session_id = ? AND status = 'queued'${BEFORE_HELD} ORDER BY queue_seq`,
       )
       .all(recipientSessionId) as unknown as Row[];
     const batch: Row[] = [];
@@ -1215,7 +1246,7 @@ function cancelPending(
       .prepare(
         `SELECT id FROM peer_prompts
           WHERE recipient_session_id = ?${senderClause}
-            AND status IN ('queued', 'retryable_failed')
+            AND status IN ('held', 'queued', 'retryable_failed')
           ORDER BY queue_seq`,
       )
       .all(...(params as never[])) as { id: string }[];
@@ -1225,7 +1256,7 @@ function cancelPending(
         transitionInTxn(
           db,
           row.id,
-          ["queued", "retryable_failed"],
+          ["held", "queued", "retryable_failed"],
           "cancelled",
           {
             failureReason: reason,
@@ -1253,16 +1284,23 @@ function cancelPending(
  * so deliver twice — a row that turn may still take. Boot recovery reconciles
  * a stranded one like any other `dispatching` row.
  */
-const claimOne = (id: string, leaseOwner: string, now = Date.now()) =>
+const claimOne = (
+  id: string,
+  leaseOwner: string,
+  now = Date.now(),
+  /** A held opening prompt's reply deadline, restarted as it starts. */
+  expiresAt?: number | null,
+) =>
   transition(
     id,
-    ["queued", "retryable_failed"],
+    ["held", "queued", "retryable_failed"],
     "dispatching",
     {
       leaseOwner,
       leaseExpiresAt: null,
       nextAttemptAt: null,
       bumpAttempts: true,
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
     },
     now,
   );
@@ -1271,7 +1309,7 @@ const claimOne = (id: string, leaseOwner: string, now = Date.now()) =>
 const cancelOne = (id: string, reason: string, now = Date.now()) =>
   transition(
     id,
-    ["queued", "retryable_failed"],
+    ["held", "queued", "retryable_failed"],
     "cancelled",
     {
       failureReason: reason,
@@ -1279,6 +1317,137 @@ const cancelOne = (id: string, reason: string, now = Date.now()) =>
       leaseExpiresAt: null,
       nextAttemptAt: null,
     },
+    now,
+  );
+
+/** A position in the peer FIFO, taken when a held spawn is admitted. */
+const allocateQueueSeq = (): number => nextId("peer_prompt_seq");
+
+/**
+ * Start a held opening prompt: `held → queued`, restarting a request's reply
+ * deadline. A compare-and-set, so an earlier withdrawal wins and this answers
+ * undefined. Queuing is not delivery: the row stays cancellable until claimed.
+ */
+const promoteHeld = (id: string, expiresAt: number | null, now = Date.now()) =>
+  transition(id, ["held"], "queued", { expiresAt }, now);
+
+/**
+ * Refuse a held opening prompt for good: `held → failed` with `reason`, and
+ * `onRefused` (the spawner's notice) in the same transaction, so the refusal
+ * and its notice commit together or not at all. Undefined when the row was no
+ * longer held.
+ */
+function refuseHeld(
+  id: string,
+  reason: string,
+  onRefused: (refused: PeerPromptRecord) => void,
+  now = Date.now(),
+): PeerPromptRecord | undefined {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const ok = transitionInTxn(
+      db,
+      id,
+      ["held"],
+      "failed",
+      { failureReason: reason },
+      now,
+    );
+    const refused = ok ? map(getRow(id)!) : undefined;
+    if (refused) onRefused(refused);
+    db.exec("COMMIT");
+    return refused;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/** One sender's held rows, oldest admission first. */
+function heldFrom(senderSessionId: string): PeerPromptRecord[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT * FROM peer_prompts WHERE sender_session_id = ? AND status = 'held' ORDER BY queue_seq",
+      )
+      .all(senderSessionId) as unknown as Row[]
+  ).map(map);
+}
+
+/** Every sender with a held row, for the boot pass. */
+function heldSenderIds(): string[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT DISTINCT sender_session_id FROM peer_prompts WHERE status = 'held'",
+      )
+      .all() as { sender_session_id: string }[]
+  ).map((r) => r.sender_session_id);
+}
+
+function cancelHeldWhere(
+  where: string,
+  params: string[],
+  reason: string,
+  now: number,
+): PeerPromptRecord[] {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const rows = db
+      .prepare(
+        `SELECT id FROM peer_prompts WHERE status = 'held' AND (${where}) ORDER BY queue_seq`,
+      )
+      .all(...params) as { id: string }[];
+    const cancelled: PeerPromptRecord[] = [];
+    for (const row of rows)
+      if (
+        transitionInTxn(
+          db,
+          row.id,
+          ["held"],
+          "cancelled",
+          { failureReason: reason },
+          now,
+        )
+      )
+        cancelled.push(map(getRow(row.id)!));
+    db.exec("COMMIT");
+    return cancelled;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+/** A deleted session's held rows, whichever side it is on. */
+const cancelHeldInvolving = (
+  sessionId: string,
+  reason: string,
+  now = Date.now(),
+) =>
+  cancelHeldWhere(
+    "sender_session_id = ? OR recipient_session_id = ?",
+    [sessionId, sessionId],
+    reason,
+    now,
+  );
+
+/**
+ * An archived session's incoming held row. Its outgoing ones stay: an
+ * archived coordinator's children may still start, and restoring it is the
+ * user's own way back.
+ */
+const cancelHeldTo = (
+  recipientSessionId: string,
+  reason: string,
+  now = Date.now(),
+) =>
+  cancelHeldWhere(
+    "recipient_session_id = ?",
+    [recipientSessionId],
+    reason,
     now,
   );
 
@@ -1419,16 +1588,16 @@ function queuedRecipientIds(): string[] {
 }
 
 /**
- * Distinct recipient ids with peer prompts still on their way in: queued,
- * mid-delivery (`dispatching`), or waiting out a retry backoff
- * (`retryable_failed`). The session list's `queuedWork` — a reply still being
+ * Distinct recipient ids with peer prompts still on their way in: waiting for
+ * a slot (`held`), queued, mid-delivery (`dispatching`), or waiting out a retry
+ * backoff (`retryable_failed`). The session list's `queuedWork` — a reply still being
  * delivered is coming without a poke, so a quiet tree is not stalled on it.
  */
 function pendingDeliveryRecipientIds(): string[] {
   return (
     getDb()
       .prepare(
-        "SELECT DISTINCT recipient_session_id FROM peer_prompts WHERE status IN ('queued', 'dispatching', 'retryable_failed')",
+        "SELECT DISTINCT recipient_session_id FROM peer_prompts WHERE status IN ('held', 'queued', 'dispatching', 'retryable_failed')",
       )
       .all() as { recipient_session_id: string }[]
   ).map((r) => r.recipient_session_id);
@@ -1658,14 +1827,14 @@ function listPendingForRecipient(
   ).map(map);
 }
 
-/** Every row not delivered to the recipient yet, in delivery order: waiting, retrying, or being dispatched. */
+/** Every row not delivered to the recipient yet, in delivery order: held, waiting, retrying, or being dispatched. */
 function listUndeliveredForRecipient(
   recipientSessionId: string,
 ): PeerPromptRecord[] {
   return (
     getDb()
       .prepare(
-        "SELECT * FROM peer_prompts WHERE recipient_session_id = ? AND status IN ('queued', 'retryable_failed', 'dispatching') ORDER BY queue_seq",
+        "SELECT * FROM peer_prompts WHERE recipient_session_id = ? AND status IN ('held', 'queued', 'retryable_failed', 'dispatching') ORDER BY queue_seq",
       )
       .all(recipientSessionId) as unknown as Row[]
   ).map(map);
@@ -1677,7 +1846,7 @@ function listUndeliveredForRecipient(
  * running. `completed`/`awaiting_response` are post-turn bookkeeping, and
  * `retryable_failed` is not running now — its retry re-enters as `queued`.
  */
-const UNFINISHED_TURN_STATUSES: PeerPromptStatus[] = [
+export const UNFINISHED_TURN_STATUSES: readonly PeerPromptStatus[] = [
   "queued",
   "dispatching",
   "admitted",
@@ -1685,22 +1854,31 @@ const UNFINISHED_TURN_STATUSES: PeerPromptStatus[] = [
 ];
 
 /**
- * How many turns this sender has queued or running in that recipient right now.
+ * How many turns this sender has queued or running in that recipient right
+ * now, for the direct concurrency cap ([Task-595](pa://task/595)): a freshly
+ * created child's runtime does not read as `running` until its queued prompt
+ * is actually picked up, and a budget that cannot see the queue would let a
+ * second batch claim the same slots during that window.
  *
- * The concurrency accounting for directly spawned peers
- * ([Task-595](pa://task/595)) needs this: a freshly created child's runtime does
- * not read as `running` until its queued prompt is actually picked up, and a
- * budget that cannot see the queue would let a second batch claim the same
- * slots during that window.
+ * What cannot run yet is left out: a `held` row never counts, nor does a
+ * `queued` one behind a held opening prompt (the drain claims nothing past
+ * it). Dispatching, admitted and acknowledged rows always count: their turn is
+ * under way.
  */
-function unfinishedTurnCount(
+function activeTurnCount(
   senderSessionId: string,
   recipientSessionId: string,
 ): number {
   const placeholders = UNFINISHED_TURN_STATUSES.map(() => "?").join(", ");
   const row = getDb()
     .prepare(
-      `SELECT COUNT(*) AS n FROM peer_prompts WHERE sender_session_id = ? AND recipient_session_id = ? AND status IN (${placeholders})`,
+      `SELECT COUNT(*) AS n FROM peer_prompts
+        WHERE sender_session_id = ? AND recipient_session_id = ?
+          AND status IN (${placeholders})
+          AND NOT (status = 'queued' AND EXISTS (
+            SELECT 1 FROM peer_prompts h
+             WHERE h.recipient_session_id = peer_prompts.recipient_session_id
+               AND h.status = 'held' AND h.queue_seq < peer_prompts.queue_seq))`,
     )
     .get(senderSessionId, recipientSessionId, ...UNFINISHED_TURN_STATUSES) as {
     n: number;
@@ -2264,6 +2442,11 @@ export const peerPromptStore = {
   markExpired,
   cancelPending,
   cancelOne,
+  allocateQueueSeq,
+  promoteHeld,
+  refuseHeld,
+  cancelHeldInvolving,
+  cancelHeldTo,
   markSenderNotified,
   markReminded,
   // reads
@@ -2280,7 +2463,9 @@ export const peerPromptStore = {
   senderIdsOwingNotice,
   listPendingForRecipient,
   listUndeliveredForRecipient,
-  unfinishedTurnCount,
+  heldFrom,
+  heldSenderIds,
+  activeTurnCount,
   outstandingResponseRequestCount,
   outstandingRepliesBySender,
   listByConversation,

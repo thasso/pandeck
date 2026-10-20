@@ -217,6 +217,11 @@ import {
   sweepPeerPromptRetries,
 } from "./peerPrompt.ts";
 import {
+  installHeldDirectPeerStarts,
+  nudgeHeldStartsForChild,
+  startHeldDirectPeersOnBoot,
+} from "./heldDirectPeers.ts";
+import {
   agentHandoffOwed,
   drainAgentHandoffs,
   recoverAgentHandoffsOnBoot,
@@ -1901,6 +1906,8 @@ server.listen(PORT, HOST, () => {
   // A delegated child's failed turn becomes a durable notice for the
   // coordinator waiting on it, recorded before the run's closing marker.
   installDelegationFailureNotices();
+  // A raised peer-turn cap starts the waiting children it now has room for.
+  installHeldDirectPeerStarts();
   // An idle session is reminded of the peer requests it has not answered;
   // the limit decides which of them the session list shows as still owed.
   installReplyReminders();
@@ -2050,7 +2057,11 @@ server.listen(PORT, HOST, () => {
     // who owns a spawned session: that is the explicit Take over command.
     closeChainsForHumanPrompt,
   );
-  setSessionIdleHook((sessionId) => idleEdge.offer(sessionId));
+  setSessionIdleHook((sessionId) => {
+    // A direct child that went idle may free its coordinator's slot.
+    nudgeHeldStartsForChild(sessionId);
+    idleEdge.offer(sessionId);
+  });
   setAutomaticTurnHoldHost({
     changed: (sessionId) => publishPromptQueue(sessionId),
     resumed: (sessionId) => {
@@ -2078,6 +2089,9 @@ server.listen(PORT, HOST, () => {
   bootStep("agent-handoff recovery", () => recoverAgentHandoffsOnBoot());
   bootStep("prompt-queue drain", () => drainPromptQueuesOnBoot());
   bootStep("peer-prompt drain", () => drainAllQueuedOnBoot());
+  // After recovery and the idle wiring: children that waited for a slot across
+  // the restart start as the surviving work allows.
+  bootStep("held direct peer starts", () => startHeldDirectPeersOnBoot());
   // A failure backlog beyond what boot recorded drains in yielding batches.
   bootStep("failure-journal backlog", () => drainJournaledFailureBacklog());
   bootStep("settings sign-in cards", () => watchSignInCards());

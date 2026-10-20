@@ -10,7 +10,7 @@
  * - whether ONE named row can run RIGHT NOW, exactly as approved
  *   (`resolveApprovedPeerRuntime`) — model and thinking never substitute; an
  *   account is routed only when the human approved Automatic, never for a pin;
- * - whether a coordinator may start another direct peer turn at this moment
+ * - whether a coordinator's next direct peer turns start now or wait for a slot
  *   (`admitDirectPeerTurns`), a per-session cap excluding user-marked low-cost turns.
  *
  * It knows nothing about the subagent registry and must never import it: what
@@ -40,9 +40,13 @@ import {
 import { pickAccount } from "./accountRouter.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
+import {
+  directPeerChildStore,
+  type DirectPeerChild,
+} from "./db/directPeerChildStore.ts";
 import { modelsForAccount } from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
-import { runtimeStateFor } from "./tools/sessions/sessionInspection.ts";
+import { runtimeStateReader } from "./tools/sessions/sessionInspection.ts";
 
 /**
  * How many counted peer turns one coordinator may have RUNNING at once through
@@ -58,12 +62,31 @@ export function directPeerTurnCapOf(sessionId: string): number {
  * User/approval-only domain writer, never an agent tool. Validation and persistence
  * do not yield: approval executors can compare and set in one synchronous step.
  * The caller owns session-list notification, so this writer never loads the hub.
+ *
+ * A raised cap applies at once: the coordinator's waiting children start, in
+ * order, through the ordinary start pass — scheduled here through
+ * {@link setPeerTurnCapChangedHook}, never awaited. A lowered one stops
+ * nothing; it only gates the next starts.
  */
 export function setSessionPeerTurnCap(
   sessionId: string,
   cap: number | null,
 ): void {
   sessionStore.setPeerTurnCap(sessionId, cap);
+  capChanged?.(sessionId);
+}
+
+let capChanged: ((sessionId: string) => void) | undefined;
+
+/**
+ * What a successful cap write schedules: the held-start pass
+ * (`heldDirectPeers.ts`), installed at boot. A hook rather than an import,
+ * since that module admits through this one. Synchronous; it must not await.
+ */
+export function setPeerTurnCapChangedHook(
+  hook: ((sessionId: string) => void) | undefined,
+): void {
+  capChanged = hook;
 }
 
 /** Every model one account can actually run, mirroring the settings projection. */
@@ -80,7 +103,7 @@ export async function modelsForProfile(
  * DISABLED account: a roster row pinned to one must read as "that account is
  * disabled" rather than as "that model is gone".
  */
-async function accountModelOptions(): Promise<AccountModelOption[]> {
+export async function accountModelOptions(): Promise<AccountModelOption[]> {
   const out: AccountModelOption[] = [];
   for (const profile of listCredentialProfiles()) {
     for (const model of await modelsForProfile(profile.id))
@@ -342,13 +365,6 @@ export function directPeerCostClass(
 }
 
 /**
- * Which sessions each coordinator started through the direct path, this
- * process's lifetime. In memory on purpose: the limit bounds what is running
- * NOW, and a restart has by definition left nothing of those turns running.
- */
-const directChildren = new Map<string, Map<string, DirectPeerCostClass>>();
-
-/**
  * Slots a batch has claimed while its sessions do not exist yet.
  *
  * A cap counted purely from observed state is not a cap: admission awaits the
@@ -359,6 +375,15 @@ const directChildren = new Map<string, Map<string, DirectPeerCostClass>>();
  * running turns are what occupy the budget.
  */
 const reservedTurns = new Map<string, number>();
+
+/**
+ * Hold tickets: queue positions admission handed to a held row whose `held`
+ * peer prompt is not inserted yet, per coordinator. A start pass stops at the
+ * oldest one, so a younger batch can never start ahead of an older batch whose
+ * child is still being created. Per process, like {@link reservedTurns}: after
+ * a restart only inserted rows exist.
+ */
+const inFlightHolds = new Map<string, Set<number>>();
 
 /**
  * Per-coordinator serialization of the count-then-reserve pair. Node runs one
@@ -385,23 +410,28 @@ async function withAdmissionLock<T>(
   return next;
 }
 
-/** Record a session the direct path just created for this coordinator. */
-export function recordDirectPeerChild(
+/**
+ * Run `fn` inside this coordinator's admission critical section — the one a
+ * held child's start shares with every batch (`heldDirectPeers.ts`). Not
+ * re-entrant: `fn` must not admit or start for the same coordinator.
+ */
+export function withDirectAdmission<T>(
   coordinatorSessionId: string,
-  sessionId: string,
-  costClass: DirectPeerCostClass,
-): void {
-  const children =
-    directChildren.get(coordinatorSessionId) ??
-    new Map<string, DirectPeerCostClass>();
-  children.set(sessionId, costClass);
-  directChildren.set(coordinatorSessionId, children);
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withAdmissionLock(coordinatorSessionId, fn);
 }
 
-/** Test seam: forget the recorded children and claims of every coordinator. */
+/** Record a session the direct path just created for this coordinator. */
+export function recordDirectPeerChild(child: DirectPeerChild): void {
+  directPeerChildStore.record(child);
+}
+
+/** Test seam: forget the recorded children, claims and tickets of every coordinator. */
 export function resetDirectPeerChildrenForTests(): void {
-  directChildren.clear();
+  directPeerChildStore.clearForTests();
   reservedTurns.clear();
+  inFlightHolds.clear();
   admissionLocks.clear();
 }
 
@@ -419,69 +449,161 @@ export function resetDirectPeerChildrenForTests(): void {
  * - the queue alone misses a turn already under way, since a delivered prompt
  *   leaves the unfinished statuses the moment the turn completes.
  *
+ * A child whose opening prompt waits for a slot (`held`) costs nothing yet, and
+ * neither do the messages queued behind it ({@link peerPromptStore.activeTurnCount}),
+ * unless the user started a turn in it: a running child always counts.
+ *
  * The queue is a durable, self-clearing signal rather than a timer: every
  * delivery ends in a terminal or post-turn status (a retry re-enters as
  * `queued`), so nothing can leak a slot for a start that never happens. And
  * because the count is state, not a ledger, a child that answered and went idle
  * releases its slot and one the coordinator forgot about never blocks the cap
- * permanently.
+ * permanently. The children themselves are durable (`direct_peer_children`), so
+ * a restart counts the work that survived it.
  */
 async function directPeerTurnsHeld(
   coordinatorSessionId: string,
-): Promise<number> {
-  let held = 0;
-  for (const [child, costClass] of directChildren.get(coordinatorSessionId) ??
-    []) {
-    if (costClass === "low") continue;
-    const queued = peerPromptStore.unfinishedTurnCount(
-      coordinatorSessionId,
-      child,
-    );
-    if (queued > 0 || (await runtimeStateFor(child)) === "running") held += 1;
-  }
-  return held + (reservedTurns.get(coordinatorSessionId) ?? 0);
-}
-
-/** A batch's claim on the coordinator's concurrency budget. */
-export interface DirectPeerTurnClaim {
-  /** Give the claimed slots back. Idempotent; call it in a `finally`. */
-  release(): void;
+): Promise<() => number> {
+  const stateOf = await runtimeStateReader();
+  // Everything is read when the count is called, by whoever uses it, in the
+  // same step as its decision: a turn started, a row claimed, a cap lowered or
+  // a batch's claim released before then is what that decision sees.
+  return () => {
+    let held = 0;
+    for (const child of directPeerChildStore.childrenOf(coordinatorSessionId))
+      if (
+        child.costClass !== "low" &&
+        (peerPromptStore.activeTurnCount(
+          coordinatorSessionId,
+          child.childSessionId,
+        ) > 0 ||
+          stateOf(child.childSessionId) === "running")
+      )
+        held += 1;
+    return held + (reservedTurns.get(coordinatorSessionId) ?? 0);
+  };
 }
 
 /**
- * Claim `counted` concurrent turns for this coordinator, or refuse the batch.
- * Low-only batches claim zero and are unbounded.
+ * Await the hub's runtime-state reader, then answer a SYNCHRONOUS count of the
+ * counted slots free under the coordinator's CURRENT cap: runtime state, the
+ * queue, reservations and cap are read when the count is called, so a caller that
+ * decides in the same step as it counts sees every claim, cap edit or
+ * released batch that landed during the awaits. Call it only inside
+ * {@link withDirectAdmission}.
+ */
+export async function directSlotCounter(
+  coordinatorSessionId: string,
+): Promise<() => number> {
+  const held = await directPeerTurnsHeld(coordinatorSessionId);
+  return () => Math.max(0, directPeerTurnCapOf(coordinatorSessionId) - held());
+}
+
+/** The oldest queue position admitted to wait but not inserted yet. */
+export function oldestInFlightHold(
+  coordinatorSessionId: string,
+): number | undefined {
+  const seqs = inFlightHolds.get(coordinatorSessionId);
+  return seqs && seqs.size > 0 ? Math.min(...seqs) : undefined;
+}
+
+/** In-flight hold tickets older than `queueSeq`, for a waiting row's position. */
+export function inFlightHoldsBefore(
+  coordinatorSessionId: string,
+  queueSeq: number,
+): number {
+  let count = 0;
+  for (const seq of inFlightHolds.get(coordinatorSessionId) ?? [])
+    if (seq < queueSeq) count += 1;
+  return count;
+}
+
+/** What admission decided for one row of a batch, in row order. */
+type DirectPeerAdmission = { start: true } | { holdSeq: number };
+
+/** A batch's claim on the coordinator's concurrency budget. */
+export interface DirectPeerTurnClaim {
+  rows: DirectPeerAdmission[];
+  /** Give the claimed slots back. Idempotent; call it in a `finally`. */
+  release(): void;
+  /**
+   * The held row with this position was inserted, or will never be: its
+   * ticket stops blocking younger rows. Idempotent; call it in a `finally`.
+   */
+  settleHold(holdSeq: number): void;
+}
+
+/**
+ * Decide, per row, whether a batch starts now or waits for a slot. Nothing is
+ * refused for the cap.
  *
- * The decision and the claim happen inside one critical section per
- * coordinator, so two overlapping batches cannot both be told the same slots
- * are free. The claim is held for the whole batch and released by the caller;
- * from then on the children's own runtime state is what occupies the budget.
+ * `low` rows always start and are unbounded. A `counted` row starts when a
+ * slot is free AND nothing of this coordinator's is already waiting — not a
+ * held row, not an admitted one still being created — so rows start in
+ * admission order. Every other counted row is given its queue position now
+ * ({@link peerPromptStore.allocateQueueSeq}) and is created with its opening
+ * prompt `held`.
+ *
+ * The decision, the claim for the rows that start and the tickets for the rows
+ * that wait happen inside one critical section per coordinator, so two
+ * overlapping batches cannot both be told the same slots are free. The cap is
+ * read inside it too: an edit landing while an earlier call holds the lock
+ * applies to this one.
  */
 export async function admitDirectPeerTurns(
   coordinatorSessionId: string,
-  counted: number,
+  costs: readonly DirectPeerCostClass[],
 ): Promise<DirectPeerTurnClaim> {
   return withAdmissionLock(coordinatorSessionId, async () => {
-    const held = await directPeerTurnsHeld(coordinatorSessionId);
-    const cap = directPeerTurnCapOf(coordinatorSessionId);
-    const available = Math.max(0, cap - held);
-    if (counted > available)
-      throw new PeerRuntimeRefusedError(
-        `You already have ${held} directly spawned peer turn(s) running or starting; at most ${cap} may run at once, so this batch of ${counted} counted turns was not started. Runtimes the user marked low cost don't count. Wait for results from the sessions you started, then spawn the rest. The user can raise this cap in the session inspector.`,
-      );
-    reservedTurns.set(
-      coordinatorSessionId,
-      (reservedTurns.get(coordinatorSessionId) ?? 0) + counted,
-    );
+    const counted = costs.filter((cost) => cost === "counted").length;
+    let started = 0;
+    const decideRows = (available: number): DirectPeerAdmission[] => {
+      let free = available;
+      let waiting =
+        counted > 0 &&
+        (oldestInFlightHold(coordinatorSessionId) !== undefined ||
+          peerPromptStore.heldFrom(coordinatorSessionId).length > 0);
+      const tickets =
+        inFlightHolds.get(coordinatorSessionId) ?? new Set<number>();
+      const decided = costs.map((cost): DirectPeerAdmission => {
+        if (cost === "low") return { start: true };
+        if (free > 0 && !waiting) {
+          free -= 1;
+          started += 1;
+          return { start: true };
+        }
+        // Once one row waits, every later one waits behind it.
+        waiting = true;
+        const holdSeq = peerPromptStore.allocateQueueSeq();
+        tickets.add(holdSeq);
+        return { holdSeq };
+      });
+      if (tickets.size > 0) inFlightHolds.set(coordinatorSessionId, tickets);
+      if (started > 0)
+        reservedTurns.set(
+          coordinatorSessionId,
+          (reservedTurns.get(coordinatorSessionId) ?? 0) + started,
+        );
+      return decided;
+    };
+    const free =
+      counted > 0 ? await directSlotCounter(coordinatorSessionId) : undefined;
+    const rows = decideRows(free?.() ?? 0);
     let released = false;
     return {
+      rows,
       release() {
         if (released) return;
         released = true;
         const remaining =
-          (reservedTurns.get(coordinatorSessionId) ?? 0) - counted;
+          (reservedTurns.get(coordinatorSessionId) ?? 0) - started;
         if (remaining > 0) reservedTurns.set(coordinatorSessionId, remaining);
         else reservedTurns.delete(coordinatorSessionId);
+      },
+      settleHold(holdSeq) {
+        const current = inFlightHolds.get(coordinatorSessionId);
+        if (!current?.delete(holdSeq)) return;
+        if (current.size === 0) inFlightHolds.delete(coordinatorSessionId);
       },
     };
   });

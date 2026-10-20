@@ -8,6 +8,7 @@
  * leaves the run intact so the user can repair the blocker and retry.
  */
 import { sessionStore } from "../db/sessionStore.ts";
+import { cancelHeldForArchivedSessions } from "../heldDirectPeers.ts";
 import {
   deleteCancelledRun,
   getRun,
@@ -38,6 +39,20 @@ interface RunCleanupOperations {
   broadcastRuns(): void;
 }
 
+/**
+ * Archive a cancelled run's sessions. A child among them that was waiting for
+ * a slot never starts: its opening prompt is cancelled with it.
+ */
+export async function archiveRunSessions(
+  sessionIds: readonly string[],
+): Promise<void> {
+  for (const sessionId of sessionIds) sessionStore.setArchived(sessionId, true);
+  cancelHeldForArchivedSessions(sessionIds);
+  if (sessionIds.length === 0) return;
+  const { hub } = await import("../hub.ts");
+  await hub.broadcastSessions();
+}
+
 const defaultOperations: RunCleanupOperations = {
   getRun,
   getWorktree,
@@ -54,13 +69,7 @@ const defaultOperations: RunCleanupOperations = {
       deleteBranch: true,
       force: true,
     }),
-  archiveSessions: async (sessionIds) => {
-    for (const sessionId of sessionIds)
-      sessionStore.setArchived(sessionId, true);
-    if (sessionIds.length === 0) return;
-    const { hub } = await import("../hub.ts");
-    await hub.broadcastSessions();
-  },
+  archiveSessions: archiveRunSessions,
   deleteRun: deleteCancelledRun,
   broadcastRuns: broadcastWorkflowRuns,
 };

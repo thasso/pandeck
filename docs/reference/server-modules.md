@@ -2279,7 +2279,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `responseRequested` defaults to TRUE here — the coordinator owns closure on
   this path — and the opening prompt goes out through `withReportingRoute`, so
   the child is told who to answer even when the coordinator forgot to say it.
-  The batch runs under one concurrency claim, released in a `finally`.
+  The batch runs under one concurrency claim, released in a `finally`; a row
+  over the cap is created with its opening prompt `held` and reports its waiting
+  position (`heldDirectPeers.ts`).
 - `peerSpawnRuntimes.ts` owns the approved peer-runtime roster
   ([Task-595](pa://task/595)) — the user's standing permission for agents to
   start ordinary peer sessions without a card per batch. `peerRuntimeRoster`
@@ -2298,56 +2300,79 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   synchronous validate-and-persist domain writer for existing sessions. Its
   caller owns session-list notification: the inspector command awaits the
   already-loaded hub's broadcast after a successful write, so the writer starts
-  no background module loads. It has no actor parameter and is not an agent
-  tool; approval executors can compare and set without yielding. A creation-only
-  `createSession` option carries spawn-row or definition defaults. Forks do not
-  inherit the cap. Admission counts a coordinator's own counted direct child
-  while its runtime is RUNNING **or** while a prompt that coordinator sent it is
-  still queued or dispatching (`peerPromptStore.unfinishedTurnCount`). Low-cost
-  children never count and have no separate bound. `directPeerCostClass` uses
-  the profile's label, or, for an agent runtime, requires at least one enabled
-  provider/model/thinking match with every match low, ignoring accounts. Unknown
-  or conflicting cost counts. The child keeps its admitted class; a synchronous
-  re-check immediately before creation refuses a low-to-counted change. Both
-  halves of the counted child's state check are load-bearing: delivery only
-  ENQUEUES the opening prompt and drains it in the background, so runtime state
-  alone is blind for the whole create-to-first-turn window and the next call
-  would be handed a full fresh quota, while the queue alone would miss a turn
-  already under way. The queue is a durable self-clearing signal rather than a
-  timer — every delivery ends terminal or post-turn, and a retry re-enters as
-  `queued` — so no slot leaks for a start that never happens, and an answered or
-  forgotten child still frees its slot. On top of that, admission CLAIMS the
-  slots it grants and returns them as a handle the caller releases, with the
-  count-then-claim pair in one per-coordinator critical section: the check
-  awaits runtime state, and a second batch arriving during that await would
-  otherwise be told the same slots are free. The claim covers the window before
-  the children exist at all; the queue covers the window after they do. The
-  return route (`withReportingRoute`) is server-owned in the same spirit: a
-  caller's text can never suppress it — a previously generated block is stripped
-  and exactly one block naming the CURRENT coordinator is appended, so quoting
-  the marker sentence or pasting another coordinator's suffix changes nothing.
-  Nothing here imports the subagent domain; `architecture.test.ts` holds that
-  line. `peerSpawnRuntimes` is also the one ARRAY-valued settings section, and a
-  patch REPLACES the whole roster, so `validateClientMessage.ts` checks it
-  explicitly (array, plain-object rows, `id`/`modelId` present, kind-checked
-  leaves, `relativeCost` in its four-value vocabulary, and `description` within
-  `MAX_PEER_RUNTIME_DESCRIPTION_CHARS`). `thinkingLevel` is kind-checked only,
-  because a patch replaces the WHOLE roster and a vocabulary check there cannot
-  tell a client inventing a level from one preserving what a legacy row already
-  stores — it would freeze renaming, enabling or re-modelling that row behind
-  replacing its level, the opposite of retaining it for repair. Settings store
-  that leaf VERBATIM, and `peerRuntimeUnavailableReason` plus
-  `resolveApprovedPeerRuntime` stop an unrecognized level from ever running.
-  Cost is stricter safely because read normalization maps an absent or invalid
-  legacy label to `unknown`, so no legitimate round trip has an invalid value to
-  preserve. The normalizer also bounds descriptions while retaining their text
-  verbatim so server echoes cannot consume a space mid-typing; the roster
-  projection trims and collapses whitespace before exposing a one-line hint to a
-  model. `updateSettings` applies the roster only when it really is an array.
-  Both guards exist because the normalizer answers "not an array" with an empty
-  list: without them a malformed patch would not be an error, it would silently
-  delete every approval the user granted. An EMPTY array stays a legitimate
-  patch — that is how the last row is removed.
+  no background module loads. After it persisted it schedules
+  `startHeldDirectPeers` through a hook installed at boot
+  (`setPeerTurnCapChangedHook`, since that module admits through this one),
+  never awaited: a raised cap starts waiting children at once. It has no actor
+  parameter and is not an agent tool; approval executors can compare and set
+  without yielding. A creation-only `createSession` option carries spawn-row or
+  definition defaults. Forks do not inherit the cap. The children are a durable
+  registry (`direct_peer_children`, `db/directPeerChildStore.ts`), written the
+  moment each session exists, so a restart counts what survived it. Admission
+  counts a coordinator's own counted direct child while its runtime is RUNNING
+  **or** while a prompt that coordinator sent it is queued, dispatching,
+  admitted or acknowledged (`peerPromptStore.activeTurnCount`), leaving out a
+  `held` opening prompt and `queued` rows behind one: neither can run yet.
+  Low-cost children never count and have no separate bound.
+  `directPeerCostClass` uses the profile's label, or, for an agent runtime,
+  requires at least one enabled provider/model/thinking match with every match
+  low, ignoring accounts. Unknown or conflicting cost counts. The child keeps
+  its admitted class; a synchronous re-check immediately before creation refuses
+  a low-to-counted change. Both halves of the counted child's state check are
+  load-bearing: delivery only ENQUEUES the opening prompt and drains it in the
+  background, so runtime state alone is blind for the whole create-to-first-turn
+  window and the next call would be handed a full fresh quota, while the queue
+  alone would miss a turn already under way. The queue is a durable
+  self-clearing signal rather than a timer — every delivery ends terminal or
+  post-turn, and a retry re-enters as `queued` — so no slot leaks for a start
+  that never happens, and an answered or forgotten child still frees its slot.
+  On top of that, admission CLAIMS the slots it grants and returns them as a
+  handle the caller releases, with the count-then-claim pair in one
+  per-coordinator critical section: the check awaits runtime state, and a second
+  batch arriving during that await would otherwise be told the same slots are
+  free. The claim covers the window before the children exist at all; the queue
+  covers the window after they do. Admission never refuses for the cap: it
+  partitions a batch per row into start now or wait, a counted row starting only
+  when a slot is free and nothing of the coordinator's already waits. A waiting
+  row is handed its queue position at admission (`allocateQueueSeq`) plus an
+  in-memory hold ticket until its `held` row is inserted, and a start pass
+  (`heldDirectPeers.ts`, through `withDirectAdmission`) stops at the oldest
+  ticket, so creation order never overtakes admission order. The pass cancels
+  rows whose child was deleted or archived or whose coordinator was deleted,
+  re-checks the rest oldest first against current Settings or definitions (all
+  awaits first, ending with a last `agentDefinitionBlob` read; then verdict,
+  count and promotion in one synchronous step — `directSlotCounter` reads
+  runtime state, the queue, reservations and cap when it is called, through
+  `runtimeStateReader`), refuses one no longer allowed (`refuseHeld`, with the
+  spawner's notice in the same transaction) and promotes `held → queued` by
+  compare-and-set while slots last. The `peerSpawnRuntimes` module never imports
+  it statically. The return route (`withReportingRoute`) is server-owned in the
+  same spirit: a caller's text can never suppress it — a previously generated
+  block is stripped and exactly one block naming the CURRENT coordinator is
+  appended, so quoting the marker sentence or pasting another coordinator's
+  suffix changes nothing. Nothing here imports the subagent domain;
+  `architecture.test.ts` holds that line. `peerSpawnRuntimes` is also the one
+  ARRAY-valued settings section, and a patch REPLACES the whole roster, so
+  `validateClientMessage.ts` checks it explicitly (array, plain-object rows,
+  `id`/`modelId` present, kind-checked leaves, `relativeCost` in its four-value
+  vocabulary, and `description` within `MAX_PEER_RUNTIME_DESCRIPTION_CHARS`).
+  `thinkingLevel` is kind-checked only, because a patch replaces the WHOLE
+  roster and a vocabulary check there cannot tell a client inventing a level
+  from one preserving what a legacy row already stores — it would freeze
+  renaming, enabling or re-modelling that row behind replacing its level, the
+  opposite of retaining it for repair. Settings store that leaf VERBATIM, and
+  `peerRuntimeUnavailableReason` plus `resolveApprovedPeerRuntime` stop an
+  unrecognized level from ever running. Cost is stricter safely because read
+  normalization maps an absent or invalid legacy label to `unknown`, so no
+  legitimate round trip has an invalid value to preserve. The normalizer also
+  bounds descriptions while retaining their text verbatim so server echoes
+  cannot consume a space mid-typing; the roster projection trims and collapses
+  whitespace before exposing a one-line hint to a model. `updateSettings`
+  applies the roster only when it really is an array. Both guards exist because
+  the normalizer answers "not an array" with an empty list: without them a
+  malformed patch would not be an error, it would silently delete every approval
+  the user granted. An EMPTY array stays a legitimate patch — that is how the
+  last row is removed.
 - `sessionContext.ts` is the ONE place that decides what context a session
   starts with ([Task-554](pa://task/554)): started from a Task, from a Knowledge
   Base entry, or on a plain Project. Five triggers used to carry their own copy

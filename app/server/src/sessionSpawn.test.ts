@@ -90,8 +90,11 @@ const {
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
 const accountRouter = await import("./accountRouter.ts");
-const { resetDirectPeerChildrenForTests } =
-  await import("./peerSpawnRuntimes.ts");
+const {
+  recordDirectPeerChild,
+  resetDirectPeerChildrenForTests,
+  setSessionPeerTurnCap,
+} = await import("./peerSpawnRuntimes.ts");
 const inspection = await import("./tools/sessions/sessionInspection.ts");
 const { createSession } = await import("./harnesses/create.ts");
 const { firstSendEngine } = await import("./harnesses/firstSend.ts");
@@ -106,6 +109,10 @@ const { setAgentSpawnSourcesForTests } = await import("./agents/agentSpawn.ts");
 const { LibraryStore } = await import("./library/libraryStore.ts");
 const { sessionAgent } = await import("./agents/sessionAgent.ts");
 const { buildClaudeSdkQueryOptions } = await import("./claudeSdk/options.ts");
+
+const { peerPromptStore } = await import("./db/peerPromptStore.ts");
+const peerPromptModule = await import("./peerPrompt.ts");
+const { startHeldDirectPeers } = await import("./heldDirectPeers.ts");
 
 const spawnTool = sessionSpawnTools()[0]!;
 const SENDER = "spawner-session";
@@ -124,6 +131,8 @@ let createFails: string | undefined;
 /** Runs inside the pi model lookup: the last await before creation. */
 let duringPiLookup: (() => void) | undefined;
 let deliverFails = false;
+/** Awaited at the start of creation, by row title: an in-flight creation. */
+let beforeCreate: ((title: string) => Promise<void>) | undefined;
 
 function activeWorktree(id: string, projectId = "spawn-proj") {
   // A real worktree belongs to a registered Project; an unregistered id is
@@ -202,6 +211,7 @@ beforeEach(() => {
   createFails = undefined;
   deliverFails = false;
   duringPiLookup = undefined;
+  beforeCreate = undefined;
   const standIn = (sessionId: string) =>
     ({ sessionId, setTitle() {}, rename() {} }) as never;
   vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id: string) =>
@@ -217,6 +227,7 @@ beforeEach(() => {
       return { provider, id: modelId } as never;
     },
     create: async (spec) => {
+      await beforeCreate?.(spec.title ?? "");
       if (createFails === spec.title) throw new Error("creation exploded");
       const cwd = spec.worktree?.path ?? spec.cwd;
       const started = {
@@ -263,6 +274,20 @@ beforeEach(() => {
       );
       if (deliverFails) throw new Error("delivery exploded");
       recorded.delivered.push({ ...input });
+      // A held opening prompt is what the start pass reads, so it is stored as
+      // the real delivery would store it.
+      if (input.hold)
+        peerPromptStore.enqueueRouted({
+          conversationId: `conv-${input.targetSessionId}`,
+          chainId: `chain-${input.targetSessionId}`,
+          senderSessionId: input.senderSessionId,
+          recipientSessionId: input.targetSessionId,
+          participants: [input.senderSessionId, input.targetSessionId],
+          maxHops: 10,
+          prompt: input.prompt,
+          responseRequested: input.responseRequested,
+          held: input.hold,
+        });
     },
     broadcastSessions: () => recorded.events.push("broadcast"),
   });
@@ -283,6 +308,9 @@ afterEach(() => {
   setSessionSpawnDepsForTests(null);
   updateSettings({ peerSpawnRuntimes: [] });
   patchCredentialProfile("default", { enterprise: false });
+  // Waiting rows outlive a test in the shared database; nothing may start them.
+  for (const held of peerPromptStore.heldFrom(SENDER))
+    peerPromptStore.cancelOne(held.id, "test reset");
   resetDirectPeerChildrenForTests();
   setAgentSpawnSourcesForTests(null);
   setAgentRuntimeSourcesForTests(null);
@@ -2033,7 +2061,7 @@ test("a direct developer row carries its worktree, Project and Task", async () =
 
 test("mixed batches spend only counted slots and low-only batches bypass a full pool", async () => {
   approveRuntimes();
-  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(() => "running");
   for (let batch = 0; batch < 2; batch += 1) {
     const results = await spawnApprovedPeers({
       senderSessionId: SENDER,
@@ -2045,11 +2073,19 @@ test("mixed batches spend only counted slots and low-only batches bypass a full 
       true,
     );
   }
-  await expect(
-    spawnDirect([{ ...row(), profileId: "pr_sonnet" }]),
-  ).rejects.toThrow(/may run at once/);
+  // The fifth counted row is created and waits; it is not refused.
+  const waiting = await spawnDirect([{ ...row(), profileId: "pr_sonnet" }]);
+  expect(waiting).toMatch(/^Started 0 sessions; 1 waiting for a slot\./);
+  expect(waiting).toMatch(/waiting for a slot \(position 1\)/);
+  expect(waiting).toMatch(
+    /Your cap is 4 concurrent counted peer turns; the user can raise it in the session inspector\./,
+  );
+  expect(waiting).toMatch(/session_control cancel_queued_prompts/);
+  expect(waiting).not.toMatch(/may run at once/);
+  expect(recorded.delivered.at(-1)?.hold).toBeDefined();
   await spawnDirect([{ ...row(), profileId: "pr_terra" }]);
-  expect(recorded.claude).toHaveLength(4);
+  expect(recorded.delivered.at(-1)?.hold).toBeUndefined();
+  expect(recorded.claude).toHaveLength(5);
   expect(recorded.pi).toHaveLength(5);
 });
 
@@ -2084,7 +2120,7 @@ test("a counted profile relabeled low during lookup keeps its admitted slot", as
       relativeCost: "high",
     })),
   });
-  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(() => "running");
   duringPiLookup = () => updateSettings({ peerSpawnRuntimes: runtimes });
   const results = await spawnApprovedPeers({
     senderSessionId: SENDER,
@@ -2096,9 +2132,230 @@ test("a counted profile relabeled low during lookup keeps its admitted slot", as
   expect(results.every((result) => result.sessionId && !result.error)).toBe(
     true,
   );
-  await expect(
-    spawnDirect([{ ...row(), profileId: "pr_sonnet" }]),
-  ).rejects.toThrow(/may run at once/);
+  const [waiting] = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: [{ ...row(), profileId: "pr_sonnet" }],
+  });
+  expect(waiting?.waitingForSlot).toEqual({ position: 1 });
+});
+
+/* ------------------------- waiting for a slot ----------------------------- */
+
+/** Children this sender already runs, counted against its cap. */
+function runningChildren(states: Map<string, string>, n: number): string[] {
+  return Array.from({ length: n }, () => {
+    const id = `busy-${(counter += 1)}`;
+    recordDirectPeerChild({
+      childSessionId: id,
+      spawnerSessionId: SENDER,
+      costClass: "counted",
+      source: { kind: "profile", profileId: "pr_sonnet" },
+      provider: "claude-sdk",
+      modelId: "sonnet",
+      thinkingLevel: "medium",
+      credentialProfileId: "default",
+      createdAt: Date.now(),
+    });
+    states.set(id, "running");
+    return id;
+  });
+}
+
+function childStates(): Map<string, string> {
+  const states = new Map<string, string>();
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    (id: string) => (states.get(id) ?? "not_loaded") as never,
+  );
+  return states;
+}
+
+/** The held rows from SENDER, oldest first, by child. */
+const heldChildren = () =>
+  peerPromptStore.heldFrom(SENDER).map((row) => row.recipientSessionId);
+
+function silentDrains() {
+  peerPromptModule.setHubForTests({
+    getLiveById: () => undefined,
+    acquireById: async () => undefined,
+    broadcastPeerPromptCardUpdate: () => {},
+  });
+  return vi
+    .spyOn(peerPromptModule, "drainRecipient")
+    .mockResolvedValue(undefined);
+}
+
+test("over-cap counted rows are created and wait instead of being refused", async () => {
+  approveRuntimes();
+  const states = childStates();
+  silentDrains();
+  try {
+    runningChildren(states, 4);
+    const results = await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: ["A", "B", "C"].map((title) => ({
+        ...row({ title }),
+        profileId: "pr_sonnet",
+      })),
+    });
+    expect(results.map((r) => Boolean(r.sessionId && !r.error))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(recorded.delivered.map((d) => d.hold !== undefined)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(heldChildren()).toEqual(results.map((r) => r.sessionId));
+    expect(results.map((r) => r.waitingForSlot?.position)).toEqual([1, 2, 3]);
+  } finally {
+    peerPromptModule.setHubForTests(undefined);
+  }
+});
+
+test("a batch straddling the cap starts what fits and holds the rest, at any stored cap", async () => {
+  approveRuntimes();
+  const states = childStates();
+  silentDrains();
+  try {
+    runningChildren(states, 3);
+    await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: ["first", "second"].map((title) => ({
+        ...row({ title }),
+        profileId: "pr_sonnet",
+      })),
+    });
+    expect(recorded.delivered.map((d) => d.hold !== undefined)).toEqual([
+      false,
+      true,
+    ]);
+    // A raised cap of 6 with 6 running behaves the same way, not as a fixed 4.
+    for (const held of peerPromptStore.heldFrom(SENDER))
+      peerPromptStore.cancelOne(held.id, "test reset");
+    resetDirectPeerChildrenForTests();
+    recorded.delivered = [];
+    setSessionPeerTurnCap(SENDER, 6);
+    runningChildren(states, 6);
+    await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: [{ ...row({ title: "seventh" }), profileId: "pr_sonnet" }],
+    });
+    expect(recorded.delivered.map((d) => d.hold !== undefined)).toEqual([true]);
+  } finally {
+    setSessionPeerTurnCap(SENDER, null);
+    peerPromptModule.setHubForTests(undefined);
+  }
+});
+
+test("low-cost rows never wait; only the counted row of a mixed batch is held", async () => {
+  approveRuntimes();
+  const states = childStates();
+  silentDrains();
+  try {
+    runningChildren(states, 4);
+    const results = await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: ["pr_terra", "pr_sonnet", "pr_terra"].map((profileId) => ({
+        ...row(),
+        profileId,
+      })),
+    });
+    expect(recorded.delivered.map((d) => d.hold !== undefined)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    expect(results.map((r) => r.waitingForSlot?.position)).toEqual([
+      undefined,
+      1,
+      undefined,
+    ]);
+  } finally {
+    peerPromptModule.setHubForTests(undefined);
+  }
+});
+
+test("an older held row still being created starts before a younger batch", async () => {
+  approveRuntimes();
+  const states = childStates();
+  const drains = silentDrains();
+  try {
+    const busy = runningChildren(states, 4);
+    let releaseA!: () => void;
+    let creatingA!: () => void;
+    const aGate = new Promise<void>((resolve) => (releaseA = resolve));
+    const aEntered = new Promise<void>((resolve) => (creatingA = resolve));
+    beforeCreate = async (title) => {
+      if (title !== "A") return;
+      creatingA();
+      await aGate;
+    };
+    const batchA = spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: [{ ...row({ title: "A" }), profileId: "pr_sonnet" }],
+    });
+    await aEntered;
+    // A slot frees while A is still being created.
+    states.set(busy[0]!, "idle");
+    const [b] = await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: [{ ...row({ title: "B" }), profileId: "pr_sonnet" }],
+    });
+    // B's own batch-end pass did not start it ahead of A.
+    expect(heldChildren()).toEqual([b!.sessionId]);
+    expect(drains).not.toHaveBeenCalledWith(b!.sessionId);
+    releaseA();
+    const [a] = await batchA;
+    await vi.waitFor(() => expect(drains).toHaveBeenCalledWith(a!.sessionId));
+    expect(heldChildren()).toEqual([b!.sessionId]);
+    expect(drains).not.toHaveBeenCalledWith(b!.sessionId);
+    // The next free slot is B's.
+    states.set(busy[1]!, "idle");
+    await startHeldDirectPeers(SENDER);
+    expect(drains).toHaveBeenCalledWith(b!.sessionId);
+    expect(heldChildren()).toEqual([]);
+  } finally {
+    peerPromptModule.setHubForTests(undefined);
+  }
+});
+
+test("an older held row whose creation fails gives its place to the next", async () => {
+  approveRuntimes();
+  const states = childStates();
+  const drains = silentDrains();
+  try {
+    const busy = runningChildren(states, 4);
+    let releaseA!: () => void;
+    let creatingA!: () => void;
+    const aGate = new Promise<void>((resolve) => (releaseA = resolve));
+    const aEntered = new Promise<void>((resolve) => (creatingA = resolve));
+    beforeCreate = async (title) => {
+      if (title !== "A") return;
+      creatingA();
+      await aGate;
+      throw new Error("creation exploded");
+    };
+    const batchA = spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: [{ ...row({ title: "A" }), profileId: "pr_sonnet" }],
+    });
+    await aEntered;
+    states.set(busy[0]!, "idle");
+    const [b] = await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: [{ ...row({ title: "B" }), profileId: "pr_sonnet" }],
+    });
+    expect(heldChildren()).toEqual([b!.sessionId]);
+    releaseA();
+    const [a] = await batchA;
+    expect(a?.sessionId).toBeUndefined();
+    await vi.waitFor(() => expect(drains).toHaveBeenCalledWith(b!.sessionId));
+    expect(heldChildren()).toEqual([]);
+  } finally {
+    peerPromptModule.setHubForTests(undefined);
+  }
 });
 
 test("a proposal row may not name an approved runtime", async () => {
@@ -2668,7 +2925,7 @@ test("an agent's low-cost fallback needs no slot even when its default model cou
       relativeCost: runtime.id === "pr_sonnet" ? "low" : "high",
     })),
   });
-  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(() => "running");
   await spawnApprovedPeers({
     senderSessionId: SENDER,
     rows: Array.from({ length: 4 }, () => ({

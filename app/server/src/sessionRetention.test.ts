@@ -9,6 +9,7 @@ import type { SessionListItem, ServerMessage } from "@assistant/shared";
 import { afterEach, test, vi } from "vitest";
 import { Connection } from "./connection.ts";
 import { getDb } from "./db/index.ts";
+import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import * as workflowStore from "./db/workflowStore.ts";
 import { hub } from "./hub.ts";
@@ -406,4 +407,45 @@ test("the default projection reads only unarchived rows and never reintroduces a
   });
   assert.deepEqual(storeList.mock.calls.at(-1), [{}]);
   assert.equal(archive.find((r) => r.id === archived)?.archived, true);
+});
+
+/* ---------------------------- waiting children ---------------------------- */
+
+function heldOpenerTo(child: string) {
+  const coordinator = seed("coordinator");
+  return peerPromptStore.enqueueRouted({
+    conversationId: `retention-conv-${child}`,
+    chainId: peerPromptStore.createChain(),
+    senderSessionId: coordinator,
+    recipientSessionId: child,
+    participants: [coordinator, child],
+    maxHops: 10,
+    prompt: "start when there is room",
+    responseRequested: true,
+    held: { queueSeq: peerPromptStore.allocateQueueSeq() },
+  });
+}
+
+test("a child waiting for a slot is queued work, so retention does not take it", async () => {
+  // A listable child: it already had a user turn before it waited.
+  const child = seed("waiting", { settledAt: OLD });
+  const opener = heldOpenerTo(child);
+  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
+  const listed = (await hub.listSessions()).find((r) => r.id === child);
+  assert.equal(listed?.queuedWork, true);
+  assert.ok(!(await sweepSettledSessionArchive(NOW)).includes(child));
+  assert.equal(peerPromptStore.getById(opener.id)?.status, "held");
+});
+
+test("a waiting child the sweep does archive has its opening prompt cancelled", async () => {
+  const child = seed("archived-waiting", { settledAt: OLD });
+  const opener = heldOpenerTo(child);
+  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
+  // Reach the writer deliberately: the listed row is an eligible candidate.
+  vi.spyOn(hub, "listSessions").mockResolvedValue([
+    { ...row(child), file: "" },
+  ]);
+  const archived = await sweepSettledSessionArchive(NOW);
+  assert.deepEqual(archived, [child]);
+  assert.equal(peerPromptStore.getById(opener.id)?.status, "cancelled");
 });

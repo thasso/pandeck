@@ -38,6 +38,21 @@ function enqueue(senderSessionId: string, recipientSessionId: string) {
   });
 }
 
+/** A spawned child's opening prompt waiting for a slot. */
+function hold(senderSessionId: string, recipientSessionId: string) {
+  return peerPromptStore.enqueueRouted({
+    conversationId: `session-control-conversation-${sequence++}`,
+    chainId: peerPromptStore.createChain(),
+    senderSessionId,
+    recipientSessionId,
+    participants: [senderSessionId, recipientSessionId],
+    maxHops: 10,
+    prompt: "start when there is room",
+    responseRequested: true,
+    held: { queueSeq: peerPromptStore.allocateQueueSeq() },
+  });
+}
+
 const tool = () => sessionControlTools()[0]!;
 const context = (sessionId: string) => ({
   toolCallId: "tool-call",
@@ -221,5 +236,30 @@ describe("session_control tool", () => {
     sessionStore.setSpawnedOwnership(child, "coordinator");
     await stop();
     assert.equal(aborts, 2, "handing back restores the coordinator's stop");
+  });
+
+  it("cancels a child's opening prompt still waiting for a slot, either way", async () => {
+    setSessionControlRuntimeForTests({
+      isRunning: () => false,
+      abort: () => {},
+    });
+    const coordinator = seed("Coordinator");
+    for (const operation of ["cancel_queued_prompts", "stop"] as const) {
+      const child = seed("Waiting child");
+      sessionStore.linkSpawned(coordinator, child);
+      const opener = hold(coordinator, child);
+      const text = resultText(
+        await tool().execute(
+          {
+            operation,
+            targetSessionId: child,
+            ...(operation === "stop" ? { clearQueue: true } : {}),
+          },
+          context(coordinator),
+        ),
+      );
+      assert.match(text, /Cancelled 1 queued prompt/, operation);
+      assert.equal(peerPromptStore.getById(opener.id)?.status, "cancelled");
+    }
   });
 });

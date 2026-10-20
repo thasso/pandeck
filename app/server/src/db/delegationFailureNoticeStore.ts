@@ -18,6 +18,47 @@ export type DelegationFailureCategory =
   | "provider_error"
   | "delivery";
 
+/**
+ * Why a directly spawned child that waited for a slot was NOT started: its
+ * approval no longer allows it (`heldDirectPeers.ts`). Each has one fixed
+ * sentence; nothing here ever says a turn failed or a delivery was retried.
+ */
+export type HeldStartCategory =
+  | "held_runtime_removed"
+  | "held_runtime_disabled"
+  | "held_runtime_changed"
+  | "held_account_unavailable"
+  | "held_agent_removed"
+  | "held_agent_changed";
+
+export type NoticeCategory = DelegationFailureCategory | HeldStartCategory;
+
+const KNOWN_CATEGORIES: ReadonlySet<string> = new Set<NoticeCategory>([
+  "auth",
+  "usage_limit",
+  "rate_limit",
+  "content_policy",
+  "provider_error",
+  "delivery",
+  "held_runtime_removed",
+  "held_runtime_disabled",
+  "held_runtime_changed",
+  "held_account_unavailable",
+  "held_agent_removed",
+  "held_agent_changed",
+]);
+
+/** A stored category this build can word; an unknown one is never rendered. */
+export function isKnownNoticeCategory(value: string): value is NoticeCategory {
+  return KNOWN_CATEGORIES.has(value);
+}
+
+export function isHeldStartCategory(
+  value: NoticeCategory,
+): value is HeldStartCategory {
+  return value.startsWith("held_");
+}
+
 /** How the coordinator is known to be waiting on the child. */
 export type DelegationFailureRoute = "spawn" | "request";
 
@@ -27,7 +68,7 @@ export interface DelegationFailureNoticeInput {
   childSessionId: string;
   coordinatorSessionId: string;
   route: DelegationFailureRoute;
-  category: DelegationFailureCategory;
+  category: NoticeCategory;
   resetAt?: number;
   /** Peer prompts from the coordinator the failure leaves unanswered. */
   requestIds: readonly string[];
@@ -47,7 +88,7 @@ interface Row {
   child_session_id: string;
   coordinator_session_id: string;
   route: DelegationFailureRoute;
-  category: DelegationFailureCategory;
+  category: NoticeCategory;
   reset_at_ms: number | null;
   request_ids_json: string;
   chain_id: string | null;

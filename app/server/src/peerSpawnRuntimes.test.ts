@@ -80,6 +80,8 @@ const {
   PeerRuntimeRefusedError,
   admitDirectPeerTurns,
   directPeerCostClass,
+  directSlotCounter,
+  setSessionPeerTurnCap,
   peerRuntimeRoster,
   recordDirectPeerChild,
   resetDirectPeerChildrenForTests,
@@ -699,81 +701,147 @@ test.each([
 
 /* ------------------------------- admission -------------------------------- */
 
+/** A direct child of `spawner`, as the spawn path records one. */
+function recordChild(
+  child: string,
+  costClass: "low" | "counted",
+  spawner = "coordinator",
+) {
+  recordDirectPeerChild({
+    childSessionId: child,
+    spawnerSessionId: spawner,
+    costClass,
+    source: { kind: "profile", profileId: "pr_terra" },
+    provider: "openai-codex",
+    modelId: "gpt-5.6-terra",
+    thinkingLevel: "medium",
+    credentialProfileId: "codex-acct",
+    createdAt: Date.now(),
+  });
+}
+
+const counted = (n: number) =>
+  Array.from({ length: n }, () => "counted" as const);
+
+type Claim = Awaited<ReturnType<typeof admitDirectPeerTurns>>;
+
+/** Release a claim and the hold tickets it handed out. */
+function settle(claim: Claim) {
+  claim.release();
+  for (const row of claim.rows)
+    if ("holdSeq" in row) claim.settleHold(row.holdSeq);
+}
+
+const decisions = (claim: Claim) =>
+  claim.rows.map((row) => ("start" in row ? "start" : "hold"));
+
+/** Admit a batch, report what it decided, and give everything back. */
+async function decide(
+  costs: readonly ("low" | "counted")[],
+  spawner = "coordinator",
+): Promise<string[]> {
+  const claim = await admitDirectPeerTurns(spawner, costs);
+  settle(claim);
+  return decisions(claim);
+}
+
+/** A held opening prompt from `spawner` to `child`, as a hold leaves it. */
+function holdPromptTo(child: string, spawner = "coordinator") {
+  return peerPromptStore.enqueueRouted({
+    conversationId: `conv-held-${child}`,
+    chainId: `chain-held-${child}`,
+    senderSessionId: spawner,
+    recipientSessionId: child,
+    participants: [spawner, child],
+    maxHops: 10,
+    prompt: "Start when there is room.",
+    responseRequested: true,
+    held: { queueSeq: peerPromptStore.allocateQueueSeq() },
+  });
+}
+
 test("running and queued low-cost children leave all counted slots free", async () => {
-  const state = vi
-    .spyOn(inspection, "runtimeStateFor")
-    .mockResolvedValue("running");
+  const state = vi.fn(() => "running" as const);
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(state);
   for (let i = 0; i < 16; i += 1) {
-    recordDirectPeerChild("coordinator", `low-${i}`, "low");
+    recordChild(`low-${i}`, "low");
     queuePromptTo(`low-${i}`);
   }
-  (await admitDirectPeerTurns("coordinator", 4)).release();
+  expect(await decide(counted(4))).toEqual(counted(4).map(() => "start"));
   expect(state).not.toHaveBeenCalled();
 });
 
 test("low-only batches are unbounded even with a full counted pool", async () => {
-  vi.spyOn(inspection, "runtimeStateFor").mockResolvedValue("running");
-  for (let i = 0; i < 4; i += 1)
-    recordDirectPeerChild("coordinator", `counted-${i}`, "counted");
-  for (let i = 0; i < 16; i += 1)
-    recordDirectPeerChild("coordinator", `low-${i}`, "low");
-  (await admitDirectPeerTurns("coordinator", 0)).release();
-  (await admitDirectPeerTurns("coordinator", 0)).release();
-  await expect(admitDirectPeerTurns("coordinator", 1)).rejects.toThrow(
-    /low.cost.*don't count/i,
-  );
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(() => "running");
+  for (let i = 0; i < 4; i += 1) recordChild(`counted-${i}`, "counted");
+  for (let i = 0; i < 16; i += 1) recordChild(`low-${i}`, "low");
+  expect(await decide([])).toEqual([]);
+  expect(await decide(["low", "low"])).toEqual(["start", "start"]);
+  // The counted row waits; nothing is refused for the cap.
+  expect(await decide(["low", "counted", "low"])).toEqual([
+    "start",
+    "hold",
+    "start",
+  ]);
 });
 
 test("only RUNNING direct children hold a concurrency slot", async () => {
   const states = new Map<string, string>();
-  vi.spyOn(inspection, "runtimeStateFor").mockImplementation(
-    async (id: string) => (states.get(id) ?? "not_loaded") as never,
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    (id: string) => (states.get(id) ?? "not_loaded") as never,
   );
   for (let i = 0; i < MAX_CONCURRENT_DIRECT_PEER_TURNS; i += 1) {
-    recordDirectPeerChild("coordinator", `child-${i}`, "counted");
+    recordChild(`child-${i}`, "counted");
     states.set(`child-${i}`, "running");
   }
 
-  await expect(admitDirectPeerTurns("coordinator", 1)).rejects.toThrow(
-    /may run at once/i,
-  );
+  expect(await decide(counted(1))).toEqual(["hold"]);
 
   // One child answered and went idle: the slot comes back.
   states.set("child-0", "idle");
-  (await admitDirectPeerTurns("coordinator", 1)).release();
-  await expect(admitDirectPeerTurns("coordinator", 2)).rejects.toThrow(
-    /may run at once/i,
-  );
+  expect(await decide(counted(1))).toEqual(["start"]);
+  expect(await decide(counted(2))).toEqual(["start", "hold"]);
   // Another coordinator's children are not this coordinator's problem.
-  (
-    await admitDirectPeerTurns(
+  expect(
+    await decide(
+      counted(MAX_CONCURRENT_DIRECT_PEER_TURNS),
       "other-coordinator",
-      MAX_CONCURRENT_DIRECT_PEER_TURNS,
-    )
-  ).release();
+    ),
+  ).toEqual(counted(MAX_CONCURRENT_DIRECT_PEER_TURNS).map(() => "start"));
   vi.restoreAllMocks();
 });
 
 test("overlapping batches cannot both claim the same free slots", async () => {
   // The check awaits every child's runtime state, and that await is exactly
   // where a second call gets in. Without a claim held across it, two batches
-  // would each be told all four turns are free and start eight paid sessions.
-  vi.spyOn(inspection, "runtimeStateFor").mockImplementation(
-    async () => "not_loaded" as never,
+  // would each be told all four turns are free and start six paid sessions.
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    () => "not_loaded" as never,
   );
+  recordChild("idle-child", "counted");
 
   const [first, second] = await Promise.allSettled([
-    admitDirectPeerTurns("coordinator", 3),
-    admitDirectPeerTurns("coordinator", 3),
+    admitDirectPeerTurns("coordinator", counted(3)),
+    admitDirectPeerTurns("coordinator", counted(3)),
   ]);
 
+  // Both admissions succeed: one starts, the other mostly waits — and no
+  // slot is handed out twice.
   expect(first?.status).toBe("fulfilled");
-  expect(second?.status).toBe("rejected");
-  if (second?.status === "rejected")
-    expect(String(second.reason)).toMatch(/may run at once/i);
-  // Releasing the first batch's claim frees the budget again.
-  if (first?.status === "fulfilled") first.value.release();
-  (await admitDirectPeerTurns("coordinator", 3)).release();
+  expect(second?.status).toBe("fulfilled");
+  if (first?.status !== "fulfilled" || second?.status !== "fulfilled") return;
+  expect(decisions(first.value)).toEqual(["start", "start", "start"]);
+  expect(decisions(second.value)).toEqual(["start", "hold", "hold"]);
+  const starts = [first.value, second.value]
+    .flatMap(decisions)
+    .filter((d) => d === "start").length;
+  expect(starts).toBe(MAX_CONCURRENT_DIRECT_PEER_TURNS);
+  // Releasing the first batch's claim frees its slots, but the second batch's
+  // waiting rows keep their place until their tickets are settled.
+  settle(first.value);
+  expect(await decide(counted(1))).toEqual(["hold"]);
+  settle(second.value);
+  expect(await decide(counted(3))).toEqual(["start", "start", "start"]);
   vi.restoreAllMocks();
 });
 
@@ -782,17 +850,15 @@ test("a child whose opening prompt is only QUEUED still holds its slot", async (
   // creating the session and its first turn the runtime reads as not_loaded.
   // A budget blind to the queue would hand the next call a full fresh quota
   // and start a second set of paid turns.
-  vi.spyOn(inspection, "runtimeStateFor").mockImplementation(
-    async () => "not_loaded" as never,
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    () => "not_loaded" as never,
   );
   for (let i = 0; i < MAX_CONCURRENT_DIRECT_PEER_TURNS; i += 1) {
-    recordDirectPeerChild("coordinator", `queued-child-${i}`, "counted");
+    recordChild(`queued-child-${i}`, "counted");
     queuePromptTo(`queued-child-${i}`);
   }
 
-  await expect(admitDirectPeerTurns("coordinator", 1)).rejects.toThrow(
-    /may run at once/i,
-  );
+  expect(await decide(counted(1))).toEqual(["hold"]);
 
   // The turn ran and finished: its row leaves the unfinished statuses and the
   // slot comes back without anyone having observed it running.
@@ -800,38 +866,108 @@ test("a child whose opening prompt is only QUEUED still holds its slot", async (
     "queued-child-0",
   ))
     peerPromptStore.markFailed(record.id, "the turn is over");
-  (await admitDirectPeerTurns("coordinator", 1)).release();
-  await expect(admitDirectPeerTurns("coordinator", 2)).rejects.toThrow(
-    /may run at once/i,
-  );
+  expect(await decide(counted(1))).toEqual(["start"]);
+  expect(await decide(counted(2))).toEqual(["start", "hold"]);
   vi.restoreAllMocks();
 });
 
 test("another coordinator's queued turn does not spend this one's budget", async () => {
-  vi.spyOn(inspection, "runtimeStateFor").mockImplementation(
-    async () => "not_loaded" as never,
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    () => "not_loaded" as never,
   );
-  recordDirectPeerChild("coordinator", "shared-child", "counted");
+  recordChild("shared-child", "counted");
   queuePromptTo("shared-child", "someone-else");
 
-  (
-    await admitDirectPeerTurns("coordinator", MAX_CONCURRENT_DIRECT_PEER_TURNS)
-  ).release();
+  expect(await decide(counted(MAX_CONCURRENT_DIRECT_PEER_TURNS))).toEqual(
+    counted(MAX_CONCURRENT_DIRECT_PEER_TURNS).map(() => "start"),
+  );
   vi.restoreAllMocks();
 });
 
 test("a released claim is not counted twice", async () => {
-  vi.spyOn(inspection, "runtimeStateFor").mockImplementation(
-    async () => "not_loaded" as never,
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    () => "not_loaded" as never,
   );
 
-  const claim = await admitDirectPeerTurns("coordinator", 4);
+  const claim = await admitDirectPeerTurns("coordinator", counted(4));
   claim.release();
   claim.release();
 
-  (
-    await admitDirectPeerTurns("coordinator", MAX_CONCURRENT_DIRECT_PEER_TURNS)
-  ).release();
+  expect(await decide(counted(MAX_CONCURRENT_DIRECT_PEER_TURNS))).toEqual(
+    counted(MAX_CONCURRENT_DIRECT_PEER_TURNS).map(() => "start"),
+  );
+  vi.restoreAllMocks();
+});
+
+test("a held opener and the queued rows behind it occupy no slot", async () => {
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    () => "idle" as never,
+  );
+  recordChild("waiting-child", "counted");
+  holdPromptTo("waiting-child");
+  queuePromptTo("waiting-child");
+  expect(peerPromptStore.activeTurnCount("coordinator", "waiting-child")).toBe(
+    0,
+  );
+  // ...but the held row makes every new counted row wait behind it.
+  expect(await decide(counted(1))).toEqual(["hold"]);
+  vi.restoreAllMocks();
+});
+
+test("a user-started turn in a held child counts; a finished sibling frees nothing for it", async () => {
+  const states = new Map<string, string>();
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    (id: string) => (states.get(id) ?? "idle") as never,
+  );
+  const { sessionStore } = await import("./db/sessionStore.ts");
+  sessionStore.upsert({
+    id: "coordinator",
+    harness: "pi",
+    agentType: "assistant",
+  });
+  setSessionPeerTurnCap("coordinator", 2);
+  for (const id of ["busy-0", "busy-1"]) {
+    recordChild(id, "counted");
+    states.set(id, "running");
+  }
+  recordChild("held-but-busy", "counted");
+  holdPromptTo("held-but-busy");
+  states.set("held-but-busy", "running");
+  // Three slots are taken on a cap of two.
+  expect((await directSlotCounter("coordinator"))()).toBe(0);
+  states.set("busy-0", "idle");
+  // Two still taken: the user's turn in the held child counts.
+  expect((await directSlotCounter("coordinator"))()).toBe(0);
+  setSessionPeerTurnCap("coordinator", null);
+  vi.restoreAllMocks();
+});
+
+test("a Send-now'd follow-up behind a held opener counts from its claim", async () => {
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    () => "idle" as never,
+  );
+  recordChild("send-now-child", "counted");
+  holdPromptTo("send-now-child");
+  const followUp = queuePromptTo("send-now-child");
+  expect(peerPromptStore.activeTurnCount("coordinator", "send-now-child")).toBe(
+    0,
+  );
+  // The user's out-of-order claim still works behind the held opener.
+  expect(peerPromptStore.claimOne(followUp.id, "send-now")?.status).toBe(
+    "dispatching",
+  );
+  expect(peerPromptStore.activeTurnCount("coordinator", "send-now-child")).toBe(
+    1,
+  );
+  peerPromptStore.markAdmitted(followUp.id);
+  peerPromptStore.markAcknowledged(followUp.id);
+  expect(peerPromptStore.activeTurnCount("coordinator", "send-now-child")).toBe(
+    1,
+  );
+  peerPromptStore.markCompleted(followUp.id);
+  expect(peerPromptStore.activeTurnCount("coordinator", "send-now-child")).toBe(
+    0,
+  );
   vi.restoreAllMocks();
 });
 
