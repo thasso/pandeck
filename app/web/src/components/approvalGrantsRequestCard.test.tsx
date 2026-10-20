@@ -49,9 +49,10 @@ function click(element: Element): void {
   });
 }
 
-function checkbox(id: string): Element {
-  const match = container!.querySelector(`#${CSS.escape(id)}`);
-  expect(match, `no checkbox ${id}`).not.toBeNull();
+/** A control by the end of its per-card id, e.g. `-scope-jira:edit`. */
+function checkbox(suffix: string, scope: ParentNode = container!): Element {
+  const match = scope.querySelector(`[id$="${suffix}"]`);
+  expect(match, `no checkbox ${suffix}`).not.toBeNull();
   return match!;
 }
 
@@ -124,9 +125,9 @@ test("Approve as requested carries no edits", () => {
 test("unticking, per-key scope, the all-scope control and the cap become the edits", () => {
   const onResolve = vi.fn();
   render(<ApprovalCard approval={pending} onResolve={onResolve} />);
-  click(checkbox("grants-request-all-scope"));
-  click(checkbox("grants-request-scope-managedPullRequestMerge"));
-  click(checkbox("grants-request-cap"));
+  click(checkbox("-all-scope"));
+  click(checkbox("-scope-managedPullRequestMerge"));
+  click(checkbox("-cap"));
   click(button("Approve"));
   expect(onResolve).toHaveBeenLastCalledWith(
     "ap_req",
@@ -145,10 +146,10 @@ test("unticking, per-key scope, the all-scope control and the cap become the edi
 
 test("Approve is disabled once nothing is ticked", () => {
   render(<ApprovalCard approval={pending} onResolve={vi.fn()} />);
-  click(checkbox("grants-request-jira:edit"));
-  click(checkbox("grants-request-managedPullRequestMerge"));
+  click(checkbox("-tick-jira:edit"));
+  click(checkbox("-tick-managedPullRequestMerge"));
   expect(button("Approve").disabled).toBe(false);
-  click(checkbox("grants-request-cap"));
+  click(checkbox("-cap"));
   expect(button("Approve").disabled).toBe(true);
 });
 
@@ -239,4 +240,50 @@ test("a rejected card offers no Revoke", () => {
     />,
   );
   expect(buttonLabels()).not.toContain("Revoke");
+});
+
+test("labels on a repeated request reach its own controls, not the earlier card's", () => {
+  const onResolve = vi.fn();
+  render(
+    <>
+      <div data-card="old">
+        <ApprovalCard
+          approval={{ ...pending, id: "ap_old", status: "superseded" }}
+          onResolve={onResolve}
+        />
+      </div>
+      <div data-card="new">
+        <ApprovalCard approval={pending} onResolve={onResolve} />
+      </div>
+    </>,
+  );
+  const fresh = container!.querySelector('[data-card="new"]')!;
+  const labelFor = (suffix: string) => {
+    const control = checkbox(suffix, fresh);
+    const label = fresh.querySelector(`label[for="${control.id}"]`);
+    expect(label, `no label for ${suffix}`).not.toBeNull();
+    return label!;
+  };
+  expect(
+    new Set([...container!.querySelectorAll("[id]")].map((e) => e.id)).size,
+  ).toBe(container!.querySelectorAll("[id]").length);
+  click(labelFor("-all-scope"));
+  click(labelFor("-scope-managedPullRequestMerge"));
+  click(labelFor("-tick-jira:edit"));
+  click(labelFor("-cap"));
+  click(
+    [...fresh.querySelectorAll("button")].find(
+      (element) => (element.textContent ?? "").trim() === "Approve",
+    )!,
+  );
+  expect(onResolve).toHaveBeenLastCalledWith(
+    "ap_req",
+    "approved",
+    {
+      kind: "approvalGrantsRequest",
+      keys: [{ key: "managedPullRequestMerge", inheritable: false }],
+    },
+    false,
+    false,
+  );
 });

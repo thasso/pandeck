@@ -9,6 +9,7 @@
  * @payload `ApprovalGrantsRequestBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "approvalGrantsRequest"`.
  */
+import { useId } from "react";
 import { Lock } from "lucide-react";
 import type {
   ApprovalGrantsRequestBody as GrantsRequestBodyData,
@@ -138,6 +139,9 @@ export function ApprovalGrantsRequestBody({
   const allInheritable =
     ticked.length > 0 && ticked.every((row) => row.inheritable);
   const capMin = (body.peerTurnCap?.current ?? 0) + 1;
+  // Per mounted card: a superseded or rejected request stays in the
+  // transcript, and a label must never reach that card's control.
+  const idPrefix = useId();
   return (
     <div className="flex flex-col gap-2">
       {body.reason ? <Markdown text={body.reason} density="compact" /> : null}
@@ -148,7 +152,7 @@ export function ApprovalGrantsRequestBody({
           {editable && items.length > 1 ? (
             <div className="flex items-center gap-2 text-foreground">
               <Checkbox
-                id="grants-request-all-scope"
+                id={`${idPrefix}-all-scope`}
                 checked={allInheritable}
                 disabled={ticked.length === 0}
                 onCheckedChange={(checked) =>
@@ -160,7 +164,7 @@ export function ApprovalGrantsRequestBody({
                   })
                 }
               />
-              <Label htmlFor="grants-request-all-scope">
+              <Label htmlFor={`${idPrefix}-all-scope`}>
                 Pass every ticked grant to the sessions it starts
               </Label>
             </div>
@@ -172,8 +176,8 @@ export function ApprovalGrantsRequestBody({
                 ticked: true,
                 inheritable: item.inheritable,
               };
-              const tickId = `grants-request-${item.key}`;
-              const scopeId = `grants-request-scope-${item.key}`;
+              const tickId = `${idPrefix}-tick-${item.key}`;
+              const scopeId = `${idPrefix}-scope-${item.key}`;
               return (
                 <li key={item.key} className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-2">
@@ -229,7 +233,7 @@ export function ApprovalGrantsRequestBody({
           {body.peerTurnCap && selection.cap ? (
             <div className="flex flex-wrap items-center gap-2 text-foreground">
               <Checkbox
-                id="grants-request-cap"
+                id={`${idPrefix}-cap`}
                 checked={selection.cap.ticked}
                 disabled={!editable}
                 onCheckedChange={(checked) =>
@@ -239,7 +243,7 @@ export function ApprovalGrantsRequestBody({
                   })
                 }
               />
-              <Label htmlFor="grants-request-cap">
+              <Label htmlFor={`${idPrefix}-cap`}>
                 Concurrent peer turns: {body.peerTurnCap.current} →
               </Label>
               <Input
