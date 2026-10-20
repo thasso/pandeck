@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test, vi } from "vitest";
+import { test } from "vitest";
 import type { ServerMessage, SessionListItem } from "@assistant/shared";
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
@@ -40,11 +40,8 @@ test("inspector command persists, broadcasts explicit and reset caps, and refuse
         cap,
       });
       assert.equal(sessionStore.get(id)?.peerTurnCap, cap ?? undefined);
-      await vi.waitFor(async () => {
-        await hub.flushPendingBroadcastsForTests();
-        assert.ok(seen());
-        assert.equal(seen()?.peerTurnCap, cap ?? undefined);
-      });
+      assert.ok(seen());
+      assert.equal(seen()?.peerTurnCap, cap ?? undefined);
     }
     assert.ok(seen(), "session update reached the other tab");
     sessionStore.markDeleted(id);

@@ -2292,16 +2292,17 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `directPeerTurnCapOf` inside the admission critical section. The persisted
   `session_index.peer_turn_cap` is nullable, default 4, bounded to integers 1-16
   by the shared validator and the store. `setSessionPeerTurnCap` is the
-  synchronous validate-and-persist domain writer for existing sessions, with
-  fire-and-forget session-list notification. It has no actor parameter and is
-  not an agent tool; the inspector command calls it, and approval executors can
-  compare and set without yielding. A creation-only `createSession` option
-  carries spawn-row or definition defaults. Forks do not inherit the cap.
-  Admission counts a coordinator's own counted direct child while its runtime is
-  RUNNING **or** while a prompt that coordinator sent it is still queued or
-  dispatching (`peerPromptStore.unfinishedTurnCount`). Low-cost children never
-  count and have no separate bound. `directPeerCostClass` uses the profile's
-  label, or, for an agent runtime, requires at least one enabled
+  synchronous validate-and-persist domain writer for existing sessions. Its
+  caller owns session-list notification: the inspector command awaits the
+  already-loaded hub's broadcast after a successful write, so the writer starts
+  no background module loads. It has no actor parameter and is not an agent
+  tool; approval executors can compare and set without yielding. A creation-only
+  `createSession` option carries spawn-row or definition defaults. Forks do not
+  inherit the cap. Admission counts a coordinator's own counted direct child
+  while its runtime is RUNNING **or** while a prompt that coordinator sent it is
+  still queued or dispatching (`peerPromptStore.unfinishedTurnCount`). Low-cost
+  children never count and have no separate bound. `directPeerCostClass` uses
+  the profile's label, or, for an agent runtime, requires at least one enabled
   provider/model/thinking match with every match low, ignoring accounts. Unknown
   or conflicting cost counts. The child keeps its admitted class; a synchronous
   re-check immediately before creation refuses a low-to-counted change. Both

@@ -1204,6 +1204,7 @@ export class Connection implements Viewer {
       case "setSessionPeerTurnCap":
         try {
           setSessionPeerTurnCap(msg.sessionId, msg.cap);
+          await hub.broadcastSessions();
         } catch (err) {
           this.send({
             type: "error",

@@ -1,6 +1,10 @@
 import { expect, test, vi } from "vitest";
 import { isSessionPeerTurnCap } from "@assistant/shared";
-vi.mock("./hub.ts", () => ({ hub: { broadcastSessions: vi.fn() } }));
+const hubLoad = vi.hoisted(() => vi.fn());
+vi.mock("./hub.ts", () => {
+  hubLoad();
+  return { hub: { broadcastSessions: vi.fn() } };
+});
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { closeDb } = await import("./db/index.ts");
 const {
@@ -11,12 +15,18 @@ const {
   resetDirectPeerChildrenForTests,
 } = await import("./peerSpawnRuntimes.ts");
 const inspection = await import("./tools/sessions/sessionInspection.ts");
-// Load the mocked notification module before synchronous setters fire-and-forget.
-await import("./hub.ts");
 
 function create(id: string) {
   sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
 }
+
+test("a synchronous cap write does not start loading the session hub", async () => {
+  const id = "cap-no-hub-load";
+  create(id);
+  setSessionPeerTurnCap(id, 6);
+  await vi.dynamicImportSettled();
+  expect(hubLoad).not.toHaveBeenCalled();
+});
 
 test("cap bounds reject non-integers and non-numbers", () => {
   for (const value of [1, 16]) expect(isSessionPeerTurnCap(value)).toBe(true);
