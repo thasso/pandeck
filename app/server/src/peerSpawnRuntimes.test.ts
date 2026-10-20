@@ -871,6 +871,27 @@ test("a child whose opening prompt is only QUEUED still holds its slot", async (
   vi.restoreAllMocks();
 });
 
+test("a settled prompt still consumes cap until its counted child stops running", async () => {
+  const states = new Map<string, string>();
+  vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
+    (id) => (states.get(id) ?? "idle") as never,
+  );
+  for (let i = 0; i < MAX_CONCURRENT_DIRECT_PEER_TURNS; i++) {
+    const child = `settled-running-${i}`;
+    recordChild(child, "counted");
+    const prompt = queuePromptTo(child);
+    peerPromptStore.claimNext(child, "test", 60_000);
+    peerPromptStore.markAdmitted(prompt.id);
+    peerPromptStore.markCompleted(prompt.id);
+    peerPromptStore.markSettled(child, [prompt.id], "No reply needed");
+    expect(peerPromptStore.getById(prompt.id)?.status).toBe("settled");
+    states.set(child, "running");
+  }
+  expect(await decide(counted(1))).toEqual(["hold"]);
+  states.set("settled-running-0", "idle");
+  expect(await decide(counted(2))).toEqual(["start", "hold"]);
+});
+
 test("another coordinator's queued turn does not spend this one's budget", async () => {
   vi.spyOn(inspection, "runtimeStateReader").mockResolvedValue(
     () => "not_loaded" as never,

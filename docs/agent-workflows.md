@@ -160,8 +160,12 @@ the outcome:
   the child. A low-to-counted change before creation refuses that row; a
   counted-to-low change still counts. The children are durable
   (`direct_peer_children`), so a restart counts the work that survived it.
-  Card-approved `propose` spawns are outside this admission gate. Each batch
-  still has at most eight rows.
+  Children created before this registry shipped are outside its accounting; old
+  spawn edges cannot prove their approved runtime or cost class and are not
+  backfilled. Immediate starts also re-check the current roster's enabled state,
+  exact runtime and account pin after the final pi lookup, without yielding
+  before creation. Card-approved `propose` spawns are outside this admission
+  gate. Each batch still has at most eight rows.
 
   Nothing is refused for the cap. A counted row over it is still created (the
   spawner gets its id, title and worktree) but its opening prompt is stored
@@ -229,38 +233,6 @@ the outcome:
   later slot-start pass or restart cannot dispatch one. See
   [Compaction window](compaction-window.md) for ranges and pi's summary-cost
   risk.
-
-  #### Peer-message hop limit
-
-  Peer prompts share a server-owned causal chain. A chain permits
-  `sessionPeerPromptMaxHops` accepted sends since human intervention, default
-  50, configurable from 1 to 200. Hops are reserved at enqueue, not delivery, so
-  queued and concurrent sends count too. A refusal queues nothing and does not
-  mark an awaited request replied or consume another hop.
-
-  A session can always send a report to its immediate spawner, identified by the
-  durable `session_links` `spawned` edge. This exception applies regardless of
-  ownership, reply correlation, or `responseRequested`. It does not apply to a
-  grandparent, a sibling, a fork parent, or a downward send. Exempt reports
-  still increment the chain's hop count. They preserve an honest send count and
-  cannot create a budget for the next downward or sideways send. Every loop in a
-  spawn tree contains such a non-upward send, so upward reports cannot sustain a
-  loop after the limit.
-
-  A refused send raises a durable condition on its sending session. The Sessions
-  inbox shows **Reset chain** in `needs-you`, including through a folded
-  coordinator tree. The session shows the chain id, limit, and reset
-  instructions above its composer. The first refusal per sender and chain also
-  notifies the user when away, even for a coordinator-owned child. Repeated
-  attempts do not repeat that notification. Reading, settling, agent turns,
-  restarts, and time do not resolve the condition.
-
-  Any human-origin prompt to any participant closes all open chains that session
-  participates in and resolves their refusal conditions. Future sends use a
-  fresh chain. Already queued messages retain their old chain and hop, but their
-  replies cannot reopen it. Resume, restart, Task attachment, and agent or
-  system prompts do not reset chains. The refused message is not automatically
-  retried, so the human should ask the agent to retry it.
 
   That spawn edge also carries WHO OWNS the child ([Task-637](pa://task/637)),
   as `SessionListItem.spawnOwnership`:
@@ -341,6 +313,39 @@ the outcome:
   Clearing another session's messages is allowed only through that owned-child
   stop operation. Stopping leaves the ordinary session and its transcript
   intact.
+
+  #### Peer-message hop limit
+
+  Peer prompts share a server-owned causal chain. A chain permits
+  `sessionPeerPromptMaxHops` accepted sends since human intervention, default
+  50, configurable from 1 to 200. Hops are reserved at enqueue, not delivery, so
+  queued and concurrent sends count too. A refusal queues nothing and does not
+  mark an awaited request replied or consume another hop.
+
+  A session can always send a report to its immediate spawner, identified by the
+  durable `session_links` `spawned` edge. This exception applies regardless of
+  ownership or `responseRequested`, but never bypasses stale `inReplyTo`
+  validation. It does not apply to a grandparent, a sibling, a fork parent, or a
+  downward send. Exempt reports still increment the chain's hop count. They
+  preserve an honest send count and cannot create a budget for the next downward
+  or sideways send. Every loop in a spawn tree contains such a non-upward send,
+  so upward reports cannot sustain a loop after the limit.
+
+  A refused send raises a durable condition on its sending session. The Sessions
+  inbox shows **Reset chain** in `needs-you`, including through a folded
+  coordinator tree. A concurrent pending question leads instead, without
+  clearing the refusal. The session shows the chain id, limit, and reset
+  instructions above its composer. The first refusal per sender and chain also
+  notifies the user when away, even for a coordinator-owned child. Repeated
+  attempts do not repeat that notification. Reading, settling, agent turns,
+  restarts, and time do not resolve the condition.
+
+  Any human-origin prompt to any participant closes all open chains that session
+  participates in and resolves their refusal conditions. Future sends use a
+  fresh chain. Already queued messages retain their old chain and hop, but their
+  replies cannot reopen it. Resume, restart, Task attachment, and agent or
+  system prompts do not reset chains. The refused message is not automatically
+  retried, so the human should ask the agent to retry it.
 
   Peers talk over `session_send_prompt`, which takes `rows`, 1 to 10
   ([Task-942](pa://task/942)). Each row is its own message with its own result,

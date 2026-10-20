@@ -296,9 +296,12 @@ and another's `jira:edit`.
   spawns through it. Its OWN inheritable grants still reach its descendants. A
   row that does not set it takes its agent definition's `inheritGrants`
   ([agent-definitions.md](agent-definitions.md#the-file)), else inherits; an
-  explicit row value always wins. The choice is fixed at spawn: the propose card
-  shows "Won't inherit your approvals" on such a row but does not offer to
-  change it, and Take over / Hand back keep it.
+  explicit row value always wins. An already-granted check describes the current
+  session's effective scope, not a prediction about future children: a later
+  `inheritGrants: false` deliberately opts out even when the current session
+  holds an inheritable key. The choice is fixed at spawn: the propose card shows
+  "Won't inherit your approvals" on such a row but does not offer to change it,
+  and Take over / Hand back keep it.
 - **Edges from before inheritance inherit.** An edge with no flag inherits, so
   peers spawned before this shipped, reviewers included, started inheriting on
   deploy. Revoke on the ancestor to stop it.

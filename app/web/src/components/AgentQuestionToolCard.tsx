@@ -111,14 +111,28 @@ export function questionFlowForBlock(
   if (exactAnswered) return { answered: exactAnswered };
   const exactPending = pending?.find((r) => r.toolCallId === block.toolId);
   if (exactPending) return { pending: exactPending };
-  const shapeAnswered = answered?.find((a) =>
-    mcpGeneratedToolCallMatchesBlock(a, block),
+  const flows: QuestionFlowMatch[] = [
+    ...(answered ?? []).map((a) => ({ answered: a })),
+    ...(pending ?? []).map((r) => ({ pending: r })),
+  ];
+  // Keep the lead in step with questionTool.ts's POSTED_FLOW_RE. The result
+  // names this flow first; later text may also name other still-open flows.
+  const requestId =
+    typeof block.output === "string"
+      ? /^Posted \d+ questions? to the user in the app's question panel as flow (question-(?:[A-Za-z0-9-]+)) \(/.exec(
+          block.output,
+        )?.[1]
+      : undefined;
+  if (requestId)
+    return flows.find(
+      (flow) => (flow.answered ?? flow.pending).requestId === requestId,
+    );
+  const matches = flows.filter((flow) =>
+    mcpGeneratedToolCallMatchesBlock(flow.answered ?? flow.pending, block),
   );
-  if (shapeAnswered) return { answered: shapeAnswered };
-  const shapePending = pending?.find((r) =>
-    mcpGeneratedToolCallMatchesBlock(r, block),
-  );
-  return shapePending ? { pending: shapePending } : undefined;
+  // Old or still-streaming results have no request id. Never guess between
+  // identical unlinked flows, including one answered beside one still open.
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /**

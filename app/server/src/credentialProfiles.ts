@@ -328,13 +328,12 @@ function shellQuote(value: string): string {
 
 /**
  * One-time compatibility seed: copies the former pi agent state into PA-owned
- * storage before the SDK is initialized. No later runtime path reads `~/.pi`.
+ * storage only from an explicit argument or ASSISTANT_LEGACY_PI_AGENT_DIR.
+ * A fresh DATA_DIR never silently imports credentials from the user's home.
  */
 export function migrateLegacyDefaultPiProfile(legacyAgentDir?: string): void {
-  const source =
-    legacyAgentDir ??
-    process.env.ASSISTANT_LEGACY_PI_AGENT_DIR ??
-    join(homedir(), ".pi", "agent");
+  const source = legacyAgentDir ?? process.env.ASSISTANT_LEGACY_PI_AGENT_DIR;
+  if (!source) return;
   const destination = piAgentDir(DEFAULT_OPENAI_PROFILE_ID);
   const marker = join(
     profileRoot(DEFAULT_OPENAI_PROFILE_ID),

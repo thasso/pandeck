@@ -4837,6 +4837,7 @@ export type SessionAgentSummary =
       model: string;
       effort: ThinkingLevel;
       runtimeSource: SessionAgentRuntimeSource;
+      modelFallbackReason?: string;
       denyTools: string[];
       skills: string[];
     }

@@ -185,6 +185,27 @@ test("pi cards label the estimate and resolved cards show the actual persisted n
   expect(host.textContent).not.toContain("Estimate assuming");
 });
 
+test("a failed resolved proposal row shows its failure without a window estimate", () => {
+  const data = card();
+  if (data.body.kind !== "sessionSpawn") throw new Error("spawn card");
+  data.body.items = [
+    {
+      ...data.body.items[0]!,
+      error: "Creation refused",
+      compactionWindow: {
+        requested: 12_000,
+        source: "row",
+        tokens: 12_000,
+        estimated: true,
+      },
+    },
+  ];
+  render({ ...data, status: "failed" });
+  expect(host.textContent).toContain("Creation refused");
+  expect(host.textContent).not.toContain("12,000");
+  expect(host.textContent).not.toContain("Estimate assuming");
+});
+
 test("shows every proposed session, its target and its runtime", () => {
   render(card());
 

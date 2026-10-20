@@ -215,6 +215,7 @@ interface AgentDefinitionRead {
 async function readAgentDefinition(
   name: string,
   scanned?: { library: LibraryStore; scan: LibraryScan },
+  includeDisabledModels = false,
 ): Promise<AgentDefinitionRead> {
   // A name no definition could declare is refused unquoted: it is the
   // caller's own input, of any size.
@@ -244,7 +245,10 @@ async function readAgentDefinition(
   try {
     // The bytes being frozen are parsed again, not trusted to the scan.
     manifest = assertManifest(agentKind, read.source, read.path);
-    listed = (await checkAgentRuntime(manifest, { checkModel: "each" }))!;
+    listed = (await checkAgentRuntime(manifest, {
+      checkModel: "each",
+      includeDisabledModels,
+    }))!;
   } catch (error) {
     throw new AgentSpawnRefusedError(
       `Agent "${name}" cannot run: ${(error as Error).message}`,
@@ -414,7 +418,13 @@ export async function resolveAgentSpawn(
     allowModelFallback?: boolean;
   } = {},
 ): Promise<AgentSpawnRuntime> {
-  const read = await readAgentDefinition(name, scanned);
+  const allowFallback =
+    options.allowModelFallback === true &&
+    options.model === undefined &&
+    options.profileId === undefined;
+  // Disabled accounts may still identify a known default model. They never
+  // authorize a start: every candidate must pass the scoped account router.
+  const read = await readAgentDefinition(name, scanned, allowFallback);
   let chosen: { spec: string; runtime: AgentRuntime } | undefined;
   try {
     chosen = chosenModel(name, read.listed, options.model);
@@ -429,11 +439,8 @@ export async function resolveAgentSpawn(
       : await pick(chosen.runtime);
     let modelFallbackReason: string | undefined;
     if (
-      options.allowModelFallback === true &&
-      options.model === undefined &&
-      options.profileId === undefined &&
-      account.profileId &&
-      account.degraded === "no-eligible-account"
+      allowFallback &&
+      (!account.profileId || account.degraded === "no-eligible-account")
     ) {
       const skipped = [unavailableReason(chosen.spec, account)];
       for (const alternative of read.listed.slice(1)) {

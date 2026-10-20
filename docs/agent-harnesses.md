@@ -166,7 +166,10 @@ Four layers, each depending only on the ones below it:
      (`engineTranscript`) and whether a reopen has what it needs
      (`storedSessionState`). The registry adds what needs the stores: the engine
      and persona a row-less session opens as (`rowlessRef`) and why a stored
-     session cannot be opened (`unopenableReason`).
+     session cannot be opened (`unopenableReason`). `hub.acquireById` reopens
+     the harness's persisted record, including its model, rather than treating
+     the metadata list row as a new-session specification. A metadata-only
+     fixture does not select the model of an existing native record.
    - `harnesses/availability.ts` says whether an existing session may be opened
      now (`existingSessionRefusal`): a Claude session waits on the Claude SDK
      setting, a pi session on its persona's availability.

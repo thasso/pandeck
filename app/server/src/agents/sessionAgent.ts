@@ -199,6 +199,9 @@ export function sessionAgentSummary(
     }`,
     effort: agent.effort,
     runtimeSource: agent.runtimeSource,
+    ...(agent.modelFallbackReason
+      ? { modelFallbackReason: agent.modelFallbackReason }
+      : {}),
     denyTools: agent.denyTools,
     skills: agent.skills,
   };

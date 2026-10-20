@@ -41,6 +41,7 @@ it("shows the frozen agent and opens its definition by name", () => {
           model: "claude-sdk/opus (claude-opus-5-5)",
           effort: "high",
           runtimeSource: "definition",
+          modelFallbackReason: "sol has no enabled account in scope; used opus",
           denyTools: ["worktree_push"],
           skills: [],
         }}
@@ -51,6 +52,7 @@ it("shows the frozen agent and opens its definition by name", () => {
   const text = container!.textContent ?? "";
   expect(text).toContain("claude-sdk/opus (claude-opus-5-5), high effort");
   expect(text).toContain("The definition's model list");
+  expect(text).toContain("sol has no enabled account in scope; used opus");
   expect(text).toContain("worktree_push");
   expect(text).toContain("0123456789ab");
   const link = [...container!.querySelectorAll("button")].find(

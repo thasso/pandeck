@@ -160,13 +160,16 @@ create or edit form, and its only Initiative write is Settle.
   number, URL, status, draft, last observed `headSha`, conflicts, and checks and
   review only while open. Settled sessions and removed worktrees still
   contribute PRs. Session state is live at read time (`activityAsOf` on the
-  answer); PR observations come from stored cards, not a provider refresh. Each
-  member lists at most 5 sessions, 3 worktrees and 3 PRs, with `sessionCount`,
-  `worktreeCount` or `pullRequestCount` when capped. Sessions list at most 3
-  owed ids with `owedReplyCount` when capped; titles are clipped to 120 UTF-8
-  bytes. Activity is the first whole field dropped if a member exceeds 4 KB,
-  before other optional fields or required-string clipping. Paging and the 24 KB
-  whole-answer cap are unchanged. List reads do not accept `includeActivity`.
+  answer); PR observations come from stored cards, not a provider refresh.
+  Shared or reused worktrees give non-exclusive PR attribution: the same PR may
+  appear under more than one member Task. This summary does not assign a PR an
+  exclusive owner. Each member lists at most 5 sessions, 3 worktrees and 3 PRs,
+  with `sessionCount`, `worktreeCount` or `pullRequestCount` when capped.
+  Sessions list at most 3 owed ids with `owedReplyCount` when capped; titles are
+  clipped to 120 UTF-8 bytes. Activity is the first whole field dropped if a
+  member exceeds 4 KB, before other optional fields or required-string clipping.
+  Paging and the 24 KB whole-answer cap are unchanged. List reads do not accept
+  `includeActivity`.
 - `initiative_manage`: a batch of `create`, `update` (title, description,
   state), `addMembers`, `removeMembers`, `setMilestone` / `clearMilestone`,
   `archive`, `unarchive` and `delete`. Each operation is all-or-nothing, like

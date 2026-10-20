@@ -158,7 +158,9 @@ range:
 
   After each real rebuild it re-reads the underlying reserve and re-applies. A
   pi upgrade that changes that set needs the controller revisited; its tests run
-  on a real `SettingsManager`.
+  on a real `SettingsManager`. pi's `save()` also drops the separate in-memory
+  retry-suppression override. No production path calls it today; this controller
+  restores only the compaction window, not other SettingsManager overrides.
 
 - Clearing writes back each touched model's underlying reserve. A model switch
   writes the window for the new model.

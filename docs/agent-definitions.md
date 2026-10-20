@@ -158,33 +158,37 @@ explicit one (`checkAgentRuntime`).
 
 Validation at write time checks that every listed model resolves against the
 accounts connected right now. A spawn resolves them again and needs only the one
-it runs on (`checkModel: "each"`). A model that stopped resolving, because an
-account was removed, refuses the spawn with the reason. There is no fallback to
-another model for a resolution failure: an unavailable default refuses and names
-the listed models that can run, and the caller picks one explicitly. A default
-that still resolves but whose router pick is `no-eligible-account`, because
-every enabled account in scope is benched, unhealthy or cannot offer the
-runtime, may instead use the next listed model with an eligible account.
-Alternatives are tried in definition order, skipping unresolved models and
-degraded picks. `requiresEnterprise` constrains every pick, so a healthy
-personal account never makes an enterprise-only alternative available.
+it runs on (`checkModel: "each"`). Direct automatic fallback may use disabled
+accounts to identify known models, never to authorize a start. A model that
+stopped resolving because its account was removed refuses with the reason. There
+is no fallback to another model for a resolution failure: an unavailable default
+refuses and names the listed models that can run, and the caller picks one
+explicitly. A default that still resolves but has no enabled account in scope,
+or whose router pick is `no-eligible-account` because every enabled account in
+scope is benched, unhealthy or cannot offer the runtime, may instead use the
+next listed model with an eligible account. Alternatives are tried in definition
+order, skipping unresolved models and degraded picks. `requiresEnterprise`
+constrains every pick, so a healthy personal account never makes an
+enterprise-only alternative available.
 
 An explicit spawn-row `modelId` never falls back, even when its accounts are
 benched. A caller-selected account also stays exact. If no listed alternative
 has an eligible account, the original router's degraded default remains the
-choice, preserving its existing best-effort start policy. A missing or
-unresolvable default and a provider/model lookup failure still refuse, rather
-than trigger health fallback.
+choice, preserving its existing best-effort start policy. Without a default
+account or an eligible alternative, the spawn refuses. A missing or unresolvable
+default and a provider/model lookup failure still refuse, rather than trigger
+health fallback.
 
-The spawn result and `operation: "agents"` report the model actually selected
-and the reason for any substitution. The frozen session-agent record stores
-`modelFallbackReason` beside that runtime. A reason can include the selected
-account's bench reset time, in UTC; it does not claim that every account resets
-at that time. Health is read again immediately before creation. This is only a
-spawn-time model choice, not cross-provider failover for a running session. Only
-direct `session_spawn` and that tool's `agents` preview opt into health
-fallback. Browser agent listings and first sends retain their default-model
-policy, so temporary benches do not silently change the new-session prefill.
+The spawn result, `operation: "agents"` and the session inspector report the
+model actually selected and the reason for any substitution. The frozen
+session-agent record stores `modelFallbackReason` beside that runtime. A reason
+can include the selected account's bench reset time, in UTC; it does not claim
+that every account resets at that time. Health is read again immediately before
+creation. This is only a spawn-time model choice, not cross-provider failover
+for a running session. Only direct `session_spawn` and that tool's `agents`
+preview opt into health fallback. Browser agent listings and first sends retain
+their default-model policy, so temporary benches do not silently change the
+new-session prefill.
 
 ### The account
 

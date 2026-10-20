@@ -1112,6 +1112,67 @@ describe("peer prompt engine", () => {
     assert.equal(message.hop, 1);
   });
 
+  it("rejects a stale inReplyTo even for a hop-exempt upward report without queue or hop effects", async () => {
+    const original = getSettings().sessionPeerPromptMaxHops;
+    updateSettings({ sessionPeerPromptMaxHops: 1 });
+    try {
+      const parent = seed("Stale report parent");
+      const child = seed("Stale report child");
+      sessionStore.linkSpawned(parent, child);
+      const { message: assignment } = await sendPeerPrompt({
+        senderSessionId: parent,
+        targetSessionId: child,
+        prompt: "implement",
+        responseRequested: true,
+      });
+      peerPromptStore.markAdmitted(
+        peerPromptStore.claimNext(child, "test", 60_000)!.id,
+      );
+      const stale = peerPromptStore.enqueue({
+        conversationId: assignment.conversationId,
+        chainId: assignment.chainId,
+        hop: 1,
+        senderSessionId: parent,
+        recipientSessionId: child,
+        prompt: "old question",
+        responseRequested: true,
+      });
+      peerPromptStore.claimNext(child, "test", 60_000);
+      peerPromptStore.markAdmitted(stale.id);
+      peerPromptStore.markCompleted(stale.id);
+      peerPromptStore.markSettled(child, [stale.id], "already handled");
+      const before = peerPromptStore.listByChain(assignment.chainId);
+      const nextHop = peerPromptStore.getChain(assignment.chainId)!.nextHop;
+      await assert.rejects(
+        sendPeerPrompt({
+          senderSessionId: child,
+          targetSessionId: parent,
+          prompt: "done",
+          responseRequested: false,
+          inReplyTo: [peerRequestKey(stale)],
+        }),
+        /not an open request/,
+      );
+      assert.deepEqual(peerPromptStore.listByChain(assignment.chainId), before);
+      assert.equal(
+        peerPromptStore.getChain(assignment.chainId)!.nextHop,
+        nextHop,
+      );
+      assert.equal(peerPromptStore.getById(assignment.id)?.status, "admitted");
+      assert.equal(peerPromptStore.hopRefusalsBySender().has(child), false);
+      // The same upward report without the stale key is genuinely exempt.
+      const { message: report } = await sendPeerPrompt({
+        senderSessionId: child,
+        targetSessionId: parent,
+        prompt: "done",
+        responseRequested: false,
+      });
+      assert.equal(report.hop, 2);
+    } finally {
+      updateSettings({ sessionPeerPromptMaxHops: original });
+    }
+  });
+
   it("lets reports climb the spawn tree beyond the limit without sustaining a loop", async () => {
     const original = getSettings().sessionPeerPromptMaxHops;
     updateSettings({ sessionPeerPromptMaxHops: 1 });
