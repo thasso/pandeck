@@ -634,6 +634,7 @@ test("find_tools still discovers app tools by capability", async () => {
       ["read another session's log", "session_read"],
       ["send a prompt to another session", "session_send_prompt"],
       ["stop a spawned child session", "session_control"],
+      ["lower this session's compaction window", "session_compaction_window"],
       ["search the web", "web_search"],
       ["convert a pdf attachment to markdown", "convert_pdf"],
       ["write a knowledge base entry", "kb_write"],

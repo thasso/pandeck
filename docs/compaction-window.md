@@ -6,8 +6,8 @@ default applies, which is the behaviour sessions had before the window existed.
 It exists because Claude sessions on 1M-window models otherwise compact only
 near 1M, and every tool call re-reads the whole context (Task-946).
 
-This document owns the contract. Task-969 (an agent lowering its own window) and
-Task-970 (spawn rows and the `AGENT.md` field) build on it.
+This document owns the contract. Task-969 (an agent lowering its own window,
+delivered) and Task-970 (spawn rows and the `AGENT.md` field) build on it.
 
 ## Storage
 
@@ -47,19 +47,29 @@ range:
 
 - **User** (the inspector): any value in the range, or clear. The value is
   stored first, then handed to the live harness.
-- **Agent** (Task-969; no caller yet): only its own running session, never a
-  clear. Checks, in order, each refusing before any effect:
+- **Agent** (Task-969): the deferred, Build-only tool
+  `session_compaction_window { tokens }`
+  (`tools/sessions/sessionCompactionWindowTool.ts`). It acts only on the calling
+  session, during a turn, and never clears. Checks, in order, each refusing
+  before any effect:
   1. the provider reports compaction turned off;
   2. pi only: its applied state is `unknown` after a failed change;
   3. the value is at least the agent floor, 100 000, and within the range;
-  4. it does not raise the window. Claude: below the window the current or last
-     process runs with (its start value, or with none the reported threshold +
-     13 000), and below the stored value if there is one. With no report of the
-     running window it refuses. pi: below the current trigger from pi's own
-     resolver.
+  4. it does not raise the window. Claude: below the window the current process
+     runs with (its start value, or with none the reported threshold + 13 000),
+     and below the stored value if there is one. pi: below the current trigger
+     from pi's own resolver.
 
-  The stored value never authorizes an agent change and is never a rollback
-  target.
+  Claude checks only against the RUNNING process. Its provider switch and
+  running window must be known for that process: from a report it already sent,
+  or from one summary `getContextUsage` read, bounded at 10 seconds. With no
+  running process, a failed or silent read, a reply missing either field, or a
+  process that changed while reading, it refuses with nothing stored. It never
+  falls back to an earlier process's report.
+
+  The result says when the value applies: Claude when the next process starts
+  (normally the next turn), pi now. The stored value never authorizes an agent
+  change and is never a rollback target.
 
 - **Spawn** (Task-970): a row value is agent-written, so it must be between the
   agent floor and the model's native trigger. A definition default is clamped
@@ -156,3 +166,13 @@ real `ClaudeSdkSession` on the real SDK seam.
 
 The start path, in-turn compaction and resume follow the window. The live path
 does not. Revisit the live path when the SDK is upgraded.
+
+Task-969's agent path ran live on 2026-10-20, same SDK, Opus 5.5, an unbound
+session with nothing stored, through the real tool and setter:
+
+- On its first turn, `session_compaction_window { tokens: 150000 }` read the
+  running process mid-turn (threshold 967 000) and stored 150 000 in about 50
+  ms, pending `process-restart`; the turn finished normally.
+- The next turn's process started with 150 000 ("Applied"); its threshold was
+  117 000.
+- A later call with 200 000 was refused: the largest acceptable was 149 999.

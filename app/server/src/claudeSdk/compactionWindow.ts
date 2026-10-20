@@ -36,6 +36,9 @@ const CAPABILITY = HARNESSES["claude-sdk"].compactionWindow!;
  */
 const THRESHOLD_MIN_OFFSET = 13_000;
 
+/** How long the agent path waits for the CLI's context report. */
+const USAGE_READ_TIMEOUT_MS = 10_000;
+
 type ContextUsage = Awaited<
   ReturnType<NonNullable<ClaudeQuery["getContextUsage"]>>
 >;
@@ -53,6 +56,8 @@ interface EpochWindow {
   started: number | null;
   trigger?: number;
   disabled?: boolean;
+  /** The CLI reported this epoch's auto-compact switch. */
+  switchReported?: boolean;
 }
 
 /** What the last finished epoch reported, shown while no process runs. */
@@ -120,8 +125,29 @@ export class ClaudeCompactionWindow {
     if (epoch?.epochKey !== epochKey) return;
     if (typeof usage.autoCompactThreshold === "number")
       epoch.trigger = usage.autoCompactThreshold;
-    if (typeof usage.isAutoCompactEnabled === "boolean")
+    if (typeof usage.isAutoCompactEnabled === "boolean") {
       epoch.disabled = !usage.isAutoCompactEnabled;
+      epoch.switchReported = true;
+    }
+  }
+
+  /**
+   * Whether `epochKey` is the running epoch, and whether the agent path must
+   * read the CLI's report first: the epoch has not reported its switch, or
+   * (switched on) started with no value and has no threshold to bound it.
+   */
+  agentCheck(epochKey: string): { current: boolean; needsRead: boolean } {
+    const epoch = this.currentEpoch();
+    if (epoch?.epochKey !== epochKey)
+      return { current: false, needsRead: false };
+    return {
+      current: true,
+      needsRead:
+        !epoch.switchReported ||
+        (!epoch.disabled &&
+          epoch.started === null &&
+          epoch.trigger === undefined),
+    };
   }
 
   status(stored: number | undefined): CompactionWindowLiveStatus {
@@ -168,9 +194,10 @@ export class ClaudeCompactionWindow {
   /**
    * The agent path, in the precedence of `docs/compaction-window.md`: the
    * provider's own switch, the floor and range, then the non-raising check.
-   * The value must be below the window the current (or last) process runs
-   * with, and below the stored value the next process would start with. The
-   * stored value only ever tightens the bound: it never authorizes on its own.
+   * The value must be below the window the current process runs with, and
+   * below the stored value the next process would start with. The stored
+   * value only ever tightens the bound: it never authorizes on its own. The
+   * session calls it only for the running epoch, once `agentCheck` passes.
    * On success `persist` stores it; it applies when the next process starts.
    */
   lower(
@@ -249,5 +276,26 @@ export class ClaudeCompactionWindow {
       ...(epoch.trigger !== undefined ? { trigger: epoch.trigger } : {}),
       ...(epoch.disabled ? { disabled: true } : {}),
     };
+  }
+}
+
+/**
+ * One summary context report for the agent path, or `undefined` when the
+ * query cannot answer, fails, or stays silent past the bound.
+ */
+export async function readContextUsage(
+  query: ClaudeQuery,
+): Promise<ContextUsage | undefined> {
+  const read = query.getContextUsage?.({ detail: "summary" });
+  if (!read) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const silence = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), USAGE_READ_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([read.catch(() => undefined), silence]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

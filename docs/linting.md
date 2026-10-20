@@ -475,10 +475,11 @@ side.
 
 The four modules that reach `hub.ts` back lazily — `sessionActivity.ts`,
 `pendingApprovals.ts`, `pullRequestCards.ts`, `peerPrompt.ts` — do it precisely
-so the static graph stays acyclic, each with a comment saying so. Rejecting that
-would push them onto a startup-ordered injection seam: a self-healing lazy read
-traded for one that silently does nothing if a setter never ran, and two of the
-four already swallow failure in a `catch {}`.
+so the static graph stays acyclic, each with a comment saying so. The
+`session_compaction_window` tool reaches the setter (and so `hub.ts`) the same
+way. Rejecting that would push them onto a startup-ordered injection seam: a
+self-healing lazy read traded for one that silently does nothing if a setter
+never ran, and two of the four already swallow failure in a `catch {}`.
 
 Breaking a cycle is a design decision, so the shapes used here are worth naming.
 In order of preference:

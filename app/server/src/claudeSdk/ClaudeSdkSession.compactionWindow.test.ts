@@ -2,14 +2,15 @@
  * The Claude compaction window (`docs/compaction-window.md`): a query starts
  * with the stored window, a running or retained process keeps the window it
  * started with (nothing is sent live), the next start applies a change, and
- * the agent's lowering checks run against what the next process would use.
+ * the agent's lowering checks run against the running process, known in its
+ * own epoch, and against what the next process would use.
  *   pnpm --filter @assistant/server test src/claudeSdk/ClaudeSdkSession.compactionWindow.test.ts
  */
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import type {
   ClaudeQuery,
   ClaudeQueryParams,
@@ -67,15 +68,20 @@ class OutputQueue implements AsyncIterable<ClaudeSdkMessage> {
   }
 }
 
+type Usage = Awaited<ReturnType<NonNullable<ClaudeQuery["getContextUsage"]>>>;
+
 /**
  * A query whose threshold follows its START settings only, like the CLI:
- * `applyFlagSettings` is recorded and has no effect.
+ * `applyFlagSettings` is recorded and has no effect. `summary` intercepts the
+ * agent path's summary reads only; the result-time refresh is never held.
  */
 class FakeQuery implements ClaudeQuery {
   readonly output = new OutputQueue();
   readonly inputs: ClaudeSdkUserMessage[] = [];
   readonly flagCalls: Record<string, unknown>[] = [];
+  readonly usageReads: string[] = [];
   enabled = true;
+  summary?: (usage: Usage) => Promise<Usage>;
 
   constructor(readonly params: ClaudeQueryParams) {
     void this.consumeInput();
@@ -96,18 +102,21 @@ class FakeQuery implements ClaudeQuery {
     this.flagCalls.push(settings);
   }
 
-  async getContextUsage() {
+  async getContextUsage(opts?: { detail?: "summary" | "full" }) {
+    const detail = opts?.detail ?? "full";
+    this.usageReads.push(detail);
     const settings = this.params.options?.settings as
       { autoCompactWindow?: number } | undefined;
     const window = Math.min(
       settings?.autoCompactWindow ?? 1_000_000,
       1_000_000,
     );
-    return {
+    const usage: Usage = {
       mcpTools: [],
       autoCompactThreshold: window - 33_000,
       isAutoCompactEnabled: this.enabled,
     };
+    return detail === "summary" && this.summary ? this.summary(usage) : usage;
   }
 
   private async consumeInput(): Promise<void> {
@@ -140,6 +149,16 @@ function result(uuid: string): ClaudeSdkMessage {
     permission_denials: [],
     stop_reason: null,
   } as unknown as ClaudeSdkMessage;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
 }
 
 async function until(check: () => boolean): Promise<void> {
@@ -177,6 +196,67 @@ function makeHarness(stored?: number) {
       providerSessionId: "provider-window",
     });
   return { id, session: make(), make, queries };
+}
+
+/** A harness whose first turn is running, and a recording `persist`. */
+async function midTurn(stored?: number) {
+  const harness = makeHarness(stored);
+  const adapter = harness.session.createRuntimeAdapter();
+  const turn = adapter.prompt("hello");
+  await until(() => harness.queries.length === 1);
+  const persisted: number[] = [];
+  const persist = (tokens: number) => {
+    persisted.push(tokens);
+    sessionStore.setCompactionWindow(harness.id, tokens);
+  };
+  return {
+    ...harness,
+    adapter,
+    turn,
+    query: harness.queries[0]!,
+    persisted,
+    persist,
+  };
+}
+
+/** Starts a background shell in the running turn, so its process is kept. */
+async function startBackgroundShell(query: FakeQuery): Promise<void> {
+  const pre = query.params.options?.hooks?.PreToolUse?.[0]?.hooks[0];
+  assert.ok(pre);
+  await pre(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-window",
+      transcript_path: "/tmp/transcript",
+      cwd: dataDir,
+      tool_name: "Bash",
+      tool_input: { command: "sleep 300", run_in_background: true },
+      tool_use_id: "tool-bg-1",
+    },
+    "tool-bg-1",
+    { signal: new AbortController().signal },
+  );
+  query.output.emit({
+    type: "system",
+    subtype: "task_started",
+    task_id: "vendor-1",
+    tool_use_id: "tool-bg-1",
+    description: "sleep",
+    task_type: "shell",
+    uuid: "started-1",
+    session_id: "provider-window",
+  } as unknown as ClaudeSdkMessage);
+}
+
+function enableBackgroundWork(): void {
+  updateSettings({
+    backgroundWork: {
+      enabled: true,
+      ownerSessionCap: 20,
+      taskLifetimeMinutes: 60,
+      claudeEmptyHostGraceSeconds: 30,
+    },
+  });
 }
 
 const startWindow = (query: FakeQuery) =>
@@ -245,45 +325,14 @@ test("a change during a running turn is stored, never sent, and applies at the n
 });
 
 test("a background-retained process keeps its window across turns; a restart applies the stored one", async () => {
-  updateSettings({
-    backgroundWork: {
-      enabled: true,
-      ownerSessionCap: 20,
-      taskLifetimeMinutes: 60,
-      claudeEmptyHostGraceSeconds: 30,
-    },
-  });
+  enableBackgroundWork();
   const { id, session, make, queries } = makeHarness();
   await sessionSkills(session.id, session.agentType);
   const adapter = session.createRuntimeAdapter();
   const first = adapter.prompt("start background work");
   await until(() => queries.length === 1);
   const query = queries[0]!;
-  const pre = query.params.options?.hooks?.PreToolUse?.[0]?.hooks[0];
-  assert.ok(pre);
-  await pre(
-    {
-      hook_event_name: "PreToolUse",
-      session_id: "provider-window",
-      transcript_path: "/tmp/transcript",
-      cwd: dataDir,
-      tool_name: "Bash",
-      tool_input: { command: "sleep 300", run_in_background: true },
-      tool_use_id: "tool-bg-1",
-    },
-    "tool-bg-1",
-    { signal: new AbortController().signal },
-  );
-  query.output.emit({
-    type: "system",
-    subtype: "task_started",
-    task_id: "vendor-1",
-    tool_use_id: "tool-bg-1",
-    description: "sleep",
-    task_type: "shell",
-    uuid: "started-1",
-    session_id: "provider-window",
-  } as unknown as ClaudeSdkMessage);
+  await startBackgroundShell(query);
   query.output.emit(result("r1"));
   await first;
 
@@ -359,34 +408,21 @@ test("a stored window above the model's range is clamped at start", async () => 
   assert.equal(queries.length, 0);
 });
 
-test("agent lowering: provider switch, floor and range, then non-raising against the next start", async () => {
-  const { id, session, queries } = makeHarness();
-  const persisted: number[] = [];
-  const persist = (tokens: number) => {
-    persisted.push(tokens);
-    sessionStore.setCompactionWindow(id, tokens);
-  };
-  const noReport = await session.lowerCompactionWindow(400_000, persist);
-  assert.equal(noReport.ok, false);
-  assert.match(!noReport.ok ? noReport.message : "", /not reported/);
-
-  const turn = session.createRuntimeAdapter().prompt("hello");
-  await until(() => queries.length === 1);
-  queries[0]!.output.emit(result("r1"));
-  await turn;
-
+test("agent lowering, first turn with nothing stored: one summary read, then floor, range and the reported threshold", async () => {
+  const { id, session, adapter, turn, query, queries, persisted, persist } =
+    await midTurn();
+  // With no stored window the threshold read now (967 000) bounds it.
+  const tooHigh = await session.lowerCompactionWindow(980_000, persist);
+  assert.equal(!tooHigh.ok && tooHigh.largestAcceptable, 979_999);
   for (const tokens of [90_000, 1_200_000]) {
     const outcome = await session.lowerCompactionWindow(tokens, persist);
     assert.equal(outcome.ok, false, `${tokens} is refused`);
   }
-  // With no stored window the reported 967 000 threshold bounds it.
-  const tooHigh = await session.lowerCompactionWindow(980_000, persist);
-  assert.equal(!tooHigh.ok && tooHigh.largestAcceptable, 979_999);
   assert.deepEqual(await session.lowerCompactionWindow(400_000, persist), {
     ok: true,
     previous: null,
     applied: 400_000,
-    pendingReason: "next-turn",
+    pendingReason: "process-restart",
   });
   // Now the stored window bounds it.
   const raise = await session.lowerCompactionWindow(400_000, persist);
@@ -394,48 +430,228 @@ test("agent lowering: provider switch, floor and range, then non-raising against
   const failed = await session.lowerCompactionWindow(300_000, () => {
     throw new Error("disk full");
   });
-  assert.equal(failed.ok, false);
   assert.match(!failed.ok ? failed.message : "", /disk full/);
+  assert.deepEqual(
+    query.usageReads,
+    ["summary"],
+    "one read for the epoch, never repeated",
+  );
   assert.deepEqual(persisted, [400_000]);
+  assert.equal(window(session)?.pendingReason, "process-restart");
+
+  query.output.emit(result("r1"));
+  await turn;
+  const next = adapter.prompt("next");
+  await until(() => queries.length === 2);
+  assert.equal(startWindow(queries[1]!), 400_000);
+  queries[1]!.output.emit(result("r2"));
+  await next;
   assert.equal(sessionStore.get(id)?.compactionWindow, 400_000);
-  assert.deepEqual(queries[0]!.flagCalls, []);
+  assert.deepEqual(
+    queries.flatMap((each) => each.flagCalls),
+    [],
+  );
   session.dispose();
+});
+
+test("agent lowering, stored start: the switch is still read, and the stored value bounds it", async () => {
+  const { id, session, turn, query, persisted, persist } =
+    await midTurn(300_000);
+  const same = await session.lowerCompactionWindow(300_000, persist);
+  assert.equal(!same.ok && same.largestAcceptable, 299_999);
+  assert.deepEqual(query.usageReads, ["summary"]);
+  assert.deepEqual(persisted, []);
+  assert.deepEqual(await session.lowerCompactionWindow(200_000, persist), {
+    ok: true,
+    previous: 300_000,
+    applied: 200_000,
+    pendingReason: "process-restart",
+  });
+  assert.equal(sessionStore.get(id)?.compactionWindow, 200_000);
+  query.output.emit(result("r1"));
+  await turn;
+  session.dispose();
+});
+
+test("agent lowering, stored start with the provider's compaction off: refused after the read", async () => {
+  const { id, session, turn, query, persisted, persist } =
+    await midTurn(300_000);
+  query.enabled = false;
+  const first = await session.lowerCompactionWindow(200_000, persist);
+  assert.match(!first.ok ? first.message : "", /turned off/);
+  const again = await session.lowerCompactionWindow(200_000, persist);
+  assert.match(!again.ok ? again.message : "", /turned off/);
+  assert.deepEqual(query.usageReads, ["summary"], "known off is not re-read");
+  assert.deepEqual(persisted, []);
+  assert.equal(sessionStore.get(id)?.compactionWindow, 300_000);
+  assert.deepEqual(query.flagCalls, []);
+  query.output.emit(result("r1"));
+  await turn;
+  session.dispose();
+});
+
+test("agent lowering: a failed read refuses even after another report for the epoch arrived", async () => {
+  const { id, session, turn, query, persisted, persist } = await midTurn();
+  const held = deferred<Usage>();
+  query.summary = () => held.promise;
+  const outcome = session.lowerCompactionWindow(400_000, persist);
+  await until(() => query.usageReads.includes("summary"));
+  query.output.emit(result("r1"));
+  await until(() => query.usageReads.includes("full"));
+  held.reject(new Error("control channel closed"));
+  const refused = await outcome;
+  assert.match(!refused.ok ? refused.message : "", /Could not read/);
+  await turn;
+  assert.deepEqual(persisted, []);
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  session.dispose();
+});
+
+test("agent lowering: a read that never answers refuses at its bound", async () => {
+  const { id, session, turn, query, persisted, persist } = await midTurn();
+  query.summary = () => new Promise<Usage>(() => {});
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const outcome = session.lowerCompactionWindow(400_000, persist);
+    await vi.advanceTimersByTimeAsync(10_001);
+    const refused = await outcome;
+    assert.match(!refused.ok ? refused.message : "", /Could not read/);
+  } finally {
+    vi.useRealTimers();
+  }
+  assert.deepEqual(persisted, []);
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  query.output.emit(result("r1"));
+  await turn;
+  session.dispose();
+});
+
+test("agent lowering: a read that answers after its process ended refuses, despite the ended report", async () => {
+  const { id, session, turn, query, persisted, persist } = await midTurn();
+  const held = deferred<Usage>();
+  query.summary = () => held.promise;
+  const outcome = session.lowerCompactionWindow(400_000, persist);
+  await until(() => query.usageReads.includes("summary"));
+  query.output.emit(result("r1"));
+  await turn;
+  assert.equal(
+    window(session)?.providerTrigger,
+    967_000,
+    "the ended epoch's report is saved",
+  );
+  held.resolve({
+    mcpTools: [],
+    autoCompactThreshold: 967_000,
+    isAutoCompactEnabled: true,
+  });
+  const refused = await outcome;
+  assert.match(!refused.ok ? refused.message : "", /changed while checking/);
+  assert.deepEqual(persisted, []);
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  session.dispose();
+});
+
+test("agent lowering: a read that answers after a replacement process started refuses", async () => {
+  const { id, session, adapter, turn, query, queries, persisted, persist } =
+    await midTurn(300_000);
+  const held = deferred<Usage>();
+  query.summary = () => held.promise;
+  const outcome = session.lowerCompactionWindow(200_000, persist);
+  await until(() => query.usageReads.includes("summary"));
+  query.output.emit(result("r1"));
+  await turn;
+  const next = adapter.prompt("next");
+  await until(() => queries.length === 2);
+  assert.equal(startWindow(queries[1]!), 300_000);
+  held.resolve({
+    mcpTools: [],
+    autoCompactThreshold: 267_000,
+    isAutoCompactEnabled: true,
+  });
+  const refused = await outcome;
+  assert.match(!refused.ok ? refused.message : "", /changed while checking/);
+  assert.deepEqual(persisted, []);
+  assert.equal(sessionStore.get(id)?.compactionWindow, 300_000);
+  assert.deepEqual(queries[1]!.usageReads, []);
+  queries[1]!.output.emit(result("r2"));
+  await next;
+  assert.deepEqual(
+    queries.flatMap((each) => each.flagCalls),
+    [],
+  );
+  session.dispose();
+});
+
+test("agent lowering: a read missing the switch, or the threshold of a no-value start, refuses", async () => {
+  for (const missing of ["isAutoCompactEnabled", "autoCompactThreshold"]) {
+    const { id, session, turn, query, persisted, persist } = await midTurn();
+    query.summary = async (usage) => {
+      const partial: Record<string, unknown> = { ...usage };
+      delete partial[missing];
+      return partial as Usage;
+    };
+    const refused = await session.lowerCompactionWindow(400_000, persist);
+    assert.match(
+      !refused.ok ? refused.message : "",
+      /Could not read/,
+      `without ${missing}`,
+    );
+    assert.deepEqual(persisted, []);
+    assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+    query.output.emit(result("r1"));
+    await turn;
+    session.dispose();
+  }
 });
 
 test("agent lowering: a pending stored raise never lifts the running window's bound", async () => {
-  const { id, session, queries } = makeHarness(200_000);
-  const turn = session.createRuntimeAdapter().prompt("hello");
-  await until(() => queries.length === 1);
-  queries[0]!.output.emit(result("r1"));
-  await turn;
-  // The process ran with 200 000; the user then stored a raise to 500 000.
+  const { id, session, turn, query, persisted, persist } =
+    await midTurn(200_000);
+  // The process runs with 200 000; the user then stored a raise to 500 000.
   sessionStore.setCompactionWindow(id, 500_000);
-  const persisted: number[] = [];
-  const raise = await session.lowerCompactionWindow(400_000, (tokens) =>
-    persisted.push(tokens),
-  );
-  assert.equal(raise.ok, false);
+  const raise = await session.lowerCompactionWindow(400_000, persist);
   assert.equal(!raise.ok && raise.largestAcceptable, 199_999);
-  assert.equal(persisted.length, 0);
+  assert.deepEqual(persisted, []);
   assert.equal(sessionStore.get(id)?.compactionWindow, 500_000);
-  const lower = await session.lowerCompactionWindow(150_000, (tokens) =>
-    persisted.push(tokens),
-  );
+  const lower = await session.lowerCompactionWindow(150_000, persist);
   assert.equal(lower.ok, true);
   assert.deepEqual(persisted, [150_000]);
+  assert.deepEqual(query.usageReads, ["summary"]);
+  query.output.emit(result("r1"));
+  await turn;
   session.dispose();
 });
 
-test("agent lowering refuses when the provider reports compaction off", async () => {
+test("agent lowering on a retained process uses its epoch's report; reported off refuses with no read", async () => {
+  enableBackgroundWork();
   const { session, queries } = makeHarness();
-  const turn = session.createRuntimeAdapter().prompt("hello");
+  await sessionSkills(session.id, session.agentType);
+  const turn = session.createRuntimeAdapter().prompt("start background work");
   await until(() => queries.length === 1);
-  queries[0]!.enabled = false;
-  queries[0]!.output.emit(result("r1"));
+  const query = queries[0]!;
+  await startBackgroundShell(query);
+  query.enabled = false;
+  query.output.emit(result("r1"));
   await turn;
   assert.equal(window(session)?.disabled, true);
-  const outcome = await session.lowerCompactionWindow(90_000, () => {});
+  const persisted: number[] = [];
+  const outcome = await session.lowerCompactionWindow(150_000, (tokens) =>
+    persisted.push(tokens),
+  );
   assert.match(!outcome.ok ? outcome.message : "", /turned off/);
+  assert.deepEqual(query.usageReads, ["full"]);
+  assert.deepEqual(persisted, []);
+  session.dispose();
+});
+
+test("agent lowering with no running process refuses without reading", async () => {
+  const { session, turn, query, persisted, persist } = await midTurn();
+  query.output.emit(result("r1"));
+  await turn;
+  const outcome = await session.lowerCompactionWindow(400_000, persist);
+  assert.match(!outcome.ok ? outcome.message : "", /during a turn/);
+  assert.deepEqual(query.usageReads, ["full"]);
+  assert.deepEqual(persisted, []);
   session.dispose();
 });
 
