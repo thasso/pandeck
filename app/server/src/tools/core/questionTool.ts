@@ -467,7 +467,7 @@ export const askQuestionsTool = defineAgentTool<QuestionToolParams>({
         ? [`Also still open: ${earlier.map(flowLabel).join(", ")}.`]
         : []),
       "STOP HERE: end your turn now and wait. Do NOT guess, assume, or fill in answers, and do not keep working; only an unrelated set of questions may still be posted first, as its own ask_questions call.",
-      "The user's answers (or a cancellation) will arrive as a separate follow-up message that resumes this session, one per flow.",
+      "The user's answers will arrive as a separate follow-up message that resumes this session, one per flow. Cancelling a flow closes it silently.",
     ].join(" ");
     return {
       content: [{ type: "text", text }],

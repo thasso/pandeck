@@ -279,6 +279,11 @@ accounts sign in through the same card in `signIn` mode (see Accounts).
 
 ## Accounts
 
+A fresh data directory never imports `~/.pi/agent/auth.json` implicitly. To opt
+into the one-time legacy pi import, set `ASSISTANT_LEGACY_PI_AGENT_DIR` to the
+source directory before startup. Existing imports and their markers are
+preserved; an unconfigured import creates no marker and can be enabled later.
+
 The Claude and OpenAI accounts models run on are credential profiles
 (`app/server/src/credentialProfiles.ts`), kept outside the settings registry.
 The Personal Assistant reaches them through three tools in the same `settings`

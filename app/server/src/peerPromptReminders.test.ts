@@ -14,6 +14,14 @@ import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
+import {
+  createApproval,
+  hasPendingApproval,
+  resolveApproval,
+  setApprovalBroadcastForTests,
+} from "./pendingApprovals.ts";
+import { recordRunFailureNotices } from "./delegationFailureNotice.ts";
+import { delegationFailureNoticeStore } from "./db/delegationFailureNoticeStore.ts";
 
 const { fakeDrivers, coldIds, acquired, listBroadcasts, preparation } =
   vi.hoisted(() => ({
@@ -611,8 +619,26 @@ describe("reply reminders", () => {
       const me = seed("Asking");
       openRequest(seed("Asker"), me, "question");
       handoffOwed = (id) => handoffs.agentHandoffOwed(id);
-      await offerReplyReminders(me);
-      assert.equal(reminders(me).length, 1);
+      setApprovalBroadcastForTests(() => {});
+      const card = createApproval({
+        sessionId: me,
+        kind: "commit",
+        title: "Undecided commit",
+        body: { kind: "commit", message: "pending", files: ["a.ts"] },
+      });
+      try {
+        assert.equal(hasPendingApproval(me), true);
+        await offerReplyReminders(me);
+        assert.equal(reminders(me).length, 1);
+        assert.equal(
+          hasPendingApproval(me),
+          true,
+          "the reminder never decides it",
+        );
+      } finally {
+        await resolveApproval(card.id, "rejected");
+        setApprovalBroadcastForTests(null);
+      }
     });
 
     it("stops offering the edge again when a blocker never clears", async () => {
@@ -662,6 +688,39 @@ describe("reply reminders", () => {
     await until(
       () => userTexts(me).some((t) => t.startsWith("Peer notice")),
       "the notice",
+    );
+  });
+
+  it("yields to a real run-failure notice and the wake survives the reminder's drain lock", async () => {
+    const me = seed("Failure coordinator");
+    const child = seed("Failed child");
+    sessionStore.linkSpawned(me, child);
+    const request = openRequest(seed("Asker"), me, "question");
+    const gate = gatePreparation();
+    const offer = offerReplyReminders(me);
+    await gate.atGate;
+    const written = recordRunFailureNotices({
+      sessionId: child,
+      runId: "failed-during-reminder",
+      origin: { kind: "system", source: "test" },
+      errorMessage: "401 Unauthorized",
+      failure: { kind: "auth" },
+      at: Date.now(),
+    });
+    assert.equal(written.length, 1);
+    assert.equal(delegationFailureNoticeStore.hasPendingFor(me), true);
+    peer.wakeForNotice(written.map((notice) => notice.coordinatorSessionId));
+    gate.open();
+    await offer;
+    assert.equal(count(request.id), 0, "the real notice outranks the reminder");
+    await until(
+      () => userTexts(me).some((text) => text.startsWith("Peer notice")),
+      "failure notice wake",
+    );
+    assert.equal(delegationFailureNoticeStore.hasPendingFor(me), false);
+    assert.match(
+      userTexts(me).find((text) => text.startsWith("Peer notice"))!,
+      /credentials|sign.in|authentication/,
     );
   });
 

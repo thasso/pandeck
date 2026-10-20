@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Markdown } from "./Markdown.tsx";
 import {
   Activity,
   Bot,
@@ -326,6 +327,14 @@ function AgentSection({
           <PropertyText className="text-foreground">
             {RUNTIME_SOURCE_LABELS[agent.runtimeSource]}
           </PropertyText>
+          {agent.modelFallbackReason ? (
+            <>
+              <PropertyLabel>Model fallback</PropertyLabel>
+              <PropertyText className="text-foreground">
+                <Markdown text={agent.modelFallbackReason} inline />
+              </PropertyText>
+            </>
+          ) : null}
           {agent.denyTools.length > 0 ? (
             <>
               <PropertyLabel>Denied tools</PropertyLabel>

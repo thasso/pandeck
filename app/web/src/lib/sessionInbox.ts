@@ -731,9 +731,9 @@ export function classifySessionStatus(
 ): SessionInboxStatus {
   if (session.attention === "approval") return "approval";
   if (session.attention === "task-choice") return "task-choice";
-  if (session.peerPromptHopRefusal) return "peer-limit";
   if (session.attention === "question" || session.awaitingInput)
     return "question";
+  if (session.peerPromptHopRefusal) return "peer-limit";
   if (session.isStreaming) return "running";
   // A real failure outranks a cut turn: one says something broke, the other says
   // work is waiting. Both are `attention`, so this only decides which sentence

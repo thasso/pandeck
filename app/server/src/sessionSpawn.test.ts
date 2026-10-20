@@ -2095,6 +2095,46 @@ test("mixed batches spend only counted slots and low-only batches bypass a full 
   expect(recorded.pi).toHaveLength(5);
 });
 
+test.each(["disabled", "removed", "repointed", "account-disabled"])(
+  "a runtime %s during the final pi lookup creates nothing",
+  async (change) => {
+    approveRuntimes();
+    const account = accountFor("openai-codex");
+    duringPiLookup = () => {
+      if (change === "account-disabled") {
+        setCredentialProfileEnabled(account, false);
+        return;
+      }
+      updateSettings({
+        peerSpawnRuntimes: getSettings().peerSpawnRuntimes.flatMap((runtime) =>
+          runtime.id !== "pr_terra"
+            ? [runtime]
+            : change === "removed"
+              ? []
+              : [
+                  {
+                    ...runtime,
+                    ...(change === "disabled"
+                      ? { enabled: false }
+                      : { modelId: "different-model" }),
+                  },
+                ],
+        ),
+      });
+    };
+    const [result] = await spawnApprovedPeers({
+      senderSessionId: SENDER,
+      rows: [{ ...row(), profileId: "pr_terra" }],
+    }).finally(() => setCredentialProfileEnabled(account, true));
+    expect(result?.error).toMatch(
+      /no longer approved|disabled|changed|account/i,
+    );
+    expect(result?.sessionId).toBeUndefined();
+    expect(recorded.pi).toHaveLength(0);
+    expect(recorded.delivered).toHaveLength(0);
+  },
+);
+
 test("a profile relabeled from low to counted during pi lookup refuses only that row", async () => {
   approveRuntimes();
   duringPiLookup = () =>
@@ -3068,6 +3108,37 @@ test.each([
     expect(recorded.pi).toHaveLength(0);
   },
 );
+
+test("a disabled default account is discovered only for fallback, never used to start", async () => {
+  await useAgents();
+  writeAgent({
+    persona: "assistant",
+    models: ["sonnet", "gpt-5"],
+    effort: "medium",
+    denyTools: [],
+  });
+  setAgentRuntimeSourcesForTests(null);
+  const account = accountFor("claude");
+  const fallbackAccount = accountFor("openai-codex");
+  setAgentSpawnSourcesForTests({
+    library: () => new LibraryStore(agentKind, agentsRoot),
+    accountFor: ({ model }) => ({
+      profileId: model.provider === "claude-sdk" ? null : fallbackAccount,
+    }),
+  });
+  setCredentialProfileEnabled(account, false);
+  try {
+    const text = await spawnDirect([agentRow()]);
+    expect(recorded.pi).toHaveLength(1);
+    expect(recorded.claude).toHaveLength(0);
+    expect(text).toMatch(/sonnet has no enabled account in scope; used gpt-5/);
+    expect(recorded.pi[0]?.agent).toMatchObject({
+      modelFallbackReason: expect.stringMatching(/used gpt-5/),
+    });
+  } finally {
+    setCredentialProfileEnabled(account, true);
+  }
+});
 
 test("an agent admitted low refuses a conflicting cost added during pi lookup", async () => {
   await useAgents();

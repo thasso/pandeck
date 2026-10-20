@@ -27,6 +27,10 @@ import {
   setAgentSpawnSourcesForTests,
 } from "./agentSpawn.ts";
 import { LibraryStore } from "../library/libraryStore.ts";
+import {
+  createCredentialProfile,
+  patchCredentialProfile,
+} from "../credentialProfiles.ts";
 import { scanLibrary } from "../library/libraryScanner.ts";
 
 function model(
@@ -250,6 +254,88 @@ test("without a healthy alternative the router's degraded default still runs", a
   assert.equal(runtime.agent.modelFallbackReason, undefined);
 });
 
+test.each([false, true])(
+  "a default with no account falls back within enterprise scope %s, never for pins",
+  async (requiresEnterprise) => {
+    write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
+    const scopes: boolean[] = [];
+    setAgentRuntimeSourcesForTests({
+      models: async (includeDisabled) =>
+        requiresEnterprise || includeDisabled
+          ? models
+          : models.filter((m) => m.provider !== "openai-codex"),
+      skillNames: async () => [],
+      toolNames: async () => ["worktree_push"],
+    });
+    const eligible = createCredentialProfile({
+      name: "Fallback account",
+      provider: "claude",
+    });
+    patchCredentialProfile(eligible.id, { enterprise: requiresEnterprise });
+    setAgentSpawnSourcesForTests({
+      library: () => new LibraryStore(agentKind, root),
+      offers: async () => true,
+      accountFor: ({ model: { provider }, requiresEnterprise: scope }) => {
+        scopes.push(scope === true);
+        return provider === "openai-codex"
+          ? { profileId: null }
+          : { profileId: eligible.id };
+      },
+    });
+    const options = { allowModelFallback: true, requiresEnterprise };
+    const runtime = await resolveAgentSpawn(
+      "test-reviewer",
+      undefined,
+      options,
+    );
+    assert.equal(runtime.modelId, "opus");
+    assert.match(
+      runtime.agent.modelFallbackReason!,
+      /sol has no enabled account in scope; used opus/,
+    );
+    assert.deepEqual(scopes, [requiresEnterprise, requiresEnterprise]);
+    await assert.rejects(
+      resolveAgentSpawn("test-reviewer", undefined, {
+        ...options,
+        model: "sol",
+      }),
+      /No enabled/,
+    );
+    const pinned = resolveAgentSpawn("test-reviewer", undefined, {
+      ...options,
+      profileId: eligible.id,
+    });
+    if (requiresEnterprise) assert.equal((await pinned).modelId, "gpt-6.1-sol");
+    else await assert.rejects(pinned, /No enabled/);
+    if (!requiresEnterprise) {
+      assert.match(runtime.listed[0]?.problem ?? "", /No enabled/);
+      write("test-reviewer", reviewer({ models: ["opus", "sol"] }));
+      const listing = spawnableAgentsText(
+        await listSpawnableAgents(undefined, options),
+      );
+      assert.match(listing, /sol \(cannot run: No enabled/);
+      write("test-reviewer", reviewer({ models: ["missing", "sol"] }));
+      await assert.rejects(
+        resolveAgentSpawn("test-reviewer", undefined, options),
+        /None of its listed models resolve now/,
+      );
+      const refused = spawnableAgentsText(
+        await listSpawnableAgents(undefined, options),
+      );
+      assert.doesNotMatch(refused, /other listed models that resolve now/);
+      write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
+    }
+    setAgentSpawnSourcesForTests({
+      library: () => new LibraryStore(agentKind, root),
+      accountFor: () => ({ profileId: null }),
+    });
+    await assert.rejects(
+      resolveAgentSpawn("test-reviewer", undefined, options),
+      /No enabled/,
+    );
+  },
+);
+
 test("an account pin never causes model fallback", async () => {
   write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
   const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
@@ -261,8 +347,16 @@ test("an account pin never causes model fallback", async () => {
   assert.deepEqual(accounts, []);
 });
 
-test("a healthy default never probes later listed accounts", async () => {
+test("a healthy default never probes later listed accounts or becomes ambiguous from disabled models", async () => {
   write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
+  setAgentRuntimeSourcesForTests({
+    models: async (includeDisabled) =>
+      includeDisabled
+        ? [...models, model("openai-codex", "gpt-7-sol")]
+        : models,
+    skillNames: async () => [],
+    toolNames: async () => ["worktree_push"],
+  });
   const runtime = await resolveAgentSpawn("test-reviewer", undefined, {
     allowModelFallback: true,
   });

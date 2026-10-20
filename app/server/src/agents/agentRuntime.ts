@@ -60,7 +60,7 @@ export function agentRuntimeLabel(runtime: AgentRuntime): string {
 
 /** The outside state a runtime check reads; injectable for tests. */
 export interface AgentRuntimeSources {
-  models(): Promise<readonly AgentModelOption[]>;
+  models(includeDisabled?: boolean): Promise<readonly AgentModelOption[]>;
   skillNames(): Promise<readonly string[]>;
   toolNames(persona: AgentPersona): Promise<readonly string[]>;
 }
@@ -74,15 +74,18 @@ export type AgentModelOption = ModelOption & { pinnedId?: string };
 /** How many candidate ids a resolution failure names. */
 const MAX_LISTED_MODELS = 12;
 
-/** Every model the ENABLED accounts can run now, one row per provider + id. */
-async function connectedModels(): Promise<AgentModelOption[]> {
+/** Known models, enabled-only except when resolving a spawn's fallback candidates. */
+async function connectedModels(
+  includeDisabled = false,
+): Promise<AgentModelOption[]> {
   const byKey = new Map<string, AgentModelOption>();
   for (const profile of listCredentialProfiles()) {
-    if (!profile.enabled) continue;
+    if (!profile.enabled && !includeDisabled) continue;
     const models = await modelsForAccount(profile).catch(() => []);
     const pins = pinnedModelIdsFor(profile);
     for (const model of models) {
       const key = `${model.provider}:${model.id}`;
+      if (!profile.enabled && byKey.has(key)) continue;
       const pinnedId = pins.get(key);
       byKey.set(key, pinnedId ? { ...model, pinnedId } : model);
     }
@@ -225,6 +228,7 @@ export async function checkAgentRuntime(
   >,
   options: {
     checkModel?: boolean | "each";
+    includeDisabledModels?: boolean;
     sources?: AgentRuntimeSources;
   } = {},
 ): Promise<AgentModelChoice[] | undefined> {
@@ -233,14 +237,27 @@ export async function checkAgentRuntime(
   let choices: AgentModelChoice[] | undefined;
   if (options.checkModel !== false) {
     const models = await sources.models();
+    const knownModels = options.includeDisabledModels
+      ? await sources.models(true)
+      : models;
     choices = manifest.models.map((spec) => {
       try {
+        let candidates = models;
+        if (options.includeDisabledModels) {
+          // Disabled models must not make a healthy alias ambiguous or
+          // change its resolved version. Consult them only after refusal.
+          try {
+            resolveAgentModel(spec, models);
+          } catch {
+            candidates = knownModels;
+          }
+        }
         return {
           spec,
           runtime: agentRuntimeFor(
             spec,
             manifest.effort,
-            models,
+            candidates,
             manifest.compactionWindow,
           ),
         };

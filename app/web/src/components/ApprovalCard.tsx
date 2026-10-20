@@ -846,8 +846,9 @@ function SpawnRow({
   const repicked =
     selected &&
     (selected.provider !== item.provider || selected.id !== item.modelId);
-  const window =
-    item.compactionWindow && editable && ladderModel
+  const window = item.error
+    ? undefined
+    : item.compactionWindow && editable && ladderModel
       ? estimateSpawnCompactionWindow(ladderModel, {
           tokens: item.compactionWindow.requested,
           source: item.compactionWindow.source,

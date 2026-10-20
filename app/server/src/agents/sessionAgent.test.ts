@@ -63,6 +63,9 @@ test("a model fallback reason survives the frozen session record", () => {
   };
   assert.deepEqual(freezeSessionAgent("model-fallback", fallback), fallback);
   assert.deepEqual(sessionAgent("model-fallback"), fallback);
+  const summary = sessionAgentSummary("model-fallback");
+  assert.ok(summary && !summary.unreadable);
+  assert.equal(summary.modelFallbackReason, fallback.modelFallbackReason);
   sessionStore.freezeAgent(
     "bad-fallback",
     JSON.stringify({ ...reviewer, modelFallbackReason: 1 }),

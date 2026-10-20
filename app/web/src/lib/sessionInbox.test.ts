@@ -128,6 +128,12 @@ describe("classifySessionStatus", () => {
       peerPromptHopRefusal: { chainId: "chain-limit", maxHops: 3 },
     });
     expect(classifySessionStatus(child)).toBe("peer-limit");
+    expect(classifySessionStatus({ ...child, attention: "question" })).toBe(
+      "question",
+    );
+    expect(classifySessionStatus({ ...child, awaitingInput: true })).toBe(
+      "question",
+    );
     expect(isShelvedSession(child)).toBe(false);
     expect(tierForStatus(classifySessionStatus(child))).toBe("needs-you");
     expect(sessionStatusDetail(child, classifySessionStatus(child))).toContain(

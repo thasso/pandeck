@@ -63,6 +63,32 @@ const pending: AgentQuestionRequest = {
 };
 
 describe("AgentQuestionToolCard", () => {
+  it("correlates identical unlinked flows by the posted request id, not shape", () => {
+    const second = { ...pending, requestId: "question-2", toolCallId: "3" };
+    const posted = {
+      ...block,
+      output: `Posted 2 questions to the user in the app's question panel as flow question-2 ("Deployment check"). Also still open: question-1 ("Deployment check").`,
+    };
+    expect(questionFlowForBlock([pending, second], [], posted)?.pending).toBe(
+      second,
+    );
+    const answered: AnsweredAgentQuestion = {
+      ...pending,
+      response: {
+        requestId: pending.requestId,
+        status: "submitted",
+        submittedAt: 2,
+        answers: [],
+      },
+    };
+    expect(questionFlowForBlock([second], [answered], posted)?.pending).toBe(
+      second,
+    );
+    expect(questionFlowForBlock([pending, second], [], block)).toBeUndefined();
+    expect(questionFlowForBlock([second], [answered], block)).toBeUndefined();
+    // A posted id whose state has not arrived must not borrow another flow.
+    expect(questionFlowForBlock([pending], [], posted)).toBeUndefined();
+  });
   it("renders the interactive form for Claude SDK MCP numeric request ids", () => {
     const html = renderToStaticMarkup(
       <AgentQuestionToolCard

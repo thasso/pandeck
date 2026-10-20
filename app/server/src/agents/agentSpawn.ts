@@ -175,12 +175,13 @@ function chosenModel(
   name: string,
   choices: readonly AgentModelChoice[],
   wanted: string | undefined,
+  enabledChoices = choices,
 ): { spec: string; runtime: AgentRuntime } {
   if (wanted === undefined) {
     const first = choices[0]!;
     if (first.runtime) return { spec: first.spec, runtime: first.runtime };
     throw new AgentSpawnRefusedError(
-      `Agent "${name}" cannot run on its default model "${first.spec}": ${first.problem} ${runnableNamed(choices.slice(1))}`,
+      `Agent "${name}" cannot run on its default model "${first.spec}": ${first.problem} ${runnableNamed(enabledChoices.slice(1))}`,
     );
   }
   const asked = wanted.trim().toLowerCase();
@@ -206,6 +207,7 @@ interface AgentDefinitionRead {
   manifest: AgentManifest;
   blob: string;
   listed: AgentModelChoice[];
+  fallbackListed?: AgentModelChoice[];
 }
 
 /**
@@ -215,6 +217,7 @@ interface AgentDefinitionRead {
 async function readAgentDefinition(
   name: string,
   scanned?: { library: LibraryStore; scan: LibraryScan },
+  includeDisabledModels = false,
 ): Promise<AgentDefinitionRead> {
   // A name no definition could declare is refused unquoted: it is the
   // caller's own input, of any size.
@@ -241,10 +244,16 @@ async function readAgentDefinition(
     );
   let manifest;
   let listed;
+  let fallbackListed;
   try {
     // The bytes being frozen are parsed again, not trusted to the scan.
     manifest = assertManifest(agentKind, read.source, read.path);
     listed = (await checkAgentRuntime(manifest, { checkModel: "each" }))!;
+    if (includeDisabledModels)
+      fallbackListed = (await checkAgentRuntime(manifest, {
+        checkModel: "each",
+        includeDisabledModels: true,
+      }))!;
   } catch (error) {
     throw new AgentSpawnRefusedError(
       `Agent "${name}" cannot run: ${(error as Error).message}`,
@@ -253,7 +262,14 @@ async function readAgentDefinition(
   // The bytes on disk, not the decoded text: decoding drops a BOM and bad
   // UTF-8, and the id has to name the repository's own blob.
   const blob = await library.gitBlobIdOf(read.raw);
-  return { manifest, blob, listed };
+  // Only enabled-account resolutions belong in caller-visible choices and
+  // refusal hints. Known disabled models are internal fallback candidates.
+  return {
+    manifest,
+    blob,
+    listed,
+    ...(fallbackListed ? { fallbackListed } : {}),
+  };
 }
 
 /**
@@ -414,10 +430,17 @@ export async function resolveAgentSpawn(
     allowModelFallback?: boolean;
   } = {},
 ): Promise<AgentSpawnRuntime> {
-  const read = await readAgentDefinition(name, scanned);
+  const allowFallback =
+    options.allowModelFallback === true &&
+    options.model === undefined &&
+    options.profileId === undefined;
+  // Disabled accounts may still identify a known default model. They never
+  // authorize a start: every candidate must pass the scoped account router.
+  const read = await readAgentDefinition(name, scanned, allowFallback);
   let chosen: { spec: string; runtime: AgentRuntime } | undefined;
   try {
-    chosen = chosenModel(name, read.listed, options.model);
+    const candidates = read.fallbackListed ?? read.listed;
+    chosen = chosenModel(name, candidates, options.model, read.listed);
     const pick = (runtime: AgentRuntime) =>
       sources.accountFor({
         model: { provider: runtime.model.provider, modelId: runtime.model.id },
@@ -429,14 +452,11 @@ export async function resolveAgentSpawn(
       : await pick(chosen.runtime);
     let modelFallbackReason: string | undefined;
     if (
-      options.allowModelFallback === true &&
-      options.model === undefined &&
-      options.profileId === undefined &&
-      account.profileId &&
-      account.degraded === "no-eligible-account"
+      allowFallback &&
+      (!account.profileId || account.degraded === "no-eligible-account")
     ) {
       const skipped = [unavailableReason(chosen.spec, account)];
-      for (const alternative of read.listed.slice(1)) {
+      for (const alternative of candidates.slice(1)) {
         if (!alternative.runtime) {
           skipped.push(`${alternative.spec} does not resolve`);
           continue;

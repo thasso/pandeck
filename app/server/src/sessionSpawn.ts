@@ -48,6 +48,7 @@ import {
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
 import { pickAccount } from "./accountRouter.ts";
+import { getSettings } from "./settings.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { sourceRequiresEnterprise } from "./sessionEnterprise.ts";
 import { errorText } from "./errors.ts";
@@ -1089,7 +1090,7 @@ async function spawnOne(
     } else delete item.compactionWindow;
   }
   // Binding admission check: nothing may yield between this and creation.
-  options.assertAdmittedCost?.(item);
+  options.assertAdmittedRuntime?.(item);
   const sessionId = (await deps.create(spec)).sessionId;
   // From here the session is real: claim it on the result row immediately so
   // any later metadata, context, or delivery failure still reports the child.
@@ -1251,7 +1252,7 @@ interface SpawnOneOptions {
   /** Synchronous, the moment the session exists and before its delivery. */
   onCreated?: (sessionId: string) => void;
   /** Synchronous, after the last await and immediately before creation. */
-  assertAdmittedCost?: (item: SessionSpawnApprovalItem) => void;
+  assertAdmittedRuntime?: (item: SessionSpawnApprovalItem) => void;
   currentRuntime?: () => Promise<{
     provider: string;
     modelId: string;
@@ -1609,7 +1610,32 @@ export async function spawnApprovedPeers(input: {
             credentialProfileId: item.credentialProfileId,
             createdAt: Date.now(),
           }),
-        assertAdmittedCost: (current) => {
+        assertAdmittedRuntime: (current) => {
+          // Final synchronous approval read, after the pi lookup and every
+          // definition await. Nothing may yield between this and creation.
+          if (!credentialProfileById(current.credentialProfileId)?.enabled)
+            throw new Error(
+              "The runtime's account is no longer enabled; nothing was created.",
+            );
+          if (row.agent === undefined) {
+            const approved = getSettings().peerSpawnRuntimes.find(
+              (r) => r.id === row.profileId.trim(),
+            );
+            if (!approved?.enabled)
+              throw new Error(
+                "The peer runtime is no longer approved or is disabled in Settings; nothing was created.",
+              );
+            if (
+              approved.provider !== current.provider ||
+              approved.modelId !== current.modelId ||
+              approved.thinkingLevel !== current.thinkingLevel ||
+              (approved.credentialProfileId &&
+                approved.credentialProfileId !== current.credentialProfileId)
+            )
+              throw new Error(
+                "The approved peer runtime changed while starting; nothing was created. Spawn it again.",
+              );
+          }
           if (
             admittedCost === "low" &&
             directPeerCostClass(

@@ -74,6 +74,8 @@ describe("ask_questions with several open flows", () => {
       new RegExp(`Also still open: ${first.requestId} \\("Planner A"\\)\\.`),
     );
     assert.match(second.text, /STOP HERE: end your turn now/);
+    assert.match(first.text, /Cancelling a flow closes it silently/);
+    assert.doesNotMatch(first.text, /answers \(or a cancellation\)/);
   });
 
   test("answering one flow resumes with its own answers and leaves the rest", async () => {

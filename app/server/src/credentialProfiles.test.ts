@@ -180,6 +180,40 @@ test("the protected Claude default reflects the normal user login without an iso
   assert.doesNotMatch(JSON.stringify(ready), /default-secret/);
 });
 
+test("fresh profiles never import home auth implicitly, but explicit legacy import remains available", () => {
+  const legacy = join(process.env.HOME!, ".pi", "agent");
+  mkdirSync(legacy, { recursive: true });
+  writeFileSync(
+    join(legacy, "auth.json"),
+    '{"openai-codex":{"access":"old-token"}}',
+  );
+  const previous = process.env.ASSISTANT_LEGACY_PI_AGENT_DIR;
+  delete process.env.ASSISTANT_LEGACY_PI_AGENT_DIR;
+  try {
+    ensureDefaultPiProfile();
+    const destination = join(piAgentDir("default"), "auth.json");
+    assert.equal(existsSync(destination), false);
+    // A skipped import must not write a marker that prevents later opt-in.
+    process.env.ASSISTANT_LEGACY_PI_AGENT_DIR = legacy;
+    ensureDefaultPiProfile();
+    assert.equal(
+      readFileSync(destination, "utf8"),
+      readFileSync(join(legacy, "auth.json"), "utf8"),
+    );
+    delete process.env.ASSISTANT_LEGACY_PI_AGENT_DIR;
+    ensureDefaultPiProfile();
+    assert.equal(
+      existsSync(destination),
+      true,
+      "existing imports are never removed",
+    );
+  } finally {
+    if (previous === undefined)
+      delete process.env.ASSISTANT_LEGACY_PI_AGENT_DIR;
+    else process.env.ASSISTANT_LEGACY_PI_AGENT_DIR = previous;
+  }
+});
+
 test("seeds a legacy pi agent directory once into the protected default profile", () => {
   const legacy = join(tmp, "legacy-pi-agent");
   mkdirSync(join(legacy, "extensions"), { recursive: true });
