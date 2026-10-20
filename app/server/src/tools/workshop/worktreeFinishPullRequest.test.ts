@@ -248,6 +248,7 @@ function operations(
         body: input.body,
       } satisfies ApprovalCard;
     },
+    followUps: async () => ({ warnings: [] }),
     taskIds: () => ["588"],
     task: (taskId) =>
       taskId === "588"
@@ -273,6 +274,147 @@ function operations(
 function details(result: { details?: unknown }): Record<string, unknown> {
   return result.details as Record<string, unknown>;
 }
+
+describe("merge follow-up flags", () => {
+  test("runs both choices after the merge and releases the mutation hold before cleanup", async () => {
+    const events: string[] = [];
+    const ops = operations({
+      cards: async () => [
+        managedCard({ linkedTask: operations().task("588")! }),
+      ],
+      reserve: () => () => {
+        events.push("released");
+      },
+      merge: async (input) => {
+        events.push("merge");
+        return operations().merge(input);
+      },
+      followUps: async (input) => {
+        events.push("follow-ups");
+        assert.deepEqual(input, {
+          worktreeId: row.id,
+          number: 91,
+          sessionId: "caller-session",
+          markTaskDone: true,
+          removeWorktree: true,
+          taskId: "588",
+        });
+        return {
+          task: { id: "588", status: "done" },
+          worktreeRemoved: true,
+          warnings: [],
+        };
+      },
+    });
+    const result = details(
+      await createWorktreeFinishPullRequestTool(ops).execute(
+        {
+          worktreeId: row.id,
+          action: "merge",
+          method: "squash",
+          markTaskDone: true,
+          removeWorktree: true,
+        },
+        context(),
+      ),
+    );
+    assert.equal(result.status, "merged");
+    assert.deepEqual(result.followUps, {
+      task: { id: "588", status: "done" },
+      worktreeRemoved: true,
+      warnings: [],
+    });
+    assert.deepEqual(events, ["merge", "released", "follow-ups"]);
+  });
+
+  test("a failed merge never starts follow-ups", async () => {
+    const ops = operations({
+      merge: async () => {
+        throw new Error("provider refused");
+      },
+      followUps: async () => {
+        assert.fail("must not run");
+      },
+    });
+    await assert.rejects(
+      createWorktreeFinishPullRequestTool(ops).execute(
+        {
+          worktreeId: row.id,
+          action: "merge",
+          method: "squash",
+          removeWorktree: true,
+        },
+        context(),
+      ),
+      /provider refused/,
+    );
+  });
+
+  test("follow-up and invalidation failures never hide a confirmed merge", async () => {
+    const ops = operations({
+      followUps: async () => {
+        throw new Error("disk full");
+      },
+      invalidate: () => {
+        throw new Error("cache failed");
+      },
+    });
+    const result = details(
+      await createWorktreeFinishPullRequestTool(ops).execute(
+        {
+          worktreeId: row.id,
+          action: "merge",
+          method: "squash",
+          removeWorktree: true,
+        },
+        context(),
+      ),
+    );
+    assert.equal(result.status, "merged");
+    assert.match(String(result.message), /disk full/);
+  });
+
+  test("completion refuses a missing or ambiguous card Task before merging", async () => {
+    for (const cards of [
+      [managedCard()],
+      [
+        managedCard({ linkedTask: operations().task("588")! }),
+        managedCard({
+          id: "other",
+          linkedTask: { ...operations().task("588")!, id: "other" },
+        }),
+      ],
+    ]) {
+      const ops = operations({ cards: async () => cards });
+      await assert.rejects(
+        createWorktreeFinishPullRequestTool(ops).execute(
+          {
+            worktreeId: row.id,
+            action: "merge",
+            method: "squash",
+            markTaskDone: true,
+          },
+          context(),
+        ),
+        /unique linked Task/,
+      );
+      assert.deepEqual(ops.calls.merges, []);
+    }
+  });
+
+  test("close refuses either follow-up flag, even false", async () => {
+    const tool = createWorktreeFinishPullRequestTool(operations());
+    for (const flag of [{ markTaskDone: false }, { removeWorktree: false }]) {
+      await assert.rejects(
+        tool.execute(
+          { worktreeId: row.id, action: "close", reason: "abandoned", ...flag },
+          context(),
+        ),
+        /merge only/,
+      );
+    }
+  });
+});
 
 describe("managed draft to ready", () => {
   test("resolves the canonical draft, rechecks identity and updates its cards", async () => {
@@ -732,6 +874,8 @@ describe("input contract", () => {
       "action",
       "method",
       "deleteRemoteBranch",
+      "markTaskDone",
+      "removeWorktree",
       "reason",
     ]);
   });
@@ -1411,6 +1555,8 @@ describe("merge into the default branch", () => {
       method: "squash",
       supportedMethods: ["squash", "merge"],
       deleteRemoteBranch: false,
+      markTaskDone: false,
+      removeWorktree: false,
       checks: { state: "success", total: 2, finished: true },
       review: { changesRequested: false },
       mergeable: true,
@@ -1557,6 +1703,78 @@ describe("approved default-branch merge", () => {
       },
     ]);
     assert.match(outcome.resultSummary, /Merged #91/);
+  });
+
+  test("approval carries the choices and applies them as the requesting agent after merging", async () => {
+    const task = ops.task("588")!;
+    ops.cards = async () => [managedCard({ linkedTask: task })];
+    let followUps = 0;
+    ops.followUps = async (input) => {
+      assert.equal(ops.calls.merges.length, 1);
+      assert.equal(ops.calls.released, 2);
+      assert.equal(input.sessionId, "caller-session");
+      assert.equal(input.taskId, task.id);
+      assert.equal(input.markTaskDone, true);
+      assert.equal(input.removeWorktree, true);
+      followUps++;
+      return {
+        task: { id: task.id, status: "done" },
+        worktreeRemoved: false,
+        warnings: ["The worktree was kept: dirty"],
+      };
+    };
+    await createWorktreeFinishPullRequestTool(ops).execute(
+      {
+        worktreeId: row.id,
+        action: "merge",
+        method: "squash",
+        markTaskDone: true,
+        removeWorktree: true,
+      },
+      context(),
+    );
+    assert.equal(followUps, 0);
+    const body = ops.calls.approvals[0]!;
+    assert.equal(body.markTaskDone, true);
+    assert.equal(body.removeWorktree, true);
+    const outcome = await run.execute(card(body), {});
+    assert.equal(followUps, 1);
+    assert.equal(body.resultMerged, true);
+    assert.equal(body.resultWorktreeRemoved, false);
+    assert.match(outcome.resultSummary, /Merged #91.*worktree was kept/);
+  });
+
+  test("approval follow-up failures retain the confirmed merge outcome", async () => {
+    ops.followUps = async () => {
+      throw new Error("cleanup unavailable");
+    };
+    ops.invalidate = () => {
+      throw new Error("cache unavailable");
+    };
+    const body = approvalBody({ removeWorktree: true });
+    const outcome = await run.execute(card(body), {});
+    assert.equal(body.resultMerged, true);
+    assert.match(outcome.resultSummary, /Merged #91.*cleanup unavailable/);
+    assert.equal(ops.calls.released, 1);
+  });
+
+  test("approval refuses a changed linked Task before merging", async () => {
+    ops.cards = async () => [
+      managedCard({ linkedTask: { ...ops.task("588")!, id: "other" } }),
+    ];
+    await assert.rejects(
+      run.execute(
+        card(
+          approvalBody({
+            markTaskDone: true,
+            linkedTask: { id: "588", title: "Task" },
+          }),
+        ),
+        {},
+      ),
+      /linked Task changed/,
+    );
+    assert.deepEqual(ops.calls.merges, []);
   });
 
   test("a moved head refuses instead of merging what was not approved", async () => {

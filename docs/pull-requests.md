@@ -392,11 +392,40 @@ before `worktree_finish_pull_request`.
 `worktree_finish_pull_request` is the last managed-delivery step, an external
 side effect available in Build mode. Its input is a worktree id, an `action` of
 `merge` or `close`, a `method` for merges only, an optional `deleteRemoteBranch`
-(default true, merges only), and a bounded `reason` that is REQUIRED for a close
-and retained in the tool result and transcript. It accepts no repository,
+(default true, merges only), optional `markTaskDone` and `removeWorktree` flags
+(default false, merges only), and a bounded `reason` that is REQUIRED for a
+close and retained in the tool result and transcript. It accepts no repository,
 provider, pull-request number, ref, SHA, base/default-branch claim, path or
 credential; a close that carries merge fields, and a close with no reason, are
 refused outright.
+
+After the provider confirms a merge, `markTaskDone: true` applies an ordinary
+agent `done` write to the unique Task linked on the managed PR cards, with the
+requesting session and reason recorded as answered `statusSuggestion`
+provenance. Missing or conflicting card Task links refuse before merging; the
+worktree's other Task links never select a different Task. Without the flag the
+existing merge-time `done` suggestion stays.
+
+`removeWorktree: true` attempts the ordinary guarded removal, deleting the local
+branch without force. The mutation reservation is released first so removal can
+take its own stricter hold. Dirty files, unpreserved commits, running sessions
+including the caller, pending questions/approvals, or other removal blockers
+keep the worktree. Delivered squash/rebase branches use the ordinary delivery
+receipt guard. An idle target can be removed from a caller in another checkout.
+Neither flag runs before a confirmed merge, nor on a close. Follow-up failures
+are independent: Task failure does not skip removal, removal failure does not
+undo Task completion, and neither turns a successful merge into an error. The
+result stays `merged`, with `followUps.task`, `followUps.worktreeRemoved` when
+requested, and `followUps.warnings` explaining incomplete steps. Durable removal
+with branch-cleanup failure or directory residue is reported as removed with a
+warning, not as a retained checkout.
+
+Default-branch approval cards freeze and show both choices and the selected
+Task. The approved executor revalidates that Task identity before merging, then
+uses the same follow-up function as direct merges, attributing Task completion
+to the requesting agent rather than to the human approver. Its result summary
+reports completion, removal and any follow-up warnings. Approval rejection or
+failed revalidation performs neither follow-up.
 
 Both actions share one resolution: synthetic main is refused, the active spawned
 worktree is reserved with the caller-aware mutation reservation and its row
