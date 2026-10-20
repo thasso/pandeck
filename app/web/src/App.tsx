@@ -168,6 +168,7 @@ import {
   taskPath,
   usagePath,
   useSessionRouting,
+  viewedSessionIdentity,
   worktreePath,
   type Route,
   type SettingsSection,
@@ -1306,12 +1307,16 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           : (availableAgentTypes[0] ?? "assistant"),
     [availableAgentTypes],
   );
+  // The same snapshot `currentId` comes from, so it describes that session.
+  const viewedIdentity = viewedSessionIdentity(state.session);
   const { route, navigate, notifyStagedFirstSend } = useSessionRouting({
     connected: state.connected,
     hydrated: state.hydrated,
     sessions: state.sessions,
     currentId,
     hasMessages,
+    sessionListFresh: state.sessionListFresh,
+    viewedIdentity,
     loadSession: actions.loadSession,
     openPermanentAssistant: actions.openPermanentAssistant,
   });

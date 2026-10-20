@@ -1074,12 +1074,17 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    child the user has explicitly taken over is marked **Taken over** on that
    row, ahead of its running/model/thinking detail and read from
    `spawnOwnership`, never from a title or a role word; a coordinator-owned or
-   untracked child carries no marker. A spawned session's own panel offers
-   **Take over** — the ONE way ownership moves, since messaging a peer is a poke
-   that leaves its coordinator in charge — and, once taken, **Hand back**,
-   naming the coordinator it returns to. The inspector LISTS this relation; the
-   Sessions inbox is what folds it into one card (above). Beside it, **Worktrees
-   from this session** lists every worktree the session's spawn tree owns by the
+   untracked child carries no marker. A child whose opening prompt waits for a
+   slot under its coordinator's cap states **Status: Waiting for a slot
+   (position N)** on that row and in its own Details, from the list's
+   `waitingForSlot`; every session title row (`SessionTitleRow`) marks it with a
+   trailing hourglass in any status, and a quiet card's second line says it
+   under a muted **Waiting** badge. A spawned session's own panel offers **Take
+   over** — the ONE way ownership moves, since messaging a peer is a poke that
+   leaves its coordinator in charge — and, once taken, **Hand back**, naming the
+   coordinator it returns to. The inspector LISTS this relation; the Sessions
+   inbox is what folds it into one card (above). Beside it, **Worktrees from
+   this session** lists every worktree the session's spawn tree owns by the
    server's answer (`treeSessionIds`, `docs/worktree-ownership.md`) — created by
    it or a peer below it, or run in by one of them, archived peers included — as
    worktree rows, each with its pull request's mark; a tree that owns nothing
@@ -1165,6 +1170,16 @@ it directly with the final title. A failed naming run settles on an informative
 deterministic first-prompt fallback only AFTER the working state ends, so it
 does not reintroduce an interim-title flicker; disabled naming skips the working
 treatment and uses that fallback as soon as the session row lands.
+
+A session URL with no messages is a draft's only while nothing says otherwise.
+An id route is rehomed to `/sessions/create` only for a proven client-staged
+bootstrap, decided from the viewed snapshot first and the list second
+(`canonicalizeEmptySessionToCreate`): a snapshot naming its direct spawner
+(`SessionState.directSpawnedBy`) or holding incoming peer prompts keeps the id,
+as does a listed row with messages or a spawn edge. A row the list lacks proves
+nothing until a list has answered on this connection, so a waiting, refused or
+cancelled child keeps its page however its snapshot and its first list row are
+ordered.
 
 ## Small Screens
 

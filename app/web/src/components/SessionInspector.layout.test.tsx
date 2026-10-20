@@ -152,6 +152,35 @@ describe("SessionInspector layout", () => {
     expect(html).not.toContain("Bound when this session started");
   });
 
+  it("states a waiting child's Status in Details only while it waits", () => {
+    const child = (extra: Partial<SessionListItem>) =>
+      ({
+        id: "s1",
+        harness: "pi",
+        agentType: "developer",
+        title: "A session",
+        createdAt: 1,
+        updatedAt: 1,
+        messageCount: 0,
+        spawnedBySessionId: "coordinator",
+        ...extra,
+      }) as SessionListItem;
+    const status = (sessions: SessionListItem[]) => {
+      const doc = new DOMParser().parseFromString(
+        render({ ...base, sessions }),
+        "text/html",
+      );
+      return [...doc.querySelectorAll("span")].find(
+        (span) => span.textContent === "Status",
+      )?.nextElementSibling?.textContent;
+    };
+    expect(status([child({ waitingForSlot: { position: 3 } })])).toBe(
+      "Waiting for a slot (position 3)",
+    );
+    expect(status([child({})])).toBeUndefined();
+    expect(status([])).toBeUndefined();
+  });
+
   it("shows five tasks and defers the rest to a Show more", () => {
     const html = render({
       ...base,

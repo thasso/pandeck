@@ -38,6 +38,7 @@ import {
 } from "./db/directPeerChildStore.ts";
 import {
   peerPromptStore,
+  type HeldQueueEntry,
   type PeerPromptRecord,
 } from "./db/peerPromptStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -358,18 +359,44 @@ export function startHeldDirectPeersOnBoot(): void {
 }
 
 /**
+ * The ONE position rule: a held row's 1-based place among its coordinator's
+ * waiting rows (inserted, or admitted and still being created), keyed by the
+ * waiting child. `held` must be grouped by sender, oldest admission first.
+ */
+function rankHeld(
+  held: readonly HeldQueueEntry[],
+): Map<string, { position: number }> {
+  const positions = new Map<string, { position: number }>();
+  let sender: string | undefined;
+  let index = 0;
+  for (const row of held) {
+    index = row.senderSessionId === sender ? index + 1 : 1;
+    sender = row.senderSessionId;
+    positions.set(row.recipientSessionId, {
+      position: index + inFlightHoldsBefore(sender, row.queueSeq),
+    });
+  }
+  return positions;
+}
+
+/**
+ * Every waiting child's position, for the session list: one read of the held
+ * rows per build.
+ */
+export function waitingForSlotByChild(): Map<string, { position: number }> {
+  return rankHeld(peerPromptStore.heldQueue());
+}
+
+/**
  * 1-based position of this child's held opening prompt among its
- * coordinator's waiting rows (inserted, or admitted and still being created);
- * undefined when it is not waiting.
+ * coordinator's waiting rows; undefined when it is not waiting.
  */
 export function waitingPositionOf(
   spawnerId: string,
   childSessionId: string,
 ): number | undefined {
-  const held = peerPromptStore.heldFrom(spawnerId);
-  const index = held.findIndex((r) => r.recipientSessionId === childSessionId);
-  if (index < 0) return undefined;
-  return index + 1 + inFlightHoldsBefore(spawnerId, held[index]!.queueSeq);
+  return rankHeld(peerPromptStore.heldFrom(spawnerId)).get(childSessionId)
+    ?.position;
 }
 
 /* -------------------------------- removal --------------------------------- */

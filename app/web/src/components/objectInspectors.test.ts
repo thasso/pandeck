@@ -200,6 +200,46 @@ describe("sessionRelationGroups", () => {
     ).toEqual(["reviewer"]);
   });
 
+  it("lists a waiting child before its first message, with its Status", () => {
+    const groups = sessionRelationGroups({
+      sessionId: "coordinator",
+      relatedTasks: [],
+      sessions: [
+        session({ id: "coordinator", title: "Coordinator" }),
+        session({
+          id: "waiting",
+          title: "Reviewer",
+          messageCount: 0,
+          spawnedBySessionId: "coordinator",
+          spawnOwnership: "coordinator",
+          queuedWork: true,
+          waitingForSlot: { position: 2 },
+        }),
+        session({
+          id: "taken",
+          title: "Implementer",
+          spawnedBySessionId: "coordinator",
+          spawnOwnership: "taken-over",
+          waitingForSlot: { position: 1 },
+        }),
+      ],
+    });
+    const refs = groups.find((g) => g.id === "spawned-sessions")?.refs;
+    expect(refs?.map((ref) => [ref.id, ref.facts])).toEqual([
+      [
+        "waiting",
+        [{ label: "Status", value: "Waiting for a slot (position 2)" }],
+      ],
+      [
+        "taken",
+        [
+          { label: "Status", value: "Waiting for a slot (position 1)" },
+          { label: "Control", value: "Taken over" },
+        ],
+      ],
+    ]);
+  });
+
   it("keeps a spawned parent navigable when its list row is unavailable", () => {
     const groups = sessionRelationGroups({
       sessionId: "child",

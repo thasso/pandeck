@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { SessionListItem } from "@assistant/shared";
+import type { QueuedPeerPrompt, SessionListItem } from "@assistant/shared";
 import {
   backgroundTasksPath,
   canonicalizeEmptySessionToCreate,
+  viewedSessionIdentity,
   initiativePath,
   INITIATIVES_PATH,
   fileViewerPath,
@@ -206,30 +207,73 @@ describe("stagedSendCreatedSession", () => {
 });
 
 describe("canonicalizeEmptySessionToCreate", () => {
-  const listed = (id: string, messageCount: number) =>
-    ({ id, messageCount }) as SessionListItem;
+  const listed = (
+    id: string,
+    messageCount: number,
+    spawnedBySessionId?: string,
+  ) =>
+    ({
+      id,
+      messageCount,
+      ...(spawnedBySessionId ? { spawnedBySessionId } : {}),
+    }) as SessionListItem;
+  const decide = (
+    sessions: SessionListItem[],
+    evidence: { viewedIdentity?: boolean; sessionListFresh?: boolean } = {},
+    hydrated = true,
+  ) =>
+    canonicalizeEmptySessionToCreate(hydrated, sessions, "s1", {
+      viewedIdentity: evidence.viewedIdentity ?? false,
+      sessionListFresh: evidence.sessionListFresh ?? true,
+    });
 
   it("keeps the id URL for a session the list says has messages", () => {
     // Task 449 defence in depth: a zero-message PROJECTION of a session the
     // list knows is non-empty is an unrenderable snapshot, not a bootstrap —
     // sending it to /sessions/create makes a real conversation unreachable.
-    expect(
-      canonicalizeEmptySessionToCreate(true, [listed("s1", 2)], "s1"),
-    ).toBe(false);
+    expect(decide([listed("s1", 2)])).toBe(false);
   });
 
   it("withholds judgement until the session list has arrived", () => {
     // A cold deep link: the snapshot lands BEFORE `ready`'s list, so `sessions`
     // is still empty. An unknown id is "not yet known", never "empty" — the
     // guard must wait for hydration instead of rehoming on absent evidence.
-    expect(canonicalizeEmptySessionToCreate(false, [], "s1")).toBe(false);
+    expect(decide([], {}, false)).toBe(false);
+    // Hydrated from a cache or an earlier connection, but no list answered on
+    // this one yet: the same.
+    expect(decide([], { sessionListFresh: false })).toBe(false);
+  });
+
+  it("keeps a session the snapshot says the server created", () => {
+    // A directly spawned child, waiting for a slot or refused before its first
+    // prompt, may have no row in a list fresh for this connection yet.
+    expect(decide([], { viewedIdentity: true })).toBe(false);
+    expect(decide([listed("s1", 0)], { viewedIdentity: true })).toBe(false);
+  });
+
+  it("keeps a listed spawned child without messages", () => {
+    expect(decide([listed("s1", 0, "coordinator")])).toBe(false);
   });
 
   it("still rehomes a genuinely empty bootstrap session", () => {
+    expect(decide([listed("s1", 0)])).toBe(true);
+    expect(decide([])).toBe(true);
+  });
+});
+
+describe("viewedSessionIdentity", () => {
+  it("is the registry's spawner or incoming peer work, nothing else", () => {
+    expect(viewedSessionIdentity(null)).toBe(false);
+    expect(viewedSessionIdentity({})).toBe(false);
+    expect(viewedSessionIdentity({ queuedPeerPrompts: [] })).toBe(false);
+    expect(viewedSessionIdentity({ directSpawnedBy: "coordinator" })).toBe(
+      true,
+    );
     expect(
-      canonicalizeEmptySessionToCreate(true, [listed("s1", 0)], "s1"),
+      viewedSessionIdentity({
+        queuedPeerPrompts: [{ id: "k" } as QueuedPeerPrompt],
+      }),
     ).toBe(true);
-    expect(canonicalizeEmptySessionToCreate(true, [], "s1")).toBe(true);
   });
 });
 

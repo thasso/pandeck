@@ -1,8 +1,9 @@
 import type { SessionListItem } from "@assistant/shared";
-import { Network } from "lucide-react";
+import { Hourglass, Network } from "lucide-react";
 import {
   sessionStatusBadge,
   tierForStatus,
+  waitingForSlotLabel,
   type SessionInboxStatus,
 } from "../lib/sessionInbox.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
@@ -21,7 +22,9 @@ import { SessionTitleText } from "./SessionTitleText.tsx";
  *   Fixed width, so every title starts at the same x. The title is bright only
  *   where it asks for the user — unread, or needing them; a read one recedes.
  *   Coordinator-owned peers follow the shared session-identity policy: italic
- *   title and a trailing sub-agent marker, without unread emphasis.
+ *   title and a trailing sub-agent marker, without unread emphasis. A child
+ *   whose opening prompt waits for a slot carries a trailing hourglass in ANY
+ *   status: a user turn may run, or a reply sit unread, while it waits.
  */
 export function SessionTitleRow({
   session,
@@ -41,6 +44,7 @@ export function SessionTitleRow({
     AGENT_TYPE_DISPLAY.assistant;
   const AgentIcon = agent.Icon;
   const bright = status === "unread" || tierForStatus(status) === "needs-you";
+  const waiting = waitingForSlotLabel(session);
   return (
     <>
       <span className="flex size-4 shrink-0 items-center justify-center">
@@ -62,6 +66,16 @@ export function SessionTitleRow({
           pending={session.titleGenerationPending}
         />
       </span>
+      {waiting ? (
+        <span
+          className="flex shrink-0 items-center text-muted-foreground"
+          title={waiting}
+          aria-label={waiting}
+          role="img"
+        >
+          <Hourglass size={12} aria-hidden />
+        </span>
+      ) : null}
       {delegated ? (
         <span
           className="flex shrink-0 items-center text-muted-foreground"

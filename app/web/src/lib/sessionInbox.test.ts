@@ -3819,3 +3819,102 @@ describe("a reply owed after the last reminder", () => {
     expect(sessionCardKey(owing, NOW)).not.toBe(sessionCardKey(clear, NOW));
   });
 });
+
+describe("a child waiting for a slot", () => {
+  const waiting = (position?: number) =>
+    position === undefined ? {} : { waitingForSlot: { position } };
+  const kinds: Record<string, Partial<SessionListItem>> = {
+    quiet: { queuedWork: true },
+    running: { queuedWork: true, isStreaming: true },
+    unread: { queuedWork: true, unread: true },
+  };
+
+  it("says so on a quiet card, and leaves running and unread cards their own words", () => {
+    const quiet = card({ id: "a", ...kinds.quiet, ...waiting(2) });
+    expect(quiet.status).toBe("quiet");
+    expect(sessionStatusBadge(quiet.session, quiet.status, NOW)).toEqual({
+      label: "Waiting",
+      tone: "muted",
+    });
+    expect(sessionStatusDetail(quiet.session, quiet.status)).toBe(
+      "Waiting for a slot (position 2)",
+    );
+    const running = card({ id: "a", ...kinds.running, ...waiting(1) });
+    expect(running.status).toBe("running");
+    expect(
+      sessionStatusBadge(running.session, running.status, NOW)?.label,
+    ).toBe("Working");
+    expect(sessionStatusDetail(running.session, running.status)).toBe(
+      undefined,
+    );
+    const unread = card({ id: "a", ...kinds.unread, ...waiting(1) });
+    expect(unread.status).toBe("unread");
+    expect(sessionStatusBadge(unread.session, unread.status, NOW)?.label).toBe(
+      "Done",
+    );
+    expect(sessionStatusDetail(unread.session, unread.status)).toBe(
+      "Unread response",
+    );
+    // Without the field, a quiet card with queued work reads as before.
+    const plain = card({ id: "a", ...kinds.quiet });
+    expect(sessionStatusBadge(plain.session, plain.status, NOW)?.label).toBe(
+      "Idle",
+    );
+    expect(sessionStatusDetail(plain.session, plain.status)).toBe(
+      "Queued work is waiting to run",
+    );
+  });
+
+  it.each(Object.keys(kinds))(
+    "repaints a %s card when its position appears, moves or clears",
+    (kind) => {
+      const steps = [undefined, 1, 2, undefined].map((position) =>
+        card({ id: "a", ...kinds[kind], ...waiting(position) }),
+      );
+      const onOpen = () => {};
+      for (let i = 1; i < steps.length; i += 1) {
+        const [prev, next] = [steps[i - 1]!, steps[i]!];
+        expect(sessionCardKey(next, NOW)).not.toBe(sessionCardKey(prev, NOW));
+        expect(
+          sameSessionCardProps(
+            { card: prev, now: NOW, relations: {}, onOpen },
+            { card: next, now: NOW, relations: {}, onOpen },
+          ),
+        ).toBe(false);
+        expect(
+          sameClusterChildProps(
+            { card: prev, now: NOW, onOpen },
+            { card: next, now: NOW, onOpen },
+          ),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it.each(Object.keys(kinds))(
+    "repaints an open Spawned sessions strip when a %s peer's position moves",
+    (kind) => {
+      const keyAt = (position?: number) =>
+        spawnedSessionsKey(
+          spawnedSessionsView({
+            sessions: [
+              session({ id: "root" }),
+              session({
+                id: "kid",
+                spawnedBySessionId: "root",
+                spawnOwnership: "coordinator",
+                ...kinds[kind],
+                ...waiting(position),
+              }),
+            ],
+            coordinatorId: "root",
+            includeSettled: false,
+          }),
+          true,
+        );
+      const keys = [undefined, 1, 2, undefined].map(keyAt);
+      for (let i = 1; i < keys.length; i += 1)
+        expect(keys[i]).not.toBe(keys[i - 1]);
+    },
+  );
+});

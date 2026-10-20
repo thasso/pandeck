@@ -795,7 +795,7 @@ export interface SessionStatusBadge {
  * badge, so every card states its state in the same place.
  */
 export function sessionStatusBadge(
-  _session: SessionListItem,
+  session: SessionListItem,
   status: SessionInboxStatus,
   _now: number,
 ): SessionStatusBadge | undefined {
@@ -818,10 +818,28 @@ export function sessionStatusBadge(
       return { label: "Working", tone: "accent" };
     case "unread":
       return { label: "Done", tone: "success" };
-    // Neutral: done and read, nothing is waiting on you.
+    // Neutral: done and read, nothing is waiting on you. A child whose
+    // opening prompt waits for a slot is not idle, but nothing is asked of you
+    // either.
     case "quiet":
-      return { label: "Idle", tone: "muted" };
+      return session.waitingForSlot
+        ? { label: "Waiting", tone: "muted" }
+        : { label: "Idle", tone: "muted" };
   }
+}
+
+/**
+ * "Waiting for a slot (position N)" while a directly spawned child's opening
+ * prompt is held under its coordinator's concurrency cap; undefined otherwise.
+ * Every surface that marks the state says it in these words.
+ */
+export function waitingForSlotLabel(
+  session: Pick<SessionListItem, "waitingForSlot">,
+): string | undefined {
+  const waiting = session.waitingForSlot;
+  return waiting
+    ? `Waiting for a slot (position ${waiting.position})`
+    : undefined;
 }
 
 /**
@@ -863,7 +881,10 @@ export function sessionStatusDetail(
     case "unread":
       return "Unread response";
     case "quiet":
-      return session.queuedWork ? "Queued work is waiting to run" : undefined;
+      return (
+        waitingForSlotLabel(session) ??
+        (session.queuedWork ? "Queued work is waiting to run" : undefined)
+      );
   }
 }
 
@@ -1484,6 +1505,9 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     // Derived, so key on it directly rather than enumerating every input it
     // might grow.
     sessionStatusDetail(session, status) ?? "",
+    // The title row's waiting marker, drawn in every status: the detail above
+    // states it only for a quiet card.
+    String(session.waitingForSlot?.position ?? ""),
     // The delivery chip, for the same reason: its state moves on a CI poll,
     // which touches nothing else on this key.
     sessionDeliveryKey(session),
@@ -2015,6 +2039,8 @@ function spawnedPeerKey(card: SessionInboxCard): string {
     session.agentType ?? "",
     card.status,
     sessionStatusDetail(session, card.status) ?? "",
+    // The waiting marker and Status fact, in any status.
+    String(session.waitingForSlot?.position ?? ""),
     String(session.updatedAt),
     // The row's place in the tree and what it shows beside its title.
     String(card.depth ?? ""),

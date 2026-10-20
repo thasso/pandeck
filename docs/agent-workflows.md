@@ -199,6 +199,15 @@ the outcome:
   silent and needs no free slot. A future archive writer must cancel the same
   way (`cancelHeldForArchivedSessions`).
 
+  The user sees the wait too. The child's session-list row carries
+  `waitingForSlot: { position }`, the same position the spawn result reported
+  (`docs/session-list.md`). Every row that draws the child marks it "Waiting for
+  a slot (position N)", and so do the child's inspector Details and the
+  spawner's Spawned sessions rows (`app/web/docs/ui-shell.md`). A directly
+  spawned child stays listed and openable from creation, without a message, and
+  also after its start was refused or cancelled, until the user settles,
+  archives or deletes it.
+
   #### Compaction window at creation
 
   Both `spawn` and `propose` rows accept `compactionWindow`, a whole number of

@@ -59,6 +59,8 @@ it("reopens the PA reader after returning from a pure UI route", async () => {
       sessions: [],
       currentId: "pa",
       hasMessages: true,
+      sessionListFresh: true,
+      viewedIdentity: false,
       loadSession: () => {},
       openPermanentAssistant: open,
     });

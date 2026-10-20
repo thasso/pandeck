@@ -49,6 +49,29 @@ describe("sessionRowKey", () => {
   });
 });
 
+describe("sessionRowKey for a child waiting for a slot", () => {
+  it.each([
+    ["quiet", { queuedWork: true }],
+    ["running", { queuedWork: true, isStreaming: true }],
+  ] as const)(
+    "changes on a %s row as its position appears, moves and clears",
+    (_kind, patch) => {
+      const at = Date.now() - 5 * 60_000;
+      const keys = [undefined, 1, 2, undefined].map((position) =>
+        sessionRowKey(
+          row({
+            updatedAt: at,
+            ...patch,
+            ...(position === undefined ? {} : { waitingForSlot: { position } }),
+          }),
+        ),
+      );
+      for (let i = 1; i < keys.length; i += 1)
+        expect(keys[i]).not.toBe(keys[i - 1]);
+    },
+  );
+});
+
 describe("backlogSessionsKey", () => {
   const base = [row({ id: "a", isStreaming: true }), row({ id: "b" })];
 

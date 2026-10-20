@@ -46,6 +46,7 @@ import { storedCompactionWindowState } from "./harnesses/compactionWindow.ts";
 import { engineTranscript } from "./harnesses/storage.ts";
 import { sessionToolExposure } from "./tools/sessionToolExposure.ts";
 import {
+  directSpawnField,
   peerPromptPeersFor,
   peerPromptQueueField,
   peerPromptThreadsFor,
@@ -211,6 +212,7 @@ export class ViewSession implements HarnessDriver {
       peerPromptPeers: peerPromptPeersFor(this.id),
       ...promptQueueField(this.id),
       ...peerPromptQueueField(this.id),
+      ...directSpawnField(this.id),
       ...backgroundUpdateQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),

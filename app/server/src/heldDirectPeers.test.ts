@@ -906,6 +906,137 @@ test("cleanup needs no free slot: a pass with the cap full cancels what was remo
   expect(noticeKeys(coord)).toEqual([]);
 });
 
+/* -------------------------- the session list sees it -------------------------- */
+
+/** How many session-list rebuilds `action` asked for, once its effects settled. */
+async function listBroadcastsDuring(action: () => unknown): Promise<number> {
+  await settle();
+  const spy = vi.spyOn(fakeHub, "broadcastSessions");
+  try {
+    await action();
+    await settle();
+    return spy.mock.calls.length;
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+const positionOf = (child: string) =>
+  held.waitingForSlotByChild().get(child)?.position;
+
+test("every held transition asks the session list to rebuild", async () => {
+  const coord = spawner(1);
+  const [busy] = running(coord, 1);
+  const a = waiting(coord, "A");
+  const b = waiting(coord, "B");
+  const c = waiting(coord, "C");
+  const d = waiting(coord, "D");
+  const e = waiting(coord, "E");
+  const late = session("Late");
+  expect(
+    await listBroadcastsDuring(() =>
+      peerPrompt.sendPeerPrompt({
+        senderSessionId: coord,
+        targetSessionId: late,
+        prompt: "start when there is room",
+        responseRequested: false,
+        hold: { queueSeq: peerPromptStore.allocateQueueSeq() },
+      }),
+    ),
+    "held insertion",
+  ).toBeGreaterThan(0);
+  states.set(busy!, "idle");
+  expect(
+    await listBroadcastsDuring(() => startHeldDirectPeers(coord)),
+    "promotion",
+  ).toBeGreaterThan(0);
+  expect(statusOf(a.rowId)).toBe("queued");
+  expect(
+    await listBroadcastsDuring(() =>
+      withdrawQueuedPeerPrompt(
+        b.child,
+        peerPromptQueueField(b.child).queuedPeerPrompts![0]!.id,
+      ),
+    ),
+    "withdraw",
+  ).toBeGreaterThan(0);
+  expect(
+    await listBroadcastsDuring(() =>
+      cancelQueuedPeerPrompts({
+        recipientSessionId: c.child,
+        senderSessionId: coord,
+        reason: "Stopped by the coordinator.",
+      }),
+    ),
+    "cancel",
+  ).toBeGreaterThan(0);
+  sessionStore.markDeleted(d.child);
+  expect(
+    await listBroadcastsDuring(() => cancelHeldForDeletedSession(d.child)),
+    "delete",
+  ).toBeGreaterThan(0);
+  sessionStore.setArchived(e.child, true);
+  expect(
+    await listBroadcastsDuring(() => cancelHeldForArchivedSessions([e.child])),
+    "archive",
+  ).toBeGreaterThan(0);
+  for (const id of [b.rowId, c.rowId, d.rowId, e.rowId])
+    expect(statusOf(id)).toBe("cancelled");
+  expect(positionOf(late)).toBe(1);
+});
+
+test("a refused start asks the session list to rebuild", async () => {
+  const coord = spawner(1);
+  const a = waiting(coord, "A");
+  updateSettings({ peerSpawnRuntimes: [runtimeRow({ enabled: false })] });
+  expect(
+    await listBroadcastsDuring(() => startHeldDirectPeers(coord)),
+  ).toBeGreaterThan(0);
+  expect(statusOf(a.rowId)).toBe("failed");
+  expect(positionOf(a.child)).toBeUndefined();
+});
+
+test("Send now on a waiting child updates the list before its delivery is appended", async () => {
+  const coord = spawner(1);
+  running(coord, 1);
+  const a = waiting(coord, "A");
+  const b = waiting(coord, "B");
+  expect([positionOf(a.child), positionOf(b.child)]).toEqual([1, 2]);
+  fakeDrivers.set(a.child, new FakeRuntimeDriver(a.child));
+  drains.mockRestore();
+  // The await every prompt passes before its transcript append.
+  const skills = await import("./sessionSkills.ts");
+  const realSkills = skills.sessionSkills;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  vi.spyOn(skills, "sessionSkills").mockImplementation(async (...args) => {
+    await gate;
+    return realSkills(...args);
+  });
+  await settle();
+  const lists = vi.spyOn(fakeHub, "broadcastSessions");
+  const sending = sendQueuedPeerPromptNow(
+    a.child,
+    peerPromptQueueField(a.child).queuedPeerPrompts![0]!.id,
+  );
+  try {
+    await vi.waitFor(() => expect(statusOf(a.rowId)).toBe("dispatching"));
+    await settle();
+    expect(lists).toHaveBeenCalled();
+    const { listSessions } = await import("./sessions.ts");
+    const rows = await listSessions([], () => Date.now(), {
+      onlyIds: new Set([a.child, b.child]),
+    });
+    const row = (id: string) => rows.find((r) => r.id === id);
+    expect(row(a.child)).toBeDefined();
+    expect(row(a.child)?.waitingForSlot).toBeUndefined();
+    expect(row(b.child)?.waitingForSlot).toEqual({ position: 1 });
+  } finally {
+    release();
+    await sending;
+  }
+});
+
 /** The real definition reader over a stand-in library whose source can change. */
 async function realAgentReader(onModels: (call: number) => void) {
   const authoring = await import("./library/libraryAuthoring.ts");

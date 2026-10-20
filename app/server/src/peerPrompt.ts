@@ -457,6 +457,22 @@ export function peerPromptQueueField(sessionId: string): {
 }
 
 /**
+ * The session state's direct-spawn identity: the coordinator the registry
+ * records for it, fixed at creation; absent for every other session.
+ */
+export function directSpawnField(sessionId: string): {
+  directSpawnedBy?: string;
+} {
+  try {
+    const spawner = directPeerChildStore.spawnerOf(sessionId);
+    return spawner ? { directSpawnedBy: spawner } : {};
+  } catch (err) {
+    console.warn("Failed to read the direct spawner for session state:", err);
+    return {};
+  }
+}
+
+/**
  * Recipients whose queue projection is due. One delivery moves several rows
  * through several transitions; their viewers get the list once, after them.
  */
@@ -566,6 +582,9 @@ export async function sendQueuedPeerPromptNow(
     // the hold either way; the delivery is then refused and the row put back.
     if (!steer) spendHumanResume(resume);
     publishPeerQueue(recipientId);
+    // A started waiting child leaves its coordinator's queue now, not when the
+    // delivery ends: the list's waiting marker and its siblings' positions move.
+    if (row.status === "held") void broadcastParticipants([claimed]);
     if (steer) await steerPeerPrompt(live, claimed);
     // Hold the recipient authority through the idle delivery so an automatic
     // drainer cannot start a competing turn or replace its reply context.

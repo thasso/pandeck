@@ -151,6 +151,7 @@ import {
 } from "../pullRequestCards.ts";
 import { sessionProjectContextInfo } from "../sessionProjectContext.ts";
 import {
+  directSpawnField,
   peerPromptPeersFor,
   peerPromptQueueField,
   peerPromptThreadsFor,
@@ -1904,6 +1905,7 @@ export class PiLiveSession implements LiveSession {
       peerPromptPeers: peerPromptPeersFor(this.session.sessionId),
       ...promptQueueField(this.session.sessionId),
       ...peerPromptQueueField(this.session.sessionId),
+      ...directSpawnField(this.session.sessionId),
       ...backgroundUpdateQueueField(this.session.sessionId),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),

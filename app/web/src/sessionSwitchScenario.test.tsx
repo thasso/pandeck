@@ -142,6 +142,8 @@ function RoutingHarness({
     sessions: [],
     currentId,
     hasMessages: false,
+    sessionListFresh: true,
+    viewedIdentity: false,
     loadSession,
     openPermanentAssistant: () => {},
   });

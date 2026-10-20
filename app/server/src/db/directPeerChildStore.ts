@@ -113,6 +113,22 @@ export const directPeerChildStore = {
     return row?.spawner_session_id;
   },
 
+  /**
+   * Which of these sessions are recorded children, in one primary-key read:
+   * the session list keeps them even before their first message.
+   */
+  childIdsAmong(sessionIds: Iterable<string>): Set<string> {
+    const ids = [...new Set(sessionIds)];
+    if (ids.length === 0) return new Set();
+    const rows = getDb()
+      .prepare(
+        `SELECT child_session_id FROM direct_peer_children
+          WHERE child_session_id IN (${ids.map(() => "?").join(", ")})`,
+      )
+      .all(...ids) as { child_session_id: string }[];
+    return new Set(rows.map((r) => r.child_session_id));
+  },
+
   /** Test seam: forget every recorded child. */
   clearForTests(): void {
     getDb().prepare("DELETE FROM direct_peer_children").run();

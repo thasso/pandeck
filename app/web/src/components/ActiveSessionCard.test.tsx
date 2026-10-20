@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SessionListItem } from "@assistant/shared";
@@ -98,6 +100,80 @@ describe("ActiveSessionCard at rest", () => {
     // rest and tolerates ordinary edits to the front.
     const elements = (html: string) => (html.match(/<[a-z]/g) ?? []).length;
     expect(elements(markup({ id: "a" }))).toBeLessThan(60);
+  });
+});
+
+describe("ActiveSessionCard for a child waiting for a slot", () => {
+  const label = (position: number) =>
+    `aria-label="Waiting for a slot (position ${position})"`;
+
+  it("marks the title in any status, and states it on the second line only when quiet", () => {
+    const quiet = markup({
+      id: "a",
+      queuedWork: true,
+      waitingForSlot: { position: 2 },
+    });
+    expect(quiet).toContain(label(2));
+    expect(quiet).toContain(">Waiting for a slot (position 2)<");
+    expect(quiet).not.toContain("Queued work is waiting to run");
+    for (const status of [{ isStreaming: true }, { unread: true }]) {
+      const html = markup({
+        id: "a",
+        queuedWork: true,
+        waitingForSlot: { position: 1 },
+        ...status,
+      });
+      expect(html).toContain(label(1));
+      expect(html).not.toContain(">Waiting for a slot (position 1)<");
+    }
+    expect(markup({ id: "a", queuedWork: true })).not.toContain(
+      "Waiting for a slot",
+    );
+  });
+
+  it("repaints a mounted running card whose position alone moved", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const noop = () => {};
+    const relations: SessionCardRelations = {};
+    const render = (position: number) =>
+      act(() =>
+        root.render(
+          <ActiveSessionCard
+            card={card({
+              id: "a",
+              isStreaming: true,
+              queuedWork: true,
+              waitingForSlot: { position },
+            })}
+            now={NOW}
+            active={false}
+            relations={relations}
+            worktreeDirty={false}
+            density="tight"
+            onOpen={noop}
+            onSettle={noop}
+            onDismissFailure={noop}
+            onRename={noop}
+            onArchive={noop}
+            onDelete={noop}
+            onOpenProject={noop}
+            onOpenTask={noop}
+            onOpenWorktree={noop}
+          />,
+        ),
+      );
+    try {
+      render(2);
+      expect(host.innerHTML).toContain(label(2));
+      render(1);
+      expect(host.innerHTML).toContain(label(1));
+      expect(host.innerHTML).not.toContain(label(2));
+    } finally {
+      act(() => root.unmount());
+      host.remove();
+    }
   });
 });
 

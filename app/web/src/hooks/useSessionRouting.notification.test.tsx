@@ -40,6 +40,8 @@ beforeEach(() => {
     sessions: [{ id: "old", messageCount: 2 }] as SessionListItem[],
     currentId: "old",
     hasMessages: true,
+    sessionListFresh: true,
+    viewedIdentity: false,
     loadSession: vi.fn(),
     openPermanentAssistant: vi.fn(),
   };

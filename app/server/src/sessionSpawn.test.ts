@@ -113,7 +113,8 @@ const { buildClaudeSdkQueryOptions } = await import("./claudeSdk/options.ts");
 
 const { peerPromptStore } = await import("./db/peerPromptStore.ts");
 const peerPromptModule = await import("./peerPrompt.ts");
-const { startHeldDirectPeers } = await import("./heldDirectPeers.ts");
+const { startHeldDirectPeers, waitingForSlotByChild } =
+  await import("./heldDirectPeers.ts");
 
 const spawnTool = sessionSpawnTools()[0]!;
 const SENDER = "spawner-session";
@@ -2214,6 +2215,11 @@ test("over-cap counted rows are created and wait instead of being refused", asyn
     ]);
     expect(heldChildren()).toEqual(results.map((r) => r.sessionId));
     expect(results.map((r) => r.waitingForSlot?.position)).toEqual([1, 2, 3]);
+    // The session list derives the same positions the result reported.
+    const listed = waitingForSlotByChild();
+    expect(results.map((r) => listed.get(r.sessionId!)?.position)).toEqual([
+      1, 2, 3,
+    ]);
   } finally {
     peerPromptModule.setHubForTests(undefined);
   }
