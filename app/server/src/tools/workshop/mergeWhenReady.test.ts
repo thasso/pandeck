@@ -305,6 +305,11 @@ test("ready and idle is byte-identical to foreground and never launches", async 
   );
   const inline = await f.run(f.params, f.ctx, f.ops);
   expect(inline).toEqual(ordinary);
+  expect(f.ops.hosting).toHaveBeenLastCalledWith(
+    expect.anything(),
+    f.ctx.signal,
+    undefined,
+  );
   expect(f.launch).not.toHaveBeenCalled();
 });
 
@@ -314,6 +319,11 @@ test("green but busy launches and retries with the requester, without retaining 
   vi.mocked(f.ops.reserve).mockReturnValueOnce(undefined);
   expect(payload(await f.run(f.params, f.ctx, f.ops)).status).toBe("waiting");
   expect((await f.job()).payload).toMatchObject({ status: "merged" });
+  expect(f.ops.hosting).toHaveBeenLastCalledWith(
+    expect.anything(),
+    f.budget.signal,
+    f.budget.signal,
+  );
 });
 
 test.each([false, true])(

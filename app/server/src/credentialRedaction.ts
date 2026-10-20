@@ -17,15 +17,18 @@ const CREDENTIAL_TOKEN_PATTERNS = [
   /\bAIza[0-9A-Za-z_-]{20,}/,
 ];
 
+const HTTP_CREDENTIAL_LITERAL =
+  /\bAuthorization["']?\s*[:=]\s*["']?(?:Bearer|Basic|Token)\s+([A-Za-z0-9._~+/-]{8,}=*)(?=$|[\s"',;`])/i;
+
 const PUBLISHED_CREDENTIAL_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   ...CREDENTIAL_TOKEN_PATTERNS,
   /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password)\b\s*[:=]\s*["'][^"']{12,}["']/i,
-  /\bAuthorization["']?\s*[:=]\s*["']?(?:Bearer|Basic|Token|Digest)\s+[^\s"',;]+/i,
-  // Without a header/assignment, keep ordinary "Bearer authentication" prose.
-  /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i,
+  // Bare values stay narrower than headers: not hyphenated prose or named constants.
+  /\bBearer\s+[A-Za-z0-9~+/]{20,}=*(?=$|[\s"',;`])/i,
   /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{16,}\b/,
-  /\b[\w.-]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)[\w.-]*["']?\s*[:=]\s*[A-Za-z0-9._~+/-]{20,}=*/i,
+  // Only standalone shell-style literals, not source expressions or object fields.
+  /^\s*(?:export\s+)?(?:[A-Z][A-Z0-9]*_)*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY)=(?!(?:[A-Z0-9]+_)+[A-Z0-9]+\s*$)[A-Za-z0-9_~+/-]{20,}=*\s*$/,
 ];
 
 /**
@@ -36,9 +39,15 @@ const PUBLISHED_CREDENTIAL_PATTERNS = [
  * so prose that merely mentions a token or password has to pass.
  */
 export function textLooksLikeCredential(text: string): boolean {
-  return text
-    .split("\n")
-    .some((line) => PUBLISHED_CREDENTIAL_PATTERNS.some((re) => re.test(line)));
+  return text.split("\n").some((line) => {
+    if (PUBLISHED_CREDENTIAL_PATTERNS.some((re) => re.test(line))) return true;
+    const value = HTTP_CREDENTIAL_LITERAL.exec(line)?.[1];
+    return (
+      value !== undefined &&
+      !/^(?:[A-Z][A-Z0-9]*_)+[A-Z0-9]+$/.test(value) &&
+      !/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(value)
+    );
+  });
 }
 
 /**

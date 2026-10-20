@@ -595,7 +595,7 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
       includeReviewThreads: {
         type: "boolean",
         description:
-          "Include review threads with GraphQL thread ids for resolve/reopen, numeric comment ids for replies, and resolved state. Last 50 threads, first 20 comments each; truncation flagged. Defaults to false.",
+          "Include review threads with GraphQL thread ids for resolve/reopen, decimal-string comment ids for replies, and resolved state. Last 50 threads, first 20 comments each; truncation flagged. Defaults to false.",
       },
       maxCommits: {
         type: "number",

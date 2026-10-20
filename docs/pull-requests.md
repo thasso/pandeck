@@ -99,8 +99,8 @@ blocker. A caller-written `message` is the opposite case: it is published as
 written, so it gets the same credential check as the patch's added lines
 (`textLooksLikeCredential` in `credentialRedaction.ts`: private keys, known
 token shapes including JWTs, Authorization/Bearer headers, quoted credential
-assignments and long unquoted credential assignments). A hit refuses before the
-worktree is read, and there is no override, `force` included.
+assignments and long standalone unquoted shell credential literals). A hit
+refuses before the worktree is read, and there is no override, `force` included.
 
 ### Commit review override
 
@@ -563,8 +563,11 @@ reconcile that uncertainty.
 Default-branch classification is live, not pinned when waiting begins. A change
 before the managed core's decision is reclassified using current capabilities. A
 change between that decision and the merge seam's final read refuses the
-operation without merging. Provider reads before the outward boundary carry the
-job's abort signal, so Stop also interrupts slow reads.
+operation without merging. Background provider reads before the outward boundary
+carry the job's abort signal, so Stop also interrupts slow reads. Foreground
+providers do not retain the turn signal: once a convergent write starts it must
+finish and project its result even if the turn stops. Background Stop likewise
+cannot abort a write after the job's commit boundary.
 
 `timeoutSeconds` requires `whenReady` and bounds only the background wait, not
 an inline finish. It defaults to 1800, clamps to 30–7200 and is shortened by the

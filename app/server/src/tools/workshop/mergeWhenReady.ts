@@ -430,7 +430,11 @@ export function createMergeWhenReadyRunner(deps: Dependencies) {
         if (!sameRow(current, frozen))
           return notMerged("worktree_unavailable", "poll");
         const push = await operations.target(current!, budget.signal);
-        const hosted = await operations.hosting(push, budget.signal);
+        const hosted = await operations.hosting(
+          push,
+          budget.signal,
+          budget.signal,
+        );
         if (
           !hosted ||
           hosted.provider.kind !== frozen.provider ||
@@ -472,6 +476,7 @@ export function createMergeWhenReadyRunner(deps: Dependencies) {
                 operations,
                 {
                   signal: budget.signal,
+                  providerSignal: budget.signal,
                   frozen,
                   exemptBackgroundItem: {
                     itemId: budget.itemId,

@@ -22,6 +22,52 @@ vi.mock("../../forgejoSettings.ts", () => ({
 afterEach(() => vi.unstubAllGlobals());
 
 test.each(["github.com", "forgejo.example"])(
+  "foreground %s write converges after the turn aborts",
+  async (host) => {
+    remote.url = `https://${host}/acme/repo.git`;
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let finish!: (response: Response) => void;
+    let signal!: AbortSignal;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        expect(init.method).toBe(host === "github.com" ? "PUT" : "POST");
+        signal = init.signal;
+        entered();
+        return new Promise<Response>((resolve, reject) => {
+          finish = resolve;
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("write aborted")),
+            { once: true },
+          );
+        });
+      }),
+    );
+    const controller = new AbortController();
+    const hosted = await resolveManagedHosting(
+      { repoRoot: "/repo", remote: "origin" } as ResolvedPushTarget,
+      controller.signal,
+    );
+    const result = hosted!.provider
+      .mergePullRequest(42, {
+        method: "squash",
+        deleteBranch: false,
+        expectedHeadSha: "head",
+      })
+      .catch((error: unknown) => error);
+    await writing;
+    controller.abort(new Error("turn stopped"));
+    finish(new Response(JSON.stringify({ merged: true }), { status: 200 }));
+    expect(await result).toMatchObject({ number: 42, branchDeleted: false });
+    expect(signal.aborted).toBe(false);
+  },
+);
+
+test.each(["github.com", "forgejo.example"])(
   "managed %s provider reads abort with the job",
   async (host) => {
     remote.url = `https://${host}/acme/repo.git`;
@@ -54,6 +100,7 @@ test.each(["github.com", "forgejo.example"])(
     const controller = new AbortController();
     const hosted = await resolveManagedHosting(
       { repoRoot: "/repo", remote: "origin" } as ResolvedPushTarget,
+      controller.signal,
       controller.signal,
     );
     const request = hosted!.provider

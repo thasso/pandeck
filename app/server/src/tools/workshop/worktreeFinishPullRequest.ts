@@ -145,6 +145,7 @@ export interface WorktreeFinishPullRequestOperations {
   hosting(
     target: ResolvedPushTarget,
     signal?: AbortSignal,
+    providerSignal?: AbortSignal,
   ): Promise<ManagedHostingTarget | undefined>;
   capabilities(
     provider: GitHostingProvider,
@@ -788,6 +789,7 @@ interface ResolveManagedTargetOptions {
    * branch and card ownership are still required to match.
    */
   baseMayDiffer?: boolean;
+  providerSignal?: AbortSignal | undefined;
 }
 
 async function resolveManagedTarget(
@@ -797,7 +799,11 @@ async function resolveManagedTarget(
   options: ResolveManagedTargetOptions = {},
 ): Promise<ManagedPullRequestTarget> {
   const target = await operations.target(row, signal);
-  const hosted = await operations.hosting(target, signal);
+  const hosted = await operations.hosting(
+    target,
+    signal,
+    options.providerSignal,
+  );
   if (!hosted)
     throw new Error(
       `No git hosting provider is configured for the derived push remote "${target.remote}".`,
@@ -1219,6 +1225,7 @@ async function runClose(
 
 interface ManagedMergeOptions {
   signal?: AbortSignal | undefined;
+  providerSignal?: AbortSignal | undefined;
   frozen?: FrozenMergeTarget;
   beforeOutwardStep?: () => void;
   exemptBackgroundItem?: { itemId: string; ownerSessionId: string };
@@ -1258,7 +1265,9 @@ async function finishManagedMerge(
         "worktree-changed",
         "The managed worktree target changed or was removed.",
       );
-    const target = await resolveManagedTarget(row, operations, options.signal);
+    const target = await resolveManagedTarget(row, operations, options.signal, {
+      providerSignal: options.providerSignal,
+    });
     if (options.frozen) assertFrozenMergeTarget(target, options.frozen);
     return await runMerge(
       request,
