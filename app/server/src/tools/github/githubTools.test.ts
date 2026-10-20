@@ -1039,6 +1039,52 @@ describe("github_watch_pull_request_checks", () => {
 });
 
 describe("github_get_ref_checks", () => {
+  // Frozen at 422671d, before adding wait/background modes. Compact text is a contract.
+  test.each([
+    {
+      runs: [
+        {
+          name: "ci",
+          status: "completed",
+          conclusion: "success",
+          html_url: "https://ci/1",
+        },
+      ],
+      statuses: [{ context: "legacy", state: "success", description: null }],
+      total: 1,
+      text: '{"repo":"acme/app","ref":"main","state":"success","total":2,"url":"https://ci/1","checkRuns":[{"name":"ci","status":"completed","conclusion":"success","url":"https://ci/1"}],"statuses":[{"context":"legacy","state":"success"}]}',
+    },
+    {
+      runs: [{ name: "ci", status: "in_progress" }],
+      statuses: [],
+      total: 2,
+      text: '{"repo":"acme/app","ref":"main","state":"pending","total":2,"truncated":true,"url":null,"checkRuns":[{"name":"ci","status":"in_progress"}],"statuses":[]}',
+    },
+    {
+      runs: [],
+      statuses: [],
+      total: 0,
+      text: '{"repo":"acme/app","ref":"main","state":"neutral","total":0,"url":null,"checkRuns":[],"statuses":[]}',
+    },
+  ])(
+    "keeps default output byte-stable: $text",
+    async ({ runs, statuses, total, text }) => {
+      vi.mocked(getGithubToolConfig).mockReturnValue(config);
+      globalThis.fetch = vi.fn(async (input) =>
+        jsonResponse(
+          String(input).includes("/check-runs")
+            ? { total_count: total, check_runs: runs }
+            : { statuses },
+        ),
+      ) as typeof fetch;
+      const result = await githubGetRefChecksTool.execute(
+        { repo: "acme/app", ref: "main" },
+        ctxFor("ref-fixture"),
+      );
+      expect(result.content[0]).toEqual({ type: "text", text });
+      expect(result.details).toEqual(JSON.parse(text));
+    },
+  );
   test("aggregates check-runs and commit statuses into an overall state", async () => {
     vi.mocked(getGithubToolConfig).mockReturnValue(config);
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {

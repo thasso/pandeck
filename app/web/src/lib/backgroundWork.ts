@@ -279,6 +279,8 @@ export function backgroundWorkKindLabel(
       return `WebSocket monitor${service}`;
     case "check-watch":
       return `Check watch${service}`;
+    case "image-pull":
+      return `Image pull${service}`;
   }
 }
 

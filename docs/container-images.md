@@ -78,11 +78,35 @@ the GitHub integration is enabled.
 
 - A pull is a no-op when the image is already present
   (`status: "already-present"`); pass `refresh: true` to re-fetch a moving tag.
-- Concurrent requests for the same reference share one docker invocation; at
-  most two pulls run at a time. Only the first caller sees progress updates.
+- Concurrent requests for the same reference and refresh flag share one docker
+  invocation under its own controller. At most two pulls run at a time, with
+  cancellable slot waits. Every subscribed foreground caller receives progress.
 - The result carries safe metadata only: normalized reference, registry, status,
   digest, image id, size, whether credentials were used, and duration.
-- Default timeout is 15 minutes; the call honors turn cancellation.
+- Every caller has its own 15-minute timeout, counted from its call and
+  including any slot wait, login and inspect. Cancellation or timeout settles
+  only that caller. The shared pull continues for remaining subscribers; the
+  last caller's departure aborts it and releases its slot once docker exits.
+  Docker separately retains its fixed 15-minute command limit, so each caller
+  ends at the earlier of its own timeout and the shared command's result. A
+  queued foreground caller can now time out without ever starting docker.
+- `background: true` validates the runtime and checks presence in the call. An
+  already-present image returns inline unless refreshed; otherwise the call
+  returns `{ taskId, state: "running", hint }`. The `server-task` / `image-pull`
+  item appears as "Image pull" in Background tasks. Its artifact is the same
+  safe JSON payload as a foreground result. It emits no progress activity.
+- Background admission uses the Settings lifetime, with a one-minute margin; the
+  job's own subscription timeout is the shorter of 15 minutes and that frozen
+  lifetime minus one minute. A timeout fails only that job, before its deadline
+  Stop. Only interactive top-level sessions may start one; refusals throw. Stop
+  through Background tasks or `background_tasks` affects only that job's
+  subscription, not other sessions' pulls. Ending the initiating turn does not
+  stop it.
+- Completion uses the existing background delivery: wake an idle session, steer
+  into a running pi turn, or wait for a running Claude turn to end then wake.
+  Restart resumes nothing. Deployment drain and boot retain a wake for the real
+  outcome or restart stop, as for check watches. Docker may leave an incomplete
+  download, which it discards; the app does not resume it.
 
 ## Troubleshooting
 

@@ -156,6 +156,11 @@ describe("state and activity classification", () => {
         item({ id: "h", backend: "server-task", kind: "check-watch" }),
       ),
     ).toBe("Check watch");
+    expect(
+      backgroundWorkKindLabel(
+        item({ id: "i", backend: "server-task", kind: "image-pull" }),
+      ),
+    ).toBe("Image pull");
   });
 });
 

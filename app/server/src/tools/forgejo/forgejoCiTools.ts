@@ -37,7 +37,12 @@ import {
   normalizeForgejoBaseUrl,
   type ForgejoApiConfig,
 } from "../../forgejoClient.ts";
-import { forgejoProvider } from "../../gitHosting.ts";
+import { forgejoProvider, forgejoRefChecksVerdict } from "../../gitHosting.ts";
+import {
+  executeRefCheckWait,
+  refCheckWaitParameters,
+  type RefCheckWaitParams,
+} from "../refCheckWait.ts";
 import { createPullRequestCheckWatchTool } from "../pullRequestCheckWatch.ts";
 import {
   clamp,
@@ -46,7 +51,7 @@ import {
   resolveForgejoRepo,
 } from "./forgejoTools.ts";
 
-type GetRefChecksParams = {
+type GetRefChecksParams = RefCheckWaitParams & {
   repo: string;
   ref: string;
   includeHistory?: boolean;
@@ -107,7 +112,7 @@ export const forgejoGetRefChecksTool = defineAgentTool<GetRefChecksParams>({
   name: "forgejo_get_ref_checks",
   label: "Forgejo: Ref Checks",
   description:
-    "Aggregate CI for a branch/tag/SHA on the configured Forgejo instance — 'is CI green on this branch?'. Forgejo has no check-runs: Actions jobs report as commit statuses, one per job, rolled up into an overall state where the worst context wins. Read-only.",
+    "Aggregate CI for a branch/tag/SHA on the configured Forgejo instance — 'is CI green on this branch?'. Forgejo has no check-runs: Actions jobs report as commit statuses, one per job, rolled up into an overall state where the worst context wins. Read-only. Supports wait and background modes with the PR check watch's bounds and stop rules.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -115,6 +120,7 @@ export const forgejoGetRefChecksTool = defineAgentTool<GetRefChecksParams>({
     properties: {
       repo: { type: "string", description: "Repository as 'owner/repo'." },
       ref: { type: "string", description: "Branch name, tag, or commit SHA." },
+      ...refCheckWaitParameters("Forgejo"),
       includeHistory: {
         type: "boolean",
         description:
@@ -123,37 +129,45 @@ export const forgejoGetRefChecksTool = defineAgentTool<GetRefChecksParams>({
     },
   },
   async execute(params, ctx) {
-    const config = getForgejoToolConfig();
     const { owner, repo } = resolveForgejoRepo(params.repo);
     const ref = params.ref.trim();
     if (!ref)
       throw new Error("ref must be a non-empty branch, tag, or commit SHA.");
-    const summary = await forgejoRefChecks(
-      config,
-      owner,
-      repo,
-      ref,
-      ctx.signal,
-    );
-    const history = params.includeHistory
-      ? await fetchStatusHistory(config, owner, repo, ref, ctx.signal)
-      : null;
-    const payload = dropNulls({
+    return executeRefCheckWait(params, ctx, {
+      toolName: "forgejo_get_ref_checks",
+      providerName: "Forgejo",
       repo: `${owner}/${repo}`,
       ref,
-      sha: summary.sha,
-      state: summary.state,
-      total: summary.total,
-      // Only ever true, so a payload without the key is a complete answer.
-      truncated: summary.truncated ? true : null,
-      url: summary.url,
-      statuses: summary.statuses.map((status) => dropNulls(status)),
-      history,
+      read: (signal) =>
+        forgejoRefChecks(getForgejoToolConfig(), owner, repo, ref, signal),
+      observe: (summary) => ({
+        headSha: summary.sha || ref,
+        checks: forgejoRefChecksVerdict(summary),
+      }),
+      payload: async (summary, signal) => {
+        const history = params.includeHistory
+          ? await fetchStatusHistory(
+              getForgejoToolConfig(),
+              owner,
+              repo,
+              ref,
+              signal,
+            )
+          : null;
+        return dropNulls({
+          repo: `${owner}/${repo}`,
+          ref,
+          sha: summary.sha,
+          state: summary.state,
+          total: summary.total,
+          // Only ever true, so a payload without the key is a complete answer.
+          truncated: summary.truncated ? true : null,
+          url: summary.url,
+          statuses: summary.statuses.map((status) => dropNulls(status)),
+          history,
+        });
+      },
     });
-    return {
-      content: [{ type: "text", text: JSON.stringify(payload) }],
-      details: payload,
-    };
   },
 });
 

@@ -51,7 +51,7 @@ const SUMMARY_MAX_CHARS = 500;
 const STOP_GRACE_MS = 5_000;
 
 /** The kinds a server task may be; widened by each piece that adds one. */
-type ServerTaskKind = Extract<BackgroundWorkKind, "check-watch">;
+type ServerTaskKind = Extract<BackgroundWorkKind, "check-watch" | "image-pull">;
 
 /** What a job gets to work with: its own signal and its frozen budget. */
 export interface ServerTaskBudget {

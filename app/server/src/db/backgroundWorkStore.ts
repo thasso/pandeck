@@ -2063,6 +2063,7 @@ function countKind(
       activity.monitorWebsocketCount += 1;
       return;
     case "check-watch":
+    case "image-pull":
       // Counted by its backend (`serverTaskCount`) only.
       return;
     default:

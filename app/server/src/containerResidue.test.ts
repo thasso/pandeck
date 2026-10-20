@@ -136,6 +136,24 @@ test("refuses a path that has already gone", async () => {
   assert.deepEqual(calls, []);
 });
 
+test("an aborted runtime probe is a reason, not an exception", async () => {
+  const root = scratch();
+  const worktree = join(root, "repo-feature");
+  mkdirSync(worktree);
+  exec(() => ({ code: 0, stdout: "", stderr: "" }));
+  const outcome = await reclaimContainerResidue({
+    path: worktree,
+    allowedRoots: [root],
+    signal: AbortSignal.abort(new Error("reclaim was cancelled")),
+  });
+  assert.equal(outcome.status, "unavailable");
+  assert.match(
+    outcome.status === "unavailable" ? outcome.reason : "",
+    /reclaim was cancelled/,
+  );
+  assert.deepEqual(calls, []);
+});
+
 test("an unusable runtime is a reason, not an exception", async () => {
   const root = scratch();
   const worktree = join(root, "repo-feature");

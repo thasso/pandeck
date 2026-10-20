@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   ContainerPullError,
   execContainerCommand,
@@ -402,7 +402,9 @@ describe("pullContainerImage", () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow(/cancelled/);
-    for (const dir of harness.configDirs) expect(existsSync(dir)).toBe(false);
+    await vi.waitFor(() => {
+      for (const dir of harness.configDirs) expect(existsSync(dir)).toBe(false);
+    });
   });
 
   test("concurrent requests for the same image share one pull", async () => {

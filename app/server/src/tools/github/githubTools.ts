@@ -19,12 +19,18 @@ import {
 import {
   githubPaginate,
   githubRefChecks,
+  githubRateLimit,
   githubRequest,
   resolveAuthenticatedLogin,
   type GithubApiConfig,
   type GithubResponse,
 } from "../../githubClient.ts";
-import { githubProvider } from "../../gitHosting.ts";
+import { githubProvider, githubRefChecksVerdict } from "../../gitHosting.ts";
+import {
+  executeRefCheckWait,
+  refCheckWaitParameters,
+  type RefCheckWaitParams,
+} from "../refCheckWait.ts";
 import { localDateOf, localDayBoundsMs } from "@assistant/shared/zonedTime";
 import { userTimeZone } from "../../userProfile.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
@@ -105,7 +111,7 @@ type GetContentParams = {
   maxDownloadBytes?: number;
 };
 
-type GetRefChecksParams = {
+type GetRefChecksParams = RefCheckWaitParams & {
   repo: string;
   ref: string;
 };
@@ -1758,7 +1764,7 @@ export const githubGetRefChecksTool = defineAgentTool<GetRefChecksParams>({
   name: "github_get_ref_checks",
   label: "GitHub: Ref Checks",
   description:
-    "Aggregate CI for a branch/tag/SHA — 'is CI green on this branch?'. Checks API check-runs plus legacy commit statuses, with an overall state: failure if any check failed, pending while any is still running, success only when all passed. Read-only.",
+    "Aggregate CI for a branch/tag/SHA — 'is CI green on this branch?'. Checks API check-runs plus legacy commit statuses, with an overall state: failure if any check failed, pending while any is still running, success only when all passed. Read-only. Supports wait and background modes with the PR check watch's bounds and stop rules.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -1766,29 +1772,41 @@ export const githubGetRefChecksTool = defineAgentTool<GetRefChecksParams>({
     properties: {
       repo: { type: "string", description: "Repository as 'owner/repo'." },
       ref: { type: "string", description: "Branch name, tag, or commit SHA." },
+      ...refCheckWaitParameters("GitHub"),
     },
   },
   async execute(params, ctx) {
-    const config = getGithubToolConfig();
     const { owner, repo } = resolveRepo(params.repo);
     const ref = params.ref.trim();
     if (!ref)
       throw new Error("ref must be a non-empty branch, tag, or commit SHA.");
-    const summary = await githubRefChecks(config, owner, repo, ref, ctx.signal);
-    const payload = {
+    return executeRefCheckWait(params, ctx, {
+      toolName: "github_get_ref_checks",
+      providerName: "GitHub",
       repo: `${owner}/${repo}`,
       ref,
-      state: summary.state,
-      total: summary.total,
-      ...(summary.truncated ? { truncated: true } : {}),
-      url: summary.url,
-      checkRuns: summary.checkRuns.map((r) => dropNulls(r)),
-      statuses: summary.statuses.map((s) => dropNulls(s)),
-    };
-    return {
-      content: [{ type: "text", text: JSON.stringify(payload) }],
-      details: payload,
-    };
+      read: (signal) =>
+        githubRefChecks(getGithubToolConfig(), owner, repo, ref, signal),
+      observe: (summary) => {
+        const config = getGithubToolConfig();
+        const remaining = githubRateLimit(config)?.remaining;
+        return {
+          headSha: summary.sha || ref,
+          checks: githubRefChecksVerdict(summary, config, { owner, repo }),
+          ...(remaining !== undefined ? { rateLimitRemaining: remaining } : {}),
+        };
+      },
+      payload: (summary) => ({
+        repo: `${owner}/${repo}`,
+        ref,
+        state: summary.state,
+        total: summary.total,
+        ...(summary.truncated ? { truncated: true } : {}),
+        url: summary.url,
+        checkRuns: summary.checkRuns.map((r) => dropNulls(r)),
+        statuses: summary.statuses.map((s) => dropNulls(s)),
+      }),
+    });
   },
 });
 

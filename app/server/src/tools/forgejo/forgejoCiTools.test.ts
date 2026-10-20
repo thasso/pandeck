@@ -280,6 +280,44 @@ describe("forgejo_watch_pull_request_checks in the background", () => {
 });
 
 describe("forgejo_get_ref_checks", () => {
+  // Frozen at 422671d before the tools change, including omission and key order.
+  test.each([
+    {
+      total: 1,
+      history: false,
+      text: '{"repo":"acme/app","ref":"main","sha":"abc","state":"success","total":1,"statuses":[{"context":"ci","state":"success"}]}',
+    },
+    {
+      total: 2,
+      history: false,
+      text: '{"repo":"acme/app","ref":"main","sha":"abc","state":"success","total":2,"truncated":true,"statuses":[{"context":"ci","state":"success"}]}',
+    },
+    {
+      total: 1,
+      history: true,
+      text: '{"repo":"acme/app","ref":"main","sha":"abc","state":"success","total":1,"statuses":[{"context":"ci","state":"success"}],"history":[{"context":"ci","state":"pending","createdAt":"2026-08-06"}]}',
+    },
+  ])(
+    "keeps default output byte-stable: $text",
+    async ({ total, history, text }) => {
+      globalThis.fetch = vi.fn(async (input) =>
+        String(input).includes("/statuses")
+          ? jsonResponse([
+              { context: "ci", status: "pending", created_at: "2026-08-06" },
+            ])
+          : jsonResponse(
+              { sha: "abc", statuses: [{ context: "ci", status: "success" }] },
+              { "x-total-count": String(total) },
+            ),
+      ) as typeof fetch;
+      const result = await forgejoGetRefChecksTool.execute(
+        { repo: "acme/app", ref: "main", includeHistory: history },
+        ctxFor("ref-fixture"),
+      );
+      expect(result.content[0]).toEqual({ type: "text", text });
+      expect(result.details).toEqual(JSON.parse(text));
+    },
+  );
   test("rolls the ref's statuses into one state without asking for history", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse(
