@@ -216,6 +216,25 @@ function setup() {
   return fixture();
 }
 
+test("distinct calls without tool ids get concurrency wording, not retry wording", async () => {
+  const f = setup();
+  vi.mocked(f.ops.readiness).mockResolvedValue(f.ready());
+  const gate = deferred<void>();
+  vi.mocked(f.ops.resolve).mockImplementationOnce(async () => {
+    await gate.promise;
+    return f.row;
+  });
+  const ctx: ToolCallContext = { ...f.ctx, toolCallId: "" };
+  const first = f.run(f.params, ctx, f.ops);
+  const second = f.run(f.params, ctx, f.ops).catch((error: unknown) => error);
+  gate.resolve();
+  const concurrent = await second;
+  await first;
+  expect(concurrent).toMatchObject({
+    message: expect.stringContaining("for this worktree is starting"),
+  });
+});
+
 test("pending admits immediately with no reservation, then commits exactly once through the core", async () => {
   const f = setup();
   const result = payload(
@@ -286,6 +305,11 @@ test("ready and idle is byte-identical to foreground and never launches", async 
   );
   const inline = await f.run(f.params, f.ctx, f.ops);
   expect(inline).toEqual(ordinary);
+  expect(f.ops.hosting).toHaveBeenLastCalledWith(
+    expect.anything(),
+    f.ctx.signal,
+    undefined,
+  );
   expect(f.launch).not.toHaveBeenCalled();
 });
 
@@ -295,6 +319,11 @@ test("green but busy launches and retries with the requester, without retaining 
   vi.mocked(f.ops.reserve).mockReturnValueOnce(undefined);
   expect(payload(await f.run(f.params, f.ctx, f.ops)).status).toBe("waiting");
   expect((await f.job()).payload).toMatchObject({ status: "merged" });
+  expect(f.ops.hosting).toHaveBeenLastCalledWith(
+    expect.anything(),
+    f.budget.signal,
+    f.budget.signal,
+  );
 });
 
 test.each([false, true])(

@@ -372,19 +372,34 @@ interface SharedPull {
   settled: boolean;
 }
 const inFlight = new Map<string, SharedPull>();
+const credentialIds = new WeakMap<RegistryCredentialProvider, number>();
+let nextCredentialId = 0;
+
+function credentialKey(
+  ref: ContainerImageRef,
+  credential?: RegistryCredentialProvider,
+): number {
+  if (ref.registry !== GHCR_REGISTRY || !credential) return 0;
+  let id = credentialIds.get(credential);
+  if (id === undefined) {
+    id = ++nextCredentialId;
+    credentialIds.set(credential, id);
+  }
+  return id;
+}
 
 /**
  * Make an image available in the local Docker image store.
  *
- * Concurrent callers asking for the same reference share one docker
- * invocation under its own controller. Every caller has an independent signal,
+ * Concurrent callers asking for the same reference and credential provider
+ * share one docker invocation under its own controller. Every caller has an independent signal,
  * timeout and progress subscription; the last departure aborts the operation.
  */
 export async function pullContainerImage(
   options: PullContainerImageOptions,
 ): Promise<ContainerPullResult> {
   const ref = parseImageRef(options.image);
-  const key = `${ref.normalized}${options.refresh ? "#refresh" : ""}`;
+  const key = `${ref.normalized}${options.refresh ? "#refresh" : ""}#auth:${credentialKey(ref, options.credential)}`;
   const cancelled = () =>
     new ContainerPullError(`Pull of ${ref.normalized} was cancelled.`);
   if (options.signal?.aborted) throw cancelled();

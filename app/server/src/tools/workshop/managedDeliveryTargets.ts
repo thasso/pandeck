@@ -75,9 +75,11 @@ export interface ManagedHostingTarget {
   repository: RemoteRepoRef;
 }
 
+/** Only background jobs bind provider requests; foreground writes must converge. */
 export async function resolveManagedHosting(
   target: ResolvedPushTarget,
   signal?: AbortSignal,
+  providerSignal?: AbortSignal,
 ): Promise<ManagedHostingTarget | undefined> {
   const remoteUrl = await gitOptional(
     ["remote", "get-url", "--push", target.remote],
@@ -90,7 +92,11 @@ export async function resolveManagedHosting(
     throw new Error(
       `The derived push remote "${target.remote}" does not name a supported repository URL.`,
     );
-  const provider = await hostingProviderForRepo(target.repoRoot, target.remote);
+  const provider = await hostingProviderForRepo(
+    target.repoRoot,
+    target.remote,
+    providerSignal,
+  );
   return provider ? { provider, repository } : undefined;
 }
 

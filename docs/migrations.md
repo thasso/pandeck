@@ -40,6 +40,9 @@ Two consequences follow, and every rule below is one of them:
 `foreign_key_check` inside the transaction and refuses a migration that leaves
 violations.
 
+The lock generator and CI reject duplicate numeric versions before hashing.
+Different labels or zero padding do not make two files with version 99 distinct.
+
 ## Rebasing onto a migration that took your number
 
 This is the conflict that caused a production outage, so it gets its own

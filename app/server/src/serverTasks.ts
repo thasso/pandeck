@@ -235,10 +235,17 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
     request: BackgroundWorkStopRequest,
   ): Promise<BackgroundWorkStopAck> {
     const work = this.running.get(request.target.itemId);
-    if (!work || work.ownerSessionId !== request.target.ownerSessionId)
+    // A previous process's task cannot survive here. Even if reconciliation
+    // failed, absence from this process is conclusive, not an unconfirmed Stop.
+    if (!work)
+      return {
+        acknowledged: true,
+        evidence: "the server task is not running in this process",
+      };
+    if (work.ownerSessionId !== request.target.ownerSessionId)
       return {
         acknowledged: false,
-        evidence: "the server task is not running in this process",
+        evidence: "the server task belongs to another owner",
       };
     await stopJob(work, request.reason, this.stopGraceMs);
     return { acknowledged: !work.committed };
@@ -248,6 +255,7 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
     request: BackgroundWorkStopAllRequest,
   ): Promise<BackgroundWorkStopAllAck> {
     const reserved = new Set(request.itemIds);
+    const absent = request.itemIds.filter((id) => !this.running.has(id));
     const targets = [...this.running.entries()].filter(
       ([itemId, work]) =>
         reserved.has(itemId) && work.ownerSessionId === request.ownerSessionId,
@@ -258,9 +266,12 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
       ),
     );
     return {
-      acknowledgedItemIds: targets
-        .filter(([, work]) => !work.committed)
-        .map(([itemId]) => itemId),
+      acknowledgedItemIds: [
+        ...absent,
+        ...targets
+          .filter(([, work]) => !work.committed)
+          .map(([itemId]) => itemId),
+      ],
       unconfirmedItemIds: targets
         .filter(([, work]) => work.committed)
         .map(([itemId]) => itemId),
@@ -316,11 +327,8 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
 const serverTaskBackend = new ServerTaskBackend();
 let registered = false;
 
-/**
- * Registered on first use. Nothing needs the port earlier: boot ends every
- * server task an earlier process left before any tool can run.
- */
-function ensureServerTaskBackend(): void {
+/** Register at boot independently of reconciliation; also safe on first use. */
+export function registerServerTaskBackend(): void {
   if (registered) return;
   backgroundWorkSupervisor.registerBackend(serverTaskBackend);
   registered = true;
@@ -357,7 +365,7 @@ export interface ServerTaskStarted {
 export async function launchServerTask(
   input: ServerTaskLaunch,
 ): Promise<ServerTaskStarted> {
-  ensureServerTaskBackend();
+  registerServerTaskBackend();
   const ownerSessionId = input.ctx.session.sessionId;
   const label = backgroundWorkTitle({
     description: input.label,

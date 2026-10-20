@@ -78,9 +78,12 @@ the GitHub integration is enabled.
 
 - A pull is a no-op when the image is already present
   (`status: "already-present"`); pass `refresh: true` to re-fetch a moving tag.
-- Concurrent requests for the same reference and refresh flag share one docker
-  invocation under its own controller. At most two pulls run at a time, with
-  cancellable slot waits. Every subscribed foreground caller receives progress.
+- Concurrent requests for the same reference, refresh flag and GHCR credential
+  provider identity share one docker invocation under its own controller.
+  Anonymous pulls and distinct credential providers never join each other;
+  credentials themselves are never used as deduplication keys. At most two pulls
+  run at a time, with cancellable slot waits. Every subscribed foreground caller
+  receives progress.
 - The result carries safe metadata only: normalized reference, registry, status,
   digest, image id, size, whether credentials were used, and duration.
 - Every caller has its own 15-minute timeout, counted from its call and
@@ -90,6 +93,8 @@ the GitHub integration is enabled.
   Docker separately retains its fixed 15-minute command limit, so each caller
   ends at the earlier of its own timeout and the shared command's result. A
   queued foreground caller can now time out without ever starting docker.
+  Cancelling residue reclamation reports cancellation, not image unavailability,
+  whether it happens during the runtime probe or the pull.
 - `background: true` validates the runtime and checks presence in the call. An
   already-present image returns inline unless refreshed; otherwise the call
   returns `{ taskId, state: "running", hint }`. The `server-task` / `image-pull`

@@ -23,6 +23,7 @@ import {
   patchPullRequestCard,
   patchPullRequestCardObservation,
   pullRequestCardById,
+  pullRequestCardRecord,
   resetPullRequestCardsStoreForTests,
 } from "./pullRequestCards.ts";
 import {
@@ -168,6 +169,58 @@ test("a merge issued from another checkout of the repo still closes the card", a
     "a poll started before merge cannot reopen the merged card",
   );
   assert.equal(pullRequestCardById(card.id)?.status, "merged");
+});
+
+test("a degraded merge clears a stale head receipt instead of proving an old force-pushed tip", async () => {
+  const path = repo();
+  const card = createPullRequestCard(
+    {
+      sessionId: "stale",
+      status: "open",
+      title: "test",
+      headBranch: "feature",
+      baseBranch: "main",
+      provider: "github",
+      number: 42,
+    },
+    {
+      repoRoot: path,
+      sessionKind: "developer",
+      sessionId: "stale",
+      headBranch: "feature",
+      baseBranch: "main",
+      draft: false,
+      observedHeadSha: "old-head",
+    },
+  );
+  const provider = fakeProvider();
+  provider.pullRequestDetail = async () => {
+    throw new Error("unavailable");
+  };
+  await mergePullRequestAndProject({
+    provider,
+    repoPath: path,
+    number: 42,
+    headBranch: "feature",
+    baseBranch: "main",
+    method: "squash",
+  });
+  assert.equal(pullRequestCardById(card.id)?.status, "merged");
+  assert.equal(
+    pullRequestCardRecord(card.id)?.context.observedHeadSha,
+    undefined,
+  );
+  // The action's best-effort fallback also lacks a fresh receipt.
+  patchPullRequestCard(
+    card.id,
+    { status: "open" },
+    { observedHeadSha: "old-head" },
+  );
+  patchPullRequestCard(card.id, { status: "merged" });
+  assert.equal(
+    pullRequestCardRecord(card.id)?.context.observedHeadSha,
+    undefined,
+  );
 });
 
 // Same number, same provider, different repository: never the same card.

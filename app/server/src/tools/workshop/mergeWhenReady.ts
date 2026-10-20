@@ -64,7 +64,7 @@ export function assertFrozenMergeTarget(
   ) => {
     throw new ManagedFinishRefusedError(
       kind,
-      `The managed pull request changed while waiting; nothing was merged.`,
+      `The managed pull request changed during this operation; nothing was merged.`,
       {
         number: target.number,
         headSha: target.headSha,
@@ -209,7 +209,7 @@ export function createMergeWhenReadyRunner(deps: Dependencies) {
     const prior = starting.get(id);
     if (prior)
       throw new Error(
-        prior.toolCallId === ctx.toolCallId
+        ctx.toolCallId && prior.toolCallId === ctx.toolCallId
           ? "This merge-when-ready call is still starting; retry shortly."
           : "A merge-when-ready call for this worktree is starting; wait for it.",
       );
@@ -430,7 +430,11 @@ export function createMergeWhenReadyRunner(deps: Dependencies) {
         if (!sameRow(current, frozen))
           return notMerged("worktree_unavailable", "poll");
         const push = await operations.target(current!, budget.signal);
-        const hosted = await operations.hosting(push, budget.signal);
+        const hosted = await operations.hosting(
+          push,
+          budget.signal,
+          budget.signal,
+        );
         if (
           !hosted ||
           hosted.provider.kind !== frozen.provider ||
@@ -472,6 +476,7 @@ export function createMergeWhenReadyRunner(deps: Dependencies) {
                 operations,
                 {
                   signal: budget.signal,
+                  providerSignal: budget.signal,
                   frozen,
                   exemptBackgroundItem: {
                     itemId: budget.itemId,

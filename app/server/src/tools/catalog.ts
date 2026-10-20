@@ -908,7 +908,7 @@ function codingToolGroups(): UnclassifiedToolGroup[] {
       id: "github-pr-writes",
       label: "GitHub PR writes",
       description:
-        "GitHub: approval-gated pull-request creation, draft-to-ready transitions, description edits, reviews, comments, and reviewer/assignee changes (coding personas only).",
+        "GitHub: approval-gated pull-request creation, draft-to-ready transitions, description edits, reviews, comments, thread resolve/reopen, and reviewer/assignee changes (coding personas only).",
       loading: "deferred",
       family: "integration",
       gate: "github",

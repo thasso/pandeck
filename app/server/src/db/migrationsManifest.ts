@@ -29,23 +29,36 @@ export const MIGRATIONS_LOCK_PATH = PACKAGED_MIGRATIONS_LOCK_PATH;
 const MIGRATION_FILE_RE = /^\d+_.+\.sql$/;
 
 /** Sorted list of migration file names, matching `runMigrations`' filter/order. */
-function listMigrationFileNames(): string[] {
-  return readdirSync(MIGRATIONS_DIR)
+function listMigrationFileNames(directory: string): string[] {
+  const names = readdirSync(directory)
     .filter((name) => MIGRATION_FILE_RE.test(name))
     .sort();
+  const versions = new Map<number, string>();
+  for (const name of names) {
+    const version = Number(name.split("_", 1)[0]);
+    const prior = versions.get(version);
+    if (prior)
+      throw new Error(
+        `Duplicate migration version ${version}: ${prior}, ${name}. Renumber the never-applied migration.`,
+      );
+    versions.set(version, name);
+  }
+  return names;
 }
 
 /** sha256 of one migration's UTF-8 content — identical to the runtime checksum. */
-function hashMigrationContent(name: string): string {
-  const sql = readFileSync(join(MIGRATIONS_DIR, name), "utf8");
+function hashMigrationContent(name: string, directory: string): string {
+  const sql = readFileSync(join(directory, name), "utf8");
   return createHash("sha256").update(sql).digest("hex");
 }
 
 /** Current on-disk migration hashes, keyed by file name (sorted insertion order). */
-export function computeMigrationHashes(): Record<string, string> {
+export function computeMigrationHashes(
+  directory = MIGRATIONS_DIR,
+): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const name of listMigrationFileNames())
-    out[name] = hashMigrationContent(name);
+  for (const name of listMigrationFileNames(directory))
+    out[name] = hashMigrationContent(name, directory);
   return out;
 }
 

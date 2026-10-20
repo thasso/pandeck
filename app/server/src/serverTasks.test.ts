@@ -10,8 +10,12 @@ const dataDir = mkdtempSync(join(tmpdir(), "server-tasks-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 
-const { launchServerTask, ServerTaskBackend, SERVER_TASK_DEADLINE_MARGIN_MS } =
-  await import("./serverTasks.ts");
+const {
+  launchServerTask,
+  registerServerTaskBackend,
+  ServerTaskBackend,
+  SERVER_TASK_DEADLINE_MARGIN_MS,
+} = await import("./serverTasks.ts");
 const { backgroundWorkSupervisor } =
   await import("./backgroundWork/supervisor.ts");
 const { setBackgroundWorkAdmissionsOpenForTests } =
@@ -108,6 +112,37 @@ afterEach(() => {
   withLifetime(60);
 });
 
+test("boot registers a stoppable server-task port without a launch or reconciliation", async () => {
+  registerServerTaskBackend();
+  registerServerTaskBackend();
+  withLifetime(60);
+  const sessionId = owner();
+  const admitted = backgroundWorkSupervisor.admit({
+    ownerSessionId: sessionId,
+    backend: "server-task",
+    kind: "check-watch",
+    label: "leftover",
+    sourceRequestId: "leftover",
+    requestedLifetimeMs: 90000,
+  });
+  if (!admitted.admitted) throw new Error(admitted.message);
+  backgroundWorkStore.markRunning({ itemId: admitted.item.id });
+  const stopped = await backgroundWorkSupervisor.stopOne({
+    itemId: admitted.item.id,
+    ownerSessionId: sessionId,
+    sourceRequestId: "boot-stop",
+    reason: "Stop",
+  });
+  expect(stopped.state).toBe("stopped");
+  const index = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  expect(
+    index.indexOf('bootStep("server-task backend", registerServerTaskBackend)'),
+  ).toBeGreaterThan(-1);
+  expect(
+    index.indexOf('bootStep("server-task backend", registerServerTaskBackend)'),
+  ).toBeLessThan(index.indexOf('bootStep("background-work reconciliation"'));
+});
+
 describe("launchServerTask", () => {
   test("admits a hostless check watch whose own timeout ends before its deadline", async () => {
     withLifetime(60);
@@ -192,6 +227,36 @@ describe("launchServerTask", () => {
     expect(stopped.state).toBe("stopped");
     expect(stopped.evidence).toBeUndefined();
     expect(stopped.outcomeSummary).toBeUndefined();
+  });
+
+  test("requester Stop after a planned-drain mark is not described as a restart", async () => {
+    const sessionId = owner();
+    const job = controlledJob();
+    const started = await launch(sessionId, job.run);
+    await settle();
+    backgroundWorkStore.recordPlannedDrain({
+      itemId: started.taskId,
+      reason: "stopped-for-deployment",
+    });
+    const stop = backgroundWorkSupervisor.stopOne({
+      itemId: started.taskId,
+      ownerSessionId: sessionId,
+      sourceRequestId: "requester-during-drain",
+      reason: "User stopped",
+    });
+    job.result.resolve({ payload: {}, summary: "done" });
+    await stop;
+    const notices = await import("./backgroundCompletionNotices.ts");
+    const enqueue = vi.fn();
+    notices.enqueueCompletionNotice(
+      { enqueue } as never,
+      backgroundWorkStore.getItem(started.taskId)!,
+      false,
+    );
+    expect(enqueue).toHaveBeenCalledOnce();
+    expect(enqueue.mock.calls[0]![1].outcomeSummary ?? "").not.toMatch(
+      /server restart/,
+    );
   });
 
   test("Stop after commit keeps the real result and does not abort the write", async () => {
@@ -557,6 +622,20 @@ describe("ServerTaskBackend", () => {
     job.result.reject(new Error("uncertain provider write"));
     await settle();
     expect(sink.completions).toEqual(["committed"]);
+  });
+
+  test("Stop-all confirms reserved tasks absent from this process", async () => {
+    const port = new ServerTaskBackend({ events: events() });
+    expect(
+      await port.stopAll({
+        ownerSessionId: "o",
+        sourceRequestId: "stop",
+        itemIds: ["leftover"],
+        attempt: 1,
+        reason: "Stop",
+        protectOrdinaryTurn: false,
+      }),
+    ).toEqual({ acknowledgedItemIds: ["leftover"], unconfirmedItemIds: [] });
   });
 
   test("a launch without its reservation starts nothing", async () => {

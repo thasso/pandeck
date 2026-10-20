@@ -74,14 +74,16 @@ function lifetimeText(ms: number): string {
 /**
  * A server task the restart ended rather than one that finished in the drain
  * grace. Read from typed row fields: a hostless server task is `lost` only by
- * boot reconciliation, and a `stopped` one with a drain reason was stopped for
- * the deployment.
+ * boot reconciliation. A stopped one belongs to deployment only when its
+ * terminal reason is the planned drain, not a requester Stop that won first.
  */
 function endedByRestart(item: BackgroundWorkItem): boolean {
   if (item.backend !== "server-task") return false;
   return (
     item.state === "lost" ||
-    (item.state === "stopped" && item.drainReason !== undefined)
+    (item.state === "stopped" &&
+      item.drainReason !== undefined &&
+      item.terminalReason === item.drainReason)
   );
 }
 

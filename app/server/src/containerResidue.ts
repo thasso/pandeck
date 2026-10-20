@@ -117,6 +117,8 @@ export async function reclaimContainerResidue(
       ...(options.signal ? { signal: options.signal } : {}),
     });
   } catch (err) {
+    if (options.signal?.aborted)
+      return unavailable(text(options.signal.reason ?? err));
     return unavailable(
       `the reclaim image ${image} is unavailable: ${text(err)}`,
     );

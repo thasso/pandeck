@@ -17,6 +17,7 @@ import {
   getGithubToolConfig,
 } from "../../githubSettings.ts";
 import {
+  githubGraphql,
   githubPaginate,
   githubRefChecks,
   githubRateLimit,
@@ -594,7 +595,7 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
       includeReviewThreads: {
         type: "boolean",
         description:
-          "Include review threads with GraphQL thread ids for resolve/reopen, numeric comment ids for replies, and resolved state. Last 50 threads, first 20 comments each; truncation flagged. Defaults to false.",
+          "Include review threads with GraphQL thread ids for resolve/reopen, decimal-string comment ids for replies, and resolved state. Last 50 threads, first 20 comments each; truncation flagged. Defaults to false.",
       },
       maxCommits: {
         type: "number",
@@ -671,7 +672,9 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
         params.includeReviews === true
           ? fetchPrReviews(
               config,
-              prBase,
+              owner,
+              repo,
+              number,
               clamp(params.maxReviews, 30, 1, 100),
               ctx.signal,
             )
@@ -681,7 +684,7 @@ export const githubGetPullRequestTool = defineAgentTool<GetPullRequestParams>({
               { host: "github.com", owner, repo },
               config,
               ctx.signal,
-            ).pullRequestConversation(number)
+            ).pullRequestConversation(number, { threadsOnly: true })
           : Promise.resolve(null),
       ]);
 
@@ -811,24 +814,40 @@ async function fetchPrFiles(
 
 async function fetchPrReviews(
   config: GithubApiConfig,
-  prBase: string,
+  owner: string,
+  repo: string,
+  number: number,
   maxReviews: number,
   signal?: AbortSignal,
 ) {
-  const { items } = await githubPaginate<Record<string, any>>(
+  const data = await githubGraphql<{
+    repository?: {
+      pullRequest?: { reviews?: { nodes?: Array<Record<string, any> | null> } };
+    };
+  }>(
     config,
-    `${prBase}/reviews`,
-    { maxItems: maxReviews, ...(signal !== undefined ? { signal } : {}) },
+    `query($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+      reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) { nodes { author { login } state body submittedAt url } }
+    } }
+  }`,
+    { owner, name: repo, number },
+    signal,
   );
-  return items
-    .filter((r) => r.state !== "PENDING")
+  if (!data.repository?.pullRequest)
+    throw new Error(`Pull request #${number} was not found.`);
+  return (data.repository.pullRequest.reviews?.nodes ?? [])
+    .filter(
+      (r): r is Record<string, any> => r !== null && r.state !== "PENDING",
+    )
+    .slice(-maxReviews)
     .map((r) =>
       dropNulls({
-        author: compactUser(r.user),
+        author: compactUser(r.author),
         state: r.state ?? null,
         body: typeof r.body === "string" && r.body ? r.body : null,
-        submittedAt: r.submitted_at ?? null,
-        url: r.html_url ?? null,
+        submittedAt: r.submittedAt ?? null,
+        url: r.url ?? null,
       }),
     );
 }

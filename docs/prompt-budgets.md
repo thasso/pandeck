@@ -100,7 +100,7 @@ limit's largest layers and says only that.
 Regenerate it with:
 
 ```
-pnpm --filter @assistant/server test -u src/promptBudgets.test.ts
+pnpm --filter @assistant/server test src/promptBudgets.test.ts --update
 ```
 
 It holds sizes only — no budgets (a raise must not churn it), no absolute paths

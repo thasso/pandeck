@@ -330,6 +330,7 @@ export interface GitHostingProvider {
    */
   pullRequestConversation(
     prNumber: number,
+    options?: { threadsOnly?: boolean },
   ): Promise<ProviderPullRequestConversation>;
   /** Review state of one open PR. `null` = could not be determined. */
   pullRequestReview(
@@ -511,6 +512,14 @@ const GITHUB_CONVERSATION_QUERY = `query($owner: String!, $name: String!, $numbe
   }
 }`;
 
+const GITHUB_THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(last: ${CONVERSATION_THREADS}) { totalCount nodes { id isResolved isOutdated path line originalLine comments(first: ${THREAD_COMMENTS}) { totalCount nodes { databaseId author { login } body createdAt url diffHunk } } } }
+    }
+  }
+}`;
+
 const GITHUB_VERDICT: Record<string, PullRequestReviewVerdict> = {
   APPROVED: "approved",
   CHANGES_REQUESTED: "changes-requested",
@@ -536,12 +545,13 @@ async function githubPullRequestConversation(
   ref: RemoteRepoRef,
   prNumber: number,
   signal: AbortSignal,
+  threadsOnly = false,
 ): Promise<ProviderPullRequestConversation> {
   const data = await githubGraphql<{
     repository?: { pullRequest?: GithubConversationPull | null } | null;
   }>(
     config,
-    GITHUB_CONVERSATION_QUERY,
+    threadsOnly ? GITHUB_THREADS_QUERY : GITHUB_CONVERSATION_QUERY,
     { owner: ref.owner, name: ref.repo, number: prNumber },
     signal,
   );
@@ -1433,10 +1443,12 @@ function standingChangeRequests(reviews: ProviderReview[]): ProviderReview[] {
 export async function hostingProviderForRepo(
   repoPath: string,
   remote = "origin",
+  signal?: AbortSignal,
 ): Promise<GitHostingProvider | null> {
   const remoteRes = await gitOptional(
     ["remote", "get-url", "--push", remote],
     repoPath,
+    signal,
   );
   if (remoteRes.code !== 0) return null;
   const ref = parseRemoteUrl(remoteRes.stdout.trim());
@@ -1449,7 +1461,7 @@ export async function hostingProviderForRepo(
         new URL(normalizeForgejoBaseUrl(forgejoConfig.baseUrl)).hostname ===
         ref.host
       ) {
-        return forgejoProvider(ref, forgejoConfig);
+        return forgejoProvider(ref, forgejoConfig, signal);
       }
     } catch {
       // Invalid configured base URL — treat as unconfigured.
@@ -1458,7 +1470,7 @@ export async function hostingProviderForRepo(
   if (ref.host === "github.com") {
     // Uses the existing GitHub PAT integration; absent/disabled = feature off.
     const config = getGithubConfigIfAvailable();
-    if (config) return githubProvider(ref, config);
+    if (config) return githubProvider(ref, config, signal);
   }
   return null;
 }
@@ -2451,8 +2463,14 @@ export function githubProvider(
         `${repoWebUrl}/commit/${refOid}`,
       );
     },
-    pullRequestConversation(prNumber) {
-      return githubPullRequestConversation(config, ref, prNumber, signal());
+    pullRequestConversation(prNumber, options) {
+      return githubPullRequestConversation(
+        config,
+        ref,
+        prNumber,
+        signal(),
+        options?.threadsOnly,
+      );
     },
     async refChecks(refOid) {
       const summary = await githubRefChecks(
