@@ -5,6 +5,38 @@ const { sessionStore, SPAWNED_DESCENDANTS_SQL, SPAWN_GRANT_EDGE_SQL } =
   await import("./sessionStore.ts");
 const { closeDb, getDb } = await import("./index.ts");
 
+test("compaction window and note persist together across restart, upserts preserve and later changes clear the note", () => {
+  const id = `window-note-${Date.now()}`;
+  sessionStore.upsert({ id, harness: "pi", agentType: "assistant" });
+  assert.equal(sessionStore.get(id)?.compactionWindowNote, undefined);
+  sessionStore.setCompactionWindow(
+    id,
+    12_000,
+    "Set to 12,000 tokens: the estimate found no range.",
+  );
+  sessionStore.upsert({
+    id,
+    harness: "pi",
+    agentType: "assistant",
+    title: "New title",
+  });
+  closeDb();
+  assert.equal(sessionStore.get(id)?.compactionWindow, 12_000);
+  assert.equal(
+    sessionStore.get(id)?.compactionWindowNote,
+    "Set to 12,000 tokens: the estimate found no range.",
+  );
+  sessionStore.setCompactionWindow(id, 15_000);
+  assert.equal(sessionStore.get(id)?.compactionWindowNote, undefined);
+  sessionStore.setCompactionWindow(id, null, "Not set: no range.");
+  closeDb();
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  assert.equal(
+    sessionStore.get(id)?.compactionWindowNote,
+    "Not set: no range.",
+  );
+});
+
 test("SQLite session store persists developer persona sessions", () => {
   const id = `developer-session-${Date.now()}`;
   const storedOk = sessionStore.upsert({

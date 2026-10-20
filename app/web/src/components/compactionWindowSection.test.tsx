@@ -84,6 +84,16 @@ function click(label: string) {
   act(() => button.click());
 }
 
+it.each([
+  "Set to 12,000 tokens: the estimate from pi's default reserve found no range for this model, and this session's pi settings allow it.",
+  "Lowered from the 250,000 tokens shown to 200,000 by this session's pi settings.",
+])("renders the persisted reconciliation note: %s", (note) => {
+  render({ ...claude, note });
+  expect(text()).toContain(note);
+  render(claude);
+  expect(text()).not.toContain(note);
+});
+
 it("shows the stored value, the range and when it applies", () => {
   render(claude);
   expect(text()).toContain("150,000 tokens");

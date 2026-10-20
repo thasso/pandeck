@@ -60,6 +60,7 @@ const piModels: ModelOption[] = [
 const { insertWorktree, updateWorktree, worktreeIdForSession } =
   await import("./db/worktreeStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
+const { hub } = await import("./hub.ts");
 const piModelApi = await import("./piSdk/models.ts");
 const worktreeResolve = await import("./worktrees/worktreeResolve.ts");
 const { projectStore } = await import("./db/projectStore.ts");
@@ -125,6 +126,7 @@ interface Recorded {
   events: string[];
   /** Whether each child's spawn edge inherited grants when its prompt was delivered. */
   inheritsAtDelivery?: boolean[];
+  windowsAtDelivery?: Array<number | undefined>;
 }
 let recorded: Recorded;
 let createFails: string | undefined;
@@ -271,6 +273,9 @@ beforeEach(() => {
       );
       (recorded.inheritsAtDelivery ??= []).push(
         sessionStore.spawnGrantEdge(input.targetSessionId)?.inherits ?? false,
+      );
+      (recorded.windowsAtDelivery ??= []).push(
+        sessionStore.get(input.targetSessionId)?.compactionWindow,
       );
       if (deliverFails) throw new Error("delivery exploded");
       recorded.delivered.push({ ...input });
@@ -3548,6 +3553,366 @@ test("an enterprise Automatic row with no enterprise account is refused clearly"
     "no enabled enterprise account is available for this peer runtime",
   );
   expect(recorded.pi).toHaveLength(0);
+});
+
+test.each([99_999, 1.5, "x", 1_200_000])(
+  "invalid row window %s creates neither session nor card",
+  async (compactionWindow) => {
+    approveRuntimes();
+    const count = approvalsForSession(SENDER).length;
+    await expect(
+      propose([
+        row({ provider: "claude-sdk", modelId: "opus", compactionWindow }),
+      ]),
+    ).rejects.toThrow(/compaction window|compactionWindow/);
+    expect(approvalsForSession(SENDER)).toHaveLength(count);
+    expect(recorded.delivered).toHaveLength(0);
+    expect(recorded.claude).toHaveLength(0);
+  },
+);
+
+test("a smaller model re-pick clamps the sealed row with the shared decision and persists its approval note", async () => {
+  const { card } = await propose([
+    row({ provider: "claude-sdk", modelId: "opus", compactionWindow: 300_000 }),
+  ]);
+  const edits = {
+    kind: "sessionSpawn" as const,
+    items: [
+      {
+        rowId: bodyOf(card).items[0]!.rowId,
+        provider: "claude-sdk",
+        modelId: "sonnet",
+        credentialProfileId: accountFor("claude"),
+      },
+    ],
+  };
+  const prepared = (await prepareSpawnApproval(
+    card,
+    edits,
+  )) as SessionSpawnApprovalBody;
+  const { estimateSpawnCompactionWindow } = await import("@assistant/shared");
+  expect(prepared.items[0]?.compactionWindow).toMatchObject(
+    estimateSpawnCompactionWindow(
+      { provider: "claude-sdk", contextWindow: 200_000 },
+      { tokens: 300_000, source: "row", rowAbove: "clamp" },
+    ),
+  );
+  const { card: done, outcomePrompt } = await resolveApproval(
+    card.id,
+    "approved",
+    edits,
+  );
+  const item = bodyOf(done).items[0]!;
+  expect(item.compactionWindow?.tokens).toBe(200_000);
+  expect(sessionStore.get(item.resultSessionId!)?.compactionWindow).toBe(
+    200_000,
+  );
+  expect(
+    sessionStore.get(item.resultSessionId!)?.compactionWindowNote,
+  ).toContain("On approval:");
+  expect(outcomePrompt).toContain("On approval:");
+});
+
+function actualPiWindow(contextWindow: number, underlyingReserve: number) {
+  vi.spyOn(hub, "getLiveById").mockImplementation(
+    (sessionId: string) =>
+      ({
+        live: true,
+        sessionId,
+        compactionWindowStatus: () => ({
+          contextWindow,
+          underlyingReserve,
+          live: { applied: "pending" },
+        }),
+        applyCompactionWindow: async () => ({}),
+        broadcastState() {},
+      }) as never,
+  );
+  setSessionSpawnDepsForTests({
+    findPiModel: async (_profile, provider, id) =>
+      ({ provider, id, contextWindow }) as never,
+    deliver: async (input) => {
+      recorded.delivered.push({
+        ...input,
+        stored: sessionStore.get(input.targetSessionId)?.compactionWindow,
+        note: sessionStore.get(input.targetSessionId)?.compactionWindowNote,
+      });
+    },
+  });
+  vi.mocked(piModelApi.listModelsForProfile).mockResolvedValue([
+    { ...piModels[0]!, contextWindow },
+  ]);
+}
+
+test.each(["direct", "approved"] as const)(
+  "%s pi requests reconcile before delivery and report actual values",
+  async (path) => {
+    await useAgents();
+    writeAgent({
+      persona: "assistant",
+      model: "gpt-5",
+      compactionWindow: 250_000,
+    });
+    approveRuntimes();
+    actualPiWindow(272_000, 72_000);
+    if (path === "direct") {
+      const [result] = await spawnApprovedPeers({
+        senderSessionId: SENDER,
+        rows: [agentRow()],
+      });
+      expect(result?.compactionWindow).toMatchObject({
+        tokens: 200_000,
+        note: expect.stringMatching(/250,000.*200,000/),
+      });
+    } else {
+      const { card } = await propose([agentRow()]);
+      expect(bodyOf(card).items[0]?.compactionWindow?.tokens).toBe(250_000);
+      const { card: done, outcomePrompt } = await resolveApproval(
+        card.id,
+        "approved",
+      );
+      expect(bodyOf(done).items[0]?.compactionWindow).toMatchObject({
+        tokens: 200_000,
+        note: expect.stringMatching(/250,000.*200,000/),
+      });
+      expect(outcomePrompt).toContain("200,000");
+    }
+    expect(recorded.delivered).toHaveLength(1);
+    expect(recorded.delivered[0]).toMatchObject({
+      stored: 200_000,
+      note: expect.stringMatching(/250,000.*200,000/),
+    });
+  },
+);
+
+test.each(
+  (["direct", "approved"] as const).flatMap((path) => [
+    {
+      path,
+      source: "row" as const,
+      request: 220_000,
+      context: 272_000,
+      reserve: 72_000,
+      actual: 200_000,
+    },
+    {
+      path,
+      source: "definition" as const,
+      request: 150_000,
+      context: 272_000,
+      reserve: 190_000,
+      actual: 82_000,
+    },
+    {
+      path,
+      source: "definition" as const,
+      request: 260_000,
+      context: 272_000,
+      reserve: 10_000,
+      actual: 255_616,
+    },
+    {
+      path,
+      source: "definition" as const,
+      request: 12_000,
+      context: 16_000,
+      reserve: 16_384,
+      actual: null,
+    },
+  ]),
+)(
+  "$path $source window $request becomes $actual before delivery",
+  async ({ path, source, request, context, reserve, actual }) => {
+    await useAgents();
+    writeAgent({
+      persona: "assistant",
+      model: "gpt-5",
+      compactionWindow: request,
+    });
+    approveRuntimes();
+    actualPiWindow(context, reserve);
+    const input =
+      source === "row" ? { ...row(), compactionWindow: request } : agentRow();
+    if (path === "direct") {
+      const rows =
+        source === "row"
+          ? [{ ...row(), profileId: "pr_terra", compactionWindow: request }]
+          : [agentRow()];
+      const [result] = await spawnApprovedPeers({
+        senderSessionId: SENDER,
+        rows,
+      });
+      expect(result?.error).toBeUndefined();
+      expect(result?.compactionWindow?.tokens).toBe(actual);
+    } else {
+      const { card } = await propose([input]);
+      const { card: done } = await resolveApproval(card.id, "approved");
+      expect(bodyOf(done).items[0]?.error).toBeUndefined();
+      expect(bodyOf(done).items[0]?.compactionWindow?.tokens).toBe(actual);
+    }
+    expect(recorded.delivered).toHaveLength(1);
+    expect(recorded.delivered[0]?.stored).toBe(actual ?? undefined);
+  },
+);
+
+test.each(["direct", "approved"] as const)(
+  "%s estimate-none becomes an actual window with a truthful persisted note",
+  async (path) => {
+    await useAgents();
+    writeAgent({
+      persona: "assistant",
+      model: "gpt-5",
+      compactionWindow: 12_000,
+    });
+    actualPiWindow(16_000, 1_000);
+    let id: string;
+    if (path === "direct") {
+      const [result] = await spawnApprovedPeers({
+        senderSessionId: SENDER,
+        rows: [agentRow()],
+      });
+      id = result!.sessionId!;
+      expect(result?.compactionWindow?.tokens).toBe(12_000);
+    } else {
+      const { card } = await propose([agentRow()]);
+      expect(bodyOf(card).items[0]?.compactionWindow?.tokens).toBeNull();
+      const { card: done, outcomePrompt } = await resolveApproval(
+        card.id,
+        "approved",
+      );
+      id = bodyOf(done).items[0]!.resultSessionId!;
+      expect(outcomePrompt).toContain("12,000");
+    }
+    expect(sessionStore.get(id)?.compactionWindow).toBe(12_000);
+    expect(sessionStore.get(id)?.compactionWindowNote).toMatch(
+      /12,000.*estimate.*found no range/,
+    );
+    expect(recorded.delivered[0]?.stored).toBe(12_000);
+  },
+);
+
+test.each(["direct", "approved"] as const)(
+  "%s row actual trigger below 100k fails closed with its created id",
+  async (path) => {
+    approveRuntimes();
+    actualPiWindow(272_000, 190_000);
+    if (path === "direct") {
+      const [result] = await spawnApprovedPeers({
+        senderSessionId: SENDER,
+        rows: [{ ...row(), profileId: "pr_terra", compactionWindow: 150_000 }],
+      });
+      expect(result?.sessionId).toBeTruthy();
+      expect(result?.error).toMatch(/opening prompt was not delivered/);
+      expect(
+        sessionStore.get(result!.sessionId!)?.compactionWindow,
+      ).toBeUndefined();
+    } else {
+      const { card } = await propose([row({ compactionWindow: 150_000 })]);
+      const { card: done } = await resolveApproval(card.id, "approved");
+      expect(bodyOf(done).items[0]?.resultSessionId).toBeTruthy();
+      expect(bodyOf(done).items[0]?.error).toMatch(
+        /opening prompt was not delivered/,
+      );
+    }
+    expect(recorded.delivered).toHaveLength(0);
+  },
+);
+
+test.each(["direct", "approved"] as const)(
+  "%s save failure prevents delivery",
+  async (path) => {
+    approveRuntimes();
+    vi.spyOn(sessionStore, "setCompactionWindow").mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    if (path === "direct") {
+      const [result] = await spawnApprovedPeers({
+        senderSessionId: SENDER,
+        rows: [{ ...row(), profileId: "pr_sonnet", compactionWindow: 150_000 }],
+      });
+      expect(result?.sessionId).toBeTruthy();
+      expect(result?.error).toContain("disk full");
+    } else {
+      const { card } = await propose([
+        row({
+          provider: "claude-sdk",
+          modelId: "sonnet",
+          compactionWindow: 150_000,
+        }),
+      ]);
+      const { card: done } = await resolveApproval(card.id, "approved");
+      expect(bodyOf(done).items[0]?.resultSessionId).toBeTruthy();
+      expect(bodyOf(done).items[0]?.error).toContain("disk full");
+    }
+    expect(recorded.delivered).toHaveLength(0);
+  },
+);
+
+test("a held row stores its window before the opener; a failed save leaves no held or queued opener", async () => {
+  approveRuntimes();
+  sessionStore.setPeerTurnCap(SENDER, 1);
+  const states = childStates();
+  runningChildren(states, 1);
+  silentDrains();
+  const child = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: [{ ...row(), profileId: "pr_sonnet", compactionWindow: 150_000 }],
+  });
+  expect(child[0]?.error).toBeUndefined();
+  expect(recorded.delivered[0]?.hold).toBeDefined();
+  expect(recorded.windowsAtDelivery).toEqual([150_000]);
+  expect(sessionStore.get(child[0]!.sessionId!)?.compactionWindow).toBe(
+    150_000,
+  );
+  vi.spyOn(sessionStore, "setCompactionWindow").mockImplementation(() => {
+    throw new Error("disk full");
+  });
+  const [failed] = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: [{ ...row(), profileId: "pr_sonnet", compactionWindow: 150_000 }],
+  });
+  expect(failed?.sessionId).toBeTruthy();
+  expect(failed?.error).toContain("disk full");
+  expect(
+    peerPromptStore
+      .heldFrom(SENDER)
+      .some((p) => p.recipientSessionId === failed!.sessionId),
+  ).toBe(false);
+  await startHeldDirectPeers(SENDER);
+  const { closeDb } = await import("./db/index.ts");
+  closeDb();
+  await startHeldDirectPeers(SENDER);
+  expect(
+    peerPromptStore.listUndeliveredForRecipient(failed!.sessionId!),
+  ).toEqual([]);
+  expect(
+    recorded.delivered.some((p) => p.targetSessionId === failed!.sessionId),
+  ).toBe(false);
+  peerPromptModule.setHubForTests(undefined);
+});
+
+test("row wins over definition; approval seals the default even when the file changes", async () => {
+  await useAgents();
+  writeAgent({
+    persona: "assistant",
+    model: "sonnet",
+    compactionWindow: 120_000,
+  });
+  const [result] = await spawnApprovedPeers({
+    senderSessionId: SENDER,
+    rows: [agentRow({ compactionWindow: 180_000 })],
+  });
+  expect(result?.compactionWindow?.tokens).toBe(180_000);
+  const { card } = await propose([agentRow()]);
+  writeAgent({
+    persona: "assistant",
+    model: "sonnet",
+    compactionWindow: 190_000,
+  });
+  const { card: done } = await resolveApproval(card.id, "approved");
+  expect(
+    sessionStore.get(bodyOf(done).items[0]!.resultSessionId!)?.compactionWindow,
+  ).toBe(120_000);
 });
 
 test("an ordinary sender's enterprise agent row routes its definition within enterprise scope", async () => {

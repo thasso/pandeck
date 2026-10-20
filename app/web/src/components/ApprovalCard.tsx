@@ -57,7 +57,11 @@ import type {
   SessionSpawnApprovalItem,
   ThinkingLevel,
 } from "@assistant/shared";
-import { approvalGrantKeys, approvalGrantLabel } from "@assistant/shared";
+import {
+  approvalGrantKeys,
+  approvalGrantLabel,
+  estimateSpawnCompactionWindow,
+} from "@assistant/shared";
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
@@ -839,6 +843,17 @@ function SpawnRow({
     );
   const thinkingLevel = edit?.thinkingLevel ?? item.thinkingLevel;
   const warning = edit?.model ? undefined : item.modelWarning;
+  const repicked =
+    selected &&
+    (selected.provider !== item.provider || selected.id !== item.modelId);
+  const window =
+    item.compactionWindow && editable && ladderModel
+      ? estimateSpawnCompactionWindow(ladderModel, {
+          tokens: item.compactionWindow.requested,
+          source: item.compactionWindow.source,
+          rowAbove: repicked ? "clamp" : "refuse",
+        })
+      : item.compactionWindow;
 
   return (
     <Item
@@ -938,6 +953,31 @@ function SpawnRow({
           <p className="text-muted-foreground">
             Won&rsquo;t inherit your approvals
           </p>
+        )}
+        {window && (
+          <div className="text-muted-foreground">
+            {"refused" in window ? (
+              <Markdown text={window.refused} inline />
+            ) : (
+              <>
+                <p>
+                  Compaction window:{" "}
+                  {window.tokens === null
+                    ? editable
+                      ? "none for this model by estimate"
+                      : "not set"
+                    : `${window.tokens.toLocaleString("en-US")} tokens`}
+                </p>
+                {window.note ? <Markdown text={window.note} inline /> : null}
+                {window.estimated ? (
+                  <p>
+                    Estimate assuming pi&apos;s default reserve. Session
+                    settings may lower it or refuse a row below 100k.
+                  </p>
+                ) : null}
+              </>
+            )}
+          </div>
         )}
         {warning && (
           <p className="flex items-start gap-1.5 text-warning">
@@ -1084,6 +1124,38 @@ function AgentDefinitionBody({ body }: { body: AgentDefinitionApprovalBody }) {
           after={effort(body.effort.after)}
         />
       </Row>
+      {body.compactionWindow ? (
+        <Row label="Compaction window">
+          <Change
+            {...(body.action === "edit"
+              ? {
+                  before: String(
+                    body.compactionWindow.before ?? "Provider default",
+                  ),
+                }
+              : {})}
+            after={String(body.compactionWindow.after ?? "Provider default")}
+          />
+          {body.resolvedModels.map((resolved, at) =>
+            resolved.compactionWindow ? (
+              <div key={at} className="text-muted-foreground">
+                <p>
+                  {resolved.model}:{" "}
+                  {resolved.compactionWindow.tokens === null
+                    ? "none for this model"
+                    : `${resolved.compactionWindow.tokens.toLocaleString("en-US")} tokens`}
+                  {resolved.compactionWindow.estimated
+                    ? " estimated using pi's default reserve"
+                    : ""}
+                </p>
+                {resolved.compactionWindow.note ? (
+                  <Markdown text={resolved.compactionWindow.note} inline />
+                ) : null}
+              </div>
+            ) : null,
+          )}
+        </Row>
+      ) : null}
       {body.peerTurns ? (
         <Row label="Peer turns at once">
           <Change

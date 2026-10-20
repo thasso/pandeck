@@ -68,6 +68,7 @@ const KNOWN_KEYS = new Set([
   "model",
   "effort",
   "peer-turns",
+  "compactionWindow",
   "tools",
   "skills",
   "inheritGrants",
@@ -88,6 +89,7 @@ export interface AgentManifest {
   models: string[];
   effort?: ThinkingLevel;
   peerTurns?: number;
+  compactionWindow?: number;
   /** Tools the spawned session must not have; empty when none. */
   denyTools: string[];
   /** Library skills to mount on top of the enabled set; developer only. */
@@ -127,6 +129,17 @@ export function parseAgentManifest(content: string, path: string) {
       const peerTurns = fields["peer-turns"];
       if (peerTurns !== undefined && !isSessionPeerTurnCap(peerTurns))
         bad("Frontmatter peer-turns must be an integer from 1 to 16.");
+      const compactionWindow = fields.compactionWindow;
+      if (
+        compactionWindow !== undefined &&
+        (typeof compactionWindow !== "number" ||
+          !Number.isSafeInteger(compactionWindow) ||
+          compactionWindow < 1 ||
+          compactionWindow > 1_000_000)
+      )
+        bad(
+          "Frontmatter compactionWindow must be a whole number of tokens from 1 to 1,000,000.",
+        );
       const denyTools = parseDenyList(fields.tools, issues);
       const skills = parseNameList(fields.skills, "skills", issues);
       const inheritGrants = fields.inheritGrants;
@@ -142,6 +155,7 @@ export function parseAgentManifest(content: string, path: string) {
         models,
         ...(isThinkingLevel(effort) ? { effort } : {}),
         ...(isSessionPeerTurnCap(peerTurns) ? { peerTurns } : {}),
+        ...(typeof compactionWindow === "number" ? { compactionWindow } : {}),
         denyTools,
         skills,
         ...(typeof inheritGrants === "boolean" ? { inheritGrants } : {}),
@@ -285,6 +299,7 @@ export interface AgentDefinitionInput {
   models: string[];
   effort?: ThinkingLevel;
   peerTurns?: number;
+  compactionWindow?: number;
   denyTools?: string[];
   skills?: string[];
   inheritGrants?: boolean;
@@ -312,6 +327,8 @@ export function formatAgentManifest(input: AgentDefinitionInput): string {
   if (input.effort !== undefined) lines.push(`effort: ${input.effort}`);
   if (input.peerTurns !== undefined)
     lines.push(`peer-turns: ${input.peerTurns}`);
+  if (input.compactionWindow !== undefined)
+    lines.push(`compactionWindow: ${input.compactionWindow}`);
   if (input.denyTools?.length)
     lines.push("tools:", `  deny: ${yamlList(input.denyTools)}`);
   if (input.skills?.length) lines.push(`skills: ${yamlList(input.skills)}`);

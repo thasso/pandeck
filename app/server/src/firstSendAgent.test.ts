@@ -40,6 +40,7 @@ const { Connection } = await import("./connection.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
+const { hub } = await import("./hub.ts");
 const { AGENTS_LIBRARY_DIR } = await import("./config.ts");
 const { formatAgentManifest } = await import("./agents/agentLibrary.ts");
 const { setAgentRuntimeSourcesForTests } =
@@ -78,6 +79,7 @@ function writeResearcher(
     effort?: "low" | "high";
     body?: string;
     persona?: "assistant" | "developer";
+    compactionWindow?: number;
   } = {},
 ): void {
   writeFileSync(
@@ -88,6 +90,9 @@ function writeResearcher(
       persona: patch.persona ?? "assistant",
       models: ["opus"],
       effort: patch.effort ?? "high",
+      ...(patch.compactionWindow !== undefined
+        ? { compactionWindow: patch.compactionWindow }
+        : {}),
       denyTools: [],
       skills: [],
       body: patch.body ?? "Research carefully.",
@@ -181,6 +186,90 @@ afterAll(() => {
   setAgentRuntimeSourcesForTests(null);
   setAgentSpawnSourcesForTests(null);
 });
+
+test.each(["claude-sdk", "pi"] as const)(
+  "%s first send stores the definition window before the prompt, and a save failure reports the created id",
+  async (harness) => {
+    const name = harness === "pi" ? "drafter" : "researcher";
+    const modelId = harness === "pi" ? "gpt-5" : "opus";
+    const file = join(AGENTS_LIBRARY_DIR, name, "AGENT.md");
+    const definition = {
+      name,
+      description: "Window test.",
+      persona: "assistant" as const,
+      models: [modelId],
+      effort: "low" as const,
+      body: "Draft briefly.",
+    };
+    writeFileSync(
+      file,
+      formatAgentManifest({ ...definition, compactionWindow: 50_000 }),
+    );
+    const liveSpy = vi.spyOn(hub, "getLiveById").mockImplementation(
+      (sessionId: string) =>
+        ({
+          live: true,
+          sessionId,
+          broadcastState() {},
+          compactionWindowStatus: () => ({
+            contextWindow: 200_000,
+            underlyingReserve: 16_384,
+            live: { applied: "pending" },
+          }),
+          applyCompactionWindow: async () => ({}),
+        }) as never,
+    );
+    try {
+      const { conn, sent } = makeConnection();
+      const req = {
+        harness,
+        id: `first-window-${harness}`,
+        agentType: "assistant",
+        text: "Start with window",
+        agent: name,
+        modelProvider: harness === "pi" ? "openai-codex" : "claude-sdk",
+        modelId,
+        thinkingLevel: "low",
+        credentialProfileId: harness === "pi" ? "default" : claudeProfile.id,
+      };
+      await conn.handleFirstSend(req);
+      const createdId = harness === "pi" ? "pi-agent-session" : req.id;
+      assert.equal(
+        sessionStore.get(createdId)?.compactionWindow,
+        harness === "pi" ? 50_000 : 100_000,
+      );
+      assert.deepEqual(prompts, ["Start with window"]);
+      if (harness !== "pi")
+        assert.match(
+          sessionStore.get(createdId)?.compactionWindowNote ?? "",
+          /clamped/,
+        );
+      const save = vi
+        .spyOn(sessionStore, "setCompactionWindow")
+        .mockImplementation(() => {
+          throw new Error("disk full");
+        });
+      prompts.length = 0;
+      await conn.handleFirstSend({ ...req, id: `failed-window-${harness}` });
+      assert.deepEqual(prompts, []);
+      assert.ok(
+        sent.some(
+          (msg) =>
+            msg.message?.includes(
+              harness === "pi"
+                ? "pi-agent-session"
+                : `failed-window-${harness}`,
+            ) && msg.message.includes("disk full"),
+        ),
+      );
+      save.mockRestore();
+    } finally {
+      liveSpy.mockRestore();
+      writeFileSync(file, formatAgentManifest(definition));
+      writeResearcher();
+    }
+  },
+);
 
 test("a first send naming an agent runs as that definition and freezes it", async () => {
   const { conn } = makeConnection();

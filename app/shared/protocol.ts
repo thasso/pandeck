@@ -12,7 +12,11 @@ import type {
 } from "./runtimeEvents.ts";
 import type { BuildInfo } from "./buildInfo.ts";
 import { CLAUDE_SDK_PROVIDER, type Harness } from "./harnesses.ts";
-import type { SessionCompactionWindow } from "./compactionWindow.ts";
+import type {
+  SessionCompactionWindow,
+  SpawnCompactionWindow,
+  CompactionWindowEstimate,
+} from "./compactionWindow.ts";
 import type { TurnStatsSeed } from "./turnStats.ts";
 import type { AgentStopReason, AgentUsage } from "./session/content.ts";
 import type { PromptOrigin } from "./session/origin.ts";
@@ -3801,7 +3805,11 @@ export interface AgentDefinitionApprovalBody {
    * connected model (`provider/id`, plus a pinned version) and the effort it
    * runs at, the definition's or the default fitted to what it supports.
    */
-  resolvedModels: Array<{ model: string; effort: ThinkingLevel }>;
+  resolvedModels: Array<{
+    model: string;
+    effort: ThinkingLevel;
+    compactionWindow?: CompactionWindowEstimate & { estimated?: true };
+  }>;
   /**
    * Effort as written before (edit only) and after; absent means the
    * definition default (`medium`).
@@ -3811,6 +3819,7 @@ export interface AgentDefinitionApprovalBody {
     after?: ThinkingLevel;
   };
   peerTurns?: { before?: number; after?: number };
+  compactionWindow?: { before?: number; after?: number };
   /** The complete `AGENT.md` the approval would write. */
   source: string;
   /** The commit subject. */
@@ -4076,6 +4085,8 @@ export interface SessionSpawnApprovalItem {
   responseRequested: boolean;
   /** Choosing user ownership at approval withdrew the proposed awaited reply. */
   responseRequestWithdrawn?: boolean;
+  /** Sealed request and estimate, replaced by the stored result after creation. */
+  compactionWindow?: SpawnCompactionWindow;
   /**
    * The session will not inherit the proposer's approval grants, nor will its
    * own spawns through it; absent means it inherits. Fixed at proposal from

@@ -2,6 +2,8 @@
 import { expect, test } from "vitest";
 import {
   COMPACTION_WINDOW_AGENT_FLOOR,
+  spawnCompactionWindow,
+  compactionWindowEstimateNote,
   compactionWindowRange,
   compactionWindowUserRefusal,
   effectiveCompactionWindow,
@@ -17,8 +19,93 @@ const pi = HARNESSES.pi.compactionWindow as CompactionWindowCapability;
 
 test("both harnesses declare the capability; the agent floor is 100k", () => {
   expect(claude).toEqual({ mapping: "window", min: 100_000, max: 1_000_000 });
-  expect(pi).toEqual({ mapping: "reserve", summaryCostNote: true });
+  expect(pi).toEqual({
+    mapping: "reserve",
+    summaryCostNote: true,
+    defaultReserve: 16_384,
+  });
   expect(COMPACTION_WINDOW_AGENT_FLOOR).toBe(100_000);
+});
+
+test("spawn rows refuse outside the agent range, re-picks clamp and definitions use the user range", () => {
+  const available = { range: { min: 1, max: 200_000 } };
+  for (const tokens of [99_999, 1.5, 220_000])
+    expect(
+      spawnCompactionWindow(available, {
+        tokens,
+        source: "row",
+        rowAbove: "refuse",
+      }),
+    ).toHaveProperty("refused");
+  expect(
+    spawnCompactionWindow(available, {
+      tokens: 220_000,
+      source: "row",
+      rowAbove: "clamp",
+    }),
+  ).toMatchObject({ tokens: 200_000 });
+  expect(
+    spawnCompactionWindow(
+      { range: { min: 1, max: 82_000 } },
+      { tokens: 150_000, source: "row", rowAbove: "clamp" },
+    ),
+  ).toHaveProperty("refused");
+  expect(
+    spawnCompactionWindow(available, {
+      tokens: 12_000,
+      source: "definition",
+      rowAbove: "refuse",
+    }),
+  ).toEqual({ tokens: 12_000 });
+  expect(
+    spawnCompactionWindow(available, {
+      tokens: 260_000,
+      source: "definition",
+      rowAbove: "clamp",
+      ceiling: 150_000,
+    }),
+  ).toMatchObject({ tokens: 150_000 });
+  expect(
+    spawnCompactionWindow(
+      { unavailable: "empty" },
+      { tokens: 12_000, source: "definition", rowAbove: "refuse" },
+    ),
+  ).toMatchObject({ tokens: null });
+});
+
+test("estimate notes explain actual differences and discard stale empty-range explanations", () => {
+  const note = compactionWindowEstimateNote(
+    { tokens: null, note: "No compaction window was set: no range" },
+    12_000,
+  );
+  expect(note).toContain("12,000");
+  expect(note).toContain("estimate");
+  expect(note).not.toContain("No compaction window was set");
+  expect(compactionWindowEstimateNote({ tokens: 250_000 }, 200_000)).toMatch(
+    /250,000.*200,000/,
+  );
+  expect(compactionWindowEstimateNote({ tokens: 150_000 }, null)).toContain(
+    "Not set",
+  );
+  expect(
+    compactionWindowEstimateNote({ tokens: 150_000 }, 150_000),
+  ).toBeUndefined();
+  expect(
+    compactionWindowEstimateNote(
+      { tokens: 200_000, note: "On approval: clamped" },
+      200_000,
+    ),
+  ).toBe("On approval: clamped");
+  expect(
+    compactionWindowEstimateNote(
+      { tokens: null, note: "old" },
+      null,
+      "actual empty range",
+    ),
+  ).toBe("actual empty range");
+  expect(compactionWindowEstimateNote(undefined, 100_000, "clamped")).toBe(
+    "clamped",
+  );
 });
 
 test("Claude: 100k up to the model window, never above 1M", () => {

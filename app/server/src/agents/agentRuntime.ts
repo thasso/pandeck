@@ -11,6 +11,8 @@
  */
 import {
   clampThinkingLevelForModel,
+  estimateSpawnCompactionWindow,
+  type CompactionWindowEstimate,
   isCodingAgentType,
   type ModelOption,
   type ThinkingLevel,
@@ -41,6 +43,7 @@ export interface AgentRuntime {
    * an approval checks and a spawn freezes.
    */
   thinkingLevel: ThinkingLevel;
+  compactionWindow?: CompactionWindowEstimate & { estimated?: true };
 }
 
 /** One listed model as it resolves now, or why it cannot run. */
@@ -174,6 +177,7 @@ function agentRuntimeFor(
   spec: string,
   effort: ThinkingLevel | undefined,
   models: readonly AgentModelOption[],
+  compactionWindow?: number,
 ): AgentRuntime {
   const model = resolveAgentModel(spec, models);
   const { pinnedId, ...option } = model;
@@ -182,7 +186,16 @@ function agentRuntimeFor(
     [pinnedId, `${model.provider}/${pinnedId}`].some(
       (form) => form.toLowerCase() === spec.toLowerCase(),
     );
+  const window =
+    compactionWindow !== undefined
+      ? estimateSpawnCompactionWindow(option, {
+          tokens: compactionWindow,
+          source: "definition",
+          rowAbove: "refuse",
+        })
+      : undefined;
   return {
+    ...(window && !("refused" in window) ? { compactionWindow: window } : {}),
     model: option,
     ...(pinned ? { pinnedModel: pinnedId } : {}),
     thinkingLevel: clampThinkingLevelForModel(
@@ -203,7 +216,12 @@ function agentRuntimeFor(
 export async function checkAgentRuntime(
   manifest: Pick<
     AgentManifest,
-    "persona" | "models" | "effort" | "denyTools" | "skills"
+    | "persona"
+    | "models"
+    | "effort"
+    | "denyTools"
+    | "skills"
+    | "compactionWindow"
   >,
   options: {
     checkModel?: boolean | "each";
@@ -219,7 +237,12 @@ export async function checkAgentRuntime(
       try {
         return {
           spec,
-          runtime: agentRuntimeFor(spec, manifest.effort, models),
+          runtime: agentRuntimeFor(
+            spec,
+            manifest.effort,
+            models,
+            manifest.compactionWindow,
+          ),
         };
       } catch (error) {
         return { spec, problem: (error as Error).message };

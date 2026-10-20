@@ -41,6 +41,28 @@ function issuesOf(source: string): string[] {
 }
 
 describe("the AGENT.md content rule", () => {
+  test("compactionWindow uses the user range and round-trips", () => {
+    for (const value of ["0", "1000001", "1.5", '"x"'])
+      assert.match(
+        issuesOf(
+          valid.replace("effort: high", `compactionWindow: ${value}`),
+        ).join(),
+        /compactionWindow must be a whole number/,
+      );
+    for (const value of [1, 50_000, 1_000_000]) {
+      const parsed = parseAgentManifest(
+        valid.replace("effort: high", `compactionWindow: ${value}`),
+        "x/AGENT.md",
+      );
+      assert.ok(parsed.ok);
+      const again = parseAgentManifest(
+        formatAgentManifest(parsed.manifest),
+        "x/AGENT.md",
+      );
+      assert.ok(again.ok);
+      assert.equal(again.manifest.compactionWindow, value);
+    }
+  });
   test("peer-turns is bounded and round-trips", () => {
     for (const value of ["0", "17", "2.5", '"4"'])
       assert.match(

@@ -1479,6 +1479,7 @@ export class ClaudeSdkSession implements LiveSession {
       HARNESSES[this.harness].compactionWindow,
       {
         stored,
+        note: sessionStore.get(this.id)?.compactionWindowNote,
         contextWindow: this.modelOption().contextWindow,
         live: this.compactionWindow.status(stored),
       },

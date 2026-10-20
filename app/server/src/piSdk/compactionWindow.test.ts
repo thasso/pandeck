@@ -9,7 +9,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "vitest";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import { PiCompactionWindow } from "./compactionWindow.ts";
+import { HARNESSES } from "@assistant/shared";
+import {
+  PiCompactionWindow,
+  DEFAULT_COMPACTION_SETTINGS,
+} from "./compactionWindow.ts";
+
+test("shared pre-creation estimate uses pi's actual default reserve", () => {
+  const capability = HARNESSES.pi.compactionWindow;
+  assert.ok(capability?.mapping === "reserve");
+  assert.equal(
+    capability.defaultReserve,
+    DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+  );
+});
 
 const M = { provider: "p", id: "m", contextWindow: 272_000 };
 const N = { provider: "p", id: "n", contextWindow: 200_000 };
