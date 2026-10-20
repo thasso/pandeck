@@ -136,6 +136,11 @@ only binding rules; everything else lives here.
   and usage ports), the shared `HARNESSES` descriptor, the boundary ratchet that
   pins remaining engine imports and harness-id comparisons, and the step-by-step
   migration status.
+- `compaction-window.md` — a session's compaction window: the one stored value
+  and its single writer, ranges per harness and model, the agent floor and actor
+  rules, how Claude (start settings only; a running process keeps its window)
+  and pi (a per-model reserve that survives every settings rebuild) apply it,
+  the applied states the inspector shows, forks, and the live evidence.
 - `claude-session-records.md` — how a Claude SDK session's own record is stored:
   small atomically-replaced metadata beside an append-only timeline log, why it
   is not derived from the app-owned log, the byte-exact extent and crash-safety

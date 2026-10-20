@@ -7620,6 +7620,19 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           sessionId={displaySession?.sessionId}
           toolExposure={displaySession?.toolExposure}
           agent={displaySession?.agent}
+          harness={displaySession?.harness}
+          compactionWindow={displaySession?.compactionWindow}
+          compactionWindowEdit={
+            displaySession
+              ? state.compactionWindowEdits[displaySession.sessionId]
+              : undefined
+          }
+          onSetCompactionWindow={
+            displaySession
+              ? (tokens) =>
+                  actions.setCompactionWindow(displaySession.sessionId, tokens)
+              : undefined
+          }
           onOpenAgent={(name) =>
             navigateFromInspector(
               `${settingsPath("agents")}?entry=${encodeURIComponent(name)}`,

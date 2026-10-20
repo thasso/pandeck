@@ -12,6 +12,7 @@ import type {
 } from "./runtimeEvents.ts";
 import type { BuildInfo } from "./buildInfo.ts";
 import { CLAUDE_SDK_PROVIDER, type Harness } from "./harnesses.ts";
+import type { SessionCompactionWindow } from "./compactionWindow.ts";
 import type { TurnStatsSeed } from "./turnStats.ts";
 import type { AgentStopReason, AgentUsage } from "./session/content.ts";
 import type { PromptOrigin } from "./session/origin.ts";
@@ -83,6 +84,7 @@ export * from "./thinkingLevels.ts";
 export * from "./peerRuntimes.ts";
 export * from "./approvalGrants.ts";
 export * from "./harnesses.ts";
+export * from "./compactionWindow.ts";
 export { SESSION_TIMELINE_PROJECTION_VERSION } from "./runtimeEvents.ts";
 export type { TimelineCacheDescriptor } from "./runtimeEvents.ts";
 export type { TurnStatsSeed } from "./turnStats.ts";
@@ -452,7 +454,8 @@ export const CLAUDE_SDK_MODELS: ModelOption[] = [
     name: "Claude Opus",
     reasoning: true,
     supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
-    contextWindow: 200_000,
+    // The `opus` alias runs with a 1M window; sessions report 1M.
+    contextWindow: 1_000_000,
   },
   {
     provider: CLAUDE_SDK_PROVIDER,
@@ -4782,6 +4785,11 @@ export interface SessionState {
   mode?: SessionMode;
   /** Only enterprise accounts may run this session; absent means no restriction. */
   requiresEnterprise?: boolean;
+  /**
+   * The session's compaction window: stored value, range and applied state.
+   * Absent when the harness has no compaction-window capability.
+   */
+  compactionWindow?: SessionCompactionWindow;
   /** True when this provider can accept a user steering prompt during a running turn. */
   canSteer?: boolean;
   /**
@@ -7548,6 +7556,7 @@ export const MUTATION_REQUEST_ID_COMMANDS = [
   "saveProject",
   "updateSettings",
   "renameSession",
+  "setCompactionWindow",
   "deleteSession",
   "archiveSession",
   "removeWorktree",
@@ -7889,6 +7898,16 @@ export type ClientMessage =
       requestId?: string;
     }
   | { type: "renameSession"; id: string; title: string; requestId?: string }
+  /**
+   * Set (`tokens`) or clear (`null`) a session's compaction window as the user
+   * (`docs/compaction-window.md`). Refused outside the session's range.
+   */
+  | {
+      type: "setCompactionWindow";
+      sessionId: string;
+      tokens: number | null;
+      requestId?: string;
+    }
   /**
    * `/rename`: rerun the session-naming agent over the session's recent user
    * prompts and agent replies. `guidance` is the user's own hint and outweighs

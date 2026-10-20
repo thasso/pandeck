@@ -46,8 +46,15 @@ export type ClaudeQuery = AsyncIterable<ClaudeSdkMessage> & {
   setModel?: (model?: string) => Promise<void>;
   setMaxThinkingTokens?: (tokens: number | null) => Promise<void>;
   applyFlagSettings?: (settings: Record<string, unknown>) => Promise<void>;
-  /** Tool-search visibility: which MCP tool definitions are loaded (optional; fakes omit it). */
-  getContextUsage?: () => Promise<{ mcpTools: ClaudeContextUsageMcpTool[] }>;
+  /**
+   * Tool-search visibility (which MCP tool definitions are loaded) and the
+   * compaction threshold the CLI resolved (optional; fakes omit it).
+   */
+  getContextUsage?: () => Promise<{
+    mcpTools: ClaudeContextUsageMcpTool[];
+    autoCompactThreshold?: number;
+    isAutoCompactEnabled?: boolean;
+  }>;
   /**
    * The structured data behind the CLI's `/usage` command (session cost/usage
    * totals plus claude.ai plan rate-limit utilization). Untyped/loose on

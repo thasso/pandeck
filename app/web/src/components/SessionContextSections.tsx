@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { approvalGrantLabel, GRANTABLE_OPERATIONS } from "@assistant/shared";
 import { useDialogs } from "./common/dialogs.tsx";
+import { CompactionWindowSection } from "./CompactionWindowSection.tsx";
+import type { CompactionWindowEdit } from "../hooks/useAssistant.ts";
 import type {
   ApprovalGrant,
   ApprovalGrantInheritance,
@@ -30,6 +32,8 @@ import type {
   SessionSkillInvocation,
   SessionToolExposure,
   EntryLibraryList,
+  Harness,
+  SessionCompactionWindow,
 } from "@assistant/shared";
 import { relativeTime } from "../lib/sessionRows.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
@@ -99,6 +103,12 @@ interface SessionContextSectionsProps {
   agent?: SessionAgentSummary | undefined;
   /** Open an agent definition on the Agents settings page. */
   onOpenAgent?: ((name: string) => void) | undefined;
+  /** The engine that runs the session, for its compaction-window capability. */
+  harness?: Harness | undefined;
+  compactionWindow?: SessionCompactionWindow | undefined;
+  /** The inspector's last compaction-window save for this session. */
+  compactionWindowEdit?: CompactionWindowEdit | undefined;
+  onSetCompactionWindow?: ((tokens: number | null) => void) | undefined;
   /** Frozen library skill names; defined (possibly empty) for coding sessions. */
   activeSkills?: string[] | undefined;
   /** Loads of those skills' bodies, newest last. */
@@ -141,6 +151,10 @@ export function SessionContextSections({
   toolExposure,
   agent,
   onOpenAgent,
+  harness,
+  compactionWindow,
+  compactionWindowEdit,
+  onSetCompactionWindow,
   activeSkills,
   skillInvocations,
   skillLibrary,
@@ -173,6 +187,16 @@ export function SessionContextSections({
           sessionId={sessionId}
           agent={agent}
           onOpenAgent={onOpenAgent}
+        />
+      )}
+
+      {harness && compactionWindow && (
+        <CompactionWindowSection
+          sessionId={sessionId}
+          harness={harness}
+          window={compactionWindow}
+          edit={compactionWindowEdit}
+          onSave={onSetCompactionWindow}
         />
       )}
 

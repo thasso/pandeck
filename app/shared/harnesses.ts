@@ -4,6 +4,7 @@
  * owns, and what it can do. Server and web read these instead of
  * repeating the mapping between the three names a harness goes by.
  */
+import type { CompactionWindowCapability } from "./compactionWindow.ts";
 import type {
   BackgroundWorkBackend,
   CredentialProfileProvider,
@@ -41,6 +42,11 @@ export interface HarnessDescriptor {
    * one its own tools admit under.
    */
   readonly backgroundWorkBackends: readonly BackgroundWorkBackend[];
+  /**
+   * Whether a session on this harness can take a compaction window, and how
+   * the harness maps it (`docs/compaction-window.md`). Absent: it cannot.
+   */
+  readonly compactionWindow?: CompactionWindowCapability;
 }
 
 export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
@@ -48,12 +54,15 @@ export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
     id: "pi",
     accountProvider: "openai-codex",
     backgroundWorkBackends: ["host-process", "server-task"],
+    compactionWindow: { mapping: "reserve", summaryCostNote: true },
   },
   "claude-sdk": {
     id: "claude-sdk",
     accountProvider: "claude",
     modelProvider: CLAUDE_SDK_PROVIDER,
     backgroundWorkBackends: ["claude-query", "server-task"],
+    // The CLI's `autoCompactWindow` schema and env clamp.
+    compactionWindow: { mapping: "window", min: 100_000, max: 1_000_000 },
   },
 };
 

@@ -52,7 +52,9 @@ import type {
 } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
+  HARNESSES,
   isCodingAgentType,
+  sessionCompactionWindowState,
   sessionModeOrDefault,
   UNLABELED_SESSION_TITLE,
 } from "@assistant/shared";
@@ -129,7 +131,13 @@ import {
   relinkAgentQuestionToolCallId,
   subscribeAgentQuestionChanges,
 } from "../tools/core/questionTool.ts";
-import type { LiveSession, Viewer } from "../harness.ts";
+import type {
+  CompactionWindowApplyResult,
+  CompactionWindowHarnessStatus,
+  CompactionWindowLowerResult,
+  LiveSession,
+  Viewer,
+} from "../harness.ts";
 import { SessionResidency } from "../sessionKit/residency.ts";
 import {
   discardHostCommandTurn,
@@ -239,6 +247,7 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import { buildClaudeSdkQueryOptions, claudeQueryModel } from "./options.ts";
+import { ClaudeCompactionWindow } from "./compactionWindow.ts";
 import {
   copyClaudeSessionForAccount,
   lastSavedCostState,
@@ -693,6 +702,14 @@ export class ClaudeSdkSession implements LiveSession {
   private unregisterBackgroundHost: (() => void) | undefined;
   private processClosing = false;
   private processCloseReason: string | undefined;
+  private readonly compactionWindow = new ClaudeCompactionWindow({
+    currentEpochKey: () =>
+      this.activeQuery && this.inputQueue && !this.processClosing
+        ? this.queryEpochKey
+        : undefined,
+    modelId: () => this.modelId,
+    modelWindow: () => this.modelOption().contextWindow,
+  });
   /**
    * The provider failure seen during the live turn (synthetic assistant message
    * and/or `result`), which `finishTurn` turns into the turn's error. Cleared
@@ -1028,9 +1045,11 @@ export class ClaudeSdkSession implements LiveSession {
     const agentValue = sessionAgentSummary(this.id);
     const worktreeIdValue = this.safeWorktreeId();
     const originTaskValue = this.safeOriginTask();
-    const requiresEnterprise = sessionStore.getIncludingDeleted(
-      this.id,
-    )?.requiresEnterprise;
+    const stored = sessionStore.getIncludingDeleted(this.id);
+    const requiresEnterprise = stored?.requiresEnterprise;
+    const compactionWindowValue = this.compactionWindowState(
+      stored?.compactionWindow,
+    );
     return {
       sessionId: this.id,
       ...(this.sessionFile !== undefined
@@ -1042,6 +1061,9 @@ export class ClaudeSdkSession implements LiveSession {
       thinkingLevel: this.thinkingLevel,
       mode: this.mode,
       ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
+      ...(compactionWindowValue !== undefined
+        ? { compactionWindow: compactionWindowValue }
+        : {}),
       canSteer: this.canSteer,
       ...(this.forkOrigin ? { forkOrigin: this.forkOrigin } : {}),
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
@@ -1378,6 +1400,56 @@ export class ClaudeSdkSession implements LiveSession {
       return;
     }
     this.configure(undefined, thinkingLevel);
+  }
+
+  /* ---------------------------- compaction window --------------------------- */
+
+  compactionWindowStatus(): CompactionWindowHarnessStatus {
+    return {
+      live: this.compactionWindow.status(
+        sessionStore.get(this.id)?.compactionWindow,
+      ),
+      contextWindow: this.modelOption().contextWindow,
+    };
+  }
+
+  /** A running process keeps the window it started with (see the module). */
+  async applyCompactionWindow(
+    tokens: number | null,
+  ): Promise<CompactionWindowApplyResult> {
+    return this.compactionWindow.apply(tokens);
+  }
+
+  async lowerCompactionWindow(
+    tokens: number,
+    persist: (tokens: number) => void,
+  ): Promise<CompactionWindowLowerResult> {
+    return this.compactionWindow.lower(
+      tokens,
+      sessionStore.get(this.id)?.compactionWindow,
+      persist,
+    );
+  }
+
+  private compactionWindowState(
+    stored: number | undefined,
+  ): SessionState["compactionWindow"] {
+    return sessionCompactionWindowState(
+      HARNESSES[this.harness].compactionWindow,
+      {
+        stored,
+        contextWindow: this.modelOption().contextWindow,
+        live: this.compactionWindow.status(stored),
+      },
+    );
+  }
+
+  /** The stored window a query starts with, as builder input. */
+  private compactionWindowStart(): { compactionWindow?: number } {
+    const start = this.compactionWindow.startWindow(
+      sessionStore.get(this.id)?.compactionWindow,
+    );
+    return start !== undefined ? { compactionWindow: start } : {};
   }
 
   modelSelection(): {
@@ -1944,6 +2016,7 @@ export class ClaudeSdkSession implements LiveSession {
       },
     });
     let query: ClaudeQuery;
+    const start = this.compactionWindowStart();
     try {
       query = seam.query({
         prompt: queue,
@@ -1984,6 +2057,7 @@ export class ClaudeSdkSession implements LiveSession {
             TMPDIR: taskOutputTemp.tmpDir,
             CLAUDE_CODE_TMPDIR: taskOutputTemp.tmpDir,
           },
+          ...start,
         }),
       });
     } catch (error) {
@@ -1999,7 +2073,9 @@ export class ClaudeSdkSession implements LiveSession {
       throw error;
     }
     this.activeQuery = query;
+    this.compactionWindow.queryStarted(epochKey, start.compactionWindow);
     this.queryLoop = this.consumeQuery(query, epochKey);
+    this.broadcastState();
   }
 
   private async consumeQuery(
@@ -2096,7 +2172,7 @@ export class ClaudeSdkSession implements LiveSession {
           this.answersBeforePrompt(message, epochKey)
         )
           continue;
-        await this.refreshToolLoadState(query);
+        await this.refreshToolLoadState(query, epochKey);
         const ownsTurn =
           this.running &&
           !this.syntheticTurn &&
@@ -2194,6 +2270,8 @@ export class ClaudeSdkSession implements LiveSession {
         this.processClosing = false;
         this.processCloseReason = undefined;
         this.resetProviderResultTracking();
+        this.compactionWindow.queryEnded(epochKey);
+        this.broadcastState();
       }
     }
   }
@@ -2681,10 +2759,14 @@ export class ClaudeSdkSession implements LiveSession {
     return true;
   }
 
-  private async refreshToolLoadState(query: ClaudeQuery): Promise<void> {
+  private async refreshToolLoadState(
+    query: ClaudeQuery,
+    epochKey: string,
+  ): Promise<void> {
     if (!query.getContextUsage) return;
     try {
       const usage = await query.getContextUsage();
+      this.compactionWindow.usageReported(epochKey, usage);
       const prefix = externalToolName("");
       const eager = eagerToolNamesFor(this.agentType, this.promptConditions());
       const newlyLoaded: string[] = [];
@@ -3195,6 +3277,7 @@ export class ClaudeSdkSession implements LiveSession {
             ...(this.credentialProfileId
               ? { env: claudeProfileEnvironment(this.credentialProfileId) }
               : {}),
+            ...this.compactionWindowStart(),
           }),
           hooks: {
             PostCompact: [

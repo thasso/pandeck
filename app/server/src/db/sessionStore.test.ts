@@ -3,7 +3,7 @@ import { test } from "vitest";
 
 const { sessionStore, SPAWNED_DESCENDANTS_SQL, SPAWN_GRANT_EDGE_SQL } =
   await import("./sessionStore.ts");
-const { getDb } = await import("./index.ts");
+const { closeDb, getDb } = await import("./index.ts");
 
 test("SQLite session store persists developer persona sessions", () => {
   const id = `developer-session-${Date.now()}`;
@@ -98,6 +98,36 @@ test("SQLite session store durably freezes an enterprise account requirement", (
     requiresEnterprise: false,
   });
   assert.equal(sessionStore.get(id)?.requiresEnterprise, true);
+});
+
+test("the compaction window has one throwing writer that upsert never touches", () => {
+  const id = `compaction-window-session-${Date.now()}`;
+  sessionStore.upsert({ id, harness: "claude-sdk", agentType: "developer" });
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+
+  sessionStore.setCompactionWindow(id, 300_000);
+  assert.equal(sessionStore.get(id)?.compactionWindow, 300_000);
+  closeDb();
+  assert.equal(
+    sessionStore.get(id)?.compactionWindow,
+    300_000,
+    "a restart re-reads the stored window",
+  );
+
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: "developer",
+    title: "Later metadata refresh",
+  });
+  assert.equal(sessionStore.get(id)?.compactionWindow, 300_000);
+
+  sessionStore.setCompactionWindow(id, null);
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+
+  sessionStore.markDeleted(id);
+  assert.throws(() => sessionStore.setCompactionWindow(id, 200_000));
+  assert.throws(() => sessionStore.setCompactionWindow(`${id}-missing`, 1));
 });
 
 test("SQLite session store persists mutable Build/Plan mode", () => {

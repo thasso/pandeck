@@ -103,6 +103,12 @@ const GRANT_KEYS: FieldSpec = {
     value.every((key) => key.length > 0 && key.length <= 4096),
   kind: "1 to 256 grant keys",
 };
+/** A compaction window in whole tokens, or `null` to clear it. */
+const COMPACTION_WINDOW_TOKENS: FieldSpec = {
+  check: (value: unknown) =>
+    value === null || (Number.isSafeInteger(value) && (value as number) > 0),
+  kind: "a positive integer or null",
+};
 
 /**
  * The background updates a Recover or Dismiss names: one Recover's worth at
@@ -1022,6 +1028,10 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     return checkOptionalFields(msg, { requestId: STRING });
   },
   renameSession: fields({ id: STRING, title: STRING }),
+  setCompactionWindow: fields({
+    sessionId: STRING,
+    tokens: COMPACTION_WINDOW_TOKENS,
+  }),
   regenerateSessionTitle: fields({ id: STRING }, { guidance: STRING }),
   setSpawnOwnership: fields({
     id: STRING,

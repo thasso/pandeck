@@ -152,3 +152,38 @@ test("a pi engine claims inherited enterprise metadata before returning its fork
   await prepared.fork();
   assert.equal(sessionStore.get(childId)?.requiresEnterprise, true);
 });
+
+test("a fork inherits the parent's stored compaction window", async () => {
+  sessionStore.upsert({
+    id: "window-parent",
+    harness: "claude-sdk",
+    agentType: "developer",
+  });
+  sessionStore.setCompactionWindow("window-parent", 180_000);
+  const applied: Array<number | null> = [];
+  vi.spyOn(claudeSdkStore, "forkSession").mockImplementation(async () => {
+    sessionStore.upsert({
+      id: "window-child",
+      harness: "claude-sdk",
+      agentType: "developer",
+    });
+    return {
+      sessionId: "window-child",
+      applyCompactionWindow: async (tokens: number | null) => {
+        applied.push(tokens);
+        return {};
+      },
+      broadcastState: () => {},
+    } as never;
+  });
+  const prepared = prepareFork("claude-sdk", {
+    ...request,
+    id: "window-parent",
+    position: "at",
+    anchors: { entryFound: true, own: "native-2" },
+  });
+  assert.ok("fork" in prepared);
+  await prepared.fork();
+  assert.equal(sessionStore.get("window-child")?.compactionWindow, 180_000);
+  assert.deepEqual(applied, [180_000]);
+});

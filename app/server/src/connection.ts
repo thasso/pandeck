@@ -101,6 +101,7 @@ import { randomUUID } from "node:crypto";
 import { createSession } from "./harnesses/create.ts";
 import { existingSessionRefusal } from "./harnesses/availability.ts";
 import { prepareFork } from "./harnesses/fork.ts";
+import { setSessionCompactionWindow } from "./sessionCompactionWindow.ts";
 import { handoffEngine } from "./harnesses/handoffSession.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { sessionRefFile } from "./harnesses/storage.ts";
@@ -1009,6 +1010,8 @@ export class Connection implements Viewer {
         return this.onSetInboxPositions(msg.positions);
       case "renameSession":
         return this.onRenameSession(msg.id, msg.title);
+      case "setCompactionWindow":
+        return this.onSetCompactionWindow(msg.sessionId, msg.tokens);
       case "regenerateSessionTitle":
         return this.onRegenerateSessionTitle(msg.id, msg.guidance);
       case "setSpawnOwnership":
@@ -5271,6 +5274,20 @@ export class Connection implements Viewer {
     }
   }
 
+  /** The user sets or clears a session's compaction window (inspector). */
+  private async onSetCompactionWindow(
+    sessionId: string,
+    tokens: number | null,
+  ): Promise<void> {
+    const result = await setSessionCompactionWindow(sessionId, tokens, "user");
+    if (!result.ok)
+      this.send({
+        type: "error",
+        message: result.message,
+        target: { type: "session", id: sessionId },
+      });
+  }
+
   /** `/rename`: let the naming agent retitle the session from its recent turns. */
   private async onRegenerateSessionTitle(
     id: string,
@@ -5580,6 +5597,13 @@ export class Connection implements Viewer {
    */
   sessionHarnessOpened(driver: HarnessDriver): void {
     this.upgradeViewingDriver(driver);
+  }
+
+  sessionStateChanged(sessionId: string): void {
+    const viewing = this.viewing;
+    if (!viewing || viewing.live || viewing.sessionId !== sessionId) return;
+    if (this.disposed) return;
+    this.send({ type: "state", state: viewing.state() });
   }
 
   /**

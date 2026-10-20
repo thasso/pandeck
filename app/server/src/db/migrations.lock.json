@@ -90,5 +90,6 @@
   "0089_session_peer_turn_cap.sql": "1300322ffeaf84c1246df1a62e01eb89d4e4dfb01175efd264d2d69b36666ea1",
   "0090_background_work_server_tasks.sql": "4671fb54a488c159f9563915083e022318fed1aad17e9b950333557bcdafdaf4",
   "0091_approval_grant_scope.sql": "d1ae6d66ca58e7767b5a952d0442baef6c7c0026b51370747b00856424850ddb",
-  "0092_peer_prompt_reminders.sql": "10357eb870948d547f7bc1fd5c88aaeecb5acfd5b34ac15187d9fd5c7c776aef"
+  "0092_peer_prompt_reminders.sql": "10357eb870948d547f7bc1fd5c88aaeecb5acfd5b34ac15187d9fd5c7c776aef",
+  "0094_session_compaction_window.sql": "e673fc39686f11da58498d55d7bde5d7560443d8a4b1b67978e9751ca8362c1b"
 }

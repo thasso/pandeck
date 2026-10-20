@@ -60,16 +60,16 @@ export const CLAUDE_SDK_MODELS: Array<ModelOption & { sdkModelId: string }> = [
   // accepted on resume with history retained, but the first turn re-reads the
   // transcript uncached because the prompt cache is per-model.
   //
-  // `contextWindow` stays at the harness default: the CLI takes the 1M window
-  // only through the explicit `claude-opus-5-5[1m]` id, and a session that
-  // learns a different window reports it through `claudeSdkModelOption`.
+  // Opus 5.5 runs with a 1M window under the plain id: sessions report 1M, so
+  // the compaction-window range reaches 1M before the first `result`. A session
+  // that learns a different window reports it through `claudeSdkModelOption`.
   {
     provider: CLAUDE_SDK_PROVIDER,
     id: "opus",
     name: "Claude Opus",
     reasoning: true,
     supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
-    contextWindow: 200_000,
+    contextWindow: 1_000_000,
     sdkModelId: "claude-opus-5-5",
   },
   // Sonnet 5.5 and Haiku 5.5 are alias repoints like Opus above: existing

@@ -196,11 +196,12 @@ Four layers, each depending only on the ones below it:
 
 `HARNESSES` in `app/shared/harnesses.ts` is the one table that maps a harness to
 its account provider, its model-picker provider (Claude only; pi models keep
-their upstream provider) and its capabilities, today the background-work
-backends it may own. `harnessForModelProvider`, `harnessForAccountProvider` and
-`accountProviderForModelProvider` translate between the three names; server and
-web call them instead of repeating the mapping. Further capabilities join the
-table when a later step needs them.
+their upstream provider) and its capabilities: the background-work backends it
+may own, and how it maps a session's compaction window (`compactionWindow`, see
+`compaction-window.md`). `harnessForModelProvider`, `harnessForAccountProvider`
+and `accountProviderForModelProvider` translate between the three names; server
+and web call them instead of repeating the mapping. Further capabilities join
+the table when a later step needs them.
 
 ## Rules
 

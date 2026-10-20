@@ -8,6 +8,8 @@ import type {
   AgentType,
   BroadcastTopic,
   BrowserRuntimeInfo,
+  CompactionWindowLiveStatus,
+  CompactionWindowPendingReason,
   ContextInfo,
   DisplayMessage,
   Harness,
@@ -90,6 +92,11 @@ export interface Viewer {
    * that session re-attaches to it; every other viewer ignores the call.
    */
   sessionHarnessOpened?(driver: HarnessDriver): void;
+  /**
+   * A session's stored metadata changed while no harness may be open for it.
+   * A viewer showing it DETACHED resends its state, read fresh from the row.
+   */
+  sessionStateChanged?(sessionId: string): void;
 }
 
 /**
@@ -174,7 +181,62 @@ export interface LiveSession extends HarnessDriver, RuntimePromptDriver {
   };
   /** Accept a dry-run commit card into the session. Only pi produces them. */
   acceptCommitDryRun?(entryId: string): Promise<void>;
+  /**
+   * Compaction window (`docs/compaction-window.md`), on harnesses with that
+   * capability. The setter (`sessionCompactionWindow.ts`) is the only caller.
+   */
+  compactionWindowStatus?(): CompactionWindowHarnessStatus;
+  /**
+   * Apply an already-stored window (user, spawn and fork paths); `null` is
+   * the provider default. Never throws: a failure is `applyError`, and a
+   * harness that cannot apply it to the running process says when it will.
+   */
+  applyCompactionWindow?(
+    tokens: number | null,
+  ): Promise<CompactionWindowApplyResult>;
+  /**
+   * An agent lowering its own window. The harness runs the checks and calls
+   * the synchronous `persist` (which throws on a failed write) only once they
+   * pass; a harness that applies live restores its previous value when
+   * `persist` fails. The stored value is never a rollback target.
+   */
+  lowerCompactionWindow?(
+    tokens: number,
+    persist: (tokens: number) => void,
+  ): Promise<CompactionWindowLowerResult>;
 }
+
+/** A live harness's window state plus the inputs its range is computed from. */
+export interface CompactionWindowHarnessStatus {
+  live: CompactionWindowLiveStatus;
+  contextWindow?: number;
+  /** The `reserve` mapping's reserve without Pandeck's override. */
+  underlyingReserve?: number;
+}
+
+export interface CompactionWindowApplyResult {
+  /** Not applied live yet; the stored value applies at the named start. */
+  pendingReason?: CompactionWindowPendingReason;
+  /** The live apply failed; applied state is now `unknown`. */
+  applyError?: string;
+  /** Compaction is turned off in the provider's settings; nothing was applied. */
+  disabled?: true;
+}
+
+export type CompactionWindowLowerResult =
+  | {
+      ok: true;
+      previous: number | null;
+      applied: number;
+      /** Stored but not in effect yet; it applies at the named start. */
+      pendingReason?: CompactionWindowPendingReason;
+    }
+  | {
+      ok: false;
+      message: string;
+      /** The largest value this agent could set now, when there is one. */
+      largestAcceptable?: number;
+    };
 
 /** Whether a driver (or anything a lookup returned) is a resident session. */
 export function isLiveSession(driver: unknown): driver is LiveSession {

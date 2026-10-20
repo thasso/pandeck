@@ -543,6 +543,11 @@ export interface UIState {
    */
   initiativeSettleErrors: Readonly<Record<string, InitiativeSettleError>>;
   /**
+   * The inspector's last compaction-window save, by session id: busy while it
+   * is unanswered, then its refusal (if any) until the next save.
+   */
+  compactionWindowEdits: Readonly<Record<string, CompactionWindowEdit>>;
+  /**
    * Keyed Initiative reads (`getInitiative`): the graph with its map layout, or
    * `ready(null)` when it does not exist or was deleted. A newer `initiatives`
    * event or snapshot revision re-reads an entry; Task events never do.
@@ -946,6 +951,7 @@ const emptyInitial: UIState = {
   initiativesRefreshing: false,
   initiativeListError: null,
   initiativeSettleErrors: {},
+  compactionWindowEdits: {},
   initiativeDetails: {},
   initiativeDetailRevisions: {},
   initiativeDetailsLru: [],
@@ -1976,6 +1982,15 @@ type Action =
       kind: "optimisticInitiativeSettle";
       initiativeId: string;
       throughRevision: number;
+    }
+  /** The inspector sent a compaction-window save for a session. */
+  | { kind: "compactionWindowRequested"; sessionId: string; requestId: string }
+  /** That save was answered: settled, refused, or left unanswered. */
+  | {
+      kind: "compactionWindowAnswered";
+      sessionId: string;
+      requestId: string;
+      error?: string;
     }
   /** An Initiative Settle failed while its card was on screen to say so. */
   | {
@@ -4588,6 +4603,13 @@ function initiativeName(initiative: InitiativeSummary): string {
  * outcome revision the card showed then: a later outcome is a different item,
  * and this is not about it.
  */
+/** One inspector save of a session's compaction window. */
+export interface CompactionWindowEdit {
+  requestId: string;
+  busy: boolean;
+  error?: string;
+}
+
 export interface InitiativeSettleError {
   message: string;
   revision: number;
@@ -5129,6 +5151,34 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           action.now,
         );
     return { ...state, sessions, error: null };
+  }
+  if (action.kind === "compactionWindowRequested")
+    return {
+      ...state,
+      compactionWindowEdits: {
+        ...state.compactionWindowEdits,
+        [action.sessionId]: { requestId: action.requestId, busy: true },
+      },
+    };
+  if (action.kind === "compactionWindowAnswered") {
+    // Only the session's latest save speaks; an earlier one's late answer
+    // must not clear a newer one's busy state.
+    if (
+      state.compactionWindowEdits[action.sessionId]?.requestId !==
+      action.requestId
+    )
+      return state;
+    return {
+      ...state,
+      compactionWindowEdits: {
+        ...state.compactionWindowEdits,
+        [action.sessionId]: {
+          requestId: action.requestId,
+          busy: false,
+          ...(action.error !== undefined ? { error: action.error } : {}),
+        },
+      },
+    };
   }
   if (action.kind === "initiativeSettleResult")
     return {
@@ -7086,6 +7136,8 @@ export interface AssistantActions {
     keys: string[],
     inheritable: boolean,
   ) => void;
+  /** Set (`tokens`) or clear (`null`) a session's compaction window. */
+  setCompactionWindow: (sessionId: string, tokens: number | null) => void;
   /** Answer a `choosing-task` pull-request card's Task-disambiguation prompt. */
   choosePullRequestTask: (cardId: string, taskId: string | null) => void;
   /**
@@ -7324,6 +7376,8 @@ export function useAssistant({
   const initiativeSettleRequestsRef = useRef(
     new Map<string, InitiativeSettleRequest>(),
   );
+  /** Compaction-window saves in flight: request id → session id. */
+  const compactionWindowRequestsRef = useRef(new Map<string, string>());
   /** One in-flight targeted catch-up for the latest Task digest. */
   const taskDigestSyncRef = useRef<TaskDigestSync | null>(null);
   const projectDigestSyncRef = useRef<TaskDigestSync | null>(null);
@@ -8134,6 +8188,19 @@ export function useAssistant({
       if (msg.type === "mutationSettled")
         initiativeSettleRequestsRef.current.delete(msg.requestId);
       if (msg.type === "mutationSettled") {
+        const windowSession = compactionWindowRequestsRef.current.get(
+          msg.requestId,
+        );
+        if (windowSession !== undefined) {
+          compactionWindowRequestsRef.current.delete(msg.requestId);
+          dispatch({
+            kind: "compactionWindowAnswered",
+            sessionId: windowSession,
+            requestId: msg.requestId,
+          });
+        }
+      }
+      if (msg.type === "mutationSettled") {
         // Card broadcasts are best-effort async sends and can follow this
         // generic settle. Keep their recovery alive until the matching durable
         // outcome arrives; a timeout remains the final backstop.
@@ -8275,6 +8342,22 @@ export function useAssistant({
         // announcement below is left to do that. Here the click only stops
         // owning the control — writing the same sentence onto the delivery
         // block as well would be the duplicate `docs/messaging.md` forbids.
+        // A compaction-window refusal belongs to the inspector control that
+        // sent it, never to the viewed chat's generic error.
+        const windowSession = compactionWindowRequestsRef.current.get(
+          msg.requestId,
+        );
+        if (windowSession !== undefined) {
+          compactionWindowRequestsRef.current.delete(msg.requestId);
+          dispatch({
+            kind: "compactionWindowAnswered",
+            sessionId: windowSession,
+            requestId: msg.requestId,
+            error: msg.message,
+          });
+          announceArrival(msg, stateRef.current);
+          return;
+        }
         const delivery = workflowDeliveryRequestsRef.current.get(msg.requestId);
         if (delivery) {
           workflowDeliveryRequestsRef.current.delete(msg.requestId);
@@ -8563,6 +8646,13 @@ export function useAssistant({
           if (!pending.timedOut)
             settleMutation(pendingMutationsRef.current, requestId);
         initiativeSettleRequestsRef.current.clear();
+        // The reconnect's state says what landed; the control stops waiting.
+        for (const [
+          requestId,
+          sessionId,
+        ] of compactionWindowRequestsRef.current)
+          dispatch({ kind: "compactionWindowAnswered", sessionId, requestId });
+        compactionWindowRequestsRef.current.clear();
         episodeListReadsRef.current = {
           tasks: false,
           projects: false,
@@ -9684,6 +9774,21 @@ export function useAssistant({
         }),
       setApprovalGrantScope: (sessionId, keys, inheritable) =>
         send({ type: "setApprovalGrantScope", sessionId, keys, inheritable }),
+      setCompactionWindow: (sessionId, tokens) => {
+        const requestId = createClientId();
+        compactionWindowRequestsRef.current.set(requestId, sessionId);
+        dispatch({ kind: "compactionWindowRequested", sessionId, requestId });
+        setTimeout(() => {
+          if (!compactionWindowRequestsRef.current.delete(requestId)) return;
+          dispatch({
+            kind: "compactionWindowAnswered",
+            sessionId,
+            requestId,
+            error: "The server did not answer. Try again.",
+          });
+        }, MUTATION_SETTLE_TIMEOUT_MS);
+        send({ type: "setCompactionWindow", sessionId, tokens, requestId });
+      },
       choosePullRequestTask: (cardId, taskId) =>
         send({ type: "resolvePullRequestCardTask", cardId, taskId }),
       runPullRequestCardAction: (cardId, action, options) => {
