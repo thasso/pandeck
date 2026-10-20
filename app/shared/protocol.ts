@@ -6782,7 +6782,8 @@ export type BackgroundWorkKind =
   | "monitor-command"
   | "monitor-websocket"
   | "check-watch"
-  | "image-pull";
+  | "image-pull"
+  | "merge-when-ready";
 
 /**
  * Whether the owner WAITS on an item (`awaited`, the default: a build, a test

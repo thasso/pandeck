@@ -876,6 +876,8 @@ describe("input contract", () => {
       "deleteRemoteBranch",
       "markTaskDone",
       "removeWorktree",
+      "whenReady",
+      "timeoutSeconds",
       "reason",
     ]);
   });

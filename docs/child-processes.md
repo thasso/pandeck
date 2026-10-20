@@ -206,7 +206,12 @@ meantime:
    checkout removal, since removal closes it through this supervisor. Ordinary
    session Settle still blocks on that host because it does not close it.
    Prompted turns, active background items, queued work, unanswered decisions
-   and unhandled background updates continue to block removal.
+   and unhandled background updates continue to block removal. A managed
+   merge-when-ready job's own follow-up removal exempts exactly that job's item,
+   for its actual owner, from both gate reads and this Stop sweep. Sibling jobs
+   and all other blockers remain. Removing the requester's idle checkout settles
+   it; the result remains on the background task even when its completion wake
+   requires missing-worktree acknowledgement.
 2. Any remaining process whose working directory is inside the checkout gets
    SIGTERM, then SIGKILL after two seconds — only if the server provably started
    it: a descendant at least two levels down. The server's direct children are

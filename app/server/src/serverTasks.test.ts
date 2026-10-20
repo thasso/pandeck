@@ -194,6 +194,76 @@ describe("launchServerTask", () => {
     expect(stopped.outcomeSummary).toBeUndefined();
   });
 
+  test("Stop after commit keeps the real result and does not abort the write", async () => {
+    const sessionId = owner();
+    const job = controlledJob();
+    const started = await launch(sessionId, job.run);
+    await settle();
+    const budget = job.budgets[0]!;
+    expect(budget.itemId).toBe(started.taskId);
+    budget.commit();
+    const stop = backgroundWorkSupervisor.stopOne({
+      itemId: started.taskId,
+      ownerSessionId: sessionId,
+      sourceRequestId: "stop-after-commit",
+      reason: "Stop",
+    });
+    await settle();
+    expect(budget.signal.aborted).toBe(false);
+    job.result.resolve({ payload: { merged: true }, summary: "Merged" });
+    await stop;
+    await settle();
+    expect(backgroundWorkStore.getItem(started.taskId)).toMatchObject({
+      state: "completed",
+      outcomeSummary: "Merged",
+    });
+  });
+
+  test("a Stop before commit prevents the outward step", async () => {
+    const sessionId = owner();
+    const job = controlledJob();
+    const started = await launch(sessionId, job.run);
+    await settle();
+    const stop = backgroundWorkSupervisor.stopOne({
+      itemId: started.taskId,
+      ownerSessionId: sessionId,
+      sourceRequestId: "stop-before-commit",
+      reason: "Stop",
+    });
+    await settle();
+    expect(() => job.budgets[0]!.commit()).toThrow();
+    job.result.reject(new Error("Stopped"));
+    await stop;
+    expect(backgroundWorkStore.getItem(started.taskId)?.state).toBe("stopped");
+  });
+
+  test("an owner Stop-all exemption keeps only the named item", async () => {
+    const sessionId = owner();
+    const own = controlledJob();
+    const sibling = controlledJob();
+    const first = await launch(sessionId, own.run);
+    const second = await launch(sessionId, sibling.run);
+    await settle();
+    const stopping = backgroundWorkSupervisor.stopAllOwner({
+      ownerSessionId: sessionId,
+      exceptItemIds: [first.taskId],
+      sourceRequestId: "remove-worktree",
+      reason: "Removed",
+    });
+    await settle();
+    sibling.result.resolve({ payload: {}, summary: "stopped" });
+    await stopping;
+    expect(backgroundWorkStore.getItem(first.taskId)?.state).toBe("running");
+    expect(own.budgets[0]!.signal.aborted).toBe(false);
+    expect(backgroundWorkStore.getItem(second.taskId)?.state).toBe("stopped");
+    own.result.resolve({
+      payload: { merged: true },
+      summary: "Merged and removed",
+    });
+    await settle();
+    expect(backgroundWorkStore.getItem(first.taskId)?.state).toBe("completed");
+  });
+
   test("a job that throws ends failed with its message", async () => {
     const started = await launch(owner(), async () => {
       throw new Error("GitHub returned no pull request #42.");
@@ -447,6 +517,46 @@ describe("ServerTaskBackend", () => {
       }),
     ).toMatchObject({ acknowledged: false });
     expect(signals.get("c-1")?.aborted).toBe(false);
+  });
+
+  test("committed work outliving Stop grace is unconfirmed, then preserves its failure", async () => {
+    const sink = events();
+    const port = new ServerTaskBackend({ events: sink, stopGraceMs: 1 });
+    const job = controlledJob();
+    port.reserve("committed", {
+      ownerSessionId: "o",
+      kind: "merge-when-ready",
+      label: "merge",
+      sourceTool: "test",
+      timeoutMs: 1000,
+      deadlineAt: Date.now() + 61000,
+      run: job.run,
+    });
+    await port.launch({
+      target: {
+        itemId: "committed",
+        ownerSessionId: "o",
+        kind: "merge-when-ready",
+      },
+      deadlineAt: Date.now() + 61000,
+      emptyHostGraceMs: 0,
+    });
+    await settle();
+    job.budgets[0]!.commit();
+    expect(
+      await port.stopAll({
+        ownerSessionId: "o",
+        sourceRequestId: "stop",
+        itemIds: ["committed"],
+        attempt: 1,
+        reason: "Stop",
+        protectOrdinaryTurn: false,
+      }),
+    ).toEqual({ acknowledgedItemIds: [], unconfirmedItemIds: ["committed"] });
+    expect(job.budgets[0]!.signal.aborted).toBe(false);
+    job.result.reject(new Error("uncertain provider write"));
+    await settle();
+    expect(sink.completions).toEqual(["committed"]);
   });
 
   test("a launch without its reservation starts nothing", async () => {

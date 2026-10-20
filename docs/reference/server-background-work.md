@@ -472,16 +472,20 @@ keeps no provider import. The pi port is under
 Settings card live in `app/web` (`docs/reference/web-*.md`).
 
 `../serverTasks.ts` is the third port, `server-task`: jobs PA's own server runs,
-running PR and ref check waits (kind `check-watch`) and container image pulls
-(kind `image-pull`). Both harnesses list it after their native backend, so
-`background_tasks` keeps admitting under the native one while its owner checks
-(`status`, `stop`, `set_intent`) accept any backend the harness supports.
-`launchServerTask` admits through the supervisor with a lifetime of the
-requested timeout plus `SERVER_TASK_DEADLINE_MARGIN_MS` (one minute), hands the
-job `run({ signal, timeoutMs, deadlineAt })` with `timeoutMs` fitted inside the
-frozen lifetime, stores the job's JSON result as its artifact and reports
-`completed`. A Stop aborts the job's own signal and discards whatever it
-returns. The port is registered on first use and has no host epoch. Every
+running PR and ref check waits (`check-watch`), container image pulls
+(`image-pull`) and managed merge waits (`merge-when-ready`). Both harnesses list
+it after their native backend, so `background_tasks` keeps admitting under the
+native one while its owner checks (`status`, `stop`, `set_intent`) accept any
+backend the harness supports. `launchServerTask` admits through the supervisor
+with a lifetime of the requested timeout plus `SERVER_TASK_DEADLINE_MARGIN_MS`
+(one minute), hands the job
+`run({ itemId, signal, timeoutMs, deadlineAt, commit })` with `timeoutMs` fitted
+inside the frozen lifetime, stores the job's JSON result as its artifact and
+reports `completed`. A Stop aborts an uncommitted job's signal and discards its
+result. `commit()` is synchronous and refuses after Stop. Once committed, Stop
+waits boundedly without aborting or discarding the real outcome, answering
+unconfirmed if it cannot yet confirm completion. Only managed merging uses this
+boundary. The port is registered on first use and has no host epoch. Every
 `stopAll` request names the items the supervisor reserved (`itemIds`), and each
 port stops only those: a Stop-all over several backends awaits them in turn, and
 work admitted meanwhile is not that Stop's. Migration

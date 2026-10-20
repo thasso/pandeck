@@ -110,7 +110,7 @@ const NO_CHECKS_GRACE_SECONDS = 120;
  * A wait stops once the provider reports fewer requests than this left in its
  * window, leaving the rest of the shared budget to everything else.
  */
-const MIN_RATE_LIMIT_REMAINING = 500;
+export const MIN_RATE_LIMIT_REMAINING = 500;
 const MAX_EXCERPT_CHARS = 2_000;
 
 export function checkWaitBounds(
@@ -537,14 +537,15 @@ export async function pollCheckWatch<Snapshot>(
  * The next sleep, capped by what is left of the timeout from the watch's own
  * start. Zero once it is spent: the poll after it then ends with `timeout`.
  */
-function nextSleepMs(
+export function nextSleepMs(
   watch: CheckWatch,
   timeoutMs: number,
   pollIntervalMs: number,
+  now = Date.now(),
 ): number {
   return Math.max(
     0,
-    Math.min(pollIntervalMs, timeoutMs - (Date.now() - watch.startedAt)),
+    Math.min(pollIntervalMs, timeoutMs - (now - watch.startedAt)),
   );
 }
 
@@ -739,7 +740,7 @@ export function throwIfAborted(signal: AbortSignal | undefined): void {
     : new Error("Pull-request check watch was cancelled.");
 }
 
-function abortableSleep(ms: number, signal: AbortSignal | undefined) {
+export function abortableSleep(ms: number, signal: AbortSignal | undefined) {
   return new Promise<void>((resolve, reject) => {
     throwIfAborted(signal);
     const timer = setTimeout(() => {

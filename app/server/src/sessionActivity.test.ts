@@ -782,6 +782,54 @@ test("worktree removal ignores an empty retained host, but not active work or a 
   }
 });
 
+test("removal exempts only the named active item for its actual owner", async () => {
+  const { worktreeSettleBlockedReason } = await import("./sessionActivity.ts");
+  const { linkSessionToWorktree } = await import("./db/worktreeStore.ts");
+  const { backgroundWorkStore } = await import("./db/backgroundWorkStore.ts");
+  const { hub } = await import("./hub.ts");
+  const id = (await liveSession()).id;
+  linkSessionToWorktree(id, "wt-self-removal");
+  const projected = {
+    id,
+    isStreaming: false,
+    backgroundActivity: { activeCount: 1, retainedHost: true },
+  } as import("./sessions.ts").InternalSessionListItem;
+  const list = vi.spyOn(hub, "listSessions").mockResolvedValue([projected]);
+  const item = vi.spyOn(backgroundWorkStore, "getItem").mockReturnValue({
+    id: "job",
+    ownerSessionId: id,
+    state: "running",
+  } as NonNullable<ReturnType<typeof backgroundWorkStore.getItem>>);
+  try {
+    const exempt = { itemId: "job", ownerSessionId: id };
+    assert.equal(
+      await worktreeSettleBlockedReason("wt-self-removal", exempt),
+      undefined,
+    );
+    assert.match(
+      (await worktreeSettleBlockedReason("wt-self-removal", {
+        ...exempt,
+        ownerSessionId: "other",
+      }))!,
+      /background process/,
+    );
+    projected.backgroundActivity!.activeCount = 2;
+    assert.match(
+      (await worktreeSettleBlockedReason("wt-self-removal", exempt))!,
+      /background process/,
+    );
+    projected.backgroundActivity!.activeCount = 1;
+    projected.isStreaming = true;
+    assert.equal(
+      await worktreeSettleBlockedReason("wt-self-removal", exempt),
+      "it is still running.",
+    );
+  } finally {
+    item.mockRestore();
+    list.mockRestore();
+  }
+});
+
 // The other inbox fact that is not a runtime event: a Workflow Run reached its
 // end. A session the run never linked to a checkout needs settlement from the
 // terminal run, because no checkout removal can reach it.

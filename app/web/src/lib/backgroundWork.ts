@@ -281,6 +281,8 @@ export function backgroundWorkKindLabel(
       return `Check watch${service}`;
     case "image-pull":
       return `Image pull${service}`;
+    case "merge-when-ready":
+      return `Merge when ready${service}`;
   }
 }
 
