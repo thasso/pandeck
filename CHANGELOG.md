@@ -3,6 +3,71 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.61.0] - 2026-10-20
+
+### Upgrade notes
+
+- This release adds SQLite migrations `0086`–`0095`. Back up `DATA_DIR` before
+  upgrading if you may need to roll back to 0.60.0, because an older version
+  does not reverse them.
+
+### Other changes
+
+- Fix session, spawn and UI follow-ups (Task-962, part 2)
+  ([PR #195](https://github.com/thasso/pandeck/pull/195))
+- Deliver peer messages queued during background and notice turns
+  ([PR #194](https://github.com/thasso/pandeck/pull/194))
+- Fix integration and delivery follow-ups (Task-962, part 1)
+  ([PR #193](https://github.com/thasso/pandeck/pull/193))
+- Show held direct children waiting for a slot
+  ([PR #192](https://github.com/thasso/pandeck/pull/192))
+- Apply compaction window defaults during spawn
+  ([PR #191](https://github.com/thasso/pandeck/pull/191))
+- Add managed merge-when-ready background jobs
+  ([PR #190](https://github.com/thasso/pandeck/pull/190))
+- Add deferred tool for sessions to lower their own compaction window
+  ([PR #189](https://github.com/thasso/pandeck/pull/189))
+- Hold over-cap direct spawns for FIFO starts
+  ([PR #188](https://github.com/thasso/pandeck/pull/188))
+- Add background ref checks and isolated image pulls
+  ([PR #187](https://github.com/thasso/pandeck/pull/187))
+- Request session grants and higher peer turn caps up front
+  ([PR #186](https://github.com/thasso/pandeck/pull/186))
+- Add persistent per-session compaction windows and inspector controls
+  ([PR #185](https://github.com/thasso/pandeck/pull/185))
+- Remind idle sessions of unanswered peer requests
+  ([PR #184](https://github.com/thasso/pandeck/pull/184))
+- Add managed merge completion and cleanup flags
+  ([PR #179](https://github.com/thasso/pandeck/pull/179))
+- Fix peer-cap teardown and Markdown import races
+  ([PR #183](https://github.com/thasso/pandeck/pull/183))
+- Make approval grant inheritance configurable
+  ([PR #178](https://github.com/thasso/pandeck/pull/178))
+- Run PR check watches as background server tasks
+  ([PR #182](https://github.com/thasso/pandeck/pull/182))
+- Add configurable per-session peer turn caps
+  ([PR #181](https://github.com/thasso/pandeck/pull/181))
+- Add opt-in live delivery state to Initiative reads
+  ([PR #180](https://github.com/thasso/pandeck/pull/180))
+- Add explicit peer reply tracking, settlement, and bulk prompt rows
+  ([PR #177](https://github.com/thasso/pandeck/pull/177))
+- Exempt low-cost peers from the direct turn cap
+  ([PR #176](https://github.com/thasso/pandeck/pull/176))
+- Let managed delivery publish caller-written commit messages and PR bodies
+  ([PR #173](https://github.com/thasso/pandeck/pull/173))
+- Let child reports through the hop limit and surface refused sends
+  ([PR #175](https://github.com/thasso/pandeck/pull/175))
+- Fall back to healthy listed models for direct named-agent spawns
+  ([PR #174](https://github.com/thasso/pandeck/pull/174))
+- Support multiple pending question flows with per-flow shortcuts
+  ([PR #172](https://github.com/thasso/pandeck/pull/172))
+- Recognise delivered branches during worktree removal
+  ([PR #171](https://github.com/thasso/pandeck/pull/171))
+- Add GitHub review-thread resolve and reopen tools
+  ([PR #170](https://github.com/thasso/pandeck/pull/170))
+- Unify shared browser rows and Initiative attention
+  ([PR #169](https://github.com/thasso/pandeck/pull/169))
+
 ## [0.60.0] - 2026-10-19
 
 ### Other changes
