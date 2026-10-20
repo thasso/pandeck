@@ -527,6 +527,57 @@ revalidation is the same.
 
 The human merge surfaces and the generic provider PR write tools are unchanged.
 
+### Merge when ready
+
+For a merge, `whenReady: true` first makes the ordinary read-only preflight. A
+terminal refusal throws without starting work. If ready and idle, it finishes
+inline exactly like the ordinary call. Otherwise it returns `status: "waiting"`
+and a visible, stoppable `merge-when-ready` background `taskId`. A task that
+already ended before the call returns has `status: "ended"`; its result stays on
+that task. A second call cannot start another live job for the same worktree.
+Retries of the same call return the existing live task. Completed or missing
+rows release that exclusion on the next call.
+
+The job pins the server-derived provider, repository, PR number, branches, exact
+head and worktree row. It holds no worktree reservation while waiting. When
+checks and hosted review are ready, it takes the caller-aware mutation
+reservation and runs the same managed finish core, including fresh local,
+readiness, capability and final provider identity checks. It never merges a
+replacement PR. A default-branch merge creates its normal approval card at ready
+time for the requesting session, with coverage decided by that session's grants
+at creation. The job ends reporting the card and `autoApproved`, not claiming
+the merge already happened. Job-created cards have no source tool-call placement
+because the proposing call has already returned.
+
+Failed checks, requested changes, a moved head, a closed or merged PR,
+retargeting, a changed default-branch classification, draft state, confirmed
+conflicts, inconclusive/truncated checks, the no-checks grace and timeout end
+without merging. Deterministic refusals at a final re-read have the same
+`not-merged` result with `observedBy: "final-check"`. Low provider budget ends a
+job that would keep waiting, but does not block an otherwise ready merge.
+Unreadable state or a rejected provider write instead fails the job. A lost
+provider response may have landed, so failure never claims `merged: false`. The
+PR card and watcher reconcile that uncertainty.
+
+`timeoutSeconds` requires `whenReady` and bounds only the background wait, not
+an inline finish. It defaults to 1800, clamps to 30–7200 and is shortened by the
+frozen Settings background lifetime. The clock continues from the first
+observation. It is checked before readiness and immediately before the outward
+request. Stop prevents a provider merge request or approval creation until that
+synchronous boundary. Once a request is sent, Stop cannot abort it or replace
+its real result with `stopped`. A Stop that cannot yet confirm completion is
+reported unconfirmed. Restart resumes nothing; retained restart delivery tells
+the owner the wait ended. A crash after a provider write can still lose its
+confirmation even if the provider merged.
+
+The background job carries `deleteRemoteBranch`, `markTaskDone` and
+`removeWorktree`. Its removal exempts exactly its own background item, for its
+actual owner, from both the settlement gate and tracked-work Stop sweep. Other
+jobs, prompted turns and all git guards still block removal. If it removes the
+requester's own idle checkout, removal settles that session. Its later
+completion wake needs the ordinary missing-worktree acknowledgement; the result
+remains on the background task and PR card.
+
 ## Pull-request draft agent
 
 A dedicated no-tool agent receives bounded `base...head` commit log, diffstat
@@ -808,6 +859,9 @@ raw provider value, including `neutral` for an empty ref; the internal verdict
 compact final payload as a foreground wait, apart from its observation mode.
 
 #### Background watches
+
+Managed finishing also offers [merge when ready](#merge-when-ready), which uses
+this background backend but keeps all managed merge authority checks.
 
 `background: true` turns the wait into PA background work instead of blocking
 the agent's turn for up to two hours, which is what led agents to start whole

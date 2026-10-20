@@ -99,9 +99,29 @@ import {
   type ManagedWorktreeLocalState,
 } from "./managedDeliveryTargets.ts";
 
+import {
+  ManagedFinishRefusedError,
+  WorktreeBusyError,
+} from "../../managedFinishRefusal.ts";
+import {
+  createMergeWhenReadyRunner,
+  assertFrozenMergeTarget,
+  type FrozenMergeTarget,
+} from "./mergeWhenReady.ts";
+
 const MAX_REASON_CHARS = 1_000;
-const BUSY_REFUSAL =
-  "Another session is running or starting in this worktree. Wait until it is idle before finishing its pull request.";
+const BUSY_REFUSAL = new WorktreeBusyError().message;
+
+export const managedMergeCore = {
+  finishManagedMerge,
+  requireMergeableLocalState,
+  requireMergeCapabilities,
+  requiredLinkedCardTask,
+  resolveManagedTarget,
+  validateRequest,
+  requireCurrentReadiness,
+};
+const mergeWhenReady = createMergeWhenReadyRunner({ core: managedMergeCore });
 const APPROVAL_RESERVATION_REASON =
   "An approved managed default-branch merge is executing for this worktree.";
 
@@ -248,6 +268,8 @@ export type WorktreeFinishPullRequestParams = {
   markTaskDone?: boolean;
   removeWorktree?: boolean;
   reason?: string;
+  whenReady?: boolean;
+  timeoutSeconds?: number;
 };
 
 const finishSchema = {
@@ -290,6 +312,16 @@ const finishSchema = {
       default: false,
       description:
         "After a confirmed merge, remove the clean worktree and its local branch only if no session is running or otherwise blocks removal, including this caller. Never forces cleanup. A refusal or follow-up failure is reported without hiding the merge. Default-branch approval carries both follow-up choices. Refused for close.",
+    },
+    whenReady: {
+      type: "boolean",
+      description:
+        "Merge only. If checks or worktree occupancy are pending, return a visible, stoppable background task. It pins this PR/head, then uses the same readiness and approval/grant path. One job per worktree; restart stops it.",
+    },
+    timeoutSeconds: {
+      type: "number",
+      description:
+        "Background wait only, with whenReady. Default 1800, clamped to 30–7200 seconds and the Settings background lifetime. No effect on an inline finish.",
     },
     reason: {
       type: "string",
@@ -683,7 +715,11 @@ function validateRequest(
   if (reason && reason.length > MAX_REASON_CHARS)
     throw new Error(`reason exceeds ${MAX_REASON_CHARS} characters.`);
 
+  if (params.timeoutSeconds !== undefined && !params.whenReady)
+    throw new Error("timeoutSeconds requires whenReady.");
   if (action === "close") {
+    if (params.whenReady !== undefined)
+      throw new Error("whenReady applies to merge only.");
     if (params.method !== undefined)
       throw new Error(
         "method applies to merge only; a close never merges anything.",
@@ -776,7 +812,8 @@ async function resolveManagedTarget(
   // open pull request for this branch behind a page boundary.
   const pulls = await hosted.provider.findPullRequestsForBranch(row.branch);
   if (pulls.open.length > 1)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "ambiguous",
       `The managed branch ${row.branch} has ${pulls.open.length} open pull requests (${pulls.open
         .map((pull) => `#${pull.number}`)
         .join(
@@ -787,10 +824,13 @@ async function resolveManagedTarget(
   if (!pr) {
     const terminal = pulls.latestTerminal;
     if (terminal)
-      throw new Error(
+      throw new ManagedFinishRefusedError(
+        "not-open",
         `Pull request #${terminal.number} for ${row.branch} is already ${terminal.state}; nothing was done.`,
+        terminal,
       );
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "no-pull-request",
       `No pull request exists for the managed branch ${row.branch}. Create one with worktree_create_pull_request first.`,
     );
   }
@@ -800,8 +840,10 @@ async function resolveManagedTarget(
       `Pull request #${pr.number} could not be re-read from ${hosted.provider.kind}; nothing was done.`,
     );
   if (detail.state !== "open" || detail.merged)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "not-open",
       `Pull request #${pr.number} is ${detail.merged ? "merged" : detail.state}; nothing was done.`,
+      detail,
     );
   if (!detail.headSha)
     throw new Error(
@@ -811,8 +853,10 @@ async function resolveManagedTarget(
     detail.headBranch !== row.branch ||
     (!options.baseMayDiffer && detail.baseBranch !== row.baseBranch)
   )
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "branches-changed",
       `Pull request #${pr.number} is ${detail.headBranch} → ${detail.baseBranch}, but this worktree is registered for ${row.branch} → ${row.baseBranch}; nothing was done.${detail.headBranch === row.branch ? ` Run worktree_retarget_pull_request to move it onto ${row.baseBranch}, or worktree_set_base if ${detail.baseBranch} is the right target.` : ""}`,
+      detail,
     );
 
   const cards = await operations.cards({
@@ -950,8 +994,11 @@ function requireReady(
   number: number,
 ): PullRequestReadiness {
   if (readiness.canMergeNow) return readiness;
-  throw new Error(
+  throw new ManagedFinishRefusedError(
+    "not-ready",
     `Pull request #${number} is not ready to merge: ${readiness.mergeBlockers.join(", ")}. Investigate each blocker; the provider remains the authority on branch protections and permissions.`,
+    readiness.detail,
+    readiness,
   );
 }
 
@@ -962,27 +1009,37 @@ function requireCurrentReadiness(
 ): PullRequestReadiness {
   const detail = readiness.detail;
   if (detail.number !== target.number)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "other-number",
       `Readiness described pull request #${detail.number}, not managed pull request #${target.number}; nothing was merged.`,
+      detail,
     );
   if (detail.state !== "open" || detail.merged)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "not-open",
       `Pull request #${target.number} became ${detail.merged ? "merged" : detail.state} while readiness was checked; nothing was merged.`,
+      detail,
     );
   if (detail.headSha.toLowerCase() !== target.headSha.toLowerCase())
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "head-moved",
       `Pull request #${target.number} head moved from ${target.headSha} to ${detail.headSha} while it was being checked; nothing was merged.`,
+      detail,
     );
   if (
     detail.headBranch !== target.headBranch ||
     detail.baseBranch !== target.baseBranch
   )
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "branches-changed",
       `Pull request #${target.number} changed from ${target.headBranch} → ${target.baseBranch} to ${detail.headBranch} → ${detail.baseBranch} while readiness was checked; nothing was merged.`,
+      detail,
     );
   if (detail.draft)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "draft",
       `Pull request #${target.number} became a draft while readiness was checked; nothing was merged.`,
+      detail,
     );
   return requireReady(readiness, target.number);
 }
@@ -1071,7 +1128,20 @@ async function executeWorktreeFinishPullRequest(
   ctx: ToolCallContext,
   operations: WorktreeFinishPullRequestOperations,
 ) {
+  if (params.whenReady) return mergeWhenReady(params, ctx, operations);
   const request = validateRequest(params);
+  if (request.action === "merge") {
+    const payload = await finishManagedMerge(
+      request,
+      { sessionId: ctx.session.sessionId, toolCallId: ctx.toolCallId },
+      operations,
+      { signal: ctx.signal },
+    );
+    return {
+      ...jsonResult(payload),
+      ...(payload.status === "approval-pending" ? { terminate: true } : {}),
+    };
+  }
   const initial = await operations.resolve(request.worktreeId);
   if (!initial || initial.status !== "active")
     throw new Error("That active managed worktree is not available.");
@@ -1097,9 +1167,7 @@ async function executeWorktreeFinishPullRequest(
       throw new Error("The managed worktree target changed or was removed.");
 
     const target = await resolveManagedTarget(row, operations, ctx.signal);
-    return request.action === "close"
-      ? await runClose(request, target, operations)
-      : await runMerge(request, target, ctx, operations, release);
+    return await runClose(request, target, operations);
   } finally {
     invalidateAfterFinish(operations, initial.id);
     release();
@@ -1149,12 +1217,70 @@ async function runClose(
   });
 }
 
+interface ManagedMergeOptions {
+  signal?: AbortSignal | undefined;
+  frozen?: FrozenMergeTarget;
+  beforeOutwardStep?: () => void;
+  exemptBackgroundItem?: { itemId: string; ownerSessionId: string };
+}
+
+type MergeCaller = { sessionId: string; toolCallId?: string };
+
+/** The foreground and background managed merge share every authority check. */
+async function finishManagedMerge(
+  request: FinishRequest,
+  caller: MergeCaller,
+  operations: WorktreeFinishPullRequestOperations,
+  options: ManagedMergeOptions = {},
+) {
+  const initial = await operations.resolve(request.worktreeId);
+  if (!initial || initial.status !== "active")
+    throw new Error("That active managed worktree is not available.");
+  const reservation = operations.reserve(
+    initial.id,
+    caller.sessionId,
+    "A checked agent pull-request merge is in progress in this worktree.",
+  );
+  if (!reservation) throw new WorktreeBusyError();
+  const release = once(reservation);
+  try {
+    const row = await operations.resolve(request.worktreeId);
+    if (
+      !row ||
+      row.status !== "active" ||
+      row.id !== initial.id ||
+      row.path !== initial.path ||
+      row.branch !== initial.branch ||
+      row.baseBranch !== initial.baseBranch ||
+      row.projectId !== initial.projectId
+    )
+      throw new ManagedFinishRefusedError(
+        "worktree-changed",
+        "The managed worktree target changed or was removed.",
+      );
+    const target = await resolveManagedTarget(row, operations, options.signal);
+    if (options.frozen) assertFrozenMergeTarget(target, options.frozen);
+    return await runMerge(
+      request,
+      target,
+      caller,
+      operations,
+      release,
+      options,
+    );
+  } finally {
+    invalidateAfterFinish(operations, initial.id);
+    release();
+  }
+}
+
 async function runMerge(
   request: FinishRequest,
   target: ManagedPullRequestTarget,
-  ctx: ToolCallContext,
+  caller: MergeCaller,
   operations: WorktreeFinishPullRequestOperations,
   release: () => void,
+  options: ManagedMergeOptions,
 ) {
   const method = request.method!;
   if (target.draft)
@@ -1166,7 +1292,7 @@ async function runMerge(
     target.headSha,
     operations,
     target.target,
-    ctx.signal,
+    options.signal,
   );
   // The readiness read is REDONE here, through the same function the check
   // watch tools use: a previous turn's verdict describes a head and a check set
@@ -1189,7 +1315,8 @@ async function runMerge(
     return stageDefaultBranchApproval({
       request,
       target,
-      ctx,
+      caller,
+      options,
       operations,
       method,
       defaultBranch,
@@ -1208,7 +1335,10 @@ async function runMerge(
     expectedHeadSha: readiness.detail.headSha,
     deleteBranch: request.deleteRemoteBranch,
     worktreeId: target.row.id,
-    workflowActor: { kind: "agent", id: ctx.session.sessionId },
+    workflowActor: { kind: "agent", id: caller.sessionId },
+    ...(options.beforeOutwardStep
+      ? { beforeProviderWrite: options.beforeOutwardStep }
+      : {}),
     // What made this merge pre-authorized: a base that was NOT the default
     // branch, judged against this default branch. The seam re-checks both
     // against its own authoritative read, so a default branch that moves
@@ -1220,7 +1350,10 @@ async function runMerge(
     {
       worktreeId: target.row.id,
       number: target.number,
-      sessionId: ctx.session.sessionId,
+      sessionId: caller.sessionId,
+      ...(options.exemptBackgroundItem
+        ? { exemptBackgroundItem: options.exemptBackgroundItem }
+        : {}),
       markTaskDone: request.markTaskDone,
       removeWorktree: request.removeWorktree,
       ...(linkedTask ? { taskId: linkedTask.id } : {}),
@@ -1228,7 +1361,7 @@ async function runMerge(
     operations,
     release,
   );
-  return jsonResult({
+  return {
     action: "merge" as const,
     status: "merged" as const,
     approvalRequired: false,
@@ -1263,13 +1396,14 @@ async function runMerge(
     message: [projection.message, followUpMessage(followUps)]
       .filter(Boolean)
       .join(" "),
-  });
+  };
 }
 
 function stageDefaultBranchApproval(input: {
   request: FinishRequest;
   target: ManagedPullRequestTarget;
-  ctx: ToolCallContext;
+  caller: MergeCaller;
+  options: ManagedMergeOptions;
   operations: WorktreeFinishPullRequestOperations;
   method: PullRequestMergeMethod;
   defaultBranch: string;
@@ -1317,11 +1451,14 @@ function stageDefaultBranchApproval(input: {
         }
       : {}),
   };
+  input.options.beforeOutwardStep?.();
   const card = input.operations.approve({
-    sessionId: input.ctx.session.sessionId,
+    sessionId: input.caller.sessionId,
     title: `Merge #${target.number} into ${input.defaultBranch}`,
     summary: `${body.repo}#${target.number}: ${target.headBranch} → ${target.baseBranch} (${input.method})`,
-    ...(input.ctx.toolCallId ? { sourceToolCallId: input.ctx.toolCallId } : {}),
+    ...(input.caller.toolCallId
+      ? { sourceToolCallId: input.caller.toolCallId }
+      : {}),
     body,
     // A re-staged merge of the same pull request — typically after new commits
     // moved its head — replaces the earlier card: approving the stale one would
@@ -1333,29 +1470,27 @@ function stageDefaultBranchApproval(input: {
       earlier.body.number === body.number,
   });
   return {
-    ...jsonResult({
-      action: "merge" as const,
-      status: "approval-pending" as const,
-      approvalRequired: true,
-      approvalId: card.id,
-      provider: body.provider,
-      number: target.number,
-      url: target.url,
-      head: { ref: target.headBranch, sha: target.headSha },
-      base: { ref: target.baseBranch },
-      defaultBranch: input.defaultBranch,
-      baseIsDefaultBranch: true,
-      method: input.method,
-      supportedMethods: input.supportedMethods,
-      deleteRemoteBranch: input.request.deleteRemoteBranch,
-      markTaskDone: input.request.markTaskDone,
-      removeWorktree: input.request.removeWorktree,
-      merged: false,
-      message: `Pull request #${target.number} targets the default branch ${input.defaultBranch}. Nothing was merged: one approval was created, replacing any earlier pending merge card for this pull request, and the merge runs only after it is approved and the complete state revalidates. ${approvalCardReference(card)}`,
-    }),
-    // The turn ENDS here. The approval outcome resumes this session; polling
-    // for it would burn a turn on a decision only a human can make.
-    terminate: true,
+    action: "merge" as const,
+    status: "approval-pending" as const,
+    ...(input.options.beforeOutwardStep
+      ? { autoApproved: card.autoApproved === true }
+      : {}),
+    approvalRequired: true,
+    approvalId: card.id,
+    provider: body.provider,
+    number: target.number,
+    url: target.url,
+    head: { ref: target.headBranch, sha: target.headSha },
+    base: { ref: target.baseBranch },
+    defaultBranch: input.defaultBranch,
+    baseIsDefaultBranch: true,
+    method: input.method,
+    supportedMethods: input.supportedMethods,
+    deleteRemoteBranch: input.request.deleteRemoteBranch,
+    markTaskDone: input.request.markTaskDone,
+    removeWorktree: input.request.removeWorktree,
+    merged: false,
+    message: `Pull request #${target.number} targets the default branch ${input.defaultBranch}. Nothing was merged: one approval was created, replacing any earlier pending merge card for this pull request, and the merge runs only after it is approved and the complete state revalidates. ${approvalCardReference(card)}`,
   };
 }
 

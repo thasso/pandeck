@@ -200,8 +200,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `managedDeliveryTargets.ts`, because a second derivation of "the remote head"
   or "the provider repository" is a second chance to target something the caller
   never asked for. All derive their targets from the row and take a caller-aware
-  mutation reservation. Commit runs the shared checked workflow without force;
-  the calling session's prompts, touched paths and Tasks remain context and its
+  mutation reservation. `mergeWhenReady.ts` holds only call-owned STARTING
+  claims and a durable-row WATCHING index while waiting, and reuses the finish
+  core when ready. `managedFinishRefusal.ts` carries deterministic pre-write
+  refusals from the core and shared merge seam without classifying provider
+  write errors. Commit runs the shared checked workflow without force; the
+  calling session's prompts, touched paths and Tasks remain context and its
   result is the ordinary rich `CommitDisplay`. Push requires a clean complete
   HEAD and calls `pushWorkflow.ts` with server-derived branch/HEAD/remote
   preconditions. Intentional rewritten history uses an authoritative remote oid

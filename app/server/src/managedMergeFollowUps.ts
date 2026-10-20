@@ -11,7 +11,10 @@ import {
   WorktreeDirectoryResidueError,
 } from "./worktrees/worktrees.ts";
 
+import type { BackgroundItemExemption } from "./sessionActivity.ts";
+
 export interface ManagedMergeFollowUpInput {
+  exemptBackgroundItem?: BackgroundItemExemption;
   worktreeId: string;
   number: number;
   sessionId: string;
@@ -28,7 +31,10 @@ export interface ManagedMergeFollowUpResult {
 
 export interface ManagedMergeFollowUpOperations {
   markDone(taskId: string, sessionId: string, number: number): TaskSummary;
-  remove(worktreeId: string): Promise<string | undefined>;
+  remove(
+    worktreeId: string,
+    exempt?: BackgroundItemExemption,
+  ): Promise<string | undefined>;
   projectTask?(worktreeId: string, task: TaskSummary): void;
   isRemoved?(worktreeId: string): boolean;
 }
@@ -50,11 +56,16 @@ const defaultOperations: ManagedMergeFollowUpOperations = {
         patchPullRequestCard(card.id, { linkedTask: task });
     }
   },
-  remove: (worktreeId) =>
-    removeWorktreeAndSettleSessions(worktreeId, {
-      force: false,
-      deleteBranch: true,
-    }),
+  remove: (worktreeId, exempt) =>
+    removeWorktreeAndSettleSessions(
+      worktreeId,
+      {
+        force: false,
+        deleteBranch: true,
+      },
+      undefined,
+      exempt,
+    ),
 };
 
 /** Call only AFTER a confirmed provider merge and after releasing any mutation
@@ -90,7 +101,10 @@ export async function runManagedMergeFollowUps(
   }
   if (input.removeWorktree) {
     try {
-      const refusal = await operations.remove(input.worktreeId);
+      const refusal = await operations.remove(
+        input.worktreeId,
+        input.exemptBackgroundItem,
+      );
       result.worktreeRemoved = !refusal;
       if (refusal) result.warnings.push(`The worktree was kept: ${refusal}`);
     } catch (error) {

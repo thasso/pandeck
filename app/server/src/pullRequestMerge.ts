@@ -70,7 +70,10 @@ import {
   reviewedHeadForMergeDecision,
 } from "./workflow/pullRequestObservation.ts";
 
+import { ManagedFinishRefusedError } from "./managedFinishRefusal.ts";
+
 export interface MergePullRequestInput {
+  beforeProviderWrite?: () => void;
   provider: GitHostingProvider;
   /** Any checkout of the repository; used for repo identity, never for display. */
   repoPath: string;
@@ -405,16 +408,20 @@ async function mergeAndProject(
     );
   if (detail) {
     if (detail.state !== "open")
-      throw new Error(
+      throw new ManagedFinishRefusedError(
+        "not-open",
         `Pull request #${input.number} is no longer open. Refresh before merging.`,
+        detail,
       );
     if (
       expectedHeadCommit &&
       detail.headSha.toLowerCase() !== expectedHeadCommit.toLowerCase()
     ) {
       await projectFreshPullRequestSnapshot(operationObservations, detail);
-      throw new Error(
+      throw new ManagedFinishRefusedError(
+        "head-moved",
         `Pull request #${input.number} head moved from reviewed ${expectedHeadCommit} to ${detail.headSha}; re-review before merging.`,
+        detail,
       );
     }
     // The head SHA alone does not identify what is being merged: a retarget
@@ -438,8 +445,10 @@ async function mergeAndProject(
         confirmedConflict: true,
         actionError: `The base moved; use Rebase and re-review before merging pull request #${input.number}.`,
       });
-      throw new Error(
+      throw new ManagedFinishRefusedError(
+        "conflict",
         `Pull request #${input.number} cannot merge because the base moved; use Rebase and re-review.`,
+        detail,
       );
     }
   }
@@ -452,6 +461,7 @@ async function mergeAndProject(
   const mergedHeadCommit = expectedHeadCommit ?? detail?.headSha;
 
   let result: PullRequestMergeResult;
+  input.beforeProviderWrite?.();
   try {
     result = await input.provider.mergePullRequest(input.number, {
       method: input.method,
@@ -681,8 +691,13 @@ async function requireMergeCapabilities(
       }, so pull request #${input.number} could not be classified and was not merged.`,
     );
   if (capabilities.defaultBranch !== decision.defaultBranch)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "default-branch-changed",
       `The repository default branch changed from ${decision.defaultBranch} to ${capabilities.defaultBranch} while pull request #${input.number} was being merged; nothing was merged. Re-check it and decide again.`,
+      {
+        defaultBranch: capabilities.defaultBranch,
+        decidedDefaultBranch: decision.defaultBranch,
+      },
     );
   if (
     decision.approvedMethods &&
@@ -719,21 +734,33 @@ function requireUnchangedMergeTarget(
     detail.headBranch !== input.headBranch ||
     detail.baseBranch !== input.baseBranch
   )
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "branches-changed",
       `Pull request #${input.number} is now ${detail.headBranch} → ${detail.baseBranch}, not the ${input.headBranch} → ${input.baseBranch} this merge was decided for. Nothing was merged; re-check it and decide again.`,
+      detail,
     );
   if (detail.draft)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "draft",
       `Pull request #${input.number} is a draft again; nothing was merged.`,
+      detail,
     );
   const decision = input.managedDecision;
   if (!decision) return;
   const isDefaultBranch = detail.baseBranch === capabilities.defaultBranch;
   if (isDefaultBranch !== decision.baseIsDefaultBranch)
-    throw new Error(
+    throw new ManagedFinishRefusedError(
+      "default-branch-changed",
       isDefaultBranch
         ? `Pull request #${input.number} now targets ${detail.baseBranch}, which IS the repository default branch; that merge needs a human approval and nothing was merged.`
         : `Pull request #${input.number} now targets ${detail.baseBranch}, which is no longer the repository default branch ${capabilities.defaultBranch ?? "(unknown)"}; the approval answered a different question and nothing was merged.`,
+      {
+        ...detail,
+        ...(capabilities.defaultBranch
+          ? { defaultBranch: capabilities.defaultBranch }
+          : {}),
+        decidedDefaultBranch: decision.defaultBranch,
+      },
     );
 }
 

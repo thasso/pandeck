@@ -42,19 +42,24 @@ export const SERVER_TASK_DEADLINE_MARGIN_MS = 60_000;
 const SUMMARY_MAX_CHARS = 500;
 
 /**
- * How long a Stop waits for an aborted job to unwind before it answers anyway.
- * A stopped job's result is discarded, so once its signal is aborted nothing it
- * does can reach the row; waiting longer would only leave a job that ignores
- * its signal `stop-unconfirmed`. Under the supervisor's acknowledgement
- * deadline.
+ * How long Stop waits for a job to settle. Before commit its aborted result is
+ * discarded. After commit its signal and real outcome are preserved, and Stop
+ * answers unconfirmed if the request is still in flight. Under the supervisor's
+ * acknowledgement deadline.
  */
 const STOP_GRACE_MS = 5_000;
 
 /** The kinds a server task may be; widened by each piece that adds one. */
-type ServerTaskKind = Extract<BackgroundWorkKind, "check-watch" | "image-pull">;
+type ServerTaskKind = Extract<
+  BackgroundWorkKind,
+  "check-watch" | "image-pull" | "merge-when-ready"
+>;
 
 /** What a job gets to work with: its own signal and its frozen budget. */
 export interface ServerTaskBudget {
+  itemId: string;
+  /** Synchronous boundary immediately before an irreversible outward request. */
+  commit(): void;
   /** Aborted by a Stop, never by the turn that started the job. */
   signal: AbortSignal;
   /** The job's own timeout, already fitted inside its frozen lifetime. */
@@ -86,6 +91,7 @@ interface RunningServerTask {
   ownerSessionId: string;
   controller: AbortController;
   stopping: boolean;
+  committed: boolean;
   done: Promise<void>;
 }
 
@@ -106,14 +112,16 @@ function errorText(error: unknown): string {
   return bounded(error instanceof Error ? error.message : String(error));
 }
 
-/** Abort one job and give it {@link STOP_GRACE_MS} to unwind. */
+/** Abort uncommitted work, then wait boundedly for either kind to settle. */
 async function stopJob(
   work: RunningServerTask,
   reason: string,
   graceMs: number,
 ): Promise<void> {
-  work.stopping = true;
-  work.controller.abort(new Error(reason));
+  if (!work.committed) {
+    work.stopping = true;
+    work.controller.abort(new Error(reason));
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     work.done,
@@ -174,6 +182,7 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
       ownerSessionId: task.ownerSessionId,
       controller,
       stopping: false,
+      committed: false,
       done: Promise.resolve(),
     };
     // A microtask later, so the supervisor marks the row running before the
@@ -181,6 +190,15 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
     running.done = Promise.resolve()
       .then(() =>
         task.run({
+          itemId,
+          commit() {
+            if (running.stopping || controller.signal.aborted)
+              throw (
+                controller.signal.reason ??
+                new Error("Server task was stopped.")
+              );
+            running.committed = true;
+          },
           signal: controller.signal,
           timeoutMs: task.timeoutMs,
           deadlineAt: task.deadlineAt,
@@ -223,7 +241,7 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
         evidence: "the server task is not running in this process",
       };
     await stopJob(work, request.reason, this.stopGraceMs);
-    return { acknowledged: true };
+    return { acknowledged: !work.committed };
   }
 
   async stopAll(
@@ -240,8 +258,12 @@ export class ServerTaskBackend implements BackgroundWorkBackendPort {
       ),
     );
     return {
-      acknowledgedItemIds: targets.map(([itemId]) => itemId),
-      unconfirmedItemIds: [],
+      acknowledgedItemIds: targets
+        .filter(([, work]) => !work.committed)
+        .map(([itemId]) => itemId),
+      unconfirmedItemIds: targets
+        .filter(([, work]) => work.committed)
+        .map(([itemId]) => itemId),
     };
   }
 

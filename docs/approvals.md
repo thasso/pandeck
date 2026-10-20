@@ -161,15 +161,18 @@ ignores a for-session decision on such a card.
   worktree the turn runs in). It runs on the session's next idle edge
   (`runAutoApprovals`, from the idle hook in `index.ts`), before queued handoffs
   drain, through the same `prepare`/`execute` path as a click. A session's
-  covered cards run oldest first. Each card's outcome goes into the durable
-  handoff queue (`enqueueAgentHandoff`) in the same synchronous step that
-  records the card as terminal, with no await in between. A later card that
-  hangs, or a graceful restart, therefore cannot lose it; only a hard kill
-  between those two synchronous writes could. If the queue refuses the write,
-  the card keeps its status and shows that the agent could not be told. Delivery
-  starts only after the whole batch, because delivering an outcome starts the
-  agent's next turn. Boot resumes the covered cards a restart left pending, one
-  batch per session; a card already executing is not retried.
+  covered cards run oldest first. A merge-when-ready job creates its card at
+  ready time with the requester's current grant coverage, not at launch. The job
+  commits immediately before card creation and reports `autoApproved` when
+  covered; the executor still follows this idle-edge path. Each card's outcome
+  goes into the durable handoff queue (`enqueueAgentHandoff`) in the same
+  synchronous step that records the card as terminal, with no await in between.
+  A later card that hangs, or a graceful restart, therefore cannot lose it; only
+  a hard kill between those two synchronous writes could. If the queue refuses
+  the write, the card keeps its status and shows that the agent could not be
+  told. Delivery starts only after the whole batch, because delivering an
+  outcome starts the agent's next turn. Boot resumes the covered cards a restart
+  left pending, one batch per session; a card already executing is not retried.
 - **Other turns during a batch.** Holding delivery back only stops the batch's
   OWN outcomes from starting a turn. Anything else that can start one still
   does: a prompt from the user, a peer prompt, a background completion, or

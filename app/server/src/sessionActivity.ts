@@ -578,8 +578,14 @@ export async function sessionSettleBlockedReason(
  * or holding a queued prompt or an unanswered approval, would be settling work
  * that is not done. One list read for all of them; the first blocker answers.
  */
+export interface BackgroundItemExemption {
+  itemId: string;
+  ownerSessionId: string;
+}
+
 export async function worktreeSettleBlockedReason(
   worktreeId: string,
+  exempt?: BackgroundItemExemption,
 ): Promise<string | undefined> {
   const live = liveSessionIdsForWorktree(worktreeId);
   if (live.length === 0) return undefined;
@@ -588,8 +594,28 @@ export async function worktreeSettleBlockedReason(
     includeArchived: true,
     onlyIds: new Set(live),
   });
+  const { backgroundWorkStore } = await import("./db/backgroundWorkStore.ts");
+  const exemptItem = exempt
+    ? backgroundWorkStore.getItem(exempt.itemId)
+    : undefined;
   for (const sessionId of live) {
-    const row = rows.find((item) => item.id === sessionId);
+    const original = rows.find((item) => item.id === sessionId);
+    const activity = original?.backgroundActivity;
+    const dropsOwnItem =
+      exemptItem &&
+      exemptItem.ownerSessionId === sessionId &&
+      exempt?.ownerSessionId === sessionId &&
+      (exemptItem.state === "running" || exemptItem.state === "pending-launch");
+    const row =
+      original && activity && dropsOwnItem
+        ? {
+            ...original,
+            backgroundActivity: {
+              ...activity,
+              activeCount: Math.max(0, activity.activeCount - 1),
+            },
+          }
+        : original;
     // Removal stops tracked work before deleting the checkout. An empty host
     // in its quiet grace is safe to close there, unlike ordinary Settle which
     // does not close hosts. Every real job and all other blockers still apply.

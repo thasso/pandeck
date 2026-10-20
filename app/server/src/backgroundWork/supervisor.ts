@@ -84,6 +84,7 @@ export interface BackgroundWorkStopOneRequest {
 
 export interface BackgroundWorkStopAllOwnerRequest {
   ownerSessionId: string;
+  exceptItemIds?: readonly string[];
   /** The caller identity, when this is a model/human owner request. */
   callerSessionId?: string;
   sourceRequestId: string;
@@ -417,7 +418,9 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     terminalReason: string = BACKGROUND_OWNER_TERMINAL_REASON,
   ): Promise<BackgroundWorkStopResult[]> {
     const active = allActiveItems().filter(
-      (item) => item.ownerSessionId === request.ownerSessionId,
+      (item) =>
+        item.ownerSessionId === request.ownerSessionId &&
+        !request.exceptItemIds?.includes(item.id),
     );
     const byBackend = new Map<BackgroundWorkBackend, BackgroundWorkItem[]>();
     const results: BackgroundWorkStopResult[] = [];

@@ -166,13 +166,13 @@ function session(capabilities: { steerAcceptance?: "deferred" } = {}) {
 /** A finished background job owned by `owner`. */
 function finished(
   owner: string,
-  options: { stopped?: boolean; outcome?: string } = {},
+  options: { stopped?: boolean; outcome?: string; mergeJob?: boolean } = {},
 ) {
   serial += 1;
   const item = backgroundWorkStore.reserveItem({
     ownerSessionId: owner,
-    backend: "host-process",
-    kind: "shell",
+    backend: options.mergeJob ? "server-task" : "host-process",
+    kind: options.mergeJob ? "merge-when-ready" : "shell",
     label: `job ${serial}`,
     sourceRequestId: `${owner}:job:${serial}`,
     lifetimeMs: 60_000,
@@ -756,6 +756,35 @@ function failNextUserAppend(id: string, persistFirst: boolean) {
     return append(draft);
   };
 }
+
+test("self-removal settles the requester and keeps a merge job's result when its wake hits the missing-worktree door", async () => {
+  const { id, provider } = session();
+  const { linkSessionToWorktree } = await import("./db/worktreeStore.ts");
+  const { settleSessionsForRemovedWorktree } =
+    await import("./sessionActivity.ts");
+  const gone = `removed-${id}`;
+  sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  linkSessionToWorktree(id, gone);
+  await settleSessionsForRemovedWorktree(gone);
+  assert.ok(sessionStore.get(id)?.settledAt);
+  const item = finished(id, {
+    mergeJob: true,
+    outcome: "Merged #42; worktree removed",
+  });
+  const w = wire();
+  w.owe(id, item);
+  await w.delivery.drain(id);
+  await settle();
+  assert.equal(provider.texts.length, 0);
+  assert.deepEqual(rows(id), [
+    { itemId: item.id, phase: "owed", interruption: null },
+  ]);
+  assert.equal(
+    backgroundWorkStore.getItem(item.id)?.outcomeSummary,
+    "Merged #42; worktree removed",
+  );
+  assert.equal(w.delivery.queuedCount(id), 0);
+});
 
 test("a provider that never had the prompt gives the fact back, even when its entry was persisted first", async () => {
   const { id, provider } = session();

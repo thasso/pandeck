@@ -37,7 +37,9 @@ persona toolsets.
   ungated deferred `managed-delivery` group: checked local `worktree_commit`,
   external `worktree_push`, external `worktree_create_pull_request`, external
   `worktree_ready_pull_request`, external `worktree_retarget_pull_request`, and
-  external `worktree_finish_pull_request`; Plan excludes all of them, since the
+  external `worktree_finish_pull_request`, whose merge-only `whenReady` option
+  delegates a bounded background wait to `workshop/mergeWhenReady.ts` and then
+  reuses the foreground managed merge core. Plan excludes all of them, since the
   none/local policy allows only what its classifications permit (in practice
   none of the mutating delivery sequence). Coding personas also receive the
   ungated, shared, deferred `workflow` group containing `session_submit_result`;

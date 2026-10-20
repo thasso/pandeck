@@ -37,6 +37,25 @@ const operations: ManagedMergeFollowUpOperations = {
   remove: async () => undefined,
 };
 
+test("follow-up removal carries exactly the job exemption", async () => {
+  const exemptBackgroundItem = { itemId: "job", ownerSessionId: "agent-1" };
+  let removed = false;
+  const result = await runManagedMergeFollowUps(
+    { ...input, exemptBackgroundItem },
+    {
+      ...operations,
+      remove: async (id, exempt) => {
+        assert.equal(id, input.worktreeId);
+        assert.deepEqual(exempt, exemptBackgroundItem);
+        removed = true;
+        return undefined;
+      },
+    },
+  );
+  assert.equal(removed, true);
+  assert.equal(result.worktreeRemoved, true);
+});
+
 test("completion is an applied agent write with answered provenance", async () => {
   const task = createTask({
     title: "Merge completion",

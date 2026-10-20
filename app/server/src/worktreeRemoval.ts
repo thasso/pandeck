@@ -86,9 +86,14 @@ import {
 import { baseBranchTarget } from "./worktrees/worktreeSync.ts";
 import { forgetWorktreeInPullRequestInventory } from "./pullRequestInventorySync.ts";
 
+import type { BackgroundItemExemption } from "./sessionActivity.ts";
+
 /** The side-effecting seams, injectable exactly like `PullRequestActionOperations`. */
 export interface WorktreeRemovalOperations {
-  settleBlockedReason(worktreeId: string): Promise<string | undefined>;
+  settleBlockedReason(
+    worktreeId: string,
+    exempt?: BackgroundItemExemption,
+  ): Promise<string | undefined>;
   reserveForRemoval(
     worktreeId: string,
     reason: string,
@@ -99,7 +104,10 @@ export interface WorktreeRemovalOperations {
     options: RemoveWorktreeOptions,
   ): Promise<void>;
   settleSessions(worktreeId: string): Promise<void>;
-  stopTrackedWork?(worktreeId: string): Promise<void>;
+  stopTrackedWork?(
+    worktreeId: string,
+    exempt?: BackgroundItemExemption,
+  ): Promise<void>;
   /** Drop what the pull request inventory joined to a removed checkout. */
   inventoryChanged?(worktreeId: string): void;
 }
@@ -112,7 +120,10 @@ const STOP_TRACKED_WORK_BUDGET_MS = 3_000;
  * work left behind by settled or archived sessions — the dev server nobody
  * remembers. Bounded: the process sweep in `removeWorktree` is the backstop.
  */
-async function stopTrackedWorkForWorktree(worktreeId: string): Promise<void> {
+async function stopTrackedWorkForWorktree(
+  worktreeId: string,
+  exempt?: BackgroundItemExemption,
+): Promise<void> {
   const now = Date.now();
   const stops = Promise.allSettled(
     sessionIdsForWorktree(worktreeId).map((ownerSessionId) =>
@@ -120,6 +131,9 @@ async function stopTrackedWorkForWorktree(worktreeId: string): Promise<void> {
         ownerSessionId,
         sourceRequestId: `worktree-removal:${worktreeId}:${now}`,
         reason: "Its worktree was removed",
+        ...(exempt?.ownerSessionId === ownerSessionId
+          ? { exceptItemIds: [exempt.itemId] }
+          : {}),
       }),
     ),
   );
@@ -457,13 +471,14 @@ export async function removeWorktreeAndSettleSessions(
   worktreeId: string,
   options: RemoveWorktreeOptions = {},
   operations: WorktreeRemovalOperations = defaultOperations,
+  exempt?: BackgroundItemExemption,
 ): Promise<string | undefined> {
   const result = await guardedRemoveWorktree(
     worktreeId,
     options,
     {
       blockedReason: async (id) => {
-        const blocked = await operations.settleBlockedReason(id);
+        const blocked = await operations.settleBlockedReason(id, exempt);
         return blocked ? removalRefusal(blocked) : undefined;
       },
       reserveForRemoval: operations.reserveForRemoval,
@@ -471,7 +486,7 @@ export async function removeWorktreeAndSettleSessions(
       removeWorktree: operations.removeWorktree,
       settleSessions: operations.settleSessions,
       ...(operations.stopTrackedWork
-        ? { stopTrackedWork: operations.stopTrackedWork }
+        ? { stopTrackedWork: (id) => operations.stopTrackedWork!(id, exempt) }
         : {}),
     },
     {

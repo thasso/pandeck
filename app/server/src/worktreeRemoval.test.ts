@@ -97,6 +97,37 @@ function retireRecorder(overrides: Partial<WorktreeRetireOperations> = {}) {
   return { calls, operations };
 }
 
+test("own-job exemption reaches both gate reads and the tracked-work sweep before settlement", async () => {
+  const exempt = { itemId: "merge-job", ownerSessionId: "requester" };
+  let gates = 0;
+  let stopped = false;
+  let settled = false;
+  const { operations } = recorder({
+    settleBlockedReason: async (_id, received) => {
+      assert.deepEqual(received, exempt);
+      gates += 1;
+      return undefined;
+    },
+    stopTrackedWork: async (_id, received) => {
+      assert.deepEqual(received, exempt);
+      stopped = true;
+    },
+    removeWorktree: async (_id, options) => {
+      await options.stopTrackedWork?.();
+    },
+    settleSessions: async () => {
+      assert.equal(stopped, true);
+      settled = true;
+    },
+  });
+  assert.equal(
+    await removeWorktreeAndSettleSessions("wt-1", {}, operations, exempt),
+    undefined,
+  );
+  assert.equal(gates, 2);
+  assert.equal(settled, true);
+});
+
 /* --------------------------------- retire --------------------------------- */
 
 test("retire refreshes the base before containment, then removes and settles", async () => {

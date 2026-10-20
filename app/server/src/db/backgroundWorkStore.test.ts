@@ -1640,7 +1640,7 @@ function receiptsFor(itemId: string) {
 
 function staleServerTasks(
   bootEpoch: string,
-  kind: "check-watch" | "image-pull" = "check-watch",
+  kind: "check-watch" | "image-pull" | "merge-when-ready" = "check-watch",
 ) {
   const owner = makeSession();
   const serverTask = (sourceRequestId: string) =>
@@ -1666,7 +1666,7 @@ function staleServerTasks(
   return { crashed, drained, process };
 }
 
-test.each(["check-watch", "image-pull"] as const)(
+test.each(["check-watch", "image-pull", "merge-when-ready"] as const)(
   "boot owes a %s server task it ends one retained wake, in the reconciling transaction",
   (kind) => {
     const { crashed, drained, process } = staleServerTasks(
@@ -1732,7 +1732,7 @@ test("a boot pass whose receipt cannot be written ends nothing, and the next pas
   assert.deepEqual(receiptsFor(process.id), []);
 });
 
-test.each(["check-watch", "image-pull"] as const)(
+test.each(["check-watch", "image-pull", "merge-when-ready"] as const)(
   "an active %s server task counts by its backend, never as a monitor",
   (kind) => {
     const owner = makeSession();

@@ -2064,6 +2064,7 @@ function countKind(
       return;
     case "check-watch":
     case "image-pull":
+    case "merge-when-ready":
       // Counted by its backend (`serverTaskCount`) only.
       return;
     default:
