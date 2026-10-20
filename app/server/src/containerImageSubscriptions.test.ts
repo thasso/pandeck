@@ -7,6 +7,22 @@ import {
   type ContainerExecResult,
 } from "./containerImages.ts";
 
+const cleanupHook = vi.hoisted(() => ({
+  next: undefined as (() => void) | undefined,
+}));
+vi.mock("node:fs/promises", async (importActual) => {
+  const actual = await importActual<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    async rm(...args: Parameters<typeof actual.rm>) {
+      await actual.rm(...args);
+      const next = cleanupHook.next;
+      cleanupHook.next = undefined;
+      // Start a caller just before runPull's finally resumes and releases its slot.
+      if (next) queueMicrotask(next);
+    },
+  };
+});
 const OK = { code: 0, stdout: "", stderr: "" };
 interface Pull {
   request: ContainerExecRequest;
@@ -55,6 +71,7 @@ const call = (
   });
 afterEach(() => {
   setContainerExecForTests(null);
+  cleanupHook.next = undefined;
   vi.useRealTimers();
 });
 
@@ -153,7 +170,7 @@ describe("shared pull subscriptions", () => {
       expect(await queued).toBeInstanceOf(Error);
       exec.pulls[0]!.finish();
       exec.pulls[1]!.finish();
-      // A new acquisition can race with releasing a handed-off slot.
+      // Released capacity serves new pulls, never the cancelled queued image.
       const c = call("node:28");
       const d = call("node:30");
       await vi.waitFor(() => expect(exec.pulls).toHaveLength(4));
@@ -242,6 +259,27 @@ describe("shared pull subscriptions", () => {
     exec.pulls[2]!.finish();
     exec.pulls[3]!.finish();
     await Promise.all([a, b, surviving, newcomer]);
+    expect(exec.peak()).toBe(2);
+  });
+  test("slot handoff stays within capacity when a fresh acquire races its live waiter", async () => {
+    const exec = gatedExec();
+    const a = call("node:22");
+    const b = call("node:24");
+    await vi.waitFor(() => expect(exec.pulls).toHaveLength(2));
+    const waiting = call("node:26");
+    let newcomer: Promise<unknown> | undefined;
+    cleanupHook.next = () => {
+      newcomer = call("node:28");
+    };
+    exec.pulls[0]!.finish();
+    await vi.waitFor(() => expect(exec.pulls).toHaveLength(3));
+    expect(exec.pulls[2]!.request.args).toContain("docker.io/library/node:26");
+    expect(exec.peak()).toBe(2);
+    exec.pulls[1]!.finish();
+    await vi.waitFor(() => expect(exec.pulls).toHaveLength(4));
+    exec.pulls[2]!.finish();
+    exec.pulls[3]!.finish();
+    await Promise.all([a, b, waiting, newcomer]);
     expect(exec.peak()).toBe(2);
   });
   test("already-aborted callers start nothing", async () => {

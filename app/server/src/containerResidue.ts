@@ -106,12 +106,12 @@ export async function reclaimContainerResidue(
     );
   }
 
-  const runtime = await containerRuntimeStatus(options.signal);
-  if (!runtime.available)
-    return unavailable(
-      `no usable container runtime: ${runtime.reason || "docker is unavailable"}`,
-    );
   try {
+    const runtime = await containerRuntimeStatus(options.signal);
+    if (!runtime.available)
+      return unavailable(
+        `no usable container runtime: ${runtime.reason || "docker is unavailable"}`,
+      );
     await pullContainerImage({
       image,
       ...(options.signal ? { signal: options.signal } : {}),
