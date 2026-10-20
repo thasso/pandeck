@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Shrink } from "lucide-react";
+import { Markdown } from "./Markdown.tsx";
 import {
   HARNESSES,
   compactionWindowUserRefusal,
@@ -100,6 +101,7 @@ export function CompactionWindowSection({
           </>
         ) : null}
       </PropertyList>
+      {window.note ? <Markdown text={window.note} inline /> : null}
       {window.applyError ? <ErrorNote message={window.applyError} /> : null}
       {onSave ? (
         <form

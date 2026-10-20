@@ -96,6 +96,7 @@ interface FirstSendEngine {
 /** What a first send starts as: the definition's role, on one runtime. */
 interface FirstSendAgent {
   peerTurnCap?: number;
+  compactionWindow?: number;
   agent: SessionAgent;
   provider: string;
   modelId: string;
@@ -151,7 +152,8 @@ async function agentAtCreation(
   profileId: string,
   prepared: FirstSendAgent | undefined,
 ): Promise<
-  { refusal: FirstSendRefusal } | { agent?: SessionAgent; peerTurnCap?: number }
+  | { refusal: FirstSendRefusal }
+  | { agent?: SessionAgent; peerTurnCap?: number; compactionWindow?: number }
 > {
   if (!prepared) return {};
   // The same checks as `prepare`: a persona or engine that no longer matches
@@ -173,6 +175,9 @@ async function agentAtCreation(
   }
   return {
     agent: now.agent,
+    ...(now.compactionWindow !== undefined
+      ? { compactionWindow: now.compactionWindow }
+      : {}),
     ...(now.peerTurnCap !== undefined ? { peerTurnCap: now.peerTurnCap } : {}),
   };
 }
@@ -281,6 +286,24 @@ function claudeOwnershipRefusal(id: string): FirstSendRefusal | undefined {
     : undefined;
 }
 
+async function applyDefinitionWindow(
+  live: LiveSession,
+  tokens: number | undefined,
+): Promise<FirstSendRefusal | undefined> {
+  if (tokens === undefined) return undefined;
+  const { setSessionCompactionWindow } =
+    await import("../sessionCompactionWindow.ts");
+  const result = await setSessionCompactionWindow(live.sessionId, tokens, {
+    spawn: "definition",
+  });
+  return result.ok
+    ? undefined
+    : {
+        message: `Session ${live.sessionId} was created, but its compaction window could not be saved: ${result.message}; the message was not sent.`,
+        onSession: true,
+      };
+}
+
 const engines: Record<Harness, FirstSendEngine> = {
   pi: {
     // pi mints the session id; the client's only names the optimistic view.
@@ -325,6 +348,11 @@ const engines: Record<Harness, FirstSendEngine> = {
           requiresEnterprise: req.requiresEnterprise,
           promptEvidence: evidence,
         });
+        const windowRefusal = await applyDefinitionWindow(
+          live,
+          frozen.compactionWindow,
+        );
+        if (windowRefusal) return { refusal: windowRefusal };
         return {
           live,
           ref: {
@@ -382,6 +410,11 @@ const engines: Record<Harness, FirstSendEngine> = {
             return { refusal: { message: err.message, onSession: true } };
           throw err;
         }
+        const windowRefusal = await applyDefinitionWindow(
+          live,
+          frozen.compactionWindow,
+        );
+        if (windowRefusal) return { refusal: windowRefusal };
         return {
           live,
           ref: {

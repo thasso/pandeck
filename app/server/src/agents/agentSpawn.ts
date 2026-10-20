@@ -52,6 +52,7 @@ export class AgentSpawnRefusedError extends Error {
 /** Everything a spawn needs from one definition. */
 export interface AgentSpawnRuntime {
   peerTurnCap?: number;
+  compactionWindow?: number;
   agent: SessionAgent;
   description: string;
   provider: string;
@@ -310,6 +311,7 @@ export async function resolveAgentRole(
   role: AgentRole;
   listed: AgentModelChoice[];
   peerTurnCap?: number;
+  compactionWindow?: number;
   inheritGrants?: boolean;
 }> {
   const read = await readAgentDefinition(name, scanned);
@@ -319,15 +321,23 @@ export async function resolveAgentRole(
     ...(read.manifest.peerTurns !== undefined
       ? { peerTurnCap: read.manifest.peerTurns }
       : {}),
-    ...inheritGrantsOf(read.manifest),
+    ...creationDefaultsOf(read.manifest),
   };
 }
 
-/** A definition's `inheritGrants` spawn default, spread only when it sets one. */
-function inheritGrantsOf(manifest: AgentManifest): { inheritGrants?: boolean } {
-  return manifest.inheritGrants === undefined
-    ? {}
-    : { inheritGrants: manifest.inheritGrants };
+/** Creation-only defaults, spread only when the definition sets them. */
+function creationDefaultsOf(manifest: AgentManifest): {
+  inheritGrants?: boolean;
+  compactionWindow?: number;
+} {
+  return {
+    ...(manifest.inheritGrants !== undefined
+      ? { inheritGrants: manifest.inheritGrants }
+      : {}),
+    ...(manifest.compactionWindow !== undefined
+      ? { compactionWindow: manifest.compactionWindow }
+      : {}),
+  };
 }
 
 /**
@@ -341,7 +351,11 @@ export async function resolveAgentOnRuntime(
   runtime: { provider: string; modelId: string; thinkingLevel: ThinkingLevel },
   /** The account it runs on, which must offer the model. */
   profileId: string,
-): Promise<{ agent: SessionAgent; peerTurnCap?: number }> {
+): Promise<{
+  agent: SessionAgent;
+  peerTurnCap?: number;
+  compactionWindow?: number;
+}> {
   const read = await readAgentDefinition(name);
   let offered: boolean;
   try {
@@ -368,6 +382,9 @@ export async function resolveAgentOnRuntime(
   return {
     ...(read.manifest.peerTurns !== undefined
       ? { peerTurnCap: read.manifest.peerTurns }
+      : {}),
+    ...(read.manifest.compactionWindow !== undefined
+      ? { compactionWindow: read.manifest.compactionWindow }
       : {}),
     agent: {
       ...roleOf(read),
@@ -533,7 +550,7 @@ async function spawnRuntimeOf(
     ...(accountName ? { accountName } : {}),
     thinkingLevel,
     listed,
-    ...inheritGrantsOf(manifest),
+    ...creationDefaultsOf(manifest),
   };
 }
 

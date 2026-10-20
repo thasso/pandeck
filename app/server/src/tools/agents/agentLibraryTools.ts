@@ -79,9 +79,10 @@ function runsOn(manifest: {
   models: string[];
   effort?: ThinkingLevel | undefined;
   peerTurns?: number | undefined;
+  compactionWindow?: number | undefined;
 }): string {
   // Order counts: the first model is the one a spawn runs without choosing.
-  return `${manifest.persona}\u0000${manifest.models.join("\u0001")}\u0000${manifest.effort ?? ""}\u0000${manifest.peerTurns ?? ""}`;
+  return `${manifest.persona}\u0000${manifest.models.join("\u0001")}\u0000${manifest.effort ?? ""}\u0000${manifest.peerTurns ?? ""}\u0000${manifest.compactionWindow ?? ""}`;
 }
 
 function manifestPath(name: string): string {
@@ -133,6 +134,14 @@ async function propose(
       ...(before?.peerTurns !== undefined ? { before: before.peerTurns } : {}),
       ...(after.peerTurns !== undefined ? { after: after.peerTurns } : {}),
     },
+    compactionWindow: {
+      ...(before?.compactionWindow !== undefined
+        ? { before: before.compactionWindow }
+        : {}),
+      ...(after.compactionWindow !== undefined
+        ? { after: after.compactionWindow }
+        : {}),
+    },
     source,
     reason: context.meta.reason,
   };
@@ -174,6 +183,9 @@ async function resolvedModelsOf(
   return (await checkAgentRuntime(definition))!.map((choice) => ({
     model: agentRuntimeLabel(choice.runtime!),
     effort: choice.runtime!.thinkingLevel,
+    ...(choice.runtime!.compactionWindow
+      ? { compactionWindow: choice.runtime!.compactionWindow }
+      : {}),
   }));
 }
 
@@ -190,6 +202,10 @@ async function assertStillResolves(
     if (was?.model !== is.model)
       throw new EntryValidationError(
         `"${spec}" now resolves to ${is.model}, not the ${was?.model ?? "nothing"} this card showed. Nothing was written; propose it again.`,
+      );
+    if (was.compactionWindow?.tokens !== is.compactionWindow?.tokens)
+      throw new EntryValidationError(
+        `${is.model}'s compaction window estimate changed. Nothing was written; propose it again.`,
       );
     // The effort the card said a model runs at is part of what was approved:
     // a model whose supported levels changed while the card waited would run
@@ -218,6 +234,10 @@ function cardSummary(body: AgentDefinitionApprovalBody): string {
   if (body.effort.before !== body.effort.after)
     changes.push(
       `effort ${effort(body.effort.before)} → ${effort(body.effort.after)}`,
+    );
+  if (body.compactionWindow?.before !== body.compactionWindow?.after)
+    changes.push(
+      `compaction window ${body.compactionWindow?.before ?? "default"} → ${body.compactionWindow?.after ?? "default"}`,
     );
   if (body.peerTurns?.before !== body.peerTurns?.after)
     changes.push(
@@ -304,6 +324,13 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         description:
           "Optional concurrent peer turn cap for new sessions, default 4. Requires user approval.",
       },
+      compactionWindow: {
+        type: "integer",
+        minimum: 1,
+        maximum: 1_000_000,
+        description:
+          "Optional creation-time window in tokens, clamped to the model's user range. Requires user approval.",
+      },
       denyTools: {
         type: "array",
         items: { type: "string" },
@@ -340,6 +367,9 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
         ...(params.peerTurns !== undefined
           ? { peerTurns: params.peerTurns as number }
           : {}),
+        ...(params.compactionWindow !== undefined
+          ? { compactionWindow: params.compactionWindow as number }
+          : {}),
         // Typed by the tool's schema, checked before `run` (`withCheckedArguments`).
         ...(params.denyTools !== undefined
           ? { denyTools: params.denyTools as string[] }
@@ -360,7 +390,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
     },
   },
   edit: {
-    note: "An edit that changes persona, the listed models, effort or peer-turns is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
+    note: "An edit that changes persona, the listed models, effort, peer-turns or compactionWindow is put in front of the user as an approval card and written only when they approve it; any other edit is committed directly.",
     async run(input, meta, library, options, ctx) {
       if (ctx.signal?.aborted) throw new Error("Operation aborted");
       const current = await readEntrySource(input.name, library);
@@ -396,7 +426,7 @@ export const agentLibraryTools: AgentTool[] = libraryTools({
           const now = definitionOf(lockedAfter, input.name);
           if (runsOn(was) !== runsOn(now))
             throw new EntryValidationError(
-              `${current.path} changed since this edit was checked, and the edit would now change its persona, model, effort or peer-turns; read it again and retry.`,
+              `${current.path} changed since this edit was checked, and the edit would now change its persona, model, effort, peer-turns or compactionWindow; read it again and retry.`,
             );
           await checkAgentRuntime(now, { checkModel: false });
         },

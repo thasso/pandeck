@@ -23,6 +23,9 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   accountProviderForModelProvider,
+  estimateSpawnCompactionWindow,
+  COMPACTION_WINDOW_AGENT_FLOOR,
+  type SpawnCompactionWindow,
   isSessionPeerTurnCap,
   type ApprovalBody,
   type ApprovalCard,
@@ -49,7 +52,10 @@ import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { sourceRequiresEnterprise } from "./sessionEnterprise.ts";
 import { errorText } from "./errors.ts";
 import { getProject } from "./projectRegistry.ts";
-import { piModelForAccount } from "./harnesses/models.ts";
+import {
+  piModelForAccount,
+  storedSessionModelOption,
+} from "./harnesses/models.ts";
 import {
   admitDirectPeerTurns,
   directPeerTurnCapOf,
@@ -107,6 +113,7 @@ export type SpawnRequestRow = SpawnRequestRowFields &
   );
 
 interface SpawnRequestRowFields {
+  compactionWindow?: number;
   title: string;
   prompt: string;
   owner?: "coordinator" | "user";
@@ -434,6 +441,14 @@ async function validateStructure(
   /** The row's agent definition's `inheritGrants`, when it sets one. */
   definitionInheritGrants?: boolean,
 ): Promise<StructuralRow> {
+  if (
+    row.compactionWindow !== undefined &&
+    (!Number.isSafeInteger(row.compactionWindow) ||
+      row.compactionWindow < COMPACTION_WINDOW_AGENT_FLOOR)
+  )
+    throw new SpawnProposalError(
+      "compactionWindow must be a whole number of at least 100,000 tokens.",
+    );
   const owner = row.owner ?? "coordinator";
   if (owner !== "coordinator" && owner !== "user")
     throw new SpawnProposalError('owner must be "coordinator" or "user".');
@@ -558,6 +573,7 @@ export async function buildSpawnProposal(
     let agentType: SpawnAgentType;
     let rowFallback = fallback;
     let definitionInheritGrants: boolean | undefined;
+    let definitionWindow: number | undefined;
     if (row.agent === undefined) agentType = row.agentType;
     else {
       const name = row.agent.trim();
@@ -576,6 +592,7 @@ export async function buildSpawnProposal(
       // Fixed here, on the card: execution never reads the definition's
       // default again, so the user approves what the card shows.
       definitionInheritGrants = resolved.inheritGrants;
+      definitionWindow = resolved.compactionWindow;
       // An un-hinted row starts from the definition's default, not from
       // the proposer's own runtime.
       const runtime = resolved.listed[0]?.runtime;
@@ -595,8 +612,14 @@ export async function buildSpawnProposal(
       definitionInheritGrants,
     );
     const runtime = await resolveRuntime(row, rowFallback, requiresEnterprise);
+    const window = await estimatedWindow(
+      runtime,
+      row.compactionWindow,
+      definitionWindow,
+    );
     items.push({
       ...approvalItemOf(structural),
+      ...(window ? { compactionWindow: window } : {}),
       ...(row.agent !== undefined ? { agent: row.agent.trim() } : {}),
       ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
       responseRequested: row.responseRequested === true,
@@ -645,6 +668,41 @@ function approvalItemOf(
     ...(structural.taskId ? { taskId: structural.taskId } : {}),
     ...(structural.taskTitle ? { taskTitle: structural.taskTitle } : {}),
   };
+}
+
+async function estimatedWindow(
+  runtime: ResolvedRuntime,
+  row: number | undefined,
+  definition: number | undefined,
+): Promise<SpawnCompactionWindow | undefined> {
+  const requested = row ?? definition;
+  if (requested === undefined) return undefined;
+  const model = (await modelsForProfile(runtime.credentialProfileId)).find(
+    (option) =>
+      option.provider === runtime.provider && option.id === runtime.modelId,
+  );
+  const source = row !== undefined ? "row" : "definition";
+  return decideWindow(
+    model ?? { provider: runtime.provider },
+    requested,
+    source,
+    "refuse",
+  );
+}
+
+function decideWindow(
+  model: { provider: string; contextWindow?: number },
+  requested: number,
+  source: "row" | "definition",
+  rowAbove: "refuse" | "clamp",
+): SpawnCompactionWindow {
+  const decision = estimateSpawnCompactionWindow(model, {
+    tokens: requested,
+    source,
+    rowAbove,
+  });
+  if ("refused" in decision) throw new SpawnProposalError(decision.refused);
+  return { requested, source, ...decision };
 }
 
 /* ------------------------- approve-time settlement ------------------------ */
@@ -698,6 +756,7 @@ function editedItem(
 async function settledItem(
   item: SessionSpawnApprovalItem,
   requiresEnterprise: boolean,
+  repicked: boolean,
 ): Promise<SessionSpawnApprovalItem> {
   if (
     item.owner !== undefined &&
@@ -732,6 +791,16 @@ async function settledItem(
   if (item.agent !== undefined) await approvedAgentOf(item);
   return {
     ...item,
+    ...(item.compactionWindow
+      ? {
+          compactionWindow: decideWindow(
+            model,
+            item.compactionWindow.requested,
+            item.compactionWindow.source,
+            repicked ? "clamp" : "refuse",
+          ),
+        }
+      : {}),
     modelName: model.name,
     accountName: profile.name,
     // Clamped, not refused: the level is derived from a model choice the user
@@ -764,7 +833,12 @@ export async function prepareSpawnApproval(
     items.push(
       item.skipped
         ? item
-        : await settledItem(item, rowRequiresEnterprise(card.body, original)),
+        : await settledItem(
+            item,
+            rowRequiresEnterprise(card.body, original),
+            item.provider !== original.provider ||
+              item.modelId !== original.modelId,
+          ),
     );
   }
   return {
@@ -919,6 +993,7 @@ async function spawnOne(
   // agent's definition is read again after it (below).
   let agent: SessionAgent | undefined;
   let peerTurnCap = options.peerTurnCap;
+  let definitionWindow: number | undefined;
   if (options.currentRuntime) {
     const runtime = await options.currentRuntime();
     // The row was validated for the persona the definition had then; one
@@ -929,6 +1004,7 @@ async function spawnOne(
       );
     agent = runtime.agent;
     peerTurnCap ??= runtime.peerTurnCap;
+    definitionWindow = runtime.compactionWindow;
     item.provider = runtime.provider;
     item.modelId = runtime.modelId;
     item.credentialProfileId = runtime.credentialProfileId;
@@ -960,7 +1036,13 @@ async function spawnOne(
     ...(agent ? { agent } : {}),
   };
   let spec: NewSession;
+  let windowModel: { provider: string; contextWindow?: number };
   if (item.provider === CLAUDE_SDK_PROVIDER) {
+    windowModel = storedSessionModelOption(
+      harnessForModelProvider(item.provider),
+      item.provider,
+      item.modelId,
+    ) ?? { provider: item.provider };
     spec = {
       harness: "claude-sdk",
       id: deps.newSessionId(),
@@ -978,6 +1060,7 @@ async function spawnOne(
         `${item.provider}/${item.modelId} is no longer available on this account.`,
       );
     spec = { harness: "pi", model, ...start };
+    windowModel = model;
     // A definition deleted, re-pointed or edited during that lookup must not
     // start as it was read before it.
     if (agent) await assertAgentUnchanged(agent, item.title);
@@ -994,6 +1077,17 @@ async function spawnOne(
     throw new Error(
       "The session requires an enterprise account. Select an account marked as enterprise.",
     );
+  if (options.currentRuntime) {
+    const requested = options.rowWindow ?? definitionWindow;
+    if (requested !== undefined) {
+      item.compactionWindow = decideWindow(
+        windowModel,
+        requested,
+        options.rowWindow !== undefined ? "row" : "definition",
+        "refuse",
+      );
+    } else delete item.compactionWindow;
+  }
   // Binding admission check: nothing may yield between this and creation.
   options.assertAdmittedCost?.(item);
   const sessionId = (await deps.create(spec)).sessionId;
@@ -1026,6 +1120,36 @@ async function spawnOne(
     item.owner === "user" ? "taken-over" : "coordinator",
     { inheritGrants: item.inheritGrants !== false },
   );
+  if (item.compactionWindow) {
+    const { setSessionCompactionWindow } =
+      await import("./sessionCompactionWindow.ts");
+    const window = item.compactionWindow;
+    const applied = await setSessionCompactionWindow(
+      sessionId,
+      window.requested,
+      {
+        spawn: window.source,
+        estimate: {
+          tokens: window.tokens,
+          ...(window.note
+            ? {
+                note: `${options.currentRuntime ? "At creation" : "On approval"}: ${window.note}`,
+              }
+            : {}),
+        },
+      },
+    );
+    if (!applied.ok)
+      throw new Error(
+        `Created, but its compaction window could not be applied: ${applied.message}. Its opening prompt was not delivered.`,
+      );
+    item.compactionWindow = {
+      requested: window.requested,
+      source: window.source,
+      tokens: applied.tokens,
+      ...(applied.note ? { note: applied.note } : {}),
+    };
+  }
   // A worktree record names its holders' coordinators (`treeSessionIds`), and
   // creation broadcast the child's checkout BEFORE this edge existed: say the
   // list again now, or a coordinator already watching it would hold the peer's
@@ -1120,6 +1244,7 @@ async function assertAgentUnchanged(
  */
 interface SpawnOneOptions {
   peerTurnCap?: number;
+  rowWindow?: number;
   requiresEnterprise?: boolean;
   /** Over the cap: the opening prompt waits for a slot at this position. */
   hold?: { queueSeq: number };
@@ -1137,6 +1262,7 @@ interface SpawnOneOptions {
     /** The agent definition the session is spawned as, frozen at creation. */
     agent?: SessionAgent | undefined;
     peerTurnCap?: number;
+    compactionWindow?: number;
   }>;
 }
 
@@ -1180,7 +1306,7 @@ registerApprovalExecutor("sessionSpawn", {
     const named = created
       .map(
         (item) =>
-          `"${item.title}" (${item.resultSessionId}, owner ${item.owner ?? "coordinator"}${item.responseRequestWithdrawn ? ", awaited reply withdrawn" : ""}${item.inheritGrants === false ? ", doesn't inherit your approvals" : ""})${
+          `"${item.title}" (${item.resultSessionId}, owner ${item.owner ?? "coordinator"}${item.responseRequestWithdrawn ? ", awaited reply withdrawn" : ""}${item.inheritGrants === false ? ", doesn't inherit your approvals" : ""}${item.compactionWindow && !item.error ? `, compaction window ${item.compactionWindow.tokens === null ? "not set" : `${item.compactionWindow.tokens.toLocaleString("en-US")} tokens`}${item.compactionWindow.note ? `. ${item.compactionWindow.note}` : ""}` : ""})${
             item.error ? " — created, but its opening prompt failed" : ""
           }`,
       )
@@ -1226,6 +1352,7 @@ export type DirectSpawnRequestRow = DirectSpawnRowFields &
 
 interface DirectSpawnRowFields {
   peerTurnCap?: number;
+  compactionWindow?: number;
   title: string;
   prompt: string;
   owner?: "coordinator" | "user";
@@ -1262,6 +1389,7 @@ export interface DirectSpawnRowResult {
     modelFallbackReason?: string;
   };
   sessionId?: string;
+  compactionWindow?: { tokens: number | null; note?: string };
   /** Created over the cap: its opening prompt waits for a slot, at this place. */
   waitingForSlot?: { position: number };
   error?: string;
@@ -1457,6 +1585,9 @@ export async function spawnApprovedPeers(input: {
     try {
       await spawnOne(input.senderSessionId, item, {
         requiresEnterprise,
+        ...(row.compactionWindow !== undefined
+          ? { rowWindow: row.compactionWindow }
+          : {}),
         ...(row.peerTurnCap !== undefined
           ? { peerTurnCap: row.peerTurnCap }
           : {}),
@@ -1525,6 +1656,13 @@ export async function spawnApprovedPeers(input: {
     // stale or fallback runtime had been attempted when nothing was created.
     if (finalRuntime) result.runtime = reportedRuntime(finalRuntime);
     if (item.resultSessionId) result.sessionId = item.resultSessionId;
+    if (item.compactionWindow && !item.error && !result.error)
+      result.compactionWindow = {
+        tokens: item.compactionWindow.tokens,
+        ...(item.compactionWindow.note
+          ? { note: item.compactionWindow.note }
+          : {}),
+      };
   }
 }
 

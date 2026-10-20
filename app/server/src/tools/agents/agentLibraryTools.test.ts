@@ -120,6 +120,46 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("window-only edits require approval, including removal, with before and after values", async () => {
+  await call("agent_create", { ...definition, compactionWindow: 150_000 });
+  let card = latestCard();
+  assert.equal(card.body.kind, "agentDefinition");
+  if (card.body.kind !== "agentDefinition") return;
+  assert.deepEqual(card.body.compactionWindow, { after: 150_000 });
+  assert.equal(card.body.resolvedModels[0]?.compactionWindow?.tokens, 150_000);
+  await resolveApproval(card.id, "approved");
+  await call("agent_edit", {
+    name: definition.name,
+    reason: "Lower window",
+    edits: [
+      {
+        oldText: "compactionWindow: 150000",
+        newText: "compactionWindow: 120000",
+      },
+    ],
+  });
+  card = latestCard();
+  assert.equal(card.body.kind, "agentDefinition");
+  if (card.body.kind !== "agentDefinition") return;
+  assert.deepEqual(card.body.compactionWindow, {
+    before: 150_000,
+    after: 120_000,
+  });
+  assert.match(readFileSync(manifest(), "utf8"), /compactionWindow: 150000/);
+  await resolveApproval(card.id, "approved");
+  await call("agent_edit", {
+    name: definition.name,
+    reason: "Remove window",
+    edits: [{ oldText: "compactionWindow: 120000\n", newText: "" }],
+  });
+  card = latestCard();
+  assert.equal(card.body.kind, "agentDefinition");
+  if (card.body.kind !== "agentDefinition") return;
+  assert.deepEqual(card.body.compactionWindow, { before: 120_000 });
+  await resolveApproval(card.id, "approved");
+  assert.doesNotMatch(readFileSync(manifest(), "utf8"), /compactionWindow/);
+});
+
 test("peer-turns creation and changes require approval and show the exact change", async () => {
   await call("agent_create", { ...definition, peerTurns: 10 });
   let card = latestCard();

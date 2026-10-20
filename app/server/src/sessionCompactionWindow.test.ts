@@ -198,12 +198,14 @@ test("agent: only a live session; the harness persists through the callback", as
   );
   const id = stored();
   fakeLive(id);
+  sessionStore.setCompactionWindow(id, 180_000, "Creation-time note");
   assert.deepEqual(await setSessionCompactionWindow(id, 150_000, "agent"), {
     ok: true,
     tokens: 150_000,
     previous: null,
   });
   assert.equal(sessionStore.get(id)?.compactionWindow, 150_000);
+  assert.equal(sessionStore.get(id)?.compactionWindowNote, undefined);
 });
 
 test("spawn: a row value is agent-written; a definition default is clamped", async () => {
@@ -215,7 +217,7 @@ test("spawn: a row value is agent-written; a definition default is clamped", asy
   );
   assert.equal(
     (await setSessionCompactionWindow(id, 250_000, { spawn: "row" })).ok,
-    false,
+    true,
   );
   assert.deepEqual(
     await setSessionCompactionWindow(id, 2_000_000, { spawn: "definition" }),
@@ -234,6 +236,110 @@ test("spawn: a row value is agent-written; a definition default is clamped", asy
   });
   assert.equal(dropped.ok && dropped.tokens, null);
   assert.match((dropped.ok && dropped.note) || "", /No compaction window/);
+});
+
+test.each([
+  {
+    context: 272_000,
+    reserve: 72_000,
+    source: "row",
+    request: 220_000,
+    estimate: 220_000,
+    actual: 200_000,
+  },
+  {
+    context: 272_000,
+    reserve: 72_000,
+    source: "definition",
+    request: 250_000,
+    estimate: 250_000,
+    actual: 200_000,
+  },
+  {
+    context: 272_000,
+    reserve: 190_000,
+    source: "definition",
+    request: 150_000,
+    estimate: 150_000,
+    actual: 82_000,
+  },
+  {
+    context: 272_000,
+    reserve: 10_000,
+    source: "definition",
+    request: 260_000,
+    estimate: 255_616,
+    actual: 255_616,
+  },
+  {
+    context: 16_000,
+    reserve: 1_000,
+    source: "definition",
+    request: 12_000,
+    estimate: null,
+    actual: 12_000,
+  },
+  {
+    context: 16_000,
+    reserve: 16_384,
+    source: "definition",
+    request: 12_000,
+    estimate: null,
+    actual: null,
+  },
+] as const)(
+  "spawn actual reconcile $request to $actual at reserve $reserve",
+  async ({ context, reserve, source, request, estimate, actual }) => {
+    const id = stored("pi");
+    fakeLive(id, { contextWindow: context, underlyingReserve: reserve });
+    const result = await setSessionCompactionWindow(id, request, {
+      spawn: source,
+      estimate: { tokens: estimate },
+    });
+    assert.equal(result.ok && result.tokens, actual);
+    assert.equal(sessionStore.get(id)?.compactionWindow, actual ?? undefined);
+    const { storedCompactionWindowState } =
+      await import("./harnesses/compactionWindow.ts");
+    assert.equal(
+      storedCompactionWindowState(sessionStore.get(id)!)?.note,
+      result.ok ? result.note : undefined,
+    );
+    assert.equal(
+      sessionStore.get(id)?.compactionWindowNote,
+      result.ok ? result.note : undefined,
+    );
+    if (estimate !== actual)
+      assert.ok(
+        result.ok &&
+          result.note?.includes(actual?.toLocaleString("en-US") ?? "Not set"),
+      );
+    if (estimate === null && actual === 12_000)
+      assert.match(
+        (result.ok && result.note) || "",
+        /estimate.*found no range/,
+      );
+    await setSessionCompactionWindow(id, null, "user");
+    assert.equal(sessionStore.get(id)?.compactionWindowNote, undefined);
+  },
+);
+
+test("spawn refuses a row when its actual pi trigger is below the agent floor", async () => {
+  const id = stored("pi");
+  const { applied } = fakeLive(id, {
+    contextWindow: 272_000,
+    underlyingReserve: 190_000,
+  });
+  assert.equal(
+    (
+      await setSessionCompactionWindow(id, 150_000, {
+        spawn: "row",
+        estimate: { tokens: 150_000 },
+      })
+    ).ok,
+    false,
+  );
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  assert.deepEqual(applied, []);
 });
 
 test("a fork copies the parent's stored window and applies it once", async () => {

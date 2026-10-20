@@ -4,7 +4,13 @@
  * owns, and what it can do. Server and web read these instead of
  * repeating the mapping between the three names a harness goes by.
  */
-import type { CompactionWindowCapability } from "./compactionWindow.ts";
+import {
+  compactionWindowRange,
+  spawnCompactionWindow,
+  type CompactionWindowCapability,
+  type SpawnCompactionWindowRequest,
+  type CompactionWindowEstimate,
+} from "./compactionWindow.ts";
 import type {
   BackgroundWorkBackend,
   CredentialProfileProvider,
@@ -54,7 +60,11 @@ export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
     id: "pi",
     accountProvider: "openai-codex",
     backgroundWorkBackends: ["host-process", "server-task"],
-    compactionWindow: { mapping: "reserve", summaryCostNote: true },
+    compactionWindow: {
+      mapping: "reserve",
+      summaryCostNote: true,
+      defaultReserve: 16_384,
+    },
   },
   "claude-sdk": {
     id: "claude-sdk",
@@ -65,6 +75,39 @@ export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
     compactionWindow: { mapping: "window", min: 100_000, max: 1_000_000 },
   },
 };
+
+/** Pre-creation estimate only. A live session reconciles with its actual reserve. */
+export function estimateSpawnCompactionWindow(
+  model: { provider: string; contextWindow?: number },
+  request: SpawnCompactionWindowRequest,
+): (CompactionWindowEstimate & { estimated?: true }) | { refused: string } {
+  const capability =
+    HARNESSES[harnessForModelProvider(model.provider)].compactionWindow;
+  if (!capability) return { refused: "This harness has no compaction window." };
+  const decision = spawnCompactionWindow(
+    compactionWindowRange(capability, {
+      ...(model.contextWindow !== undefined
+        ? { contextWindow: model.contextWindow }
+        : {}),
+      ...(capability.mapping === "reserve"
+        ? { underlyingReserve: capability.defaultReserve }
+        : {}),
+    }),
+    request,
+  );
+  if ("refused" in decision)
+    return {
+      refused:
+        decision.refused +
+        (capability.mapping === "reserve"
+          ? " This estimate assumes pi's default reserve."
+          : ""),
+    };
+  return {
+    ...decision,
+    ...(capability.mapping === "reserve" ? { estimated: true as const } : {}),
+  };
+}
 
 /** Whether an untrusted value names a harness this app runs. */
 export function isHarness(value: string): value is Harness {

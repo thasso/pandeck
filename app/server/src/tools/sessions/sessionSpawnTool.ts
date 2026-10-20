@@ -141,6 +141,10 @@ function makeSessionSpawnTool() {
                 description:
                   'Record an awaited answer. Defaults to true on coordinator-owned "spawn", false on "propose" and user-owned rows.',
               },
+              compactionWindow: {
+                description:
+                  "Optional tokens, 100k to native trigger. Overrides the agent definition default; pi uses an estimate until creation.",
+              },
               peerTurnCap: {
                 type: "integer",
                 minimum: 1,
@@ -290,7 +294,10 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
       )
       .map(listedText);
     return [
-      `- ${agent.name}: ${clip(agent.description, "agent_get reads it whole")}`,
+      `- ${agent.name}: ${clip(agent.description, "agent_get reads it whole")}${runtime.compactionWindow !== undefined ? `; compactionWindow default ${runtime.compactionWindow}` : ""}`,
+      ...runtime.listed
+        .filter((choice) => choice.runtime?.compactionWindow)
+        .map((choice) => `  ${listedText(choice)}`),
       `  ${runtime.agent.persona} on ${runtime.provider}/${runtime.modelId}${
         runtime.agent.pinnedModel
           ? ` (pinned ${runtime.agent.pinnedModel})`
@@ -319,7 +326,7 @@ export function spawnableAgentsText(agents: readonly SpawnableAgent[]): string {
 /** One listed model as a caller names it in modelId, or why it cannot run. */
 function listedText(choice: AgentModelChoice): string {
   return choice.runtime
-    ? `${choice.spec} (${choice.runtime.model.provider}/${choice.runtime.model.id}, ${choice.runtime.thinkingLevel} effort)`
+    ? `${choice.spec} (${choice.runtime.model.provider}/${choice.runtime.model.id}, ${choice.runtime.thinkingLevel} effort${choice.runtime.compactionWindow ? `, compaction window ${choice.runtime.compactionWindow.tokens ?? "none"}${choice.runtime.compactionWindow.estimated ? " estimated" : ""}${choice.runtime.compactionWindow.note ? `: ${choice.runtime.compactionWindow.note}` : ""}` : ""})`
     : `${choice.spec} (cannot run: ${clip(choice.problem, "spawning on it refuses with the whole reason")})`;
 }
 
@@ -365,6 +372,9 @@ async function runDirectSpawn(
       ...(row.responseRequested === undefined
         ? {}
         : { responseRequested: row.responseRequested }),
+      ...(row.compactionWindow !== undefined
+        ? { compactionWindow: row.compactionWindow }
+        : {}),
       ...(row.peerTurnCap !== undefined
         ? { peerTurnCap: row.peerTurnCap }
         : {}),
@@ -425,7 +435,7 @@ function directSpawnText(results: DirectSpawnRowResult[], cap: number): string {
       return `- "${row.title}" NOT started on ${runtime}: ${row.error ?? "unknown error"}`;
     return `- "${row.title}" → session ${row.sessionId} on ${runtime}, owner ${row.owner}${
       row.inheritGrants === false ? ", doesn't inherit your approvals" : ""
-    }${row.runtime?.modelFallbackReason ? `; ${row.runtime.modelFallbackReason}` : ""}${
+    }${row.compactionWindow ? `, compaction window ${row.compactionWindow.tokens === null ? "not set" : `${row.compactionWindow.tokens.toLocaleString("en-US")} tokens`}${row.compactionWindow.note ? `. ${row.compactionWindow.note}` : ""}` : ""}${row.runtime?.modelFallbackReason ? `; ${row.runtime.modelFallbackReason}` : ""}${
       row.waitingForSlot
         ? `, waiting for a slot (position ${row.waitingForSlot.position})`
         : ""
@@ -551,6 +561,7 @@ const ROW_PROPERTIES = [
   "responseRequested",
   "inheritGrants",
   "peerTurnCap",
+  "compactionWindow",
   "owner",
   "provider",
   "modelId",
@@ -630,6 +641,17 @@ function checkRawRow(
   for (const key of ROW_PROPERTIES) {
     if (!stated(row, key)) continue;
     const value = row[key];
+    if (key === "compactionWindow") {
+      if (
+        typeof value !== "number" ||
+        !Number.isSafeInteger(value) ||
+        value < 100_000
+      )
+        throw new Error(
+          `${where}.compactionWindow must be a whole number of at least 100,000 tokens.`,
+        );
+      continue;
+    }
     if (key === "peerTurnCap") {
       if (!isSessionPeerTurnCap(value))
         throw new Error(
@@ -678,6 +700,9 @@ function readRows(
         ? { agentType: text(row.agentType) as ParsedRow["agentType"] }
         : {}),
       prompt: text(row.prompt),
+      ...(typeof row.compactionWindow === "number"
+        ? { compactionWindow: row.compactionWindow }
+        : {}),
       ...(isSessionPeerTurnCap(row.peerTurnCap)
         ? { peerTurnCap: row.peerTurnCap }
         : {}),

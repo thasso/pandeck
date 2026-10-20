@@ -1838,6 +1838,7 @@ export class PiLiveSession implements LiveSession {
       HARNESSES[this.harness].compactionWindow,
       {
         stored: stored?.compactionWindow,
+        note: stored?.compactionWindowNote,
         ...(windowStatus.contextWindow !== undefined
           ? { contextWindow: windowStatus.contextWindow }
           : {}),

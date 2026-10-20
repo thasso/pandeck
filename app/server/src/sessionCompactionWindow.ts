@@ -16,11 +16,12 @@
  * a session with none gets the value when its next process starts.
  */
 import {
-  COMPACTION_WINDOW_AGENT_FLOOR,
   HARNESSES,
   compactionWindowRange,
   compactionWindowUserRefusal,
-  effectiveCompactionWindow,
+  spawnCompactionWindow,
+  compactionWindowEstimateNote,
+  type CompactionWindowEstimate,
   type CompactionWindowPendingReason,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -32,7 +33,9 @@ import {
 import { hub } from "./hub.ts";
 
 export type CompactionWindowActor =
-  "user" | "agent" | { spawn: "row" | "definition" };
+  | "user"
+  | "agent"
+  | { spawn: "row" | "definition"; estimate?: CompactionWindowEstimate };
 
 export type SetCompactionWindowResult =
   | {
@@ -55,10 +58,6 @@ function refused(message: string): SetCompactionWindowResult {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function format(tokens: number): string {
-  return tokens.toLocaleString("en-US");
 }
 
 function residentLive(sessionId: string): LiveSession | undefined {
@@ -144,28 +143,22 @@ async function setNow(
   if (actor === "user") {
     const refusal = compactionWindowUserRefusal(available, tokens);
     if (refusal) return refused(refusal);
-  } else if (actor.spawn === "row" && tokens !== null) {
-    if ("unavailable" in available)
-      return refused(
-        `The compaction window cannot be set: ${available.unavailable}`,
-      );
-    if (tokens < COMPACTION_WINDOW_AGENT_FLOOR || tokens > available.range.max)
-      return refused(
-        `A spawned session's compaction window must be between ${format(COMPACTION_WINDOW_AGENT_FLOOR)} and ${format(available.range.max)} tokens.`,
-      );
   } else if (tokens !== null) {
-    if ("unavailable" in available) {
-      value = null;
-      note = `No compaction window was set: ${available.unavailable}`;
-    } else {
-      value = effectiveCompactionWindow(available.range, tokens);
-      if (value !== tokens)
-        note = `The definition's ${format(tokens)}-token window was clamped to ${format(value)} for this model.`;
-    }
+    const decision = spawnCompactionWindow(available, {
+      tokens,
+      source: actor.spawn,
+      rowAbove: "clamp",
+      ...(typeof actor.estimate?.tokens === "number"
+        ? { ceiling: actor.estimate.tokens }
+        : {}),
+    });
+    if ("refused" in decision) return refused(decision.refused);
+    value = decision.tokens;
+    note = compactionWindowEstimateNote(actor.estimate, value, decision.note);
   }
 
   try {
-    sessionStore.setCompactionWindow(sessionId, value);
+    sessionStore.setCompactionWindow(sessionId, value, note);
   } catch (error) {
     return refused(`Saving the compaction window failed: ${errorText(error)}`);
   }

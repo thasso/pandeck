@@ -65,6 +65,24 @@ const base: Pick<
   skills: [],
 };
 
+test("definition window reports each model's user-range clamp without refusing the definition", async () => {
+  const choices = await checkAgentRuntime(
+    { ...base, models: ["opus", "sonnet"], compactionWindow: 900_000 },
+    {
+      sources: {
+        ...sources,
+        models: async () => [
+          { ...models[0]!, contextWindow: 1_000_000 },
+          models[1]!,
+        ],
+      },
+    },
+  );
+  assert.equal(choices?.[0]?.runtime?.compactionWindow?.tokens, 900_000);
+  assert.equal(choices?.[1]?.runtime?.compactionWindow?.tokens, 200_000);
+  assert.match(choices?.[1]?.runtime?.compactionWindow?.note ?? "", /clamped/);
+});
+
 describe("resolveAgentModel", () => {
   test("an exact id or a Claude family alias resolves directly", () => {
     assert.equal(resolveAgentModel("opus", models).id, "opus");

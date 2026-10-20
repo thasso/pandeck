@@ -35,13 +35,18 @@ export function storedCompactionWindowInputs(
 export function storedCompactionWindowState(
   meta: Pick<
     SessionMeta,
-    "harness" | "provider" | "model" | "compactionWindow"
+    | "harness"
+    | "provider"
+    | "model"
+    | "compactionWindow"
+    | "compactionWindowNote"
   >,
 ): SessionCompactionWindow | undefined {
   return sessionCompactionWindowState(
     HARNESSES[meta.harness].compactionWindow,
     {
       stored: meta.compactionWindow,
+      note: meta.compactionWindowNote,
       ...storedCompactionWindowInputs(meta),
     },
   );

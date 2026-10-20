@@ -106,6 +106,7 @@ export interface SessionMeta {
    * default. Only {@link setCompactionWindow} writes it (`docs/compaction-window.md`).
    */
   compactionWindow?: number;
+  compactionWindowNote?: string;
   archivedAt?: number;
   /**
    * When the user last settled this session out of the Sessions inbox working
@@ -212,6 +213,7 @@ interface DbSessionRow {
   peer_turn_cap: number | null;
   mode: string;
   compaction_window: number | null;
+  compaction_window_note: string | null;
   archived_at_ms: number | null;
   settled_at_ms: number | null;
   inbox_position: number | null;
@@ -257,6 +259,9 @@ function fromRow(row: DbSessionRow): SessionMeta {
     mode: sessionModeOrDefault(row.mode),
     ...(row.compaction_window !== null && row.compaction_window > 0
       ? { compactionWindow: row.compaction_window }
+      : {}),
+    ...(row.compaction_window_note !== null
+      ? { compactionWindowNote: row.compaction_window_note }
       : {}),
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
     ...(row.settled_at_ms !== null ? { settledAt: row.settled_at_ms } : {}),
@@ -504,12 +509,16 @@ function switchCredentialProfile(
  * live row changed so the setter can report the failure instead of applying a
  * value it did not store.
  */
-function setCompactionWindow(id: string, tokens: number | null): void {
+function setCompactionWindow(
+  id: string,
+  tokens: number | null,
+  note?: string,
+): void {
   const result = getDb()
     .prepare(
-      "UPDATE session_index SET compaction_window = ? WHERE id = ? AND deleted_at_ms IS NULL",
+      "UPDATE session_index SET compaction_window = ?, compaction_window_note = ? WHERE id = ? AND deleted_at_ms IS NULL",
     )
-    .run(tokens, id);
+    .run(tokens, note ?? null, id);
   if (result.changes !== 1)
     throw new Error("The session was not found or has been deleted.");
 }

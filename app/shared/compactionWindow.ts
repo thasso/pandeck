@@ -24,7 +24,11 @@ export const COMPACTION_WINDOW_AGENT_FLOOR = 100_000;
  */
 export type CompactionWindowCapability =
   | { readonly mapping: "window"; readonly min: number; readonly max: number }
-  | { readonly mapping: "reserve"; readonly summaryCostNote: true };
+  | {
+      readonly mapping: "reserve";
+      readonly summaryCostNote: true;
+      readonly defaultReserve: number;
+    };
 
 /** An inclusive token range; never empty. */
 export interface CompactionWindowRange {
@@ -93,6 +97,91 @@ export function compactionWindowUserRefusal(
     : undefined;
 }
 
+/** A creation request, shared by the card preview and the server. */
+export interface SpawnCompactionWindowRequest {
+  tokens: number;
+  source: "row" | "definition";
+  rowAbove: "refuse" | "clamp";
+  ceiling?: number;
+}
+
+export interface CompactionWindowEstimate {
+  tokens: number | null;
+  note?: string;
+}
+
+export interface SpawnCompactionWindow extends CompactionWindowEstimate {
+  requested: number;
+  source: "row" | "definition";
+  estimated?: true;
+}
+
+/** Decide against either an estimated range or a session's actual range. */
+export function spawnCompactionWindow(
+  available: CompactionWindowRangeResult,
+  request: SpawnCompactionWindowRequest,
+): CompactionWindowEstimate | { refused: string } {
+  const { tokens, source } = request;
+  if (!Number.isSafeInteger(tokens) || tokens <= 0)
+    return {
+      refused: "The compaction window must be a whole number of tokens.",
+    };
+  if (source === "row" && tokens < COMPACTION_WINDOW_AGENT_FLOOR)
+    return {
+      refused:
+        "A spawn row's compaction window must be at least 100,000 tokens.",
+    };
+  if ("unavailable" in available)
+    return source === "row"
+      ? {
+          refused: `The compaction window cannot be set: ${available.unavailable}`,
+        }
+      : {
+          tokens: null,
+          note: `No compaction window was set: ${available.unavailable}`,
+        };
+  if (
+    source === "row" &&
+    (available.range.max < COMPACTION_WINDOW_AGENT_FLOOR ||
+      (tokens > available.range.max && request.rowAbove === "refuse"))
+  )
+    return {
+      refused: `A spawned session's compaction window must be between 100,000 and ${formatTokens(available.range.max)} tokens.`,
+    };
+  let value = effectiveCompactionWindow(available.range, tokens);
+  if (request.ceiling !== undefined) value = Math.min(value, request.ceiling);
+  return {
+    tokens: value,
+    ...(value !== tokens
+      ? {
+          note: `The ${source === "row" ? "row's" : "definition's"} ${formatTokens(tokens)}-token window was clamped to ${formatTokens(value)} for this model.`,
+        }
+      : {}),
+  };
+}
+
+/** Build the note before the atomic value/note write. Empty estimates are distinct from absent estimates. */
+export function compactionWindowEstimateNote(
+  estimate: CompactionWindowEstimate | undefined,
+  actual: number | null,
+  decisionNote?: string,
+): string | undefined {
+  if (!estimate) return decisionNote;
+  const sentences: string[] = [];
+  if (actual !== estimate.tokens) {
+    sentences.push(
+      actual === null
+        ? `Not set: this session's pi settings leave no range. The estimate showed ${formatTokens(estimate.tokens!)} tokens.`
+        : estimate.tokens === null
+          ? `Set to ${formatTokens(actual)} tokens: the estimate from pi's default reserve found no range for this model, and this session's pi settings allow it.`
+          : `Lowered from the ${formatTokens(estimate.tokens)} tokens shown to ${formatTokens(actual)} by this session's pi settings.`,
+    );
+  }
+  if (estimate.tokens !== null && estimate.note) sentences.push(estimate.note);
+  if (actual === null && decisionNote) sentences.push(decisionNote);
+  return [...new Set(sentences)].join(" ").slice(0, 500) || undefined;
+}
+
 /** Whether the harness's live process has taken the window. */
 type CompactionWindowApplied = "pending" | "confirmed" | "unknown";
 
@@ -127,6 +216,8 @@ export interface CompactionWindowLiveStatus {
 export interface SessionCompactionWindow extends CompactionWindowLiveStatus {
   /** The stored (desired) window; absent means the provider's default. */
   tokens?: number;
+  /** Creation-time clamp/reconciliation explanation, cleared by a later change. */
+  note?: string;
   /** The user's range for the current model, or why there is none. */
   range?: CompactionWindowRange;
   unavailable?: string;
@@ -143,6 +234,7 @@ export function sessionCompactionWindowState(
   capability: CompactionWindowCapability | undefined,
   input: {
     stored: number | undefined;
+    note?: string | undefined;
     contextWindow?: number;
     underlyingReserve?: number;
     live?: CompactionWindowLiveStatus;
@@ -156,6 +248,7 @@ export function sessionCompactionWindowState(
   };
   return {
     ...live,
+    ...(input.note !== undefined ? { note: input.note } : {}),
     ...(input.stored !== undefined ? { tokens: input.stored } : {}),
     ...available,
     ...(input.stored !== undefined && "range" in available

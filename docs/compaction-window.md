@@ -6,16 +6,22 @@ default applies, which is the behaviour sessions had before the window existed.
 It exists because Claude sessions on 1M-window models otherwise compact only
 near 1M, and every tool call re-reads the whole context (Task-946).
 
-This document owns the contract. Task-969 (an agent lowering its own window,
-delivered) and Task-970 (spawn rows and the `AGENT.md` field) build on it.
+This document owns the contract. Task-969 adds an agent lowering its own window;
+Task-970 adds spawn rows and the `AGENT.md` default.
 
 ## Storage
 
 - `session_index.compaction_window` (migration `0094`), nullable, mapped to
   `SessionMeta.compactionWindow`. It is the DESIRED value.
-- The only writer is `sessionStore.setCompactionWindow(id, tokens | null)`. It
-  throws when no live row changed, so a caller never applies a value it did not
-  store. `upsert` never writes or clears the column.
+- `session_index.compaction_window_note` (migration `0095`) maps to
+  `SessionMeta.compactionWindowNote`. It explains creation-time clamping or a pi
+  estimate-to-actual difference, survives restart, and lasts until the next
+  window change. Forks do not copy the note.
+- The only writer is
+  `sessionStore.setCompactionWindow(id, tokens | null, note?)`. Its single
+  UPDATE writes both columns, clearing the note when omitted. It throws when no
+  live row changed, so a caller never applies a value it did not store. `upsert`
+  never writes or clears the column.
 - Every source goes through one setter,
   `setSessionCompactionWindow(sessionId, tokens, actor)` in
   `app/server/src/sessionCompactionWindow.ts`. Calls for one session run one at
@@ -73,9 +79,35 @@ range:
   (normally the next turn), pi now. The stored value never authorizes an agent
   change and is never a rollback target.
 
-- **Spawn** (Task-970): a row value is agent-written, so it must be between the
-  agent floor and the model's native trigger. A definition default is clamped
-  into the range, or dropped with the reason when there is none.
+- **Spawn**: a row value is agent-written, so initial validation requires the
+  agent floor through the model's native trigger. The row overrides an
+  `AGENT.md` `compactionWindow` default. A definition uses the user's range,
+  clamped into it, or dropped with the reason when there is none. Claude can
+  therefore raise a definition's 50,000 to its 100,000 floor.
+
+  The propose card seals the request and shows the estimated value read-only. A
+  smaller model re-pick clamps a row down, refusing only if its trigger is below
+  100,000. pi estimates use the capability's `defaultReserve`, pinned by a test
+  to pi's `DEFAULT_COMPACTION_SETTINGS.reserveTokens`. Initial row validation
+  can refuse a value a smaller actual reserve would allow.
+
+  After creation the setter reconciles against the actual range. pi never raises
+  the request or a numeric estimate; an estimate of none is not a ceiling, so a
+  definition can acquire a value when the actual range allows it. An explicit
+  row whose actual trigger is below 100,000 is refused, never dropped and
+  delivered. A definition drops only for an empty actual range. The setter
+  atomically stores the actual value and a truthful note whenever it differs
+  from the estimate, including none to a value. Still-true re-pick clamp notes
+  carry an `On approval:` prefix; direct notes use `At creation:`. The result,
+  resolved card and inspector show the same stored value and note.
+
+  Storage precedes context and every delivery, including a held opener's
+  enqueue. A refusal or save failure names the created session id and delivers
+  no opener. A later start pass or restart has nothing to dispatch for it. First
+  sends from the agent picker apply the creation-time definition default through
+  the same setter, without an estimate or ceiling, before sending the first
+  prompt. Resume never reapplies defaults.
+
 - **Fork**: the child copies the parent's stored value verbatim
   (`inheritCompactionWindow`) and its harness applies it. Failover keeps the
   row.
@@ -143,6 +175,7 @@ The session inspector's Compaction window section shows:
 - the stored value, or "Provider default", with the effective value when a model
   clamps it;
 - the range;
+- the persisted creation-time note, when present;
 - when the value applies: "Applied", "Applies when the next turn starts", or
   "Applies when this process restarts";
 - a failed apply (pi only);

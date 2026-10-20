@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 import type {
   AccountModelOption,
   ApprovalCard as ApprovalCardData,
@@ -101,6 +105,16 @@ const button = (label: string) =>
   );
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  if (!Element.prototype.scrollIntoView)
+    Element.prototype.scrollIntoView = () => {};
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -110,6 +124,65 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.unstubAllGlobals();
+});
+
+test("the read-only window recomputes after a smaller model re-pick and approval sends no window edit", async () => {
+  const data = card();
+  if (data.body.kind !== "sessionSpawn") throw new Error("spawn card");
+  data.body.items = [
+    {
+      ...data.body.items[1]!,
+      compactionWindow: { requested: 300_000, source: "row", tokens: 300_000 },
+    },
+  ];
+  render(data);
+  expect(host.textContent).toContain("300,000 tokens");
+  const modelButton = [...host.querySelectorAll("button")].find((element) =>
+    element.textContent?.includes("opus"),
+  );
+  await act(async () => modelButton?.click());
+  const option = [...document.querySelectorAll('[role="option"]')].find(
+    (element) => element.textContent?.includes("Claude Sonnet"),
+  );
+  expect(option).toBeDefined();
+  await act(async () => (option as HTMLElement).click());
+  expect(host.textContent).toContain("200,000 tokens");
+  expect(host.textContent).toContain("clamped");
+  expect(data.body.items[0]?.compactionWindow?.tokens).toBe(300_000);
+  act(() => button("Approve")?.click());
+  expect(JSON.stringify(resolved[0]?.edits)).not.toContain("compactionWindow");
+});
+
+test("pi cards label the estimate and resolved cards show the actual persisted note instead", () => {
+  const data = card();
+  if (data.body.kind !== "sessionSpawn") throw new Error("spawn card");
+  data.body.items = [
+    {
+      ...data.body.items[0]!,
+      provider: "openai-codex",
+      modelId: "tiny",
+      compactionWindow: {
+        requested: 12_000,
+        source: "definition",
+        tokens: null,
+        estimated: true,
+      },
+    },
+  ];
+  render(data);
+  expect(host.textContent).toContain("none for this model by estimate");
+  expect(host.textContent).toContain("Estimate assuming pi's default reserve");
+  data.body.items[0]!.compactionWindow = {
+    requested: 12_000,
+    source: "definition",
+    tokens: 12_000,
+    note: "Set to 12,000 tokens: the estimate found no range, and the session settings allow it.",
+  };
+  render({ ...data, status: "executed" });
+  expect(host.textContent).toContain("12,000 tokens");
+  expect(host.textContent).toContain("the session settings allow it");
+  expect(host.textContent).not.toContain("Estimate assuming");
 });
 
 test("shows every proposed session, its target and its runtime", () => {

@@ -199,6 +199,28 @@ the outcome:
   silent and needs no free slot. A future archive writer must cancel the same
   way (`cancelHeldForArchivedSessions`).
 
+  #### Compaction window at creation
+
+  Both `spawn` and `propose` rows accept `compactionWindow`, a whole number of
+  tokens from 100,000 to the model's native trigger. A row overrides the agent
+  definition's default; without either, the provider default applies. Invalid
+  row values refuse before creation. The propose card shows the window
+  read-only. Re-picking a smaller model clamps it down with a note, refusing
+  approval only if the trigger is below 100,000.
+
+  pi's preview assumes its default reserve. Once created, the session's actual
+  settings may lower the value, never raise a numeric preview, or allow a
+  definition whose estimate had no range. The spawn result, approval outcome and
+  inspector show the stored value and explain the difference. An explicit row
+  whose actual trigger is below 100,000 fails with the created session id and no
+  opener. A definition is dropped only if the actual user range is empty.
+
+  The window and note are stored before any immediate delivery or held opener
+  enqueue. A failed save also fails closed with the created id and no opener; a
+  later slot-start pass or restart cannot dispatch one. See
+  [Compaction window](compaction-window.md) for ranges and pi's summary-cost
+  risk.
+
   #### Peer-message hop limit
 
   Peer prompts share a server-owned causal chain. A chain permits
