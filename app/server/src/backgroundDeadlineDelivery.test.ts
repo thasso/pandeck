@@ -265,14 +265,11 @@ test("an idle parked owner is woken with the deadline fact, after its peers", as
       "the card says the same",
     );
   }
-  // Each delivered offer reads the peer FIFO once more after its turn.
   assert.deepEqual(h.events, [
     `peers:${session}`,
     `offer:${session}:delivered`,
     `peers:${session}`,
-    `peers:${session}`,
     `offer:${session}:delivered`,
-    `peers:${session}`,
   ]);
   assert.equal(h.delivery.queuedCount(session), 0);
   assert.deepEqual(owed(session), [], "delivered facts leave the outbox");

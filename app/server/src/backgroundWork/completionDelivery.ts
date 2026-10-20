@@ -476,6 +476,8 @@ export class BackgroundCompletionDelivery {
   private readonly rerunAfterDrain = new Set<string>();
   /** Sessions whose wake batch is being offered as a turn right now. */
   private readonly offering = new Set<string>();
+  /** Sessions whose drain in flight has passed its peer phase (`drain`). */
+  private readonly pastPeerPhase = new Set<string>();
   /** Completions whose outbox row could not be written when they were queued. */
   private readonly unrecorded = new WeakSet<BackgroundCompletionNotice>();
   private stopped = false;
@@ -523,6 +525,7 @@ export class BackgroundCompletionDelivery {
     this.pending.clear();
     this.deferred.clear();
     this.rerunAfterDrain.clear();
+    this.pastPeerPhase.clear();
   }
 
   enqueue(sessionId: string, notice: BackgroundCompletionNotice): void {
@@ -701,14 +704,27 @@ export class BackgroundCompletionDelivery {
     return this.drain(sessionId);
   }
 
+  /**
+   * Drain now, or join the drain in flight. One already past its peer phase
+   * runs once more after it instead: it may be awaiting a turn — its own offer,
+   * or a steer the provider will decline — whose idle edge is this call, and a
+   * peer prompt or notice that found the session busy has no other wake
+   * (Task-973). Joining during the peer phase is enough, since that phase still
+   * reads the queue.
+   */
   drain(sessionId: string): Promise<void> {
     if (this.stopped) return Promise.resolve();
     const existing = this.drains.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (this.pastPeerPhase.has(sessionId))
+        this.rerunAfterDrain.add(sessionId);
+      return existing;
+    }
     const run = this.drainOnce(sessionId)
       .catch(() => undefined)
       .finally(() => {
         this.drains.delete(sessionId);
+        this.pastPeerPhase.delete(sessionId);
         if (this.rerunAfterDrain.delete(sessionId) && !this.stopped)
           void this.drain(sessionId);
       });
@@ -718,6 +734,7 @@ export class BackgroundCompletionDelivery {
 
   private async drainOnce(sessionId: string): Promise<void> {
     await this.options.drainPeers(sessionId);
+    this.pastPeerPhase.add(sessionId);
     // Read AFTER the peer phase: a Stop during that turn holds this batch too.
     // One that lands while the offer below awaits is refused at the run door
     // and answered `busy`, which puts the batch back.
@@ -761,10 +778,7 @@ export class BackgroundCompletionDelivery {
       // An offer that throws never said what reached the model.
       if (attempt.abandon() === "unsent")
         this.requeue(liveBatch, sessionId, sent, offered.dropped);
-      else {
-        for (const notice of sent) this.options.discard?.(notice);
-        this.rerunAfterDrain.add(sessionId);
-      }
+      else for (const notice of sent) this.options.discard?.(notice);
       this.requeue(liveBatch, sessionId, leftOver, 0);
       throw error;
     } finally {
@@ -782,12 +796,7 @@ export class BackgroundCompletionDelivery {
     for (const notice of sent) this.options.discard?.(notice);
     if (liveBatch.notices.length === 0 && liveBatch.dropped === 0)
       this.pending.delete(sessionId);
-    // A turn that carried the facts was awaited here, and its idle edge
-    // coalesced onto this drain, which is past its peer phase: a peer prompt
-    // or owed notice that found the session busy meanwhile has no other wake
-    // (Task-973). Read the peer phase again; with nothing owed it starts no turn.
-    if (leftOver.length > 0 || reached !== "unsent")
-      this.rerunAfterDrain.add(sessionId);
+    if (leftOver.length > 0) this.rerunAfterDrain.add(sessionId);
   }
 
   /** Put notices back at the front of a session's wake queue, in order. */
