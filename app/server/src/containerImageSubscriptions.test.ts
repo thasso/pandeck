@@ -76,6 +76,39 @@ afterEach(() => {
 });
 
 describe("shared pull subscriptions", () => {
+  test("anonymous and distinct GHCR credential providers never share a pull", async () => {
+    const exec = gatedExec();
+    const image = "ghcr.io/acme/private:latest";
+    const first = pullContainerImage({ image, refresh: true }).catch(
+      (e: Error) => e,
+    );
+    const credential = vi.fn(async () => ({
+      username: "one",
+      token: "first-token",
+    }));
+    const other = vi.fn(async () => ({
+      username: "two",
+      token: "second-token",
+    }));
+    const a = pullContainerImage({ image, refresh: true, credential });
+    const b = pullContainerImage({ image, refresh: true, credential: other });
+    const results = Promise.allSettled([a, b]);
+    await vi.waitFor(() => expect(exec.pulls).toHaveLength(2));
+    expect(await first).toBeInstanceOf(Error);
+    expect(credential).toHaveBeenCalledOnce();
+    expect(other).toHaveBeenCalledOnce();
+    exec.pulls.forEach((pull) => pull.finish());
+    expect(await results).toEqual([
+      {
+        status: "fulfilled",
+        value: expect.objectContaining({ authenticated: true }),
+      },
+      {
+        status: "fulfilled",
+        value: expect.objectContaining({ authenticated: true }),
+      },
+    ]);
+  });
   test.each([
     [undefined, 600_000, 0],
     [undefined, 600_000, 1],

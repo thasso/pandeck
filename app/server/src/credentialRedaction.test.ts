@@ -38,12 +38,21 @@ test("flags credentials that would be published, not prose about them", () => {
     `Use ${"ghp_" + "a".repeat(36)} here`,
     `key ${"AKIA" + "ABCDEFGHIJKLMNOP"}`,
     `auth_token: ${'"' + "abcdefghijklmnop"}"`,
+    JWT,
+    `Authorization: Basic dXNlcjpwYXNz`,
+    `Bearer ${"a".repeat(32)}`,
+    `bearer ${"b".repeat(32)}`,
+    `TOKEN=${"a".repeat(32)}`,
+    `export CUSTOM_API_KEY=${"a".repeat(32)}`,
   ])
     assert.equal(textLooksLikeCredential(text), true, text);
   for (const text of [
     "Rotate the token and mask the password field.",
     "The secret: check refuses on a hit.",
     'password = "short"',
+    "TOKEN=short",
+    "The Authorization header and Bearer scheme are supported.",
+    "Bearer authentication is supported.",
     "## Notes for Percy\n\n- The `api_key` setting is read from the env.",
   ])
     assert.equal(textLooksLikeCredential(text), false, text);

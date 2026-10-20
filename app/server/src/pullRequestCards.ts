@@ -589,6 +589,10 @@ export function patchPullRequestCard(
   patch: Patch<PullRequestCard>,
   contextPatch?: Patch<PullRequestCardContext>,
 ): PullRequestCard {
+  // A merged card is a delivery receipt. An older poll's head is not proof of
+  // what merged after a force-push; only an explicitly supplied head survives.
+  if (patch.status === "merged")
+    contextPatch = { observedHeadSha: undefined, ...contextPatch };
   const cardBefore = pullRequestCardById(id);
   if (!cardBefore) throw new Error("Pull request card not found.");
   const sessionId = cardBefore.sessionId;

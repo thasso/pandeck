@@ -98,8 +98,9 @@ keys, tokens) is masked before the commit-message agent sees it and is not a
 blocker. A caller-written `message` is the opposite case: it is published as
 written, so it gets the same credential check as the patch's added lines
 (`textLooksLikeCredential` in `credentialRedaction.ts`: private keys, known
-token shapes, quoted `secret`/`token`/`password` assignments). A hit refuses
-before the worktree is read, and there is no override, `force` included.
+token shapes including JWTs, Authorization/Bearer headers, quoted credential
+assignments and long unquoted credential assignments). A hit refuses before the
+worktree is read, and there is no override, `force` included.
 
 ### Commit review override
 
@@ -550,14 +551,20 @@ the merge already happened. Job-created cards have no source tool-call placement
 because the proposing call has already returned.
 
 Failed checks, requested changes, a moved head, a closed or merged PR,
-retargeting, a changed default-branch classification, draft state, confirmed
-conflicts, inconclusive/truncated checks, the no-checks grace and timeout end
-without merging. Deterministic refusals at a final re-read have the same
-`not-merged` result with `observedBy: "final-check"`. Low provider budget ends a
-job that would keep waiting, but does not block an otherwise ready merge.
-Unreadable state or a rejected provider write instead fails the job. A lost
-provider response may have landed, so failure never claims `merged: false`. The
-PR card and watcher reconcile that uncertainty.
+retargeting, draft state, confirmed conflicts, inconclusive/truncated checks,
+the no-checks grace and timeout end without merging. Deterministic refusals at a
+final re-read have the same `not-merged` result with
+`observedBy: "final-check"`. Low provider budget ends a job that would keep
+waiting, but does not block an otherwise ready merge. Unreadable state or a
+rejected provider write instead fails the job. A lost provider response may have
+landed, so failure never claims `merged: false`. The PR card and watcher
+reconcile that uncertainty.
+
+Default-branch classification is live, not pinned when waiting begins. A change
+before the managed core's decision is reclassified using current capabilities. A
+change between that decision and the merge seam's final read refuses the
+operation without merging. Provider reads before the outward boundary carry the
+job's abort signal, so Stop also interrupts slow reads.
 
 `timeoutSeconds` requires `whenReady` and bounds only the background wait, not
 an inline finish. It defaults to 1800, clamps to 30–7200 and is shortened by the
@@ -567,8 +574,12 @@ request. Stop prevents a provider merge request or approval creation until that
 synchronous boundary. Once a request is sent, Stop cannot abort it or replace
 its real result with `stopped`. A Stop that cannot yet confirm completion is
 reported unconfirmed. Restart resumes nothing; retained restart delivery tells
-the owner the wait ended. A crash after a provider write can still lose its
-confirmation even if the provider merged.
+the owner the wait ended. Server-task Stop routing is registered at boot,
+independently of reconciliation; a task absent from this process can be
+confirmed stopped even when reconciliation failed. A requester Stop that wins
+after the planned-drain mark keeps its own outcome, not the restart sentence. A
+crash after a provider write can still lose its confirmation even if the
+provider merged.
 
 The background job carries `deleteRemoteBranch`, `markTaskDone` and
 `removeWorktree`. Its removal exempts exactly its own background item, for its
@@ -1544,14 +1555,17 @@ the last because a check finishing does not move the pull request's `updatedAt`.
 ### Resolving provider review threads
 
 `github_get_pull_request` with `includeReviewThreads: true` reads GitHub's
-conversation through `gitHosting.ts`. Each thread includes its GraphQL `id`,
-`resolved` state and comment ids. Use the thread id with
-`github_resolve_review_thread` and the numeric comment id with
+threads through a threads-only GraphQL query in `gitHosting.ts`, without
+fetching the description, timeline or reviewer data. Each thread includes its
+GraphQL `id`, `resolved` state and comment ids. Use the thread id with
+`github_resolve_review_thread` and the decimal-string comment id with
 `github_comment_pull_request`'s `replyToCommentId`. The read returns at most the
 last 50 threads, keeping the newest when `maxReviews` limits them further, with
 the first 20 comments per thread. Returned threads stay oldest first within that
 retained window. `reviewThreadsTruncated` flags omitted threads; a thread's
-`truncated` flags omitted comments.
+`truncated` flags omitted comments. `includeReviews` similarly retains the
+newest submitted reviews, oldest first within the retained window, up to
+`maxReviews` and at most 100. Pending reviews do not consume that window.
 
 `github_resolve_review_thread` takes `repo`, PR `number`, `threadId`, and
 `resolved`: `true` resolves, `false` reopens. It stages a visible

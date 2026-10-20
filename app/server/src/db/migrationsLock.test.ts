@@ -10,6 +10,9 @@
  *   pnpm --filter @assistant/server migrations:lock
  */
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "vitest";
 import {
   computeMigrationHashes,
@@ -17,6 +20,20 @@ import {
 } from "./migrationsManifest.ts";
 
 const UPDATE_CMD = "pnpm --filter @assistant/server migrations:lock";
+
+test("rejects two migration files sharing a numeric version before locking", () => {
+  const dir = mkdtempSync(join(tmpdir(), "migration-collision-"));
+  try {
+    writeFileSync(join(dir, "0099_one.sql"), "SELECT 1;");
+    writeFileSync(join(dir, "99_two.sql"), "SELECT 2;");
+    assert.throws(
+      () => computeMigrationHashes(dir),
+      /Duplicate migration version 99.*0099_one.*99_two/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("migrations.lock.json matches the migration files exactly", () => {
   const current = computeMigrationHashes();

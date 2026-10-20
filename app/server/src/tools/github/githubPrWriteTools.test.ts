@@ -581,13 +581,30 @@ describe("github PR write approvals (unified subsystem)", () => {
         repo: "acme/app",
         number: 9,
         body: "thanks",
-        replyToCommentId: 555,
+        replyToCommentId: "555",
       } as never,
       ctxFor(sessionId) as never,
     );
     await resolveApproval(latest(sessionId).id, "approved");
     expect(latest(sessionId).status).toBe("executed");
   });
+
+  test.each(["bad", "-1", "1.5", "0", "9007199254740992", 555])(
+    "rejects invalid reply comment id %s before approval",
+    async (replyToCommentId) => {
+      await expect(
+        githubCommentPullRequestTool.execute(
+          {
+            repo: "acme/app",
+            number: 9,
+            body: "thanks",
+            replyToCommentId,
+          } as never,
+          ctxFor("bad-reply") as never,
+        ),
+      ).rejects.toThrow(/replyToCommentId/);
+    },
+  );
 
   test("a failed write surfaces the error and stays non-pending", async () => {
     const sessionId = "appr-fail";

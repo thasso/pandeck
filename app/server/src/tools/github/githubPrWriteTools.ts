@@ -60,7 +60,7 @@ type CommentPullRequestParams = {
   repo: string;
   number: number;
   body: string;
-  replyToCommentId?: number;
+  replyToCommentId?: string;
 };
 type ResolveReviewThreadParams = {
   repo: string;
@@ -390,7 +390,7 @@ export const githubCommentPullRequestTool =
         number: { type: "number", description: "Pull-request number." },
         body: { type: "string", description: "Comment text (Markdown)." },
         replyToCommentId: {
-          type: "number",
+          type: "string",
           description:
             "Reply to this review comment id (from github_get_pull_request review threads). Omit for a general timeline comment.",
         },
@@ -404,15 +404,23 @@ export const githubCommentPullRequestTool =
       const pullNumber = Math.trunc(params.number);
       const commentBody = params.body.trim();
       if (!commentBody) throw new Error("body must be a non-empty comment.");
+      const replyId = params.replyToCommentId;
+      if (
+        replyId !== undefined &&
+        (typeof replyId !== "string" ||
+          !/^[1-9]\d*$/.test(replyId) ||
+          !Number.isSafeInteger(Number(replyId)))
+      )
+        throw new Error(
+          "replyToCommentId must be a positive safe decimal-string comment id.",
+        );
       const body: GithubPullRequestApprovalBody = {
         kind: "githubPullRequest",
         operation: "comment",
         repo: `${owner}/${repo}`,
         pullNumber,
         commentBody,
-        ...(typeof params.replyToCommentId === "number"
-          ? { replyToCommentId: Math.trunc(params.replyToCommentId) }
-          : {}),
+        ...(replyId !== undefined ? { replyToCommentId: Number(replyId) } : {}),
       };
       const card = createApproval({
         sessionId: ctx.session.sessionId,

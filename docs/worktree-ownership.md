@@ -111,7 +111,9 @@ it without force requires one of these proofs for its exact current tip:
 
 A merged card alone is not sufficient. Its creation head is not proof of what
 landed after a force-push, and a new local commit after the merged head stays
-protected. Semantic containment remains base-specific; an arbitrary sibling
+protected. Marking a card merged without an explicit current head clears its
+older head observation, including degraded reads and best-effort action
+fallbacks. Semantic containment remains base-specific; an arbitrary sibling
 local branch or a matching patch on a remote branch is not a substitute.
 
 Remote preservation checks run before the repository lock and pass exact

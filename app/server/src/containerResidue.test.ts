@@ -149,10 +149,38 @@ test("an aborted runtime probe is a reason, not an exception", async () => {
   assert.equal(outcome.status, "unavailable");
   assert.match(
     outcome.status === "unavailable" ? outcome.reason : "",
-    /reclaim was cancelled/,
+    /^reclaim was cancelled$/,
   );
   assert.deepEqual(calls, []);
 });
+
+for (const stage of ["version", "pull"])
+  test(`cancellation during ${stage} keeps its reason without an image prefix`, async () => {
+    const root = scratch();
+    const worktree = join(root, "repo-feature");
+    mkdirSync(worktree);
+    const controller = new AbortController();
+    setContainerExecForTests(async (req) => {
+      if (req.args[0] === stage) {
+        controller.abort(new Error("reclaim cancelled"));
+        throw controller.signal.reason;
+      }
+      return {
+        code: req.args[0] === "image" ? 1 : 0,
+        stdout: req.args[0] === "version" ? "29" : "",
+        stderr: "",
+      };
+    });
+    const outcome = await reclaimContainerResidue({
+      path: worktree,
+      allowedRoots: [root],
+      signal: controller.signal,
+    });
+    assert.deepEqual(outcome, {
+      status: "unavailable",
+      reason: "reclaim cancelled",
+    });
+  });
 
 test("an unusable runtime is a reason, not an exception", async () => {
   const root = scratch();

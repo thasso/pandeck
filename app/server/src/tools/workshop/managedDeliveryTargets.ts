@@ -90,7 +90,11 @@ export async function resolveManagedHosting(
     throw new Error(
       `The derived push remote "${target.remote}" does not name a supported repository URL.`,
     );
-  const provider = await hostingProviderForRepo(target.repoRoot, target.remote);
+  const provider = await hostingProviderForRepo(
+    target.repoRoot,
+    target.remote,
+    signal,
+  );
   return provider ? { provider, repository } : undefined;
 }
 

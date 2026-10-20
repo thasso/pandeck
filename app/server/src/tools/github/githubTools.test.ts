@@ -646,6 +646,17 @@ describe("github_get_pull_request", () => {
           data: {
             repository: {
               pullRequest: {
+                reviews: {
+                  nodes: [
+                    {
+                      author: { login: "bob" },
+                      state: "APPROVED",
+                      body: "LGTM",
+                      submittedAt: "2026-07-20T10:00:00Z",
+                    },
+                    { author: { login: "c" }, state: "PENDING" },
+                  ],
+                },
                 reviewThreads: {
                   totalCount: 51,
                   nodes: [
@@ -741,6 +752,57 @@ describe("github_get_pull_request", () => {
     expect(pr.reviewThreadsTruncated).toBe(true);
     expect(urls.some((url) => /\/pulls\/42\/comments/.test(url))).toBe(false);
   });
+  test("reads only thread fields and keeps newest submitted reviews", async () => {
+    vi.mocked(getGithubToolConfig).mockReturnValue(config);
+    const queries: string[] = [];
+    globalThis.fetch = vi.fn(async (input, init) => {
+      if (!String(input).endsWith("/graphql"))
+        return jsonResponse({ number: 42 });
+      const query = JSON.parse(String(init?.body)).query as string;
+      queries.push(query);
+      return jsonResponse({
+        data: {
+          repository: {
+            pullRequest: {
+              reviews: {
+                nodes: [
+                  ...Array.from({ length: 8 }, (_, i) => ({
+                    author: { login: `u${i}` },
+                    state: "APPROVED",
+                    submittedAt: `2026-07-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+                  })),
+                  { state: "PENDING" },
+                ],
+              },
+              reviewThreads: { totalCount: 0, nodes: [] },
+            },
+          },
+        },
+      });
+    }) as typeof fetch;
+    const { pullRequest } = parse(
+      await githubGetPullRequestTool.execute(
+        {
+          repo: "acme/app",
+          number: 42,
+          includeReviews: true,
+          includeReviewThreads: true,
+          maxReviews: 2,
+        },
+        ctxFor("newest-reviews"),
+      ),
+    );
+    expect(
+      pullRequest.reviews.map((r: { author: string }) => r.author),
+    ).toEqual(["u6", "u7"]);
+    expect(queries).toHaveLength(2);
+    const threads = queries.find((q) => q.includes("reviewThreads"))!;
+    expect(threads).not.toMatch(
+      /assignees|reviewRequests|headRefOid|reviews\(/,
+    );
+    expect(queries.find((q) => q.includes("reviews("))).toContain("last: 100");
+  });
+
   test.each([undefined, 2, 50])(
     "keeps the newest threads when maxReviews=%s limits the provider window",
     async (maxReviews) => {

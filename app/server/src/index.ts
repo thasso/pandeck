@@ -116,6 +116,7 @@ import {
   installBackgroundUpdateQueue,
 } from "./backgroundUpdateQueue.ts";
 import { backgroundWorkSupervisor } from "./backgroundWork/supervisor.ts";
+import { registerServerTaskBackend } from "./serverTasks.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import { setArtifactRetentionGuard } from "./mcp/toolGroups/packRuntime.ts";
 import {
@@ -1992,6 +1993,7 @@ server.listen(PORT, HOST, () => {
         `[assistant] recovered ${recovered.recovered} in-flight peer prompt(s) (${recovered.interrupted} interrupted after prior admission)`,
       );
   });
+  bootStep("server-task backend", registerServerTaskBackend);
   bootStep("background-work reconciliation", () => {
     // No background command or monitor survives an OS process restart, so
     // anything a previous epoch left nonterminal is lost. Never replayed.

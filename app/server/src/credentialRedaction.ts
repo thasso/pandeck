@@ -21,12 +21,17 @@ const PUBLISHED_CREDENTIAL_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   ...CREDENTIAL_TOKEN_PATTERNS,
   /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password)\b\s*[:=]\s*["'][^"']{12,}["']/i,
+  /\bAuthorization["']?\s*[:=]\s*["']?(?:Bearer|Basic|Token|Digest)\s+[^\s"',;]+/i,
+  // Without a header/assignment, keep ordinary "Bearer authentication" prose.
+  /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/i,
+  /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{16,}\b/,
+  /\b[\w.-]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)[\w.-]*["']?\s*[:=]\s*[A-Za-z0-9._~+/-]{20,}=*/i,
 ];
 
 /**
  * Whether text that is about to be PUBLISHED — an added patch line, a
  * caller-written commit message or pull-request body — holds a private key, a
- * known token shape, or a quoted credential assignment. Deliberately narrower
+ * known token shape, HTTP credentials, or a credential assignment. Narrower
  * than {@link redactCredentials}: a hit refuses publication with no override,
  * so prose that merely mentions a token or password has to pass.
  */
