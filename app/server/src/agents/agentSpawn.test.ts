@@ -307,6 +307,24 @@ test.each([false, true])(
     });
     if (requiresEnterprise) assert.equal((await pinned).modelId, "gpt-6.1-sol");
     else await assert.rejects(pinned, /No enabled/);
+    if (!requiresEnterprise) {
+      assert.match(runtime.listed[0]?.problem ?? "", /No enabled/);
+      write("test-reviewer", reviewer({ models: ["opus", "sol"] }));
+      const listing = spawnableAgentsText(
+        await listSpawnableAgents(undefined, options),
+      );
+      assert.match(listing, /sol \(cannot run: No enabled/);
+      write("test-reviewer", reviewer({ models: ["missing", "sol"] }));
+      await assert.rejects(
+        resolveAgentSpawn("test-reviewer", undefined, options),
+        /None of its listed models resolve now/,
+      );
+      const refused = spawnableAgentsText(
+        await listSpawnableAgents(undefined, options),
+      );
+      assert.doesNotMatch(refused, /other listed models that resolve now/);
+      write("test-reviewer", reviewer({ models: ["sol", "opus"] }));
+    }
     setAgentSpawnSourcesForTests({
       library: () => new LibraryStore(agentKind, root),
       accountFor: () => ({ profileId: null }),
