@@ -6488,6 +6488,12 @@ export interface QueuedPeerPrompt {
   retrying?: true;
   /** Its delivery is under way (a steer the turn has not read yet): past withdrawing. */
   sending?: true;
+  /**
+   * This session's opening prompt from the coordinator that spawned it, waiting
+   * for a slot under that coordinator's concurrency cap. It starts by itself;
+   * Send now starts it at once (after its approval is re-checked).
+   */
+  waitingForSlot?: true;
 }
 
 export interface PromptAttachment {

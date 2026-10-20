@@ -119,10 +119,22 @@ only shares the Stop hold and its Resume.
 
 Peer prompts other sessions sent are not the user's drafts, but until delivery
 they wait in the same place. The session state projects them as
-`queuedPeerPrompts` (`peerPrompt.ts`, every row not yet delivered: queued,
-retrying or being dispatched), re-sent as `peerPromptQueue` on every transition
-of one. A row carries its sender, an excerpt, and the opaque key of the sender's
-card, which the commands address it by.
+`queuedPeerPrompts` (`peerPrompt.ts`, every row not yet delivered: waiting for a
+slot, queued, retrying or being dispatched), re-sent as `peerPromptQueue` on
+every transition of one. A row carries its sender, an excerpt, and the opaque
+key of the sender's card, which the commands address it by.
+
+A directly spawned session whose coordinator was at its concurrency cap shows
+its opening prompt as **Waiting for a slot** (`waitingForSlot`, a `held` row;
+`docs/agent-workflows.md`). It starts by itself, in order, when its coordinator
+has a slot. The automatic drain delivers nothing queued after it until it
+starts, so a later message from any sender waits behind it unless the user sends
+that one now. Withdraw cancels it like any waiting row, and what waited behind
+it is then delivered as usual (so too when it is refused). **Send now** starts
+it at once, past the cap and the coordinator's order, but its approval is
+checked again first: one no longer allowed is refused (its row `failed`, the
+coordinator told why) and the queue action fails with that reason. Starting it
+restarts its reply deadline.
 
 - **Withdraw** (`withdrawQueuedPeerPrompt`) cancels a row that has not started
   dispatching; the sender's card says `cancelled` with the reason. A row being

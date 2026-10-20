@@ -1166,3 +1166,146 @@ describe("peerPromptStore", () => {
     });
   });
 });
+
+describe("held opening prompts", () => {
+  function hold(recipient: string, sender = "sender-A") {
+    const { conversationId, chainId } = conv();
+    return store.enqueueRouted({
+      conversationId,
+      chainId,
+      senderSessionId: sender,
+      recipientSessionId: recipient,
+      participants: [sender, recipient],
+      maxHops: 10,
+      prompt: "opener",
+      responseRequested: true,
+      held: { queueSeq: store.allocateQueueSeq() },
+    });
+  }
+
+  it("keeps the admission-time position, and the drain claims nothing at or after it", () => {
+    const recipient = `r-${seq++}`;
+    const seqAtAdmission = store.allocateQueueSeq();
+    const earlier = enqueue(recipient);
+    // Admitted before `earlier` was queued, inserted after it.
+    const { conversationId, chainId } = conv();
+    const opener = store.enqueueRouted({
+      conversationId,
+      chainId,
+      senderSessionId: "sender-A",
+      recipientSessionId: recipient,
+      participants: ["sender-A", recipient],
+      maxHops: 10,
+      prompt: "opener",
+      responseRequested: false,
+      held: { queueSeq: seqAtAdmission },
+    });
+    assert.equal(opener.status, "held");
+    assert.equal(opener.queueSeq, seqAtAdmission);
+    assert.ok(opener.queueSeq < earlier.queueSeq);
+    const later = enqueue(recipient);
+    assert.equal(store.claimNext(recipient, "d", 60_000), undefined);
+    assert.deepEqual(store.claimBatch(recipient, "d", 60_000, 5, 10_000), []);
+    // The user's out-of-order claim of a later row still works.
+    assert.equal(store.claimOne(later.id, "send-now")?.status, "dispatching");
+    assert.equal(store.promoteHeld(opener.id, null)?.status, "queued");
+    assert.equal(store.claimNext(recipient, "d", 60_000)?.id, opener.id);
+    assert.equal(store.claimNext(recipient, "d", 60_000)?.id, earlier.id);
+  });
+
+  it("lists a held row in the recipient's queue and its pending delivery, never as an unfinished turn", () => {
+    const recipient = `r-${seq++}`;
+    const opener = hold(recipient);
+    assert.deepEqual(
+      store.listUndeliveredForRecipient(recipient).map((r) => r.id),
+      [opener.id],
+    );
+    assert.ok(store.pendingDeliveryRecipientIds().includes(recipient));
+    assert.ok(!store.queuedRecipientIds().includes(recipient));
+    assert.equal(store.activeTurnCount("sender-A", recipient), 0);
+    assert.deepEqual(
+      store
+        .heldFrom("sender-A")
+        .filter((r) => r.recipientSessionId === recipient).length,
+      1,
+    );
+    // An open request it still is: the reply is owed once it runs.
+    assert.ok(store.outstandingResponseRequestCount("sender-A") >= 1);
+  });
+
+  it("a cancel before the promotion wins; the promotion answers undefined", () => {
+    const recipient = `r-${seq++}`;
+    const a = hold(recipient);
+    assert.equal(store.cancelOne(a.id, "withdrawn")?.status, "cancelled");
+    assert.equal(store.promoteHeld(a.id, null), undefined);
+    const b = hold(recipient);
+    assert.deepEqual(
+      store.cancelPending(recipient, "cleared").map((r) => r.id),
+      [b.id],
+    );
+    assert.equal(store.promoteHeld(b.id, null), undefined);
+  });
+
+  it("a promoted row is queued, not dispatched: it stays cancellable until claimed", () => {
+    const recipient = `r-${seq++}`;
+    const a = hold(recipient);
+    assert.equal(store.promoteHeld(a.id, null)?.status, "queued");
+    assert.equal(store.cancelOne(a.id, "withdrawn")?.status, "cancelled");
+    const b = hold(recipient);
+    store.promoteHeld(b.id, null);
+    assert.equal(store.cancelPending(recipient, "cleared").length, 1);
+    const c = hold(recipient);
+    store.promoteHeld(c.id, null);
+    assert.equal(store.claimNext(recipient, "d", 60_000)?.id, c.id);
+    assert.equal(store.cancelOne(c.id, "withdrawn"), undefined);
+    assert.deepEqual(store.cancelPending(recipient, "cleared"), []);
+  });
+
+  it("a refusal and its consequence commit together or not at all", () => {
+    const recipient = `r-${seq++}`;
+    const a = hold(recipient);
+    assert.throws(
+      () =>
+        store.refuseHeld(a.id, "Not started.", () => {
+          throw new Error("notice write failed");
+        }),
+      /notice write failed/,
+    );
+    assert.equal(store.getById(a.id)?.status, "held");
+    const seen: string[] = [];
+    assert.equal(
+      store.refuseHeld(a.id, "Not started.", (r) => seen.push(r.status))
+        ?.status,
+      "failed",
+    );
+    assert.deepEqual(seen, ["failed"]);
+    assert.equal(
+      store.refuseHeld(a.id, "Not started.", () => {}),
+      undefined,
+    );
+    // A queued row is never refused this way.
+    assert.equal(
+      store.refuseHeld(enqueue(recipient).id, "x", () => {}),
+      undefined,
+    );
+  });
+
+  it("delete cancels both directions, archive only incoming, and neither touches queued rows", () => {
+    const coordinator = `c-${seq++}`;
+    const child = `k-${seq++}`;
+    const grandchild = `g-${seq++}`;
+    const incoming = hold(child, coordinator);
+    const outgoing = hold(grandchild, child);
+    const queued = enqueue(child, { sender: coordinator });
+    assert.deepEqual(
+      store.cancelHeldTo(child, "archived").map((r) => r.id),
+      [incoming.id],
+    );
+    assert.equal(store.getById(outgoing.id)?.status, "held");
+    assert.deepEqual(
+      store.cancelHeldInvolving(child, "deleted").map((r) => r.id),
+      [outgoing.id],
+    );
+    assert.equal(store.getById(queued.id)?.status, "queued");
+  });
+});

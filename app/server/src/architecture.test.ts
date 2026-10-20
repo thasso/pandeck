@@ -382,6 +382,7 @@ test("the peer-spawn lane never reaches into the subagent domain", () => {
   for (const file of [
     "sessionSpawn.ts",
     "peerSpawnRuntimes.ts",
+    "heldDirectPeers.ts",
     "tools/sessions/sessionSpawnTool.ts",
   ]) {
     const source = readFileSync(join(SRC_ROOT, file), "utf8");

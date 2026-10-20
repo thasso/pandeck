@@ -60,6 +60,7 @@ import {
   withReportingRoute,
   type ApprovedPeerRuntime,
 } from "./peerSpawnRuntimes.ts";
+import { startHeldDirectPeers, waitingPositionOf } from "./heldDirectPeers.ts";
 import { registerApprovalExecutor } from "./pendingApprovals.ts";
 import { sendPeerPrompt } from "./peerPrompt.ts";
 import type { LiveSession } from "./harness.ts";
@@ -806,6 +807,8 @@ export interface SessionSpawnDeps {
     prompt: string;
     responseRequested: boolean;
     taskId?: string;
+    /** Store the opening prompt `held` at this queue position. */
+    hold?: { queueSeq: number };
   }): Promise<void>;
   broadcastSessions(): void;
 }
@@ -834,6 +837,7 @@ const REAL_DEPS: SessionSpawnDeps = {
       prompt: input.prompt,
       responseRequested: input.responseRequested,
       ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.hold ? { hold: input.hold } : {}),
     });
   },
   broadcastSessions: () => {
@@ -996,6 +1000,7 @@ async function spawnOne(
   // From here the session is real: claim it on the result row immediately so
   // any later metadata, context, or delivery failure still reports the child.
   item.resultSessionId = sessionId;
+  options.onCreated?.(sessionId);
   const harness = harnessForModelProvider(item.provider);
   // Both real creation paths already write metadata. This merge is also the
   // explicit ordering gate for injected adapters and future harnesses: the
@@ -1046,6 +1051,7 @@ async function spawnOne(
     prompt: item.prompt,
     responseRequested: item.responseRequested,
     ...(item.taskId ? { taskId: item.taskId } : {}),
+    ...(options.hold ? { hold: options.hold } : {}),
   });
 }
 
@@ -1115,6 +1121,10 @@ async function assertAgentUnchanged(
 interface SpawnOneOptions {
   peerTurnCap?: number;
   requiresEnterprise?: boolean;
+  /** Over the cap: the opening prompt waits for a slot at this position. */
+  hold?: { queueSeq: number };
+  /** Synchronous, the moment the session exists and before its delivery. */
+  onCreated?: (sessionId: string) => void;
   /** Synchronous, after the last await and immediately before creation. */
   assertAdmittedCost?: (item: SessionSpawnApprovalItem) => void;
   currentRuntime?: () => Promise<{
@@ -1252,6 +1262,8 @@ export interface DirectSpawnRowResult {
     modelFallbackReason?: string;
   };
   sessionId?: string;
+  /** Created over the cap: its opening prompt waits for a slot, at this place. */
+  waitingForSlot?: { position: number };
   error?: string;
 }
 
@@ -1265,6 +1277,9 @@ export interface DirectSpawnRowResult {
  * so a roster or definition edit between rows is honoured rather than assumed
  * away, and a runtime, creation or delivery failure is reported on that row
  * while the others continue.
+ *
+ * Nothing is refused for the concurrency cap: a counted row over it is created
+ * with its opening prompt waiting for a slot (`heldDirectPeers.ts`), in order.
  */
 export async function spawnApprovedPeers(input: {
   senderSessionId: string;
@@ -1340,138 +1355,177 @@ export async function spawnApprovedPeers(input: {
         : { profileId: row.profileId },
     ),
   );
-  // The fixed concurrency policy is a batch gate, not a per-row one: half a
-  // batch admitted would leave the coordinator reasoning about a limit it
-  // cannot see. The claim is held for the whole batch and released in the
-  // `finally`, so an overlapping call cannot be told the same slots are free
-  // while these sessions are still being created.
+  // Children already waiting go first: a slot freed since the last trigger is
+  // theirs, not this batch's.
+  await startHeldDirectPeers(input.senderSessionId);
+  // One decision for the whole batch, per row: start now, or wait behind the
+  // coordinator's earlier rows. The claim for the rows that start is held for
+  // the whole batch and released in the `finally`, so an overlapping call
+  // cannot be told the same slots are free while these sessions are still
+  // being created; a waiting row's ticket keeps its place until its row exists.
   const claim = await admitDirectPeerTurns(
     input.senderSessionId,
-    admittedCosts.filter((cost) => cost === "counted").length,
+    admittedCosts,
   );
   const results: DirectSpawnRowResult[] = [];
   try {
     for (const [index, row] of input.rows.entries()) {
-      const structural = structurals[index]!;
-      const admittedCost = admittedCosts[index]!;
-      const requiresEnterprise = rowRequires(row);
-      const result: DirectSpawnRowResult = {
-        title: structural.title,
-        owner: structural.owner,
-        ...(structural.inheritGrants === false ? { inheritGrants: false } : {}),
-        ...(row.agent !== undefined
-          ? { agent: row.agent.trim() }
-          : { profileId: row.profileId.trim() }),
-      };
-      results.push(result);
-      // An early resolution so a roster mistake costs no worktree lookups —
-      // but it is NOT what the session runs on. `spawnOne` re-resolves through
-      // `currentRuntime` immediately before creating anything, because the
-      // awaits in between are exactly where a Settings or definition edit
-      // lands.
-      const resolve = rowRuntime(row, requiresEnterprise);
-      // An agent row was resolved with the batch already; the late read in
-      // `spawnOne` is the one that counts.
-      let runtime: RowRuntime;
+      const decision = claim.rows[index]!;
+      const hold =
+        "holdSeq" in decision ? { queueSeq: decision.holdSeq } : undefined;
       try {
-        runtime = earlyAgents.get(index) ?? (await resolve());
-        if (
-          requiresEnterprise &&
-          !credentialProfileById(runtime.credentialProfileId)?.enterprise
-        )
-          throw new Error(
-            "This session requires an enterprise account. Select an approved runtime using an account marked as enterprise.",
-          );
-      } catch (err) {
-        result.error = errorText(err);
-        continue;
-      }
-      const item: SessionSpawnApprovalItem = {
-        ...approvalItemOf(structural),
-        // The child is told who to answer by the SERVER, so a coordinator that
-        // forgot to say it in its own prompt still gets a result.
-        prompt:
-          structural.owner === "user"
-            ? structural.prompt
-            : withReportingRoute(structural.prompt, input.senderSessionId),
-        responseRequested:
-          structural.owner === "coordinator" && row.responseRequested !== false,
-        provider: runtime.provider,
-        modelId: runtime.modelId,
-        ...(runtime.modelName ? { modelName: runtime.modelName } : {}),
-        credentialProfileId: runtime.credentialProfileId,
-        ...(runtime.accountName ? { accountName: runtime.accountName } : {}),
-        thinkingLevel: runtime.thinkingLevel,
-      };
-      let finalRuntime: RowRuntime | undefined;
-      try {
-        await spawnOne(input.senderSessionId, item, {
-          requiresEnterprise,
-          ...(row.peerTurnCap !== undefined
-            ? { peerTurnCap: row.peerTurnCap }
-            : {}),
-          assertAdmittedCost: (current) => {
-            if (
-              admittedCost === "low" &&
-              directPeerCostClass(
-                row.agent !== undefined
-                  ? current
-                  : { profileId: row.profileId },
-              ) !== "low"
-            )
-              throw new Error(
-                `The runtime's cost label changed while "${item.title}" was being started; nothing was created. Spawn it again.`,
-              );
-          },
-          currentRuntime: async () => {
-            // Throws if the row was disabled, deleted or made unrunnable while
-            // this row was being prepared; a row edited to another runtime runs
-            // on the CURRENT approval, which is the only one that exists.
-            const current = await resolve();
-            if (
-              requiresEnterprise &&
-              !credentialProfileById(current.credentialProfileId)?.enterprise
-            )
-              throw new Error(
-                "This session requires an enterprise account. Select an approved runtime using an account marked as enterprise.",
-              );
-            finalRuntime = current;
-            // The definition the session is created from decides, unless the
-            // row did.
-            if (
-              inheritsGrants(
-                row.inheritGrants,
-                current.agent ? current.inheritGrants : undefined,
-              )
-            )
-              delete item.inheritGrants;
-            else item.inheritGrants = false;
-            return current;
-          },
-        });
-      } catch (err) {
-        result.error = errorText(err);
-      }
-      if (item.inheritGrants === false) result.inheritGrants = false;
-      else delete result.inheritGrants;
-      // Report only the late resolution used for creation. If late resolution
-      // refused the row, repeating the earlier runtime here would imply that a
-      // stale or fallback runtime had been attempted when nothing was created.
-      if (finalRuntime) result.runtime = reportedRuntime(finalRuntime);
-      if (item.resultSessionId) {
-        result.sessionId = item.resultSessionId;
-        recordDirectPeerChild(
-          input.senderSessionId,
-          item.resultSessionId,
-          admittedCost,
-        );
+        await spawnDirectRow(index, row, hold);
+      } finally {
+        if (hold) {
+          claim.settleHold(hold.queueSeq);
+          void startHeldDirectPeers(input.senderSessionId);
+        }
       }
     }
   } finally {
     claim.release();
+    for (const decision of claim.rows)
+      if ("holdSeq" in decision) claim.settleHold(decision.holdSeq);
+  }
+  // Decides and schedules only: whatever this batch's end freed starts now.
+  await startHeldDirectPeers(input.senderSessionId);
+  for (const [index, result] of results.entries()) {
+    if (!result.sessionId || !("holdSeq" in claim.rows[index]!)) continue;
+    const position = waitingPositionOf(input.senderSessionId, result.sessionId);
+    if (position !== undefined) result.waitingForSlot = { position };
   }
   deps.broadcastSessions();
   return results;
+
+  async function spawnDirectRow(
+    index: number,
+    row: DirectSpawnRequestRow,
+    hold: { queueSeq: number } | undefined,
+  ): Promise<void> {
+    const structural = structurals[index]!;
+    const admittedCost = admittedCosts[index]!;
+    const requiresEnterprise = rowRequires(row);
+    const result: DirectSpawnRowResult = {
+      title: structural.title,
+      owner: structural.owner,
+      ...(structural.inheritGrants === false ? { inheritGrants: false } : {}),
+      ...(row.agent !== undefined
+        ? { agent: row.agent.trim() }
+        : { profileId: row.profileId.trim() }),
+    };
+    results.push(result);
+    // An early resolution so a roster mistake costs no worktree lookups —
+    // but it is NOT what the session runs on. `spawnOne` re-resolves through
+    // `currentRuntime` immediately before creating anything, because the
+    // awaits in between are exactly where a Settings or definition edit
+    // lands.
+    const resolve = rowRuntime(row, requiresEnterprise);
+    // An agent row was resolved with the batch already; the late read in
+    // `spawnOne` is the one that counts.
+    let runtime: RowRuntime;
+    try {
+      runtime = earlyAgents.get(index) ?? (await resolve());
+      if (
+        requiresEnterprise &&
+        !credentialProfileById(runtime.credentialProfileId)?.enterprise
+      )
+        throw new Error(
+          "This session requires an enterprise account. Select an approved runtime using an account marked as enterprise.",
+        );
+    } catch (err) {
+      result.error = errorText(err);
+      return;
+    }
+    const item: SessionSpawnApprovalItem = {
+      ...approvalItemOf(structural),
+      // The child is told who to answer by the SERVER, so a coordinator that
+      // forgot to say it in its own prompt still gets a result.
+      prompt:
+        structural.owner === "user"
+          ? structural.prompt
+          : withReportingRoute(structural.prompt, input.senderSessionId),
+      responseRequested:
+        structural.owner === "coordinator" && row.responseRequested !== false,
+      provider: runtime.provider,
+      modelId: runtime.modelId,
+      ...(runtime.modelName ? { modelName: runtime.modelName } : {}),
+      credentialProfileId: runtime.credentialProfileId,
+      ...(runtime.accountName ? { accountName: runtime.accountName } : {}),
+      thinkingLevel: runtime.thinkingLevel,
+    };
+    let finalRuntime: RowRuntime | undefined;
+    try {
+      await spawnOne(input.senderSessionId, item, {
+        requiresEnterprise,
+        ...(row.peerTurnCap !== undefined
+          ? { peerTurnCap: row.peerTurnCap }
+          : {}),
+        ...(hold ? { hold } : {}),
+        // The registry is what admission counts, from the moment the
+        // session exists, and what a waiting child is re-checked against.
+        onCreated: (sessionId) =>
+          recordDirectPeerChild({
+            childSessionId: sessionId,
+            spawnerSessionId: input.senderSessionId,
+            costClass: admittedCost,
+            source:
+              row.agent !== undefined
+                ? { kind: "agent", agentName: row.agent.trim() }
+                : { kind: "profile", profileId: row.profileId.trim() },
+            provider: item.provider,
+            modelId: item.modelId,
+            thinkingLevel: item.thinkingLevel,
+            credentialProfileId: item.credentialProfileId,
+            createdAt: Date.now(),
+          }),
+        assertAdmittedCost: (current) => {
+          if (
+            admittedCost === "low" &&
+            directPeerCostClass(
+              row.agent !== undefined ? current : { profileId: row.profileId },
+            ) !== "low"
+          )
+            throw new Error(
+              `The runtime's cost label changed while "${item.title}" was being started; nothing was created. Spawn it again.`,
+            );
+        },
+        currentRuntime: async () => {
+          // Throws if the row was disabled, deleted or made unrunnable while
+          // this row was being prepared; a row edited to another runtime runs
+          // on the CURRENT approval, which is the only one that exists.
+          const current = await resolve();
+          if (
+            requiresEnterprise &&
+            !credentialProfileById(current.credentialProfileId)?.enterprise
+          )
+            throw new Error(
+              "This session requires an enterprise account. Select an approved runtime using an account marked as enterprise.",
+            );
+          finalRuntime = current;
+          // The definition the session is created from decides, unless the
+          // row did.
+          if (
+            inheritsGrants(
+              row.inheritGrants,
+              current.agent ? current.inheritGrants : undefined,
+            )
+          )
+            delete item.inheritGrants;
+          else item.inheritGrants = false;
+          return current;
+        },
+      });
+    } catch (err) {
+      result.error = errorText(err);
+    }
+    if (item.inheritGrants === false) result.inheritGrants = false;
+    else delete result.inheritGrants;
+    // Report only the late resolution used for creation. If late resolution
+    // refused the row, repeating the earlier runtime here would imply that a
+    // stale or fallback runtime had been attempted when nothing was created.
+    if (finalRuntime) result.runtime = reportedRuntime(finalRuntime);
+    if (item.resultSessionId) result.sessionId = item.resultSessionId;
+  }
 }
 
 /** What one direct row runs on: an approved runtime, or an agent definition. */

@@ -74,6 +74,20 @@ describe("PromptQueueLedge peer rows", () => {
     expect(props.onOpenSession).toHaveBeenCalledWith("session-reviewer");
   });
 
+  it("shows a spawned session's opening prompt waiting for a slot, with Send now and Withdraw", () => {
+    const props = render({
+      peers: [peer({ waitingForSlot: true })],
+      running: false,
+      canSteer: false,
+    });
+    expect(container.textContent).toContain("Waiting for a slot");
+    act(() => button("Send it now")!.click());
+    expect(props.onSendPeerNow).toHaveBeenCalledWith("k1");
+    act(() => button("Withdraw message")!.click());
+    expect(props.onWithdrawPeer).toHaveBeenCalledWith("k1");
+    expect(button("Send it next")).toBeNull();
+  });
+
   it("says a steer is under way instead of offering actions on it", () => {
     render({ peers: [peer({ sending: true })] });
     expect(container.textContent).toContain("Steering…");

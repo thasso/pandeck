@@ -32,11 +32,17 @@ import {
 } from "./delegationFailureJournal.ts";
 import {
   delegationFailureNoticeStore,
+  isHeldStartCategory,
+  isKnownNoticeCategory,
   type DelegationFailureCategory,
   type DelegationFailureNotice,
   type DelegationFailureNoticeInput,
   type DelegationFailureRoute,
+  type HeldStartCategory,
 } from "./db/delegationFailureNoticeStore.ts";
+import { directPeerChildStore } from "./db/directPeerChildStore.ts";
+import { peerRuntimeDisplayName } from "@assistant/shared";
+import { getSettings } from "./settings.ts";
 import {
   peerPromptStore,
   type PeerPromptRecord,
@@ -669,16 +675,75 @@ export function recordDeliveryFailureNotice(
 }
 
 /**
+ * The fixed reason a held opening prompt is refused with, on its row and card:
+ * our own words, naming no runtime.
+ */
+export const HELD_START_REASONS: Record<HeldStartCategory, string> = {
+  held_runtime_removed:
+    "Not started: the approved runtime it was spawned on was removed.",
+  held_runtime_disabled:
+    "Not started: the approved runtime it was spawned on is disabled.",
+  held_runtime_changed:
+    "Not started: the approved runtime it was spawned on no longer approves its model, thinking level or account.",
+  held_account_unavailable:
+    "Not started: its account can no longer run its model.",
+  held_agent_removed:
+    "Not started: the agent definition it was spawned as is gone or unreadable.",
+  held_agent_changed:
+    "Not started: the agent definition it was spawned as no longer allows its persona, model or effort.",
+};
+
+/**
+ * The notice a held opening prompt refused at start owes its spawner: whatever
+ * the child's ownership or `responseRequested`, as long as both sessions are
+ * live. Called inside the transaction that refuses the row
+ * (`peerPromptStore.refuseHeld`), so the notice commits with it.
+ */
+export function recordHeldStartNotice(
+  held: PeerPromptRecord,
+  category: HeldStartCategory,
+  now = Date.now(),
+): DelegationFailureNotice[] {
+  const childId = held.recipientSessionId;
+  const coordinatorId = held.senderSessionId;
+  if (!liveUserSession(childId) || !liveUserSession(coordinatorId)) return [];
+  return delegationFailureNoticeStore.record(
+    [
+      {
+        incidentKey: `held-start:${held.id}`,
+        childSessionId: childId,
+        coordinatorSessionId: coordinatorId,
+        route: "spawn",
+        category,
+        requestIds: [held.id],
+        anchor: {
+          chainId: held.chainId,
+          conversationId: held.conversationId,
+          hop: held.hop,
+        },
+        failedAt: now,
+      },
+    ],
+    now,
+  );
+}
+
+/**
  * Why a recorded notice may no longer be delivered, or `undefined` when it may.
  * Asked again right before the notice turn is appended, because the user may
  * have ended the delegation since it was recorded: the evidence that routed it
  * must still hold.
  */
 function noLongerOwed(n: DelegationFailureNotice): string | undefined {
+  // Fail closed: a category this build cannot word is never rendered.
+  if (!isKnownNoticeCategory(n.category)) return "unknown category";
   const coordinator = liveUserSession(n.coordinatorSessionId);
   if (!coordinator) return "coordinator no longer active";
   const child = liveUserSession(n.childSessionId);
   if (!child) return "child no longer active";
+  // The spawner still holds a child that never started: a takeover, a
+  // settlement or a withdrawn reply request does not change that.
+  if (isHeldStartCategory(n.category)) return undefined;
   const waiting = n.requestIds
     .map((id) => peerPromptStore.getById(id))
     .some((m) => m !== undefined && unanswered(m));
@@ -772,7 +837,28 @@ function requestLine(ids: readonly string[]): string | undefined {
 export function delegationFailureNoticeLines(
   notices: readonly DelegationFailureNotice[],
 ): string[] {
-  const byChild = new Map<string, DelegationFailureNotice[]>();
+  const failures = notices.filter(
+    (n): n is FailureNotice => !isHeldStartCategory(n.category),
+  );
+  const refused = notices.filter((n): n is HeldStartNotice =>
+    isHeldStartCategory(n.category),
+  );
+  return [
+    ...(failures.length > 0 ? failureNoticeLines(failures) : []),
+    ...(failures.length > 0 && refused.length > 0 ? [""] : []),
+    ...(refused.length > 0 ? heldStartNoticeLines(refused) : []),
+  ];
+}
+
+type FailureNotice = DelegationFailureNotice & {
+  category: DelegationFailureCategory;
+};
+type HeldStartNotice = DelegationFailureNotice & {
+  category: HeldStartCategory;
+};
+
+function failureNoticeLines(notices: readonly FailureNotice[]): string[] {
+  const byChild = new Map<string, FailureNotice[]>();
   for (const n of notices) {
     const list = byChild.get(n.childSessionId) ?? [];
     list.push(n);
@@ -799,6 +885,61 @@ export function delegationFailureNoticeLines(
       ...new Set(list.flatMap((n) => n.requestIds)),
     ]);
     if (requests) lines.push(requests);
+  }
+  return lines;
+}
+
+/**
+ * Who the child was spawned on, in the user's own label: the roster row's
+ * current name (its id once the row is gone), or the definition's name.
+ */
+function heldStartLabel(childId: string): string {
+  const child = directPeerChildStore.get(childId);
+  if (!child) return "unknown";
+  if (child.source.kind === "agent")
+    return clip(child.source.agentName, TITLE_MAX);
+  const profileId = child.source.profileId;
+  const row = getSettings().peerSpawnRuntimes.find((r) => r.id === profileId);
+  return clip(row ? peerRuntimeDisplayName(row) : profileId, TITLE_MAX);
+}
+
+/** One sentence per refused-start category, never a provider's words. */
+function heldStartSentence(category: HeldStartCategory, label: string): string {
+  const lead = "It was waiting for a slot and was NOT started:";
+  switch (category) {
+    case "held_runtime_removed":
+      return `${lead} the approved runtime "${label}" it was spawned on was removed from Settings.`;
+    case "held_runtime_disabled":
+      return `${lead} the approved runtime "${label}" it was spawned on is now disabled in Settings.`;
+    case "held_runtime_changed":
+      return `${lead} the approved runtime "${label}" it was spawned on was changed and no longer approves its model, thinking level or account.`;
+    case "held_account_unavailable":
+      return `${lead} the account it was created on can no longer run the model of "${label}".`;
+    case "held_agent_removed":
+      return `${lead} the agent definition "${label}" it was spawned as was removed or can no longer be read.`;
+    case "held_agent_changed":
+      return `${lead} the agent definition "${label}" it was spawned as changed and no longer allows its persona, model or effort.`;
+  }
+}
+
+function heldStartNoticeLines(notices: readonly HeldStartNotice[]): string[] {
+  const lines = [
+    notices.length === 1
+      ? "A session you spawned was waiting for a slot and was NOT started:"
+      : `${notices.length} sessions you spawned were waiting for a slot and were NOT started:`,
+  ];
+  for (const n of notices) {
+    const title = clip(
+      sessionStore.get(n.childSessionId)?.title ?? "a session",
+      TITLE_MAX,
+    );
+    const opener = n.requestIds
+      .map((id) => peerPromptStore.getById(id))
+      .find((m) => m !== undefined);
+    const sent = opener ? ` (sent ${at(opener.createdAt)})` : "";
+    lines.push(
+      `- ${title} (session \`${n.childSessionId}\`): ${heldStartSentence(n.category, heldStartLabel(n.childSessionId))} Its opening prompt${sent} was not delivered; the session exists with no turn.`,
+    );
   }
   return lines;
 }

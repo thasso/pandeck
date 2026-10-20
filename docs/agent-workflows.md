@@ -140,8 +140,8 @@ the outcome:
   under **Peer turns at once** in any session's inspector. Agents cannot change
   their own cap; one may ask for a raise on an up-front grant request card
   (`docs/approvals.md`, Requesting grants up front), which only the user's click
-  applies. Lowering it leaves existing turns alone and gates only new starts. A
-  refusal names the current cap and the inspector control. A `spawn` row may set
+  applies. Lowering it leaves existing turns alone and gates only new starts;
+  raising it starts waiting children at once (below). A `spawn` row may set
   `peerTurnCap` for its child, no higher than the spawner's cap captured before
   batch validation. `propose` rows refuse that field. Initial precedence is
   row > definition `peer-turns` > default 4. Definition defaults are
@@ -149,16 +149,55 @@ the outcome:
   creation, not reapplied on resume. Forks start unset; resetting a session
   returns to 4, not to its definition's default. A counted child holds a slot
   while running or while a prompt from its spawner is queued or being
-  dispatched. Runtimes the user marked `relativeCost: "low"` neither need nor
-  hold a slot, with no bound on low-cost turns. A profile row uses its own cost
-  label. An agent-definition row is low only when at least one enabled approved
-  runtime matches its provider, model and thinking level, and every match is
-  low. Account pins do not affect that match. Unknown or conflicting cost
-  counts. The admitted class stays fixed for the child. A low-to-counted change
-  before creation refuses that row; a counted-to-low change still counts. A
-  batch reserves only its counted rows and refuses as a whole if those exceed
-  available slots. Card-approved `propose` spawns are outside this admission
-  gate. Each batch still has at most eight rows.
+  dispatched, admitted or acknowledged; an opening prompt waiting for a slot,
+  and messages queued behind it, hold none until it starts (a turn the user
+  started in that child still counts). Runtimes the user marked
+  `relativeCost: "low"` neither need nor hold a slot, with no bound on low-cost
+  turns. A profile row uses its own cost label. An agent-definition row is low
+  only when at least one enabled approved runtime matches its provider, model
+  and thinking level, and every match is low. Account pins do not affect that
+  match. Unknown or conflicting cost counts. The admitted class stays fixed for
+  the child. A low-to-counted change before creation refuses that row; a
+  counted-to-low change still counts. The children are durable
+  (`direct_peer_children`), so a restart counts the work that survived it.
+  Card-approved `propose` spawns are outside this admission gate. Each batch
+  still has at most eight rows.
+
+  Nothing is refused for the cap. A counted row over it is still created (the
+  spawner gets its id, title and worktree) but its opening prompt is stored
+  `held`, waiting for a slot; the result says which rows wait and their
+  position, names the cap and says the user can raise it in the inspector. Rows
+  start in admission order per spawner: a counted row starts now only when a
+  slot is free and nothing of that spawner's is already waiting, including a row
+  admitted to wait whose session is still being created. Starting a waiting
+  child takes the same admission critical section as a batch, so a start and an
+  overlapping spawn cannot both take one slot. Starts are event-driven, never
+  timed: a direct child's idle edge, a spawner's row to its child leaving the
+  statuses that hold a slot (finished, failed, cancelled, withdrawn), the end of
+  a batch or of a waiting row's creation, a raised cap (scheduled by the
+  synchronous setter, never awaited) and boot, all reaching
+  `startHeldDirectPeers` (`heldDirectPeers.ts`).
+
+  Before a waiting child starts, its approval is checked again against the
+  CURRENT Settings or definition: the roster row must still exist, be enabled
+  and approve its exact provider, model and thinking (a pin must be its
+  account), and its account must still run it; a definition must still resolve,
+  keep its persona and list its model at its effort. Every await comes first —
+  account discovery, the definition's model check and a last read of the
+  definition's source, which must still be the one checked — then Settings, the
+  account, which children are running, the free slots and the start are read and
+  decided in one synchronous step. One no longer allowed is NOT started: its row
+  fails with a fixed reason and the spawner gets a notice saying why
+  (`docs/delegation-failure-notices.md`). A refused child frees nothing and
+  blocks nothing. The spawner cancels a waiting child with `session_control`
+  (`cancel_queued_prompts`, or `stop` with `clearQueue`); the user withdraws it,
+  or sends it now, in the child's composer queue
+  (`docs/steering-and-queueing.md`). Deleting the spawner or the child cancels
+  its waiting prompt, as does archiving the child (manually, through a run's
+  cleanup, or by retention, which a waiting child's queued work normally keeps
+  away); an archived spawner's children keep waiting. Every such cancellation is
+  silent and needs no free slot. A future archive writer must cancel the same
+  way (`cancelHeldForArchivedSessions`).
 
   #### Peer-message hop limit
 

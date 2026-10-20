@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import { peerPromptStore } from "../db/peerPromptStore.ts";
+import { sessionStore } from "../db/sessionStore.ts";
 import type { WorkflowRunRow } from "../db/workflowStore.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
-import { deleteCancelledWorkflowRun } from "./runCleanup.ts";
+import {
+  archiveRunSessions,
+  deleteCancelledWorkflowRun,
+} from "./runCleanup.ts";
+
+vi.mock("../hub.ts", () => ({ hub: { broadcastSessions: async () => {} } }));
 
 function run(overrides: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
   return {
@@ -134,4 +141,24 @@ test("only cancelled runs admit permanent cleanup", async () => {
     /only a cancelled run can be deleted/,
   );
   assert.deepEqual(rec.calls, []);
+});
+
+test("archiving a run's waiting child cancels its opening prompt for good", async () => {
+  for (const id of ["run-coordinator", "run-waiting-child"])
+    sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  const opener = peerPromptStore.enqueueRouted({
+    conversationId: "run-conv",
+    chainId: peerPromptStore.createChain(),
+    senderSessionId: "run-coordinator",
+    recipientSessionId: "run-waiting-child",
+    participants: ["run-coordinator", "run-waiting-child"],
+    maxHops: 10,
+    prompt: "start when there is room",
+    responseRequested: true,
+    held: { queueSeq: peerPromptStore.allocateQueueSeq() },
+  });
+  await archiveRunSessions(["run-waiting-child"]);
+  assert.equal(peerPromptStore.getById(opener.id)?.status, "cancelled");
+  sessionStore.setArchived("run-waiting-child", false);
+  assert.equal(peerPromptStore.getById(opener.id)?.status, "cancelled");
 });

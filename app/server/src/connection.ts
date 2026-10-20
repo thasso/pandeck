@@ -68,6 +68,10 @@ import {
   withdrawQueuedPeerPrompt,
 } from "./peerPrompt.ts";
 import {
+  cancelHeldForArchivedSessions,
+  cancelHeldForDeletedSession,
+} from "./heldDirectPeers.ts";
+import {
   availableAgents,
   isAgentAvailable,
   isAgentSessionAvailable,
@@ -4966,6 +4970,7 @@ export class Connection implements Viewer {
         backgroundDeliveryOutboxStore.deleteSession(sessionId),
       (sessionId: string) =>
         delegationFailureNoticeStore.dropForSession(sessionId, "deleted"),
+      cancelHeldForDeletedSession,
       deleteToolGroupSessionData,
       deleteSessionStatusCard,
       (sessionId: string) => projectStore.forgetSessionProject(sessionId),
@@ -4985,6 +4990,8 @@ export class Connection implements Viewer {
     if (!ref) return;
     const key = id;
     sessionStore.setArchived(key, archived);
+    // A child archived while it waited for a slot never starts, restored or not.
+    if (archived) cancelHeldForArchivedSessions([key]);
     // Restoring from the archive brings the session back into the WORKING
     // SET, not onto the Settled shelf: a settled row's age is what automatic
     // retention (`sessionRetention.ts`) archives on, so a restore that left

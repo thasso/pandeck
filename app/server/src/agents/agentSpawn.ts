@@ -255,6 +255,27 @@ async function readAgentDefinition(
   return { manifest, blob, listed };
 }
 
+/**
+ * The blob id of a definition's source as it is NOW, or undefined when it
+ * cannot be read. No model is checked, so nothing slow sits between the read
+ * and the answer: a caller that checked the definition earlier compares this
+ * to the blob it checked.
+ */
+export async function agentDefinitionBlob(
+  name: string,
+): Promise<string | undefined> {
+  if (!isSafeEntryName(name)) return undefined;
+  const { library, scan } = await scanAgentsForSpawn();
+  let read;
+  try {
+    read = await resolveEntrySource(library, scan, name);
+  } catch {
+    return undefined;
+  }
+  if (!read || read.truncated) return undefined;
+  return library.gitBlobIdOf(read.raw);
+}
+
 /** The role half of a frozen agent: everything a runtime choice never changes. */
 export type AgentRole = Omit<
   SessionAgent,

@@ -388,7 +388,9 @@ const QueuedRow = memo(function QueuedRow({
 /**
  * A message another session sent this one, not delivered yet. Its text is the
  * sender's, so it offers no edit: it can go in now (steer, or send next) or be
- * withdrawn. A steer stays here until the turn reads it.
+ * withdrawn. A steer stays here until the turn reads it. A spawned session's
+ * opening prompt waiting for its coordinator's slot says so; sending it now
+ * starts it ahead of the cap.
  */
 function QueuedPeerRow({
   peer,
@@ -442,6 +444,7 @@ function QueuedPeerRow({
             </a>
             {peer.responseRequested ? " · wants a reply" : null}
             {peer.retrying ? " · delivery failed, retrying" : null}
+            {peer.waitingForSlot ? " · Waiting for a slot" : null}
           </span>
         </div>
         <ItemActions className="gap-0.5">
@@ -454,8 +457,20 @@ function QueuedPeerRow({
             <>
               {onSendNow ? (
                 <IconButton
-                  label={steering ? "Steer it in now" : "Send it next"}
-                  title={steering ? "Steer" : "Send next"}
+                  label={
+                    steering
+                      ? "Steer it in now"
+                      : peer.waitingForSlot
+                        ? "Send it now"
+                        : "Send it next"
+                  }
+                  title={
+                    steering
+                      ? "Steer"
+                      : peer.waitingForSlot
+                        ? "Send now"
+                        : "Send next"
+                  }
                   size="icon-xs"
                   onClick={() => onSendNow(peer.id)}
                 >

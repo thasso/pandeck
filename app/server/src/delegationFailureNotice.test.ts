@@ -25,7 +25,13 @@ import type { AgentType, Harness } from "@assistant/shared";
 import type { PromptOrigin } from "@assistant/shared/session";
 import { sessionStore } from "./db/sessionStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
-import { delegationFailureNoticeStore } from "./db/delegationFailureNoticeStore.ts";
+import {
+  delegationFailureNoticeStore,
+  type HeldStartCategory,
+} from "./db/delegationFailureNoticeStore.ts";
+import { directPeerChildStore } from "./db/directPeerChildStore.ts";
+import type { PeerPromptRecord } from "./db/peerPromptStore.ts";
+import { updateSettings } from "./settings.ts";
 import { automaticTurnHoldStore } from "./db/automaticTurnHoldStore.ts";
 import { closeDb, getDb } from "./db/index.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
@@ -81,6 +87,7 @@ const {
   setPeerPromptAutoDeliverForTests,
   setPeerPromptDeliveryStoppedForTests,
   sweepPeerPromptRetries,
+  wakeForNotice,
 } = await import("./peerPrompt.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
@@ -92,8 +99,10 @@ const { NativeAdapterEventSource } =
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const { holdAutomaticTurns } = await import("./automaticTurnHold.ts");
 const {
+  HELD_START_REASONS,
   PEER_NOTICE_AGENT_ID,
   deliverableNotices,
+  recordHeldStartNotice,
   delegationFailureNoticeLines,
   recordRunFailureNotices,
   recoverJournaledFailuresOnBoot,
@@ -2076,6 +2085,185 @@ describe("a delegation the user ended after the failure is not announced", () =>
 });
 
 /* ------------------------------- reset times ------------------------------- */
+
+describe("a held child refused at start tells its spawner why", () => {
+  const categories = Object.keys(HELD_START_REASONS) as HeldStartCategory[];
+
+  function heldRow(
+    coord: string,
+    child: string,
+    responseRequested = true,
+  ): PeerPromptRecord {
+    return peerPromptStore.enqueueRouted({
+      conversationId: `dfn-${n++}`,
+      chainId: peerPromptStore.createChain(),
+      senderSessionId: coord,
+      recipientSessionId: child,
+      participants: [coord, child],
+      maxHops: 10,
+      prompt: "start when there is room",
+      responseRequested,
+      held: { queueSeq: peerPromptStore.allocateQueueSeq() },
+    });
+  }
+
+  function registered(coord: string, child: string, agent: boolean): void {
+    directPeerChildStore.record({
+      childSessionId: child,
+      spawnerSessionId: coord,
+      costClass: "counted",
+      source: agent
+        ? { kind: "agent", agentName: "test-reviewer" }
+        : { kind: "profile", profileId: "pr_terra" },
+      provider: "openai-codex",
+      modelId: "gpt-5.6-terra",
+      thinkingLevel: "medium",
+      credentialProfileId: "codex-acct",
+      createdAt: Date.now(),
+    });
+  }
+
+  const refuse = (row: PeerPromptRecord, category: HeldStartCategory) =>
+    peerPromptStore.refuseHeld(row.id, HELD_START_REASONS[category], (r) => {
+      recordHeldStartNotice(r, category);
+    });
+
+  it("words every category as a start that never happened, naming the runtime or definition", async () => {
+    updateSettings({
+      peerSpawnRuntimes: [
+        {
+          id: "pr_terra",
+          name: "Terra implementer",
+          relativeCost: "high",
+          credentialProfileId: "codex-acct",
+          provider: "openai-codex",
+          modelId: "gpt-5.6-terra",
+          thinkingLevel: "medium",
+          enabled: false,
+        },
+      ],
+    });
+    try {
+      for (const category of categories) {
+        const { id: coord } = coordinator();
+        const child = seed("Waiting child");
+        sessionStore.linkSpawned(coord, child);
+        registered(coord, child, category.startsWith("held_agent"));
+        const row = heldRow(coord, child);
+        assert.equal(refuse(row, category)?.status, "failed", category);
+        assert.equal(
+          peerPromptStore.getById(row.id)?.failureReason,
+          HELD_START_REASONS[category],
+        );
+        wakeForNotice([coord]);
+        await until(() => noticesIn(coord).length === 1, category);
+        const text = noticesIn(coord)[0]!;
+        assert.match(text, /waiting for a slot/, category);
+        assert.match(text, /was NOT started/, category);
+        assert.match(text, new RegExp(child), category);
+        assert.match(
+          text,
+          category.startsWith("held_agent")
+            ? /"test-reviewer"/
+            : /"Terra implementer"/,
+          category,
+        );
+        for (const wrong of [
+          /could not be delivered/,
+          /repeated attempts/,
+          /Its turn/,
+        ])
+          assert.doesNotMatch(text, wrong, category);
+      }
+      // A removed roster row is named by its id.
+      updateSettings({ peerSpawnRuntimes: [] });
+      const { id: coord } = coordinator();
+      const child = seed("Orphaned child");
+      sessionStore.linkSpawned(coord, child);
+      registered(coord, child, false);
+      refuse(heldRow(coord, child), "held_runtime_removed");
+      wakeForNotice([coord]);
+      await until(() => noticesIn(coord).length === 1, "removed row");
+      assert.match(noticesIn(coord)[0]!, /"pr_terra"/);
+    } finally {
+      updateSettings({ peerSpawnRuntimes: [] });
+    }
+  });
+
+  it("reaches the spawner of a user-owned child wanting no reply, after a takeover and settlement", async () => {
+    const { id: coord } = coordinator();
+    const child = seed("Handed over");
+    sessionStore.linkSpawned(coord, child, Date.now(), "taken-over");
+    registered(coord, child, false);
+    holdAutomaticTurns(coord);
+    refuse(heldRow(coord, child, false), "held_runtime_disabled");
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
+    sessionStore.setSettled(coord, true);
+    sessionStore.setSettled(child, true);
+    automaticTurnHoldStore.release(coord);
+    wakeForNotice([coord]);
+    await until(() => noticesIn(coord).length === 1, "the refused start");
+    assert.match(noticesIn(coord)[0]!, /was NOT started/);
+  });
+
+  it("is dropped once either side is archived, and an unknown category is never rendered", async () => {
+    for (const end of ["coordinator", "child"] as const) {
+      const { id: coord } = coordinator();
+      const child = seed("Archived later");
+      sessionStore.linkSpawned(coord, child);
+      registered(coord, child, false);
+      holdAutomaticTurns(coord);
+      refuse(heldRow(coord, child), "held_agent_changed");
+      sessionStore.setArchived(end === "coordinator" ? coord : child, true);
+      assert.equal(deliverableNotices(coord).length, 0, end);
+      // Retired, not postponed: a restore brings nothing back.
+      sessionStore.setArchived(end === "coordinator" ? coord : child, false);
+      assert.equal(deliverableNotices(coord).length, 0, end);
+      automaticTurnHoldStore.release(coord);
+    }
+    const { id: coord } = coordinator();
+    const child = seed("Future category");
+    sessionStore.linkSpawned(coord, child);
+    delegationFailureNoticeStore.record([
+      {
+        incidentKey: `held-start:future-${n++}`,
+        childSessionId: child,
+        coordinatorSessionId: coord,
+        route: "spawn",
+        category: "held_from_a_newer_build" as never,
+        requestIds: [],
+        failedAt: Date.now(),
+      },
+    ]);
+    assert.equal(deliverableNotices(coord).length, 0);
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 0);
+  });
+
+  it("commits the refusal and its notice together or not at all", async () => {
+    const { id: coord } = coordinator();
+    const child = seed("Refused twice");
+    sessionStore.linkSpawned(coord, child);
+    registered(coord, child, false);
+    holdAutomaticTurns(coord);
+    const row = heldRow(coord, child);
+    const record = delegationFailureNoticeStore.record;
+    delegationFailureNoticeStore.record = () => {
+      throw new Error("SQLITE_FULL");
+    };
+    try {
+      assert.throws(() => refuse(row, "held_runtime_changed"), /SQLITE_FULL/);
+    } finally {
+      delegationFailureNoticeStore.record = record;
+    }
+    assert.equal(peerPromptStore.getById(row.id)?.status, "held");
+    assert.equal(recordedFor(coord), 0);
+    assert.equal(refuse(row, "held_runtime_changed")?.status, "failed");
+    assert.equal(refuse(row, "held_runtime_changed"), undefined);
+    assert.equal(recordedFor(coord), 1);
+    automaticTurnHoldStore.release(coord);
+  });
+});
 
 describe("a reset time is stated only when it is a real, plausible date", () => {
   it("drops non-finite, overflowing and out-of-range resets at the source", () => {
