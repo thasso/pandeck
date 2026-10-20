@@ -2063,16 +2063,49 @@ describe("real delivery through a fake runtime driver", () => {
   });
 });
 
+/**
+ * The production idle chain (`index.ts`) over a real background delivery,
+ * installed as the idle hook: nothing owed ahead of the background step, which
+ * an ordinary idle edge enters without a rerun. Its offer carries the attempt's
+ * claim like `offerBackgroundCompletion`, so the drain learns the facts reached
+ * the model from the runtime itself.
+ */
+function wireProductionIdleEdge(): BackgroundCompletionDelivery {
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: drainRecipient,
+    offer: async (sessionId, offer, clientRequestId, attempt) => {
+      await promptRuntimeSession(driverFor(sessionId), offer.visibleText, {
+        origin: { kind: "system", source: "background-completion" },
+        contextBlock: offer.contextBlock,
+        clientRequestId,
+        ...attempt.hooks(),
+      });
+      return attempt.finished(undefined) === "unsent" ? "busy" : "delivered";
+    },
+  });
+  const idleEdge = createIdleEdge({
+    runAutoApprovals: async () => {},
+    drainAgentHandoffs: async () => {},
+    drainPromptQueue: async () => {},
+    drainBackground: (id, rerun) =>
+      rerun ? delivery.requestDrain(id) : delivery.drain(id),
+    offerReplyReminders: async () => {},
+  });
+  setSessionIdleHook((id) => idleEdge.offer(id));
+  return delivery;
+}
+
+async function waitFor(check: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`${label} was not reached`);
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
+
 describe("browser-independent drain triggers", () => {
   afterEach(() => setSessionIdleHook(undefined));
-
-  async function until(check: () => boolean, label: string): Promise<void> {
-    const deadline = Date.now() + 5_000;
-    while (!check()) {
-      if (Date.now() > deadline) throw new Error(`${label} was not reached`);
-      await new Promise((r) => setTimeout(r, 2));
-    }
-  }
+  const until = waitFor;
 
   it("the idle-hook background phase waits for explicit peer authority", async () => {
     const recipient = seed("Idle authority recipient");
@@ -2151,31 +2184,7 @@ describe("browser-independent drain triggers", () => {
     const implementer = seed("Implementer");
     const driver = driverFor(implementer);
     driver.behavior = { mode: "success" };
-    // Carries the attempt's claim like `offerBackgroundCompletion`, so the
-    // drain learns the facts reached the model from the runtime itself.
-    const delivery = new BackgroundCompletionDelivery({
-      drainPeers: drainRecipient,
-      offer: async (sessionId, offer, clientRequestId, attempt) => {
-        await promptRuntimeSession(driverFor(sessionId), offer.visibleText, {
-          origin: { kind: "system", source: "background-completion" },
-          contextBlock: offer.contextBlock,
-          clientRequestId,
-          ...attempt.hooks(),
-        });
-        return attempt.finished(undefined) === "unsent" ? "busy" : "delivered";
-      },
-    });
-    // The production idle chain (`index.ts`): nothing owed ahead of the
-    // background step, which an ordinary idle edge enters without a rerun.
-    const idleEdge = createIdleEdge({
-      runAutoApprovals: async () => {},
-      drainAgentHandoffs: async () => {},
-      drainPromptQueue: async () => {},
-      drainBackground: (id, rerun) =>
-        rerun ? delivery.requestDrain(id) : delivery.drain(id),
-      offerReplyReminders: async () => {},
-    });
-    setSessionIdleHook((id) => idleEdge.offer(id));
+    const delivery = wireProductionIdleEdge();
     setPeerPromptAutoDeliverForTests(true);
     try {
       const releaseTurn = driver.holdTurns();
@@ -2248,6 +2257,7 @@ describe("browser-independent drain triggers", () => {
  * waits forever for an answer nobody is going to send.
  */
 describe("interruption notice to the sender", () => {
+  const until = waitFor;
   /** A row in the exact state boot recovery leaves behind: delivered, then the process died. */
   function strandedRow(
     sender: string,
@@ -2296,6 +2306,44 @@ describe("interruption notice to the sender", () => {
       true,
       "the notice is recorded durably, not in memory",
     );
+  });
+
+  it("delivers a peer prompt that arrived during the notice turn once that turn ends (Task-973)", async () => {
+    const sender = seed("Notice turn sender");
+    const recipient = seed("Notice turn recipient");
+    const other = seed("Notice turn peer");
+    const driver = driverFor(sender);
+    driver.behavior = { mode: "success" };
+    wireProductionIdleEdge();
+    strandedRow(sender, recipient, "please review the diff");
+    setPeerPromptAutoDeliverForTests(true);
+    try {
+      const releaseTurn = driver.holdTurns();
+      const releaseSettle = driver.holdSettle();
+      const drain = drainRecipient(sender);
+      await until(() => driver.isRunning, "the notice turn");
+
+      // The notice drain holds the session past its FIFO step: this send's
+      // own drain joins it.
+      const late = await sendPeerPrompt({
+        senderSessionId: other,
+        targetSessionId: sender,
+        prompt: "One more thing.",
+        responseRequested: false,
+      });
+      releaseTurn();
+      await until(() => !driver.isRunning, "the notice turn's idle edge");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      releaseSettle();
+      await drain;
+      await until(
+        () => peerPromptStore.getById(late.message.id)!.status === "completed",
+        "the peer prompt to deliver after the notice turn",
+      );
+      assert.equal(driver.promptOptions.length, 2, "one turn each, no repeat");
+    } finally {
+      setPeerPromptAutoDeliverForTests(false);
+    }
   });
 
   it("wakes the sender with the failure's category when the recipient's turn failed", async () => {

@@ -85,11 +85,15 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   other trigger defers while a queued message is owed
   (`promptQueueHasPriority`). A send counts once its user entry is appended, so
   the drain returns before the turn ends and every later step sees a busy
-  session. A background completion's turn is the exception: its drain awaits
-  that turn, so the turn's own idle edge joins that drain, already past its peer
-  step. A drain whose facts reached the model therefore runs the peer step once
-  more after the turn; without that a peer reply that arrived during the turn
-  waited for an unrelated wake ([Task-973](pa://task/973)).
+  session. Two drains await their own turn instead, and the turn's idle edge
+  joins a drain already past its peer read: a background completion's, and the
+  peer drain's notice turn, which comes after its FIFO. So a background drain
+  whose facts reached the model runs the peer step once more after the turn, and
+  a peer prompt sent while its recipient's drain is in flight drains once more
+  when that drain ends, as an owed notice already did. Without both, a reply
+  that arrived during such a turn waited for an unrelated wake
+  ([Task-973](pa://task/973)). A reply reminder holds the recipient's drain lock
+  as a reservation, and its release drains again.
 - **Stop means stop.** Stopping a turn that has messages queued pauses the queue
   (`session_prompt_queue_pause`), so its idle edge sends nothing. Sending a
   message of their own or "Send next" lifts the pause. A Stop also holds the

@@ -320,8 +320,7 @@ export async function sendPeerPrompt(
   }
   // Fire-and-forget delivery; the send call never blocks on the recipient turn.
   // A held prompt starts only through its coordinator's start pass.
-  if (autoDeliver && !input.hold)
-    void drainRecipient(target.id).catch(() => {});
+  if (autoDeliver && !input.hold) wakeRecipient(target.id);
   return { message, card };
 }
 
@@ -956,16 +955,23 @@ function releaseRecipientReservation(
   // drainRecipient also checks this count for idle hooks racing the handoff.
   if (!explicitSendWaiting(recipientId)) {
     void drainRecipient(recipientId).catch(() => {});
-    if (noticeWakesPending.delete(recipientId))
+    if (drainWakesPending.delete(recipientId))
       void drainRecipient(recipientId).catch(() => {});
   }
 }
 /**
- * Senders newly owed a notice while their drain was already in flight. That
- * drain may be past its owed-notice read (or inside the notice turn itself),
- * so coalescing onto it would lose the wake; it runs once more on release.
+ * Sessions newly owed a notice, or sent a peer prompt, while their drain was
+ * already in flight. That drain may be past the read that would find it — its
+ * owed-notice read, or its FIFO while it awaits a notice turn — so coalescing
+ * onto it would lose the wake (Task-973); it runs once more on release.
  */
-const noticeWakesPending = new Set<string>();
+const drainWakesPending = new Set<string>();
+
+/** Drain now, or once more after the drain in flight (`drainWakesPending`). */
+function wakeRecipient(sessionId: string): void {
+  if (drainLocks.has(sessionId)) drainWakesPending.add(sessionId);
+  void drainRecipient(sessionId).catch(() => {});
+}
 
 /**
  * Set on graceful shutdown (SIGTERM/deploy) so no NEW peer-prompt batch delivery
@@ -1081,7 +1087,7 @@ export function drainRecipient(recipientId: string): Promise<void> {
     // send's release, which drains again once it is done.
     if (
       !explicitSendWaiting(recipientId) &&
-      noticeWakesPending.delete(recipientId)
+      drainWakesPending.delete(recipientId)
     )
       void drainRecipient(recipientId).catch(() => {});
   });
@@ -1214,10 +1220,7 @@ export function installDelegationFailureNotices(): () => void {
 }
 
 export function wakeForNotice(sessionIds: Iterable<string>): void {
-  for (const id of sessionIds) {
-    if (drainLocks.has(id)) noticeWakesPending.add(id);
-    void drainRecipient(id).catch(() => {});
-  }
+  for (const id of sessionIds) wakeRecipient(id);
 }
 
 /**
@@ -2189,10 +2192,7 @@ function wakeSendersOwingNotice(
       .filter((m) => m.responseRequested && m.senderSessionId !== recipientId)
       .map((m) => m.senderSessionId),
   );
-  for (const id of senders) {
-    if (drainLocks.has(id)) noticeWakesPending.add(id);
-    void drainRecipient(id).catch(() => {});
-  }
+  for (const id of senders) wakeRecipient(id);
 }
 
 const STRANDED_ADMISSION_REASON =
