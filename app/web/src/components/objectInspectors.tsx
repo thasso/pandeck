@@ -130,6 +130,7 @@ import {
 import {
   classifySessionStatus,
   tierForStatus,
+  waitingForSlotLabel,
   type SessionInboxCard,
 } from "../lib/sessionInbox.ts";
 import {
@@ -312,12 +313,17 @@ function sessionObjectRef(
 ): ObjectRef {
   const runtime = session ? sessionRuntimeSubtitle(session) : undefined;
   const subtitle = [marker, runtime].filter(Boolean).join(" · ") || undefined;
+  const waiting = session ? waitingForSlotLabel(session) : undefined;
+  const facts = [
+    ...(waiting ? [{ label: "Status", value: waiting }] : []),
+    ...(marker ? [{ label: "Control", value: marker }] : []),
+  ];
   return {
     kind: "session",
     id,
     title: session?.title ?? fallbackTitle,
     ...(subtitle !== undefined ? { subtitle } : {}),
-    ...(marker ? { facts: [{ label: "Control", value: marker }] } : {}),
+    ...(facts.length > 0 ? { facts } : {}),
     ...(session?.isStreaming ? { running: true } : {}),
   };
 }
@@ -1573,6 +1579,9 @@ export function SessionInspector({
           alwaysShown: true,
           content: (
             <SessionDetails
+              waiting={waitingForSlotLabel(
+                sessions.find((item) => item.id === sessionId) ?? {},
+              )}
               peerTurnCap={
                 sessions.find((item) => item.id === sessionId)?.peerTurnCap
               }
@@ -1744,6 +1753,7 @@ function withPeerPrompts(
  * and thinking level it runs on now), as the Task inspector's property list.
  */
 function SessionDetails({
+  waiting,
   peerTurnCap,
   onSetPeerTurnCap,
   project,
@@ -1754,6 +1764,8 @@ function SessionDetails({
   thinkingLevel,
   openers,
 }: {
+  /** "Waiting for a slot (position N)" while its opening prompt is held. */
+  waiting: string | undefined;
   peerTurnCap: number | undefined;
   onSetPeerTurnCap: ((cap: number | null) => void) | undefined;
   project: ProjectRecord | undefined;
@@ -1772,6 +1784,12 @@ function SessionDetails({
   const branch = worktreeStatus?.branch ?? worktree?.branch;
   return (
     <PropertyList>
+      {waiting ? (
+        <>
+          <PropertyLabel>Status</PropertyLabel>
+          <PropertyText>{waiting}</PropertyText>
+        </>
+      ) : null}
       {onSetPeerTurnCap ? (
         <>
           <PropertyLabel>Peer turns at once</PropertyLabel>

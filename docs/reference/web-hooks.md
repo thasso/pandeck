@@ -165,13 +165,18 @@ backlog/task interaction and drag/reorder behavior.
   `navigate()` to its client-known claude-sdk id, because that id is not in the
   session list until the server creates it and the route's
   pending-unknown-session fallback would canonicalize the URL back to the
-  previously viewed session. Route names include `backgroundTasks`, the
-  `/background-tasks` registry, whose optional `?task=` anchor names one PA item
-  — the same shape the server's `background_tasks` tool hands a model as
-  `humanLink`, so an agent's link resolves without translation. It is an ACTION
-  surface, not a section: no sidebar location, never a section index route, and
-  it loads standalone on a direct reload because its rows come from the
-  `background` topic alone.
+  previously viewed session. The reverse, an empty id route rehomed to
+  `/sessions/create`, needs proof of a bootstrap
+  (`canonicalizeEmptySessionToCreate`): no `viewedSessionIdentity` on the
+  snapshot (`directSpawnedBy` or incoming peer prompts), and either a listed
+  zero-message row without a spawn edge or no row in a list fresh for this
+  connection. Route names include `backgroundTasks`, the `/background-tasks`
+  registry, whose optional `?task=` anchor names one PA item — the same shape
+  the server's `background_tasks` tool hands a model as `humanLink`, so an
+  agent's link resolves without translation. It is an ACTION surface, not a
+  section: no sidebar location, never a section index route, and it loads
+  standalone on a direct reload because its rows come from the `background`
+  topic alone.
 - `useClaudeLoginTerminal.ts` owns the dedicated authenticated
   `/ws/claude-login` browser lifecycle for Settings: reconnect while the
   official CLI process is still waiting, reduce bounded snapshot/output/status
@@ -698,11 +703,11 @@ backlog/task interaction and drag/reorder behavior.
   and 0 when the row has none, which is the fail-closed answer — and the
   optimistic row acknowledges exactly that revision. `normalizeCachedSessions`
   drops every live-derived field on shell-cache hydration — `isStreaming`,
-  `runStartedAt`, `awaitingInput`, `attention`, `queuedWork` — keeping durable
-  `lastError`/`settledAt`/`outcomeAttention`/ `archived`; a cached elapsed label
-  would otherwise count up from a run that ended while the tab was shut, and a
-  stale "Needs your approval" row would both lie and disable Settle until the
-  socket re-asserted the truth.
+  `runStartedAt`, `awaitingInput`, `attention`, `queuedWork`, `waitingForSlot` —
+  keeping durable `lastError`/`settledAt`/`outcomeAttention`/ `archived`; a
+  cached elapsed label would otherwise count up from a run that ended while the
+  tab was shut, and a stale "Needs your approval" row would both lie and disable
+  Settle until the socket re-asserted the truth.
 - Worktree review comments are held as authoritative per-worktree projections
   from comment broadcasts; components request/mutate them only through
   `useAssistant` actions. The list/unwatch pair goes through

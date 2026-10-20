@@ -17,8 +17,11 @@ vocabulary, display projection, and normalized session model types.
   durable metadata, `SessionListItem` carries `createdAt`, the precise
   `attention` kind (`SessionAttentionKind`, alongside the coarse
   `awaitingInput`), the volatile `runStartedAt`, the persisted `lastError`
-  (`SessionRunFailure`, bounded server-side), `queuedWork`, and `settledAt` —
+  (`SessionRunFailure`, bounded server-side), `queuedWork`, `waitingForSlot` (a
+  held direct child's position in its coordinator's queue), and `settledAt` —
   settlement being a first-class state distinct from `archived`.
+  `SessionState.directSpawnedBy` projects the direct-child registry onto every
+  snapshot, so routing never mistakes a message-less child for a bootstrap.
   `settleBlockedReason(session)` is the ONE settle-eligibility predicate,
   deliberately shared: the browser disables its action with it and the server
   refuses the `settleSession` command with it, so the two cannot drift.

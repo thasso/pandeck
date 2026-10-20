@@ -72,3 +72,26 @@ test("an id no catalog offers resolves to no model rather than a guess", () => {
   });
   expect(viewSessionById("view-unknown")?.state().model).toBeUndefined();
 });
+
+test("a directly spawned child's state names its spawner; no other session's does", async () => {
+  const { directPeerChildStore } = await import("./db/directPeerChildStore.ts");
+  for (const id of ["view-child", "view-plain"])
+    sessionStore.upsert({ id, harness: "pi", agentType: "developer" });
+  directPeerChildStore.record({
+    childSessionId: "view-child",
+    spawnerSessionId: "view-spawner",
+    costClass: "counted",
+    source: { kind: "profile", profileId: "pr_test" },
+    provider: "openai-codex",
+    modelId: "gpt-6-sol",
+    thinkingLevel: "high",
+    credentialProfileId: "acct",
+    createdAt: Date.now(),
+  });
+  expect(viewSessionById("view-child")?.state().directSpawnedBy).toBe(
+    "view-spawner",
+  );
+  expect(viewSessionById("view-plain")?.state()).not.toHaveProperty(
+    "directSpawnedBy",
+  );
+});

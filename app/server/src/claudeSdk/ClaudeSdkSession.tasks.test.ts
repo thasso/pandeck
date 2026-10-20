@@ -124,3 +124,23 @@ test.each([
     expect(state.model).toEqual(before.model);
   },
 );
+
+test("a directly spawned child's state names its spawner; no other session's does", async () => {
+  const { directPeerChildStore } =
+    await import("../db/directPeerChildStore.ts");
+  const child = makeSession("developer");
+  const plain = makeSession("assistant");
+  directPeerChildStore.record({
+    childSessionId: child.id,
+    spawnerSessionId: "claude-spawner",
+    costClass: "counted",
+    source: { kind: "agent", agentName: "reviewer" },
+    provider: "claude-sdk",
+    modelId: "opus",
+    thinkingLevel: "high",
+    credentialProfileId: "acct",
+    createdAt: Date.now(),
+  });
+  expect(child.state().directSpawnedBy).toBe("claude-spawner");
+  expect(plain.state()).not.toHaveProperty("directSpawnedBy");
+});

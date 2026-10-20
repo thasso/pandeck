@@ -115,6 +115,31 @@ sibling something on their shared chain is cleared by that sibling's own report
 — the same rows as a real forward. Measured on a copy of the production database
 (7,539 peer prompts, 16 senders owed): 0.24 ms median.
 
+## Children waiting for a slot
+
+A directly spawned child over its coordinator's concurrency cap is created with
+its opening prompt `held` (`docs/agent-workflows.md`). Each rebuild reads every
+held row once (`peerPromptStore.heldQueue`, pinned to the partial
+`peer_prompts_held_sender_idx`, already in sender and `queue_seq` order) and
+ranks it within its coordinator's rows (`heldDirectPeers.ts`
+`waitingForSlotByChild`). A row the start pass may not pass yet, admitted but
+still being created, counts too: the rank adds the coordinator's older in-flight
+hold tickets, read from their one owner in `peerSpawnRuntimes.ts`. The
+`session_spawn` result reports a position by the same rule, so the two never
+disagree. The row carries `waitingForSlot: { position }`; nothing else stores
+it. Every held transition (insertion, a start by the pass or by Send now, a
+refusal, a withdraw or stop, an archive or delete) requests a rebuild, and Send
+now requests it when it claims the row, before the delivery is appended.
+
+**Zero-message rows.** A row with no message is a runtime's metadata claim, not
+a conversation, and stays unlisted, with two exceptions: a draft, and a child
+the direct `session_spawn` path recorded (`direct_peer_children`). The recorded
+child is listed from creation, while it waits, and after its start was refused
+or cancelled, until the user settles, archives or deletes it. Which zero-message
+rows are recorded is one primary-key read over just those ids
+(`directPeerChildStore.childIdsAmong`). Rows from before the registry existed
+are not revived, and the live-only rows are unchanged.
+
 ## Provider retries
 
 A running row carries `providerRetry` while its provider reports it is retrying

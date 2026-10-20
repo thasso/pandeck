@@ -601,13 +601,16 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `createdAt`, the precise `attention` kind (question vs approval vs
   `task-choice`, alongside the coarse `awaitingInput`), `runStartedAt` (from
   `sessionActivity.ts`, so an elapsed label is honest rather than derived from
-  `updatedAt`), the persisted `lastError`, `queuedWork`, `settledAt` and
-  `outcomeAttention`. Those last two are one decision
-  ([Task-674](pa://task/674)): the projection is the ONE place the settlement
-  mark and the durable attention revision are combined, and it withholds
-  `settledAt` (and therefore suppresses the shelved-row unread guard) while the
-  session's latest outcome is unacknowledged, so no consumer has to know that
-  settlement has two halves. Task-495 adds one more batched prologue read,
+  `updatedAt`), the persisted `lastError`, `queuedWork`, `waitingForSlot` (a
+  held direct child's position, ranked once per build by `heldDirectPeers.ts`
+  `waitingForSlotByChild`), `settledAt` and `outcomeAttention`. A zero-message
+  row is listed only as a draft or a child the direct-spawn registry recorded.
+  Those last two are one decision ([Task-674](pa://task/674)): the projection is
+  the ONE place the settlement mark and the durable attention revision are
+  combined, and it withholds `settledAt` (and therefore suppresses the
+  shelved-row unread guard) while the session's latest outcome is
+  unacknowledged, so no consumer has to know that settlement has two halves.
+  Task-495 adds one more batched prologue read,
   `subagentStore.delegationSummaries()`: only active child rows contribute,
   split into starting/working/awaiting-parent counts on
   `SessionListItem.delegation`. It never folds delegated activity into the
@@ -2285,7 +2288,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   the child is told who to answer even when the coordinator forgot to say it.
   The batch runs under one concurrency claim, released in a `finally`; a row
   over the cap is created with its opening prompt `held` and reports its waiting
-  position (`heldDirectPeers.ts`).
+  position (`heldDirectPeers.ts`, the same rank the session list shows).
 - `peerSpawnRuntimes.ts` owns the approved peer-runtime roster
   ([Task-595](pa://task/595)) — the user's standing permission for agents to
   start ordinary peer sessions without a card per batch. `peerRuntimeRoster`

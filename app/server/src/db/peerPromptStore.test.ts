@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 import { getDb } from "./index.ts";
 import {
+  HELD_QUEUE_SQL,
   OUTSTANDING_REPLIES_SQL,
   peerPromptStore as store,
   PeerPromptHopLimitError,
@@ -1307,5 +1308,19 @@ describe("held opening prompts", () => {
       [outgoing.id],
     );
     assert.equal(store.getById(queued.id)?.status, "queued");
+  });
+});
+
+describe("the held queue the session list ranks", () => {
+  it("reads only the held rows, in FIFO order, from their partial index", () => {
+    const plan = getDb()
+      .prepare(`EXPLAIN QUERY PLAN ${HELD_QUEUE_SQL}`)
+      .all() as { detail: string }[];
+    const details = plan.map((step) => step.detail).join("\n");
+    assert.match(
+      details,
+      /USING (COVERING )?INDEX peer_prompts_held_sender_idx/,
+    );
+    assert.doesNotMatch(details, /TEMP B-TREE/);
   });
 });

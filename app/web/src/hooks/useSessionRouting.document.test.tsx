@@ -21,6 +21,8 @@ function Probe() {
     sessions: [],
     currentId: undefined,
     hasMessages: false,
+    sessionListFresh: false,
+    viewedIdentity: false,
     loadSession: vi.fn(),
     openPermanentAssistant: vi.fn(),
   });

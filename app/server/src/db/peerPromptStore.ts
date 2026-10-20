@@ -1375,6 +1375,36 @@ function heldFrom(senderSessionId: string): PeerPromptRecord[] {
   ).map(map);
 }
 
+/** One waiting opening prompt, as the session list ranks it. */
+export interface HeldQueueEntry {
+  senderSessionId: string;
+  recipientSessionId: string;
+  queueSeq: number;
+}
+
+/**
+ * Every held row's FIFO coordinates, grouped by sender and oldest admission
+ * first: one read per list build. Pinned to the partial index, which is
+ * already in this order; the planner would otherwise seek the status index
+ * and sort.
+ */
+export const HELD_QUEUE_SQL =
+  "SELECT sender_session_id, recipient_session_id, queue_seq FROM peer_prompts INDEXED BY peer_prompts_held_sender_idx WHERE status = 'held' ORDER BY sender_session_id, queue_seq";
+
+function heldQueue(): HeldQueueEntry[] {
+  return (
+    getDb().prepare(HELD_QUEUE_SQL).all() as {
+      sender_session_id: string;
+      recipient_session_id: string;
+      queue_seq: number;
+    }[]
+  ).map((r) => ({
+    senderSessionId: r.sender_session_id,
+    recipientSessionId: r.recipient_session_id,
+    queueSeq: r.queue_seq,
+  }));
+}
+
 /** Every sender with a held row, for the boot pass. */
 function heldSenderIds(): string[] {
   return (
@@ -2464,6 +2494,7 @@ export const peerPromptStore = {
   listPendingForRecipient,
   listUndeliveredForRecipient,
   heldFrom,
+  heldQueue,
   heldSenderIds,
   activeTurnCount,
   outstandingResponseRequestCount,

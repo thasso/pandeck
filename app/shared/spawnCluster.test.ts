@@ -254,6 +254,23 @@ describe("spawnClusterSettleBlockedReason", () => {
     expect(reason("missing", [])).toBe(undefined);
   });
 
+  test("a child waiting for a slot says so before its queued opening prompt", () => {
+    expect(
+      reason("kid", [
+        row({ id: "kid", queuedWork: true, waitingForSlot: { position: 2 } }),
+      ]),
+    ).toBe("it is waiting for a slot.");
+    expect(
+      reason("root", [
+        row({ id: "root" }),
+        child("kid", "root", {
+          queuedWork: true,
+          waitingForSlot: { position: 1 },
+        }),
+      ]),
+    ).toBe("it is waiting for a slot.");
+  });
+
   test("a row that is no member still answers its own reason", () => {
     // An archived coordinator, or a working-set run's role: the forest holds
     // nothing for it, but the row map does, and its own block still counts.

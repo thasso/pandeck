@@ -170,3 +170,36 @@ it("drops who still owes a reply from cached rows, like every live fact", () => 
   const hydrated = createInitialState();
   expect(hydrated.sessions[0]?.awaitingRepliesFrom).toBe(undefined);
 });
+
+it("drops a waiting child's place from cached rows, but keeps who spawned it", () => {
+  const defaults = createInitialState();
+  const waiting: SessionListItem = {
+    id: "child",
+    harness: "pi",
+    agentType: "developer",
+    title: "Reviewer",
+    createdAt: 1,
+    updatedAt: 2,
+    messageCount: 0,
+    spawnedBySessionId: "coordinator",
+    spawnOwnership: "coordinator",
+    waitingForSlot: { position: 2 },
+  };
+  writeAppShellCacheRecord({
+    version: 1,
+    savedAt: Date.now(),
+    models: [],
+    agents: [],
+    // It may have started, or moved up, while the tab was shut.
+    sessions: [waiting],
+    settings: defaults.settings,
+    slashCommands: [],
+    taskList: null,
+    projectList: null,
+    worktrees: [],
+  });
+
+  const hydrated = createInitialState();
+  expect(hydrated.sessions[0]?.waitingForSlot).toBe(undefined);
+  expect(hydrated.sessions[0]?.spawnedBySessionId).toBe("coordinator");
+});

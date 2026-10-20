@@ -1824,6 +1824,13 @@ export interface SessionListItem {
    */
   queuedWork?: boolean;
   /**
+   * Present while this directly spawned session's opening prompt is held for a
+   * free slot under its coordinator's concurrency cap: its 1-based place among
+   * that coordinator's waiting children. Server-derived from the held prompt,
+   * the same position `session_spawn` reported; absent otherwise.
+   */
+  waitingForSlot?: { position: number };
+  /**
    * Background-work updates it was given whose handling turn did not finish
    * (`SessionState.unhandledBackgroundUpdates`); absent when there are none.
    */
@@ -1998,6 +2005,7 @@ export function settleBlockedReason(
     return "it is waiting for you to pick a Task.";
   if (session.attention === "question" || session.awaitingInput)
     return "it is waiting for your answer.";
+  if (session.waitingForSlot) return "it is waiting for a slot.";
   if (session.queuedWork) return "work is queued behind it.";
   if (session.unhandledBackgroundUpdates)
     return "background updates it was given were not handled.";
@@ -4884,6 +4892,13 @@ export interface SessionState {
    * queue unless the user steers one in or withdraws it.
    */
   queuedPeerPrompts?: QueuedPeerPrompt[];
+  /**
+   * The coordinator the direct-child registry records as having spawned this
+   * session through `session_spawn` (children from Task-966 on). Fixed at
+   * creation; it is the server's positive evidence that this session is never
+   * a client-staged bootstrap, even before it has a message or a list row.
+   */
+  directSpawnedBy?: string;
   /**
    * Background-work updates (completions, monitor activity) waiting to reach
    * this session — to start a turn of their own, or to ride its next one;

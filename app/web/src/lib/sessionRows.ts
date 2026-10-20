@@ -50,6 +50,8 @@ export function sessionRowKey(session: SessionListItem): string {
     // The title line's status badge (`SessionTitleRow`): failed and
     // interrupted are states the fields above do not spell.
     classifySessionStatus(session),
+    // The title line's waiting marker, drawn whatever the status.
+    String(session.waitingForSlot?.position ?? ""),
     session.unread ? "1" : "",
     session.archived ? "1" : "",
     progress

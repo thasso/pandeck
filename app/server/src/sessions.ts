@@ -28,6 +28,8 @@ import { subagentStore } from "./db/subagentStore.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
+import { directPeerChildStore } from "./db/directPeerChildStore.ts";
+import { waitingForSlotByChild } from "./heldDirectPeers.ts";
 import { getSettings } from "./settings.ts";
 import {
   sessionProviderRetry,
@@ -356,6 +358,26 @@ function unansweredRequestsByRecipient(): Map<string, string[]> {
  * could not be told about yet (`agentHandoffs.ts`). Both are the same fact to a reader — something is
  * waiting for this session to finish — so they share the row's one flag.
  */
+/** Each directly spawned child still waiting for a slot, with its position. */
+function waitingForSlotPositions(): Map<string, { position: number }> {
+  try {
+    return waitingForSlotByChild();
+  } catch (err) {
+    console.warn("Failed to read waiting peer starts for session list:", err);
+    return new Map();
+  }
+}
+
+/** Which zero-message rows the direct `session_spawn` path recorded. */
+function recordedDirectChildren(ids: string[]): Set<string> {
+  try {
+    return directPeerChildStore.childIdsAmong(ids);
+  } catch (err) {
+    console.warn("Failed to read direct peer children for session list:", err);
+    return new Set();
+  }
+}
+
 function queuedWorkRecipients(): Set<string> {
   const queued = new Set<string>();
   try {
@@ -428,6 +450,7 @@ export async function listSessions(
   const worktreeAckBySession = sessionStore.worktreeMissingAckBySession();
   const objectRefsBySessionId = objectRefsBySession();
   const queuedRecipients = queuedWorkRecipients();
+  const waitingForSlot = waitingForSlotPositions();
   const unhandledBackground = unhandledBackgroundBySession();
   const awaitingReplies = awaitingRepliesBySender();
   const unansweredRequests = unansweredRequestsByRecipient();
@@ -460,6 +483,11 @@ export async function listSessions(
   const spawnedParentByChild = sessionStore.spawnedParentsByChildIds(
     storedRows.map((row) => row.id),
   );
+  const recordedChildren = recordedDirectChildren(
+    storedRows
+      .filter((row) => row.messageCount === 0 && row.purpose !== "draft")
+      .map((row) => row.id),
+  );
 
   // Rows outside the default scope never reach the list — not from the store
   // (which reads `user` only) and not from the live rows below, which know
@@ -485,12 +513,15 @@ export async function listSessions(
     // that archive/delete used to mint and strand in the list. Draft creation
     // is the explicit exception: it must remain reachable before its prompt is
     // sent, and keeps the old bootstrap count of one so routing does not mistake
-    // it for the generic client-staged `/sessions/create` surface.
+    // it for the generic client-staged `/sessions/create` surface. A child
+    // recorded by the direct `session_spawn` path is the other: it exists from
+    // its creation, waiting for a slot or refused before its first prompt, and
+    // stays reachable until the user settles, archives or deletes it.
     const messageCount =
       nativeMessageCount === 0 && row.purpose === "draft"
         ? 1
         : nativeMessageCount;
-    if (messageCount === 0) continue;
+    if (messageCount === 0 && !recordedChildren.has(key)) continue;
     const updatedAt = Math.max(row.updatedAt, l?.updatedAt ?? 0);
     const objectRefs = objectRefsBySessionId.get(key) ?? [];
     const isStreaming = l?.isStreaming ?? false;
@@ -582,6 +613,9 @@ export async function listSessions(
           }
         : {}),
       ...(queuedRecipients.has(row.id) ? { queuedWork: true } : {}),
+      ...(waitingForSlot.has(row.id)
+        ? { waitingForSlot: waitingForSlot.get(row.id)! }
+        : {}),
       ...backgroundHandlingFields(unhandledBackground.get(row.id)),
       ...(hopRefusals.has(row.id)
         ? { peerPromptHopRefusal: hopRefusals.get(row.id)! }
@@ -679,6 +713,9 @@ export async function listSessions(
         taskChoiceSessions,
       ),
       ...(queuedRecipients.has(key) ? { queuedWork: true } : {}),
+      ...(waitingForSlot.has(key)
+        ? { waitingForSlot: waitingForSlot.get(key)! }
+        : {}),
       ...backgroundHandlingFields(unhandledBackground.get(key)),
       ...(hopRefusals.has(key)
         ? { peerPromptHopRefusal: hopRefusals.get(key)! }

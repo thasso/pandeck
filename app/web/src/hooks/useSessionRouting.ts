@@ -4,6 +4,7 @@ import {
   isGitHostingProviderKind,
   type GitHostingProviderKind,
   type SessionListItem,
+  type SessionState,
 } from "@assistant/shared";
 import {
   documentTargetHref,
@@ -489,23 +490,46 @@ export function stagedSendCreatedSession(
 
 /**
  * Whether a session that projects ZERO messages may be canonicalized to
- * `/sessions/create`. Trust the list over the projection: a session the list
- * says has messages is a snapshot that failed to render (Task 449 — a windowed
- * snapshot of nothing but orphan tool results), not a bootstrap session, and
- * rehoming it to the create page would make a real conversation unreachable.
+ * `/sessions/create`. Only a client-staged bootstrap may: rehoming anything
+ * else makes a real session unreachable. Evidence, strongest first:
  *
- * The list is evidence only once it EXISTS: on a cold deep link the snapshot
- * arrives before `ready`'s session list, so an id the (empty) list does not
- * know is "not yet known", never "empty" — withhold judgement until the shell
- * is hydrated (from cache, which keeps `messageCount`, or from `ready`).
+ * - The viewed snapshot (`viewedIdentity`): the server says it created this
+ *   session — the registry records it as a direct child (`directSpawnedBy`),
+ *   or other sessions' messages wait for it. A child waiting for a slot, or one
+ *   refused or cancelled before its first prompt, has no message and may have
+ *   no list row yet; neither makes it a bootstrap.
+ * - The list: a row with messages is a snapshot that failed to render (Task
+ *   449 — a windowed snapshot of nothing but orphan tool results), and a
+ *   spawned child's row is a session in its own right.
+ * - The list's ABSENCE proves something only once the shell is hydrated and a
+ *   list answered on this connection (`sessionListFresh`). On a cold deep link
+ *   or a reconnect the snapshot can arrive before that list, and an id the
+ *   retained list does not know is "not yet known", never "empty"; the
+ *   decision waits for the list.
  */
+/**
+ * Whether the viewed snapshot proves the server created this session: the
+ * direct-child registry records it, or other sessions' messages wait for it.
+ */
+export function viewedSessionIdentity(
+  session: Pick<SessionState, "directSpawnedBy" | "queuedPeerPrompts"> | null,
+): boolean {
+  return (
+    session?.directSpawnedBy !== undefined ||
+    (session?.queuedPeerPrompts?.length ?? 0) > 0
+  );
+}
+
 export function canonicalizeEmptySessionToCreate(
   hydrated: boolean,
   sessions: readonly SessionListItem[],
   id: string,
+  evidence: { viewedIdentity: boolean; sessionListFresh: boolean },
 ): boolean {
-  if (!hydrated) return false;
-  return !sessions.some((s) => s.id === id && s.messageCount > 0);
+  if (!hydrated || evidence.viewedIdentity) return false;
+  const row = sessions.find((s) => s.id === id);
+  if (row) return row.messageCount === 0 && !row.spawnedBySessionId;
+  return evidence.sessionListFresh;
 }
 
 function routeMatchesServer(
@@ -542,6 +566,12 @@ interface Args {
   /** Whether the active session has any messages — an empty bootstrap session
    *  stays at `/sessions/create` rather than being given a `/sessions/:id` address. */
   hasMessages: boolean;
+  /** Whether a session list answered on this connection; see
+   *  {@link canonicalizeEmptySessionToCreate}. */
+  sessionListFresh: boolean;
+  /** Whether the viewed snapshot proves the server created the session: it is
+   *  a recorded direct child, or peer messages wait for it. */
+  viewedIdentity: boolean;
   /** View a session addressed by OUR id. */
   loadSession: (id: string) => void;
   /** Create/restore and view the server-owned singleton Personal Assistant. */
@@ -554,6 +584,8 @@ export function useSessionRouting({
   sessions,
   currentId,
   hasMessages,
+  sessionListFresh,
+  viewedIdentity,
   loadSession,
   openPermanentAssistant,
 }: Args): {
@@ -743,7 +775,10 @@ export function useSessionRouting({
       route.name === "session" &&
       !hasMessages &&
       currentId === route.id &&
-      canonicalizeEmptySessionToCreate(hydrated, sessions, route.id)
+      canonicalizeEmptySessionToCreate(hydrated, sessions, route.id, {
+        viewedIdentity,
+        sessionListFresh,
+      })
     ) {
       // An empty (bootstrap) session lives at /sessions/create, not at an id URL.
       if (location.pathname !== SESSIONS_CREATE_PATH) {
@@ -752,7 +787,16 @@ export function useSessionRouting({
       setRoute({ name: "new" });
       applied.current = "new";
     }
-  }, [connected, currentId, hasMessages, hydrated, route, sessions]);
+  }, [
+    connected,
+    currentId,
+    hasMessages,
+    hydrated,
+    route,
+    sessions,
+    sessionListFresh,
+    viewedIdentity,
+  ]);
 
   const navigate = useCallback((path: string) => {
     // Any explicit navigation cancels a still-armed staged advance. Callers that

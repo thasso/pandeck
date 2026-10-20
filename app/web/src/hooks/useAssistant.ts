@@ -1221,6 +1221,8 @@ function normalizeCachedSessions(
         awaitingInput: _awaitingInput,
         attention: _attention,
         queuedWork: _queuedWork,
+        // A waiting child may have started, or its place moved, meanwhile.
+        waitingForSlot: _waitingForSlot,
         delegation: _delegation,
         // Who still owes a reply is live too: kept alone, it would read a
         // tree whose peers were working as stalled until the first list.

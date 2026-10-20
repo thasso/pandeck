@@ -202,6 +202,7 @@ import {
 } from "../pullRequestCards.ts";
 import { sessionRunStartedAt } from "../sessionActivity.ts";
 import {
+  directSpawnField,
   drainRecipient,
   peerPromptPeersFor,
   peerPromptQueueField,
@@ -1105,6 +1106,7 @@ export class ClaudeSdkSession implements LiveSession {
       peerPromptPeers: peerPromptPeersFor(this.id),
       ...promptQueueField(this.id),
       ...peerPromptQueueField(this.id),
+      ...directSpawnField(this.id),
       ...backgroundUpdateQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
