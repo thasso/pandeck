@@ -3514,6 +3514,7 @@ export type ApprovalKind =
   | "managedCommitOverride"
   | "projectCreate"
   | "agentDefinition"
+  | "approvalGrantsRequest"
   | "settingsInput";
 /**
  * pending → executing → executed | failed (approved path); rejected (declined);
@@ -4122,6 +4123,61 @@ export interface SessionSpawnApprovalBody {
   items: SessionSpawnApprovalItem[];
 }
 
+/** One operation an up-front grant request asks for. */
+export interface ApprovalGrantsRequestItem {
+  /** A key from `GRANTABLE_OPERATIONS`. */
+  key: string;
+  label: string;
+  covers: string;
+  /**
+   * Normally approved one card at a time (a merge into the default branch, a
+   * deleted branch, a release, deleted pages); this card grants it anyway.
+   */
+  cardOnly: boolean;
+  /** The scope the agent asked for: true also covers the sessions it starts. */
+  inheritable: boolean;
+  /**
+   * The session already holds the key for itself only: the request asks to
+   * pass it down, and approving it that way widens the existing grant.
+   */
+  heldForSessionOnly?: true;
+}
+
+/** What an approved grant request did, item by item. */
+export interface ApprovalGrantsRequestResult {
+  /** Each granted key with the scope the session holds it with afterwards. */
+  granted: Array<{ key: string; inheritable: boolean }>;
+  /** Keys the user unticked: not granted. */
+  declined: string[];
+  peerTurnCap?:
+    | { outcome: "raised"; from: number; to: number }
+    /** Already at or above the approved cap when the card ran. */
+    | { outcome: "unchanged"; current: number }
+    | { outcome: "declined" }
+    | { outcome: "failed"; error: string };
+}
+
+/**
+ * An agent's request for session grants, and optionally a higher concurrent
+ * peer turn cap, made once up front (`approval_grants_request`). The card
+ * itself carries no grant key, so nothing but the user's click approves it.
+ */
+export interface ApprovalGrantsRequestBody {
+  kind: "approvalGrantsRequest";
+  /** The agent's reason, shown on the card. */
+  reason: string;
+  /** What the session does not hold yet with the requested scope. */
+  items: ApprovalGrantsRequestItem[];
+  /** A raise of the session's concurrent peer turn cap, above `current`. */
+  peerTurnCap?: { current: number; requested: number };
+  /** The user's selection, settled before anything runs. */
+  approved?: {
+    keys: Array<{ key: string; inheritable: boolean }>;
+    peerTurnCap?: number;
+  };
+  result?: ApprovalGrantsRequestResult;
+}
+
 export type ApprovalBody =
   | GithubPullRequestApprovalBody
   | GithubIssueApprovalBody
@@ -4139,6 +4195,7 @@ export type ApprovalBody =
   | ManagedCommitOverrideApprovalBody
   | ProjectCreateApprovalBody
   | AgentDefinitionApprovalBody
+  | ApprovalGrantsRequestBody
   | SettingsInputApprovalBody;
 
 /**
@@ -4171,9 +4228,22 @@ export interface SettingsInputResolutionEdits {
   value: string;
 }
 
+/**
+ * The user's selection on a grant request card. Every key must be one the card
+ * lists; a listed key left out is not granted. An absent cap leaves the cap
+ * unchanged.
+ */
+export interface ApprovalGrantsRequestResolutionEdits {
+  kind: "approvalGrantsRequest";
+  keys: Array<{ key: string; inheritable: boolean }>;
+  peerTurnCap?: number;
+}
+
 /** Edits carried by a `resolveApproval` decision, discriminated like the body. */
 export type ApprovalResolutionEdits =
-  SessionSpawnResolutionEdits | SettingsInputResolutionEdits;
+  | SessionSpawnResolutionEdits
+  | SettingsInputResolutionEdits
+  | ApprovalGrantsRequestResolutionEdits;
 
 /**
  * @payload ApprovalCard

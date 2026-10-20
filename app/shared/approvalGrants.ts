@@ -54,9 +54,9 @@ export interface GrantableOperation {
   /** What a grant lets the agent do without asking, in one sentence. */
   covers: string;
   /**
-   * Approved only on its own card, never ahead of time: the operations
-   * hardest to undo (a merge into the default branch, a deleted branch, a
-   * published release, deleted pages).
+   * Approved only on a card — its own, or an agent's up-front grant request —
+   * never from the inspector: the operations hardest to undo (a merge into the
+   * default branch, a deleted branch, a published release, deleted pages).
    */
   cardOnly: boolean;
 }
@@ -224,6 +224,17 @@ export function grantableAheadOfTime(key: string): boolean {
   );
 }
 
+/**
+ * The operation an agent may ask for on an up-front grant request card, or
+ * undefined: every listed key, card-only ones included. Tag keys and the
+ * keyless kinds are not listed, so they are never requestable.
+ */
+export function requestableUpFront(
+  key: string,
+): GrantableOperation | undefined {
+  return GRANTABLE_OPERATIONS.find((operation) => operation.key === key);
+}
+
 /** The operation keys a card performs, deduplicated and sorted. */
 export function approvalGrantKeys(body: ApprovalBody): string[] {
   const keys = new Set<string>();
@@ -263,6 +274,10 @@ export function approvalGrantKeys(body: ApprovalBody): string[] {
     case "managedCommitOverride":
       // Never granted: overriding a blocked commit review answers those exact
       // findings, so no earlier override may answer a later one.
+      break;
+    case "approvalGrantsRequest":
+      // Never granted: only the user's click may grant or raise what a request
+      // asks for, so approving one request must never pre-approve the next.
       break;
     default:
       keys.add(body.kind);

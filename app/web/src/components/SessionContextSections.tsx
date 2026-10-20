@@ -832,7 +832,7 @@ function ApprovalGrantsSection({
                   ) : fromAncestor ? (
                     <>Inherited from {holder(fromAncestor.heldBy)}</>
                   ) : operation.cardOnly ? (
-                    "Approved on its card, every time"
+                    "Approved only on a card, never from here"
                   ) : (
                     "Asks first"
                   )}
