@@ -6768,10 +6768,15 @@ export const BACKGROUND_WORK_COMMAND_MAX_CHARS = 4_096;
 
 /**
  * What the item does. Both monitor kinds may outlive the provider turn. A
- * `check-watch` is a `server-task` waiting on a pull request's checks.
+ * `check-watch` waits on pull-request or ref checks; `image-pull` pulls a
+ * container image. Both run as `server-task` work.
  */
 export type BackgroundWorkKind =
-  "shell" | "monitor-command" | "monitor-websocket" | "check-watch";
+  | "shell"
+  | "monitor-command"
+  | "monitor-websocket"
+  | "check-watch"
+  | "image-pull";
 
 /**
  * Whether the owner WAITS on an item (`awaited`, the default: a build, a test

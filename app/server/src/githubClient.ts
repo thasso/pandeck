@@ -296,6 +296,8 @@ export async function githubPaginate<T>(
 
 /** Aggregate CI state for a ref, shared by the `github_get_ref_checks` tool and the git-hosting provider. */
 export interface GithubRefChecksSummary {
+  /** Resolved commit from the combined-status response, when available. */
+  sha: string | null;
   state: "success" | "failure" | "pending" | "neutral";
   /** True total check-runs + legacy commit statuses reported by GitHub. */
   total: number;
@@ -354,6 +356,7 @@ export async function githubRefChecks(
     // answer assembled from half the evidence. Both endpoints must answer, or
     // the caller is told nothing and can omit the row.
     githubRequest<{
+      sha?: string;
       total_count?: number;
       statuses?: Record<string, any>[];
     }>(config, "GET", `${repoBase}/status`, {
@@ -408,7 +411,15 @@ export async function githubRefChecks(
     statuses.find((status) => isFailedGitCheckStatus(status.state))?.url;
   const url = firstFailUrl || checkRuns[0]?.url || statuses[0]?.url || null;
 
-  return { state, total, truncated, url, checkRuns, statuses };
+  return {
+    sha: statusRes.data.sha ?? null,
+    state,
+    total,
+    truncated,
+    url,
+    checkRuns,
+    statuses,
+  };
 }
 
 function parseNextLink(header: string | null): string | null {

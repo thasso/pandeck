@@ -37,6 +37,7 @@ import {
   githubRefChecks,
   githubRequest,
   type GithubApiConfig,
+  type GithubRefChecksSummary,
 } from "./githubClient.ts";
 import {
   isFailedGitCheckStatus,
@@ -45,6 +46,7 @@ import {
 import { getForgejoConfigIfAvailable } from "./forgejoSettings.ts";
 import {
   type ForgejoApiConfig,
+  type ForgejoRefChecksSummary,
   ForgejoHttpError,
   forgejoRefChecks,
   forgejoRequest,
@@ -54,6 +56,73 @@ import {
 import { errorText } from "./errors.ts";
 
 const REQUEST_TIMEOUT_MS = 8_000;
+
+/** The same ref verdict for the provider and agent-facing ref waits. */
+export function githubRefChecksVerdict(
+  summary: GithubRefChecksSummary,
+  config: GithubApiConfig,
+  ref: Pick<RemoteRepoRef, "owner" | "repo">,
+): GitHostingRefChecks {
+  return {
+    state:
+      summary.total === 0
+        ? "none"
+        : summary.state === "failure"
+          ? "failure"
+          : summary.truncated
+            ? "pending"
+            : summary.state === "success"
+              ? "success"
+              : "pending",
+    total: summary.total,
+    ...(summary.truncated ? { truncated: true } : {}),
+    checks: [
+      ...summary.checkRuns.map((check) => ({
+        name: check.name || check.app || "GitHub check",
+        status: check.conclusion || check.status || "unknown",
+        ...(check.url ? { url: check.url } : {}),
+        ...(check.appSlug === "github-actions" && check.id !== null
+          ? {
+              logJobId: check.id,
+              logUrl: `${config.apiBaseUrl.replace(/\/$/, "")}/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/actions/jobs/${check.id}/logs`,
+            }
+          : {}),
+        ...(check.output ? { excerpt: check.output } : {}),
+      })),
+      ...summary.statuses.map((status) => ({
+        name: status.context || "GitHub status",
+        status: status.state || "unknown",
+        ...(status.url ? { url: status.url } : {}),
+        ...(status.description ? { excerpt: status.description } : {}),
+      })),
+    ],
+  };
+}
+
+export function forgejoRefChecksVerdict(
+  summary: ForgejoRefChecksSummary,
+): GitHostingRefChecks {
+  return {
+    state:
+      summary.total === 0
+        ? "none"
+        : summary.state === "failure" || summary.state === "error"
+          ? "failure"
+          : summary.truncated
+            ? "pending"
+            : summary.state === "success"
+              ? "success"
+              : "pending",
+    total: summary.total,
+    ...(summary.truncated ? { truncated: true } : {}),
+    checks: summary.statuses.map((status) => ({
+      name: status.context || "Forgejo status",
+      status: status.state || "unknown",
+      ...(status.url ? { url: status.url } : {}),
+      ...(status.description ? { excerpt: status.description } : {}),
+    })),
+  };
+}
 
 /** Bound each provider request while still honoring a long-running tool's cancellation. */
 function requestSignal(parentSignal?: AbortSignal): AbortSignal {
@@ -2393,40 +2462,7 @@ export function githubProvider(
         refOid,
         signal(),
       );
-      return {
-        state:
-          summary.total === 0
-            ? "none"
-            : summary.state === "failure"
-              ? "failure"
-              : summary.truncated
-                ? "pending"
-                : summary.state === "success"
-                  ? "success"
-                  : "pending",
-        total: summary.total,
-        ...(summary.truncated ? { truncated: true } : {}),
-        checks: [
-          ...summary.checkRuns.map((check) => ({
-            name: check.name || check.app || "GitHub check",
-            status: check.conclusion || check.status || "unknown",
-            ...(check.url ? { url: check.url } : {}),
-            ...(check.appSlug === "github-actions" && check.id !== null
-              ? {
-                  logJobId: check.id,
-                  logUrl: `${config.apiBaseUrl.replace(/\/$/, "")}/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/actions/jobs/${check.id}/logs`,
-                }
-              : {}),
-            ...(check.output ? { excerpt: check.output } : {}),
-          })),
-          ...summary.statuses.map((status) => ({
-            name: status.context || "GitHub status",
-            status: status.state || "unknown",
-            ...(status.url ? { url: status.url } : {}),
-            ...(status.description ? { excerpt: status.description } : {}),
-          })),
-        ],
-      };
+      return githubRefChecksVerdict(summary, config, ref);
     },
     async pullRequestReview(prNumber) {
       // Every page: GitHub lists reviews oldest first, so a first page alone
@@ -3063,26 +3099,7 @@ export function forgejoProvider(
         refOid,
         signal(),
       );
-      return {
-        state:
-          summary.total === 0
-            ? "none"
-            : summary.state === "failure" || summary.state === "error"
-              ? "failure"
-              : summary.truncated
-                ? "pending"
-                : summary.state === "success"
-                  ? "success"
-                  : "pending",
-        total: summary.total,
-        ...(summary.truncated ? { truncated: true } : {}),
-        checks: summary.statuses.map((status) => ({
-          name: status.context || "Forgejo status",
-          status: status.state || "unknown",
-          ...(status.url ? { url: status.url } : {}),
-          ...(status.description ? { excerpt: status.description } : {}),
-        })),
-      };
+      return forgejoRefChecksVerdict(summary);
     },
     async pullRequestReview(prNumber) {
       const res = await forgejoRequest<ProviderReview[]>(

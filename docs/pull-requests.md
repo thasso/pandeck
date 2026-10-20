@@ -790,11 +790,29 @@ visibly `none`), and no hosted changes-requested review. Its blockers are
 returned explicitly. It is not a dry-run merge: provider permissions and branch
 rules remain authoritative when a later merge is attempted.
 
+#### Ref check waits
+
+`github_get_ref_checks` and `forgejo_get_ref_checks` keep their compact, single
+snapshot by default. `wait: true` follows a branch, tag or commit using the same
+poll loop and bounds: timeout defaults to 1800 seconds, range 30–7200; intervals
+default to 60 seconds on GitHub and 15 on Forgejo, minimum 30 and 5
+respectively, maximum 120. Stop reasons are `checks_finished`,
+`checks_truncated`, `no_checks`, `timeout`, and GitHub's `rate_limited`. There
+is no PR-open-state stop. A new head restarts the 120-second no-checks grace.
+Wait results add `finished` and `observation`, including mode, stop reason, poll
+count, elapsed time, effective timeout, interval and resolved `headSha`, plus
+GitHub's remaining rate budget when reported. The top-level `state` stays the
+raw provider value, including `neutral` for an empty ref; the internal verdict
+`none` is not substituted. Forgejo's opt-in history is read once at the end.
+`background: true` uses the same background-watch lifecycle below and the same
+compact final payload as a foreground wait, apart from its observation mode.
+
 #### Background watches
 
 `background: true` turns the wait into PA background work instead of blocking
 the agent's turn for up to two hours, which is what led agents to start whole
-watcher sessions just to wait for CI. It implies `wait`.
+watcher sessions just to wait for CI. It implies `wait` on both PR and ref
+tools.
 
 - **One observation in the call.** The tool polls once in the call itself. If
   that already ends the wait (checks finished, the PR is not open, the page is

@@ -51,7 +51,7 @@ type StopReason =
 /** What the caller asked for; `background` names the request, not the path. */
 type ObservationMode = "current" | "wait" | "background";
 
-interface WatchOutcome<Snapshot> {
+export interface WatchOutcome<Snapshot> {
   snapshot: Snapshot;
   stopReason: StopReason;
   polls: number;
@@ -65,7 +65,7 @@ interface WatchOutcome<Snapshot> {
  * judge it. The pull-request observation below is one; a ref observation can be
  * another without forking the loop.
  */
-interface CheckObservation<Snapshot> {
+export interface CheckObservation<Snapshot> {
   snapshot: Snapshot;
   /** The commit whose checks were read; a new one restarts the no-checks grace. */
   headSha: string;
@@ -112,6 +112,46 @@ const NO_CHECKS_GRACE_SECONDS = 120;
  */
 const MIN_RATE_LIMIT_REMAINING = 500;
 const MAX_EXCERPT_CHARS = 2_000;
+
+export function checkWaitBounds(
+  providerName: "GitHub" | "Forgejo",
+  params: {
+    wait?: boolean;
+    background?: boolean;
+    timeoutSeconds?: number;
+    pollIntervalSeconds?: number;
+  },
+) {
+  const poll = POLL_INTERVAL_SECONDS[providerName];
+  const timeoutSeconds = clamp(
+    params.timeoutSeconds,
+    DEFAULT_TIMEOUT_SECONDS,
+    30,
+    MAX_TIMEOUT_SECONDS,
+  );
+  const pollIntervalSeconds = clamp(
+    params.pollIntervalSeconds,
+    poll.default,
+    poll.min,
+    MAX_POLL_INTERVAL_SECONDS,
+  );
+  const background = params.background === true;
+  const wait = background || params.wait === true;
+  const mode: ObservationMode = background
+    ? "background"
+    : wait
+      ? "wait"
+      : "current";
+  return {
+    background,
+    wait,
+    mode,
+    timeoutSeconds,
+    timeoutMs: timeoutSeconds * 1_000,
+    pollIntervalSeconds,
+    pollIntervalMs: pollIntervalSeconds * 1_000,
+  };
+}
 
 /**
  * Build one provider-specific deferred tool over the shared git-hosting seam.
@@ -166,27 +206,15 @@ export function createPullRequestCheckWatchTool(options: {
     },
     async execute(params, ctx) {
       const number = clamp(params.number, 1, 1, Number.MAX_SAFE_INTEGER);
-      const timeoutSeconds = clamp(
-        params.timeoutSeconds,
-        DEFAULT_TIMEOUT_SECONDS,
-        30,
-        MAX_TIMEOUT_SECONDS,
-      );
-      const pollIntervalSeconds = clamp(
-        params.pollIntervalSeconds,
-        poll.default,
-        poll.min,
-        MAX_POLL_INTERVAL_SECONDS,
-      );
-      const background = params.background === true;
-      const wait = background || params.wait === true;
-      const mode: ObservationMode = background
-        ? "background"
-        : wait
-          ? "wait"
-          : "current";
-      const timeoutMs = timeoutSeconds * 1_000;
-      const pollIntervalMs = pollIntervalSeconds * 1_000;
+      const {
+        timeoutSeconds,
+        pollIntervalSeconds,
+        background,
+        wait,
+        mode,
+        timeoutMs,
+        pollIntervalMs,
+      } = checkWaitBounds(options.providerName, params);
       const resolved = await options.resolve(params.repo, ctx.signal);
       const watch = startCheckWatch();
       const observe = observePullRequest(
@@ -284,11 +312,14 @@ export function createPullRequestCheckWatchTool(options: {
           );
           return {
             payload,
-            summary: checkWatchSummary(
-              outcome,
-              options.providerName,
-              budget.timeoutMs,
-            ),
+            summary: checkWaitSummary({
+              ...outcome,
+              checks: outcome.snapshot.checks,
+              head: outcome.snapshot.detail.headSha.slice(0, 7),
+              notOpen: `PR #${outcome.snapshot.detail.number} is ${outcome.snapshot.detail.state}`,
+              providerName: options.providerName,
+              timeoutMs: budget.timeoutMs,
+            }),
           };
         },
       });
@@ -298,14 +329,17 @@ export function createPullRequestCheckWatchTool(options: {
 }
 
 /** One bounded line naming why the background wait ended and what it saw. */
-function checkWatchSummary(
-  outcome: WatchOutcome<PullRequestCheckSnapshot>,
-  providerName: string,
-  timeoutMs: number,
-): string {
-  const { detail, checks } = outcome.snapshot;
-  const head = detail.headSha.slice(0, 7);
-  switch (outcome.stopReason) {
+export function checkWaitSummary(input: {
+  stopReason: StopReason;
+  checks: GitHostingRefChecks;
+  head: string;
+  providerName: string;
+  timeoutMs: number;
+  rateLimitRemaining?: number;
+  notOpen?: string;
+}): string {
+  const { checks, head, providerName, timeoutMs } = input;
+  switch (input.stopReason) {
     case "checks_finished": {
       const total = checks.total ?? checks.checks.length;
       const failed = checks.checks.filter((check) =>
@@ -318,9 +352,9 @@ function checkWatchSummary(
     case "timeout":
       return `Timed out after ${seconds(timeoutMs)} s: ${checks.state} on ${head}`;
     case "pull_request_not_open":
-      return `PR #${detail.number} is ${detail.state}`;
+      return input.notOpen!;
     case "rate_limited":
-      return `Stopped early: ${providerName} rate limit (${outcome.rateLimitRemaining ?? 0} left)`;
+      return `Stopped early: ${providerName} rate limit (${input.rateLimitRemaining ?? 0} left)`;
     case "no_checks":
       return `No checks appeared on ${head} within ${NO_CHECKS_GRACE_SECONDS} s`;
     case "checks_truncated":
@@ -446,7 +480,7 @@ function observePullRequest(
   };
 }
 
-function startCheckWatch(): CheckWatch {
+export function startCheckWatch(): CheckWatch {
   return { startedAt: Date.now(), polls: 0, bare: null };
 }
 
@@ -454,7 +488,7 @@ function startCheckWatch(): CheckWatch {
  * One observation and the stop rules over it: an outcome when the watch ends
  * here, otherwise the observation it continues past.
  */
-async function pollCheckWatch<Snapshot>(
+export async function pollCheckWatch<Snapshot>(
   watch: CheckWatch,
   input: {
     observe: () => Promise<CheckObservation<Snapshot>>;
@@ -519,7 +553,7 @@ function nextSleepMs(
  * a watch whose last poll ran elsewhere (the background job after the call's
  * first observation) at the sleep that poll would have taken.
  */
-async function continueCheckWatch<Snapshot>(
+export async function continueCheckWatch<Snapshot>(
   watch: CheckWatch,
   input: {
     observe: () => Promise<CheckObservation<Snapshot>>;
@@ -698,7 +732,7 @@ function clamp(
   return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
+export function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   throw signal.reason instanceof Error
     ? signal.reason

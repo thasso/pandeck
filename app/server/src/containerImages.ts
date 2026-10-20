@@ -29,7 +29,7 @@ import { childProcessEnv } from "./subprocessEnv.ts";
 const GHCR_REGISTRY = "ghcr.io";
 
 const DOCKER_BIN = "docker";
-const DEFAULT_PULL_TIMEOUT_MS = 15 * 60_000;
+export const DEFAULT_PULL_TIMEOUT_MS = 15 * 60_000;
 const LOGIN_TIMEOUT_MS = 60_000;
 const INSPECT_TIMEOUT_MS = 30_000;
 const RUNTIME_CHECK_TIMEOUT_MS = 10_000;
@@ -98,6 +98,7 @@ export interface PullContainerImageOptions {
   credential?: RegistryCredentialProvider;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
+  /** This caller's timeout, including slot wait; defaults to 15 minutes. */
   timeoutMs?: number;
 }
 
@@ -311,9 +312,11 @@ function resetContainerRuntimeCacheForTests(): void {
 export async function containerRuntimeStatus(
   signal?: AbortSignal,
 ): Promise<ContainerRuntimeStatus> {
+  signal?.throwIfAborted();
   if (runtimeCache && Date.now() - runtimeCache.at < RUNTIME_CACHE_MS)
     return runtimeCache.status;
   const status = await probeContainerRuntime(signal);
+  signal?.throwIfAborted();
   runtimeCache = { at: Date.now(), status };
   return status;
 }
@@ -359,33 +362,108 @@ function firstLine(text: string): string {
   );
 }
 
-const inFlight = new Map<string, Promise<ContainerPullResult>>();
+interface PullSubscriber {
+  settle(error: Error | null, result?: ContainerPullResult): void;
+  onProgress?: (message: string) => void;
+}
+interface SharedPull {
+  controller: AbortController;
+  subscribers: Set<PullSubscriber>;
+  settled: boolean;
+}
+const inFlight = new Map<string, SharedPull>();
 
 /**
  * Make an image available in the local Docker image store.
  *
  * Concurrent callers asking for the same reference share one docker
- * invocation; only the first caller's `onProgress` sees pull progress.
+ * invocation under its own controller. Every caller has an independent signal,
+ * timeout and progress subscription; the last departure aborts the operation.
  */
 export async function pullContainerImage(
   options: PullContainerImageOptions,
 ): Promise<ContainerPullResult> {
   const ref = parseImageRef(options.image);
   const key = `${ref.normalized}${options.refresh ? "#refresh" : ""}`;
-  const running = inFlight.get(key);
-  if (running) {
+  const cancelled = () =>
+    new ContainerPullError(`Pull of ${ref.normalized} was cancelled.`);
+  if (options.signal?.aborted) throw cancelled();
+  let operation = inFlight.get(key);
+  const joining = Boolean(operation);
+  if (!operation) {
+    operation = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      settled: false,
+    };
+    inFlight.set(key, operation);
+  }
+  const shared = operation;
+  const forget = () => {
+    if (inFlight.get(key) === shared) inFlight.delete(key);
+  };
+  const result = new Promise<ContainerPullResult>((resolve, reject) => {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_PULL_TIMEOUT_MS;
+    let settled = false;
+    const subscriber: PullSubscriber = {
+      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+      settle(error, value) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+        shared.subscribers.delete(subscriber);
+        if (error) reject(error);
+        else resolve(value!);
+        if (!shared.settled && shared.subscribers.size === 0) {
+          forget();
+          shared.controller.abort();
+        }
+      },
+    };
+    const onAbort = () => subscriber.settle(cancelled());
+    const timer = setTimeout(
+      () =>
+        subscriber.settle(
+          new ContainerPullError(
+            `Pull of ${ref.normalized} did not finish within ${timeoutMs / 1_000} s.`,
+          ),
+        ),
+      timeoutMs,
+    );
+    timer.unref?.();
+    shared.subscribers.add(subscriber);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  if (joining) {
     options.onProgress?.(
       `Waiting for an in-progress pull of ${ref.normalized}…`,
     );
-    return running;
+  } else {
+    // Schedule after the first subscription is attached, and handle rejection even
+    // when every caller has left. No caller's signal or timeout owns this run.
+    const finish = (error: Error | null, value?: ContainerPullResult) => {
+      shared.settled = true;
+      forget();
+      for (const subscriber of shared.subscribers)
+        subscriber.settle(error, value);
+    };
+    void runPull(ref, {
+      image: ref.normalized,
+      refresh: options.refresh === true,
+      ...(options.credential ? { credential: options.credential } : {}),
+      signal: shared.controller.signal,
+      onProgress: (message) => {
+        for (const subscriber of shared.subscribers)
+          subscriber.onProgress?.(message);
+      },
+    }).then(
+      (value) => finish(null, value),
+      (error: unknown) =>
+        finish(error instanceof Error ? error : new Error(String(error))),
+    );
   }
-  const run = runPull(ref, options);
-  inFlight.set(key, run);
-  try {
-    return await run;
-  } finally {
-    inFlight.delete(key);
-  }
+  return result;
 }
 
 async function runPull(
@@ -400,20 +478,14 @@ async function runPull(
     );
   }
 
+  options.signal?.throwIfAborted();
   if (!options.refresh) {
-    const present = await inspectImage(ref, options.signal);
-    if (present) {
-      return {
-        image: ref.normalized,
-        registry: ref.registry,
-        status: "already-present",
-        digest: present.digest,
-        imageId: present.imageId,
-        sizeBytes: present.sizeBytes,
-        authenticated: false,
-        durationMs: Date.now() - started,
-      };
-    }
+    const present = await findLocalContainerImage(
+      ref.normalized,
+      options.signal,
+    );
+    options.signal?.throwIfAborted();
+    if (present) return { ...present, durationMs: Date.now() - started };
   }
 
   // Credentials are for GHCR only — a provider is ignored for any other host.
@@ -430,9 +502,11 @@ async function runPull(
     ? [credential.token, `${credential.username}:${credential.token}`]
     : [];
 
-  const release = await acquirePullSlot();
-  const configDir = await mkdtemp(join(tmpdir(), "pa-registry-"));
+  const release = await acquirePullSlot(options.signal);
+  let configDir: string | undefined;
   try {
+    options.signal?.throwIfAborted();
+    configDir = await mkdtemp(join(tmpdir(), "pa-registry-"));
     await chmod(configDir, 0o700);
     const env = { DOCKER_CONFIG: configDir };
 
@@ -469,7 +543,7 @@ async function runPull(
       args: ["pull", "--", ref.normalized],
       env,
       ...(options.signal ? { signal: options.signal } : {}),
-      timeoutMs: options.timeoutMs ?? DEFAULT_PULL_TIMEOUT_MS,
+      timeoutMs: DEFAULT_PULL_TIMEOUT_MS,
       ...(options.onProgress
         ? { onStdoutLine: pullProgressReporter(ref, options.onProgress) }
         : {}),
@@ -510,9 +584,33 @@ async function runPull(
     );
   } finally {
     // Always destroy the temporary docker config, credentials and all.
-    await rm(configDir, { recursive: true, force: true });
-    release();
+    try {
+      if (configDir) await rm(configDir, { recursive: true, force: true });
+    } finally {
+      release();
+    }
   }
+}
+
+/** The same already-present payload used by foreground pulls and background preflight. */
+export async function findLocalContainerImage(
+  image: string,
+  signal?: AbortSignal,
+): Promise<ContainerPullResult | null> {
+  const started = Date.now();
+  const ref = parseImageRef(image);
+  const present = await inspectImage(ref, signal);
+  signal?.throwIfAborted();
+  return present
+    ? {
+        image: ref.normalized,
+        registry: ref.registry,
+        status: "already-present",
+        ...present,
+        authenticated: false,
+        durationMs: Date.now() - started,
+      }
+    : null;
 }
 
 interface InspectedImage {
@@ -659,16 +757,35 @@ function pullProgressReporter(
 let activePulls = 0;
 const pullWaiters: Array<() => void> = [];
 
-async function acquirePullSlot(): Promise<() => void> {
+async function acquirePullSlot(signal?: AbortSignal): Promise<() => void> {
+  signal?.throwIfAborted();
   if (activePulls >= MAX_CONCURRENT_PULLS) {
-    await new Promise<void>((resolve) => pullWaiters.push(resolve));
-  }
-  activePulls += 1;
+    await new Promise<void>((resolve, reject) => {
+      const grant = () => {
+        signal?.removeEventListener("abort", abort);
+        resolve();
+      };
+      const abort = () => {
+        const index = pullWaiters.indexOf(grant);
+        if (index >= 0) pullWaiters.splice(index, 1);
+        signal?.removeEventListener("abort", abort);
+        reject(
+          signal?.reason instanceof Error
+            ? signal.reason
+            : new Error("Pull slot wait was cancelled."),
+        );
+      };
+      pullWaiters.push(grant);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  } else activePulls += 1;
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    activePulls -= 1;
-    pullWaiters.shift()?.();
+    const next = pullWaiters.shift();
+    // Transfer ownership without temporarily making capacity available.
+    if (next) next();
+    else activePulls -= 1;
   };
 }

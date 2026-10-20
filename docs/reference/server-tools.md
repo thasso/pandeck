@@ -279,16 +279,17 @@ persona toolsets.
     shared loop lives in `pullRequestCheckWatch.ts`), `github_get_ref_checks`
     (aggregate Checks API check-runs + legacy commit statuses for a
     branch/tag/SHA into one success/failure/pending state — via the shared
-    `githubClient.githubRefChecks` core that `gitHosting.ts`'s GitHub `ciStatus`
-    reuses), `github_list_actions_runs` (Actions workflow runs filterable by
-    branch/head SHA/event/status/date), `github_get_actions_run` (run +
-    jobs/steps, opt-in bounded failed-job annotations), and
-    `github_get_actions_job_log` (one job's log as bounded text — follows
-    GitHub's redirect to signed storage, dropping auth cross-origin, capped at a
-    5 MB ceiling, tail-by-default; never a whole run ZIP). Bare `owner`-less
-    repos/orgs resolve against the configured default owner. Payloads are
-    compact JSON with null/empty keys dropped and conservative bounded limits;
-    no render tables yet.
+    `githubClient.githubRefChecks` core; current/wait/background modes reuse
+    `refCheckWait.ts` and the PR loop, with compact default output unchanged.
+    `gitHosting.ts`'s GitHub `ciStatus` reuses), `github_list_actions_runs`
+    (Actions workflow runs filterable by branch/head SHA/event/status/date),
+    `github_get_actions_run` (run + jobs/steps, opt-in bounded failed-job
+    annotations), and `github_get_actions_job_log` (one job's log as bounded
+    text — follows GitHub's redirect to signed storage, dropping auth
+    cross-origin, capped at a 5 MB ceiling, tail-by-default; never a whole run
+    ZIP). Bare `owner`-less repos/orgs resolve against the configured default
+    owner. Payloads are compact JSON with null/empty keys dropped and
+    conservative bounded limits; no render tables yet.
 - `github/githubPrWriteTools.ts` owns the approval-gated, coding-persona-only PR
   write tools (catalog group `github-pr-writes`, gate `github`):
   `github_create_pull_request`, `github_review_pull_request` (verdict +
@@ -394,14 +395,16 @@ persona toolsets.
   `forgejo_get_ref_checks` (aggregate CI for a branch/tag/SHA via the shared
   `forgejoClient.forgejoRefChecks` core that `gitHosting.ts`'s Forgejo
   `ciStatus` reuses, plus opt-in `includeHistory` superseded status rows from
-  `/commits/{ref}/statuses`), `forgejo_list_actions_runs` (`/actions/runs`
-  filterable by `ref`/`head_sha`/`event`/`status`/`workflow_id`/`run_number`,
-  sliced client-side as well as asked for because instances differ on whether
-  `limit` is honoured), and `forgejo_get_actions_run` (one run plus its jobs).
-  Three deliberate divergences from the GitHub twin, all forced by API v1:
-  Forgejo has NO check-runs, so ref checks are one endpoint and one rollup where
-  the worst context wins (Gitea's own `CalcCommitStatus` order); there is no
-  per-run jobs/steps route, so jobs are RECONSTRUCTED from the repo-wide
+  `/commits/{ref}/statuses` read once at the end; current/wait/background modes
+  share `refCheckWait.ts` and the PR loop), `forgejo_list_actions_runs`
+  (`/actions/runs` filterable by
+  `ref`/`head_sha`/`event`/`status`/`workflow_id`/`run_number`, sliced
+  client-side as well as asked for because instances differ on whether `limit`
+  is honoured), and `forgejo_get_actions_run` (one run plus its jobs). Three
+  deliberate divergences from the GitHub twin, all forced by API v1: Forgejo has
+  NO check-runs, so ref checks are one endpoint and one rollup where the worst
+  context wins (Gitea's own `CalcCommitStatus` order); there is no per-run
+  jobs/steps route, so jobs are RECONSTRUCTED from the repo-wide
   `/actions/tasks` feed by run number — scanned newest-first under a 4×50-task
   budget, stopping only once a whole page sits below the run because adjacent
   runs INTERLEAVE in that feed. Both ways of running out of budget are stated
@@ -464,17 +467,19 @@ persona toolsets.
   (catalog group `container-images`, coding personas only, deferred, gate
   `github` because the credential is the GitHub integration token):
   `container_image_pull` makes an image available in the host's local Docker
-  store so a worktree build can use it. The tool only validates the reference,
-  checks `containerRuntimeStatus()`, and delegates to `../../containerImages.ts`
-  with `getGithubRegistryCredential` as the credential provider — credentials
-  never enter the tool result, the agent shell, or the transcript, and plain
-  `docker pull` in an agent shell stays unauthenticated by design (the prompt
-  guidance says so explicitly). Output is compact JSON safe metadata (normalized
-  ref, registry, status pulled/already-present, digest, image id, size,
-  `authenticated`, duration); `ContainerPullError` messages are already bounded
-  and redacted. Deliberately no allowlist, digest pinning, or approval card —
-  the boundary is the credential, not the image list (contract:
-  `docs/container-images.md`).
+  store so a worktree build can use it. `background: true` returns an inline
+  already-present result or launches an `image-pull` server task with its own
+  signal and subscription timeout; Stop does not cancel other subscribers. The
+  tool validates the reference, checks `containerRuntimeStatus()`, and delegates
+  to `../../containerImages.ts` with `getGithubRegistryCredential` as the
+  credential provider — credentials never enter the tool result, the agent
+  shell, or the transcript, and plain `docker pull` in an agent shell stays
+  unauthenticated by design (the prompt guidance says so explicitly). Output is
+  compact JSON safe metadata (normalized ref, registry, status
+  pulled/already-present, digest, image id, size, `authenticated`, duration);
+  `ContainerPullError` messages are already bounded and redacted. Deliberately
+  no allowlist, digest pinning, or approval card — the boundary is the
+  credential, not the image list (contract: `docs/container-images.md`).
 - `tempo/tempoTools.ts` owns the Tempo family (OAuth bearer via
   `tempoSettings.getTempoToolConfig`, gate `tempo`): `tempo_list_worklogs` and
   `tempo_mutate_worklogs` — which stages a PENDING `ApprovalCard` via the shared

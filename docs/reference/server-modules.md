@@ -2131,11 +2131,14 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   and all surfaced text goes through `redactRegistrySecrets` bounded to the last
   lines. `parseImageRef` normalizes and hard-validates references (printable
   ASCII, no leading `-`, strict grammar) and pulls run as
-  `docker pull -- <ref>`. Same-reference pulls dedupe in-flight, at most two run
-  concurrently, and already-present images short-circuit without touching
-  credentials. `setContainerExecForTests` is the single docker exec seam; the
-  credential arrives as an injected provider, so this module never imports
-  settings.
+  `docker pull -- <ref>`. Same-reference pulls dedupe in-flight under their own
+  controller and fixed 15-minute command timeout. Each subscriber has its own
+  signal and timeout including queue time; only the last departure aborts the
+  shared pull. Slots are cancellable and handed directly to queued work, at most
+  two run concurrently, and progress fans out to live subscribers.
+  Already-present images short-circuit without touching credentials.
+  `setContainerExecForTests` is the single docker exec seam; the credential
+  arrives as an injected provider, so this module never imports settings.
 - `containerResidue.ts` is the one place the app RUNS a container instead of
   pulling one (Task 659): when a removal finds a directory owned by another uid
   — a bind-mounted container that wrote as root — it asks the daemon, already
