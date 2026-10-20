@@ -28,6 +28,7 @@ import { subagentStore } from "./db/subagentStore.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
+import { getSettings } from "./settings.ts";
 import {
   sessionProviderRetry,
   sessionRunStartedAt,
@@ -334,6 +335,21 @@ function awaitingRepliesBySender(): Map<string, string[]> {
   }
 }
 
+/** Who each session still owes an answer after its last reminder; empty (and logged) when unreadable. */
+function unansweredRequestsByRecipient(): Map<string, string[]> {
+  try {
+    return peerPromptStore.remindersExhaustedByRecipient(
+      getSettings().sessionPeerPromptReminderLimit,
+    );
+  } catch (err) {
+    console.warn(
+      "Failed to read unanswered peer requests for session list:",
+      err,
+    );
+    return new Map();
+  }
+}
+
 /**
  * Sessions with work queued behind their next turn (two queries): peer prompts
  * still being delivered or retried, and the card outcomes a mid-turn session
@@ -414,6 +430,7 @@ export async function listSessions(
   const queuedRecipients = queuedWorkRecipients();
   const unhandledBackground = unhandledBackgroundBySession();
   const awaitingReplies = awaitingRepliesBySender();
+  const unansweredRequests = unansweredRequestsByRecipient();
   const hopRefusals = peerPromptStore.hopRefusalsBySender();
   const delegationBySession = subagentStore.delegationSummaries();
   // A separate component from `isStreaming`/`runStartedAt`: background work is
@@ -572,6 +589,9 @@ export async function listSessions(
       ...(awaitingReplies.has(row.id)
         ? { awaitingRepliesFrom: awaitingReplies.get(row.id)! }
         : {}),
+      ...(unansweredRequests.has(row.id)
+        ? { unansweredRequestsFrom: unansweredRequests.get(row.id)! }
+        : {}),
       // Settlement HOLDS only while the user has acknowledged the session's
       // latest outcome: an unacknowledged completion or failure is what takes a
       // shelved row back into the working set (Task-674). This is the ONE place
@@ -665,6 +685,9 @@ export async function listSessions(
         : {}),
       ...(awaitingReplies.has(key)
         ? { awaitingRepliesFrom: awaitingReplies.get(key)! }
+        : {}),
+      ...(unansweredRequests.has(key)
+        ? { unansweredRequestsFrom: unansweredRequests.get(key)! }
         : {}),
       unread: l.updatedAt > readAt(key),
     });

@@ -95,6 +95,7 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   // peer-runtimes
   "peerSpawnRuntimes",
   "sessionPeerPromptMaxHops",
+  "sessionPeerPromptReminderLimit",
   // background-processes
   "backgroundWork.enabled",
   "backgroundWork.ownerSessionCap",

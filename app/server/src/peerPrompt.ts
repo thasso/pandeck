@@ -64,6 +64,7 @@ import {
   setRunFailureHook,
   subscribeSessionRunEnded,
   subscribeSessionRunStarted,
+  subscribeSessionUserEntry,
   type RunFailureReport,
   type RunOutcome,
 } from "./session/runtime/liveSession.ts";
@@ -99,6 +100,8 @@ import {
 } from "./tools/sessions/sessionInspection.ts";
 
 export const MAX_PEER_PROMPT_CHARS = 8_000;
+/** The most rows one `session_send_prompt` call may carry. */
+export const MAX_SEND_ROWS = 10;
 /** The longest reason a settle may give; it is shown on the requester's card. */
 export const MAX_SETTLE_REASON_CHARS = 200;
 export const BATCH_MAX_MESSAGES = 5;
@@ -881,16 +884,30 @@ async function withRecipientDrainLock<T>(
     return await operation();
   } finally {
     clearExplicitRecipientAuthority(recipientId);
-    if (drainLocks.get(recipientId) === reservation)
-      drainLocks.delete(recipientId);
-    release();
-    // Waiting explicit sends retain authority before ordinary FIFO draining.
-    // drainRecipient also checks this count for idle hooks racing the handoff.
-    if (!explicitSendWaiting(recipientId)) {
+    releaseRecipientReservation(recipientId, reservation, release);
+  }
+}
+
+/**
+ * Give back a reservation taken in place of a drain: drains that coalesced
+ * onto it resolve, and whatever arrived for the recipient meanwhile — a
+ * peer prompt, or a notice whose wake found the reservation held — is
+ * drained now, since nothing else would come back for it.
+ */
+function releaseRecipientReservation(
+  recipientId: string,
+  reservation: Promise<void>,
+  release: () => void,
+): void {
+  if (drainLocks.get(recipientId) === reservation)
+    drainLocks.delete(recipientId);
+  release();
+  // Waiting explicit sends retain authority before ordinary FIFO draining.
+  // drainRecipient also checks this count for idle hooks racing the handoff.
+  if (!explicitSendWaiting(recipientId)) {
+    void drainRecipient(recipientId).catch(() => {});
+    if (noticeWakesPending.delete(recipientId))
       void drainRecipient(recipientId).catch(() => {});
-      if (noticeWakesPending.delete(recipientId))
-        void drainRecipient(recipientId).catch(() => {});
-    }
   }
 }
 /**
@@ -1263,6 +1280,250 @@ class NoticeSetChangedError extends Error {
     super("The owed notices changed before the notice turn was appended.");
     this.name = "NoticeSetChangedError";
   }
+}
+
+/* ---------------------------- reply reminders ---------------------------- */
+
+/**
+ * What the reply reminder needs from outside this module: whether the idle
+ * edge still owes the session something that goes before it, and a way to
+ * offer that edge again. Injected at boot (`index.ts`), so this module does
+ * not depend on the handoff queue or background delivery.
+ */
+export interface ReplyReminderHost {
+  /** A decision waits to reach the session, or is being delivered. */
+  handoffOwed(sessionId: string): boolean;
+  /** A background wake waits for the session, or is being offered. */
+  wakeOwed(sessionId: string): boolean;
+  /** Offer the session's whole idle edge again. */
+  requestIdleEdge(sessionId: string): void;
+}
+
+let reminderHost: ReplyReminderHost | undefined;
+export function setReplyReminderHost(
+  host: ReplyReminderHost | undefined,
+): void {
+  reminderHost = host;
+}
+
+/**
+ * Sessions whose newest appended user entry is a reply reminder. No second
+ * reminder follows until the session has handled something else, so a
+ * session that ignores its reminders is not woken again and again. In memory:
+ * a restart allows at most one more, still bounded by each request's count.
+ */
+const reminderLast = new Set<string>();
+/**
+ * How many times a session's reminder gave way to other work since its last
+ * appended user entry. Each yield offers the idle edge again, so the work runs
+ * first and the reminder follows; the bound stops a blocker that never clears
+ * from offering the edge forever. The next real idle edge starts afresh.
+ */
+const reminderYields = new Map<string, number>();
+const REMINDER_REOFFERS_MAX = 3;
+
+/** How much of each request a reminder quotes back. */
+const REMINDER_EXCERPT_MAX = 120;
+
+/**
+ * Hear every user entry the runtime appends, so {@link reminderLast} means
+ * exactly "the newest entry was a reminder". Called once at boot; the
+ * returned uninstall exists for tests.
+ */
+export function installReplyReminders(): () => void {
+  return subscribeSessionUserEntry((sessionId) => {
+    reminderLast.delete(sessionId);
+    reminderYields.delete(sessionId);
+  });
+}
+
+/**
+ * Why a reminder may not take the edge now. `stop`: nothing to do until
+ * something else brings the session back — a Stop's Resume, the end of a
+ * running turn, an entry other than a reminder. `yield`: other work is owed
+ * first; it runs, and the edge is offered again.
+ */
+type ReminderBlock = "stop" | "yield";
+
+function reminderBlock(
+  driver: RuntimePromptDriver,
+  sessionId: string,
+): ReminderBlock | undefined {
+  if (
+    deliveryStopped ||
+    driver.released ||
+    driver.isRunning ||
+    automaticTurnsHeld(sessionId) ||
+    reminderLast.has(sessionId)
+  )
+    return "stop";
+  if (
+    explicitSendWaiting(sessionId) ||
+    promptQueueHasPriority(sessionId) ||
+    peerPromptStore.listPendingForRecipient(sessionId).length > 0 ||
+    owesNotice(sessionId) ||
+    reminderHost?.handoffOwed(sessionId) === true ||
+    reminderHost?.wakeOwed(sessionId) === true
+  )
+    return "yield";
+  return undefined;
+}
+
+function dueReminders(sessionId: string, limit: number): PeerPromptRecord[] {
+  return peerPromptStore.dueReminderRequests(sessionId, limit);
+}
+
+/**
+ * The idle edge's last step: remind a session of every request it received
+ * and has not answered or settled, in ONE turn, each request at most
+ * `sessionPeerPromptReminderLimit` times. Only a session that is live and
+ * idle, with nothing else owed to it: it never resumes a cold session, never
+ * runs at boot, and gives way to anything that arrives while it is prepared.
+ * Nothing is stored for it; the list is read again right before the turn is
+ * accepted, so a reply or settle that lands meanwhile drops out of it.
+ */
+export async function offerReplyReminders(sessionId: string): Promise<void> {
+  if (
+    deliveryStopped ||
+    automaticTurnsHeld(sessionId) ||
+    reminderLast.has(sessionId)
+  )
+    return;
+  const live = (await getHub()).getLiveById(sessionId);
+  if (!live || !isRuntimePromptDriver(live)) return;
+  const limit = getSettings().sessionPeerPromptReminderLimit;
+  if (dueReminders(sessionId, limit).length === 0) return;
+  // The recipient's drain lock, so no peer batch or notice turn starts
+  // beside it; a drain asked for meanwhile coalesces onto the reservation
+  // and runs again at its release.
+  while (drainLocks.has(sessionId))
+    await drainLocks.get(sessionId)?.catch(() => {});
+  let release!: () => void;
+  const reservation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  drainLocks.set(sessionId, reservation);
+  let block: ReminderBlock | undefined;
+  try {
+    block = await deliverReplyReminder(live, sessionId);
+  } finally {
+    releaseRecipientReservation(sessionId, reservation, release);
+  }
+  if (block !== "yield") return;
+  const yields = (reminderYields.get(sessionId) ?? 0) + 1;
+  reminderYields.set(sessionId, yields);
+  if (yields <= REMINDER_REOFFERS_MAX) reminderHost?.requestIdleEdge(sessionId);
+}
+
+/** The reminder turn, rebuilt when its list changes during admission. */
+async function deliverReplyReminder(
+  driver: RuntimePromptDriver,
+  sessionId: string,
+): Promise<ReminderBlock | undefined> {
+  const limit = getSettings().sessionPeerPromptReminderLimit;
+  for (let attempt = 0; attempt < NOTICE_ADMISSION_ATTEMPTS; attempt += 1) {
+    const block = reminderBlock(driver, sessionId);
+    if (block) return block;
+    const due = dueReminders(sessionId, limit);
+    if (due.length === 0) return undefined;
+    const ids = due.map((r) => r.id).join();
+    try {
+      // The turn speaks in the chain of the request it reminds of, so an
+      // answer spends that chain's hop budget like any other reply, and the
+      // reminder itself spends none.
+      activeContexts.set(sessionId, reminderContext(due));
+      await promptRuntimeSession(driver, buildReminder(due, limit), {
+        // The notice origin: a failure of this turn is not a failure to
+        // answer, so it routes no request back to its requester
+        // (`delegationFailureNotice.ts`).
+        origin: { kind: "agent", agentId: PEER_NOTICE_AGENT_ID },
+        // After the last await: anything owed first takes the edge, and the
+        // list is what is still open now.
+        admit: () => {
+          const late = reminderBlock(driver, sessionId);
+          if (late) throw new ReminderBlockedError(late);
+          const now = dueReminders(sessionId, limit);
+          if (now.length === 0) throw new ReminderBlockedError(undefined);
+          if (now.map((r) => r.id).join() !== ids)
+            throw new NoticeSetChangedError();
+        },
+        // The turn is in the session: it counts, whatever the run does next.
+        onUserEntry: () => {
+          reminderLast.add(sessionId);
+          try {
+            peerPromptStore.markReminded(due.map((r) => r.id));
+          } catch (err) {
+            console.warn(
+              `[peer] could not count reminders for ${sessionId} (${failureLabel(err)})`,
+            );
+          }
+          // A request on its last reminder becomes the user's condition.
+          if (due.some((r) => r.reminderCount + 1 >= limit))
+            void getHub()
+              .then((hub) => hub.broadcastSessions?.())
+              .catch(() => {});
+        },
+      });
+      return undefined;
+    } catch (err) {
+      if (err instanceof NoticeSetChangedError) continue;
+      if (err instanceof ReminderBlockedError) return err.block;
+      if (err instanceof AutomaticTurnsHeldError) return "stop";
+      // Counted or not, nothing retries it: the next idle edge does.
+      console.warn(
+        `[peer] reply reminder for ${sessionId} was not delivered (${failureLabel(err)})`,
+      );
+      return undefined;
+    } finally {
+      activeContexts.delete(sessionId);
+    }
+  }
+  return undefined;
+}
+
+/** A reminder turn refused at admission: other work first, or nothing left. */
+class ReminderBlockedError extends Error {
+  constructor(readonly block: ReminderBlock | undefined) {
+    super("The reply reminder gave way before its turn was appended.");
+    this.name = "ReminderBlockedError";
+  }
+}
+
+/**
+ * The chain a reminder turn speaks in: its deepest (then newest) request's,
+ * as for a notice, so a plain reply to that requester answers that request.
+ */
+function reminderContext(due: PeerPromptRecord[]): ActiveDeliveryContext {
+  const anchor = due.reduce((a, b) =>
+    b.hop > a.hop || (b.hop === a.hop && b.queueSeq > a.queueSeq) ? b : a,
+  );
+  return {
+    senderSessionId: anchor.senderSessionId,
+    conversationId: anchor.conversationId,
+    chainId: anchor.chainId,
+    primaryRequestMessageId: anchor.id,
+  };
+}
+
+/**
+ * The reminder envelope: every open request with its requester, key and an
+ * excerpt, then how to close them. Lists all of them however many there are;
+ * the row bound of one send is the agent's to split across calls.
+ */
+function buildReminder(due: PeerPromptRecord[], limit: number): string {
+  const count = due.length === 1 ? "A request" : `${due.length} requests`;
+  return [
+    `Peer reminder (server-generated; no session sent this). ${count} sent to you still ${due.length === 1 ? "waits" : "wait"} for an answer:`,
+    "",
+    ...due.map((r) => {
+      const title = clip(otherPartyTitle(r, "received"), SENDER_TITLE_MAX);
+      return `- ${title} (session \`${r.senderSessionId}\`), key \`${peerRequestKey(r)}\`, reminder ${r.reminderCount + 1} of ${limit}: "${clip(r.prompt, REMINDER_EXCERPT_MAX)}"`;
+    }),
+    "",
+    `Answer or settle each one with session_send_prompt rows. To answer, send a message row to its requester with inReplyTo naming its key; several keys from one requester fit one row. When acting already answered it or it no longer applies, a settle row { inReplyTo: [keys], settle: "<short reason>" } closes it without a message, and one settle row may name requests from different sessions. One call holds at most ${MAX_SEND_ROWS} rows; use several calls when you need more.`,
+    "",
+    "If you are deliberately waiting on something before you can answer (CI, another session), send a short holding reply that says what you are waiting for and that you will not follow up on your own, so the requester owns the follow-up.",
+  ].join("\n");
 }
 
 /**

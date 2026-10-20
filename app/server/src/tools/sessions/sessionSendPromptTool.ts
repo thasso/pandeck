@@ -15,14 +15,12 @@ import { defineAgentTool, type AgentTool } from "../../mcp/tool.ts";
 import { cleanSessionId, SessionInspectionError } from "./sessionInspection.ts";
 import {
   MAX_PEER_PROMPT_CHARS,
+  MAX_SEND_ROWS,
   MAX_SETTLE_REASON_CHARS,
   sendPeerPrompt,
   settlePeerRequests,
 } from "../../peerPrompt.ts";
 import type { PeerPromptToolRow } from "@assistant/shared";
-
-/** The most rows one call may carry. */
-const MAX_SEND_ROWS = 10;
 
 const MESSAGE_FIELDS = new Set([
   "targetSessionId",

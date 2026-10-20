@@ -81,6 +81,14 @@ connection has the archive view open.
 
 ## Owed peer replies
 
+Each rebuild also reads who each session still owes an answer after its last
+reply reminder (`peerPromptStore.remindersExhaustedByRecipient`, projected as
+`unansweredRequestsFrom`, requesters newest first): one grouped read over the
+`awaiting_response` rows whose `reminder_count` reached
+`sessionPeerPromptReminderLimit`, from a user session neither archived nor
+deleted, served by `peer_prompts_expiry_idx`. A change of the limit rebuilds the
+list; nothing clears the field but a reply, a settle or the request's expiry.
+
 Each rebuild also reads who still owes each session a reply
 (`peerPromptStore.outstandingRepliesBySender`, projected as
 `awaitingRepliesFrom`): one read over the `awaiting_response` rows, each tested

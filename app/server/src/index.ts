@@ -89,6 +89,7 @@ import { searchTickets } from "./ticketSearch.ts";
 import { slackSocketMode } from "./slackSocketMode.ts";
 import {
   announceSettingsWritten,
+  onSettingsChanged,
   setModelProviderSync,
 } from "./settingsService.ts";
 import { watchSignInCards } from "./settingsInput.ts";
@@ -205,14 +206,18 @@ import {
   drainJournaledFailureBacklog,
   drainRecipient,
   installDelegationFailureNotices,
+  installReplyReminders,
+  offerReplyReminders,
   recoverPeerPromptsOnBoot,
   RETRY_SWEEP_INTERVAL_MS,
   runPeerPromptRetention,
+  setReplyReminderHost,
   stopPeerPromptDelivery,
   sweepExpiredLeases,
   sweepPeerPromptRetries,
 } from "./peerPrompt.ts";
 import {
+  agentHandoffOwed,
   drainAgentHandoffs,
   recoverAgentHandoffsOnBoot,
   stopAgentHandoffDelivery,
@@ -233,6 +238,7 @@ import {
   recoverAutoApprovalsOnBoot,
   runAutoApprovals,
 } from "./pendingApprovals.ts";
+import { createIdleEdge } from "./idleEdge.ts";
 import {
   setHumanPromptHook,
   setSessionIdleHook,
@@ -1895,6 +1901,13 @@ server.listen(PORT, HOST, () => {
   // A delegated child's failed turn becomes a durable notice for the
   // coordinator waiting on it, recorded before the run's closing marker.
   installDelegationFailureNotices();
+  // An idle session is reminded of the peer requests it has not answered;
+  // the limit decides which of them the session list shows as still owed.
+  installReplyReminders();
+  onSettingsChanged(({ sections }) => {
+    if (sections.includes("sessionPeerPromptReminderLimit"))
+      void hub.broadcastSessions();
+  });
   // Publishes proxy/CA env vars to `childProcessEnv()` (never process.env), so
   // every later-spawned agent, host command and build tool gets them while the
   // server's own traffic stays direct. Best-effort: a failure here must
@@ -1995,6 +2008,27 @@ server.listen(PORT, HOST, () => {
         `[background] ${deleted.blockedOwners} deleted session(s) still own live background work; left as members`,
       );
   });
+  // What an idle session is offered, in order (`idleEdge.ts`).
+  // BOOT is deliberately not sequenced this tightly (see below): both
+  // recoveries start their own async work, so a peer prompt can still win the
+  // first turn there. The cost is one turn of ordering for a session that
+  // happens to owe both, and paying for it would mean holding every other
+  // session's peer delivery behind a handoff turn that can run for minutes.
+  const idleEdge = createIdleEdge({
+    runAutoApprovals,
+    drainAgentHandoffs,
+    drainPromptQueue: (sessionId) => drainPromptQueue(sessionId),
+    drainBackground: (sessionId, rerun) =>
+      rerun
+        ? backgroundCompletionDelivery.requestDrain(sessionId)
+        : backgroundCompletionDelivery.drain(sessionId),
+    offerReplyReminders,
+  });
+  setReplyReminderHost({
+    handoffOwed: agentHandoffOwed,
+    wakeOwed: (sessionId) => backgroundCompletionDelivery.wakeOwed(sessionId),
+    requestIdleEdge: (sessionId) => idleEdge.offer(sessionId),
+  });
   setPromptQueueHost({
     resolve: async (sessionId) => {
       const live =
@@ -2008,65 +2042,19 @@ server.listen(PORT, HOST, () => {
     publish: (sessionId, queue) => hub.broadcastPromptQueue(sessionId, queue),
     reportError: (sessionId, message) =>
       hub.reportSessionError(sessionId, message),
-    // The idle chain's tail. `BackgroundCompletionDelivery.drain` runs its
-    // `drainPeers` (the peer FIFO) first and then offers background
-    // completions, which is exactly what waited behind the queue.
-    yieldToOthers: (sessionId) =>
-      void backgroundCompletionDelivery.requestDrain(sessionId),
+    // The idle chain's tail: what waited behind the queue.
+    yieldToOthers: (sessionId) => idleEdge.offerAfterQueue(sessionId),
   });
   setHumanPromptHook(
     // Every human prompt closes its session's peer chains. No prompt changes
     // who owns a spawned session: that is the explicit Take over command.
     closeChainsForHumanPrompt,
   );
-  // A card outcome the user decided while this session was mid-turn takes the
-  // edge FIRST: it is the one thing waiting here that the agent may be
-  // BLOCKED on, and the user is watching for it. Both harness adapters
-  // publish this edge only after their provider primitive has settled, so
-  // delivery can start immediately without steering or being claimed by the
-  // prior turn.
-  //
-  // The user's own queued messages come next (`promptQueue.ts`): they are
-  // what the user asked to happen after this turn, ahead of anything an agent
-  // queued. The peer FIFO then owns the first edge with neither owed, and
-  // background completion is offered only after the peer drain finishes.
-  // Ordering them rather than racing them is what keeps that true: each
-  // treats a session that has started running as "not now", so a handoff that
-  // wins an unordered race would make the other two wait for a turn they
-  // could have gone first in — and the reverse would leave the user's
-  // decision behind another agent's message.
-  //
-  // BOOT is deliberately not sequenced this tightly (see below): both
-  // recoveries start their own async work, so a peer prompt can still win the
-  // first turn there. The cost is one turn of ordering for a session that
-  // happens to owe both, and paying for it would mean holding every other
-  // session's peer delivery behind a handoff turn that can run for minutes.
-  //
-  // A Stop holds every automatic step of this chain (`automaticTurnHold.ts`);
-  // approvals still EXECUTE under their grants, and only the turns that would
-  // tell the agent wait. Resume offers the same chain again, and its
-  // background step reruns after a drain in flight rather than coalescing
-  // onto one that already read the hold.
-  const offerIdleEdge = (sessionId: string, resumed = false): void => {
-    // Cards a session grant approves run first: each queues its outcome as a
-    // handoff, so the drain below carries it to the agent in order.
-    void runAutoApprovals(sessionId)
-      .catch(() => {})
-      .then(() => drainAgentHandoffs(sessionId))
-      .catch(() => {})
-      .then(() => drainPromptQueue(sessionId))
-      .catch(() => {})
-      .then(() => {
-        void (resumed
-          ? backgroundCompletionDelivery.requestDrain(sessionId)
-          : backgroundCompletionDelivery.drain(sessionId));
-      });
-  };
-  setSessionIdleHook((sessionId) => offerIdleEdge(sessionId));
+  setSessionIdleHook((sessionId) => idleEdge.offer(sessionId));
   setAutomaticTurnHoldHost({
     changed: (sessionId) => publishPromptQueue(sessionId),
     resumed: (sessionId) => {
-      offerIdleEdge(sessionId, true);
+      idleEdge.offer(sessionId, true);
       resumePermanentAssistantIntake(sessionId);
     },
   });

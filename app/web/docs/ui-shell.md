@@ -539,6 +539,17 @@ line though the top card shows no chip — a peer the user took over or a run's
 role is not this chat's work — and a chat that spawned no one but asked an
 existing session for a reply shows that line alone. A settled tree is on the
 shelf and raises nothing; one kept up by an unsettled peer still shows its chip.
+
+The other direction is the owing session's OWN condition. A request it neither
+answered nor settled after its last reply reminder (`unansweredRequestsFrom`,
+`docs/agent-workflows.md`) puts a second warning chip on its card, **«requester»
+awaits a reply** (`+N` for further requesters), that opens the requester and
+rises the card to the attention tier. It sits beside any stall chip, each
+opening its own session; only a stall chip saying exactly the same words about
+the same session replaces it. A folded owing peer lifts its cluster like a peer
+waiting on the user, and the cluster names it (**Reply owed in «peer»**). A
+settled or archived owing session shows nothing.
+
 Workflow Run role sessions are the run's item and raise no chip of their own. A
 card with no chip and nothing moving is done.
 

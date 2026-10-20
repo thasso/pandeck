@@ -280,6 +280,29 @@ function emitRunStarted(
   }
 }
 
+/**
+ * Every user entry appended to a session's log, whatever its origin, a steer
+ * included. Heard before the prompt's own {@link RuntimePromptOptions.onUserEntry},
+ * so that callback can record what the newest entry was. A continuation
+ * appends none.
+ */
+const userEntryListeners = new Set<(sessionId: string) => void>();
+export function subscribeSessionUserEntry(
+  listener: (sessionId: string) => void,
+): () => void {
+  userEntryListeners.add(listener);
+  return () => userEntryListeners.delete(listener);
+}
+function emitUserEntry(sessionId: string): void {
+  for (const listener of userEntryListeners) {
+    try {
+      listener(sessionId);
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
 /** Cleanup on every closed/disposed turn, including ones with no native completion.
  * Only a normalized provider completion carries a stop reason as evidence.
  */
@@ -1335,6 +1358,7 @@ export class LiveRuntimeSession {
     const promptOrigin = origin ?? { kind: "human" as const };
     this.noteTurnOrigin(promptOrigin, options.hidden === true);
     if (promptOrigin.kind === "human") humanPromptHook?.(this.sessionId);
+    emitUserEntry(this.sessionId);
     return userRaw.id;
   }
 

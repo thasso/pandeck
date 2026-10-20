@@ -474,6 +474,8 @@ export class BackgroundCompletionDelivery {
   private readonly maxNoticesPerSession: number;
   private readonly maxPromptChars: number;
   private readonly rerunAfterDrain = new Set<string>();
+  /** Sessions whose wake batch is being offered as a turn right now. */
+  private readonly offering = new Set<string>();
   /** Completions whose outbox row could not be written when they were queued. */
   private readonly unrecorded = new WeakSet<BackgroundCompletionNotice>();
   private stopped = false;
@@ -495,6 +497,22 @@ export class BackgroundCompletionDelivery {
     return (
       (this.pending.get(sessionId)?.notices.length ?? 0) +
       (this.deferred.get(sessionId)?.notices.length ?? 0)
+    );
+  }
+
+  /**
+   * Whether a wake is owed to this session before anything offered after the
+   * background step (a peer reply reminder): a batch waiting to start its own
+   * turn, or one being offered right now. Deferred facts never count, since
+   * they ride whatever turn comes next. A drain still in its peer phase does
+   * not count either: it may be waiting on the very turn that asks. A map
+   * lookup.
+   */
+  wakeOwed(sessionId: string): boolean {
+    if (this.stopped) return false;
+    return (
+      this.offering.has(sessionId) ||
+      (this.pending.get(sessionId)?.notices.length ?? 0) > 0
     );
   }
 
@@ -731,6 +749,7 @@ export class BackgroundCompletionDelivery {
       completionIdentities(carried, this.unrecorded),
     );
     let result: BackgroundCompletionOfferResult;
+    this.offering.add(sessionId);
     try {
       result = await this.options.offer(
         sessionId,
@@ -745,6 +764,8 @@ export class BackgroundCompletionDelivery {
       else for (const notice of sent) this.options.discard?.(notice);
       this.requeue(liveBatch, sessionId, leftOver, 0);
       throw error;
+    } finally {
+      this.offering.delete(sessionId);
     }
     const reached = attempt.abandon();
     this.requeue(liveBatch, sessionId, leftOver, 0);

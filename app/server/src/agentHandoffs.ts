@@ -292,6 +292,19 @@ function queueHandoff(input: AgentHandoffInput): void {
 }
 
 /**
+ * Whether a decision still waits to reach this session, or its drain is
+ * delivering one right now: work the idle edge owes before a reply reminder
+ * (`peerPrompt.ts`). A row whose prompt already landed is not owed. A card
+ * nobody has decided is no row, so it never counts. Synchronous.
+ */
+export function agentHandoffOwed(sessionId: string): boolean {
+  if (drainLocks.has(sessionId)) return true;
+  return agentHandoffStore
+    .listForSession(sessionId)
+    .some((row) => !deliveredPendingRemoval.has(row.id));
+}
+
+/**
  * Deliver what a session is owed, oldest first, without interrupting a turn.
  * Concurrent calls for the same session coalesce: the runtime fires its idle
  * hook from inside the finishing prompt, so the hook's drain lands on the drain

@@ -1523,6 +1523,11 @@ export interface AppSettings {
    */
   sessionPeerPromptMaxHops: number;
   /**
+   * Idle-edge reminders one unanswered peer request gets before it shows as
+   * a condition on the owing session's inbox card instead.
+   */
+  sessionPeerPromptReminderLimit: number;
+  /**
    * Global on/off state for the user-owned skills library
    * ([Task-613](pa://task/613)), keyed by declared skill name. Sparse: a name
    * with no entry is OFF, so this section names what the user turned ON rather
@@ -1832,6 +1837,14 @@ export interface SessionListItem {
    * inbox's `spawnTreeStall`).
    */
   awaitingRepliesFrom?: string[];
+  /**
+   * The requesters still waiting on THIS session after their requests' last
+   * idle-edge reminder (`sessionPeerPromptReminderLimit`), by session id,
+   * newest request first: a request it neither answered nor settled. Clears
+   * on a reply, a settle or the request's expiry, never on a timer. Omitted
+   * when none.
+   */
+  unansweredRequestsFrom?: string[];
   /**
    * When the user settled this session out of the Sessions inbox working set.
    * Distinct from `archived`: a settled session stays in the ordinary list.

@@ -192,6 +192,7 @@ export const settingsFixture: AppSettings = {
     },
   ],
   sessionPeerPromptMaxHops: 10,
+  sessionPeerPromptReminderLimit: 3,
   skills: {},
   appearance: {
     separatorBeforeFinalResponse: true,
