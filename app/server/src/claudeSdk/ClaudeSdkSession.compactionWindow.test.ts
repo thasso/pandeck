@@ -604,6 +604,49 @@ test("agent lowering: a read missing the switch, or the threshold of a no-value 
   }
 });
 
+test("agent lowering: partial reads never add up to an answer", async () => {
+  const { id, session, turn, query, persisted, persist } = await midTurn();
+  const replies: Array<Partial<Usage>> = [
+    { mcpTools: [], isAutoCompactEnabled: true },
+    { mcpTools: [], autoCompactThreshold: 967_000 },
+  ];
+  query.summary = async () => replies.shift() as Usage;
+  for (const attempt of ["switch only", "threshold only"]) {
+    const refused = await session.lowerCompactionWindow(400_000, persist);
+    assert.match(!refused.ok ? refused.message : "", /Could not read/, attempt);
+  }
+  assert.deepEqual(query.usageReads, ["summary", "summary"]);
+  assert.deepEqual(persisted, []);
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  query.output.emit(result("r1"));
+  await turn;
+  session.dispose();
+});
+
+test("agent lowering: an empty read refuses even when the epoch reported fully meanwhile", async () => {
+  enableBackgroundWork();
+  const { id, session, turn, query, persisted, persist } = await midTurn();
+  await sessionSkills(session.id, session.agentType);
+  await startBackgroundShell(query);
+  const held = deferred<Usage>();
+  query.summary = () => held.promise;
+  const outcome = session.lowerCompactionWindow(400_000, persist);
+  await until(() => query.usageReads.includes("summary"));
+  query.output.emit(result("r1"));
+  await turn;
+  assert.equal(
+    window(session)?.providerTrigger,
+    967_000,
+    "the retained epoch reported in full",
+  );
+  held.resolve({ mcpTools: [] });
+  const refused = await outcome;
+  assert.match(!refused.ok ? refused.message : "", /Could not read/);
+  assert.deepEqual(persisted, []);
+  assert.equal(sessionStore.get(id)?.compactionWindow, undefined);
+  session.dispose();
+});
+
 test("agent lowering: a pending stored raise never lifts the running window's bound", async () => {
   const { id, session, turn, query, persisted, persist } =
     await midTurn(200_000);

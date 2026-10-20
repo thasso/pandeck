@@ -150,6 +150,22 @@ export class ClaudeCompactionWindow {
     };
   }
 
+  /**
+   * Whether the agent path's own read answers what `agentCheck` asked for:
+   * the switch, and (switched on, no start value) the threshold. Judged on
+   * the reply alone, never on what other reports already merged.
+   */
+  readAnswers(epochKey: string, usage: ContextUsage): boolean {
+    const epoch = this.currentEpoch();
+    if (epoch?.epochKey !== epochKey) return false;
+    if (typeof usage.isAutoCompactEnabled !== "boolean") return false;
+    return (
+      !usage.isAutoCompactEnabled ||
+      epoch.started !== null ||
+      typeof usage.autoCompactThreshold === "number"
+    );
+  }
+
   status(stored: number | undefined): CompactionWindowLiveStatus {
     const expected = this.startWindow(stored) ?? null;
     const epoch = this.currentEpoch();

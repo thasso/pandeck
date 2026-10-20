@@ -62,8 +62,10 @@ range:
 
   Claude checks only against the RUNNING process. Its provider switch and
   running window must be known for that process: from a report it already sent,
-  or from one summary `getContextUsage` read, bounded at 10 seconds. With no
-  running process, a failed or silent read, a reply missing either field, or a
+  or from one summary `getContextUsage` read, bounded at 10 seconds. The reply
+  itself must carry the switch, and, when compaction is on and the process
+  started with no value, the threshold; other reports never complete it. With no
+  running process, a failed or silent read, a reply short of those fields, or a
   process that changed while reading, it refuses with nothing stored. It never
   falls back to an earlier process's report.
 

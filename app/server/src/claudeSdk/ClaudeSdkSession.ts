@@ -1454,9 +1454,9 @@ export class ClaudeSdkSession implements LiveSession {
           "This session's Claude process changed while checking; nothing changed.",
       };
     if (usage) {
-      this.compactionWindow.usageReported(epochKey, usage);
-      if (this.compactionWindow.agentCheck(epochKey).needsRead)
+      if (!this.compactionWindow.readAnswers(epochKey, usage))
         return { ok: false, message: COMPACTION_STATE_UNREAD };
+      this.compactionWindow.usageReported(epochKey, usage);
     }
     return this.compactionWindow.lower(
       tokens,
