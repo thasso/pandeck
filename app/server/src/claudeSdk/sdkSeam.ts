@@ -49,8 +49,9 @@ export type ClaudeQuery = AsyncIterable<ClaudeSdkMessage> & {
   /**
    * Tool-search visibility (which MCP tool definitions are loaded) and the
    * compaction threshold the CLI resolved (optional; fakes omit it).
+   * `detail: "summary"` skips the per-category token counts.
    */
-  getContextUsage?: () => Promise<{
+  getContextUsage?: (opts?: { detail?: "summary" | "full" }) => Promise<{
     mcpTools: ClaudeContextUsageMcpTool[];
     autoCompactThreshold?: number;
     isAutoCompactEnabled?: boolean;

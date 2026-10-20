@@ -533,6 +533,22 @@ describe("tool catalog", () => {
     }
   });
 
+  test("self-lowering the compaction window is one deferred local tool in session controls for every persona", () => {
+    for (const persona of PERSONAS) {
+      const groups = toolGroupsFor(persona).filter(({ tools }) =>
+        tools.some((tool) => tool.name === "session_compaction_window"),
+      );
+      assert.deepEqual(
+        groups.map(({ id, loading, family }) => ({ id, loading, family })),
+        [{ id: "session-controls", loading: "deferred", family: "shared" }],
+      );
+      const tool = groups[0]!.tools.find(
+        ({ name }) => name === "session_compaction_window",
+      );
+      assert.equal(tool?.sideEffects, "local");
+    }
+  });
+
   test("settings tools are a deferred group for the Personal Assistant only", () => {
     const group = toolGroupsFor("personal-assistant").find(
       ({ id }) => id === "settings",

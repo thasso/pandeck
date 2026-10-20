@@ -247,7 +247,10 @@ import {
   resultProviderError,
 } from "./messageMapper.ts";
 import { buildClaudeSdkQueryOptions, claudeQueryModel } from "./options.ts";
-import { ClaudeCompactionWindow } from "./compactionWindow.ts";
+import {
+  ClaudeCompactionWindow,
+  readContextUsage,
+} from "./compactionWindow.ts";
 import {
   copyClaudeSessionForAccount,
   lastSavedCostState,
@@ -276,6 +279,8 @@ import {
 const DEFAULT_TITLE = "New Claude SDK";
 /** How long a Stop waits for the CLI to confirm it dropped queued steers. */
 const STEER_CANCEL_TIMEOUT_MS = 2_000;
+const COMPACTION_STATE_UNREAD =
+  "Could not read this session's compaction state; nothing changed.";
 
 interface ClaudeTaskOutputTemp {
   tmpDir: string;
@@ -703,10 +708,7 @@ export class ClaudeSdkSession implements LiveSession {
   private processClosing = false;
   private processCloseReason: string | undefined;
   private readonly compactionWindow = new ClaudeCompactionWindow({
-    currentEpochKey: () =>
-      this.activeQuery && this.inputQueue && !this.processClosing
-        ? this.queryEpochKey
-        : undefined,
+    currentEpochKey: () => this.runningEpochKey(),
     modelId: () => this.modelId,
     modelWindow: () => this.modelOption().contextWindow,
   });
@@ -1420,15 +1422,54 @@ export class ClaudeSdkSession implements LiveSession {
     return this.compactionWindow.apply(tokens);
   }
 
+  /**
+   * The agent path checks against the RUNNING process only: its switch and
+   * window must be known in this epoch, from a report it already sent or one
+   * bounded read. A failed or silent read, or a process that changed while
+   * reading, refuses; nothing falls back to an earlier process's report.
+   */
   async lowerCompactionWindow(
     tokens: number,
     persist: (tokens: number) => void,
   ): Promise<CompactionWindowLowerResult> {
+    const epochKey = this.runningEpochKey();
+    const query = this.activeQuery;
+    const check =
+      epochKey !== undefined
+        ? this.compactionWindow.agentCheck(epochKey)
+        : undefined;
+    if (epochKey === undefined || !query || !check?.current)
+      return {
+        ok: false,
+        message:
+          "Lowering needs this session's running Claude process; call it during a turn. Nothing changed.",
+      };
+    const usage = check.needsRead ? await readContextUsage(query) : undefined;
+    if (check.needsRead && !usage)
+      return { ok: false, message: COMPACTION_STATE_UNREAD };
+    if (this.runningEpochKey() !== epochKey || this.activeQuery !== query)
+      return {
+        ok: false,
+        message:
+          "This session's Claude process changed while checking; nothing changed.",
+      };
+    if (usage) {
+      if (!this.compactionWindow.readAnswers(epochKey, usage))
+        return { ok: false, message: COMPACTION_STATE_UNREAD };
+      this.compactionWindow.usageReported(epochKey, usage);
+    }
     return this.compactionWindow.lower(
       tokens,
       sessionStore.get(this.id)?.compactionWindow,
       persist,
     );
+  }
+
+  /** The current query epoch, running a turn or retained; never `/compact`. */
+  private runningEpochKey(): string | undefined {
+    return this.activeQuery && this.inputQueue && !this.processClosing
+      ? this.queryEpochKey
+      : undefined;
   }
 
   private compactionWindowState(

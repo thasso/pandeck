@@ -616,6 +616,11 @@ persona toolsets.
   that owned child before the runtime abort, so the idle hook sees an empty
   queue. The user's explicit Take over revokes stop authority (Hand back
   restores it), and neither operation archives or deletes a session.
+- `sessions/sessionCompactionWindowTool.ts` owns `session_compaction_window`, a
+  Build-mode local tool in the same deferred `session-controls` group. It takes
+  no session id: it lowers the caller's own window through the setter's `agent`
+  actor (`docs/compaction-window.md`) and words its result from the returned
+  `pendingReason`, never from a harness id.
 - `workflow/sessionSubmitResultTool.ts` owns `session_submit_result` (coding
   personas, catalog group `workflow`, shared and deferred; assignment prompts
   explicitly direct discovery through tool search). It resolves the caller's one

@@ -5,8 +5,9 @@
  * - `user` (the inspector): any value in the session's range, or clear.
  *   Persisted first, then applied to a live harness; a live failure is
  *   reported in place and the stored value applies at the next start.
- * - `agent` (a session lowering its own window): the live harness runs the
- *   whole check-apply-confirm-persist transaction; there is no clearing.
+ * - `agent` (a session lowering its own window, `session_compaction_window`):
+ *   the live harness runs the checks and persists only once they pass; there
+ *   is no clearing.
  * - `spawn` (creation): a row value an agent wrote must be at least the agent
  *   floor and at most the native trigger; a definition default is clamped into
  *   the range, or dropped with the reason when there is none.

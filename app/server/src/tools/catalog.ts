@@ -87,6 +87,7 @@ import { memoryTools } from "./knowledge/memoryTools.ts";
 import { agentLibraryTools } from "./agents/agentLibraryTools.ts";
 import { skillLibraryTools } from "./skills/skillLibraryTools.ts";
 import { sessionAuditTools } from "./sessions/sessionAuditTool.ts";
+import { sessionCompactionWindowTools } from "./sessions/sessionCompactionWindowTool.ts";
 import { sessionControlTools } from "./sessions/sessionControlTool.ts";
 import { sessionLogTools } from "./sessions/sessionLogTools.ts";
 import { sessionLookupTools } from "./sessions/sessionLookupTools.ts";
@@ -205,6 +206,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   session_lookup: "none",
   session_audit: "none",
   session_control: "local",
+  session_compaction_window: "local",
   session_send_prompt: "local",
   session_spawn: "local",
   web_search: "none",
@@ -540,12 +542,12 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       id: "session-controls",
       label: "Session controls",
       description:
-        "Stop a still-owned spawned child or retract queued peer deliveries.",
+        "Stop a still-owned spawned child or retract queued peer deliveries, or lower this session's own compaction window.",
       searchHint:
-        "stop abort spawned child cancel retract remove queued delivery clear queue",
+        "stop abort spawned child cancel retract remove queued delivery clear queue compaction window context lower",
       loading: "deferred",
       family: "shared",
-      tools: sessionControlTools(),
+      tools: [...sessionControlTools(), ...sessionCompactionWindowTools()],
     },
     {
       id: "approval-grants",
