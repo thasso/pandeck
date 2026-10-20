@@ -36,6 +36,12 @@ class FakePromptableAdapter implements PromptableAdapter {
     attachments = false,
     /** Resolves when the held turn may finish; absent means "finish now". */
     private readonly gate: () => Promise<void> | undefined = () => undefined,
+    /**
+     * When present, the run completes (its idle edge) first and the prompt
+     * call answers only once this resolves, as a harness that still settles
+     * its provider call after the run closed.
+     */
+    private readonly settle: () => Promise<void> | undefined = () => undefined,
   ) {
     // The runtime DROPS attachments for an adapter that cannot take them
     // (`liveSession.ts`), so a test about attachments has to opt in.
@@ -58,6 +64,12 @@ class FakePromptableAdapter implements PromptableAdapter {
     if (behavior.mode === "reject") throw new Error(behavior.message);
     if (behavior.mode === "error")
       return { stopReason: "error", errorMessage: behavior.message };
+    const settle = this.settle();
+    if (settle) {
+      for (const listener of this.listeners)
+        listener({ type: "runCompleted", stopReason: "end" });
+      await settle;
+    }
     return { stopReason: "end" };
   }
   abort(): void {}
@@ -83,6 +95,7 @@ export class FakeRuntimeDriver implements RuntimePromptDriver {
   /** Opt in to attachment forwarding; off by default, as most fakes do not care. */
   acceptsAttachments = false;
   private gate: Promise<void> | undefined;
+  private settleGate: Promise<void> | undefined;
 
   constructor(id: string) {
     this.id = id;
@@ -131,6 +144,20 @@ export class FakeRuntimeDriver implements RuntimePromptDriver {
     };
   }
 
+  /**
+   * End every successful turn this driver starts with its run completion — the
+   * session goes idle — but keep the prompt call itself pending until the
+   * returned release runs, so a test can act inside that gap.
+   */
+  holdSettle(): () => void {
+    let release: () => void = () => {};
+    this.settleGate = new Promise<void>((resolve) => (release = resolve));
+    return () => {
+      this.settleGate = undefined;
+      release();
+    };
+  }
+
   createRuntimeAdapter(): PromptableAdapter {
     return new FakePromptableAdapter(
       () => this.behavior,
@@ -140,6 +167,7 @@ export class FakeRuntimeDriver implements RuntimePromptDriver {
       },
       this.acceptsAttachments,
       () => this.gate,
+      () => this.settleGate,
     );
   }
 }

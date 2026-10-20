@@ -13,6 +13,7 @@ import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
 import { BackgroundCompletionDelivery } from "./backgroundWork/completionDelivery.ts";
+import { createIdleEdge } from "./idleEdge.ts";
 import {
   clearExplicitRecipientAuthority,
   markExplicitRecipientAuthority,
@@ -2065,6 +2066,14 @@ describe("real delivery through a fake runtime driver", () => {
 describe("browser-independent drain triggers", () => {
   afterEach(() => setSessionIdleHook(undefined));
 
+  async function until(check: () => boolean, label: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error(`${label} was not reached`);
+      await new Promise((r) => setTimeout(r, 2));
+    }
+  }
+
   it("the idle-hook background phase waits for explicit peer authority", async () => {
     const recipient = seed("Idle authority recipient");
     let offers = 0;
@@ -2135,6 +2144,79 @@ describe("browser-independent drain triggers", () => {
       rows.some((r) => r.status === "completed"),
       "the queued peer prompt drained on idle without any explicit drainRecipient call",
     );
+  });
+
+  it("delivers a reply that arrived during a background-completion turn once that turn ends (Task-973)", async () => {
+    const reviewer = seed("Reviewer");
+    const implementer = seed("Implementer");
+    const driver = driverFor(implementer);
+    driver.behavior = { mode: "success" };
+    // Carries the attempt's claim like `offerBackgroundCompletion`, so the
+    // drain learns the facts reached the model from the runtime itself.
+    const delivery = new BackgroundCompletionDelivery({
+      drainPeers: drainRecipient,
+      offer: async (sessionId, offer, clientRequestId, attempt) => {
+        await promptRuntimeSession(driverFor(sessionId), offer.visibleText, {
+          origin: { kind: "system", source: "background-completion" },
+          contextBlock: offer.contextBlock,
+          clientRequestId,
+          ...attempt.hooks(),
+        });
+        return attempt.finished(undefined) === "unsent" ? "busy" : "delivered";
+      },
+    });
+    // The production idle chain (`index.ts`): nothing owed ahead of the
+    // background step, which an ordinary idle edge enters without a rerun.
+    const idleEdge = createIdleEdge({
+      runAutoApprovals: async () => {},
+      drainAgentHandoffs: async () => {},
+      drainPromptQueue: async () => {},
+      drainBackground: (id, rerun) =>
+        rerun ? delivery.requestDrain(id) : delivery.drain(id),
+      offerReplyReminders: async () => {},
+    });
+    setSessionIdleHook((id) => idleEdge.offer(id));
+    setPeerPromptAutoDeliverForTests(true);
+    try {
+      const releaseTurn = driver.holdTurns();
+      // A real harness closes its run, which is the idle edge, before the
+      // prompt call that carried the completion answers.
+      const releaseSettle = driver.holdSettle();
+      delivery.enqueueActivity(implementer, {
+        itemId: "ci-watch",
+        eventId: "ci-watch-done",
+        label: "CI watch",
+        lineCount: 1,
+        bytes: 1,
+        droppedEventCount: 0,
+        humanLink: "/background-tasks",
+      });
+      await until(() => driver.isRunning, "the background-completion turn");
+
+      // The reviewer answers while that turn still runs: the enqueue's own
+      // drain finds the recipient busy and leaves the reply queued.
+      const reply = await sendPeerPrompt({
+        senderSessionId: reviewer,
+        targetSessionId: implementer,
+        prompt: "Rebase check passed.",
+        responseRequested: false,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(peerPromptStore.getById(reply.message.id)!.status, "queued");
+
+      // Its idle edge is the only event left; nothing is enqueued after it.
+      releaseTurn();
+      await until(() => !driver.isRunning, "the background turn's idle edge");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      releaseSettle();
+      await until(
+        () => peerPromptStore.getById(reply.message.id)!.status === "completed",
+        "the queued reply to deliver at the background turn's idle edge",
+      );
+      assert.equal(driver.promptOptions.length, 2, "one turn each, no repeat");
+    } finally {
+      setPeerPromptAutoDeliverForTests(false);
+    }
   });
 
   it("drainAllQueuedOnBoot delivers to a resumable idle target with no browser connection", async () => {

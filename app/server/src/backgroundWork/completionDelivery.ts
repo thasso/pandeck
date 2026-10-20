@@ -761,7 +761,10 @@ export class BackgroundCompletionDelivery {
       // An offer that throws never said what reached the model.
       if (attempt.abandon() === "unsent")
         this.requeue(liveBatch, sessionId, sent, offered.dropped);
-      else for (const notice of sent) this.options.discard?.(notice);
+      else {
+        for (const notice of sent) this.options.discard?.(notice);
+        this.rerunAfterDrain.add(sessionId);
+      }
       this.requeue(liveBatch, sessionId, leftOver, 0);
       throw error;
     } finally {
@@ -779,7 +782,12 @@ export class BackgroundCompletionDelivery {
     for (const notice of sent) this.options.discard?.(notice);
     if (liveBatch.notices.length === 0 && liveBatch.dropped === 0)
       this.pending.delete(sessionId);
-    if (leftOver.length > 0) this.rerunAfterDrain.add(sessionId);
+    // A turn that carried the facts was awaited here, and its idle edge
+    // coalesced onto this drain, which is past its peer phase: a peer prompt
+    // or owed notice that found the session busy meanwhile has no other wake
+    // (Task-973). Read the peer phase again; with nothing owed it starts no turn.
+    if (leftOver.length > 0 || reached !== "unsent")
+      this.rerunAfterDrain.add(sessionId);
   }
 
   /** Put notices back at the front of a session's wake queue, in order. */

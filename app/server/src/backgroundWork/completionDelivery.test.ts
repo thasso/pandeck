@@ -523,6 +523,52 @@ test("a drain requested while one is in flight runs again after it", async () =>
   assert.equal(peerPasses, 2);
 });
 
+test("a drain whose offer reached the model reads the peer phase again after that turn (Task-973)", async () => {
+  // The turn's idle edge coalesced onto this drain while it awaited the
+  // offer; a peer reply queued during the turn has no other wake.
+  let peerPasses = 0;
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: async () => {
+      peerPasses += 1;
+    },
+    offer: (_sessionId, _offer, _id, attempt) => {
+      const hooks = attempt.hooks();
+      hooks.admit();
+      hooks.onProviderCall("run-1");
+      hooks.onUserEntry("entry-1", "run-1", true);
+      return Promise.resolve("delivered");
+    },
+  });
+
+  delivery.enqueue("owner-exposed", notice("item-exposed"));
+  await delivery.drain("owner-exposed");
+  for (let i = 0; i < 20 && peerPasses < 2; i += 1) await flush();
+  assert.equal(peerPasses, 2);
+  // The rerun offered nothing, so it reran nothing.
+  for (let i = 0; i < 20; i += 1) await flush();
+  assert.equal(peerPasses, 2);
+});
+
+test("an offer the model never saw does not rerun the drain, so busy cannot spin", async () => {
+  for (const answer of ["busy", "unavailable"] as const) {
+    let peerPasses = 0;
+    let offers = 0;
+    const delivery = new BackgroundCompletionDelivery({
+      drainPeers: async () => {
+        peerPasses += 1;
+      },
+      offer: () => {
+        offers += 1;
+        return Promise.resolve(answer);
+      },
+    });
+    delivery.enqueue(`owner-${answer}`, notice(`item-${answer}`));
+    await delivery.drain(`owner-${answer}`);
+    for (let i = 0; i < 20; i += 1) await flush();
+    assert.deepEqual([peerPasses, offers], [1, 1], answer);
+  }
+});
+
 test("a Stop's hold keeps a completion pending, unoffered and unconsumed, until it is lifted", async () => {
   let held = true;
   const offered: string[] = [];
