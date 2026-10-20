@@ -42,6 +42,7 @@ import type {
 } from "./hostSlashCommands.ts";
 import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
+import { storedCompactionWindowState } from "./harnesses/compactionWindow.ts";
 import { engineTranscript } from "./harnesses/storage.ts";
 import { sessionToolExposure } from "./tools/sessionToolExposure.ts";
 import {
@@ -159,6 +160,11 @@ export class ViewSession implements HarnessDriver {
     const originTaskValue = this.originTask();
     const toolExposureValue = sessionToolExposure(this.id);
     const coding = isCodingAgentType(this.kind);
+    // Read fresh: an open view outlives a change to the stored window.
+    const stored = sessionStore.get(this.id);
+    const compactionWindowValue = stored
+      ? storedCompactionWindowState(stored)
+      : undefined;
     return {
       sessionId: this.id,
       ...(this.sessionFile !== undefined
@@ -173,6 +179,9 @@ export class ViewSession implements HarnessDriver {
       thinkingLevel: (this.meta.thinkingLevel ?? "off") as ThinkingLevel,
       ...(this.meta.mode !== undefined ? { mode: this.meta.mode } : {}),
       ...(this.meta.requiresEnterprise ? { requiresEnterprise: true } : {}),
+      ...(compactionWindowValue !== undefined
+        ? { compactionWindow: compactionWindowValue }
+        : {}),
       // Steering needs a running turn, which a detached session cannot have.
       canSteer: false,
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),

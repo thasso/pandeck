@@ -29,7 +29,12 @@ import type {
   SessionState,
   ThinkingLevel,
 } from "@assistant/shared";
-import { isCodingAgentType, UNLABELED_SESSION_TITLE } from "@assistant/shared";
+import {
+  HARNESSES,
+  isCodingAgentType,
+  sessionCompactionWindowState,
+  UNLABELED_SESSION_TITLE,
+} from "@assistant/shared";
 import {
   skillInvocationTrail,
   type SkillInvocationToolCall,
@@ -69,7 +74,15 @@ import { activeSkillsForSession } from "../sessionSkills.ts";
 import { sessionAgentSummary } from "../agents/sessionAgent.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
-import type { HarnessHost, LiveSession, Viewer } from "../harness.ts";
+import type {
+  CompactionWindowApplyResult,
+  CompactionWindowHarnessStatus,
+  CompactionWindowLowerResult,
+  HarnessHost,
+  LiveSession,
+  Viewer,
+} from "../harness.ts";
+import { compactionWindowFor } from "./compactionWindow.ts";
 import { SessionResidency } from "../sessionKit/residency.ts";
 import {
   discardHostCommandTurn,
@@ -622,6 +635,7 @@ export class PiLiveSession implements LiveSession {
         }
         this.awaitingRetryContinuation = false;
         this.retryAttemptError = undefined;
+        compactionWindowFor(this.session)?.verify();
         if (this.retrySettingsBeforeSuppression) {
           this.session.settingsManager.applyOverrides({
             retry: this.retrySettingsBeforeSuppression,
@@ -1609,6 +1623,7 @@ export class PiLiveSession implements LiveSession {
     model: Parameters<AgentSession["setModel"]>[0],
   ): Promise<void> {
     await this.session.setModel(model);
+    compactionWindowFor(this.session)?.onModelChanged();
     this.broadcastState();
     this.broadcastContextInfo(true);
   }
@@ -1617,6 +1632,35 @@ export class PiLiveSession implements LiveSession {
     this.session.setThinkingLevel(level);
     this.broadcastState();
     this.broadcastContextInfo(true);
+  }
+
+  /* ---------------------------- compaction window --------------------------- */
+
+  compactionWindowStatus(): CompactionWindowHarnessStatus {
+    return (
+      compactionWindowFor(this.session)?.status() ?? {
+        live: { applied: "pending", pendingReason: "next-turn" },
+      }
+    );
+  }
+
+  async applyCompactionWindow(
+    tokens: number | null,
+  ): Promise<CompactionWindowApplyResult> {
+    const controller = compactionWindowFor(this.session);
+    return controller
+      ? controller.apply(tokens)
+      : { pendingReason: "next-turn" };
+  }
+
+  async lowerCompactionWindow(
+    tokens: number,
+    persist: (tokens: number) => void,
+  ): Promise<CompactionWindowLowerResult> {
+    const controller = compactionWindowFor(this.session);
+    return controller
+      ? controller.lower(tokens, persist)
+      : { ok: false, message: "This pi session cannot change its window." };
   }
 
   modelSelection(): {
@@ -1787,9 +1831,22 @@ export class PiLiveSession implements LiveSession {
     );
     const agentValue = sessionAgentSummary(this.session.sessionId);
     const worktreeIdValue = this.safeWorktreeId();
-    const requiresEnterprise = sessionStore.getIncludingDeleted(
-      this.session.sessionId,
-    )?.requiresEnterprise;
+    const stored = sessionStore.getIncludingDeleted(this.session.sessionId);
+    const requiresEnterprise = stored?.requiresEnterprise;
+    const windowStatus = this.compactionWindowStatus();
+    const compactionWindowValue = sessionCompactionWindowState(
+      HARNESSES[this.harness].compactionWindow,
+      {
+        stored: stored?.compactionWindow,
+        ...(windowStatus.contextWindow !== undefined
+          ? { contextWindow: windowStatus.contextWindow }
+          : {}),
+        ...(windowStatus.underlyingReserve !== undefined
+          ? { underlyingReserve: windowStatus.underlyingReserve }
+          : {}),
+        live: windowStatus.live,
+      },
+    );
     return {
       sessionId: this.session.sessionId,
       harness: this.harness,
@@ -1799,6 +1856,9 @@ export class PiLiveSession implements LiveSession {
       thinkingLevel: this.session.thinkingLevel as ThinkingLevel,
       mode: this.mode,
       ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
+      ...(compactionWindowValue !== undefined
+        ? { compactionWindow: compactionWindowValue }
+        : {}),
       canSteer: this.canSteer,
       ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
       ...(pendingQuestionsValue.length > 0

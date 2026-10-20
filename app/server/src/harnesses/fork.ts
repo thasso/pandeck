@@ -15,6 +15,7 @@ import type { LiveSession } from "../harness.ts";
 import { piStore } from "../piSdk/piStore.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
+import { inheritCompactionWindow } from "./compactionWindow.ts";
 
 /** The native anchors OUR log holds around the picked entry. */
 type ForkAnchors = ReturnType<typeof sessionRuntime.forkAnchors>;
@@ -46,6 +47,7 @@ export function prepareFork(
   return {
     fork: async () => {
       const live = await prepared.fork();
+      await inheritCompactionWindow(request.id, live);
       // Forks inherit the parent's execution context durably: copy the
       // in_worktree edge so a later reopen resolves the same cwd.
       const parentWorktreeId = worktreeIdForSession(request.id);

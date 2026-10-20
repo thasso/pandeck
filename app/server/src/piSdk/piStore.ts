@@ -37,6 +37,7 @@ import {
 import { toPiToolDefinitions } from "./agentToolAdapter.ts";
 import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
 import { installToolPayloadProbe } from "./toolPayloadProbe.ts";
+import { installCompactionWindow } from "./compactionWindow.ts";
 import {
   calledToolNamesFromMessages,
   createPiToolActivation,
@@ -876,6 +877,11 @@ class PiSessionStore {
       activation.reapply();
     };
     if (!staged) commit();
+    // Before any prompt: the controller must observe every settings rebuild.
+    installCompactionWindow(
+      session,
+      sessionStore.get(session.sessionId)?.compactionWindow,
+    );
     installToolPayloadProbe(session);
     installDynamicToolTurnRefresh(session);
     // Initial active set: eager + find_tools + everything the transcript

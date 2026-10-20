@@ -101,6 +101,11 @@ export interface SessionMeta {
   peerTurnCap?: number;
   /** Per-turn Build/Plan tool policy. */
   mode?: SessionMode;
+  /**
+   * The desired compaction window in tokens; absent means the provider's
+   * default. Only {@link setCompactionWindow} writes it (`docs/compaction-window.md`).
+   */
+  compactionWindow?: number;
   archivedAt?: number;
   /**
    * When the user last settled this session out of the Sessions inbox working
@@ -206,6 +211,7 @@ interface DbSessionRow {
   requires_enterprise: number;
   peer_turn_cap: number | null;
   mode: string;
+  compaction_window: number | null;
   archived_at_ms: number | null;
   settled_at_ms: number | null;
   inbox_position: number | null;
@@ -249,6 +255,9 @@ function fromRow(row: DbSessionRow): SessionMeta {
     ...(row.requires_enterprise ? { requiresEnterprise: true } : {}),
     ...(row.peer_turn_cap !== null ? { peerTurnCap: row.peer_turn_cap } : {}),
     mode: sessionModeOrDefault(row.mode),
+    ...(row.compaction_window !== null && row.compaction_window > 0
+      ? { compactionWindow: row.compaction_window }
+      : {}),
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
     ...(row.settled_at_ms !== null ? { settledAt: row.settled_at_ms } : {}),
     ...(row.inbox_position !== null
@@ -488,6 +497,21 @@ function switchCredentialProfile(
     throw new Error(
       "The session's account changed or the session was deleted during the switch.",
     );
+}
+
+/**
+ * The one writer of the compaction window (`null` clears it), THROWING when no
+ * live row changed so the setter can report the failure instead of applying a
+ * value it did not store.
+ */
+function setCompactionWindow(id: string, tokens: number | null): void {
+  const result = getDb()
+    .prepare(
+      "UPDATE session_index SET compaction_window = ? WHERE id = ? AND deleted_at_ms IS NULL",
+    )
+    .run(tokens, id);
+  if (result.changes !== 1)
+    throw new Error("The session was not found or has been deleted.");
 }
 
 /**
@@ -2052,6 +2076,7 @@ export const sessionStore = {
   upsert,
   setPeerTurnCap,
   switchCredentialProfile,
+  setCompactionWindow,
   markDeleted,
   remove,
   markRead,

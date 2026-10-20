@@ -190,6 +190,13 @@ export interface BuildClaudeSdkQueryOptionsInput {
   disableTools?: boolean;
   /** Per-process retained-query governance hooks. */
   lifecycleHooks?: ClaudeQueryLifecycleHooks;
+  /**
+   * The session's stored compaction window, already clamped into the model's
+   * range. Set: the query starts with it as `autoCompactWindow` and without the
+   * server's `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which the CLI would read first.
+   * Unset: settings and env are exactly today's (`docs/compaction-window.md`).
+   */
+  compactionWindow?: number;
 }
 
 /**
@@ -231,6 +238,12 @@ function buildCanUseTool(
     };
   };
 }
+
+/**
+ * The CLI's own compaction-window variable. It outranks every settings layer,
+ * so a query that carries a stored window must not inherit it.
+ */
+export const CLAUDE_AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 
 export function buildClaudeSdkQueryOptions(
   input: BuildClaudeSdkQueryOptionsInput,
@@ -290,6 +303,8 @@ export function buildClaudeSdkQueryOptions(
       ];
   const cwd = isAbsolute(input.cwd) ? input.cwd : pathResolve(input.cwd);
   const env = withClaudeOutputBudgetEnvironment(input.env);
+  if (input.compactionWindow !== undefined)
+    delete env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
   const frozenSkillNames = input.frozenSkillNames ?? [];
   const librarySkillPlugin =
     isCodingAgentType(agentType) &&
@@ -338,7 +353,13 @@ export function buildClaudeSdkQueryOptions(
     disallowedTools,
     // Disable Claude's native auto-memory globally; our in-app Memory is the
     // single authoritative memory surface (see CLAUDE_SDK_HARNESS_SETTINGS).
-    settings: CLAUDE_SDK_HARNESS_SETTINGS,
+    settings:
+      input.compactionWindow !== undefined
+        ? {
+            ...CLAUDE_SDK_HARNESS_SETTINGS,
+            autoCompactWindow: input.compactionWindow,
+          }
+        : CLAUDE_SDK_HARNESS_SETTINGS,
     // Assistant personas must not inherit project/user settings: in particular,
     // a run worktree's CLAUDE.md must not enter the coordinator's authority
     // context. Their complete instruction surface is the locked-down prompt.

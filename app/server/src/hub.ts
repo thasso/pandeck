@@ -390,6 +390,14 @@ class SessionHub {
     for (const c of this.connections) c.sessionHarnessOpened?.(driver);
   }
 
+  /**
+   * A session's stored metadata changed: every viewer showing it detached
+   * resends its state from the row. Opens no harness.
+   */
+  sessionStateChanged(sessionId: string): void {
+    for (const c of this.connections) c.sessionStateChanged?.(sessionId);
+  }
+
   /** The sessions some connected viewer is showing right now. */
   viewedSessionIds(): Set<string> {
     const ids = new Set<string>();

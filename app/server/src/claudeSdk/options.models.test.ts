@@ -11,6 +11,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { CLAUDE_SDK_MODELS as SHARED_CLAUDE_SDK_MODELS } from "@assistant/shared";
 import { buildClaudeSdkQueryOptions } from "./options.ts";
 import {
   CLAUDE_SDK_MODELS,
@@ -85,6 +86,17 @@ test("fable omits the off thinking level and has a 1M window", () => {
     "fable does not offer disabled thinking",
   );
   assert.equal(fable!.contextWindow, 1_000_000);
+});
+
+test("the opus alias has a 1M window in both curated copies", () => {
+  assert.equal(
+    CLAUDE_SDK_MODELS.find((m) => m.id === "opus")?.contextWindow,
+    1_000_000,
+  );
+  assert.equal(
+    SHARED_CLAUDE_SDK_MODELS.find((m) => m.id === "opus")?.contextWindow,
+    1_000_000,
+  );
 });
 
 test("adaptive models stream summarized thinking, never budget tokens", () => {

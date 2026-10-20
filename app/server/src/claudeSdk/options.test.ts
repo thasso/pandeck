@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
   buildClaudeSdkQueryOptions,
+  CLAUDE_AUTO_COMPACT_WINDOW_ENV,
   CLAUDE_SDK_NATIVE_TOOLS,
 } from "./options.ts";
 import { CLAUDE_SDK_HARNESS_SETTINGS } from "./modelSettings.ts";
@@ -496,4 +497,66 @@ async function main(): Promise<void> {
 
 test("builds persona-specific Claude SDK native-tool policy", async () => {
   await main();
+});
+
+test("a stored compaction window rides the start settings and drops the inherited variable", () => {
+  const base = {
+    cwd: "/tmp",
+    abortController: new AbortController(),
+    modelId: "opus",
+    thinkingLevel: "low" as const,
+    agentType: "developer" as const,
+  };
+  const previous = process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
+  process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV] = "150000";
+  try {
+    const explicitEnv = {
+      PATH: "/bin",
+      [CLAUDE_AUTO_COMPACT_WINDOW_ENV]: "150000",
+    };
+
+    // No stored window: settings and env are exactly today's.
+    const unsetExplicit = buildClaudeSdkQueryOptions({
+      ...base,
+      env: explicitEnv,
+    });
+    assert.equal(unsetExplicit.settings, CLAUDE_SDK_HARNESS_SETTINGS);
+    assert.equal(unsetExplicit.env?.[CLAUDE_AUTO_COMPACT_WINDOW_ENV], "150000");
+    const unsetInherited = buildClaudeSdkQueryOptions(base);
+    assert.equal(unsetInherited.settings, CLAUDE_SDK_HARNESS_SETTINGS);
+    assert.equal(
+      unsetInherited.env?.[CLAUDE_AUTO_COMPACT_WINDOW_ENV],
+      "150000",
+      "an unbound query keeps the server's variable when nothing is stored",
+    );
+
+    for (const env of [explicitEnv, undefined]) {
+      const set = buildClaudeSdkQueryOptions({
+        ...base,
+        ...(env ? { env } : {}),
+        compactionWindow: 150_000,
+      });
+      assert.deepEqual(set.settings, {
+        ...CLAUDE_SDK_HARNESS_SETTINGS,
+        autoCompactWindow: 150_000,
+      });
+      assert.equal(
+        Object.hasOwn(set.env ?? {}, CLAUDE_AUTO_COMPACT_WINDOW_ENV),
+        false,
+      );
+      assert.equal(
+        Object.hasOwn(set.settings as object, "idleCompaction"),
+        false,
+      );
+    }
+    assert.equal(
+      explicitEnv[CLAUDE_AUTO_COMPACT_WINDOW_ENV],
+      "150000",
+      "the caller's env object is not mutated",
+    );
+  } finally {
+    if (previous === undefined)
+      delete process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV];
+    else process.env[CLAUDE_AUTO_COMPACT_WINDOW_ENV] = previous;
+  }
 });
