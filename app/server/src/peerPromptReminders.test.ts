@@ -281,6 +281,62 @@ describe("reply reminders", () => {
     assert.equal(count(r.id), 0);
   });
 
+  it("boot queue recovery that yields without a turn reminds nobody", async () => {
+    const me = seed("Rebooted");
+    const r = openRequest(seed("Asker"), me, "question");
+    // A queued message whose attachment is gone fails before its append,
+    // pauses the queue and hands the edge on — at boot, with no idle edge.
+    promptQueueStore.append({
+      id: `q-${n++}`,
+      sessionId: me,
+      text: "with a file",
+      attachments: [
+        {
+          id: "missing-attachment",
+          name: "gone.png",
+          mimeType: "image/png",
+          size: 1,
+        },
+      ] as never,
+    });
+    const promptQueue = await import("./promptQueue.ts");
+    const background = new BackgroundCompletionDelivery({
+      drainPeers: drainRecipient,
+      offer: async () => "delivered",
+    });
+    const edge = createIdleEdge({
+      runAutoApprovals: async () => {},
+      drainAgentHandoffs: async () => {},
+      drainPromptQueue: (id) => promptQueue.drainPromptQueue(id),
+      drainBackground: (id, rerun) =>
+        rerun ? background.requestDrain(id) : background.drain(id),
+      offerReplyReminders,
+    });
+    let yielded = 0;
+    promptQueue.setPromptQueueHost({
+      resolve: async (id) => driverFor(id) as never,
+      live: (id) => driverFor(id) as never,
+      publish: () => {},
+      reportError: () => {},
+      yieldToOthers: (id) => {
+        yielded += 1;
+        edge.offerAfterQueue(id);
+      },
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      promptQueue.drainPromptQueuesOnBoot();
+      await until(() => yielded > 0, "the queue's yield");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      vi.restoreAllMocks();
+      promptQueue.setPromptQueueHost(undefined);
+    }
+    assert.equal(promptQueueStore.isPaused(me), true);
+    assert.equal(reminders(me).length, 0);
+    assert.equal(count(r.id), 0);
+  });
+
   it("waits out a Stop, and reminds of a stopped request once resumed", async () => {
     const me = seed("Held");
     const r = openRequest(seed("Asker"), me, "question", { stopped: true });
@@ -699,7 +755,7 @@ describe("the idle edge (idleEdge.ts)", () => {
     ]);
   });
 
-  it("a queue that yields offers what waited behind it, background first", async () => {
+  it("a queue that yields offers background delivery only, never the reminder", async () => {
     const order: string[] = [];
     const edge = createIdleEdge({
       runAutoApprovals: async () => void order.push("approvals"),
@@ -710,8 +766,9 @@ describe("the idle edge (idleEdge.ts)", () => {
       offerReplyReminders: async () => void order.push("reminders"),
     });
     edge.offerAfterQueue("s1");
-    await until(() => order.includes("reminders"), "reminders");
-    assert.deepEqual(order, ["background:true", "reminders"]);
+    await until(() => order.includes("background:true"), "background");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(order, ["background:true"]);
   });
 
   it("an edge overlapping a queue's yield settles on exactly one reminder", async () => {

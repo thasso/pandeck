@@ -98,10 +98,10 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   Editing a noted row keeps its note: rewording it is not choosing to send it.
 - **A failed send pauses too.** The row keeps its error for the user to edit,
   retry or remove, rather than being dropped. The paused queue then hands the
-  idle edge on (peer prompts, background completions, the reply reminder), since
-  a peer drain that deferred to it started no turn of its own. That hand-off is
-  a `requestDrain`, which runs once more after a drain already in flight rather
-  than being swallowed by it.
+  idle edge on (peer prompts, background completions; never the reply reminder,
+  which waits for a real idle edge), since a peer drain that deferred to it
+  started no turn of its own. That hand-off is a `requestDrain`, which runs once
+  more after a drain already in flight rather than being swallowed by it.
 - **Commands.** A queued host slash command (`/compact`, `/commit`) is stored
   with `command` and runs through the same host-command runner when its turn
   comes, under the same worktree guard as a typed one. It leaves the queue only

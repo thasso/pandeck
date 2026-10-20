@@ -41,19 +41,16 @@ export interface IdleEdge {
   /** The whole chain. `resumed` after a Resume, whose hold the drain in flight may have read. */
   offer(sessionId: string, resumed?: boolean): void;
   /**
-   * The chain behind the user's queue, for a queue that stopped holding the
-   * edge without a turn of its own (it emptied, or paused on a failure).
+   * What waited behind the user's queue, for a queue that stopped holding the
+   * edge without a turn of its own (it emptied, or paused on a failure):
+   * background delivery, never the reply reminder. A queue also yields from
+   * boot recovery, where no session has gone idle yet, and the reminder is
+   * offered only from a real idle edge, a Resume, or its own re-offer.
    */
   offerAfterQueue(sessionId: string): void;
 }
 
 export function createIdleEdge(steps: IdleEdgeSteps): IdleEdge {
-  const afterQueue = (sessionId: string, rerun: boolean): Promise<void> =>
-    steps
-      .drainBackground(sessionId, rerun)
-      .catch(() => {})
-      .then(() => steps.offerReplyReminders(sessionId))
-      .catch(() => {});
   return {
     offer: (sessionId, resumed = false) => {
       void steps
@@ -63,10 +60,13 @@ export function createIdleEdge(steps: IdleEdgeSteps): IdleEdge {
         .catch(() => {})
         .then(() => steps.drainPromptQueue(sessionId))
         .catch(() => {})
-        .then(() => afterQueue(sessionId, resumed));
+        .then(() => steps.drainBackground(sessionId, resumed))
+        .catch(() => {})
+        .then(() => steps.offerReplyReminders(sessionId))
+        .catch(() => {});
     },
     offerAfterQueue: (sessionId) => {
-      void afterQueue(sessionId, true);
+      void steps.drainBackground(sessionId, true).catch(() => {});
     },
   };
 }
