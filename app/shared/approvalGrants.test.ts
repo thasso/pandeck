@@ -3,6 +3,7 @@ import {
   approvalGrantKeys,
   approvalGrantLabel,
   GRANTABLE_OPERATIONS,
+  requestableUpFront,
 } from "./approvalGrants.ts";
 
 test("a grant key is the operation, never the target", () => {
@@ -121,4 +122,38 @@ test("the agent-definition grant says it covers persona changes too", () => {
   expect(agents?.label).toMatch(/persona/);
   expect(agents?.covers).toMatch(/persona/);
   expect(approvalGrantLabel("agentDefinition")).toMatch(/persona/);
+});
+
+test("a grant request card is never grantable, so no grant answers the next one", () => {
+  expect(
+    approvalGrantKeys({
+      kind: "approvalGrantsRequest",
+      reason: "Long delivery run",
+      items: [
+        {
+          key: "managedPullRequestMerge",
+          label: "Merge",
+          covers: "Merge",
+          cardOnly: true,
+          inheritable: true,
+        },
+      ],
+      peerTurnCap: { current: 4, requested: 8 },
+    }),
+  ).toEqual([]);
+});
+
+test("every listed key is requestable up front, card-only ones too; tags and keyless kinds never", () => {
+  expect(requestableUpFront("jira:edit")?.cardOnly).toBe(false);
+  expect(requestableUpFront("managedPullRequestMerge")?.cardOnly).toBe(true);
+  for (const operation of GRANTABLE_OPERATIONS)
+    expect(requestableUpFront(operation.key)).toBe(operation);
+  for (const key of [
+    "gitTag:/repo:origin:main:fp:v1:abc",
+    "settingsInput",
+    "managedCommitOverride",
+    "approvalGrantsRequest",
+    "nope",
+  ])
+    expect(requestableUpFront(key)).toBeUndefined();
 });

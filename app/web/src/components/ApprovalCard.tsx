@@ -29,6 +29,7 @@ import {
   KeyRound,
   MessageSquare,
   SquarePen,
+  ShieldCheck,
   Sparkles,
   Tag,
   Trash2,
@@ -83,6 +84,13 @@ import {
   type ProposalDecide,
 } from "./ProposalText.tsx";
 import { SettingsInputApprovalBody } from "./SettingsInputApprovalBody.tsx";
+import {
+  ApprovalGrantsRequestBody,
+  grantsRequestEdits,
+  type GrantsRequestSelection,
+  requestedSelection,
+  selectionIsEmpty,
+} from "./ApprovalGrantsRequestBody.tsx";
 import { NoticeList } from "./tools/NoticeList.tsx";
 import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -189,6 +197,7 @@ const KIND_ICON: Partial<Record<ApprovalCardData["body"]["kind"], LucideIcon>> =
     projectCreate: FolderPlus,
     agentDefinition: Bot,
     settingsInput: KeyRound,
+    approvalGrantsRequest: ShieldCheck,
   };
 
 function headerIcon(body: ApprovalCardData["body"]): LucideIcon {
@@ -1211,6 +1220,7 @@ function Body({
   spawn,
   onDecide,
   settingsInput,
+  grantsRequest,
 }: {
   approval: ApprovalCardData;
   /** The card's own Approve/Reject, for a body that offers them elsewhere too. */
@@ -1228,6 +1238,12 @@ function Body({
     edits: SpawnEdits;
     onEdit: (rowId: string, patch: SpawnRowEdit) => void;
     onOpenSession?: ((id: string) => void) | undefined;
+  };
+  /** A grant request card's selection, edited until Approve. */
+  grantsRequest: {
+    editable: boolean;
+    selection: GrantsRequestSelection | null;
+    onChange: (next: GrantsRequestSelection) => void;
   };
 }) {
   const b = approval.body;
@@ -1284,6 +1300,15 @@ function Body({
     return <ManagedCommitOverrideBody body={b} />;
   if (b.kind === "settingsInput")
     return <SettingsInputApprovalBody body={b} {...settingsInput} />;
+  if (b.kind === "approvalGrantsRequest")
+    return (
+      <ApprovalGrantsRequestBody
+        body={b}
+        editable={grantsRequest.editable}
+        selection={grantsRequest.selection ?? requestedSelection(b)}
+        onChange={grantsRequest.onChange}
+      />
+    );
   // commit
   return (
     <>
@@ -1372,6 +1397,8 @@ export function ApprovalCard({
   // The stored card stays the agent's proposal: adjustments live here until
   // Approve carries them, so a reload shows what was proposed, not a half-edit.
   const [spawnEdits, setSpawnEdits] = useState<SpawnEdits>({});
+  const [grantsSelection, setGrantsSelection] =
+    useState<GrantsRequestSelection | null>(null);
   // ANY authoritative card echo ends the local spinner, not just one that
   // changed the status. A refused decision — the server rejecting an edit, or
   // finding a model withdrawn while the card waited — re-sends a card that is
@@ -1399,7 +1426,9 @@ export function ApprovalCard({
     onResolve?.(
       approval.id,
       "approved",
-      spawnResolutionEdits(spawnEdits),
+      approval.body.kind === "approvalGrantsRequest"
+        ? grantsRequestEdits(approval.body, grantsSelection)
+        : spawnResolutionEdits(spawnEdits),
       decision === "approvedForSession",
       decision === "approvedForSession" && inheritable,
     );
@@ -1411,10 +1440,17 @@ export function ApprovalCard({
   };
   const operations = approvalGrantKeys(approval.body).map(approvalGrantLabel);
   // Only the grants THIS card created: an operation granted earlier belongs to
-  // the card that granted it.
-  const ownGrants = approval.grantedForSession
-    ? (grants ?? []).filter((grant) => grant.sourceApprovalId === approval.id)
-    : [];
+  // the card that granted it. A grant request creates them by approval alone.
+  const ownGrants =
+    approval.grantedForSession ||
+    (approval.body.kind === "approvalGrantsRequest" &&
+      approval.decision === "approved")
+      ? (grants ?? []).filter((grant) => grant.sourceApprovalId === approval.id)
+      : [];
+  // Approve with every row unticked would grant nothing: that is Reject.
+  const nothingSelected =
+    approval.body.kind === "approvalGrantsRequest" &&
+    selectionIsEmpty(grantsSelection ?? requestedSelection(approval.body));
   const awaitingUser = approval.status === "pending" && !approval.autoApproved;
   const header = approvalHeader(approval);
   const showDecision = awaitingUser && approval.body.kind !== "settingsInput";
@@ -1529,7 +1565,7 @@ export function ApprovalCard({
               <Button
                 size="xs"
                 onClick={() => decide("approved")}
-                disabled={busy !== null}
+                disabled={busy !== null || nothingSelected}
                 busy={busy === "approved"}
               >
                 Approve
@@ -1571,6 +1607,11 @@ export function ApprovalCard({
               [rowId]: { ...current[rowId], ...patch },
             })),
           ...(onOpenSession !== undefined ? { onOpenSession } : {}),
+        }}
+        grantsRequest={{
+          editable: awaitingUser && busy === null,
+          selection: grantsSelection,
+          onChange: setGrantsSelection,
         }}
       />
       {approval.status === "executed" &&

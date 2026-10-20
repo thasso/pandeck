@@ -44,6 +44,7 @@ import {
   toolsForToolGroup,
 } from "../mcp/toolGroups/registry.ts";
 import { containerImageTools } from "./container/containerImageTools.ts";
+import { approvalGrantsRequestTools } from "./approvals/approvalGrantsRequestTool.ts";
 import { backgroundTasksTools } from "./backgroundTasksTools.ts";
 import { askQuestionsTool } from "./core/questionTool.ts";
 import { assistantContactsTools } from "./core/contactsTools.ts";
@@ -150,6 +151,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   ask_questions: "none",
   memory_search: "none",
   memory_manage: "local",
+  approval_grants_request: "local",
   settings_read: "none",
   settings_update: "local",
   settings_request_input: "local",
@@ -544,6 +546,17 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       loading: "deferred",
       family: "shared",
       tools: sessionControlTools(),
+    },
+    {
+      id: "approval-grants",
+      label: "Approval grants",
+      description:
+        "Ask the user once, at the start, for the Approve-for-session grants and the concurrent peer turn cap this session needs.",
+      searchHint:
+        "grant approve up front permission request session cap concurrency",
+      loading: "deferred",
+      family: "shared",
+      tools: approvalGrantsRequestTools,
     },
     {
       id: "web",

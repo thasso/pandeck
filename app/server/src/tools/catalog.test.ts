@@ -520,6 +520,19 @@ describe("tool catalog", () => {
       );
   });
 
+  test("up-front grant requests are one deferred local tool for every persona", () => {
+    for (const persona of PERSONAS) {
+      const groups = toolGroupsFor(persona).filter(({ tools }) =>
+        tools.some((tool) => tool.name === "approval_grants_request"),
+      );
+      assert.deepEqual(
+        groups.map(({ id, loading, family }) => ({ id, loading, family })),
+        [{ id: "approval-grants", loading: "deferred", family: "shared" }],
+      );
+      assert.equal(groups[0]!.tools[0]!.sideEffects, "local");
+    }
+  });
+
   test("settings tools are a deferred group for the Personal Assistant only", () => {
     const group = toolGroupsFor("personal-assistant").find(
       ({ id }) => id === "settings",

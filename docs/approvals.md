@@ -24,6 +24,7 @@ hidden prompt through `agentHandoffs.ts`.
 | `managedCommitOverride`   | `worktree_commit` with `force: true`                                                          | none: never granted                                                    |
 | `projectCreate`           | `project_create`                                                                              | `projectCreate`                                                        |
 | `agentDefinition`         | `agent_create`, `agent_edit` changing `persona`, `model` (the list), `effort` or `peer-turns` | `agentDefinition`                                                      |
+| `approvalGrantsRequest`   | `approval_grants_request`                                                                     | none: never granted                                                    |
 | `settingsInput`           | `settings_request_input`, `accounts_sign_in`                                                  | none: never granted                                                    |
 
 `github_resolve_review_thread` also raises a `githubPullRequest` card, with
@@ -136,7 +137,13 @@ ignores a for-session decision on such a card.
   that one choice applies to every key the card grants
   (`resolveApproval.grantInheritable`, ignored without `forSession`). The
   inspector's Allow… dialog has a box for the same choice, unticked by default
-  (`grantApprovalForSession.inheritable`).
+  (`grantApprovalForSession.inheritable`). A grant request card sets the scope
+  per key (Requesting grants up front, below).
+- **Card-only keys.** `GrantableOperation.cardOnly` marks the operations hardest
+  to undo: `managedPullRequestMerge`, `githubBranchDelete`, `forgejoRelease`,
+  `confluence:delete` and `confluence:deleteAttachment`. They are approved only
+  on a card, either their own or an up-front grant request card, and never from
+  the inspector (`grantableAheadOfTime` refuses them).
 - **Re-granting only widens.** Approving for session a key the session already
   holds keeps the original grant (its time and source card) and widens it when
   the user chose "the sessions it starts". It never narrows one: that is an
@@ -191,6 +198,59 @@ ignores a for-session decision on such a card.
   session's own grants named in `keys`, ignoring keys it does not hold.
   Narrowing works like a revoke for the sessions below: a covered card there
   that has not started is handed back by the same re-check.
+
+### Requesting grants up front
+
+An agent that knows what a long run needs asks once, at the start, with the
+deferred tool `approval_grants_request`
+(`tools/approvals/approvalGrantsRequestTool.ts`): grant keys, each with
+`alsoSpawnedSessions` (default false), an optional `peerTurnCap`, and a `reason`
+shown on the card.
+
+- **What is requestable.** Every key in `GRANTABLE_OPERATIONS`
+  (`requestableUpFront`), card-only ones included: the user decided that a
+  long-running session may ask for a default-branch merge this way. Tag keys,
+  the keyless kinds (`settingsInput`, `managedCommitOverride`,
+  `approvalGrantsRequest`) and unknown keys throw, and nothing is created. A
+  grant never adds a tool an agent definition denies.
+- **No card for what is held.** A key is dropped when its effective scope is at
+  least the requested one. `effectiveGrantScope` reads it live and takes the
+  strongest over the chain, not the nearest holder's: the session's own
+  inheritable grant, or any ancestor's inheritable grant that reaches it, counts
+  as inheritable; its own session-only grant alone counts as this session. A
+  requested cap at or below `directPeerTurnCapOf` is dropped too. If nothing is
+  left the tool says "already granted" and creates no card; otherwise it creates
+  ONE card for the rest, supersedes the session's earlier pending request card,
+  and ends the agent's turn. A key the session holds for itself only but asks to
+  pass down is listed as a widening.
+- **Keyless, never auto-approved.** `approvalGrantKeys` returns nothing for the
+  request card, so no grant covers it, it never runs on an idle edge, and it
+  offers no "Approve for session". Only the user's click grants keys or raises
+  the cap; the tool itself writes nothing.
+- **The card.** Each row shows the operation's label and `covers` text, a tick,
+  and a "sessions it starts" box; card-only rows are marked and say they are
+  normally approved one card at a time and whom approving covers. One control
+  sets the scope of every ticked row, and the cap row has a tick and a bounded
+  number (above the current cap, at most 16). Approve sends
+  `ApprovalGrantsRequestResolutionEdits` (`keys` with a scope each, optional
+  `peerTurnCap`) only when something changed, and is disabled when nothing is
+  ticked. `prepare` refuses a key the card does not list, a cap out of bounds, a
+  cap the card did not ask for, or an empty selection, leaving the card pending
+  and nothing changed; it stores the settled selection as `body.approved`.
+- **Execution.** Grants first: `grantRequestedOperations` writes every ticked
+  key with its scope in one transaction (widen only, `sourceApprovalId` = the
+  card), and refuses any card that is not an approved, executing request. The
+  result goes on the live body (`body.result`: granted keys with the scope held
+  afterwards, declined keys). Then the cap, in one synchronous step:
+  `directPeerTurnCapOf`, and `setSessionPeerTurnCap` only when the approved
+  value is higher. A cap already at or above it is left alone and reported as
+  unchanged; the setter never lowers it, and an unticked or absent cap never
+  calls it.
+- **Outcome.** The agent's handoff lists each granted key with its scope, the
+  declined keys and the cap result. If the setter throws, the grants stay, the
+  card fails, and its error, which reaches the handoff, names the granted and
+  declined keys before the cap failure. The executed or failed card shows the
+  same lists, and Revoke for the grants it created.
 
 ### Inherited grants
 

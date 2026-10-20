@@ -35,6 +35,7 @@ import {
   applyPatch,
   approvalGrantKeys,
   grantableAheadOfTime,
+  requestableUpFront,
 } from "@assistant/shared";
 import {
   approvalMessageId,
@@ -798,22 +799,28 @@ function grantsPayload(
   };
 }
 
+/** One key to grant, with the user's chosen scope. */
+interface GrantWrite {
+  key: string;
+  inheritable: boolean;
+}
+
 /**
- * Grant `keys` for the rest of the session with the user's chosen scope, then
- * re-send the lists. Callers decide which keys a decision authorizes; this
- * writes them as given, card-only ones included. A key the session already
- * holds keeps its original grant and is only WIDENED when `inheritable`: a
- * grant is never narrowed here, only by {@link setApprovalGrantScope}.
+ * Grant each key for the rest of the session with the user's chosen scope, in
+ * one transaction, then re-send the lists. Callers decide which keys a
+ * decision authorizes; this writes them as given, card-only ones included. A
+ * key the session already holds keeps its original grant and is only WIDENED
+ * when `inheritable`: a grant is never narrowed here, only by
+ * {@link setApprovalGrantScope}.
  */
 function writeGrants(
   sessionId: string,
-  keys: readonly string[],
-  inheritable: boolean,
+  writes: readonly GrantWrite[],
   sourceApprovalId: string,
 ): void {
   const now = Date.now();
   inDbTransaction(() => {
-    for (const key of keys) {
+    for (const { key, inheritable } of writes) {
       const added = approvalStore.insertGrant(sessionId, {
         key,
         grantedAt: now,
@@ -831,10 +838,68 @@ function writeGrants(
 function grantOperations(card: ApprovalCard, inheritable: boolean): void {
   writeGrants(
     card.sessionId,
-    approvalGrantKeys(card.body),
-    inheritable,
+    approvalGrantKeys(card.body).map((key) => ({ key, inheritable })),
     card.id,
   );
+}
+
+/**
+ * Grant what the user ticked on an up-front grant request card, each key with
+ * its chosen scope, and return how the session holds each afterwards. Only the
+ * card's own executor calls it, after the user's click: it refuses any card
+ * that is not an executing request, and any key the card does not list.
+ */
+export function grantRequestedOperations(
+  card: ApprovalCard,
+  writes: readonly GrantWrite[],
+): GrantWrite[] {
+  const live = getRecord(card.id)?.card;
+  if (
+    live?.body.kind !== "approvalGrantsRequest" ||
+    live.status !== "executing" ||
+    live.decision !== "approved" ||
+    live.autoApproved
+  )
+    throw new Error("Only an approved grant request card grants these keys.");
+  const listed = new Set(live.body.items.map((item) => item.key));
+  for (const { key } of writes)
+    if (!listed.has(key) || !requestableUpFront(key))
+      throw new Error(`The request card does not list ${key}.`);
+  if (writes.length > 0) writeGrants(card.sessionId, writes, card.id);
+  const held = new Map(
+    approvalStore
+      .grantsForSession(card.sessionId)
+      .map((grant) => [grant.key, grant.inheritable]),
+  );
+  return writes.map(({ key }) => ({
+    key,
+    inheritable: held.get(key) === true,
+  }));
+}
+
+/**
+ * The strongest scope `key` reaches `sessionId` with, read live: "inheritable"
+ * when its own grant is, or when an ancestor passes the key down (an inherited
+ * grant reaches the sessions it starts too); "session" when only its own
+ * session-only grant holds it; undefined when nothing does. Unlike the
+ * nearest-holder lookup, an own session-only grant never hides an ancestor's
+ * inheritable one.
+ */
+export function effectiveGrantScope(
+  sessionId: string,
+  key: string,
+): "inheritable" | "session" | undefined {
+  const own = liveGrantReads
+    .grantsOf(sessionId)
+    .find((grant) => grant.key === key);
+  if (own?.inheritable) return "inheritable";
+  if (
+    inheritedGrants(sessionId, liveGrantReads).some(
+      (grant) => grant.key === key,
+    )
+  )
+    return "inheritable";
+  return own ? "session" : undefined;
 }
 
 /**
@@ -849,7 +914,7 @@ export function grantApprovalForSession(
   inheritable = false,
 ): void {
   if (!grantableAheadOfTime(key)) return;
-  writeGrants(sessionId, [key], inheritable, "");
+  writeGrants(sessionId, [{ key, inheritable }], "");
 }
 
 /**

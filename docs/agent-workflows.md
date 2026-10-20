@@ -138,12 +138,14 @@ the outcome:
   Direct `spawn` batches use the spawner's persisted concurrent counted peer
   turn cap, default 4, bounded to integers 1-16. The user can set or reset it
   under **Peer turns at once** in any session's inspector. Agents cannot change
-  their own cap. Lowering it leaves existing turns alone and gates only new
-  starts. A refusal names the current cap and the inspector control. A `spawn`
-  row may set `peerTurnCap` for its child, no higher than the spawner's cap
-  captured before batch validation. `propose` rows refuse that field. Initial
-  precedence is row > definition `peer-turns` > default 4. Definition defaults
-  are user-authorized and may exceed the spawner's cap. The value is fixed at
+  their own cap; one may ask for a raise on an up-front grant request card
+  (`docs/approvals.md`, Requesting grants up front), which only the user's click
+  applies. Lowering it leaves existing turns alone and gates only new starts. A
+  refusal names the current cap and the inspector control. A `spawn` row may set
+  `peerTurnCap` for its child, no higher than the spawner's cap captured before
+  batch validation. `propose` rows refuse that field. Initial precedence is
+  row > definition `peer-turns` > default 4. Definition defaults are
+  user-authorized and may exceed the spawner's cap. The value is fixed at
   creation, not reapplied on resume. Forks start unset; resetting a session
   returns to 4, not to its definition's default. A counted child holds a slot
   while running or while a prompt from its spawner is queued or being

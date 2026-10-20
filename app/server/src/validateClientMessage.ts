@@ -243,6 +243,20 @@ function validateResolveApproval(msg: Record<string, unknown>): string | null {
       msg.edits.value.length <= MAX_SETTINGS_INPUT_CHARS
       ? null
       : `edits.value must be a string of at most ${MAX_SETTINGS_INPUT_CHARS} characters`;
+  // A grant request selection: shape only; the card's executor judges which
+  // keys and which cap it may carry.
+  if (msg.edits.kind === "approvalGrantsRequest") {
+    if (!Array.isArray(msg.edits.keys)) return "edits.keys must be an array";
+    for (const key of msg.edits.keys) {
+      if (!isPlainObject(key)) return "each edits.keys entry must be an object";
+      const entry = checkRequiredFields(key, {
+        key: STRING,
+        inheritable: BOOLEAN,
+      });
+      if (entry) return entry;
+    }
+    return checkOptionalFields(msg.edits, { peerTurnCap: NUMBER });
+  }
   if (!Array.isArray(msg.edits.items)) return "edits.items must be an array";
   for (const item of msg.edits.items) {
     if (!isPlainObject(item)) return "each edits.items entry must be an object";
