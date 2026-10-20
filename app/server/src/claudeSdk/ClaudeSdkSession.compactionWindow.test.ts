@@ -402,6 +402,30 @@ test("agent lowering: provider switch, floor and range, then non-raising against
   session.dispose();
 });
 
+test("agent lowering: a pending stored raise never lifts the running window's bound", async () => {
+  const { id, session, queries } = makeHarness(200_000);
+  const turn = session.createRuntimeAdapter().prompt("hello");
+  await until(() => queries.length === 1);
+  queries[0]!.output.emit(result("r1"));
+  await turn;
+  // The process ran with 200 000; the user then stored a raise to 500 000.
+  sessionStore.setCompactionWindow(id, 500_000);
+  const persisted: number[] = [];
+  const raise = await session.lowerCompactionWindow(400_000, (tokens) =>
+    persisted.push(tokens),
+  );
+  assert.equal(raise.ok, false);
+  assert.equal(!raise.ok && raise.largestAcceptable, 199_999);
+  assert.equal(persisted.length, 0);
+  assert.equal(sessionStore.get(id)?.compactionWindow, 500_000);
+  const lower = await session.lowerCompactionWindow(150_000, (tokens) =>
+    persisted.push(tokens),
+  );
+  assert.equal(lower.ok, true);
+  assert.deepEqual(persisted, [150_000]);
+  session.dispose();
+});
+
 test("agent lowering refuses when the provider reports compaction off", async () => {
   const { session, queries } = makeHarness();
   const turn = session.createRuntimeAdapter().prompt("hello");

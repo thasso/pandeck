@@ -167,16 +167,18 @@ export class ClaudeCompactionWindow {
 
   /**
    * The agent path, in the precedence of `docs/compaction-window.md`: the
-   * provider's own switch, the floor and range, then the non-raising check
-   * against the window the NEXT process would otherwise start with. On
-   * success `persist` stores it; it applies when that process starts.
+   * provider's own switch, the floor and range, then the non-raising check.
+   * The value must be below the window the current (or last) process runs
+   * with, and below the stored value the next process would start with. The
+   * stored value only ever tightens the bound: it never authorizes on its own.
+   * On success `persist` stores it; it applies when the next process starts.
    */
   lower(
     tokens: number,
     stored: number | undefined,
     persist: (tokens: number) => void,
   ): CompactionWindowLowerResult {
-    const report = this.currentEpoch() ?? this.lastReportNow();
+    const report = this.lastReportNow();
     if (report?.disabled)
       return refused(
         "Auto-compaction is turned off for this session, so its window cannot be lowered.",
@@ -192,15 +194,19 @@ export class ClaudeCompactionWindow {
       return refused(
         `The compaction window must be at most ${format(available.range.max)} tokens.`,
       );
-    const current = this.startWindow(stored);
-    let largest: number;
-    if (current !== undefined) largest = current - 1;
-    else if (report?.trigger !== undefined)
-      largest = report.trigger + THRESHOLD_MIN_OFFSET - 1;
-    else
+    // The window the process runs with: its start value, else bounded by
+    // the threshold the CLI reported for it.
+    const running =
+      report?.value ??
+      (report?.trigger !== undefined
+        ? report.trigger + THRESHOLD_MIN_OFFSET
+        : undefined);
+    if (running === undefined)
       return refused(
         "This session has not reported its compaction threshold yet, so lowering cannot be checked; ask the user.",
       );
+    const current = this.startWindow(stored);
+    const largest = Math.min(running, current ?? running) - 1;
     if (tokens > largest)
       return largest >= COMPACTION_WINDOW_AGENT_FLOOR
         ? refused(

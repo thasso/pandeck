@@ -52,9 +52,11 @@ range:
   1. the provider reports compaction turned off;
   2. pi only: its applied state is `unknown` after a failed change;
   3. the value is at least the agent floor, 100 000, and within the range;
-  4. it does not raise the window. Claude: below the stored window, or with
-     none, below the last reported threshold + 13 000. pi: below the current
-     trigger from pi's own resolver.
+  4. it does not raise the window. Claude: below the window the current or last
+     process runs with (its start value, or with none the reported threshold +
+     13 000), and below the stored value if there is one. With no report of the
+     running window it refuses. pi: below the current trigger from pi's own
+     resolver.
 
   The stored value never authorizes an agent change and is never a rollback
   target.
