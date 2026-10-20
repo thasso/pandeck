@@ -531,7 +531,12 @@ test("a successful exact-head merge completes even after supersession settled th
   assert.equal(store.listOpenSteps(run.id).length, 0);
   assert.equal(store.getRun(run.id)?.lifecycle, "paused");
 
-  const merged = cards.patchPullRequestCard(card.id, { status: "merged" });
+  // Match the real merge projection: this provider write proved the exact head.
+  const merged = cards.patchPullRequestCard(
+    card.id,
+    { status: "merged" },
+    { observedHeadSha: HEAD },
+  );
   await observation.recordPullRequestMergeForWorkflows(merged, {
     mergeMethod: "squash",
     deleteBranch: true,
