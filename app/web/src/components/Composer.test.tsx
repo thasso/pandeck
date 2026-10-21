@@ -17,7 +17,12 @@ import {
   it,
   vi,
 } from "vitest";
-import type { PromptAttachment, SlashCommandInfo } from "@assistant/shared";
+import type {
+  EntrySummary,
+  ModelOption,
+  PromptAttachment,
+  SlashCommandInfo,
+} from "@assistant/shared";
 import type { AssistantActions, ForkDraft } from "../hooks/useAssistant.ts";
 import type {
   NewPendingChatComment,
@@ -271,50 +276,71 @@ describe("skill invocations", () => {
     window.localStorage.clear();
   });
 
-  function renderComposer(streaming: boolean) {
+  const noop = () => {};
+  const noModels: ModelOption[] = [];
+  const summaries: EntrySummary[] = [
+    {
+      name: "alpha",
+      description: "Explain a topic",
+      path: "alpha/SKILL.md",
+      argumentHint: "[topic]",
+    },
+    {
+      name: "quiet",
+      description: "Quiet",
+      path: "quiet/SKILL.md",
+      userInvocable: false,
+    },
+  ];
+
+  /**
+   * Mounts the composer; `rerender` hands it a fresh session frame (a new
+   * `activeSkills` array) while the host's stable props stay the same
+   * references, as `App` keeps them.
+   */
+  function renderComposer(
+    streaming: boolean,
+    {
+      activeSkills = ["alpha", "quiet"],
+      slashCommands = commands,
+    }: { activeSkills?: string[]; slashCommands?: SlashCommandInfo[] } = {},
+  ) {
     const onSend = vi.fn();
     const onQueue = vi.fn();
     const promptSkill = vi.fn();
+    const actions = { promptSkill } as unknown as AssistantActions;
     ({ container, root } = mount());
-    act(() =>
-      root!.render(
-        <Composer
-          onSend={onSend}
-          onQueue={onQueue}
-          onAbort={() => {}}
-          streaming={streaming}
-          disabled={false}
-          contextInfo={null}
-          session={
-            {
-              agentType: "developer",
-              harness: "pi",
-              canSteer: true,
-              activeSkills: ["alpha", "quiet"],
-            } as never
-          }
-          models={[]}
-          slashCommands={commands}
-          skillSummaries={[
-            {
-              name: "alpha",
-              description: "Explain a topic",
-              path: "alpha/SKILL.md",
-              argumentHint: "[topic]",
-            },
-            {
-              name: "quiet",
-              description: "Quiet",
-              path: "quiet/SKILL.md",
-              userInvocable: false,
-            },
-          ]}
-          actions={{ promptSkill } as unknown as AssistantActions}
-        />,
-      ),
-    );
+    const rerender = (
+      skills: string[] = activeSkills,
+      skillSummaries: EntrySummary[] = summaries,
+    ) =>
+      act(() =>
+        root!.render(
+          <Composer
+            onSend={onSend}
+            onQueue={onQueue}
+            onAbort={noop}
+            streaming={streaming}
+            disabled={false}
+            contextInfo={null}
+            session={
+              {
+                agentType: "developer",
+                harness: "pi",
+                canSteer: true,
+                activeSkills: [...skills],
+              } as never
+            }
+            models={noModels}
+            slashCommands={slashCommands}
+            skillSummaries={skillSummaries}
+            actions={actions}
+          />,
+        ),
+      );
+    rerender();
     const textarea = container.querySelector("textarea")!;
-    return { textarea, onSend, onQueue, promptSkill };
+    return { textarea, onSend, onQueue, promptSkill, rerender };
   }
 
   function type(textarea: HTMLTextAreaElement, value: string) {
@@ -346,103 +372,88 @@ describe("skill invocations", () => {
     expect(menu).not.toContain("/quiet");
   });
 
-  it("preserves slash-menu state across equal frozen-skill snapshots", () => {
-    const { textarea } = renderComposer(false);
-    type(textarea, "/");
+  const selectedOption = () =>
+    container!.querySelector('[role="option"][aria-selected="true"]')
+      ?.textContent;
+
+  function key(textarea: HTMLTextAreaElement, key: string) {
     act(() => {
       textarea.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+        new KeyboardEvent("keydown", { key, bubbles: true }),
       );
     });
-    const selectedBefore = container!.querySelector(
-      '[role="option"][aria-selected="true"]',
-    );
-    expect(selectedBefore?.textContent).toContain("/alpha");
+  }
 
-    act(() =>
-      root!.render(
-        <Composer
-          onSend={() => {}}
-          onAbort={() => {}}
-          streaming={false}
-          disabled={false}
-          contextInfo={null}
-          session={
-            {
-              agentType: "developer",
-              harness: "pi",
-              canSteer: true,
-              activeSkills: ["alpha", "quiet"],
-            } as never
-          }
-          models={[]}
-          slashCommands={commands}
-          skillSummaries={[
-            {
-              name: "alpha",
-              description: "Explain a topic",
-              path: "alpha/SKILL.md",
-              argumentHint: "[topic]",
-            },
-            {
-              name: "quiet",
-              description: "Quiet",
-              path: "quiet/SKILL.md",
-              userInvocable: false,
-            },
-          ]}
-          actions={{} as AssistantActions}
-        />,
-      ),
-    );
-    expect(
-      container!.querySelector('[role="option"][aria-selected="true"]')
-        ?.textContent,
-    ).toContain("/alpha");
-    act(() =>
-      textarea.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      ),
-    );
-    expect(container!.querySelector('[role="option"]')).toBeNull();
+  // Each session frame carries a fresh `activeSkills` array; equal names must
+  // not reset the highlighted row or reopen an Escape-dismissed menu.
+  // With no skills, a second command gives the menu a second row to select.
+  const withCompact: SlashCommandInfo[] = [
+    ...commands,
+    {
+      name: "compact",
+      description: "Compact",
+      usage: "/compact",
+      agentTypes: ["developer"],
+    },
+  ];
+  it.each([
+    {
+      label: "populated",
+      activeSkills: ["alpha", "quiet"],
+      slashCommands: commands,
+      second: "/alpha",
+    },
+    {
+      label: "empty",
+      activeSkills: [],
+      slashCommands: withCompact,
+      second: "/compact",
+    },
+  ])(
+    "keeps slash-menu state across equal $label frozen sets",
+    ({ activeSkills, slashCommands, second }) => {
+      const { textarea, rerender } = renderComposer(false, {
+        activeSkills,
+        slashCommands,
+      });
+      type(textarea, "/");
+      key(textarea, "ArrowDown");
+      expect(selectedOption()).toContain(second);
 
-    act(() =>
-      root!.render(
-        <Composer
-          onSend={() => {}}
-          onAbort={() => {}}
-          streaming={false}
-          disabled={false}
-          contextInfo={null}
-          session={
-            {
-              agentType: "developer",
-              harness: "pi",
-              canSteer: true,
-              activeSkills: ["alpha", "quiet"],
-            } as never
-          }
-          models={[]}
-          slashCommands={commands}
-          skillSummaries={[
-            {
-              name: "alpha",
-              description: "Explain a topic",
-              path: "alpha/SKILL.md",
-              argumentHint: "[topic]",
-            },
-            {
-              name: "quiet",
-              description: "Quiet",
-              path: "quiet/SKILL.md",
-              userInvocable: false,
-            },
-          ]}
-          actions={{} as AssistantActions}
-        />,
+      rerender();
+      expect(selectedOption()).toContain(second);
+
+      key(textarea, "Escape");
+      expect(container!.querySelector('[role="option"]')).toBeNull();
+      rerender();
+      expect(container!.querySelector('[role="option"]')).toBeNull();
+    },
+  );
+
+  it("refreshes the menu when the frozen set or its summaries change", () => {
+    const { textarea, rerender } = renderComposer(false);
+    type(textarea, "/");
+    key(textarea, "ArrowDown");
+    expect(selectedOption()).toContain("/alpha");
+
+    const withBeta: EntrySummary[] = [
+      ...summaries,
+      { name: "beta", description: "Second opinion", path: "beta/SKILL.md" },
+    ];
+    rerender(["alpha", "beta", "quiet"], withBeta);
+    expect(container!.textContent).toContain("/beta");
+    expect(container!.textContent).toContain("Second opinion");
+    expect(selectedOption()).toContain("/commit");
+
+    key(textarea, "Escape");
+    rerender(
+      ["alpha", "beta", "quiet"],
+      withBeta.map((entry) =>
+        entry.name === "beta" ? { ...entry, description: "Rethink it" } : entry,
       ),
     );
-    expect(container!.querySelector('[role="option"]')).toBeNull();
+    expect(container!.textContent).toContain("Rethink it");
+    expect(container!.textContent).not.toContain("Second opinion");
   });
 
   it("sends an idle invocation as the typed line with its skill", () => {

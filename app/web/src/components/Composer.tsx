@@ -1145,11 +1145,25 @@ export const Composer = memo(function Composer({
     });
   };
 
-  const activeSkills = session?.activeSkills;
-  const activeSkillsKey = JSON.stringify(activeSkills ?? []);
+  // Every session frame carries a fresh `activeSkills` array: keep the last
+  // one while its names are unchanged, so the menu reset below fires only
+  // when the frozen set did, not on each broadcast.
+  const activeSkillsCache = useRef<{
+    key: string;
+    value: readonly string[] | undefined;
+  }>({ key: "", value: undefined });
+  const activeSkillsKey = JSON.stringify(
+    [...(session?.activeSkills ?? [])].sort(),
+  );
+  if (activeSkillsCache.current.key !== activeSkillsKey)
+    activeSkillsCache.current = {
+      key: activeSkillsKey,
+      value: session?.activeSkills,
+    };
+  const activeSkills = activeSkillsCache.current.value;
   const skills = useMemo(
     () => composerSkills(activeSkills, skillSummaries, slashCommands),
-    [activeSkillsKey, skillSummaries, slashCommands],
+    [activeSkills, skillSummaries, slashCommands],
   );
   const slash = slashState(
     text,
