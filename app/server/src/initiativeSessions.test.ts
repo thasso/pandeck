@@ -1,6 +1,6 @@
 /**
- * The sessions an Initiative's inbox card lists (docs/initiatives.md, The
- * attention list): user sessions STARTED from a member Task (`task-start`,
+ * The sessions an Initiative summary lists (docs/initiatives.md, Sessions
+ * working on its Tasks): user sessions STARTED from a member Task (`task-start`,
  * `linkTaskStart`) that are neither tombstoned, archived nor settled, archived
  * member Tasks included. The page (newest 50 by session creation, ties by id)
  * and the full count come from SQL over ONE predicate, so a passive reference

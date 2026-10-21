@@ -221,20 +221,20 @@ the tool descriptions, never in a harness-specific prompt layer.
 
 ## Project browser
 
-The Initiatives group above Projects uses compact browser rows rather than the
-urgency-oriented Attention card. An Initiative shows its title, Task progress,
-and a Contents disclosure; Paused occupies an optional first line. Initiative
-and Project counters show ready/in-progress/blocked/done/total with mild
-colours, shared reserved space and aligned progress bars. In progress is blue,
-nonzero blocked is yellow, and done is green. These are state counts, not
-warning badges; meanings are supplied in the tooltip and accessible name. Every
-member belongs to exactly one bucket: completed or archived first, then blocked,
-then unblocked doing, then ready todo. Done includes every archived Task,
-regardless of stored status; counters and bars treat shelved work as out of the
-user's way without changing Task status. The first four counters sum to total.
-This browser partition is distinct from the summary DTO's overlapping
-doing/blocked facts. The heading opens its detail, while Contents expands
-inline, with state remembered per Initiative for the tab.
+The Initiatives group above Projects uses compact browser rows. An Initiative
+shows its title, Task progress, and a Contents disclosure; Paused occupies an
+optional first line. Initiative and Project counters show
+ready/in-progress/blocked/done/total with mild colours, shared reserved space
+and aligned progress bars. In progress is blue, nonzero blocked is yellow, and
+done is green. These are state counts, not warning badges; meanings are supplied
+in the tooltip and accessible name. Every member belongs to exactly one bucket:
+completed or archived first, then blocked, then unblocked doing, then ready
+todo. Done includes every archived Task, regardless of stored status; counters
+and bars treat shelved work as out of the user's way without changing Task
+status. The first four counters sum to total. This browser partition is distinct
+from the summary DTO's overlapping doing/blocked facts. The heading opens its
+detail, while Contents expands inline, with state remembered per Initiative for
+the tab.
 
 A visible Initiative header reuses the existing keyed membership graph read to
 derive an exact partition; the summary alone cannot separate doing/blocked
