@@ -15,7 +15,7 @@
  * read them through {@link touchHolders} and {@link touchSessionHolders}, the
  * same seam.
  */
-import type { InitiativeAttention, InitiativeState } from "@assistant/shared";
+import type { InitiativeState } from "@assistant/shared";
 import { getDb, inDbTransaction, withDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import {
@@ -36,11 +36,6 @@ export interface InitiativeRow {
   description: string;
   state: InitiativeState;
   revision: number;
-  attentionRevision: number;
-  attentionSettledRevision: number;
-  attentionKind?: InitiativeAttention["kind"];
-  inboxPosition?: number;
-  attentionAt?: number;
   createdAt: number;
   updatedAt: number;
   archivedAt?: number;
@@ -97,14 +92,13 @@ function taskNode(id: number): NodeRef {
 /**
  * Run one Initiative write in its OWN transaction, stamp every Initiative it
  * touched with the next `initiative_revision` value before COMMIT, and notify
- * after it. Activity also raises attention. Acknowledgement and ordering pass
- * `activity = false`, preserving attention. A write that throws notifies nobody.
+ * after it. A write that throws notifies nobody.
  *
  * Top-level only, like `createTask`: joined to a caller's transaction, a
  * failure the caller catches would leave half an operation in that commit with
  * no revision and no event. Refused before anything is written.
  */
-function mutation<T>(fn: (touch: Set<number>) => T, activity = true): T {
+function mutation<T>(fn: (touch: Set<number>) => T): T {
   if (getDb().isTransaction)
     throw new Error(
       "An Initiative write must not run inside an open database transaction.",
@@ -112,7 +106,7 @@ function mutation<T>(fn: (touch: Set<number>) => T, activity = true): T {
   const { value, touched } = withDbTransaction(() => {
     const touched = new Set<number>();
     const value = fn(touched);
-    stampRevisions(touched, activity);
+    stampRevisions(touched);
     return { value, touched };
   });
   notifyListeners(touched);
@@ -127,43 +121,14 @@ function mutation<T>(fn: (touch: Set<number>) => T, activity = true): T {
  * it. It only stamps — it writes nothing a caller could half-commit — and the
  * listeners only schedule a debounced flush that reads committed state.
  */
-function stampAndNotify(
-  ids: ReadonlySet<number>,
-  activity: HolderActivity = true,
-): void {
+function stampAndNotify(ids: ReadonlySet<number>): void {
   if (!ids.size) return;
-  inDbTransaction(() => stampRevisions(ids, activity));
+  inDbTransaction(() => stampRevisions(ids));
   notifyListeners(ids);
 }
 
-/**
- * Which stamped Initiatives also raise attention: all of them, none (a
- * refresh, preserving attention), or exactly the listed ones.
- */
-type HolderActivity = boolean | ReadonlySet<number>;
-
-function stampRevisions(
-  ids: ReadonlySet<number>,
-  activity: HolderActivity,
-): void {
+function stampRevisions(ids: ReadonlySet<number>): void {
   if (!ids.size) return;
-  const raised =
-    activity === true
-      ? [...ids]
-      : activity === false
-        ? []
-        : [...ids].filter((id) => activity.has(id));
-  if (raised.length) {
-    const attention = getDb().prepare(
-      `UPDATE initiatives
-          SET attention_revision = attention_revision + 1,
-              attention_kind = CASE WHEN state = 'active' THEN 'activity' ELSE state END,
-              attention_at_ms = ?
-        WHERE id = ? AND archived_at_ms IS NULL AND deleted_at_ms IS NULL`,
-    );
-    const now = Date.now();
-    for (const id of raised) attention.run(now, id);
-  }
   const revision = nextId("initiative_revision");
   const stamp = getDb().prepare(
     "UPDATE initiatives SET revision = ? WHERE id = ?",
@@ -191,24 +156,12 @@ function create(
 ): InitiativeRow {
   const id = nextId("initiative");
   const now = Date.now();
-  // The mutation's stamp raises the first attention revision in this write.
   getDb()
     .prepare(
-      `INSERT INTO initiatives (id, title, description, state, attention_revision,
-                                attention_kind, attention_at_ms, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO initiatives (id, title, description, state, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(
-      id,
-      input.title,
-      input.description,
-      input.state,
-      0,
-      null,
-      null,
-      now,
-      now,
-    );
+    .run(id, input.title, input.description, input.state, now, now);
   touch.add(id);
   return get(id)!;
 }
@@ -259,29 +212,6 @@ function update(
       `UPDATE initiatives SET ${sets.join(", ")} WHERE id = ? AND deleted_at_ms IS NULL`,
     )
     .run(...params, id);
-  touch.add(id);
-}
-
-/**
- * Acknowledge the attention cursor through `throughRevision`, the revision the
- * user's clicked card rendered: the `workflowStore.settleRun` rules. Clamped to
- * the stored revision, since acknowledging the future is meaningless, and only
- * ever forward, so an older click landing after a newer one cannot bring back
- * an outcome already acknowledged; a lower value leaves a newer outcome
- * unacknowledged. The cursor is the user's reading position, not an edit, so
- * the Initiative's `updated_at_ms` stays.
- */
-function settle(touch: Set<number>, id: number, throughRevision: number): void {
-  getDb()
-    .prepare(
-      `UPDATE initiatives
-          SET attention_settled_revision = MAX(
-                attention_settled_revision,
-                MIN(attention_revision, ?)
-              )
-        WHERE id = ? AND deleted_at_ms IS NULL`,
-    )
-    .run(Math.max(0, Math.trunc(throughRevision)), id);
   touch.add(id);
 }
 
@@ -714,50 +644,26 @@ function subtreeIds(roots: Iterable<number>): number[] {
  * The Task notification seam's fan-out: bump and notify every Initiative that
  * reads one of `taskIds` now, plus `formerHolders` — the ones a delete or a
  * move took the Task away from, read before the write.
- *
- * Every one of them is stamped and notified. `activity` says which also raise
- * attention: all (the default), none for a mechanical write, or only the
- * holders of `activity.taskIds` plus `activity.formerHolders` — the Tasks a
- * reorder actually reparented, against the siblings it merely renumbered.
  */
 function touchHolders(
   taskIds: Iterable<number>,
   formerHolders: Iterable<number> = [],
-  activity: TaskHolderActivity = true,
 ): void {
-  const ids = new Set([...holdersOf(taskIds), ...formerHolders]);
-  stampAndNotify(
-    ids,
-    typeof activity === "boolean"
-      ? activity
-      : new Set([...holdersOf(activity.taskIds), ...activity.formerHolders]),
-  );
+  stampAndNotify(new Set([...holdersOf(taskIds), ...formerHolders]));
 }
 
-export type TaskHolderActivity =
-  boolean | { taskIds: readonly number[]; formerHolders: readonly number[] };
-
-/**
- * A linked session changed. Always refresh the summary, but raise attention
- * only for actual activity, never for settlement, archival or deletion.
- */
-function touchSessionHolders(
-  sessionIds: readonly string[],
-  activity: boolean,
-): void {
+/** A linked session changed: refresh the summaries listing it. */
+function touchSessionHolders(sessionIds: readonly string[]): void {
   if (!sessionIds.length) return;
   const rows = getDb()
     .prepare(INITIATIVE_STORE_SQL.sessionTasks)
     .all(JSON.stringify([...new Set(sessionIds)])) as Array<{ id: string }>;
-  stampAndNotify(
-    new Set(holdersOf(rows.map((row) => Number(row.id)))),
-    activity,
-  );
+  stampAndNotify(new Set(holdersOf(rows.map((row) => Number(row.id)))));
 }
 
-sessionStore.subscribeLiveness((ids, activity) => {
+sessionStore.subscribeLiveness((ids) => {
   try {
-    touchSessionHolders(ids, activity);
+    touchSessionHolders(ids);
   } catch (error) {
     // The session write is durable already; say that the summaries listing
     // its sessions stay behind until their next write.
@@ -795,11 +701,6 @@ interface DbInitiativeRow {
   description: string;
   state: InitiativeState;
   revision: number;
-  attention_revision: number;
-  attention_settled_revision: number;
-  attention_kind: InitiativeAttention["kind"] | null;
-  inbox_position: number | null;
-  attention_at_ms: number | null;
   created_at_ms: number;
   updated_at_ms: number;
   archived_at_ms: number | null;
@@ -813,17 +714,6 @@ function fromRow(row: DbInitiativeRow): InitiativeRow {
     description: row.description,
     state: row.state,
     revision: row.revision,
-    attentionRevision: row.attention_revision,
-    attentionSettledRevision: row.attention_settled_revision,
-    ...(row.inbox_position !== null
-      ? { inboxPosition: row.inbox_position }
-      : {}),
-    ...(row.attention_kind !== null
-      ? { attentionKind: row.attention_kind }
-      : {}),
-    ...(row.attention_at_ms !== null
-      ? { attentionAt: row.attention_at_ms }
-      : {}),
     createdAt: row.created_at_ms,
     updatedAt: row.updated_at_ms,
     ...(row.archived_at_ms !== null ? { archivedAt: row.archived_at_ms } : {}),
@@ -838,7 +728,6 @@ export const initiativeStore = {
   get,
   list,
   update,
-  settle,
   setArchived,
   remove,
   // membership

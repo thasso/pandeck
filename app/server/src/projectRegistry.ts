@@ -477,7 +477,7 @@ export function deleteProject(id: string): {
     .map((edge) => edge.fromId);
   projectStore.remove(normalizedId);
   notifyProjectChange([normalizedId]);
-  if (orphaned.length) notifyTaskChange(orphaned, { activity: false });
+  if (orphaned.length) notifyTaskChange(orphaned);
   return { registry: readProjectRegistry(), deleted };
 }
 

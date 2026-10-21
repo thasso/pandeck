@@ -18,7 +18,6 @@
  */
 import {
   INITIATIVE_SUMMARY_SESSION_LIMIT,
-  type InitiativeAttention,
   type InitiativeDetail,
   type InitiativeExternalBlocker,
   type InitiativeGraphEdge,
@@ -157,24 +156,6 @@ export function updateInitiative(
   )
     notifyHeldTasks(storedTaskIds(current.id));
   return row;
-}
-
-/**
- * The user's Settle on an Initiative's inbox card: acknowledge its attention
- * through `throughRevision`, the revision that card rendered. Forward-only and
- * clamped (`initiativeStore.settle`), so a stale click leaves a newer outcome
- * standing. No agent tool reaches this, and a state change never calls it: an
- * agent changing the state never takes the item away from the user.
- */
-export function settleInitiative(
-  id: string,
-  throughRevision: number,
-): InitiativeRow {
-  const current = requireInitiative(id);
-  return initiativeStore.mutation((touch) => {
-    initiativeStore.settle(touch, current.id, throughRevision);
-    return initiativeStore.get(current.id)!;
-  }, false);
 }
 
 export function archiveInitiative(id: string): InitiativeRow {
@@ -504,16 +485,6 @@ export function initiativeProgressOf<
   return progress;
 }
 
-function attentionOf(row: InitiativeRow): InitiativeAttention | undefined {
-  if (row.attentionRevision <= 0) return undefined;
-  return {
-    revision: row.attentionRevision,
-    settledRevision: row.attentionSettledRevision,
-    kind: row.attentionKind ?? "activity",
-    at: row.attentionAt ?? row.updatedAt,
-  };
-}
-
 /**
  * The first marked edge, in the user's member order, whose Task is a member
  * now and still open — neither done nor archived. Read from the stored marks
@@ -538,7 +509,6 @@ function summaryOf(
   members: readonly InitiativeMemberRow[],
   edges: readonly InitiativeMemberEdge[] = initiativeStore.memberEdges(row.id),
 ): InitiativeSummary {
-  const attention = attentionOf(row);
   const sessions = initiativeStore.memberSessions(
     row.id,
     INITIATIVE_SUMMARY_SESSION_LIMIT,
@@ -548,10 +518,6 @@ function summaryOf(
     id: String(row.id),
     title: row.title,
     state: row.state,
-    ...(row.inboxPosition !== undefined
-      ? { inboxPosition: row.inboxPosition }
-      : {}),
-    ...(attention ? { attention } : {}),
     progress: progressOf(members),
     ...(nextMilestone ? { nextMilestone } : {}),
     sessionIds: sessions.ids,

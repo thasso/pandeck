@@ -221,7 +221,6 @@ import { copyWithToast } from "./lib/clipboard.ts";
 import { showToast, TOAST_DWELL_MS } from "./lib/toast.ts";
 import { failureOnViewedSession } from "./lib/messageAnnounce.ts";
 import { setFailureHomes } from "./lib/messageArrival.ts";
-import { initiativeSettleRevision } from "./lib/initiativeInbox.ts";
 import { visibleModels } from "./lib/models.ts";
 import {
   accountModelOptions,
@@ -2724,13 +2723,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [actions],
   );
 
-  /** Settle an Initiative from its inbox card; same stability contract. */
-  const settleInitiative = useCallback(
-    (initiativeId: string, throughRevision: number) =>
-      actions.settleInitiative(initiativeId, throughRevision),
-    [actions],
-  );
-
   /** Place dragged Sessions inbox items; same stability contract. */
   const setInboxPositions = useCallback(
     (positions: InboxPositionEntry[]) => actions.setInboxPositions(positions),
@@ -5186,17 +5178,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
       : inspectorTabVisible)
       ? initiativeSelectedTaskId
       : null);
-  // An Initiative's inbox card states its Settle's failure only while the
-  // Sessions inbox is the section on screen and the card is drawn there with
-  // its Settle — an unsettled outcome. A shut sidebar, another section, or an
-  // optimistic Settle that took the card away leaves nothing to say it on.
-  const failureHomeInitiativeCards =
-    sidebarPanelOpen && sidebarSection === "sessions"
-      ? state.initiatives
-          .filter((item) => initiativeSettleRevision(item) !== undefined)
-          .map((item) => item.id)
-          .join(",")
-      : "";
   useEffect(() => {
     setFailureHomes({
       viewedSessionId: displayCurrentId ?? null,
@@ -5215,9 +5196,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         project: selectedProjectId ? [selectedProjectId] : [],
         task: failureHomeTaskId ? [failureHomeTaskId] : [],
       },
-      initiativeCards: failureHomeInitiativeCards
-        ? failureHomeInitiativeCards.split(",")
-        : [],
     });
   }, [
     displayCurrentId,
@@ -5225,7 +5203,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     stagedSendSessionId,
     selectedProjectId,
     failureHomeTaskId,
-    failureHomeInitiativeCards,
   ]);
 
   // Leaving settings returns to the chat we were in, or to /sessions/create for a fresh start.
@@ -7139,7 +7116,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         initiativesFresh={state.initiativesFresh}
         initiativesRefreshing={state.initiativesRefreshing}
         initiativeListError={state.initiativeListError}
-        initiativeSettleErrors={state.initiativeSettleErrors}
         onRetryInitiatives={actions.retryInitiatives}
         selectedInitiativeId={selectedInitiativeId}
         worktrees={state.worktrees}
@@ -7152,7 +7128,6 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
         workflowCards={state.workflowCards}
         onOpenWorkflowRun={openWorkflowRun}
         onSettleWorkflowRun={settleWorkflowRun}
-        onSettleInitiative={settleInitiative}
         onSetInboxPositions={setInboxPositions}
         pullRequestInventory={pullRequestInventory.state}
         onReloadPullRequests={pullRequestInventory.reload}

@@ -464,7 +464,7 @@ function bubbles(card: SessionInboxCard): boolean {
  * Run's role and the composer ledge's row can never classify the same session
  * differently.
  */
-export function inboxCard(
+function inboxCard(
   session: SessionListItem,
   readCurrentId: string | undefined,
 ): SessionInboxCard {
@@ -1309,24 +1309,6 @@ function compareSessionCards(a: SessionInboxCard, b: SessionInboxCard): number {
 }
 
 /**
- * The order a BOUNDED list of sessions is cut in: a session that needs the
- * user — waiting on a human, or holding an unresolved failure, exactly what
- * lifts a Workflow Run's or a cluster's line ({@link bubbles}) — first, then
- * newest created, ties by id. Used where only the first few are shown, so the
- * one that needs an answer is never the one cut.
- */
-export function compareSessionsNeedingUserFirst(
-  a: SessionInboxCard,
-  b: SessionInboxCard,
-): number {
-  const needs = Number(bubbles(b)) - Number(bubbles(a));
-  if (needs !== 0) return needs;
-  const created = b.session.createdAt - a.session.createdAt;
-  if (created !== 0) return created;
-  return a.session.id < b.session.id ? -1 : a.session.id > b.session.id ? 1 : 0;
-}
-
-/**
  * The order a LIST shows sessions in: what needs the user first, then newest
  * created first, ties by id. Nothing about a session's activity moves it —
  * starting a run, finishing one, being read — so a list holds still while it
@@ -2158,12 +2140,8 @@ function compareInboxItems(a: SessionInboxItem, b: SessionInboxItem): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/**
- * Where an item stands in its group: {@link inboxPositionOf} of its session or
- * run. Exported so an item kind this list does not build — an Initiative's
- * outcome in Needs you — is ordered on the same scale.
- */
-export function itemPosition(item: SessionInboxItem): number {
+/** Where an item stands in its group: {@link inboxPositionOf} of its session or run. */
+function itemPosition(item: SessionInboxItem): number {
   return inboxPositionOf(item.kind === "run" ? item.run : item.card.session);
 }
 
@@ -2199,8 +2177,8 @@ export function planInboxDrop(
   });
 }
 
-/** The shared drop algorithm, including item kinds built by other inbox hosts. */
-export function planPositionedInboxDrop<T>(
+/** The drop algorithm, over any item the order can name and place. */
+function planPositionedInboxDrop<T>(
   items: readonly T[],
   activeId: string,
   overId: string,

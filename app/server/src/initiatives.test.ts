@@ -26,7 +26,6 @@ import {
   readInitiative,
   removeInitiativeMembers,
   setInitiativeMilestones,
-  settleInitiative,
   subscribeInitiativeChanges,
   unarchiveInitiative,
   updateInitiative,
@@ -742,7 +741,6 @@ test("every Initiative write reports the row it touched", () => {
 
   movesRevision(id, () => updateInitiative(id, { title: "Renamed" }));
   movesRevision(id, () => updateInitiative(id, { state: "paused" }));
-  movesRevision(id, () => settleInitiative(id, 1));
   movesRevision(id, () => addInitiativeMembers(id, [member]));
   movesRevision(id, () => setInitiativeMilestones(id, [member], true));
   movesRevision(id, () => removeInitiativeMembers(id, [member]));

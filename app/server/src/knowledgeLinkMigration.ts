@@ -146,10 +146,7 @@ export async function migrateKnowledgeLinks(
     ).shortCommit;
   if (descriptions.length > 0) {
     knowledgeLinkStore.rewriteTaskDescriptions(descriptions);
-    notifyTaskChange(
-      descriptions.map((row) => String(row.id)),
-      { activity: false },
-    );
+    notifyTaskChange(descriptions.map((row) => String(row.id)));
   }
   for (const card of memoryCards) {
     const result = editMemory(card.id, card.revision, {

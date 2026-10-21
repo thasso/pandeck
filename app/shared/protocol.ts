@@ -1945,8 +1945,7 @@ export function inboxPositionOf(item: {
 /** One item `setInboxPositions` places in the shared Attention order. */
 export type InboxPositionEntry =
   | { kind: "session"; id: string; position: number }
-  | { kind: "run"; runId: string; position: number }
-  | { kind: "initiative"; id: string; position: number };
+  | { kind: "run"; runId: string; position: number };
 
 /** The most entries one `setInboxPositions` may carry. */
 export const MAX_INBOX_POSITIONS = 1000;
@@ -7979,19 +7978,6 @@ export type ClientMessage =
   | {
       type: "settleWorkflowRun";
       runId: string;
-      throughRevision: number;
-      requestId?: string;
-    }
-  /**
-   * The user's Settle on an Initiative's inbox card, the one Initiative write
-   * the UI makes (`docs/initiatives.md`, The attention list). `throughRevision`
-   * is the `InitiativeAttention` revision the clicked card rendered,
-   * REQUIRED as on `settleWorkflowRun`; the server clamps it and only moves the
-   * acknowledgement forward. The outcome travels as an `initiatives` event.
-   */
-  | {
-      type: "settleInitiative";
-      id: string;
       throughRevision: number;
       requestId?: string;
     }

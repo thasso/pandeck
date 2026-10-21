@@ -54,11 +54,7 @@ import {
   type PrimaryNavSection,
 } from "./shell/PrimaryNav.tsx";
 import type { Task, TaskPlacement } from "../lib/backlogTree.ts";
-import type {
-  AssistantActions,
-  InitiativeSettleError,
-  UIState,
-} from "../hooks/useAssistant.ts";
+import type { AssistantActions, UIState } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
 import type { InitiativeBrowserWorktrees } from "./initiative/InitiativeBrowserRow.tsx";
 import type { InitiativeBrowserSessions } from "./initiative/InitiativeCoordinatorRows.tsx";
@@ -79,10 +75,7 @@ import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
 import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
 import { browserRowDensity, type RowDensity } from "../lib/rowDensity.ts";
-import {
-  initiativePath,
-  type SettingsSection,
-} from "../hooks/useSessionRouting.ts";
+import type { SettingsSection } from "../hooks/useSessionRouting.ts";
 import {
   isNavAction,
   type NavAction,
@@ -191,8 +184,6 @@ interface Props {
   initiativesRefreshing: boolean;
   /** The Initiative list could not be read. */
   initiativeListError: string | null;
-  /** A Settle's failure, by Initiative id, for its inbox card. */
-  initiativeSettleErrors: Readonly<Record<string, InitiativeSettleError>>;
   /** Ask for the Initiative list again; stable. */
   onRetryInitiatives: () => void;
   /** Initiative id open in the main pane, for highlighting. */
@@ -238,11 +229,6 @@ interface Props {
   onOpenWorkflowRun: (taskId: string, runId: string) => void;
   /** Settle one Workflow Run out of the Sessions inbox working set. */
   onSettleWorkflowRun: (runId: string, throughRevision: number) => void;
-  /**
-   * Settle a paused or done Initiative from its Sessions inbox card, through
-   * the revision the card rendered.
-   */
-  onSettleInitiative: (initiativeId: string, throughRevision: number) => void;
   /** Place Sessions inbox items where the user dragged them. */
   onSetInboxPositions: (positions: InboxPositionEntry[]) => void;
   /** The app's pull-request inventory (`hooks/usePullRequestInventory.ts`). */
@@ -508,7 +494,6 @@ function SidebarImpl({
   initiativesFresh,
   initiativesRefreshing,
   initiativeListError,
-  initiativeSettleErrors,
   onRetryInitiatives,
   selectedInitiativeId,
   worktrees,
@@ -521,7 +506,6 @@ function SidebarImpl({
   workflowCards,
   onOpenWorkflowRun,
   onSettleWorkflowRun,
-  onSettleInitiative,
   onSetInboxPositions,
   pullRequestInventory,
   onReloadPullRequests,
@@ -665,11 +649,6 @@ function SidebarImpl({
   // rebroadcast hands back the same ids in a fresh array. Keep the PREVIOUS
   // array when the ids are unchanged: React then bails out of the re-render
   // entirely, and the set below stays referentially stable for its consumers.
-  // An Initiative card opens its page, the map, by its canonical route.
-  const openInitiative = useCallback(
-    (initiativeId: string) => onNavigate(initiativePath(initiativeId)),
-    [onNavigate],
-  );
   const onVisibleProjectWorktreeIds = useCallback((ids: string[]) => {
     setVisibleProjectWorktreeIds((current) =>
       current.length === ids.length && current.every((id, i) => id === ids[i])
@@ -1078,14 +1057,6 @@ function SidebarImpl({
             onOpenTask={onOpenTask}
             onOpenWorkflowRun={onOpenWorkflowRun}
             onSettleWorkflowRun={onSettleWorkflowRun}
-            initiatives={initiatives}
-            initiativesFresh={initiativesFresh}
-            initiativesRefreshing={initiativesRefreshing}
-            initiativeListError={initiativeListError}
-            initiativeSettleErrors={initiativeSettleErrors}
-            onRetryInitiatives={onRetryInitiatives}
-            onOpenInitiative={openInitiative}
-            onSettleInitiative={onSettleInitiative}
             onSetInboxPositions={onSetInboxPositions}
             onOpenWorktree={onOpenWorktree}
           />

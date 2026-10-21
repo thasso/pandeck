@@ -44,7 +44,6 @@ import { taskStore, type TaskStatusActor } from "./db/taskStore.ts";
 import {
   initiativeStore,
   type InitiativeMembership,
-  type TaskHolderActivity,
 } from "./db/initiativeStore.ts";
 import {
   addLink,
@@ -176,18 +175,12 @@ export function subscribeTaskChanges(fn: TaskChangeListener): () => void {
  * passes them as `formerHolders`: afterwards nothing links them any more. Such
  * a write also reports the subtree of a Task whose `initiatives` it changed
  * (`movedMembershipSubtrees`), since every Task below lists them too.
- *
- * Those Initiatives always get their revision and refresh. `activity` only
- * decides whether they also raise attention (docs/initiatives.md): a
- * mechanical write — unlinking a deleted session, a pure sibling renumber, the
- * completed-work retention sweep — passes `false`, and a reorder names just
- * the Tasks it reparented.
+
  */
 function notify(
   ids: Iterable<string>,
   formerHolders: readonly number[] = [],
   holders = true,
-  activity: TaskHolderActivity = true,
 ): void {
   // A write may make old completed work eligible (most importantly, completing
   // its active parent). Retention is best-effort: this write is already durable,
@@ -201,7 +194,7 @@ function notify(
     .filter((id): id is number => id !== undefined);
   if (numeric.length) taskStore.stampRevisions(numeric);
   try {
-    if (holders) initiativeStore.touchHolders(numeric, formerHolders, activity);
+    if (holders) initiativeStore.touchHolders(numeric, formerHolders);
   } catch (error) {
     // The Task write is durable already; a failed fan-out leaves the counts of
     // the Initiatives holding it behind until their next write, so say so.
@@ -225,14 +218,12 @@ function notify(
  * `{ holders: false }`: those Task rows did not change, so the Initiatives
  * reading them have nothing new, and the holder fan-out would only bump the
  * writing Initiative a second time and every other one holding the same Tasks.
- * A mechanical rewrite (a deletion cascade, a data migration) passes
- * `{ activity: false }`: its holders refresh without raising attention.
  */
 export function notifyTaskChange(
   ids: Iterable<string>,
-  options: { holders?: boolean; activity?: false } = {},
+  options: { holders?: boolean } = {},
 ): void {
-  notify(ids, [], options.holders ?? true, options.activity ?? true);
+  notify(ids, [], options.holders ?? true);
 }
 
 /**
@@ -664,24 +655,10 @@ export function createTask(input: CreateTaskInput): TaskItem {
 }
 
 export function updateTask(id: string, patch: UpdateTaskInput): TaskItem {
-  return writeTask(id, patch, !isPureSortPatch(patch));
+  return writeTask(id, patch);
 }
 
-/**
- * A patch that only moves a Task among its siblings: what a renumber writes,
- * which raises no Initiative's attention.
- */
-function isPureSortPatch(patch: UpdateTaskInput): boolean {
-  return Object.keys(patch).every(
-    (key) => key === "sortOrder" || key === "actor",
-  );
-}
-
-function writeTask(
-  id: string,
-  patch: UpdateTaskInput,
-  activity: boolean,
-): TaskItem {
+function writeTask(id: string, patch: UpdateTaskInput): TaskItem {
   assertTopLevelWrite("updateTask");
   const nid = parseId(id);
   const current = nid !== undefined ? readTaskItem(nid, false) : null;
@@ -799,8 +776,6 @@ function writeTask(
         : []),
     ],
     formerHolders,
-    true,
-    activity,
   );
   return readTask(id)!;
 }
@@ -841,7 +816,6 @@ export function unarchiveTask(id: string, actor?: TaskStatusActor): TaskItem {
  * Archive Tasks completed more than 14 days ago unless their direct parent is
  * still active. Each eligible row goes through the ordinary Task write, so
  * Task change notifications and broadcasts remain the only lifecycle path.
- * Retention is mechanical: its holders refresh without raising attention.
  */
 export function sweepCompletedTaskArchive(now = Date.now()): string[] {
   if (autoArchiveSweepRunning) return [];
@@ -864,7 +838,7 @@ export function sweepCompletedTaskArchive(now = Date.now()): string[] {
       return parent?.status === "done" || parent?.archivedAt !== undefined;
     });
     for (const task of eligible)
-      writeTask(String(task.id), { archivedAt: Date.now() }, false);
+      writeTask(String(task.id), { archivedAt: Date.now() });
     return eligible.map((task) => String(task.id));
   } finally {
     autoArchiveSweepRunning = false;
@@ -964,7 +938,7 @@ export function linkSessionToTask(
 
 /**
  * Remove every reference to a deleted session: drop its `context` edges.
- * Returns changed ids. Deleting is no activity, so holders only refresh.
+ * Returns changed ids.
  */
 export function unlinkSessionEverywhere(sessionId: string): string[] {
   const changed = new Set<string>();
@@ -976,7 +950,7 @@ export function unlinkSessionEverywhere(sessionId: string): string[] {
     );
     changed.add(edge.fromId);
   }
-  if (changed.size) notify(changed, [], true, false);
+  if (changed.size) notify(changed);
   return [...changed];
 }
 
@@ -1009,29 +983,21 @@ export function reorderTasks(
   // deleted, a duplicate, a cycle) must not leave the earlier moves written
   // without the notification that reports them — that is a hierarchy, and an
   // Initiative's membership, changing with nobody told.
-  const { touched, moved, movedFormerHolders } = withDbTransaction(() =>
-    applyReorder(order, byUser),
-  );
-  // Renumbering siblings is mechanical; only a reparent changes what an
-  // Initiative holds, so only the holders of the moved Tasks, before and
-  // after, raise attention. Every holder still refreshes.
+  const { touched } = withDbTransaction(() => applyReorder(order, byUser));
   notify(
     [...touched, ...movedMembershipSubtrees(membershipBefore, placed)],
     formerHolders,
-    true,
-    { taskIds: moved, formerHolders: [...movedFormerHolders] },
   );
 }
 
 function applyReorder(
   order: readonly TaskReorderPlacement[],
   byUser: boolean,
-): { touched: Set<string>; moved: number[]; movedFormerHolders: Set<number> } {
+): { touched: Set<string> } {
   const siblingIndex = new Map<string, number>();
   const seen = new Set<string>();
   const reparented: number[] = [];
   const moved: number[] = [];
-  const movedFormerHolders = new Set<number>();
   const touched = new Set<string>();
   for (const placement of order) {
     const childId = parseId(placement.id.trim());
@@ -1062,8 +1028,6 @@ function applyReorder(
     if (!hiddenParent) {
       if ((previousParent ?? null) !== parentId) {
         moved.push(childId);
-        for (const holder of initiativeStore.holdersOf([childId]))
-          movedFormerHolders.add(holder);
         if (byUser) reparented.push(childId);
       }
       // enforces single-parent + acyclic, and reports the subtree a project
@@ -1083,7 +1047,7 @@ function applyReorder(
       taskStore.update(id, { triagedAt: now });
   }
   dropNestedMemberships(moved);
-  return { touched, moved, movedFormerHolders };
+  return { touched };
 }
 
 /**
@@ -1432,8 +1396,7 @@ export function markTaskProcessed(id: string): void {
   const task = taskStore.get(nid);
   if (!task || task.triagedAt !== undefined) return;
   taskStore.update(nid, { triagedAt: Date.now() });
-  // Bookkeeping like a read mark: holders refresh, attention stays.
-  notify([id], [], true, false);
+  notify([id]);
 }
 
 /**

@@ -27,7 +27,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { isShelvedSession, MAX_INBOX_POSITIONS } from "@assistant/shared";
 import type {
   InboxPositionEntry,
-  InitiativeSummary,
   ProjectRecord,
   SessionListItem,
   TaskSummary,
@@ -39,10 +38,6 @@ import type {
 import { ActiveSessionCard } from "./ActiveSessionCard.tsx";
 import { ClusterChildRow } from "./ClusterChildRow.tsx";
 import { WorkflowRunInboxCard } from "./WorkflowRunInboxCard.tsx";
-import {
-  InitiativeInboxCard,
-  InitiativeMoreRow,
-} from "./InitiativeInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
 import {
@@ -58,13 +53,7 @@ import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
-import {
-  EmptyBox,
-  ErrorNote,
-  PaneLoading,
-  RefreshIndicator,
-} from "./common/load.tsx";
-import type { InitiativeSettleError } from "../hooks/useAssistant.ts";
+import { EmptyBox, PaneLoading } from "./common/load.tsx";
 import { Button } from "@/components/ui/button";
 import { ListGroupSection } from "./ListGroupSection.tsx";
 import { ListExpansionRow } from "./common/ListExpansionRow.tsx";
@@ -82,6 +71,7 @@ import {
   classifySessionStatus,
   inboxItemId,
   planCardReorder,
+  planInboxDrop,
   sessionCardKey,
   sessionRelationsKey,
   SETTLED_PAGE_SIZE,
@@ -93,16 +83,6 @@ import {
   type WorkflowRunInboxItem,
 } from "../lib/sessionInbox.ts";
 import { globalBackgroundActivity } from "../lib/backgroundWork.ts";
-import {
-  buildInitiativeInbox,
-  initiativeItemId,
-  initiativeLayoutKey,
-  mergeNeedsYou,
-  needsYouEntryId,
-  planInitiativeInboxDrop,
-  type InitiativeInboxItem,
-  type NeedsYouEntry,
-} from "../lib/initiativeInbox.ts";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 
 // Every row in this browser — card, settled row, archived row — answers the
@@ -228,30 +208,6 @@ interface Props {
    */
   onSettleWorkflowRun: (runId: string, throughRevision: number) => void;
   /**
-   * Live Initiative summaries (the `initiatives` topic). Active ones are items
-   * of their own, and paused or done ones while their outcome is unsettled.
-   */
-  initiatives: readonly InitiativeSummary[];
-  /** An Initiative snapshot answered the current subscription. */
-  initiativesFresh: boolean;
-  /** A new Initiative snapshot is out over the list an earlier one answered. */
-  initiativesRefreshing: boolean;
-  /** The Initiative list could not be read; stated above the items it holds. */
-  initiativeListError: string | null;
-  /**
-   * A Settle's failure, by Initiative id, said under that Initiative's card
-   * (`UIState.initiativeSettleErrors`).
-   */
-  initiativeSettleErrors?: Readonly<Record<string, InitiativeSettleError>>;
-  /** Ask for the Initiative list again; stable. */
-  onRetryInitiatives: () => void;
-  /** Open one Initiative's page, where its map is. */
-  onOpenInitiative: (initiativeId: string) => void;
-  /**
-   * Settle any Initiative through the revision its clicked card rendered.
-   */
-  onSettleInitiative: (initiativeId: string, throughRevision: number) => void;
-  /**
    * Place working-set items where the user dragged them. Absent, the list
    * does not drag. Only the working set below **Needs you** drags: that block
    * empties as it is answered, and the shelves are history.
@@ -307,14 +263,6 @@ export function SessionInbox({
   onOpenTask,
   onOpenWorkflowRun,
   onSettleWorkflowRun,
-  initiatives,
-  initiativesFresh,
-  initiativesRefreshing,
-  initiativeListError,
-  initiativeSettleErrors,
-  onRetryInitiatives,
-  onOpenInitiative,
-  onSettleInitiative,
   onSetInboxPositions,
   onOpenWorktree,
 }: Props) {
@@ -331,9 +279,6 @@ export function SessionInbox({
   // by default: the fold is about what is going on now, and its history is a
   // request.
   const [settledHistory, setSettledHistory] = useState<string[]>([]);
-  const [expandedInitiativeSessions, setExpandedInitiativeSessions] = useState<
-    string[]
-  >([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Cards on their way out: they stay in the list, playing the exit, until the
   // settle command is actually sent — the row is the animation's subject, so it
@@ -401,31 +346,6 @@ export function SessionInbox({
       ),
     [settleWithExit, onSettleWorkflowRun],
   );
-  // The same capture for an Initiative: the revision its card rendered. Its
-  // send also outlives this list, as a swipe's does (`swipeCommit`): leaving
-  // the Sessions section mid-exit unmounts the inbox, and the timer that would
-  // have sent the acknowledgement dies with it. Whichever ends first — the
-  // exit or the inbox — sends it, and the other finds nothing left to send.
-  const initiativeSends = useRef(new Map<string, () => void>());
-  const settleInitiativeItem = useCallback(
-    (initiativeId: string, throughRevision: number) => {
-      const id = initiativeItemId(initiativeId);
-      if (initiativeSends.current.has(id)) return;
-      const send = () => {
-        if (!initiativeSends.current.delete(id)) return;
-        onSettleInitiative(initiativeId, throughRevision);
-      };
-      initiativeSends.current.set(id, send);
-      settleWithExit(id, send);
-    },
-    [settleWithExit, onSettleInitiative],
-  );
-  useEffect(() => {
-    const pending = initiativeSends.current;
-    return () => {
-      for (const send of [...pending.values()]) send();
-    };
-  }, []);
 
   /**
    * The command a swiped card is waiting to send, by session id.
@@ -615,36 +535,6 @@ export function SessionInbox({
   );
   useEffect(() => setSettledLimit(SETTLED_PAGE_SIZE), [filters]);
 
-  // Unsettled Initiatives share the working set while active, or Needs you
-  // while paused/done. Their summaries supply every fact, and their
-  // sessions are LISTED under them and keep their own cards, so nothing here
-  // takes a session out of `view`.
-  const initiativeInbox = useMemo(
-    () => buildInitiativeInbox(initiatives, sessions, readCurrentId),
-    [initiatives, sessions, readCurrentId],
-  );
-  const initiativeItems = useMemo(
-    () => [...initiativeInbox.outcomes, ...initiativeInbox.active],
-    [initiativeInbox],
-  );
-  const needsYouEntries = useMemo(
-    () => mergeNeedsYou(view.needsYou, initiativeInbox.outcomes),
-    [view.needsYou, initiativeInbox],
-  );
-  const allActiveEntries = useMemo(
-    () => mergeNeedsYou(inbox.active, initiativeInbox.active),
-    [inbox.active, initiativeInbox],
-  );
-  const activeEntries = useMemo(
-    () => mergeNeedsYou(view.active, initiativeInbox.active),
-    [view.active, initiativeInbox],
-  );
-  const projectForEntry = useCallback(
-    (entry: NeedsYouEntry): string | null =>
-      entry.kind === "initiative" ? null : projectForItem(entry.item),
-    [projectForItem],
-  );
-
   // Which peers a cluster card is showing under it. The disclosure is the
   // user's: open, and the cluster lists every peer. The card is told that state
   // and nothing else, so its label always describes what the click will do.
@@ -677,21 +567,11 @@ export function SessionInbox({
   // own. A run item is deliberately not a reason to tick every second: it shows
   // a minute-granularity age and no elapsed label, so only the SESSIONS under it
   // can ask for the faster clock.
-  const initiativeRows = (item: InitiativeInboxItem): SessionInboxCard[] =>
-    !expandedClusters.has(initiativeItemId(item.initiative.id))
-      ? []
-      : expandedInitiativeSessions.includes(item.initiative.id)
-        ? [...item.sessions, ...(item.additionalSessions ?? [])]
-        : item.sessions;
-  const anyRunning =
-    [...view.needsYou, ...view.active].some(
-      (item) =>
-        (item.kind === "session" && item.card.status === "running") ||
-        childRows(item).some((child) => child.status === "running"),
-    ) ||
-    initiativeItems.some((item) =>
-      initiativeRows(item).some((child) => child.status === "running"),
-    );
+  const anyRunning = [...view.needsYou, ...view.active].some(
+    (item) =>
+      (item.kind === "session" && item.card.status === "running") ||
+      childRows(item).some((child) => child.status === "running"),
+  );
   const now = useNow(anyRunning ? RUNNING_TICK_MS : IDLE_TICK_MS);
 
   // Which Task a session belongs to, when exactly ONE can be identified. A
@@ -813,14 +693,6 @@ export function SessionInbox({
         // digest that ignored it would leave the baseline at the old geometry
         // for the next keyed change to animate from.
         density,
-        ...initiativeItems.map((item) =>
-          initiativeLayoutKey(
-            item,
-            expandedClusters.has(initiativeItemId(item.initiative.id)),
-            now,
-            expandedInitiativeSessions.includes(item.initiative.id),
-          ),
-        ),
         filters.byProject ? JSON.stringify(projectOrder) : "",
         projectDisclosureVersion,
         ...[...view.needsYou, ...view.active].map((item) =>
@@ -847,9 +719,6 @@ export function SessionInbox({
       now,
       relationsById,
       childRows,
-      initiativeItems,
-      expandedClusters,
-      expandedInitiativeSessions,
       filters.byProject,
       projectOrder,
       projectForItem,
@@ -919,7 +788,7 @@ export function SessionInbox({
   // A host-drawn bar hears the counts before paint, so it never shows the
   // previous list's numbers; it hears nothing once this list is gone. Only a
   // changed count reaches it (the store drops an equal answer).
-  const needsYouCount = inbox.needsYou.length + initiativeInbox.outcomes.length;
+  const needsYouCount = inbox.needsYou.length;
   const { activeCount: backgroundCount, ownerCount: backgroundOwners } =
     backgroundActive;
   useLayoutEffect(() => {
@@ -1004,15 +873,6 @@ export function SessionInbox({
     (runId: string) => toggleCluster(`run:${runId}`),
     [toggleCluster],
   );
-  const toggleInitiativeSessions = useCallback(
-    (initiativeId: string) => toggleCluster(initiativeItemId(initiativeId)),
-    [toggleCluster],
-  );
-  const showMoreInitiativeSessions = useCallback((initiativeId: string) => {
-    setExpandedInitiativeSessions((ids) =>
-      ids.includes(initiativeId) ? ids : [...ids, initiativeId],
-    );
-  }, []);
 
   const focusSibling = useCallback((delta: 1 | -1) => {
     const container = containerRef.current;
@@ -1211,79 +1071,6 @@ export function SessionInbox({
     );
   };
 
-  /**
-   * An Initiative and, when opened, the sessions started from its Tasks. Those
-   * rows only LIST sessions that keep their own cards, so they open the
-   * session and offer none of its lifecycle actions: Settle, Archive and
-   * Delete stay on the session's own card, where that session is the subject.
-   * Settle is the one verb the Initiative carries, with the settle exit.
-   */
-  const renderInitiativeItem = (item: InitiativeInboxItem) => {
-    const id = initiativeItemId(item.initiative.id);
-    const open = expandedClusters.has(id);
-    const rows = initiativeRows(item);
-    const additionalCount = item.additionalSessions?.length ?? 0;
-    const unavailableCount = Math.max(0, item.more - additionalCount);
-    const showMore = expandedInitiativeSessions.includes(item.initiative.id);
-    // Said about the outcome the card showed when the Settle failed; a newer
-    // outcome is a different item.
-    const settleError = initiativeSettleErrors?.[item.initiative.id];
-    const settleNote =
-      settleError && settleError.revision === item.settleRevision
-        ? settleError.message
-        : null;
-    return (
-      <ExitStage leaving={settling.includes(id)}>
-        <div className={`border-b border-border/60 ${open ? "pb-2" : ""}`}>
-          <InitiativeInboxCard
-            item={item}
-            now={now}
-            density={density}
-            expanded={open}
-            onOpen={onOpenInitiative}
-            onSettle={settleInitiativeItem}
-            onToggleSessions={toggleInitiativeSessions}
-            onFocusSibling={focusSibling}
-          />
-          {/* Its Settle's failure, on the card whose control was refused. */}
-          {settleNote ? (
-            <ErrorNote className="mx-2 my-1" message={settleNote} />
-          ) : null}
-          {rows.map((child) => (
-            <ClusterChildRow
-              key={child.session.id}
-              card={child}
-              now={now}
-              density={density}
-              relation="working"
-              active={child.session.id === currentId}
-              // The session's own card already carries its id.
-              listRowId={`${id}:${child.session.id}`}
-              onOpen={onSelect}
-              onFocusSibling={focusSibling}
-            />
-          ))}
-          {open && !showMore && additionalCount > 0 ? (
-            <InitiativeMoreRow
-              initiativeId={item.initiative.id}
-              title={item.initiative.title}
-              more={additionalCount}
-              density={density}
-              onShowMore={showMoreInitiativeSessions}
-              onFocusSibling={focusSibling}
-            />
-          ) : null}
-          {open && unavailableCount > 0 ? (
-            <p className="border-t border-border/60 px-3 py-1 text-xs text-muted-foreground">
-              {unavailableCount} more session
-              {unavailableCount === 1 ? " is" : "s are"} not loaded
-            </p>
-          ) : null}
-        </div>
-      </ExitStage>
-    );
-  };
-
   const renderItem = (item: SessionInboxItem, dragging: boolean) =>
     item.kind === "run"
       ? renderRunItem(item, dragging)
@@ -1303,20 +1090,6 @@ export function SessionInbox({
       );
     });
 
-  const renderEntry = (entry: NeedsYouEntry, lifted: boolean) =>
-    entry.kind === "initiative"
-      ? renderInitiativeItem(entry.item)
-      : renderItem(entry.item, lifted);
-  const renderNeedsYou = (entries: NeedsYouEntry[]) =>
-    entries.map((entry) => (
-      <div
-        key={needsYouEntryId(entry)}
-        data-inbox-card={needsYouEntryId(entry)}
-      >
-        {renderEntry(entry, false)}
-      </div>
-    ));
-
   const itemIsSelected = (item: SessionInboxItem) =>
     item.kind === "run"
       ? item.roles.some((role) => role.session.id === currentId)
@@ -1326,8 +1099,6 @@ export function SessionInbox({
             (child) => child.session.id === currentId,
           ),
         );
-  const entryIsSelected = (entry: NeedsYouEntry) =>
-    entry.kind === "inbox" && itemIsSelected(entry.item);
   const sessionProject = (session: SessionListItem) =>
     filterProjects.get(session.id) ?? null;
   const sessionIsSelected = (session: SessionListItem) =>
@@ -1369,12 +1140,9 @@ export function SessionInbox({
   const activeProjects = useMemo(
     () =>
       new Map(
-        allActiveEntries.map((entry) => [
-          needsYouEntryId(entry),
-          projectForEntry(entry),
-        ]),
+        inbox.active.map((item) => [inboxItemId(item), projectForItem(item)]),
       ),
-    [allActiveEntries, projectForEntry],
+    [inbox.active, projectForItem],
   );
   const detectInboxCollisions = useCallback<CollisionDetection>(
     (args) => {
@@ -1401,11 +1169,9 @@ export function SessionInbox({
       )
         return;
       const items = filters.byProject
-        ? allActiveEntries.filter(
-            (entry) => projectForEntry(entry) === projectId,
-          )
-        : allActiveEntries;
-      const positions = planInitiativeInboxDrop(
+        ? inbox.active.filter((item) => projectForItem(item) === projectId)
+        : inbox.active;
+      const positions = planInboxDrop(
         items,
         String(active.id),
         String(over.id),
@@ -1424,23 +1190,23 @@ export function SessionInbox({
       onSetInboxPositions(positions);
     },
     [
-      allActiveEntries,
+      inbox.active,
       onSetInboxPositions,
       filters.byProject,
       activeProjects,
-      projectForEntry,
+      projectForItem,
     ],
   );
   const activeIds = useMemo(
     () =>
       filters.byProject
         ? groupAttentionByProject(
-            activeEntries,
-            projectForEntry,
+            view.active,
+            projectForItem,
             projectOrder,
-          ).flatMap((group) => group.items.map(needsYouEntryId))
-        : activeEntries.map(needsYouEntryId),
-    [activeEntries, filters.byProject, projectForEntry, projectOrder],
+          ).flatMap((group) => group.items.map(inboxItemId))
+        : view.active.map(inboxItemId),
+    [view.active, filters.byProject, projectForItem, projectOrder],
   );
 
   // The cold-start message claims this browser has NOTHING, so a live Workflow
@@ -1451,20 +1217,12 @@ export function SessionInbox({
   // rather than instead of it: the bar states the same three counts on a cold
   // start as at any other moment, and a browser that swapped its own header out
   // would be the first thing to move.
-  // Initiatives count against both claims too: an inbox holding only an
-  // Initiative is not empty. And neither claim is made before the Initiative
-  // list has answered: that would state an emptiness nobody read. A failed
-  // read is not that answer — until one comes, the failure stands alone. Nor
-  // is an earlier answer while a new read is out: that one refreshes.
-  const initiativesPending = !initiativesFresh && !initiativeListError;
-  const nothingToShow =
-    view.empty && archivedSessions.length === 0 && initiativeItems.length === 0;
+  const nothingToShow = view.empty && archivedSessions.length === 0;
   const coldStart =
     sessions.length === 0 &&
     archivedAvailableCount === 0 &&
     inbox.needsYou.length === 0 &&
-    inbox.active.length === 0 &&
-    initiativeItems.length === 0;
+    inbox.active.length === 0;
 
   return (
     <div
@@ -1486,15 +1244,7 @@ export function SessionInbox({
         />
       )}
 
-      {nothingToShow && initiativesPending ? (
-        initiativesRefreshing ? (
-          <div className="flex flex-none justify-center p-3">
-            <RefreshIndicator label="Refreshing Initiatives" />
-          </div>
-        ) : (
-          <PaneLoading label="Loading Initiatives…" className="flex-none p-3" />
-        )
-      ) : !initiativesFresh ? null : coldStart ? (
+      {coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
       ) : nothingToShow ? (
         filtersActive ? (
@@ -1518,41 +1268,21 @@ export function SessionInbox({
         )
       ) : null}
 
-      {/* A failed Initiative list read is stated above both places its
-          items stand, over any items still held. */}
-      {initiativeListError ? (
-        <ErrorNote
-          className="mx-2 my-1"
-          message={initiativeListError}
-          onRetry={onRetryInitiatives}
-        />
-      ) : null}
-
-      {needsYouEntries.length > 0 ? (
+      {view.needsYou.length > 0 ? (
         // No heading: the cards say it themselves (their status icon and a
         // bright title), and the bar above counts them. The section stays the
-        // block "Needs you" in the bar scrolls to. An Initiative's unsettled
-        // paused or done outcome is one of its items, like an ended run.
+        // block "Needs you" in the bar scrolls to.
         <section
           aria-label="Needs you"
           data-inbox-needs-you
           className="flex flex-col"
         >
-          {filters.byProject ? (
-            <>
-              {renderNeedsYou(
-                needsYouEntries.filter((entry) => entry.kind === "initiative"),
-              )}
-              {renderProjectGroups(
-                "needs-you",
-                view.needsYou,
-                projectForItem,
-                renderCardList,
-                itemIsSelected,
-              )}
-            </>
-          ) : (
-            renderNeedsYou(needsYouEntries)
+          {renderProjectGroups(
+            "needs-you",
+            view.needsYou,
+            projectForItem,
+            renderCardList,
+            itemIsSelected,
           )}
         </section>
       ) : null}
@@ -1571,28 +1301,28 @@ export function SessionInbox({
           >
             {renderProjectGroups(
               "active",
-              activeEntries,
-              projectForEntry,
-              (entries) =>
-                entries.map((entry) => (
+              view.active,
+              projectForItem,
+              (items) =>
+                items.map((item) => (
                   <DraggableInboxItem
-                    key={needsYouEntryId(entry)}
-                    id={needsYouEntryId(entry)}
+                    key={inboxItemId(item)}
+                    id={inboxItemId(item)}
                   >
-                    {(lifted) => renderEntry(entry, lifted)}
+                    {(lifted) => renderItem(item, lifted)}
                   </DraggableInboxItem>
                 )),
-              entryIsSelected,
+              itemIsSelected,
             )}
           </SortableContext>
         </DndContext>
       ) : (
         renderProjectGroups(
           "active",
-          activeEntries,
-          projectForEntry,
-          renderNeedsYou,
-          entryIsSelected,
+          view.active,
+          projectForItem,
+          renderCardList,
+          itemIsSelected,
         )
       )}
 

@@ -80,7 +80,6 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         initiativesFresh
         initiativesRefreshing={false}
         initiativeListError={null}
-        initiativeSettleErrors={{}}
         onRetryInitiatives={noop}
         selectedInitiativeId={null}
         worktrees={fixture.worktrees}
@@ -92,7 +91,6 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         workflowCards={fixture.workflowCards ?? {}}
         onOpenWorkflowRun={noop}
         onSettleWorkflowRun={noop}
-        onSettleInitiative={noop}
         onSetInboxPositions={noop}
         pullRequestInventory={ready([])}
         onReloadPullRequests={noop}
