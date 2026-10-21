@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { afterEach, test, vi } from "vitest";
 import type { SessionSkillInvocation } from "@assistant/shared";
 import {
   skillRuntimePluginName,
   skillSetHash,
 } from "../skills/skillRuntimeMaterializer.ts";
+import { SKILLS_RUNTIME_DIR } from "../config.ts";
 import type {
   ClaudeQuery,
   ClaudeQueryParams,
@@ -910,3 +912,187 @@ test("a steer the command's reply missed runs as a follow-up the skill never ans
       ["command"],
     );
 });
+
+/** A genuine answer that wrote nothing displayable. */
+function emptyAnswer(id = `empty-${Math.random()}`): ClaudeSdkMessage {
+  return {
+    type: "assistant",
+    uuid: `asst-${id}`,
+    session_id: "provider-skill",
+    message: {
+      id,
+      role: "assistant",
+      model: "claude-sonnet-4-6",
+      content: [],
+      usage: { input_tokens: 1, output_tokens: 0 },
+    },
+  } as unknown as ClaudeSdkMessage;
+}
+
+const SKILL_FILE = join(
+  SKILLS_RUNTIME_DIR,
+  skillSetHash(FROZEN),
+  "skills",
+  "alpha",
+  "SKILL.md",
+);
+
+/** The model loading alpha itself, by Skill call or by reading its file, and succeeding. */
+const LOADS = [
+  { via: "skill_tool", name: "Skill", input: { skill: REGISTERED } },
+  { via: "read", name: "Read", input: { file_path: SKILL_FILE } },
+] as const;
+
+function loadAlpha(
+  load: (typeof LOADS)[number],
+  toolUseId: string,
+): ClaudeSdkMessage[] {
+  return [
+    {
+      type: "assistant",
+      uuid: `asst-${toolUseId}`,
+      session_id: "provider-skill",
+      message: {
+        id: `msg-${toolUseId}`,
+        role: "assistant",
+        model: "claude-sonnet-4-6",
+        content: [
+          {
+            type: "tool_use",
+            id: toolUseId,
+            name: load.name,
+            input: load.input,
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    } as unknown as ClaudeSdkMessage,
+    {
+      type: "user",
+      uuid: `result-${toolUseId}`,
+      session_id: "provider-skill",
+      parent_tool_use_id: null,
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: toolUseId, content: "loaded" },
+        ],
+      },
+    } as unknown as ClaudeSdkMessage,
+  ];
+}
+
+test("an empty genuine answer still confirms the command durably", async () => {
+  const h = skillHarness();
+  const outcome = await commandTurn(h, async (query, command) => {
+    query.output.emit(emptyAnswer());
+    await until(() => h.internals.skillTurnNativeResponse);
+    query.output.emit(result("empty", [command]));
+  });
+  assert.equal(outcome.stopReason, "end");
+  const answers = messageEntries(h.session).filter(
+    (entry) => entry.role === "assistant",
+  );
+  assert.equal(answers.length, 1);
+  assert.deepEqual(answers[0]!.content, []);
+  assert.equal(answers[0]!.nativeResponse, true);
+  for (const trail of trails(h))
+    assert.deepEqual(
+      trail.map(({ via }) => via),
+      ["command"],
+    );
+
+  // An ordinary turn's empty answer is still not recorded.
+  const plain = h.adapter.prompt("plain");
+  await until(() => h.queries[1]?.inputs.length === 1);
+  const next = h.queries[1]!;
+  const prompt = uuidOf(next.inputs[0]);
+  next.output.emit(emptyAnswer());
+  next.output.emit(result("plain-empty", [prompt]));
+  await plain;
+  assert.equal(
+    messageEntries(h.session).filter((entry) => entry.role === "assistant")
+      .length,
+    1,
+  );
+});
+
+test("an empty answer the follow-up continues past still confirms the command", async () => {
+  const h = skillHarness();
+  const outcome = await commandTurn(h, async (query, command) => {
+    const steer = h.adapter.prompt("and also", { steer: true });
+    await until(() => query.inputs.length === 2);
+    const steerUuid = uuidOf(query.inputs[1]);
+    query.output.emit(emptyAnswer());
+    await until(() => h.internals.skillTurnNativeResponse);
+    query.output.emit(result("command", [command]));
+    assert.deepEqual(await steer, {
+      stopReason: "end",
+      steerDelivery: "followUp",
+    });
+    query.output.emit(started(steerUuid));
+    for (const message of reply("Follow-up answer."))
+      query.output.emit(message);
+    query.output.emit(result("follow-up", [steerUuid]));
+  });
+  assert.equal(outcome.stopReason, "end");
+  const answers = messageEntries(h.session).filter(
+    (entry) => entry.role === "assistant",
+  );
+  assert.deepEqual(
+    answers.map((entry) => [entry.content.length, entry.nativeResponse]),
+    [
+      [0, true],
+      [1, undefined],
+    ],
+  );
+  for (const trail of trails(h))
+    assert.deepEqual(
+      trail.map(({ via }) => via),
+      ["command"],
+    );
+});
+
+for (const load of LOADS) {
+  test(`a ${load.via} load of the commanded skill in its own turn is not counted again`, async () => {
+    const h = skillHarness();
+    const outcome = await commandTurn(h, (query, command) => {
+      for (const message of loadAlpha(load, "same-turn"))
+        query.output.emit(message);
+      for (const message of reply("Skill answer.")) query.output.emit(message);
+      query.output.emit(result("command", [command]));
+    });
+    assert.equal(outcome.stopReason, "end");
+    for (const trail of trails(h))
+      assert.deepEqual(
+        trail.map(({ via }) => via),
+        ["command"],
+      );
+  });
+
+  test(`a follow-up turn's ${load.via} load of the commanded skill is counted`, async () => {
+    const h = skillHarness();
+    const outcome = await commandTurn(h, async (query, command) => {
+      const steer = h.adapter.prompt("load alpha again", { steer: true });
+      await until(() => query.inputs.length === 2);
+      const steerUuid = uuidOf(query.inputs[1]);
+      for (const message of reply("Skill answer.")) query.output.emit(message);
+      query.output.emit(result("command", [command]));
+      assert.deepEqual(await steer, {
+        stopReason: "end",
+        steerDelivery: "followUp",
+      });
+      query.output.emit(started(steerUuid));
+      for (const message of loadAlpha(load, "follow-up"))
+        query.output.emit(message);
+      for (const message of reply("Loaded again.")) query.output.emit(message);
+      query.output.emit(result("follow-up", [steerUuid]));
+    });
+    assert.equal(outcome.stopReason, "end");
+    for (const trail of trails(h))
+      assert.deepEqual(
+        trail.map(({ via }) => via),
+        ["command", load.via],
+      );
+  });
+}

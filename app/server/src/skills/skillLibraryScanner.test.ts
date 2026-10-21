@@ -99,6 +99,10 @@ describe("scanSkillLibrary", () => {
       "loose",
       'name: loose\ndescription: Loose\nargument-hint: 3\ndisable-model-invocation: "yes"\nuser-invocable: "no"',
     );
+    await writeSkill(
+      "padded",
+      'name: padded\ndescription: Padded\nargument-hint: " [file] "',
+    );
 
     const scan = await scanSkillLibrary(root);
 
@@ -125,6 +129,12 @@ describe("scanSkillLibrary", () => {
         disableModelInvocation: true,
       },
       { name: "loose", description: "Loose", path: "loose/SKILL.md" },
+      {
+        name: "padded",
+        description: "Padded",
+        path: "padded/SKILL.md",
+        argumentHint: " [file] ",
+      },
     ]);
   });
 

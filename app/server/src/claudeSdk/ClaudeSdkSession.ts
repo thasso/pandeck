@@ -1340,7 +1340,9 @@ export class ClaudeSdkSession implements LiveSession {
           });
       }
     }
-    if (content.length > 0) {
+    // A skill command's empty native answer still loaded the skill, and this
+    // entry is the only durable record of that.
+    if (content.length > 0 || nativeResponse) {
       this.appendTimelineEntry({
         id: turn.id,
         type: "message",
@@ -3156,8 +3158,12 @@ export class ClaudeSdkSession implements LiveSession {
     const calls: SkillInvocationToolCall[] = [];
     const commands: SkillInvocationCommand[] = [];
     const succeeded = new Set<string>();
-    // Turns are counted by their prompt entries (`csu-<n>`); a steer's entry
-    // (`csu-<n>-<uuid>`) joins the turn it was read in.
+    // A native turn commits exactly one assistant entry — a follow-up's turn
+    // opens its own after the reply it missed — so that entry IS the turn: a
+    // command and its own answer's calls share its key, and a later turn's
+    // load is counted again. Positional, since entry ids restart with the
+    // process. A command opens at its prompt entry (`csu-<n>`), never at a
+    // steer's (`csu-<n>-<uuid>`).
     let turn = 0;
     let open: { name: string; at: number; confirmed: boolean } | undefined;
     for (const entry of this.committed) {
@@ -3170,13 +3176,13 @@ export class ClaudeSdkSession implements LiveSession {
       const at = Number.isNaN(parsed) ? 0 : parsed;
       if (entry.role === "user") {
         if (!TURN_PROMPT_ENTRY_ID.test(entry.id)) continue;
-        turn += 1;
         open = entry.skillCommand
           ? { name: entry.skillCommand, at, confirmed: false }
           : undefined;
         continue;
       }
       if (entry.role !== "assistant") continue;
+      turn += 1;
       if (entry.nativeResponse && open && !open.confirmed) {
         open.confirmed = true;
         commands.push({ name: open.name, at: open.at, turn: String(turn) });

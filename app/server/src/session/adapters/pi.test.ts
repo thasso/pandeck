@@ -890,6 +890,56 @@ test("skill prompt: context inline after the command, the typed text for naming"
   });
 });
 
+test("a failed skill prompt leaks no context into the next ordinary prompt", async () => {
+  // pi fails a skill command either as it is handed over or once its run
+  // ends; the next ordinary prompt is exactly its own text either way.
+  class FailingSkillDriver implements PiDriver {
+    readonly sessionFile = undefined;
+    readonly texts: string[] = [];
+    subscribeAdapterEvents(): () => void {
+      return () => {};
+    }
+    prompt(text: string): { outcome: "started"; completed: Promise<void> } {
+      this.texts.push(text);
+      if (text.startsWith("/skill:alpha the"))
+        throw new Error("alpha could not be expanded");
+      return {
+        outcome: "started",
+        completed: text.startsWith("/skill:")
+          ? Promise.reject(new Error("alpha could not be loaded"))
+          : Promise.resolve(),
+      };
+    }
+    abort(): void {}
+    setModel(): void {}
+    setThinkingLevel(): void {}
+  }
+
+  const driver = new FailingSkillDriver();
+  const adapter = createPiAdapter("p-skill-failed", driver);
+  await assert.rejects(
+    adapter.prompt("/skill:alpha the parser", {
+      turnContext: "<memory>m</memory>",
+      titleText: "/alpha the parser",
+    }),
+    /alpha could not be expanded/,
+  );
+  await adapter.prompt("plain");
+  const failed = await adapter.prompt("/skill:alpha", {
+    turnContext: "<memory>m</memory>",
+    titleText: "/alpha",
+  });
+  assert.equal(failed.stopReason, "error");
+  assert.match(failed.errorMessage ?? "", /alpha could not be loaded/);
+  await adapter.prompt("plain again");
+  assert.deepEqual(driver.texts, [
+    "/skill:alpha the parser\n\n<memory>m</memory>",
+    "plain",
+    "/skill:alpha \n\n<memory>m</memory>",
+    "plain again",
+  ]);
+});
+
 /* ------------------------- adapter → runtime projection ------------------ */
 test("adapter → runtime projection", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));

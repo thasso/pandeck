@@ -57,7 +57,7 @@ function parseSkillManifest(
           ? hint.map((item) => `[${item}]`).join(" ")
           : undefined;
     return {
-      ...(argumentHint?.trim() ? { argumentHint: argumentHint.trim() } : {}),
+      ...(argumentHint !== undefined ? { argumentHint } : {}),
       ...(fields["disable-model-invocation"] === true
         ? { disableModelInvocation: true as const }
         : {}),

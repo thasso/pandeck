@@ -41,6 +41,8 @@ const {
 const { subscribeSessionRunEnded } = await import("./runtime/liveSession.ts");
 const { planModeHint, forgetPlanHintState } = await import("./planHint.ts");
 const { closeDb } = await import("../db/index.ts");
+const { createMemory, archiveMemory } =
+  await import("../memory/memoryService.ts");
 const { updateSettings, getSettings } = await import("../settings.ts");
 
 updateSettings({
@@ -182,6 +184,45 @@ test("a skill turn's deferred fact rides its context and settles by the run's ou
     assert.equal(finished.length, 1);
   } finally {
     unsubscribe();
+  }
+});
+
+test("one skill turn carries a selected memory, the Plan hint and a deferred fact, all beside the command", async () => {
+  const created = createMemory({
+    text: "Prefers terse parser reviews",
+    kind: "preference",
+    pinned: true,
+    provenance: { sourceKind: "manual" },
+  });
+  assert.ok(created.ok);
+  setDeferredBackgroundContextProvider(() => ({
+    block: "BACKGROUND-FACT",
+    hooks: {},
+    finished: () => {},
+  }));
+  try {
+    const { runtime, driver, prompts, userTexts } = harnessed("sess-all");
+    await promptRuntimeSessionWithRuntime(
+      runtime,
+      driver,
+      "/alpha the parser",
+      {
+        clientRequestId: "a1",
+        skillInvocation: { name: "alpha", args: "the parser" },
+      },
+    );
+    assert.equal(prompts.length, 1);
+    assert.equal(prompts[0]!.text, "/native:alpha the parser");
+    const context = prompts[0]!.options?.turnContext ?? "";
+    for (const part of [
+      "Prefers terse parser reviews",
+      planModeHint("claude-sdk"),
+      "BACKGROUND-FACT",
+    ])
+      assert.ok(context.includes(part), `turnContext carries ${part}`);
+    assert.deepEqual(userTexts(), ["/alpha the parser"]);
+  } finally {
+    archiveMemory(created.card.id, created.card.revision);
   }
 });
 

@@ -959,7 +959,8 @@ session's runtime copy, before anything is appended.
 
 **Frontmatter.** The scan summary adds three optional fields:
 
-- `argument-hint`: a trimmed string, or a list of strings joined as `[a] [b]`;
+- `argument-hint`: a string kept as is, or a list of strings joined as
+  `[a] [b]`;
 - `disable-model-invocation: true`;
 - `user-invocable: false`.
 
