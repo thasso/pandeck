@@ -180,6 +180,8 @@ afterEach(() => {
 async function show(props: {
   view: "changes" | "files";
   filePath: string;
+  narrow?: boolean;
+  browseAsDocuments?: boolean;
 }): Promise<void> {
   await act(async () => {
     root!.render(
@@ -187,7 +189,8 @@ async function show(props: {
         <Probe />
         <WorktreeDetailPage
           worktree={worktree}
-          narrow={false}
+          narrow={props.narrow ?? false}
+          browseAsDocuments={props.browseAsDocuments ?? false}
           view={props.view}
           filePath={props.filePath}
           navigate={() => {}}
@@ -354,4 +357,47 @@ it("clamps an image's visual scale when its diff pivot takes over", async () => 
   await clickPivot("Changes vs base");
   expect(zoom().mode).toBe("text");
   expect(zoom().scale).toBe(2);
+});
+
+it("puts a phone's document pivots behind the header's one `…`", async () => {
+  await show({
+    view: "files",
+    filePath: "notes.md",
+    narrow: true,
+    browseAsDocuments: true,
+  });
+  await answer(fileRequests, fileContent("notes.md", "# Title\n\nBody text."));
+
+  // One header row: no pivot toolbar under it, and no bar repeating the name.
+  expect(container!.querySelector('[aria-label="Preview"]')).toBeNull();
+  expect(
+    [...container!.querySelectorAll("span, h2")].filter(
+      (node) => node.textContent === "notes.md",
+    ),
+  ).toHaveLength(1);
+
+  const more = container!.querySelector<HTMLButtonElement>(
+    'button[aria-label="File view"]',
+  );
+  expect(more, "expected the header overflow").not.toBeNull();
+  await act(async () => {
+    more!.click();
+    await Promise.resolve();
+  });
+  const choices = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+  ];
+  expect(choices.map((item) => item.textContent)).toEqual([
+    "File",
+    "Preview",
+    "Changes vs base",
+    "History",
+  ]);
+  expect(choices[0]!.getAttribute("aria-checked")).toBe("true");
+
+  await act(async () => {
+    choices[1]!.click();
+    await Promise.resolve();
+  });
+  expect(container!.querySelector("h1")?.textContent).toBe("Title");
 });
