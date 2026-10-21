@@ -346,6 +346,105 @@ describe("skill invocations", () => {
     expect(menu).not.toContain("/quiet");
   });
 
+  it("preserves slash-menu state across equal frozen-skill snapshots", () => {
+    const { textarea } = renderComposer(false);
+    type(textarea, "/");
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+      );
+    });
+    const selectedBefore = container!.querySelector(
+      '[role="option"][aria-selected="true"]',
+    );
+    expect(selectedBefore?.textContent).toContain("/alpha");
+
+    act(() =>
+      root!.render(
+        <Composer
+          onSend={() => {}}
+          onAbort={() => {}}
+          streaming={false}
+          disabled={false}
+          contextInfo={null}
+          session={
+            {
+              agentType: "developer",
+              harness: "pi",
+              canSteer: true,
+              activeSkills: ["alpha", "quiet"],
+            } as never
+          }
+          models={[]}
+          slashCommands={commands}
+          skillSummaries={[
+            {
+              name: "alpha",
+              description: "Explain a topic",
+              path: "alpha/SKILL.md",
+              argumentHint: "[topic]",
+            },
+            {
+              name: "quiet",
+              description: "Quiet",
+              path: "quiet/SKILL.md",
+              userInvocable: false,
+            },
+          ]}
+          actions={{} as AssistantActions}
+        />,
+      ),
+    );
+    expect(
+      container!.querySelector('[role="option"][aria-selected="true"]')
+        ?.textContent,
+    ).toContain("/alpha");
+    act(() =>
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      ),
+    );
+    expect(container!.querySelector('[role="option"]')).toBeNull();
+
+    act(() =>
+      root!.render(
+        <Composer
+          onSend={() => {}}
+          onAbort={() => {}}
+          streaming={false}
+          disabled={false}
+          contextInfo={null}
+          session={
+            {
+              agentType: "developer",
+              harness: "pi",
+              canSteer: true,
+              activeSkills: ["alpha", "quiet"],
+            } as never
+          }
+          models={[]}
+          slashCommands={commands}
+          skillSummaries={[
+            {
+              name: "alpha",
+              description: "Explain a topic",
+              path: "alpha/SKILL.md",
+              argumentHint: "[topic]",
+            },
+            {
+              name: "quiet",
+              description: "Quiet",
+              path: "quiet/SKILL.md",
+              userInvocable: false,
+            },
+          ]}
+          actions={{} as AssistantActions}
+        />,
+      ),
+    );
+    expect(container!.querySelector('[role="option"]')).toBeNull();
+  });
+
   it("sends an idle invocation as the typed line with its skill", () => {
     const { textarea, onSend, onQueue, promptSkill } = renderComposer(false);
     type(textarea, "/alpha the parser");

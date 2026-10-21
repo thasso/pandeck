@@ -1146,9 +1146,10 @@ export const Composer = memo(function Composer({
   };
 
   const activeSkills = session?.activeSkills;
+  const activeSkillsKey = JSON.stringify(activeSkills ?? []);
   const skills = useMemo(
     () => composerSkills(activeSkills, skillSummaries, slashCommands),
-    [activeSkills, skillSummaries, slashCommands],
+    [activeSkillsKey, skillSummaries, slashCommands],
   );
   const slash = slashState(
     text,
