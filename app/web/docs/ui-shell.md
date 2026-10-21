@@ -1081,8 +1081,9 @@ user's one write, Settle, belongs to its inbox card.
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action
 remains visible in that header beside the comment controls. The inspector does
-not repeat an **Actions** section there. On small layouts there is no header
-`…`, so the object dock's inspector retains the full **Actions** section.
+not repeat an **Actions** section there. On small layouts the header `…` holds
+no object action (at most a document's view pivots, see Small Screens), so the
+object dock's inspector retains the full **Actions** section.
 
 There is no embedded agent panel. The **Start a new session** action navigates
 to the new-session page (`/sessions/create`) with the inspected object (and any
@@ -1207,7 +1208,11 @@ still be moved.
   the object screen, and that is what hides the browser.
 - Navigation on a phone is therefore: the nav bar on the browser screen, back
   and the object's actions in the dock's row on an object screen. Nothing lives
-  in a top corner, which is what let the header go.
+  in a top corner, which is what let the header go. The one exception is a
+  Knowledge Base file's view pivots (File / Preview / History): they choose how
+  the screen presents the file rather than act on it, so they sit behind a `…`
+  at the end of the document's single header row, and no second toolbar or
+  repeated name/path bar sits under it.
 - The right object panel becomes the **object dock** at the bottom edge: ONE
   card in two positions, resting with only its **header** showing (non-modal —
   the page scrolls and clicks through behind it) and sliding up into a **sheet**

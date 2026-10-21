@@ -62,6 +62,10 @@ import {
   useDocumentScrollRestoration,
 } from "../DocumentNavigationShell.tsx";
 import { Button } from "../ui/button.tsx";
+import {
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from "../ui/dropdown-menu.tsx";
 import { Field, FieldLabel } from "../ui/field.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { Separator } from "../ui/separator.tsx";
@@ -92,6 +96,7 @@ import { WorktreeScopePicker } from "./WorktreeScopePicker.tsx";
 import { useViewedFiles } from "./useViewedFiles.ts";
 import { EdgeSheet } from "../common/EdgeSheet.tsx";
 import { IconButton } from "../common/IconButton.tsx";
+import { OverflowMenu } from "../common/OverflowMenu.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "../common/load.tsx";
 import {
   externalDocumentActionEnabled,
@@ -309,6 +314,7 @@ function WorktreeRailLayout({
   rail,
   narrow,
   narrowListHeader = true,
+  narrowDetailBar = true,
   railHidden = false,
   detailActive = false,
   onBack,
@@ -325,6 +331,8 @@ function WorktreeRailLayout({
   narrow: boolean;
   /** Narrow list screen: render the navigator's own title/controls header. */
   narrowListHeader?: boolean;
+  /** Narrow detail screen: draw the back/title/controls bar above it. */
+  narrowDetailBar?: boolean;
   /** Desktop: no rail at all, as if collapsed (another tree browses this). */
   railHidden?: boolean;
   /** Narrow: a detail is selected, so the content pane replaces the list. */
@@ -397,26 +405,28 @@ function WorktreeRailLayout({
       );
     }
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-        <div className="flex items-center gap-2 border-b border-border bg-background/40 py-1.5 pl-1 pr-3 text-sm text-muted-foreground">
-          {onBack ? (
-            <IconButton
-              label={`Back to ${title.toLowerCase()}`}
-              size="icon"
-              onClick={onBack}
-            >
-              <ChevronLeft />
-            </IconButton>
-          ) : null}
-          {collapsedSummary ?? (
-            <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-              {title}
-            </span>
-          )}
-          {detailControls ? (
-            <div className="shrink-0">{detailControls}</div>
-          ) : null}
-        </div>
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-card">
+        {narrowDetailBar ? (
+          <div className="flex items-center gap-2 border-b border-border bg-background/40 py-1.5 pl-1 pr-3 text-sm text-muted-foreground">
+            {onBack ? (
+              <IconButton
+                label={`Back to ${title.toLowerCase()}`}
+                size="icon"
+                onClick={onBack}
+              >
+                <ChevronLeft />
+              </IconButton>
+            ) : null}
+            {collapsedSummary ?? (
+              <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                {title}
+              </span>
+            )}
+            {detailControls ? (
+              <div className="shrink-0">{detailControls}</div>
+            ) : null}
+          </div>
+        ) : null}
         {children}
       </div>
     );
@@ -1002,6 +1012,33 @@ function FilePreview({
   );
 }
 
+type FilePivotOption = { id: FilePivot; label: string; icon: ReactNode };
+
+// A raster image has no "Preview" (its File already is the image), and the
+// main checkout has no fork point, so the "vs base" pivot is dropped.
+function filePivotsFor(
+  filePath: string | undefined,
+  isMain: boolean | undefined,
+): FilePivotOption[] {
+  const previewKind = filePath ? previewKindForPath(filePath) : undefined;
+  return [
+    { id: "file", label: "File", icon: <File /> },
+    ...(previewKind && previewKind !== "raster"
+      ? [{ id: "preview", label: "Preview", icon: <Eye /> } as const]
+      : []),
+    ...(isMain
+      ? []
+      : [
+          {
+            id: "vs-base",
+            label: "Changes vs base",
+            icon: <GitCompareArrows />,
+          } as const,
+        ]),
+    { id: "history", label: "History", icon: <History /> },
+  ];
+}
+
 function FilesView({
   worktree,
   narrow,
@@ -1125,27 +1162,7 @@ function FilesView({
       : pivot === "file" && previewKind !== "raster" && file && !file.binary
         ? "code"
         : undefined;
-  // The main checkout has no fork point, so the "vs base" pivot is dropped.
-  const pivots: Array<{ id: FilePivot; label: string; icon: ReactNode }> = [
-    { id: "file", label: "File", icon: <File /> },
-    ...(previewKind && previewKind !== "raster"
-      ? ([{ id: "preview", label: "Preview", icon: <Eye /> }] as Array<{
-          id: FilePivot;
-          label: string;
-          icon: ReactNode;
-        }>)
-      : []),
-    ...(worktree.isMain
-      ? []
-      : ([
-          {
-            id: "vs-base",
-            label: "Changes vs base",
-            icon: <GitCompareArrows />,
-          },
-        ] as Array<{ id: FilePivot; label: string; icon: ReactNode }>)),
-    { id: "history", label: "History", icon: <History /> },
-  ];
+  const pivots = filePivotsFor(filePath, worktree.isMain);
   // Content/diff-derived, memoized pierre cache keys (see ChangesView).
   const pivotDiffPath = pivotDiff?.path;
   const pivotDiffText = pivotDiff?.diff;
@@ -1212,8 +1229,9 @@ function FilesView({
     <>
       {browseAsDocuments ? (
         // Only the file's own pivots (Preview / File / History) remain; with
-        // no file open there is nothing to switch, so no toolbar at all.
-        filePath && (pivotControls || shownRefresh !== null) ? (
+        // no file open there is nothing to switch, so no toolbar at all. A
+        // phone has none either: the page header's `…` holds the pivots.
+        filePath && !narrow && (pivotControls || shownRefresh !== null) ? (
           <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
             {shownRefresh !== null ? (
               <RefreshIndicator label={shownRefresh} />
@@ -1288,6 +1306,8 @@ function FilesView({
         onUpdatePrefs={onUpdatePrefs}
         narrow={narrow}
         narrowListHeader={false}
+        // The document header already names the file and holds its pivots.
+        narrowDetailBar={!browseAsDocuments}
         railHidden={browseAsDocuments}
         detailActive={Boolean(filePath)}
         {...(!filePath
@@ -1307,6 +1327,13 @@ function FilesView({
       >
         {filePath ? (
           <>
+            {narrow && browseAsDocuments && shownRefresh !== null ? (
+              // No bar to carry R2's marker here, so it floats over the pane.
+              <RefreshIndicator
+                className="absolute right-3 top-2 z-10"
+                label={shownRefresh}
+              />
+            ) : null}
             {!narrow && !browseAsDocuments ? (
               <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                 <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
@@ -1855,14 +1882,41 @@ export default function WorktreeDetailPage({
                 </div>
               }
               actions={
-                embedded ? (
-                  headerActions
-                ) : filePath ? (
-                  <DocumentNavigationActions
-                    className="hidden desktop:flex"
-                    showClose={false}
-                  />
-                ) : undefined
+                <>
+                  {embedded ? (
+                    headerActions
+                  ) : filePath ? (
+                    <DocumentNavigationActions
+                      className="hidden desktop:flex"
+                      showClose={false}
+                    />
+                  ) : null}
+                  {/* A phone has room for one header row, so the file's pivots
+                    move off their own toolbar into its overflow. */}
+                  {narrow && filePath && view === "files" ? (
+                    <OverflowMenu
+                      label="File view"
+                      size="icon"
+                      contentClassName="min-w-48"
+                    >
+                      <DropdownMenuRadioGroup
+                        value={filePivot}
+                        onValueChange={(next) =>
+                          setFilePivot(next as FilePivot)
+                        }
+                      >
+                        {filePivotsFor(filePath, worktree.isMain).map(
+                          ({ id, label, icon }) => (
+                            <DropdownMenuRadioItem key={id} value={id}>
+                              {icon}
+                              {label}
+                            </DropdownMenuRadioItem>
+                          ),
+                        )}
+                      </DropdownMenuRadioGroup>
+                    </OverflowMenu>
+                  ) : null}
+                </>
               }
             />
           ) : (
