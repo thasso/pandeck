@@ -233,14 +233,6 @@ panel tab, or behind a collapsed panel, would suppress the announcement and then
 show the user nothing at all. A Task write the server never answers ends at its
 deadline, and that outcome is judged against the same claims as a refusal.
 
-An Initiative's Settle is the one write whose home is a ROW's control: the
-Sessions inbox claims the Initiatives whose card it draws with Settle while it
-is the visible sidebar section (`FailureHomes.initiativeCards`). That claim is
-asked only for the Settle the client tracked, at its refusal or deadline — never
-for an arrival that merely names an Initiative — and an optimistic Settle that
-took the card away leaves nothing claimed, so the failure is announced. Either
-way it is the Initiative's outcome alone and never reaches the viewed chat's.
-
 A collection's load failure needs no claim: it is a condition, kept on the
 collection and rendered by the pane whenever the user arrives, on screen or not,
 so it is never also said in passing. Four collections keep one — projects,

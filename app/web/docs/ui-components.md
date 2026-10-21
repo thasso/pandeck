@@ -273,9 +273,6 @@ session-row and card memo keys so takeover updates every list immediately.
   remembered per Initiative/Worktree and row ids are namespaced by
   Initiative/Project. First reads, refreshing data, failures and empty
   membership use shared load chrome.
-- **Initiative Attention items:** Progress and age in context, state/title in
-  identity, and session disclosure, readiness, blockers and next milestone in
-  signals. Only unacknowledged paused/done outcomes offer Settle.
 - **Pull requests:** Context, title and signals use `ListRow`. Local-checkout
   and CI indicators use `trailing`; these rows currently need no action.
 - **Worktrees:** `WorktreeRow` shares `ListRowContent` and `ListRowActions`

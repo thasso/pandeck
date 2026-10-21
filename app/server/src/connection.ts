@@ -277,7 +277,6 @@ import {
   initiativeRevisionDigest,
   initiativeSnapshot,
   initiativeStateItems,
-  settleInitiative,
 } from "./initiatives.ts";
 import { readInitiativeMap } from "./initiativeLayout.ts";
 import {
@@ -1008,8 +1007,6 @@ export class Connection implements Viewer {
         );
       case "settleWorkflowRun":
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
-      case "settleInitiative":
-        return this.onSettleInitiative(msg.id, msg.throughRevision);
       case "setInboxPositions":
         return this.onSetInboxPositions(msg.positions);
       case "renameSession":
@@ -2205,23 +2202,6 @@ export class Connection implements Viewer {
     }
   }
 
-  /**
-   * The user's Settle on an Initiative's inbox card. The answer is the
-   * `initiatives` event the write raises for every subscriber; a refusal names
-   * the Initiative, and the browser re-reads the list it settled optimistically.
-   */
-  private onSettleInitiative(id: string, throughRevision: number): void {
-    try {
-      settleInitiative(id, throughRevision);
-    } catch (err) {
-      this.send({
-        type: "error",
-        target: { type: "initiative", id },
-        message: `Failed to settle Initiative: ${errorText(err)}`,
-      });
-    }
-  }
-
   private onSaveProject(
     id: string,
     patch: Partial<ProjectRecord>,
@@ -2532,7 +2512,7 @@ export class Connection implements Viewer {
     const placement = parseInboxPlacement(positions);
     if ("error" in placement) return refuse(placement.error);
     if (!setInboxPositions(placement))
-      return refuse("a session, run or Initiative no longer exists");
+      return refuse("a session or run no longer exists");
     if (placement.runs.length > 0) broadcastWorkflowRuns();
     if (placement.sessions.length > 0) await hub.broadcastSessions();
   }

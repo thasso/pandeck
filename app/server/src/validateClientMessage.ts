@@ -1021,8 +1021,6 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   // Same rule for a Workflow Run's Settle (Task-677): the observed revision is
   // required, so a stale item cannot acknowledge an outcome it never rendered.
   settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),
-  // And for an Initiative's: the revision its clicked inbox card rendered.
-  settleInitiative: fields({ id: STRING, throughRevision: COUNT }),
   setInboxPositions: (msg) => {
     const { positions } = msg;
     if (!Array.isArray(positions) || positions.length === 0)
@@ -1032,11 +1030,11 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     for (const entry of positions as unknown[]) {
       if (!isPlainObject(entry)) return "each position must be an object";
       const missing =
-        entry.kind === "session" || entry.kind === "initiative"
+        entry.kind === "session"
           ? checkRequiredFields(entry, { id: STRING, position: NUMBER })
           : entry.kind === "run"
             ? checkRequiredFields(entry, { runId: STRING, position: NUMBER })
-            : 'each position\'s kind must be "session", "run" or "initiative"';
+            : 'each position\'s kind must be "session" or "run"';
       if (missing) return missing;
     }
     return checkOptionalFields(msg, { requestId: STRING });

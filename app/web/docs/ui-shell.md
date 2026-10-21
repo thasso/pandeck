@@ -390,9 +390,8 @@ filters only the history already read. Empty results say so and offer Clear
 filters rather than claiming there is no work. Header counts stay global; Needs
 you clears filters before focusing waiting work, opening the first Needs-you
 Project group if needed. Pending settle/swipe exits stay visible until their
-existing command sends. These controls filter sessions and Workflow Runs;
-Initiatives remain independent cross-Project items, including their Needs-you
-outcomes, and are never hidden by those filters.
+existing command sends. These controls filter sessions and Workflow Runs, the
+only items Attention holds.
 
 The same popover offers Group: None / By Project, saved independently of Task
 grouping in `Prefs.attentionFilters.byProject`. Grouping does not count as a
@@ -769,56 +768,8 @@ resolves once against a page that does not have the element yet. The jump
 scrolls the card into view and focuses it, once per address, honouring reduced
 motion.
 
-An **Initiative** is a Sessions inbox item too (`docs/initiatives.md`, The
-attention list). Every state supports Settle. An Initiative is an item while its
-attention revision is unsettled. Initiative edits, member Task changes, and
-linked session creation, turn starts and outcomes raise that revision. Settle
-sends exactly the revision the clicked card rendered, captured at the click and
-sent after the settle exit, so newer activity stays an item. The send belongs to
-the click, not to the list: leaving the Sessions section during the exit sends
-it then, as a swipe's does, and never twice. A refused or unanswered Settle is
-said under its card while the visible inbox draws that card with its Settle;
-otherwise, including when the optimistic Settle has taken the card away, it is
-announced naming the Initiative (`docs/messaging.md`). The card has the session
-card's three rows: "Initiative" with its done/total progress and the time; the
-title led by the Initiative glyph while active, else by its Paused or Done mark;
-then the disclosure of its sessions, how many Tasks are ready and how many
-blocked, and the next open milestone, with Settle at the right edge. Everything
-else is in its spoken label. Opening the card goes to `/initiatives/:id`, the
-map. Every fact comes from the `initiatives` summary, the next milestone's title
-included, so no card reads a graph, a layout or the Tasks topic, and a member
-Task's change reaches it as the Initiative's own event.
-
-An unsettled ACTIVE Initiative shares the draggable working set below **Needs
-you**. An unsettled paused/done Initiative stands in Needs you and counts toward
-its waiting-on-you number. Both use the same position scale as sessions and
-runs: `inboxPosition` when manually placed, otherwise `createdAt`. Dragging
-picks up the Initiative and its expanded rows as one block, and mixed placements
-persist atomically. With Project grouping enabled, Initiatives belong to
-Unassigned. Needs you remains non-draggable, as for sessions. Settle takes an
-Initiative out of Attention until new activity, without changing its state or
-its Project browser entry. Neither settling nor dragging raises its attention
-revision. Each Initiative has one card in one place. Nothing above the cards
-holds a loading placeholder for Initiatives, but neither the cold-start nor the
-"nothing needs you" claim is made before the Initiative list has answered — an
-inbox whose only item is an Initiative is not empty — and a failed list read is
-stated above Needs you with a retry, over any items still held. A failed read is
-not that answer: before one arrives, the failure stands alone, with no empty
-claim beside it, while sessions already held still show.
-
-The disclosure lists the sessions started from its member Tasks. The summary
-carries at most 50 of their ids (the DATA bound, newest first, with the full
-count); the open disclosure initially shows five of those this browser holds,
-those needing the user first, then newest created, ties by id. Show more expands
-the remaining known sessions inline. Sessions beyond the summary's ids or not
-held here have a non-interactive "not loaded" count. Embedded session rows share
-`ListRow` and `SessionTitleRow` with the other compact session lists. Unlike a
-run's roles they are NOT folded: each keeps its own card, and a session may be
-listed under several Initiatives. The listed rows are compact `working` rows
-that open the session; they carry no Settle, Archive or Delete, which stay on
-the session's own card. The disclosure and Settle never open the Initiative, a
-session row opens only its session, and Show more stays in the list; interactive
-entries are reachable with the list's arrow keys.
+Initiatives are not Sessions inbox items (`docs/initiatives.md`): the Projects
+section lists them, and their pages hold the map.
 
 ## Pull Requests
 

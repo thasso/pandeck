@@ -11,19 +11,6 @@ export const INITIATIVE_STATES = ["active", "paused", "done"] as const;
 export type InitiativeState = (typeof INITIATIVE_STATES)[number];
 
 /**
- * Durable attention state for an Initiative. Settle acknowledges the rendered
- * revision; later Initiative, member Task or related session activity raises it.
- */
-export interface InitiativeAttention {
-  /** Monotonic, one bump per activity notification or Initiative mutation. */
-  revision: number;
-  /** The revision an explicit Settle acknowledged; 0 when never settled. */
-  settledRevision: number;
-  kind: "activity" | "paused" | "done";
-  at: number;
-}
-
-/**
  * Member counts. `total` is every member, archived ones included; `done`
  * counts done members whether archived or not. The other buckets count only
  * unarchived members, and `doing` and `blocked` overlap: a started Task whose
@@ -46,30 +33,27 @@ export const INITIATIVE_SUMMARY_SESSION_LIMIT = 50;
 /**
  * The first milestone, in the user's member order, that is still open: not
  * done and not archived (an archived open Task is shelved, the rule that makes
- * a blocker open). Its title rides the summary so the inbox card can name it
- * without holding the Tasks topic.
+ * a blocker open). Its title rides the summary so a list can name it without
+ * holding the Tasks topic.
  */
 export interface InitiativeMilestoneRef {
   id: string;
   title: string;
 }
 
-/** The `initiatives` topic projection: what lists and the inbox card read. */
+/** The `initiatives` topic projection: what lists read. */
 export interface InitiativeSummary {
   id: string;
   title: string;
   state: InitiativeState;
-  attention?: InitiativeAttention;
-  /** Manual Attention position, otherwise ordered by creation time. */
-  inboxPosition?: number;
   progress: InitiativeProgress;
   /** Absent when the Initiative has no open milestone. */
   nextMilestone?: InitiativeMilestoneRef;
   /**
    * User sessions STARTED from a member Task (`task-start`, `linkTaskStart`)
    * that are neither archived nor settled, newest by session creation first
-   * (ties by id) and at most {@link INITIATIVE_SUMMARY_SESSION_LIMIT}; a card
-   * shows "and N more" from `sessionCount` when it cut. A session that only
+   * (ties by id) and at most {@link INITIATIVE_SUMMARY_SESSION_LIMIT};
+   * `sessionCount` says how many it cut. A session that only
    * referenced a member Task, or whose link has no origin, is not listed.
    * Structural membership only, nothing parsed from titles; an archived member
    * Task still counts, and a session on several member Tasks is listed once.
@@ -80,7 +64,6 @@ export interface InitiativeSummary {
    * when it was cut.
    */
   sessionCount: number;
-  /** Creation time is the default Attention position, as for sessions and runs. */
   createdAt: number;
   updatedAt: number;
 }

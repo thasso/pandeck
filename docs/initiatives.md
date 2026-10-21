@@ -115,14 +115,13 @@ A simplification nobody waits for gets no link; it stays a sentence in the
 description. `relates` is not a dependency and the map does not draw it.
 
 Agents write these links through `task_manage`; the UI only displays them. A
-dependency written only as prose ("Depends on: L3") is invisible to the map,
-blocked state and the attention list, so an agent writing dependent Tasks
-records them as links.
+dependency written only as prose ("Depends on: L3") is invisible to the map and
+blocked state, so an agent writing dependent Tasks records them as links.
 
 ## Agent tools
 
 Agents create and manage Initiatives; the user does it by asking. The UI has no
-create or edit form, and its only Initiative write is Settle.
+create or edit form, and makes no Initiative write.
 
 - `initiative_read`: a list (state filter, search) or one Initiative by id. A
   read by id returns its members as a tree with their status and blocked state,
@@ -188,20 +187,19 @@ the tool descriptions, never in a harness-specific prompt layer.
 ## Storage
 
 - An `initiatives` table holds the Initiative's own columns: title, description,
-  state, the attention cursor (below), revision, and created, updated, archived
-  and deleted times.
+  state, revision, and created, updated, archived and deleted times.
 - Membership is an edge in the generic `links` table:
   `initiative —member→ task`, with `position` for the user's order and
   `metadata_json` carrying `{ "milestone": true }` on a milestone.
 - Initiatives join the state-change event model (`docs/state-sync.md`) as their
-  own topic, `initiatives`. A summary carries the id, title, state, attention
-  cursor, progress counts (total, done, doing, startable, blocked), the next
-  open milestone and the card's sessions (below). Because the counts move with
-  member Tasks, the Task notification seam also reports the Initiatives that
-  read a touched Task — as a member or descendant, or as an outside blocker of a
-  member — in the same flush, and a session's liveness change reports the
-  Initiatives listing it. A write is the only place that knows it changed, so no
-  second path recomputes counts on a timer.
+  own topic, `initiatives`. A summary carries the id, title, state, progress
+  counts (total, done, doing, startable, blocked), the next open milestone and
+  the sessions working on its Tasks (below). Because the counts move with member
+  Tasks, the Task notification seam also reports the Initiatives that read a
+  touched Task — as a member or descendant, or as an outside blocker of a member
+  — in the same flush, and a session's liveness change reports the Initiatives
+  listing it. A write is the only place that knows it changed, so no second path
+  recomputes counts on a timer.
 - The other way round, an Initiative write that changes what a Task lists of it
   (members added or removed, absorbed edges included; the title or state;
   archive, unarchive or delete) reports every such Task through the Task seam
@@ -212,10 +210,9 @@ the tool descriptions, never in a harness-specific prompt layer.
   milestone mark rewritten in place reports no Task. The cost grows with the
   subtree, which the user accepted.
 - Subscribing is the list read, every time. When a surface comes back to the
-  list, or a gap or a Settle's refusal or deadline resubscribes, after an
-  earlier snapshot answered in the same connection, the list held is refreshing:
-  its rows stay with a refresh indicator, and nothing calls it ready or empty
-  until the new snapshot answers.
+  list, or a gap resubscribes, after an earlier snapshot answered in the same
+  connection, the list held is refreshing: its rows stay with a refresh
+  indicator, and nothing calls it ready or empty until the new snapshot answers.
 - The graph (nodes, the parent tree, `blocks` edges, milestones) is detail, read
   by id with the revision it is as of, the same way a Task body is. A newer
   Initiative event re-reads it. An archived Initiative leaves the live list, but
@@ -224,20 +221,20 @@ the tool descriptions, never in a harness-specific prompt layer.
 
 ## Project browser
 
-The Initiatives group above Projects uses compact browser rows rather than the
-urgency-oriented Attention card. An Initiative shows its title, Task progress,
-and a Contents disclosure; Paused occupies an optional first line. Initiative
-and Project counters show ready/in-progress/blocked/done/total with mild
-colours, shared reserved space and aligned progress bars. In progress is blue,
-nonzero blocked is yellow, and done is green. These are state counts, not
-warning badges; meanings are supplied in the tooltip and accessible name. Every
-member belongs to exactly one bucket: completed or archived first, then blocked,
-then unblocked doing, then ready todo. Done includes every archived Task,
-regardless of stored status; counters and bars treat shelved work as out of the
-user's way without changing Task status. The first four counters sum to total.
-This browser partition is distinct from the summary DTO's overlapping
-doing/blocked facts. The heading opens its detail, while Contents expands
-inline, with state remembered per Initiative for the tab.
+The Initiatives group above Projects uses compact browser rows. An Initiative
+shows its title, Task progress, and a Contents disclosure; Paused occupies an
+optional first line. Initiative and Project counters show
+ready/in-progress/blocked/done/total with mild colours, shared reserved space
+and aligned progress bars. In progress is blue, nonzero blocked is yellow, and
+done is green. These are state counts, not warning badges; meanings are supplied
+in the tooltip and accessible name. Every member belongs to exactly one bucket:
+completed or archived first, then blocked, then unblocked doing, then ready
+todo. Done includes every archived Task, regardless of stored status; counters
+and bars treat shelved work as out of the user's way without changing Task
+status. The first four counters sum to total. This browser partition is distinct
+from the summary DTO's overlapping doing/blocked facts. The heading opens its
+detail, while Contents expands inline, with state remembered per Initiative for
+the tab.
 
 A visible Initiative header reuses the existing keyed membership graph read to
 derive an exact partition; the summary alone cannot separate doing/blocked
@@ -444,91 +441,28 @@ re-reads the graph.
   walks the hierarchy recursively: a valid hierarchy of any depth still reaches
   this outcome, its collapsed drawing and the List.
 
-## The attention list
+## Sessions working on its Tasks
 
-An Initiative is a Sessions inbox item, following the Workflow Run precedent
-(`docs/agent-workflows.md`, `app/web/docs/ui-shell.md`).
+An Initiative is not a Sessions inbox item. Attention holds sessions and
+Workflow Runs; Initiatives are browsed in the Projects section and on their own
+pages, so they have no attention cursor, Settle or manual Attention position.
 
-- An Initiative in **any state** can settle. New Initiatives arrive with an
-  attention revision. Unsettled active Initiatives share the draggable working
-  set with sessions and Workflow Runs. Unsettled paused/done Initiatives stand
-  in **Needs you**, counted by its bar like an ended Workflow Run.
-- Settle acknowledges exactly the revision the clicked item rendered
-  (`settleInitiative`, whose `throughRevision` is required). The server clamps
-  it to the stored revision and only moves the acknowledgement forward. A
-  settled Initiative leaves Attention without changing its state, membership, or
-  visibility in the Project browser and detail pages.
-- Later activity automatically brings it back. Initiative edits and membership
-  writes, member Task notifications, and linked session creation, turn starts
-  and outcomes raise attention in the same transaction as the Initiative's
-  state-event revision. The existing holder fan-out also covers external blocker
-  changes. Repeating unchanged Initiative fields does not raise it. Session read
-  marks, settlement, archival and deletion refresh summaries but do not raise
-  attention. Settling or reordering the Initiative does not raise it either.
-  Newer activity after the rendered revision survives a stale Settle.
-- A mechanical Task write refreshes its holders without raising attention: the
-  holder fan-out still stamps and notifies every Initiative reading the Task,
-  through the same `notify` seam, but passes `activity = false`. The list is
-  closed: unlinking a deleted session (`unlinkSessionEverywhere`), a pure
-  sibling renumber (a `reorderTasks` drop, or a sort-only `updateTask`), the
-  completed-work retention sweep, marking a Task processed, a deleted Project's
-  cascade, and the Knowledge link migration. A reorder that reparents a Task is
-  membership activity for the Initiatives holding that Task before or after the
-  move; the siblings it only renumbered refresh. Every other Task write —
-  content, status, archive by a person or agent, links, sessions, hierarchy — is
-  activity.
-- Active Initiative cards use the same drag activation and position scale as
-  sessions and runs. A drop moves the whole card and any expanded session rows.
-  `inboxPosition` overrides creation time; activity preserves that position.
-  Mixed-kind drops persist atomically through `setInboxPositions`. Needs you
-  remains non-draggable for every kind. With Project grouping enabled,
-  Initiatives are Unassigned and can reorder within that group.
-- A Settle is the user's acknowledgement, not an effect of the card being on
-  screen: leaving the inbox while the card plays its exit still sends it, once,
-  with the revision the card rendered. Its refusal or unanswered deadline is the
-  Initiative's own outcome, never the chat being viewed: the client re-reads the
-  list, and says it once — under the card while that card is on screen with its
-  Settle, otherwise announced naming the Initiative (by the name it was clicked
-  under if the list no longer holds it). A reconnect's snapshot answers a Settle
-  in flight, so its deadline then says nothing.
-- Only the user settles. An agent changing the state never removes the item, and
-  no agent tool settles. Archiving or deleting the Initiative takes its item
-  away with it.
-
-The card shows the title, state, progress, how many Tasks can start now and how
-many are blocked, the next open milestone, and the sessions working on its
-Tasks. Opening it goes to the map. The next open milestone is the first
-milestone in the user's member order that is neither done nor archived; the
-summary carries its id and title, so the card needs no Task list.
-
-The sessions working on its Tasks are the user's sessions STARTED from a member
-Task (`task-start`, `linkTaskStart`), archived member Tasks included, that are
-neither archived nor settled (a settled session counts again once a new outcome
-raises it). A session that only referenced a member Task, or whose link has no
-origin, is not listed and not counted. This is the map's definition without its
-second half: the inbox needs no running turn, because an idle session, or one
-waiting on the user, is still the work the card points to. The summary carries
-at most 50 of them, newest by session creation first (ties by id), and the full
-count; both come from one rule in the query, a session started from several
-member Tasks counts once, and the query returns no more than that. That is the
-data bound.
-
-Those sessions initially show five rows: those needing the user first, then
-newest by creation, ties by id, among the listed ids the browser holds. Show
-more reveals the remaining known sessions inline, without navigating. Sessions
-beyond the summary's 50 ids or not held by the browser are counted in a
-non-interactive "not loaded" note, not offered as an expansion the browser
-cannot fulfill. Session entries use the shared compact `ListRow` presentation
-and open their chats. The sessions keep their own inbox cards. Unlike a Workflow
-Run's role sessions they are not folded away: a Task can belong to several
-Initiatives, so no single card owns a session, and a session that needs the user
-must stay visible on its own. Membership is structural: sessions linked to
+The summary lists the user's sessions STARTED from a member Task (`task-start`,
+`linkTaskStart`), archived member Tasks included, that are neither archived nor
+settled (a settled session counts again once a new outcome raises it). A session
+that only referenced a member Task, or whose link has no origin, is not listed
+and not counted. This is the map's definition without its second half: no
+running turn is needed, because an idle session, or one waiting on the user, is
+still work on the Initiative. The summary carries at most 50 of them, newest by
+session creation first (ties by id), and the full count; both come from one rule
+in the query, a session started from several member Tasks counts once, and the
+query returns no more than that. Membership is structural: sessions linked to
 member Tasks, nothing parsed from titles.
 
-Migration `0086_initiative_inbox.sql` preserves existing Initiative data and
-paused/done acknowledgements, initializes active attention, and adds manual
-positions. `attention_kind` also accepts `activity`. Only the deployed server
-applies this migration; a production-backed web preview alone cannot enable it.
+Migration `0096_drop_initiative_attention.sql` removes the attention cursor and
+the manual position that `0085_initiatives.sql` and `0086_initiative_inbox.sql`
+added, keeping every other column and row, and moves every revision so a cached
+state digest cannot keep the old summary.
 
 ## Phases
 
@@ -537,7 +471,8 @@ applies this migration; a production-backed web preview alone cannot enable it.
    release" milestone Task, blocked by L7 ([Task-817](pa://task/817)) and S5
    ([Task-807](pa://task/807)). Its `blocks` links are already written.
 2. The Initiative page: List view, and the Map view (read only, live).
-3. The Sessions inbox card and Settle.
+3. The Sessions inbox card and Settle (since removed: Initiatives are browsed
+   under Projects).
 4. Map interaction: the object panel with sessions, collapsing epics, the
    critical path and filters.
 
