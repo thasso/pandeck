@@ -823,6 +823,123 @@ test("steer-only prompt mapping", async () => {
   );
 });
 
+test("skill prompt: context inline after the command, the typed text for naming", async () => {
+  // pi binds nothing: everything after the command's first space joins the
+  // skill block, so the context rides in the same prompt string. A name-only
+  // command keeps that space, or pi would read the context as the name.
+  class RecordingDriver implements PiDriver {
+    readonly sessionFile = undefined;
+    readonly calls: Array<{ text: string; titleText?: string }> = [];
+    subscribeAdapterEvents(): () => void {
+      return () => {};
+    }
+    prompt(
+      text: string,
+      _a?: unknown[],
+      options?: { titleText?: string },
+    ): { outcome: "started"; completed: Promise<void> } {
+      this.calls.push({
+        text,
+        ...(options?.titleText !== undefined
+          ? { titleText: options.titleText }
+          : {}),
+      });
+      return { outcome: "started", completed: Promise.resolve() };
+    }
+    abort(): void {}
+    setModel(): void {}
+    setThinkingLevel(): void {}
+  }
+
+  const driver = new RecordingDriver();
+  const adapter = createPiAdapter("p-skill-prompt", driver);
+  await adapter.prompt("/skill:alpha the parser", {
+    turnContext: "<memory>m</memory>",
+    titleText: "/alpha the parser",
+  });
+  await adapter.prompt("/skill:alpha", {
+    turnContext: "<memory>m</memory>",
+    titleText: "/alpha",
+  });
+  // A skill prompt without context, then an ordinary prompt: neither carries
+  // an earlier turn's context.
+  await adapter.prompt("/skill:alpha", { titleText: "/alpha" });
+  await adapter.prompt("plain");
+  assert.deepEqual(driver.calls, [
+    {
+      text: "/skill:alpha the parser\n\n<memory>m</memory>",
+      titleText: "/alpha the parser",
+    },
+    { text: "/skill:alpha \n\n<memory>m</memory>", titleText: "/alpha" },
+    { text: "/skill:alpha", titleText: "/alpha" },
+    { text: "plain" },
+  ]);
+
+  // The dispatch is the driver's; without one the adapter refuses.
+  assert.deepEqual(adapter.skillDispatch?.("alpha"), {
+    refused: "/alpha cannot be invoked in this session.",
+  });
+  const dispatching = createPiAdapter(
+    "p-skill-dispatch",
+    Object.assign(new RecordingDriver(), {
+      skillDispatch: (name: string) => ({ command: `/skill:${name}` }),
+    }),
+  );
+  assert.deepEqual(dispatching.skillDispatch?.("alpha"), {
+    command: "/skill:alpha",
+  });
+});
+
+test("a failed skill prompt leaks no context into the next ordinary prompt", async () => {
+  // pi fails a skill command either as it is handed over or once its run
+  // ends; the next ordinary prompt is exactly its own text either way.
+  class FailingSkillDriver implements PiDriver {
+    readonly sessionFile = undefined;
+    readonly texts: string[] = [];
+    subscribeAdapterEvents(): () => void {
+      return () => {};
+    }
+    prompt(text: string): { outcome: "started"; completed: Promise<void> } {
+      this.texts.push(text);
+      if (text.startsWith("/skill:alpha the"))
+        throw new Error("alpha could not be expanded");
+      return {
+        outcome: "started",
+        completed: text.startsWith("/skill:")
+          ? Promise.reject(new Error("alpha could not be loaded"))
+          : Promise.resolve(),
+      };
+    }
+    abort(): void {}
+    setModel(): void {}
+    setThinkingLevel(): void {}
+  }
+
+  const driver = new FailingSkillDriver();
+  const adapter = createPiAdapter("p-skill-failed", driver);
+  await assert.rejects(
+    adapter.prompt("/skill:alpha the parser", {
+      turnContext: "<memory>m</memory>",
+      titleText: "/alpha the parser",
+    }),
+    /alpha could not be expanded/,
+  );
+  await adapter.prompt("plain");
+  const failed = await adapter.prompt("/skill:alpha", {
+    turnContext: "<memory>m</memory>",
+    titleText: "/alpha",
+  });
+  assert.equal(failed.stopReason, "error");
+  assert.match(failed.errorMessage ?? "", /alpha could not be loaded/);
+  await adapter.prompt("plain again");
+  assert.deepEqual(driver.texts, [
+    "/skill:alpha the parser\n\n<memory>m</memory>",
+    "plain",
+    "/skill:alpha \n\n<memory>m</memory>",
+    "plain again",
+  ]);
+});
+
 /* ------------------------- adapter → runtime projection ------------------ */
 test("adapter → runtime projection", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));

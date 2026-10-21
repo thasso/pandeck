@@ -151,6 +151,12 @@ export interface EntrySummary {
   description: string;
   /** Library-relative path of the source manifest. */
   path: string;
+  /** Skills only: frontmatter `argument-hint`, a list joined as `[a] [b]`. */
+  argumentHint?: string;
+  /** Skills only: `disable-model-invocation: true` — only `/name` loads it. */
+  disableModelInvocation?: true;
+  /** Skills only: `user-invocable: false` — hidden from and refused by `/name`. */
+  userInvocable?: false;
 }
 
 /** One actionable reason a source folder is not usable. */

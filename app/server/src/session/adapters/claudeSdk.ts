@@ -24,6 +24,7 @@ import type {
   PromptableAdapter,
   PromptOptions,
   RunFailureFacts,
+  SkillDispatch,
 } from "./contract.ts";
 import type { AdapterEventListener } from "./nativeEvents.ts";
 
@@ -37,8 +38,14 @@ export interface ClaudeSdkAdapterDriver {
       clientRequestId?: string;
       hidden?: boolean;
       attachments?: PromptAttachment[];
+      /** A skill turn: the frozen name, its model-only context, the typed text. */
+      skillCommand?: string;
+      turnContext?: string;
+      titleText?: string;
     },
   ): Promise<void>;
+  /** The native plugin command for a frozen library skill: `/<plugin>:<name>`. */
+  skillCommand?(name: string): string;
   /**
    * Hand a message to the RUNNING turn. Resolves once the CLI has decided:
    * `steer` when the turn took it at a tool step, `followUp` when it arrived
@@ -131,6 +138,13 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     };
   }
 
+  skillDispatch(name: string): SkillDispatch {
+    const command = this.driver.skillCommand?.(name);
+    return command
+      ? { command }
+      : { refused: `/${name} cannot be invoked in this session.` };
+  }
+
   async prompt(
     text: string,
     options: PromptOptions = {},
@@ -174,6 +188,13 @@ class ClaudeSdkAdapter implements PromptableAdapter {
       ...(options.hidden ? { hidden: true } : {}),
       ...(options.attachments?.length
         ? { attachments: options.attachments }
+        : {}),
+      ...(options.skillCommand !== undefined
+        ? { skillCommand: options.skillCommand }
+        : {}),
+      ...(options.turnContext ? { turnContext: options.turnContext } : {}),
+      ...(options.titleText !== undefined
+        ? { titleText: options.titleText }
         : {}),
     });
     const stopReason =

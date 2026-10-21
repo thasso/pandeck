@@ -139,6 +139,18 @@ export async function sessionSkills(
   );
 }
 
+/**
+ * Whether the library lets the USER invoke `name` with `/name`: it must still
+ * be a valid entry, and `user-invocable: false` reserves it to the agent
+ * (`docs/skills.md`). A fresh scan, like every library read.
+ */
+export async function skillUserInvocable(name: string): Promise<boolean> {
+  await skillLibraryStore.ensureInitialized();
+  const scan = await scanSkillLibrary(skillLibraryStore.root);
+  const entry = scan.entries.find((candidate) => candidate.name === name);
+  return entry !== undefined && entry.userInvocable !== false;
+}
+
 function normalizePreset(names: readonly string[]): string[] {
   if (names.some((name) => !isSafeEntryName(name))) return [];
   return [...new Set(names)].sort(compareText);

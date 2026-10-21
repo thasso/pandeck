@@ -461,6 +461,104 @@ describe("what a broadcast re-renders", () => {
     }
   });
 
+  it("re-renders no composer for an identical skills rescan or an unrelated broadcast", async () => {
+    const socket = await openChat();
+    const skillsList = (hint: string): ServerMessage =>
+      ({
+        type: "libraryList",
+        library: "skills",
+        list: {
+          libraryPath: "/skills",
+          entries: [
+            {
+              name: "beta",
+              description: "Beta",
+              path: "beta/SKILL.md",
+            },
+            {
+              name: "alpha",
+              description: "Alpha",
+              path: "alpha/SKILL.md",
+              argumentHint: hint,
+            },
+          ],
+          diagnostics: [],
+        },
+      }) as unknown as ServerMessage;
+    // A coding session with frozen skills: its composer reads the library.
+    await act(async () =>
+      socket.receive({
+        ...snapshotMessage(),
+        state: {
+          sessionId: sessionId(0),
+          harness: "pi",
+          agentType: "developer",
+          thinkingLevel: "off",
+          activeSkills: ["alpha", "beta"],
+          skillInvocations: [],
+        },
+      } as unknown as ServerMessage),
+    );
+    await act(async () => socket.receive(skillsList("[topic]")));
+    await settle();
+    setPerfStatsEnabled(true);
+    try {
+      // A rescan answers with fresh objects; nothing a `/` row shows moved.
+      await act(async () => socket.receive(skillsList("[topic]")));
+      await act(async () => socket.receive(reorderedSessions()));
+      await settle();
+      expect(countOf(perfSnapshot(), "Composer")).toBe(0);
+      // The rows' own content is what does reach it.
+      setPerfStatsEnabled(false);
+      setPerfStatsEnabled(true);
+      await act(async () => socket.receive(skillsList("[file]")));
+      await settle();
+      expect(countOf(perfSnapshot(), "Composer")).toBeGreaterThan(0);
+    } finally {
+      setPerfStatsEnabled(false);
+    }
+  });
+
+  it("sends a typed skill invocation as a prompt carrying its skill", async () => {
+    const socket = await openChat();
+    await act(async () =>
+      socket.receive({
+        ...snapshotMessage(),
+        state: {
+          sessionId: sessionId(0),
+          harness: "pi",
+          agentType: "developer",
+          thinkingLevel: "off",
+          activeSkills: ["alpha"],
+          skillInvocations: [],
+        },
+      } as unknown as ServerMessage),
+    );
+    await settle();
+    const textarea = container!.querySelector("textarea")!;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    await act(async () => {
+      setter?.call(textarea, "/alpha the parser");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+    expect(socket.sent.filter((msg) => msg.type === "prompt")).toEqual([
+      {
+        type: "prompt",
+        text: "/alpha the parser",
+        skill: "alpha",
+        clientRequestId: expect.any(String),
+      },
+    ]);
+  });
+
   it("re-renders no approval card when only an ancestor's grants change", async () => {
     const socket = await openChat();
     const receive = (message: ServerMessage) =>

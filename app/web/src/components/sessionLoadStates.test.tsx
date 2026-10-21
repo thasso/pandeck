@@ -394,6 +394,55 @@ it("orders loaded, then available, then unmounted skills, alphabetically within 
   ).toBe(2);
 });
 
+it("marks user-only skills and names a slash-command load", async () => {
+  const library: EntryLibraryList = {
+    libraryPath: "/data/skills",
+    entries: [
+      {
+        name: "deploy",
+        description: "",
+        path: "deploy/SKILL.md",
+        disableModelInvocation: true,
+      },
+      {
+        name: "sealed",
+        description: "",
+        path: "sealed/SKILL.md",
+        disableModelInvocation: true,
+        userInvocable: false,
+      },
+    ],
+    diagnostics: [],
+  };
+  await act(async () =>
+    root!.render(
+      <ActiveSkillsSection
+        sessionId="s-a"
+        activeSkills={["deploy", "sealed"]}
+        skillInvocations={[{ at: 1_000, name: "deploy", via: "command" }]}
+        skillLibrary={ready(library)}
+      />,
+    ),
+  );
+
+  const rows = [
+    ...container!.querySelectorAll('[aria-label="Session skills"] li'),
+  ];
+  // The marker adds to the state; it does not replace it.
+  expect(rows.map((row) => row.getAttribute("aria-label"))).toEqual([
+    "deploy: Loaded",
+    "sealed: Available",
+  ]);
+  expect(rows[0]?.textContent).toContain("User-invoked");
+  expect(rows[0]?.getAttribute("title")).toMatch(
+    /^Body loaded into the model context — via slash command at .*\. The agent does not load it by itself; \/deploy does$/,
+  );
+  expect(rows[1]?.textContent).toContain("Not loadable");
+  expect(rows[1]?.getAttribute("title")).toBe(
+    "Mounted: only the name and description are in context. Neither the agent nor /sealed can load it",
+  );
+});
+
 it("does not present an incomplete skill scan as an empty or complete list", async () => {
   await act(async () =>
     root!.render(

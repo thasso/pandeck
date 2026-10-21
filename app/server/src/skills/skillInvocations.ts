@@ -17,6 +17,13 @@
  * not yet. Both harnesses feed their committed transcript through
  * `skillInvocationTrail` at projection time, the way the Tools inspector
  * derives `used`.
+ *
+ * The user's `/<skill>` composer invocation is the third way, `command`. Each
+ * harness confirms it from its own durable transcript — pi's expanded skill
+ * block at the runtime path, a Claude skill turn whose assistant entry carries
+ * `nativeResponse` — and hands over only confirmed ones. A confirmed command
+ * already loaded that skill for its turn, so a same-turn Skill call or read of
+ * it is not counted again.
  */
 import { isAbsolute, normalize, resolve, sep } from "node:path";
 import type { SessionSkillInvocation } from "@assistant/shared";
@@ -32,12 +39,23 @@ export interface SkillInvocationToolCall {
   toolName: string;
   input: unknown;
   at: number;
+  /** The user turn the call ran in, when the feed knows it. */
+  turn?: string;
+}
+
+/** A user `/<skill>` invocation its harness confirmed loaded the skill. */
+export interface SkillInvocationCommand {
+  /** Declared library skill name, as the user typed it. */
+  name: string;
+  at: number;
+  turn: string;
 }
 
 /** A transcript's tool calls plus the ids whose result arrived without error. */
 export interface SkillInvocationTranscript {
   calls: readonly SkillInvocationToolCall[];
   succeeded: ReadonlySet<string>;
+  commands?: readonly SkillInvocationCommand[];
 }
 
 const TRAIL_LIMIT = 50;
@@ -58,12 +76,56 @@ export function skillInvocationTrail(
   const plugin = skillRuntimePluginName(hash);
   const skillsRoot = resolve(runtimeDir, hash, "skills") + sep;
   const trail: SessionSkillInvocation[] = [];
+  const commanded = new Set<string>();
+  for (const command of transcript.commands ?? []) {
+    if (!frozen.has(command.name)) continue;
+    const key = `${command.turn}\0${command.name}`;
+    if (commanded.has(key)) continue;
+    commanded.add(key);
+    trail.push({ at: command.at, name: command.name, via: "command" });
+  }
   for (const call of transcript.calls) {
     if (!transcript.succeeded.has(call.toolCallId)) continue;
     const invocation = classify(call, frozen, plugin, skillsRoot);
-    if (invocation) trail.push(invocation);
+    if (!invocation) continue;
+    if (
+      call.turn !== undefined &&
+      commanded.has(`${call.turn}\0${invocation.name}`)
+    )
+      continue;
+    trail.push(invocation);
   }
+  // Stable: a command precedes the calls of its own turn at the same instant.
+  if (commanded.size > 0) trail.sort((a, b) => a.at - b.at);
   return trail.slice(-TRAIL_LIMIT);
+}
+
+/**
+ * Whether a pi user message is the skill block pi expands a `/skill:<name>`
+ * command into, for a frozen skill at THIS session's runtime path. pi writes
+ * the block only after reading the file, so the block is the confirmation; a
+ * block naming any other location is a repository skill. `runtimeDir` as in
+ * {@link skillInvocationTrail}.
+ */
+export function piSkillCommandName(
+  frozenNames: readonly string[],
+  text: string,
+  runtimeDir: string = SKILLS_RUNTIME_DIR,
+): string | undefined {
+  const match = /^<skill name="([^"]+)" location="([^"]+)">/.exec(text);
+  if (!match) return undefined;
+  const [, name, location] = match;
+  if (!name || !location || !frozenNames.includes(name)) return undefined;
+  const expected = resolve(
+    runtimeDir,
+    skillSetHash(frozenNames),
+    "skills",
+    name,
+    SKILL_FILE_NAME,
+  );
+  return isAbsolute(location) && normalize(location) === expected
+    ? name
+    : undefined;
 }
 
 function classify(

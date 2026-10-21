@@ -420,8 +420,12 @@ test("a typed message captures its resume authority before anything is awaited",
     join(dirname(fileURLToPath(import.meta.url)), "connection.ts"),
     "utf8",
   );
-  assert.match(
-    source,
-    /const resumeHold = this\.viewing\s*\?\s*captureHumanResume\(this\.viewing\.sessionId\)\s*:\s*undefined;\s*const driver = await this\.ensureViewingDriver\(\);/,
-  );
+  // The capture is the case's first statement; synchronous checks may follow
+  // it, but nothing is awaited before the driver is acquired.
+  const prompt =
+    /case "prompt": \{(?:\s*\/\/[^\n]*)*\s*const resumeHold = this\.viewing\s*\?\s*captureHumanResume\(this\.viewing\.sessionId\)\s*:\s*undefined;([\s\S]*?)const driver = await this\.ensureViewingDriver\(\);/.exec(
+      source,
+    );
+  assert.ok(prompt, "the prompt case opens by capturing resume authority");
+  assert.doesNotMatch(prompt[1]!, /\bawait\b/);
 });

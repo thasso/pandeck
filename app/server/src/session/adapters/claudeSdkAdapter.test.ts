@@ -366,3 +366,51 @@ test("abort preserves partial assistant output", async () => {
 });
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+test("skill dispatch and the skill turn's options reach the driver", async () => {
+  const { createClaudeSdkAdapter } = await import("./claudeSdk.ts");
+  const { NativeAdapterEventSource } = await import("./nativeEvents.ts");
+  const events = new NativeAdapterEventSource();
+  const prompts: Array<{ text: string; options: unknown }> = [];
+  const driver = {
+    subscribeAdapterEvents: (
+      listener: Parameters<typeof events.subscribe>[0],
+    ) => events.subscribe(listener),
+    prompt: async (text: string, options?: unknown) => {
+      prompts.push({ text, options });
+    },
+    steer: async () => "refused" as const,
+    abort: () => {},
+    setModel: () => {},
+    setThinkingLevel: () => {},
+  };
+  const plain = createClaudeSdkAdapter("c-skill-none", driver);
+  assert.deepEqual(plain.skillDispatch?.("alpha"), {
+    refused: "/alpha cannot be invoked in this session.",
+  });
+
+  const adapter = createClaudeSdkAdapter("c-skill", {
+    ...driver,
+    skillCommand: (name: string) => `/pa-skills-0123456789abcdef:${name}`,
+  });
+  assert.deepEqual(adapter.skillDispatch?.("alpha"), {
+    command: "/pa-skills-0123456789abcdef:alpha",
+  });
+  await adapter.prompt("/pa-skills-0123456789abcdef:alpha the parser", {
+    skillCommand: "alpha",
+    turnContext: "<memory>m</memory>",
+    titleText: "/alpha the parser",
+  });
+  await adapter.prompt("plain");
+  assert.deepEqual(prompts, [
+    {
+      text: "/pa-skills-0123456789abcdef:alpha the parser",
+      options: {
+        skillCommand: "alpha",
+        turnContext: "<memory>m</memory>",
+        titleText: "/alpha the parser",
+      },
+    },
+    { text: "plain", options: {} },
+  ]);
+});

@@ -17,7 +17,12 @@ import {
   it,
   vi,
 } from "vitest";
-import type { PromptAttachment, SlashCommandInfo } from "@assistant/shared";
+import type {
+  EntrySummary,
+  ModelOption,
+  PromptAttachment,
+  SlashCommandInfo,
+} from "@assistant/shared";
 import type { AssistantActions, ForkDraft } from "../hooks/useAssistant.ts";
 import type {
   NewPendingChatComment,
@@ -26,7 +31,12 @@ import type {
 import { composerDraftStorageKey } from "../lib/newSessionRuntime.ts";
 import { stubMatchMedia } from "../test/matchMedia.ts";
 import { mount } from "../test/mount.tsx";
-import { Composer, ModeSelector, resolveSlashSubmit } from "./Composer.tsx";
+import {
+  Composer,
+  ModeSelector,
+  composerSkills,
+  resolveSlashSubmit,
+} from "./Composer.tsx";
 
 stubMatchMedia();
 vi.stubGlobal(
@@ -157,6 +167,319 @@ describe("resolveSlashSubmit", () => {
       rawArgs: "stress the API",
       runsWhileStreaming: true,
     });
+  });
+});
+
+describe("skill invocations", () => {
+  const commands: SlashCommandInfo[] = [
+    {
+      name: "commit",
+      description: "Commit",
+      usage: "/commit",
+      agentTypes: ["developer"],
+    },
+  ];
+  const skills = composerSkills(
+    ["alpha", "commit", "quiet", "manual"],
+    [
+      {
+        name: "alpha",
+        description: "Alpha",
+        path: "alpha/SKILL.md",
+        argumentHint: "[topic]",
+      },
+      {
+        name: "quiet",
+        description: "Quiet",
+        path: "quiet/SKILL.md",
+        userInvocable: false,
+      },
+      {
+        name: "manual",
+        description: "Manual",
+        path: "manual/SKILL.md",
+        disableModelInvocation: true,
+      },
+    ],
+    commands,
+  );
+  const idle = {
+    agentType: "developer",
+    harness: "pi",
+    streaming: false,
+    attachmentCount: 0,
+    commentCount: 0,
+    skills,
+  } as const;
+
+  it("joins the frozen set with the scan, the registry winning a shared name", () => {
+    expect(skills).toEqual([
+      {
+        name: "alpha",
+        description: "Alpha",
+        argumentHint: "[topic]",
+        userInvocable: true,
+      },
+      { name: "manual", description: "Manual", userInvocable: true },
+      { name: "quiet", description: "Quiet", userInvocable: false },
+    ]);
+    // A session with no frozen skills offers none.
+    expect(composerSkills(undefined, [], commands)).toEqual([]);
+  });
+
+  it("resolves a frozen skill after the registry, before an ordinary send", () => {
+    expect(resolveSlashSubmit("/alpha  the parser ", commands, idle)).toEqual({
+      kind: "skill",
+      name: "alpha",
+    });
+    expect(resolveSlashSubmit("/commit", commands, idle).kind).toBe("host");
+    // Unknown names and the `//` escape stay text.
+    expect(resolveSlashSubmit("/beta x", commands, idle)).toEqual({
+      kind: "send",
+    });
+    expect(resolveSlashSubmit("//alpha", commands, idle)).toEqual({
+      kind: "send",
+    });
+  });
+
+  it("refuses a busy, attached or agent-only invocation", () => {
+    const busy = "/alpha starts a new turn; send it when this one finishes.";
+    // Queued (streaming cleared) or steered: running is what refuses it.
+    expect(
+      resolveSlashSubmit("/alpha", commands, { ...idle, running: true }),
+    ).toEqual({ kind: "error", message: busy });
+    expect(
+      resolveSlashSubmit("/alpha", commands, { ...idle, attachmentCount: 1 }),
+    ).toEqual({
+      kind: "error",
+      message: "Skill commands do not support attachments.",
+    });
+    expect(
+      resolveSlashSubmit("/alpha", commands, { ...idle, commentCount: 1 }),
+    ).toEqual({
+      kind: "error",
+      message: "Skill commands do not support attached comments.",
+    });
+    expect(resolveSlashSubmit("/quiet", commands, idle)).toEqual({
+      kind: "error",
+      message: "/quiet can only be loaded by the agent.",
+    });
+  });
+
+  let root: Root | null = null;
+  let container: HTMLDivElement | null = null;
+
+  afterEach(() => {
+    act(() => root?.unmount());
+    root = null;
+    container = null;
+    window.localStorage.clear();
+  });
+
+  const noop = () => {};
+  const noModels: ModelOption[] = [];
+  const summaries: EntrySummary[] = [
+    {
+      name: "alpha",
+      description: "Explain a topic",
+      path: "alpha/SKILL.md",
+      argumentHint: "[topic]",
+    },
+    {
+      name: "quiet",
+      description: "Quiet",
+      path: "quiet/SKILL.md",
+      userInvocable: false,
+    },
+  ];
+
+  /**
+   * Mounts the composer; `rerender` hands it a fresh session frame (a new
+   * `activeSkills` array) while the host's stable props stay the same
+   * references, as `App` keeps them.
+   */
+  function renderComposer(
+    streaming: boolean,
+    {
+      activeSkills = ["alpha", "quiet"],
+      slashCommands = commands,
+    }: { activeSkills?: string[]; slashCommands?: SlashCommandInfo[] } = {},
+  ) {
+    const onSend = vi.fn();
+    const onQueue = vi.fn();
+    const promptSkill = vi.fn();
+    const actions = { promptSkill } as unknown as AssistantActions;
+    ({ container, root } = mount());
+    const rerender = (
+      skills: string[] = activeSkills,
+      skillSummaries: EntrySummary[] = summaries,
+    ) =>
+      act(() =>
+        root!.render(
+          <Composer
+            onSend={onSend}
+            onQueue={onQueue}
+            onAbort={noop}
+            streaming={streaming}
+            disabled={false}
+            contextInfo={null}
+            session={
+              {
+                agentType: "developer",
+                harness: "pi",
+                canSteer: true,
+                activeSkills: [...skills],
+              } as never
+            }
+            models={noModels}
+            slashCommands={slashCommands}
+            skillSummaries={skillSummaries}
+            actions={actions}
+          />,
+        ),
+      );
+    rerender();
+    const textarea = container.querySelector("textarea")!;
+    return { textarea, onSend, onQueue, promptSkill, rerender };
+  }
+
+  function type(textarea: HTMLTextAreaElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    act(() => {
+      setter?.call(textarea, value);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function press(textarea: HTMLTextAreaElement, altKey = false) {
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", altKey, bubbles: true }),
+      );
+    });
+  }
+
+  it("offers invocable skills in the menu with their hint", () => {
+    const { textarea } = renderComposer(false);
+    type(textarea, "/");
+    const menu = container!.textContent ?? "";
+    expect(menu).toContain("/alpha");
+    expect(menu).toContain("Explain a topic");
+    expect(menu).toContain("/alpha [topic]");
+    expect(menu).not.toContain("/quiet");
+  });
+
+  const selectedOption = () =>
+    container!.querySelector('[role="option"][aria-selected="true"]')
+      ?.textContent;
+
+  function key(textarea: HTMLTextAreaElement, key: string) {
+    act(() => {
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true }),
+      );
+    });
+  }
+
+  // Each session frame carries a fresh `activeSkills` array; equal names must
+  // not reset the highlighted row or reopen an Escape-dismissed menu.
+  // With no skills, a second command gives the menu a second row to select.
+  const withCompact: SlashCommandInfo[] = [
+    ...commands,
+    {
+      name: "compact",
+      description: "Compact",
+      usage: "/compact",
+      agentTypes: ["developer"],
+    },
+  ];
+  it.each([
+    {
+      label: "populated",
+      activeSkills: ["alpha", "quiet"],
+      slashCommands: commands,
+      second: "/alpha",
+    },
+    {
+      label: "empty",
+      activeSkills: [],
+      slashCommands: withCompact,
+      second: "/compact",
+    },
+  ])(
+    "keeps slash-menu state across equal $label frozen sets",
+    ({ activeSkills, slashCommands, second }) => {
+      const { textarea, rerender } = renderComposer(false, {
+        activeSkills,
+        slashCommands,
+      });
+      type(textarea, "/");
+      key(textarea, "ArrowDown");
+      expect(selectedOption()).toContain(second);
+
+      rerender();
+      expect(selectedOption()).toContain(second);
+
+      key(textarea, "Escape");
+      expect(container!.querySelector('[role="option"]')).toBeNull();
+      rerender();
+      expect(container!.querySelector('[role="option"]')).toBeNull();
+    },
+  );
+
+  it("refreshes the menu when the frozen set or its summaries change", () => {
+    const { textarea, rerender } = renderComposer(false);
+    type(textarea, "/");
+    key(textarea, "ArrowDown");
+    expect(selectedOption()).toContain("/alpha");
+
+    const withBeta: EntrySummary[] = [
+      ...summaries,
+      { name: "beta", description: "Second opinion", path: "beta/SKILL.md" },
+    ];
+    rerender(["alpha", "beta", "quiet"], withBeta);
+    expect(container!.textContent).toContain("/beta");
+    expect(container!.textContent).toContain("Second opinion");
+    expect(selectedOption()).toContain("/commit");
+
+    key(textarea, "Escape");
+    rerender(
+      ["alpha", "beta", "quiet"],
+      withBeta.map((entry) =>
+        entry.name === "beta" ? { ...entry, description: "Rethink it" } : entry,
+      ),
+    );
+    expect(container!.textContent).toContain("Rethink it");
+    expect(container!.textContent).not.toContain("Second opinion");
+  });
+
+  it("sends an idle invocation as the typed line with its skill", () => {
+    const { textarea, onSend, onQueue, promptSkill } = renderComposer(false);
+    type(textarea, "/alpha the parser");
+    press(textarea);
+    expect(promptSkill).toHaveBeenCalledWith("/alpha the parser", "alpha");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onQueue).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+  });
+
+  it("refuses to queue or steer an invocation while a turn runs", () => {
+    const { textarea, onSend, onQueue, promptSkill } = renderComposer(true);
+    type(textarea, "/alpha the parser");
+    // Enter queues in this busy mode; Alt+Enter queues to steer.
+    press(textarea);
+    press(textarea, true);
+    expect(onQueue).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(promptSkill).not.toHaveBeenCalled();
+    expect(container!.textContent).toContain(
+      "/alpha starts a new turn; send it when this one finishes.",
+    );
+    // The line stays to be sent later.
+    expect(textarea.value).toBe("/alpha the parser");
   });
 });
 

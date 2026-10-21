@@ -44,6 +44,12 @@ export type ClaudeQuery = AsyncIterable<ClaudeSdkMessage> & {
    */
   cancelAsyncMessage?: (messageUuid: string) => Promise<boolean>;
   setModel?: (model?: string) => Promise<void>;
+  /**
+   * The slash commands (plugin skills included) the CLI has registered. It
+   * waits for query initialization, not for an input, so an empty input queue
+   * can ask it. Optional; a fake without it registers nothing.
+   */
+  supportedCommands?: () => Promise<Array<{ name: string }>>;
   setMaxThinkingTokens?: (tokens: number | null) => Promise<void>;
   applyFlagSettings?: (settings: Record<string, unknown>) => Promise<void>;
   /**

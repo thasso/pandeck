@@ -39,6 +39,12 @@ export interface TopicSurface {
   initiativeTaskSelected?: boolean;
   /** The session inspector is rendering its skills list. */
   sessionInspectorVisible?: boolean;
+  /**
+   * The session route shows a coding session with a non-empty frozen skill
+   * set, whose composer offers those skills as `/<name>` with the library's
+   * descriptions and argument hints.
+   */
+  composerSkillsVisible?: boolean;
   /** The session inspector is on screen for a persisted session. */
   backgroundInspectorVisible?: boolean;
   /**
@@ -84,6 +90,7 @@ export interface TopicSurface {
  * visible quick start, while either it or `/sessions` adds Tasks only while the
  * staged-context Task picker is expanded. Session inspector surfaces also
  * subscribe to the skills library while they render its loaded/unloaded list,
+ * as does a session route whose composer offers frozen skills as `/<name>`,
  * and to Worktrees while they list the worktrees the session's spawn tree owns.
  * Initiatives are held by the Projects browser, whose top group lists them, and
  * by their own pages, which add Tasks and Projects for the live map.
@@ -98,6 +105,7 @@ export function topicsForSurface({
   projectSelected = false,
   initiativeTaskSelected = false,
   sessionInspectorVisible = false,
+  composerSkillsVisible = false,
   backgroundInspectorVisible = false,
   sessionTreeWorktreesVisible = false,
   taskWorktreesVisible = false,
@@ -166,10 +174,12 @@ export function topicsForSurface({
     topics.add("tasks");
   // The settings BROWSER lists sections without reading any of them, so the
   // rendered section is the only thing that counts here. The session inspector
-  // also reads the library to distinguish loaded from unloaded skills.
+  // also reads the library to distinguish loaded from unloaded skills, and a
+  // coding session's composer to describe its `/<skill>` menu rows.
   if (
     (routeName === "settings" && settingsSection === "skills") ||
-    sessionInspectorVisible
+    sessionInspectorVisible ||
+    composerSkillsVisible
   )
     topics.add("skills");
   // The Agents section and new-session page offer definitions. Each subscribe

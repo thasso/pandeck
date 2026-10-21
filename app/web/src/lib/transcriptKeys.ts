@@ -1,3 +1,4 @@
+import type { EntrySummary } from "@assistant/shared";
 import type { PaObjectLinkResolution } from "@assistant/shared/objectLinks";
 
 /**
@@ -47,6 +48,26 @@ export function sessionReferenceKey(
   return JSON.stringify(
     sessions
       .map((session) => [session.id, session.title ?? null])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  );
+}
+
+/**
+ * The same contract for the composer's skill summaries: what a `/<skill>` menu
+ * row and its refusal read. Order-insensitive, because the composer looks
+ * them up by name; `path` and the frontmatter fields it does not show stay
+ * out, so a rescan that changed nothing it reads keeps the prop.
+ */
+export function skillSummariesKey(entries: readonly EntrySummary[]): string {
+  return JSON.stringify(
+    entries
+      .map((entry) => [
+        entry.name,
+        entry.description,
+        entry.argumentHint ?? null,
+        entry.disableModelInvocation ?? null,
+        entry.userInvocable ?? null,
+      ])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
   );
 }

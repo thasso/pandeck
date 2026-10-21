@@ -36,10 +36,13 @@ import {
   UNLABELED_SESSION_TITLE,
 } from "@assistant/shared";
 import {
+  piSkillCommandName,
   skillInvocationTrail,
+  type SkillInvocationCommand,
   type SkillInvocationToolCall,
   type SkillInvocationTranscript,
 } from "../skills/skillInvocations.ts";
+import { piSkillDispatch } from "./skillDispatch.ts";
 import type { AgentUsage } from "@assistant/shared/session";
 import { CWD } from "../config.ts";
 import { resetMemorySessionContext } from "../memory/memoryRuntime.ts";
@@ -1180,6 +1183,12 @@ export class PiLiveSession implements LiveSession {
           options,
         ),
       abort: () => this.abort(),
+      skillDispatch: (name) =>
+        piSkillDispatch(
+          this.session.resourceLoader,
+          activeSkillsForSession(this.session.sessionId, this.kind) ?? [],
+          name,
+        ),
       setModel: (model) =>
         this.setModel(model as Parameters<AgentSession["setModel"]>[0]),
       setThinkingLevel: (level) =>
@@ -1259,6 +1268,7 @@ export class PiLiveSession implements LiveSession {
       clientRequestId?: string;
       steerOnly?: boolean;
       continuation?: boolean;
+      titleText?: string;
     } = {},
   ): PiPromptResponse {
     if (options.continuation) return this.continueFailedTurn(text);
@@ -1284,6 +1294,9 @@ export class PiLiveSession implements LiveSession {
     }
 
     const promptText = trimmedInput || "Please analyze the attached file(s).";
+    // A skill command is named and shown as typed, never as the native
+    // `/skill:` token and context pi is sent.
+    const titleText = options.titleText ?? promptText;
     const { promptWithFiles, images } = buildModelPromptWithAttachments(
       this.session.sessionId,
       promptText,
@@ -1315,7 +1328,7 @@ export class PiLiveSession implements LiveSession {
     if (shouldAutoName) {
       this.title ??= namingSettings?.enabled
         ? UNLABELED_SESSION_TITLE
-        : fallbackSessionTitle(promptText, attachments);
+        : fallbackSessionTitle(titleText, attachments);
       this.titleGenerationPending = Boolean(namingSettings?.enabled);
     }
     const now = Date.now();
@@ -1324,7 +1337,7 @@ export class PiLiveSession implements LiveSession {
       this.updatedAt > 0 ? now - this.updatedAt : 0,
     );
     this.updatedAt = now;
-    const blocks: DisplayBlock[] = [{ kind: "text", text: promptText }];
+    const blocks: DisplayBlock[] = [{ kind: "text", text: titleText }];
     blocks.push(
       ...attachments.map((a): DisplayBlock => ({
         kind: "attachment",
@@ -1381,14 +1394,10 @@ export class PiLiveSession implements LiveSession {
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
     void this.host.broadcastSessions();
     if (shouldAutoName && namingSettings?.enabled)
-      void this.autoNameFromFirstPrompt(
-        promptText,
-        attachments,
-        namingSettings,
-      );
+      void this.autoNameFromFirstPrompt(titleText, attachments, namingSettings);
     if (shouldAutoNameFork)
       void this.autoNameForkFromFirstPrompt(
-        promptText,
+        titleText,
         forkNamingContext,
         forkOriginalName,
         attachments,
@@ -1752,16 +1761,23 @@ export class PiLiveSession implements LiveSession {
 
   /**
    * Library-skill loads in the persisted branch: pi's prompt asks the model to
-   * `read` a skill's SKILL.md, so that read is the invocation. The branch, not
-   * `state.messages`, is walked — a context clear empties the latter.
+   * `read` a skill's SKILL.md, so that read is the invocation, and a user
+   * `/skill:` command leaves its expanded skill block as the user message. The
+   * branch, not `state.messages`, is walked — a context clear empties the
+   * latter.
    */
   private skillInvocations(frozenNames: string[]): SessionSkillInvocation[] {
-    return skillInvocationTrail(frozenNames, this.branchToolCalls());
+    return skillInvocationTrail(frozenNames, this.branchToolCalls(frozenNames));
   }
 
-  private branchToolCalls(): SkillInvocationTranscript {
+  private branchToolCalls(
+    frozenNames: readonly string[],
+  ): SkillInvocationTranscript {
     const calls: SkillInvocationToolCall[] = [];
+    const commands: SkillInvocationCommand[] = [];
     const succeeded = new Set<string>();
+    // Each user message opens the turn the calls after it belong to.
+    let turn = 0;
     for (const entry of this.session.sessionManager.getBranch()) {
       const record = entry as { type?: unknown; message?: unknown };
       if (record.type !== "message") continue;
@@ -1779,9 +1795,18 @@ export class PiLiveSession implements LiveSession {
           succeeded.add(message.toolCallId);
         continue;
       }
+      const at = typeof message?.timestamp === "number" ? message.timestamp : 0;
+      if (message?.role === "user") {
+        turn += 1;
+        const name = piSkillCommandName(
+          frozenNames,
+          extractTextContent(message.content),
+        );
+        if (name) commands.push({ name, at, turn: String(turn) });
+        continue;
+      }
       if (message?.role !== "assistant" || !Array.isArray(message.content))
         continue;
-      const at = typeof message.timestamp === "number" ? message.timestamp : 0;
       for (const block of message.content) {
         const call = block as {
           type?: unknown;
@@ -1799,10 +1824,11 @@ export class PiLiveSession implements LiveSession {
             toolName: call.name,
             input: call.arguments,
             at,
+            turn: String(turn),
           });
       }
     }
-    return { calls, succeeded };
+    return { calls, succeeded, commands };
   }
 
   state(): SessionState {

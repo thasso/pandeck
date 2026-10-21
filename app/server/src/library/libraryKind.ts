@@ -9,6 +9,7 @@
  * Adding a kind should need a descriptor, a manifest rule and a create renderer
  * and nothing else.
  */
+import type { EntrySummary } from "@assistant/shared";
 import type { LibraryStore } from "./libraryStore.ts";
 import type { EntryManifest, ManifestResult } from "./entryManifest.ts";
 
@@ -39,6 +40,13 @@ export interface LibraryKind<M extends EntryManifest = EntryManifest> {
    * file that is too large. Absent: only the core's own bounds.
    */
   maxManifestBytes?: number;
+  /**
+   * The kind's own optional summary fields, read from a valid manifest and
+   * added to its scan entry. Absent: the summary is the shared fields alone.
+   */
+  summaryExtras?(
+    manifest: M,
+  ): Omit<Partial<EntrySummary>, "name" | "description" | "path">;
   /**
    * Push a fresh read to the kind's browser topic after a committed mutation.
    * Runs while the repository lock is still held, and its failure never
