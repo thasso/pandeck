@@ -33,6 +33,7 @@ import type {
   SessionSkillInvocation,
   SessionToolExposure,
   EntryLibraryList,
+  EntrySummary,
   Harness,
   SessionCompactionWindow,
 } from "@assistant/shared";
@@ -386,6 +387,10 @@ export function ActiveSkillsSection({
   const initialLibraryLoad =
     skillLibrary?.status === "loading" && library === undefined;
   const mounted = useMemo(() => new Set(activeSkills), [activeSkills]);
+  const entries = useMemo(
+    () => new Map(library?.entries.map((entry) => [entry.name, entry])),
+    [library],
+  );
   const loads = useMemo(() => {
     const byName = new Map<
       string,
@@ -464,11 +469,12 @@ export function ActiveSkillsSection({
             const title = load
               ? `${SKILL_STATE_TITLE[state]} — ${load.count > 1 ? `${load.count} times, last ` : ""}via ${SKILL_LOAD_VIA[load.last.via]} at ${new Date(load.last.at).toLocaleTimeString()}`
               : SKILL_STATE_TITLE[state];
+            const invocation = skillInvocationNote(name, entries.get(name));
             return (
               <li
                 key={name}
                 aria-label={`${name}: ${state}`}
-                title={title}
+                title={invocation ? `${title}. ${invocation.title}` : title}
                 className="flex min-h-7 min-w-0 items-center gap-2 px-1 text-sm"
               >
                 {/* An 8px dot in the 14px glyph column: filled once loaded,
@@ -487,6 +493,11 @@ export function ActiveSkillsSection({
                 >
                   {name}
                 </span>
+                {invocation ? (
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {invocation.label}
+                  </span>
+                ) : null}
                 {load ? (
                   <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                     {load.count > 1 ? `×${load.count} · ` : ""}
@@ -526,7 +537,29 @@ const SKILL_STATE_DOT: Record<SkillState, string> = {
 const SKILL_LOAD_VIA: Record<SessionSkillInvocation["via"], string> = {
   skill_tool: "Skill tool",
   read: "read",
+  command: "slash command",
 };
+
+/**
+ * Who may load a skill, when its frontmatter narrows it (`docs/skills.md`):
+ * `disable-model-invocation` leaves only the user's `/name`, and adding
+ * `user-invocable: false` leaves no one.
+ */
+function skillInvocationNote(
+  name: string,
+  entry: EntrySummary | undefined,
+): { label: string; title: string } | undefined {
+  if (!entry?.disableModelInvocation) return undefined;
+  if (entry.userInvocable === false)
+    return {
+      label: "Not loadable",
+      title: `Neither the agent nor /${name} can load it`,
+    };
+  return {
+    label: "User-invoked",
+    title: `The agent does not load it by itself; /${name} does`,
+  };
+}
 
 /**
  * Deferred-tool visibility: which catalog tool groups exist for this session,

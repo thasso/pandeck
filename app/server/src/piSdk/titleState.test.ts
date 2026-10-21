@@ -1,11 +1,28 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import { describe, it } from "vitest";
+import type { ServerMessage } from "@assistant/shared";
+import { afterAll, describe, it } from "vitest";
 import {
   piSessionHasUserPrompt,
   restorePiLiveTitle,
   shouldAutoNamePiSession,
 } from "./titleState.ts";
+
+const tmp = mkdtempSync(join(tmpdir(), "pi-title-state-test-"));
+process.env.ASSISTANT_CWD = tmp;
+
+const { PiLiveSession } = await import("./PiLiveSession.ts");
+const { closeDb } = await import("../db/index.ts");
+const { getSettings, updateSettings } = await import("../settings.ts");
+const { fallbackSessionTitle } = await import("../sessionNaming.ts");
+
+afterAll(() => {
+  closeDb();
+  rmSync(tmp, { recursive: true, force: true });
+});
 
 describe("pi session title state", () => {
   it("hydrates live titles from native session names before metadata", () => {
@@ -74,6 +91,58 @@ describe("pi session title state", () => {
       false,
     );
     assert.equal(piSessionHasUserPrompt(managerWithBranch(userBranch())), true);
+  });
+});
+
+describe("pi skill command naming", () => {
+  it("names and shows a skill turn as typed, never as the native command", async () => {
+    // No naming model runs here: the fallback title is the whole check.
+    updateSettings({
+      sessionNaming: { ...getSettings().sessionNaming, enabled: false },
+    });
+    const sent: string[] = [];
+    const seen: ServerMessage[] = [];
+    const live = new PiLiveSession(
+      "coding" as never,
+      {
+        sessionId: "pi-skill-title",
+        sessionName: undefined,
+        isStreaming: false,
+        sessionManager: { getBranch: () => [] },
+        subscribe: () => () => {},
+        getSessionStats: () => ({
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          cost: 0,
+          contextSize: 0,
+        }),
+        prompt: (text: string) => {
+          sent.push(text);
+          return Promise.resolve();
+        },
+      } as never,
+      {
+        broadcastSessions: () => Promise.resolve(),
+        noteRunStarted: () => {},
+        checkPendingReload: () => {},
+        isReloadQueued: () => false,
+        browserRuntimesFor: () => [],
+      } as never,
+      () => {},
+    );
+    live.addViewer({ send: (m: ServerMessage) => seen.push(m) });
+    void live.createRuntimeAdapter().prompt("/skill:alpha the parser", {
+      turnContext: "<memory>m</memory>",
+      titleText: "/alpha the parser",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(sent, ["/skill:alpha the parser\n\n<memory>m</memory>"]);
+    assert.equal(live.title, fallbackSessionTitle("/alpha the parser", []));
+    const shown = JSON.stringify(
+      seen.filter((m) => (m as { type: string }).type === "userMessage"),
+    );
+    assert.ok(shown.includes("/alpha the parser"));
+    assert.ok(!shown.includes("/skill:") && !shown.includes("<memory>"));
   });
 });
 

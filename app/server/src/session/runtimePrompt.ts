@@ -34,7 +34,7 @@ import {
 import { memoryScheduler } from "../memory/memoryScheduler.ts";
 import { beginPromptRun } from "./sessionRunLease.ts";
 import { planTurnHintFor } from "./planHint.ts";
-import { sessionSkills } from "../sessionSkills.ts";
+import { sessionSkills, skillUserInvocable } from "../sessionSkills.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { credentialProfileById } from "../credentialProfiles.ts";
 import {
@@ -327,7 +327,12 @@ export async function promptRuntimeSessionWithRuntime(
     // eagerly where they know a session is new; this covers reopen/resume and
     // the first post-upgrade start of a legacy coding session. It happens before
     // the runtime session exists or any user entry can be appended.
-    await sessionSkills(driver.sessionId, driver.agentType);
+    const frozenSkills = await sessionSkills(
+      driver.sessionId,
+      driver.agentType,
+    );
+    if (options.skillInvocation)
+      await assertSkillInvocation(options, frozenSkills);
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
     // Nothing below awaits before the append. The enterprise check runs before
@@ -348,6 +353,30 @@ export async function promptRuntimeSessionWithRuntime(
     releaseAdmission();
     releaseRun();
   }
+}
+
+/**
+ * A `/<skill>` invocation starts a turn of its own with one of the session's
+ * frozen skills, and nothing else: refused before anything is appended. The
+ * adapter's synchronous dispatch check follows inside the runtime.
+ */
+async function assertSkillInvocation(
+  options: RuntimePromptFacadeOptions,
+  frozenSkills: readonly string[],
+): Promise<void> {
+  const name = options.skillInvocation!.name;
+  if (!frozenSkills.includes(name))
+    throw new Error(`/${name} is not one of this session's skills.`);
+  if (options.steer || options.steerOnly)
+    throw new Error(
+      `/${name} starts a new turn; send it when the current one finishes.`,
+    );
+  if (options.hidden || options.continuation)
+    throw new Error(`/${name} can only be sent as a visible prompt.`);
+  if (options.attachments?.length)
+    throw new Error("Skill commands do not support attachments.");
+  if (!(await skillUserInvocable(name)))
+    throw new Error(`/${name} can only be loaded by the agent.`);
 }
 
 /**

@@ -13,8 +13,13 @@
  * Every subscriber receives the same publish, so a second window that opens the
  * library also refreshes the first one instead of the two drifting apart.
  */
+import type { EntrySummary } from "@assistant/shared";
 import { SKILLS_LIBRARY_DIR } from "../config.ts";
-import { parseEntryManifest } from "../library/entryManifest.ts";
+import {
+  parseManifestWith,
+  type EntryManifest,
+  type ManifestResult,
+} from "../library/entryManifest.ts";
 import type { LibraryKind } from "../library/libraryKind.ts";
 import { publishLibrary } from "../library/libraryPublish.ts";
 import { scanLibrary, type LibraryScan } from "../library/libraryScanner.ts";
@@ -23,13 +28,57 @@ import { LibraryStore } from "../library/libraryStore.ts";
 /** The one file a skill folder is recognized by. */
 const SKILL_FILE_NAME = "SKILL.md";
 
-/** A skill's manifest is exactly the shared `name` + `description` rule. */
-export const skillKind: LibraryKind = {
+/** The optional invocation fields a skill summary carries. */
+type SkillInvocationFields = Pick<
+  EntrySummary,
+  "argumentHint" | "disableModelInvocation" | "userInvocable"
+>;
+
+type SkillManifest = EntryManifest & SkillInvocationFields;
+
+/**
+ * A skill's manifest is the shared `name` + `description` rule; every other
+ * key is the harness's and ignored. The invocation fields the composer and the
+ * inspector show are read here when well-typed and otherwise left out — the
+ * harness parses them itself, so a wrong type is never a diagnostic.
+ */
+function parseSkillManifest(
+  content: string,
+  path: string,
+): ManifestResult<SkillManifest> {
+  return parseManifestWith<SkillInvocationFields>(content, path, (fields) => {
+    const hint = fields["argument-hint"];
+    const argumentHint =
+      typeof hint === "string"
+        ? hint
+        : Array.isArray(hint) &&
+            hint.length > 0 &&
+            hint.every((item) => typeof item === "string")
+          ? hint.map((item) => `[${item}]`).join(" ")
+          : undefined;
+    return {
+      ...(argumentHint?.trim() ? { argumentHint: argumentHint.trim() } : {}),
+      ...(fields["disable-model-invocation"] === true
+        ? { disableModelInvocation: true as const }
+        : {}),
+      ...(fields["user-invocable"] === false
+        ? { userInvocable: false as const }
+        : {}),
+    };
+  });
+}
+
+export const skillKind: LibraryKind<SkillManifest> = {
   noun: "skill",
   plural: "skills",
   manifestFile: SKILL_FILE_NAME,
   trailerPrefix: "Skill",
-  parseManifest: parseEntryManifest,
+  parseManifest: parseSkillManifest,
+  summaryExtras: ({ argumentHint, disableModelInvocation, userInvocable }) => ({
+    ...(argumentHint !== undefined ? { argumentHint } : {}),
+    ...(disableModelInvocation ? { disableModelInvocation } : {}),
+    ...(userInvocable === false ? { userInvocable } : {}),
+  }),
   publish: (library) => publishSkillLibrary(library),
 };
 

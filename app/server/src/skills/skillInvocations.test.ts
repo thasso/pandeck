@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "vitest";
 import {
+  piSkillCommandName,
   skillInvocationTrail,
   type SkillInvocationToolCall,
 } from "./skillInvocations.ts";
@@ -149,4 +150,100 @@ test("an empty freeze has no loads and the trail is bounded newest-last", () => 
   assert.equal(trail.length, 50);
   assert.equal(trail[0]?.at, 10);
   assert.equal(trail.at(-1)?.at, 59);
+});
+
+test("a confirmed command counts once per turn and absorbs its turn's own load", () => {
+  const calls = transcript([
+    // The command's own turn: the agent also called Skill and read the file.
+    {
+      toolName: "Skill",
+      input: { skill: `${plugin}:alpha` },
+      at: 11,
+      turn: "t1",
+    },
+    {
+      toolName: "read",
+      input: { path: skillFile("alpha") },
+      at: 12,
+      turn: "t1",
+    },
+    // Another skill in that turn still counts.
+    {
+      toolName: "Skill",
+      input: { skill: `${plugin}:beta` },
+      at: 13,
+      turn: "t1",
+    },
+    // A later turn loading it again is a new load.
+    {
+      toolName: "Skill",
+      input: { skill: `${plugin}:alpha` },
+      at: 21,
+      turn: "t2",
+    },
+  ]);
+  assert.deepEqual(
+    skillInvocationTrail(
+      frozen,
+      {
+        ...calls,
+        commands: [
+          { name: "alpha", at: 10, turn: "t1" },
+          // A duplicate confirmation of the same turn is the same invocation.
+          { name: "alpha", at: 10, turn: "t1" },
+          // Not frozen: never a load of this session's skill.
+          { name: "gamma", at: 30, turn: "t3" },
+        ],
+      },
+      runtimeDir,
+    ),
+    [
+      { at: 10, name: "alpha", via: "command" },
+      { at: 13, name: "beta", via: "skill_tool" },
+      { at: 21, name: "alpha", via: "skill_tool" },
+    ],
+  );
+});
+
+test("pi's expanded skill block confirms only this session's runtime file", () => {
+  const block = (name: string, location: string) =>
+    `<skill name="${name}" location="${location}">\nReferences are relative to x.\n\nbody\n</skill>\n\nargs`;
+  assert.equal(
+    piSkillCommandName(frozen, block("alpha", skillFile("alpha")), runtimeDir),
+    "alpha",
+  );
+  // A repository skill of the same name, another set's runtime, a name the
+  // session did not freeze, a relative path, or plain text are not.
+  assert.equal(
+    piSkillCommandName(
+      frozen,
+      block("alpha", "/repo/.pi/skills/alpha/SKILL.md"),
+      runtimeDir,
+    ),
+    undefined,
+  );
+  assert.equal(
+    piSkillCommandName(
+      frozen,
+      block("alpha", join(runtimeDir, "other", "skills", "alpha", "SKILL.md")),
+      runtimeDir,
+    ),
+    undefined,
+  );
+  assert.equal(
+    piSkillCommandName(
+      frozen,
+      block("gamma", join(runtimeDir, hash, "skills", "gamma", "SKILL.md")),
+      runtimeDir,
+    ),
+    undefined,
+  );
+  assert.equal(
+    piSkillCommandName(frozen, block("alpha", "alpha/SKILL.md"), runtimeDir),
+    undefined,
+  );
+  assert.equal(
+    piSkillCommandName(frozen, "/skill:alpha go", runtimeDir),
+    undefined,
+  );
 });

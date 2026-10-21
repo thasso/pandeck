@@ -112,9 +112,14 @@ import {
 } from "../agents/sessionAgent.ts";
 import {
   skillInvocationTrail,
+  type SkillInvocationCommand,
   type SkillInvocationToolCall,
   type SkillInvocationTranscript,
 } from "../skills/skillInvocations.ts";
+import {
+  skillRuntimePluginName,
+  skillSetHash,
+} from "../skills/skillRuntimeMaterializer.ts";
 import {
   fallbackSessionTitle,
   generateSessionTitle,
@@ -456,6 +461,13 @@ class CloseableInputQueue implements AsyncIterable<ClaudeSdkUserMessage> {
  */
 type SteerOutcome = PromptDelivery | "refused" | "withdrawn" | "uncertain";
 
+/** A skill turn's command on its way to the CLI, with its model-only context. */
+interface SkillSubmission {
+  /** The frozen skill name, never the native token. */
+  name: string;
+  turnContext?: string;
+}
+
 /** A message handed to the running CLI turn that the CLI has not yet taken. */
 interface PendingSteer {
   text: string;
@@ -688,6 +700,34 @@ export class ClaudeSdkSession implements LiveSession {
   private lifecycleFramesEpochKey: string | undefined;
   /** A Stop's interrupt (or kill) still waiting on the CLI's drop answers. */
   private stopInterrupt: Promise<void> | undefined;
+  /**
+   * The skill submission now between its first statement and the push of its
+   * context + command pair: an identity owned by ONE `sendPromptToProcess`
+   * call, released only by that owner. While set, nothing else may reach the
+   * input queue — a steer or compaction written now would run before the
+   * command — so both refuse.
+   */
+  private skillSubmission: object | undefined;
+  /**
+   * Uuids of `shouldQuery: false` skill-context messages. Transcript-only: their
+   * lifecycle frames and 0-turn results never start, settle or join a turn.
+   */
+  private readonly skillContextUuids = new Set<string>();
+  /** The frozen skill the open turn's command invokes; undefined on ordinary turns. */
+  private skillTurn: string | undefined;
+  /**
+   * A non-synthetic native assistant message answered the open skill turn's
+   * command — the `command` load's confirmation, persisted as the assistant
+   * entry's `nativeResponse`.
+   */
+  private skillTurnNativeResponse = false;
+  /**
+   * Such a message arrived before the command's start was reported: a CLI
+   * without lifecycle frames binds the command only at its result.
+   */
+  private skillTurnUnboundResponse = false;
+  /** The CLI's stderr for a skill command that failed to expand. */
+  private skillExpansionError: string | undefined;
   /** The ordinary epoch a Stop is killing once those answers are in. */
   private stoppingEpochKey: string | undefined;
   private queryEpochKey: string | undefined;
@@ -1235,7 +1275,11 @@ export class ClaudeSdkSession implements LiveSession {
 
   private appendUserEntry(
     text: string,
-    options: { hidden?: boolean; attachments?: PromptAttachment[] } = {},
+    options: {
+      hidden?: boolean;
+      attachments?: PromptAttachment[];
+      skillCommand?: string;
+    } = {},
     id = `csu-${this.turnCounter}`,
   ): ClientTimelineEntry {
     const content: AgentContentBlock[] =
@@ -1256,11 +1300,18 @@ export class ClaudeSdkSession implements LiveSession {
       role: "user",
       origin: { kind: "human" },
       ...(options.hidden ? { hidden: true } : {}),
+      ...(options.skillCommand !== undefined
+        ? { skillCommand: options.skillCommand }
+        : {}),
       content,
     });
   }
 
-  private appendAssistantTurn(turn: DisplayMessage, usage?: AgentUsage): void {
+  private appendAssistantTurn(
+    turn: DisplayMessage,
+    usage?: AgentUsage,
+    nativeResponse = false,
+  ): void {
     const content: AgentContentBlock[] = [];
     const toolResults: Array<{
       toolCallId: string;
@@ -1298,6 +1349,7 @@ export class ClaudeSdkSession implements LiveSession {
         model: this.modelId,
         ...(usage ? { usage } : {}),
         ...(turn.stopReason ? { stopReason: turn.stopReason } : {}),
+        ...(nativeResponse ? { nativeResponse: true as const } : {}),
       });
     }
     for (const result of toolResults) {
@@ -1608,6 +1660,10 @@ export class ClaudeSdkSession implements LiveSession {
         this.subscribeAdapterEvents(listener),
       prompt: (text, options) => this.#promptRaw(text, options),
       steer: (text, options) => this.steer(text, options),
+      // Plugin namespacing keeps a repository skill of the same name out of
+      // reach; whether the CLI registered the command is checked at submission.
+      skillCommand: (name) =>
+        `/${skillRuntimePluginName(skillSetHash(this.frozenSkillNames()))}:${name}`,
       abort: () => this.abort(),
       setModel: (modelId) => this.setModel(modelId),
       setThinkingLevel: (level) => this.setThinkingLevel(level),
@@ -1626,6 +1682,9 @@ export class ClaudeSdkSession implements LiveSession {
       clientRequestId?: string;
       hidden?: boolean;
       attachments?: PromptAttachment[];
+      skillCommand?: string;
+      turnContext?: string;
+      titleText?: string;
     } = {},
   ): Promise<void> {
     this.assertNotDisposed();
@@ -1660,20 +1719,31 @@ export class ClaudeSdkSession implements LiveSession {
     // Claim the stable unnamed state before the acceptance broadcast. The list
     // must never expose a provider default or prompt-derived guess while the
     // dedicated naming agent is still working.
+    // A skill command names the session from what the user typed, never from
+    // the native command token the model is sent.
+    const titleText = options.titleText ?? modelPromptText;
     const namingSettings =
       options.hidden || options.continuation
         ? undefined
-        : this.beginAutoName(modelPromptText, attachments);
+        : this.beginAutoName(titleText, attachments);
 
     // User message. Hidden resume prompts (for example answers submitted from
     // the question panel) are sent to Claude but represented by their UI card,
     // so they must not add a visible user bubble to the transcript.
+    // A skill turn records the typed `/<skill> <args>`, marked with the skill;
+    // the native token and its context stay model-only.
     const userEntry = options.continuation
       ? undefined
-      : this.appendUserEntry(trimmed, {
-          ...(options.hidden !== undefined ? { hidden: options.hidden } : {}),
-          attachments,
-        });
+      : this.appendUserEntry(
+          options.skillCommand !== undefined ? titleText : trimmed,
+          {
+            ...(options.hidden !== undefined ? { hidden: options.hidden } : {}),
+            attachments,
+            ...(options.skillCommand !== undefined
+              ? { skillCommand: options.skillCommand }
+              : {}),
+          },
+        );
     // Persist + announce at ACCEPTANCE, not only after naming or turn end. A
     // first turn can run for minutes, and zero-message sessions are deliberately
     // absent from the list; without this edge a newly prompted Claude session
@@ -1693,7 +1763,7 @@ export class ClaudeSdkSession implements LiveSession {
             : {}),
         });
       if (namingSettings)
-        void this.autoName(modelPromptText, attachments, namingSettings);
+        void this.autoName(titleText, attachments, namingSettings);
     }
 
     // Live assistant turn (opened before broadcasting running state, so the
@@ -1720,6 +1790,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.toolIdsByBlock.clear();
     this.startedTools.clear();
     this.resetTurnFailureState();
+    this.resetSkillTurnState(options.skillCommand);
 
     this.abortingTurn = false;
     const completion = deferred<void>();
@@ -1738,6 +1809,14 @@ export class ClaudeSdkSession implements LiveSession {
         { ...sdkUserMessage(promptWithFiles, images), uuid },
         frozenSkillNames,
         ownsTurn,
+        options.skillCommand !== undefined
+          ? {
+              name: options.skillCommand,
+              ...(options.turnContext
+                ? { turnContext: options.turnContext }
+                : {}),
+            }
+          : undefined,
       );
       await completion.promise;
     } catch (error) {
@@ -1782,6 +1861,8 @@ export class ClaudeSdkSession implements LiveSession {
       this.processClosing ||
       this.stopInterrupt ||
       this.compactOperation ||
+      // A skill submission's command must be the next input the CLI reads.
+      this.skillSubmission ||
       this.foreignProviderResultsToDiscard > 0 ||
       !epochKey ||
       this.activeTurnEpochKey !== epochKey
@@ -1936,7 +2017,11 @@ export class ClaudeSdkSession implements LiveSession {
         : {}),
     });
     this.pendingNativeMessageId = undefined;
-    this.appendAssistantTurn(turn, usage);
+    // The skill command's answer is the entry committed here; what follows is
+    // the follow-ups' turn, which invokes nothing.
+    const nativeResponse = this.skillTurnNativeResponse;
+    this.resetSkillTurnState();
+    this.appendAssistantTurn(turn, usage, nativeResponse);
     for (const uuid of [...this.pendingSteers.keys()]) {
       this.acceptSteer(uuid, "followUp");
       this.followUpsOwed.add(uuid);
@@ -1979,6 +2064,36 @@ export class ClaudeSdkSession implements LiveSession {
     message: ClaudeSdkUserMessage,
     frozenSkillNames: readonly string[],
     ownsTurn: () => boolean,
+    skill?: SkillSubmission,
+  ): Promise<void> {
+    // Taken before the first await and released only by this call: a stopped
+    // submission's late exit must not unguard the one that replaced it, nor
+    // an outer call the inner one it hands the prompt to.
+    const token = skill ? {} : undefined;
+    if (token) this.skillSubmission = token;
+    const release = (): void => {
+      if (token && this.skillSubmission === token)
+        this.skillSubmission = undefined;
+    };
+    try {
+      return await this.sendPromptOnce(
+        message,
+        frozenSkillNames,
+        ownsTurn,
+        skill,
+        release,
+      );
+    } finally {
+      release();
+    }
+  }
+
+  private async sendPromptOnce(
+    message: ClaudeSdkUserMessage,
+    frozenSkillNames: readonly string[],
+    ownsTurn: () => boolean,
+    skill: SkillSubmission | undefined,
+    release: () => void,
   ): Promise<void> {
     if (!ownsTurn()) return;
     this.cancelQuietClose();
@@ -2000,6 +2115,34 @@ export class ClaudeSdkSession implements LiveSession {
       const epochKey = this.queryEpochKey;
       if (!epochKey)
         throw new Error("The active Claude query has no owning epoch.");
+      if (skill) {
+        const query = this.activeQuery;
+        const queue = this.inputQueue;
+        await this.assertSkillRegistered(
+          query,
+          frozenSkillNames,
+          skill.name,
+          this.abortController?.signal,
+        );
+        if (!ownsTurn()) return;
+        // The retained process ended while it answered: start the next one.
+        if (
+          this.activeQuery !== query ||
+          this.inputQueue !== queue ||
+          this.queryEpochKey !== epochKey ||
+          this.processClosing
+        )
+          return this.sendPromptToProcess(
+            message,
+            frozenSkillNames,
+            ownsTurn,
+            skill,
+          );
+        this.activeTurnEpochKey = epochKey;
+        this.pushSkillSubmission(queue, message, skill);
+        release();
+        return;
+      }
       this.activeTurnEpochKey = epochKey;
       this.inputQueue.push(message);
       return;
@@ -2011,11 +2154,18 @@ export class ClaudeSdkSession implements LiveSession {
     if (!ownsTurn()) return;
     // A query opened meanwhile takes the prompt the way it would have above.
     if (this.activeQuery)
-      return this.sendPromptToProcess(message, frozenSkillNames, ownsTurn);
+      return this.sendPromptToProcess(
+        message,
+        frozenSkillNames,
+        ownsTurn,
+        skill,
+      );
     if (!this.toolServer) this.toolServer = createClaudeSessionToolServer(this);
     const epochKey = `claude-${randomUUID()}`;
     const queue = new CloseableInputQueue();
-    queue.push(message);
+    // A skill turn's queue starts EMPTY: the CLI must register the command
+    // before it is sent, and the pair is pushed once it has.
+    if (!skill) queue.push(message);
     const abortController = new AbortController();
     this.abortController = abortController;
     if (this.epochTaskOutputTemp) {
@@ -2120,6 +2270,86 @@ export class ClaudeSdkSession implements LiveSession {
     this.compactionWindow.queryStarted(epochKey, start.compactionWindow);
     this.queryLoop = this.consumeQuery(query, epochKey);
     this.broadcastState();
+    if (!skill) return;
+    try {
+      await this.assertSkillRegistered(
+        query,
+        frozenSkillNames,
+        skill.name,
+        abortController.signal,
+      );
+    } catch (error) {
+      // Fail the turn before the close: the query loop's exit would otherwise
+      // settle it as a clean end first.
+      if (this.running && ownsTurn())
+        this.finishTurn({
+          stopReason: "error",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      // Nothing was sent, so no result will ever end this process.
+      if (this.queryEpochKey === epochKey && this.retainedEpochKey !== epochKey)
+        void this.closeProcess("the skill command was not sent");
+      throw error;
+    }
+    // Stop and teardown close the query they took the turn from.
+    if (!ownsTurn()) return;
+    if (this.queryEpochKey !== epochKey || this.processClosing)
+      throw new Error(
+        "The Claude process closed before the skill command was sent.",
+      );
+    this.pushSkillSubmission(queue, message, skill);
+    release();
+  }
+
+  /**
+   * The CLI registered this session's plugin command for `name`. Asked of the
+   * query itself: the frozen set was materialized for it, but only the CLI
+   * knows whether it loaded the plugin. A Stop that kills the process ends
+   * the wait without an answer; the caller's ownership check then returns.
+   */
+  private async assertSkillRegistered(
+    query: ClaudeQuery,
+    frozenSkillNames: readonly string[],
+    name: string,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const command = `${skillRuntimePluginName(skillSetHash(frozenSkillNames))}:${name}`;
+    if (!query.supportedCommands)
+      throw new Error(`/${name} is not available in this session's runtime.`);
+    const killed = new Promise<"killed">((resolve) => {
+      if (signal?.aborted) resolve("killed");
+      signal?.addEventListener("abort", () => resolve("killed"), {
+        once: true,
+      });
+    });
+    const commands = await Promise.race([query.supportedCommands(), killed]);
+    if (commands === "killed") return;
+    if (!commands.some((entry) => entry.name === command))
+      throw new Error(`/${name} is not available in this session's runtime.`);
+  }
+
+  /**
+   * One synchronous step: the skill turn's model-only context as a stamped
+   * `shouldQuery: false` message — the CLI appends it without a turn, so it is
+   * never bound as the command's arguments — then the command itself.
+   */
+  private pushSkillSubmission(
+    queue: CloseableInputQueue,
+    message: ClaudeSdkUserMessage,
+    skill: SkillSubmission,
+  ): void {
+    if (skill.turnContext) {
+      const uuid = randomUUID();
+      this.skillContextUuids.add(uuid);
+      queue.push({
+        type: "user",
+        message: { role: "user", content: skill.turnContext },
+        parent_tool_use_id: null,
+        shouldQuery: false,
+        uuid,
+      } as unknown as ClaudeSdkUserMessage);
+    }
+    queue.push(message);
   }
 
   private async consumeQuery(
@@ -2133,12 +2363,17 @@ export class ClaudeSdkSession implements LiveSession {
         if (reportsCommandLifecycle(message))
           this.lifecycleFramesEpochKey = epochKey;
         const lifecycle = commandLifecycle(message);
+        // A skill turn's context message is transcript-only: its frames are
+        // no command start, steer or turn of anyone's.
+        if (lifecycle?.started && this.skillContextUuids.has(lifecycle.started))
+          continue;
         if (lifecycle) {
           if (
             lifecycle.started !== undefined &&
             lifecycle.started === this.turnPromptWaiting
           ) {
             this.turnPromptWaiting = undefined;
+            this.bindSkillCommandStart();
             // The CLI runs one command at a time: a stopped or denied run's
             // result precedes the next command's start, so none still owed
             // can arrive now. A Stop that withdrew its prompt from an idle
@@ -2155,6 +2390,16 @@ export class ClaudeSdkSession implements LiveSession {
             this.activeTurnEpochKey === epochKey
           )
             this.acceptSteer(lifecycle.started, "steer");
+          continue;
+        }
+        if (message.type === "result" && this.answersOnlyContext(message)) {
+          // Its running total is still the epoch's; nothing else of it is.
+          if (this.activeTurnEpochKey === epochKey)
+            this.handleSdkMessage(message);
+          else
+            this.adapterEvents.unattributed(() =>
+              this.handleSdkMessage(message),
+            );
           continue;
         }
         if (
@@ -2300,6 +2545,7 @@ export class ClaudeSdkSession implements LiveSession {
       if (this.stoppingEpochKey === epochKey) this.stoppingEpochKey = undefined;
       if (this.queryEpochKey === epochKey) {
         void this.withdrawPendingSteers();
+        this.skillContextUuids.clear();
         this.activeQuery = undefined;
         this.abortController = undefined;
         this.inputQueue = undefined;
@@ -2341,11 +2587,44 @@ export class ClaudeSdkSession implements LiveSession {
     const consumed = consumedMessageUuids(message);
     if (consumed.includes(waiting)) {
       this.turnPromptWaiting = undefined;
+      this.bindSkillCommandStart();
       return false;
     }
     if (resultProviderError(message)) return false;
     if (this.lifecycleFramesEpochKey === epochKey) return true;
     return consumed.length === 0 && message.num_turns === 0;
+  }
+
+  /**
+   * The CLI's own 0-turn result for skill-context messages and nothing else:
+   * the turn starts and settles only on its command's uuid. Retires the uuids
+   * it names.
+   */
+  private answersOnlyContext(
+    message: Extract<
+      import("./sdkSeam.ts").ClaudeSdkMessage,
+      { type: "result" }
+    >,
+  ): boolean {
+    const consumed = consumedMessageUuids(message);
+    if (
+      consumed.length === 0 ||
+      !consumed.every((uuid) => this.skillContextUuids.has(uuid))
+    )
+      return false;
+    for (const uuid of consumed) this.skillContextUuids.delete(uuid);
+    return true;
+  }
+
+  /**
+   * The open skill turn's command has been dequeued. An answer that arrived
+   * before the start was reported (a CLI without lifecycle frames, bound only
+   * by the result consuming the command) is the command's now.
+   */
+  private bindSkillCommandStart(): void {
+    if (this.skillTurn && this.skillTurnUnboundResponse)
+      this.skillTurnNativeResponse = true;
+    this.skillTurnUnboundResponse = false;
   }
 
   private isProviderTurnContent(
@@ -2867,28 +3146,52 @@ export class ClaudeSdkSession implements LiveSession {
     return skillInvocationTrail(frozenNames, this.committedToolCalls());
   }
 
-  /** Raw native tool names: the Skill/Read contract is the CLI's, not an MCP namespace. */
+  /**
+   * Raw native tool names: the Skill/Read contract is the CLI's, not an MCP
+   * namespace. A skill turn's `command` load is its user entry's
+   * `skillCommand`, confirmed by the turn's `nativeResponse` assistant entry —
+   * both written at append time, so a rebuild from disk reads the same trail.
+   */
   private committedToolCalls(): SkillInvocationTranscript {
     const calls: SkillInvocationToolCall[] = [];
+    const commands: SkillInvocationCommand[] = [];
     const succeeded = new Set<string>();
+    // Turns are counted by their prompt entries (`csu-<n>`); a steer's entry
+    // (`csu-<n>-<uuid>`) joins the turn it was read in.
+    let turn = 0;
+    let open: { name: string; at: number; confirmed: boolean } | undefined;
     for (const entry of this.committed) {
       if (entry.type !== "message") continue;
       if (entry.role === "toolResult") {
         if (!entry.isError) succeeded.add(entry.toolCallId);
         continue;
       }
+      const parsed = Date.parse(entry.createdAt);
+      const at = Number.isNaN(parsed) ? 0 : parsed;
+      if (entry.role === "user") {
+        if (!TURN_PROMPT_ENTRY_ID.test(entry.id)) continue;
+        turn += 1;
+        open = entry.skillCommand
+          ? { name: entry.skillCommand, at, confirmed: false }
+          : undefined;
+        continue;
+      }
       if (entry.role !== "assistant") continue;
-      const at = Date.parse(entry.createdAt);
+      if (entry.nativeResponse && open && !open.confirmed) {
+        open.confirmed = true;
+        commands.push({ name: open.name, at: open.at, turn: String(turn) });
+      }
       for (const block of entry.content)
         if (block.type === "toolCall")
           calls.push({
             toolCallId: block.toolCallId,
             toolName: block.name,
             input: block.input,
-            at: Number.isNaN(at) ? 0 : at,
+            at,
+            turn: String(turn),
           });
     }
-    return { calls, succeeded };
+    return { calls, succeeded, commands };
   }
 
   /** The Tools-inspector projection: catalog universe + CLI tool-search load state. */
@@ -3020,12 +3323,24 @@ export class ClaudeSdkSession implements LiveSession {
     this.pendingProviderError = undefined;
   }
 
+  /** Open (or, with no name, close) the per-turn skill-command bookkeeping. */
+  private resetSkillTurnState(skill?: string): void {
+    this.skillTurn = skill;
+    this.skillTurnNativeResponse = false;
+    this.skillTurnUnboundResponse = false;
+    this.skillExpansionError = undefined;
+  }
+
   /** How the live turn ends now that a `result` arrived. */
   private turnOutcome(): {
     stopReason: "end" | "error";
     errorMessage?: string;
     statusCode?: number;
   } {
+    // The CLI answers a command that failed to expand with a clean 0-turn
+    // result; its stderr is why the turn did nothing.
+    if (this.skillExpansionError !== undefined)
+      return { stopReason: "error", errorMessage: this.skillExpansionError };
     const failure = this.pendingProviderError;
     return failure
       ? {
@@ -3114,7 +3429,10 @@ export class ClaudeSdkSession implements LiveSession {
       });
     }
     this.pendingNativeMessageId = undefined;
-    if (turn) this.appendAssistantTurn(turn, usage);
+    // Read before the reset: the entry is the flag's only durable record.
+    const nativeResponse = this.skillTurnNativeResponse;
+    this.resetSkillTurnState();
+    if (turn) this.appendAssistantTurn(turn, usage, nativeResponse);
     this.updatedAt = Date.now();
     // No post-turn `history` broadcast: turn completion + reconnect are covered
     // by the runtime's durable entryAppended deltas + snapshot timeline.
@@ -3440,6 +3758,10 @@ export class ClaudeSdkSession implements LiveSession {
       };
     if (this.compactOperation)
       throw new Error("Claude compaction is already running.");
+    if (this.skillSubmission)
+      throw new Error(
+        "A skill command is being sent to Claude; compact after it starts.",
+      );
     if (this.providerResultBlocksCompact)
       throw new Error(
         "Claude is still settling an interrupted background turn; compact after it finishes.",
@@ -3452,6 +3774,10 @@ export class ClaudeSdkSession implements LiveSession {
       };
     this.cancelQuietClose();
     await this.stopInterruptSent();
+    if (this.skillSubmission)
+      throw new Error(
+        "A skill command is being sent to Claude; compact after it starts.",
+      );
     const operation: CompactOperation = { completion: deferred<void>() };
     this.compactOperation = operation;
     this.compactOperationEpochKey = epochKey;
@@ -4044,6 +4370,18 @@ export class ClaudeSdkSession implements LiveSession {
       this.streamSubIndex += 1;
       return;
     }
+    // The `command` load's confirmation: a native model answer — neither a
+    // recognised provider failure nor the CLI's synthetic sentinel, which can
+    // arrive without `error` — to a command that expanded.
+    if (
+      this.skillTurn &&
+      !this.skillExpansionError &&
+      assistantModel(message) !== SYNTHETIC_MODEL
+    ) {
+      if (!this.turnPromptWaiting) this.skillTurnNativeResponse = true;
+      else if (this.lifecycleFramesEpochKey !== this.activeTurnEpochKey)
+        this.skillTurnUnboundResponse = true;
+    }
     // Use the committed assistant message ONLY to open tool blocks with full args.
     for (const block of mapAssistantBlocks(message)) {
       if (block.type !== "toolUse") continue;
@@ -4082,6 +4420,10 @@ export class ClaudeSdkSession implements LiveSession {
     message: Extract<import("./sdkSeam.ts").ClaudeSdkMessage, { type: "user" }>,
   ): void {
     if (!this.liveTurn || !this.liveTurnId) return;
+    if (this.skillTurn && !this.skillExpansionError) {
+      const stderr = skillExpansionStderr(message);
+      if (stderr !== undefined) this.skillExpansionError = stderr;
+    }
     if (!isToolResultUserMessage(message)) return;
     for (const result of mapToolResults(message)) {
       const toolBlock = this.liveTurn.blocks.find(
@@ -4364,6 +4706,43 @@ function sdkUserMessage(
     parent_tool_use_id: null,
     message: { role: "user", content },
   } as unknown as ClaudeSdkUserMessage;
+}
+
+/** A turn's own prompt entry, as `#promptRaw` names it; steers add a uuid. */
+const TURN_PROMPT_ENTRY_ID = /^csu-\d+$/;
+
+/** The CLI's sentinel model id on messages it wrote itself, not the model. */
+const SYNTHETIC_MODEL = "<synthetic>";
+
+/**
+ * The stderr of a failed skill expansion: the CLI replays it as a user message
+ * (`isReplay`) wrapped in `<local-command-stderr>`, then ends with a clean
+ * 0-turn result. Bounded, like any other turn error.
+ */
+function skillExpansionStderr(
+  message: Extract<import("./sdkSeam.ts").ClaudeSdkMessage, { type: "user" }>,
+): string | undefined {
+  if ((message as { isReplay?: unknown }).isReplay !== true) return undefined;
+  const content = (message.message as { content?: unknown }).content;
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((block) =>
+              (block as { type?: unknown }).type === "text"
+                ? String((block as { text?: unknown }).text ?? "")
+                : "",
+            )
+            .join("")
+        : "";
+  const match =
+    /<local-command-stderr>([\s\S]*?)(?:<\/local-command-stderr>|$)/.exec(text);
+  if (!match) return undefined;
+  return (match[1]!.trim() || "The skill command failed to expand.").slice(
+    0,
+    500,
+  );
 }
 
 /** A single-prompt iterable used only when no retained process is alive. */

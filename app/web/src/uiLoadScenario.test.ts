@@ -19,6 +19,7 @@ import {
 import {
   paObjectReferenceKey,
   sessionReferenceKey,
+  skillSummariesKey,
 } from "./lib/transcriptKeys.ts";
 import { dataOf } from "./lib/loadState.ts";
 import { backlogSessionsKey, sameSessionRowProps } from "./lib/sessionRows.ts";
@@ -615,6 +616,52 @@ describe("UI load scenario: 10 streaming sessions, 2000-entry transcript", () =>
     expect(paObjectReferenceKey(references(next.sessions))).toBe(
       paObjectReferenceKey(references(state.sessions)),
     );
+  });
+
+  it("keys the composer's skill summaries by what its rows show", () => {
+    const entries = [
+      { name: "alpha", description: "A", path: "alpha/SKILL.md" },
+      {
+        name: "beta",
+        description: "B",
+        path: "beta/SKILL.md",
+        argumentHint: "[topic]",
+      },
+    ];
+    let state = apply(loadedState(), {
+      type: "libraryList",
+      library: "skills",
+      list: { libraryPath: "/skills", entries, diagnostics: [] },
+    });
+    const key = skillSummariesKey(dataOf(state.skillLibrary)!.entries);
+    // A rescan answers with new objects in another order: the same content.
+    state = apply(state, {
+      type: "libraryList",
+      library: "skills",
+      list: {
+        libraryPath: "/skills",
+        entries: entries.map((entry) => ({ ...entry })).reverse(),
+        diagnostics: [],
+      },
+    });
+    expect(skillSummariesKey(dataOf(state.skillLibrary)!.entries)).toBe(key);
+    // An unrelated broadcast leaves the scan itself alone.
+    const library = state.skillLibrary;
+    state = apply(state, {
+      type: "sessions",
+      sessions: sessionRows(SESSION_COUNT, true),
+    });
+    expect(state.skillLibrary).toBe(library);
+    // What a row shows or refuses on is content.
+    for (const change of [
+      { argumentHint: "[file]" },
+      { userInvocable: false as const },
+      { disableModelInvocation: true as const },
+      { description: "B2" },
+    ])
+      expect(
+        skillSummariesKey([entries[0]!, { ...entries[1]!, ...change }]),
+      ).not.toBe(key);
   });
 
   it("absorbs the re-SORT a broadcast performs, not just its new row objects", () => {

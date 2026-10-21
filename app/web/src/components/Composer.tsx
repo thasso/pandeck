@@ -9,6 +9,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -30,6 +31,7 @@ import {
 } from "lucide-react";
 import {
   type ContextInfo,
+  type EntrySummary,
   type ModelOption,
   type Harness,
   type PromptAttachment,
@@ -39,6 +41,7 @@ import {
   type SessionState,
   type SlashCommandInfo,
   clampThinkingLevelForModel,
+  parseSlashLine,
   slashCommandApplies,
   type ThinkingLevel,
 } from "@assistant/shared";
@@ -158,6 +161,13 @@ interface Props {
    * dispatching them to the server.
    */
   onClientSlashCommand?: (name: string, rawArgs: string) => string | null;
+  /**
+   * The current skills library scan, read only for the frozen
+   * `session.activeSkills`: each one's description, argument hint and whether
+   * the user may invoke it as `/<name>`. Kept stable by content
+   * (`skillSummariesKey`).
+   */
+  skillSummaries?: readonly EntrySummary[] | undefined;
   actions: AssistantActions;
   focusToken?: number;
   draft?: ForkDraft | null;
@@ -663,31 +673,81 @@ function AgentTypeSelector({
   );
 }
 
+/** One row of the `/` menu: a registry command or one of the session's skills. */
+type SlashMenuItem = Pick<SlashCommandInfo, "name" | "description" | "usage">;
+
+/**
+ * A skill this session froze, as the composer offers it (`docs/skills.md`).
+ * The description, hint and invocability come from the current library scan;
+ * a frozen name the scan does not (yet) describe is still offered, and the
+ * server decides.
+ */
+export interface ComposerSkill {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  /** False for `user-invocable: false`: hidden from the menu and refused. */
+  userInvocable: boolean;
+}
+
+/**
+ * The session's frozen skills that `/<name>` can reach. A registry command of
+ * the same name wins — it is always intercepted — so such a skill is dropped
+ * here rather than offered twice.
+ */
+export function composerSkills(
+  activeSkills: readonly string[] | undefined,
+  summaries: readonly EntrySummary[] | undefined,
+  commands: readonly SlashCommandInfo[],
+): ComposerSkill[] {
+  if (!activeSkills?.length) return [];
+  const byName = new Map(summaries?.map((entry) => [entry.name, entry]));
+  const registry = new Set(commands.map((cmd) => cmd.name));
+  return activeSkills
+    .filter((name) => !registry.has(name))
+    .map((name) => {
+      const entry = byName.get(name);
+      return {
+        name,
+        description: entry?.description ?? "",
+        ...(entry?.argumentHint ? { argumentHint: entry.argumentHint } : {}),
+        userInvocable: entry?.userInvocable !== false,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 interface SlashState {
   active: boolean;
-  exact: SlashCommandInfo | undefined;
-  items: SlashCommandInfo[];
+  items: SlashMenuItem[];
 }
 
 function slashState(
   text: string,
   commands: SlashCommandInfo[],
+  skills: readonly ComposerSkill[],
   agentType: AgentType | undefined,
   harness: Harness | undefined,
 ): SlashState {
   if (!text.startsWith("/") || text.startsWith("//") || text.includes("\n")) {
-    return { active: false, exact: undefined, items: [] };
+    return { active: false, items: [] };
   }
-  const allowed = commands.filter((cmd) =>
-    slashCommandApplies(cmd, agentType, harness),
-  );
+  const allowed: SlashMenuItem[] = [
+    ...commands.filter((cmd) => slashCommandApplies(cmd, agentType, harness)),
+    ...skills
+      .filter((skill) => skill.userInvocable)
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        usage: `/${skill.name}${skill.argumentHint ? ` ${skill.argumentHint}` : ""}`,
+      })),
+  ];
   const body = text.slice(1);
   const match = body.match(/^(\S*)(?:\s+([\s\S]*))?$/);
   const token = match?.[1] ?? "";
   const hasArgs = match?.[2] !== undefined;
-  const exact = allowed.find((cmd) => cmd.name === token);
   const items = allowed.filter((cmd) => cmd.name.startsWith(token)).slice(0, 8);
-  return { active: !hasArgs, exact, items };
+  return { active: !hasArgs, items };
 }
 
 /**
@@ -700,14 +760,10 @@ function slashState(
  * (e.g. a provider's own `/model` — those pass through as normal text).
  */
 function matchKnownSlash(text: string, commands: SlashCommandInfo[]) {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return null;
-  const match = trimmed.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
-  if (!match) return null;
-  const name = match[1]!;
-  const cmd = commands.find((item) => item.name === name);
+  const line = parseSlashLine(text);
+  const cmd = line && commands.find((item) => item.name === line.name);
   if (!cmd) return null;
-  return { cmd, rawArgs: match[2] ?? "" };
+  return { cmd, rawArgs: line.rawArgs };
 }
 
 export type SlashSubmit =
@@ -716,6 +772,11 @@ export type SlashSubmit =
   | { kind: "error"; message: string }
   /** Dispatch `runSlashCommand` to the server. */
   | { kind: "host"; name: string; rawArgs: string }
+  /**
+   * One of the session's frozen skills: send the typed line as a `prompt`
+   * carrying `skill`, which the server turns into the native command.
+   */
+  | { kind: "skill"; name: string }
   /**
    * Handle in the web app via `onClientSlashCommand`; never reaches the wire.
    * `runsWhileStreaming` runs it at once mid-turn instead of refusing to queue.
@@ -731,7 +792,9 @@ export type SlashSubmit =
  * What submitting the composer does about slash commands. Pure and exported
  * for tests, because the decision is the contract: a registered command is
  * ALWAYS intercepted (inapplicable ones error instead of going to the model),
- * and a client-execution command never reaches `runSlashCommand`.
+ * and a client-execution command never reaches `runSlashCommand`. A line
+ * naming none of them but one of the session's `skills` is a skill invocation;
+ * any other slash goes to the model as text.
  */
 export function resolveSlashSubmit(
   value: string,
@@ -742,10 +805,18 @@ export function resolveSlashSubmit(
     streaming: boolean;
     attachmentCount: number;
     commentCount: number;
+    /** The session's frozen skills (`composerSkills`). */
+    skills?: readonly ComposerSkill[];
+    /**
+     * A turn is running, whatever the submit would do with it (send, queue or
+     * steer). Unlike `streaming`, a queued submit does not clear it: a skill
+     * invocation is a turn of its own and is never queued or steered.
+     */
+    running?: boolean;
   },
 ): SlashSubmit {
   const command = matchKnownSlash(value, commands);
-  if (!command) return { kind: "send" };
+  if (!command) return resolveSkillSubmit(value, context);
   if (!slashCommandApplies(command.cmd, context.agentType, context.harness)) {
     return {
       kind: "error",
@@ -780,6 +851,27 @@ export function resolveSlashSubmit(
   return { kind: "host", name: command.cmd.name, rawArgs: command.rawArgs };
 }
 
+function resolveSkillSubmit(
+  value: string,
+  context: Parameters<typeof resolveSlashSubmit>[2],
+): SlashSubmit {
+  const line = parseSlashLine(value);
+  const skill = line && context.skills?.find((item) => item.name === line.name);
+  if (!skill) return { kind: "send" };
+  const error = (message: string): SlashSubmit => ({ kind: "error", message });
+  if (!skill.userInvocable)
+    return error(`/${skill.name} can only be loaded by the agent.`);
+  if (context.running)
+    return error(
+      `/${skill.name} starts a new turn; send it when this one finishes.`,
+    );
+  if (context.attachmentCount > 0)
+    return error("Skill commands do not support attachments.");
+  if (context.commentCount > 0)
+    return error("Skill commands do not support attached comments.");
+  return { kind: "skill", name: skill.name };
+}
+
 /**
  * Memoized: the composer sits under `App`, which re-renders for every socket
  * message — up to several a second while any agent runs, and once per animation
@@ -802,6 +894,7 @@ export const Composer = memo(function Composer({
   models,
   slashCommands,
   onClientSlashCommand,
+  skillSummaries,
   actions,
   focusToken,
   draft,
@@ -1052,9 +1145,15 @@ export const Composer = memo(function Composer({
     });
   };
 
+  const activeSkills = session?.activeSkills;
+  const skills = useMemo(
+    () => composerSkills(activeSkills, skillSummaries, slashCommands),
+    [activeSkills, skillSummaries, slashCommands],
+  );
   const slash = slashState(
     text,
     slashCommands,
+    skills,
     session?.agentType,
     session?.harness,
   );
@@ -1068,7 +1167,7 @@ export const Composer = memo(function Composer({
   useEffect(() => {
     setSlashIndex(0);
     setSlashDismissed(false);
-  }, [text, session?.agentType, session?.harness, slashCommands]);
+  }, [text, session?.agentType, session?.harness, slashCommands, skills]);
 
   useEffect(() => {
     if (
@@ -1079,7 +1178,7 @@ export const Composer = memo(function Composer({
     }
   }, [branchInfo]);
 
-  const applySlash = (cmd: SlashCommandInfo) => {
+  const applySlash = (cmd: SlashMenuItem) => {
     setText(`/${cmd.name} `);
     requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
   };
@@ -1388,6 +1487,8 @@ export const Composer = memo(function Composer({
       streaming: streaming && !queueing,
       attachmentCount: attachments.length,
       commentCount: pendingComments.length,
+      skills,
+      running: streaming,
     });
     if (slashAction.kind === "error") {
       setAttachmentError(slashAction.message);
@@ -1437,6 +1538,15 @@ export const Composer = memo(function Composer({
           command: { name: slashAction.name, rawArgs: slashAction.rawArgs },
         });
       else actions.runSlashCommand(slashAction.name, slashAction.rawArgs);
+      clearSentText();
+      setAttachmentError(null);
+      finishSubmit();
+      return;
+    }
+    if (slashAction.kind === "skill") {
+      // The typed line as the prompt: the transcript keeps it, and the server
+      // sends the harness's native command for `skill`.
+      actions.promptSkill(value, slashAction.name);
       clearSentText();
       setAttachmentError(null);
       finishSubmit();

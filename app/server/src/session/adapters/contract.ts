@@ -322,7 +322,24 @@ export interface PromptOptions {
    * the answer would resume only after both. Must not throw.
    */
   onSteerAccepted?: (delivery: PromptDelivery) => void;
+  /**
+   * Skill turns only: model-only context (memory, deferred facts, the Plan
+   * hint) the adapter delivers WITHOUT binding it as command input. Ordinary
+   * turns carry their context prepended to the text instead.
+   */
+  turnContext?: string;
+  /** The human text automatic naming reads when the text sent differs from it. */
+  titleText?: string;
+  /** The frozen library skill this turn's native command invokes. */
+  skillCommand?: string;
 }
+
+/**
+ * How an adapter dispatches `/<name>` for one frozen library skill: the native
+ * command prefix the text sent starts with, or why it cannot. Synchronous and
+ * side-effect free, so the runtime can ask before it claims anything.
+ */
+export type SkillDispatch = { command: string } | { refused: string };
 
 export interface ForkCapability {
   fork: "arbitrary" | "lastTurn" | "none";
@@ -367,4 +384,9 @@ export interface PromptableAdapter extends SessionAdapter {
   setReasoning(level: string): void | Promise<void>;
   /** Optional model catalog for the picker; a missing/failed list degrades to empty. */
   listModels?(): Promise<SessionConfigModel[]>;
+  /**
+   * The native dispatch for a frozen library skill (`/<name> <args>` from the
+   * composer). An adapter without it refuses every skill invocation.
+   */
+  skillDispatch?(name: string): SkillDispatch;
 }

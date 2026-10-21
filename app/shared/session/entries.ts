@@ -73,6 +73,12 @@ type UserSessionEntry = SessionEntryEnvelope & {
    * `content`, so opaque ids/reply syntax never appear in the timeline.
    */
   peerPrompt?: PeerPromptCard;
+  /**
+   * The frozen library skill this prompt invoked as `/<skill> <args>`; never
+   * the native command token, which stays model-only like the rest of the
+   * translation. Written at append time.
+   */
+  skillCommand?: string;
   content: AgentContentBlock[];
 };
 
@@ -88,6 +94,12 @@ type AssistantSessionEntry = SessionEntryEnvelope & {
   /** Human-readable provider error retained on a failed turn, rendered in-chat. */
   error?: string;
   usage?: AgentUsage;
+  /**
+   * A non-synthetic native assistant message answered this turn's skill
+   * command; set only by the Claude driver on skill turns. Confirms the
+   * `command` skill load, so it survives restarts in the append-only log.
+   */
+  nativeResponse?: true;
   /** ISO-8601 generation span; duration derived. */
   startedAt?: string;
   completedAt?: string;

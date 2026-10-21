@@ -8,6 +8,8 @@ import {
   WORKTREE_MISSING_BLOCKED_REASON,
   backgroundWorkBlockedReason,
   slashCommandApplies,
+  isSafeEntryName,
+  parseSlashLine,
   isOrdinarilyCreatableAgentType,
   isClaudeSdkModel,
   HARNESSES,
@@ -804,11 +806,55 @@ export class Connection implements Viewer {
         const resumeHold = this.viewing
           ? captureHumanResume(this.viewing.sessionId)
           : undefined;
+        // A `/<skill>` invocation is checked before any effect: it is the typed
+        // line itself, and it carries nothing else.
+        const skillRefusal = (message: string): void =>
+          this.send({
+            type: "error",
+            message,
+            ...(this.viewing
+              ? { target: { type: "session", id: this.viewing.sessionId } }
+              : {}),
+            ...(msg.clientRequestId !== undefined
+              ? { failedPromptClientRequestId: msg.clientRequestId }
+              : {}),
+          });
+        let skillInvocation: { name: string; args: string } | undefined;
+        if (msg.skill !== undefined) {
+          const line = parseSlashLine(msg.text);
+          if (
+            typeof msg.skill !== "string" ||
+            !isSafeEntryName(msg.skill) ||
+            line?.name !== msg.skill
+          )
+            return skillRefusal("This skill command is not valid.");
+          if (
+            msg.attachments?.length ||
+            msg.attachTaskId ||
+            msg.projectId ||
+            msg.fileContext
+          )
+            return skillRefusal(
+              "Skill commands do not support attachments or attached context.",
+            );
+          skillInvocation = { name: msg.skill, args: line.rawArgs };
+        }
         const driver = await this.ensureViewingDriver();
         if (!driver) return;
         // A session whose worktree is gone would run in the app CWD — the wrong
         // repository. Refuse before anything is linked, attached or appended.
         if (!this.guardMissingWorktree(driver.sessionId)) return;
+        if (skillInvocation) {
+          if (isPermanentAssistantSession(driver.sessionId))
+            return skillRefusal(
+              `/${skillInvocation.name} is not available in this session.`,
+            );
+          // Never a steer: a skill command is a turn of its own.
+          if (driver.isRunning)
+            return skillRefusal(
+              `/${skillInvocation.name} starts a new turn; send it when the current one finishes.`,
+            );
+        }
         if (isPermanentAssistantSession(driver.sessionId)) {
           if (msg.attachments?.length) {
             this.send({
@@ -867,7 +913,10 @@ export class Connection implements Viewer {
             ? { clientRequestId: msg.clientRequestId }
             : {}),
           attachments,
-          ...(driver.isRunning && driver.canSteer ? { steer: true } : {}),
+          ...(skillInvocation ? { skillInvocation } : {}),
+          ...(driver.isRunning && driver.canSteer && !skillInvocation
+            ? { steer: true }
+            : {}),
           ...(resumeHold?.sessionId === driver.sessionId ? { resumeHold } : {}),
         }).catch((err: unknown) => {
           // A steer the turn ended before reading is the user's own words: it

@@ -54,6 +54,11 @@ ended the run, that came next.
 does not fold in still runs after the reply, which is the unasked-for turn that
 mode forbids. Those callers get `steered: false` and use their own queue.
 
+While a Claude skill submission waits for the CLI to confirm its command is
+registered, `steer()` refuses. Compaction refuses too. The skill's context and
+command must be the next inputs the CLI reads
+([`docs/skills.md`](skills.md#user-invocation-from-the-composer)).
+
 ### Transcript
 
 A user entry sent during a running turn carries `delivery`, projected to
@@ -120,6 +125,10 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   session metadata (`/rename`) runs at once instead, even mid-turn.
 - **Attachments** are saved to the session attachment store when queued. The row
   keeps only their metadata, and the send reads the bytes back.
+- **Skill commands are neither steered nor queued.** A user's `/<skill>` starts
+  a new turn. Sent while a turn runs, it is refused with "/X starts a new turn;
+  send it when the current one finishes." The text stays in the composer. Queued
+  invocations are [Task-1023](pa://task/1023).
 
 The permanent Assistant has its own intake queue and does not offer this one; it
 only shares the Stop hold and its Resume.

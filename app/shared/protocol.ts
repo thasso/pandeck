@@ -1316,7 +1316,8 @@ export interface SessionSkillInvocation {
   at: number;
   /** Declared library skill name, never plugin-qualified. */
   name: string;
-  via: "skill_tool" | "read";
+  /** `command`: the user's `/<skill>` composer invocation, once confirmed. */
+  via: "skill_tool" | "read" | "command";
 }
 
 /** Session-level deferred-tool exposure projection (Tools inspector section). */
@@ -1600,6 +1601,23 @@ export function slashCommandApplies(
   if (harness && cmd.harnesses && !cmd.harnesses.includes(harness))
     return false;
   return true;
+}
+
+/**
+ * Split a typed `/name args` line by the composer's token rule: the trimmed
+ * line's name runs to the first whitespace and `rawArgs` is the rest without
+ * its leading whitespace. `null` for a line that is not a slash command
+ * (including the `//` escape and a bare `/`). The composer and the server both
+ * use it.
+ */
+export function parseSlashLine(
+  text: string,
+): { name: string; rawArgs: string } | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return null;
+  const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
+  if (!match) return null;
+  return { name: match[1]!, rawArgs: match[2] ?? "" };
 }
 
 /** A persisted web session, shown in the sidebar. */
@@ -7703,6 +7721,12 @@ export type ClientMessage =
       /** A document staged as context, as its canonical viewer route. */
       fileContext?: string;
       clientRequestId?: string;
+      /**
+       * Set when `text` is `/<skill> <args>` naming one of the session's frozen
+       * library skills: the server sends the harness-native command for it and
+       * keeps `text` as typed. Refused mid-turn and with attachments or context.
+       */
+      skill?: string;
     }
   | { type: "runSlashCommand"; name: string; rawArgs: string }
   /**

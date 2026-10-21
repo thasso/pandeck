@@ -120,6 +120,13 @@ export interface RuntimePromptOptions extends PromptOptions {
    * after {@link onProviderCall} may have reached the provider. Not forwarded.
    */
   onProviderDeclined?: () => void;
+  /**
+   * The user's `/<name> <args>` composer invocation of a frozen library skill:
+   * the adapter is sent its native command plus `args`, the durable entry
+   * keeps the typed text, and memory/context travel as `turnContext` instead
+   * of being prepended. Not forwarded to the adapter.
+   */
+  skillInvocation?: { name: string; args: string };
   /** Sanitized peer-prompt card recorded on the durable user entry for rendering. */
   peerPrompt?: import("@assistant/shared").PeerPromptCard;
   /** Durable admission keys for every peer message combined into this entry (server-only). */
@@ -948,6 +955,18 @@ export class LiveRuntimeSession {
   /* ------------------------------- prompts ------------------------------- */
 
   /**
+   * The text sent for a skill invocation: the adapter's native command, then
+   * a literal space and the args as typed. Throws the adapter's refusal.
+   */
+  private skillCommandText(skill: { name: string; args: string }): string {
+    const dispatch = this.adapter.skillDispatch?.(skill.name) ?? {
+      refused: `/${skill.name} cannot be invoked in this session.`,
+    };
+    if ("refused" in dispatch) throw new Error(dispatch.refused);
+    return skill.args ? `${dispatch.command} ${skill.args}` : dispatch.command;
+  }
+
+  /**
    * Run one prompt. Normally idle-only (concurrent → {@link SessionBusyError});
    * providers with `capabilities.steer` may accept an explicit steering prompt
    * while running. A durable user entry is appended at submission, with `hidden`
@@ -972,7 +991,8 @@ export class LiveRuntimeSession {
       onProviderAccepted,
       peerPrompt: _peerPrompt,
       peerMessageIds: _peerMessageIds,
-      ...adapterOpts
+      skillInvocation,
+      ...promptOpts
     } = options;
     if (this.tornDown) throw new InactiveSessionError(this.sessionId);
     if (clientRequestId && this.handledRequestIds.has(clientRequestId)) return; // dup (precedes busy gate)
@@ -987,6 +1007,11 @@ export class LiveRuntimeSession {
     // the driver-side check exists for, caught one layer earlier.
     if (options.steerOnly === true && !steering)
       throw new SteerNotTakenError(this.sessionId);
+    // Asked before anything is claimed: a refusal leaves the request id free
+    // and nothing appended.
+    const skillCommand = skillInvocation
+      ? this.skillCommandText(skillInvocation)
+      : undefined;
     if (clientRequestId) this.handledRequestIds.add(clientRequestId);
 
     const promptOrigin = origin ?? { kind: "human" as const };
@@ -997,7 +1022,19 @@ export class LiveRuntimeSession {
     const modelContext = [memoryBlock, contextBlock]
       .filter((block): block is string => Boolean(block))
       .join("\n\n");
-    const modelText = modelContext ? `${modelContext}\n\n${text}` : text;
+    // A skill command must reach the harness first and alone, so its context
+    // rides beside it as `turnContext`; naming reads the typed text.
+    const modelText =
+      skillCommand ?? (modelContext ? `${modelContext}\n\n${text}` : text);
+    const adapterOpts: PromptOptions =
+      skillCommand !== undefined
+        ? {
+            ...promptOpts,
+            ...(modelContext ? { turnContext: modelContext } : {}),
+            titleText: text,
+            skillCommand: skillInvocation!.name,
+          }
+        : promptOpts;
 
     // A steer-only sender accepts "nothing was sent" as an answer, so the driver
     // — which holds the authoritative streaming state — decides, and NOTHING is

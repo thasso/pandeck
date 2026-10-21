@@ -108,17 +108,6 @@ function parseManifestFrontmatter(
 }
 
 /**
- * The rule every kind shares: a safe `name` and a bounded `description`.
- * Skills use it as their whole rule.
- */
-export function parseEntryManifest(
-  content: string,
-  path: string,
-): ManifestResult {
-  return parseManifestWith(content, path, () => ({}));
-}
-
-/**
  * A kind's whole rule: the shared `name` + `description` checks, then the
  * kind's own fields validated by `extend` from the same frontmatter mapping
  * (and the body, for a kind whose size bound lets it read one) into the same

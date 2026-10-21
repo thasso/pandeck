@@ -449,6 +449,26 @@ describe("topicsForSurface", () => {
     ).toEqual(["projects", "skills"]);
   });
 
+  it("subscribes to skills while a session composer offers frozen skills", () => {
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "sessions",
+        routeName: "session",
+        composerSkillsVisible: true,
+      }),
+    ).toEqual(["projects", "skills"]);
+    // A session without frozen skills reads no library.
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "sessions",
+        routeName: "session",
+        composerSkillsVisible: false,
+      }),
+    ).toEqual(["projects"]);
+  });
+
   it("holds Worktrees while the session inspector lists the spawn tree's worktrees", () => {
     expect(
       topicsForSurface({

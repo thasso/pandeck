@@ -82,6 +82,52 @@ describe("scanSkillLibrary", () => {
     });
   });
 
+  test("carries the invocation fields a skill declares, ignoring wrong types", async () => {
+    await writeSkill(
+      "hinted",
+      'name: hinted\ndescription: Hinted\nargument-hint: "[topic] [depth]"\nuser-invocable: true',
+    );
+    await writeSkill(
+      "listed",
+      "name: listed\ndescription: Listed\nargument-hint: [topic, depth]\ndisable-model-invocation: true",
+    );
+    await writeSkill(
+      "hidden",
+      "name: hidden\ndescription: Hidden\nuser-invocable: false\ndisable-model-invocation: true",
+    );
+    await writeSkill(
+      "loose",
+      'name: loose\ndescription: Loose\nargument-hint: 3\ndisable-model-invocation: "yes"\nuser-invocable: "no"',
+    );
+
+    const scan = await scanSkillLibrary(root);
+
+    assert.deepEqual(scan.diagnostics, []);
+    assert.deepEqual(scan.entries, [
+      {
+        name: "hidden",
+        description: "Hidden",
+        path: "hidden/SKILL.md",
+        disableModelInvocation: true,
+        userInvocable: false,
+      },
+      {
+        name: "hinted",
+        description: "Hinted",
+        path: "hinted/SKILL.md",
+        argumentHint: "[topic] [depth]",
+      },
+      {
+        name: "listed",
+        description: "Listed",
+        path: "listed/SKILL.md",
+        argumentHint: "[topic] [depth]",
+        disableModelInvocation: true,
+      },
+      { name: "loose", description: "Loose", path: "loose/SKILL.md" },
+    ]);
+  });
+
   test("reports missing and unreadable SKILL.md files without hiding their folders", async () => {
     await mkdir(join(root, "missing"));
     await mkdir(join(root, "unreadable", "SKILL.md"), { recursive: true });

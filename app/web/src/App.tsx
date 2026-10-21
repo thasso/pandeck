@@ -29,6 +29,7 @@ import {
   type AgentType,
   clampThinkingLevelForModel,
   claudeSdkModelOption,
+  type EntrySummary,
   type Harness,
   harnessForAccountProvider,
   type InboxPositionEntry,
@@ -69,7 +70,10 @@ import {
   type PaObjectLinkResolution,
   type PaObjectType,
 } from "@assistant/shared/objectLinks";
-import { paObjectReferenceKey } from "./lib/transcriptKeys.ts";
+import {
+  paObjectReferenceKey,
+  skillSummariesKey,
+} from "./lib/transcriptKeys.ts";
 import {
   approvalCardsOf,
   approvalStatusDetail,
@@ -1465,6 +1469,12 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           route.name === "session" &&
           state.session?.sessionId === route.id &&
           state.session.activeSkills !== undefined,
+        // The composer's `/<skill>` rows read descriptions and argument hints
+        // from the current library scan.
+        composerSkillsVisible:
+          route.name === "session" &&
+          state.session?.sessionId === route.id &&
+          (state.session.activeSkills?.length ?? 0) > 0,
         // The inspector lists the worktrees the session's spawn tree owns,
         // with their pull requests. It holds the topic whenever it shows a
         // session: gating on the held list would gate on the very collection
@@ -3060,6 +3070,22 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     // oxlint-disable-next-line react/exhaustive-deps -- `referenceKey` IS the content of `mentionedPaObjectReferences`; depending on the array would hand the transcript new link props on every broadcast that touched a mentioned object
     [referenceKey],
   );
+
+  // The composer's `/<skill>` rows read the library scan, which every
+  // subscribe and rescan answers afresh: hand it a new array only when what
+  // the rows show changed.
+  const skillSummariesCache = useRef<{
+    key: string;
+    value: EntrySummary[] | undefined;
+  }>({ key: "", value: undefined });
+  const skillEntries = dataOf(state.skillLibrary)?.entries;
+  const skillEntriesKey = skillEntries ? skillSummariesKey(skillEntries) : "";
+  if (skillSummariesCache.current.key !== skillEntriesKey)
+    skillSummariesCache.current = {
+      key: skillEntriesKey,
+      value: skillEntries,
+    };
+  const composerSkillSummaries = skillSummariesCache.current.value;
 
   const selectedProjectWorktreeCache = useRef<{
     key: string;
@@ -6793,6 +6819,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
           models={pickerModels}
           slashCommands={state.slashCommands}
           onClientSlashCommand={runClientSlashCommand}
+          skillSummaries={composerSkillSummaries}
           actions={runtimeActions}
           focusToken={composerFocusToken}
           draftStorageKey={chatDraftStorageKey}

@@ -6695,6 +6695,12 @@ export interface AssistantActions {
     fileContext?: string,
   ) => void;
   runSlashCommand: (name: string, rawArgs: string) => void;
+  /**
+   * Send a typed `/<skill> args` line as a user skill invocation
+   * (`docs/skills.md`). `text` is the line as typed and is what the transcript
+   * keeps; the server translates it to the harness's native command.
+   */
+  promptSkill: (text: string, skill: string) => void;
   /** Edit a session's prompt queue; the server answers with its new state. */
   promptQueue: (command: PromptQueueCommand) => void;
   acceptCommitDryRun: (entryId: string) => void;
@@ -8722,6 +8728,14 @@ export function useAssistant({
       },
       runSlashCommand: (name, rawArgs) =>
         send({ type: "runSlashCommand", name, rawArgs }),
+      promptSkill: (text, skill) => {
+        const clientRequestId = createClientId();
+        const target = stateRef.current.session?.sessionId;
+        if (target)
+          dispatch({ kind: "clearSessionFailure", sessionId: target });
+        optimisticUserEcho(dispatch, clientRequestId, text, target, false);
+        send({ type: "prompt", text, skill, clientRequestId });
+      },
       promptQueue: (command) => send(command),
       acceptCommitDryRun: (entryId) =>
         send({ type: "acceptCommitDryRun", entryId }),

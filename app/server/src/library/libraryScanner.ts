@@ -66,6 +66,7 @@ interface EntryCandidate {
   path: string;
   declaredName?: string;
   description?: string;
+  extras?: Omit<Partial<EntrySummary>, "name" | "description" | "path">;
   diagnostics: EntryDiagnostic[];
   sourceIdentity?: EntrySourceIdentity;
 }
@@ -124,6 +125,7 @@ export async function scanLibrary(
         name: candidate.declaredName,
         description: candidate.description,
         path: candidate.path,
+        ...candidate.extras,
       });
       if (candidate.sourceIdentity) {
         scanSourceIdentities.set(candidate.path, candidate.sourceIdentity);
@@ -244,6 +246,8 @@ async function scanEntryFolder(
   if (parsed.ok && !tooLarge) {
     candidate.declaredName = parsed.manifest.name;
     candidate.description = parsed.manifest.description;
+    const extras = kind.summaryExtras?.(parsed.manifest);
+    if (extras) candidate.extras = extras;
     candidate.sourceIdentity = identity;
     return candidate;
   }

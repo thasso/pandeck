@@ -21,6 +21,7 @@ import type {
   PromptableAdapter,
   PromptOptions,
   RunFailureFacts,
+  SkillDispatch,
 } from "./contract.ts";
 import type { AdapterEventListener } from "./nativeEvents.ts";
 
@@ -58,8 +59,12 @@ export interface PiDriver {
        * is what keeps a lost race from becoming an unasked-for turn.
        */
       steerOnly?: boolean;
+      /** The human text naming and the user bubble read instead of `text`. */
+      titleText?: string;
     },
   ): PiPromptResponse;
+  /** The native `/skill:` dispatch for a frozen library skill. */
+  skillDispatch?(name: string): SkillDispatch;
   abort(): void | Promise<void>;
   setModel(model: unknown): void | Promise<void>;
   setThinkingLevel(level: string): void;
@@ -81,6 +86,20 @@ const PROVIDER = "pi";
 
 interface PendingRun {
   resolve: (r: AgentRunResult) => void;
+}
+
+/**
+ * A skill turn's one prompt string: pi binds nothing, it appends everything
+ * after the first space to the skill block, so the context follows the args
+ * in the same prompt — owned by it, never left behind for a later one. A
+ * name-only command keeps that space, or pi would read the context as part
+ * of the name. Ordinary turns pass `text` unchanged.
+ */
+function skillPromptText(text: string, turnContext: string | undefined) {
+  if (!turnContext) return text;
+  return text.includes(" ")
+    ? `${text}\n\n${turnContext}`
+    : `${text} \n\n${turnContext}`;
 }
 
 export function createPiAdapter(
@@ -145,17 +164,29 @@ class PiAdapter implements PromptableAdapter {
     };
   }
 
+  skillDispatch(name: string): SkillDispatch {
+    return (
+      this.driver.skillDispatch?.(name) ?? {
+        refused: `/${name} cannot be invoked in this session.`,
+      }
+    );
+  }
+
   /** Drive a turn; resolves when the turn completes (pi signals runCompleted). */
   prompt(text: string, options: PromptOptions = {}): Promise<AgentRunResult> {
+    const modelText = skillPromptText(text, options.turnContext);
     const drive = () =>
       normalizePromptResponse(
-        this.driver.prompt(text, options.attachments ?? [], {
+        this.driver.prompt(modelText, options.attachments ?? [], {
           ...(options.clientRequestId
             ? { clientRequestId: options.clientRequestId }
             : {}),
           ...(options.hidden ? { hidden: true } : {}),
           ...(options.steerOnly ? { steerOnly: true } : {}),
           ...(options.continuation ? { continuation: true } : {}),
+          ...(options.titleText !== undefined
+            ? { titleText: options.titleText }
+            : {}),
         }),
       );
 

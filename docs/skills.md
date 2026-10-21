@@ -738,7 +738,9 @@ A frozen name makes a skill AVAILABLE, not loaded: only its name and description
 reach the model, and the `SKILL.md` body enters the context when the agent asks
 for it. `SessionState.skillInvocations` is that record — a bounded, newest-last
 trail present exactly when `activeSkills` is, derived from the committed
-transcript by `skills/skillInvocations.ts` at projection time, never stored. Two
+transcript by `skills/skillInvocations.ts` at projection time, never stored.
+Beside a user's own `/<skill>` command (`via: "command"`, see
+[User invocation from the composer](#user-invocation-from-the-composer)), two
 calls count: Claude's native `Skill` tool naming the skill under this session's
 own runtime plugin (`pa-skills-<hash16>:<name>`; an unqualified or foreign
 qualifier is a repository or CLI skill sharing the name), and a read of the
@@ -861,6 +863,119 @@ carries the frozen list through option construction for continuity but sets the
 explicit no-tool policy, mounts no plugin, exposes neither `Skill` nor
 `ToolSearch`, and does not recreate generated output. Compaction cannot invoke a
 skill and must not pay discovery work accidentally.
+
+## User invocation from the composer
+
+A user loads a frozen skill directly by typing `/<name> [args]` in the composer.
+The line is parsed by `parseSlashLine` (`app/shared/protocol.ts`), which the
+composer and the server share. The line is trimmed. It must start with one `/`
+(never `//`). The name ends at the first whitespace, so `/alpha-x` is never
+`alpha`. The args are the rest of the line, with their leading whitespace
+removed.
+
+**What the menu offers.**
+
+- The `/` menu lists the session's `activeSkills` next to the registry commands.
+  Each row shows the summary's description and `argument-hint` from the `skills`
+  topic. The composer subscribes to that topic only while the viewed session has
+  skills.
+- A registry command owns its name: a skill called `review` shows only the
+  client's `/review`.
+- A skill whose entry says `user-invocable: false` is hidden.
+- A name outside the frozen set is not a skill command. It is sent as ordinary
+  text, as before.
+
+**The wire.** A matched line is sent as `prompt` with `text` exactly as typed
+and an explicit `skill: "<name>"`. The server never infers a skill from text.
+The durable user entry keeps the typed text and records
+`skillCommand: "<name>"`. The session title comes from the typed line. Neither
+the native command nor the turn's context reaches the log, the client projection
+or the title.
+
+**Refusals.** A refused invocation appends nothing and shows its reason on the
+composer.
+
+- Before anything is sent, the composer and `connection.ts` refuse:
+  - a busy session: "/X starts a new turn; send it when the current one
+    finishes." Skill turns are never steered or queued.
+  - attachments, attached comments, Task, project or file context;
+  - a `skill` field that does not match the line;
+  - the permanent Assistant, which has no library skills.
+- The `runtimePrompt.ts` door then refuses:
+  - a name outside the frozen set;
+  - a steer, `steerOnly`, hidden or continuation run;
+  - attachments;
+  - a skill the current scan lacks or marks `user-invocable: false`: "/X can
+    only be loaded by the agent."
+- The adapter's synchronous `skillDispatch` is asked before the request id is
+  claimed, so its refusal leaves that id free.
+
+**Native translation.** The adapter supplies the native command, and the model
+text is that command, plus a space and the args when there are any.
+
+| Harness | Command                      | Context (memory, Plan hint, deferred facts)                                                                                                                 |
+| ------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude  | `/pa-skills-<hash16>:<name>` | A separate uuid-stamped `shouldQuery: false` message pushed just before the command, so the CLI never binds it as the command's arguments                   |
+| pi      | `/skill:<name>`              | Inline after the command and a blank line. A command without args keeps its space (`/skill:alpha \n\nctx`); otherwise pi would read the context as the name |
+
+On Claude, the plugin namespace keeps a repository skill of the same name out of
+reach. Before anything is pushed, the driver asks the query's
+`supportedCommands()` whether the CLI registered the command. If not, the turn
+fails with "/X is not available in this session's runtime." That check runs on
+cold, resumed and retained processes.
+
+While the check is pending, a per-submission token makes `steer()` and
+compaction refuse, so the context and the command are the next inputs the CLI
+reads. The token is taken before the submission's first await, and only its
+owner releases it. A stopped submission's late exit therefore cannot unguard the
+one that replaced it. A Stop during the check pushes nothing.
+
+The context message's own lifecycle frames and 0-turn `result` neither start nor
+settle the turn; only the command's uuid does. If the CLI replays a
+`<local-command-stderr>` for the command, the expansion failed, and that text
+becomes the turn's error.
+
+pi keeps the first skill of a name, so a repository `.pi/skills` skill shadows
+the library one. `skillDispatch` refuses a name whose loaded file is not this
+session's runtime copy, before anything is appended.
+
+**Load tracking.** A confirmed invocation adds `via: "command"` to
+`skillInvocations`, and the inspector labels it "slash command".
+
+- pi confirms it with the expanded `<skill name="X" location="…">` user message,
+  at this session's runtime path. pi writes that block only after reading the
+  file.
+- Claude confirms it with the skill turn's committed assistant entry carrying
+  `nativeResponse: true`. That flag requires all of:
+  - the command started, or a result consumed it;
+  - the expansion did not fail;
+  - the message is neither a recognised provider failure nor from the CLI's
+    `"<synthetic>"` model, which can arrive without `error`.
+- A genuine reply still counts if the turn then fails or is stopped.
+- A follow-up the reply missed belongs to the next turn, and is never the
+  skill's answer.
+- Each skill counts once per turn: a same-turn `Skill` call or read of a
+  commanded skill is not counted again.
+
+**Frontmatter.** The scan summary adds three optional fields:
+
+- `argument-hint`: a trimmed string, or a list of strings joined as `[a] [b]`;
+- `disable-model-invocation: true`;
+- `user-invocable: false`.
+
+A value of the wrong type is ignored without a diagnostic. Both harnesses
+already keep a `disable-model-invocation` skill out of the model's listing, so
+Pandeck changes nothing the model sees. The inspector marks such a skill
+"User-invoked", and marks it "Not loadable" when `user-invocable: false` is set
+too.
+
+Quote a multi-token hint, as in `argument-hint: "[topic] [depth]"`. Unquoted,
+pi's YAML parser rejects the whole frontmatter (a flow sequence followed by more
+text). Pandeck's YAML subset reads it as a one-item list, `topic] [depth`, which
+only happens to display as typed.
+
+Queued invocations are Task-1023, and invocations sent by peers are Task-1024.
+Until then, neither queues a skill command.
 
 ## Source of truth and garbage collection
 
