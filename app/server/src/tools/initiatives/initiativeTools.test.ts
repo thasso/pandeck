@@ -3,10 +3,12 @@ import { test, vi } from "vitest";
 import type { InitiativeDetail } from "@assistant/shared";
 import { createTask, updateTask } from "../../tasks.ts";
 import {
+  initiativeSummaryFor,
   listInitiatives,
   readInitiative,
   setInitiativeMilestones,
 } from "../../initiatives.ts";
+import { sessionStore } from "../../db/sessionStore.ts";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
 import { deepTaskChain } from "../../test/deepTaskChain.ts";
 import { affirmed, assertPromptRules } from "../../test/promptRules.ts";
@@ -554,6 +556,9 @@ test("Initiative tool descriptions carry their rules", () => {
           /milestone is a member Task, even one inside a member epic/i,
         "dependencies-are-links":
           /dependencies[^.\n]*task_manage blocks links/i,
+        "coordinate-when-taking-on":
+          /coordinate records that a session drives the Initiative/i,
+        "spawn-initiative-id": /session_spawn's initiativeId/,
       },
     },
     "initiative_manage.state": {
@@ -816,6 +821,7 @@ test("every string of a read may be oversized: fields drop, then clip, and pagin
     progress,
     sessionIds: [],
     sessionCount: 0,
+    coordinatorSessionIds: [],
     updatedAt: 0,
     description: big("description"),
     createdAt: 0,
@@ -885,4 +891,47 @@ test("every string of a read may be oversized: fields drop, then clip, and pagin
   }
   assert.equal(seen.length, nodes.length, "every member read once");
   synthetic.delete("synthetic");
+});
+
+/** A user session row, optionally spawned by `parent`. */
+function sessionRow(id: string, parent?: string): string {
+  sessionStore.upsert({
+    id,
+    scope: "user",
+    harness: "pi",
+    agentType: "developer",
+    title: id,
+    messageCount: 1,
+  });
+  if (parent) sessionStore.linkSpawned(parent, id);
+  return id;
+}
+
+test("coordinate records the caller or a session it spawned, and nobody else", async () => {
+  sessionRow(ctx.session.sessionId);
+  const child = sessionRow("initiative-tool-child", ctx.session.sessionId);
+  const stranger = sessionRow("initiative-tool-stranger");
+  const { changed } = await manage([
+    { operation: "create", title: "Coordinated by a tool" },
+  ]);
+  const id = changed[0]!.id;
+
+  await manage([
+    { operation: "coordinate", id },
+    { operation: "coordinate", id, sessionId: child },
+  ]);
+  assert.deepEqual(
+    [...initiativeSummaryFor(id)!.coordinatorSessionIds].sort(),
+    [child, ctx.session.sessionId].sort(),
+  );
+  await assert.rejects(
+    manage([{ operation: "coordinate", id, sessionId: stranger }]),
+    /not this session or one it spawned/,
+  );
+  await assert.rejects(
+    manage([{ operation: "update", id, title: "x", sessionId: child }]),
+    /sessionId does not apply to update/,
+  );
+  await manage([{ operation: "uncoordinate", id }]);
+  assert.deepEqual(initiativeSummaryFor(id)!.coordinatorSessionIds, [child]);
 });

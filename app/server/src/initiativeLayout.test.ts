@@ -1015,6 +1015,7 @@ function synthetic(
     },
     sessionIds: [],
     sessionCount: 0,
+    coordinatorSessionIds: [],
     updatedAt: 0,
     description: "",
     createdAt: 0,

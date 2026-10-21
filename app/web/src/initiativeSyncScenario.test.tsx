@@ -80,6 +80,7 @@ function summary(id: string, title = `Initiative ${id}`): InitiativeSummary {
     progress: { total: 1, done: 0, doing: 0, startable: 1, blocked: 0 },
     sessionIds: [],
     sessionCount: 0,
+    coordinatorSessionIds: [],
     createdAt: 1,
     updatedAt: 1,
   };

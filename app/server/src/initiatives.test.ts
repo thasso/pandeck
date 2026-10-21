@@ -25,6 +25,7 @@ import {
   listInitiatives,
   readInitiative,
   removeInitiativeMembers,
+  setInitiativeCoordinator,
   setInitiativeMilestones,
   subscribeInitiativeChanges,
   unarchiveInitiative,
@@ -770,4 +771,82 @@ test("every Initiative write reports the row it touched", () => {
       new RegExp(`movesRevision\\(id, \\(\\) => ${name}\\(`).test(exercised),
       `${name} is an Initiative write this test does not exercise`,
     );
+});
+
+/** A user (or `scope`) session row with no Task link at all. */
+function bareSession(scope: "user" | "internal" = "user"): string {
+  sessionSerial += 1;
+  const id = `sess-coordinator-${sessionSerial}`;
+  sessionStore.upsert({
+    id,
+    scope,
+    harness: "pi",
+    agentType: "developer",
+    title: id,
+    messageCount: 1,
+    createdAt: 1_000 + sessionSerial,
+  });
+  return id;
+}
+
+test("a recorded coordinator rides the summary until it is archived or dropped", () => {
+  const id = initiative("Coordinated");
+  const older = bareSession();
+  const newer = bareSession();
+  const settled = bareSession();
+  movesRevision(id, () => setInitiativeCoordinator(id, older, true));
+  setInitiativeCoordinator(id, newer, true);
+  setInitiativeCoordinator(id, settled, true);
+  // Idempotent: a second record is still one coordinator.
+  setInitiativeCoordinator(id, older, true);
+  sessionStore.setSettled(settled, true);
+  assert.deepEqual(
+    initiativeSummaryFor(id)!.coordinatorSessionIds,
+    [settled, newer, older],
+    "newest first, a settled coordinator still driving it",
+  );
+
+  movesRevision(id, () => sessionStore.setArchived(newer, true));
+  assert.deepEqual(initiativeSummaryFor(id)!.coordinatorSessionIds, [
+    settled,
+    older,
+  ]);
+  movesRevision(id, () => setInitiativeCoordinator(id, settled, false));
+  assert.deepEqual(initiativeSummaryFor(id)!.coordinatorSessionIds, [older]);
+  // Dropping one that was never recorded is not an error.
+  setInitiativeCoordinator(id, settled, false);
+});
+
+test("only a live user session on a live Initiative can be recorded", () => {
+  const id = initiative("Refuses coordinators");
+  assert.throws(
+    () => setInitiativeCoordinator(id, "sess-no-row", true),
+    /Session not found/,
+  );
+  assert.throws(
+    () => setInitiativeCoordinator(id, bareSession("internal"), true),
+    /Session not found/,
+  );
+  archiveInitiative(id);
+  assert.throws(
+    () => setInitiativeCoordinator(id, bareSession(), true),
+    /archived/,
+  );
+  assert.throws(
+    () => setInitiativeCoordinator("999999", bareSession(), true),
+    /Initiative not found/,
+  );
+});
+
+test("deleting an Initiative drops its coordinator edges", () => {
+  const id = initiative("Deleted with coordinator");
+  const coordinator = bareSession();
+  setInitiativeCoordinator(id, coordinator, true);
+  deleteInitiative(id);
+  const left = getDb()
+    .prepare(
+      "SELECT COUNT(*) AS n FROM links WHERE relation = 'coordinates' AND from_id = ?",
+    )
+    .get(coordinator) as { n: number };
+  assert.equal(left.n, 0);
 });

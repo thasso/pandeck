@@ -477,6 +477,23 @@ export const INITIATIVE_STORE_SQL = {
       FROM links l INDEXED BY links_to_idx
      WHERE l.to_type = 'session' AND l.to_id IN (SELECT value FROM json_each(?))
        AND l.relation = 'context' AND l.from_type = 'task'`,
+  /** The Initiatives the given sessions coordinate, for the liveness fan-out. */
+  sessionCoordinated: `SELECT DISTINCT l.to_id AS id
+      FROM links l INDEXED BY links_from_idx
+     WHERE l.from_type = 'session' AND l.from_id IN (SELECT value FROM json_each(?))
+       AND l.relation = 'coordinates' AND l.to_type = 'initiative'`,
+  /**
+   * The Initiative's recorded coordinators that are still live: a user-scope
+   * session row neither tombstoned nor archived. Settled ones stay, since a
+   * coordinator between turns is still the one driving it. Newest first.
+   */
+  coordinatorSessions: `SELECT s.id
+      FROM links l INDEXED BY links_to_idx
+      CROSS JOIN session_index s ON s.id = l.from_id
+     WHERE l.to_type = 'initiative' AND l.to_id = ? AND l.relation = 'coordinates'
+       AND l.from_type = 'session'
+       AND s.scope = 'user' AND s.deleted_at_ms IS NULL AND s.archived_at_ms IS NULL
+     ORDER BY s.created_at_ms DESC, s.id LIMIT ?`,
 } as const;
 
 function members(id: number): InitiativeMemberRow[] {
@@ -538,6 +555,31 @@ function memberSessions(
     }
   ).n;
   return { ids, count };
+}
+
+/** The live coordinators of `id`, newest first, at most `limit`. */
+function coordinatorSessions(id: number, limit: number): string[] {
+  return (
+    getDb()
+      .prepare(INITIATIVE_STORE_SQL.coordinatorSessions)
+      .all(String(id), limit) as Array<{ id: string }>
+  ).map((row) => row.id);
+}
+
+/**
+ * Record, or drop, that `sessionId` coordinates the Initiative. Idempotent:
+ * an existing edge is kept, and a missing one is not an error to remove.
+ */
+function setCoordinator(
+  touch: Set<number>,
+  id: number,
+  sessionId: string,
+  coordinates: boolean,
+): void {
+  const session: NodeRef = { type: "session", id: sessionId };
+  if (coordinates) addLink(session, "coordinates", initiativeNode(id));
+  else removeLink(session, "coordinates", initiativeNode(id));
+  touch.add(id);
 }
 
 /** Every `blocks` link into the given Tasks from a live Task. */
@@ -652,13 +694,25 @@ function touchHolders(
   stampAndNotify(new Set([...holdersOf(taskIds), ...formerHolders]));
 }
 
-/** A linked session changed: refresh the summaries listing it. */
+/**
+ * A linked session changed: refresh the summaries listing it, through a member
+ * Task it started from or as a coordinator.
+ */
 function touchSessionHolders(sessionIds: readonly string[]): void {
   if (!sessionIds.length) return;
-  const rows = getDb()
+  const ids = JSON.stringify([...new Set(sessionIds)]);
+  const tasks = getDb()
     .prepare(INITIATIVE_STORE_SQL.sessionTasks)
-    .all(JSON.stringify([...new Set(sessionIds)])) as Array<{ id: string }>;
-  stampAndNotify(new Set(holdersOf(rows.map((row) => Number(row.id)))));
+    .all(ids) as Array<{ id: string }>;
+  const coordinated = getDb()
+    .prepare(INITIATIVE_STORE_SQL.sessionCoordinated)
+    .all(ids) as Array<{ id: string }>;
+  stampAndNotify(
+    new Set([
+      ...holdersOf(tasks.map((row) => Number(row.id))),
+      ...coordinated.map((row) => Number(row.id)),
+    ]),
+  );
 }
 
 sessionStore.subscribeLiveness((ids) => {
@@ -740,6 +794,8 @@ export const initiativeStore = {
   members,
   memberSessions,
   memberTaskStarts,
+  coordinatorSessions,
+  setCoordinator,
   blockersInto,
   holdersOf,
   membershipsOf,

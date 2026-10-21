@@ -17,6 +17,7 @@
  * its `initiatives` (docs/initiatives.md).
  */
 import {
+  INITIATIVE_SUMMARY_COORDINATOR_LIMIT,
   INITIATIVE_SUMMARY_SESSION_LIMIT,
   type InitiativeDetail,
   type InitiativeExternalBlocker,
@@ -38,6 +39,7 @@ import {
   type InitiativeRow,
 } from "./db/initiativeStore.ts";
 import { taskStore } from "./db/taskStore.ts";
+import { sessionStore } from "./db/sessionStore.ts";
 import { notifyTaskChange } from "./tasks.ts";
 
 /** A list entry: the summary, plus when it was archived for archived reads. */
@@ -176,6 +178,29 @@ function setArchived(id: string, archived: boolean): InitiativeRow {
   if ((current.archivedAt !== undefined) !== archived)
     notifyHeldTasks(storedTaskIds(current.id));
   return row;
+}
+
+/**
+ * Record that `sessionId` drives the Initiative, or drop that record. The
+ * session must be a live user session; WHO may name it is the caller's rule
+ * (`initiative_manage`, `session_spawn`). Idempotent. Recording one on an
+ * archived Initiative is refused: nothing lists it, so nothing would show it.
+ */
+export function setInitiativeCoordinator(
+  id: string,
+  sessionId: string,
+  coordinates: boolean,
+): InitiativeRow {
+  const current = requireInitiative(id);
+  if (coordinates && current.archivedAt !== undefined)
+    throw new Error(`Initiative-${current.id} is archived.`);
+  const session = sessionStore.get(sessionId);
+  if (coordinates && (!session || session.scope !== "user"))
+    throw new Error(`Session not found: ${quoted(sessionId)}`);
+  return initiativeStore.mutation((touch) => {
+    initiativeStore.setCoordinator(touch, current.id, sessionId, coordinates);
+    return initiativeStore.get(current.id)!;
+  });
 }
 
 /**
@@ -522,6 +547,10 @@ function summaryOf(
     ...(nextMilestone ? { nextMilestone } : {}),
     sessionIds: sessions.ids,
     sessionCount: sessions.count,
+    coordinatorSessionIds: initiativeStore.coordinatorSessions(
+      row.id,
+      INITIATIVE_SUMMARY_COORDINATOR_LIMIT,
+    ),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

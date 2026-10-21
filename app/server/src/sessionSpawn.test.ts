@@ -65,6 +65,8 @@ const piModelApi = await import("./piSdk/models.ts");
 const worktreeResolve = await import("./worktrees/worktreeResolve.ts");
 const { projectStore } = await import("./db/projectStore.ts");
 const { createTask, deleteTask } = await import("./tasks.ts");
+const { archiveInitiative, createInitiative, initiativeSummaryFor } =
+  await import("./initiatives.ts");
 const {
   buildSpawnProposal,
   prepareSpawnApproval,
@@ -134,6 +136,8 @@ let createFails: string | undefined;
 /** Runs inside the pi model lookup: the last await before creation. */
 let duringPiLookup: (() => void) | undefined;
 let deliverFails = false;
+/** Runs inside the recorded delivery, before it is recorded. */
+let beforeDeliver: (() => void) | undefined;
 /** Awaited at the start of creation, by row title: an in-flight creation. */
 let beforeCreate: ((title: string) => Promise<void>) | undefined;
 
@@ -278,6 +282,7 @@ beforeEach(() => {
       (recorded.windowsAtDelivery ??= []).push(
         sessionStore.get(input.targetSessionId)?.compactionWindow,
       );
+      beforeDeliver?.();
       if (deliverFails) throw new Error("delivery exploded");
       recorded.delivered.push({ ...input });
       // A held opening prompt is what the start pass reads, so it is stored as
@@ -312,6 +317,7 @@ beforeEach(() => {
 afterEach(() => {
   setApprovalBroadcastForTests(null);
   setSessionSpawnDepsForTests(null);
+  beforeDeliver = undefined;
   updateSettings({ peerSpawnRuntimes: [] });
   patchCredentialProfile("default", { enterprise: false });
   // Waiting rows outlive a test in the shared database; nothing may start them.
@@ -489,6 +495,7 @@ test.each([
   ["a developer with no worktree", { agentType: "developer" }],
   ["an unknown project", { projectId: "no-such-project" }],
   ["an unknown Task", { taskId: "424242" }],
+  ["an unknown Initiative", { initiativeId: "424242" }],
 ])("%s is refused before any card exists", async (_label, patch) => {
   const before = approvalsForSession(SENDER).length;
   await expect(propose([row(patch)])).rejects.toThrow();
@@ -2063,6 +2070,40 @@ test("a direct developer row carries its worktree, Project and Task", async () =
     promptEvidence: { hasAttachments: false, projectId: "spawn-proj" },
   });
   expect(recorded.delivered[0]?.taskId).toBe(task.id);
+});
+
+test("a direct row's initiativeId records the child as coordinator before its prompt", async () => {
+  approveRuntimes();
+  const initiative = String(
+    createInitiative({ title: "Driven by a spawn" }).initiative.id,
+  );
+  const archived = String(
+    createInitiative({ title: "Archived before spawn" }).initiative.id,
+  );
+  archiveInitiative(archived);
+  const coordinatorsAtDelivery: string[][] = [];
+  beforeDeliver = () =>
+    coordinatorsAtDelivery.push(
+      initiativeSummaryFor(initiative)!.coordinatorSessionIds,
+    );
+  await spawnDirect([
+    {
+      ...row({ title: "Coordinator" }),
+      profileId: "pr_terra",
+      initiativeId: initiative,
+    },
+  ]);
+  const child = String(recorded.delivered[0]?.targetSessionId);
+  expect(coordinatorsAtDelivery).toEqual([[child]]);
+  await expect(
+    spawnDirect([
+      {
+        ...row({ title: "Too late" }),
+        profileId: "pr_terra",
+        initiativeId: archived,
+      },
+    ]),
+  ).rejects.toThrow(/archived/);
 });
 
 test("mixed batches spend only counted slots and low-only batches bypass a full pool", async () => {

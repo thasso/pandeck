@@ -12,6 +12,7 @@ import type {
 import { SessionInbox } from "../../../src/components/SessionInbox.tsx";
 import { NAV_CARD_INSET } from "../../../src/components/shell/PrimaryNav.tsx";
 import type { RowDensity } from "../../../src/lib/rowDensity.ts";
+import { hostedLabsSummary } from "../../fixtures/initiatives.ts";
 import {
   attentionFixture,
   defined,
@@ -20,6 +21,18 @@ import {
   type SessionInboxFixture,
   type SessionOverrides,
 } from "../../fixtures/shell.ts";
+
+/**
+ * One Initiative over the attention fixture: `coordinator` is recorded as
+ * driving it, and `failed` was started from one of its Tasks.
+ */
+const STORY_INITIATIVES = [
+  hostedLabsSummary({
+    coordinatorSessionIds: ["coordinator"],
+    sessionIds: ["failed"],
+    sessionCount: 1,
+  }),
+];
 
 export interface SessionInboxStoryProps {
   frameWidth: number;
@@ -857,6 +870,8 @@ export function SessionInboxStory({
             onOpenTask={() => {}}
             onOpenWorkflowRun={() => {}}
             onSettleWorkflowRun={() => {}}
+            initiatives={STORY_INITIATIVES}
+            onOpenInitiative={() => {}}
             onOpenWorktree={() => {}}
           />
         </div>

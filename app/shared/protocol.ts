@@ -4119,6 +4119,9 @@ export interface SessionSpawnApprovalItem {
   projectName?: string;
   taskId?: string;
   taskTitle?: string;
+  /** The Initiative the session will coordinate (`docs/initiatives.md`). */
+  initiativeId?: string;
+  initiativeTitle?: string;
   /** The user dropped this row at approve time; nothing was created. */
   skipped?: boolean;
   /** The session this row created, once executed. */

@@ -63,6 +63,26 @@ test("a session change finds its Tasks through links_to_idx", () => {
   );
 });
 
+test("a session change finds the Initiatives it coordinates through links_from_idx", () => {
+  const plan = assertIndexed("sessionCoordinated", ["[]"]);
+  assert.match(
+    plan,
+    /SEARCH l USING (COVERING )?INDEX links_from_idx \(from_type=\? AND from_id=\? AND relation=\?\)/,
+  );
+});
+
+test("an Initiative's coordinators are a search by its id, then by session id", () => {
+  const plan = assertIndexed("coordinatorSessions", ["1", "20"]);
+  assert.match(
+    plan,
+    /SEARCH l USING (COVERING )?INDEX links_to_idx \(to_type=\? AND to_id=\? AND relation=\?\)/,
+  );
+  assert.match(
+    plan,
+    /SEARCH s USING INDEX sqlite_autoindex_session_index_1 \(id=\?\)/,
+  );
+});
+
 test("the member walk and its session filter search by key", () => {
   const plan = assertIndexed("members", ["1"]);
   assert.match(plan, /SEARCH t USING INTEGER PRIMARY KEY/);

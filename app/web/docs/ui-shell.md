@@ -239,10 +239,11 @@ its open state for the tab. Initiatives (`docs/initiatives.md`) have their
 canonical location in the first group, above the Project tree. That group is
 bounded: it lists the active and paused Initiatives. Its heading only folds the
 list; there is no link to the Initiatives index. Individual rows still open
-their Initiative. It holds the `initiatives` topic only while the Projects
-browser is on screen; an Initiative's page holds it too, with Tasks and Projects
-for the live map. There is no Initiatives section of its own and no view of an
-Initiative inside a Project page.
+their Initiative. It holds the `initiatives` topic while the Projects or
+Sessions browser is on screen (the Sessions cards mark their Initiative, below);
+an Initiative's page holds it too, with Tasks and Projects for the live map.
+There is no Initiatives section of its own and no view of an Initiative inside a
+Project page.
 
 `InitiativeBrowserRow` is the quieter, structure-oriented counterpart to its
 Attention card: title and compact Task progress, then a leading Contents
@@ -769,7 +770,16 @@ scrolls the card into view and focuses it, once per address, honouring reduced
 motion.
 
 Initiatives are not Sessions inbox items (`docs/initiatives.md`): the Projects
-section lists them, and their pages hold the map.
+section lists them, and their pages hold the map. A session card instead MARKS
+the Initiative it belongs to, leading its first row: the Initiative glyph, and
+for a session recorded as coordinating it (`coordinatorSessionIds`) a small bar
+of the Initiative's done/total progress beside it. A session started from one of
+its Tasks (`sessionIds`) gets the glyph alone. The role, name, progress and any
+further Initiatives are the marker's tooltip and part of the card's spoken
+label; clicking the marker opens the Initiative's page. A session in several
+Initiatives is marked once, by the first recording it as coordinator, else the
+first listing it. Membership comes only from the summaries, never from spawns or
+titles; peer rows folded under a cluster carry no marker.
 
 ## Pull Requests
 

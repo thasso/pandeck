@@ -179,6 +179,16 @@ create or edit form, and makes no Initiative write.
   those a removal took with their ancestor) and removed ones still members
   through an ancestor once the batch is done. Every id it names is the canonical
   one, never the caller's spelling.
+  - `coordinate` / `uncoordinate` record, or drop, that a session drives the
+    Initiative (below). The session is the caller by default; `sessionId` may
+    name only a session the caller spawned, since any other is the user's or
+    another agent's to claim. Recording one on an archived Initiative is
+    refused.
+- `session_spawn` rows (`spawn` and `propose`) accept `initiativeId`: the
+  created session is recorded as a coordinator before its opening prompt is
+  delivered, so it is marked from its first turn. An unknown or archived
+  Initiative refuses the row; one archived while a proposal waited is skipped
+  with a warning, never failing the created session.
 
 Both are deferred tools, found with a tool search for "initiative", and are
 available to the developer and personal-assistant personas. Their rules live in
@@ -446,6 +456,19 @@ re-reads the graph.
 An Initiative is not a Sessions inbox item. Attention holds sessions and
 Workflow Runs; Initiatives are browsed in the Projects section and on their own
 pages, so they have no attention cursor, Settle or manual Attention position.
+Instead a session card marks the Initiative it belongs to
+(`app/web/docs/ui-shell.md`): a coordinator's marker draws the Initiative's
+progress, a member's is the glyph alone.
+
+A COORDINATOR is a session recorded as driving the Initiative: a
+`session —coordinates→ initiative` edge in `links`, written only by
+`initiative_manage`'s `coordinate` or `session_spawn`'s `initiativeId`, never
+inferred from spawns, titles or prompts. The summary's `coordinatorSessionIds`
+lists the live ones — user sessions neither archived nor tombstoned, settled
+ones included, since a coordinator between turns still drives it — newest by
+creation first, at most 20. Recording, dropping, archiving or deleting one
+notifies the Initiative like any other summary change. Deleting the Initiative
+drops its edges; a deleted session's edge stays but never qualifies.
 
 The summary lists the user's sessions STARTED from a member Task (`task-start`,
 `linkTaskStart`), archived member Tasks included, that are neither archived nor

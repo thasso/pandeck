@@ -60,6 +60,11 @@ export const InitiativeCoordinatorRows = memo(
           session.spawnedBySessionId ? [session.spawnedBySessionId] : [],
         ),
       );
+      // Recorded as driving the Initiative: a coordinator by the record alone.
+      for (const id of initiative.coordinatorSessionIds) {
+        related.add(id);
+        coordinators.add(id);
+      }
       for (const worktree of worktrees) {
         for (const id of worktree.sessionIds) related.add(id);
         if (worktree.createdBySessionId)
@@ -123,6 +128,7 @@ export const InitiativeCoordinatorRows = memo(
     }, [
       initiative.sessionIds,
       initiative.sessionCount,
+      initiative.coordinatorSessionIds,
       members,
       worktrees,
       sessions,

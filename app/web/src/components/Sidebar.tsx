@@ -75,7 +75,10 @@ import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
 import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
 import { browserRowDensity, type RowDensity } from "../lib/rowDensity.ts";
-import type { SettingsSection } from "../hooks/useSessionRouting.ts";
+import {
+  initiativePath,
+  type SettingsSection,
+} from "../hooks/useSessionRouting.ts";
 import {
   isNavAction,
   type NavAction,
@@ -649,6 +652,11 @@ function SidebarImpl({
   // rebroadcast hands back the same ids in a fresh array. Keep the PREVIOUS
   // array when the ids are unchanged: React then bails out of the re-render
   // entirely, and the set below stays referentially stable for its consumers.
+  // A card's Initiative marker opens its page, the map, by its canonical route.
+  const openInitiative = useCallback(
+    (initiativeId: string) => onNavigate(initiativePath(initiativeId)),
+    [onNavigate],
+  );
   const onVisibleProjectWorktreeIds = useCallback((ids: string[]) => {
     setVisibleProjectWorktreeIds((current) =>
       current.length === ids.length && current.every((id, i) => id === ids[i])
@@ -1057,6 +1065,8 @@ function SidebarImpl({
             onOpenTask={onOpenTask}
             onOpenWorkflowRun={onOpenWorkflowRun}
             onSettleWorkflowRun={onSettleWorkflowRun}
+            initiatives={initiatives}
+            onOpenInitiative={openInitiative}
             onSetInboxPositions={onSetInboxPositions}
             onOpenWorktree={onOpenWorktree}
           />

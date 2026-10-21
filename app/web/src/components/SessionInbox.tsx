@@ -27,6 +27,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { isShelvedSession, MAX_INBOX_POSITIONS } from "@assistant/shared";
 import type {
   InboxPositionEntry,
+  InitiativeSummary,
   ProjectRecord,
   SessionListItem,
   TaskSummary,
@@ -83,6 +84,7 @@ import {
   type WorkflowRunInboxItem,
 } from "../lib/sessionInbox.ts";
 import { globalBackgroundActivity } from "../lib/backgroundWork.ts";
+import { initiativesBySession } from "../lib/sessionInitiatives.ts";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 
 // Every row in this browser — card, settled row, archived row — answers the
@@ -138,6 +140,8 @@ const REORDER_MS = 220;
 
 /** One shared empty relations object, so an unjoined card keeps its memo. */
 const NO_RELATIONS: SessionCardRelations = {};
+/** Stable default, so the Initiative join is not rebuilt on every render. */
+const NO_INITIATIVES: readonly InitiativeSummary[] = [];
 
 interface Props {
   /**
@@ -208,6 +212,13 @@ interface Props {
    */
   onSettleWorkflowRun: (runId: string, throughRevision: number) => void;
   /**
+   * Live Initiative summaries (the `initiatives` topic): a card marks the
+   * Initiative it coordinates or works on. Not inbox items of their own.
+   */
+  initiatives?: readonly InitiativeSummary[];
+  /** Open one Initiative's page from a card's marker. */
+  onOpenInitiative?: ((initiativeId: string) => void) | undefined;
+  /**
    * Place working-set items where the user dragged them. Absent, the list
    * does not drag. Only the working set below **Needs you** drags: that block
    * empties as it is answered, and the shelves are history.
@@ -263,6 +274,8 @@ export function SessionInbox({
   onOpenTask,
   onOpenWorkflowRun,
   onSettleWorkflowRun,
+  initiatives = NO_INITIATIVES,
+  onOpenInitiative,
   onSetInboxPositions,
   onOpenWorktree,
 }: Props) {
@@ -605,6 +618,11 @@ export function SessionInbox({
     [projects],
   );
 
+  // Structural membership only: what the Initiative summaries record.
+  const initiativeBySession = useMemo(
+    () => initiativesBySession(initiatives),
+    [initiatives],
+  );
   // Central joins: ids are resolved to display metadata once for the whole list.
   const relationsById = useMemo(() => {
     const projectsById = new Map(
@@ -665,10 +683,20 @@ export function SessionInbox({
               worktreeAhead: status.ahead,
             }
           : {}),
+        ...(initiativeBySession.has(session.id)
+          ? { initiative: initiativeBySession.get(session.id)! }
+          : {}),
       });
     }
     return map;
-  }, [sessions, projects, worktrees, worktreeStatuses, soleTaskBySession]);
+  }, [
+    sessions,
+    projects,
+    worktrees,
+    worktreeStatuses,
+    soleTaskBySession,
+    initiativeBySession,
+  ]);
 
   // Everything the cards render, in the order they render it. A commit that
   // leaves this unchanged repainted no card, so no card can have MOVED — which
@@ -1038,6 +1066,7 @@ export function SessionInbox({
               onSettle={settleCard}
               onDismissFailure={onDismissFailure}
               onOpenProject={onOpenProject}
+              onOpenInitiative={onOpenInitiative}
               onOpenTask={onOpenTask}
               onOpenWorktree={onOpenWorktree}
               onRename={onRenameSession}

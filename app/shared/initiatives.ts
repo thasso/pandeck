@@ -30,6 +30,9 @@ export interface InitiativeProgress {
 /** At most this many session ids ride a summary; `sessionCount` has the rest. */
 export const INITIATIVE_SUMMARY_SESSION_LIMIT = 50;
 
+/** At most this many coordinator ids ride a summary. */
+export const INITIATIVE_SUMMARY_COORDINATOR_LIMIT = 20;
+
 /**
  * The first milestone, in the user's member order, that is still open: not
  * done and not archived (an archived open Task is shelved, the rule that makes
@@ -64,6 +67,15 @@ export interface InitiativeSummary {
    * when it was cut.
    */
   sessionCount: number;
+  /**
+   * The sessions RECORDED as driving this Initiative — a `coordinates` edge
+   * that `session_spawn`'s `initiativeId` or `initiative_manage`'s
+   * `coordinate` wrote, never inferred from spawns or titles — that are live
+   * user sessions: neither archived nor tombstoned, settled ones included.
+   * Newest by session creation first (ties by id), at most
+   * {@link INITIATIVE_SUMMARY_COORDINATOR_LIMIT}.
+   */
+  coordinatorSessionIds: string[];
   createdAt: number;
   updatedAt: number;
 }

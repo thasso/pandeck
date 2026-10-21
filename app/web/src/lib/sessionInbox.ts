@@ -43,6 +43,10 @@ import {
   workflowRunSettleBlockedReason,
 } from "@assistant/shared";
 import { sessionDeliveryKey } from "./sessionDelivery.ts";
+import {
+  sessionInitiativeKey,
+  type SessionInitiativeRelation,
+} from "./sessionInitiatives.ts";
 import { backgroundActivityKey } from "./backgroundWork.ts";
 import { elapsedLabel, relativeAge } from "./relativeTime.ts";
 
@@ -1359,6 +1363,8 @@ export interface SessionCardRelations {
   worktreeDeletions?: number;
   /** Commits the worktree branch is ahead of its base. */
   worktreeAhead?: number;
+  /** The Initiative it coordinates or works on (`sessionInitiatives.ts`). */
+  initiative?: SessionInitiativeRelation;
 }
 
 /** Which relation an item stands for; the renderer keys its glyph on this. */
@@ -1538,6 +1544,7 @@ export function sessionRelationsKey(relations: SessionCardRelations): string {
     relations.worktreeAdditions ?? "",
     relations.worktreeDeletions ?? "",
     relations.worktreeAhead ?? "",
+    sessionInitiativeKey(relations.initiative),
   ].join("\u0000");
 }
 

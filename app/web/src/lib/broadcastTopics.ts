@@ -122,11 +122,12 @@ export function topicsForSurface({
     topics.add("projects");
     topics.add("workflow");
   }
-  // Attention holds Workflow Runs as independent inbox items.
-  // Filters also need authoritative Project/worktree associations, while Task
+  // Attention holds Workflow Runs as independent inbox items, and its cards
+  // mark the Initiative a session coordinates or works on. Filters also need authoritative Project/worktree associations, while Task
   // titles remain a best-effort join without subscribing to the Backlog.
   if (shownSection === "sessions") {
     topics.add("workflow");
+    topics.add("initiatives");
     topics.add("projects");
     topics.add("worktrees");
   }
