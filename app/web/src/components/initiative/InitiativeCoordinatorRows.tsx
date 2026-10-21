@@ -60,11 +60,9 @@ export const InitiativeCoordinatorRows = memo(
           session.spawnedBySessionId ? [session.spawnedBySessionId] : [],
         ),
       );
-      // Recorded as driving the Initiative: a coordinator by the record alone.
-      for (const id of initiative.coordinatorSessionIds) {
-        related.add(id);
-        coordinators.add(id);
-      }
+      // Recorded as driving the Initiative: a coordinator by the record alone,
+      // listed as itself — never replaced by, nor dependent on, its spawn root.
+      const recorded = new Set(initiative.coordinatorSessionIds);
       for (const worktree of worktrees) {
         for (const id of worktree.sessionIds) related.add(id);
         if (worktree.createdBySessionId)
@@ -91,7 +89,13 @@ export const InitiativeCoordinatorRows = memo(
         }
       }
       const roots = new Map<string, SessionListItem>();
+      for (const id of recorded) {
+        const session = byId.get(id);
+        if (session) roots.set(id, session);
+        else incomplete = true;
+      }
       for (const id of related) {
+        if (recorded.has(id)) continue;
         let current = byId.get(id);
         let coordinated = false;
         const seen = new Set<string>();

@@ -300,10 +300,13 @@ holder and full ancestry ids, and explicit coordinator roles of member-Task
 Workflow Runs. Only complete loaded spawn chains can identify a root: a missing
 parent or a cycle never promotes the last visible peer. Positive roots are
 deduplicated; missing session details or clipped summary membership are stated
-as incomplete, not as absence of a coordinator. The fold does not fetch the
-whole archived-session collection. These are recorded coordinating
-relationships, not an explicit Initiative owner; takeover does not erase
-provenance or change the shared current-ownership presentation.
+as incomplete, not as absence of a coordinator. A RECORDED coordinator
+(`coordinatorSessionIds`) is listed as itself whenever its row is loaded, never
+replaced by its spawn root and never dependent on that root being loaded. The
+fold does not fetch the whole archived-session collection. Apart from those
+recorded ones, these are inferred coordinating relationships, not an explicit
+Initiative owner; takeover does not erase provenance or change the shared
+current-ownership presentation.
 
 Inside a Worktree, Task context includes only linked member Tasks whose status
 is doing and which are not archived. One Task is a canonical link in the row's

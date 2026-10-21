@@ -274,17 +274,17 @@ folded away or unmounted, as when the top-level Projects group folds, leaving
 the other hosts' demand in place. A remembered Known coordinators fold precedes
 Projects, using recorded spawn/Workflow relationships and the server's Worktree
 ancestry projection; only verified roots appear, with missing session details
-stated rather than guessed. In-progress member Tasks appear within Worktrees,
-one as an inline link or several behind a disclosure. This context is not a
-required Task tier above sessions. Worktree Sessions expand separately from
-Tasks in the shared Tree, with five known rows initially and inline paging.
-Sessions without a Worktree appear directly under their member Project;
-ambiguous or unavailable placement stays in Other related sessions. Session
-scope comes from recorded Task context, bounded Task-start ids, Workflow roles
-and eligible owned descendants, never merely sharing a checkout or Project.
-Missing relationship coverage stays explicit. Session folds are remembered per
-Initiative/Worktree, preserve sibling Project folds, and add no lifecycle
-actions.
+stated rather than guessed. A session recorded as the Initiative's coordinator
+appears as itself. In-progress member Tasks appear within Worktrees, one as an
+inline link or several behind a disclosure. This context is not a required Task
+tier above sessions. Worktree Sessions expand separately from Tasks in the
+shared Tree, with five known rows initially and inline paging. Sessions without
+a Worktree appear directly under their member Project; ambiguous or unavailable
+placement stays in Other related sessions. Session scope comes from recorded
+Task context, bounded Task-start ids, Workflow roles and eligible owned
+descendants, never merely sharing a checkout or Project. Missing relationship
+coverage stays explicit. Session folds are remembered per Initiative/Worktree,
+preserve sibling Project folds, and add no lifecycle actions.
 
 Tasks use one server-authoritative Backlog projection across the sidebar and
 full-page browser. A `tasks` topic subscription replaces browser-local cached

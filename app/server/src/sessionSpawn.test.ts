@@ -926,6 +926,40 @@ test("a Task deleted after the proposal stops the row BEFORE a session exists", 
   expect(recorded.pi).toHaveLength(0);
 });
 
+test("a proposed initiativeId names the Initiative on the card and records the coordinator on approval", async () => {
+  const initiative = String(
+    createInitiative({ title: "Proposed coordination" }).initiative.id,
+  );
+  const { card } = await propose([row({ initiativeId: initiative })]);
+  expect(bodyOf(card).items[0]).toMatchObject({
+    initiativeId: initiative,
+    initiativeTitle: "Proposed coordination",
+  });
+
+  const { card: done } = await resolveApproval(card.id, "approved");
+
+  const sessionId = bodyOf(done).items[0]!.resultSessionId!;
+  expect(initiativeSummaryFor(initiative)!.coordinatorSessionIds).toEqual([
+    sessionId,
+  ]);
+});
+
+test("an Initiative archived while the card waited still creates and delivers the session", async () => {
+  const initiative = String(
+    createInitiative({ title: "Archived while waiting" }).initiative.id,
+  );
+  const { card } = await propose([row({ initiativeId: initiative })]);
+  archiveInitiative(initiative);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const { card: done } = await resolveApproval(card.id, "approved");
+
+  expect(bodyOf(done).items[0]?.resultSessionId).toBeDefined();
+  expect(recorded.delivered).toHaveLength(1);
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("coordinator"));
+  warn.mockRestore();
+});
+
 test("a spawned session is bound to its Project and claims it in its evidence", async () => {
   activeWorktree("wt-ctx");
   const { card } = await propose([
