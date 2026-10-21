@@ -25,7 +25,9 @@ import {
   updateInitiative,
   initiativeMembershipNow,
   type InitiativeMembershipWrite,
+  setInitiativeCoordinator,
 } from "../../initiatives.ts";
+import { sessionStore } from "../../db/sessionStore.ts";
 
 /**
  * Every result is bounded by its WHOLE UTF-8 size, like `task_read`: an
@@ -82,6 +84,8 @@ const MANAGE_OPERATIONS = [
   "archive",
   "unarchive",
   "delete",
+  "coordinate",
+  "uncoordinate",
 ] as const;
 
 type ManageOperationName = (typeof MANAGE_OPERATIONS)[number];
@@ -150,6 +154,11 @@ const initiativeManageSchema = {
             description:
               "create, addMembers, removeMembers, setMilestone, clearMilestone. A Task brings its whole subtree; one list is one request, in any order.",
           },
+          sessionId: {
+            type: "string",
+            description:
+              "coordinate, uncoordinate: this session (the default) or a session it spawned.",
+          },
         },
       },
     },
@@ -173,6 +182,7 @@ interface ManageOperation {
   description?: string;
   state?: InitiativeState;
   taskIds?: string[];
+  sessionId?: string;
 }
 
 type ManageParams = { operations?: ManageOperation[] };
@@ -230,11 +240,11 @@ function makeInitiativeManageTool() {
     name: "initiative_manage",
     label: "Initiatives: Manage",
     description:
-      "Batch-create, update, archive, unarchive or delete Initiatives — the user's groupings of Tasks across Projects — and add or remove member Tasks and mark milestones; delete only when the user explicitly asks. A member brings its whole subtree: adding a Task under a member is refused, and adding an epic absorbs its members below it. A milestone is a member Task, even one inside a member epic, done when its status is. Dependencies between Tasks are task_manage blocks links, never Initiative text.",
+      "Batch-create, update, archive, unarchive or delete Initiatives — the user's groupings of Tasks across Projects — and add or remove member Tasks and mark milestones; delete only when the user explicitly asks. coordinate records that a session drives the Initiative, so the user's lists mark it with the Initiative's progress: use it when you take an Initiative on (session_spawn's initiativeId does the same for a coordinator you start); uncoordinate when you hand it back. A member brings its whole subtree: adding a Task under a member is refused, and adding an epic absorbs its members below it. A milestone is a member Task, even one inside a member epic, done when its status is. Dependencies between Tasks are task_manage blocks links, never Initiative text.",
     searchHint:
       "initiative initiatives milestone epic cross-project group members create",
     parameters: initiativeManageSchema,
-    async execute(params) {
+    async execute(params, ctx) {
       const operations = params.operations ?? [];
       if (operations.length === 0)
         throw new Error("initiative_manage requires at least one operation.");
@@ -265,6 +275,10 @@ function makeInitiativeManageTool() {
           !MEMBER_OPERATIONS.has(operation ?? "")
         )
           throw new Error(`taskIds does not apply to ${named}.`);
+        const coordinates =
+          operation === "coordinate" || operation === "uncoordinate";
+        if (op.sessionId !== undefined && !coordinates)
+          throw new Error(`sessionId does not apply to ${named}.`);
         if (operation === "create") {
           record(
             createInitiative({
@@ -298,7 +312,21 @@ function makeInitiativeManageTool() {
           changed.add(String(archiveInitiative(id).id));
         else if (operation === "unarchive")
           changed.add(String(unarchiveInitiative(id).id));
-        else if (operation === "delete") {
+        else if (coordinates) {
+          const sessionId = coordinatedSession(
+            ctx.session.sessionId,
+            cleanOptional(op.sessionId),
+          );
+          changed.add(
+            String(
+              setInitiativeCoordinator(
+                id,
+                sessionId,
+                operation === "coordinate",
+              ).id,
+            ),
+          );
+        } else if (operation === "delete") {
           const canonical = deleteInitiative(id);
           changed.delete(canonical);
           absorbed.delete(canonical);
@@ -370,6 +398,20 @@ function makeInitiativeManageTool() {
       });
     },
   });
+}
+
+/**
+ * The session a coordinate write names: the caller, or a session the caller
+ * spawned. Any other session is the user's or another agent's to claim.
+ */
+function coordinatedSession(caller: string, named: string | undefined): string {
+  if (named === undefined || named === caller) return caller;
+  const parent = sessionStore.spawnedParentsByChildIds([named]).get(named);
+  if (parent?.parentSessionId !== caller)
+    throw new Error(
+      `Session ${shortText(named)} is not this session or one it spawned.`,
+    );
+  return named;
 }
 
 /** `{ [key]: ids }` capped, with the true count when the cap cut it. */

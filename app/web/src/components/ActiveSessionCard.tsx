@@ -12,6 +12,7 @@ import {
   Play,
   Reply,
   Users,
+  Waypoints,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -62,7 +63,12 @@ import { Spinner } from "./common/load.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { TONE_BADGE } from "./common/statusBadge.ts";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { ListRow, ListRowContent } from "./common/ListRow.tsx";
+import {
+  sessionInitiativeLabel,
+  type SessionInitiativeRelation,
+} from "../lib/sessionInitiatives.ts";
 
 /** Object glyphs for the third line, matching the primary navigation's icons. */
 const META_ICON: Partial<Record<SessionCardMetaKind, LucideIcon>> = {
@@ -101,6 +107,58 @@ function WorktreeChanges({ relations }: { relations: SessionCardRelations }) {
         </span>
       ) : null}
     </span>
+  );
+}
+
+/**
+ * The Initiative a session coordinates or works on: its glyph, and for a
+ * coordinator the Initiative's progress beside it. Everything else is the
+ * tooltip, so it leads the context row without costing the Project its width.
+ */
+function InitiativeMarker({
+  relation,
+  onOpen,
+}: {
+  relation: SessionInitiativeRelation;
+  onOpen?: ((initiativeId: string) => void) | undefined;
+}) {
+  const label = sessionInitiativeLabel(relation);
+  const body = (
+    <>
+      <Waypoints size={12} className="shrink-0" aria-hidden />
+      {relation.coordinator ? (
+        <Progress
+          value={
+            relation.total === 0 ? 0 : (relation.done / relation.total) * 100
+          }
+          aria-hidden
+          className="w-8 shrink-0"
+        />
+      ) : null}
+    </>
+  );
+  const shape = "flex shrink-0 items-center gap-1";
+  if (!onOpen)
+    return (
+      <span role="img" aria-label={label} title={label} className={shape}>
+        {body}
+      </span>
+    );
+  return (
+    <Badge
+      variant="ghost"
+      render={<button type="button" />}
+      // Flush and fill-free like the Project item beside it (`MetaItem`).
+      className={`${shape} h-auto cursor-pointer border-0 px-0 py-0 hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
+      title={`Open ${label}`}
+      aria-label={`Open ${label}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(relation.id);
+      }}
+    >
+      {body}
+    </Badge>
   );
 }
 
@@ -144,6 +202,7 @@ export interface ActiveSessionCardProps {
     outcomeRevision: number,
   ) => void;
   onOpenProject?: (projectId: string) => void;
+  onOpenInitiative?: ((initiativeId: string) => void) | undefined;
   onOpenTask?: (taskId: string) => void;
   onOpenWorktree?: (worktreeId: string) => void;
   onRename: (sessionId: string) => void;
@@ -183,6 +242,7 @@ function ActiveSessionCardImpl({
   onSettle,
   onDismissFailure,
   onOpenProject,
+  onOpenInitiative,
   onArchive,
   onDelete,
   onToggleCluster,
@@ -297,6 +357,10 @@ function ActiveSessionCardImpl({
           : changesText
             ? ` — ${changesText}`
             : ""
+      }${
+        relations.initiative
+          ? ` — ${sessionInitiativeLabel(relations.initiative)}`
+          : ""
       }${worktreeIntegrated ? " — branch changes integrated into base" : ""}${backgroundText ? ` — ${backgroundText}` : ""}${
         clusterSummary ? ` — coordinating ${clusterSummary}` : ""
       }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
@@ -326,6 +390,12 @@ function ActiveSessionCardImpl({
         density={density}
         context={
           <>
+            {relations.initiative ? (
+              <InitiativeMarker
+                relation={relations.initiative}
+                onOpen={onOpenInitiative}
+              />
+            ) : null}
             {meta.length === 0 ? (
               // No linked object: the row names who the session is, so
               // the card keeps three filled rows.

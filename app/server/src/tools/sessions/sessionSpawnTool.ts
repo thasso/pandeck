@@ -130,6 +130,11 @@ function makeSessionSpawnTool() {
                 description:
                   "Task this session works on: it is linked to the Task and the prompt names it.",
               },
+              initiativeId: {
+                type: "string",
+                description:
+                  "Initiative this session will coordinate; recorded for the user's lists.",
+              },
               owner: {
                 type: "string",
                 enum: ["coordinator", "user"],
@@ -384,6 +389,7 @@ async function runDirectSpawn(
       ...(row.worktreeId ? { worktreeId: row.worktreeId } : {}),
       ...(row.projectId ? { projectId: row.projectId } : {}),
       ...(row.taskId ? { taskId: row.taskId } : {}),
+      ...(row.initiativeId ? { initiativeId: row.initiativeId } : {}),
       ...(row.requiresEnterprise === undefined
         ? {}
         : { requiresEnterprise: row.requiresEnterprise }),
@@ -558,6 +564,7 @@ const ROW_PROPERTIES = [
   "worktreeId",
   "projectId",
   "taskId",
+  "initiativeId",
   "responseRequested",
   "inheritGrants",
   "peerTurnCap",
@@ -721,6 +728,7 @@ function readRows(
       ...optional(row, "worktreeId"),
       ...optional(row, "projectId"),
       ...optional(row, "taskId"),
+      ...optional(row, "initiativeId"),
       ...optional(row, "provider"),
       ...optional(row, "modelId"),
       ...optional(row, "thinkingLevel"),

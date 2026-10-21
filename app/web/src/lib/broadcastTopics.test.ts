@@ -460,23 +460,23 @@ describe("topicsForSurface", () => {
     ).toEqual(["worktrees", "projects"]);
   });
 
-  it("holds Workflow Runs and Project-filter associations for a visible Sessions browser", () => {
-    // Project filters join sessions through worktrees; Task titles remain
-    // best-effort without Backlog broadcasts.
+  it("holds Workflow Runs, Initiatives and Project-filter associations for a visible Sessions browser", () => {
+    // Initiatives mark the cards. Project filters join sessions through
+    // worktrees; Task titles remain best-effort without Backlog broadcasts.
     expect(
       topicsForSurface({
         sidebarVisible: true,
         sidebarSection: "sessions",
         routeName: "session",
       }),
-    ).toEqual(["workflow", "projects", "worktrees"]);
+    ).toEqual(["workflow", "initiatives", "projects", "worktrees"]);
     // A hidden Sessions browser holds neither.
     const hidden = topicsForSurface({
       sidebarVisible: false,
       sidebarSection: "sessions",
       routeName: "session",
     });
-    expect(hidden).not.toContain("workflow");
+    expect(hidden).not.toContain("initiatives");
     expect(hidden).not.toContain("tasks");
   });
 

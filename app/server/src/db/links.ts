@@ -56,6 +56,9 @@ export type NodeType =
  *                  `{ milestone: true }` in metadata marks a milestone). Only
  *                  the Task that was added holds one; its descendants are
  *                  members through it (`initiativeStore`).
+ *  - `coordinates` session → initiative (the session drives the Initiative:
+ *                  written by `session_spawn`'s `initiativeId` or
+ *                  `initiative_manage`'s `coordinate`, never inferred)
  */
 export type Relation =
   | "subtask"
@@ -69,7 +72,8 @@ export type Relation =
   | "created_worktree"
   | "blocks"
   | "relates"
-  | "member";
+  | "member"
+  | "coordinates";
 
 const RELATIONS: ReadonlySet<Relation> = new Set([
   "subtask",
@@ -84,6 +88,7 @@ const RELATIONS: ReadonlySet<Relation> = new Set([
   "blocks",
   "relates",
   "member",
+  "coordinates",
 ]);
 
 export interface NodeRef {

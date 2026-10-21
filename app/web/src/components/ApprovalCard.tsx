@@ -791,6 +791,9 @@ function spawnTargetLine(item: SessionSpawnApprovalItem): string {
         ? `Task-${item.taskId}: ${item.taskTitle}`
         : `Task-${item.taskId}`
       : undefined,
+    item.initiativeId
+      ? `Coordinates Initiative-${item.initiativeId}${item.initiativeTitle ? `: ${item.initiativeTitle}` : ""}`
+      : undefined,
   ]
     .filter(Boolean)
     .join(" · ");

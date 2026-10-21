@@ -600,6 +600,9 @@ capability logic.
   the host's row density, as the digest gating its reorder pass, so a commit
   that repaints no card also costs no layout (Task-338). React- and socket-free,
   so the rules stay testable against partial rows.
+- `sessionInitiatives.ts` joins the `initiatives` summaries to session ids: a
+  card's Initiative marker, coordinator (`coordinatorSessionIds`) before member
+  (`sessionIds`), its tooltip label and the key the card's relations memoize on.
 - `sessionDelivery.ts` owns where a SESSION's pull request stands, for the
   indicator every session list carries ([Task-342](pa://task/342)). Its input is
   the row's own `SessionListItem.pullRequest` — nothing here fetches or joins —

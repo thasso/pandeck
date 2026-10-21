@@ -78,6 +78,7 @@ import {
   sessionContextEvidence,
 } from "./sessionContext.ts";
 import { readTask } from "./tasks.ts";
+import { getInitiative, setInitiativeCoordinator } from "./initiatives.ts";
 import {
   AgentSpawnRefusedError,
   resolveAgentRole,
@@ -124,6 +125,7 @@ interface SpawnRequestRowFields {
   worktreeId?: string;
   projectId?: string;
   taskId?: string;
+  initiativeId?: string;
   provider?: string;
   modelId?: string;
   thinkingLevel?: ThinkingLevel;
@@ -428,6 +430,8 @@ interface StructuralRow {
   projectName?: string;
   taskId?: string;
   taskTitle?: string;
+  initiativeId?: string;
+  initiativeTitle?: string;
 }
 
 /**
@@ -504,6 +508,13 @@ async function validateStructure(
   if (taskId && !task)
     throw new SpawnProposalError(`Task ${taskId} does not exist.`);
 
+  const namedInitiative = row.initiativeId?.trim();
+  const initiative = namedInitiative ? getInitiative(namedInitiative) : null;
+  if (namedInitiative && (!initiative || initiative.archivedAt !== undefined))
+    throw new SpawnProposalError(
+      `Initiative ${namedInitiative} does not exist or is archived.`,
+    );
+
   return {
     title,
     agentType: row.agentType,
@@ -517,6 +528,12 @@ async function validateStructure(
     ...(project?.name ? { projectName: project.name } : {}),
     ...(taskId ? { taskId } : {}),
     ...(task?.title ? { taskTitle: task.title } : {}),
+    ...(initiative
+      ? {
+          initiativeId: String(initiative.id),
+          initiativeTitle: initiative.title,
+        }
+      : {}),
   };
 }
 
@@ -668,6 +685,14 @@ function approvalItemOf(
     ...(structural.projectName ? { projectName: structural.projectName } : {}),
     ...(structural.taskId ? { taskId: structural.taskId } : {}),
     ...(structural.taskTitle ? { taskTitle: structural.taskTitle } : {}),
+    ...(structural.initiativeId
+      ? {
+          initiativeId: structural.initiativeId,
+          ...(structural.initiativeTitle
+            ? { initiativeTitle: structural.initiativeTitle }
+            : {}),
+        }
+      : {}),
   };
 }
 
@@ -1169,6 +1194,18 @@ async function spawnOne(
     },
     { pinProject: true },
   );
+  // Recorded before the opening prompt, so the coordinator is marked from its
+  // first turn. Best-effort like the context links: an Initiative archived
+  // while the card waited must not leave a created session undelivered.
+  if (item.initiativeId) {
+    try {
+      setInitiativeCoordinator(item.initiativeId, sessionId, true);
+    } catch (err) {
+      console.warn(
+        `[spawn] could not record ${sessionId} as coordinator of Initiative-${item.initiativeId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   await deps.deliver({
     senderSessionId,
@@ -1362,6 +1399,7 @@ interface DirectSpawnRowFields {
   worktreeId?: string;
   projectId?: string;
   taskId?: string;
+  initiativeId?: string;
   /** The agent's own request; it can only add to the source's requirement. */
   requiresEnterprise?: boolean;
 }

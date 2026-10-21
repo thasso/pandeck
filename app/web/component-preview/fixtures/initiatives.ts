@@ -31,6 +31,7 @@ export const HOSTED_LABS_DETAIL: InitiativeDetail = {
   nextMilestone: { id: "931", title: "First hosted release" },
   sessionIds: ["sess-labs-images", "sess-quotas"],
   sessionCount: 2,
+  coordinatorSessionIds: [],
   updatedAt: 1792100000000,
   description:
     "Run **SDC**, **Stardust Labs** and **SRS** on hosted infrastructure, with one first release when all three are ready.\n\n- Each product ships its hosted images first.\n- Session quotas land before [the first hosted release](pa://task/931).",

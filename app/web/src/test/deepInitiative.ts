@@ -63,6 +63,7 @@ export function deepInitiative(depth: number): DeepInitiative {
       },
       sessionIds: [],
       sessionCount: 0,
+      coordinatorSessionIds: [],
       createdAt: 1,
       updatedAt: 1,
       description: "",

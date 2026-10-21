@@ -529,3 +529,31 @@ describe("ActiveSessionCard stall chip fit", () => {
     expect(html).toMatch(/shrink-0">\+2<\/span>/);
   });
 });
+
+describe("ActiveSessionCard's Initiative marker", () => {
+  const initiative = {
+    id: "4",
+    title: "Hosted Labs",
+    done: 3,
+    total: 8,
+    others: [],
+  };
+
+  it("draws a coordinator's progress and says it in the label", () => {
+    const html = markup({ id: "c" }, "tight", {
+      initiative: { ...initiative, coordinator: true },
+    });
+    expect(html).toContain(
+      'aria-label="Coordinating Initiative-4 Hosted Labs: 3 of 8 Tasks done"',
+    );
+    expect(html).toContain('data-slot="progress-track"');
+  });
+
+  it("marks a member with the glyph alone", () => {
+    const html = markup({ id: "m" }, "tight", {
+      initiative: { ...initiative, coordinator: false },
+    });
+    expect(html).toContain("Part of Initiative-4 Hosted Labs");
+    expect(html).not.toContain('data-slot="progress-track"');
+  });
+});
