@@ -71,6 +71,12 @@ export async function githubRequest<T>(
     body?: unknown;
     accept?: string;
     signal?: AbortSignal;
+    /**
+     * Non-2xx statuses this caller handles itself: the response comes back
+     * with its parsed body instead of throwing a truncated error. A merge
+     * answering 409 with the id of the request already running is one.
+     */
+    acceptStatuses?: readonly number[];
   } = {},
 ): Promise<GithubResponse<T>> {
   if (!config.token) {
@@ -127,11 +133,11 @@ export async function githubRequest<T>(
     conditionalCache.set(cacheKey, cached);
     ({ text, link } = cached);
     scopes ??= cached.scopes;
-  } else if (!res.ok) {
+  } else if (!res.ok && !options.acceptStatuses?.includes(res.status)) {
     throw new Error(
       `GitHub API returned HTTP ${res.status} for ${method} ${url.pathname}: ${text.slice(0, 400)}`,
     );
-  } else if (cacheKey) {
+  } else if (cacheKey && res.ok) {
     const etag = res.headers.get("etag");
     conditionalCache.delete(cacheKey);
     if (etag && text.length <= CONDITIONAL_CACHE_MAX_BODY_CHARS) {
@@ -143,7 +149,9 @@ export async function githubRequest<T>(
     }
   }
   const isRaw = accept.includes("raw") || accept.includes("diff");
-  const data = (isRaw ? text : text ? JSON.parse(text) : {}) as T;
+  const data = (
+    isRaw ? text : text ? parseBody(text, res.ok || res.status === 304) : {}
+  ) as T;
   return {
     data,
     status: res.status === 304 ? 200 : res.status,
@@ -151,6 +159,21 @@ export async function githubRequest<T>(
     rateRemaining,
     scopes: parseScopes(scopes),
   };
+}
+
+/**
+ * A success body that is not JSON is a broken response and throws; an
+ * accepted error status's body is only context for its caller, so one that
+ * is not JSON reads as empty rather than hiding the status behind a parse
+ * error.
+ */
+function parseBody(text: string, ok: boolean): unknown {
+  if (ok) return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
 }
 
 /**

@@ -209,6 +209,7 @@ function operations(
       });
       return {
         result: {
+          outcome: "merged" as const,
           number: input.number,
           method: input.method,
           branchDeleted: input.deleteBranch !== false,
@@ -1301,6 +1302,89 @@ describe("merge into a non-default base", () => {
     assert.equal(ops.calls.merges[0]?.deleteBranch, false);
   });
 
+  // Accepted, not confirmed: a partial in the same convention as
+  // `retargeted-partial`, telling the agent not to merge again or clean up.
+  test("a merge the provider has not confirmed is reported as merge-pending", async () => {
+    const ops = operations({
+      merge: async (
+        input: Parameters<WorktreeFinishPullRequestOperations["merge"]>[0],
+      ) => ({
+        result: {
+          outcome: "pending" as const,
+          number: input.number,
+          method: input.method,
+          requestId: "req-1",
+          pendingReason:
+            "GitHub had not finished merging it when this stopped waiting",
+        },
+        message: `GitHub accepted the merge of #${input.number} into ${input.baseBranch} (${input.method}) but has not confirmed it: GitHub had not finished merging it when this stopped waiting.`,
+        cardIds: [],
+        taskSuggestions: [],
+      }),
+    });
+    let followUps = 0;
+    ops.followUps = async () => {
+      followUps++;
+      return { warnings: [] };
+    };
+    const payload = details(
+      await createWorktreeFinishPullRequestTool(ops).execute(
+        {
+          worktreeId: row.id,
+          action: "merge",
+          method: "squash",
+          removeWorktree: true,
+        },
+        context(),
+      ),
+    );
+    // Removing the worktree of a merge that may never land would lose work.
+    assert.equal(followUps, 0);
+    assert.match(
+      String(payload.message),
+      /Not done, because the merge is not confirmed: removing the worktree\./,
+    );
+    assert.equal(payload.status, "merge-pending");
+    assert.equal(
+      payload.pendingReason,
+      "GitHub had not finished merging it when this stopped waiting",
+    );
+    assert.equal(payload.remoteBranchDeleted, undefined);
+    assert.equal(payload.taskSuggestions, undefined);
+    assert.match(
+      String(payload.message),
+      /has not confirmed it.*Do not merge again or clean up yet/,
+    );
+  });
+
+  test("reports why a merged branch was kept", async () => {
+    const ops = operations({
+      merge: async (input) => ({
+        result: {
+          outcome: "merged" as const,
+          number: input.number,
+          method: input.method,
+          branchDeleted: false,
+          branchKeptReason: "#92 still targets it as base",
+        },
+        message: "Merged.",
+        cardIds: [],
+        taskSuggestions: [],
+      }),
+    });
+    const payload = details(
+      await createWorktreeFinishPullRequestTool(ops).execute(
+        { worktreeId: row.id, action: "merge", method: "squash" },
+        context(),
+      ),
+    );
+    assert.equal(payload.remoteBranchDeleted, false);
+    assert.equal(
+      payload.remoteBranchKeptReason,
+      "#92 still targets it as base",
+    );
+  });
+
   test("a method the repository does not allow is refused with the set", async () => {
     const ops = operations(
       {},
@@ -1777,6 +1861,46 @@ describe("approved default-branch merge", () => {
       /linked Task changed/,
     );
     assert.deepEqual(ops.calls.merges, []);
+  });
+
+  test("an approved merge the provider has not confirmed records no merged result", async () => {
+    const pendingOps = {
+      ...ops,
+      merge: async (
+        input: Parameters<WorktreeFinishPullRequestOperations["merge"]>[0],
+      ) => ({
+        result: {
+          outcome: "pending" as const,
+          number: input.number,
+          method: input.method,
+          requestId: "req-1",
+          pendingReason:
+            "GitHub had not finished merging it when this stopped waiting",
+        },
+        message: `GitHub accepted the merge of #${input.number} into ${input.baseBranch} (${input.method}) but has not confirmed it: GitHub had not finished merging it when this stopped waiting.`,
+        cardIds: [],
+        taskSuggestions: [],
+      }),
+    };
+    let followUps = 0;
+    pendingOps.followUps = async () => {
+      followUps++;
+      return { warnings: [] };
+    };
+    setManagedMergeApprovalOperationsForTests(pendingOps);
+    const subject = card(approvalBody({ removeWorktree: true }));
+    const outcome = await run.execute(subject, {});
+    assert.match(outcome.resultSummary, /has not confirmed it/);
+    assert.match(
+      outcome.resultSummary,
+      /Not done, because the merge is not confirmed: removing the worktree\./,
+    );
+    assert.equal(followUps, 0);
+    assert.equal(
+      subject.body.kind === "managedPullRequestMerge" &&
+        subject.body.resultMerged,
+      undefined,
+    );
   });
 
   test("a moved head refuses instead of merging what was not approved", async () => {

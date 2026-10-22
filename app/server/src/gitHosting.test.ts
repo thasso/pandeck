@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import type {
   PullRequestCloseResult,
+  PullRequestDetail,
   PullRequestMergeResult,
   PullRequestRepositoryCapabilities,
   WorktreePullRequestInfo,
@@ -24,7 +25,9 @@ import {
   parseRemoteUrl,
   pickBranchPull,
   repositoryCapabilitiesFor,
+  setGithubMergePollDelaysForTests,
   type GitHostingProvider,
+  type PullRequestStackMembers,
 } from "./gitHosting.ts";
 
 test("parses ssh remotes with ports", () => {
@@ -736,155 +739,574 @@ async function withRecordedFetch(
   return calls;
 }
 
+/**
+ * Like {@link withRecordedFetch}, with the STATUS in the script's hands too:
+ * `respond` answers `[status, body]`, and `undefined` is `[200, {}]`.
+ */
+async function withScriptedFetch(
+  respond: (req: RecordedRequest) => [number, unknown] | undefined,
+  run: () => Promise<void>,
+): Promise<RecordedRequest[]> {
+  const calls: RecordedRequest[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    const url = new URL(String(input));
+    const call: RecordedRequest = {
+      method: init?.method ?? "GET",
+      path: url.pathname,
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      query: Object.fromEntries(url.searchParams),
+    };
+    calls.push(call);
+    const [status, body] = respond(call) ?? [200, {}];
+    return new Response(JSON.stringify(body ?? {}), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = original;
+  }
+  return calls;
+}
+
+const GITHUB_PULL_7 = {
+  number: 7,
+  state: "open",
+  head: { ref: "feature", sha: "head-1" },
+  base: { ref: "main" },
+};
+
+/**
+ * A GitHub that merges #7 the way `merges` scripts it — the PUT's answer, then
+ * one per poll — with nothing open on `feature`, the branch it deletes.
+ */
+function githubMergeScript(
+  merges: Array<[number, unknown]>,
+  overrides: (req: RecordedRequest) => [number, unknown] | undefined = () =>
+    undefined,
+): (req: RecordedRequest) => [number, unknown] | undefined {
+  return (req) => {
+    const override = overrides(req);
+    if (override) return override;
+    if (req.path.includes("/merge-async")) return merges.shift() ?? [200, {}];
+    if (req.method === "GET" && req.path === "/repos/acme/repo/pulls")
+      return [200, []];
+    if (req.method === "GET") return [200, GITHUB_PULL_7];
+    return [200, {}];
+  };
+}
+
+function mergeCalls(calls: RecordedRequest[]): string[] {
+  return calls.map(
+    (call) =>
+      `${call.method} ${call.path}${call.query.base ? `?base=${call.query.base}` : ""}`,
+  );
+}
+
 // Deleting the remote branch is part of MERGING, not a second step callers
 // orchestrate — so each provider must do both from one seam call, in the way
-// its own API expects.
-test("GitHub merges with the chosen method and then deletes the head ref", async () => {
+// its own API expects. GitHub merges asynchronously: the PUT is accepted, the
+// request is followed, and only a CONFIRMED merge deletes anything.
+test("GitHub merges through merge-async, follows the request, then deletes the head ref", async () => {
+  setGithubMergePollDelaysForTests([0, 0, 0]);
+  const provider = githubTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  try {
+    const calls = await withScriptedFetch(
+      githubMergeScript([
+        // The MESSAGE says "enqueued" for a direct merge too; only `status`
+        // decides.
+        [
+          202,
+          {
+            status: "pending",
+            details: { uuid: "req-1", message: "Merge request enqueued." },
+          },
+        ],
+        [200, { status: "pending", details: { uuid: "req-1" } }],
+        [200, { status: "merged", details: { uuid: "req-1", sha: "landed" } }],
+      ]),
+      async () => {
+        result = await provider.mergePullRequest(7, {
+          method: "squash",
+          deleteBranch: true,
+          expectedHeadSha: "reviewed-head",
+        });
+      },
+    );
+
+    assert.deepEqual(mergeCalls(calls), [
+      "GET /repos/acme/repo/pulls/7",
+      "PUT /repos/acme/repo/pulls/7/merge-async",
+      "GET /repos/acme/repo/pulls/7/merge-async/req-1",
+      "GET /repos/acme/repo/pulls/7/merge-async/req-1",
+      "GET /repos/acme/repo/pulls?base=feature",
+      "DELETE /repos/acme/repo/git/refs/heads/feature",
+    ]);
+    // "Merge now", on exactly this head, by the repository's own rules: the
+    // default action would ENQUEUE on a merge-queue base, and the rules are
+    // never bypassed.
+    assert.deepEqual(calls[1]!.body, {
+      merge_method: "squash",
+      sha: "reviewed-head",
+      merge_action: "direct_merge",
+    });
+    assert.equal(calls[4]!.query.state, "open");
+    assert.equal(result?.outcome, "merged");
+    assert.equal(result?.outcome === "merged" && result.branchDeleted, true);
+  } finally {
+    setGithubMergePollDelaysForTests();
+  }
+});
+
+test("a GitHub merge answered merged at once is not polled", async () => {
+  const provider = githubTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  const calls = await withScriptedFetch(
+    githubMergeScript([
+      [200, { status: "merged", details: { uuid: "req-1" } }],
+    ]),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "merge",
+        deleteBranch: false,
+        expectedHeadSha: "head-1",
+      });
+    },
+  );
+  assert.deepEqual(mergeCalls(calls), [
+    "PUT /repos/acme/repo/pulls/7/merge-async",
+  ]);
+  assert.deepEqual(result, {
+    outcome: "merged",
+    number: 7,
+    method: "merge",
+    branchDeleted: false,
+  });
+});
+
+// A 409 names the merge request ALREADY running for this pull request — a
+// retry after a lost answer, say. Following it is what makes retrying safe,
+// but only when it is THIS merge: same head, method and action.
+const DUPLICATE = {
+  status: "pending",
+  details: {
+    message: "A merge request already exists for this pull request.",
+    uuid: "req-0",
+    merge_method: "squash",
+    merge_action: "direct_merge",
+    expected_head_sha: "HEAD-1",
+  },
+};
+
+test("a GitHub 409 adopts the request already running when it is this merge", async () => {
+  setGithubMergePollDelaysForTests([0]);
+  const provider = githubTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  try {
+    const calls = await withScriptedFetch(
+      githubMergeScript([
+        [409, DUPLICATE],
+        [200, { status: "merged", details: { uuid: "req-0" } }],
+      ]),
+      async () => {
+        result = await provider.mergePullRequest(7, {
+          method: "squash",
+          deleteBranch: false,
+          expectedHeadSha: "head-1",
+        });
+      },
+    );
+    assert.deepEqual(mergeCalls(calls), [
+      "PUT /repos/acme/repo/pulls/7/merge-async",
+      "GET /repos/acme/repo/pulls/7/merge-async/req-0",
+    ]);
+    assert.equal(result?.outcome, "merged");
+  } finally {
+    setGithubMergePollDelaysForTests();
+  }
+});
+
+test("a GitHub 409 for someone else's merge request is refused, not adopted", async () => {
+  const provider = githubTestProvider();
+  for (const mismatch of [
+    { expected_head_sha: "other-head" },
+    { merge_method: "rebase" },
+    { merge_action: "default" },
+  ]) {
+    const calls = await withScriptedFetch(
+      githubMergeScript([
+        [409, { ...DUPLICATE, details: { ...DUPLICATE.details, ...mismatch } }],
+      ]),
+      async () => {
+        await assert.rejects(
+          provider.mergePullRequest(7, {
+            method: "squash",
+            deleteBranch: false,
+            expectedHeadSha: "head-1",
+          }),
+          /already running another merge request for pull request #7/,
+        );
+      },
+    );
+    assert.deepEqual(mergeCalls(calls), [
+      "PUT /repos/acme/repo/pulls/7/merge-async",
+    ]);
+  }
+});
+
+// Every refusal body is JSON with `status`/`details`, and GitHub's own words
+// are what the user reads — which the seam's refusal classification then
+// reads the pull request about.
+test("a GitHub refusal to merge throws with GitHub's message", async () => {
+  const provider = githubTestProvider();
+  for (const [status, body, pattern] of [
+    [
+      400,
+      {
+        status: "failed",
+        details: { message: "Pull request head branch was modified." },
+      },
+      /#7 head moved since it was checked \(GitHub: Pull request head branch was modified\.\); nothing was merged/,
+    ],
+    [
+      400,
+      { status: "failed", details: { message: "Pull request is closed." } },
+      /GitHub refused to merge pull request #7: Pull request is closed\./,
+    ],
+    [
+      409,
+      { message: "Conflict" },
+      /refused to merge pull request #7: Conflict/,
+    ],
+    [
+      403,
+      { message: "Resource not accessible by integration" },
+      /Resource not accessible by integration/,
+    ],
+  ] as const)
+    await withScriptedFetch(githubMergeScript([[status, body]]), async () => {
+      await assert.rejects(
+        provider.mergePullRequest(7, {
+          method: "squash",
+          deleteBranch: true,
+          expectedHeadSha: "head-1",
+          headBranch: "feature",
+        }),
+        pattern,
+      );
+    });
+});
+
+// A draft BELOW the target is accepted and only fails on the poll; the
+// failure's own words are what the user needs.
+test("a GitHub merge request that failed throws with its details", async () => {
+  setGithubMergePollDelaysForTests([0]);
+  const provider = githubTestProvider();
+  try {
+    const calls = await withScriptedFetch(
+      githubMergeScript([
+        [202, { status: "pending", details: { uuid: "req-1" } }],
+        [
+          200,
+          {
+            status: "failed",
+            details: {
+              uuid: "req-1",
+              message:
+                "Pull request must be open and not in draft mode in order to be merged.",
+            },
+          },
+        ],
+      ]),
+      async () => {
+        await assert.rejects(
+          provider.mergePullRequest(7, {
+            method: "squash",
+            deleteBranch: true,
+            expectedHeadSha: "head-1",
+            headBranch: "feature",
+          }),
+          /refused to merge pull request #7: Pull request must be open and not in draft mode/,
+        );
+      },
+    );
+    assert.ok(!calls.some((call) => call.method === "DELETE"));
+  } finally {
+    setGithubMergePollDelaysForTests();
+  }
+});
+
+// Everything between "accepted" and "merged" is PENDING: never a merge, never
+// a refusal, and nothing that follows a merge — the branch above all.
+for (const [name, merges, delays, reason] of [
+  [
+    "queued instead of merged",
+    [[200, { status: "enqueued", details: { uuid: "req-1" } }]],
+    [0],
+    /merge queue/,
+  ],
+  [
+    "still running when the wait ends",
+    [
+      [202, { status: "pending", details: { uuid: "req-1" } }],
+      [200, { status: "pending", details: { uuid: "req-1" } }],
+      [200, { status: "pending", details: { uuid: "req-1" } }],
+    ],
+    [0, 0],
+    /had not finished merging it/,
+  ],
+  [
+    "whose status cannot be read",
+    [
+      [202, { status: "pending", details: { uuid: "req-1" } }],
+      [500, { message: "boom" }],
+    ],
+    [0, 0],
+    /status could not be read/,
+  ],
+  [
+    "answered with no request to follow",
+    [[202, {}]],
+    [0],
+    /no request to follow/,
+  ],
+] as const)
+  test(`a GitHub merge ${name} comes back pending and deletes nothing`, async () => {
+    setGithubMergePollDelaysForTests(delays);
+    const provider = githubTestProvider();
+    let result: PullRequestMergeResult | undefined;
+    try {
+      const calls = await withScriptedFetch(
+        githubMergeScript(merges.map(([status, body]) => [status, body])),
+        async () => {
+          result = await provider.mergePullRequest(7, {
+            method: "squash",
+            deleteBranch: true,
+            expectedHeadSha: "head-1",
+            headBranch: "feature",
+          });
+        },
+      );
+      assert.equal(result?.outcome, "pending");
+      assert.match(
+        result?.outcome === "pending" ? result.pendingReason : "",
+        reason,
+      );
+      assert.ok(
+        !calls.some(
+          (call) =>
+            call.method === "DELETE" || call.path === "/repos/acme/repo/pulls",
+        ),
+      );
+    } finally {
+      setGithubMergePollDelaysForTests();
+    }
+  });
+
+test("a cancelled wait comes back pending with the request id", async () => {
+  const controller = new AbortController();
   const provider = githubProvider(
-    { host: "github.com", owner: "acme", repo: "repo" },
+    GITHUB_REF,
     { token: "t", apiBaseUrl: "https://api.github.com" },
+    controller.signal,
   );
   let result: PullRequestMergeResult | undefined;
-  const calls = await withRecordedFetch(
-    (req) =>
-      req.method === "GET"
-        ? { number: 7, head: { ref: "feature" }, base: { ref: "main" } }
-        : { merged: true },
+  await withScriptedFetch(
+    githubMergeScript([], (req) => {
+      if (req.method !== "PUT") return undefined;
+      controller.abort();
+      return [202, { status: "pending", details: { uuid: "req-1" } }];
+    }),
     async () => {
       result = await provider.mergePullRequest(7, {
         method: "squash",
         deleteBranch: true,
-        expectedHeadSha: "reviewed-head",
+        expectedHeadSha: "head-1",
+        headBranch: "feature",
       });
     },
   );
-
-  assert.deepEqual(
-    calls.map((call) => `${call.method} ${call.path}`),
-    [
-      "GET /repos/acme/repo/pulls/7",
-      "PUT /repos/acme/repo/pulls/7/merge",
-      "DELETE /repos/acme/repo/git/refs/heads/feature",
-    ],
-  );
-  assert.deepEqual(calls[1]!.body, {
-    merge_method: "squash",
-    sha: "reviewed-head",
+  assert.deepEqual(result, {
+    outcome: "pending",
+    number: 7,
+    method: "squash",
+    requestId: "req-1",
+    pendingReason: "waiting for GitHub's answer was cancelled",
   });
-  assert.equal(result?.branchDeleted, true);
+});
+
+// The merged head is the base of the pull request stacked on it. On a PLAIN
+// chain of pull requests (a Pandeck-managed stack, not a native one) GitHub
+// does not retarget that child: deleting the base CLOSES it at once (seen live
+// 2026-10-13, and it stays closed). So a branch something still targets is
+// kept, and so is one whose dependents could not be read.
+test("GitHub keeps a merged head branch an open pull request targets, since deleting it closes that pull request", async () => {
+  const provider = githubTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  const calls = await withScriptedFetch(
+    githubMergeScript([[200, { status: "merged" }]], (req) =>
+      req.method === "GET" && req.path === "/repos/acme/repo/pulls"
+        ? [200, [{ number: 8 }, { number: 9 }]]
+        : undefined,
+    ),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "squash",
+        deleteBranch: true,
+        expectedHeadSha: "head-1",
+        headBranch: "feature",
+      });
+    },
+  );
+  assert.ok(!calls.some((call) => call.method === "DELETE"));
+  assert.equal(result?.outcome, "merged");
+  if (result?.outcome !== "merged") return;
+  assert.equal(result.branchDeleted, false);
+  assert.match(result.branchKeptReason ?? "", /#8, #9 still target it as base/);
+});
+
+test("GitHub keeps a merged head branch whose dependents could not be read", async () => {
+  const provider = githubTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  const calls = await withScriptedFetch(
+    githubMergeScript([[200, { status: "merged" }]], (req) =>
+      req.method === "GET" && req.path === "/repos/acme/repo/pulls"
+        ? [200, { message: "not a list" }]
+        : undefined,
+    ),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "squash",
+        deleteBranch: true,
+        expectedHeadSha: "head-1",
+        headBranch: "feature",
+      });
+    },
+  );
+  assert.ok(!calls.some((call) => call.method === "DELETE"));
+  assert.match(
+    result?.outcome === "merged" ? (result.branchKeptReason ?? "") : "",
+    /could not be checked/,
+  );
 });
 
 // The merge already landed by the time the ref is deleted, so a refused
 // deletion (protected branch, someone else got there first) must not be
 // reported as a failed merge.
 test("a GitHub branch deletion that fails still reports a merged pull request", async () => {
-  const provider = githubProvider(
-    { host: "github.com", owner: "acme", repo: "repo" },
-    { token: "t", apiBaseUrl: "https://api.github.com" },
-  );
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (
-    _input: string | URL | Request,
-    init?: RequestInit,
-  ) => {
-    const method = init?.method ?? "GET";
-    if (method === "DELETE")
-      return new Response(JSON.stringify({ message: "protected" }), {
-        status: 422,
+  const provider = githubTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  await withScriptedFetch(
+    githubMergeScript([[200, { status: "merged" }]], (req) =>
+      req.method === "DELETE" ? [422, { message: "protected" }] : undefined,
+    ),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "merge",
+        deleteBranch: true,
       });
-    return new Response(
-      JSON.stringify(
-        method === "GET"
-          ? { number: 7, head: { ref: "feature", sha: "head-1" } }
-          : {},
-      ),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-  }) as typeof fetch;
-  try {
-    const result = await provider.mergePullRequest(7, {
-      method: "merge",
-      deleteBranch: true,
-    });
-    assert.equal(result.branchDeleted, false);
-    assert.match(result.branchDeleteError ?? "", /422/);
-  } finally {
-    globalThis.fetch = original;
-  }
+    },
+  );
+  assert.equal(result?.outcome, "merged");
+  if (result?.outcome !== "merged") return;
+  assert.equal(result.branchDeleted, false);
+  assert.match(result.branchDeleteError ?? "", /422/);
 });
 
-test("Forgejo merges and deletes the branch in the same request", async () => {
-  const provider = forgejoProvider(
-    { host: "git.example.com", owner: "acme", repo: "repo" },
-    { baseUrl: "https://git.example.com", token: "t" },
-  );
+/** A Forgejo that merges #7 and lists `open` as its open pull requests. */
+function forgejoMergeScript(
+  open: unknown,
+  branchAfter: [number, unknown],
+): (req: RecordedRequest) => [number, unknown] | undefined {
+  return (req) => {
+    if (req.method === "GET" && req.path === "/api/v1/repos/acme/repo/pulls")
+      return [200, open];
+    if (req.method === "GET" && req.path.includes("/branches/"))
+      return branchAfter;
+    if (req.method === "GET")
+      return [200, { number: 7, head: { ref: "feature", sha: "head-1" } }];
+    return [200, {}];
+  };
+}
+
+// Forgejo could delete the branch inside the merge request, but only blindly;
+// the same dependents guard needs the merge to come first.
+test("Forgejo merges, then deletes the branch nothing targets and confirms it", async () => {
+  const provider = forgejoTestProvider();
   let result: PullRequestMergeResult | undefined;
-  const original = globalThis.fetch;
-  const paths: string[] = [];
-  let mergeBody: unknown;
-  globalThis.fetch = (async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ) => {
-    const url = new URL(String(input));
-    paths.push(`${init?.method ?? "GET"} ${url.pathname}`);
-    if (url.pathname.endsWith("/merge")) {
-      mergeBody = JSON.parse(String(init?.body));
-      return new Response("{}", { status: 200 });
-    }
-    // The branch read is the deletion CHECK: 404 = it is really gone.
-    if (url.pathname.includes("/branches/"))
-      return new Response(JSON.stringify({ message: "not found" }), {
-        status: 404,
+  const calls = await withScriptedFetch(
+    forgejoMergeScript(
+      [{ number: 8, base: { ref: "main" } }],
+      [404, { message: "not found" }],
+    ),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "rebase",
+        deleteBranch: true,
+        expectedHeadSha: "reviewed-head",
       });
-    return new Response(
-      JSON.stringify({ number: 7, head: { ref: "feature", sha: "head-1" } }),
-      {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      },
-    );
-  }) as typeof fetch;
-  try {
-    result = await provider.mergePullRequest(7, {
-      method: "rebase",
-      deleteBranch: true,
-      expectedHeadSha: "reviewed-head",
-    });
-  } finally {
-    globalThis.fetch = original;
-  }
+    },
+  );
 
   // The caller named no branch, so the pull request is read ONCE — before the
   // merge, where it also binds the target — and the branch it reported is what
-  // the deletion is confirmed against afterwards.
-  assert.deepEqual(paths, [
-    "GET /api/v1/repos/acme/repo/pulls/7",
-    "POST /api/v1/repos/acme/repo/pulls/7/merge",
-    "GET /api/v1/repos/acme/repo/branches/feature",
-  ]);
-  assert.deepEqual(mergeBody, {
+  // is deleted and confirmed afterwards.
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.path}`),
+    [
+      "GET /api/v1/repos/acme/repo/pulls/7",
+      "POST /api/v1/repos/acme/repo/pulls/7/merge",
+      "GET /api/v1/repos/acme/repo/pulls",
+      "DELETE /api/v1/repos/acme/repo/branches/feature",
+      "GET /api/v1/repos/acme/repo/branches/feature",
+    ],
+  );
+  assert.deepEqual(calls[1]!.body, {
     Do: "rebase",
-    delete_branch_after_merge: true,
+    delete_branch_after_merge: false,
     head_commit_id: "reviewed-head",
   });
-  assert.equal(result?.branchDeleted, true);
+  assert.equal(result?.outcome === "merged" && result.branchDeleted, true);
 });
 
-// Forgejo answers a merge the same way whether or not the head branch survived
-// it, so a protected branch must not be reported to the user as deleted.
-test("a Forgejo head branch that survived the merge is not reported as deleted", async () => {
-  const provider = forgejoProvider(
-    { host: "git.example.com", owner: "acme", repo: "repo" },
-    { baseUrl: "https://git.example.com", token: "t" },
-  );
-  // Every read succeeds, the branch read included: it is still there.
+test("Forgejo keeps a merged head branch another open pull request targets", async () => {
+  const provider = forgejoTestProvider();
   let result: PullRequestMergeResult | undefined;
-  await withRecordedFetch(
-    (req) =>
-      req.path.includes("/branches/")
-        ? { name: "feature" }
-        : { number: 7, head: { ref: "feature", sha: "head-1" } },
+  const calls = await withScriptedFetch(
+    forgejoMergeScript(
+      [{ number: 8, base: { ref: "feature" } }],
+      [404, { message: "not found" }],
+    ),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "squash",
+        deleteBranch: true,
+        expectedHeadSha: "head-1",
+        headBranch: "feature",
+      });
+    },
+  );
+  assert.ok(!calls.some((call) => call.method === "DELETE"));
+  assert.match(
+    result?.outcome === "merged" ? (result.branchKeptReason ?? "") : "",
+    /#8 still targets it as base/,
+  );
+});
+
+// Forgejo answers a deletion the same way whether or not a protected branch
+// survived it, so a surviving branch must not be reported as deleted.
+test("a Forgejo head branch that survived the deletion is not reported as deleted", async () => {
+  const provider = forgejoTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  await withScriptedFetch(
+    forgejoMergeScript([], [200, { name: "feature" }]),
     async () => {
       result = await provider.mergePullRequest(7, {
         method: "squash",
@@ -892,48 +1314,126 @@ test("a Forgejo head branch that survived the merge is not reported as deleted",
       });
     },
   );
-
-  assert.equal(result?.branchDeleted, false);
-  assert.match(result?.branchDeleteError ?? "", /still exists/);
+  assert.equal(result?.outcome, "merged");
+  if (result?.outcome !== "merged") return;
+  assert.equal(result.branchDeleted, false);
+  assert.match(result.branchDeleteError ?? "", /still exists/);
 });
 
 // A check that could not be COMPLETED is not evidence that the branch is gone:
 // only a 404 is. An unauthorized/500/timeout answer must report the deletion as
 // unconfirmed rather than inventing the outcome it was asked for.
 test("an unreadable Forgejo branch check reports the deletion as unconfirmed", async () => {
-  const provider = forgejoProvider(
-    { host: "git.example.com", owner: "acme", repo: "repo" },
-    { baseUrl: "https://git.example.com", token: "t" },
+  const provider = forgejoTestProvider();
+  let result: PullRequestMergeResult | undefined;
+  await withScriptedFetch(
+    forgejoMergeScript([], [500, { message: "boom" }]),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "squash",
+        deleteBranch: true,
+      });
+    },
   );
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ) => {
-    const url = new URL(String(input));
-    if ((init?.method ?? "GET") === "POST")
-      return new Response("{}", { status: 200 });
-    if (url.pathname.includes("/branches/"))
-      return new Response(JSON.stringify({ message: "boom" }), { status: 500 });
-    return new Response(
-      JSON.stringify({ number: 7, head: { ref: "feature", sha: "head-1" } }),
+  assert.equal(result?.outcome, "merged");
+  if (result?.outcome !== "merged") return;
+  assert.equal(result.branchDeleted, false);
+  assert.match(result.branchDeleteError ?? "", /could not be confirmed/);
+  assert.match(result.branchDeleteError ?? "", /500/);
+});
+
+/* ------------------------------ native stacks ------------------------------ */
+
+test("GitHub's stack object maps onto the pull request detail", async () => {
+  const provider = githubTestProvider();
+  const answers: unknown[] = [
+    {
+      ...GITHUB_PULL_7,
+      stack: { number: 3, size: 3, position: 2, base: { ref: "main" } },
+    },
+    { ...GITHUB_PULL_7, stack: null },
+    GITHUB_PULL_7,
+    { ...GITHUB_PULL_7, stack: { number: 3, size: 3 } },
+  ];
+  const details: Array<PullRequestDetail | null> = [];
+  await withScriptedFetch(
+    () => [200, answers.shift()],
+    async () => {
+      for (let i = 0; i < 4; i += 1)
+        details.push(await provider.pullRequestDetail(7));
+    },
+  );
+  assert.deepEqual(details[0]?.stack, {
+    number: 3,
+    size: 3,
+    position: 2,
+    baseBranch: "main",
+  });
+  assert.equal(details[1]?.stack, undefined);
+  assert.equal(details[1]?.stackUnknownReason, undefined);
+  assert.equal(details[2]?.stack, undefined);
+  // A stack this app cannot read is UNKNOWN, never "not stacked".
+  assert.equal(details[3]?.stack, undefined);
+  assert.match(details[3]?.stackUnknownReason ?? "", /does not understand/);
+});
+
+test("GitHub stack members are read bottom to top and validated", async () => {
+  const provider = githubTestProvider();
+  let members: PullRequestStackMembers | undefined;
+  const calls = await withScriptedFetch(
+    () => [
+      200,
       {
-        status: 200,
-        headers: { "content-type": "application/json" },
+        pull_requests: [
+          {
+            number: 6,
+            state: "closed",
+            draft: false,
+            merged_at: "2026-10-01T00:00:00Z",
+            head: { ref: "a", sha: "a1" },
+          },
+          {
+            number: 7,
+            state: "open",
+            draft: true,
+            merged_at: null,
+            head: { ref: "b", sha: "b1" },
+          },
+          {
+            number: 8,
+            state: "closed",
+            merged_at: null,
+            head: { ref: "c", sha: "c1" },
+          },
+        ],
+      },
+    ],
+    async () => {
+      members = await provider.stackMembers!(3);
+    },
+  );
+  assert.deepEqual(mergeCalls(calls), ["GET /repos/acme/repo/stacks/3"]);
+  // Merged members stay listed; `merged_at` is what tells them from closed.
+  assert.deepEqual(members, {
+    number: 3,
+    members: [
+      { number: 6, state: "merged" },
+      { number: 7, state: "open" },
+      { number: 8, state: "closed" },
+    ],
+  });
+
+  for (const body of [
+    { pull_requests: { not: "a list" } },
+    { pull_requests: [{ number: 6 }] },
+    { members: [] },
+  ])
+    await withScriptedFetch(
+      () => [200, body],
+      async () => {
+        await assert.rejects(provider.stackMembers!(3));
       },
     );
-  }) as typeof fetch;
-  try {
-    const result = await provider.mergePullRequest(7, {
-      method: "squash",
-      deleteBranch: true,
-    });
-    assert.equal(result.branchDeleted, false);
-    assert.match(result.branchDeleteError ?? "", /could not be confirmed/);
-    assert.match(result.branchDeleteError ?? "", /500/);
-  } finally {
-    globalThis.fetch = original;
-  }
 });
 
 // Same rule one step earlier, and stricter than it used to be: a caller that
@@ -1666,8 +2166,8 @@ test("a forced read is never served from the cache", async () => {
 test("GitHub merges with no read between the caller's check and the merge", async () => {
   const provider = githubTestProvider();
   let result: PullRequestMergeResult | undefined;
-  const calls = await withRecordedFetch(
-    () => ({ merged: true }),
+  const calls = await withScriptedFetch(
+    githubMergeScript([[200, { status: "merged" }]]),
     async () => {
       result = await provider.mergePullRequest(7, {
         method: "squash",
@@ -1679,10 +2179,13 @@ test("GitHub merges with no read between the caller's check and the merge", asyn
     },
   );
 
+  // The dependents read comes AFTER the merge: it is about other pull
+  // requests, and only a confirmed merge gets that far.
   assert.deepEqual(
-    calls.map((call) => `${call.method} ${call.path}`),
+    mergeCalls(calls),
     [
-      "PUT /repos/acme/repo/pulls/7/merge",
+      "PUT /repos/acme/repo/pulls/7/merge-async",
+      "GET /repos/acme/repo/pulls?base=feature",
       "DELETE /repos/acme/repo/git/refs/heads/feature",
     ],
     "the pre-merge GET is gone once the caller proved the head branch",
@@ -1690,8 +2193,9 @@ test("GitHub merges with no read between the caller's check and the merge", asyn
   assert.deepEqual(calls[0]!.body, {
     merge_method: "squash",
     sha: "reviewed-head",
+    merge_action: "direct_merge",
   });
-  assert.equal(result?.branchDeleted, true);
+  assert.equal(result?.outcome === "merged" && result.branchDeleted, true);
 });
 
 // A caller that could NOT prove the branch still pays for the provider's read —
@@ -1723,43 +2227,34 @@ test("a fallback pre-merge read refuses a pull request that moved base", async (
   );
 });
 
-// Forgejo merges and deletes in ONE request, so it never had the gap — but the
-// branch it confirms afterwards is the one the caller proved, which spares the
-// extra pull-request read.
-test("Forgejo confirms the caller's branch without re-reading the pull request", async () => {
+// Forgejo never read between the check and the merge, and the branch it
+// deletes and confirms afterwards is the one the caller proved, which spares
+// the extra pull-request read.
+test("Forgejo deletes the caller's branch without re-reading the pull request", async () => {
   const provider = forgejoTestProvider();
-  const original = globalThis.fetch;
-  const calls: string[] = [];
-  globalThis.fetch = (async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ) => {
-    const url = new URL(String(input));
-    calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
-    // The branch is gone after the merge: a 404 is the only proof of deletion.
-    if (url.pathname.includes("/branches/"))
-      return new Response("{}", { status: 404 });
-    return new Response(JSON.stringify({}), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }) as typeof fetch;
-  try {
-    const result = await provider.mergePullRequest(7, {
-      method: "squash",
-      deleteBranch: true,
-      expectedHeadSha: "reviewed-head",
-      headBranch: "feature",
-      expectedBaseBranch: "main",
-    });
-    assert.deepEqual(calls, [
+  let result: PullRequestMergeResult | undefined;
+  const calls = await withScriptedFetch(
+    forgejoMergeScript([], [404, {}]),
+    async () => {
+      result = await provider.mergePullRequest(7, {
+        method: "squash",
+        deleteBranch: true,
+        expectedHeadSha: "reviewed-head",
+        headBranch: "feature",
+        expectedBaseBranch: "main",
+      });
+    },
+  );
+  assert.deepEqual(
+    calls.map((call) => `${call.method} ${call.path}`),
+    [
       "POST /api/v1/repos/acme/repo/pulls/7/merge",
+      "GET /api/v1/repos/acme/repo/pulls",
+      "DELETE /api/v1/repos/acme/repo/branches/feature",
       "GET /api/v1/repos/acme/repo/branches/feature",
-    ]);
-    assert.equal(result.branchDeleted, true);
-  } finally {
-    globalThis.fetch = original;
-  }
+    ],
+  );
+  assert.equal(result?.outcome === "merged" && result.branchDeleted, true);
 });
 
 /* ---------- what an UNPROVEN caller still gets bound to, everywhere --------- */

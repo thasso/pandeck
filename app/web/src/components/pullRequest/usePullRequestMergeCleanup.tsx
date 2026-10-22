@@ -338,6 +338,19 @@ function settle(
   item: PullRequestInventoryItem,
   priorMerge: string | undefined,
 ): MergeState {
+  // Accepted but not confirmed is the UNKNOWN state with an answer attached:
+  // the merge may still land, so only the check may end it — and checking at
+  // once would mostly find it still open and call that "did not merge".
+  if (result.merge.status === "pending")
+    return {
+      key,
+      open: true,
+      busy: false,
+      error: `${result.merge.reason} Checking asks what it is now.`,
+      escalatable: false,
+      unknown: true,
+      ...(priorMerge !== undefined ? { mergedNote: priorMerge } : {}),
+    };
   // A retry after a refusal finds the pull request already terminal and reports
   // no merge of its own; the one that DID land is still this flow's fact and
   // must keep being stated.

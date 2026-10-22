@@ -21,7 +21,7 @@ import {
   pullRequestCardsForWorktree,
   type PullRequestCardContext,
 } from "../pullRequestCards.ts";
-import { scheduleImmediatePoll } from "../pullRequestWatcher.ts";
+import { scheduleImmediatePoll } from "../pullRequestPollSchedule.ts";
 import {
   beginPullRequestCard,
   finalizePullRequestCard,

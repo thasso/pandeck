@@ -90,6 +90,9 @@ interface ProviderOptions {
   merges?: { method: string; deleteBranch: boolean; headBranch?: string }[];
   branchDeleted?: boolean;
   branchDeleteError?: string;
+  branchKeptReason?: string;
+  /** The provider accepted but did not confirm: this is why. */
+  pendingReason?: string;
   /** Runs at the moment the provider ACCEPTS, for what happens after it. */
   onMerged?: () => void;
 }
@@ -133,12 +136,23 @@ function fakeProvider(options: ProviderOptions = {}): GitHostingProvider {
         ...(merge.headBranch ? { headBranch: merge.headBranch } : {}),
       });
       options.onMerged?.();
+      if (options.pendingReason)
+        return {
+          outcome: "pending",
+          number,
+          method: merge.method,
+          pendingReason: options.pendingReason,
+        };
       return {
+        outcome: "merged",
         number,
         method: merge.method,
         branchDeleted: options.branchDeleted !== false,
         ...(options.branchDeleteError
           ? { branchDeleteError: options.branchDeleteError }
+          : {}),
+        ...(options.branchKeptReason
+          ? { branchKeptReason: options.branchKeptReason }
           : {}),
       };
     },
@@ -267,6 +281,60 @@ test("merges the pull request and then retires its local worktree", async () => 
     branchDeleted: true,
     settledSessions: 2,
     deliveryVerified: true,
+  });
+});
+
+// Accepted but not confirmed: whether it merged is unknown, so the checkout is
+// left alone — removing it could lose work that never lands.
+test("a merge the provider has not confirmed reports pending and skips the cleanup", async () => {
+  const path = repo();
+  const provider = fakeProvider({
+    pendingReason:
+      "GitHub had not finished merging it when this stopped waiting",
+  });
+  const worktree = row("wt-7", path, "feature-7");
+
+  const result = await mergePullRequestFromView(
+    request({ removeWorktree: true }),
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main"), worktree],
+      providers: { [path]: provider },
+    }),
+  );
+
+  assert.equal(result.merge.status, "pending");
+  assert.match(
+    result.merge.status === "pending" ? result.merge.reason : "",
+    /accepted the merge of #7 into main \(squash\) but has not confirmed it: GitHub had not finished/,
+  );
+  assert.equal(result.cleanup.status, "skipped");
+  assert.deepEqual(result.taskSuggestions, []);
+});
+
+// A branch another open pull request targets is kept on purpose, and the view
+// says why in place of a deletion error.
+test("a branch kept for a stacked pull request is reported with that reason", async () => {
+  const path = repo();
+  const provider = fakeProvider({
+    branchDeleted: false,
+    branchKeptReason: "#8 still targets it as base",
+  });
+
+  const result = await mergePullRequestFromView(
+    request(),
+    operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    }),
+  );
+
+  assert.deepEqual(result.merge, {
+    status: "merged",
+    method: "squash",
+    headBranch: "feature-7",
+    baseBranch: "main",
+    remoteBranch: "not-deleted",
+    remoteBranchError: "#8 still targets it as base",
   });
 });
 

@@ -22,12 +22,12 @@ import {
 import {
   reconcilePullRequestCardsOnBoot,
   resetPullRequestWatcherForTests,
-  scheduleImmediatePoll,
   setPullRequestWatcherNotifierForTests,
   setPullRequestWatcherProviderResolverForTests,
   setPullRequestWatcherSessionOwnershipForTests,
   sweepPullRequestWatcherForTests,
 } from "./pullRequestWatcher.ts";
+import { scheduleImmediatePoll } from "./pullRequestPollSchedule.ts";
 import type { AppWebPushNotification } from "./webPush.ts";
 import { createTask, deleteTask, readTask, taskSummaryOf } from "./tasks.ts";
 
@@ -168,6 +168,23 @@ test("a watcher observation follows a base retargeted on the provider", async ()
 
   assert.equal(pullRequestCardById(card.id)?.baseBranch, "release-2");
   assert.equal(pullRequestCardRecord(card.id)?.context.baseBranch, "release-2");
+});
+
+test("a watcher observation copies the native stack, and clears it once gone", async () => {
+  const card = openCard();
+  const stack = { number: 3, size: 2, position: 2, baseBranch: "main" };
+  let answer = detail({ baseBranch: "feature-a", stack });
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({ pullRequestDetail: async () => answer }),
+  );
+
+  await sweepPullRequestWatcherForTests();
+  assert.deepEqual(pullRequestCardById(card.id)?.stack, stack);
+
+  answer = detail();
+  scheduleImmediatePoll(card.id);
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(card.id)?.stack, undefined);
 });
 
 test("a ready projection invalidates an in-flight draft observation", () => {

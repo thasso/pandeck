@@ -14,9 +14,13 @@ import { join } from "node:path";
 import { afterEach, test } from "vitest";
 import type {
   PullRequestDetail,
+  PullRequestMergeResult,
   PullRequestRepositoryCapabilities,
 } from "@assistant/shared";
-import type { GitHostingProvider } from "./gitHosting.ts";
+import type {
+  GitHostingProvider,
+  PullRequestStackMembers,
+} from "./gitHosting.ts";
 import {
   beginPullRequestCardObservation,
   createPullRequestCard,
@@ -26,8 +30,10 @@ import {
   pullRequestCardRecord,
   resetPullRequestCardsStoreForTests,
 } from "./pullRequestCards.ts";
+import { nextPullRequestPollAt } from "./pullRequestPollSchedule.ts";
 import {
   mergePullRequestAndProject,
+  mergePullRequestAndProjectLocked,
   resetPullRequestMutationsForTests,
   suggestLinkedTaskDone,
   withHostedPullRequestMutation,
@@ -79,12 +85,18 @@ function fakeProvider(
     }),
     mergePullRequest: async (number, options) => {
       onMerge();
-      return { number, method: options.method, branchDeleted: true };
+      return {
+        outcome: "merged",
+        number,
+        method: options.method,
+        branchDeleted: true,
+      };
     },
   };
 }
 
 afterEach(() => {
+  nextPullRequestPollAt.clear();
   resetPullRequestCardsStoreForTests();
   resetPullRequestMutationsForTests();
   resetWorkflowStoreForTests();
@@ -407,7 +419,12 @@ test("a caller's accepted head is always forwarded to the provider", async () =>
     }),
     mergePullRequest: async (number, options) => {
       providerExpectedHead = options.expectedHeadSha;
-      return { number, method: options.method, branchDeleted: false };
+      return {
+        outcome: "merged",
+        number,
+        method: options.method,
+        branchDeleted: false,
+      };
     },
   };
 
@@ -1555,7 +1572,12 @@ function optionCapturingProvider(detail: PullRequestDetail | null): {
       pullRequestDetail: async () => detail,
       mergePullRequest: async (number, options) => {
         captured = { ...options };
-        return { number, method: options.method, branchDeleted: true };
+        return {
+          outcome: "merged",
+          number,
+          method: options.method,
+          branchDeleted: true,
+        };
       },
     },
     options: () => captured,
@@ -1816,4 +1838,491 @@ test("a refusal with no known conditioned head claims no conflict", async () => 
     /provider raw 409/,
   );
   assert.notEqual(pullRequestCardById(card.id)?.conflicts, true);
+});
+
+/* ------------------------------ native stacks ------------------------------ */
+
+const OPEN_DETAIL: PullRequestDetail = {
+  number: 7,
+  state: "open",
+  merged: false,
+  mergeable: true,
+  draft: false,
+  headSha: "head-7",
+  headBranch: "feature-c",
+  baseBranch: "feature-b",
+};
+
+/**
+ * #5 ← #6 ← #7 on `main`: #7 targets #6's head, #6 targets #5's. `details` is
+ * what successive detail reads answer; the last one repeats.
+ */
+function stackedProvider(options: {
+  details: readonly PullRequestDetail[];
+  members?: PullRequestStackMembers | Error;
+  merge?: () => PullRequestMergeResult;
+}): { provider: GitHostingProvider; calls: string[] } {
+  const calls: string[] = [];
+  const details = [...options.details];
+  return {
+    calls,
+    provider: {
+      ...fakeProvider(),
+      pullRequestDetail: async () => {
+        calls.push("detail");
+        return details.length > 1 ? details.shift()! : details[0]!;
+      },
+      stackMembers: async (stackNumber) => {
+        calls.push(`members:${stackNumber}`);
+        const members = options.members ?? {
+          number: stackNumber,
+          members: [
+            {
+              number: 5,
+              state: "open",
+            },
+            {
+              number: 6,
+              state: "open",
+            },
+            {
+              number: 7,
+              state: "open",
+            },
+          ],
+        };
+        if (members instanceof Error) throw members;
+        return members;
+      },
+      mergePullRequest: async (number, mergeOptions) => {
+        calls.push("merge");
+        return (
+          options.merge?.() ?? {
+            outcome: "merged",
+            number,
+            method: mergeOptions.method,
+            branchDeleted: true,
+          }
+        );
+      },
+    },
+  };
+}
+
+const STACK = { number: 3, size: 3, position: 3, baseBranch: "main" };
+
+/** Every entry point reaches the same seam with its own kind of input. */
+const ENTRY_POINTS = [
+  ["a card click", {}],
+  [
+    "a managed direct merge",
+    {
+      expectedHeadSha: "head-7",
+      managedDecision: { baseIsDefaultBranch: false, defaultBranch: "main" },
+    },
+  ],
+] as const;
+
+for (const [name, extra] of ENTRY_POINTS)
+  for (const locked of [false, true])
+    test(`${name}${locked ? " (locked, as the Pull Requests view)" : ""} refuses a pull request stacked on open ones`, async () => {
+      const { provider, calls } = stackedProvider({
+        details: [{ ...OPEN_DETAIL, stack: STACK }],
+      });
+      const merge = locked
+        ? mergePullRequestAndProjectLocked
+        : mergePullRequestAndProject;
+      await assert.rejects(
+        merge({
+          provider,
+          repoPath: repo(),
+          number: 7,
+          headBranch: "feature-c",
+          baseBranch: "feature-b",
+          method: "squash",
+          ...extra,
+        }),
+        /stacked on open pull requests #6, #5; merging it would merge them into main too\. Merge #5 first; nothing was merged/,
+      );
+      // The members are read BEFORE the final identity read, and nothing is
+      // merged after it.
+      assert.deepEqual(calls, ["detail", "members:3", "detail"]);
+    });
+
+// An approval is only ever for the default branch, which the bottom of a stack
+// targets; what can still go wrong while it waits is the stack itself.
+test("an approved default-branch merge refuses a stack that changed under it", async () => {
+  const bottom = {
+    ...OPEN_DETAIL,
+    baseBranch: "main",
+    stack: { ...STACK, position: 1 },
+  };
+  const { provider, calls } = stackedProvider({
+    details: [bottom, { ...bottom, stack: { ...STACK, position: 2 } }],
+  });
+  await assert.rejects(
+    mergePullRequestAndProject({
+      provider,
+      repoPath: repo(),
+      number: 7,
+      headBranch: "feature-c",
+      baseBranch: "main",
+      method: "squash",
+      expectedHeadSha: "head-7",
+      managedDecision: {
+        baseIsDefaultBranch: true,
+        defaultBranch: "main",
+        approvedMethods: ["squash", "merge", "rebase"],
+      },
+    }),
+    /stack 3, 1 of 3 on main → stack 3, 2 of 3 on main/,
+  );
+  assert.ok(!calls.includes("merge"));
+});
+
+// Merged members stay listed and `position` never moves, so only the members'
+// own state says what is still below.
+test("merged members below do not count; the open one above them does", async () => {
+  const { provider, calls } = stackedProvider({
+    details: [{ ...OPEN_DETAIL, stack: STACK }],
+    members: {
+      number: 3,
+      members: [
+        { number: 5, state: "merged" },
+        { number: 6, state: "open" },
+        { number: 7, state: "open" },
+      ],
+    },
+  });
+  await assert.rejects(
+    mergePullRequestAndProject({
+      provider,
+      repoPath: repo(),
+      number: 7,
+      headBranch: "feature-c",
+      baseBranch: "feature-b",
+      method: "squash",
+    }),
+    /stacked on open pull request #6; merging it would merge that one into main too\. Merge #6 first/,
+  );
+  assert.ok(!calls.includes("merge"));
+});
+
+test("a member below that was closed without merging refuses the merge", async () => {
+  const { provider, calls } = stackedProvider({
+    details: [{ ...OPEN_DETAIL, baseBranch: "main", stack: STACK }],
+    members: {
+      number: 3,
+      members: [
+        { number: 5, state: "merged" },
+        { number: 6, state: "closed" },
+        { number: 7, state: "open" },
+      ],
+    },
+  });
+  await assert.rejects(
+    mergePullRequestAndProject({
+      provider,
+      repoPath: repo(),
+      number: 7,
+      headBranch: "feature-c",
+      baseBranch: "main",
+      method: "squash",
+    }),
+    /stacked on #6, closed without merging/,
+  );
+  assert.ok(!calls.includes("merge"));
+});
+
+// The lower pull request merged, but GitHub has not retargeted this one yet:
+// nothing open is below it, and its merge would still not land where the stack
+// does.
+test("a stacked pull request whose base is not the stack's base is refused", async () => {
+  const { provider, calls } = stackedProvider({
+    details: [{ ...OPEN_DETAIL, stack: STACK }],
+    members: {
+      number: 3,
+      members: [
+        {
+          number: 6,
+          state: "merged",
+        },
+        {
+          number: 7,
+          state: "open",
+        },
+      ],
+    },
+  });
+  await assert.rejects(
+    mergePullRequestAndProject({
+      provider,
+      repoPath: repo(),
+      number: 7,
+      headBranch: "feature-c",
+      baseBranch: "feature-b",
+      method: "squash",
+    }),
+    /targets feature-b, but its stack lands on main/,
+  );
+  assert.ok(!calls.includes("merge"));
+});
+
+for (const [name, second] of [
+  [
+    "changed size",
+    { ...OPEN_DETAIL, baseBranch: "main", stack: { ...STACK, size: 4 } },
+  ],
+  [
+    "became stacked",
+    { ...OPEN_DETAIL, baseBranch: "main", stack: { ...STACK, position: 1 } },
+  ],
+] as const)
+  test(`a stack that ${name} between the member read and the identity read is refused`, async () => {
+    const bottom = { ...OPEN_DETAIL, baseBranch: "main" };
+    const { provider, calls } = stackedProvider({
+      details: [
+        name === "became stacked"
+          ? bottom
+          : { ...bottom, stack: { ...STACK, position: 1 } },
+        second,
+      ],
+    });
+    await assert.rejects(
+      mergePullRequestAndProject({
+        provider,
+        repoPath: repo(),
+        number: 7,
+        headBranch: "feature-c",
+        baseBranch: "main",
+        method: "squash",
+      }),
+      /The stack of pull request #7 changed while it was being merged/,
+    );
+    assert.ok(!calls.includes("merge"));
+  });
+
+test("the bottom of a stack merges like any pull request", async () => {
+  const bottom = {
+    ...OPEN_DETAIL,
+    baseBranch: "main",
+    stack: { ...STACK, position: 1 },
+  };
+  const { provider, calls } = stackedProvider({
+    details: [bottom],
+    members: {
+      number: 3,
+      members: [
+        {
+          number: 7,
+          state: "open",
+        },
+        {
+          number: 8,
+          state: "open",
+        },
+      ],
+    },
+  });
+  const projection = await mergePullRequestAndProject({
+    provider,
+    repoPath: repo(),
+    number: 7,
+    headBranch: "feature-c",
+    baseBranch: "main",
+    method: "squash",
+  });
+  assert.deepEqual(calls, ["detail", "members:3", "detail", "merge"]);
+  assert.equal(projection.result.outcome, "merged");
+});
+
+// Unknown fails closed, ordinary clicks included: a merge whose stack position
+// cannot be read may land pull requests nobody looked at.
+for (const [name, options, pattern] of [
+  [
+    "a stack it cannot read",
+    {
+      details: [
+        {
+          ...OPEN_DETAIL,
+          baseBranch: "main",
+          stackUnknownReason:
+            "GitHub reported a stack for it in a shape this app does not understand",
+        },
+      ],
+    },
+    /shape this app does not understand, and merging a stacked pull request can merge the ones below it too/,
+  ],
+  [
+    "members it cannot read",
+    {
+      details: [
+        {
+          ...OPEN_DETAIL,
+          baseBranch: "main",
+          stack: { ...STACK, position: 1 },
+        },
+      ],
+      members: new Error("HTTP 404"),
+    },
+    /in stack 3, whose members could not be read \(HTTP 404\)/,
+  ],
+] as const)
+  test(`a merge with ${name} is refused`, async () => {
+    const { provider, calls } = stackedProvider(options);
+    await assert.rejects(
+      mergePullRequestAndProject({
+        provider,
+        repoPath: repo(),
+        number: 7,
+        headBranch: "feature-c",
+        baseBranch: "main",
+        method: "squash",
+      }),
+      pattern,
+    );
+    assert.ok(!calls.includes("merge"));
+  });
+
+test("a card click whose stack cannot be read at all is refused", async () => {
+  const provider: GitHostingProvider = {
+    ...fakeProvider(),
+    pullRequestDetail: async () => {
+      throw new Error("HTTP 502");
+    },
+    stackMembers: async () => ({ number: 3, members: [] }),
+  };
+  await assert.rejects(
+    mergePullRequestAndProject({
+      provider,
+      repoPath: repo(),
+      number: 7,
+      headBranch: "feature-c",
+      baseBranch: "main",
+      method: "squash",
+    }),
+    /Whether pull request #7 is part of a stack could not be read \(HTTP 502\)/,
+  );
+});
+
+/* ------------------------- accepted, not confirmed ------------------------- */
+
+function openCard(
+  path: string,
+  number: number,
+  headBranch: string,
+  baseBranch: string,
+) {
+  return createPullRequestCard(
+    {
+      sessionId: "session-1",
+      status: "open",
+      title: `PR ${number}`,
+      headBranch,
+      baseBranch,
+      provider: "github",
+      number,
+    },
+    {
+      repoRoot: path,
+      sessionKind: "developer",
+      sessionId: "session-1",
+      headBranch,
+      baseBranch,
+      draft: false,
+    },
+  );
+}
+
+test("a pending merge leaves the card open, says so, and polls it at once", async () => {
+  const path = repo();
+  const task = createTask({ title: "Ship it", source: { createdBy: "user" } });
+  try {
+    const card = openCard(path, 7, "feature-c", "main");
+    patchPullRequestCard(card.id, {
+      linkedTask: taskSummaryOf(task),
+      busyAction: "merge",
+    });
+    nextPullRequestPollAt.set(card.id, Date.now() + 60_000);
+    let refreshed = 0;
+    const { provider } = stackedProvider({
+      details: [{ ...OPEN_DETAIL, baseBranch: "main" }],
+      merge: () => ({
+        outcome: "pending",
+        number: 7,
+        method: "squash",
+        requestId: "req-1",
+        pendingReason:
+          "GitHub had not finished merging it when this stopped waiting",
+      }),
+    });
+    const projection = await mergePullRequestAndProject(
+      {
+        provider,
+        repoPath: path,
+        number: 7,
+        headBranch: "feature-c",
+        baseBranch: "main",
+        method: "squash",
+        worktreeId: "wt-1",
+      },
+      {
+        refreshBaseCheckout: async () => {
+          refreshed += 1;
+          return undefined;
+        },
+      },
+    );
+
+    assert.equal(projection.result.outcome, "pending");
+    assert.deepEqual(projection.cardIds, []);
+    assert.deepEqual(projection.taskSuggestions, []);
+    assert.equal(refreshed, 0, "the base cannot hold a merge nobody confirmed");
+    const after = pullRequestCardById(card.id)!;
+    assert.equal(after.status, "open");
+    assert.equal(after.busyAction, undefined);
+    assert.match(
+      after.actionMessage ?? "",
+      /^GitHub accepted the merge of #7 into main \(squash\) but has not confirmed it: GitHub had not finished merging it/,
+    );
+    assert.equal(readTask(task.id)?.statusSuggestion, undefined);
+    assert.equal(nextPullRequestPollAt.get(card.id), 0);
+  } finally {
+    deleteTask(task.id);
+  }
+});
+
+// The merged head is the base of whatever is stacked on it; the provider moves
+// that pull request now, so its card is asked now rather than in five minutes.
+test("a confirmed merge polls the cards stacked on the merged branch", async () => {
+  const path = repo();
+  const above = openCard(path, 8, "feature-d", "feature-c");
+  const unrelated = openCard(path, 9, "feature-e", "main");
+  nextPullRequestPollAt.set(above.id, Date.now() + 60_000);
+  nextPullRequestPollAt.set(unrelated.id, Date.now() + 60_000);
+  const { provider } = stackedProvider({
+    details: [{ ...OPEN_DETAIL, baseBranch: "main" }],
+    merge: () => ({
+      outcome: "merged",
+      number: 7,
+      method: "squash",
+      branchDeleted: false,
+      branchKeptReason:
+        "#8 still targets it as base, and deleting it could close that pull request; delete it once nothing targets it",
+    }),
+  });
+  const projection = await mergePullRequestAndProject({
+    provider,
+    repoPath: path,
+    number: 7,
+    headBranch: "feature-c",
+    baseBranch: "main",
+    method: "squash",
+  });
+  assert.equal(nextPullRequestPollAt.get(above.id), 0);
+  assert.notEqual(nextPullRequestPollAt.get(unrelated.id), 0);
+  assert.match(
+    projection.message,
+    /The remote branch feature-c was kept: #8 still targets it as base/,
+  );
 });

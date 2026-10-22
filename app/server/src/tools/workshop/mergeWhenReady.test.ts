@@ -123,7 +123,12 @@ function fixture() {
     merge: vi.fn(async (input) => {
       input.beforeProviderWrite?.();
       return {
-        result: { number: 42, method: "squash" as const, branchDeleted: true },
+        result: {
+          outcome: "merged" as const,
+          number: 42,
+          method: "squash" as const,
+          branchDeleted: true,
+        },
         cardIds: ["card"],
         taskSuggestions: [],
         message: "Merged #42",
@@ -282,7 +287,12 @@ test("terminal first observations and inline completion both release STARTING", 
   vi.mocked(f.ops.merge).mockImplementationOnce(async () => {
     vi.setSystemTime(Date.now() + 120_000);
     return {
-      result: { number: 42, method: "squash", branchDeleted: true },
+      result: {
+        outcome: "merged" as const,
+        number: 42,
+        method: "squash" as const,
+        branchDeleted: true,
+      },
       cardIds: [],
       taskSuggestions: [],
       message: "Merged",
@@ -663,7 +673,12 @@ test.each([
   const write = vi.fn();
   f.provider.mergePullRequest = async () => {
     write();
-    return { number: 42, method: "squash", branchDeleted: true };
+    return {
+      outcome: "merged" as const,
+      number: 42,
+      method: "squash" as const,
+      branchDeleted: true,
+    };
   };
   f.provider.repositoryCapabilities = async () => ({
     defaultBranch: change === "default" ? "release" : "main",
@@ -739,7 +754,12 @@ test.each(["capabilities", "detail"])(
     };
     f.provider.mergePullRequest = async () => {
       write();
-      return { number: 42, method: "squash", branchDeleted: true };
+      return {
+        outcome: "merged" as const,
+        number: 42,
+        method: "squash" as const,
+        branchDeleted: true,
+      };
     };
     vi.mocked(f.ops.merge).mockImplementation(async (input) => {
       f.provider.pullRequestDetail = async () => {
@@ -760,3 +780,43 @@ test.each(["capabilities", "detail"])(
     expect(f.release).toHaveBeenCalledTimes(1);
   },
 );
+
+// GitHub accepted the merge but did not confirm it within the wait. The job
+// ends with the same `merge-pending` partial as a foreground call, and no
+// follow-up runs: removing the worktree of a merge that may never land would
+// lose its work.
+test("a background merge the provider has not confirmed ends merge-pending with no follow-ups", async () => {
+  const f = setup();
+  const result = payload(
+    await f.run({ ...f.params, removeWorktree: true }, f.ctx, f.ops),
+  );
+  expect(result.status).toBe("waiting");
+  vi.mocked(f.ops.readiness).mockImplementation(async () => f.ready());
+  vi.mocked(f.ops.merge).mockImplementationOnce(async (input) => {
+    input.beforeProviderWrite?.();
+    return {
+      result: {
+        outcome: "pending" as const,
+        number: 42,
+        method: "squash" as const,
+        requestId: "req-1",
+        pendingReason: "waiting for GitHub's answer was cancelled",
+      },
+      cardIds: [],
+      taskSuggestions: [],
+      message:
+        "GitHub accepted the merge of #42 into release (squash) but has not confirmed it: waiting for GitHub's answer was cancelled.",
+    };
+  });
+  const ended = await f.job();
+  expect(ended.payload).toMatchObject({
+    status: "merge-pending",
+    pendingReason: "waiting for GitHub's answer was cancelled",
+    whenReady: { endedBy: "ready", mode: "background" },
+  });
+  expect(String(ended.summary)).toContain(
+    "Not done, because the merge is not confirmed: removing the worktree.",
+  );
+  expect(f.budget.commit).toHaveBeenCalledTimes(1);
+  expect(f.ops.followUps).not.toHaveBeenCalled();
+});

@@ -396,6 +396,12 @@ function usePullRequestCardActions({
   const taskOpen = card.linkedTask && card.linkedTask.status !== "done";
   const canCleanup = merged && local && !card.cleanedUp;
   const conflicted = open && card.conflicts === true;
+  // Above the bottom of a native stack, a merge here would land the pull
+  // requests below it too, so the server refuses it; say so before the click.
+  const stackedAbove =
+    open && card.stack && card.baseBranch !== card.stack.baseBranch
+      ? card.stack
+      : undefined;
   // The click already became a PROMPT in this session: the rebase is the
   // agent's turn now, and a second click would start another one on the branch
   // it is holding. Paired with the session actually running, so an agent that
@@ -536,6 +542,16 @@ function usePullRequestCardActions({
                 : local
                   ? "Update with main rebases it and republishes the branch; a conflict git cannot resolve on its own is handed to this session's agent."
                   : `Resolve the conflicts on ${card.headBranch} and push it, then merge.`}
+            </AlertDescription>
+          </Alert>
+        )}
+        {stackedAbove && (
+          <Alert variant="warning" role="note">
+            <AlertTriangle />
+            <AlertDescription>
+              Pull request {stackedAbove.position} of {stackedAbove.size} in a
+              stack on {stackedAbove.baseBranch}. Merge the pull requests below
+              it first; merging this one here is refused.
             </AlertDescription>
           </Alert>
         )}

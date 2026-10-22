@@ -153,6 +153,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   mergeResponse = {
     worktreeId: "wt-1",
+    status: "merged",
     pr: {
       number: 42,
       url: "https://example.test/pull/42",
@@ -202,4 +203,29 @@ it("distinguishes a refused deletion from an intentional one", async () => {
 
   expect(merges).toEqual([{ method: "squash" }]);
   expect(toasts).toEqual(["Merged PR #42; the remote branch was NOT deleted."]);
+});
+
+// An accepted merge GitHub has not confirmed is neither a merge nor a
+// failure: the toast must not claim either.
+it("reports a merge the provider has not confirmed as not confirmed", async () => {
+  mergeResponse = {
+    worktreeId: "wt-1",
+    status: "pending",
+    pr: {
+      number: 42,
+      url: "https://example.test/pull/42",
+      title: "Add /pr",
+      state: "open",
+    },
+    method: "squash",
+    branchDeleted: false,
+    pendingReason:
+      "GitHub had not finished merging it when this stopped waiting",
+  };
+  await openMergeDialog();
+  await confirmMerge();
+
+  expect(toasts).toEqual([
+    "PR #42: the merge is not confirmed yet (GitHub had not finished merging it when this stopped waiting). Check again in a moment.",
+  ]);
 });

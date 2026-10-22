@@ -145,7 +145,12 @@ function recorder(
       (async (number, options) => {
         calls.push(`merge:${options.method}`);
         merges.push({ number, ...options });
-        return { number, method: options.method, branchDeleted: true };
+        return {
+          outcome: "merged",
+          number,
+          method: options.method,
+          branchDeleted: true,
+        };
       }),
   };
   const operations: PullRequestActionOperations = {
@@ -273,7 +278,12 @@ test("a merge that keeps the remote branch asks the provider to keep it", async 
         ? { deleteBranch: options.deleteBranch }
         : {}),
     });
-    return { number, method: options.method, branchDeleted: false };
+    return {
+      outcome: "merged",
+      number,
+      method: options.method,
+      branchDeleted: false,
+    };
   });
 
   const { card: updated } = await runPullRequestCardAction(
@@ -288,6 +298,34 @@ test("a merge that keeps the remote branch asks the provider to keep it", async 
   assert.match(
     updated.actionMessage ?? "",
     /Merged #42 into main \(merge\)\. The remote branch feature was kept\./,
+  );
+});
+
+// GitHub accepted the merge but did not confirm it within the wait: the card
+// stays open and says so, and the click is over (no busy state left behind).
+test("a merge the provider has not confirmed leaves the card open with its message", async () => {
+  const subject = card();
+  const rec = recorder({}, async (number, options) => ({
+    outcome: "pending",
+    number,
+    method: options.method,
+    pendingReason:
+      "GitHub had not finished merging it when this stopped waiting",
+  }));
+
+  const { card: updated } = await runPullRequestCardAction(
+    subject.id,
+    "merge",
+    { mergeMethod: "squash", expectedBaseBranch: "main" },
+    rec.operations,
+  );
+
+  assert.equal(updated.status, "open");
+  assert.equal(updated.busyAction, undefined);
+  assert.equal(updated.actionError, undefined);
+  assert.match(
+    updated.actionMessage ?? "",
+    /GitHub accepted the merge of #42 into main \(squash\) but has not confirmed it/,
   );
 });
 

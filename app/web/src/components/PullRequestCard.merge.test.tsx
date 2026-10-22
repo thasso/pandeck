@@ -282,3 +282,37 @@ for (const running of [
     expect(clicks).toEqual([]);
   });
 }
+
+// A pull request above the bottom of its native stack cannot merge alone; the
+// card says so before the click, and says nothing for the bottom one.
+it("states that a pull request above the bottom of its stack merges after the ones below", () => {
+  render({
+    ...card,
+    baseBranch: "feature-a",
+    stack: { number: 3, size: 3, position: 2, baseBranch: "main" },
+  });
+  expect(container!.textContent).toContain(
+    "Pull request 2 of 3 in a stack on main. Merge the pull requests below it first",
+  );
+  act(() => root?.unmount());
+  container?.remove();
+  render({
+    ...card,
+    stack: { number: 3, size: 3, position: 1, baseBranch: "main" },
+  });
+  expect(container!.textContent).not.toContain("in a stack on");
+});
+
+// GitHub accepted the merge but did not confirm it: the card is still open and
+// says so in the server's words rather than claiming a merge.
+it("shows a pending merge's message on a card that is still open", () => {
+  render({
+    ...card,
+    actionMessage:
+      "GitHub accepted the merge of #42 into main (squash) but has not confirmed it: GitHub had not finished merging it when this stopped waiting. Nothing else was done yet; this updates when the provider reports the outcome.",
+  });
+  expect(container!.textContent).toContain(
+    "GitHub accepted the merge of #42 into main (squash) but has not confirmed it",
+  );
+  expect(find<HTMLButtonElement>("button", "Merge").disabled).toBe(false);
+});

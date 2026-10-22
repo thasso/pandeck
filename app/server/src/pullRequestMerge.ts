@@ -17,6 +17,8 @@
  *   4. the linked Task's `done` SUGGESTION (never a status write),
  *   5. matching Workflow Runs record the merge choice and observed completion,
  *   6. the worktree hosting cache, invalidated so the page re-reads.
+ * A merge the provider accepted but has not confirmed projects none of 2–5:
+ * only a message on the cards and an immediate watcher poll.
  *
  * Cards are matched by REPOSITORY IDENTITY (`repoLockKey`, the common git dir
  * shared by a repo's main checkout and all its worktrees) plus provider and
@@ -30,6 +32,7 @@ import type {
   PullRequestMergeMethod,
   PullRequestMergeResult,
   PullRequestRepositoryCapabilities,
+  PullRequestStack,
   TaskSummary,
   WorktreeMergePrRequest,
   WorktreeMergePrResponse,
@@ -38,10 +41,12 @@ import type {
 import { randomUUID } from "node:crypto";
 import type { WorktreeRow } from "./db/worktreeStore.ts";
 import { repoLockKey } from "./gitExec.ts";
+import { errorText } from "./errors.ts";
 import {
   hostingProviderForRepo,
   repositoryCapabilitiesFor,
   type GitHostingProvider,
+  type PullRequestStackMembers,
 } from "./gitHosting.ts";
 import {
   beginPullRequestCardObservation,
@@ -51,6 +56,7 @@ import {
   pullRequestCardRecord,
 } from "./pullRequestCards.ts";
 import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
+import { scheduleImmediatePoll } from "./pullRequestPollSchedule.ts";
 import { pullRequestIdentity, pullRequestKey } from "./pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "./pullRequestInventory.ts";
 import { readTask, taskSummaryOf, updateTask } from "./tasks.ts";
@@ -385,6 +391,10 @@ async function mergeAndProject(
   // a base nobody classified. The pull request's own identity is therefore the
   // LAST thing read before merging.
   const capabilities = await requireMergeCapabilities(input);
+  // The provider's native stack is read here too, for the same reason: it
+  // takes up to two round trips, and the stack the identity read below reports
+  // is bound against what this learned.
+  const stackEvidence = await readStackEvidence(input);
 
   // The provider's CURRENT answer, read under the lock, is what may be merged.
   // A caller that accepted an exact head (managed delivery, a workflow merge
@@ -432,6 +442,10 @@ async function mergeAndProject(
     // capabilities read a moment ago.
     requireUnchangedMergeTarget(input, detail, capabilities);
   }
+  // A stacked pull request merged above the bottom of its stack lands the
+  // ones below it as well, which no surface showed and no classification
+  // covered. Only a merge of exactly this one pull request may proceed.
+  requireMergeableStackPosition(input, stackEvidence, detail);
   if (expectedHeadCommit && detail) {
     // Both reads must have answered `false` about the SAME head. A retry that
     // failed, answered nothing, or describes a different head confirms nothing:
@@ -508,6 +522,8 @@ async function mergeAndProject(
       );
     throw err;
   }
+  if (result.outcome === "pending")
+    return projectPendingMerge(input, cards, result, operations);
   let baseRefreshMessage: string | undefined;
   if (input.worktreeId) {
     try {
@@ -531,7 +547,9 @@ async function mergeAndProject(
       ? `The remote branch ${input.headBranch} was kept.`
       : result.branchDeleted
         ? `Deleted the remote branch ${input.headBranch}.`
-        : `The remote branch ${input.headBranch} was NOT deleted${result.branchDeleteError ? `: ${result.branchDeleteError}` : "."}`,
+        : result.branchKeptReason
+          ? `The remote branch ${input.headBranch} was kept: ${result.branchKeptReason}.`
+          : `The remote branch ${input.headBranch} was NOT deleted${result.branchDeleteError ? `: ${result.branchDeleteError}` : "."}`,
     baseRefreshMessage,
   ]
     .filter((clause): clause is string => Boolean(clause))
@@ -634,6 +652,15 @@ async function mergeAndProject(
       `The PR inventory could not be refreshed: ${errorText(error)}.`,
     );
   }
+  // A pull request stacked on this one now has a merged base, which the
+  // provider retargets (and, for a native stack, rebases): ask its cards now
+  // rather than on their slow cadence.
+  await pollDependentCards(input).catch((err) =>
+    console.warn(
+      `[pull-request] scheduling polls above #${input.number} failed:`,
+      err,
+    ),
+  );
 
   return {
     result,
@@ -644,6 +671,196 @@ async function mergeAndProject(
     cardIds: mergedCards.map((card) => card.id),
     taskSuggestions,
   };
+}
+
+/**
+ * A merge the provider accepted but has not confirmed. Nothing that follows a
+ * merge may happen on it — no terminal card state, Task suggestion, Workflow
+ * record, base refresh or branch deletion — because it may still fail. The
+ * cards say what is known and are polled at once; the watcher projects the
+ * real outcome when the provider reports it.
+ */
+function projectPendingMerge(
+  input: MergePullRequestInput,
+  cards: PullRequestCard[],
+  result: Extract<PullRequestMergeResult, { outcome: "pending" }>,
+  operations: MergePullRequestOperations,
+): MergePullRequestProjection {
+  const message = `${providerName(input.provider.kind)} accepted the merge of #${input.number} into ${input.baseBranch} (${input.method}) but has not confirmed it: ${result.pendingReason}. Nothing else was done yet; this updates when the provider reports the outcome.`;
+  for (const card of cards) {
+    try {
+      patchPullRequestCard(
+        card.id,
+        {
+          busyAction: undefined,
+          actionError: undefined,
+          actionMessage: message,
+        },
+        // Whatever an older poll read describes the pull request from before
+        // this request.
+        { observationToken: randomUUID() },
+      );
+      scheduleImmediatePoll(card.id);
+    } catch (err) {
+      console.warn(
+        `[pull-request] projecting the pending merge of #${input.number} onto card ${card.id} failed:`,
+        err,
+      );
+    }
+  }
+  const invalidated = new Set<string>(
+    [input.worktreeId, ...cards.map((card) => card.worktreeId)].filter(
+      (id): id is string => Boolean(id),
+    ),
+  );
+  for (const worktreeId of invalidated) invalidateWorktreeHosting(worktreeId);
+  operations.inventoryChanged?.(input);
+  return { result, message, cardIds: [], taskSuggestions: [] };
+}
+
+function providerName(kind: GitHostingProviderKind): string {
+  return kind === "github" ? "GitHub" : "Forgejo";
+}
+
+/** Poll every open card of THIS repository whose base is the merged head. */
+async function pollDependentCards(input: MergePullRequestInput): Promise<void> {
+  const candidates = openPullRequestCards().filter(
+    (card) =>
+      card.provider === input.provider.kind &&
+      card.number !== input.number &&
+      card.baseBranch === input.headBranch,
+  );
+  if (candidates.length === 0) return;
+  const key = await repoLockKey(input.repoPath);
+  for (const card of candidates)
+    if ((await cardRepoKey(card)) === key) scheduleImmediatePoll(card.id);
+}
+
+/**
+ * What the provider says about this pull request's native stack, read before
+ * the identity read. `undefined` = the provider has no native stacks.
+ */
+interface StackEvidence {
+  stack?: PullRequestStack;
+  members?: PullRequestStackMembers;
+}
+
+/**
+ * Read whether this pull request is stacked and, when it is, the stack's
+ * members. Everything here fails CLOSED, ordinary clicks included: a merge
+ * whose stack position is unknown may land pull requests nobody looked at.
+ */
+async function readStackEvidence(
+  input: MergePullRequestInput,
+): Promise<StackEvidence | undefined> {
+  const stackMembers = input.provider.stackMembers?.bind(input.provider);
+  if (!stackMembers) return undefined;
+  let detail: PullRequestDetail | null;
+  try {
+    detail = await input.provider.pullRequestDetail(input.number);
+  } catch (err) {
+    throw new Error(
+      `Whether pull request #${input.number} is part of a stack could not be read (${errorText(err)}); nothing was merged. Try again.`,
+    );
+  }
+  if (!detail)
+    throw new Error(
+      `Whether pull request #${input.number} is part of a stack could not be read; nothing was merged. Try again.`,
+    );
+  requireReadableStack(input.number, detail);
+  if (!detail.stack) return {};
+  try {
+    return {
+      stack: detail.stack,
+      members: await stackMembers(detail.stack.number),
+    };
+  } catch (err) {
+    throw new Error(
+      `Pull request #${input.number} is in stack ${detail.stack.number}, whose members could not be read (${errorText(err)}); nothing was merged.`,
+    );
+  }
+}
+
+function requireReadableStack(number: number, detail: PullRequestDetail): void {
+  if (detail.stackUnknownReason)
+    throw new Error(
+      `Pull request #${number} was not merged: ${detail.stackUnknownReason}, and merging a stacked pull request can merge the ones below it too.`,
+    );
+}
+
+/**
+ * Refuse a merge that would land more than this one pull request (Tier A of
+ * `docs/pull-requests.md#native-stacks`): one with OPEN pull requests below it
+ * in its stack, or one whose direct base is not the stack's base. What is left
+ * merges exactly one pull request into a base every surface showed, so every
+ * other classification holds unchanged.
+ *
+ * The identity read must describe the SAME stack the members were read for —
+ * number, size, position and base — or the member list may be describing a
+ * stack that has since changed shape. A degraded human click with no identity
+ * read is judged on the earlier read alone.
+ */
+function requireMergeableStackPosition(
+  input: MergePullRequestInput,
+  evidence: StackEvidence | undefined,
+  detail: PullRequestDetail | null,
+): void {
+  if (!evidence) return;
+  if (detail) requireReadableStack(input.number, detail);
+  const stack = evidence.stack;
+  const current = detail ? detail.stack : stack;
+  if (!sameStack(stack, current))
+    throw new Error(
+      `The stack of pull request #${input.number} changed while it was being merged (${describeStack(stack)} → ${describeStack(current)}); nothing was merged. Look at it again and decide.`,
+    );
+  if (!stack || !evidence.members) return;
+  const members = evidence.members.members;
+  const index = members.findIndex((member) => member.number === input.number);
+  if (evidence.members.number !== stack.number || index < 0)
+    throw new Error(
+      `Stack ${stack.number} as listed does not contain pull request #${input.number}; nothing was merged. Look at it again and decide.`,
+    );
+  // Members are listed bottom to top and stay listed once merged, so what
+  // stands below this one is everything before it that has not merged —
+  // nearest first. `position` cannot say it: it never changes as the stack
+  // merges down.
+  const below = members.slice(0, index).reverse();
+  const open = below.filter((member) => member.state === "open");
+  if (open.length > 0) {
+    const list = open.map((member) => `#${member.number}`).join(", ");
+    throw new Error(
+      `Pull request #${input.number} is stacked on open pull request${open.length === 1 ? "" : "s"} ${list}; merging it would merge ${open.length === 1 ? "that one" : "them"} into ${stack.baseBranch} too. Merge #${open.at(-1)!.number} first; nothing was merged.`,
+    );
+  }
+  const closed = below.filter((member) => member.state === "closed");
+  if (closed.length > 0)
+    throw new Error(
+      `Pull request #${input.number} is stacked on ${closed.map((member) => `#${member.number}`).join(", ")}, closed without merging; nothing was merged.`,
+    );
+  const directBase = detail?.baseBranch ?? input.baseBranch;
+  if (directBase !== stack.baseBranch)
+    throw new Error(
+      `Pull request #${input.number} targets ${directBase}, but its stack lands on ${stack.baseBranch}; merging it would merge the pull requests below it too. Merge the bottom of the stack first; nothing was merged.`,
+    );
+}
+
+function sameStack(
+  a: PullRequestStack | undefined,
+  b: PullRequestStack | undefined,
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.number === b.number &&
+    a.size === b.size &&
+    a.position === b.position &&
+    a.baseBranch === b.baseBranch
+  );
+}
+
+function describeStack(stack: PullRequestStack | undefined): string {
+  return stack
+    ? `stack ${stack.number}, ${stack.position} of ${stack.size} on ${stack.baseBranch}`
+    : "not stacked";
 }
 
 /**
@@ -890,10 +1107,6 @@ async function cardsForMergedPullRequest(
   });
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /* ------------------------------- linked Task ------------------------------- */
 
 /**
@@ -983,8 +1196,18 @@ export async function mergeWorktreePullRequest(
     ...(input.deleteBranch === false ? { deleteBranch: false } : {}),
     worktreeId: row.id,
   });
+  if (result.outcome === "pending")
+    return {
+      worktreeId: row.id,
+      status: "pending",
+      pr,
+      method: result.method,
+      branchDeleted: false,
+      pendingReason: result.pendingReason,
+    };
   return {
     worktreeId: row.id,
+    status: "merged",
     pr: { ...pr, state: "merged" },
     method: result.method,
     branchDeleted: result.branchDeleted,

@@ -704,3 +704,41 @@ it("never reads AMBIGUOUS local checkouts as none", async () => {
     "2 local worktrees stand on pull-requests in acme/pa; none was removed.",
   );
 });
+
+// GitHub accepted the merge but has not confirmed it. That is UNKNOWN with an
+// answer attached: no merge is claimed, nothing local was cleaned up, the row
+// offers only the check, and no check runs by itself — at once it would mostly
+// find the pull request still open and call that "did not merge".
+it("treats a merge the provider has not confirmed as UNKNOWN, without checking at once", async () => {
+  response = {
+    number: 7,
+    merge: {
+      status: "pending",
+      reason:
+        "GitHub accepted the merge of #7 into main (squash) but has not confirmed it: GitHub had not finished merging it when this stopped waiting. Nothing else was done yet; this updates when the provider reports the outcome.",
+    },
+    cleanup: {
+      status: "skipped",
+      reason: "The merge is not confirmed yet, so the checkout was left alone.",
+    },
+    taskSuggestions: [],
+  };
+  await render(pr({ worktreeId: "wt-1" }));
+  await click(button(/Merge & clean up/));
+  await click(confirm(/^Merge & clean up$/));
+  await flush();
+
+  expect(checks).toEqual([]);
+  expect(toasts).toEqual([]);
+  expect(document.body.textContent).toContain(
+    "GitHub accepted the merge of #7 into main (squash) but has not confirmed it",
+  );
+  await click(confirm(/Close/));
+  await render(pr({ worktreeId: "wt-1" }));
+  expect(
+    [...host.querySelectorAll("button")].some((element) =>
+      /Merge & clean up/.test(element.textContent ?? ""),
+    ),
+  ).toBe(false);
+  expect(button(/Check again/, host).disabled).toBe(false);
+});

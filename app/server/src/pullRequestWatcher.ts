@@ -36,6 +36,10 @@ import {
 } from "./pullRequestCards.ts";
 import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
 import {
+  nextPullRequestPollAt,
+  scheduleImmediatePoll,
+} from "./pullRequestPollSchedule.ts";
+import {
   pullRequestMutationInProgress,
   suggestLinkedTaskDone,
 } from "./pullRequestMerge.ts";
@@ -106,8 +110,7 @@ const CONCURRENCY = 3;
 const CONFLICT_CONFIRMING_READS = 2;
 
 let sweeper: ReturnType<typeof setInterval> | undefined;
-/** Next-due schedule, in-memory only — rebuilt by `reconcilePullRequestCardsOnBoot` on restart. */
-const nextPollAt = new Map<string, number>();
+const nextPollAt = nextPullRequestPollAt;
 const inFlight = new Set<string>();
 /** Consecutive `mergeable: false` reads per card, with the head and base they concern. */
 const unmergeableReads = new Map<
@@ -184,11 +187,6 @@ function conflictConfirmed(
 function forgetCard(cardId: string): void {
   nextPollAt.delete(cardId);
   unmergeableReads.delete(cardId);
-}
-
-/** Poll this card on the next sweep instead of waiting out its current interval. */
-export function scheduleImmediatePoll(cardId: string): void {
-  nextPollAt.set(cardId, 0);
 }
 
 async function pollCard(cardId: string): Promise<void> {
@@ -293,6 +291,8 @@ async function pollCard(cardId: string): Promise<void> {
       // or a generic PR tool). Omission would leave the old draft flag stuck.
       draft: detail.draft ? true : undefined,
       mergeable: detail.mergeable,
+      // Written every poll so a stack that merged down or dissolved clears.
+      stack: detail.stack,
       conflicts: conflictConfirmed(card, context.observedHeadSha, detail),
       // A head other than the one the agent inherited means the branch was
       // republished: the rebase it was handed is over (or someone else moved

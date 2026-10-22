@@ -438,7 +438,7 @@ async function mergeCard(
   // written by the shared projection, so the two merge surfaces cannot drift.
   // It patches this card itself; the returned patch only re-states the message
   // for the action's own bookkeeping.
-  const { message, cardIds } = await mergePullRequestAndProject({
+  const { message, cardIds, result } = await mergePullRequestAndProject({
     provider,
     repoPath: cardRepoRoot,
     number: card.number,
@@ -452,6 +452,9 @@ async function mergeCard(
     ...(card.worktreeId ? { worktreeId: card.worktreeId } : {}),
     workflowActor: actor,
   });
+  // Accepted but not confirmed: the card stays open, says so, and is polled.
+  if (result.outcome === "pending")
+    return { patch: { actionMessage: message } };
   // `cardIds` are the cards the projection actually WROTE. Everything after the
   // provider accepts is best-effort there, so this card can be missing from it
   // — and then clearing `busyAction` over an `open` card would offer Merge

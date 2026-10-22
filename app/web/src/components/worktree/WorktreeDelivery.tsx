@@ -308,6 +308,18 @@ export function useWorktreeDelivery({
         ...(deleteBranch ? {} : { deleteBranch: false }),
       });
       setMergePrOpen(false);
+      if (result.status === "pending") {
+        // Accepted, not confirmed: the pull request is still open as far as
+        // anyone knows, and the refetch below shows what it is now.
+        showToast(
+          `PR #${result.pr.number}: the merge is not confirmed yet${
+            result.pendingReason ? ` (${result.pendingReason})` : ""
+          }. Check again in a moment.`,
+          { durationMs: TOAST_DWELL_MS },
+        );
+        onDidMutate();
+        return;
+      }
       setHosting((current) =>
         current && current.worktreeId === worktreeId
           ? { ...current, pr: result.pr }

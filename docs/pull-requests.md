@@ -315,7 +315,10 @@ merging — inside the provider too. GitHub used to fetch the pull request again
 at the top of `mergePullRequest`, purely to learn which ref to delete after
 merging, which reopened exactly that window whenever branch deletion was on (the
 managed default). The seam therefore hands the provider the head branch its own
-identity read PROVED, and the provider then reads nothing before merging.
+identity read PROVED, and the provider then reads nothing before merging. The
+native stack read ([Native stacks](#native-stacks)) sits on the same side of
+that line as the capability read: one detail read and one member read, BEFORE
+the identity read, which then binds the stack it reports against them.
 
 A caller that could NOT prove it — a human click whose provider could not be
 re-read — states nothing about the branch, and the provider reads the pull
@@ -526,7 +529,26 @@ rather than an edited approval. A session grant for this operation
 (`approvals.md`) answers it on the turn's end instead of a click; the
 revalidation is the same.
 
-The human merge surfaces and the generic provider PR write tools are unchanged.
+A GitHub merge the provider ACCEPTED but has not confirmed (see the card actions
+below) comes back as `status: "merge-pending"`, the same partial convention as
+`retargeted-partial`: the pending reason, no branch or Task outcome, and a
+message telling the agent not to merge again or clean up until the pull request
+reports merged. A retry is safe anyway — it follows the request already running.
+The approval executor publishes the same sentence as its outcome and records no
+merged result. The completion and cleanup flags (`markTaskDone`,
+`removeWorktree`) are follow-ups of a CONFIRMED merge, so a pending one runs
+neither, on the direct path, the approval and merge when ready alike, and its
+message names the ones it did not do: removing the checkout of a merge that may
+never land would lose its work. Merge when ready ends its job with the same
+`merge-pending` payload; its outward-step commit has already happened by then,
+so a stopped job whose wait was cut short reports pending rather than "not
+merged". A stacked pull request above the bottom of its stack is refused by the
+seam on every path, the approval and merge when ready included
+([Native stacks](#native-stacks)). The stack reads and that refusal happen
+before the outward-step boundary, so a refused job commits nothing. Merge when
+ready does not yet WAIT for the pull requests below; it ends with the refusal.
+
+The generic provider PR write tools are unchanged.
 
 ### Merge when ready
 
@@ -591,6 +613,76 @@ jobs, prompted turns and all git guards still block removal. If it removes the
 requester's own idle checkout, removal settles that session. Its later
 completion wake needs the ordinary missing-worktree acknowledgement; the result
 remains on the background task and PR card.
+
+## Native stacks
+
+GitHub stacked pull requests are a provider-native stack: pull requests stacked
+bottom to top, each targeting the head branch of the one below, the bottom one
+targeting the stack's base. Merging a pull request above the bottom lands the
+ones below it too, so a single merge can put several pull requests into the
+default branch that no surface showed and no classification covered. This is
+step one of supporting them: merging stays safe, and nothing is added to the
+decision itself.
+
+`pullRequestDetail` maps GitHub's `stack` object (`githubStackFrom`, the one
+place that knows its spelling) onto `PullRequestDetail.stack` (`number`, `size`,
+`position` with 1 = bottom, `baseBranch`). A stack it cannot read is
+`stackUnknownReason`, never absent: unstacked and unreadable are different
+answers, and the second fails closed. `stackMembers` (GitHub only) lists one
+stack's members and throws on a body that is not a list or a member without its
+number, head or base. The watcher copies `stack` onto the card, which states
+"pull request k of n in a stack on <base>; merge the pull requests below it
+first" while the card's base is not the stack's.
+
+**Tier A — only single-pull-request merges.** For a provider with native stacks
+the shared merge seam reads the pull request's detail and, when it is stacked,
+the stack's members, after the capability read and BEFORE the final identity
+read (the ordering argument in
+[Repository pull-request capabilities](#repository-pull-request-capabilities)).
+The identity read must then report the same stack — number, size, position, base
+— or the merge is refused as "the stack changed". It refuses, on every entry
+point (card, worktree page, PR view, managed tool, approval executor, Workflow
+Run):
+
+- a pull request with OPEN members below it, named nearest first, with the
+  lowest one to merge first. "Below" is the members listed before it:
+  `GET /stacks/{n}` lists them bottom to top, merged ones included, and carries
+  no base. `position` and `size` never change as the stack merges down (the top
+  of three stays 3 of 3), so only the members' own state says what is left;
+- a member below that was closed without merging;
+- a pull request whose direct base is not the stack's base (a lower member
+  merged and GitHub has not retargeted this one yet);
+- a stack or member list that could not be read, a member list that does not
+  contain this pull request, and a detail read that failed outright — ordinary
+  clicks included, which otherwise tolerate an unreadable provider.
+
+GitHub's legacy `PUT /pulls/{n}/merge` refuses every stacked pull request, the
+bottom one included (403, "use the asynchronous merge endpoint"), which is one
+reason every GitHub merge goes through `merge-async`. A merged mid-stack pull
+request keeps its ORIGINAL `base.ref` although it landed on the stack's base, so
+where a merged pull request landed is never inferred from its base.
+
+What is left merges exactly one pull request into its direct base, which equals
+the stack's base, so every existing classification (managed direct versus
+approval, human direct) holds unchanged and no new UI decision is needed.
+
+Residual window: a stack CREATED over this already-bottom pull request between
+the identity read and the provider call needs no retarget and moves no head, so
+no precondition covers it. It is the same class as the documented base window
+inside the merge call.
+
+After a pull request in a native stack merges, GitHub retargets the one above
+onto the stack's base at once and rewrites its head server-side about 8 s later
+(rebased onto the new base). A managed worktree for that pull request is then
+behind and diverged from its remote, so `worktree_finish_pull_request` refuses
+it until the worktree is synced. That is legible, and fixing it is out of Tier
+A's scope.
+
+Branch deletion after a confirmed merge is guarded for stacks native or not (see
+[Card actions](#card-actions)). Not in Tier A, and the follow-up step: merging a
+mid-stack pull request as a human decision — classifying by the stack base and
+the member set, an approval that lists every member, and the lower members'
+cards projected as merged by the real actor.
 
 ## Pull-request draft agent
 
@@ -769,6 +861,15 @@ below counts consecutive reads of the same head AND base, and a conflict the
 card stated about another base is not carried over: a retarget keeps the head,
 and Forgejo's queued `false` on the new base would otherwise confirm a conflict
 nothing checked.
+
+The same read carries GitHub's native `stack`, written onto the card on every
+poll so that a stack that merged down or dissolved clears. Cards are polled AT
+ONCE, outside their cadence, in two cases: a merge the provider accepted but has
+not confirmed (its own cards, whose real outcome this poll projects like any
+external merge), and a confirmed merge whose head is the base of another open
+card in the same repository — the provider retargets that pull request now, and
+for a native stack rebases it. On GitHub's five-minute cadence that card would
+otherwise state the old base for minutes.
 
 A card OUTLIVES its checkout. Its `repoRoot` is the spawned worktree the pull
 request was published from, and retiring that worktree is the ordinary end of a
@@ -1048,26 +1149,57 @@ a branch another surface just merged and deleted.
   living on the card, and only the opt-out is sent: an omitted `deleteBranch`
   deletes, as it always did, so an older client merges unchanged.
   `gitHosting.mergePullRequest` merges AND deletes the remote head branch as one
-  call, so no caller orchestrates two steps: GitHub takes `PUT /pulls/{n}/merge`
-  followed by `DELETE /git/refs/heads/<branch>`, Forgejo takes one
-  `POST /pulls/{n}/merge` with `Do` and `delete_branch_after_merge`, then
-  CONFIRMS the deletion with a branch read where ONLY a 404 counts as gone (any
-  other answer, including one that could not be obtained, is reported as
-  unconfirmed rather than invented), since Forgejo answers a merge the same way
-  whether or not a protected head branch survived it. The provider decides
-  whether a merge is allowed — branch protection, required checks, stale
-  mergeability — and its refusal surfaces as the card's error rather than being
-  pre-judged here. A branch deletion that fails afterwards is reported but never
-  turns a landed merge into a failure, and the outcome sentence says what
-  happened to the branch rather than what was asked for — kept on purpose,
-  deleted, or not deleted with the provider's reason. The ONE thing the card
-  decides itself is a known conflict: while `conflicts` is set the merge button,
-  its method picker and the branch checkbox are all disabled, the update below
-  becomes the card's primary button, and the reason is written out as text under
-  the row (a tooltip on a disabled button reaches neither a keyboard nor a
-  phone) in place of the branch-outcome sentence, which would otherwise describe
-  a click that cannot happen. `mergeable: null` is not that state — it is still
-  being computed, and merge stays on offer.
+  call, so no caller orchestrates two steps. GitHub takes
+  `PUT /pulls/{n}/merge-async` with the exact-head `sha`,
+  `merge_action: "direct_merge"` (the default action ENQUEUES on a base with a
+  merge queue, which is not "merge now") and never `bypass_rules`, and then
+  polls `GET /pulls/{n}/merge-async/{uuid}` under the pull request's mutation
+  lock, backing off from 1 s to 5 s for about 45 s. A 409 names the request
+  already running for this pull request and is followed — making a retry after a
+  lost answer idempotent — but only when its `expected_head_sha`, `merge_method`
+  and `merge_action` are this merge's; someone else's request is refused. Every
+  refusal body is JSON with `status` and `details.message`, which is what the
+  user reads: a stale `sha` (400 "head branch was modified") reads as the
+  ordinary moved-head refusal, and a request whose poll ends `failed` (a draft
+  below the target is accepted and fails there) throws with its message. Only
+  `status` decides, never the message: the accepting 202 says "enqueued" even
+  for a direct merge. A request that is still running when the wait ends, is
+  `enqueued`, or whose status cannot be read is `outcome: "pending"` — never a
+  merge and never a refusal. Forgejo takes one `POST /pulls/{n}/merge` with
+  `Do`. Only after a CONFIRMED merge is the head branch deleted, and only while
+  no OPEN pull request targets it as its base (GitHub: one
+  `GET /pulls?state=open&base=<head>` page; Forgejo cannot filter by base and
+  pages its open set): the merged branch is the base of whatever is stacked on
+  it. On a native stack GitHub has already retargeted that pull request when the
+  poll reports `merged`, but on a plain chain (a Pandeck-managed stack) it does
+  not retarget at all: deleting the merged head CLOSES the child at once, for
+  good (seen live). A dependent, or a dependents read that failed, keeps the
+  branch with `branchKeptReason`, and the outcome sentence says why. GitHub then
+  takes `DELETE /git/refs/heads/<branch>`; Forgejo takes
+  `DELETE /branches/<branch>` and CONFIRMS it with a branch read where ONLY a
+  404 counts as gone (any other answer, including one that could not be
+  obtained, is reported as unconfirmed rather than invented), since a protected
+  head branch survives the same answer. Forgejo used to delete inside the merge
+  request (`delete_branch_after_merge`), but only blindly; the guard needs the
+  merge first, and a read before the merge would sit in the identity window. A
+  PENDING merge projects none of what follows a merge: no terminal card state,
+  Task suggestion, Workflow record, base refresh or branch deletion. Its cards
+  keep `open`, get the outcome sentence as `actionMessage`, and are polled at
+  once; the PR view reports it as an unknown outcome (see
+  [Merge & clean up](#merge--clean-up)) and the worktree page as unconfirmed.
+  The provider decides whether a merge is allowed — branch protection, required
+  checks, stale mergeability — and its refusal surfaces as the card's error
+  rather than being pre-judged here. A branch deletion that fails afterwards is
+  reported but never turns a landed merge into a failure, and the outcome
+  sentence says what happened to the branch rather than what was asked for —
+  kept on purpose, deleted, or not deleted with the provider's reason. The ONE
+  thing the card decides itself is a known conflict: while `conflicts` is set
+  the merge button, its method picker and the branch checkbox are all disabled,
+  the update below becomes the card's primary button, and the reason is written
+  out as text under the row (a tooltip on a disabled button reaches neither a
+  keyboard nor a phone) in place of the branch-outcome sentence, which would
+  otherwise describe a click that cannot happen. `mergeable: null` is not that
+  state — it is still being computed, and merge stays on offer.
 - **Update with main** (`open`, worktree sessions) — the deterministic path
   first: `pull-rebase` on the project's main checkout, then `rebase-main` on the
   worktree, then a lease-guarded force push so the pull request actually sees
@@ -1733,6 +1865,14 @@ toast when nothing local is left, since the pull request is leaving the view),
 and an OPEN answer states plainly that the attempt did not merge it and hands
 back the ordinary decision — blocked, with its reason as text, when that is what
 the pull request now is.
+
+A merge GitHub ACCEPTED but has not confirmed (`merge.status: "pending"`) is the
+same uncertainty with its reason attached, and lands in the same state: the
+server skips the cleanup (`cleanup.status: "skipped"` when one was asked for,
+since removing a checkout whose work may never land is not a cleanup), the
+dialog states the server's sentence, and the row offers only **Check again**. No
+check is issued automatically here: right after the wait ran out it would mostly
+find the pull request still open and call that "did not merge".
 
 The check's LOCAL answer has three values for the same reason the merge's
 cleanup does: `none`, `one` worktree, or `ambiguous` with its reason. Two

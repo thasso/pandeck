@@ -27,7 +27,8 @@
  *  3. read the pull request once to derive what is being merged;
  *  4. merge, then clean up — in that order, and never the other way. A merge
  *     that landed is reported as landed whatever the cleanup then did; that is
- *     why the two phases are separate answers on the wire.
+ *     why the two phases are separate answers on the wire. A merge the
+ *     provider accepted but has not confirmed skips the cleanup.
  *
  * {@link checkPullRequestFromView} is the same resolution with NO side effect:
  * what this pull request is, read under that same lock, for a client whose
@@ -304,6 +305,23 @@ async function mergeAndCleanUp(
       ...(request.deleteRemoteBranch === false ? { deleteBranch: false } : {}),
       ...(local.worktreeId ? { worktreeId: local.worktreeId } : {}),
     });
+    if (projection.result.outcome === "pending") {
+      // Whether it merged is unknown, so nothing local may act on it: the
+      // cleanup would remove a checkout whose work may never land.
+      forgetInventoryReads(request, repository, operations);
+      return {
+        number: request.number,
+        merge: { status: "pending", reason: projection.message },
+        cleanup: request.removeWorktree
+          ? {
+              status: "skipped",
+              reason:
+                "The merge is not confirmed yet, so the checkout was left alone.",
+            }
+          : { status: "not-requested" },
+        taskSuggestions: [],
+      };
+    }
     merge = {
       status: "merged",
       method: projection.result.method,
@@ -315,8 +333,13 @@ async function mergeAndCleanUp(
           : projection.result.branchDeleted
             ? "deleted"
             : "not-deleted",
-      ...(projection.result.branchDeleteError
-        ? { remoteBranchError: projection.result.branchDeleteError }
+      ...(projection.result.branchKeptReason ||
+      projection.result.branchDeleteError
+        ? {
+            remoteBranchError:
+              projection.result.branchKeptReason ??
+              projection.result.branchDeleteError,
+          }
         : {}),
     };
     taskSuggestions = projection.taskSuggestions;
