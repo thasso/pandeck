@@ -356,7 +356,7 @@ function fakeRuntime() {
       calls.push({ kind: "create", id });
       return {};
     },
-    prompt: async (id: string) => {
+    deliverPrompt: async (id: string) => {
       calls.push({ kind: "prompt", id });
     },
     admitPrompt: () => () => {},

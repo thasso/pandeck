@@ -403,17 +403,17 @@ function deliverPrompt(
       // row is a duplicate to the runtime, never a second turn.
       clientRequestId: `queued:${item.id}`,
       ...(options.steer ? { steer: true } : {}),
-      // Runs inside the runtime's append; nothing here may throw.
-      onUserEntry: () => {
-        accepted = true;
-        try {
-          promptQueueStore.remove(sessionId, item.id);
-          settleEmptyQueue(sessionId);
-        } catch (err) {
-          console.warn("[prompt-queue] could not retire a sent row:", err);
-        }
-        resolve();
-      },
+    });
+    run.observe((event) => {
+      if (event.type !== "appended") return;
+      accepted = true;
+      try {
+        promptQueueStore.remove(sessionId, item.id);
+        settleEmptyQueue(sessionId);
+      } catch (err) {
+        console.warn("[prompt-queue] could not retire a sent row:", err);
+      }
+      resolve();
     });
     run.then(
       () => resolve(),

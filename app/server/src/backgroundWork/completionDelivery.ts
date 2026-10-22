@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { wakeSessionDelivery } from "../deliveryWake.ts";
+import type { PromptDeliveryReceipt } from "../session/runtime/promptDelivery.ts";
 import type { BackgroundWorkPromptPresentation } from "@assistant/shared/session";
 import type {
   BackgroundDeliveryBackend,
@@ -136,29 +137,12 @@ export class BackgroundHandlingClaimRefusedError extends Error {
 }
 
 /**
- * The runtime's hooks for the prompt carrying an attempt, as the facade takes
- * them (`RuntimePromptFacadeOptions`).
- */
-export interface BackgroundCarrierHooks {
-  admit: () => void;
-  onUserEntry: (
-    entryId: string,
-    runId: string | undefined,
-    accepted: boolean,
-  ) => void;
-  onProviderCall: (openRunId: string | undefined) => void;
-  onProviderDeclined: () => void;
-  onProviderAccepted: (openRunId: string | undefined) => void;
-}
-
-/**
  * One attempt to have a session handle a set of owed facts: claimed right
  * before exposure, bound to the run its prompt reached ONCE the provider has
  * taken it, and from then on that run's to settle (`index.ts`, from its
  * `RunOutcome`), which nothing else here overrides. Nothing here decides that
  * the facts were HANDLED; it records how far exposure got, from the runtime's
- * own word only (`RuntimePromptOptions.onUserEntry`'s `accepted`,
- * `onProviderCall`, `onProviderAccepted`, `onProviderDeclined`): never from
+ * delivery receipt only: never from
  * which error a prompt threw, whether it resolved, or what a log contains.
  *
  * Never exposed means provably so: the runtime never handed the provider the
@@ -185,22 +169,34 @@ export class BackgroundHandlingAttempt {
     private readonly outbox: BackgroundDeliveryOutbox | undefined,
   ) {}
 
-  /** The hooks to hand the facade for the prompt carrying this attempt. */
-  hooks(): BackgroundCarrierHooks {
-    return {
-      admit: () => this.reserve(),
-      onUserEntry: (entryId, runId, accepted) =>
-        this.exposed(entryId, runId, accepted),
-      onProviderCall: (openRunId) => {
-        if (this.state === "finished") return;
-        this.providerCalled = true;
-        this.aimedRun = openRunId;
-      },
-      onProviderDeclined: () => {
-        this.declined = true;
-      },
-      onProviderAccepted: (openRunId) => this.accepted(openRunId),
-    };
+  /** Attach before the facade's asynchronous admission can append. */
+  observe(receipt: PromptDeliveryReceipt, before = false): void {
+    receipt.observe((event) => {
+      switch (event.type) {
+        case "appended":
+          this.exposed(
+            event.append.entryId,
+            event.append.runId,
+            event.append.accepted,
+          );
+          break;
+        case "provider-called":
+          if (this.state === "finished") return;
+          this.providerCalled = true;
+          this.aimedRun = event.runId;
+          break;
+        case "provider-declined":
+          this.declined = true;
+          break;
+        case "provider-accepted":
+          this.accepted(event.runId);
+          break;
+        case "run-ended":
+        case "settled":
+          // Durable settlement and write retries belong to the outbox service.
+          break;
+      }
+    }, before);
   }
 
   /**
@@ -630,7 +626,7 @@ export class BackgroundCompletionDelivery {
   claimDeferredContext(sessionId: string):
     | {
         block: string;
-        hooks: Omit<BackgroundCarrierHooks, "admit">;
+        observe(receipt: PromptDeliveryReceipt, before?: boolean): void;
         finished: (thrown: unknown) => void;
       }
     | undefined {
@@ -656,7 +652,7 @@ export class BackgroundCompletionDelivery {
     this.options.queueChanged?.(sessionId);
     return {
       block: rendered.offer.contextBlock,
-      hooks: (({ admit: _claimedAlready, ...rest }) => rest)(attempt.hooks()),
+      observe: (receipt, before) => attempt.observe(receipt, before),
       finished: (thrown) => {
         if (attempt.finished(thrown) !== "unsent") {
           for (const entry of claimed) this.options.discard?.(entry);

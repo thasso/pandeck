@@ -155,10 +155,11 @@ test("a skill turn's deferred fact rides its context and settles by the run's ou
   const finished: unknown[] = [];
   setDeferredBackgroundContextProvider(() => ({
     block: "BACKGROUND-FACT",
-    hooks: {
-      onUserEntry: (_entryId, runId) => {
-        if (runId) exposures.push(runId);
-      },
+    observe: (receipt) => {
+      receipt.observe((event) => {
+        if (event.type === "appended" && event.append.runId)
+          exposures.push(event.append.runId);
+      });
     },
     finished: (thrown) => finished.push(thrown),
   }));
@@ -197,7 +198,7 @@ test("one skill turn carries a selected memory, the Plan hint and a deferred fac
   assert.ok(created.ok);
   setDeferredBackgroundContextProvider(() => ({
     block: "BACKGROUND-FACT",
-    hooks: {},
+    observe: () => {},
     finished: () => {},
   }));
   try {

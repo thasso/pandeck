@@ -20,6 +20,7 @@ import {
   type TimelineRangeResult,
 } from "../log/store.ts";
 import { InactiveSessionError } from "./errors.ts";
+import { PromptDeliveryReceipt } from "./promptDelivery.ts";
 import type { RuntimeEvent, RuntimeEventListener } from "./events.ts";
 import {
   LiveRuntimeSession,
@@ -218,13 +219,24 @@ export class SessionRuntime {
   }
 
   /** Drive a prompt on a live session. Throws {@link InactiveSessionError} if not live. */
-  async prompt(
+  prompt(
     sessionId: string,
     text: string,
-    options?: RuntimePromptOptions,
+    options: RuntimePromptOptions = {},
+  ): PromptDeliveryReceipt {
+    return new PromptDeliveryReceipt((receipt) =>
+      this.deliverPrompt(sessionId, text, options, receipt),
+    );
+  }
+
+  /** Internal facade entry; keeps its pre-runtime refusals on the same receipt. */
+  deliverPrompt(
+    sessionId: string,
+    text: string,
+    options: RuntimePromptOptions,
+    receipt: PromptDeliveryReceipt,
   ): Promise<void> {
-    const session = this.require(sessionId);
-    return session.prompt(text, options);
+    return this.require(sessionId).deliverPrompt(text, options, receipt);
   }
 
   abort(sessionId: string): void | Promise<void> {

@@ -339,26 +339,24 @@ for (const harness of engines) {
       lifecycle.setSessionIdleHook((id) => {
         if (id !== s.id || !pending) return;
         pending = false;
-        queued = promptRuntimeSessionWithRuntime(
+        const receipt = promptRuntimeSessionWithRuntime(
           s.runtime,
           s.driver,
           "queued unrelated turn",
-          {
-            onRunEnded: (outcome) => {
-              queuedOutcomes.push(outcome);
-            },
-          },
-        ).catch((error: unknown) => {
+        );
+        receipt.observe((event) => {
+          if (event.type === "run-ended") queuedOutcomes.push(event.outcome);
+        });
+        queued = receipt.catch((error: unknown) => {
           if (error instanceof SessionBusyError) {
             pending = true;
             busy++;
           }
         });
       });
-      const original = s.send({
-        onRunEnded: (outcome) => {
-          outcomes.push(outcome);
-        },
+      const original = s.send();
+      original.observe((event) => {
+        if (event.type === "run-ended") outcomes.push(event.outcome);
       });
       try {
         await vi.waitFor(() => assert.ok(completed));
@@ -407,13 +405,11 @@ for (const harness of engines) {
           release = resolve;
         });
       });
-      const sent = s
-        .send({
-          onRunEnded: (outcome) => {
-            outcomes.push(outcome);
-          },
-        })
-        .catch((error: unknown) => error);
+      const receipt = s.send();
+      receipt.observe((event) => {
+        if (event.type === "run-ended") outcomes.push(event.outcome);
+      });
+      const sent = receipt.catch((error: unknown) => error);
       try {
         await vi.waitFor(() => assert.ok(copying));
         assert.equal(outcomes.length, 0);
@@ -478,11 +474,12 @@ for (const harness of engines) {
       return pending
         ? {
             block: "NEW DEFERRED FACT",
-            hooks: {
-              onUserEntry: () => {
+            observe: (receipt) => {
+              receipt.observe((event) => {
+                if (event.type !== "appended") return;
                 pending = false;
                 committed++;
-              },
+              });
             },
             finished: () => {},
           }

@@ -40,6 +40,7 @@ const script = `
   const { backgroundWorkStore } = await import(${JSON.stringify(url("./db/backgroundWorkStore.ts"))});
   const { BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./backgroundWork/completionDelivery.ts"))});
   const notices = await import(${JSON.stringify(url("./backgroundCompletionNotices.ts"))});
+  const { PromptDeliveryReceipt } = await import(${JSON.stringify(url("./session/runtime/promptDelivery.ts"))});
   const { reconcileBackgroundWorkOnBoot } = await import(${JSON.stringify(url("./backgroundWorkBoot.ts"))});
   const owners = ["release", "busy", "gone", "failed", "peeked", "held", "delivered", "never", "before"];
   const offered = [];
@@ -63,10 +64,11 @@ const script = `
   const handled = (sessionId, attempt) => {
     runs += 1;
     const runId = phase + "-run-" + runs;
-    // An offer's attempt claims in its \`admit\`; a deferred carrier is claimed already.
-    const hooks = typeof attempt.hooks === "function" ? attempt.hooks() : attempt.hooks;
-    hooks.admit?.();
-    hooks.onUserEntry("entry-" + runs, runId);
+    // A deferred carrier is claimed already.
+    attempt.reserve?.();
+    attempt.observe(new PromptDeliveryReceipt(async (receipt) => {
+      receipt.appended({ entryId: "entry-" + runs, runId, accepted: true, joined: false });
+    }));
     attempt.finished(undefined);
     notices.settleBackgroundHandling(sessionId, { runId, stopReason: "end", abortRequested: false });
   };

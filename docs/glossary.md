@@ -53,8 +53,8 @@ _Avoid_: delivery, message, receipt
 A new turn ends it; a steer does not.\
 _Avoid_: turn, run, drain
 
-**Receipt**: The planned runtime answer describing a prompt's append, provider
-admission and run outcome, for each lane to interpret. Task-1051 introduces this
-answer; the scheduler's current drain adapters use the existing callbacks, not a
-runtime receipt.\
+**Receipt**: The runtime's evidence of one prompt's append, provider admission
+and run outcome, for each lane to interpret. A receipt distinguishes delivery
+from handling and records uncertainty rather than treating resolution as
+success.\
 _Avoid_: success flag, delivery acknowledgment

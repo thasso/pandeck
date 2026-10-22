@@ -24,6 +24,7 @@ import {
 import type { PromptOrigin, SessionSnapshot } from "@assistant/shared/session";
 import type { PromptableAdapter } from "./adapters/contract.ts";
 import type { RuntimePromptOptions } from "./runtime/liveSession.ts";
+import { PromptDeliveryReceipt } from "./runtime/promptDelivery.ts";
 import { SessionRuntime } from "./runtime/runtime.ts";
 import { sessionRuntime } from "./runtimeInstance.ts";
 import {
@@ -240,11 +241,11 @@ export function assertSessionEnterpriseAccount(
     );
 }
 
-export async function promptRuntimeSession(
+export function promptRuntimeSession(
   driver: RuntimePromptDriver,
   text: string,
   options: RuntimePromptFacadeOptions = {},
-): Promise<void> {
+): PromptDeliveryReceipt {
   return promptRuntimeSessionWithRuntime(sessionRuntime, driver, text, options);
 }
 
@@ -287,11 +288,23 @@ export async function beginRuntimeProviderTurn(
   }
 }
 
-export async function promptRuntimeSessionWithRuntime(
+export function promptRuntimeSessionWithRuntime(
   runtime: SessionRuntime,
   driver: RuntimePromptDriver,
   text: string,
   facadeOptions: RuntimePromptFacadeOptions = {},
+): PromptDeliveryReceipt {
+  return new PromptDeliveryReceipt((receipt) =>
+    deliverWithRuntime(runtime, driver, text, facadeOptions, receipt),
+  );
+}
+
+async function deliverWithRuntime(
+  runtime: SessionRuntime,
+  driver: RuntimePromptDriver,
+  text: string,
+  facadeOptions: RuntimePromptFacadeOptions,
+  receipt: PromptDeliveryReceipt,
 ): Promise<void> {
   const { admit, accountRecovery, ...options } = facadeOptions;
   const assertRecoveryAdmission = () => {
@@ -365,8 +378,9 @@ export async function promptRuntimeSessionWithRuntime(
       runtime,
       driver,
       text,
-      withHumanResume(options),
+      withHumanResume(options, receipt),
       excludedFromMemoryCapture,
+      receipt,
     );
   } finally {
     releaseAdmission();
@@ -407,21 +421,19 @@ async function assertSkillInvocation(
  */
 function withHumanResume(
   options: RuntimePromptFacadeOptions,
+  receipt: PromptDeliveryReceipt,
 ): RuntimePromptFacadeOptions {
   const { resumeHold, ...rest } = options;
   if (!resumeHold || options.steer) return rest;
-  return {
-    ...rest,
-    // Runs inside the runtime's append; nothing here may throw.
-    onUserEntry: (entryId, runId, accepted) => {
-      try {
-        spendHumanResume(resumeHold);
-      } catch (err) {
-        console.warn("[stop-hold] could not lift a hold:", err);
-      }
-      options.onUserEntry?.(entryId, runId, accepted);
-    },
-  };
+  receipt.observe((event) => {
+    if (event.type !== "appended") return;
+    try {
+      spendHumanResume(resumeHold);
+    } catch (err) {
+      console.warn("[stop-hold] could not lift a hold:", err);
+    }
+  }, true);
+  return rest;
 }
 
 /**
@@ -432,19 +444,8 @@ function withHumanResume(
  */
 export interface DeferredBackgroundContext {
   block: string;
-  /**
-   * The runtime's word on how far the carrying prompt got, merged into its
-   * options: the append binds the facts to its run (whose `RunOutcome` alone
-   * settles them); the provider call and an explicit decline say whether the
-   * provider ever had them. Each runs inside the runtime and never throws.
-   */
-  hooks: Pick<
-    RuntimePromptOptions,
-    | "onUserEntry"
-    | "onProviderCall"
-    | "onProviderDeclined"
-    | "onProviderAccepted"
-  >;
+  /** Observe runtime evidence before the carrying prompt can append. */
+  observe(receipt: PromptDeliveryReceipt, before?: boolean): void;
   /** The carrying prompt is over: what it threw, undefined when it resolved. */
   finished(thrown: unknown): void;
 }
@@ -491,6 +492,7 @@ export function setDeferredBackgroundContextProvider(
 function withDeferredBackgroundContext(
   driver: RuntimePromptDriver,
   options: RuntimePromptFacadeOptions,
+  receipt: PromptDeliveryReceipt,
 ): {
   options: RuntimePromptFacadeOptions;
   finished: (thrown: unknown) => void;
@@ -501,27 +503,9 @@ function withDeferredBackgroundContext(
   const contextBlock = options.contextBlock
     ? `${options.contextBlock}\n\n${pending.block}`
     : pending.block;
+  pending.observe(receipt, true);
   return {
-    options: {
-      ...options,
-      contextBlock,
-      onUserEntry: (entryId, runId, accepted) => {
-        pending.hooks.onUserEntry?.(entryId, runId, accepted);
-        options.onUserEntry?.(entryId, runId, accepted);
-      },
-      onProviderCall: (openRunId) => {
-        pending.hooks.onProviderCall?.(openRunId);
-        options.onProviderCall?.(openRunId);
-      },
-      onProviderDeclined: () => {
-        pending.hooks.onProviderDeclined?.();
-        options.onProviderDeclined?.();
-      },
-      onProviderAccepted: (openRunId) => {
-        pending.hooks.onProviderAccepted?.(openRunId);
-        options.onProviderAccepted?.(openRunId);
-      },
-    },
+    options: { ...options, contextBlock },
     finished: (thrown) => pending.finished(thrown),
   };
 }
@@ -529,11 +513,12 @@ function withDeferredBackgroundContext(
 /**
  * Prepend the turn's Plan-mode block (if any) to the model-only context block,
  * keeping any structured context the caller already supplied. The commit rides
- * `onUserEntry`, so only an ACCEPTED turn advances the Plan bookkeeping.
+ * the receipt's append, so only an ACCEPTED turn advances the Plan bookkeeping.
  */
 function withPlanTurnHint(
   driver: RuntimePromptDriver,
   options: RuntimePromptFacadeOptions,
+  receipt: PromptDeliveryReceipt,
 ): RuntimePromptFacadeOptions {
   if (options.continuation) return options;
   const hint = planTurnHintFor(driver);
@@ -541,14 +526,10 @@ function withPlanTurnHint(
   const contextBlock = options.contextBlock
     ? `${options.contextBlock}\n\n${hint.block}`
     : hint.block;
-  return {
-    ...options,
-    contextBlock,
-    onUserEntry: (entryId, runId, accepted) => {
-      hint.commit();
-      options.onUserEntry?.(entryId, runId, accepted);
-    },
-  };
+  receipt.observe((event) => {
+    if (event.type === "appended") hint.commit();
+  }, true);
+  return { ...options, contextBlock };
 }
 
 async function runPromptWithRuntime(
@@ -557,6 +538,7 @@ async function runPromptWithRuntime(
   text: string,
   rawOptions: RuntimePromptFacadeOptions,
   excludedFromMemoryCapture: boolean,
+  receipt: PromptDeliveryReceipt,
 ): Promise<void> {
   ensureRuntimeSessionWithRuntime(runtime, driver);
 
@@ -564,10 +546,10 @@ async function runPromptWithRuntime(
   // ones included, since they all reach the model — on the model-only context
   // seam, so it stays out of the durable log and the client projection. It is
   // applied before the memory branch below so both paths carry it.
-  const deferred = withDeferredBackgroundContext(driver, rawOptions);
+  const deferred = withDeferredBackgroundContext(driver, rawOptions, receipt);
   let options: RuntimePromptFacadeOptions;
   try {
-    options = withPlanTurnHint(driver, deferred.options);
+    options = withPlanTurnHint(driver, deferred.options, receipt);
   } catch (error) {
     deferred.finished(error);
     throw error;
@@ -579,7 +561,7 @@ async function runPromptWithRuntime(
     prompt: RuntimePromptFacadeOptions,
   ): Promise<void> => {
     try {
-      await runtime.prompt(driver.id, text, prompt);
+      await runtime.deliverPrompt(driver.id, text, prompt, receipt);
     } catch (error) {
       deferred.finished(error);
       throw error;
@@ -615,12 +597,12 @@ async function runPromptWithRuntime(
   const enriched: RuntimePromptFacadeOptions = {
     ...options,
     ...(decision?.memoryBlock ? { memoryBlock: decision.memoryBlock } : {}),
-    onUserEntry: (entryId, runId, accepted) => {
-      capturedTurnId = entryId;
-      capturedAtMs = Date.now();
-      options.onUserEntry?.(entryId, runId, accepted);
-    },
   };
+  receipt.observe((event) => {
+    if (event.type !== "appended") return;
+    capturedTurnId = event.append.entryId;
+    capturedAtMs = Date.now();
+  }, true);
 
   await runPrompt(enriched);
 

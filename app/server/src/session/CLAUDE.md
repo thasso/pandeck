@@ -41,10 +41,11 @@
   turn that just completed, matched from the END by turn structure and call ids
   — never positionally, never the history — all-or-nothing, and fork at its
   TERMINAL native id.
-- `onProviderCall` fires right before EVERY adapter `prompt`. An entry written
-  before the provider answered (an ordinary steer) reports `accepted: false`,
-  then `onProviderAccepted` or `onProviderDeclined` (its took-nothing answer).
-  Callers read exposure from these, never from an error type or resolution.
+- Prompt callers read exposure from the returned `PromptDeliveryReceipt`, never
+  an error or resolution. Its provider-call fact precedes EVERY adapter
+  `prompt`; an ordinary steer's append is not acceptance. Only acceptance in its
+  still-open run binds it; late acceptance stays unknown. Observe the receipt
+  before admission resumes; observers must not throw.
 - Aborted turns are lossless everywhere: persist partial assistant content with
   `stopReason: "aborted"` and completed tool results before the aborted run
   completion, and mirror a live `toolEnd` into the transient stream so a

@@ -6,6 +6,7 @@
  *   pnpm --filter @assistant/server test src/backgroundDeadlineDelivery.test.ts
  */
 import assert from "node:assert/strict";
+import { PromptDeliveryReceipt } from "./session/runtime/promptDelivery.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -305,7 +306,16 @@ test("an explicit Stop keeps its deferral and is not retained across restart", a
   const carried = h.delivery.claimDeferredContext(session)!;
   assert.match(carried.block, new RegExp(item.id));
   assert.doesNotMatch(carried.block, /frozen deadline/);
-  carried.hooks.onUserEntry?.("entry-explicit", "run-explicit", true);
+  carried.observe(
+    new PromptDeliveryReceipt(async (receipt) => {
+      receipt.appended({
+        entryId: "entry-explicit",
+        runId: "run-explicit",
+        accepted: true,
+        joined: false,
+      });
+    }),
+  );
   carried.finished(undefined);
   notices.settleBackgroundHandling(session, {
     runId: "run-explicit",
