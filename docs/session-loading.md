@@ -73,9 +73,19 @@ harness.**
   browser — announces it through `subscribeHarnessOpened`, so every connection
   showing that session from storage upgrades too.
 
-What a detached `state()` cannot answer from storage it OMITS rather than
-guesses: no `skillInvocations`, no `browserRuntimes`, and `canSteer: false` (a
-session that is not resident is not running). The upgrade fills them in.
+`buildSessionState(sessionId, facts)` in `app/server/src/sessionState.ts` owns
+state assembly. It composes the existing per-domain projections, including
+Tasks, queues, peers, skills and worktree status. `ViewSession.state()` supplies
+only its stored identity and configuration, with no live facts. The live engines
+still assemble their own state until their migration to this owner.
+
+A detached view is the case with no live part in the native facts. The owner
+OMITS what storage cannot answer rather than guessing: no `skillInvocations`, no
+`browserRuntimes`, and `canSteer: false`, since a session that is not resident
+is not running. The upgrade fills them in. Optional fields are omitted when
+undefined. Safe Task and worktree reads log a failure once per failed read and
+fall back without losing the rest of the state. The detached JSON field order
+and values remain unchanged.
 
 Two consequences worth knowing:
 
