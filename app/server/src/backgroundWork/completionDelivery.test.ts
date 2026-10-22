@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
+import { PromptDeliveryReceipt } from "../session/runtime/promptDelivery.ts";
+
+function appendedReceipt(entryId: string, runId: string) {
+  return new PromptDeliveryReceipt(async (receipt) => {
+    receipt.appended({ entryId, runId, accepted: true, joined: false });
+  });
+}
 import {
   BackgroundCompletionDelivery,
   BackgroundCompletionTurnTracker,
@@ -374,7 +381,7 @@ test("a claim refused before its append gives the fact back; an appended one kee
   refused.finished(new Error("busy"));
   const accepted = delivery.claimDeferredContext("owner-peek");
   assert.ok(accepted, "a refused turn must not consume the only copy");
-  accepted.hooks.onUserEntry?.("entry", "run", true);
+  accepted.observe(appendedReceipt("entry", "run"));
   accepted.finished(undefined);
   assert.equal(delivery.claimDeferredContext("owner-peek"), undefined);
 });
@@ -393,7 +400,7 @@ test("a fact deferred after a claim is not taken with the claimed batch", async 
   assert.match(pending.block, /"taskId":"first"/);
   // Arrives after the block was built, so it was never sent.
   delivery.enqueue("owner-race", notice("second"));
-  pending.hooks.onUserEntry?.("entry", "run", true);
+  pending.observe(appendedReceipt("entry", "run"));
   pending.finished(undefined);
 
   const remaining = delivery.claimDeferredContext("owner-race");
@@ -448,7 +455,7 @@ test("deferred output files are cleaned up once their block is exposed", async (
 
   const pending = delivery.claimDeferredContext("owner-files");
   assert.ok(pending);
-  pending.hooks.onUserEntry?.("entry", "run", true);
+  pending.observe(appendedReceipt("entry", "run"));
   pending.finished(undefined);
   assert.deepEqual(discarded, ["/tmp/turn-scoped"]);
 });
@@ -669,7 +676,7 @@ test("the outbox keeps an owed completion until the run it reached ends cleanly,
   const carrier = delivery.claimDeferredContext("owner-outbox")!;
   assert.equal(phaseOf("owner-outbox|deferred:1"), "reserved");
   assert.equal(delivery.queuedCount("owner-outbox"), 0, "claimed, not queued");
-  carrier.hooks.onUserEntry?.("entry-human", "run-human", true);
+  carrier.observe(appendedReceipt("entry-human", "run-human"));
   carrier.finished(undefined);
   assert.equal(phaseOf("owner-outbox|deferred:1"), "handling");
   settleRun("run-human");
@@ -791,7 +798,7 @@ test("the queued count follows real queued work and announces every change", asy
   await delivery.drain("owner-count");
   assert.equal(delivery.queuedCount("owner-count"), 1);
   const carrier = delivery.claimDeferredContext("owner-count")!;
-  carrier.hooks.onUserEntry?.("entry", "run", true);
+  carrier.observe(appendedReceipt("entry", "run"));
   carrier.finished(undefined);
   assert.equal(delivery.queuedCount("owner-count"), 0);
   assert.equal(changes.at(-1), 0);

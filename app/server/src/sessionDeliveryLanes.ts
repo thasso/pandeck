@@ -29,7 +29,7 @@ import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
 /**
  * Today's drains own their run promises and private locks. Observe the append
  * to return admission immediately, and fence their later claims. This is not a
- * runtime receipt: settlement and retry interpretation remain inside the drain.
+ * per-prompt subscription: lanes interpret their own runtime receipts.
  */
 function createDeliver() {
   const settling = new Map<string, Set<Promise<DeliveryResult>>>();
@@ -45,9 +45,21 @@ function createDeliver() {
     // background's peer phase also holds the peer lock. Running offers must
     // not wait for the turn they are allowed to steer.
     if (!session.isRunning) {
-      await Promise.all(
-        [...(settling.get(id) ?? [])].map((run) => run.catch(() => {})),
-      );
+      const earlier = [...(settling.get(id) ?? [])];
+      if (earlier.length > 0) {
+        // Diagnostic only: a timeout must not admit over a still-owned drain.
+        const warning = setTimeout(() => {
+          console.warn(
+            `[delivery] session ${id} is idle but ${earlier.length} earlier drain(s) have not settled after 30s`,
+          );
+        }, 30_000);
+        warning.unref?.();
+        try {
+          await Promise.all(earlier.map((run) => run.catch(() => {})));
+        } finally {
+          clearTimeout(warning);
+        }
+      }
     }
     let appended = false;
     const running = session.isRunning;

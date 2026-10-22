@@ -109,19 +109,19 @@ function oneBlock(block: string) {
     let declined = false;
     return {
       block,
-      hooks: {
-        onUserEntry: (_entryId, runId) => {
-          exposed = true;
-          state.exposures.push(runId);
-        },
-        onProviderCall: (runId) => {
-          called = true;
-          state.providerCalls.push(runId);
-        },
-        onProviderDeclined: () => {
-          declined = true;
-          state.declined += 1;
-        },
+      observe: (receipt) => {
+        receipt.observe((event) => {
+          if (event.type === "appended") {
+            exposed = true;
+            state.exposures.push(event.append.runId);
+          } else if (event.type === "provider-called") {
+            called = true;
+            state.providerCalls.push(event.runId);
+          } else if (event.type === "provider-declined") {
+            declined = true;
+            state.declined += 1;
+          }
+        });
       },
       finished: (thrown) => {
         state.finished.push(thrown);
@@ -399,7 +399,7 @@ test("a refused turn leaves the fact for the next one", async () => {
   const { runtime, driver } = harnessed("sess-refused");
   const state = oneBlock("SURVIVES");
   // A duplicate clientRequestId is dropped before any user entry is appended,
-  // so `onUserEntry` never fires and the block must stay uncommitted.
+  // so no append is reported and the block must stay uncommitted.
   await promptRuntimeSessionWithRuntime(runtime, driver, "once", {
     clientRequestId: "same",
   });

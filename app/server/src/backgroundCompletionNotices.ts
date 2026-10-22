@@ -432,7 +432,7 @@ export function settleBackgroundHandling(
  * How a wake reaches its owner (`BackgroundCompletionDeliveryOptions.offer`):
  * joining a running turn as a steer where the driver takes one, otherwise a
  * turn of its own through the prompt facade. The attempt is claimed in the
- * facade's `admit` and bound in `onUserEntry`; what reached the model is the
+ * facade's `admit` and bound from the receipt's append; what reached the model is the
  * attempt's answer, and only the run it reached settles it.
  */
 export function offerBackgroundCompletion(
@@ -452,12 +452,10 @@ export function offerBackgroundCompletion(
     // Claimed after the facade's last await, right before the append; bound
     // to the run the append belongs to. Whether the facts were HANDLED is that
     // run's outcome (`settleBackgroundHandling`), never this prompt's.
-    const hooks = attempt.hooks();
     const claim = {
-      ...hooks,
       admit: () => {
         if (shouldStart?.() === false) throw new SessionBusyError(sessionId);
-        hooks.admit();
+        attempt.reserve();
       },
     };
     // A running turn is an opportunity, not an obstacle, when the driver can
@@ -475,7 +473,7 @@ export function offerBackgroundCompletion(
       const steerId = `${clientRequestId}:steer`;
       let thrown: unknown;
       try {
-        await promptRuntimeSession(driver, signal.visibleText, {
+        const receipt = promptRuntimeSession(driver, signal.visibleText, {
           origin,
           contextBlock: signal.contextBlock,
           clientRequestId: steerId,
@@ -483,6 +481,8 @@ export function offerBackgroundCompletion(
           steerOnly: true,
           ...claim,
         });
+        attempt.observe(receipt);
+        await receipt;
       } catch (error) {
         thrown = error;
       }
@@ -502,18 +502,19 @@ export function offerBackgroundCompletion(
     }
     let thrown: unknown;
     try {
-      await backgroundCompletionTurns.run(sessionId, (accepted) =>
-        promptRuntimeSession(driver, signal.visibleText, {
+      await backgroundCompletionTurns.run(sessionId, (accepted) => {
+        const receipt = promptRuntimeSession(driver, signal.visibleText, {
           origin,
           contextBlock: signal.contextBlock,
           clientRequestId,
           ...claim,
-          onUserEntry: (entryId, runId, taken) => {
-            claim.onUserEntry(entryId, runId, taken);
-            accepted();
-          },
-        }),
-      );
+        });
+        attempt.observe(receipt);
+        receipt.observe((event) => {
+          if (event.type === "appended") accepted();
+        });
+        return receipt;
+      });
     } catch (error) {
       thrown = error;
     }
@@ -661,52 +662,56 @@ export async function recoverBackgroundHandling(
     })),
     "interrupted",
   );
-  const hooks = attempt.hooks();
   const done = (async () => {
     let thrown: unknown;
     try {
-      await promptRuntimeSession(driver, "Recover background updates.", {
-        origin: {
-          kind: "system",
-          source: "background-recovery",
-          presentation: {
-            kind: "background-work",
-            updates: updates.flatMap(({ item }) =>
-              item &&
-              (item.state === "completed" ||
-                item.state === "failed" ||
-                item.state === "stopped" ||
-                item.state === "lost")
-                ? [
-                    {
-                      taskId: item.id,
-                      label: item.label,
-                      ...backgroundNoticeCommand(item),
-                      status: item.state,
-                      humanLink: backgroundWorkHumanLink(item.id),
-                    },
-                  ]
-                : [],
-            ),
-            ...(remaining > 0 ? { omittedCount: remaining } : {}),
-            recovery: true,
+      const receipt = promptRuntimeSession(
+        driver,
+        "Recover background updates.",
+        {
+          origin: {
+            kind: "system",
+            source: "background-recovery",
+            presentation: {
+              kind: "background-work",
+              updates: updates.flatMap(({ item }) =>
+                item &&
+                (item.state === "completed" ||
+                  item.state === "failed" ||
+                  item.state === "stopped" ||
+                  item.state === "lost")
+                  ? [
+                      {
+                        taskId: item.id,
+                        label: item.label,
+                        ...backgroundNoticeCommand(item),
+                        status: item.state,
+                        humanLink: backgroundWorkHumanLink(item.id),
+                      },
+                    ]
+                  : [],
+              ),
+              ...(remaining > 0 ? { omittedCount: remaining } : {}),
+              recovery: true,
+            },
+          },
+          contextBlock,
+          clientRequestId: `background-recovery:${attempt.id}`,
+          // After the facade's last await, right before the append: the user's
+          // eligibility is asked once more (an archive or delete may have landed
+          // while the facade awaited; the facade itself rechecks the hold), then
+          // the claim — a compare-and-set on each fact's interrupted attempt, so
+          // a second Recover or a Dismiss racing this one finds nothing to take.
+          // A refusal here claims nothing: the facts stay as they were.
+          admit: () => {
+            const refused = recoveryRefusal(sessionId);
+            if (refused) throw new BackgroundRecoveryRefusedError(refused);
+            attempt.reserve();
           },
         },
-        contextBlock,
-        clientRequestId: `background-recovery:${attempt.id}`,
-        ...hooks,
-        // After the facade's last await, right before the append: the user's
-        // eligibility is asked once more (an archive or delete may have landed
-        // while the facade awaited; the facade itself rechecks the hold), then
-        // the claim — a compare-and-set on each fact's interrupted attempt, so
-        // a second Recover or a Dismiss racing this one finds nothing to take.
-        // A refusal here claims nothing: the facts stay as they were.
-        admit: () => {
-          const refused = recoveryRefusal(sessionId);
-          if (refused) throw new BackgroundRecoveryRefusedError(refused);
-          hooks.admit();
-        },
-      });
+      );
+      attempt.observe(receipt);
+      await receipt;
     } catch (error) {
       thrown = error;
     }

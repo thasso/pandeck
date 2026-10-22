@@ -22,7 +22,7 @@
  *
  * Three properties are worth stating outright, because each is a choice:
  *
- *  - AT LEAST ONCE, deliberately. The row is dropped inside `onUserEntry` —
+ *  - AT LEAST ONCE, deliberately. The row is dropped on the receipt's append —
  *    the same synchronous step that appends the durable user entry — so a run
  *    that fails afterwards never re-delivers. A process killed BETWEEN those two
  *    writes leaves the row queued and the agent hears the decision twice after
@@ -242,7 +242,7 @@ export async function deliverAgentHandoff(
   if (worthTrying) {
     let appended = false;
     try {
-      await promptRuntimeSession(driver, input.text, {
+      const receipt = promptRuntimeSession(driver, input.text, {
         ...(input.visible ? {} : { hidden: true }),
         origin: input.origin,
         ...(input.contextBlock ? { contextBlock: input.contextBlock } : {}),
@@ -253,11 +253,13 @@ export async function deliverAgentHandoff(
         // prompted ordinarily instead (`steerOnly` is what refuses that, and a
         // handoff wants the turn either way).
         ...(driver.isRunning && driver.canSteer ? { steer: true } : {}),
-        onUserEntry: () => {
-          appended = true;
-          reportOutcome(input.outcomeRef, { kind: "delivered" });
-        },
       });
+      receipt.observe((event) => {
+        if (event.type !== "appended") return;
+        appended = true;
+        reportOutcome(input.outcomeRef, { kind: "delivered" });
+      });
+      await receipt;
       return "delivered";
     } catch (err) {
       if (appended || !(err instanceof SessionBusyError)) throw err;
@@ -418,7 +420,7 @@ async function deliverQueued(
 ): Promise<boolean> {
   let appended = false;
   try {
-    await promptRuntimeSession(driver, row.prompt, {
+    const receipt = promptRuntimeSession(driver, row.prompt, {
       admit: () => {
         if (shouldStart?.() === false)
           throw new SessionBusyError(driver.sessionId);
@@ -426,16 +428,15 @@ async function deliverQueued(
       ...(row.hidden ? { hidden: true } : {}),
       origin: row.origin,
       ...(row.contextBlock ? { contextBlock: row.contextBlock } : {}),
-      // Dropped at APPEND time, inside the same synchronous step that records
-      // the turn: a run that fails after this must not re-deliver the decision.
-      // Nothing in here may throw — this runs inside the runtime's append, and
-      // a throw would abort a turn whose user entry already exists.
-      onUserEntry: () => {
-        appended = true;
-        if (!removeRow(row.id)) deliveredPendingRemoval.add(row.id);
-        reportOutcome(row.outcomeRef, { kind: "delivered" });
-      },
     });
+    // Retirement stays synchronous with append, not provider acceptance.
+    receipt.observe((event) => {
+      if (event.type !== "appended") return;
+      appended = true;
+      if (!removeRow(row.id)) deliveredPendingRemoval.add(row.id);
+      reportOutcome(row.outcomeRef, { kind: "delivered" });
+    });
+    await receipt;
     return true;
   } catch (err) {
     if (appended) return true; // the agent has it; the run failing is its own story

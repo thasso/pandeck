@@ -332,6 +332,41 @@ test("Stop during deferred settlement keeps later handoffs and queue rows for Re
   assert.deepEqual(f.errors, []);
 });
 
+test("an idle settlement wait warns without releasing its admission gate", async () => {
+  const f = fixture();
+  const releaseUser = await f.startUser();
+  for (const text of ["A", "B"])
+    handoffs.enqueueAgentHandoff({
+      sessionId: f.driver.sessionId,
+      text,
+      origin: { kind: "system", source: "approval-decision" },
+    });
+  const releaseSettle = f.driver.holdSettle();
+  releases.push(releaseSettle);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.useFakeTimers();
+  try {
+    releaseUser();
+    await until(() => f.driver.promptTexts.length === 2 && !f.driver.isRunning);
+    await vi.advanceTimersByTimeAsync(30_000);
+    assert.equal(warn.mock.calls.length, 1);
+    assert.match(
+      String(warn.mock.calls[0]?.[0]),
+      /is idle but 1 earlier drain\(s\) have not settled after 30s/,
+    );
+    assert.deepEqual(f.driver.promptTexts, ["U", "A"]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    assert.equal(warn.mock.calls.length, 1, "one diagnostic, not polling");
+  } finally {
+    releaseSettle();
+    await f.scheduler.wake(f.driver.sessionId);
+    vi.useRealTimers();
+    warn.mockRestore();
+  }
+  await until(() => f.driver.promptTexts.length === 3);
+  assert.deepEqual(f.driver.promptTexts, ["U", "A", "B"]);
+});
+
 test("a preappend rejection settles once without debt spinning and a new wake can retry", async () => {
   const f = fixture();
   const releaseUser = await f.startUser();

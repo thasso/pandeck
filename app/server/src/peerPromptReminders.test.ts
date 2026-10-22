@@ -705,7 +705,7 @@ describe("reply reminders", () => {
 });
 
 describe("the user-entry seam", () => {
-  it("is heard for every appended entry, before the prompt's own callback", async () => {
+  it("is heard for every appended entry, before the prompt's receipt", async () => {
     const me = seed("Seam");
     const { subscribeSessionUserEntry } =
       await import("./session/runtime/liveSession.ts");
@@ -717,15 +717,18 @@ describe("the user-entry seam", () => {
       throw new Error("one listener failing");
     });
     try {
-      await promptRuntimeSession(driverFor(me), "hello", {
+      const receipt = promptRuntimeSession(driverFor(me), "hello", {
         origin: { kind: "system", source: "test" },
-        onUserEntry: () => heard.push("onUserEntry"),
       });
+      receipt.observe((event) => {
+        if (event.type === "appended") heard.push("receipt");
+      });
+      await receipt;
     } finally {
       stop();
       throwing();
     }
-    assert.deepEqual(heard, ["listener", "onUserEntry"]);
+    assert.deepEqual(heard, ["listener", "receipt"]);
   });
 });
 

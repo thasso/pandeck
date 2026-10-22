@@ -153,9 +153,11 @@ a new idle admission, they await earlier admitted drains' settlement across all
 lanes, including a background drain's peer phase. A fenced drain therefore
 cannot consume a fresh offer or let a lower-priority lane overtake it. Running
 joinable offers do not wait for the turn they may steer. This adds no debt-based
-retry loop. The adapters do not implement runtime receipts, which are
-[Task-1051](pa://task/1051). Private drain locks, rerun markers and cross-path
-yield checks remain until [Task-1053](pa://task/1053).
+retry loop. An idle admission waiting over 30 seconds logs a diagnostic, but
+never times out and admits over a drain that still owns its claim. The drains
+interpret their prompt receipts as described below. The adapters still observe
+the session-wide append feed to fence admission; private drain locks, rerun
+markers and cross-path yield checks remain until [Task-1053](pa://task/1053).
 
 Only a real idle edge, Resume or a reminder's own re-offer enables the reminder
 lane, which never cold-acquires a session. Queue failures and removals wake the
@@ -218,18 +220,17 @@ restarts its reply deadline.
   `dispatching` only through its own delivery or boot recovery, which reads the
   recipient's log: never swept back, never withdrawable, never sent twice. A
   database that cannot check fails closed: nothing is sent, under the bounded
-  retry. The batch is recorded admitted as the runtime appends it
-  (`onUserEntry`), in one transaction; a write refused there is tried once more
-  at settlement, and if that fails too the rows stay reserved for boot. Any
-  other refusal before the append — a Stop at the run door (also of a steer), a
-  busy session, a harness released meanwhile — likewise leaves the rows
-  `dispatching`, so they go back to the queue (a Stop spends no attempt) or
-  under the bounded retry; a released instance is sent nothing more. Admitted
-  rows are never retried or re-queued: the prompt is in the recipient's context
-  and its tools may have run. They settle from the `RunOutcome` the runtime
-  records as the run's bracket closes (the run the batch opened; for a steer,
-  the run it joined), never from whether the prompt resolved, since a Stop
-  resolves it like a finished turn:
+  retry. The batch is recorded admitted from the receipt's append, in one
+  transaction; a write refused there is tried once more at settlement, and if
+  that fails too the rows stay reserved for boot. Any other refusal before the
+  append — a Stop at the run door (also of a steer), a busy session, a harness
+  released meanwhile — likewise leaves the rows `dispatching`, so they go back
+  to the queue (a Stop spends no attempt) or under the bounded retry; a released
+  instance is sent nothing more. Admitted rows are never retried or re-queued:
+  the prompt is in the recipient's context and its tools may have run. They
+  settle from the `RunOutcome` the runtime records as the run's bracket closes
+  (the run the batch opened; for a steer, the run it joined), never from whether
+  the prompt resolved, since a Stop resolves it like a finished turn:
   - a clean end is `completed`, or `awaiting_response` when a reply was asked
     for — the turn finishing does not answer the request;
   - an abort someone ASKED for (the user's Stop, a coordinator's stand-down),
@@ -263,10 +264,11 @@ restarts its reply deadline.
   possibly read — `stopped` when that close was a Stop or teardown, otherwise
   the uncertain-read notice — and is never sent again.
 
-  A delivery the runtime never confirmed (no `onUserEntry`), whether its prompt
-  threw or resolved, is reconciled before anything is retried or refunded,
-  because the log's append persists the entry before its own bookkeeping (the
-  session's stats row) and a producer may swallow that bookkeeping's failure:
+  A delivery the runtime never confirmed with a receipt append, whether its
+  prompt threw or resolved, is reconciled before anything is retried or
+  refunded, because the log's append persists the entry before its own
+  bookkeeping (the session's stats row) and a producer may swallow that
+  bookkeeping's failure:
   - a batch refused before its claim gate never reached anything: unsent;
   - a steer the provider took whose entry write then failed is delivered on the
     provider's word (`SteerEntryFailedError`), log or no log;
@@ -398,6 +400,36 @@ unheld.
 
 ### Delivered is not handled
 
+`promptRuntimeSession` and the runtime's `prompt` return one
+`PromptDeliveryReceipt`. Awaiting it, or using `then`, `catch` or `finally`,
+keeps the old prompt result and errors. The receipt is not a success flag. Its
+facts are available immediately and through `observe`, which synchronously
+replays prior facts before following new ones. Subscribe immediately after the
+prompt call, before asynchronous admission resumes. Observers must not throw.
+
+- `append` names the durable entry and run, whether it joined a run, and whether
+  the provider had accepted it at append time. A continuation has a `runId` but
+  no append. A duplicate sets `duplicate`, appends nothing and has no outcome.
+- Provider-call, acceptance and decline facts come only from the runtime.
+  `exposure` is `none` before a provider call or after an explicit decline,
+  `accepted` for an attributed acceptance, otherwise `unknown`. An ordinary
+  steer's append precedes acceptance. Acceptance after its run closed stays
+  unknown, even when that run ended cleanly.
+- `refusedBeforeAppend` records a rejected prompt with no append. It does not
+  prove non-exposure, since a provider may take a steer before its entry writes.
+- `outcome` is the appended or continued run's `RunOutcome`, including for a
+  steer whose call settled before that run. `boundOutcome` is available only
+  with attributed acceptance. Neither another run's end nor the prompt result
+  settles a bound background batch. Account recovery defers the admitted run's
+  outcome until continuation decides it.
+
+The user queue and handoffs retire on append, peers record admission on append
+and settle from their run, and background delivery binds only on acceptance.
+Workflow and other direct callers can keep awaiting the same receipt without
+changing their result interpretation. There are no per-prompt lifecycle callback
+options. Session-wide feeds remain for scheduler fencing and cross-prompt
+services such as durable background settlement.
+
 A background fact that reached the model has been DELIVERED; it has been HANDLED
 only when the turn it reached ends cleanly. Until then its outbox row stays, and
 a turn that fails, is stopped or is cut off leaves it for the user
@@ -411,10 +443,10 @@ a turn that fails, is stopped or is cut off leaves it for the user
   if the session were busy. The append binds the batch to the run it opened or
   joined (`handling`, with the run and entry ids), but only once the provider
   has taken it. An ordinary steer is written before the provider answers: its
-  batch stays claimed and unbound until the runtime reports the acceptance
-  (`onProviderAccepted`), and is bound only if its run is still open then. A run
-  that closes first, cleanly or not, settles nothing of it; acceptance after
-  that close is `unknown`, a decline gives it back. Only that run's `RunOutcome`
+  batch stays claimed and unbound until the runtime reports the acceptance on
+  the receipt, and is bound only if its run is still open then. A run that
+  closes first, cleanly or not, settles nothing of it; acceptance after that
+  close is `unknown`, a decline gives it back. Only that run's `RunOutcome`
   settles it, and once bound nothing else does (a prompt that throws after its
   run reported a clean end relabels nothing): a clean end nobody aborted retires
   exactly the rows bound to it; an abort somebody asked for (a Stop, a
@@ -423,10 +455,10 @@ a turn that fails, is stopped or is cut off leaves it for the user
   reported before a Stop stays a failure. Whether the prompt resolved or threw,
   an idle edge, output, a viewer, or another run ending cleanly settles nothing,
   and a stale, duplicate or foreign callback finds no row to move.
-- **Exposure comes from the runtime, never from an error.** The runtime calls
-  `onProviderCall` right before it hands the adapter any prompt, with the run
-  open then, and `onProviderDeclined` only when the adapter answered that it
-  took nothing: a steer-only `steered: false`, a deferred steer never sent or
+- **Exposure comes from the runtime, never from an error.** The receipt records
+  `provider-called` right before the runtime hands the adapter any prompt, with
+  the run open then, and `provider-declined` only when the adapter answered that
+  it took nothing: a steer-only `steered: false`, a deferred steer never sent or
   dropped unread on the provider's word, an ordinary steer the provider
   rejected. A claimed batch goes back to where it was (owed and queued in order,
   or interrupted as it was for a Recover) only when the provider never had the

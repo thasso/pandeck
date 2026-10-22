@@ -89,8 +89,8 @@ export function planTurnBlock(
 export interface PlanTurnHint {
   readonly block: string;
   /**
-   * Record that this turn actually ran. Called from the runtime's
-   * `onUserEntry`, which fires only once the durable user entry exists — so a
+   * Record that this turn actually ran. Called from the receipt's append,
+   * which fires only once the durable user entry exists, so a
    * duplicate `clientRequestId` (returned before any append) neither consumes
    * the clearing line nor claims a Plan turn happened.
    */

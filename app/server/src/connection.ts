@@ -3276,7 +3276,7 @@ export class Connection implements Viewer {
       // rebase, with the truth in a toast the user may never see.
       //
       // The action's own token correlates that late write with the action it
-      // belongs to. Success lands when the prompt is APPENDED (`onUserEntry`),
+      // belongs to. Success lands on the prompt receipt's APPEND,
       // not when the turn ends minutes later, and an outcome for an action the
       // card has since moved past is dropped rather than overwriting the newer
       // one.

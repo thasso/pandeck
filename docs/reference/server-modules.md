@@ -436,9 +436,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   is being viewed — and reports the handoff's outcome back onto the card
   (`recordRebaseHandoff`), so an unavailable session or a rejected prompt leaves
   a durable `actionError` rather than a card claiming a handoff that never
-  happened. Success is recorded when the prompt is APPENDED (`onUserEntry`), and
-  every such write carries the card's `updatedAt` from when the handoff was
-  issued so a late outcome cannot overwrite a newer action's.
+  happened. Success is recorded on the prompt receipt's APPEND, and every such
+  write carries the card's `updatedAt` from when the handoff was issued so a
+  late outcome cannot overwrite a newer action's.
 - `session/sessionRunLease.ts` is the mutual exclusion between starting a RUN in
   a session and REMOVING a WORKTREE. The held resource is the worktree, and each
   prompt resolves its session's CURRENT worktree at admission — so a session

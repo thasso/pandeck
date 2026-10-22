@@ -158,9 +158,10 @@ harness adapters, runtime-to-wire transport, and runtime attachment helpers.
   `RuntimePromptOptions.memoryBlock` carries effective Memory and `contextBlock`
   carries server-owned structured handoff context; both prepend to
   provider-bound text while the durable app log/projection keep only the clean
-  human text. `onUserEntry` reports the accepted user-turn id for the
-  effective-load audit. Central callers must not wrap the prompt to inject
-  hidden context themselves.
+  human text. The returned `PromptDeliveryReceipt` reports the appended
+  user-turn id for the effective-load audit and records provider exposure and
+  the run outcome, independently of the prompt's result. Central callers must
+  not wrap the prompt to inject hidden context themselves.
 - `planHint.ts` rides that same seam for Plan mode ([Task-330](pa://task/330)).
   Plan is STATE, so the reminder is prepended to `contextBlock` on EVERY Plan
   turn — hidden, steering and agent-origin ones included, because they all reach
@@ -178,12 +179,13 @@ harness adapters, runtime-to-wire transport, and runtime attachment helpers.
   stops and the tool block changes by itself) except for ONE clearing line on
   the first Build turn after a Plan turn, because both harnesses resume a
   provider transcript that still carries the earlier in-band Plan lines. The
-  bookkeeping commits from `onUserEntry`, so a duplicate `clientRequestId`
-  neither consumes the clearing line nor claims a Plan turn; it is in-memory, so
-  a restart drops a pending clearing line. Note the seam's known edge, shared
-  with `memoryBlock`: the Claude harness's OWN mirrored record entries
-  (`ClaudeSdkSession.timelineEntries`) keep the enriched text — the app-owned
-  log, the client projection and the timeline the browser renders do not.
+  bookkeeping commits from the receipt's append, so a duplicate
+  `clientRequestId` neither consumes the clearing line nor claims a Plan turn;
+  it is in-memory, so a restart drops a pending clearing line. Note the seam's
+  known edge, shared with `memoryBlock`: the Claude harness's OWN mirrored
+  record entries (`ClaudeSdkSession.timelineEntries`) keep the enriched text —
+  the app-owned log, the client projection and the timeline the browser renders
+  do not.
 - A retained provider may start a turn without an app prompt.
   `beginRuntimeProviderTurn` applies the same worktree, session-run lease,
   frozen skills, and runtime attachment checks, then returns an idempotent

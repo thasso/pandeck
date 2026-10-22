@@ -1026,7 +1026,7 @@ function reserveAdmission(
 /**
  * The runtime appended this claimed batch as ONE turn: record the batch, the
  * admission and the turn start for every row still held by THIS claim, in one
- * transaction. Called from inside that append (`onUserEntry`), so admission
+ * transaction. Called from the receipt's synchronous append, so admission
  * is never recorded for a turn that was refused before it reached the log.
  * The batch passed {@link reserveAdmission} just before, so every row is
  * still this claim's; one that is not is left alone. Returns the ids admitted.

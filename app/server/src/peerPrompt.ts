@@ -68,7 +68,6 @@ import {
 } from "./delegationFailureNotice.ts";
 import {
   setRunFailureHook,
-  subscribeSessionRunEnded,
   subscribeSessionRunStarted,
   subscribeSessionUserEntry,
   type RunFailureReport,
@@ -611,25 +610,16 @@ async function steerPeerPrompt(
   let admitted = false;
   let reserved = false;
   let ownsContext = false;
-  // What the append admitted (undefined while its write has not succeeded)
-  // and the run it joined, read inside that append. A steer does not open its
-  // run, so it hears the end from the runtime's run-ended feed, subscribed
-  // before the prompt so no end is missed.
+  // The receipt follows the joined run even after the steer call settles.
   let admittedIds: string[] | undefined;
-  let joinedRun: string | undefined;
   let runEnded: (outcome: RunOutcome) => void = () => {};
   const ended = new Promise<RunOutcome>((resolve) => {
     runEnded = resolve;
   });
-  const unsubscribe = subscribeSessionRunEnded((sessionId, outcome) => {
-    if (sessionId !== driver.sessionId || !admitted) return;
-    // No run was open at the append (it should be): the next end is its own.
-    if (joinedRun === undefined || outcome.runId === joinedRun)
-      runEnded(outcome);
-  });
+  let unsubscribe = () => {};
   let thrown: unknown;
   try {
-    await promptRuntimeSession(driver, envelope, {
+    const receipt = promptRuntimeSession(driver, envelope, {
       origin: { kind: "agent", agentId: PEER_ORIGIN_AGENT_ID },
       clientRequestId: peerKey(m.id),
       peerMessageIds: [peerKey(m.id)],
@@ -640,19 +630,19 @@ async function steerPeerPrompt(
         admitClaimed(batch);
         reserved = true;
       },
-      // Runs inside the runtime's append; nothing here may throw.
-      onUserEntry: () => {
-        admitted = true;
-        joinedRun = sessionRuntime.get(driver.sessionId)?.currentRunId;
-        // sendQueuedPeerPromptNow refuses steering into an existing peer
-        // delivery context, so this run has one unambiguous reply owner.
-        activeContexts.set(driver.sessionId, context);
-        ownsContext = true;
-        admittedIds = recordAppended(batch);
-        void broadcastParticipants(batch);
-        void broadcastBatchCardUpdates([m.id]);
-      },
     });
+    unsubscribe = receipt.observe((event) => {
+      if (event.type === "run-ended") runEnded(event.outcome);
+      if (event.type !== "appended") return;
+      admitted = true;
+      // sendQueuedPeerPromptNow refuses steering into an existing peer context.
+      activeContexts.set(driver.sessionId, context);
+      ownsContext = true;
+      admittedIds = recordAppended(batch);
+      void broadcastParticipants(batch);
+      void broadcastBatchCardUpdates([m.id]);
+    });
+    await receipt;
   } catch (err) {
     thrown = err;
   }
@@ -1332,34 +1322,38 @@ async function deliverOwedNotices(
       // `sender_notified_at_ms`, which is written only from an accepted turn,
       // and a delegation notice's `delivered_at_ms`, written as the turn is
       // appended; concurrent drains for one session coalesce on `drainLocks`.
-      await promptRuntimeSession(driver, buildNotice(owed, delegated), {
-        origin: { kind: "agent", agentId: PEER_NOTICE_AGENT_ID },
-        // Asked once more after the last await: the user may have taken the
-        // child over, settled it or answered for it since the text was built.
-        admit: () => {
-          if (shouldStart?.() === false) throw new SessionBusyError(sessionId);
-          if (
-            deliverableNotices(sessionId)
-              .map((n) => n.id)
-              .join() !== ids
-          )
-            throw new NoticeSetChangedError();
+      const receipt = promptRuntimeSession(
+        driver,
+        buildNotice(owed, delegated),
+        {
+          origin: { kind: "agent", agentId: PEER_NOTICE_AGENT_ID },
+          // Asked once more after the last await: the user may have taken the
+          // child over, settled it or answered for it since the text was built.
+          admit: () => {
+            if (shouldStart?.() === false)
+              throw new SessionBusyError(sessionId);
+            if (
+              deliverableNotices(sessionId)
+                .map((n) => n.id)
+                .join() !== ids
+            )
+              throw new NoticeSetChangedError();
+          },
         },
-        // A delegation notice is a fact the coordinator now holds: retired as
-        // its turn reaches the log, so a failure of that turn — often the same
-        // limit the child hit — does not deliver it again and again.
-        onUserEntry: () => {
-          try {
-            delegationFailureNoticeStore.markDelivered(
-              delegated.map((n) => n.id),
-            );
-          } catch (err) {
-            console.warn(
-              `[peer] could not retire failure notices for ${sessionId} (${failureLabel(err)})`,
-            );
-          }
-        },
+      );
+      receipt.observe((event) => {
+        if (event.type !== "appended") return;
+        try {
+          delegationFailureNoticeStore.markDelivered(
+            delegated.map((n) => n.id),
+          );
+        } catch (err) {
+          console.warn(
+            `[peer] could not retire failure notices for ${sessionId} (${failureLabel(err)})`,
+          );
+        }
       });
+      await receipt;
       // Only an accepted turn consumes the interruption notice.
       peerPromptStore.markSenderNotified(owed.map((m) => m.id));
       clearInterruptionNoticeRetry(sessionId);
@@ -1562,7 +1556,7 @@ async function deliverReplyReminder(
       // answer spends that chain's hop budget like any other reply, and the
       // reminder itself spends none.
       activeContexts.set(sessionId, reminderContext(due));
-      await promptRuntimeSession(driver, buildReminder(due, limit), {
+      const receipt = promptRuntimeSession(driver, buildReminder(due, limit), {
         // The notice origin: a failure of this turn is not a failure to
         // answer, so it routes no request back to its requester
         // (`delegationFailureNotice.ts`).
@@ -1578,23 +1572,23 @@ async function deliverReplyReminder(
           if (now.map((r) => r.id).join() !== ids)
             throw new NoticeSetChangedError();
         },
-        // The turn is in the session: it counts, whatever the run does next.
-        onUserEntry: () => {
-          reminderLast.add(sessionId);
-          try {
-            peerPromptStore.markReminded(due.map((r) => r.id));
-          } catch (err) {
-            console.warn(
-              `[peer] could not count reminders for ${sessionId} (${failureLabel(err)})`,
-            );
-          }
-          // A request on its last reminder becomes the user's condition.
-          if (due.some((r) => r.reminderCount + 1 >= limit))
-            void getHub()
-              .then((hub) => hub.broadcastSessions?.())
-              .catch(() => {});
-        },
       });
+      receipt.observe((event) => {
+        if (event.type !== "appended") return;
+        reminderLast.add(sessionId);
+        try {
+          peerPromptStore.markReminded(due.map((r) => r.id));
+        } catch (err) {
+          console.warn(
+            `[peer] could not count reminders for ${sessionId} (${failureLabel(err)})`,
+          );
+        }
+        if (due.some((r) => r.reminderCount + 1 >= limit))
+          void getHub()
+            .then((hub) => hub.broadcastSessions?.())
+            .catch(() => {});
+      });
+      await receipt;
       return undefined;
     } catch (err) {
       if (err instanceof NoticeSetChangedError) continue;
@@ -2033,7 +2027,7 @@ async function deliverBatch(
   let thrown: unknown;
   activeContexts.set(driver.sessionId, context);
   try {
-    await promptRuntimeSession(driver, envelope, {
+    const receipt = promptRuntimeSession(driver, envelope, {
       origin: { kind: "agent", agentId: PEER_ORIGIN_AGENT_ID },
       clientRequestId: peerKey(head.id),
       // A session an agent spawned is created by one path and first prompted
@@ -2058,19 +2052,16 @@ async function deliverBatch(
         admitClaimed(batch);
         reserved = true;
       },
-      // Runs inside the runtime's append; nothing here may throw. Admitted
-      // (in the recipient log) and acknowledged (its run started) together,
-      // with the batch grouping history projection reconstructs.
-      onUserEntry: () => {
-        appended = true;
-        admittedIds = recordAppended(batch);
-        void broadcastParticipants(batch);
-        void broadcastBatchCardUpdates(ids);
-      },
-      onRunEnded: (ended) => {
-        outcome = ended;
-      },
     });
+    receipt.observe((event) => {
+      if (event.type === "run-ended") outcome = event.outcome;
+      if (event.type !== "appended") return;
+      appended = true;
+      admittedIds = recordAppended(batch);
+      void broadcastParticipants(batch);
+      void broadcastBatchCardUpdates(ids);
+    });
+    await receipt;
   } catch (err) {
     thrown = err;
   } finally {
@@ -2145,7 +2136,7 @@ function admitClaimed(batch: PeerPromptRecord[]): void {
 
 /**
  * What reached the recipient when the runtime never confirmed an append
- * (`onUserEntry`): the prompt resolved or threw without it.
+ * on the receipt: the prompt resolved or threw without it.
  *
  * - `delivered`: the provider took a steer whose entry write then failed
  *   (`SteerEntryFailedError` — its acceptance is the receipt), or the

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, expect, test, vi } from "vitest";
 import type { DisplayMessage } from "@assistant/shared";
 import type { PermanentAssistantDelivery } from "./permanentAssistant.ts";
+import { PromptDeliveryReceipt } from "./session/runtime/promptDelivery.ts";
 
 vi.mock("./session/runtimePrompt.ts", async (original) => ({
   ...(await original<typeof import("./session/runtimePrompt.ts")>()),
@@ -51,31 +52,34 @@ function setup(extraPrompt = false) {
   vi.spyOn(hub, "acquireById").mockResolvedValue(driver as never);
   vi.spyOn(hub, "broadcastSessionUpdated").mockResolvedValue();
   vi.mocked(promptRuntimeSession).mockClear();
-  vi.mocked(promptRuntimeSession).mockImplementation(async (_driver, text) => {
-    messages.push({
-      id: `user-${messages.length}`,
-      role: "user",
-      blocks: [{ kind: "text", text }],
-    });
-    if (extraPrompt)
-      messages.push({
-        id: `peer-${messages.length}`,
-        role: "user",
-        blocks: [{ kind: "text", text: "Another prompt arrived" }],
-      });
-    messages.push({
-      id: `answer-${messages.length}`,
-      role: "assistant",
-      blocks: [{ kind: "text", text: "Answer" }],
-    });
-    sessionStore.upsert({
-      id,
-      harness: "pi",
-      agentType: "personal-assistant",
-      updatedAt: 100 + messages.length * 100,
-      messageCount: 2 + messages.length,
-    });
-  });
+  vi.mocked(promptRuntimeSession).mockImplementation(
+    (_driver, text) =>
+      new PromptDeliveryReceipt(async () => {
+        messages.push({
+          id: `user-${messages.length}`,
+          role: "user",
+          blocks: [{ kind: "text", text }],
+        });
+        if (extraPrompt)
+          messages.push({
+            id: `peer-${messages.length}`,
+            role: "user",
+            blocks: [{ kind: "text", text: "Another prompt arrived" }],
+          });
+        messages.push({
+          id: `answer-${messages.length}`,
+          role: "assistant",
+          blocks: [{ kind: "text", text: "Answer" }],
+        });
+        sessionStore.upsert({
+          id,
+          harness: "pi",
+          agentType: "personal-assistant",
+          updatedAt: 100 + messages.length * 100,
+          messageCount: 2 + messages.length,
+        });
+      }),
+  );
 }
 function completion(
   count = 1,

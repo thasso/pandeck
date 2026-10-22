@@ -1587,6 +1587,62 @@ test("the run bracket: what a killed turn leaves behind", async () => {
  * prompt resolved: a Stop resolves a prompt like a finished turn, and a Stop
  * that kept an earlier attempt's error rejects like a failed one.
  */
+test("receipt records append, duplicate and refusal before append without inferring exposure", async () => {
+  const { runtime, adapter } = makeRuntime();
+  const receipt = runtime.prompt("s1", "go", { clientRequestId: "receipt" });
+  assert.ok(receipt.append?.entryId);
+  assert.ok(receipt.append.runId);
+  assert.equal(receipt.append.joined, false);
+  assert.equal(receipt.exposure, "accepted");
+  const duplicate = runtime.prompt("s1", "go", { clientRequestId: "receipt" });
+  await duplicate;
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.append, undefined);
+  assert.equal(duplicate.refusedBeforeAppend, false);
+  const refused = runtime.prompt("s1", "busy");
+  await assert.rejects(refused, SessionBusyError);
+  assert.equal(refused.refusedBeforeAppend, true);
+  assert.equal(refused.append, undefined);
+  assert.equal(refused.exposure, "none");
+  assert.equal(refused.outcome, undefined);
+  adapter.finishRun({ stopReason: "end" });
+  await receipt;
+  assert.equal(receipt.outcome?.runId, receipt.append.runId);
+  assert.equal(receipt.boundOutcome?.stopReason, "end");
+});
+
+test("receipt distinguishes a declined steer from acceptance after its run closed", async () => {
+  const { runtime, adapter } = makeRuntime();
+  (adapter.capabilities as { steer?: boolean }).steer = true;
+  let settle!: (result: AgentRunResult) => void;
+  const original = adapter.prompt.bind(adapter);
+  adapter.prompt = (text, options) =>
+    options?.steer
+      ? new Promise((resolve) => {
+          settle = resolve;
+        })
+      : original(text, options);
+  const turn = runtime.prompt("s1", "go");
+  const declined = runtime.prompt("s1", "declined", { steer: true });
+  settle({ stopReason: "error", errorMessage: "not taken" });
+  await assert.rejects(declined, RunFailedError);
+  assert.equal(declined.provider, "declined");
+  assert.equal(declined.exposure, "none");
+  assert.equal(declined.boundOutcome, undefined);
+  const late = runtime.prompt("s1", "late", { steer: true });
+  assert.equal(late.append?.runId, turn.append?.runId);
+  assert.equal(late.append?.joined, true);
+  assert.equal(late.append?.accepted, false);
+  adapter.finishRun({ stopReason: "end" });
+  await turn;
+  assert.equal(late.outcome?.stopReason, "end");
+  settle({ stopReason: "end" });
+  await late;
+  assert.equal(late.provider, "accepted");
+  assert.equal(late.exposure, "unknown");
+  assert.equal(late.boundOutcome, undefined);
+});
+
 test("the run outcome: how each run ended, and whether its abort was asked for", async () => {
   const { runtime, adapter } = makeRuntime();
   const heard: Array<[string, RunOutcome]> = [];
@@ -1600,14 +1656,18 @@ test("the run outcome: how each run ended, and whether its abort was asked for",
     const outcomes: RunOutcome[] = [];
     const prompted = runtime.prompt("s1", "go", {
       clientRequestId,
-      onRunEnded: (outcome) => outcomes.push(outcome),
+    });
+    prompted.observe((event) => {
+      if (event.type === "run-ended") outcomes.push(event.outcome);
     });
     await tick();
     await settle();
     try {
       await prompted;
+      assert.deepEqual(prompted.outcome, outcomes[0]);
       return { outcomes };
     } catch (error) {
+      assert.deepEqual(prompted.outcome, outcomes[0]);
       return { outcomes, error };
     }
   };
@@ -1693,9 +1753,11 @@ test("the run outcome: how each run ended, and whether its abort was asked for",
 test("a Stop after the run's failure was reported does not relabel it", async () => {
   const { runtime, adapter } = makeRuntime();
   const outcomes: RunOutcome[] = [];
-  const prompted = runtime
-    .prompt("s1", "go", { onRunEnded: (o) => outcomes.push(o) })
-    .catch((error: unknown) => error);
+  const receipt = runtime.prompt("s1", "go");
+  receipt.observe((event) => {
+    if (event.type === "run-ended") outcomes.push(event.outcome);
+  });
+  const prompted = receipt.catch((error: unknown) => error);
   await tick();
   adapter.emit({ type: "runFailing", errorMessage: "401" });
   await runtime.abort("s1");
@@ -1753,11 +1815,9 @@ test("a deferred steer joins the open run, and a Stop's withdrawal says so", asy
       options.onSteerAccepted?.("steer");
       return { stopReason: "end", steerDelivery: "steer" };
     };
-    const steered = runtime.prompt("s1", "steer one", {
-      steer: true,
-      onUserEntry: () => {
-        joined = live.currentRunId;
-      },
+    const steered = runtime.prompt("s1", "steer one", { steer: true });
+    steered.observe((event) => {
+      if (event.type === "appended") joined = event.append.runId;
     });
     steerAnswered.shift()!();
     await steered;
@@ -1799,8 +1859,9 @@ test("a teardown ends the open run as a deliberate end and lets nothing new star
   const idled: string[] = [];
   setSessionIdleHook((sessionId) => idled.push(sessionId));
   try {
-    const prompted = runtime.prompt("s1", "long", {
-      onRunEnded: (o) => outcomes.push(o),
+    const prompted = runtime.prompt("s1", "long");
+    prompted.observe((event) => {
+      if (event.type === "run-ended") outcomes.push(event.outcome);
     });
     await tick();
     runtime.closeForTeardown("s1");
@@ -1826,9 +1887,11 @@ test("a teardown ends the open run as a deliberate end and lets nothing new star
     // A run whose failure was already reported stays a failure.
     const second = makeRuntime();
     const failed: RunOutcome[] = [];
-    void second.runtime
-      .prompt("s1", "go", { onRunEnded: (o) => failed.push(o) })
-      .catch(() => undefined);
+    const secondReceipt = second.runtime.prompt("s1", "go");
+    secondReceipt.observe((event) => {
+      if (event.type === "run-ended") failed.push(event.outcome);
+    });
+    void secondReceipt.catch(() => undefined);
     await tick();
     second.adapter.emit({ type: "runFailing", errorMessage: "429" });
     await second.runtime.disposeSession("s1");
@@ -1870,12 +1933,11 @@ test("a late deferred acceptance appends nothing and reads as possibly read", as
     const appended: string[] = [];
     const turn = runtime.prompt("s1", "own work");
     await tick();
-    const steered = runtime
-      .prompt("s1", "steer", {
-        steer: true,
-        onUserEntry: (id) => appended.push(id),
-      })
-      .catch((error: unknown) => error);
+    const receipt = runtime.prompt("s1", "steer", { steer: true });
+    receipt.observe((event) => {
+      if (event.type === "appended") appended.push(event.append.entryId);
+    });
+    const steered = receipt.catch((error: unknown) => error);
     await runtime.abort("s1");
     adapter.finishRun({ stopReason: "aborted" });
     await turn;
