@@ -31,27 +31,49 @@ import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
  * to return admission immediately, and fence their later claims. This is not a
  * runtime receipt: settlement and retry interpretation remain inside the drain.
  */
-function deliver(
-  session: PromptQueueDriver,
-  drain: (shouldStart: () => boolean) => Promise<void>,
-): Promise<DeliveryResult> {
-  let appended = false;
-  const running = session.isRunning;
-  let onAppend!: (result: DeliveryResult) => void;
-  const admitted = new Promise<DeliveryResult>((resolve) => {
-    onAppend = resolve;
-  });
-  const unsubscribe = subscribeSessionUserEntry((id) => {
-    if (id !== session.sessionId) return;
-    appended = true;
-    unsubscribe();
-    onAppend(running ? "steer" : "turn");
-  });
-  const drained = Promise.resolve()
-    .then(() => drain(() => !appended))
-    .then<DeliveryResult>(() => "none")
-    .finally(unsubscribe);
-  return Promise.race([admitted, drained]);
+function createDeliver() {
+  const settling = new Map<string, Set<Promise<DeliveryResult>>>();
+
+  return async function deliver(
+    session: PromptQueueDriver,
+    drain: (shouldStart: () => boolean) => Promise<void>,
+  ): Promise<DeliveryResult> {
+    const id = session.sessionId;
+    // The idle hook fires before the provider prompt and its drain settle.
+    // Joining that drain would reuse its fenced admission and swallow this
+    // offer. Wait before observing appends or entering ANY sibling drain:
+    // background's peer phase also holds the peer lock. Running offers must
+    // not wait for the turn they are allowed to steer.
+    if (!session.isRunning) {
+      await Promise.all(
+        [...(settling.get(id) ?? [])].map((run) => run.catch(() => {})),
+      );
+    }
+    let appended = false;
+    const running = session.isRunning;
+    let onAppend!: (result: DeliveryResult) => void;
+    const admitted = new Promise<DeliveryResult>((resolve) => {
+      onAppend = resolve;
+    });
+    const unsubscribe = subscribeSessionUserEntry((sessionId) => {
+      if (sessionId !== id) return;
+      appended = true;
+      unsubscribe();
+      onAppend(running ? "steer" : "turn");
+    });
+    const pending = settling.get(id) ?? new Set<Promise<DeliveryResult>>();
+    settling.set(id, pending);
+    const drained = Promise.resolve()
+      .then(() => drain(() => !appended))
+      .then<DeliveryResult>(() => "none")
+      .finally(() => {
+        unsubscribe();
+        pending.delete(drained);
+        if (pending.size === 0) settling.delete(id);
+      });
+    pending.add(drained);
+    return Promise.race([admitted, drained]);
+  };
 }
 
 export function sessionDeliveryLanes(
@@ -60,6 +82,7 @@ export function sessionDeliveryLanes(
   lanes: DeliveryLane<PromptQueueDriver>[];
   reminder: DeliveryLane<PromptQueueDriver>;
 } {
+  const deliver = createDeliver();
   return {
     lanes: [
       {

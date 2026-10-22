@@ -148,10 +148,14 @@ and ride the next prompt's model-only context.
 A new turn ends the pass; a steer does not. A failure before append is logged
 and the next lane is offered. Each lane keeps its own table, rendering,
 batching, retry, recovery and outcome interpretation. The current adapters
-observe the existing append hook and fence subsequent claims in a drain. They do
-not implement runtime receipts, which are [Task-1051](pa://task/1051). Private
-drain locks, rerun markers and cross-path yield checks remain until
-[Task-1053](pa://task/1053).
+observe the existing append hook and fence subsequent claims in a drain. Before
+a new idle admission, they await earlier admitted drains' settlement across all
+lanes, including a background drain's peer phase. A fenced drain therefore
+cannot consume a fresh offer or let a lower-priority lane overtake it. Running
+joinable offers do not wait for the turn they may steer. This adds no debt-based
+retry loop. The adapters do not implement runtime receipts, which are
+[Task-1051](pa://task/1051). Private drain locks, rerun markers and cross-path
+yield checks remain until [Task-1053](pa://task/1053).
 
 Only a real idle edge, Resume or a reminder's own re-offer enables the reminder
 lane, which never cold-acquires a session. Queue failures and removals wake the
