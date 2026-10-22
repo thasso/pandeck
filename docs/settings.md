@@ -123,8 +123,11 @@ What a test persists, such as discovered models, reaches every client.
 Its registry entries use the Dictation section. It defaults to enabled, the
 first installed streaming model, four threads, a 600-second idle shutdown, and
 1.2 seconds of trailing silence before the recognizer finalizes a segment. The
-silence setting accepts 0.3 to 5 seconds; zero idle shutdown keeps the model
-resident. Model ids name catalog entries, never paths. Deployment wiring and the
+silence setting accepts 0.3 to 5 seconds and applies to both silence-based
+endpoint rules; zero idle shutdown keeps the model resident. The intentional
+exception is the 120-second hard segment cap: unbroken speech forces a final
+without waiting for silence, and conversation mode auto-sends that segment as a
+turn. Model ids name catalog entries, never paths. Deployment wiring and the
 minimum runtime version are described in
 [deployment.md](deployment.md#streaming-conversation-recognition).
 

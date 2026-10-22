@@ -39,6 +39,7 @@ interface ConversationRecognizer {
     onTranscript: (result: StreamingTranscript) => void,
     onError: (error: Error) => void,
     onDone: () => void,
+    signal?: AbortSignal,
   ): Promise<ConversationStream>;
 }
 
@@ -50,6 +51,7 @@ export function attachConversationSocket(
 ): void {
   let state: "idle" | "starting" | "listening" | "stopping" | "closed" = "idle";
   let stream: ConversationStream | undefined;
+  let opening: AbortController | undefined;
   let generation = 0;
   let timer: NodeJS.Timeout | undefined;
   let startedAt = 0;
@@ -57,6 +59,8 @@ export function attachConversationSocket(
   const reset = () => {
     generation++;
     clearTimeout(timer);
+    opening?.abort();
+    opening = undefined;
     stream?.close();
     stream = undefined;
   };
@@ -88,6 +92,8 @@ export function attachConversationSocket(
     if (!current.speechConversation.enabled)
       return fail("Conversation is disabled in settings.");
     state = "starting";
+    const controller = new AbortController();
+    opening = controller;
     const token = ++generation;
     armTimeout(65_000);
     try {
@@ -113,6 +119,7 @@ export function attachConversationSocket(
           state = "idle";
           send({ type: "stopped" });
         },
+        controller.signal,
       );
       if (token !== generation) {
         opened.close();
@@ -126,6 +133,8 @@ export function attachConversationSocket(
       send({ type: "accepted", sampleRate: 16000 });
     } catch (error) {
       if (token === generation) fail(errorText(error), 1011);
+    } finally {
+      if (opening === controller) opening = undefined;
     }
   };
   ws.on("message", (raw, isBinary) => {

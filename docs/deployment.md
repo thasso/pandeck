@@ -781,13 +781,15 @@ belong outside DATA_DIR. These overrides can be supplied through the module's
 `extraEnvironment`; host runtime upgrades remain a separate deployment change.
 
 The streaming model defaults to four inference threads, 1.2 seconds trailing
-silence, and unloading after ten idle minutes. Its log defaults to
-`/tmp/assistant-streaming-stt.log`, overridden by `ASSISTANT_STT_STREAMING_LOG`.
-Keep logs outside DATA_DIR. The browser connects only to the authenticated
-`/ws/speech/conversation` socket. Live audio is forwarded in memory without an
-HTTP retry buffer. The streaming STT status is nested under
-`ready.speechToText.conversation` and the `speechToTextStatus` settings echo. It
-reports STT capability only, not TTS readiness.
+silence, and unloading after ten idle minutes. Both silence-based endpoint rules
+honor the configured pause. A separate 120-second hard cap forces finalization
+of unbroken speech without silence; conversation mode auto-sends that forced
+segment. Its log defaults to `/tmp/assistant-streaming-stt.log`, overridden by
+`ASSISTANT_STT_STREAMING_LOG`. Keep logs outside DATA_DIR. The browser connects
+only to the authenticated `/ws/speech/conversation` socket. Live audio is
+forwarded in memory without an HTTP retry buffer. The streaming STT status is
+nested under `ready.speechToText.conversation` and the `speechToTextStatus`
+settings echo. It reports STT capability only, not TTS readiness.
 
 The upstream recognizer binds to `0.0.0.0` and has no bind-address option. Keep
 its ports 46000 to 46999 blocked by the host firewall; app connections use

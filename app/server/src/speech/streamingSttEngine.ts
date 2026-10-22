@@ -31,6 +31,8 @@ export class StreamingSttEngine {
   private streams = new Set<StreamingSttConnection>();
   private holds = 0;
   private configuration = "";
+  private childGeneration = 0;
+  private pending = new Set<(error: Error) => void>();
 
   constructor(private readonly deps = dependencies) {}
 
@@ -39,7 +41,9 @@ export class StreamingSttEngine {
     onTranscript: (result: StreamingTranscript) => void,
     onError: (error: Error) => void,
     onDone: () => void,
+    signal?: AbortSignal,
   ): Promise<StreamingSttConnection> {
+    signal?.throwIfAborted();
     if (this.disposed)
       throw new Error("Server is restarting; conversation is unavailable.");
     if (this.holds >= MAX_STREAMS)
@@ -70,13 +74,32 @@ export class StreamingSttEngine {
       this.holds--;
       this.scheduleIdle(settings);
     };
+    let rejectCancelled!: (error: Error) => void;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      rejectCancelled = reject;
+    });
+    const cancel = (error: Error) => {
+      connection?.close();
+      release();
+      rejectCancelled(error);
+    };
+    const aborted = () => cancel(new Error("Conversation start cancelled."));
+    signal?.addEventListener("abort", aborted, { once: true });
+    this.pending.add(cancel);
     try {
       if (!this.ready) {
-        this.starting ??= this.start(settings).finally(() => {
-          this.starting = undefined;
-        });
-        await this.starting;
+        if (!this.starting) {
+          const starting: Promise<void> = this.start(
+            settings,
+            this.childGeneration,
+          ).finally(() => {
+            if (this.starting === starting) this.starting = undefined;
+          });
+          this.starting = starting;
+        }
+        await Promise.race([this.starting, cancelled]);
       }
+      if (released) throw new Error("Conversation start cancelled.");
       if (this.disposed || !this.ready)
         throw new Error("Streaming recognizer is unavailable.");
       connection = new StreamingSttConnection(
@@ -86,7 +109,11 @@ export class StreamingSttEngine {
         release,
       );
       this.streams.add(connection);
-      await connection.connect(`ws://127.0.0.1:${this.port}`);
+      await Promise.race([
+        connection.connect(`ws://127.0.0.1:${this.port}`),
+        cancelled,
+      ]);
+      if (released) throw new Error("Conversation start cancelled.");
       if (this.disposed || !this.ready)
         throw new Error("Streaming recognizer stopped while connecting.");
       return connection;
@@ -94,22 +121,34 @@ export class StreamingSttEngine {
       connection?.close();
       release();
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", aborted);
+      this.pending.delete(cancel);
     }
   }
 
   dispose(): void {
     this.disposed = true;
+    for (const cancel of this.pending)
+      cancel(new Error("Server shutting down."));
     this.clearIdleTimer();
     this.stopChild("Server shutting down.");
   }
 
-  private async start(settings: SpeechConversationSettings): Promise<void> {
+  private async start(
+    settings: SpeechConversationSettings,
+    generation: number,
+  ): Promise<void> {
     const delay = this.notBefore - Date.now();
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     if (this.disposed) throw new Error("Server shutting down.");
+    if (generation !== this.childGeneration)
+      throw new Error("Streaming settings changed during warm-up.");
     const runtime = await this.deps.runtime(settings);
     if (!runtime.ok) throw new Error(runtime.reason);
     if (this.disposed) throw new Error("Server shutting down.");
+    if (generation !== this.childGeneration)
+      throw new Error("Streaming settings changed during warm-up.");
     this.port = 46_000 + Math.floor(Math.random() * 1_000);
     const child = this.deps.spawn(
       runtime.binary,
@@ -124,7 +163,15 @@ export class StreamingSttEngine {
         "--max-batch-size=1",
         "--decoding-method=greedy_search",
         "--enable-endpoint=true",
+        "--rule1-must-contain-nonsilence=false",
+        "--rule1-min-utterance-length=0",
+        `--rule1-min-trailing-silence=${settings.endpointSilenceSeconds}`,
+        "--rule2-must-contain-nonsilence=true",
+        "--rule2-min-utterance-length=0",
         `--rule2-min-trailing-silence=${settings.endpointSilenceSeconds}`,
+        // Intentional exception: unbroken speech is forced final at 120 seconds.
+        "--rule3-must-contain-nonsilence=false",
+        "--rule3-min-trailing-silence=0",
         "--rule3-min-utterance-length=120",
         `--log-file=${process.env.ASSISTANT_STT_STREAMING_LOG?.trim() || join(process.env.TMPDIR?.trim() || "/tmp", "assistant-streaming-stt.log")}`,
       ],
@@ -132,6 +179,8 @@ export class StreamingSttEngine {
     );
     releaseChildOomScore(child.pid);
     this.child = child;
+    // All callers may have cancelled while runtime discovery was pending.
+    this.scheduleIdle(settings);
     let stderr = "";
     let spawnError: Error | undefined;
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -155,18 +204,27 @@ export class StreamingSttEngine {
         60_000,
         () =>
           !this.disposed &&
+          generation === this.childGeneration &&
           !spawnError &&
           this.child === child &&
           child.exitCode === null &&
           child.signalCode === null,
       );
       probe.close();
-      if (this.disposed || this.child !== child)
+      if (
+        this.disposed ||
+        generation !== this.childGeneration ||
+        this.child !== child
+      )
         throw new Error("Streaming recognizer stopped while starting.");
       this.ready = true;
+      this.scheduleIdle(settings);
     } catch (error) {
-      this.stopChild("Streaming recognizer failed to start.");
-      this.notBefore = Date.now() + RESTART_BACKOFF_MS;
+      // A superseded warm-up must never stop a newer model or add crash backoff.
+      if (generation === this.childGeneration) {
+        this.stopChild("Streaming recognizer failed to start.");
+        this.notBefore = Date.now() + RESTART_BACKOFF_MS;
+      }
       throw new Error(
         `${errorText(spawnError ?? error)} ${stderr.trim().split("\n").slice(-3).join(" ")}`.trim(),
       );
@@ -174,10 +232,13 @@ export class StreamingSttEngine {
   }
 
   private stopChild(reason: string): void {
+    this.clearIdleTimer();
+    this.childGeneration++;
+    this.starting = undefined;
     this.ready = false;
-    for (const stream of this.streams) stream.close();
     const child = this.child;
     this.child = undefined;
+    for (const stream of this.streams) stream.close();
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     console.log(`[streaming-stt] ${reason}`);
     child.kill("SIGTERM");

@@ -3,8 +3,8 @@
 Fully local CPU inference for dictation and conversation.
 
 - Audio stays in memory on this machine. Offline dictation buffers one
-  utterance; conversation forwards frames without audio history. TTS holds only
-  one request, never stores audio/text or logs input-bearing native diagnostics.
+  utterance; conversation forwards frames without audio history. TTS holds one
+  request, never stores audio/text or logs input-bearing native diagnostics.
 - Parakeet offline dictation needs the total sample count before audio. Buffer
   and decode once on `/ws/speech`; keep its HTTP retry path unchanged. Live
   partials belong only to Nemotron on `/ws/speech/conversation`, gated on
@@ -16,8 +16,9 @@ Fully local CPU inference for dictation and conversation.
 - The per-utterance byte cap stays DERIVED from
   `maxUtteranceSeconds × sampleRate × 2`; a flat constant wrongly rejects a
   legitimate long utterance from a 48 kHz `AudioContext`.
-- Speech frames are their own shared unions with their own validator: never
-  route them through `validateClientMessage`.
+- Speech frames have separate unions/validation, not `validateClientMessage`.
+- Aborting a pending conversation start releases admission immediately. Stale
+  warm-ups cannot revive or stop a replacement child.
 - Speech is not an agent turn: shutdown rejects work and disposes all engines.
   Recognizer logs must stay outside `DATA_DIR`.
 - Kokoro uses the complete fp32 v1.0 directory and shared named speaker ids.

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
 import { afterEach, test, vi } from "vitest";
@@ -8,7 +9,12 @@ import {
   attachConversationSocket,
   validateConversationClientMessage,
 } from "./conversationSocket.ts";
-import type { StreamingTranscript } from "./streamingSttClient.ts";
+import {
+  StreamingSttConnection,
+  type StreamingTranscript,
+} from "./streamingSttClient.ts";
+import { StreamingSttEngine } from "./streamingSttEngine.ts";
+import type { SttConnection } from "./sttClient.ts";
 
 class Socket extends EventEmitter {
   OPEN = 1;
@@ -69,7 +75,10 @@ const tick = async () => {
   await Promise.resolve();
   await Promise.resolve();
 };
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 test("only the separate conversation union is accepted", () => {
   for (const type of ["start", "stop", "cancel"])
@@ -117,6 +126,188 @@ test("cancel during warm-up closes a late stream and ignores its callbacks", asy
   assert.deepEqual(s.ws.sent, [{ type: "stopped" }]);
   assert.equal(s.stream.close.mock.calls.length, 1);
   s.ws.close(1000);
+});
+
+function pendingRecognizer() {
+  const connect = vi
+    .spyOn(StreamingSttConnection.prototype, "connect")
+    .mockResolvedValue();
+  const child = Object.assign(new EventEmitter(), {
+    exitCode: null,
+    signalCode: null,
+    pid: undefined,
+    stderr: new EventEmitter(),
+    kill: vi.fn(() => true),
+  });
+  const spawnChild = vi.fn(() => child as unknown as ChildProcess);
+  const model = {
+    ok: true as const,
+    binary: "mock",
+    version: "1.13.8",
+    model: {
+      id: "streaming",
+      label: "streaming",
+      dir: "/model",
+      encoder: "/model/encoder",
+      decoder: "/model/decoder",
+      joiner: "/model/joiner",
+      tokens: "/model/tokens",
+    },
+  };
+  const runtime = vi.fn(async () => model);
+  const probe = { close: vi.fn() } as unknown as SttConnection;
+  let ready!: (probe: SttConnection) => void;
+  const readiness = new Promise<SttConnection>((resolve) => {
+    ready = resolve;
+  });
+  const readyProbe = vi
+    .fn(async () => probe)
+    .mockImplementationOnce(() => readiness);
+  const engine = new StreamingSttEngine({
+    spawn: spawnChild as unknown as typeof spawn,
+    runtime,
+    ready: readyProbe,
+  });
+  const socket = (patch = {}) => {
+    const ws = new Socket();
+    const current = getSettings();
+    attachConversationSocket(ws as unknown as WebSocket, engine, () => ({
+      ...current,
+      speechConversation: { ...DEFAULT_SPEECH_CONVERSATION_SETTINGS, ...patch },
+    }));
+    return ws;
+  };
+  return {
+    engine,
+    child,
+    spawnChild,
+    runtime,
+    model,
+    connect,
+    socket,
+    ready: () => ready(probe),
+  };
+}
+
+test("M1-C1 abandoned warm-up starts immediately free both admission slots", async () => {
+  const s = pendingRecognizer();
+  try {
+    const first = s.socket();
+    first.json({ type: "start" });
+    first.json({ type: "cancel" });
+    const second = s.socket();
+    second.json({ type: "start" });
+    second.close(1000);
+    const third = s.socket();
+    third.json({ type: "start" });
+    await tick();
+    assert.deepEqual(
+      third.sent,
+      [],
+      "a live third start waits for readiness, not abandoned holds",
+    );
+    s.ready();
+    await vi.waitFor(() =>
+      assert.deepEqual(third.sent, [{ type: "accepted", sampleRate: 16000 }]),
+    );
+    assert.equal(
+      s.connect.mock.calls.length,
+      1,
+      "abandoned opens never connect when warm-up finishes",
+    );
+    assert.equal(s.spawnChild.mock.calls.length, 1);
+    first.close(1000);
+    third.close(1000);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+test("M1-C1 settings changes replace an abandoned pending start without reviving its model", async () => {
+  const s = pendingRecognizer();
+  let resolved!: (value: typeof s.model) => void;
+  s.runtime.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolved = resolve;
+      }),
+  );
+  try {
+    const first = s.socket();
+    first.json({ type: "start" });
+    first.json({ type: "cancel" });
+    const next = s.socket({ numThreads: 2 });
+    next.json({ type: "start" });
+    await tick();
+    assert.equal(
+      s.runtime.mock.calls.length,
+      2,
+      "cancelled admission does not block changing settings",
+    );
+    s.ready();
+    await vi.waitFor(() => assert.equal(next.sent[0]?.type, "accepted"));
+    resolved(s.model);
+    await tick();
+    assert.equal(
+      s.spawnChild.mock.calls.length,
+      1,
+      "old runtime completion cannot spawn a stale model",
+    );
+    assert.equal(s.child.kill.mock.calls.length, 0);
+    assert.equal(s.connect.mock.calls.length, 1);
+    first.close(1000);
+    next.close(1000);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+test("M1-C1 abandoned warm-up idles out and a late readiness cannot stop its replacement", async () => {
+  vi.useFakeTimers();
+  const s = pendingRecognizer();
+  try {
+    const first = s.socket({ idleShutdownSeconds: 1 });
+    first.json({ type: "start" });
+    await vi.advanceTimersByTimeAsync(0);
+    first.close(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    assert.deepEqual(s.child.kill.mock.calls, [["SIGTERM"]]);
+    const next = s.socket({ idleShutdownSeconds: 1 });
+    next.json({ type: "start" });
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(next.sent[0]?.type, "accepted");
+    s.ready();
+    await vi.advanceTimersByTimeAsync(0);
+    assert.equal(
+      s.child.kill.mock.calls.length,
+      1,
+      "stale warm-up cleanup cannot kill the replacement",
+    );
+    assert.equal(s.spawnChild.mock.calls.length, 2);
+    next.close(1000);
+  } finally {
+    s.engine.dispose();
+  }
+});
+
+test("M1-C1 dispose releases pending opens before runtime resolution and prevents late spawn", async () => {
+  const s = pendingRecognizer();
+  let resolved!: (value: typeof s.model) => void;
+  s.runtime.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolved = resolve;
+      }),
+  );
+  const ws = s.socket();
+  ws.json({ type: "start" });
+  s.engine.dispose();
+  await vi.waitFor(() =>
+    assert.match(String(ws.sent[0]?.message), /shutting down/),
+  );
+  resolved(s.model);
+  await tick();
+  assert.equal(s.spawnChild.mock.calls.length, 0);
 });
 
 test("rejects audio before accepted, odd PCM, oversized frames and accelerated upload", async () => {

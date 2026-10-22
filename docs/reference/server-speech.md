@@ -97,12 +97,22 @@ the lazy engine checks the same gate before spawning.
 `streamingSttEngine.ts` owns one additional warm model child, not the offline
 engine. Concurrent starts share one warm-up, readiness uses a real WebSocket
 handshake, and two live streams are allowed. Each holds the child against idle
-shutdown. Failure backs off five seconds; disposal prevents a late spawn or
-connection after shutdown. Direct model-child spawn is the narrow server rule
-exception for PID-held lifetime control and SIGKILL escalation. Default
-inference uses four threads and greedy decoding. Sherpa endpoint rule 2 uses the
-configured silence duration, while rule 3 caps an unbroken segment at 120
-seconds. The process log stays outside DATA_DIR.
+shutdown. Each pending open has a cancellation signal: cancel/disconnect
+releases admission immediately during runtime discovery, backoff, readiness or
+connection. An abandoned open never connects when shared warm-up later finishes.
+The warm model can still serve a new start; without holds its idle timer also
+applies while warming. Configuration generations prevent superseded starts from
+spawning, marking readiness or stopping their replacement. Failure backs off
+five seconds; disposal rejects pending opens immediately and prevents late
+spawn/connection. Direct model-child spawn is the narrow server rule exception
+for PID-held lifetime control and SIGKILL escalation. Default inference uses
+four threads and greedy decoding. Sherpa endpoint rules 1 and 2 both explicitly
+use the configured silence duration, with zero minimum segment length. Rule 1
+includes all-silence segments; rule 2 requires speech. Rule 3 is an intentional
+exception to the pause threshold: it forces a final segment at 120 seconds even
+without silence. M3 auto-sends that forced final as a spoken turn, just like an
+ordinary endpoint. All rule flags are explicit so upstream defaults cannot
+shorten a configured pause. The process log stays outside DATA_DIR.
 
 `streamingSttClient.ts` translates browser Int16 LE into 16 kHz Float32 LE,
 without the offline header. Sherpa JSON updates contain `text`, `segment`, and

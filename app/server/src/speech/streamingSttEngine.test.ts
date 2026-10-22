@@ -8,7 +8,9 @@ import { StreamingSttConnection } from "./streamingSttClient.ts";
 import { StreamingSttEngine } from "./streamingSttEngine.ts";
 
 function setup() {
-  vi.spyOn(StreamingSttConnection.prototype, "connect").mockResolvedValue();
+  const connect = vi
+    .spyOn(StreamingSttConnection.prototype, "connect")
+    .mockResolvedValue();
   const child = Object.assign(new EventEmitter(), {
     exitCode: null,
     signalCode: null,
@@ -39,14 +41,18 @@ function setup() {
     ready,
     runtime,
   });
-  const open = (settings = DEFAULT_SPEECH_CONVERSATION_SETTINGS) =>
+  const open = (
+    settings = DEFAULT_SPEECH_CONVERSATION_SETTINGS,
+    signal?: AbortSignal,
+  ) =>
     engine.open(
       settings,
       () => {},
       () => {},
       () => {},
+      signal,
     );
-  return { engine, child, spawnChild, runtime, ready, open };
+  return { engine, child, spawnChild, runtime, ready, connect, open };
 }
 
 afterEach(() => {
@@ -75,6 +81,36 @@ test("one warm model serves concurrent streams with four threads and endpoint se
     s.engine.dispose();
   }
 });
+
+test.each([0.3, 1.2, 5])(
+  "M1-C2 both silence rules honor %s seconds, with an explicit 120-second hard cap",
+  async (silence) => {
+    const s = setup();
+    try {
+      const stream = await s.open({
+        ...DEFAULT_SPEECH_CONVERSATION_SETTINGS,
+        endpointSilenceSeconds: silence,
+      });
+      const args = (
+        s.spawnChild.mock.calls as unknown as [string, string[]][]
+      )[0]![1];
+      for (const rule of [1, 2]) {
+        assert.ok(
+          args.includes(`--rule${rule}-min-trailing-silence=${silence}`),
+        );
+        assert.ok(args.includes(`--rule${rule}-min-utterance-length=0`));
+      }
+      assert.ok(args.includes("--rule1-must-contain-nonsilence=false"));
+      assert.ok(args.includes("--rule2-must-contain-nonsilence=true"));
+      assert.ok(args.includes("--rule3-min-utterance-length=120"));
+      assert.ok(args.includes("--rule3-min-trailing-silence=0"));
+      assert.ok(args.includes("--rule3-must-contain-nonsilence=false"));
+      stream.close();
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);
 
 test("holds prevent idle release; closing the last stream arms shutdown and escalation", async () => {
   vi.useFakeTimers();
@@ -132,6 +168,54 @@ test("startup failure kills the child, tolerates repeated error events, and back
   } finally {
     s.engine.dispose();
   }
+});
+
+test.each([false, true])(
+  "M1-C1 connecting cancellation frees admission even at handshake completion: %s",
+  async (handshakeComplete) => {
+    const s = setup();
+    const controller = new AbortController();
+    let connected!: () => void;
+    s.connect.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          connected = resolve;
+        }),
+    );
+    try {
+      const pending = s.open(
+        DEFAULT_SPEECH_CONVERSATION_SETTINGS,
+        controller.signal,
+      );
+      const rejected = assert.rejects(pending, /cancelled/);
+      await vi.waitFor(() => assert.equal(s.connect.mock.calls.length, 1));
+      if (handshakeComplete) connected();
+      controller.abort();
+      await rejected;
+      const streams = await Promise.all([s.open(), s.open()]);
+      connected();
+      await Promise.resolve();
+      await assert.rejects(s.open(), /busy/);
+      streams.forEach((stream) => stream.close());
+      const fresh = await s.open();
+      fresh.close();
+    } finally {
+      s.engine.dispose();
+    }
+  },
+);
+
+test("M1-C1 dispose during restart backoff rejects pending admission immediately", async () => {
+  vi.useFakeTimers();
+  const s = setup();
+  s.ready.mockRejectedValueOnce(new Error("cannot connect"));
+  await assert.rejects(s.open(), /cannot connect/);
+  const pending = s.open();
+  const rejected = assert.rejects(pending, /shutting down/);
+  s.engine.dispose();
+  await rejected;
+  await vi.advanceTimersByTimeAsync(5000);
+  assert.equal(s.spawnChild.mock.calls.length, 1);
 });
 
 test("settings changes wait for active streams then reload the warm process", async () => {
