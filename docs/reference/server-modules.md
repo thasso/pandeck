@@ -1442,11 +1442,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   subscribes to the memory domain change + effective-load events, emitting
   compact targeted `memoryInvalidated`/`memoryLoadInvalidated` messages so open
   panels refetch authoritative data without bloating session-list payloads.
-- `projectRegistry.ts` owns the Project notify-with-touched-ids seam, persisted
-  revisions, lean summary projection reads, digest and targeted-item recovery.
-  `hub.ts` coalesces those notifications into archived-inclusive `stateEvents`;
-  browser and agent mutations never push a complete `projectList`, so every open
-  sidebar converges without a reload.
+- `projectRegistry.ts` runs every Project write as one change set and owns the
+  `projects` topic descriptor (`projectStateTopic`): by-id revisions, the lean
+  summary, the canonical `projectList` and the digest. Its kernel publishes
+  archived-inclusive `stateEvents`; browser and agent mutations never push a
+  complete `projectList`, so every open sidebar converges without a reload.
 - `initiatives.ts` is the Initiative domain (`docs/initiatives.md`): writes
   validated whole inside one store mutation (an add under a member is refused
   with the reason, an add over plain members absorbs them, a milestone on a
@@ -2736,10 +2736,10 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `Viewer.wantsTopic(topic)` is true (`BroadcastTopic` in `@assistant/shared`:
   `tasks`, `projects`, `worktrees`, `skills`, …), and every domain broadcaster
   seam (`taskEvents`/`worktreeEvents`/`library/libraryPublish`) exposes exactly
-  one `broadcast` the hub binds to its topic; migrated Projects instead expose
-  notify-with-touched-ids from `projectRegistry.ts`, which the hub projects into
-  that same topic. A `broadcastAll` seam would let a domain quietly opt out of
-  addressing. `connection.ts` owns the `topics` set behind
+  one `broadcast` the hub binds to its topic; topics on the state topic kernel
+  (`stateTopics.ts`: Background, Projects, Initiatives) publish into that same
+  topic from their kernels. A `broadcastAll` seam would let a domain quietly opt
+  out of addressing. `connection.ts` owns the `topics` set behind
   `subscribe`/`unsubscribe`, and subscribing is ALSO the authoritative read for
   every stateful list: cold `tasks`/`projects` and the complete app-level
   `worktrees` list answer with their current snapshot; warm migrated domains

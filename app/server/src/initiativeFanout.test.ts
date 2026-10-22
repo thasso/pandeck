@@ -17,7 +17,7 @@ import {
   archiveInitiative,
   createInitiative,
   deleteInitiative,
-  initiativeRevisionIndex,
+  initiativeStateTopic,
   readInitiative,
   unarchiveInitiative,
   updateInitiative,
@@ -36,6 +36,7 @@ import {
 import { deleteProject, upsertProject } from "./projectRegistry.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { withChangeSet } from "./db/changeSet.ts";
 import { withDbTransaction } from "./db/index.ts";
 
 function task(title: string, parentId?: string): string {
@@ -51,7 +52,7 @@ function initiative(title: string, taskIds: string[] = []): string {
 }
 
 function revisionOf(id: string): number {
-  return initiativeRevisionIndex().get(id)?.revision ?? -1;
+  return initiativeStateTopic.revisions([id]).get(id)?.revision ?? -1;
 }
 
 /** The Initiatives whose revision `write` moved, among `ids`. */
@@ -409,9 +410,9 @@ test("archive deletes, later writes repeat the delete at a newer revision, unarc
     messages.length = 0;
     write();
     await hub.flushPendingBroadcastsForTests();
-    const batches = initiativeBatches(messages);
-    assert.equal(batches.length, 1, "one batch per flush");
-    const event = batches[0]!.find((candidate) => candidate.id === id);
+    const event = initiativeBatches(messages)
+      .flat()
+      .find((candidate) => candidate.id === id);
     assert.ok(event, `no event for Initiative ${id}`);
     return event;
   };
@@ -444,7 +445,7 @@ test("archive deletes, later writes repeat the delete at a newer revision, unarc
   }
 });
 
-test("a session tombstone inside a larger transaction stamps with it, or not at all", async () => {
+test("a session tombstone inside a larger transaction stamps with it, or publishes committed state", async () => {
   const member = task("Nested tombstone member");
   const id = initiative("Nested tombstone", [member]);
   const register = (sessionId: string) => {
@@ -458,8 +459,17 @@ test("a session tombstone inside a larger transaction stamps with it, or not at 
     });
     linkSessionToTask(member, { sessionId, origin: "task-start" });
   };
-  register("sess-nested-rolled-back");
-  register("sess-nested-committed");
+  const managedRollback = "sess-nested-managed-rolled-back";
+  const managedCommit = "sess-nested-managed-committed";
+  const foreignCommit = "sess-nested-foreign-committed";
+  const foreignRollback = "sess-nested-foreign-rolled-back";
+  for (const sessionId of [
+    managedRollback,
+    managedCommit,
+    foreignCommit,
+    foreignRollback,
+  ])
+    register(sessionId);
   await hub.flushPendingBroadcastsForTests();
   const messages: ServerMessage[] = [];
   const viewer = {
@@ -467,47 +477,81 @@ test("a session tombstone inside a larger transaction stamps with it, or not at 
     wantsTopic: (topic: string) => topic === "initiatives",
   };
   hub.register(viewer);
-  try {
-    const before = revisionOf(id);
-    assert.throws(() =>
-      withDbTransaction(() => {
-        assert.equal(
-          sessionStore.markDeleted("sess-nested-rolled-back"),
-          "deleted",
-        );
-        throw new Error("the larger delete fails");
-      }),
-    );
+  /** Run `write`, flush, and return this Initiative's events. */
+  const eventsOf = async (write: () => void) => {
+    messages.length = 0;
+    write();
     await hub.flushPendingBroadcastsForTests();
-    assert.equal(revisionOf(id), before, "the stamp rolled back with it");
+    return initiativeBatches(messages)
+      .flat()
+      .filter((event) => event.id === id);
+  };
+  const tombstone = (sessionId: string) =>
+    assert.equal(sessionStore.markDeleted(sessionId), "deleted");
+  try {
+    // A managed (change set) delete that rolls back takes the stamp with it.
+    const before = revisionOf(id);
     assert.deepEqual(
-      initiativeBatches(messages),
+      await eventsOf(() =>
+        assert.throws(() =>
+          withChangeSet(() => {
+            tombstone(managedRollback);
+            throw new Error("the larger delete fails");
+          }),
+        ),
+      ),
       [],
       "no event for a revision that never committed",
     );
+    assert.equal(revisionOf(id), before, "the stamp rolled back with it");
+    assert.ok(readInitiative(id)!.sessionIds.includes(managedRollback));
+
+    // A managed delete that commits publishes once, at its own revision.
+    const managed = await eventsOf(() =>
+      withChangeSet(() => tombstone(managedCommit)),
+    );
+    const afterManaged = revisionOf(id);
+    assert.ok(afterManaged > before);
+    assert.deepEqual(
+      managed.map((event) => [event.kind, event.revision]),
+      [["upsert", afterManaged]],
+    );
     assert.ok(
-      readInitiative(id)!.sessionIds.includes("sess-nested-rolled-back"),
+      managed[0]?.kind === "upsert" &&
+        !managed[0].item.sessionIds.includes(managedCommit),
     );
 
-    withDbTransaction(() => {
-      assert.equal(
-        sessionStore.markDeleted("sess-nested-committed"),
-        "deleted",
-      );
-    });
-    await hub.flushPendingBroadcastsForTests();
-    const after = revisionOf(id);
-    assert.ok(after > before);
-    const events = initiativeBatches(messages).flat();
+    // A foreign transaction that commits publishes the new revision.
+    const foreign = await eventsOf(() =>
+      withDbTransaction(() => tombstone(foreignCommit)),
+    );
+    const afterForeign = revisionOf(id);
+    assert.ok(afterForeign > afterManaged);
     assert.deepEqual(
-      events.map((event) => [event.id, event.kind, event.revision]),
-      [[id, "upsert", after]],
+      foreign.map((event) => [event.kind, event.revision]),
+      [["upsert", afterForeign]],
     );
-    const upsert = events[0];
-    assert.ok(
-      upsert?.kind === "upsert" &&
-        !upsert.item.sessionIds.includes("sess-nested-committed"),
+
+    // A foreign transaction that rolls back was reported at once; what
+    // publishes is the committed state, at the unchanged committed revision.
+    const rolledBack = await eventsOf(() =>
+      assert.throws(() =>
+        withDbTransaction(() => {
+          tombstone(foreignRollback);
+          throw new Error("the larger delete fails");
+        }),
+      ),
     );
+    assert.equal(revisionOf(id), afterForeign);
+    assert.equal(rolledBack.length, 1);
+    for (const event of rolledBack) {
+      assert.equal(event.revision, afterForeign);
+      assert.ok(
+        event.kind === "upsert" &&
+          event.item.sessionIds.includes(foreignRollback),
+        "the committed summary still lists the rolled-back session",
+      );
+    }
   } finally {
     hub.unregister(viewer);
   }

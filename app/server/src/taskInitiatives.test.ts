@@ -13,7 +13,7 @@ import {
   archiveInitiative,
   createInitiative,
   deleteInitiative,
-  initiativeRevisionIndex,
+  initiativeStateTopic,
   removeInitiativeMembers,
   setInitiativeMilestones,
   unarchiveInitiative,
@@ -207,7 +207,7 @@ test("title, state, archive and delete bump every held Task; a description does 
   const sibling = initiative("Row sibling", [epic]);
   const all = [epic, sub, loner];
   const siblingRevision = () =>
-    initiativeRevisionIndex().get(sibling)?.revision;
+    initiativeStateTopic.revisions([sibling]).get(sibling)?.revision;
 
   const before = siblingRevision();
   assert.deepEqual(

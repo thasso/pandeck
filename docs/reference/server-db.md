@@ -330,9 +330,10 @@ facade.
   failure should stop being shown.
 - `projectStore.ts` owns the projects row + `project_paths` child table and the
   project graph edges (`parent`, `jira`, and the standalone
-  `session —in_project→ project` mapping). It is pure persistence;
-  normalization, validation, and the lookup/scoring engine live in
-  `../projectRegistry.ts`.
+  `session —in_project→ project` mapping). `put` and `remove` run whole in one
+  transaction, or the caller's change set, and `projectTopicWrites` stamps the
+  `projects` topic's revisions. It is pure persistence; normalization,
+  validation, and the lookup/scoring engine live in `../projectRegistry.ts`.
 - `worktreeStore.ts` owns worktree rows, `in_worktree` edge helpers, and
   worktree review-comment rows; lifecycle rules live in `../worktrees/`.
   `worktree_comments.worktree_id` has no FK (dropped in `0007`) so comments can
@@ -355,17 +356,17 @@ facade.
   (`dropCoveredPlainEdges` runs inside a Task move's transaction), marked
   milestone edges may. Every Initiative write runs in `mutation`: top-level only
   (refused inside an open transaction, so a caught failure can never commit half
-  an operation), stamping the touched rows from the `initiative_revision`
-  sequence before COMMIT and notifying after it. The Task and session fan-outs
-  (`touchHolders`, the `sessionStore` liveness listener) only stamp and notify,
-  through `stampAndNotify`, the one seam that may join a caller's transaction: a
-  session tombstone inside a larger delete, whose rollback takes the stamp with
-  it. Members resolve at read time (stored edges plus descendants along
-  `subtask`); member sessions — only those a member Task's `context` edge marks
-  `task-start` — come back as a bounded page plus a separate count over one
-  shared CTE. `update` raises the attention cursor inside the state write itself
-  (`state <> ?` read against the old row), `create` raises it for an Initiative
-  born paused or done, and `settle` is the clamped, forward-only
+  an operation), stamping the touched rows through its change set before COMMIT
+  and reporting them after it. The Task and session fan-outs (`touchHolders`,
+  the `sessionStore` liveness listener) only stamp, through `stampAndNotify` and
+  the join-or-open touch (`changeSet.ts` `touchStateTopic`): a session tombstone
+  inside a larger delete joins that delete's change set, whose rollback takes
+  the stamp with it. Members resolve at read time (stored edges plus descendants
+  along `subtask`); member sessions — only those a member Task's `context` edge
+  marks `task-start` — come back as a bounded page plus a separate count over
+  one shared CTE. `update` raises the attention cursor inside the state write
+  itself (`state <> ?` read against the old row), `create` raises it for an
+  Initiative born paused or done, and `settle` is the clamped, forward-only
   acknowledgement. `INITIATIVE_STORE_SQL` holds the statements that
   `initiativeStoreQueryPlan.test.ts` pins to index searches.
 - `sessionStore.subscribeLiveness` is told, after each write lands, the ids of
