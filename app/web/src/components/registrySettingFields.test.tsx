@@ -59,7 +59,7 @@ test("every setting that needs hand-built UI is claimed", () => {
   );
 });
 
-test("today only auto-redeem and the Tempo worklog author are rendered from the registry", () => {
+test("voice settings are claimed by their dedicated UI", () => {
   const unclaimed = SETTINGS_REGISTRY.filter(
     (d) => !CLAIMED_SETTING_PATHS.has(d.path),
   ).map((d) => d.path);

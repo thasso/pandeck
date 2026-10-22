@@ -39,6 +39,9 @@ export const WEB_DIST_DIR = configuredRoot
   ? runtimeAssetPath("web")
   : runtimeAssetPath("app", "web", "dist");
 export const PACKAGED_CONFIG_DIR = runtimeAssetPath("config");
+export const KOKORO_SIDECAR_PATH = configuredRoot
+  ? runtimeAssetPath("speech", "kokoroSidecar.py")
+  : runtimeAssetPath("app", "server", "src", "speech", "kokoroSidecar.py");
 export const PACKAGED_PROMPTS_DIR = runtimeAssetPath("config", "prompts");
 export const PACKAGED_MIGRATIONS_DIR = configuredRoot
   ? runtimeAssetPath("migrations")
@@ -103,6 +106,8 @@ export function assertPackagedRuntimeAssets(): void {
     join(PACKAGED_CONFIG_DIR, "app.json"),
     join(PACKAGED_CONFIG_DIR, "host-tools.json"),
     join(PACKAGED_CONFIG_DIR, "stt-models.json"),
+    join(PACKAGED_CONFIG_DIR, "tts-models.json"),
+    KOKORO_SIDECAR_PATH,
     join(PACKAGED_PROMPTS_DIR, "assistant.md"),
     PACKAGED_MIGRATIONS_DIR,
     PACKAGED_MIGRATIONS_LOCK_PATH,

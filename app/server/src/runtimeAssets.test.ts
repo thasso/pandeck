@@ -30,4 +30,8 @@ test("captures the packaged root before the instance environment is scrubbed", a
     "/nix/store/example-runtime/workers/xhr-sync-worker.js",
   );
   assert.equal(assets.packagedClaudeCliPath(), "/nix/store/example-claude");
+  assert.equal(
+    assets.KOKORO_SIDECAR_PATH,
+    "/nix/store/example-runtime/speech/kokoroSidecar.py",
+  );
 });

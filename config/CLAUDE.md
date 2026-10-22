@@ -11,9 +11,9 @@
   `DATA_DIR/settings/`. No committed or packaged config may contain a secret,
   even by explicit user choice; secrets use the deployment variables in
   `docs/credential-distribution.md`.
-- `stt-models.json` is the SINGLE source of truth for the speech model catalog,
-  read by `flake.nix`, the install script and the server. Model WEIGHTS never
-  live here or in `DATA_DIR`; the nixosModule deploys none.
+- `stt-models.json` and `tts-models.json` are the model catalogs shared by
+  `flake.nix`, install scripts and server. Weights live outside config and
+  `DATA_DIR`; the NixOS module deploys none.
 - `host-tools.json` declares binaries and version floors REQUIRED on the host
   PATH; a missing one fails startup in production. Never list what the package
   wrapper vendors (`git`, `ssh`), which measures the vendored copy rather than

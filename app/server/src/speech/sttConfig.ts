@@ -36,6 +36,7 @@ const SERVER_BIN = "sherpa-onnx-offline-websocket-server";
 /** One catalog entry from `config/stt-models.json`. */
 export interface SttModelCatalogEntry {
   id: string;
+  mode: "offline" | "streaming";
   label: string;
   language: string;
   url: string;
@@ -94,20 +95,23 @@ export function resetSttConfigCache(): void {
 function isCatalogEntry(value: unknown): value is SttModelCatalogEntry {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Record<string, unknown>;
-  return [
-    "id",
-    "label",
-    "language",
-    "url",
-    "sha256",
-    "stripPrefix",
-    "encoder",
-    "decoder",
-    "joiner",
-    "tokens",
-  ].every(
-    (key) =>
-      typeof entry[key] === "string" && (entry[key] as string).length > 0,
+  return (
+    (entry.mode === "offline" || entry.mode === "streaming") &&
+    [
+      "id",
+      "label",
+      "language",
+      "url",
+      "sha256",
+      "stripPrefix",
+      "encoder",
+      "decoder",
+      "joiner",
+      "tokens",
+    ].every(
+      (key) =>
+        typeof entry[key] === "string" && (entry[key] as string).length > 0,
+    )
   );
 }
 
@@ -120,7 +124,11 @@ function candidateDirs(entry: SttModelCatalogEntry): string[] {
   const dirs: string[] = [];
   const fromMap = envModelMap()[entry.id];
   if (fromMap) dirs.push(fromMap);
-  const single = process.env.ASSISTANT_STT_MODEL_DIR?.trim();
+  const single = (
+    entry.mode === "streaming"
+      ? process.env.ASSISTANT_STT_STREAMING_MODEL_DIR
+      : process.env.ASSISTANT_STT_MODEL_DIR
+  )?.trim();
   if (single) dirs.push(single);
   dirs.push(join(DATA_DIR, "models", "stt", entry.id));
   return dirs;
@@ -167,25 +175,31 @@ function resolveModel(
 }
 
 /** Every catalogued model present on this instance. */
-export function availableSttModels(): ResolvedSttModel[] {
+export function availableSttModels(
+  mode: "offline" | "streaming" = "offline",
+): ResolvedSttModel[] {
   return sttCatalog()
+    .filter((entry) => entry.mode === mode)
     .map(resolveModel)
     .filter((model): model is ResolvedSttModel => model !== undefined);
 }
 
 /** Whether this instance is forbidden to dictate regardless of what it can find. */
-function isSttDisabled(): boolean {
+export function isSttDisabled(): boolean {
   const raw = process.env.ASSISTANT_STT_DISABLED?.trim();
   return raw !== undefined && raw !== "" && raw !== "0" && raw !== "false";
 }
 
 /** Recognizer executable: explicit env override, else a PATH lookup. */
-function resolveSttBinary(): string | undefined {
-  const fromEnv = process.env.ASSISTANT_STT_SERVER_BIN?.trim();
+export function resolveSpeechBinary(
+  name: string,
+  envKey: string,
+): string | undefined {
+  const fromEnv = process.env[envKey]?.trim();
   if (fromEnv) return existsSync(fromEnv) ? fromEnv : undefined;
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, SERVER_BIN);
+    const candidate = join(dir, name);
     if (existsSync(candidate)) return candidate;
   }
   return undefined;
@@ -221,7 +235,7 @@ export function resolveSttRuntime(
         "Dictation is disabled for this instance (ASSISTANT_STT_DISABLED).",
     };
   }
-  const binary = resolveSttBinary();
+  const binary = resolveSpeechBinary(SERVER_BIN, "ASSISTANT_STT_SERVER_BIN");
   if (!binary) {
     return {
       ok: false,
@@ -231,7 +245,7 @@ export function resolveSttRuntime(
   const model = selectSttModel(settings);
   if (!model) {
     const wanted = settings.modelId.trim();
-    const catalog = sttCatalog();
+    const catalog = sttCatalog().filter((entry) => entry.mode === "offline");
     if (catalog.length === 0)
       return {
         ok: false,

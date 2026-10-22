@@ -37,6 +37,7 @@
     "test:suites": "pnpm run test:release && pnpm run test:package-config-secrets && pnpm --filter '@assistant/*' --parallel --no-bail test",
     "test:web": "pnpm --filter @assistant/web test",
     "stt:model": "node scripts/install-stt-model.mjs",
+    "tts:model": "node scripts/install-tts-model.mjs",
     "typecheck": "pnpm --filter '@assistant/*' --parallel --no-bail typecheck",
     "version:set": "node scripts/set-version.mjs"
   },

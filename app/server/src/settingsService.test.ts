@@ -193,6 +193,94 @@ describe("settingsPatchForWrites", () => {
     refuse("peerSpawnRuntimes", "oops", /peerSpawnRuntimes must be an array/);
   });
 
+  test("synthesis settings validate named voices and normalize persisted bounds", async () => {
+    const before = getSettings().speechSynthesis;
+    try {
+      assert.equal(before.voice, "af_heart");
+      assert.equal(before.numThreads, 8);
+      assert.throws(
+        () =>
+          settingsPatchForWrites([
+            { path: "speechSynthesis.voice", value: "unknown" },
+          ]),
+        /must be one of/,
+      );
+      assert.throws(
+        () =>
+          settingsPatchForWrites([{ path: "speechSynthesis.speed", value: 0 }]),
+        /must be between/,
+      );
+      await saveSettings(
+        settingsPatchForWrites([
+          { path: "speechSynthesis.voice", value: "bm_lewis" },
+          { path: "speechSynthesis.speed", value: 1.2 },
+        ]),
+      );
+      assert.equal(getSettings().speechSynthesis.voice, "bm_lewis");
+      assert.equal(getSettings().speechSynthesis.speed, 1.2);
+      await saveSettings({
+        speechSynthesis: {
+          ...before,
+          voice: "bad",
+          speed: 99,
+          numThreads: 99,
+          idleShutdownSeconds: -1,
+        },
+      });
+      assert.deepEqual(getSettings().speechSynthesis, {
+        ...before,
+        voice: "af_heart",
+        speed: 2,
+        numThreads: 32,
+        idleShutdownSeconds: 0,
+      });
+    } finally {
+      await saveSettings({ speechSynthesis: before });
+    }
+  });
+
+  test("conversation settings have bounded registry writes and normalized persistence", async () => {
+    const before = getSettings().speechConversation;
+    try {
+      assert.equal(before.numThreads, 4);
+      assert.equal(before.endpointSilenceSeconds, 1.2);
+      assert.throws(
+        () =>
+          settingsPatchForWrites([
+            { path: "speechConversation.endpointSilenceSeconds", value: 0 },
+          ]),
+        /must be between/,
+      );
+      await saveSettings(
+        settingsPatchForWrites([
+          { path: "speechConversation.endpointSilenceSeconds", value: 1.8 },
+        ]),
+      );
+      assert.equal(
+        getSettings().speechConversation.endpointSilenceSeconds,
+        1.8,
+      );
+      await saveSettings({
+        speechConversation: {
+          ...before,
+          modelId: "  streaming  ",
+          numThreads: 99,
+          idleShutdownSeconds: -1,
+          endpointSilenceSeconds: 99,
+        },
+      });
+      assert.deepEqual(getSettings().speechConversation, {
+        ...before,
+        modelId: "streaming",
+        numThreads: 32,
+        idleShutdownSeconds: 0,
+        endpointSilenceSeconds: 5,
+      });
+    } finally {
+      await saveSettings({ speechConversation: before });
+    }
+  });
+
   test("a malformed vocabulary is refused before it can erase the current one", async () => {
     const vocabulary = [{ from: "pan deck", to: "Pandeck" }];
     await saveSettings(

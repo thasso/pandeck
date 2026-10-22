@@ -90,6 +90,8 @@ import {
   type SettingsChange,
 } from "./settingsService.ts";
 import { describeSttAvailability } from "./speech/sttConfig.ts";
+import { describeConversationAvailability } from "./speech/streamingSttConfig.ts";
+import { describeTtsAvailability } from "./speech/ttsConfig.ts";
 import { testSlackSettings } from "./slackSettings.ts";
 import { testTempoSettings } from "./tempoSettings.ts";
 import { testConfluenceSettings } from "./confluenceSettings.ts";
@@ -660,7 +662,13 @@ export class Connection implements Viewer {
       archivedSessionsLoaded: false,
       settings: readySettings(this.settings()),
       serverBuild: serverBuildInfo(),
-      speechToText: describeSttAvailability(this.settings().speechToText),
+      speechToText: {
+        ...describeSttAvailability(this.settings().speechToText),
+        tts: describeTtsAvailability(),
+        conversation: describeConversationAvailability(
+          this.settings().speechConversation,
+        ),
+      },
       slashCommands,
       contextInfo: viewing?.contextInfo() ?? null,
     });
@@ -3573,10 +3581,20 @@ export class Connection implements Viewer {
     // installed models), so recompute it — otherwise the Settings health line
     // and the mic button's reason keep reporting the pre-save answer until the
     // next reconnect.
-    if (change.sections.includes("speechToText"))
+    if (
+      change.sections.includes("speechToText") ||
+      change.sections.includes("speechConversation") ||
+      change.sections.includes("speechSynthesis")
+    )
       this.send({
         type: "speechToTextStatus",
-        status: describeSttAvailability(settings.speechToText),
+        status: {
+          ...describeSttAvailability(settings.speechToText),
+          tts: describeTtsAvailability(),
+          conversation: describeConversationAvailability(
+            settings.speechConversation,
+          ),
+        },
       });
   }
 
@@ -5754,6 +5772,8 @@ function readySettings(settings: AppSettings): Partial<AppSettings> {
     models: settings.models,
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,
+    speechConversation: settings.speechConversation,
+    speechSynthesis: settings.speechSynthesis,
     // The shell shows the Knowledge section, tab and route only while it is on.
     knowledgeBase: settings.knowledgeBase,
   };

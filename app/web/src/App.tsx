@@ -442,6 +442,8 @@ const EMPTY_PROMPT_QUEUE: import("@assistant/shared").PromptQueueState = {
   items: [],
   paused: false,
 };
+const EMPTY_CONVERSATION_MESSAGES: import("@assistant/shared").DisplayMessage[] =
+  [];
 const EMPTY_UNHANDLED_BATCH: import("@assistant/shared").BackgroundHandlingRef[] =
   [];
 /** The permanent Assistant's ledge after a Stop: its hold, and no drafts. */
@@ -5444,6 +5446,48 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
     [],
   );
   const abortRun = useCallback(() => actions.abort(), [actions]);
+  const [conversationActive, setConversationActive] = useState(false);
+  // Display projection calls every transient response "live". Speech needs the
+  // runtime's unique stream id so successive turns never share a cursor.
+  const conversationStreamId = state.liveStreams.find(
+    (stream) => stream.kind === "message",
+  )?.streamId;
+  const conversationSourceMessages = useMemo(
+    () =>
+      displayMessages.map((message) =>
+        message.id === "live" && conversationStreamId
+          ? { ...message, id: `voice-live:${conversationStreamId}` }
+          : message,
+      ),
+    [displayMessages, conversationStreamId],
+  );
+  const conversationMessagesRef = useRef(conversationSourceMessages);
+  conversationMessagesRef.current = conversationSourceMessages;
+  const getConversationMessages = useCallback(
+    () => conversationMessagesRef.current,
+    [],
+  );
+  const conversationMessages = conversationActive
+    ? conversationSourceMessages
+    : EMPTY_CONVERSATION_MESSAGES;
+  const composerConversation = useMemo(
+    () => ({
+      settings: {
+        speechConversation: state.settings.speechConversation,
+        speechSynthesis: state.settings.speechSynthesis,
+      },
+      // Idle transcript traffic must not redraw the memoized composer.
+      messages: conversationMessages,
+      getMessages: getConversationMessages,
+      onActiveChange: setConversationActive,
+    }),
+    [
+      conversationMessages,
+      state.settings.speechConversation,
+      state.settings.speechSynthesis,
+      getConversationMessages,
+    ],
+  );
   const composerDictation = useMemo(
     () => ({
       enabled: state.settings.speechToText.enabled,
@@ -6875,6 +6919,7 @@ function AppContent({ prefs, update }: ReturnType<typeof usePrefs>) {
             showAgentTypePicker ? pickStagedAgentType : undefined
           }
           dictation={composerDictation}
+          conversation={composerConversation}
         />
       </>
     );

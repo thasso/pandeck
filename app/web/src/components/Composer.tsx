@@ -30,6 +30,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  type AppSettings,
+  type DisplayMessage,
   type ContextInfo,
   type EntrySummary,
   type ModelOption,
@@ -51,6 +53,8 @@ import { insertTranscript } from "../lib/insertTranscript.ts";
 import { refineText } from "../lib/refineText.ts";
 import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 import { useDictation } from "../hooks/useDictation.ts";
+import { useConversation } from "../hooks/useConversation.ts";
+import { VOICE_REPLY_HINT } from "../lib/conversationText.ts";
 import { useTouchComposerMode } from "../hooks/useTouchComposerMode.ts";
 import type {
   NewPendingChatComment,
@@ -112,7 +116,7 @@ import {
   composerFoldClass,
 } from "./common/composerShell.ts";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
-import { EmptyBox } from "./common/load.tsx";
+import { EmptyBox, ErrorNote } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
 import { localStore } from "../lib/localStore.ts";
@@ -295,6 +299,13 @@ interface Props {
    * reason rather than failing at the first press.
    */
   dictation?: { enabled: boolean; status: SpeechToTextStatus | null };
+  /** Only the active chat supplies prose; secondary composers never speak it. */
+  conversation?: {
+    settings: Pick<AppSettings, "speechConversation" | "speechSynthesis">;
+    messages: readonly DisplayMessage[];
+    getMessages: () => readonly DisplayMessage[];
+    onActiveChange: (active: boolean) => void;
+  };
 }
 
 interface AttachmentDraft extends PromptAttachment {
@@ -927,6 +938,7 @@ export const Composer = memo(function Composer({
   onCommentDraftChange,
   collapseWhenBlurred = false,
   dictation,
+  conversation,
 }: Props) {
   usePerfRenderCount("Composer");
   const [text, setText] = useBrowserDraft(draftStorageKey);
@@ -1459,13 +1471,14 @@ export const Composer = memo(function Composer({
     clearBrowserDraft(draftStorageKey);
   };
 
-  const submit = (alternate = false) => {
-    if (disabled || !canSend || sendBlocked || sendBlockedReason) return;
+  const submit = (alternate = false, voiceText?: string) => {
+    if (disabled || !canSend || sendBlocked || sendBlockedReason) return false;
     const steerNow = alternate && providerCanSteer;
     const outgoing = attachments.map(
       ({ previewUrl: _previewUrl, ...attachment }) => attachment,
     );
     const deliver = (prompt: string) => {
+      voice.userMessageSent();
       if (queueing && onQueue)
         onQueue({
           text: prompt,
@@ -1474,7 +1487,7 @@ export const Composer = memo(function Composer({
         });
       else onSend(prompt, outgoing);
     };
-    const value = text.trim();
+    const value = voiceText ?? text.trim();
     const pendingComments = chatComments?.comments ?? [];
     if (!value && attachments.length === 0 && pendingComments.length === 0)
       return;
@@ -1486,7 +1499,7 @@ export const Composer = memo(function Composer({
       clearSentText();
       setAttachmentError(null);
       finishSubmit();
-      return;
+      return true;
     }
 
     // A registered slash command is ALWAYS intercepted — never forwarded to
@@ -1543,8 +1556,9 @@ export const Composer = memo(function Composer({
         setAttachmentError(error);
         return;
       }
+      voice.userMessageSent();
       finishSubmit();
-      return;
+      return true;
     }
     if (slashAction.kind === "host") {
       if (queueing && onQueue)
@@ -1553,19 +1567,21 @@ export const Composer = memo(function Composer({
           command: { name: slashAction.name, rawArgs: slashAction.rawArgs },
         });
       else actions.runSlashCommand(slashAction.name, slashAction.rawArgs);
+      voice.userMessageSent();
       clearSentText();
       setAttachmentError(null);
       finishSubmit();
-      return;
+      return true;
     }
     if (slashAction.kind === "skill") {
       // The typed line as the prompt: the transcript keeps it, and the server
       // sends the harness's native command for `skill`.
       actions.promptSkill(value, slashAction.name);
+      voice.userMessageSent();
       clearSentText();
       setAttachmentError(null);
       finishSubmit();
-      return;
+      return true;
     }
 
     deliver(serializeChatCommentPrompt(value, pendingComments));
@@ -1576,7 +1592,43 @@ export const Composer = memo(function Composer({
     clearSentText();
     setAttachmentError(null);
     finishSubmit();
+    return true;
   };
+
+  const voice = useConversation({
+    instanceId: `${dictationInstanceId}-conversation`,
+    sessionId: session?.sessionId,
+    disabled:
+      disabled || Boolean(sendBlocked || sendBlockedReason) || commentMode,
+    settings: conversation?.settings,
+    status: dictation?.status ?? null,
+    messages: conversation?.messages ?? [],
+    ...(session?.promptQueue
+      ? { queuedMessages: session.promptQueue.items }
+      : {}),
+    ...(conversation ? { getMessages: conversation.getMessages } : {}),
+    streaming,
+    onFinal: (spoken) => {
+      const utterance = spoken.trim();
+      if (!utterance) return false;
+      // Read the field at send time, including edits made during recognition.
+      // Live partials are only a preview, never a replacement for this draft.
+      const draft = (ref.current?.value ?? text).trim();
+      const combined = [draft, utterance].filter(Boolean).join("\n\n");
+      const sent = submit(false, `${combined}\n\n${VOICE_REPLY_HINT}`) === true;
+      if (!sent) setText(combined);
+      return sent;
+    },
+  });
+
+  const onConversationActiveChange = conversation?.onActiveChange;
+  useEffect(() => {
+    onConversationActiveChange?.(voice.active);
+  }, [onConversationActiveChange, voice.active]);
+  useEffect(
+    () => () => onConversationActiveChange?.(false),
+    [onConversationActiveChange],
+  );
 
   // After sending, drop the pin and — where the composer collapses (mobile / the
   // inspector footer) — blur so the virtual keyboard closes and it returns to the
@@ -1992,6 +2044,36 @@ export const Composer = memo(function Composer({
             />
           ) : null}
         </ChatDockPanel>
+        {conversation && (voice.active || voice.error) && (
+          <ComposerLedge joined={!hidden} keepWithKeyboard>
+            <div
+              className="flex items-center gap-2 px-3 py-2 text-sm"
+              aria-live="polite"
+            >
+              <div className="min-w-0 flex-1">
+                {voice.error ? (
+                  <ErrorNote message={voice.error} />
+                ) : (
+                  <>
+                    <div className="text-muted-foreground">
+                      Conversation: {voice.phase}
+                    </div>
+                    {hidden && voice.partial && (
+                      <div aria-label="Draft with live speech">
+                        {[text, voice.partial].filter(Boolean).join("\n\n")}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              {voice.active && (
+                <Button variant="ghost" size="sm" onClick={voice.toggle}>
+                  Stop conversation
+                </Button>
+              )}
+            </div>
+          </ComposerLedge>
+        )}
         {slashMenuOpen ? (
           // The command menu is a strip of its own on the shelf while a slash
           // is typed, standing in for the resting strips rather than floating
@@ -2172,6 +2254,17 @@ export const Composer = memo(function Composer({
                 }
                 className={COMPOSER_FIELD_CLASS}
               />
+              {/* Append recognition after the editable draft without persisting
+                  partial guesses or replacing user edits. */}
+              {voice.active && voice.partial && (
+                <div
+                  aria-label="Live speech"
+                  aria-live="polite"
+                  className="px-3 pb-2 text-sm whitespace-pre-wrap"
+                >
+                  {voice.partial}
+                </div>
+              )}
 
               {attachments.length > 0 && (
                 // `pt-1.5 pr-1.5` leaves room for each tile's remove button,
@@ -2273,6 +2366,23 @@ export const Composer = memo(function Composer({
                   >
                     <WandSparkles />
                   </IconButton>
+                  {conversation && (
+                    <Button
+                      variant={voice.active ? "secondary" : "ghost"}
+                      size="sm"
+                      aria-pressed={voice.active}
+                      onClick={voice.toggle}
+                      disabled={
+                        !voice.active && Boolean(voice.unavailableReason)
+                      }
+                      title={
+                        voice.unavailableReason ??
+                        "Hands-free conversation. Pausing sends your words automatically."
+                      }
+                    >
+                      Conversation
+                    </Button>
+                  )}
                   {dictationAvailable && (
                     <IconButton
                       label="Start dictation"

@@ -1,0 +1,101 @@
+# Voice conversation
+
+The main chat composer offers Conversation beside dictation. It requires an
+existing session, a secure microphone-capable browser, streaming recognition and
+speech synthesis on the host, and both conversation and spoken replies enabled
+in Settings. The disabled button explains the missing capability. Offline
+tap-to-start/tap-to-stop dictation remains separate and never auto-sends. All
+composers share microphone admission, including the mobile dock.
+
+## Talking and interruption
+
+Conversation keeps the microphone open with echo cancellation, noise suppression
+and automatic gain control. The browser reuses the PCM worklet, resamples its
+non-integer output rates to 16 kHz and sends paced 200 ms Int16 frames after
+recognition admission. It retains no utterance buffer. Upload backpressure stops
+conversation rather than replaying stale speech later. The shared 256 KiB send
+watermark allows about 8.2 seconds of socket backlog at 16 kHz Int16. The server
+derives its finite ten-second burst credit from that watermark plus one maximum
+frame, so permitted backlog can catch up. Reaching the watermark stops capture
+and reports that upload fell behind; no additional utterance buffer is kept.
+
+Replacement partials appear after the editable typed draft, without changing its
+browser-local saved copy. A nonempty final sends the latest draft plus the
+utterance together through the ordinary composer path, including attachments,
+comments, send restrictions, queueing and permanent-session steering. Edits made
+during recognition are included. Empty finals and stopping mid-utterance leave
+the typed draft intact; changing sessions restores that session's own draft. A
+refused send keeps the combined draft and final locally so it can be retried.
+The silence threshold is configured in Dictation settings; the recognizer also
+forces a final after two minutes of uninterrupted speech. Empty finals do not
+send or consume a segment number: the recognizer can reuse that number after a
+silence-only endpoint. The ordinary prompt API has no independent per-message
+instruction field, so spoken sends append the visible hint "Voice conversation:
+answer briefly in plain spoken sentences." No always-on system prompt layer is
+added.
+
+The ledge announces starting, listening, hearing you, thinking and speaking. It
+stays visible when the mobile composer collapses and offers Stop conversation.
+Turning off, changing session, hiding/unloading the page or losing the socket
+releases the microphone and closes recognition and playback. Errors stay on the
+composer. Reconnecting is an explicit toggle, never an automatic microphone
+open.
+
+Only newly arriving assistant text blocks are spoken, not history, thinking,
+tool calls or results. Speech uses the runtime stream id, not the display row's
+reused `live` id. When a durable entry replaces that row, matching text-block
+prefixes transfer the source-position cursors and interruption suppression, so
+the response is neither repeated nor unmuted on completion. Markdown links use
+their labels; fenced and indented code becomes "Code omitted"; actual tables and
+images are skipped. Prose and inline code containing pipes remain audible.
+Trailing open inline Markdown is held until stable. A trailing sentence waits
+for following text or message completion, not just whitespace. Speech resumes at
+its original Markdown source position, so later table recognition cannot replay
+earlier speech or skip prose after the table. To keep mid-line speech, a
+prose-looking header sentence already spoken before its pipe arrives is an
+accepted edge case. Once recognized, the table's delimiter and rows are never
+spoken, including GFM body rows without pipes. A blank line or a new block, such
+as a heading, list, quote or fence, ends the table. Complete sentences are
+synthesized as the response streams, with a final unpunctuated tail on
+completion. Long sentences are split within the server's 500-character limit.
+One synthesis fetch runs at a time; at most two decoded sentences are scheduled,
+with the next buffer starting at the previous buffer's exact AudioContext end
+time. Slow synthesis can still cause a gap. A global busy response is shown, not
+retried.
+
+Distinct nonempty speech cancels the synthesis fetch, scheduled audio and queue,
+including synthesis still waiting for its first buffer. The interrupted agent
+turn stays muted across later assistant messages and tool steps, including
+speech begun in a gap between buffers after that run has spoken. Speech before
+any playback or pending synthesis does not arm this mute, so a partial that ends
+empty or resolves to echo cannot silence the upcoming reply. Playback history
+resets for each new run. The mute ends when that run ends or the user sends the
+next message; the following reply speaks normally. Sends from another tab,
+steering and newly queued messages also release the mute, independent of the
+live overlay's display position. Loading older user history, editing or
+reordering an existing queued message, and automatic agent prompts do not
+release it. The agent keeps running. The next spoken final uses the same
+queue/steer choice as typing. Matching recognizer feedback is ignored against
+the current/recent spoken text, retained for the segment through its final.
+There is no grace period that would swallow a short genuine "stop". This is a
+lexical echo guard, not speaker identification: repeating the exact spoken words
+may be ignored. Echo safety also delays barge-in while the user's partial words
+match a prefix of the spoken words, such as "you can" during "You cannot change
+this." Further speech that distinguishes the words interrupts immediately;
+otherwise the endpoint applies strict whole-word matching and preserves the
+final "you can" text unchanged. There is no delay once the transcript is
+distinguishable from playback. Headphones are recommended if speaker echo
+remains.
+
+## Settings and preview
+
+The Dictation section owns conversation enablement, installed-model selection,
+silence, threads and idle release, plus spoken-reply enablement, the shared 28
+English Kokoro voice names, speed, synthesis threads and idle release. Numeric
+bounds come from the settings registry. Voice preview uses local picker/speed
+values as request overrides, without waiting for a settings echo. Stop preview,
+page hide or leaving Settings cancels its request and playback. Preview and
+conversation use the same globally single-flight endpoint, so another client can
+make synthesis busy. See
+[settings](../../../docs/settings.md#speech-conversation) and
+[server speech](../../../docs/reference/server-speech.md).

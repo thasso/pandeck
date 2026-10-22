@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { concatFrames, effectiveCaptureRate } from "./speechCapture.ts";
+import { SPEECH_SEND_WATERMARK_BYTES } from "@assistant/shared";
+import {
+  concatFrames,
+  effectiveCaptureRate,
+  socketAcceptsMore,
+} from "./speechCapture.ts";
+
+it("N1: speech sockets stop feeding at the shared backlog watermark", () => {
+  const socket: { readyState: number; bufferedAmount: number } = {
+    readyState: WebSocket.OPEN,
+    bufferedAmount: SPEECH_SEND_WATERMARK_BYTES - 1,
+  };
+  expect(socketAcceptsMore(socket as WebSocket)).toBe(true);
+  socket.bufferedAmount = SPEECH_SEND_WATERMARK_BYTES;
+  expect(socketAcceptsMore(socket as WebSocket)).toBe(false);
+  socket.bufferedAmount += 6400;
+  expect(socketAcceptsMore(socket as WebSocket)).toBe(false);
+  socket.readyState = WebSocket.CLOSED;
+  socket.bufferedAmount = 0;
+  expect(socketAcceptsMore(socket as WebSocket)).toBe(false);
+});
 
 describe("effectiveCaptureRate", () => {
   /**

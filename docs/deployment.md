@@ -78,13 +78,14 @@ server down.
 
 The Bun package contains the pinned Bun executable, one deterministic bundled
 server module, and explicit runtime assets: the built web UI, app configuration
-and prompts, SQLite migrations and their lock, the root version manifest, the
-Apache-2.0 `LICENSE` and `NOTICE`, the native watcher addon, Photon module and
-WASM, a bundled JSDOM sync-XHR worker, the bundled Initiative layout worker
-(elkjs, which `server.js` does not contain), the Claude CLI, and `browser-mcp/`
-with the pinned Playwright MCP CLI and its `playwright-core` package. It does
-not contain Node, tsx, workspace sources, or a `node_modules` tree. The wrapper
-sets `ASSISTANT_RUNTIME_DIR` to this asset root. elkjs ships under the EPL-2.0
+and prompts, the speech model catalogs and Kokoro Python sidecar source, SQLite
+migrations and their lock, the root version manifest, the Apache-2.0 `LICENSE`
+and `NOTICE`, the native watcher addon, Photon module and WASM, a bundled JSDOM
+sync-XHR worker, the bundled Initiative layout worker (elkjs, which `server.js`
+does not contain), the Claude CLI, and `browser-mcp/` with the pinned Playwright
+MCP CLI and its `playwright-core` package. It does not contain Node, tsx,
+workspace sources, or a `node_modules` tree. The wrapper sets
+`ASSISTANT_RUNTIME_DIR` to this asset root. elkjs ships under the EPL-2.0
 (`NOTICE`), its license text, copyright notices and source location in
 `workers/licenses/elkjs/`, which the install check requires. The web UI's
 Initiative map bundles @xyflow/react and the packages under it; the web build
@@ -700,8 +701,8 @@ discovers both at startup (`ASSISTANT_STT_SERVER_BIN` else a PATH lookup;
 `ASSISTANT_STT_MODELS`, then `ASSISTANT_STT_MODEL_DIR`, then the dev
 `DATA_DIR/models/stt/<id>` slot) and reports `configured: false` with a specific
 reason when either is absent, which is what disables the mic button. The
-module's only speech options are the paths `speech.modelDir` and
-`speech.logFile`.
+module's dictation options are the paths `speech.modelDir` and `speech.logFile`.
+Conversation adds the optional host paths described below.
 
 Obtaining the weights is entirely the host's business — this flake neither
 fetches nor installs them. The recommended arrangement is a host `fetchzip`
@@ -754,6 +755,89 @@ touching the app — with the accepted risk that they are a compatible PAIR, whi
 the operator now owns. Browser capture needs a secure context, so dictation
 works over the deployment's https URL but not against the plain-http dev server
 from another device.
+
+### Streaming conversation recognition
+
+Conversation uses a separate warm `sherpa-onnx-online-websocket-server` child
+and the catalog's `nemotron-streaming-en-560ms-int8` model. Offline Parakeet and
+its dictation API are unchanged. Both paths respect `ASSISTANT_STT_DISABLED`.
+The shared catalog marks models as `offline` or `streaming`; the existing flake
+recipe builds either with `nix build .#stt-model-<id>`, without adding weights
+to the app closure.
+
+Put the online server on PATH or set `ASSISTANT_STT_STREAMING_SERVER_BIN`. At
+startup the app probes `sherpa-onnx-version` beside that server, or
+`ASSISTANT_STT_VERSION_BIN` when explicitly set. Conversation requires at least
+1.13.5. An older, missing or unverifiable version disables conversation with a
+reason while leaving old dictation alone. Restart after replacing the host
+runtime, since this probe is cached for the process lifetime.
+
+Supply weights through the existing `ASSISTANT_STT_MODELS` id-to-directory JSON
+map, `ASSISTANT_STT_STREAMING_MODEL_DIR`, or the dev fallback
+`DATA_DIR/models/stt/<id>`. The offline single-directory override is
+deliberately not shared, because these models use the same filenames. In dev,
+run `pnpm run stt:model nemotron-streaming-en-560ms-int8`. Production weights
+belong outside DATA_DIR. These overrides can be supplied through the module's
+`extraEnvironment`; host runtime upgrades remain a separate deployment change.
+
+The streaming model defaults to four inference threads, 1.2 seconds trailing
+silence, and unloading after ten idle minutes. Both silence-based endpoint rules
+honor the configured pause. A separate 120-second hard cap forces finalization
+of unbroken speech without silence; conversation mode auto-sends that forced
+segment. Its log defaults to `/tmp/assistant-streaming-stt.log`, overridden by
+`ASSISTANT_STT_STREAMING_LOG`. Keep logs outside DATA_DIR. The browser connects
+only to the authenticated `/ws/speech/conversation` socket. Live audio is
+forwarded in memory without an HTTP retry buffer. The streaming STT status is
+nested under `ready.speechToText.conversation` and the `speechToTextStatus`
+settings echo. It reports STT capability only, not TTS readiness.
+
+The upstream recognizer binds to `0.0.0.0` and has no bind-address option. Keep
+its ports 46000 to 46999 blocked by the host firewall; app connections use
+127.0.0.1. Only the authenticated app socket should be reachable remotely.
+
+### Kokoro speech synthesis
+
+Kokoro 82M v1.0 fp32 is a separate optional host capability. The app ships only
+its sidecar source and model catalog. TTS adds neither sherpa-onnx nor model
+weights to the app closure. Git already brings Python into the app closure
+transitively; TTS does not add its own Python runtime. Provide a Python with
+`python3Packages.sherpa-onnx`, such as a host-owned
+`pkgs.python3.withPackages (p: [ p.sherpa-onnx ])`, and point `speech.ttsPython`
+at its interpreter. This sets `ASSISTANT_TTS_PYTHON`; without an override the
+server searches PATH for `python3`. Startup probes the import through the
+broker, without loading weights, and reports an unavailable reason under
+`ready.speechToText.tts`. Runtime changes require a server restart.
+
+`speech.ttsModelDir` sets `ASSISTANT_TTS_MODEL_DIR` to the complete
+`kokoro-multi-lang-v1_0` directory. Keep `model.onnx`, `voices.bin`,
+`tokens.txt`, the English lexicons, `espeak-ng-data/` and `dict/` together. Use
+fp32, not `model.int8.onnx`, which measured slower on the deploy CPU. The
+catalog `config/tts-models.json` pins the URL and hash shared by
+`nix build .#tts-model-kokoro-v1-fp32` and `pnpm run tts:model`. The latter
+creates a dev GC-root symlink at `DATA_DIR/models/tts/kokoro-v1-fp32`;
+production weights belong outside the backed-up data directory. Whole-directory
+installation preserves phonemizer dictionaries. Host path strings keep ownership
+optional; a stable host path or fixed-output derivation avoids host-input
+restart churn. `speech.streamingModelDir` similarly exports
+`ASSISTANT_STT_STREAMING_MODEL_DIR`. These production-only paths do not enter
+preview services.
+
+The sidecar loads one CPU model lazily, initializes its graph, then serves one
+sentence at a time over framed stdio. No network listener is opened. Default
+eight inference threads measured best in the local trial. After ten idle minutes
+it exits; shutdown disposes it immediately. Synthesis, startup and cancellation
+all have deadlines, with SIGKILL escalation for a hung native call.
+`ASSISTANT_TTS_DISABLED=1` disables synthesis independently;
+`ASSISTANT_STT_DISABLED=1` disables all speech, including TTS, so preview guards
+also prevent accidental TTS loads. Audio and input text are neither persisted
+nor logged. Native stderr is drained and discarded because phonemizers can echo
+input text.
+
+The token/origin-protected `POST /api/speech/synthesize` accepts one bounded
+sentence and returns mono PCM16 WAV at 24 kHz with `Cache-Control: no-store`.
+Aborting the fetch cancels generation. See
+[the protocol reference](reference/server-speech.md#kokoro-synthesis) for
+limits.
 
 ## PR previews
 

@@ -204,6 +204,11 @@ copy(join(repoRoot, "app/web/dist"), "web");
 copy(join(repoRoot, "config/app.json"), "config/app.json");
 copy(join(repoRoot, "config/host-tools.json"), "config/host-tools.json");
 copy(join(repoRoot, "config/stt-models.json"), "config/stt-models.json");
+copy(join(repoRoot, "config/tts-models.json"), "config/tts-models.json");
+copy(
+  join(repoRoot, "app/server/src/speech/kokoroSidecar.py"),
+  "speech/kokoroSidecar.py",
+);
 copy(join(repoRoot, "config/prompts"), "config/prompts");
 copy(join(repoRoot, "app/server/src/db/migrations"), "migrations");
 copy(

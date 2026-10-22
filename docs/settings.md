@@ -89,8 +89,9 @@ Then every `onSettingsChanged` listener hears which sections were written. The
 hub forwards that to each connection's `settingsChanged`, which sends that
 client its own `settings` (OAuth redirect URIs depend on the connection's public
 URL), plus `models` after a `claudeSdk` or `openAiCompatible` write and
-`speechToTextStatus` after a `speechToText` write. The writer gets its echo the
-same way as everyone else, before the request's `mutationSettled`.
+`speechToTextStatus` after a `speechToText`, `speechConversation` or
+`speechSynthesis` write. The writer gets its echo the same way as everyone else,
+before the request's `mutationSettled`.
 
 Each effect and each listener runs on its own, so one failure never skips the
 rest or the announcement. A section counts as written once its writer has run,
@@ -115,6 +116,62 @@ read-only settings, bad values and non-null OAuth writes.
 The connection-test messages (`saveAndTest*`, `test*`) still answer only the
 client that asked: a test result is that client's request, not shared state.
 What a test persists, such as discovered models, reaches every client.
+
+## Speech conversation
+
+The Dictation page groups conversation controls separately from offline
+push-to-talk. It offers an installed streaming-model picker, endpoint silence,
+threads and idle release. The composer's Conversation toggle combines this
+settings group's enablement with independent streaming STT and TTS capabilities
+and synthesis enablement. Unavailable hosts show the reason. See the
+[web conversation contract](../app/web/docs/voice-conversation.md) for
+auto-send, spoken content and interruption behavior.
+
+`speechConversation` is independent of offline dictation's `speechToText` group.
+Its registry entries use the Dictation section. It defaults to enabled, the
+first installed streaming model, four threads, a 600-second idle shutdown, and
+1.2 seconds of trailing silence before the recognizer finalizes a segment. The
+silence setting accepts 0.3 to 5 seconds and applies to both silence-based
+endpoint rules; zero idle shutdown keeps the model resident. The intentional
+exception is the 120-second hard segment cap: unbroken speech forces a final
+without waiting for silence, and conversation mode auto-sends that segment as a
+turn. Model ids name catalog entries, never paths. Deployment wiring and the
+minimum runtime version are described in
+[deployment.md](deployment.md#streaming-conversation-recognition).
+
+The ready projection includes all three speech settings groups, including
+synthesis enablement so a reload preserves the composer's gate. It nests
+streaming STT availability under `speechToText.conversation`. Settings writes
+echo that status to all connections. Capability status does not depend on the
+user's enabled switch. Both the browser and server check that switch before
+starting capture. Changes to model, inference threads or endpoint silence take
+effect on the next conversation; starting a differently configured stream while
+another is active is refused rather than interrupting it. Vocabulary comes from
+the existing `speechToText.vocabulary` list and is captured at conversation
+start, so partial and final results use the same one-pass replacement engine as
+dictation.
+
+## Speech synthesis
+
+`speechSynthesis` uses the Dictation registry section independently of STT.
+Defaults are enabled, `af_heart`, speed 1, eight CPU threads and a 600-second
+idle shutdown. Speed accepts 0.5 to 2; threads accept 1 to 32; idle shutdown
+accepts 0 to 86400 seconds, with zero keeping the model resident. Normalization
+clamps numeric bounds and replaces unknown persisted voices with `af_heart`.
+Registry writes reject unknown voices or out-of-range numbers before saving.
+
+The shared `KOKORO_ENGLISH_VOICES` list contains the 28 named English speakers
+from sherpa-onnx's Kokoro v1.0 table, with explicit speaker ids and a pinned
+upstream source. The ready projection and `speechToTextStatus` echo report the
+independent host capability as `speechToText.tts`, including a reason when
+unavailable and the voice names for the picker. User enablement is separate from
+host capability. Thread changes reload the model on the next request; voice and
+speed changes reuse it. Preview requests may override voice/speed without saving
+settings, using
+[the synthesis endpoint](reference/server-speech.md#kokoro-synthesis). The
+Dictation page provides the named voice picker, speed and Preview voice. Preview
+uses current local voice/speed values even before a settings echo; stopping it,
+hiding the page or leaving Settings cancels fetch and playback.
 
 ## Personal Assistant working directory
 
