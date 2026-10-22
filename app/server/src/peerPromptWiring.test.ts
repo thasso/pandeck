@@ -65,23 +65,23 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
   );
   assert.match(
     source,
-    /new BackgroundCompletionDelivery\s*\(\s*\{[\s\S]{0,300}?drainPeers:\s*\(sessionId\)\s*=>\s*drainRecipient\(sessionId\)/,
+    /new BackgroundCompletionDelivery\s*\(\s*\{[\s\S]{0,300}?drainPeers:[\s\S]{0,200}?drainRecipient\(sessionId,/,
     "background completion must drain the durable peer FIFO first",
   );
   assert.match(
     source,
-    /const idleEdge = createIdleEdge\(\{[\s\S]{0,600}?drainBackground:[\s\S]{0,200}?backgroundCompletionDelivery\.drain\(sessionId\)[\s\S]{0,100}?offerReplyReminders,/,
-    "the idle chain must enter the peer-first background delivery gate, then the reply reminder",
+    /createDeliveryScheduler\(\{\s*\.\.\.sessionDeliveryLanes\(backgroundCompletionDelivery\)/,
+    "the scheduler must use the production lanes",
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*idleEdge\.offer\(sessionId\);\s*\}\s*\)/,
-    "the idle hook must offer a freed direct slot, then run that chain",
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*void deliveryScheduler\.offerReminders\(sessionId\);\s*\}\s*\)/,
+    "the idle hook must offer a freed direct slot, then the scheduler with reminders",
   );
   assert.match(
     source,
-    /yieldToOthers:\s*\(sessionId\)\s*=>\s*idleEdge\.offerAfterQueue\(sessionId\)/,
-    "a queue that yields must offer what waited behind it",
+    /yieldToOthers:\s*\(sessionId\)\s*=>\s*\{\s*void deliveryScheduler\.wake\(sessionId\)/,
+    "a queue that yields must wake delivery without enabling reminders",
   );
 });
 
@@ -90,13 +90,13 @@ test("a Stop's hold gates background delivery and Resume reruns the idle chain",
 
   assert.match(
     source,
-    /new BackgroundCompletionDelivery\s*\(\s*\{[\s\S]{0,300}?held:\s*\(sessionId\)\s*=>\s*automaticTurnsHeld\(sessionId\)/,
+    /new BackgroundCompletionDelivery\s*\(\s*\{[\s\S]{0,600}?held:\s*\(sessionId\)\s*=>\s*automaticTurnsHeld\(sessionId\)/,
     "background completion must read the session's Stop hold",
   );
   assert.match(
     source,
-    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*idleEdge\.offer\(sessionId,\s*true\);\s*resumePermanentAssistantIntake\(sessionId\);/,
-    "Resume must offer the whole idle chain again, rerunning background delivery, and the Assistant's intake",
+    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*void deliveryScheduler\.offerReminders\(sessionId\);\s*resumePermanentAssistantIntake\(sessionId\);/,
+    "Resume must offer the scheduler with reminders, and the Assistant's intake",
   );
 });
 

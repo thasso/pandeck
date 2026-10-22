@@ -37,32 +37,6 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
-test("a pending peer batch always finishes before background delivery", async () => {
-  const order: string[] = [];
-  let releasePeer!: () => void;
-  const peer = new Promise<void>((resolve) => {
-    releasePeer = resolve;
-  });
-  const delivery = new BackgroundCompletionDelivery({
-    drainPeers: async () => {
-      order.push("peer-start");
-      await peer;
-      order.push("peer-finished");
-    },
-    offer: () => {
-      order.push("background");
-      return Promise.resolve("delivered");
-    },
-  });
-
-  delivery.enqueue("owner-1", notice("item-1"));
-  await flush();
-  assert.deepEqual(order, ["peer-start"]);
-  releasePeer();
-  await delivery.drain("owner-1");
-  assert.deepEqual(order, ["peer-start", "peer-finished", "background"]);
-});
-
 test("a competing ordinary turn stays protected until background admission", async () => {
   const tracker = new BackgroundCompletionTurnTracker();
   let release!: () => void;
@@ -498,82 +472,6 @@ test("stop() discards deferred facts as well as queued ones", async () => {
   delivery.stop();
   assert.deepEqual(discarded, ["/tmp/held"]);
   assert.equal(delivery.claimDeferredContext("owner-drain"), undefined);
-});
-
-test("a drain requested while one is in flight runs again after it", async () => {
-  // The user's queue gives up an idle edge the peer phase already deferred
-  // to: returning the drain in flight would leave that peer with no edge.
-  let peerPasses = 0;
-  let releaseFirst!: () => void;
-  const first = new Promise<void>((resolve) => (releaseFirst = resolve));
-  const delivery = new BackgroundCompletionDelivery({
-    drainPeers: async () => {
-      peerPasses += 1;
-      if (peerPasses === 1) await first;
-    },
-    offer: () => Promise.resolve("delivered"),
-  });
-
-  void delivery.drain("owner-rerun");
-  await flush();
-  void delivery.requestDrain("owner-rerun");
-  assert.equal(peerPasses, 1);
-  releaseFirst();
-  for (let i = 0; i < 20 && peerPasses < 2; i += 1) await flush();
-  assert.equal(peerPasses, 2);
-});
-
-test("a drain joined after its peer phase runs once more, whatever its offer answers (Task-973)", async () => {
-  // The offer awaits a turn — its own, or a steer the provider declines once
-  // the running turn ends — whose idle edge joins this drain. A peer reply
-  // queued during that turn has no other wake.
-  for (const answer of ["delivered", "busy", "unavailable"] as const) {
-    let peerPasses = 0;
-    let offers = 0;
-    let releaseOffer!: () => void;
-    const delivery = new BackgroundCompletionDelivery({
-      drainPeers: async () => {
-        peerPasses += 1;
-      },
-      offer: async () => {
-        offers += 1;
-        if (offers === 1)
-          await new Promise<void>((resolve) => (releaseOffer = resolve));
-        return answer;
-      },
-    });
-    const id = `owner-joined-${answer}`;
-    delivery.enqueue(id, notice(`item-${answer}`));
-    void delivery.drain(id);
-    for (let i = 0; i < 20 && offers < 1; i += 1) await flush();
-    void delivery.drain(id); // the turn's idle edge
-    releaseOffer();
-    for (let i = 0; i < 40 && peerPasses < 2; i += 1) await flush();
-    assert.equal(peerPasses, 2, answer);
-    // The rerun was asked for by nothing, so nothing runs a third time.
-    for (let i = 0; i < 40; i += 1) await flush();
-    assert.equal(peerPasses, 2, answer);
-  }
-});
-
-test("a drain joined during its peer phase does not run again: that phase still reads the queue", async () => {
-  let peerPasses = 0;
-  let releasePeer!: () => void;
-  const delivery = new BackgroundCompletionDelivery({
-    drainPeers: async () => {
-      peerPasses += 1;
-      if (peerPasses === 1)
-        await new Promise<void>((resolve) => (releasePeer = resolve));
-    },
-    offer: () => Promise.resolve("delivered"),
-  });
-  delivery.enqueue("owner-peer-phase", notice("item-peer-phase"));
-  void delivery.drain("owner-peer-phase");
-  await flush();
-  void delivery.drain("owner-peer-phase");
-  releasePeer();
-  for (let i = 0; i < 40; i += 1) await flush();
-  assert.equal(peerPasses, 1);
 });
 
 test("a Stop's hold keeps a completion pending, unoffered and unconsumed, until it is lifted", async () => {

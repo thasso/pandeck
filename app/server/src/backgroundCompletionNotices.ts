@@ -438,7 +438,7 @@ export function settleBackgroundHandling(
 export function offerBackgroundCompletion(
   driverFor: (sessionId: string) => Promise<RuntimePromptDriver | undefined>,
 ): BackgroundCompletionDeliveryOptions["offer"] {
-  return async (sessionId, signal, clientRequestId, attempt) => {
+  return async (sessionId, signal, clientRequestId, attempt, shouldStart) => {
     // The drain read the hold after the peer phase; a Stop since then must not
     // cost a cold acquisition the run door would refuse anyway.
     if (automaticTurnsHeld(sessionId)) return "busy";
@@ -452,7 +452,14 @@ export function offerBackgroundCompletion(
     // Claimed after the facade's last await, right before the append; bound
     // to the run the append belongs to. Whether the facts were HANDLED is that
     // run's outcome (`settleBackgroundHandling`), never this prompt's.
-    const claim = attempt.hooks();
+    const hooks = attempt.hooks();
+    const claim = {
+      ...hooks,
+      admit: () => {
+        if (shouldStart?.() === false) throw new SessionBusyError(sessionId);
+        hooks.admit();
+      },
+    };
     // A running turn is an opportunity, not an obstacle, when the driver can
     // take mid-turn input: joining it delivers the same fact for the cost of a
     // message instead of a whole turn — pi's equivalent of the notification the
@@ -789,6 +796,9 @@ export function unhandledBackground(sessionId: string): {
  */
 export function restoreOwedBackgroundDelivery(
   delivery: BackgroundCompletionDelivery,
+  offer: (sessionId: string) => void = (sessionId) => {
+    void delivery.requestDrain(sessionId);
+  },
 ): { restored: number; forgotten: number; interrupted: number } {
   let restored = 0;
   let forgotten = 0;
@@ -835,6 +845,6 @@ export function restoreOwedBackgroundDelivery(
   // Released before the restart (or never held, for a deadline fact), so
   // nothing else will come for these: the usual peer-first drain offers them
   // now (a deferred fact still waits for the session's next turn).
-  for (const sessionId of resumed) void delivery.requestDrain(sessionId);
+  for (const sessionId of resumed) offer(sessionId);
   return { restored, forgotten, interrupted: interrupted.length };
 }

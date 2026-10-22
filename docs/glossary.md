@@ -38,3 +38,23 @@ server persistence layer.
 **Peer session**: A session started by another session that reports back through
 peer messages.\
 _Avoid_: subagent. That word means only the Claude SDK's native subagents.
+
+**Lane**: A source of work the per-session delivery scheduler pulls from in
+priority order. It reports whether a session is owed work without opening a
+harness, then delivers through that session. It owns its storage and retry
+policy.\
+_Avoid_: unified delivery queue, transport
+
+**Wake**: A payload-free request to run a session's delivery scheduler. A wake
+during a pass marks another pass from the top.\
+_Avoid_: delivery, message, receipt
+
+**Pass**: One ordered offer of a session's owed lanes under its scheduler gate.
+A new turn ends it; a steer does not.\
+_Avoid_: turn, run, drain
+
+**Receipt**: The planned runtime answer describing a prompt's append, provider
+admission and run outcome, for each lane to interpret. Task-1051 introduces this
+answer; the scheduler's current drain adapters use the existing callbacks, not a
+runtime receipt.\
+_Avoid_: success flag, delivery acknowledgment

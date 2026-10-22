@@ -80,7 +80,7 @@ const hold = await import("./automaticTurnHold.ts");
 const handoffs = await import("./agentHandoffs.ts");
 const { BackgroundCompletionDelivery } =
   await import("./backgroundWork/completionDelivery.ts");
-const { createIdleEdge } = await import("./idleEdge.ts");
+
 const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
 
 setHubForTests(fakeHub as never);
@@ -286,62 +286,6 @@ describe("reply reminders", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     assert.deepEqual(acquired, []);
-    assert.equal(count(r.id), 0);
-  });
-
-  it("boot queue recovery that yields without a turn reminds nobody", async () => {
-    const me = seed("Rebooted");
-    const r = openRequest(seed("Asker"), me, "question");
-    // A queued message whose attachment is gone fails before its append,
-    // pauses the queue and hands the edge on — at boot, with no idle edge.
-    promptQueueStore.append({
-      id: `q-${n++}`,
-      sessionId: me,
-      text: "with a file",
-      attachments: [
-        {
-          id: "missing-attachment",
-          name: "gone.png",
-          mimeType: "image/png",
-          size: 1,
-        },
-      ] as never,
-    });
-    const promptQueue = await import("./promptQueue.ts");
-    const background = new BackgroundCompletionDelivery({
-      drainPeers: drainRecipient,
-      offer: async () => "delivered",
-    });
-    const edge = createIdleEdge({
-      runAutoApprovals: async () => {},
-      drainAgentHandoffs: async () => {},
-      drainPromptQueue: (id) => promptQueue.drainPromptQueue(id),
-      drainBackground: (id, rerun) =>
-        rerun ? background.requestDrain(id) : background.drain(id),
-      offerReplyReminders,
-    });
-    let yielded = 0;
-    promptQueue.setPromptQueueHost({
-      resolve: async (id) => driverFor(id) as never,
-      live: (id) => driverFor(id) as never,
-      publish: () => {},
-      reportError: () => {},
-      yieldToOthers: (id) => {
-        yielded += 1;
-        edge.offerAfterQueue(id);
-      },
-    });
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      promptQueue.drainPromptQueuesOnBoot();
-      await until(() => yielded > 0, "the queue's yield");
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    } finally {
-      vi.restoreAllMocks();
-      promptQueue.setPromptQueueHost(undefined);
-    }
-    assert.equal(promptQueueStore.isPaused(me), true);
-    assert.equal(reminders(me).length, 0);
     assert.equal(count(r.id), 0);
   });
 
@@ -785,84 +729,7 @@ describe("the user-entry seam", () => {
   });
 });
 
-describe("the idle edge (idleEdge.ts)", () => {
-  it("offers the reminder last, after the background step settles", async () => {
-    const order: string[] = [];
-    let finishBackground!: () => void;
-    const edge = createIdleEdge({
-      runAutoApprovals: async () => void order.push("approvals"),
-      drainAgentHandoffs: async () => void order.push("handoffs"),
-      drainPromptQueue: async () => void order.push("queue"),
-      drainBackground: (_id, rerun) => {
-        order.push(`background:${rerun}`);
-        return new Promise<void>((resolve) => (finishBackground = resolve));
-      },
-      offerReplyReminders: async () => void order.push("reminders"),
-    });
-    edge.offer("s1");
-    await until(() => order.includes("background:false"), "background");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.ok(!order.includes("reminders"));
-    finishBackground();
-    await until(() => order.includes("reminders"), "reminders");
-    assert.deepEqual(order, [
-      "approvals",
-      "handoffs",
-      "queue",
-      "background:false",
-      "reminders",
-    ]);
-  });
-
-  it("a queue that yields offers background delivery only, never the reminder", async () => {
-    const order: string[] = [];
-    const edge = createIdleEdge({
-      runAutoApprovals: async () => void order.push("approvals"),
-      drainAgentHandoffs: async () => void order.push("handoffs"),
-      drainPromptQueue: async () => void order.push("queue"),
-      drainBackground: async (_id, rerun) =>
-        void order.push(`background:${rerun}`),
-      offerReplyReminders: async () => void order.push("reminders"),
-    });
-    edge.offerAfterQueue("s1");
-    await until(() => order.includes("background:true"), "background");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(order, ["background:true"]);
-  });
-
-  it("an edge overlapping a queue's yield settles on exactly one reminder", async () => {
-    const me = seed("Overlap");
-    const r = openRequest(seed("Asker"), me, "question");
-    const background = new BackgroundCompletionDelivery({
-      drainPeers: drainRecipient,
-      offer: async () => "delivered",
-    });
-    wakeOwed = (id) => background.wakeOwed(id);
-    const edge = createIdleEdge({
-      runAutoApprovals: async () => {},
-      drainAgentHandoffs: async () => {},
-      drainPromptQueue: async () => {},
-      drainBackground: (id, rerun) =>
-        rerun ? background.requestDrain(id) : background.drain(id),
-      offerReplyReminders,
-    });
-    setReplyReminderHost({
-      handoffOwed: () => false,
-      wakeOwed: (id) => background.wakeOwed(id),
-      requestIdleEdge: (id) => {
-        reoffers.push(id);
-        edge.offer(id);
-      },
-    });
-    edge.offer(me);
-    edge.offerAfterQueue(me);
-    await until(() => reminders(me).length === 1, "the reminder");
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.equal(reminders(me).length, 1);
-    assert.equal(count(r.id), 1);
-    assert.ok(reoffers.length <= 3, "re-offers stop");
-  });
-
+describe("deferred background context", () => {
   it("a deferred background fact rides the reminder turn", async () => {
     const me = seed("Deferred");
     openRequest(seed("Asker"), me, "question");
@@ -890,14 +757,7 @@ describe("the idle edge (idleEdge.ts)", () => {
     );
     wakeOwed = (id) => background.wakeOwed(id);
     try {
-      const edge = createIdleEdge({
-        runAutoApprovals: async () => {},
-        drainAgentHandoffs: async () => {},
-        drainPromptQueue: async () => {},
-        drainBackground: (id) => background.drain(id),
-        offerReplyReminders,
-      });
-      edge.offer(me);
+      await offerReplyReminders(me);
       await until(() => reminders(me).length === 1, "the reminder");
       const modelText = driverFor(me).promptTexts.at(-1) ?? "";
       assert.ok(modelText.includes("Peer reminder"));

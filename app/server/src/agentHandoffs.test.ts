@@ -769,35 +769,26 @@ test("index.ts drains handoffs on the idle edge, at boot, and stops for shutdown
     join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
     "utf8",
   );
-  const idleEdge = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "idleEdge.ts"),
-    "utf8",
-  );
   assert.match(
-    idleEdge,
-    /offer: \(sessionId, resumed = false\) => \{\s*void steps\s*\.runAutoApprovals\(sessionId\)\s*\.catch\(\(\) => \{\}\)\s*\.then\(\(\) => steps\.drainAgentHandoffs\(sessionId\)\)/,
-    "session-granted approvals, then queued handoffs, must take the running→idle edge before the other drains",
+    source,
+    /createDeliveryScheduler\(\{\s*\.\.\.sessionDeliveryLanes\(backgroundCompletionDelivery\)/,
+    "index.ts must build the scheduler from the real lanes",
   );
   assert.match(
     source,
-    /createIdleEdge\(\{\s*runAutoApprovals,\s*drainAgentHandoffs,/,
-    "index.ts must build that chain from the real steps",
-  );
-  assert.match(
-    source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?idleEdge\.offer\(sessionId\);\s*\}\s*\)/,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?void deliveryScheduler\.offerReminders\(sessionId\);\s*\}\s*\)/,
     "the running→idle edge must run that chain",
   );
   // Each inside its own boot step: a bare mention (a comment, an import) must
   // not satisfy this, and one step's throw must not skip the other.
   assert.match(
     source,
-    /\bbootStep\(\s*"[^"]+",\s*\(\)\s*=>\s*recoverAutoApprovalsOnBoot\(\)\s*,?\s*\)/,
+    /\bbootStep\(\s*"[^"]+",\s*\(\)\s*=>\s*recoverAutoApprovalsOnBoot\(offerOnBoot\)\s*,?\s*\)/,
     "auto-approvals a restart interrupted must run again at boot, in their own boot step",
   );
   assert.match(
     source,
-    /\bbootStep\(\s*"[^"]+",\s*\(\)\s*=>\s*recoverAgentHandoffsOnBoot\(\)\s*,?\s*\)/,
+    /\bbootStep\(\s*"[^"]+",\s*\(\)\s*=>\s*recoverAgentHandoffsOnBoot\(undefined,\s*offerOnBoot\)\s*,?\s*\)/,
     "handoffs that outlived the process must be offered again at boot, in their own boot step",
   );
   assert.match(

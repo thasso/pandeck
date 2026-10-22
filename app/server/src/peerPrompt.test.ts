@@ -13,7 +13,9 @@ import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
 import { BackgroundCompletionDelivery } from "./backgroundWork/completionDelivery.ts";
-import { createIdleEdge } from "./idleEdge.ts";
+import { createDeliveryScheduler } from "./deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
+import { sessionDeliveryLanes } from "./sessionDeliveryLanes.ts";
 import {
   clearExplicitRecipientAuthority,
   markExplicitRecipientAuthority,
@@ -2124,38 +2126,6 @@ describe("real delivery through a fake runtime driver", () => {
   });
 });
 
-/**
- * The production idle chain (`index.ts`) over a real background delivery,
- * installed as the idle hook: nothing owed ahead of the background step, which
- * an ordinary idle edge enters without a rerun. Its offer carries the attempt's
- * claim like `offerBackgroundCompletion`, so the drain learns the facts reached
- * the model from the runtime itself.
- */
-function wireProductionIdleEdge(): BackgroundCompletionDelivery {
-  const delivery = new BackgroundCompletionDelivery({
-    drainPeers: drainRecipient,
-    offer: async (sessionId, offer, clientRequestId, attempt) => {
-      await promptRuntimeSession(driverFor(sessionId), offer.visibleText, {
-        origin: { kind: "system", source: "background-completion" },
-        contextBlock: offer.contextBlock,
-        clientRequestId,
-        ...attempt.hooks(),
-      });
-      return attempt.finished(undefined) === "unsent" ? "busy" : "delivered";
-    },
-  });
-  const idleEdge = createIdleEdge({
-    runAutoApprovals: async () => {},
-    drainAgentHandoffs: async () => {},
-    drainPromptQueue: async () => {},
-    drainBackground: (id, rerun) =>
-      rerun ? delivery.requestDrain(id) : delivery.drain(id),
-    offerReplyReminders: async () => {},
-  });
-  setSessionIdleHook((id) => idleEdge.offer(id));
-  return delivery;
-}
-
 async function waitFor(check: () => boolean, label: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (!check()) {
@@ -2166,7 +2136,6 @@ async function waitFor(check: () => boolean, label: string): Promise<void> {
 
 describe("browser-independent drain triggers", () => {
   afterEach(() => setSessionIdleHook(undefined));
-  const until = waitFor;
 
   it("the idle-hook background phase waits for explicit peer authority", async () => {
     const recipient = seed("Idle authority recipient");
@@ -2240,55 +2209,6 @@ describe("browser-independent drain triggers", () => {
     );
   });
 
-  it("delivers a reply that arrived during a background-completion turn once that turn ends (Task-973)", async () => {
-    const reviewer = seed("Reviewer");
-    const implementer = seed("Implementer");
-    const driver = driverFor(implementer);
-    driver.behavior = { mode: "success" };
-    const delivery = wireProductionIdleEdge();
-    setPeerPromptAutoDeliverForTests(true);
-    try {
-      const releaseTurn = driver.holdTurns();
-      // A real harness closes its run, which is the idle edge, before the
-      // prompt call that carried the completion answers.
-      const releaseSettle = driver.holdSettle();
-      delivery.enqueueActivity(implementer, {
-        itemId: "ci-watch",
-        eventId: "ci-watch-done",
-        label: "CI watch",
-        lineCount: 1,
-        bytes: 1,
-        droppedEventCount: 0,
-        humanLink: "/background-tasks",
-      });
-      await until(() => driver.isRunning, "the background-completion turn");
-
-      // The reviewer answers while that turn still runs: the enqueue's own
-      // drain finds the recipient busy and leaves the reply queued.
-      const reply = await sendPeerPrompt({
-        senderSessionId: reviewer,
-        targetSessionId: implementer,
-        prompt: "Rebase check passed.",
-        responseRequested: false,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.equal(peerPromptStore.getById(reply.message.id)!.status, "queued");
-
-      // Its idle edge is the only event left; nothing is enqueued after it.
-      releaseTurn();
-      await until(() => !driver.isRunning, "the background turn's idle edge");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      releaseSettle();
-      await until(
-        () => peerPromptStore.getById(reply.message.id)!.status === "completed",
-        "the queued reply to deliver at the background turn's idle edge",
-      );
-      assert.equal(driver.promptOptions.length, 2, "one turn each, no repeat");
-    } finally {
-      setPeerPromptAutoDeliverForTests(false);
-    }
-  });
-
   it("drainAllQueuedOnBoot delivers to a resumable idle target with no browser connection", async () => {
     const sender = seed("BootSender");
     const recipient = seed("BootRecipient");
@@ -2301,14 +2221,40 @@ describe("browser-independent drain triggers", () => {
     });
     assert.equal(peerPromptStore.listPendingForRecipient(recipient).length, 1);
 
-    drainAllQueuedOnBoot();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    const rows = peerPromptStore.listByParticipant(recipient, 5);
-    assert.ok(
-      rows.some((r) => r.status === "completed"),
-      "startup drain delivered without a browser connection",
-    );
+    const background = new BackgroundCompletionDelivery({
+      drainPeers: async () => {},
+      offer: async () => "delivered",
+    });
+    const scheduler = createDeliveryScheduler({
+      ...sessionDeliveryLanes(background),
+      runAutoApprovals: async () => {},
+      live: (id) => driverFor(id) as never,
+      acquire: async (id) => driverFor(id) as never,
+      held: () => false,
+      shutdown: () => false,
+      reportError: (_id, _lane, error) => {
+        throw error;
+      },
+    });
+    setDeliveryWake((id) => {
+      void scheduler.wake(id);
+    });
+    try {
+      const sessions = new Set<string>();
+      drainAllQueuedOnBoot((id) => {
+        sessions.add(id);
+      });
+      await scheduler.boot(sessions);
+      await waitFor(
+        () =>
+          peerPromptStore
+            .listByParticipant(recipient, 5)
+            .some((r) => r.status === "completed"),
+        "startup scheduler delivery without a browser connection",
+      );
+    } finally {
+      setDeliveryWake(undefined);
+    }
   });
 });
 
@@ -2318,7 +2264,6 @@ describe("browser-independent drain triggers", () => {
  * waits forever for an answer nobody is going to send.
  */
 describe("interruption notice to the sender", () => {
-  const until = waitFor;
   /** A row in the exact state boot recovery leaves behind: delivered, then the process died. */
   function strandedRow(
     sender: string,
@@ -2342,6 +2287,163 @@ describe("interruption notice to the sender", () => {
     peerPromptStore.markInterrupted(m.id, "the process died", kind);
     return m;
   }
+
+  it("routes one shared acquisition failure to every owed production lane without reacquiring", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const laneAcquire = vi.spyOn(fakeHub, "acquireById");
+    try {
+      for (const kind of ["error", "unavailable"] as const) {
+        const owner = seed(`Unavailable ${kind}`);
+        const peer = seed("Failure-route peer");
+        const notice = strandedRow(owner, peer, "reply owed");
+        const incoming = await sendPeerPrompt({
+          senderSessionId: peer,
+          targetSessionId: owner,
+          prompt: "queued peer work",
+          responseRequested: false,
+        });
+        handoffs.enqueueAgentHandoff({
+          sessionId: owner,
+          text: "card outcome",
+          origin: { kind: "system", source: "test" },
+        });
+        const queueId = `unavailable-${owner}`;
+        promptQueueStore.append({
+          id: queueId,
+          sessionId: owner,
+          text: "user draft",
+        });
+        const removeDebt = vi.fn();
+        const offer = vi.fn(async () => "unavailable" as const);
+        const drainPeers = vi.fn(async () => {});
+        const discard = vi.fn();
+        const background = new BackgroundCompletionDelivery({
+          drainPeers,
+          offer,
+          discard,
+          outbox: {
+            save: () => true,
+            remove: removeDebt,
+            reserve: () => true,
+            bind: () => {},
+            release: () => {},
+            interrupt: () => {},
+          },
+        });
+        background.restore(
+          owner,
+          {
+            itemId: `background-${owner}`,
+            revision: 1,
+            label: "Build",
+            state: "completed",
+            humanLink: "/background-tasks",
+            backend: "server-task",
+            stopRequested: false,
+            ownerTurnRunning: false,
+          },
+          "wake",
+        );
+        const production = sessionDeliveryLanes(background);
+        const unavailableHooks = production.lanes.map((lane) =>
+          vi.spyOn(lane, "unavailable"),
+        );
+        let acquisitions = 0;
+        const scheduler = createDeliveryScheduler({
+          ...production,
+          runAutoApprovals: async () => {},
+          live: () => undefined,
+          acquire: async () => {
+            acquisitions += 1;
+            if (kind === "error") throw new Error("provider failed to open");
+            return undefined;
+          },
+          held: () => false,
+          shutdown: () => false,
+          reportError: () => {},
+        });
+        let pass: Promise<void> | undefined;
+        setDeliveryWake((id) => {
+          pass = scheduler.wake(id);
+        });
+        const queueResolve = vi.fn(async () => undefined);
+        const queueYield = vi.fn((id: string) => {
+          void scheduler.wake(id);
+        });
+        promptQueue.setPromptQueueHost({
+          resolve: queueResolve,
+          live: () => undefined,
+          publish: () => {},
+          reportError: () => {},
+          yieldToOthers: queueYield,
+        });
+        try {
+          // The ordinary production entrypoint, not a direct call to the hook.
+          await drainRecipient(owner);
+          await pass;
+          assert.equal(acquisitions, 1);
+          assert.equal(laneAcquire.mock.calls.length, 0);
+          assert.equal(queueResolve.mock.calls.length, 0);
+          assert.equal(
+            queueYield.mock.calls.length,
+            0,
+            "failure fan-out does not create an immediate retry loop",
+          );
+          assert.ok(
+            unavailableHooks.every((hook) => hook.mock.calls.length === 1),
+          );
+          assert.equal(agentHandoffStore.next(owner)?.attempts, 1);
+          assert.equal(promptQueueStore.isPaused(owner), true);
+          assert.match(
+            promptQueueStore.get(owner, queueId)?.error ?? "",
+            /could not be resumed/,
+          );
+          assert.equal(
+            peerPromptStore.getById(incoming.message.id)?.status,
+            "retryable_failed",
+          );
+          assert.equal(
+            peerPromptStore.getById(incoming.message.id)?.attempts,
+            1,
+            "FIFO failure is not charged again by the notice lane",
+          );
+          assert.equal(
+            peerPromptStore.getById(notice.id)?.senderNotifiedAt,
+            undefined,
+          );
+          assert.ok(
+            vi.getTimerCount() >= 2,
+            "handoff and notice retain their own scheduled retries",
+          );
+          assert.equal(offer.mock.calls.length, 0);
+          assert.equal(drainPeers.mock.calls.length, 0);
+          assert.equal(
+            removeDebt.mock.calls.length,
+            0,
+            "unavailable never retires durable background debt",
+          );
+          assert.equal(background.queuedCount(owner), kind === "error" ? 1 : 0);
+          assert.equal(discard.mock.calls.length, kind === "error" ? 0 : 1);
+        } finally {
+          setDeliveryWake(undefined);
+          handoffs.setAgentHandoffDeliveryStoppedForTests(true);
+          handoffs.setAgentHandoffDeliveryStoppedForTests(false);
+          stopPeerPromptDelivery();
+          setPeerPromptDeliveryStoppedForTests(false);
+          for (const row of agentHandoffStore.listForSession(owner))
+            agentHandoffStore.remove(row.id);
+          promptQueueStore.remove(owner, queueId);
+          promptQueueStore.setPaused(owner, false);
+          background.stop();
+        }
+      }
+    } finally {
+      laneAcquire.mockRestore();
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 
   it("wakes the sender with the recipient's session id once the restart stranded its request", async () => {
     const sender = seed("NoticeSender");
@@ -2367,44 +2469,6 @@ describe("interruption notice to the sender", () => {
       true,
       "the notice is recorded durably, not in memory",
     );
-  });
-
-  it("delivers a peer prompt that arrived during the notice turn once that turn ends (Task-973)", async () => {
-    const sender = seed("Notice turn sender");
-    const recipient = seed("Notice turn recipient");
-    const other = seed("Notice turn peer");
-    const driver = driverFor(sender);
-    driver.behavior = { mode: "success" };
-    wireProductionIdleEdge();
-    strandedRow(sender, recipient, "please review the diff");
-    setPeerPromptAutoDeliverForTests(true);
-    try {
-      const releaseTurn = driver.holdTurns();
-      const releaseSettle = driver.holdSettle();
-      const drain = drainRecipient(sender);
-      await until(() => driver.isRunning, "the notice turn");
-
-      // The notice drain holds the session past its FIFO step: this send's
-      // own drain joins it.
-      const late = await sendPeerPrompt({
-        senderSessionId: other,
-        targetSessionId: sender,
-        prompt: "One more thing.",
-        responseRequested: false,
-      });
-      releaseTurn();
-      await until(() => !driver.isRunning, "the notice turn's idle edge");
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      releaseSettle();
-      await drain;
-      await until(
-        () => peerPromptStore.getById(late.message.id)!.status === "completed",
-        "the peer prompt to deliver after the notice turn",
-      );
-      assert.equal(driver.promptOptions.length, 2, "one turn each, no repeat");
-    } finally {
-      setPeerPromptAutoDeliverForTests(false);
-    }
   });
 
   it("wakes the sender with the failure's category when the recipient's turn failed", async () => {
