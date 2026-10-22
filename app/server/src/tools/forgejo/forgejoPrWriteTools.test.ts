@@ -9,8 +9,15 @@ vi.mock("../../forgejoSettings.ts", async (importActual) => ({
   getForgejoBaseUrl: vi.fn(() => ""),
 }));
 
+vi.mock("../../pullRequestInventorySync.ts", async (importActual) => ({
+  ...(await importActual<typeof import("../../pullRequestInventorySync.ts")>()),
+  invalidateForgejoPullRequestWrite: vi.fn(),
+}));
+
 const { getForgejoToolConfig, getForgejoDefaultOwner, getForgejoBaseUrl } =
   await import("../../forgejoSettings.ts");
+const { invalidateForgejoPullRequestWrite } =
+  await import("../../pullRequestInventorySync.ts");
 // Importing the tools module also registers the "forgejoPullRequest" executor.
 const {
   forgejoCreatePullRequestTool,
@@ -166,6 +173,9 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
       method: "PATCH",
       body: { title: "Feature" },
     });
+    expect(vi.mocked(invalidateForgejoPullRequestWrite).mock.calls).toEqual([
+      [config.baseUrl, "acme", "app", 42],
+    ]);
   });
 
   test("description edit records the current one, waits for approval and PATCHes only the body", async () => {
@@ -326,7 +336,12 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
       },
     ) as unknown as typeof fetch;
 
-    for (const title of ["WIP: Add widget", "[WIP] Add widget"]) {
+    for (const title of [
+      "WIP: Add widget",
+      "[WIP] Add widget",
+      "wip: Add widget",
+      "WIP:Add widget",
+    ]) {
       await forgejoCreatePullRequestTool.execute(
         {
           repo: "acme/app",
@@ -339,7 +354,12 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
       );
       await resolveApproval(latest(sessionId).id, "approved");
     }
-    expect(titles).toEqual(["WIP: Add widget", "[WIP] Add widget"]);
+    expect(titles).toEqual([
+      "WIP: Add widget",
+      "[WIP] Add widget",
+      "wip: Add widget",
+      "WIP:Add widget",
+    ]);
   });
 
   test("review approval sends Forgejo's verdict spelling and position anchors", async () => {
@@ -511,5 +531,103 @@ describe("forgejo PR write approvals (unified subsystem)", () => {
     expect(card.status).toBe("failed");
     expect(card.error).toMatch(/403|not allowed/);
     expect(outcomePrompt).toContain("FAILED");
+  });
+});
+
+// These writes bypass the provider seam, so the inventory, the open list and
+// its annotations would otherwise show the old state for a whole sync period.
+describe("forgejo PR writes invalidate what the inventory remembers", () => {
+  const invalidations = () =>
+    vi.mocked(invalidateForgejoPullRequestWrite).mock.calls;
+
+  test("an approved create, edit and review invalidate their pull request; comments do not", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ number: 7, body: "" }), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await forgejoCreatePullRequestTool.execute(
+      { repo: "acme/app", title: "T", head: "f", base: "main" } as never,
+      ctxFor("fj-inv-create") as never,
+    );
+    await resolveApproval(latest("fj-inv-create").id, "approved");
+    await forgejoEditPullRequestTool.execute(
+      { repo: "acme/app", number: 42, body: "new" } as never,
+      ctxFor("fj-inv-edit") as never,
+    );
+    await resolveApproval(latest("fj-inv-edit").id, "approved");
+    await forgejoReviewPullRequestTool.execute(
+      { repo: "acme/app", number: 43, event: "APPROVED" } as never,
+      ctxFor("fj-inv-review") as never,
+    );
+    await resolveApproval(latest("fj-inv-review").id, "approved");
+    for (const card of ["fj-inv-create", "fj-inv-edit", "fj-inv-review"])
+      expect(latest(card).status).toBe("executed");
+    expect(invalidations()).toEqual([
+      [config.baseUrl, "acme", "app", 7],
+      [config.baseUrl, "acme", "app", 42],
+      [config.baseUrl, "acme", "app", 43],
+    ]);
+
+    await forgejoCommentPullRequestTool.execute(
+      { repo: "acme/app", number: 42, body: "thanks" } as never,
+      ctxFor("fj-inv-comment") as never,
+    );
+    await resolveApproval(latest("fj-inv-comment").id, "approved");
+    await forgejoCommentPullRequestTool.execute(
+      {
+        repo: "acme/app",
+        number: 42,
+        body: "done",
+        replyToReviewId: 9,
+        replyPath: "src/a.ts",
+        replyLine: 3,
+      } as never,
+      ctxFor("fj-inv-reply") as never,
+    );
+    await resolveApproval(latest("fj-inv-reply").id, "approved");
+    expect(latest("fj-inv-comment").status).toBe("executed");
+    expect(latest("fj-inv-reply").status).toBe("executed");
+    expect(invalidations()).toHaveLength(3);
+  });
+
+  test("a failed write still invalidates: part of it may have landed", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message: "nope" }), { status: 422 }),
+    ) as unknown as typeof fetch;
+
+    await forgejoCreatePullRequestTool.execute(
+      { repo: "acme/app", title: "T", head: "f", base: "main" } as never,
+      ctxFor("fj-inv-create-fail") as never,
+    );
+    await resolveApproval(latest("fj-inv-create-fail").id, "approved");
+    await forgejoEditPullRequestTool.execute(
+      { repo: "acme/app", number: 42, base: "develop" } as never,
+      ctxFor("fj-inv-edit-fail") as never,
+    );
+    await resolveApproval(latest("fj-inv-edit-fail").id, "approved");
+    await forgejoReviewPullRequestTool.execute(
+      { repo: "acme/app", number: 43, event: "COMMENT" } as never,
+      ctxFor("fj-inv-review-fail") as never,
+    );
+    await resolveApproval(latest("fj-inv-review-fail").id, "approved");
+    await forgejoCommentPullRequestTool.execute(
+      { repo: "acme/app", number: 42, body: "thanks" } as never,
+      ctxFor("fj-inv-comment-fail") as never,
+    );
+    await resolveApproval(latest("fj-inv-comment-fail").id, "approved");
+    for (const card of [
+      "fj-inv-create-fail",
+      "fj-inv-edit-fail",
+      "fj-inv-review-fail",
+      "fj-inv-comment-fail",
+    ])
+      expect(latest(card).status).toBe("failed");
+    expect(invalidations()).toEqual([
+      [config.baseUrl, "acme", "app", undefined],
+      [config.baseUrl, "acme", "app", 42],
+      [config.baseUrl, "acme", "app", 43],
+    ]);
   });
 });
