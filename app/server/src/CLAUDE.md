@@ -14,11 +14,11 @@
 - `@earendil-works/*` (not `pi-mcp`) is imported only under `piSdk/`,
   `@anthropic-ai/claude-agent-sdk` only under `claudeSdk/`, and neither under
   `mcp/` or `tools/`. Prompts use `runtimePrompt.ts`, never raw engines
-  (`architecture.test.ts`). App code reaches those folders only through
-  `harnesses/`, branching on capabilities, not harness ids. Only
-  `harnessBoundary.test.ts`'s measurement modules are exempt
-  (`docs/agent-harnesses.md`). Existing-session decisions (cards, questions,
-  handoffs) use `agentHandoffs.ts` for mid-turn queueing.
+  (`architecture.test.ts`). App code reaches those folders through `harnesses/`,
+  branching on capabilities, not harness ids. Only `harnessBoundary.test.ts`'s
+  measurement modules are exempt (`docs/agent-harnesses.md`). Existing-session
+  decisions use `agentHandoffs.ts`. Automatic drains wake
+  `deliveryScheduler.ts`.
 - Automatic: `accountRouter.ts`; enterprise propagates, never relaxes; host-side
   usage; peer/workflow pins stay exact, unpinned peers route.
   Health/benches/switches require explicit own-subscription runs. Switch after

@@ -1050,11 +1050,14 @@ function handBackToUser(card: ApprovalCard, error?: string): void {
  * starts the agent's next turn, and a later card in the batch would then run
  * beside it — a merge would find its worktree busy.
  */
-export async function runAutoApprovals(sessionId: string): Promise<void> {
+export async function runAutoApprovals(
+  sessionId: string,
+  deliverOutcomes = true,
+): Promise<void> {
   let queued = false;
   for (const id of approvalStore.autoApprovalIds(sessionId))
     if (await autoApprove(id)) queued = true;
-  if (queued) await drainOutcomes(sessionId);
+  if (queued && deliverOutcomes) await drainOutcomes(sessionId);
 }
 
 /**
@@ -1062,14 +1065,18 @@ export async function runAutoApprovals(sessionId: string): Promise<void> {
  * nothing is running at boot. One that was already executing is not retried —
  * its action may have happened.
  */
-export function recoverAutoApprovalsOnBoot(): void {
-  for (const sessionId of approvalStore.autoApprovalSessionIds())
+export function recoverAutoApprovalsOnBoot(
+  offer: (sessionId: string) => void = (sessionId) => {
     void runAutoApprovals(sessionId).catch((err: unknown) =>
       console.warn(
         `[approvals] auto-approval recovery for ${sessionId} failed:`,
         err instanceof Error ? err.message : String(err),
       ),
     );
+  },
+): void {
+  for (const sessionId of approvalStore.autoApprovalSessionIds())
+    offer(sessionId);
 }
 
 type OutcomeDrain = (sessionId: string) => Promise<void>;

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { wakeSessionDelivery } from "../deliveryWake.ts";
 import type { BackgroundWorkPromptPresentation } from "@assistant/shared/session";
 import type {
   BackgroundDeliveryBackend,
@@ -337,7 +338,10 @@ export interface BackgroundCompletionOffer {
 
 export interface BackgroundCompletionDeliveryOptions {
   /** Drains the existing durable peer FIFO, including any admitted peer turn. */
-  drainPeers(sessionId: string): Promise<void>;
+  drainPeers(
+    sessionId: string,
+    admission?: { shouldStart(): boolean },
+  ): Promise<void>;
   /**
    * The user stopped this session, so no automatic turn may start: the batch
    * stays pending, unoffered, until a later drain finds the hold lifted.
@@ -361,6 +365,7 @@ export interface BackgroundCompletionDeliveryOptions {
     offer: BackgroundCompletionOffer,
     clientRequestId: string,
     attempt: BackgroundHandlingAttempt,
+    shouldStart?: () => boolean,
   ): Promise<BackgroundCompletionOfferResult>;
   /** Removes turn-scoped activity files after delivery or discard. */
   discard?(notice: BackgroundNotice): void;
@@ -712,7 +717,23 @@ export class BackgroundCompletionDelivery {
    * (Task-973). Joining during the peer phase is enough, since that phase still
    * reads the queue.
    */
-  drain(sessionId: string): Promise<void> {
+  drain(sessionId: string, shouldStart?: () => boolean): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (!shouldStart && wakeSessionDelivery(sessionId))
+      return Promise.resolve();
+    return this.startDrain(sessionId, shouldStart);
+  }
+
+  /** Same unsent/unavailable outcome as an offer, without another acquisition or peer drain. */
+  unavailable(sessionId: string): Promise<void> {
+    return this.startDrain(sessionId, () => true, true);
+  }
+
+  private startDrain(
+    sessionId: string,
+    shouldStart?: () => boolean,
+    unavailable = false,
+  ): Promise<void> {
     if (this.stopped) return Promise.resolve();
     const existing = this.drains.get(sessionId);
     if (existing) {
@@ -720,8 +741,10 @@ export class BackgroundCompletionDelivery {
         this.rerunAfterDrain.add(sessionId);
       return existing;
     }
-    const run = this.drainOnce(sessionId)
-      .catch(() => undefined)
+    const run = this.drainOnce(sessionId, shouldStart, unavailable)
+      .catch((error: unknown) => {
+        if (shouldStart) throw error;
+      })
       .finally(() => {
         this.drains.delete(sessionId);
         this.pastPeerPhase.delete(sessionId);
@@ -732,13 +755,26 @@ export class BackgroundCompletionDelivery {
     return run;
   }
 
-  private async drainOnce(sessionId: string): Promise<void> {
-    await this.options.drainPeers(sessionId);
+  private async drainOnce(
+    sessionId: string,
+    shouldStart?: () => boolean,
+    unavailable = false,
+  ): Promise<void> {
+    if (!unavailable)
+      await this.options.drainPeers(
+        sessionId,
+        shouldStart ? { shouldStart } : undefined,
+      );
     this.pastPeerPhase.add(sessionId);
     // Read AFTER the peer phase: a Stop during that turn holds this batch too.
     // One that lands while the offer below awaits is refused at the run door
     // and answered `busy`, which puts the batch back.
-    if (this.stopped || this.options.held?.(sessionId)) return;
+    if (
+      shouldStart?.() === false ||
+      this.stopped ||
+      this.options.held?.(sessionId)
+    )
+      return;
     const liveBatch = this.pending.get(sessionId);
     if (!liveBatch || liveBatch.notices.length === 0) return;
     const offered: PendingCompletionBatch = {
@@ -768,12 +804,15 @@ export class BackgroundCompletionDelivery {
     let result: BackgroundCompletionOfferResult;
     this.offering.add(sessionId);
     try {
-      result = await this.options.offer(
-        sessionId,
-        rendered.offer,
-        `background-completion:${attempt.id}`,
-        attempt,
-      );
+      result = unavailable
+        ? "unavailable"
+        : await this.options.offer(
+            sessionId,
+            rendered.offer,
+            `background-completion:${attempt.id}`,
+            attempt,
+            shouldStart,
+          );
     } catch (error) {
       // An offer that throws never said what reached the model.
       if (attempt.abandon() === "unsent")

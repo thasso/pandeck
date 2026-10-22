@@ -270,9 +270,9 @@ The same origin marks one more server-generated turn, the **reply reminder**
 requests a session holds unanswered, listed in one turn. It is not part of the
 peer drain and not an owed notice in the sense above — nothing is stored for it,
 it never cold-acquires a session or runs at boot, and it is offered only as the
-idle edge's last step (`app/server/src/idleEdge.ts`), after the peer FIFO, these
-notices and background wakes, yielding to any of them that is owed when its turn
-is admitted. It shares the origin so that its failure routes like a notice
+scheduler's last lane (`app/server/src/deliveryScheduler.ts`), after the peer
+FIFO, these notices and background wakes, yielding to any of them owed when its
+turn is admitted. It shares the origin so that its failure routes like a notice
 turn's (below): along the spawn route only, never back to its requesters.
 
 Logs on this route are fixed words with session and run ids: a notice turn that

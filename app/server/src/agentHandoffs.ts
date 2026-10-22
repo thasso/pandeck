@@ -45,6 +45,7 @@ import {
   type HumanResumeToken,
 } from "./automaticTurnHold.ts";
 import { errorText } from "./errors.ts";
+import { wakeSessionDelivery } from "./deliveryWake.ts";
 import {
   agentHandoffStore,
   type AgentHandoffOrigin,
@@ -310,8 +311,12 @@ export function agentHandoffOwed(sessionId: string): boolean {
  * hook from inside the finishing prompt, so the hook's drain lands on the drain
  * that is already running rather than double-admitting a turn.
  */
-export function drainAgentHandoffs(sessionId: string): Promise<void> {
+export function drainAgentHandoffs(
+  sessionId: string,
+  admission?: { driver: RuntimePromptDriver; shouldStart(): boolean },
+): Promise<void> {
   if (deliveryStopped) return Promise.resolve();
+  if (!admission && wakeSessionDelivery(sessionId)) return Promise.resolve();
   const existing = drainLocks.get(sessionId);
   // Coalescing alone would SWALLOW this call: the drain in flight may already
   // have decided "no session to deliver to" or "still running", and the caller
@@ -321,7 +326,7 @@ export function drainAgentHandoffs(sessionId: string): Promise<void> {
     rerunAfterDrain.add(sessionId);
     return existing;
   }
-  const run = drainSessionOnce(sessionId).finally(() => {
+  const run = drainSessionOnce(sessionId, admission).finally(() => {
     drainLocks.delete(sessionId);
     if (rerunAfterDrain.delete(sessionId)) void drainAgentHandoffs(sessionId);
   });
@@ -329,7 +334,10 @@ export function drainAgentHandoffs(sessionId: string): Promise<void> {
   return run;
 }
 
-async function drainSessionOnce(sessionId: string): Promise<void> {
+async function drainSessionOnce(
+  sessionId: string,
+  admission?: { driver: RuntimePromptDriver; shouldStart(): boolean },
+): Promise<void> {
   // FIRST, before anything reads the head as work owed: a row whose prompt is
   // already in its session must not be mistaken for an undelivered decision by
   // the failure paths below, which would report it abandoned to a card that has
@@ -340,7 +348,7 @@ async function drainSessionOnce(sessionId: string): Promise<void> {
   if (automaticTurnsHeld(sessionId)) return;
   const head = agentHandoffStore.next(sessionId);
   if (!head) return;
-  const driver = await resolveDriver(sessionId);
+  const driver = admission?.driver ?? (await resolveDriver(sessionId));
   if (!driver) {
     // A session that cannot be resumed is a DELIVERY failure, not a pause: it
     // produces no idle edge, so an unbudgeted wait here would re-acquire a
@@ -349,13 +357,30 @@ async function drainSessionOnce(sessionId: string): Promise<void> {
     return;
   }
   for (;;) {
-    if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
+    if (
+      admission?.shouldStart() === false ||
+      deliveryStopped ||
+      driver.isRunning ||
+      automaticTurnsHeld(sessionId)
+    )
       return;
     if (!clearDeliveredRows(sessionId)) return;
     const row = agentHandoffStore.next(sessionId);
     if (!row) return;
-    if (!(await deliverQueued(driver, row))) return;
+    if (!(await deliverQueued(driver, row, admission?.shouldStart))) return;
   }
+}
+
+/** The scheduler already tried the one shared acquisition. Keep this lane's retry policy. */
+export function agentHandoffUnavailable(sessionId: string): void {
+  if (
+    deliveryStopped ||
+    !clearDeliveredRows(sessionId) ||
+    automaticTurnsHeld(sessionId)
+  )
+    return;
+  const head = agentHandoffStore.next(sessionId);
+  if (head) failRow(head, "that session could not be resumed.");
 }
 
 /**
@@ -389,10 +414,15 @@ function clearDeliveredRows(sessionId: string): boolean {
 async function deliverQueued(
   driver: RuntimePromptDriver,
   row: AgentHandoffRecord,
+  shouldStart?: () => boolean,
 ): Promise<boolean> {
   let appended = false;
   try {
     await promptRuntimeSession(driver, row.prompt, {
+      admit: () => {
+        if (shouldStart?.() === false)
+          throw new SessionBusyError(driver.sessionId);
+      },
       ...(row.hidden ? { hidden: true } : {}),
       origin: row.origin,
       ...(row.contextBlock ? { contextBlock: row.contextBlock } : {}),
@@ -533,6 +563,9 @@ function isRuntimePromptDriver(
 export function recoverAgentHandoffsOnBoot(
   /** The age at which a handoff expires; a parameter so a test can age one. */
   ttlMs: number = HANDOFF_TTL_MS,
+  offer: (sessionId: string) => void = (sessionId) => {
+    void drainAgentHandoffs(sessionId).catch(() => {});
+  },
 ): void {
   const expired = agentHandoffStore.purgeOlderThan(ttlMs);
   if (expired.length > 0) {
@@ -547,5 +580,5 @@ export function recoverAgentHandoffsOnBoot(
       });
   }
   for (const sessionId of agentHandoffStore.queuedSessionIds())
-    void drainAgentHandoffs(sessionId).catch(() => {});
+    offer(sessionId);
 }

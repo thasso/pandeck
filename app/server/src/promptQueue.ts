@@ -44,6 +44,7 @@ import {
   readSessionAttachmentBytes,
 } from "./sessionAttachments.ts";
 import { SessionBusyError } from "./session/runtime/index.ts";
+import { wakeSessionDelivery } from "./deliveryWake.ts";
 import {
   promptRuntimeSession,
   type RuntimePromptDriver,
@@ -296,8 +297,10 @@ const rerunAfterDrain = new Set<string>();
 export function drainPromptQueue(
   sessionId: string,
   shouldStart: () => boolean = () => true,
+  driver?: QueueDriver,
 ): Promise<void> {
   if (deliveryStopped || !host) return Promise.resolve();
+  if (!driver && wakeSessionDelivery(sessionId)) return Promise.resolve();
   const authorized = () =>
     !hasExplicitRecipientAuthority(sessionId) && shouldStart();
   const existing = drainLocks.get(sessionId);
@@ -308,8 +311,10 @@ export function drainPromptQueue(
   }
   const guards = new Set([authorized]);
   drainAuthorityGuards.set(sessionId, guards);
-  const run = drainOnce(sessionId, () =>
-    [...guards].every((guard) => guard()),
+  const run = drainOnce(
+    sessionId,
+    () => [...guards].every((guard) => guard()),
+    driver,
   ).finally(() => {
     drainLocks.delete(sessionId);
     drainAuthorityGuards.delete(sessionId);
@@ -323,17 +328,23 @@ export function drainPromptQueue(
 }
 
 /** Offer every queue left over from before a restart. */
-export function drainPromptQueuesOnBoot(): void {
+export function drainPromptQueuesOnBoot(
+  offer: (sessionId: string) => void = (sessionId) => {
+    void drainPromptQueue(sessionId);
+  },
+): void {
   for (const sessionId of promptQueueStore.sessionIds())
-    if (!promptQueueStore.isPaused(sessionId)) void drainPromptQueue(sessionId);
+    if (!promptQueueStore.isPaused(sessionId)) offer(sessionId);
 }
 
 async function drainOnce(
   sessionId: string,
   shouldStart: () => boolean,
+  resolved?: QueueDriver,
 ): Promise<void> {
   if (!promptQueueHasPriority(sessionId)) return;
-  const driver = await host?.resolve(sessionId).catch(() => undefined);
+  const driver =
+    resolved ?? (await host?.resolve(sessionId).catch(() => undefined));
   // Resolution can cold-acquire a session. Callers coordinating a higher
   // priority delivery may have lost authority while that await was pending.
   if (!shouldStart()) return;
@@ -350,7 +361,7 @@ async function drainOnce(
   markSending(sessionId, head.id, true);
   try {
     if (head.command) await runQueuedCommand(driver, head, head.command);
-    else await deliverPrompt(driver, head, {});
+    else await deliverPrompt(driver, head, { shouldStart });
   } finally {
     markSending(sessionId, head.id, false);
   }
@@ -370,7 +381,7 @@ function markSending(sessionId: string, id: string, on: boolean): void {
 function deliverPrompt(
   driver: QueueDriver,
   item: QueuedPrompt,
-  options: { steer?: boolean },
+  options: { steer?: boolean; shouldStart?: () => boolean },
 ): Promise<void> {
   const { sessionId } = driver;
   let attachments: PromptAttachment[];
@@ -383,6 +394,10 @@ function deliverPrompt(
   return new Promise<void>((resolve) => {
     let accepted = false;
     const run = promptRuntimeSession(driver, item.text, {
+      admit: () => {
+        if (options.shouldStart?.() === false)
+          throw new SessionBusyError(sessionId);
+      },
       ...(attachments.length ? { attachments } : {}),
       // One identity per row: a reconnect resend or a second drain of the same
       // row is a duplicate to the runtime, never a second turn.
@@ -468,11 +483,25 @@ function loadAttachments(
   });
 }
 
+/** Interpret a shared acquisition failure without resolving the driver again. */
+export function promptQueueUnavailable(sessionId: string): void {
+  if (
+    deliveryStopped ||
+    hasExplicitRecipientAuthority(sessionId) ||
+    !promptQueueHasPriority(sessionId)
+  )
+    return;
+  const head = promptQueueStore.list(sessionId)[0];
+  if (head)
+    holdOnFailure(sessionId, head, "That session could not be resumed.", false);
+}
+
 /** Keep the row with its error and hold the queue there for the user to decide. */
 function holdOnFailure(
   sessionId: string,
   item: QueuedPrompt,
   reason: string,
+  yieldToOthers = true,
 ): void {
   if (!promptQueueStore.get(sessionId, item.id)) return;
   console.warn(`[prompt-queue] send to ${sessionId} failed:`, reason);
@@ -481,7 +510,7 @@ function holdOnFailure(
   publish(sessionId);
   // A peer drain that deferred to this row started no turn of its own; with
   // the queue held, nothing else would bring it back.
-  host?.yieldToOthers(sessionId);
+  if (yieldToOthers) host?.yieldToOthers(sessionId);
 }
 
 /** An empty queue has nothing left to hold, and owes the next edge to nobody. */

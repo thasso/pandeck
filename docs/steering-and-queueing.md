@@ -80,26 +80,10 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   another device is refused and a clear keeps it. Send-now steers it into a
   running turn that takes steering, and otherwise moves it to the front and
   sends it as soon as the session is idle.
-- **One per idle edge, the user first.** The idle chain delivers agent handoffs
-  (decisions the agent may be blocked on), then this queue, then peer prompts
-  and background completions, and LAST a reminder of the peer requests the
-  session has not answered (`app/server/src/idleEdge.ts`). The reminder waits
-  for the background step to settle and gives way to anything above that is owed
-  when its turn is admitted, offering the edge again afterwards; a deferred
-  background fact rides it like any other turn. A peer drain started by any
-  other trigger defers while a queued message is owed
-  (`promptQueueHasPriority`). A send counts once its user entry is appended, so
-  the drain returns before the turn ends and every later step sees a busy
-  session. Two drains await a turn instead, and that turn's idle edge joins a
-  drain already past its peer read: a background completion's (its own turn, or
-  a running one its steer joins, or one it ends up declined by), and the peer
-  drain's notice turn, which comes after its FIFO. So a background drain asked
-  for again after its peer step runs once more after it, and a peer prompt sent
-  while its recipient's drain is in flight drains once more when that drain
-  ends, as an owed notice already did. Without both, a reply that arrived during
-  such a turn waited for an unrelated wake ([Task-973](pa://task/973)). A reply
-  reminder holds the recipient's drain lock as a reservation, and its release
-  drains again.
+- **One per pass, the user first.** The per-session delivery scheduler offers
+  handoffs, this queue, peer FIFO, peer notices, background completions, then
+  eligible reply reminders. Starting a turn ends the pass at its append. A steer
+  does not. See [Delivery scheduler](#delivery-scheduler).
 - **Stop means stop.** Stopping a turn that has messages queued pauses the queue
   (`session_prompt_queue_pause`), so its idle edge sends nothing. Sending a
   message of their own or "Send next" lifts the pause. A Stop also holds the
@@ -114,8 +98,8 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   retry or remove, rather than being dropped. The paused queue then hands the
   idle edge on (peer prompts, background completions; never the reply reminder,
   which waits for a real idle edge), since a peer drain that deferred to it
-  started no turn of its own. That hand-off is a `requestDrain`, which runs once
-  more after a drain already in flight rather than being swallowed by it.
+  started no turn of its own. That hand-off is a scheduler wake, which marks
+  another pass if delivery is already in flight.
 - **Commands.** A queued host slash command (`/compact`, `/commit`) is stored
   with `command` and runs through the same host-command runner when its turn
   comes, under the same worktree guard as a typed one. It leaves the queue only
@@ -132,6 +116,54 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
 
 The permanent Assistant has its own intake queue and does not offer this one; it
 only shares the Stop hold and its Resume.
+
+### Delivery scheduler
+
+`deliveryScheduler.ts` owns one admission gate per session. Producers call
+`wake(sessionId)` without a payload. A wake during a pass marks another pass
+from the top, including an arrival after a lane's read point. Wakes coalesce,
+but never disappear into a pass that has already read the old state.
+
+Each pass runs the auto-approval pre-pass before checking Stop. It executes
+session-granted cards only while idle, even under Stop, and only queues their
+handoffs. The lanes then run in order: handoffs, user queue, peer FIFO, peer
+notices, background completions, reminders. Workflow assignments are not yet a
+lane, see [Task-1054](pa://task/1054).
+
+A lane exposes a cheap `owes(sessionId)` without opening a harness, and
+`deliver(session)`. The scheduler acquires a cold session once, only when work
+is owed. An optional `unavailable(sessionId, failure)` hook receives a failed
+acquisition once per owed lane per pass, without another acquisition or a new
+scheduler retry loop. It distinguishes a thrown acquisition error from an
+unavailable or unpromptable result. Handoffs retain their retry budget and
+timer; the user queue pauses its row; peer FIFO records its retry while peer
+notices schedule their own retry. Background errors retain pending facts; an
+unavailable driver gives up the in-memory batch without retiring its durable
+outbox debt. The scheduler checks shutdown, Stop-held, released, promptable and
+running state for the pass. While running, it asks only lanes whose delivery may
+join a running turn, and only if the driver can steer. Today only the background
+wake lane joins running turns. Deferred background facts stay inside that lane
+and ride the next prompt's model-only context.
+
+A new turn ends the pass; a steer does not. A failure before append is logged
+and the next lane is offered. Each lane keeps its own table, rendering,
+batching, retry, recovery and outcome interpretation. The current adapters
+observe the existing append hook and fence subsequent claims in a drain. Before
+a new idle admission, they await earlier admitted drains' settlement across all
+lanes, including a background drain's peer phase. A fenced drain therefore
+cannot consume a fresh offer or let a lower-priority lane overtake it. Running
+joinable offers do not wait for the turn they may steer. This adds no debt-based
+retry loop. The adapters do not implement runtime receipts, which are
+[Task-1051](pa://task/1051). Private drain locks, rerun markers and cross-path
+yield checks remain until [Task-1053](pa://task/1053).
+
+Only a real idle edge, Resume or a reminder's own re-offer enables the reminder
+lane, which never cold-acquires a session. Queue failures and removals wake the
+scheduler without enabling reminders. Boot first prepares recovered rows, then
+offers every owed session through the same scheduler, ordered within a session
+and parallel across sessions. There is no boot ordering exception and no boot
+reminder. Permanent-assistant intake, explicit send-now authority and direct
+host-command turns retain their own admission paths.
 
 ### Peer prompts in the queue
 

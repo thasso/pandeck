@@ -208,7 +208,6 @@ import {
   drainRecipient,
   installDelegationFailureNotices,
   installReplyReminders,
-  offerReplyReminders,
   recoverPeerPromptsOnBoot,
   RETRY_SWEEP_INTERVAL_MS,
   runPeerPromptRetention,
@@ -224,7 +223,6 @@ import {
 } from "./heldDirectPeers.ts";
 import {
   agentHandoffOwed,
-  drainAgentHandoffs,
   recoverAgentHandoffsOnBoot,
   stopAgentHandoffDelivery,
 } from "./agentHandoffs.ts";
@@ -233,7 +231,6 @@ import {
   setAutomaticTurnHoldHost,
 } from "./automaticTurnHold.ts";
 import {
-  drainPromptQueue,
   drainPromptQueuesOnBoot,
   publishPromptQueue,
   setPromptQueueHost,
@@ -244,7 +241,9 @@ import {
   recoverAutoApprovalsOnBoot,
   runAutoApprovals,
 } from "./pendingApprovals.ts";
-import { createIdleEdge } from "./idleEdge.ts";
+import { createDeliveryScheduler } from "./deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
+import { sessionDeliveryLanes } from "./sessionDeliveryLanes.ts";
 import {
   setHumanPromptHook,
   setSessionIdleHook,
@@ -341,7 +340,14 @@ async function acquirePromptDriver(
 }
 
 const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
-  drainPeers: (sessionId) => drainRecipient(sessionId),
+  drainPeers: (sessionId, admission) => {
+    const live = hub.getLiveById(sessionId);
+    return drainRecipient(sessionId, {
+      phase: "all",
+      ...(isPromptQueueDriver(live) ? { driver: live } : {}),
+      ...admission,
+    });
+  },
   queueChanged: (sessionId) => backgroundUpdateQueueChanged(sessionId),
   held: (sessionId) => automaticTurnsHeld(sessionId),
   offer: offerBackgroundCompletion(acquirePromptDriver),
@@ -2018,26 +2024,32 @@ server.listen(PORT, HOST, () => {
         `[background] ${deleted.blockedOwners} deleted session(s) still own live background work; left as members`,
       );
   });
-  // What an idle session is offered, in order (`idleEdge.ts`).
-  // BOOT is deliberately not sequenced this tightly (see below): both
-  // recoveries start their own async work, so a peer prompt can still win the
-  // first turn there. The cost is one turn of ordering for a session that
-  // happens to owe both, and paying for it would mean holding every other
-  // session's peer delivery behind a handoff turn that can run for minutes.
-  const idleEdge = createIdleEdge({
-    runAutoApprovals,
-    drainAgentHandoffs,
-    drainPromptQueue: (sessionId) => drainPromptQueue(sessionId),
-    drainBackground: (sessionId, rerun) =>
-      rerun
-        ? backgroundCompletionDelivery.requestDrain(sessionId)
-        : backgroundCompletionDelivery.drain(sessionId),
-    offerReplyReminders,
+  const deliveryScheduler = createDeliveryScheduler({
+    ...sessionDeliveryLanes(backgroundCompletionDelivery),
+    runAutoApprovals: (sessionId) => runAutoApprovals(sessionId, false),
+    live: (sessionId) => {
+      const live = hub.getLiveById(sessionId);
+      return isPromptQueueDriver(live) ? live : undefined;
+    },
+    acquire: async (sessionId) => {
+      const live = await hub.acquireById(sessionId);
+      return isPromptQueueDriver(live) ? live : undefined;
+    },
+    held: automaticTurnsHeld,
+    shutdown: () => shutdownRequested,
+    // Lanes retain their diagnostic state. Never log a provider's raw words.
+    reportError: (sessionId, lane) =>
+      console.warn(`[delivery] ${lane} for ${sessionId} failed`),
+  });
+  setDeliveryWake((sessionId) => {
+    void deliveryScheduler.wake(sessionId);
   });
   setReplyReminderHost({
     handoffOwed: agentHandoffOwed,
     wakeOwed: (sessionId) => backgroundCompletionDelivery.wakeOwed(sessionId),
-    requestIdleEdge: (sessionId) => idleEdge.offer(sessionId),
+    requestIdleEdge: (sessionId) => {
+      void deliveryScheduler.offerReminders(sessionId);
+    },
   });
   setPromptQueueHost({
     resolve: async (sessionId) => {
@@ -2052,8 +2064,10 @@ server.listen(PORT, HOST, () => {
     publish: (sessionId, queue) => hub.broadcastPromptQueue(sessionId, queue),
     reportError: (sessionId, message) =>
       hub.reportSessionError(sessionId, message),
-    // The idle chain's tail: what waited behind the queue.
-    yieldToOthers: (sessionId) => idleEdge.offerAfterQueue(sessionId),
+    // A queue failure or removal is a wake, never a reminder opportunity.
+    yieldToOthers: (sessionId) => {
+      void deliveryScheduler.wake(sessionId);
+    },
   });
   setHumanPromptHook(
     // Every human prompt closes its session's peer chains. No prompt changes
@@ -2063,15 +2077,19 @@ server.listen(PORT, HOST, () => {
   setSessionIdleHook((sessionId) => {
     // A direct child that went idle may free its coordinator's slot.
     nudgeHeldStartsForChild(sessionId);
-    idleEdge.offer(sessionId);
+    void deliveryScheduler.offerReminders(sessionId);
   });
   setAutomaticTurnHoldHost({
     changed: (sessionId) => publishPromptQueue(sessionId),
     resumed: (sessionId) => {
-      idleEdge.offer(sessionId, true);
+      void deliveryScheduler.offerReminders(sessionId);
       resumePermanentAssistantIntake(sessionId);
     },
   });
+  const bootSessions = new Set<string>();
+  const offerOnBoot = (sessionId: string): void => {
+    bootSessions.add(sessionId);
+  };
   bootStep("owed background delivery", () => {
     // After reconciliation (each notice reads its row as it ended) and after
     // the idle chain is wired: a fact released before the restart is offered
@@ -2079,19 +2097,30 @@ server.listen(PORT, HOST, () => {
     // it is delivered; nothing else does. Still inside the synchronous listen
     // callback, before anything this process prompts: every claimed or bound
     // row it finds belongs to a process that is gone.
-    const outbox = restoreOwedBackgroundDelivery(backgroundCompletionDelivery);
+    const outbox = restoreOwedBackgroundDelivery(
+      backgroundCompletionDelivery,
+      offerOnBoot,
+    );
     if (outbox.restored > 0 || outbox.forgotten > 0 || outbox.interrupted > 0)
       console.log(
         `[background] restored ${outbox.restored} owed completion(s) of stopped sessions; forgot ${outbox.forgotten}; ${outbox.interrupted} session(s) have handling cut off by the restart`,
       );
   });
-  // Offered in the same order as the idle edge, though only offered: both
-  // calls return once their per-session work is in flight, so this is a
-  // priority, not a sequence (see the idle hook above).
-  bootStep("auto-approval recovery", () => recoverAutoApprovalsOnBoot());
-  bootStep("agent-handoff recovery", () => recoverAgentHandoffsOnBoot());
-  bootStep("prompt-queue drain", () => drainPromptQueuesOnBoot());
-  bootStep("peer-prompt drain", () => drainAllQueuedOnBoot());
+  // Recovery prepares rows synchronously before any session's pass starts.
+  // Each chain is ordered, but no session waits on another session's turn.
+  bootStep("auto-approval recovery", () =>
+    recoverAutoApprovalsOnBoot(offerOnBoot),
+  );
+  bootStep("agent-handoff recovery", () =>
+    recoverAgentHandoffsOnBoot(undefined, offerOnBoot),
+  );
+  bootStep("prompt-queue recovery", () => drainPromptQueuesOnBoot(offerOnBoot));
+  bootStep("peer-prompt recovery offers", () =>
+    drainAllQueuedOnBoot(offerOnBoot),
+  );
+  bootStep("session delivery", () => {
+    void deliveryScheduler.boot(bootSessions);
+  });
   // After recovery and the idle wiring: children that waited for a slot across
   // the restart start as the surviving work allows.
   bootStep("held direct peer starts", () => startHeldDirectPeersOnBoot());
