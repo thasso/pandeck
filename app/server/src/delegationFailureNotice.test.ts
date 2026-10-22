@@ -2380,6 +2380,78 @@ function assertNothingHostileIn(calls: unknown[][]): void {
     assert.equal(logged.includes(secret), false, `logged: ${secret}`);
 }
 
+describe("notice retry after exposure", () => {
+  it("keeps six bounded attempts when retirement fails and the appended run then fails", async () => {
+    const peer = await import("./peerPrompt.ts");
+    const { id: coord, driver } = coordinator();
+    const child = piChild(coord);
+    const record = (runId: string) =>
+      recordRunFailureNotices({
+        sessionId: child.sessionId,
+        runId,
+        origin: BACKGROUND,
+        errorMessage: QUOTA,
+        failure: { kind: "quota" },
+        at: Date.now(),
+      });
+    record("double-failure");
+    driver.behavior = { mode: "error", message: "503 Service Unavailable" };
+    const retire = vi
+      .spyOn(delegationFailureNoticeStore, "markDelivered")
+      .mockImplementation(() => {
+        throw new Error("retirement refused");
+      });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    peer.setInterruptionNoticeRetryDelayForTests(1_000);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 1);
+      assert.equal(
+        vi.getTimerCount(),
+        1,
+        "a failed receipt retains the lane timer despite failed retirement",
+      );
+      // Runtime self idle and ordinary producers cannot bypass the timer.
+      await delivery.wake(coord);
+      await vi.advanceTimersByTimeAsync(999);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 1);
+      await vi.advanceTimersByTimeAsync(1);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 2);
+      // A new producer intentionally re-offers but must not replenish the budget.
+      record("new-notice-during-backoff");
+      wakeForNotice([coord]);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 3);
+      for (let expected = 4; expected <= 6; expected++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await delivery.drain(coord);
+        assert.equal(noticesIn(coord).length, expected);
+      }
+      assert.equal(vi.getTimerCount(), 0, "the automatic budget is exhausted");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await delivery.drain(coord);
+      assert.equal(noticesIn(coord).length, 6);
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 2);
+      // Public re-offers remain possible after exhaustion and retire recovered debt.
+      retire.mockRestore();
+      driver.behavior = { mode: "success" };
+      await drainRecipient(coord);
+      assert.equal(noticesIn(coord).length, 7);
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+    } finally {
+      retire.mockRestore();
+      warning.mockRestore();
+      setPeerPromptDeliveryStoppedForTests(true);
+      setPeerPromptDeliveryStoppedForTests(false);
+      peer.setInterruptionNoticeRetryDelayForTests(undefined);
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("nothing the provider said reaches a log line", () => {
   it.each(["public re-offer", "new notice", "boot"] as const)(
     "probes failed-retirement exits: %s",

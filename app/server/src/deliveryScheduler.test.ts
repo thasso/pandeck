@@ -279,6 +279,43 @@ test("scheduler contract: persistent earlier debt blocks reminders without a re-
   assert.equal(f.debts.size, 2);
 });
 
+test.each(["pending", "exhausted"] as const)(
+  "scheduler contract: %s retry debt retains priority without becoming an offer or cold acquisition",
+  async () => {
+    const f = fixture();
+    const notices = f.lanes.find((lane) => lane.name === "peer notices")!;
+    notices.offerable = () => false;
+    f.debts.add("peer notices:cold");
+    await f.scheduler.wake("cold");
+    assert.deepEqual(f.cold, []);
+    f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+    f.debts.add("peer notices:s");
+    f.debts.add("reminders:s");
+    const remind = f.reminder.deliver;
+    f.reminder.deliver = async (_session, checkAdmission) => {
+      assert.equal(checkAdmission(), "earlier-debt");
+      return "none";
+    };
+    await f.scheduler.offerReminders("s");
+    await f.scheduler.wake("s");
+    assert.deepEqual(f.delivered(), [
+      "approvals:cold",
+      "approvals:s",
+      "approvals:s",
+    ]);
+    assert.equal(f.errors.length, 0);
+    notices.offerable = () => true;
+    await f.scheduler.wake("s");
+    assert.equal(f.delivered().at(-1), "peer notices:s");
+    // An ordinary producer never makes a reminder eligible on its own.
+    await f.scheduler.wake("s");
+    assert.ok(f.debts.has("reminders:s"));
+    f.reminder.deliver = remind;
+    await f.scheduler.offerReminders("s");
+    assert.equal(f.delivered().at(-1), "reminders:s");
+  },
+);
+
 test.each(["peer notices", "background", "reminders"])(
   "scheduler contract: a peer notice arriving after the %s read survives without another event",
   async (name) => {
@@ -401,10 +438,9 @@ test.each(["self only", "self then other", "other then self"] as const)(
       return "none";
     };
     const identities: Array<string | undefined> = [];
-    f.lanes.find((lane) => lane.name === "peer notices")!.owes = (
-      _id,
-      runId,
-    ) => {
+    const notices = f.lanes.find((lane) => lane.name === "peer notices")!;
+    notices.owes = () => true;
+    notices.offerable = (_id, runId) => {
       identities.push(runId);
       return false;
     };

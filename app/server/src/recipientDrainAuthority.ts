@@ -33,11 +33,11 @@ export async function withExplicitRecipientAuthority<T>(
   }
 }
 
-export function markExplicitRecipientWaiter(sessionId: string): void {
+function markExplicitRecipientWaiter(sessionId: string): void {
   waiters.set(sessionId, (waiters.get(sessionId) ?? 0) + 1);
 }
 
-export function releaseExplicitRecipientWaiter(sessionId: string): void {
+function releaseExplicitRecipientWaiter(sessionId: string): void {
   const remaining = (waiters.get(sessionId) ?? 1) - 1;
   if (remaining > 0) waiters.set(sessionId, remaining);
   else waiters.delete(sessionId);

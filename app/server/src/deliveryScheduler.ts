@@ -6,7 +6,8 @@ export interface DeliverySession {
   readonly released?: boolean;
 }
 
-export type DeliveryResult = "none" | "turn" | "steer";
+/** Deferred admission waits for explicit-send authority's release wake. */
+export type DeliveryResult = "none" | "turn" | "steer" | "deferred";
 type DeliveryAdmissionFailure =
   | "shutdown"
   | "held"
@@ -25,7 +26,9 @@ export interface DeliveryLane<Session extends DeliverySession> {
   readonly name: string;
   readonly mayJoinRunningTurn: boolean;
   /** Cheap and harness-free. */
-  owes(sessionId: string, endedRunId?: string): boolean;
+  owes(sessionId: string): boolean;
+  /** Lane-owned retry/self-edge policy, separate from priority debt. */
+  offerable?(sessionId: string, endedRunId?: string): boolean;
   deliver(
     session: Session,
     checkAdmission: DeliveryAdmissionCheck,
@@ -121,7 +124,8 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
     const owed = lanes.filter(
       (lane) =>
         (!state.running || (state.canSteer && lane.mayJoinRunningTurn)) &&
-        lane.owes(sessionId, endedRunId),
+        lane.owes(sessionId) &&
+        lane.offerable?.(sessionId, endedRunId) !== false,
     );
     if (owed.length === 0) return;
     if (!session) {
@@ -184,6 +188,13 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
       } catch (error) {
         // A lane owns retries. One refused delivery must not block the others.
         options.reportError(sessionId, lane.name, error);
+      }
+      if (result === "deferred") {
+        // Authority may fence an earlier lane before we reach reminders, or
+        // arrive during reminder preparation. Keep only an existing idle offer.
+        // Release supplies the wake; retained eligibility must not spin itself.
+        if (withReminder) reminders.add(sessionId);
+        return;
       }
       state = sharedChecks(sessionId, session);
       if (result === "turn" || !state.admissible) return;

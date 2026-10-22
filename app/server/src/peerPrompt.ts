@@ -1078,8 +1078,13 @@ async function drainRecipientOnce(
   await deliverOwedNotices(driver, recipientId, admission.shouldStart);
 }
 
-/** Whether a session is owed a server-generated notice of either kind. */
-export function peerNoticeOwed(
+/** Priority debt persists even while the lane's retry policy delays its offer. */
+export function peerNoticeOwed(sessionId: string): boolean {
+  return owesNotice(sessionId);
+}
+
+/** Only automatic offer eligibility consumes the precise self idle edge. */
+export function peerNoticeOfferable(
   sessionId: string,
   endedRunId?: string,
 ): boolean {
@@ -1090,9 +1095,7 @@ export function peerNoticeOwed(
     failedRetirementRuns.delete(sessionId);
     return false;
   }
-  return (
-    noticeRetries.get(sessionId)?.eligible !== false && owesNotice(sessionId)
-  );
+  return noticeRetries.get(sessionId)?.eligible !== false;
 }
 
 export function peerFifoOwed(sessionId: string): boolean {
@@ -1172,7 +1175,6 @@ async function deliverOwedNotices(
     const delegated = deliverableNotices(sessionId);
     if (owed.length === 0 && delegated.length === 0) return;
     const ids = delegated.map((n) => n.id).join();
-    let retirementFailed = false;
     try {
       // The notice turn continues the causal chain it reports on, so a sender
       // that re-asks or forwards in response spends the same hop budget. A
@@ -1216,12 +1218,10 @@ async function deliverOwedNotices(
           );
           failedRetirementRuns.delete(sessionId);
         } catch (err) {
-          retirementFailed = true;
           // The receipt names the run that opened this notice. Never absorb a
           // later unrelated wake, including one coalesced with this self edge.
           if (event.append.runId)
             failedRetirementRuns.set(sessionId, event.append.runId);
-          clearInterruptionNoticeRetry(sessionId);
           console.warn(
             `[peer] could not retire failure notices for ${sessionId} (${failureLabel(err)}); exposed debt absorbs its own run's idle edge once, then reoffers on later wakes`,
           );
@@ -1230,7 +1230,9 @@ async function deliverOwedNotices(
       await receipt;
       // Only an accepted turn consumes the interruption notice.
       peerPromptStore.markSenderNotified(owed.map((m) => m.id));
-      if (!retirementFailed) clearInterruptionNoticeRetry(sessionId);
+      // Success keeps the existing failed-retirement self-edge policy. A run
+      // that rejects instead must retain its attempts across retirement failures.
+      clearInterruptionNoticeRetry(sessionId);
       return;
     } catch (err) {
       if (err instanceof NoticeSetChangedError) continue;
@@ -1247,8 +1249,7 @@ async function deliverOwedNotices(
       console.warn(
         `[peer] notice for ${sessionId} was not delivered (${failureLabel(err)}); retrying later`,
       );
-      if (!retirementFailed && owesNotice(sessionId))
-        scheduleInterruptionNoticeRetry(sessionId);
+      if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
       return;
     } finally {
       activeContexts.delete(sessionId);

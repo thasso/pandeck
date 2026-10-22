@@ -141,26 +141,30 @@ session-granted cards only while idle, even under Stop, and only queues their
 handoffs. The lanes then run in order: handoffs, user queue, workflow
 assignments, peer FIFO, peer notices, background completions, reminders.
 
-A lane exposes a cheap `owes(sessionId)` without opening a harness, and
-`deliver(session)`. The scheduler acquires a cold session once, only when work
-is owed. An optional `unavailable(sessionId, failure)` hook receives a failed
-acquisition once per owed lane per pass, without another acquisition or a new
-scheduler retry loop. It distinguishes a thrown acquisition error from an
-unavailable or unpromptable result. Handoffs retain their retry budget and
-timer; the user queue pauses its row; peer FIFO records its retry while peer
-notices schedule their own retry. Background errors retain pending facts; an
-unavailable driver gives up the in-memory batch without retiring its durable
-outbox debt. Workflow acquisition failures pause the run with its reservation
-still pending. One scheduler-owned shared-check function evaluates shutdown,
-Stop-held, released, promptable and running state. It re-evaluates after each
-admission await: earlier settlement, the auto-approval pre-pass, cold
-acquisition and each lane delivery, including a rejection. It also runs
-immediately before each lane delivery. "Once per pass" means one owner, not one
-snapshot that stays valid across awaits. Auto-approvals still run under Stop; a
-shutdown during their await prevents lane admission. A successful acquisition
-after Stop, release or shutdown leaves the debt untouched. Failed acquisition
-still goes to the lanes' failure-accounting hooks, which cannot admit a
-delivery. Their Stop/shutdown accounting guards remain in place.
+A lane exposes cheap priority debt through `owes(sessionId)` without opening a
+harness, and `deliver(session)`. Optional `offerable(sessionId, endedRunId)`
+keeps lane retry and self-idle policy separate from that debt. The scheduler
+acquires a cold session once, only when work is both owed and offerable. A
+notice in backoff or with an exhausted budget still precedes reminders, without
+creating a retry wake or cold acquisition. An optional
+`unavailable(sessionId, failure)` hook receives a failed acquisition once per
+owed lane per pass, without another acquisition or a new scheduler retry loop.
+It distinguishes a thrown acquisition error from an unavailable or unpromptable
+result. Handoffs retain their retry budget and timer; the user queue pauses its
+row; peer FIFO records its retry while peer notices schedule their own retry.
+Background errors retain pending facts; an unavailable driver gives up the
+in-memory batch without retiring its durable outbox debt. Workflow acquisition
+failures pause the run with its reservation still pending. One scheduler-owned
+shared-check function evaluates shutdown, Stop-held, released, promptable and
+running state. It re-evaluates after each admission await: earlier settlement,
+the auto-approval pre-pass, cold acquisition and each lane delivery, including a
+rejection. It also runs immediately before each lane delivery. "Once per pass"
+means one owner, not one snapshot that stays valid across awaits. Auto-approvals
+still run under Stop; a shutdown during their await prevents lane admission. A
+successful acquisition after Stop, release or shutdown leaves the debt
+untouched. Failed acquisition still goes to the lanes' failure-accounting hooks,
+which cannot admit a delivery. Their Stop/shutdown accounting guards remain in
+place.
 
 While running, the scheduler asks only lanes whose delivery may join a running
 turn, and only if the driver can steer. A new running turn or lost steering
@@ -208,17 +212,25 @@ notice is ineligible while its bounded retry timer is pending or exhausted. Its
 own idle wake and unrelated producer wakes cannot bypass that backoff. The timer
 re-enables one offer. An intentional public peer re-offer can try during backoff
 or after exhaustion, as before, without replenishing the automatic budget; a new
-notice can re-offer too. Only accepted delivery resets that budget. An exposed
-notice whose durable retirement fails absorbs only its own idle edge once,
-matched against the run named by its receipt's append rather than timing. Any
-later wake, including unrelated incoming work or a wake coalesced with that self
-edge, re-offers it as before. Public re-offer, new notices, and boot also retain
-that behavior. Retirement failures remain visible without provider-controlled
-error text. The at-least-once retirement window remains. Background keeps the
-outbox phases, deferred facts and rendering cap; leftover capped facts wake the
+notice can re-offer too. A successful notice run resets that budget. If durable
+retirement fails and the appended run then rejects, the lane retains its bounded
+timer and attempts, for six automatic attempts in total. This preserves the
+former private drain's bounded retry policy instead of the production scheduler
+base's unbounded self-idle retries. An exposed notice whose run succeeds but
+whose durable retirement fails absorbs only its own idle edge once, matched
+against the run named by its receipt's append rather than timing. Any later
+wake, including unrelated incoming work or a wake coalesced with that self edge,
+re-offers it as before. Public re-offer, new notices, and boot also retain that
+behavior. Retirement failures remain visible without provider-controlled error
+text. The at-least-once retirement window remains. Background keeps the outbox
+phases, deferred facts and rendering cap; leftover capped facts wake the
 scheduler again. It never drains peers itself. Direct inline handoffs and
 explicit send-now keep their own authority. Explicit peer sends serialize only
-other explicit sends, while their waiters fence automatic claims.
+other explicit sends, while their waiters fence automatic claims. An adapter
+reports that refusal as `deferred`; the scheduler retains any existing real-idle
+reminder eligibility until authority release wakes it again. That release does
+not enable reminders if no qualifying offer arrived, and retained eligibility
+never schedules a wake on its own.
 
 Workflow assignments to an existing role session use this lane, including idle
 and restart offers. `owes` reads pending reservation state without a harness.

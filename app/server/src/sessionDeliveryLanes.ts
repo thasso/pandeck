@@ -15,6 +15,7 @@ import {
   offerReplyReminders,
   peerFifoOwed,
   peerNoticeOwed,
+  peerNoticeOfferable,
   noteDrainTargetUnavailable,
   replyReminderOwed,
 } from "./peerPrompt.ts";
@@ -44,8 +45,9 @@ function createDeliver() {
     peer = false,
   ): Promise<DeliveryResult> {
     const id = session.sessionId;
-    if (hasExplicitRecipientAuthority(id)) return "none";
+    if (hasExplicitRecipientAuthority(id)) return "deferred";
     let appended = false;
+    let deferred = false;
     const running = session.isRunning;
     let onAppend!: (result: DeliveryResult) => void;
     const admitted = new Promise<DeliveryResult>((resolve) => {
@@ -60,7 +62,11 @@ function createDeliver() {
     const drained = Promise.resolve()
       .then(() =>
         drain(() => {
-          if (appended || hasExplicitRecipientAuthority(id)) return false;
+          if (appended) return false;
+          if (hasExplicitRecipientAuthority(id)) {
+            deferred = true;
+            return false;
+          }
           const failure = checkAdmission();
           // Preserve the facade's released-driver failure accounting for peers.
           // Other admission refusals return the claim without spending a retry.
@@ -71,7 +77,7 @@ function createDeliver() {
           return failure === undefined;
         }),
       )
-      .then<DeliveryResult>(() => "none")
+      .then<DeliveryResult>(() => (deferred ? "deferred" : "none"))
       .finally(() => {
         unsubscribe();
       });
@@ -134,6 +140,7 @@ export function sessionDeliveryLanes(
         name: `peer ${phase}`,
         mayJoinRunningTurn: false,
         owes: phase === "fifo" ? peerFifoOwed : peerNoticeOwed,
+        ...(phase === "notices" ? { offerable: peerNoticeOfferable } : {}),
         unavailable: (id: string, failure: DeliveryAcquisitionFailure) =>
           noteDrainTargetUnavailable(id, failure.reason, phase),
         deliver: (

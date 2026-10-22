@@ -462,26 +462,31 @@ describe("reply reminders", () => {
       assert.equal(userTexts(me).length, 0);
     });
 
-    it("keeps reminder debt and count when explicit send-now starts waiting during preparation", async () => {
+    it("retains the real idle offer when explicit send-now starts waiting during preparation", async () => {
       const me = seed("Yielding");
       const request = openRequest(seed("Asker"), me, "question");
-      const { markExplicitRecipientWaiter, releaseExplicitRecipientWaiter } =
+      const { withExplicitRecipientAuthority } =
         await import("./recipientDrainAuthority.ts");
       const gate = gatePreparation();
       const offer = offerReplyReminders(me);
       await gate.atGate;
-      markExplicitRecipientWaiter(me);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const explicit = withExplicitRecipientAuthority(me, () => held);
       gate.open();
       try {
         await offer;
         assert.equal(reminders(me).length, 0);
         assert.equal(count(request.id), 0);
       } finally {
-        releaseExplicitRecipientWaiter(me);
+        release();
+        await explicit;
       }
-      await offerReplyReminders(me);
+      // Only authority release wakes again. Do not manually re-offer reminders.
+      await until(() => count(request.id) === 1, "retained reminder");
       assert.equal(reminders(me).length, 1);
-      assert.equal(count(request.id), 1);
     });
 
     it("does not give way to a card nobody has decided", async () => {
@@ -517,6 +522,161 @@ describe("reply reminders", () => {
       assert.equal(count(r.id), 1);
     });
   });
+
+  it("retains the reminder from an explicit send-now turn's real idle edge", async () => {
+    const me = seed("Recipient");
+    const request = openRequest(seed("Asker"), me, "question");
+    driverFor(me);
+    const { hasExplicitRecipientAuthority } =
+      await import("./recipientDrainAuthority.ts");
+    const authorities: boolean[] = [];
+    setSessionIdleHook((id, runId) => {
+      if (id !== me) return;
+      authorities.push(hasExplicitRecipientAuthority(id));
+      void delivery.offerReminders(id, runId);
+    });
+    const queued = await sendPeerPrompt({
+      senderSessionId: seed("Other"),
+      targetSessionId: me,
+      prompt: "do this now",
+      responseRequested: false,
+    });
+    await peer.sendQueuedPeerPromptNow(me, queued.card.messageKey);
+    await until(() => count(request.id) === 1, "send-now idle reminder");
+    assert.equal(
+      authorities[0],
+      true,
+      "idle preceded explicit authority release",
+    );
+    assert.equal(reminders(me).length, 1);
+  });
+
+  it("carries one real idle offer through queued explicit sends", async () => {
+    const me = seed("Reserved");
+    const request = openRequest(seed("Asker"), me, "question");
+    driverFor(me);
+    const { withExplicitRecipientAuthority } =
+      await import("./recipientDrainAuthority.ts");
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let secondEntered!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondGate = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      secondEntered = resolve;
+    });
+    const first = withExplicitRecipientAuthority(me, () => firstGate);
+    const second = withExplicitRecipientAuthority(me, async () => {
+      secondEntered();
+      await secondGate;
+    });
+    try {
+      await offerReplyReminders(me);
+      assert.equal(count(request.id), 0);
+      releaseFirst();
+      await first;
+      await entered;
+      await delivery.wake(me);
+      assert.equal(
+        count(request.id),
+        0,
+        "the next explicit choice still fences admission",
+      );
+    } finally {
+      releaseFirst();
+      releaseSecond();
+      await Promise.all([first, second]);
+    }
+    await until(
+      () => count(request.id) === 1,
+      "queued authority release reminder",
+    );
+    assert.equal(reminders(me).length, 1);
+  });
+
+  it("does not invent reminder eligibility on an explicit authority release", async () => {
+    const me = seed("No idle offer");
+    const request = openRequest(seed("Asker"), me, "question");
+    driverFor(me);
+    const { withExplicitRecipientAuthority } =
+      await import("./recipientDrainAuthority.ts");
+    await withExplicitRecipientAuthority(me, async () => {});
+    await delivery.drain(me);
+    assert.equal(count(request.id), 0);
+    assert.equal(reminders(me).length, 0);
+  });
+
+  it.each(["pending", "exhausted"] as const)(
+    "keeps %s notice debt ahead of a real idle reminder without spinning",
+    async (retry) => {
+      const me = seed("Notice before reminder");
+      const request = openRequest(seed("Asker"), me, "due reply");
+      const child = seed("Failed recipient");
+      const chainId = peerPromptStore.createChain();
+      const message = peerPromptStore.enqueue({
+        conversationId: `priority-${n++}`,
+        chainId,
+        hop: peerPromptStore.reserveHop(chainId),
+        senderSessionId: me,
+        recipientSessionId: child,
+        prompt: "interrupted work",
+        responseRequested: true,
+        senderLabel: "Recipient",
+      });
+      peerPromptStore.claimNext(child, "test", 60_000);
+      peerPromptStore.markAdmitted(message.id);
+      peerPromptStore.markInterrupted(
+        message.id,
+        "provider failure",
+        "failure",
+      );
+      const driver = driverFor(me);
+      driver.behavior = { mode: "error", message: "503 Service Unavailable" };
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      peer.setInterruptionNoticeRetryDelayForTests(1_000);
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        await delivery.drain(me);
+        if (retry === "exhausted") {
+          for (let i = 0; i < 5; i++) {
+            await vi.advanceTimersByTimeAsync(1_000);
+            await delivery.drain(me);
+          }
+        }
+        const before = driver.promptOptions.length;
+        assert.equal(before, retry === "pending" ? 1 : 6);
+        assert.equal(vi.getTimerCount(), retry === "pending" ? 1 : 0);
+        await offerReplyReminders(me);
+        await delivery.drain(me);
+        assert.equal(
+          driver.promptOptions.length,
+          before,
+          "no notice backoff bypass or debt spin",
+        );
+        assert.equal(
+          count(request.id),
+          0,
+          "notice retains priority even when not offerable",
+        );
+        // Clear the notice and offer a real idle edge as a positive control.
+        peerPromptStore.markSenderNotified([message.id]);
+        driver.behavior = { mode: "success" };
+        await offerReplyReminders(me);
+        assert.equal(reminders(me).length, 1);
+        assert.equal(count(request.id), 1);
+      } finally {
+        peer.setPeerPromptDeliveryStoppedForTests(true);
+        peer.setPeerPromptDeliveryStoppedForTests(false);
+        peer.setInterruptionNoticeRetryDelayForTests(undefined);
+        warning.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("speaks in the deepest request's chain, spends no hop, and a plain reply answers it", async () => {
     const me = seed("Answering");
