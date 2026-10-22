@@ -330,6 +330,56 @@ test("rejects audio before accepted, odd PCM, oversized frames and accelerated u
   assert.equal(fast.ws.closeCode, 1008);
 });
 
+test("F2: sparse keepalives cannot bank more than two seconds of audio credit", async () => {
+  vi.useFakeTimers();
+  const s = setup();
+  s.ws.json({ type: "start" });
+  await tick();
+  for (let i = 0; i < 124; i++) {
+    await vi.advanceTimersByTimeAsync(29_000);
+    s.ws.audio(Buffer.alloc(2));
+  }
+  await vi.advanceTimersByTimeAsync(100);
+  s.stream.sendPcm16.mockClear();
+  // The review reproduction banked almost an hour, then sent 100 seconds at once.
+  for (let i = 0; i < 100; i++) s.ws.audio(Buffer.alloc(32_000));
+  assert.equal(s.stream.sendPcm16.mock.calls.length, 2);
+  assert.equal(s.ws.closeCode, 1008);
+  assert.match(String(s.ws.sent.at(-1)?.message), /real-time rate/);
+});
+
+test("F2: real-time frames with two seconds of jitter keep refilling the bounded credit", async () => {
+  vi.useFakeTimers();
+  const s = setup();
+  s.ws.json({ type: "start" });
+  await tick();
+  // A browser may batch ten 200 ms frames after a delayed delivery.
+  for (let batch = 0; batch < 10; batch++) {
+    for (let frame = 0; frame < 10; frame++) s.ws.audio(Buffer.alloc(6400));
+    await vi.advanceTimersByTimeAsync(2000);
+  }
+  assert.equal(s.stream.sendPcm16.mock.calls.length, 100);
+  assert.equal(s.ws.closeCode, undefined);
+  s.ws.close(1000);
+});
+
+test("F2: restarting on the same socket resets audio credit", async () => {
+  vi.useFakeTimers();
+  const s = setup();
+  s.ws.json({ type: "start" });
+  await tick();
+  s.ws.audio(Buffer.alloc(32_000));
+  s.ws.audio(Buffer.alloc(32_000));
+  s.ws.json({ type: "cancel" });
+  s.ws.json({ type: "start" });
+  await tick();
+  s.ws.audio(Buffer.alloc(32_000));
+  s.ws.audio(Buffer.alloc(32_000));
+  assert.equal(s.stream.sendPcm16.mock.calls.length, 4);
+  assert.equal(s.ws.closeCode, undefined);
+  s.ws.close(1000);
+});
+
 test("disconnect releases a stream; errors close it once and suppress late results", async () => {
   const s = setup();
   s.ws.json({ type: "start" });

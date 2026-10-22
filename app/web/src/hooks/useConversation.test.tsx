@@ -453,6 +453,52 @@ it("ignores an unfinished recognizer word in speaker feedback", async () => {
   expect(options.onFinal).not.toHaveBeenCalled();
 });
 
+it.each(["empty", "echo"])(
+  "F3: a partial corrected to an %s final before this run speaks does not mute its reply",
+  async (final) => {
+    const socket = await start();
+    if (final === "echo") {
+      // A previous run's playback must not arm interruption for the next run.
+      await render({
+        messages: [prose("previous-run", "Hello world. More")],
+        streaming: true,
+      });
+      act(() => FakeSpeechContext.instances[0]!.sources[0]!.end());
+      await render({ messages: [], streaming: false });
+      vi.mocked(fetch).mockClear();
+    }
+    await render({ messages: [], streaming: true });
+    act(() => {
+      socket.message({
+        type: "transcript",
+        segment: 0,
+        text: "uh",
+        isFinal: false,
+      });
+      socket.message({
+        type: "transcript",
+        segment: 0,
+        text: final === "echo" ? "hello world" : "",
+        isFinal: true,
+      });
+    });
+    expect(options.onFinal).not.toHaveBeenCalled();
+    await render({
+      messages: [prose("current-run", "Here is the answer. More")],
+    });
+    await render({
+      messages: [
+        prose("current-run", "Here is the answer. Second sentence. More"),
+      ],
+    });
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+    ).toEqual(["Here is the answer.", "Second sentence."]);
+  },
+);
+
 it("M3-C3: interruption mutes later messages from the same running turn", async () => {
   const socket = await start();
   await render({
@@ -881,6 +927,14 @@ it("cancels pending synthesis before the first buffer and ignores a late respons
   });
   expect(FakeSpeechContext.instances[0]!.sources).toHaveLength(0);
   expect(result.phase).toBe("hearing you");
+  act(() =>
+    socket.message({ type: "transcript", segment: 0, text: "", isFinal: true }),
+  );
+  await render({
+    messages: [prose("pending", "A slow sentence. Next sentence. More")],
+  });
+  // Pending synthesis is a real interruption even before the first buffer plays.
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 it("retains matching speaker text until a delayed final without sending it", async () => {
@@ -1004,6 +1058,27 @@ it("releases a late microphone acquisition and ignores stale socket events", asy
   expect(result.active).toBe(true);
   expect(result.error).toBeNull();
 });
+
+it.each(["speechConversation", "speechSynthesis"] as const)(
+  "F1: persisted %s disablement gates capture before any socket or send",
+  async (group) => {
+    await render({
+      settings: {
+        ...options.settings!,
+        [group]: { ...options.settings![group], enabled: false },
+      },
+    });
+    expect(result.unavailableReason).toContain(
+      group === "speechSynthesis"
+        ? "Enable spoken replies"
+        : "Enable conversation",
+    );
+    act(() => result.toggle());
+    expect(FakeSocket.instances).toHaveLength(0);
+    expect(capture.start).not.toHaveBeenCalled();
+    expect(options.onFinal).not.toHaveBeenCalled();
+  },
+);
 
 it("fails closed for settings, host capability, microphone ownership and backpressure", async () => {
   await render({

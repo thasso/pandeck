@@ -62,12 +62,15 @@ retried.
 Distinct nonempty speech cancels the synthesis fetch, scheduled audio and queue,
 including synthesis still waiting for its first buffer. The interrupted agent
 turn stays muted across later assistant messages and tool steps, including
-speech begun in a gap between buffers. The mute ends when that run ends or the
-user sends the next message; the following reply speaks normally. Sends from
-another tab, steering and newly queued messages also release the mute,
-independent of the live overlay's display position. Loading older user history,
-editing or reordering an existing queued message, and automatic agent prompts do
-not release it. The agent keeps running. The next spoken final uses the same
+speech begun in a gap between buffers after that run has spoken. Speech before
+any playback or pending synthesis does not arm this mute, so a partial that ends
+empty or resolves to echo cannot silence the upcoming reply. Playback history
+resets for each new run. The mute ends when that run ends or the user sends the
+next message; the following reply speaks normally. Sends from another tab,
+steering and newly queued messages also release the mute, independent of the
+live overlay's display position. Loading older user history, editing or
+reordering an existing queued message, and automatic agent prompts do not
+release it. The agent keeps running. The next spoken final uses the same
 queue/steer choice as typing. Matching recognizer feedback is ignored against
 the current/recent spoken text, retained for the segment through its final.
 There is no grace period that would swallow a short genuine "stop". This is a

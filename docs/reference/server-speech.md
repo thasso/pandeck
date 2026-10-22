@@ -130,9 +130,10 @@ offline validator. The protocol is:
 1. Browser sends `{ type: "start" }`, then waits for
    `{ type: "accepted", sampleRate: 16000 }` before sending audio.
 2. Binary frames contain mono Int16 LE at 16 kHz, at most one second per frame.
-   Capture must resample on the client. Server forwarding is immediate. A
-   real-time rate limit allows two seconds of burst headroom. Missing audio for
-   30 seconds closes the stream.
+   Capture must resample on the client. Server forwarding is immediate. A token
+   bucket refills at real time and holds at most two seconds of audio, including
+   after quiet keepalives. A monotonic clock measures refill time. Missing audio
+   for 30 seconds closes the stream.
 3. `{ type: "transcript", segment, text, isFinal }` replaces that segment's
    text. The vocabulary engine runs on both partial and final text. A final
    segment is the browser's auto-send signal; empty segments do not send a turn.

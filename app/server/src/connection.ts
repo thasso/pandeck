@@ -5773,6 +5773,7 @@ function readySettings(settings: AppSettings): Partial<AppSettings> {
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,
     speechConversation: settings.speechConversation,
+    speechSynthesis: settings.speechSynthesis,
     // The shell shows the Knowledge section, tab and route only while it is on.
     knowledgeBase: settings.knowledgeBase,
   };

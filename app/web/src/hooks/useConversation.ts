@@ -44,6 +44,8 @@ interface ConversationRun {
   liveMessages: Map<string, DisplayMessage>;
   suppressed: Set<string>;
   speaking: boolean;
+  agentRunning: boolean;
+  hasSpoken: boolean;
   waitingForReply: boolean;
   mutedTurn: {
     messageIds: Set<string>;
@@ -181,6 +183,7 @@ export function useConversation(options: ConversationOptions) {
         onSpeaking: (speaking) => {
           if (live.current?.player !== player) return;
           live.current.speaking = speaking;
+          if (speaking) live.current.hasSpoken = true;
           setPhase(
             speaking
               ? "speaking"
@@ -210,6 +213,8 @@ export function useConversation(options: ConversationOptions) {
           ),
         ),
         speaking: false,
+        agentRunning: current.streaming,
+        hasSpoken: false,
         waitingForReply: false,
         mutedTurn: null,
         timer: setTimeout(() => {
@@ -262,7 +267,10 @@ export function useConversation(options: ConversationOptions) {
             if (message.isFinal) setPartial("");
             return;
           }
-          if (text && (player.pending || latest.current.streaming)) {
+          if (
+            text &&
+            (player.pending || (latest.current.streaming && run.hasSpoken))
+          ) {
             if (!run.mutedTurn) {
               const rows =
                 latest.current.getMessages?.() ?? latest.current.messages;
@@ -349,6 +357,10 @@ export function useConversation(options: ConversationOptions) {
   useEffect(() => {
     const run = live.current;
     if (!run) return;
+    // Speech in a tool gap interrupts this run only after it has spoken.
+    // A new run must not inherit a previous run's playback history.
+    if (options.streaming && !run.agentRunning) run.hasSpoken = false;
+    run.agentRunning = options.streaming;
     // The durable user row may precede a still-live overlay. Compare identities
     // against the interruption, independently of assistant speech/history order.
     const interrupted = run.mutedTurn;

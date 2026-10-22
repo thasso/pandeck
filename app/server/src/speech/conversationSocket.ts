@@ -43,6 +43,9 @@ interface ConversationRecognizer {
   ): Promise<ConversationStream>;
 }
 
+const PCM_BYTES_PER_SECOND = 32_000;
+const MAX_AUDIO_CREDIT = 2 * PCM_BYTES_PER_SECOND;
+
 /** Audio is forwarded immediately. No retry buffer or utterance state is retained. */
 export function attachConversationSocket(
   ws: WebSocket,
@@ -54,8 +57,8 @@ export function attachConversationSocket(
   let opening: AbortController | undefined;
   let generation = 0;
   let timer: NodeJS.Timeout | undefined;
-  let startedAt = 0;
-  let audioBytes = 0;
+  let audioBudgetAt = 0;
+  let audioCredit = 0;
   const reset = () => {
     generation++;
     clearTimeout(timer);
@@ -127,8 +130,8 @@ export function attachConversationSocket(
       }
       stream = opened;
       state = "listening";
-      startedAt = Date.now();
-      audioBytes = 0;
+      audioBudgetAt = performance.now();
+      audioCredit = MAX_AUDIO_CREDIT;
       armTimeout(30_000);
       send({ type: "accepted", sampleRate: 16000 });
     } catch (error) {
@@ -147,9 +150,17 @@ export function attachConversationSocket(
         return fail(
           "Audio must be Int16 LE frames of at most one second at 16 kHz.",
         );
-      audioBytes += data.length;
-      if (audioBytes > ((Date.now() - startedAt) / 1000 + 2) * 32_000)
+      // Refill at real time, but never bank quiet time beyond two seconds.
+      // A monotonic clock keeps wall-clock adjustments out of admission.
+      const now = performance.now();
+      audioCredit = Math.min(
+        MAX_AUDIO_CREDIT,
+        audioCredit + ((now - audioBudgetAt) / 1000) * PCM_BYTES_PER_SECOND,
+      );
+      audioBudgetAt = now;
+      if (data.length > audioCredit)
         return fail("Conversation audio exceeded real-time rate.");
+      audioCredit -= data.length;
       armTimeout(30_000);
       try {
         stream.sendPcm16(data);
