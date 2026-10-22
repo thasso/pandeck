@@ -3,6 +3,54 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.62.0] - 2026-10-22
+
+### Upgrade notes
+
+- This release adds SQLite migrations `0096` and `0097`. Back up `DATA_DIR`
+  before upgrading if you may need to roll back to 0.61.0, because an older
+  version does not reverse them.
+- Migration `0097` drops the retired subagent registry tables. It refuses to run
+  and leaves the database unchanged if `subagent_runs` or `subagent_threads`
+  still hold rows; export or delete those rows, then restart.
+
+### Other changes
+
+- Close the remaining gaps in the move off a disabled account
+  ([PR #213](https://github.com/thasso/pandeck/pull/213))
+- Accounts: configurable auto-redeem, manual priority, move sessions off
+  disabled accounts ([PR #212](https://github.com/thasso/pandeck/pull/212))
+- Extract the Background client replica core
+  ([PR #211](https://github.com/thasso/pandeck/pull/211))
+- Move Tasks onto the state topic kernel
+  ([PR #210](https://github.com/thasso/pandeck/pull/210))
+- Move Projects and Initiatives onto the state topic kernel
+  ([PR #209](https://github.com/thasso/pandeck/pull/209))
+- Retire the subagent session scope value
+  ([PR #208](https://github.com/thasso/pandeck/pull/208))
+- Remove the dead subagent registry store and drop its tables
+  ([PR #206](https://github.com/thasso/pandeck/pull/206))
+- Move Background publishing onto a state topic kernel
+  ([PR #207](https://github.com/thasso/pandeck/pull/207))
+- Let a worktree whose repository is gone be removed
+  ([PR #205](https://github.com/thasso/pandeck/pull/205))
+- Protect OpenAI-compatible settings before writing secrets
+  ([PR #204](https://github.com/thasso/pandeck/pull/204))
+- Invalidate PR caches after every Forgejo agent PR write
+  ([PR #202](https://github.com/thasso/pandeck/pull/202))
+- Remove the dead subagent registry wiring and readers
+  ([PR #203](https://github.com/thasso/pandeck/pull/203))
+- Guard native GitHub stacked PR merges and track pending merge outcomes
+  ([PR #201](https://github.com/thasso/pandeck/pull/201))
+- Invoke frozen session skills from the composer
+  ([PR #200](https://github.com/thasso/pandeck/pull/200))
+- Give a phone's Knowledge Base document one header row
+  ([PR #199](https://github.com/thasso/pandeck/pull/199))
+- Mark session cards with the Initiative they coordinate or work on
+  ([PR #198](https://github.com/thasso/pandeck/pull/198))
+- Remove Initiatives from the Attention list
+  ([PR #197](https://github.com/thasso/pandeck/pull/197))
+
 ## [0.61.0] - 2026-10-20
 
 ### Upgrade notes
