@@ -191,48 +191,97 @@ failure, and explicit recovery reads.
 ## Client replica
 
 `app/web/src/lib/stateReplica.ts` is the client's one implementation of the
-generic mechanics for a migrated topic. Background is the only one so far;
-Tasks, Projects and Initiatives still use their own `useAssistant` code until
-they move. The module has no React and two halves, and `useAssistant` stays the
-single owner of both:
+generic mechanics for a migrated topic: Background, Projects and Initiatives so
+far. Tasks keep their own `useAssistant` code until they move. The module has no
+React and two halves, and `useAssistant` stays the single owner of both:
 
 - The DATA half is a pure reducer step,
-  `applyTopicMessage(descriptor, state, message)`, for a topic's snapshot answer
-  or `stateEvents` batch. A snapshot replaces the held items as given and parses
-  its revision sidecar; an invalid sidecar adopts the items with no revisions. A
-  batch applies the per-event revision rule above. A batch that applies nothing
-  returns the very same state object, and a value-equal echo advances only the
-  sidecar, keeping the item array and every row by identity.
+  `applyTopicMessage(descriptor, state, message)`, for a topic's snapshot
+  answer, `stateEvents` batch, `stateDigest`, or an answered item fetch. A
+  snapshot replaces the held items and parses its revision sidecar; an invalid
+  sidecar adopts the items with no revisions. A batch applies the per-event
+  revision rule above. A batch that applies nothing returns the very same state
+  object, and a value-equal echo advances only the sidecar, keeping the item
+  array and every row by identity. A digest over a safe baseline prunes the held
+  objects it leaves out, keeping the array when none goes, and keeps the held
+  revisions of the ids it names without advancing them. A catch-up answer
+  applies as a batch; a recovery answer first forgets its ids' revisions, so it
+  replaces the rows even at the held revision. A lost baseline forgets the named
+  revisions and keeps every row.
 - A topic's DESCRIPTOR lends the replica its existing `UIState` fields through
   `read`/`write` lenses, so no component changes. It adapts the topic's own list
   message into the snapshot input (no wire change), and carries the topic's
-  policy as hooks: `place` decides where a newly seen member goes (Background
-  prepends), and `adoptSnapshot` sets topic-specific snapshot fields on the
-  already written state (Background's `truncated` window flag). `write` keeps
-  every slice it does not own by reference.
-- The TRANSPORT half is one object per hook instance, held in a ref. It owns the
-  last `seq` of each migrated topic: a snapshot rebaselines it, and a batch that
-  does not continue it warns and returns the unsubscribe and subscribe to send.
-  The gapped batch still applies. Like the hook's `topicSeqRef`, which holds the
-  topics not yet migrated, it never resets on disconnect. Each topic's `seq`
-  lives in exactly one of the two.
+  policy as hooks. `write` keeps every slice it does not own by reference.
+  - `snapshot` may refuse a message: Projects admit only the canonical
+    archived-inclusive list, so a filtered `projectList` changes nothing. It is
+    handed the held items, so Projects keep value-equal rows by identity, where
+    Background and Initiatives take the rows as given.
+  - `place` decides where a newly seen member goes: Background prepends,
+    Projects and Initiatives append.
+  - `adoptSnapshot` sets topic-specific snapshot fields on the written state:
+    Background's `truncated` window flag, the Project list's own fields and
+    freshness, the Initiative list's freshness and its held keyed reads.
+  - `afterEvents` gets the events that applied, in order: Projects and
+    Initiatives re-read a held detail an event moves past.
+  - `digest` says when the held objects are a baseline (Projects: the canonical
+    list with a revision for every row; Initiatives: a sidecar this hook
+    instance set, covering every row) and sets the topic's flags for a digest
+    and for its catch-up. Background declares none.
+- The TRANSPORT half is one object per hook instance, held in a ref, so nothing
+  in it resets with a socket episode or an effect run. It owns:
+  - The last `seq` of each migrated topic. A snapshot or digest rebaselines it,
+    and a batch that does not continue it warns and returns the snapshot
+    resubscribe. The gapped batch still applies. The hook's `topicSeqRef` holds
+    Tasks' only; each topic's `seq` lives in exactly one of the two.
+  - ONE table of open `getStateItems` requests, each tagged `catchUp` (at most
+    one per topic; a newer digest replaces it) or `recovery` (an edit's
+    authoritative restore). An answer is complete iff its ids are unique and
+    exactly the expected ones. A complete answer applies as its purpose; an
+    answer to no open request is dropped. An incomplete answer, an `error`
+    stamped with the request id (consumed, never the app's error) and a 10 s
+    timeout all fail the request. A snapshot cancels its topic's catch-up, never
+    a recovery.
+  - ONE fallback: `unsubscribe`, then `subscribe` without `digests`, because
+    re-subscribing a held topic answers nothing. It serves digest failures,
+    failed requests and seq gaps alike. A descriptor that sets
+    `resubscribeOnlyWhileHeld` (Projects, Initiatives) gets it only while the
+    client holds the topic, so a dropped one is never revived; Background's gap
+    resubscribes regardless. It warns
+    `[state-sync] <topic> digest fallback: <reason>`, or `recovery fallback` for
+    a recovery.
+  - A recovery that cannot complete (failed, or still open at a disconnect or
+    teardown) loses its baseline: the reducer forgets those ids' revisions,
+    which also keeps the shell cache from persisting that list, and the topic is
+    marked due a snapshot. Both clear when an admitted snapshot re-seeds it. A
+    dropped catch-up needs nothing: its ids still hold their old revisions, so
+    the next digest names them again.
+  - The one subscribe composer. A topic asks for a digest when it declares one
+    (Tasks through their own gate until they move), has no pending mutation, is
+    not due a snapshot, and its baseline holds. `digests` keeps the order
+    `tasks`, `projects`, `initiatives` and is omitted when empty.
 
-Frame batching stays in `useAssistant`; the replica sees messages in the order
-they are applied.
+Tasks keep their own digest catch-up, recoveries, `listTasks` fallbacks and
+digest-capable gap resubscribe until they move, sharing the replica's pure
+helpers, timeout and composer. Frame batching stays in `useAssistant`; the
+replica sees messages in the order they are applied.
 
 ## Resync
 
-A `seq` gap while subscribed triggers a resubscribe and a loud log. A client
-with settled canonical objects and a revision for every object requests a
-`{id, revision}` digest. It keeps equal rows by identity, deletes cached objects
-absent from the digest, and batch-fetches changed/new ids as ordinary events.
-The digest's `seq` becomes the new tripwire baseline. Only a canonical full
-snapshot may replace that baseline or cancel its item catch-up; filtered list
-replies are ordinary one-off answers and change neither. Missing/invalid
-revisions, an incomplete or failed item batch, and a bounded item-fetch timeout
-all fall back to the full snapshot; the snapshot returns objects and sidecar
-revisions so the next resubscribe is warm. Archived projections never enter the
-digest and keep their explicit request/response reads.
+A `seq` gap while subscribed triggers a resubscribe for a fresh snapshot and a
+loud log. A client with settled canonical objects and a revision for every
+object requests a `{id, revision}` digest. It keeps equal rows by identity,
+deletes cached objects absent from the digest, and batch-fetches changed/new ids
+as ordinary events. The digest's `seq` becomes the new tripwire baseline. Only a
+canonical full snapshot may replace that baseline or cancel its item catch-up;
+filtered list replies are ordinary one-off answers and change neither.
+Missing/invalid revisions, an incomplete or failed item batch, and a bounded
+item-fetch timeout all fall back to the full snapshot: a resubscribe without
+`digests` for a migrated topic, a `listTasks` read for Tasks until they move.
+The snapshot returns objects and sidecar revisions so the next resubscribe is
+warm. An edit recovery that cannot complete leaves its objects without a
+revision, so the next subscribe takes a snapshot rather than a digest that would
+keep the rejected value. Archived projections never enter the digest and keep
+their explicit request/response reads.
 
 ## Phases
 
@@ -291,11 +340,12 @@ per-surface sub-tasks — no page invents its own delta format.
   walks are pinned to index searches (`initiativeStoreQueryPlan.test.ts`). A
   session tombstone inside a larger transaction stamps the Initiatives through
   the join-or-open touch. The kernel answers subscribe with a snapshot
-  (`initiativeList`) or, when asked, a digest with `getStateItems` catch-up. The
-  graph read also carries the map's layout, laid out in a worker thread when it
-  is read and never from a write or a flush; status changes keep it
-  (`docs/initiatives.md`, Layout and placement). The client keeps a few reads
-  keyed by id: a newer revision from an event, a snapshot, or a snapshot that
+  (`initiativeList`) or, when asked, a digest with `getStateItems` catch-up; the
+  client asks for the digest whenever it holds an answered list. The graph read
+  also carries the map's layout, laid out in a worker thread when it is read and
+  never from a write or a flush; status changes keep it (`docs/initiatives.md`,
+  Layout and placement). The client keeps a few reads keyed by id: a newer
+  revision from an event, a snapshot or a digest, or a snapshot or digest that
   leaves the id out marks a held read stale and its open page re-reads it,
   keeping the old graph on screen; an answer older than a revision the tab
   already holds is shown and read again. A Task event never touches it.

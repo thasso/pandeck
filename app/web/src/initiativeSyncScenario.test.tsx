@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
- * The `initiatives` topic through the real socket effect: the subscribe asks
- * for a snapshot, the snapshot sets the sequence baseline, a continuing batch
- * applies quietly, and a gap resubscribes for a fresh snapshot.
+ * The `initiatives` topic through the real socket effect: a cold subscribe asks
+ * for a snapshot and one over an answered list for a digest, the snapshot or
+ * digest sets the sequence baseline, a continuing batch applies quietly, and a
+ * gap or a failed catch-up resubscribes for a fresh snapshot.
  *   pnpm --filter @assistant/web test src/initiativeSyncScenario.test.tsx
  */
 import { act, useEffect } from "react";
@@ -89,11 +90,14 @@ function summary(id: string, title = `Initiative ${id}`): InitiativeSummary {
 let latestState: UIState;
 let latestActions: ReturnType<typeof useAssistant>["actions"];
 
-function InitiativeHarness() {
+function InitiativeHarness({ held = true }: { held?: boolean }) {
   const { actions, state } = useAssistant();
   latestState = state;
   latestActions = actions;
-  useEffect(() => actions.setTopics(["initiatives"]), [actions]);
+  useEffect(
+    () => actions.setTopics(held ? ["initiatives"] : []),
+    [actions, held],
+  );
   return null;
 }
 
@@ -158,7 +162,14 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
+
+const snapshotPair: ClientMessage[] = [
+  { type: "unsubscribe", topics: ["initiatives"] },
+  { type: "subscribe", topics: ["initiatives"] },
+];
 
 const subscribes = (socket: ScenarioSocket) =>
   socket.sent.filter(
@@ -219,11 +230,83 @@ describe("Initiative socket/reducer scenario", () => {
     warn.mockRestore();
     expect(unsubscribes(socket)).toHaveLength(1);
     expect(subscribes(socket)).toHaveLength(2);
+    // A gap never trusts the held list: the resubscribe asks for no digest.
+    expect(socket.sent.slice(-2)).toEqual(snapshotPair);
     // The resubscribe is a read in progress over the list held (F055).
     expect([
       latestState.initiativesFresh,
       latestState.initiativesRefreshing,
     ]).toEqual([false, true]);
+  });
+
+  it("never revives the topic for a gap after the client dropped it", async () => {
+    await act(async () => root.render(<InitiativeHarness />));
+    const socket = ScenarioSocket.instances[0]!;
+    await act(async () => {
+      socket.open();
+      socket.receive(readyMessage());
+      socket.receive({
+        type: "initiativeList",
+        items: [summary("1")],
+        seq: 5,
+        revisions: [{ id: "1", revision: 1 }],
+      });
+    });
+    await act(async () => root.render(<InitiativeHarness held={false} />));
+    expect(socket.sent.at(-1)).toEqual(snapshotPair[0]);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const beforeGap = socket.sent.length;
+    await act(async () => {
+      socket.receive({
+        type: "stateEvents",
+        topic: "initiatives",
+        seq: 7,
+        events: [{ kind: "delete", id: "1", revision: 2 }],
+      });
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(socket.sent.slice(beforeGap)).toEqual([]);
+    expect(latestState.initiativesRefreshing).toBe(false);
+  });
+
+  it("asks for a digest when it reconnects over an answered list", async () => {
+    await act(async () => root.render(<InitiativeHarness />));
+    const first = ScenarioSocket.instances[0]!;
+    await act(async () => {
+      first.open();
+      first.receive(readyMessage());
+      first.receive({
+        type: "initiativeList",
+        items: [summary("1")],
+        seq: 5,
+        revisions: [{ id: "1", revision: 1 }],
+      });
+    });
+    vi.useFakeTimers();
+    await act(async () => first.close());
+    await act(async () => vi.advanceTimersByTime(1_000));
+    const second = ScenarioSocket.instances[1]!;
+    await act(async () => second.open());
+    expect(subscribes(second)).toEqual([
+      {
+        type: "subscribe",
+        topics: ["initiatives"],
+        digests: ["initiatives"],
+      },
+    ]);
+    await act(async () =>
+      second.receive({
+        type: "stateDigest",
+        topic: "initiatives",
+        seq: 9,
+        entries: [{ id: "1", revision: 1 }],
+      }),
+    );
+    expect(latestState.initiativesFresh).toBe(true);
+    expect(
+      second.sent.filter((message) => message.type === "getStateItems"),
+    ).toEqual([]);
   });
 
   it("reads one Initiative by id, drops a superseded answer, and answers a lost read", async () => {
@@ -469,6 +552,84 @@ describe("Initiative socket/reducer scenario", () => {
       expect(groupRows()).toEqual(["initiative:3"]);
       expect(refreshIndicators()).toHaveLength(0);
       expect(text()).not.toContain("No Initiatives yet");
+    });
+
+    it("keeps the held rows refreshing until a digest's catch-up draws the change", async () => {
+      const socket = await answeredThenTakenAgain([summary("1")]);
+      expect(subscribes(socket)[1]).toEqual({
+        type: "subscribe",
+        topics: ["initiatives"],
+        digests: ["initiatives"],
+      });
+      await act(async () =>
+        socket.receive({
+          type: "stateDigest",
+          topic: "initiatives",
+          seq: 6,
+          entries: [{ id: "1", revision: 2 }],
+        }),
+      );
+      const fetches = socket.sent.filter(
+        (message) => message.type === "getStateItems",
+      );
+      expect(fetches).toHaveLength(1);
+      const fetch = fetches[0]!;
+      if (fetch.type !== "getStateItems") throw new Error("unreachable");
+      expect([fetch.topic, fetch.ids]).toEqual(["initiatives", ["1"]]);
+      expect(indexRows()).toEqual(["1"]);
+      expect(refreshIndicators()).toHaveLength(2);
+
+      await act(async () =>
+        socket.receive({
+          type: "stateItems",
+          topic: "initiatives",
+          requestId: fetch.requestId,
+          events: [
+            {
+              kind: "upsert",
+              id: "1",
+              revision: 2,
+              item: summary("1", "Renamed"),
+            },
+          ],
+        }),
+      );
+      expect(refreshIndicators()).toHaveLength(0);
+      expect(text()).toContain("Renamed");
+      expect(latestState.initiativesFresh).toBe(true);
+    });
+
+    it("takes a snapshot when a digest's catch-up answers incompletely", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const socket = await answeredThenTakenAgain([summary("1")]);
+      await act(async () =>
+        socket.receive({
+          type: "stateDigest",
+          topic: "initiatives",
+          seq: 6,
+          entries: [{ id: "1", revision: 2 }],
+        }),
+      );
+      const fetch = socket.sent.at(-1);
+      if (fetch?.type !== "getStateItems") throw new Error("no item fetch");
+      const sentBefore = socket.sent.length;
+      await act(async () =>
+        socket.receive({
+          type: "stateItems",
+          topic: "initiatives",
+          requestId: fetch.requestId,
+          events: [],
+        }),
+      );
+      expect(socket.sent.slice(sentBefore)).toEqual(snapshotPair);
+      expect(warn).toHaveBeenCalledWith(
+        "[state-sync] initiatives digest fallback: targeted item response was incomplete",
+      );
+      expect(refreshIndicators()).toHaveLength(2);
+      await snapshot(socket, [summary("1", "Renamed")]);
+      expect(refreshIndicators()).toHaveLength(0);
+      expect(text()).toContain("Renamed");
+      expect(latestState.initiativesFresh).toBe(true);
     });
 
     it("states a failed refresh over the held rows, and a retry reads again", async () => {

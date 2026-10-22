@@ -801,27 +801,126 @@ describe("Project state-sync reducer", () => {
     expect(state.projectMutations["b:remove"]?.status).toBe("loading");
   });
 
-  it("changes only the touched row and makes its authoritative echo an exact no-op", () => {
+  it("reuses value-equal rows from a canonical snapshot and adopts its list fields", () => {
     const initial = projectState();
     const beforeA = initial.projectList!.projects[0];
-    const beforeB = initial.projectList!.projects[1];
-    const event: ServerMessage = {
-      type: "stateEvents",
-      topic: "projects",
-      seq: 2,
-      events: [
-        {
-          kind: "upsert",
-          id: "a",
-          revision: 2,
-          item: { ...summaryA, name: "Alpha renamed" },
+    const next = apply(
+      {
+        type: "projectList",
+        list: {
+          request: { includeArchived: true },
+          projects: [{ ...summaryA }, { ...summaryB, name: "Beta two" }],
+          updatedAt: 9,
         },
+        seq: 3,
+        revisions: [
+          { id: "a", revision: 1 },
+          { id: "b", revision: 2 },
+        ],
+      },
+      { ...initial, projectListFresh: false, projectListError: "stale" },
+    );
+    expect(next.projectList!.projects[0]).toBe(beforeA);
+    expect(next.projectList!.projects[1]!.name).toBe("Beta two");
+    expect(next.projectList!.updatedAt).toBe(9);
+    expect(next.stateEventRevisions.projects).toEqual({ a: 1, b: 2 });
+    expect([next.projectListFresh, next.projectListError]).toEqual([
+      true,
+      null,
+    ]);
+
+    // A sidecar that misses one row vouches for none of them.
+    const uncovered = apply(
+      {
+        type: "projectList",
+        list: {
+          request: { includeArchived: true },
+          projects: [summaryA, summaryB],
+          updatedAt: 10,
+        },
+        seq: 4,
+        revisions: [{ id: "a", revision: 1 }],
+      },
+      initial,
+    );
+    expect(uncovered.stateEventRevisions.projects).toEqual({});
+  });
+
+  it("advances revisions and re-reads a held detail for an event before any list", () => {
+    const detail: ProjectRecord = { ...summaryA, description: "Body" };
+    const initial: UIState = {
+      ...createInitialState(),
+      projectDetails: { a: ready(detail) },
+      projectDetailRevisions: { a: 1 },
+    };
+    const next = apply(
+      {
+        type: "stateEvents",
+        topic: "projects",
+        seq: 2,
+        events: [
+          {
+            kind: "upsert",
+            id: "a",
+            revision: 2,
+            item: { ...summaryA, name: "Alpha renamed" },
+          },
+        ],
+      },
+      initial,
+    );
+    expect(next.projectList).toBeNull();
+    expect(next.stateEventRevisions.projects).toEqual({ a: 2 });
+    expect(next.projectDetails.a?.status).toBe("refreshing");
+    expect(dataOf(next.projectDetails.a!)).toBe(detail);
+  });
+
+  it("asks for a digest only over the canonical list with a revision for every row", () => {
+    const digest: ServerMessage = {
+      type: "stateDigest",
+      topic: "projects",
+      seq: 4,
+      entries: [{ id: "b", revision: 1 }],
+    };
+    const canonical = projectState();
+    expect(apply(digest, canonical)).not.toBe(canonical);
+    const filtered: UIState = {
+      ...canonical,
+      projectList: {
+        ...canonical.projectList!,
+        request: { includeArchived: true, query: "Al" },
+      },
+    };
+    expect(apply(digest, filtered)).toBe(filtered);
+    const uncovered: UIState = {
+      ...canonical,
+      stateEventRevisions: { projects: { a: 1 } },
+    };
+    expect(apply(digest, uncovered)).toBe(uncovered);
+    const unread: UIState = { ...canonical, projectList: null };
+    expect(apply(digest, unread)).toBe(unread);
+  });
+
+  it("forgets a failed recovery's revisions, so neither a digest nor the cache trusts the list", () => {
+    const initial = projectState();
+    const lost = reduceAssistantState(initial, {
+      kind: "replicaBaselineLost",
+      topic: "projects",
+      ids: ["a"],
+    });
+    expect(lost.projectList).toBe(initial.projectList);
+    // The shell cache admits only a list with a revision for every row.
+    expect(lost.stateEventRevisions.projects).toEqual({ b: 1 });
+    const digest: ServerMessage = {
+      type: "stateDigest",
+      topic: "projects",
+      seq: 4,
+      entries: [
+        { id: "a", revision: 1 },
+        { id: "b", revision: 1 },
       ],
     };
-    const changed = apply(event, initial);
-    expect(changed.projectList!.projects[0]).not.toBe(beforeA);
-    expect(changed.projectList!.projects[1]).toBe(beforeB);
-    expect(apply(event, changed)).toBe(changed);
+    expect(apply(digest, lost)).toBe(lost);
   });
 
   it("applies a digest by pruning deletes while retaining equal row identity", () => {

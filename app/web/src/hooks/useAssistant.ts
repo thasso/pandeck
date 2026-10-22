@@ -25,8 +25,13 @@ import { collapseRequest, sameCollapsed } from "../lib/initiativeView.ts";
 import {
   applyTopicMessage,
   createReplicaTransport,
+  digestChanges,
+  itemsComplete,
+  pruneToDigest,
   type ReplicaTransport,
+  type RequestPurpose,
   revisionSidecar,
+  STATE_ITEMS_TIMEOUT_MS,
   type TopicDescriptor,
 } from "../lib/stateReplica.ts";
 import { wireValueEqual } from "../lib/wireValueEqual.ts";
@@ -1250,22 +1255,19 @@ function reconcileTaskList(
   return reused ? { ...incoming, items } : incoming;
 }
 
-function reconcileProjectList(
-  current: ProjectListResponse | null,
-  incoming: ProjectListResponse,
-): ProjectListResponse {
-  if (!current) return incoming;
-  const byId = new Map(
-    current.projects.map((project) => [project.id, project]),
-  );
+function reconcileProjects(
+  current: ProjectSummary[],
+  incoming: ProjectSummary[],
+): ProjectSummary[] {
+  const byId = new Map(current.map((project) => [project.id, project]));
   let reused = false;
-  const projects = incoming.projects.map((project) => {
+  const projects = incoming.map((project) => {
     const existing = byId.get(project.id);
     if (!existing || !wireValueEqual(existing, project)) return project;
     reused = true;
     return existing;
   });
-  return reused ? { ...incoming, projects } : incoming;
+  return reused ? projects : incoming;
 }
 
 function parseAppShellCache(parsed: unknown): AppShellCache | null {
@@ -1547,8 +1549,6 @@ export const TASK_PROJECTION_CACHE_LIMIT = 16;
 const PROJECT_DETAIL_CACHE_LIMIT = 12;
 /** Initiative reads carry a whole graph and layout, so fewer are kept. */
 const INITIATIVE_DETAIL_CACHE_LIMIT = 6;
-/** Digest catch-up degrades to the full snapshot instead of hanging stale. */
-const TASK_DIGEST_TIMEOUT_MS = 10_000;
 
 export type ProjectMutationOperation =
   | "name"
@@ -1677,35 +1677,16 @@ interface TrackedPendingMutation extends PendingMutation {
   timer: ReturnType<typeof setTimeout>;
 }
 
-function taskSubscribeMessage(
-  topics: BroadcastTopic[],
-  state: UIState,
+/** The topics a pending mutation may still change: none may ask for a digest. */
+function pendingTopics(
   pending: ReadonlyMap<string, TrackedPendingMutation>,
-): Extract<ClientMessage, { type: "subscribe" }> {
-  const pendingTopics = new Set(
+): ReadonlySet<string> {
+  return new Set(
     [...pending.values()].flatMap((entry) => [
       entry.topic,
       ...(entry.additionalEffects?.map((effect) => effect.topic) ?? []),
     ]),
   );
-  const digests: BroadcastTopic[] = [];
-  if (
-    topics.includes("tasks") &&
-    !pendingTopics.has("tasks") &&
-    canUseTaskDigest(state)
-  )
-    digests.push("tasks");
-  if (
-    topics.includes("projects") &&
-    !pendingTopics.has("projects") &&
-    canUseProjectDigest(state)
-  )
-    digests.push("projects");
-  return {
-    type: "subscribe",
-    topics,
-    ...(digests.length ? { digests } : {}),
-  };
 }
 
 function settleMutation(
@@ -1824,9 +1805,20 @@ type Action =
       error?: string;
     }
   | { kind: "projectSaved"; item: ProjectRecord; revision: number }
+  /** A complete answer to an item fetch the replica transport opened. */
   | {
-      kind: "projectRecoveryItems";
-      events: ProjectStateEventsMessage["events"];
+      kind: "replicaItems";
+      purpose: RequestPurpose;
+      msg: Extract<
+        ServerMessage,
+        { type: "stateItems"; topic: "projects" | "initiatives" }
+      >;
+    }
+  /** A recovery that could not complete: its rows lose their held revision. */
+  | {
+      kind: "replicaBaselineLost";
+      topic: BroadcastTopic;
+      ids: readonly string[];
     }
   | { kind: "setOpenProjectProjection"; id: string | null }
   | { kind: "initiativeDetailLoad"; id: string }
@@ -3645,8 +3637,189 @@ const backgroundReplica: TopicDescriptor<
   }),
 };
 
+type ProjectListMessage = Extract<ServerMessage, { type: "projectList" }>;
+const NO_PROJECTS: ProjectSummary[] = [];
+
+/**
+ * The `projects` topic's replica lenses over the canonical registry slot. Only
+ * the canonical archived-inclusive list is this topic's snapshot: a filtered
+ * read is an independent one-off answer that changes nothing here. A snapshot
+ * keeps value-equal rows by identity; an event before any list was read
+ * advances only the sidecar; a newer revision re-reads a held detail.
+ */
+const projectReplica: TopicDescriptor<
+  UIState,
+  ProjectSummary,
+  ProjectListMessage
+> = {
+  read: (state) => ({
+    items: state.projectList?.projects ?? NO_PROJECTS,
+    revisions: state.stateEventRevisions.projects ?? {},
+  }),
+  write: (state, replica) => ({
+    ...state,
+    projectList:
+      state.projectList && replica.items !== state.projectList.projects
+        ? { ...state.projectList, projects: replica.items }
+        : state.projectList,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      projects: replica.revisions,
+    },
+  }),
+  snapshot: (message, held) => {
+    if (!isCanonicalProjectList(message.list)) return null;
+    const revisions = revisionSidecar(message.revisions);
+    return {
+      items: reconcileProjects(held.items, message.list.projects),
+      // A sidecar missing a row cannot vouch for the list: none is held.
+      revisions:
+        revisions && projectListHasRevisionSidecar(message.list, revisions)
+          ? message.revisions
+          : [],
+    };
+  },
+  place: (items, item) => [...items, item],
+  adoptSnapshot: (state, message) => {
+    // A first answer had no list for `write` to put its rows in, and with
+    // nothing held to reuse they are the message's own.
+    const projects = state.projectList?.projects ?? message.list.projects;
+    return {
+      ...state,
+      projectList:
+        projects === message.list.projects
+          ? message.list
+          : { ...message.list, projects },
+      projectListFresh: true,
+      projectListError: null,
+      error: null,
+    };
+  },
+  afterEvents: (state, applied) => {
+    let projectDetails = state.projectDetails;
+    for (const event of applied) {
+      const detail = projectDetails[event.id];
+      const detailRevision = state.projectDetailRevisions[event.id] ?? -1;
+      if (detail && dataOf(detail) && event.revision > detailRevision) {
+        if (projectDetails === state.projectDetails)
+          projectDetails = { ...state.projectDetails };
+        projectDetails[event.id] = beginLoad(detail);
+      }
+    }
+    return projectDetails === state.projectDetails
+      ? state
+      : { ...state, projectDetails };
+  },
+  digest: {
+    baseline: canUseProjectDigest,
+    adoptDigest: (state, _message, changedIds) => ({
+      ...state,
+      projectListFresh: changedIds.length === 0,
+      projectListError: null,
+      error: null,
+    }),
+    adoptItems: (state) => ({
+      ...state,
+      projectListFresh: true,
+      projectListError: null,
+      error: null,
+    }),
+  },
+  resubscribeOnlyWhileHeld: true,
+};
+
+type InitiativeListMessage = Extract<ServerMessage, { type: "initiativeList" }>;
+
+/**
+ * The `initiatives` topic's replica lenses. A newly seen row goes LAST. A
+ * snapshot or digest names the whole live projection, so it judges every held
+ * read; an event judges the reads it names.
+ */
+const initiativeReplica: TopicDescriptor<
+  UIState,
+  InitiativeSummary,
+  InitiativeListMessage
+> = {
+  read: (state) => ({
+    items: state.initiatives,
+    revisions: state.stateEventRevisions.initiatives ?? {},
+  }),
+  write: (state, replica) => ({
+    ...state,
+    initiatives: replica.items,
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      initiatives: replica.revisions,
+    },
+  }),
+  snapshot: (message) => ({
+    items: message.items,
+    revisions: message.revisions,
+  }),
+  place: (items, item) => [...items, item],
+  adoptSnapshot: (state) => ({
+    ...state,
+    initiativesFresh: true,
+    initiativesRefreshing: false,
+    initiativeListError: null,
+    initiativeDetails: staleInitiativeReads(
+      state,
+      state.stateEventRevisions.initiatives ?? {},
+    ),
+  }),
+  afterEvents: (state, applied) => {
+    let initiativeDetails = state.initiativeDetails;
+    // A delete is a newer revision too: an archived Initiative's open page
+    // re-reads, and a deleted one answers `null`.
+    for (const event of applied)
+      initiativeDetails = staleInitiativeDetail(
+        initiativeDetails,
+        state.initiativeDetails,
+        state.initiativeDetailRevisions,
+        event.id,
+        event.revision,
+      );
+    return initiativeDetails === state.initiativeDetails
+      ? state
+      : { ...state, initiativeDetails };
+  },
+  digest: {
+    // Only an answer this hook instance applied sets the sidecar; the shell
+    // cache never holds Initiatives.
+    baseline: (state) => {
+      const revisions = state.stateEventRevisions.initiatives;
+      return (
+        revisions !== undefined &&
+        state.initiatives.every(
+          (item) =>
+            Number.isSafeInteger(revisions[item.id]) &&
+            revisions[item.id]! >= 0,
+        )
+      );
+    },
+    adoptDigest: (state, message, changedIds) => ({
+      ...state,
+      initiativesFresh: changedIds.length === 0,
+      // With changes, the list stays refreshing until its catch-up answers.
+      ...(changedIds.length === 0
+        ? { initiativesRefreshing: false, initiativeListError: null }
+        : {}),
+      initiativeDetails: staleInitiativeReads(
+        state,
+        revisionSidecar(message.entries) ?? {},
+      ),
+    }),
+    adoptItems: (state) => ({
+      ...state,
+      initiativesFresh: true,
+      initiativesRefreshing: false,
+      initiativeListError: null,
+    }),
+  },
+  resubscribeOnlyWhileHeld: true,
+};
+
 type TaskDigestMessage = StateDigestMessage<"tasks">;
-type ProjectDigestMessage = StateDigestMessage<"projects">;
 
 /**
  * Diff an authoritative live-projection digest against settled cached objects.
@@ -3657,45 +3830,43 @@ function changedTaskIdsForDigest(
   message: TaskDigestMessage,
 ): string[] | null {
   if (!canUseTaskDigest(state) || !state.taskList) return null;
-  const digest = revisionSidecar(message.entries);
-  if (!digest) return null;
-  const objectIds = new Set(state.taskList.items.map((item) => item.id));
-  const revisions = state.stateEventRevisions.tasks!;
-  return message.entries
-    .filter(
-      (entry) =>
-        !objectIds.has(entry.id) || revisions[entry.id] !== entry.revision,
-    )
-    .map((entry) => entry.id);
+  return digestChanges(
+    {
+      items: state.taskList.items,
+      revisions: state.stateEventRevisions.tasks!,
+    },
+    message.entries,
+  );
 }
 
 /** Prune objects absent from a digest while stale changed rows remain visible. */
 function applyTaskDigest(state: UIState, message: TaskDigestMessage): UIState {
   const changedIds = changedTaskIdsForDigest(state, message);
   if (!changedIds || !state.taskList) return state;
+  const pruned = pruneToDigest(
+    {
+      items: state.taskList.items,
+      revisions: state.stateEventRevisions.tasks!,
+    },
+    message.entries,
+  );
   const liveIds = new Set(message.entries.map((entry) => entry.id));
-  const items = state.taskList.items.filter((item) => liveIds.has(item.id));
   const taskStatuses = forgetTaskStatuses(
     state.taskStatuses,
     state.taskList.items
       .filter((item) => !liveIds.has(item.id))
       .map((item) => item.id),
   );
-  const currentRevisions = state.stateEventRevisions.tasks!;
-  const revisions: Record<string, number> = {};
-  for (const entry of message.entries) {
-    const current = currentRevisions[entry.id];
-    // Do not advance changed rows to the digest revision before their item is
-    // fetched: the ordinary event carrying that same revision must still apply.
-    if (current !== undefined) revisions[entry.id] = current;
-  }
   return {
     ...state,
     taskList:
-      items.length === state.taskList.items.length
+      pruned.items === state.taskList.items
         ? state.taskList
-        : { ...state.taskList, items },
-    stateEventRevisions: { ...state.stateEventRevisions, tasks: revisions },
+        : { ...state.taskList, items: pruned.items },
+    stateEventRevisions: {
+      ...state.stateEventRevisions,
+      tasks: pruned.revisions,
+    },
     // The digest names only live rows; an archived Task's open body may have
     // missed changes while this tab was away, and nothing else will say so.
     taskDetails: reconcileTaskDetailRevisions(
@@ -3705,51 +3876,6 @@ function applyTaskDigest(state: UIState, message: TaskDigestMessage): UIState {
     ),
     taskListFresh: changedIds.length === 0,
     taskStatuses,
-    error: null,
-  };
-}
-
-function changedProjectIdsForDigest(
-  state: UIState,
-  message: ProjectDigestMessage,
-): string[] | null {
-  if (!canUseProjectDigest(state) || !state.projectList) return null;
-  const digest = revisionSidecar(message.entries);
-  if (!digest) return null;
-  const ids = new Set(state.projectList.projects.map((project) => project.id));
-  const revisions = state.stateEventRevisions.projects!;
-  return message.entries
-    .filter(
-      (entry) => !ids.has(entry.id) || revisions[entry.id] !== entry.revision,
-    )
-    .map((entry) => entry.id);
-}
-
-function applyProjectDigest(
-  state: UIState,
-  message: ProjectDigestMessage,
-): UIState {
-  const changedIds = changedProjectIdsForDigest(state, message);
-  if (!changedIds || !state.projectList) return state;
-  const liveIds = new Set(message.entries.map((entry) => entry.id));
-  const projects = state.projectList.projects.filter((project) =>
-    liveIds.has(project.id),
-  );
-  const current = state.stateEventRevisions.projects!;
-  const revisions: Record<string, number> = {};
-  for (const entry of message.entries) {
-    if (current[entry.id] !== undefined)
-      revisions[entry.id] = current[entry.id]!;
-  }
-  return {
-    ...state,
-    projectList:
-      projects.length === state.projectList.projects.length
-        ? state.projectList
-        : { ...state.projectList, projects },
-    stateEventRevisions: { ...state.stateEventRevisions, projects: revisions },
-    projectListFresh: changedIds.length === 0,
-    projectListError: null,
     error: null,
   };
 }
@@ -3767,9 +3893,10 @@ function applyEvent(
     | InitiativeStateEventsMessage
     | BackgroundStateEventsMessage,
 ): UIState {
-  if (message.topic === "projects") return applyProjectEvent(state, message);
+  if (message.topic === "projects")
+    return applyTopicMessage(projectReplica, state, message);
   if (message.topic === "initiatives")
-    return applyInitiativeEvent(state, message);
+    return applyTopicMessage(initiativeReplica, state, message);
   if (message.topic === "background")
     return applyTopicMessage(backgroundReplica, state, message);
   const currentRevisions = state.stateEventRevisions[message.topic] ?? {};
@@ -3884,62 +4011,15 @@ function initiativeReadMessage(
   };
 }
 
-function applyInitiativeEvent(
-  state: UIState,
-  message: InitiativeStateEventsMessage,
-): UIState {
-  const current = state.stateEventRevisions.initiatives ?? {};
-  let revisions: Record<string, number> | null = null;
-  let initiatives = state.initiatives;
-  let initiativeDetails = state.initiativeDetails;
-  for (const event of message.events) {
-    const known = revisions?.[event.id] ?? current[event.id] ?? -1;
-    if (event.revision <= known) continue;
-    revisions ??= { ...current };
-    revisions[event.id] = event.revision;
-    // A delete is a newer revision too: an archived Initiative's open page
-    // re-reads, and a deleted one answers `null`.
-    initiativeDetails = staleInitiativeDetail(
-      initiativeDetails,
-      state.initiativeDetails,
-      state.initiativeDetailRevisions,
-      event.id,
-      event.revision,
-    );
-    const index = initiatives.findIndex((item) => item.id === event.id);
-    if (event.kind === "delete") {
-      if (index >= 0)
-        initiatives = initiatives.filter((item) => item.id !== event.id);
-    } else if (index < 0) {
-      initiatives = [...initiatives, event.item];
-    } else if (!wireValueEqual(initiatives[index], event.item)) {
-      const next = initiatives.slice();
-      next[index] = event.item;
-      initiatives = next;
-    }
-  }
-  if (!revisions) return state;
-  return {
-    ...state,
-    initiatives,
-    initiativeDetails,
-    stateEventRevisions: {
-      ...state.stateEventRevisions,
-      initiatives: revisions,
-    },
-  };
-}
-
 /**
- * The `initiativeList` snapshot names the whole live projection, so it judges
- * every held read: one it leaves out (archived or deleted while this tab was
- * away) and one whose revision moved past its read both re-read.
+ * Judge every held Initiative read against a whole-projection answer (a
+ * snapshot or a digest): one it leaves out (archived or deleted while this tab
+ * was away) and one whose revision moved past its read both re-read.
  */
-function applyInitiativeSnapshot(
+function staleInitiativeReads(
   state: UIState,
-  items: InitiativeSummary[],
   revisions: Record<string, number>,
-): UIState {
+): UIState["initiativeDetails"] {
   let initiativeDetails = state.initiativeDetails;
   for (const id of Object.keys(state.initiativeDetails))
     initiativeDetails = staleInitiativeDetail(
@@ -3949,18 +4029,7 @@ function applyInitiativeSnapshot(
       id,
       revisions[id],
     );
-  return {
-    ...state,
-    initiatives: items,
-    initiativesFresh: true,
-    initiativesRefreshing: false,
-    initiativeListError: null,
-    initiativeDetails,
-    stateEventRevisions: {
-      ...state.stateEventRevisions,
-      initiatives: revisions,
-    },
-  };
+  return initiativeDetails;
 }
 
 function pruneInitiativeDetails(
@@ -3987,57 +4056,6 @@ function pruneInitiativeDetails(
     initiativeDetails: kept(details),
     initiativeDetailRevisions: kept(revisions),
     initiativeDetailsLru: lru.filter((id) => keep.has(id)),
-  };
-}
-
-function applyProjectEvent(
-  state: UIState,
-  message: ProjectStateEventsMessage,
-): UIState {
-  const currentRevisions = state.stateEventRevisions.projects ?? {};
-  let revisions: Record<string, number> | null = null;
-  let projects = state.projectList?.projects;
-  let projectDetails = state.projectDetails;
-
-  for (const event of message.events) {
-    const known = revisions?.[event.id] ?? currentRevisions[event.id] ?? -1;
-    if (event.revision <= known) continue;
-    revisions ??= { ...currentRevisions };
-    revisions[event.id] = event.revision;
-    if (projects) {
-      const index = projects.findIndex((project) => project.id === event.id);
-      if (event.kind === "delete") {
-        if (index >= 0)
-          projects = projects.filter((project) => project.id !== event.id);
-      } else if (index < 0) {
-        projects = [...projects, event.item];
-      } else if (!wireValueEqual(projects[index], event.item)) {
-        const next = projects.slice();
-        next[index] = event.item;
-        projects = next;
-      }
-    }
-    const detail = projectDetails[event.id];
-    const detailRevision = state.projectDetailRevisions[event.id] ?? -1;
-    if (detail && dataOf(detail) && event.revision > detailRevision) {
-      if (projectDetails === state.projectDetails)
-        projectDetails = { ...state.projectDetails };
-      projectDetails[event.id] = beginLoad(detail!);
-    }
-  }
-  if (!revisions) return state;
-  const projectList =
-    state.projectList && projects && projects !== state.projectList.projects
-      ? { ...state.projectList, projects }
-      : state.projectList;
-  return {
-    ...state,
-    projectList,
-    projectDetails,
-    stateEventRevisions: {
-      ...state.stateEventRevisions,
-      projects: revisions,
-    },
   };
 }
 
@@ -4676,19 +4694,27 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       ? recovered
       : withChat(recovered, { pullRequestCards });
   }
-  if (action.kind === "projectRecoveryItems") {
-    const revisions = { ...(state.stateEventRevisions.projects ?? {}) };
-    for (const event of action.events) delete revisions[event.id];
-    return applyProjectEvent(
-      {
-        ...state,
-        stateEventRevisions: {
-          ...state.stateEventRevisions,
-          projects: revisions,
-        },
-      },
-      { type: "stateEvents", topic: "projects", seq: 0, events: action.events },
-    );
+  if (action.kind === "replicaItems") {
+    const { msg, purpose } = action;
+    return msg.topic === "projects"
+      ? applyTopicMessage(projectReplica, state, {
+          kind: "items",
+          purpose,
+          events: msg.events,
+        })
+      : applyTopicMessage(initiativeReplica, state, {
+          kind: "items",
+          purpose,
+          events: msg.events,
+        });
+  }
+  if (action.kind === "replicaBaselineLost") {
+    const input = { kind: "baselineLost", ids: action.ids } as const;
+    if (action.topic === "projects")
+      return applyTopicMessage(projectReplica, state, input);
+    if (action.topic === "initiatives")
+      return applyTopicMessage(initiativeReplica, state, input);
+    return state;
   }
   if (action.kind === "optimisticProjectSave") {
     const projectList = applyOptimisticProjectSave(
@@ -5727,35 +5753,21 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return msg.topic === "tasks"
         ? applyTaskDigest(state, msg)
         : msg.topic === "projects"
-          ? applyProjectDigest(state, msg)
-          : state;
+          ? applyTopicMessage(projectReplica, state, msg)
+          : applyTopicMessage(initiativeReplica, state, msg);
     case "stateItems": {
-      if (msg.topic === "initiatives")
-        return applyEvent(state, {
-          type: "stateEvents",
-          topic: "initiatives",
-          seq: 0,
-          events: msg.events,
-        });
-      const applied =
-        msg.topic === "tasks"
-          ? applyEvent(state, {
-              type: "stateEvents",
-              topic: "tasks",
-              seq: 0,
-              events: msg.events,
-            })
-          : applyEvent(state, {
-              type: "stateEvents",
-              topic: "projects",
-              seq: 0,
-              events: msg.events,
-            });
+      // Replica topics' answers arrive as `replicaItems`, tagged by purpose.
+      if (msg.topic !== "tasks") return state;
+      const applied = applyEvent(state, {
+        type: "stateEvents",
+        topic: "tasks",
+        seq: 0,
+        events: msg.events,
+      });
       return {
         ...applied,
-        ...(msg.topic === "tasks"
-          ? { taskListFresh: true, taskListError: null }
-          : { projectListFresh: true, projectListError: null }),
+        taskListFresh: true,
+        taskListError: null,
         error: null,
       };
     }
@@ -5788,11 +5800,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       };
     }
     case "initiativeList":
-      return applyInitiativeSnapshot(
-        state,
-        msg.items,
-        revisionSidecar(msg.revisions) ?? {},
-      );
+      return applyTopicMessage(initiativeReplica, state, msg);
     case "initiativeDetail":
       // Correlated before reducer dispatch in the socket effect.
       return state;
@@ -5854,29 +5862,10 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         // later successful retry would still find it.
         error: null,
       };
-    case "projectList": {
+    case "projectList":
       // Filtered reads are independent projections and never own the canonical
-      // reducer/cache slot.
-      if (!isCanonicalProjectList(msg.list)) return state;
-      const projectList = reconcileProjectList(state.projectList, msg.list);
-      const revisionRecord = revisionSidecar(msg.revisions);
-      const revisions =
-        revisionRecord &&
-        projectListHasRevisionSidecar(projectList, revisionRecord)
-          ? revisionRecord
-          : {};
-      return {
-        ...state,
-        projectList,
-        projectListFresh: true,
-        projectListError: null,
-        stateEventRevisions: {
-          ...state.stateEventRevisions,
-          projects: revisions,
-        },
-        error: null,
-      };
-    }
+      // reducer/cache slot: the descriptor admits only the canonical list.
+      return applyTopicMessage(projectReplica, state, msg);
     case "projectDetail":
     case "projectSaved":
       // Correlated before reducer dispatch in the socket effect.
@@ -6954,14 +6943,10 @@ export function useAssistant({
     };
   }, [viewedSessionId, viewedTimeline]);
   /**
-   * Last `seq` seen per topic not yet on the replica transport (`tasks`,
-   * `projects`, `initiatives`) — the gap tripwire, never a replay cursor.
+   * Last `seq` seen for `tasks`, the one topic not yet on the replica
+   * transport — the gap tripwire, never a replay cursor.
    */
-  const topicSeqRef = useRef<Partial<Record<BroadcastTopic, number>>>({});
-  /** The replica transport for migrated topics, built once per hook instance. */
-  const replicaTransportRef = useRef<ReplicaTransport | null>(null);
-  replicaTransportRef.current ??= createReplicaTransport(["background"]);
-  const replicaTransport = replicaTransportRef.current;
+  const topicSeqRef = useRef<Partial<Record<"tasks", number>>>({});
   /**
    * Optimistic mutations still waiting for their own outcome, keyed by the
    * `requestId` the command carried. Correlation is explicit because these
@@ -7031,14 +7016,13 @@ export function useAssistant({
   const projectMutationRequestsRef = useRef(new Map<string, string>());
   /** Compaction-window saves in flight: request id → session id. */
   const compactionWindowRequestsRef = useRef(new Map<string, string>());
-  /** One in-flight targeted catch-up for the latest Task digest. */
+  /**
+   * One in-flight targeted catch-up for the latest Task digest. Tasks keep
+   * their own item requests until they move onto the replica transport.
+   */
   const taskDigestSyncRef = useRef<TaskDigestSync | null>(null);
-  const projectDigestSyncRef = useRef<TaskDigestSync | null>(null);
   /** Explicit per-mutation item recoveries, independent of digest catch-up. */
   const taskRecoveryItemsRef = useRef(new Map<string, ReadonlySet<string>>());
-  const projectRecoveryItemsRef = useRef(
-    new Map<string, ReadonlySet<string>>(),
-  );
   const lazyBlockCacheRef = useRef(new Map<string, unknown>());
   /**
    * Durable-body reads in flight, by cache key. A read leaves this map when
@@ -7181,6 +7165,30 @@ export function useAssistant({
   }, [snapshotGeneration, viewedSessionForDemand, sendLiveBodySubscriptions]);
   /** Broadcast topics this browser currently shows; re-declared on every reconnect. */
   const topicsRef = useRef(new Set<BroadcastTopic>());
+  /**
+   * The replica transport for migrated topics, built once per hook instance:
+   * their seqs, open item requests and due snapshots outlive every socket
+   * episode and effect run.
+   */
+  const replicaTransportRef = useRef<ReplicaTransport<UIState> | null>(null);
+  replicaTransportRef.current ??= createReplicaTransport<UIState>({
+    topics: {
+      background: backgroundReplica,
+      projects: projectReplica,
+      initiatives: initiativeReplica,
+    },
+    taskBaseline: canUseTaskDigest,
+    send: (message) => socketRef.current?.send(message),
+    holds: (topic) => topicsRef.current.has(topic),
+    // Subscribing is the Initiative list's read, so a held list refreshes.
+    onResubscribe: (topic) => {
+      if (topic === "initiatives")
+        dispatch({ kind: "initiativeListSubscribed" });
+    },
+    onBaselineLost: (topic, ids) =>
+      dispatch({ kind: "replicaBaselineLost", topic, ids }),
+  });
+  const replicaTransport = replicaTransportRef.current;
   const transportHasConnectedRef = useRef(false);
   /** Canonical one-off list reads already requested in this socket episode. */
   const episodeListReadsRef = useRef({
@@ -7253,7 +7261,6 @@ export function useAssistant({
     // is never reassigned, so this is the same object either way — but reading
     // `.current` from a cleanup is the shape that silently stops being true.
     const taskRecoveryItems = taskRecoveryItemsRef.current;
-    const projectRecoveryItems = projectRecoveryItemsRef.current;
     let disposed = false;
     let frame: number | null = null;
     let pendingFrameMessages: ServerMessage[] = [];
@@ -7274,24 +7281,15 @@ export function useAssistant({
       flushFrameMessages();
     };
 
-    const clearDigestSync = (topic: "tasks" | "projects") => {
-      const ref = topic === "tasks" ? taskDigestSyncRef : projectDigestSyncRef;
-      const sync = ref.current;
+    const clearTaskDigestSync = () => {
+      const sync = taskDigestSyncRef.current;
       if (sync) clearTimeout(sync.timer);
-      ref.current = null;
+      taskDigestSyncRef.current = null;
     };
-    const clearTaskDigestSync = () => clearDigestSync("tasks");
-    const fallbackFromDigest = (
-      topic: "tasks" | "projects",
-      reason: string,
-    ) => {
-      clearDigestSync(topic);
-      console.warn(`[state-sync] ${topic} digest fallback: ${reason}`);
-      socket.send(
-        topic === "tasks"
-          ? { type: "listTasks", request: {} }
-          : { type: "listProjects", request: { includeArchived: true } },
-      );
+    const fallbackFromTaskDigest = (reason: string) => {
+      clearTaskDigestSync();
+      console.warn(`[state-sync] tasks digest fallback: ${reason}`);
+      socket.send({ type: "listTasks", request: {} });
     };
 
     /** Retries scheduled by failed durable-body reads; torn down with the socket. */
@@ -7438,95 +7436,63 @@ export function useAssistant({
         clearTaskDigestSync();
         topicSeqRef.current.tasks = msg.seq;
       }
-      if (msg.type === "projectList" && isCanonicalProjectList(msg.list)) {
-        clearDigestSync("projects");
-        topicSeqRef.current.projects = msg.seq;
-      }
-      if (msg.type === "backgroundWorkList") {
+      if (msg.type === "projectList" && isCanonicalProjectList(msg.list))
+        replicaTransport.snapshotReceived("projects", msg.seq);
+      if (msg.type === "backgroundWorkList")
         replicaTransport.snapshotReceived("background", msg.seq);
-      }
-      if (msg.type === "initiativeList") {
-        topicSeqRef.current.initiatives = msg.seq;
-      }
-      // This client takes the `initiatives` snapshot on every subscribe and never
-      // asks for its digest or items, so neither answer has a sync to settle.
-      if (msg.type === "stateDigest" && msg.topic !== "initiatives") {
-        clearDigestSync(msg.topic);
-        topicSeqRef.current[msg.topic] = msg.seq;
-        const changedIds =
-          msg.topic === "tasks"
-            ? changedTaskIdsForDigest(stateRef.current, msg)
-            : changedProjectIdsForDigest(stateRef.current, msg);
+      if (msg.type === "initiativeList")
+        replicaTransport.snapshotReceived("initiatives", msg.seq);
+      if (msg.type === "stateDigest" && msg.topic === "tasks") {
+        clearTaskDigestSync();
+        topicSeqRef.current.tasks = msg.seq;
+        const changedIds = changedTaskIdsForDigest(stateRef.current, msg);
         if (!changedIds) {
-          fallbackFromDigest(
-            msg.topic,
-            "cached objects or revisions were invalid",
-          );
+          fallbackFromTaskDigest("cached objects or revisions were invalid");
           return;
         }
         if (changedIds.length > 0) {
           const requestId = createClientId();
           const expectedIds = new Set(changedIds);
           const timer = setTimeout(
-            () =>
-              fallbackFromDigest(msg.topic, "targeted item fetch timed out"),
-            TASK_DIGEST_TIMEOUT_MS,
+            () => fallbackFromTaskDigest("targeted item fetch timed out"),
+            STATE_ITEMS_TIMEOUT_MS,
           );
-          const ref =
-            msg.topic === "tasks" ? taskDigestSyncRef : projectDigestSyncRef;
-          ref.current = { requestId, expectedIds, timer };
+          taskDigestSyncRef.current = { requestId, expectedIds, timer };
           socket.send({
             type: "getStateItems",
-            topic: msg.topic,
+            topic: "tasks",
             ids: changedIds,
             requestId,
           });
         }
+      } else if (msg.type === "stateDigest") {
+        // A digest the transport fell back from never reaches the reducer.
+        const answer = replicaTransport.digestReceived(msg, stateRef.current);
+        for (const out of answer.send) socket.send(out);
+        if (!answer.apply) return;
       }
-      if (msg.type === "stateItems" && msg.topic !== "initiatives") {
-        const receivedIds = new Set(msg.events.map((event) => event.id));
-        const complete = (expectedIds: ReadonlySet<string>) =>
-          receivedIds.size === msg.events.length &&
-          receivedIds.size === expectedIds.size &&
-          [...expectedIds].every((id) => receivedIds.has(id));
-        const taskRecoveryIds =
-          msg.topic === "tasks"
-            ? taskRecoveryItemsRef.current.get(msg.requestId)
-            : undefined;
+      if (msg.type === "stateItems" && msg.topic === "tasks") {
+        const taskRecoveryIds = taskRecoveryItemsRef.current.get(msg.requestId);
         if (taskRecoveryIds) {
-          if (msg.topic !== "tasks") return;
           taskRecoveryItemsRef.current.delete(msg.requestId);
-          if (!complete(taskRecoveryIds)) {
+          if (!itemsComplete(taskRecoveryIds, msg.events)) {
             socket.send({ type: "listTasks", request: {} });
             return;
           }
           dispatch({ kind: "taskRecoveryItems", events: msg.events });
           return;
         }
-        const projectRecoveryIds =
-          msg.topic === "projects"
-            ? projectRecoveryItemsRef.current.get(msg.requestId)
-            : undefined;
-        if (projectRecoveryIds) {
-          if (msg.topic !== "projects") return;
-          projectRecoveryItemsRef.current.delete(msg.requestId);
-          if (!complete(projectRecoveryIds)) return;
-          dispatch({ kind: "projectRecoveryItems", events: msg.events });
+        const sync = taskDigestSyncRef.current;
+        if (!sync || msg.requestId !== sync.requestId) return;
+        if (!itemsComplete(sync.expectedIds, msg.events)) {
+          fallbackFromTaskDigest("targeted item response was incomplete");
           return;
-        } else {
-          const ref =
-            msg.topic === "tasks" ? taskDigestSyncRef : projectDigestSyncRef;
-          const sync = ref.current;
-          if (!sync || msg.requestId !== sync.requestId) return;
-          if (!complete(sync.expectedIds)) {
-            fallbackFromDigest(
-              msg.topic,
-              "targeted item response was incomplete",
-            );
-            return;
-          }
-          clearDigestSync(msg.topic);
         }
+        clearTaskDigestSync();
+      } else if (msg.type === "stateItems") {
+        const purpose = replicaTransport.itemsReceived(msg);
+        if (purpose) dispatch({ kind: "replicaItems", purpose, msg });
+        return;
       }
       if (
         msg.type === "error" &&
@@ -7546,17 +7512,18 @@ export function useAssistant({
       // with no sync in flight matched undefined to undefined — which swallowed
       // every unaddressed error before the reducer could show it, and re-read
       // the Task list for it.
-      const digestTopic = (["tasks", "projects"] as const).find((topic) => {
-        const sync =
-          topic === "tasks"
-            ? taskDigestSyncRef.current
-            : projectDigestSyncRef.current;
-        return sync && msg.type === "error" && msg.requestId === sync.requestId;
-      });
-      if (msg.type === "error" && digestTopic) {
-        fallbackFromDigest(digestTopic, msg.message);
+      const taskSync = taskDigestSyncRef.current;
+      if (
+        msg.type === "error" &&
+        taskSync &&
+        msg.requestId === taskSync.requestId
+      ) {
+        fallbackFromTaskDigest(msg.message);
         return;
       }
+      // A replica request's failure is consumed by its own fallback, never
+      // shown as the app's error.
+      if (msg.type === "error" && replicaTransport.errorReceived(msg)) return;
       if (msg.type === "taskDetail" && msg.requestId) {
         if (taskDetailRequestsRef.current.get(msg.id) !== msg.requestId) return;
         taskDetailRequestsRef.current.delete(msg.id);
@@ -7788,10 +7755,10 @@ export function useAssistant({
           if (topicsRef.current.has("workflow")) {
             socket.send({ type: "unsubscribe", topics: ["workflow"] });
             socket.send(
-              taskSubscribeMessage(
+              replicaTransport.subscribeRequest(
                 ["workflow"],
                 stateRef.current,
-                pendingMutationsRef.current,
+                pendingTopics(pendingMutationsRef.current),
               ),
             );
           } else {
@@ -7980,9 +7947,9 @@ export function useAssistant({
       if (msg.type === "stateEvents" && replicaTransport.owns(msg.topic)) {
         for (const out of replicaTransport.eventsReceived(msg))
           socket.send(out);
-      } else if (msg.type === "stateEvents") {
-        const previous = topicSeqRef.current[msg.topic];
-        topicSeqRef.current[msg.topic] = msg.seq;
+      } else if (msg.type === "stateEvents" && msg.topic === "tasks") {
+        const previous = topicSeqRef.current.tasks;
+        topicSeqRef.current.tasks = msg.seq;
         // A batch that does not continue the last one means an event was missed
         // while subscribed. `seq` never replays anything — it resubscribes for a
         // fresh snapshot, loudly, because silence here is silent data loss.
@@ -7990,14 +7957,12 @@ export function useAssistant({
           console.warn(
             `[state-sync] ${msg.topic} event gap: expected seq ${previous + 1}, got ${msg.seq}; resubscribing.`,
           );
-          if (msg.topic === "initiatives")
-            dispatch({ kind: "initiativeListSubscribed" });
           socket.send({ type: "unsubscribe", topics: [msg.topic] });
           socket.send(
-            taskSubscribeMessage(
+            replicaTransport.subscribeRequest(
               [msg.topic],
               stateRef.current,
-              pendingMutationsRef.current,
+              pendingTopics(pendingMutationsRef.current),
             ),
           );
         }
@@ -8082,10 +8047,10 @@ export function useAssistant({
         if (transportHasConnectedRef.current) {
           if (topics.length > 0)
             socket.send(
-              taskSubscribeMessage(
+              replicaTransport.subscribeRequest(
                 topics,
                 stateRef.current,
-                pendingMutationsRef.current,
+                pendingTopics(pendingMutationsRef.current),
               ),
             );
           // The re-declared skills subscription re-scans on the server, and the
@@ -8109,9 +8074,8 @@ export function useAssistant({
         transportHasConnectedRef.current = true;
       } else {
         clearTaskDigestSync();
-        clearDigestSync("projects");
         taskRecoveryItemsRef.current.clear();
-        projectRecoveryItemsRef.current.clear();
+        replicaTransport.dropRequests();
         commentResyncRef.current.clear();
         commentRequestsRef.current.clear();
         for (const id of taskDetailRequestsRef.current.keys())
@@ -8181,9 +8145,8 @@ export function useAssistant({
       if (frame !== null) window.cancelAnimationFrame(frame);
       pendingFrameMessages = [];
       clearTaskDigestSync();
-      clearDigestSync("projects");
       taskRecoveryItems.clear();
-      projectRecoveryItems.clear();
+      replicaTransport.dropRequests();
       for (const timer of lazyBlockRetryTimers) clearTimeout(timer);
       lazyBlockRetryTimers.clear();
       offMsg();
@@ -8285,10 +8248,10 @@ export function useAssistant({
       if (!topicsRef.current.has("workflow")) return;
       send({ type: "unsubscribe", topics: ["workflow"] });
       send(
-        taskSubscribeMessage(
+        replicaTransport.subscribeRequest(
           ["workflow"],
           stateRef.current,
-          pendingMutationsRef.current,
+          pendingTopics(pendingMutationsRef.current),
         ),
       );
     };
@@ -8302,11 +8265,8 @@ export function useAssistant({
     };
     const recoverProjects = (mutation: PendingMutation) => {
       const ids = [...new Set(mutation.objectIds)];
-      if (ids.length > 0) {
-        const requestId = createClientId();
-        projectRecoveryItemsRef.current.set(requestId, new Set(ids));
-        send({ type: "getStateItems", topic: "projects", ids, requestId });
-      }
+      if (ids.length > 0)
+        send(replicaTransport.recoveryRequest("projects", ids));
       const openId = stateRef.current.openProjectProjectionId;
       if (!openId || !ids.includes(openId)) return;
       const requestId = createClientId();
@@ -8920,10 +8880,10 @@ export function useAssistant({
           dispatch({ kind: "initiativeListSubscribed" });
         if (added.length > 0)
           send(
-            taskSubscribeMessage(
+            replicaTransport.subscribeRequest(
               added,
               stateRef.current,
-              pendingMutationsRef.current,
+              pendingTopics(pendingMutationsRef.current),
             ),
           );
         if (removed.length > 0) send({ type: "unsubscribe", topics: removed });
@@ -9123,10 +9083,10 @@ export function useAssistant({
         dispatch({ kind: "initiativeListRetry" });
         send({ type: "unsubscribe", topics: ["initiatives"] });
         send(
-          taskSubscribeMessage(
+          replicaTransport.subscribeRequest(
             ["initiatives"],
             stateRef.current,
-            pendingMutationsRef.current,
+            pendingTopics(pendingMutationsRef.current),
           ),
         );
       },
@@ -9482,7 +9442,7 @@ export function useAssistant({
         });
       },
     };
-  }, [readTimelineCache, scheduleLiveBodySubscriptions]);
+  }, [readTimelineCache, replicaTransport, scheduleLiveBodySubscriptions]);
 
   /**
    * Load a reveal's target INTO the window. The transcript is a windowed suffix,
