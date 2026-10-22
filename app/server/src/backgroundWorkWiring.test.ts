@@ -157,6 +157,56 @@ async function send(
   await connection.handle(validated.msg as ClientMessage);
 }
 
+test("subscribing answers the bounded snapshot at the topic's current seq, never a digest", async () => {
+  const viewed: ServerMessage[] = [];
+  await subscribedConnection(viewed);
+  runningItem(makeOwner());
+  await hub.flushPendingBroadcastsForTests();
+  const seq = viewed
+    .filter(
+      (message) =>
+        message.type === "stateEvents" && message.topic === "background",
+    )
+    .at(-1)?.seq;
+  assert.ok(seq !== undefined && seq > 0);
+
+  // A connection already holding the topic skips it, so each subscribe here
+  // is a fresh one.
+  const sent: ServerMessage[] = [];
+  await subscribedConnection(sent);
+  const lists = sent.filter((message) => message.type === "backgroundWorkList");
+  assert.equal(lists.length, 1);
+  const list = lists[0]!;
+  assert.deepEqual(
+    list.revisions.map((entry) => entry.id),
+    list.items.map((item) => item.id),
+  );
+  for (const entry of list.revisions)
+    assert.equal(
+      entry.revision,
+      backgroundWorkStore.itemRevisions([entry.id])[0]?.revision,
+    );
+  assert.equal(list.seq, seq);
+  assert.equal("truncated" in list, false);
+
+  // Background declares no digest: asking for one still gets the snapshot.
+  // The socket's validator already refuses a Background digest request, so
+  // this drives the connection directly to pin the route's own answer.
+  const digestSent: ServerMessage[] = [];
+  const digestConnection = new Connection(fakeSocket(digestSent));
+  hub.register(digestConnection);
+  cleanups.push(() => hub.unregister(digestConnection));
+  await digestConnection.handle({
+    type: "subscribe",
+    topics: ["background"],
+    digests: ["background"],
+  });
+  assert.deepEqual(
+    digestSent.map((message) => message.type),
+    ["backgroundWorkList"],
+  );
+});
+
 test("a validated Stop terminalizes the row and answers control feedback only", async () => {
   cleanups.push(withPort(fakePort()));
   const owner = makeOwner();

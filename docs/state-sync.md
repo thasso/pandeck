@@ -72,16 +72,46 @@ failure, and explicit recovery reads.
   `revision` from a persisted monotonic counter and schedules the broadcast.
   Bump and notification cannot diverge, and every write path — row updates,
   link-edge writes, comment-count changes — reports through this one seam.
-- The flush stays debounced and coalesces per object id. Tasks and Projects diff
-  the current `{id → revision}` map against the last flushed map: changed or new
-  ids emit upserts (reading the current summary), ids absent from the live
-  projection emit deletes. Background work, whose history only grows, reads the
-  reported ids alone: a reported member upserts and a reported non-member
-  deletes (see its entry under the domains below).
-- `seq` is an in-memory per-topic counter on the hub; the subscribe answer
-  carries the current value, each batch increments it. It exists only to trip
-  resync, so it does not survive restarts — a reconnect resubscribes and gets a
-  fresh baseline anyway.
+- The state topic kernel (`stateTopicKernel.ts`) carries a migrated topic from
+  committed write to wire, one kernel per topic, and its domain supplies only a
+  descriptor: revisions for given ids, the summary, the snapshot, an optional
+  digest and a batch maximum. `stateTopics.ts` registers the kernels, the hub
+  attaches its topic broadcaster to them, and `connection.ts` routes a kernel
+  topic's subscribe to its kernel. Background runs on it. Tasks, Projects and
+  Initiatives still diff the current `{id → revision}` map against the last
+  flushed one in `hub.ts` until they move (Task-1044, Task-1045).
+- The change set (`db/changeSet.ts`) is the kernel's write half. A write runs as
+  one top-level transaction with a change set, which stamps each topic's touched
+  rows inside that transaction with one revision per topic, drawn from the
+  topic's own persisted sequence; revisions compare only within a topic. After
+  COMMIT, every topic the write enlisted reports its touched ids to its kernel
+  once, possibly none. A rollback stamps nothing and reports nothing.
+- A kernel publishes from reported ids only. A report adds its ids to the
+  pending set and restarts a trailing debounce, even an empty report. The flush
+  reads revisions for exactly the pending ids and walks them in first-report
+  order:
+  - a live id upserts with its summary;
+  - a known non-member deletes at its stored revision, even one that joined and
+    left inside one window, because a subscribe in between may have snapshotted
+    it;
+  - an id the revision read does not return emits nothing;
+  - a live id with no summary stays pending and is logged. The next flush
+    retries it, and any later report schedules that flush. The kernel never
+    reschedules itself.
+- A flush is cut into frames of at most the topic's batch maximum, each with the
+  next `seq`. `seq` is an in-memory per-topic counter, kept by the kernel (by
+  the hub for topics not yet on it); the subscribe answer carries the current
+  value. It exists only to trip resync, so it does not survive restarts — a
+  reconnect resubscribes and gets a fresh baseline anyway.
+- A kernel's subscribe answer is a digest only when the topic declares one and
+  the client asked for it, otherwise the topic's snapshot. Items by id follow
+  the flush's event rules without consuming a `seq` or touching pending ids.
+- Cross-domain effects stay outside the kernel as post-publish listeners. Each
+  runs once after every flush, an empty one included, after its frames were
+  sent; a throwing listener is logged and stops neither the frames nor the other
+  listeners. Background's only listener is the session-list refresh for the
+  owner's `backgroundActivity`, which therefore lands one Background debounce
+  window after the write.
 - Server-internal mutations (agent tools, sweeps such as auto-archive) flow
   through the same seam and mint the same events; there is no second write path.
 
@@ -212,10 +242,11 @@ per-surface sub-tasks — no page invents its own delta format.
   touches it.
 - Background work: canonical durable session-owned work items on the
   `background` topic, snapshot-plus-revision-sidecar on subscribe and revisioned
-  upserts/deletes on every mutation. A touched Claude host epoch fans out to the
-  items whose summary carries its state rather than travelling as a second
-  collection. Membership is every non-tombstoned row, so terminal history stays
-  addressable until the owning session is deleted. Deleting a session IS
+  upserts/deletes on every mutation. It runs on the state topic kernel and
+  declares no digest. A touched Claude host epoch fans out to the items whose
+  summary carries its state rather than travelling as a second collection.
+  Membership is every non-tombstoned row, so terminal history stays addressable
+  until the owning session is deleted. Deleting a session IS
   `backgroundWorkStore.deleteOwnerSession`: one transaction, through the store's
   ordinary mutation seam, rechecks live work (an active item or a retained host
   epoch) and refuses while any exists, marks the session row deleted, and

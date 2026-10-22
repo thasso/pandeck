@@ -150,7 +150,7 @@ import {
   BackgroundWorkValidationError,
   backgroundWorkStore,
 } from "./db/backgroundWorkStore.ts";
-import { backgroundWorkSnapshot } from "./backgroundWorkRegistry.ts";
+import { stateTopicFor } from "./stateTopics.ts";
 import {
   backgroundWorkHumanStopDeps,
   stopAllBackgroundWorkForHuman,
@@ -1783,6 +1783,13 @@ export class Connection implements Viewer {
       const fresh = !this.topics.has(topic);
       this.topics.add(topic);
       if (!fresh) continue;
+      // A topic on the state topic kernel answers through it: a digest when it
+      // declares one and the client asked, else its snapshot.
+      const kernel = stateTopicFor(topic);
+      if (kernel) {
+        this.send(kernel.subscribeAnswer(digestTopics.has(topic)));
+        continue;
+      }
       if (topic === "tasks") {
         if (digestTopics.has(topic)) {
           this.send({
@@ -1810,20 +1817,6 @@ export class Connection implements Viewer {
         }
       }
       if (topic === "initiatives") this.onSubscribeInitiatives(digestTopics);
-      if (topic === "background") {
-        // Snapshot-only for now: the sidecar revisions still seed the
-        // client's digest, so adopting one later needs no wire change. The snapshot is a BOUNDED window over a
-        // registry that keeps its terminal history, so the answer's size is a
-        // constant rather than a function of this install's age.
-        const snapshot = backgroundWorkSnapshot();
-        this.send({
-          type: "backgroundWorkList",
-          items: snapshot.items,
-          seq: hub.backgroundEventSeq(),
-          revisions: snapshot.revisions,
-          ...(snapshot.truncated ? { truncated: true } : {}),
-        });
-      }
       if (topic === "worktrees") void this.onListWorktrees();
       // A library (skills, agents) is hand-authored on disk, so a subscribe is
       // a fresh SCAN, never a cached index. It answers through the topic

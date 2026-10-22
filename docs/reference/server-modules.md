@@ -1478,13 +1478,16 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   bounded state, frozen deadline, the host epoch's state, the bounded command
   and description, and evidence FACTS (`providerBound`, sizes, truncation,
   refusal reason) — never a vendor task id, process id, path or artifact body.
-  `hub.ts` coalesces the store's post-commit touched-id seam into `stateEvents`
-  — reading revisions for the reported ids only, never the whole table, so a
-  flush costs the change and not the history — and, because the owner's activity
-  moved, one session-list rebuild; `connection.ts` answers a subscribe with the
-  `backgroundWorkList` snapshot plus its revision sidecar. That snapshot is
-  `backgroundWorkSnapshot()`: a BOUNDED window — active work first, then the
-  newest history, capped at `BACKGROUND_WORK_SNAPSHOT_MAX`, read by
+  It also exports `backgroundWorkTopic`, the topic's descriptor for the state
+  topic kernel (`stateTopicKernel.ts`, registered in `stateTopics.ts`). The
+  store's writes report touched ids through the change set (`db/changeSet.ts`);
+  the kernel turns them into `stateEvents`, reading revisions for the reported
+  ids only, never the whole table, so a flush costs the change and not the
+  history. Because the owner's activity moved, the hub's post-publish listener
+  then requests one session-list rebuild. A subscribe is answered by the kernel
+  with the `backgroundWorkList` snapshot plus its revision sidecar. That
+  snapshot is `backgroundWorkSnapshot()`: a BOUNDED window — active work first,
+  then the newest history, capped at `BACKGROUND_WORK_SNAPSHOT_MAX`, read by
   `listRegistryWindow` as active rows through their partial index plus just
   enough newest history, with each revision taken from its own row — because
   terminal rows are retained until their owner session is deleted, so an

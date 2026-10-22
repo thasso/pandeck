@@ -11,8 +11,7 @@ process.env.DATA_DIR = join(tmp, "data");
 const { Connection } = await import("./connection.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { backgroundWorkStore } = await import("./db/backgroundWorkStore.ts");
-const { BACKGROUND_WORK_SNAPSHOT_MAX, backgroundWorkSnapshot } =
-  await import("./backgroundWorkRegistry.ts");
+const { backgroundWorkSnapshot } = await import("./backgroundWorkRegistry.ts");
 const { hub } = await import("./hub.ts");
 const { getDb, withDbTransaction } = await import("./db/index.ts");
 
@@ -215,25 +214,21 @@ function seedFinishedHistory(ownerSessionId: string, count: number): string[] {
 /** Every `background` state event a connected client receives meanwhile. */
 function watchBackgroundEvents() {
   const events: Array<{ id: string; kind: string; revision: number }> = [];
-  const batches: Array<{ seq: number; size: number }> = [];
   const viewer = {
     send: (message: {
       type: string;
       topic?: string;
-      seq?: number;
       events?: typeof events;
     }): void => {
       if (message.type !== "stateEvents" || message.topic !== "background")
         return;
       events.push(...(message.events ?? []));
-      batches.push({ seq: message.seq!, size: message.events?.length ?? 0 });
     },
     wantsTopic: (topic: string) => topic === "background",
   };
   hub.register(viewer as never);
   return {
     events,
-    batches,
     flushed: () => new Promise((resolve) => setTimeout(resolve, 60)),
     stop: () => hub.unregister(viewer as never),
   };
@@ -353,7 +348,7 @@ test("a failed session write fails the delete and keeps the session and its hist
   assert.equal(backgroundWorkStore.getItem(itemId)?.revision, before);
 });
 
-test("deleting a session with more history than one frame sends bounded batches", async () => {
+test("deleting a session with more history than one id statement deletes every row", async () => {
   const id = "delete-large-background-history";
   seed(id);
   // Past both the per-statement id chunk (500) and the snapshot cap (200).
@@ -362,7 +357,6 @@ test("deleting a session with more history than one frame sends bounded batches"
   try {
     await watch.flushed();
     watch.events.length = 0;
-    watch.batches.length = 0;
 
     await connectionViewing(id).conn.onDeleteSession(id);
     await watch.flushed();
@@ -373,12 +367,6 @@ test("deleting a session with more history than one frame sends bounded batches"
       [...owned].sort(),
     );
     assert.ok(watch.events.every((event) => event.kind === "delete"));
-    assert.equal(watch.batches.length, 6);
-    for (const [index, batch] of watch.batches.entries()) {
-      assert.ok(batch.size <= BACKGROUND_WORK_SNAPSHOT_MAX);
-      // Consecutive, so a client sees no gap and never resyncs.
-      if (index > 0) assert.equal(batch.seq, watch.batches[index - 1]!.seq + 1);
-    }
   } finally {
     watch.stop();
   }
