@@ -421,14 +421,17 @@ admission). It picks a non-degraded account for the session's model, effort and
 enterprise requirement and moves the idle session through the same
 `driver.switchAccount` as failover below. Every switch step rechecks the turn's
 Stop hold and recovery admission, the target's health and bench, and the model
-selection. A Claude session with no native id yet (new, or after `/clear`) has
-no history to copy and moves by rebinding alone; failover still refuses that
+selection, and the facade repeats a target-bound check (binding, enabled,
+enterprise, health, bench, selection) after the move and right before the turn's
+final admission. A Claude session with no native id yet (new, or after `/clear`)
+has no history to copy and moves by rebinding alone; failover still refuses that
 case. The display-only marker `Switched from A to B — A is disabled.` is
-appended only once the turn is admitted, and the turn counts as moved for the
-encrypted-reasoning retry below. With no eligible account the turn is refused
-before any append with a message naming the disabled account. A running turn, a
-steer into it, a recovery continuation and a provider-initiated turn
-(`beginRuntimeProviderTurn`) are never moved this way. Disabling an account
+appended only once the turn is admitted. The session's next run that actually
+starts counts as moved for the encrypted-reasoning retry below, even if the turn
+that moved it was refused. With no eligible account the turn is refused before
+any append with a message naming the disabled account. A running turn, a steer
+into it, a steer-only message, a recovery continuation and a provider-initiated
+turn (`beginRuntimeProviderTurn`) are never moved this way. Disabling an account
 therefore takes effect on each bound session's next turn.
 
 An explicitly bound session can also move after its own subscription provider

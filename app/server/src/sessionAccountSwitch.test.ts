@@ -134,6 +134,7 @@ function setup(
     [];
   const moves: string[] = [];
   let moveGate: (() => Promise<void>) | undefined;
+  let afterMove: (() => Promise<void>) | undefined;
   let failureGate: (() => Promise<void>) | undefined;
   let completionGate: (() => Promise<void>) | undefined;
   async function drive(text: string, continuation: boolean) {
@@ -218,6 +219,7 @@ function setup(
       sessionStore.switchCredentialProfile(id, profileId, next);
       profileId = next;
       moves.push(next);
+      await afterMove?.();
     },
   };
   return {
@@ -228,6 +230,9 @@ function setup(
     moves,
     gate: (fn: () => Promise<void>) => {
       moveGate = fn;
+    },
+    afterMove: (fn: () => Promise<void>) => {
+      afterMove = fn;
     },
     failureGate: (fn: () => Promise<void>) => {
       failureGate = fn;
@@ -821,6 +826,78 @@ test("pi retries without encrypted reasoning when the account it was moved to re
   profiles.setCredentialProfileEnabled(a, false);
   await s.send();
   assert.deepEqual(s.moves, [b]);
+  assert.equal(drops, 1);
+  assert.deepEqual(
+    s.calls.map((call) => [call.profileId, call.continuation]),
+    [
+      [b, false],
+      [b, true],
+    ],
+  );
+});
+
+for (const harness of engines) {
+  test(`${harness} a target that needs login after the move commits refuses the turn`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    profiles.setCredentialProfileEnabled(a, false);
+    s.afterMove(async () =>
+      health.reportAccountRunFailure(
+        b,
+        { kind: "auth", loginDeath: true },
+        offers.get(b)!.provider,
+        health.observeAccountHealth(b),
+      ),
+    );
+    await assert.rejects(s.send(), /B became unavailable/);
+    assert.equal(s.calls.length, 0);
+    assert.ok(
+      !JSON.stringify(s.runtime.get(s.id)?.clientTimeline() ?? []).includes(
+        "Switched from",
+      ),
+    );
+  });
+  test(`${harness} a steer-only message to an idle session on a disabled account moves nothing`, async () => {
+    const a = account(harness, "A");
+    account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    profiles.setCredentialProfileEnabled(a, false);
+    await assert.rejects(s.send({ steer: true, steerOnly: true }));
+    assert.deepEqual(s.moves, []);
+    assert.equal(s.calls.length, 0);
+    assert.ok(
+      !JSON.stringify(s.runtime.get(s.id)?.clientTimeline() ?? []).includes(
+        "Switched from",
+      ),
+    );
+  });
+}
+
+test("pi keeps a refused turn's move for the encrypted-reasoning retry of the next run", async () => {
+  const a = account("pi", "A");
+  const b = account("pi", "B");
+  const s = setup("pi", a, [
+    { kind: "server", encryptedReasoningRejected: true },
+    undefined,
+  ]);
+  let drops = 0;
+  s.driver.dropEncryptedReasoning = async (admit) => {
+    admit();
+    drops += 1;
+    return true;
+  };
+  profiles.setCredentialProfileEnabled(a, false);
+  await assert.rejects(
+    s.send({
+      admit: () => {
+        throw new Error("caller refused admission");
+      },
+    }),
+    /caller refused admission/,
+  );
+  assert.deepEqual(s.moves, [b]);
+  await s.send();
   assert.equal(drops, 1);
   assert.deepEqual(
     s.calls.map((call) => [call.profileId, call.continuation]),

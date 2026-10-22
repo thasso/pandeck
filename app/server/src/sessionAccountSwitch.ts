@@ -54,8 +54,7 @@ interface Recovery {
 interface Controller {
   driver: RuntimePromptDriver;
   dispose: () => void;
-  /** `movedFrom`: the turn starts on an account it was just moved to. */
-  prepare: (ticket?: AccountRecoveryTicket, movedFrom?: string) => void;
+  prepare: (ticket?: AccountRecoveryTicket) => void;
 }
 const controllers = new WeakMap<LiveRuntimeSession, Controller>();
 function signature(selection: Selection | undefined): string {
@@ -68,18 +67,26 @@ function signature(selection: Selection | undefined): string {
 }
 
 /**
+ * Sessions moved off a disabled account whose next run has not started yet.
+ * That run is a cross-account move like failover's, even when the turn that
+ * moved it was refused, so the controller consumes the entry when it starts.
+ */
+const movedBeforeTurn = new Map<string, string>();
+
+/**
  * A turn starting on a disabled account first moves the idle session to the
  * next eligible account within its enterprise requirement, through the same
  * engine switch as limit failover. `admit` is the caller's side-effect-free
  * turn admission, rechecked at every switch step with the target's health,
  * bench and the model selection. Answers the display-only marker for the
- * caller to append once the turn is admitted; with no eligible account the
- * turn is refused. A running turn is never interrupted.
+ * caller to append once the turn is admitted, and `usable`, the target-bound
+ * check the caller repeats right before that admission; with no eligible
+ * account the turn is refused. A running turn is never interrupted.
  */
 export async function moveOffDisabledAccount(
   driver: RuntimePromptDriver,
   admit: () => void,
-): Promise<{ from: string; notice: string } | undefined> {
+): Promise<{ notice: string; usable: () => void } | undefined> {
   const source = driver.credentialProfileId
     ? credentialProfileById(driver.credentialProfileId)
     : undefined;
@@ -110,6 +117,19 @@ export async function moveOffDisabledAccount(
     throw new Error(
       `${source.name} is disabled and no other eligible account is available. Enable an account to continue this session.`,
     );
+  const unavailable = () =>
+    new Error(
+      `${target.name} became unavailable while this session was moving off the disabled ${source.name}.`,
+    );
+  const eligible = () => {
+    if (
+      signature(driver.modelSelection?.()) !== signature(selected) ||
+      readAccountHealth(target.id, credentialProfileHasCredential(target.id))
+        .state === "needs-login" ||
+      readAccountBench(target.id, model.id)
+    )
+      throw unavailable();
+  };
   await driver.switchAccount(
     target.id,
     () => {
@@ -120,21 +140,27 @@ export async function moveOffDisabledAccount(
         target.id,
         source.provider,
       );
-      if (
-        signature(driver.modelSelection?.()) !== signature(selected) ||
-        readAccountHealth(target.id, credentialProfileHasCredential(target.id))
-          .state === "needs-login" ||
-        readAccountBench(target.id, model.id)
-      )
-        throw new Error(
-          `${target.name} became unavailable while this session was moving off the disabled ${source.name}.`,
-        );
+      eligible();
     },
     true,
   );
+  movedBeforeTurn.set(driver.id, source.id);
+  const usable = () => {
+    const profile = credentialProfileById(target.id);
+    const row = sessionStore.get(driver.id);
+    if (
+      !profile?.enabled ||
+      driver.credentialProfileId !== target.id ||
+      row?.credentialProfileId !== target.id ||
+      (row.requiresEnterprise && !profile.enterprise)
+    )
+      throw unavailable();
+    eligible();
+  };
+  usable();
   return {
-    from: source.id,
     notice: `Switched from ${source.name} to ${target.name} — ${source.name} is disabled.`,
+    usable,
   };
 }
 
@@ -142,9 +168,8 @@ export async function moveOffDisabledAccount(
 export function prepareAccountRecoveryTurn(
   live: LiveRuntimeSession,
   ticket?: AccountRecoveryTicket,
-  movedFrom?: string,
 ): void {
-  controllers.get(live)?.prepare(ticket, movedFrom);
+  controllers.get(live)?.prepare(ticket);
 }
 
 /** Watches both facade prompts and provider-initiated runs on the same live wrapper. */
@@ -161,7 +186,6 @@ export function installAccountRecovery(
   previous?.dispose();
   let attempt: Attempt | undefined;
   let nextTicket: AccountRecoveryTicket | undefined;
-  let nextMovedFrom: string | undefined;
   let activeTicket: AccountRecoveryTicket | undefined;
   let candidate: Recovery | undefined;
   let pumping = false;
@@ -413,12 +437,12 @@ export function installAccountRecovery(
       if (!continuing) {
         visited.clear();
         stripped.clear();
-        // A pre-turn move is a cross-account move like failover's.
-        moved = nextMovedFrom !== undefined;
-        if (nextMovedFrom) visited.add(nextMovedFrom);
+        const movedFrom = movedBeforeTurn.get(driver.id);
+        movedBeforeTurn.delete(driver.id);
+        moved = movedFrom !== undefined;
+        if (movedFrom) visited.add(movedFrom);
       }
       nextTicket = undefined;
-      nextMovedFrom = undefined;
       attempt = {
         runId: event.runId,
         profileId: driver.credentialProfileId,
@@ -486,10 +510,8 @@ export function installAccountRecovery(
   controllers.set(live, {
     driver,
     dispose: unsubscribe,
-    prepare: (ticket, movedFrom) => {
-      if (live.isRunning) return;
-      nextTicket = ticket;
-      nextMovedFrom = movedFrom;
+    prepare: (ticket) => {
+      if (!live.isRunning) nextTicket = ticket;
     },
   });
 }
