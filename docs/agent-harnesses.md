@@ -199,10 +199,11 @@ Four layers, each depending only on the ones below it:
    card) to viewers and the runtime adapter alike, while the engine keeps the
    turn's ids, running state and teardown. A host command ends its turn with one
    `finishSyntheticCard`, whichever card it renders. The live display-block
-   helpers live in `session/runtime/liveBlocks.ts`. Pi now supplies native facts
-   to the app's state owner; `HarnessDriver.state()` remains during the staged
-   migration. `HarnessHost.browserRuntimeOwner` injects resident browser-owner
-   metadata into the owner, avoiding an owner-to-registry-to-engine cycle.
+   helpers live in `session/runtime/liveBlocks.ts`. Both engines supply native
+   facts to the app's state owner; `HarnessDriver.state()` remains during the
+   staged migration. `HarnessHost.browserRuntimeOwner` injects resident
+   browser-owner metadata into the owner, avoiding an
+   owner-to-registry-to-engine cycle.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
    `session/planHint.ts` keeps each engine's Plan reminder in a table keyed by

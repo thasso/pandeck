@@ -468,7 +468,7 @@ test("both stores reach the hub through one host", () => {
     .spyOn(claudeSdkStore, "setOnChange")
     .mockImplementation(() => {});
   const setProvider = vi
-    .spyOn(claudeSdkStore, "setBrowserRuntimesProvider")
+    .spyOn(claudeSdkStore, "setBrowserRuntimeOwner")
     .mockImplementation(() => {});
   const host = {
     broadcastSessions: async () => {
@@ -479,11 +479,11 @@ test("both stores reach the hub through one host", () => {
       calls.push("checkPendingReload");
     },
     isReloadQueued: () => false,
-    browserRuntimesFor: (sessionId: string) => {
-      calls.push(`browserRuntimesFor:${sessionId}`);
-      return [];
+    browserRuntimesFor: () => [],
+    browserRuntimeOwner: (sessionId: string) => {
+      calls.push(`browserRuntimeOwner:${sessionId}`);
+      return undefined;
     },
-    browserRuntimeOwner: () => undefined,
   };
   harnessRegistry.setHost(host);
 
@@ -494,7 +494,7 @@ test("both stores reach the hub through one host", () => {
   assert.deepEqual(calls, [
     "broadcastSessions",
     "checkPendingReload",
-    "browserRuntimesFor:s1",
+    "browserRuntimeOwner:s1",
   ]);
 });
 

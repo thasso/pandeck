@@ -35,7 +35,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   AgentType,
-  BrowserRuntimeInfo,
   ContextInfo,
   DisplayMessage,
   Harness,
@@ -45,16 +44,12 @@ import type {
   SessionMode,
   SessionNamingSettings,
   SessionState,
-  SessionSkillInvocation,
-  SessionToolExposure,
   SessionToolLoadEvent,
   ThinkingLevel,
 } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
-  HARNESSES,
   isCodingAgentType,
-  sessionCompactionWindowState,
   sessionModeOrDefault,
   UNLABELED_SESSION_TITLE,
 } from "@assistant/shared";
@@ -76,45 +71,27 @@ import type { SessionToolServer } from "../mcp/sessionToolServer.ts";
 import {
   closeToolGroupSession,
   hasToolGroupSession,
-  getPendingPostReloadContinuation,
 } from "../mcp/toolGroups/registry.ts";
-import {
-  listSessionArtifacts,
-  removeSessionArtifact,
-} from "../mcp/toolGroups/packRuntime.ts";
+import { removeSessionArtifact } from "../mcp/toolGroups/packRuntime.ts";
 import { buildCommitSessionManager } from "../claudeCommitContext.ts";
 import {
   buildModelPromptWithAttachments,
   type ImageContentLike,
 } from "../promptAttachments.ts";
 import { removeAgentTempTree } from "../agentTempTree.ts";
-import { AGENT_TYPES } from "../agentTypes.ts";
-import {
-  integrationGatedActiveToolNames,
-  eagerToolNamesFor,
-  modeGatedActiveToolNames,
-} from "../tools/catalog.ts";
+import { eagerToolNamesFor } from "../tools/catalog.ts";
 import { externalToolName, MCP_SERVER_NAME } from "../mcp/names.ts";
-import {
-  buildToolExposure,
-  toolDefinitionChars,
-} from "../tools/toolExposure.ts";
+import { buildSessionState, type SessionNativeFacts } from "../sessionState.ts";
 import {
   sessionPromptConditions,
   type PromptConditions,
 } from "../promptConditions.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
-import {
-  displayedSessionAgent,
-  sessionAgent,
-  sessionAgentSummary,
-  withoutDeniedTools,
-} from "../agents/sessionAgent.ts";
-import {
-  skillInvocationTrail,
-  type SkillInvocationCommand,
-  type SkillInvocationToolCall,
-  type SkillInvocationTranscript,
+import { sessionAgent } from "../agents/sessionAgent.ts";
+import type {
+  SkillInvocationCommand,
+  SkillInvocationToolCall,
+  SkillInvocationTranscript,
 } from "../skills/skillInvocations.ts";
 import {
   skillRuntimePluginName,
@@ -129,8 +106,6 @@ import { childProcessEnv } from "../subprocessEnv.ts";
 import { CWD } from "../config.ts";
 import { claudeProfileEnvironment } from "../credentialProfiles.ts";
 import {
-  getAnsweredAgentQuestions,
-  getPendingAgentQuestions,
   hasPendingAgentQuestion,
   questionRequestIdFromToolResult,
   relinkAgentQuestionToolCallId,
@@ -140,6 +115,7 @@ import type {
   CompactionWindowApplyResult,
   CompactionWindowHarnessStatus,
   CompactionWindowLowerResult,
+  HarnessHost,
   LiveSession,
   Viewer,
 } from "../harness.ts";
@@ -186,13 +162,6 @@ import type {
 } from "./claudeSdkRecords.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { assertSessionAccountSwitch } from "../sessionAccount.ts";
-import { worktreeIdForSession } from "../db/worktreeStore.ts";
-import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
-import {
-  findOriginTask,
-  listRelatedGlobalTasks,
-  listSessionTasks,
-} from "../tasks.ts";
 import {
   approvalsForSession,
   hasPendingApproval,
@@ -206,15 +175,7 @@ import {
   withPullRequestCardBlocks,
 } from "../pullRequestCards.ts";
 import { sessionRunStartedAt } from "../sessionActivity.ts";
-import {
-  directSpawnField,
-  drainRecipient,
-  peerPromptPeersFor,
-  peerPromptQueueField,
-  peerPromptThreadsFor,
-} from "../peerPrompt.ts";
-import { backgroundUpdateQueueField } from "../backgroundUpdateQueue.ts";
-import { promptQueueField } from "../promptQueue.ts";
+import { drainRecipient } from "../peerPrompt.ts";
 import { backgroundWorkStore } from "../db/backgroundWorkStore.ts";
 import { captureTaskOutputArtifact } from "../outputPolicy.ts";
 import { peerPromptStore } from "../db/peerPromptStore.ts";
@@ -820,8 +781,8 @@ export class ClaudeSdkSession implements LiveSession {
   /** Set once disposed: nothing may drive this instance again. */
   private disposed = false;
   /** Notify the hub that the working tree may have changed (→ refresh workspace info). */
-  /** Browser runtimes visible to this session, provided by the hub. */
-  browserRuntimesFor: (sessionId: string) => BrowserRuntimeInfo[] = () => [];
+  /** Resident browser-owner metadata, provided through the hub's host. */
+  browserRuntimeOwner: HarnessHost["browserRuntimeOwner"] = () => undefined;
 
   constructor(
     readonly id: string,
@@ -1073,128 +1034,33 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   state(): SessionState {
-    const idleReasonValue = hasPendingAgentQuestion(this.sessionId)
-      ? "awaiting_question"
-      : hasPendingApproval(this.sessionId)
-        ? "awaiting_approval"
-        : hasChoosingTaskCard(this.sessionId)
-          ? "awaiting_task_choice"
-          : undefined;
-    const pendingQuestionsValue = getPendingAgentQuestions(this.sessionId);
-    const pendingPostReloadContinuationValue = getPendingPostReloadContinuation(
-      this.id,
+    return buildSessionState(this.id, this.nativeFacts(), (id) =>
+      this.browserRuntimeOwner(id),
     );
-    const activeSkillsValue = activeSkillsForSession(this.id, this.agentType);
-    const agentValue = sessionAgentSummary(this.id);
-    const worktreeIdValue = this.safeWorktreeId();
-    const originTaskValue = this.safeOriginTask();
+  }
+
+  /** Native configuration and CLI observations, without app-state projection. */
+  nativeFacts(): SessionNativeFacts {
     const stored = sessionStore.getIncludingDeleted(this.id);
-    const requiresEnterprise = stored?.requiresEnterprise;
-    const compactionWindowValue = this.compactionWindowState(
-      stored?.compactionWindow,
-    );
     return {
-      sessionId: this.id,
-      ...(this.sessionFile !== undefined
-        ? { sessionFile: this.sessionFile }
-        : {}),
       harness: this.harness,
       agentType: this.agentType,
+      kind: this.kind,
+      sessionFile: this.sessionFile,
+      forkOrigin: this.forkOrigin,
       model: this.modelOption(),
       thinkingLevel: this.thinkingLevel,
       mode: this.mode,
-      ...(requiresEnterprise ? { requiresEnterprise: true } : {}),
-      ...(compactionWindowValue !== undefined
-        ? { compactionWindow: compactionWindowValue }
-        : {}),
-      canSteer: this.canSteer,
-      ...(this.forkOrigin ? { forkOrigin: this.forkOrigin } : {}),
-      ...(idleReasonValue !== undefined ? { idleReason: idleReasonValue } : {}),
-      ...(pendingQuestionsValue.length > 0
-        ? { pendingQuestions: pendingQuestionsValue }
-        : {}),
-      answeredQuestions: getAnsweredAgentQuestions(this.sessionId),
-      tasks: this.safeSessionTasks(),
-      relatedGlobalTasks: this.safeRelatedGlobalTasks(),
-      ...(originTaskValue !== undefined ? { originTask: originTaskValue } : {}),
-      toolExposure: this.toolExposure(),
-      ...(activeSkillsValue !== undefined
-        ? {
-            activeSkills: activeSkillsValue,
-            skillInvocations: this.skillInvocations(activeSkillsValue),
-          }
-        : {}),
-      ...(agentValue !== undefined ? { agent: agentValue } : {}),
-      ...(isCodingAgentType(this.agentType)
-        ? { artifacts: listSessionArtifacts(this.id) }
-        : {}),
-      // Dev-supervisor reload continuation is a Workshop-only (local dev) concept.
-      ...(this.agentType === "workshop"
-        ? {
-            ...(pendingPostReloadContinuationValue !== undefined
-              ? {
-                  pendingPostReloadContinuation:
-                    pendingPostReloadContinuationValue,
-                }
-              : {}),
-          }
-        : {}),
-      ...(isCodingAgentType(this.agentType)
-        ? { browserRuntimes: this.browserRuntimesFor(this.id) }
-        : {}),
-      peerPrompts: peerPromptThreadsFor(this.id),
-      peerPromptPeers: peerPromptPeersFor(this.id),
-      ...promptQueueField(this.id),
-      ...peerPromptQueueField(this.id),
-      ...directSpawnField(this.id),
-      ...backgroundUpdateQueueField(this.id),
-      ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
-      ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
+      live: {
+        canSteer: this.canSteer,
+        compactionWindow: {
+          contextWindow: this.modelOption().contextWindow,
+          live: this.compactionWindow.status(stored?.compactionWindow),
+        },
+        skillInvocationTranscript: () => this.committedToolCalls(),
+        toolLoading: this.toolLoadingFacts(),
+      },
     };
-  }
-
-  private safeSessionTasks(): ReturnType<typeof listSessionTasks> {
-    try {
-      return listSessionTasks(this.agentType, this.id);
-    } catch (error) {
-      console.warn("Failed to read Session Tasks:", error);
-      return [];
-    }
-  }
-
-  private safeRelatedGlobalTasks(): ReturnType<typeof listRelatedGlobalTasks> {
-    try {
-      return listRelatedGlobalTasks(this.agentType, this.id);
-    } catch (error) {
-      console.warn("Failed to read related Tasks:", error);
-      return [];
-    }
-  }
-
-  private safeOriginTask(): ReturnType<typeof findOriginTask> {
-    try {
-      return findOriginTask(this.id);
-    } catch (error) {
-      console.warn("Failed to read origin Task:", error);
-      return undefined;
-    }
-  }
-
-  private safeWorktreeId(): string | undefined {
-    try {
-      return worktreeIdForSession(this.id);
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** The linked worktree is gone and the user has not acknowledged it (Task 321). */
-  private safeWorktreeMissing(): boolean {
-    try {
-      return sessionWorktreeMissing(this.id);
-    } catch {
-      return false;
-    }
   }
 
   contextInfo(): ContextInfo {
@@ -1526,20 +1392,6 @@ export class ClaudeSdkSession implements LiveSession {
     return this.activeQuery && this.inputQueue && !this.processClosing
       ? this.queryEpochKey
       : undefined;
-  }
-
-  private compactionWindowState(
-    stored: number | undefined,
-  ): SessionState["compactionWindow"] {
-    return sessionCompactionWindowState(
-      HARNESSES[this.harness].compactionWindow,
-      {
-        stored,
-        note: sessionStore.get(this.id)?.compactionWindowNote,
-        contextWindow: this.modelOption().contextWindow,
-        live: this.compactionWindow.status(stored),
-      },
-    );
   }
 
   /** The stored window a query starts with, as builder input. */
@@ -3155,11 +3007,6 @@ export class ClaudeSdkSession implements LiveSession {
     return activeSkillsForSession(this.id, this.agentType) ?? [];
   }
 
-  /** Library-skill loads in the committed transcript (Skill calls, SKILL.md reads). */
-  private skillInvocations(frozenNames: string[]): SessionSkillInvocation[] {
-    return skillInvocationTrail(frozenNames, this.committedToolCalls());
-  }
-
   /**
    * Raw native tool names: the Skill/Read contract is the CLI's, not an MCP
    * namespace. A skill turn's `command` load is its user entry's
@@ -3212,53 +3059,34 @@ export class ClaudeSdkSession implements LiveSession {
     return { calls, succeeded, commands };
   }
 
-  /** The Tools-inspector projection: catalog universe + CLI tool-search load state. */
-  private toolExposure(): SessionToolExposure {
-    const tools = withoutDeniedTools(
-      AGENT_TYPES[this.agentType].tools(),
-      displayedSessionAgent(this.id),
-    );
-    const integrationActive = integrationGatedActiveToolNames(
-      this.agentType,
-      tools,
-      new Set(tools.map((tool) => tool.name)),
-    );
-    const usable = modeGatedActiveToolNames(
-      this.mode,
-      tools,
-      integrationActive,
-    );
+  /** Native CLI load state; the owner supplies catalog and policy gates. */
+  private toolLoadingFacts(): NonNullable<
+    NonNullable<SessionNativeFacts["live"]>["toolLoading"]
+  > {
     const eager = eagerToolNamesFor(this.agentType, this.promptConditions());
     // Before the first getContextUsage refresh, assume the eager tier is loaded
     // (alwaysLoad) and everything deferred is not.
     const loaded = new Set<string>();
     const tokensByName = new Map<string, number>();
-    const definitionCharsByName = new Map(
-      tools.map((tool) => [
-        tool.name,
-        toolDefinitionChars(tool, externalToolName(tool.name)),
-      ]),
-    );
     const used = new Set<string>();
     for (const entry of this.committed) {
       if (entry.type !== "message" || entry.role !== "assistant") continue;
       for (const block of entry.content)
         if (block.type === "toolCall") used.add(normalizedToolName(block.name));
     }
-    for (const name of usable) {
-      const state = this.toolLoadState.get(name);
-      if (state ? state.loaded : eager.has(name)) loaded.add(name);
-      if (state) tokensByName.set(name, state.tokens);
+    for (const name of eager)
+      if (!this.toolLoadState.has(name)) loaded.add(name);
+    for (const [name, state] of this.toolLoadState) {
+      if (state.loaded) loaded.add(name);
+      tokensByName.set(name, state.tokens);
     }
-    return buildToolExposure({
-      agentType: this.agentType,
-      usableToolNames: usable,
+    return {
       loadedToolNames: loaded,
       usedToolNames: used,
-      definitionCharsByName,
+      definitionNamePrefix: externalToolName(""),
       tokensByName,
       loadEvents: this.toolLoadEvents,
-    });
+    };
   }
 
   abort(): void {

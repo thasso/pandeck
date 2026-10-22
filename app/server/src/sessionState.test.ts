@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, expect, test, vi } from "vitest";
-import type { SessionState, ThinkingLevel } from "@assistant/shared";
+import type { AgentType, SessionState, ThinkingLevel } from "@assistant/shared";
 import type { SessionNativeFacts } from "./sessionState.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "session-state-"));
@@ -66,6 +66,9 @@ const { registerSessionToolExposure } =
 const { stageSessionArtifact } =
   await import("./mcp/toolGroups/packRuntime.ts");
 const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
+const { agentToolsFor } = await import("./tools/catalog.ts");
+const { toolDefinitionChars } = await import("./tools/toolExposure.ts");
+const { externalToolName } = await import("./mcp/names.ts");
 
 function storedFacts(id: string): SessionNativeFacts {
   const meta = sessionStore.get(id)!;
@@ -342,7 +345,12 @@ test("detached serialization preserves the pre-owner field order and values", as
         usable: true,
         used: true,
         tokens: 42,
-        definitionChars: 123,
+        definitionChars: toolDefinitionChars(
+          agentToolsFor(facts.kind).find((tool) => tool.name === "task_read")!,
+          facts.harness === "claude-sdk"
+            ? externalToolName("task_read")
+            : "task_read",
+        ),
       });
       expect(
         exposure.tools.find((tool) => tool.name === "task_manage"),
@@ -357,6 +365,14 @@ test("detached serialization preserves the pre-owner field order and values", as
       expect(exposure.tools.some((tool) => tool.name === "find_tools")).toBe(
         facts.harness === "pi",
       );
+      if (facts.harness === "pi")
+        expect(
+          exposure.tools.find((tool) => tool.name === "find_tools"),
+        ).toMatchObject({ definitionChars: 789, tokens: 12 });
+      for (const name of ["task_manage", "worktree_commit", "slack_search"])
+        expect(
+          exposure.tools.find((tool) => tool.name === name),
+        ).not.toHaveProperty("tokens");
       expect(JSON.stringify(state)).not.toContain("transitions");
       expect(state.tasks!.every((task) => !("description" in task))).toBe(true);
     }
@@ -425,8 +441,19 @@ function liveFixtures(base: SessionNativeFacts): SessionNativeFacts[] {
           "slack_search",
         ]),
         usedToolNames: new Set(["task_read"]),
-        definitionCharsByName: new Map([["task_read", 123]]),
-        tokensByName: new Map([["task_read", 42]]),
+        definitionNamePrefix:
+          harness === "claude-sdk" ? externalToolName("") : "",
+        definitionCharsByName: new Map([
+          ["task_read", 123],
+          ["find_tools", 789],
+        ]),
+        tokensByName: new Map([
+          ["task_read", 42],
+          ["task_manage", 45],
+          ["worktree_commit", 46],
+          ["slack_search", 47],
+          ["find_tools", 12],
+        ]),
         includeFindTools: harness === "pi",
         loadEvents: [{ at: 400, via: "find_tools", names: ["task_read"] }],
       },
@@ -568,36 +595,38 @@ test("undefined optionals are absent, and only coding live facts enable live pro
   expect(coding).not.toHaveProperty("browserRuntimes");
 });
 
-test("lazy native transcripts are read only for rendered nonempty frozen skills", () => {
-  const transcript = vi.fn(() => ({ calls: [], succeeded: new Set<string>() }));
-  const facts: SessionNativeFacts = {
-    harness: "pi",
-    kind: "assistant",
-    agentType: "assistant",
-    thinkingLevel: "off",
-    live: { canSteer: true, skillInvocationTranscript: transcript },
-  };
-  expect(buildSessionState("lazy-skills", facts)).not.toHaveProperty(
-    "skillInvocations",
-  );
-  expect(
-    buildSessionState("lazy-skills", {
+test.each(["claude-sdk", "pi"] as const)(
+  "%s native transcripts are read only for rendered nonempty frozen skills",
+  (harness) => {
+    const id = `lazy-skills-${harness}`;
+    const transcript = vi.fn(() => ({
+      calls: [],
+      succeeded: new Set<string>(),
+    }));
+    const facts: SessionNativeFacts = {
+      harness,
+      kind: "assistant",
+      agentType: "assistant",
+      thinkingLevel: "off",
+      live: { canSteer: true, skillInvocationTranscript: transcript },
+    };
+    expect(buildSessionState(id, facts)).not.toHaveProperty("skillInvocations");
+    const coding: SessionNativeFacts = {
       ...facts,
       kind: "developer",
       agentType: "developer",
-    }).skillInvocations,
-  ).toEqual([]);
-  expect(transcript).not.toHaveBeenCalled();
-  sessionStore.freezeSkills("lazy-skills", '["review"]');
-  expect(
-    buildSessionState("lazy-skills", {
-      ...facts,
-      kind: "developer",
-      agentType: "developer",
-    }).skillInvocations,
-  ).toEqual([]);
-  expect(transcript).toHaveBeenCalledExactlyOnceWith(["review"]);
-});
+    };
+    expect(buildSessionState(id, coding).skillInvocations).toEqual([]);
+    expect(transcript).not.toHaveBeenCalled();
+    sessionStore.freezeSkills(id, '["review"]');
+    expect(
+      buildSessionState(id, { ...coding, live: undefined }),
+    ).not.toHaveProperty("skillInvocations");
+    expect(transcript).not.toHaveBeenCalled();
+    expect(buildSessionState(id, coding).skillInvocations).toEqual([]);
+    expect(transcript).toHaveBeenCalledExactlyOnceWith(["review"]);
+  },
+);
 
 test("the owner reads fresh stored restrictions and compaction, not captured view metadata", () => {
   sessionStore.upsert({
@@ -671,6 +700,84 @@ test("question, approval and task-choice priority comes from the app stores", as
   cards.patchPullRequestCard(card.id, { status: "closed" });
   expect(state()).not.toHaveProperty("idleReason");
   expect(state()).not.toHaveProperty("pendingQuestions");
+});
+
+test.each<AgentType>(["developer", "workshop", "assistant"])(
+  "%s projections include only linked Tasks and refresh their summaries",
+  (agentType) => {
+    const id = `linked-tasks-${agentType}`;
+    sessionStore.upsert({ id, harness: "claude-sdk", agentType });
+    const facts = storedFacts(id);
+    const fixtures = [facts, ...liveFixtures(facts)];
+    const origin = tasks.createTask({
+      title: "Started from this Task",
+      description: "Not sent",
+      source: { createdBy: "user" },
+    });
+    const related = tasks.createTask({
+      title: "Referenced Task",
+      source: { createdBy: "user" },
+    });
+    tasks.createTask({
+      title: "Unrelated Task",
+      source: { createdBy: "user" },
+    });
+    for (const fixture of fixtures) {
+      expect(buildSessionState(id, fixture)).toMatchObject({
+        tasks: [],
+        relatedGlobalTasks: [],
+      });
+      expect(buildSessionState(id, fixture)).not.toHaveProperty("originTask");
+    }
+    tasks.linkSessionToTask(origin.id, { sessionId: id, origin: "task-start" });
+    tasks.linkSessionToTask(related.id, { sessionId: id, origin: "reference" });
+    for (const fixture of fixtures) {
+      const state = buildSessionState(id, fixture);
+      expect(state.originTask).toEqual({
+        id: origin.id,
+        title: origin.title,
+        status: "todo",
+      });
+      expect(state.tasks).toEqual(
+        expect.arrayContaining([
+          tasks.taskSummaryOf(tasks.readTask(origin.id)!),
+          tasks.taskSummaryOf(tasks.readTask(related.id)!),
+        ]),
+      );
+      expect(state.tasks).toHaveLength(2);
+      expect(state.relatedGlobalTasks).toEqual([
+        tasks.taskSummaryOf(tasks.readTask(related.id)!),
+      ]);
+      expect(state.tasks!.every((task) => !("description" in task))).toBe(true);
+    }
+    tasks.updateTask(origin.id, { title: "Renamed origin", status: "doing" });
+    for (const fixture of fixtures)
+      expect(buildSessionState(id, fixture).originTask).toEqual({
+        id: origin.id,
+        title: "Renamed origin",
+        status: "doing",
+      });
+    tasks.deleteTask(origin.id);
+    tasks.deleteTask(related.id);
+    for (const fixture of fixtures) {
+      const state = buildSessionState(id, fixture);
+      expect(state).toMatchObject({ tasks: [], relatedGlobalTasks: [] });
+      expect(state).not.toHaveProperty("originTask");
+    }
+  },
+);
+
+test("live Claude facts retain the compaction note for a deleted but resident session", () => {
+  const id = "deleted-resident-claude";
+  sessionStore.upsert({ id, harness: "claude-sdk", agentType: "developer" });
+  sessionStore.setCompactionWindow(id, 100_000, "Keep the provider note");
+  const facts = liveFixtures(storedFacts(id))[0]!;
+  sessionStore.markDeleted(id);
+  expect(sessionStore.get(id)).toBeUndefined();
+  expect(buildSessionState(id, facts).compactionWindow).toMatchObject({
+    tokens: 100_000,
+    note: "Keep the provider note",
+  });
 });
 
 const failedReads = [
