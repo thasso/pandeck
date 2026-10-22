@@ -6,7 +6,9 @@ import {
   PEER_PROMPT_EXCERPT_CHARS,
   peerPromptExcerpt,
   providerLabel,
+  settleBlockedReason,
   type Patch,
+  type SessionListItem,
 } from "./protocol.ts";
 
 /**
@@ -157,5 +159,23 @@ describe("providerLabel", () => {
     );
     expect(providerLabel(CLAUDE_SDK_PROVIDER)).toBe("Claude SDK");
     expect(providerLabel("github-copilot")).toBe("github-copilot");
+  });
+});
+
+describe("settleBlockedReason", () => {
+  test("holds settlement while background updates it was given are unhandled", () => {
+    const row = {
+      id: "owner",
+      harness: "pi",
+      agentType: "developer",
+      title: "Owner",
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 1,
+    } satisfies SessionListItem;
+    expect(settleBlockedReason(row)).toBeUndefined();
+    expect(settleBlockedReason({ ...row, unhandledBackgroundUpdates: 2 })).toBe(
+      "background updates it was given were not handled.",
+    );
   });
 });

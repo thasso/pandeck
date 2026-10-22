@@ -377,8 +377,6 @@ list:
 - `piSdk/toolBinaries.test.ts` "stops pi's tool lookup from spawning once
   linked": its child counts spawns by patching `child_process` with
   `syncBuiltinESMExports`, which Bun ignores.
-- `db/subagentStore.test.ts` "separate SQLite connections serialize concurrent
-  capacity admission": its workers start with `--import tsx`.
 - `db/cardStoresQueryPlan.test.ts`, both cases: the `EXPLAIN QUERY PLAN`
   difference above.
 

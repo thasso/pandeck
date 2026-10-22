@@ -14,13 +14,13 @@
   never reclassify a session.
 - Projects keep stable TEXT slug ids referenced by `in_project` edges and
   `knowledge/projects/<id>/`; never switch them to integer sequences.
-- Every `subagentStore`/`backgroundWorkStore` mutation uses its
-  transaction-aware touched-id seam, and capacity takes its limit from the
-  caller. Background work stores no vendor address, pid, command, path, env,
-  credential, or output. Boot may call a planned drain stopped only when Stop
-  was not `unconfirmed`; an abandoned unconfirmed drain is `lost`. Accepted
-  residual window: force-exit during grace or the first Stop attempt still reads
-  as planned `stopped`, since the process ended the work and nothing resumes.
+- Every `backgroundWorkStore` mutation uses its transaction-aware touched-id
+  seam, and capacity takes its limit from the caller. Background work stores no
+  vendor address, pid, command, path, env, credential, or output. Boot may call
+  a planned drain stopped only when Stop was not `unconfirmed`; an abandoned
+  unconfirmed drain is `lost`. Accepted residual window: force-exit during grace
+  or the first Stop attempt still reads as planned `stopped`, since the process
+  ended the work and nothing resumes.
 - Write edges only through `links.ts`, whose counters invalidate list memos; add
   relations to its fixed vocabulary, not per-call strings.
 - Add a NEW forward migration rather than editing a shipped one. Update row

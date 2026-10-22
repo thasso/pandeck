@@ -119,20 +119,17 @@ vocabulary, display projection, and normalized session model types.
   retires a pressed button; the rows themselves travel only as `background`
   state events, and `hostCloseWaiting.protectedTurn` reports a retained host
   whose close is waiting on the user's own prompted turn rather than pretending
-  it closed. `SubagentUsageTotals` is the additive finalized-entry token/cost
-  shape; `subagentUsageSnapshotFromEntries` deliberately ignores streaming
-  estimates and context occupancy, reports partial when a finalized assistant
-  entry lacks usage, and rounds cost per durable entry like `sessionStore`.
-  `pullRequest` (`SessionPullRequestSummary`, [Task-342](pa://task/342)) is the
-  same idea for the session's live `/pr` card: the card is durable state of one
-  session's transcript, so a LIST could not otherwise say which session is the
-  one waiting on a review. It carries only what a row states — status, number,
-  CI, review, conflict, draft — never the card's body, warnings or linked Task,
-  and the type itself owns the rule that ONE card speaks for a session (the
-  newest still-moving one, else the newest terminal one) plus the warning that
-  its `ci` is a SNAPSHOT the watcher abandons once the card leaves `open`, so no
-  reader may rank it against a terminal status. Volatile fields (`isStreaming`,
-  `runStartedAt`) must be neutralized when a browser restores its shell cache.
+  it closed. `pullRequest` (`SessionPullRequestSummary`,
+  [Task-342](pa://task/342)) is the same idea for the session's live `/pr` card:
+  the card is durable state of one session's transcript, so a LIST could not
+  otherwise say which session is the one waiting on a review. It carries only
+  what a row states — status, number, CI, review, conflict, draft — never the
+  card's body, warnings or linked Task, and the type itself owns the rule that
+  ONE card speaks for a session (the newest still-moving one, else the newest
+  terminal one) plus the warning that its `ci` is a SNAPSHOT the watcher
+  abandons once the card leaves `open`, so no reader may rank it against a
+  terminal status. Volatile fields (`isStreaming`, `runStartedAt`) must be
+  neutralized when a browser restores its shell cache.
 - `protocol.ts` owns `SessionScope` ([Task-492](pa://task/492)), the three-way
   classification persisted with a session row: `user` (the user's own
   conversation, the ONLY scope a broad/default projection carries), `internal`

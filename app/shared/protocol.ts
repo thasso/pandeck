@@ -20,11 +20,7 @@ import type {
 import type { TurnStatsSeed } from "./turnStats.ts";
 import type { AgentStopReason, AgentUsage } from "./session/content.ts";
 import type { PromptOrigin } from "./session/origin.ts";
-import type {
-  PromptDelivery,
-  SessionEntry,
-  SessionEntryOrigin,
-} from "./session/entries.ts";
+import type { PromptDelivery, SessionEntryOrigin } from "./session/entries.ts";
 import type { PaObjectLinkResolution } from "./objectLinks.ts";
 import type { UsageIndicator } from "./usage.ts";
 import type {
@@ -1724,18 +1720,6 @@ export function pendingSessionOutcome(
   return attention && attention.revision > attention.settledRevision
     ? attention
     : undefined;
-}
-
-/** Compositional activity below one immediate parent session. */
-export interface SubagentDelegationSummary {
-  /** Every accepted child run that has not reached a terminal state. */
-  activeCount: number;
-  /** Child runs not yet admitted to provider execution, including predecessor waits. */
-  startingCount: number;
-  /** Child runs executing or doing host-side terminal processing. */
-  workingCount: number;
-  /** Child runs paused on an exact required response from their parent. */
-  awaitingParentCount: number;
 }
 
 /**
@@ -6676,101 +6660,6 @@ export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "skills",
   "agents",
 ];
-
-/** Cumulative finalized provider usage; live estimates never travel here. */
-export interface SubagentUsageTotals {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  costMicros?: number;
-}
-
-export interface SubagentUsageSnapshot {
-  totals: SubagentUsageTotals;
-  /** Partial means at least one finalized assistant entry had no usage report. */
-  completeness: "partial" | "complete";
-}
-
-/**
- * Sum the authoritative durable assistant entries of a normalized session.
- * Streaming estimates and context-window occupancy are intentionally ignored.
- * Cost follows the session store's per-entry USD→micros rounding.
- */
-export function subagentUsageSnapshotFromEntries(
-  entries: readonly SessionEntry[],
-): SubagentUsageSnapshot {
-  const totals: SubagentUsageTotals = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-  };
-  let assistantEntries = 0;
-  let usageEntries = 0;
-  let hasCost = false;
-  let costMicros = 0;
-  const add = (current: number, value: number | undefined, field: string) => {
-    const amount = value ?? 0;
-    if (!Number.isFinite(amount) || amount < 0)
-      throw new RangeError(`${field} must be a non-negative finite number`);
-    const next = current + amount;
-    if (!Number.isSafeInteger(next))
-      throw new RangeError(`${field} total must be a safe integer`);
-    return next;
-  };
-
-  for (const entry of entries) {
-    if (entry.role !== "assistant") continue;
-    assistantEntries += 1;
-    if (!entry.usage) continue;
-    usageEntries += 1;
-    totals.inputTokens = add(
-      totals.inputTokens,
-      entry.usage.inputTokens,
-      "inputTokens",
-    );
-    totals.outputTokens = add(
-      totals.outputTokens,
-      entry.usage.outputTokens,
-      "outputTokens",
-    );
-    totals.cacheReadTokens = add(
-      totals.cacheReadTokens,
-      entry.usage.cacheReadTokens,
-      "cacheReadTokens",
-    );
-    totals.cacheWriteTokens = add(
-      totals.cacheWriteTokens,
-      entry.usage.cacheCreationTokens,
-      "cacheWriteTokens",
-    );
-    if (entry.usage.costUSD !== undefined) {
-      if (!Number.isFinite(entry.usage.costUSD) || entry.usage.costUSD < 0)
-        throw new RangeError("costUSD must be a non-negative finite number");
-      costMicros = add(
-        costMicros,
-        Math.round(entry.usage.costUSD * 1_000_000),
-        "costMicros",
-      );
-      hasCost = true;
-    }
-  }
-  if (hasCost) totals.costMicros = costMicros;
-  return {
-    totals,
-    completeness: usageEntries === assistantEntries ? "complete" : "partial",
-  };
-}
-
-/** Facts whose ownership remains with one immediate parent session. */
-export interface DelegationObligationProjection {
-  activeRunCount: number;
-  /** Accepted terminal envelopes not yet durably admitted to the parent transcript. */
-  unadmittedResultCount: number;
-  /** Managed worktrees not yet explicitly integrated or discarded. */
-  ownedManagedWorktreeCount: number;
-}
 
 /**
  * Which runtime executes one background work item.
