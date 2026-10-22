@@ -798,6 +798,11 @@ export const DEFAULT_SPEECH_CONVERSATION_SETTINGS: SpeechConversationSettings =
     endpointSilenceSeconds: 1.2,
   };
 
+/** Speech socket send-queue limit. Streaming burst credit includes this backlog
+ * plus a maximum frame; the server derives its finite cap from this value.
+ */
+export const SPEECH_SEND_WATERMARK_BYTES = 256 * 1024;
+
 export const SPEECH_CONVERSATION_LIMITS = {
   numThreads: { min: 1, max: 32 },
   idleShutdownSeconds: { min: 0, max: 24 * 3600 },

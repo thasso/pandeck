@@ -3,7 +3,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { WebSocket } from "ws";
 import { afterEach, test, vi } from "vitest";
-import { DEFAULT_SPEECH_CONVERSATION_SETTINGS } from "@assistant/shared";
+import {
+  DEFAULT_SPEECH_CONVERSATION_SETTINGS,
+  SPEECH_SEND_WATERMARK_BYTES,
+} from "@assistant/shared";
+
 import { getSettings } from "../settings.ts";
 import {
   attachConversationSocket,
@@ -15,6 +19,8 @@ import {
 } from "./streamingSttClient.ts";
 import { StreamingSttEngine } from "./streamingSttEngine.ts";
 import type { SttConnection } from "./sttClient.ts";
+
+const MAX_BURST_SECONDS = Math.ceil(SPEECH_SEND_WATERMARK_BYTES / 32_000) + 1;
 
 class Socket extends EventEmitter {
   OPEN = 1;
@@ -324,13 +330,57 @@ test("rejects audio before accepted, odd PCM, oversized frames and accelerated u
   const fast = setup();
   fast.ws.json({ type: "start" });
   await tick();
-  fast.ws.audio(Buffer.alloc(32000));
-  fast.ws.audio(Buffer.alloc(32000));
-  fast.ws.audio(Buffer.alloc(32000));
+  for (let i = 0; i <= MAX_BURST_SECONDS; i++)
+    fast.ws.audio(Buffer.alloc(32_000));
   assert.equal(fast.ws.closeCode, 1008);
 });
 
-test("F2: sparse keepalives cannot bank more than two seconds of audio credit", async () => {
+test.each([1800, 2500, 3000, 5000, 8400])(
+  "N1: real-time capture survives a %i ms delivery stall and catch-up",
+  async (stallMs) => {
+    vi.useFakeTimers();
+    const s = setup();
+    s.ws.json({ type: "start" });
+    await tick();
+    for (let frame = 0; frame < 50; frame++) {
+      await vi.advanceTimersByTimeAsync(200);
+      s.ws.audio(Buffer.alloc(6400));
+    }
+    await vi.advanceTimersByTimeAsync(stallMs);
+    const queued = Math.floor(stallMs / 200);
+    for (let frame = 0; frame < queued; frame++) s.ws.audio(Buffer.alloc(6400));
+    assert.equal(s.stream.sendPcm16.mock.calls.length, 50 + queued);
+    assert.equal(s.ws.closeCode, undefined);
+    // Resuming the ordinary cadence must not starve after the catch-up.
+    for (let frame = 0; frame < 10; frame++) {
+      await vi.advanceTimersByTimeAsync(200);
+      s.ws.audio(Buffer.alloc(6400));
+    }
+    assert.equal(s.stream.sendPcm16.mock.calls.length, 60 + queued);
+    assert.equal(s.ws.closeCode, undefined);
+    s.ws.close(1000);
+  },
+);
+
+test("N1: burst credit accepts the entire web watermark plus one maximum frame", async () => {
+  vi.useFakeTimers();
+  const s = setup();
+  s.ws.json({ type: "start" });
+  await tick();
+  // The client checks bufferedAmount before send, so the last frame may cross it.
+  const backlog = SPEECH_SEND_WATERMARK_BYTES - 2 + 32_000;
+  for (let remaining = backlog; remaining > 0; remaining -= 32_000)
+    s.ws.audio(Buffer.alloc(Math.min(remaining, 32_000)));
+  const forwarded = s.stream.sendPcm16.mock.calls.reduce(
+    (bytes, [frame]) => bytes + (frame as Buffer).length,
+    0,
+  );
+  assert.equal(forwarded, backlog);
+  assert.equal(s.ws.closeCode, undefined);
+  s.ws.close(1000);
+});
+
+test("F2: sparse keepalives cannot bank more than the finite catch-up cap", async () => {
   vi.useFakeTimers();
   const s = setup();
   s.ws.json({ type: "start" });
@@ -343,7 +393,7 @@ test("F2: sparse keepalives cannot bank more than two seconds of audio credit", 
   s.stream.sendPcm16.mockClear();
   // The review reproduction banked almost an hour, then sent 100 seconds at once.
   for (let i = 0; i < 100; i++) s.ws.audio(Buffer.alloc(32_000));
-  assert.equal(s.stream.sendPcm16.mock.calls.length, 2);
+  assert.equal(s.stream.sendPcm16.mock.calls.length, MAX_BURST_SECONDS);
   assert.equal(s.ws.closeCode, 1008);
   assert.match(String(s.ws.sent.at(-1)?.message), /real-time rate/);
 });
@@ -368,14 +418,12 @@ test("F2: restarting on the same socket resets audio credit", async () => {
   const s = setup();
   s.ws.json({ type: "start" });
   await tick();
-  s.ws.audio(Buffer.alloc(32_000));
-  s.ws.audio(Buffer.alloc(32_000));
+  for (let i = 0; i < MAX_BURST_SECONDS; i++) s.ws.audio(Buffer.alloc(32_000));
   s.ws.json({ type: "cancel" });
   s.ws.json({ type: "start" });
   await tick();
-  s.ws.audio(Buffer.alloc(32_000));
-  s.ws.audio(Buffer.alloc(32_000));
-  assert.equal(s.stream.sendPcm16.mock.calls.length, 4);
+  for (let i = 0; i < MAX_BURST_SECONDS; i++) s.ws.audio(Buffer.alloc(32_000));
+  assert.equal(s.stream.sendPcm16.mock.calls.length, 2 * MAX_BURST_SECONDS);
   assert.equal(s.ws.closeCode, undefined);
   s.ws.close(1000);
 });

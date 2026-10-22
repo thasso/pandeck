@@ -13,11 +13,9 @@
  * the socket's `bufferedAmount` is below a threshold, and the rest wait in
  * `frames` until stop, where the caller drains them.
  */
+import { SPEECH_SEND_WATERMARK_BYTES } from "@assistant/shared";
 import { microphoneGrantPersists } from "./nativeShell.ts";
 import { assistantToken } from "./serverOrigin.ts";
-
-/** Bytes allowed to sit in the socket's send queue before we stop feeding it. */
-const SEND_WATERMARK_BYTES = 256 * 1024;
 /** Recognizer's native rate; the worklet decimates to this when it can. */
 const TARGET_SAMPLE_RATE = 16000;
 
@@ -397,7 +395,7 @@ export function concatFrames(frames: Int16Array[]): ArrayBuffer {
 export function socketAcceptsMore(socket: WebSocket): boolean {
   return (
     socket.readyState === WebSocket.OPEN &&
-    socket.bufferedAmount < SEND_WATERMARK_BYTES
+    socket.bufferedAmount < SPEECH_SEND_WATERMARK_BYTES
   );
 }
 

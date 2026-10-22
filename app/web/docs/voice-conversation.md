@@ -13,7 +13,11 @@ Conversation keeps the microphone open with echo cancellation, noise suppression
 and automatic gain control. The browser reuses the PCM worklet, resamples its
 non-integer output rates to 16 kHz and sends paced 200 ms Int16 frames after
 recognition admission. It retains no utterance buffer. Upload backpressure stops
-conversation rather than replaying stale speech later.
+conversation rather than replaying stale speech later. The shared 256 KiB send
+watermark allows about 8.2 seconds of socket backlog at 16 kHz Int16. The server
+derives its finite ten-second burst credit from that watermark plus one maximum
+frame, so permitted backlog can catch up. Reaching the watermark stops capture
+and reports that upload fell behind; no additional utterance buffer is kept.
 
 Replacement partials appear after the editable typed draft, without changing its
 browser-local saved copy. A nonempty final sends the latest draft plus the

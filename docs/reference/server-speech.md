@@ -131,9 +131,14 @@ offline validator. The protocol is:
    `{ type: "accepted", sampleRate: 16000 }` before sending audio.
 2. Binary frames contain mono Int16 LE at 16 kHz, at most one second per frame.
    Capture must resample on the client. Server forwarding is immediate. A token
-   bucket refills at real time and holds at most two seconds of audio, including
-   after quiet keepalives. A monotonic clock measures refill time. Missing audio
-   for 30 seconds closes the stream.
+   bucket refills at real time and holds at most ten seconds of audio, including
+   after quiet keepalives. Its cap rounds the shared
+   `SPEECH_SEND_WATERMARK_BYTES` send backlog up to whole seconds, then adds one
+   maximum frame. The browser's 256 KiB watermark is about 8.2 seconds at 16 kHz
+   Int16, so an allowed backlog can flush without a rate rejection. The browser
+   checks the watermark before sending and stops conversation if it is reached;
+   the extra frame covers the last send crossing it. A monotonic clock measures
+   refill time. Missing audio for 30 seconds closes the stream.
 3. `{ type: "transcript", segment, text, isFinal }` replaces that segment's
    text. The vocabulary engine runs on both partial and final text. A final
    segment is the browser's auto-send signal; empty segments do not send a turn.

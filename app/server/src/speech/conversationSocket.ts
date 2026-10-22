@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import {
   applySpeechVocabulary,
+  SPEECH_SEND_WATERMARK_BYTES,
   type ConversationClientMessage,
   type ConversationServerMessage,
   type SpeechConversationSettings,
@@ -44,7 +45,11 @@ interface ConversationRecognizer {
 }
 
 const PCM_BYTES_PER_SECOND = 32_000;
-const MAX_AUDIO_CREDIT = 2 * PCM_BYTES_PER_SECOND;
+// Round the web send watermark up to a whole second, plus one maximum frame.
+// At 16 kHz Int16 this is 10 s, so a permitted socket backlog can catch up.
+const MAX_AUDIO_CREDIT =
+  (Math.ceil(SPEECH_SEND_WATERMARK_BYTES / PCM_BYTES_PER_SECOND) + 1) *
+  PCM_BYTES_PER_SECOND;
 
 /** Audio is forwarded immediately. No retry buffer or utterance state is retained. */
 export function attachConversationSocket(
@@ -146,11 +151,15 @@ export function attachConversationSocket(
       const data = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
       if (state !== "listening" || !stream)
         return fail("Wait for accepted before sending conversation audio.");
-      if (data.length === 0 || data.length % 2 || data.length > 32_000)
+      if (
+        data.length === 0 ||
+        data.length % 2 ||
+        data.length > PCM_BYTES_PER_SECOND
+      )
         return fail(
           "Audio must be Int16 LE frames of at most one second at 16 kHz.",
         );
-      // Refill at real time, but never bank quiet time beyond two seconds.
+      // Refill at real time, but never bank more than the bounded catch-up cap.
       // A monotonic clock keeps wall-clock adjustments out of admission.
       const now = performance.now();
       audioCredit = Math.min(
