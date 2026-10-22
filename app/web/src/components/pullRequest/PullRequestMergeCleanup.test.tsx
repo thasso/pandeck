@@ -781,3 +781,34 @@ it("treats a merge the provider has not confirmed as UNKNOWN, without checking a
   );
   expect(document.body.textContent).not.toContain("is still unknown");
 });
+
+// The pending answer itself was lost: the browser has no request id, but the
+// server kept its own record of the attempt, so the automatic check reports it.
+// Open is then still NOT "did not merge".
+it("keeps a lost merge uncertain when the server reports an inconclusive attempt", async () => {
+  queued.push(new TypeError("Failed to fetch"));
+  checkQueue.push({
+    number: 7,
+    state: "open",
+    mergeable: true,
+    checkout: { status: "one", worktreeId: "wt-1" },
+    mergeRequest: {
+      status: "inconclusive",
+      message: "the provider named no request to follow",
+    },
+  });
+  response = new TypeError("Failed to fetch");
+  await render(pr({ worktreeId: "wt-1" }));
+  await click(button(/Merge & clean up/));
+  await click(confirm(/^Merge & clean up$/));
+  await flush();
+
+  // The browser had no id to send; the server answered from its record.
+  expect(checks).toEqual([TARGET]);
+  expect(document.body.textContent).toContain(
+    "the earlier merge attempt is inconclusive (the provider named no request to follow): it may still land",
+  );
+  expect(document.body.textContent).not.toContain("did not merge it");
+  await click(confirm(/Close/));
+  expect(button(/Check again/, host).disabled).toBe(false);
+});

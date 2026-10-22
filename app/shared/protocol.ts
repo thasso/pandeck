@@ -6062,12 +6062,16 @@ export interface PullRequestViewCheckResponse {
   /** The local checkout situation, which decides what cleanup still applies. */
   checkout: PullRequestViewCheckoutState;
   /**
-   * Where the request named by `mergeRequestId` stands, for an OPEN pull
-   * request. `pending` (also: could not be asked) keeps the outcome unknown —
-   * it may still land; only `failed` or `expired` says it did not merge.
+   * Where an outstanding accepted merge stands, for an OPEN pull request: the
+   * one named by `mergeRequestId`, or the server's own record of one when the
+   * client sent none. `pending` (also: could not be asked) and `inconclusive`
+   * (no request id to follow, still being watched) keep the outcome uncertain
+   * — it may still land; `unknown` means the watch ended without an answer;
+   * only `failed` or `expired` says it did not merge.
    */
   mergeRequest?: {
-    status: "pending" | "merged" | "failed" | "expired";
+    status:
+      "pending" | "merged" | "failed" | "expired" | "inconclusive" | "unknown";
     message?: string;
   };
 }

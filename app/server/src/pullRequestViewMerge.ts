@@ -35,6 +35,7 @@
  * request went unanswered.
  */
 import type {
+  PullRequestDetail,
   PullRequestViewCheckRequest,
   PullRequestViewCheckResponse,
   PullRequestViewCleanupOutcome,
@@ -49,7 +50,13 @@ import { errorText } from "./errors.ts";
 import {
   hostingProviderForRepo,
   type GitHostingProvider,
+  type MergeRequestStatus,
 } from "./gitHosting.ts";
+import {
+  forgetPendingMerge,
+  judgePendingMerge,
+  pendingMergeFor,
+} from "./pendingMerges.ts";
 import { pullRequestIdentityThrough } from "./pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "./pullRequestInventory.ts";
 import {
@@ -226,16 +233,15 @@ export async function checkPullRequestFromView(
           `Pull request #${request.number} could not be read from ${request.provider}; its state is still unknown.`,
           409,
         );
-      // A pending merge asked about: while the pull request is still open,
-      // only the request itself can say whether it may yet land.
-      const mergeRequest =
-        request.mergeRequestId && detail.state === "open"
-          ? await mergeRequestStanding(
-              repository.provider,
-              request.number,
-              request.mergeRequestId,
-            )
-          : undefined;
+      // An accepted merge still outstanding — named by the client, or found
+      // by identity when the client never got (or lost) the pending answer.
+      // While the pull request is open only that request can say whether it
+      // may yet land.
+      const mergeRequest = await outstandingMergeStanding(
+        request,
+        repository,
+        detail,
+      );
       const local = await resolveWorktree(
         request,
         detail.headBranch,
@@ -271,24 +277,66 @@ export async function checkPullRequestFromView(
 }
 
 /**
- * Where an accepted merge request stands. A provider that cannot say — no
- * such method, or the read failed — leaves it `pending`: still unknown, which
- * is the one answer that never claims it did not merge.
+ * Where an accepted merge stands, for the check. The record kept by identity
+ * (`pendingMerges.ts`) is judged exactly as the watcher judges it; a request
+ * named only by the client is asked directly. Nothing here ever turns "could
+ * not tell" into "did not merge": a request that cannot be asked stays
+ * `pending`, one with no id to follow is `inconclusive` while it is watched,
+ * and a watch that ends without an answer is `unknown`.
  */
-async function mergeRequestStanding(
+async function outstandingMergeStanding(
+  request: PullRequestViewCheckRequest,
+  repository: ResolvedRepository,
+  detail: PullRequestDetail,
+): Promise<PullRequestViewCheckResponse["mergeRequest"]> {
+  const record = pendingMergeFor(repository.identityKey);
+  if (detail.state !== "open") {
+    if (record) forgetPendingMerge(repository.identityKey, record);
+    return undefined;
+  }
+  const requestId = request.mergeRequestId ?? record?.requestId;
+  if (!record && !requestId) return undefined;
+  const asked: Asked = requestId
+    ? await askMergeRequest(repository.provider, request.number, requestId)
+    : { unreadable: "the provider named no request to follow" };
+  const answer = "answer" in asked ? asked.answer : undefined;
+  if (!record)
+    return "answer" in asked
+      ? asked.answer
+      : { status: "pending", message: asked.unreadable };
+  const verdict = judgePendingMerge(record, detail, answer, Date.now());
+  if (verdict.kind === "pending") {
+    if ("answer" in asked)
+      return {
+        status: asked.answer.status === "merged" ? "merged" : "pending",
+      };
+    return {
+      status: requestId ? "pending" : "inconclusive",
+      message: asked.unreadable,
+    };
+  }
+  forgetPendingMerge(repository.identityKey, record);
+  if (verdict.kind === "failed")
+    return { status: "failed", message: verdict.message };
+  if (verdict.kind === "unknown")
+    return { status: "unknown", message: verdict.reason };
+  return { status: "expired" };
+}
+
+/** The provider's FRESH answer about one request, or why there is none. */
+type Asked = { answer: MergeRequestStatus } | { unreadable: string };
+
+async function askMergeRequest(
   provider: GitHostingProvider,
   number: number,
   requestId: string,
-): Promise<NonNullable<PullRequestViewCheckResponse["mergeRequest"]>> {
+): Promise<Asked> {
   if (!provider.mergeRequestStatus)
-    return { status: "pending", message: "its status cannot be asked" };
+    return { unreadable: "its status cannot be asked" };
   try {
-    return await provider.mergeRequestStatus(number, requestId);
+    return { answer: await provider.mergeRequestStatus(number, requestId) };
   } catch (err) {
-    return {
-      status: "pending",
-      message: `its status could not be read (${errorText(err)})`,
-    };
+    return { unreadable: `its status could not be read (${errorText(err)})` };
   }
 }
 

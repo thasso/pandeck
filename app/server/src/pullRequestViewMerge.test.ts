@@ -42,6 +42,7 @@ import {
   type PullRequestViewMergeOperations,
 } from "./pullRequestViewMerge.ts";
 import { mainWorktreeId } from "./worktrees/worktreeResolve.ts";
+import { resetPendingMergesForTests } from "./pendingMerges.ts";
 
 /* --------------------------------- fixtures -------------------------------- */
 
@@ -94,6 +95,8 @@ interface ProviderOptions {
   branchKeptReason?: string;
   /** The provider accepted but did not confirm: this is why. */
   pendingReason?: string;
+  /** The id the provider named for that pending request, if any. */
+  pendingRequestId?: string;
   /** Runs at the moment the provider ACCEPTS, for what happens after it. */
   onMerged?: () => void;
 }
@@ -143,6 +146,9 @@ function fakeProvider(options: ProviderOptions = {}): GitHostingProvider {
           number,
           method: merge.method,
           pendingReason: options.pendingReason,
+          ...(options.pendingRequestId
+            ? { requestId: options.pendingRequestId }
+            : {}),
         };
       return {
         outcome: "merged",
@@ -231,6 +237,7 @@ function withoutMethod(
 }
 
 afterEach(() => {
+  resetPendingMergesForTests();
   resetPullRequestCardsStoreForTests();
   resetPullRequestMutationsForTests();
   invalidateRepositoryCapabilities();
@@ -893,6 +900,55 @@ test("a check about a pending merge reports where its request stands", async () 
   );
   assert.deepEqual(asked, ["req-1", "req-1"]);
 });
+
+// The server keeps its own record of an accepted merge, by identity: a check
+// with no id — the provider named none, or the browser lost the pending answer
+// — must not read an open pull request as "did not merge".
+for (const [name, requestId, expected] of [
+  [
+    "named no request",
+    undefined,
+    {
+      status: "inconclusive",
+      message: "the provider named no request to follow",
+    },
+  ],
+  ["was lost on its way back", "req-9", { status: "pending" }],
+] as const)
+  test(`a check after a pending merge whose answer ${name} stays uncertain`, async () => {
+    const path = repo();
+    const asked: string[] = [];
+    const provider = {
+      ...fakeProvider({
+        pendingReason: "GitHub had not finished merging it",
+        ...(requestId ? { pendingRequestId: requestId } : {}),
+      }),
+      mergeRequestStatus: async (_number: number, id: string) => {
+        asked.push(id);
+        return { status: "pending" as const };
+      },
+    };
+    const ops = operations({
+      rows: [row(mainWorktreeId(PROJECT), path, "main")],
+      providers: { [path]: provider },
+    });
+    const merged = await mergePullRequestFromView(request(), ops);
+    assert.equal(merged.merge.status, "pending");
+
+    // The client sends no id at all.
+    const answer = await checkPullRequestFromView(
+      {
+        projectId: PROJECT,
+        provider: "forgejo",
+        repositoryKey: REPOSITORY_KEY,
+        number: 7,
+      },
+      ops,
+    );
+    assert.equal(answer.state, "open");
+    assert.deepEqual(answer.mergeRequest, expected);
+    assert.deepEqual(asked, requestId ? [requestId] : []);
+  });
 
 test("a check answers the state under the lock and merges nothing", async () => {
   const path = repo();

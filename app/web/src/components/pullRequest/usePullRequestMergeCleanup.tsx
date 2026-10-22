@@ -191,7 +191,9 @@ export function usePullRequestMergeCleanup({
         if (
           !terminal &&
           request &&
-          (request.status === "pending" || request.status === "merged")
+          (request.status === "pending" ||
+            request.status === "merged" ||
+            request.status === "inconclusive")
         ) {
           setState({
             key: id,
@@ -199,9 +201,14 @@ export function usePullRequestMergeCleanup({
             busy: false,
             escalatable: false,
             unknown: true,
-            note: `Checked under the pull request's lock: #${answer.number} is still open and its merge request has not finished${
-              request.message ? ` (${request.message})` : ""
-            }. Check again in a moment.`,
+            note:
+              request.status === "inconclusive"
+                ? `Checked under the pull request's lock: #${answer.number} is still open, and the earlier merge attempt is inconclusive${
+                    request.message ? ` (${request.message})` : ""
+                  }: it may still land. Check again in a moment.`
+                : `Checked under the pull request's lock: #${answer.number} is still open and its merge request has not finished${
+                    request.message ? ` (${request.message})` : ""
+                  }. Check again in a moment.`,
             ...(priorMerge !== undefined ? { mergedNote: priorMerge } : {}),
             ...pending,
           });
@@ -242,7 +249,11 @@ export function usePullRequestMergeCleanup({
                         }.`
                       : request?.status === "expired"
                         ? `Checked under the pull request's lock: #${answer.number} is still open and its merge request is no longer known, so it did not merge.`
-                        : `Checked under the pull request's lock: #${answer.number} is still open, so the attempt did not merge it.`,
+                        : request?.status === "unknown"
+                          ? `Checked under the pull request's lock: #${answer.number} is still open; whether the earlier accepted merge landed is unknown${
+                              request.message ? ` (${request.message})` : ""
+                            }. Look at the pull request before merging it again.`
+                          : `Checked under the pull request's lock: #${answer.number} is still open, so the attempt did not merge it.`,
                 }),
         }));
         // The sanctioned toast, on the same rule as everywhere here: only when

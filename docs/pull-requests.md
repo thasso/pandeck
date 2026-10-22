@@ -655,8 +655,9 @@ Run):
 - a pull request whose direct base is not the stack's base (a lower member
   merged and GitHub has not retargeted this one yet);
 - a stack or member list that could not be read, a member list that does not
-  contain this pull request, and a detail read that failed — the stack read or
-  the LAST identity read, its conflict-confirming retry included. Ordinary
+  contain this pull request, and a detail read that failed or answered nothing —
+  the stack read or the LAST identity read, its conflict-confirming retry
+  included (a retry that fails never falls back to the first answer). Ordinary
   clicks are no exception, although they otherwise tolerate an unreadable
   provider: a stack can be created around a pull request after the evidence was
   read, so the earlier answer never stands in for the last one.
@@ -1199,30 +1200,43 @@ a branch another surface just merged and deleted.
   Task suggestion, Workflow record, base refresh or branch deletion. Its cards
   keep `open`, get the outcome sentence as `actionMessage`, and record the
   request in their server-side context (`pendingMerge`: request id, conditioned
-  head, time, that message). The watcher then follows it on the fast cadence,
-  asking `mergeRequestStatus` BEFORE the detail read so the detail already
-  reflects a request that just finished: `merged` lets the ordinary merged
-  observation run, `failed` leaves the card open with the provider's reason as
-  `actionError` and Merge on offer again, `expired` (GitHub forgets a result 24
-  h after its last update) or a request older than that leaves the pull
-  request's own state to speak, and the pull request merging or closing settles
-  it as well. Whatever settles it clears the pending message (only that
-  message), and a confirmed merge from any surface clears the record. The PR
-  view reports a pending merge as an unknown outcome (see
-  [Merge & clean up](#merge--clean-up)) and the worktree page as unconfirmed.
-  The provider decides whether a merge is allowed — branch protection, required
-  checks, stale mergeability — and its refusal surfaces as the card's error
-  rather than being pre-judged here. A branch deletion that fails afterwards is
-  reported but never turns a landed merge into a failure, and the outcome
-  sentence says what happened to the branch rather than what was asked for —
-  kept on purpose, deleted, or not deleted with the provider's reason. The ONE
-  thing the card decides itself is a known conflict: while `conflicts` is set
-  the merge button, its method picker and the branch checkbox are all disabled,
-  the update below becomes the card's primary button, and the reason is written
-  out as text under the row (a tooltip on a disabled button reaches neither a
-  keyboard nor a phone) in place of the branch-outcome sentence, which would
-  otherwise describe a click that cannot happen. `mergeable: null` is not that
-  state — it is still being computed, and merge stays on offer.
+  head, time, that message); the same record is kept by pull-request identity in
+  `pendingMerges.ts`, for a surface with no card. The watcher then follows it on
+  the fast cadence, asking `mergeRequestStatus` BEFORE the detail read so the
+  detail already reflects a request that just finished, and judges it with
+  `judgePendingMerge` — the one judgement the Pull Requests view's check uses
+  too:
+  - the pull request merged or closed settles it (a merge runs the ordinary
+    merged observation);
+  - a FRESH provider answer always wins, however old the request: `failed`
+    leaves the card open with the provider's reason as `actionError` and Merge
+    on offer again, `pending` keeps it, and `expired` — GitHub forgets a result
+    24 h after its LAST update — leaves the pull request's own state to speak;
+  - without one (the provider named no request, or its status cannot be read),
+    only the pull request can answer: a head that moved past the conditioned one
+    means that merge cannot land (reported as a failure), and a watch that runs
+    out — ten minutes with no request id, a day of unreadable status — ends with
+    the card saying plainly that whether it landed is unknown, never "did not
+    merge".
+
+  Whatever settles it clears the pending message (only that message), and a
+  confirmed merge from any surface clears the record. The PR view reports a
+  pending merge as an unknown outcome (see [Merge & clean up](#merge--clean-up))
+  and the worktree page as unconfirmed. The provider decides whether a merge is
+  allowed — branch protection, required checks, stale mergeability — and its
+  refusal surfaces as the card's error rather than being pre-judged here. A
+  branch deletion that fails afterwards is reported but never turns a landed
+  merge into a failure, and the outcome sentence says what happened to the
+  branch rather than what was asked for — kept on purpose, deleted, or not
+  deleted with the provider's reason. The ONE thing the card decides itself is a
+  known conflict: while `conflicts` is set the merge button, its method picker
+  and the branch checkbox are all disabled, the update below becomes the card's
+  primary button, and the reason is written out as text under the row (a tooltip
+  on a disabled button reaches neither a keyboard nor a phone) in place of the
+  branch-outcome sentence, which would otherwise describe a click that cannot
+  happen. `mergeable: null` is not that state — it is still being computed, and
+  merge stays on offer.
+
 - **Update with main** (`open`, worktree sessions) — the deterministic path
   first: `pull-rebase` on the project's main checkout, then `rebase-main` on the
   worktree, then a lease-guarded force push so the pull request actually sees
@@ -1896,11 +1910,18 @@ since removing a checkout whose work may never land is not a cleanup), the
 dialog states the server's sentence, and the row offers only **Check again**. No
 check is issued automatically here: right after the wait ran out it would mostly
 find the pull request still open. The pending answer carries the provider's
-`requestId`, and **Check again** sends it back as `mergeRequestId`; for an OPEN
-pull request the check then also reports `mergeRequest`, where that request
-stands. `pending` — or a provider that could not be asked — keeps the outcome
-unknown, because the request may still land; only `failed` (with the provider's
-reason) or `expired` lets the check say it did not merge.
+`requestId`, and **Check again** sends it back as `mergeRequestId`. A check that
+sends none — the provider named no request, or the pending answer itself was
+lost and the automatic check runs — falls back to the server's own record of the
+attempt by pull-request identity (`pendingMerges.ts`). For an OPEN pull request
+the check then reports `mergeRequest`, judged exactly as the watcher judges it:
+`pending` (also: could not be asked) and `inconclusive` (no request id to
+follow, still within its watch) keep the outcome uncertain, because the request
+may still land; `unknown` says the watch ended without an answer; only `failed`
+(with the provider's reason, a moved head included) or `expired` lets the check
+say it did not merge. The record is memory only — the cards' copy survives a
+restart and the watcher, which polls every open card on boot, restores it; a
+pending merge with no card is forgotten by a restart.
 
 The check's LOCAL answer has three values for the same reason the merge's
 cleanup does: `none`, `one` worktree, or `ambiguous` with its reason. Two

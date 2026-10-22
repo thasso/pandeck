@@ -59,6 +59,7 @@ import {
 } from "./pullRequestCards.ts";
 import { pullRequestCardRepoRoot } from "./pullRequestHosting.ts";
 import { scheduleImmediatePoll } from "./pullRequestPollSchedule.ts";
+import { forgetPendingMerge, recordPendingMerge } from "./pendingMerges.ts";
 import { pullRequestIdentity, pullRequestKey } from "./pullRequestIdentity.ts";
 import { invalidatePullRequestInventoryReads } from "./pullRequestInventory.ts";
 import { readTask, taskSummaryOf, updateTask } from "./tasks.ts";
@@ -411,14 +412,25 @@ async function mergeAndProject(
   // retry fails — would merge on a stack nobody saw.
   const lastReadRequired =
     Boolean(expectedHeadCommit) || Boolean(stackEvidence);
-  const readDetail = () =>
-    lastReadRequired
-      ? input.provider.pullRequestDetail(input.number).catch((err) => {
-          throw new Error(
-            `Pull request #${input.number} could not be re-read before merging (${errorText(err)}); nothing was merged. Refresh and try again.`,
-          );
-        })
-      : input.provider.pullRequestDetail(input.number).catch(() => null);
+  // A required read that answers NOTHING is the same refusal as one that
+  // throws: either way there is no current answer to bind.
+  const readDetail = async (): Promise<PullRequestDetail | null> => {
+    if (!lastReadRequired)
+      return input.provider.pullRequestDetail(input.number).catch(() => null);
+    let read: PullRequestDetail | null;
+    try {
+      read = await input.provider.pullRequestDetail(input.number);
+    } catch (err) {
+      throw new Error(
+        `Pull request #${input.number} could not be re-read before merging (${errorText(err)}); nothing was merged. Refresh and try again.`,
+      );
+    }
+    if (!read)
+      throw new Error(
+        `Pull request #${input.number} could not be re-read before merging (the provider answered nothing); nothing was merged. Refresh and try again.`,
+      );
+    return read;
+  };
   const first = await readDetail();
   // ONE conflicting read is not a conflict: Forgejo answers `false` while its
   // check is queued, and the projection below reaches an armed Workflow Run
@@ -430,6 +442,8 @@ async function mergeAndProject(
         ? await readDetail()
         : await input.provider.pullRequestDetail(input.number).catch(() => null)
       : null;
+  // On a stacked provider a retry that ran never answers null (it throws
+  // above), so `first` stands in only where no retry ran.
   const detail = second ?? first;
   if (lastReadRequired && !detail)
     throw new Error(
@@ -542,6 +556,15 @@ async function mergeAndProject(
         `Pull request #${input.number} cannot merge because the base moved; use Rebase and re-review.`,
       );
     throw err;
+  }
+  if (result.outcome !== "pending") {
+    // A confirmed merge settles any earlier accepted request for it.
+    const key = pullRequestKey(
+      input.provider.kind,
+      input.provider.repoWebUrl,
+      input.number,
+    );
+    if (key) forgetPendingMerge(key);
   }
   if (result.outcome === "pending")
     return projectPendingMerge(
@@ -724,6 +747,13 @@ function projectPendingMerge(
     requestedAt: Date.now(),
     message,
   };
+  // By identity too, for a surface with no card (or whose answer was lost).
+  const key = pullRequestKey(
+    input.provider.kind,
+    input.provider.repoWebUrl,
+    input.number,
+  );
+  if (key) recordPendingMerge(key, pendingMerge);
   for (const card of cards) {
     try {
       patchPullRequestCard(

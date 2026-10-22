@@ -32,6 +32,11 @@ import {
 } from "./pullRequestCards.ts";
 import { nextPullRequestPollAt } from "./pullRequestPollSchedule.ts";
 import {
+  pendingMergeFor,
+  recordPendingMerge,
+  resetPendingMergesForTests,
+} from "./pendingMerges.ts";
+import {
   mergePullRequestAndProject,
   mergePullRequestAndProjectLocked,
   resetPullRequestMutationsForTests,
@@ -97,6 +102,7 @@ function fakeProvider(
 
 afterEach(() => {
   nextPullRequestPollAt.clear();
+  resetPendingMergesForTests();
   resetPullRequestCardsStoreForTests();
   resetPullRequestMutationsForTests();
   resetWorkflowStoreForTests();
@@ -2244,6 +2250,41 @@ test("a stacked provider whose conflict-confirming retry fails merges nothing", 
   assert.ok(!calls.includes("merge"));
 });
 
+// NOTHING is not an answer either: a required read that resolves null refuses
+// exactly like one that throws — for the first read and for the retry, which
+// would otherwise fall back to the earlier answer.
+for (const [name, nullRead, mergeable] of [
+  ["first", 2, true],
+  ["conflict-confirming retry", 3, false],
+] as const)
+  test(`a stacked provider whose ${name} read resolves null merges nothing`, async () => {
+    let reads = 0;
+    const { provider, calls } = stackedProvider({
+      details: [{ ...OPEN_DETAIL, baseBranch: "main", mergeable }],
+    });
+    const reading = provider.pullRequestDetail.bind(provider);
+    provider.pullRequestDetail = async (number) => {
+      reads += 1;
+      if (reads === nullRead) return null;
+      return reading(number);
+    };
+    await assert.rejects(
+      mergePullRequestAndProject({
+        provider,
+        repoPath: repo(),
+        number: 7,
+        headBranch: "feature-c",
+        baseBranch: "main",
+        method: "squash",
+        expectedHeadSha: "head-7",
+        managedDecision: { baseIsDefaultBranch: false, defaultBranch: "main" },
+      }),
+      /could not be re-read before merging \(the provider answered nothing\); nothing was merged/,
+    );
+    assert.equal(reads, nullRead);
+    assert.ok(!calls.includes("merge"));
+  });
+
 // The provider's own pre-merge read, when one happens, is told which stack was
 // bound; an unstacked pull request binds `null`.
 test("the seam hands the provider the stack it bound", async () => {
@@ -2370,6 +2411,8 @@ test("a pending merge leaves the card open, says so, and polls it at once", asyn
     );
     assert.equal(readTask(task.id)?.statusSuggestion, undefined);
     assert.equal(nextPullRequestPollAt.get(card.id), 0);
+    // Kept by identity too, for a surface with no card.
+    assert.equal(pendingMergeFor("github#acme/repo#7")?.requestId, "req-1");
     // The request the watcher follows until it settles.
     assert.deepEqual(
       {
@@ -2392,6 +2435,10 @@ test("a pending merge leaves the card open, says so, and polls it at once", asyn
 // that pull request now, so its card is asked now rather than in five minutes.
 test("a confirmed merge polls the cards stacked on the merged branch", async () => {
   const path = repo();
+  recordPendingMerge("github#acme/repo#7", {
+    requestedAt: 1,
+    message: "earlier",
+  });
   const above = openCard(path, 8, "feature-d", "feature-c");
   const unrelated = openCard(path, 9, "feature-e", "main");
   nextPullRequestPollAt.set(above.id, Date.now() + 60_000);
@@ -2417,6 +2464,8 @@ test("a confirmed merge polls the cards stacked on the merged branch", async () 
   });
   assert.equal(nextPullRequestPollAt.get(above.id), 0);
   assert.notEqual(nextPullRequestPollAt.get(unrelated.id), 0);
+  // A confirmed merge settles any earlier accepted request for it.
+  assert.equal(pendingMergeFor("github#acme/repo#7"), undefined);
   assert.match(
     projection.message,
     /The remote branch feature-c was kept: #8 still targets it as base/,

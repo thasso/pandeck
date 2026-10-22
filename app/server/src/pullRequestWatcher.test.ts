@@ -31,6 +31,10 @@ import {
   nextPullRequestPollAt,
   scheduleImmediatePoll,
 } from "./pullRequestPollSchedule.ts";
+import {
+  pendingMergeFor,
+  resetPendingMergesForTests,
+} from "./pendingMerges.ts";
 import type { AppWebPushNotification } from "./webPush.ts";
 import { createTask, deleteTask, readTask, taskSummaryOf } from "./tasks.ts";
 
@@ -116,6 +120,7 @@ function detail(patch: Partial<PullRequestDetail> = {}): PullRequestDetail {
 }
 
 afterEach(() => {
+  resetPendingMergesForTests();
   resetPullRequestWatcherForTests();
   resetPullRequestCardsStoreForTests();
 });
@@ -824,14 +829,17 @@ const PENDING_MESSAGE =
   "GitHub accepted the merge of #42 into main (squash) but has not confirmed it: GitHub had not finished merging it when this stopped waiting.";
 
 /** A card carrying what the merge seam writes for a pending merge. */
-function pendingCard(requestedAt = Date.now()) {
+function pendingCard(
+  requestedAt = Date.now(),
+  requestId: string | null = "req-1",
+) {
   const card = openCard();
   patchPullRequestCard(
     card.id,
     { actionMessage: PENDING_MESSAGE },
     {
       pendingMerge: {
-        requestId: "req-1",
+        ...(requestId ? { requestId } : {}),
         expectedHeadSha: "sha-1",
         requestedAt,
         message: PENDING_MESSAGE,
@@ -840,6 +848,8 @@ function pendingCard(requestedAt = Date.now()) {
   );
   return card;
 }
+
+const A_DAY_AGO = () => Date.now() - 25 * 60 * 60_000;
 
 test("a pending merge that failed leaves the card open with the failure and Merge on offer", async () => {
   const card = pendingCard();
@@ -928,4 +938,95 @@ test("a merge request still running keeps its message and is asked again soon", 
   // GitHub's ordinary cadence is five minutes; a pending request is not.
   const next = nextPullRequestPollAt.get(card.id) ?? 0;
   assert.ok(next - before < 60_000, `next poll in ${next - before} ms`);
+});
+
+// GitHub's expiry runs from a request's LAST update, so a fresh answer always
+// beats the local clock: an old request still running is kept, and an old one
+// that failed reports its failure.
+test("an old merge request still running is kept, since the provider's answer wins", async () => {
+  const card = pendingCard(A_DAY_AGO());
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => ({ status: "pending" }),
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(card.id)?.actionMessage, PENDING_MESSAGE);
+  assert.ok(pullRequestCardRecord(card.id)?.context.pendingMerge);
+});
+
+test("an old merge request that failed reports the failure", async () => {
+  const card = pendingCard(A_DAY_AGO());
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => ({
+        status: "failed",
+        message: "Pull request is closed.",
+      }),
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.match(
+    pullRequestCardById(card.id)?.actionError ?? "",
+    /could not merge #42: Pull request is closed\./,
+  );
+  assert.equal(pullRequestCardRecord(card.id)?.context.pendingMerge, undefined);
+});
+
+// With no request id there is nothing to ask: the pull request itself is the
+// only evidence. A moved head is an answer (that merge cannot land); a watch
+// that runs out is NOT one, and the card says the outcome is unknown.
+test("a merge with no request to follow is watched, then stated as unknown", async () => {
+  const fresh = pendingCard(Date.now(), null);
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({ pullRequestDetail: async () => detail() }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pullRequestCardById(fresh.id)?.actionMessage, PENDING_MESSAGE);
+
+  resetPullRequestCardsStoreForTests();
+  resetPullRequestWatcherForTests();
+  const old = pendingCard(Date.now() - 11 * 60_000, null);
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({ pullRequestDetail: async () => detail() }),
+  );
+  await sweepPullRequestWatcherForTests();
+  const after = pullRequestCardById(old.id)!;
+  assert.match(
+    after.actionMessage ?? "",
+    /Whether the accepted merge of #42 landed is unknown: the provider named no request to follow/,
+  );
+  assert.equal(after.actionError, undefined);
+  assert.equal(pullRequestCardRecord(old.id)?.context.pendingMerge, undefined);
+});
+
+test("a merge with no request to follow ends once the head moves past it", async () => {
+  const card = pendingCard(Date.now(), null);
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () => detail({ headSha: "sha-2" }),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.match(
+    pullRequestCardById(card.id)?.actionError ?? "",
+    /the branch moved past sha-1, the head that merge was conditioned on/,
+  );
+  assert.equal(pullRequestCardRecord(card.id)?.context.pendingMerge, undefined);
+});
+
+// The card's copy survives a restart; the watcher restores the by-identity
+// record the Pull Requests view's check reads.
+test("the watcher restores the by-identity record from the card", async () => {
+  pendingCard();
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      mergeRequestStatus: async () => ({ status: "pending" }),
+      pullRequestDetail: async () => detail(),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  assert.equal(pendingMergeFor("github#acme/repo#42")?.requestId, "req-1");
 });
