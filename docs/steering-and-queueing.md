@@ -125,7 +125,13 @@ only shares the Stop hold and its Resume.
 from the top, including an arrival after a lane's read point. Wakes coalesce,
 but never disappear into a pass that has already read the old state.
 
-Each pass runs the auto-approval pre-pass before checking Stop. It executes
+Each idle pass first waits for earlier admitted deliveries to settle. The
+scheduler then reads the shared state and owed lanes, so a Stop, shutdown,
+release or new running turn during the wait governs the new admission. Running
+joinable offers bypass settlement, since they may steer the very turn whose
+prompt is still pending.
+
+The auto-approval pre-pass runs before checking Stop. It executes
 session-granted cards only while idle, even under Stop, and only queues their
 handoffs. The lanes then run in order: handoffs, user queue, workflow
 assignments, peer FIFO, peer notices, background completions, reminders.
@@ -140,25 +146,45 @@ timer; the user queue pauses its row; peer FIFO records its retry while peer
 notices schedule their own retry. Background errors retain pending facts; an
 unavailable driver gives up the in-memory batch without retiring its durable
 outbox debt. Workflow acquisition failures pause the run with its reservation
-still pending. The scheduler checks shutdown, Stop-held, released, promptable
-and running state for the pass. While running, it asks only lanes whose delivery
-may join a running turn, and only if the driver can steer. Today only the
+still pending. One scheduler-owned shared-check function evaluates shutdown,
+Stop-held, released, promptable and running state. It re-evaluates after each
+admission await: earlier settlement, the auto-approval pre-pass, cold
+acquisition and each lane delivery, including a rejection. It also runs
+immediately before each lane delivery. "Once per pass" means one owner, not one
+snapshot that stays valid across awaits. Auto-approvals still run under Stop; a
+shutdown during their await prevents lane admission. A successful acquisition
+after Stop, release or shutdown leaves the debt untouched. Failed acquisition
+still goes to the lanes' failure-accounting hooks, which cannot admit a
+delivery. Their Stop/shutdown accounting guards remain in place.
+
+While running, the scheduler asks only lanes whose delivery may join a running
+turn, and only if the driver can steer. A new running turn or lost steering
+capability during an await governs the remaining deliveries. Today only the
 background wake lane joins running turns. Deferred background facts stay inside
-that lane and ride the next prompt's model-only context.
+that lane and ride the next prompt's model-only context. Shutdown during cold
+acquisition leaves queued drafts, host commands and handoffs for boot, without
+starting a turn or persisting a reload refusal as a queue pause.
 
 A new turn ends the pass; a steer does not. A failure before append is logged
 and the next lane is offered. Each lane keeps its own table, rendering,
 batching, retry, recovery and outcome interpretation. The current adapters
-observe the existing append hook and fence subsequent claims in a drain. Before
-a new idle admission, they await earlier admitted drains' settlement across all
-lanes, including a background drain's peer phase. A fenced drain therefore
-cannot consume a fresh offer or let a lower-priority lane overtake it. Running
-joinable offers do not wait for the turn they may steer. This adds no debt-based
-retry loop. An idle admission waiting over 30 seconds logs a diagnostic, but
-never times out and admits over a drain that still owns its claim. The drains
-interpret their prompt receipts as described below. The adapters still observe
-the session-wide append feed to fence admission; private drain locks, rerun
-markers and cross-path yield checks remain until [Task-1053](pa://task/1053).
+observe the existing append hook, fence subsequent claims in a drain, and supply
+the scheduler's required `settleEarlierDeliveries(sessionId)` step. The wait
+spans all lanes, including a background drain's peer phase. A fenced drain
+therefore cannot consume a fresh offer or let a lower-priority lane overtake it.
+Running joinable offers do not wait for the turn they may steer. This adds no
+debt-based retry loop. An idle admission waiting over 30 seconds logs a
+diagnostic, but never times out and admits over a drain that still owns its
+claim. The drains interpret their prompt receipts as described below. The
+adapters still observe the session-wide append feed to fence admission. The user
+queue and handoffs have no private admission locks or rerun markers. Their
+public automatic drain entrypoints only wake the scheduler; only an admitted
+delivery enters the lane. Queue-specific pause and note checks, latest-head
+reads and explicit-recipient authority remain in the queue. Handoffs keep
+retry/backoff and delete-only recovery, with the same append/delete
+at-least-once window. Direct inline handoffs and explicit send-now keep their
+own authority. Peer and background locks, rerun markers and cross-path yield
+checks remain for the second [Task-1053](pa://task/1053) delivery.
 
 Workflow assignments to an existing role session use this lane, including idle
 and restart offers. `owes` reads pending reservation state without a harness.

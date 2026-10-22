@@ -7,8 +7,8 @@
  * withdrawable, which is why they live here and not in either harness's own
  * follow-up queue (the Claude CLI's cannot be edited, pi's is lost with the
  * process). A queued message goes AHEAD of anything agents queued for the same
- * session: the idle chain drains it before background completions and peer
- * prompts, and a peer drain defers to it (`promptQueueHasPriority`).
+ * session: the delivery scheduler offers it before peer prompts and background
+ * completions.
  *
  * Delivery is one message per idle edge. A prompt counts as sent once its user
  * entry is appended, so the drain returns then instead of waiting out the turn,
@@ -58,8 +58,6 @@ type QueueDriver = PromptQueueDriver;
 
 /** What the queue needs from the hub, injected so this module never imports it. */
 export interface PromptQueueHost {
-  /** The session's driver, opening its harness if needed. */
-  resolve(sessionId: string): Promise<QueueDriver | undefined>;
   /** The session's driver only if its harness is already open. */
   live(sessionId: string): QueueDriver | undefined;
   /** Tell the session's viewers its queue changed. */
@@ -79,7 +77,7 @@ export function setPromptQueueHost(next: PromptQueueHost | undefined): void {
 }
 
 let deliveryStopped = false;
-/** A graceful shutdown starts no turn from the queue; rows wait for the next boot. */
+/** Failed acquisition during shutdown must not pause drafts for the next boot. */
 export function stopPromptQueueDelivery(): void {
   deliveryStopped = true;
 }
@@ -285,46 +283,21 @@ export function deleteSessionPromptQueue(sessionId: string): void {
 
 /** Queued items whose send is in flight, so no second path sends them again. */
 const sending = new Set<string>();
-const drainLocks = new Map<string, Promise<void>>();
-const drainAuthorityGuards = new Map<string, Set<() => boolean>>();
-const rerunAfterDrain = new Set<string>();
-
-/**
- * Send the next queued message if the session is idle and the queue is not
- * held. Coalesces per session; a call during a drain reruns after it, because
- * that drain may already have decided "still running".
- */
+/** Offer the queue to the scheduler, or deliver under its admission. */
 export function drainPromptQueue(
   sessionId: string,
   shouldStart: () => boolean = () => true,
   driver?: QueueDriver,
 ): Promise<void> {
-  if (deliveryStopped || !host) return Promise.resolve();
-  if (!driver && wakeSessionDelivery(sessionId)) return Promise.resolve();
-  const authorized = () =>
-    !hasExplicitRecipientAuthority(sessionId) && shouldStart();
-  const existing = drainLocks.get(sessionId);
-  if (existing) {
-    drainAuthorityGuards.get(sessionId)?.add(authorized);
-    rerunAfterDrain.add(sessionId);
-    return existing;
+  if (!driver) {
+    wakeSessionDelivery(sessionId);
+    return Promise.resolve();
   }
-  const guards = new Set([authorized]);
-  drainAuthorityGuards.set(sessionId, guards);
-  const run = drainOnce(
+  return drainOnce(
     sessionId,
-    () => [...guards].every((guard) => guard()),
+    () => !hasExplicitRecipientAuthority(sessionId) && shouldStart(),
     driver,
-  ).finally(() => {
-    drainLocks.delete(sessionId);
-    drainAuthorityGuards.delete(sessionId);
-    if (rerunAfterDrain.delete(sessionId))
-      void drainPromptQueue(sessionId, () =>
-        [...guards].every((guard) => guard()),
-      );
-  });
-  drainLocks.set(sessionId, run);
-  return run;
+  );
 }
 
 /** Offer every queue left over from before a restart. */
@@ -340,21 +313,11 @@ export function drainPromptQueuesOnBoot(
 async function drainOnce(
   sessionId: string,
   shouldStart: () => boolean,
-  resolved?: QueueDriver,
+  driver: QueueDriver,
 ): Promise<void> {
-  if (!promptQueueHasPriority(sessionId)) return;
-  const driver =
-    resolved ?? (await host?.resolve(sessionId).catch(() => undefined));
-  // Resolution can cold-acquire a session. Callers coordinating a higher
-  // priority delivery may have lost authority while that await was pending.
-  if (!shouldStart()) return;
+  if (!promptQueueHasPriority(sessionId) || !shouldStart()) return;
   const head = promptQueueStore.list(sessionId)[0];
-  if (!head || deliveryStopped || sending.has(head.id)) return;
-  if (!driver) {
-    holdOnFailure(sessionId, head, "That session could not be resumed.");
-    return;
-  }
-  if (driver.isRunning || isHeld(sessionId)) return;
+  if (!head || sending.has(head.id)) return;
   // From here the row is the send's: no await separates reading it from
   // locking it, so an edit or removal on another device is refused rather
   // than silently losing to the text read here.

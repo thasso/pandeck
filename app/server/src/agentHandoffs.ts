@@ -129,26 +129,6 @@ export function registerAgentHandoffOutcome(
 
 export type AgentHandoffOutcome = "delivered" | "queued";
 
-/** The narrow hub surface delivery needs; see `peerPrompt.ts` for the same seam. */
-export interface AgentHandoffHub {
-  getLiveById(id: string): unknown;
-  acquireById(id: string): Promise<unknown>;
-}
-
-let hubOverride: AgentHandoffHub | undefined;
-/** Test seam: substitute the hub the drain resolves sessions through. */
-export function setAgentHandoffHubForTests(
-  hub: AgentHandoffHub | undefined,
-): void {
-  hubOverride = hub;
-}
-
-async function getHub(): Promise<AgentHandoffHub> {
-  if (hubOverride) return hubOverride;
-  const mod = await import("./hub.ts");
-  return mod.hub as unknown as AgentHandoffHub;
-}
-
 let deliveryStopped = false;
 
 /**
@@ -169,9 +149,6 @@ export function setAgentHandoffDeliveryStoppedForTests(stopped: boolean): void {
   if (stopped) cancelScheduledRetries();
 }
 
-const drainLocks = new Map<string, Promise<void>>();
-/** Sessions whose queue changed (or whose turn ended) while a drain was running. */
-const rerunAfterDrain = new Set<string>();
 /**
  * Rows whose prompt IS in its session but whose delete failed. The decision has
  * landed, so the row must never be prompted again; the drain retries only the
@@ -295,86 +272,49 @@ function queueHandoff(input: AgentHandoffInput): void {
 }
 
 /**
- * Whether a decision still waits to reach this session, or its drain is
- * delivering one right now: work the idle edge owes before a reply reminder
+ * Whether a decision still waits to reach this session, before a reply reminder
  * (`peerPrompt.ts`). A row whose prompt already landed is not owed. A card
  * nobody has decided is no row, so it never counts. Synchronous.
  */
 export function agentHandoffOwed(sessionId: string): boolean {
-  if (drainLocks.has(sessionId)) return true;
   return agentHandoffStore
     .listForSession(sessionId)
     .some((row) => !deliveredPendingRemoval.has(row.id));
 }
 
-/**
- * Deliver what a session is owed, oldest first, without interrupting a turn.
- * Concurrent calls for the same session coalesce: the runtime fires its idle
- * hook from inside the finishing prompt, so the hook's drain lands on the drain
- * that is already running rather than double-admitting a turn.
- */
+/** Offer handoffs to the scheduler, or deliver under its admission. */
 export function drainAgentHandoffs(
   sessionId: string,
   admission?: { driver: RuntimePromptDriver; shouldStart(): boolean },
 ): Promise<void> {
-  if (deliveryStopped) return Promise.resolve();
-  if (!admission && wakeSessionDelivery(sessionId)) return Promise.resolve();
-  const existing = drainLocks.get(sessionId);
-  // Coalescing alone would SWALLOW this call: the drain in flight may already
-  // have decided "no session to deliver to" or "still running", and the caller
-  // has just changed one of those answers. It is answered after that drain
-  // ends instead of being dropped on the floor.
-  if (existing) {
-    rerunAfterDrain.add(sessionId);
-    return existing;
+  // Delete-only recovery owns no admission. It must work even when no prompt
+  // debt remains for the scheduler to offer, or a Stop holds automatic turns.
+  if (!clearDeliveredRows(sessionId)) return Promise.resolve();
+  if (!admission) {
+    wakeSessionDelivery(sessionId);
+    return Promise.resolve();
   }
-  const run = drainSessionOnce(sessionId, admission).finally(() => {
-    drainLocks.delete(sessionId);
-    if (rerunAfterDrain.delete(sessionId)) void drainAgentHandoffs(sessionId);
-  });
-  drainLocks.set(sessionId, run);
-  return run;
+  return drainSessionOnce(sessionId, admission);
 }
 
 async function drainSessionOnce(
   sessionId: string,
-  admission?: { driver: RuntimePromptDriver; shouldStart(): boolean },
+  admission: { driver: RuntimePromptDriver; shouldStart(): boolean },
 ): Promise<void> {
-  // FIRST, before anything reads the head as work owed: a row whose prompt is
-  // already in its session must not be mistaken for an undelivered decision by
-  // the failure paths below, which would report it abandoned to a card that has
-  // it.
-  if (!clearDeliveredRows(sessionId)) return;
-  // A Stop holds the session: what it is owed stays queued, and a session
-  // that is not live is not resumed for it, until the user resumes it.
-  if (automaticTurnsHeld(sessionId)) return;
-  const head = agentHandoffStore.next(sessionId);
-  if (!head) return;
-  const driver = admission?.driver ?? (await resolveDriver(sessionId));
-  if (!driver) {
-    // A session that cannot be resumed is a DELIVERY failure, not a pause: it
-    // produces no idle edge, so an unbudgeted wait here would re-acquire a
-    // deleted session every few seconds until the process ended.
-    failRow(head, "that session could not be resumed.");
-    return;
-  }
+  const { driver, shouldStart } = admission;
   for (;;) {
-    if (
-      admission?.shouldStart() === false ||
-      deliveryStopped ||
-      driver.isRunning ||
-      automaticTurnsHeld(sessionId)
-    )
-      return;
+    if (!shouldStart()) return;
     if (!clearDeliveredRows(sessionId)) return;
     const row = agentHandoffStore.next(sessionId);
     if (!row) return;
-    if (!(await deliverQueued(driver, row, admission?.shouldStart))) return;
+    if (!(await deliverQueued(driver, row, shouldStart))) return;
   }
 }
 
 /** The scheduler already tried the one shared acquisition. Keep this lane's retry policy. */
 export function agentHandoffUnavailable(sessionId: string): void {
+  // A Stop or shutdown during failed cold acquisition spends no retry budget.
+  // This is failure accounting, not admission of a new delivery.
   if (
     deliveryStopped ||
     !clearDeliveredRows(sessionId) ||
@@ -433,7 +373,12 @@ async function deliverQueued(
     receipt.observe((event) => {
       if (event.type !== "appended") return;
       appended = true;
-      if (!removeRow(row.id)) deliveredPendingRemoval.add(row.id);
+      if (!removeRow(row.id)) {
+        deliveredPendingRemoval.add(row.id);
+        // No prompt debt remains once appended, so the scheduler's owes read
+        // cannot drive delete-only recovery. Keep its own bounded backoff.
+        scheduleRetry(row.sessionId);
+      }
       reportOutcome(row.outcomeRef, { kind: "delivered" });
     });
     await receipt;
@@ -526,34 +471,6 @@ function cancelScheduledRetries(): void {
   for (const timer of retryTimers.values()) clearTimeout(timer);
   retryTimers.clear();
   removalFailures.clear();
-}
-
-async function resolveDriver(
-  sessionId: string,
-): Promise<RuntimePromptDriver | undefined> {
-  const hub = await getHub();
-  let live: unknown;
-  try {
-    live = hub.getLiveById(sessionId) ?? (await hub.acquireById(sessionId));
-  } catch (err) {
-    console.warn(
-      `[handoff] could not resume ${sessionId} to deliver a queued handoff:`,
-      errorText(err),
-    );
-    return undefined;
-  }
-  return isRuntimePromptDriver(live) ? live : undefined;
-}
-
-function isRuntimePromptDriver(
-  candidate: unknown,
-): candidate is RuntimePromptDriver {
-  return (
-    typeof candidate === "object" &&
-    candidate !== null &&
-    "createRuntimeAdapter" in candidate &&
-    "canSteer" in candidate
-  );
 }
 
 /**

@@ -954,7 +954,8 @@ test("the production workflow adapter releases admission at append but tracks th
   const release = live.holdTurns();
   const releaseSettle = live.holdSettle();
   setWorkflowAssignmentDelivery(executor);
-  const lane = sessionDeliveryLanes(background).lanes.find(
+  const production = sessionDeliveryLanes(background);
+  const lane = production.lanes.find(
     (lane) => lane.name === "workflow assignments",
   )!;
   try {
@@ -967,8 +968,9 @@ test("the production workflow adapter releases admission at append but tracks th
     release();
     await vi.waitFor(() => assert.equal(live!.isRunning, false));
     let settled = false;
-    const second = lane
-      .deliver(live as unknown as PromptQueueDriver)
+    const second = production
+      .settleEarlierDeliveries(roleSession)
+      .then(() => lane.deliver(live as unknown as PromptQueueDriver))
       .then((result) => {
         settled = true;
         return result;
@@ -1150,6 +1152,7 @@ test.each(["older", "newer"] as const)(
     });
     executors.registerWorkflowAgentExecutor(restarted);
     const scheduler = createDeliveryScheduler<RuntimePromptDriver>({
+      settleEarlierDeliveries: async () => {},
       lanes: [
         {
           name: "user queue",

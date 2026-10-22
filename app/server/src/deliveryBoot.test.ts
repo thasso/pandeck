@@ -21,6 +21,7 @@ test("boot collection preserves real idle, Resume and reminder re-offers without
   const scheduler = createDeliveryScheduler({
     lanes: [],
     reminder,
+    settleEarlierDeliveries: async () => {},
     live: (sessionId) => ({ sessionId, isRunning: false, canSteer: false }),
     acquire: async () => assert.fail("reminders must not acquire"),
     runAutoApprovals: async () => {},

@@ -22,6 +22,9 @@ process.env.ASSISTANT_CWD = dataDir;
 
 const hold = await import("./automaticTurnHold.ts");
 const queue = await import("./promptQueue.ts");
+const { installDeliveryTestScheduler } =
+  await import("./test/deliveryScheduler.ts");
+const { setDeliveryWake } = await import("./deliveryWake.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { SessionBusyError } = await import("./session/runtime/errors.ts");
@@ -144,7 +147,6 @@ beforeEach(() => {
     resumed: (id) => resumed.push(id),
   });
   queue.setPromptQueueHost({
-    resolve: async () => undefined,
     live: () => undefined,
     publish: (id, state) => (published[id] = state),
     reportError: () => {},
@@ -155,6 +157,7 @@ beforeEach(() => {
 afterEach(() => {
   hold.setAutomaticTurnHoldHost(undefined);
   queue.setPromptQueueHost(undefined);
+  setDeliveryWake(undefined);
 });
 
 test("a fresh session is unheld and takes automatic turns", async () => {
@@ -305,8 +308,11 @@ test("a refused human send and a human steer into the stopping turn lift nothing
 test("a queued draft past its queue check is refused when a Stop lands during its admission", async () => {
   const s = session();
   let stopped = false;
+  const scheduler = installDeliveryTestScheduler({
+    live: () => s.driver,
+    acquire: async () => s.driver,
+  });
   queue.setPromptQueueHost({
-    resolve: async () => s.driver as never,
     live: () => s.driver as never,
     reportError: () => {},
     yieldToOthers: () => {},
@@ -324,7 +330,7 @@ test("a queued draft past its queue check is refused when a Stop lands during it
     },
   });
   queue.queuePrompt(s.id, { text: "old queued draft" });
-  await queue.drainPromptQueue(s.id);
+  await scheduler.wake(s.id);
   await until(
     () => stopped && !published[s.id]?.items.some((item) => item.sending),
     "the refused send to settle",
