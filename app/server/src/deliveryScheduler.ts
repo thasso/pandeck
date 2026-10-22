@@ -46,25 +46,46 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
   const wakes = new Set<string>();
   const reminders = new Set<string>();
 
+  // One owner for changing admission state. A missing driver is cold before
+  // acquisition and unpromptable after it; neither is a delivery target.
+  function sharedChecks(sessionId: string, session: Session | undefined) {
+    const running = session?.isRunning ?? false;
+    const canSteer = session?.canSteer ?? false;
+    const shutdown = options.shutdown();
+    const held = options.held(sessionId);
+    const blocked =
+      shutdown || held || !!session?.released || (running && !canSteer);
+    return {
+      session,
+      running,
+      canSteer,
+      shutdown,
+      held,
+      admissible: !!session && !blocked,
+    };
+  }
+
   async function pass(sessionId: string): Promise<void> {
     // Idle edges precede prompt settlement. A fresh pass must not reuse an
     // earlier fenced drain. Running joinable offers must not wait for the turn
     // they may steer. Read shared state only after the wait, including Stop.
     if (!options.live(sessionId)?.isRunning)
       await options.settleEarlierDeliveries(sessionId);
-    if (options.shutdown()) return;
-    let session = options.live(sessionId);
-    let running = session?.isRunning ?? false;
-    let canSteer = session?.canSteer ?? false;
+    let state = sharedChecks(sessionId, options.live(sessionId));
+    if (state.shutdown) return;
     // Approval executors require an idle session, but run even under Stop.
-    if (!running) {
+    if (!state.running) {
       try {
         await options.runAutoApprovals(sessionId);
       } catch (error) {
         options.reportError(sessionId, "auto-approvals", error);
       }
     }
-    if (options.held(sessionId)) return;
+    // The pre-pass can resume a driver, or Stop/shutdown can land while it
+    // awaits. Do not carry its earlier live/running snapshot into admission.
+    state = sharedChecks(sessionId, options.live(sessionId));
+    if (state.shutdown || state.held) return;
+    let session = state.session;
     const withReminder = reminders.delete(sessionId);
     // Reminders never open a harness of their own.
     const lanes =
@@ -74,7 +95,7 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
     // No debt means no cold acquisition, including boot and view-only wakes.
     const owed = lanes.filter(
       (lane) =>
-        (!running || (canSteer && lane.mayJoinRunningTurn)) &&
+        (!state.running || (state.canSteer && lane.mayJoinRunningTurn)) &&
         lane.owes(sessionId),
     );
     if (owed.length === 0) return;
@@ -90,7 +111,10 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
       } catch (reason) {
         failure = { kind: "error", reason };
       }
+      state = sharedChecks(sessionId, session);
       if (failure) {
+        // Failure hooks cannot admit work. Keep their lane-owned accounting,
+        // including Stop/shutdown guards, even if admission changed in acquire.
         options.reportError(sessionId, "acquire", failure.reason);
         for (const lane of owed) {
           try {
@@ -101,19 +125,23 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
         }
         return;
       }
-      if (!session) return;
-      running = session.isRunning;
-      canSteer = session.canSteer;
+      if (!state.admissible || !session) return;
     }
-    if (session.released || (running && !canSteer)) return;
     for (const lane of owed) {
-      if (running && !lane.mayJoinRunningTurn) continue;
+      // The selected driver's getters stay live across awaits. In particular,
+      // a refused lane must not admit its successor using an old idle snapshot.
+      state = sharedChecks(sessionId, session);
+      if (!state.admissible) return;
+      if (state.running && !lane.mayJoinRunningTurn) continue;
+      let result: DeliveryResult = "none";
       try {
-        if ((await lane.deliver(session)) === "turn") return;
+        result = await lane.deliver(session);
       } catch (error) {
         // A lane owns retries. One refused delivery must not block the others.
         options.reportError(sessionId, lane.name, error);
       }
+      state = sharedChecks(sessionId, session);
+      if (result === "turn" || !state.admissible) return;
     }
   }
 

@@ -146,11 +146,24 @@ timer; the user queue pauses its row; peer FIFO records its retry while peer
 notices schedule their own retry. Background errors retain pending facts; an
 unavailable driver gives up the in-memory batch without retiring its durable
 outbox debt. Workflow acquisition failures pause the run with its reservation
-still pending. The scheduler checks shutdown, Stop-held, released, promptable
-and running state for the pass. While running, it asks only lanes whose delivery
-may join a running turn, and only if the driver can steer. Today only the
+still pending. One scheduler-owned shared-check function evaluates shutdown,
+Stop-held, released, promptable and running state. It re-evaluates after each
+admission await: earlier settlement, the auto-approval pre-pass, cold
+acquisition and each lane delivery, including a rejection. It also runs
+immediately before each lane delivery. "Once per pass" means one owner, not one
+snapshot that stays valid across awaits. Auto-approvals still run under Stop; a
+shutdown during their await prevents lane admission. A successful acquisition
+after Stop, release or shutdown leaves the debt untouched. Failed acquisition
+still goes to the lanes' failure-accounting hooks, which cannot admit a
+delivery. Their Stop/shutdown accounting guards remain in place.
+
+While running, the scheduler asks only lanes whose delivery may join a running
+turn, and only if the driver can steer. A new running turn or lost steering
+capability during an await governs the remaining deliveries. Today only the
 background wake lane joins running turns. Deferred background facts stay inside
-that lane and ride the next prompt's model-only context.
+that lane and ride the next prompt's model-only context. Shutdown during cold
+acquisition leaves queued drafts, host commands and handoffs for boot, without
+starting a turn or persisting a reload refusal as a queue pause.
 
 A new turn ends the pass; a steer does not. A failure before append is logged
 and the next lane is offered. Each lane keeps its own table, rendering,
