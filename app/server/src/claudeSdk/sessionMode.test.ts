@@ -21,10 +21,15 @@ import { test } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DATA_DIR } from "../config.ts";
-import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
+import {
+  ClaudeSdkSession,
+  installClaudeStateBuilder,
+} from "../test/claudeSdkSession.ts";
 import type { ClaudeSdkRecord } from "./claudeSdkRecords.ts";
 import { claudeSdkStore } from "./claudeSdkStore.ts";
 import type { ClaudeQueryParams, ClaudeSdkSeam } from "./sdkSeam.ts";
+
+installClaudeStateBuilder(claudeSdkStore);
 
 const RESTORE_ID = `mode-restore-test-${Date.now()}`;
 
@@ -62,7 +67,11 @@ async function main(): Promise<void> {
   const adapter = session.createRuntimeAdapter();
 
   assert.equal(session.sessionMode, "build", "a fresh session is in Build");
-  assert.equal(session.state().mode, "build", "state carries the mode");
+  assert.equal(
+    session.nativeFacts().mode,
+    "build",
+    "native facts carry the mode",
+  );
 
   await adapter.prompt("build turn");
   const buildTools = captured[0]?.tools as string[];
@@ -72,7 +81,11 @@ async function main(): Promise<void> {
 
   // 2. Switch mid-conversation: allowed even though model/thinking are locked.
   session.setMode("plan");
-  assert.equal(session.state().mode, "plan", "state reports the new mode");
+  assert.equal(
+    session.nativeFacts().mode,
+    "plan",
+    "native facts report the new mode",
+  );
   await adapter.prompt("plan turn");
   const planOptions = captured[1];
   const planTools = planOptions?.tools as string[];

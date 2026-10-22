@@ -26,7 +26,7 @@ const dataDir = mkdtempSync(join(tmpdir(), "claude-steer-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 
-const { ClaudeSdkSession } = await import("./ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { SessionRuntime } = await import("../session/runtime/runtime.ts");
 const { SessionLogStore } = await import("../session/log/store.ts");

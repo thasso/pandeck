@@ -30,7 +30,7 @@ process.env.ASSISTANT_CWD = tmp;
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

@@ -26,7 +26,7 @@ vi.mock("../sessionSkills.ts", async (importOriginal) => ({
     mocked.names.get(sessionId) ?? [],
 }));
 
-const { ClaudeSdkSession } = await import("./ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { getSettings, updateSettings } = await import("../settings.ts");
 const { fallbackSessionTitle } = await import("../sessionNaming.ts");
 

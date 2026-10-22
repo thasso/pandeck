@@ -27,10 +27,11 @@ process.env.DATA_DIR = join(tmp, "data");
 
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { ViewSession } = await import("./viewSession.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
+const attach = await import("./session/attach.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -100,6 +101,7 @@ describe("viewing a stored session", () => {
     const sent: ServerMessage[] = [];
     const connection = new Connection(fakeSocket(sent));
     const { acquired } = storedSession("stored-b");
+    const attached = vi.spyOn(attach, "attachRuntimeView");
     vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
 
     void connection.handle({
@@ -109,6 +111,9 @@ describe("viewing a stored session", () => {
     await settle();
     expect(acquired).toEqual([]);
     const snapshotsBefore = sent.filter((m) => m.type === "snapshot").length;
+    const buildState = attached.mock.calls.at(-1)![4].buildState;
+    expect(buildState().harness).toBe("pi");
+    expect(buildState().canSteer).toBe(false);
 
     await connection.handle({
       type: "prompt",
@@ -127,6 +132,9 @@ describe("viewing a stored session", () => {
       snapshotsBefore,
     );
     expect(sent.some((m) => m.type === "state")).toBe(true);
+    // The transport retains its original callback, but resolves the view's
+    // freshly upgraded facts instead of the detached driver it attached with.
+    expect(buildState().harness).toBe("claude-sdk");
   });
 
   test("a command that is not a prompt opens the harness too, runtime included", async () => {
@@ -260,7 +268,7 @@ describe("viewing a stored session", () => {
     await settle();
     // "medium" is the default, so the level asked for has to be a different one
     // or neither assertion below would say anything.
-    const before = liveH.state().thinkingLevel;
+    const before = liveH.nativeFacts().thinkingLevel;
     expect(before).not.toBe("high");
 
     // Frames that arrive in one read are dispatched in one tick: the thinking
@@ -276,8 +284,8 @@ describe("viewing a stored session", () => {
     } as ClientMessage);
     await settle();
 
-    expect(liveH.state().thinkingLevel).toBe(before);
-    expect(liveG.state().thinkingLevel).toBe("high");
+    expect(liveH.nativeFacts().thinkingLevel).toBe(before);
+    expect(liveG.nativeFacts().thinkingLevel).toBe("high");
   });
 
   test("a control command is dropped, not redirected, when its harness open is overtaken", async () => {
@@ -320,7 +328,7 @@ describe("viewing a stored session", () => {
       id: "stored-i",
     } as ClientMessage);
     await settle();
-    const before = liveJ.state().thinkingLevel;
+    const before = liveJ.nativeFacts().thinkingLevel;
     expect(before).not.toBe("high");
 
     // I is storage-backed, so this one really does wait for a harness — the
@@ -341,7 +349,7 @@ describe("viewing a stored session", () => {
     // Unlike a prompt — which is the user's words and runs where they typed it
     // — a control change is about the session ON SHOW. The reader left, so it
     // applies to neither: never to J, and I is no longer theirs to configure.
-    expect(liveJ.state().thinkingLevel).toBe(before);
+    expect(liveJ.nativeFacts().thinkingLevel).toBe(before);
   });
 
   test("a harness opened by someone else upgrades a reader's view too", async () => {

@@ -54,7 +54,7 @@ function host() {
     noteRunStarted: () => {},
     checkPendingReload: () => {},
     isReloadQueued: () => false,
-    browserRuntimesFor: () => [],
+    buildSessionState: () => ({}) as never,
   };
 }
 

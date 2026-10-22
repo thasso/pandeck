@@ -8,13 +8,13 @@
  * never calls `prompt()` (that path is covered by ClaudeSdkSession.test.ts via a
  * fake seam). It asserts:
  *   1. `claudeSdkStore.acquire` returns a session that exposes an empty snapshot()
- *      and a state() with kind "claude-sdk", and the SAME id is idempotent.
+ *      and native facts with harness "claude-sdk", and the SAME id is idempotent.
  *   2. The empty runtime does not show in `hub.listSessions()` until prompted.
  *   3. `claudeSdkStore.remove` tombstones the id: it disappears from listSessions
  *      and a later acquire does NOT resurrect the old record.
  *
  * The session is created with a model/thinking level to confirm those flow
- * through to state(). No SDK seam is built because no turn runs.
+ * through to nativeFacts(). No SDK seam is built because no turn runs.
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -51,14 +51,13 @@ async function main(): Promise<void> {
   assert.equal(session.sessionId, ID, "sessionId matches the requested id");
   assert.deepEqual(session.snapshot(), [], "fresh session snapshot is empty");
 
-  const state = session.state();
+  const state = session.nativeFacts();
   assert.equal(state.harness, "claude-sdk", "state.harness is claude-sdk");
   assert.equal(state.agentType, "workshop", "state.agentType is workshop");
-  assert.equal(state.sessionId, ID, "state.sessionId matches");
   assert.equal(
     "isStreaming" in state,
     false,
-    "SessionState shell omits run-state",
+    "native facts omit runtime-owned run-state",
   );
   assert.equal(
     state.model?.id,

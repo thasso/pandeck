@@ -17,7 +17,7 @@
  * skipped that upgrade, and silently doing nothing would lose a prompt.
  *
  * What it cannot answer from storage it OMITS rather than guesses — a detached
- * `state()` carries no `skillInvocations` or `browserRuntimes`, both of which
+ * state carries no `skillInvocations` or `browserRuntimes`, both of which
  * are read off a live harness — and the upgrade's `state` broadcast fills them
  * in. It never reports a stale RUN: a running session is resident by
  * construction, so nothing reaches this path while it runs.
@@ -28,11 +28,10 @@ import type {
   DisplayMessage,
   Harness,
   SessionMode,
-  SessionState,
   ThinkingLevel,
 } from "@assistant/shared";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
-import type { HarnessDriver, Viewer } from "./harness.ts";
+import type { HarnessDriver, SessionNativeFacts, Viewer } from "./harness.ts";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
@@ -100,7 +99,7 @@ export class ViewSession implements HarnessDriver {
   }
 
   broadcastState(): void {
-    const state = this.state();
+    const state = buildSessionState(this.id, this.nativeFacts());
     for (const viewer of this.viewers) viewer.send({ type: "state", state });
   }
 
@@ -113,8 +112,8 @@ export class ViewSession implements HarnessDriver {
     return [];
   }
 
-  state(): SessionState {
-    return buildSessionState(this.id, {
+  nativeFacts(): SessionNativeFacts {
+    return {
       harness: this.harness,
       agentType: this.agentType,
       kind: this.kind,
@@ -127,7 +126,7 @@ export class ViewSession implements HarnessDriver {
       ),
       thinkingLevel: (this.meta.thinkingLevel ?? "off") as ThinkingLevel,
       mode: this.meta.mode,
-    });
+    };
   }
 
   /** Stats for the stored transcript, computed by the runtime from the log. */

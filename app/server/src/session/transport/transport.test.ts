@@ -33,8 +33,7 @@ const { entriesToDisplayMessages } = await import("./displayMapping.ts");
 const { RuntimeTransport } = await import("./gateway.ts");
 const { SessionRuntime } = await import("../runtime/runtime.ts");
 const { SessionLogStore } = await import("../log/store.ts");
-const { ClaudeSdkSession } =
-  await import("../../claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../../test/claudeSdkSession.ts");
 
 /* --------------------- 1. projection: folding + overlay ------------------ */
 test("projection: folding + overlay", () => {

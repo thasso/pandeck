@@ -58,8 +58,10 @@ vi.mock("../worktrees/sessionCwd.ts", async (importOriginal) => ({
   worktreeCwdForSession: (sessionId: string) => worktreeCwds.get(sessionId),
 }));
 
-const { ClaudeSdkSession } = await import("./ClaudeSdkSession.ts");
+const { ClaudeSdkSession, installClaudeStateBuilder } =
+  await import("../test/claudeSdkSession.ts");
 const { claudeSdkStore } = await import("./claudeSdkStore.ts");
+installClaudeStateBuilder(claudeSdkStore);
 const { readClaudeSdkRecord } = await import("./claudeSdkRecords.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { claudeProfileSessionStore } = await import("./profileSessionStore.ts");
@@ -384,6 +386,77 @@ function installSeam(): void {
     } satisfies ClaudeSdkSeam),
   );
 }
+
+test("state projection wiring survives creation, persisted reopen, fork and resident updates", async () => {
+  const { createSession } = await import("../harnesses/create.ts");
+  const { buildSessionState } = await import("../sessionState.ts");
+  const first = vi.fn(buildSessionState);
+  const second = vi.fn(buildSessionState);
+  claudeSdkStore.setStateBuilder(first);
+  const created = await createSession({
+    harness: "claude-sdk",
+    id: "state-wiring-created",
+    agentType: "assistant",
+    credentialProfileId: DEFAULT_CLAUDE_PROFILE_ID,
+    modelId: "sonnet",
+  });
+  const checkBroadcast = (
+    session: import("../harness.ts").LiveSession,
+    builder: typeof first,
+  ) => {
+    const sent = vi.fn();
+    const viewer = { send: sent };
+    session.addViewer(viewer);
+    builder.mockClear();
+    session.broadcastState();
+    assert.equal(builder.mock.calls.length, 1);
+    assert.equal(builder.mock.calls[0]![0], session.id);
+    assert.equal(builder.mock.calls[0]![1].harness, "claude-sdk");
+    assert.equal(sent.mock.calls[0]![0].type, "state");
+    assert.equal(sent.mock.calls[0]![0].state.sessionId, session.id);
+    session.removeViewer(viewer);
+  };
+  try {
+    checkBroadcast(created, first);
+    const { parent } = await runtimeParent("state-wiring-parent", [
+      "fork fixture",
+    ]);
+    checkBroadcast(parent, first);
+    const record = { ...parent.toRecord(), id: "state-wiring-reopened" };
+    writeFileSync(
+      join(tmp, "data", "claude-sdk", `${record.id}.json`),
+      JSON.stringify(record),
+    );
+    const reopened = claudeSdkStore.acquire(record.id);
+    assert.equal(
+      reopened.nativeFacts().model?.id,
+      parent.nativeFacts().model?.id,
+    );
+    checkBroadcast(reopened, first);
+    const anchor = sessionRuntime
+      .get(parent.id)!
+      .clientTimeline()
+      .find((entry) => entry.type === "message" && entry.role === "assistant")!;
+    const child = await claudeSdkStore.forkSession(parent.id, {
+      anchor: "native-last",
+      keepThroughEntryId: anchor.id,
+      forkOrigin: {
+        harness: "claude-sdk",
+        parentSessionId: parent.id,
+        parentEntryId: anchor.id,
+        position: "at",
+      },
+    });
+    checkBroadcast(child, first);
+    claudeSdkStore.setStateBuilder(second);
+    for (const session of [created, parent, reopened, child]) {
+      checkBroadcast(session, second);
+      assert.equal(claudeSdkStore.acquire(session.id), session);
+    }
+  } finally {
+    claudeSdkStore.setStateBuilder(buildSessionState);
+  }
+});
 
 test("forking cuts the native transcript, the runtime log and the record alike", async () => {
   const skillDir = join(tmp, "data", "skills", "parent-skill-source");

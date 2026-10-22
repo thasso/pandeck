@@ -38,7 +38,7 @@ const {
   planTurnBlock,
   forgetPlanHintState,
 } = await import("./planHint.ts");
-const { ClaudeSdkSession } = await import("../claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { closeDb } = await import("../db/index.ts");
 const { updateSettings, getSettings } = await import("../settings.ts");
 

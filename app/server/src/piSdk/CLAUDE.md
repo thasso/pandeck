@@ -2,7 +2,6 @@
 
 - No static `hub.ts` import; hub behaviour arrives via
   `piStore.setHost(...)`/`HarnessHost` injection.
-- State uses `sessionState.ts`; pi supplies native facts only.
 - Pi tools use the direct `toolActivation.ts` adapter; the session MCP server
   serves Claude and external consumers only. Register the full tool universe up
   front: pi cannot add definitions mid-session. Every active-set change uses

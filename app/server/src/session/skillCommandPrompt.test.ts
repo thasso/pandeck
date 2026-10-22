@@ -301,7 +301,7 @@ test("a dispatch refusal claims nothing: the same request id still sends", async
 
 /* ---- preflight against the real Claude driver, held at its registration ---- */
 
-const { ClaudeSdkSession } = await import("../claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { SessionBusyError } = await import("./runtime/errors.ts");
 const { skillRuntimePluginName, skillSetHash } =
   await import("../skills/skillRuntimeMaterializer.ts");

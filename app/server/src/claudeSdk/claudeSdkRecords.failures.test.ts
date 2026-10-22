@@ -76,6 +76,9 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const { DATA_DIR } = await import("../config.ts");
 const { claudeSdkStore } = await import("./claudeSdkStore.ts");
+const { installClaudeStateBuilder } =
+  await import("../test/claudeSdkSession.ts");
+installClaudeStateBuilder(claudeSdkStore);
 const { ClaudeSdkRecordReadError, readClaudeSdkRecord } =
   await import("./claudeSdkRecords.ts");
 const { claudeTurnSeam } = await import("../test/claudeTurnSeam.ts");

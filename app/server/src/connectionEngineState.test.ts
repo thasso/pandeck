@@ -22,7 +22,7 @@ const tmp = mkdtempSync(join(tmpdir(), "conn-engine-state-test-"));
 process.env.ASSISTANT_CWD = tmp;
 
 const { Connection } = await import("./connection.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 
 function makeConnection() {

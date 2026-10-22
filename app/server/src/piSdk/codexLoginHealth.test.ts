@@ -178,7 +178,7 @@ function piSession(result: AssistantMessage | Error) {
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => false,
-      browserRuntimesFor: () => [],
+      buildSessionState: () => ({}) as never,
     } as never,
     () => {},
   );

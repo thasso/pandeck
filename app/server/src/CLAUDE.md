@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4000 reason="Contracts guard shipped defects and migrations. The credential rule pins tokens to their URL origin. The newest closes the harness boundary to all but the measurement modules. Two older ones: the view rule (opening a session parsed its provider transcript first — 1.7s on one 51 MB pi file) and the spawn rule (every git process forked this 1.3 GB server, freezing all connections); one careless await or spawn brings either back." task=agent-harnesses date=2026-10-04 -->
+<!-- instruction-budget: bytes=4000 reason="Rules guard credential origins, harness boundaries, storage-only views and spawn admission. Parsing a 51 MB pi transcript added 1.7s to opening a view; forking this 1.3 GB server froze every connection." task=agent-harnesses date=2026-10-04 -->
 
 # Server modules
 
@@ -14,11 +14,14 @@
 - `@earendil-works/*` (not `pi-mcp`) is imported only under `piSdk/`,
   `@anthropic-ai/claude-agent-sdk` only under `claudeSdk/`, and neither under
   `mcp/` or `tools/`. Prompts use `runtimePrompt.ts`, never raw engines
-  (`architecture.test.ts`). App code reaches those folders through `harnesses/`,
-  branching on capabilities, not harness ids. Only `harnessBoundary.test.ts`'s
-  measurement modules are exempt (`docs/agent-harnesses.md`). Existing-session
-  decisions use `agentHandoffs.ts`. Automatic drains wake
-  `deliveryScheduler.ts`.
+  (`architecture.test.ts`). App code reaches those folders only through
+  `harnesses/`, branching on capabilities, not harness ids. Only
+  `harnessBoundary.test.ts`'s measurement modules are exempt
+  (`docs/agent-harnesses.md`). Drivers supply `nativeFacts()`; app-owned
+  `sessionState.ts` builds state. Live engines require its builder at
+  construction. Engine projection imports stay at zero in
+  `harnessBoundary.test.ts`. Existing-session decisions use `agentHandoffs.ts`.
+  Automatic drains wake `deliveryScheduler.ts`.
 - Automatic: `accountRouter.ts`; enterprise propagates, never relaxes; host-side
   usage; peer/workflow pins stay exact, unpinned peers route.
   Health/benches/switches require explicit own-subscription runs. Switch after

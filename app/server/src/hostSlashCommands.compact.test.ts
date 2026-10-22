@@ -11,7 +11,7 @@ process.env.DATA_DIR = join(tmp, "data");
 const { runCompactForHost } = await import("./hostSlashCommands.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { memoryScheduler } = await import("./memory/memoryScheduler.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const {
   createCredentialProfile,
   patchCredentialProfile,

@@ -9,7 +9,8 @@ process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
 const { sessionStore } = await import("./db/sessionStore.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
+const { buildSessionState } = await import("./sessionState.ts");
 const { skillRuntimePluginName, skillSetHash } =
   await import("./skills/skillRuntimeMaterializer.ts");
 
@@ -21,8 +22,9 @@ test("Claude SessionState carries frozen coding skills", () => {
     },
     agentType: "developer",
   });
-  assert.deepEqual(claude.state().activeSkills, ["claude-skill"]);
-  assert.deepEqual(claude.state().skillInvocations, []);
+  const state = buildSessionState(claude.id, claude.nativeFacts());
+  assert.deepEqual(state.activeSkills, ["claude-skill"]);
+  assert.deepEqual(state.skillInvocations, []);
 });
 
 test("Claude derives skill loads from its transcript", () => {
@@ -98,13 +100,16 @@ test("Claude derives skill loads from its transcript", () => {
       },
     ],
   });
-  assert.deepEqual(claude.state().skillInvocations, [
-    {
-      at: Date.parse("2026-09-21T10:00:00.000Z"),
-      name: "claude-skill",
-      via: "skill_tool",
-    },
-  ]);
+  assert.deepEqual(
+    buildSessionState(claude.id, claude.nativeFacts()).skillInvocations,
+    [
+      {
+        at: Date.parse("2026-09-21T10:00:00.000Z"),
+        name: "claude-skill",
+        via: "skill_tool",
+      },
+    ],
+  );
 });
 
 test("Claude omits skills for non-coding personas", () => {
@@ -114,8 +119,9 @@ test("Claude omits skills for non-coding personas", () => {
     },
     agentType: "assistant",
   });
-  assert.equal(Object.hasOwn(claude.state(), "activeSkills"), false);
-  assert.equal(Object.hasOwn(claude.state(), "skillInvocations"), false);
+  const state = buildSessionState(claude.id, claude.nativeFacts());
+  assert.equal(Object.hasOwn(state, "activeSkills"), false);
+  assert.equal(Object.hasOwn(state, "skillInvocations"), false);
 });
 
 afterAll(() => {

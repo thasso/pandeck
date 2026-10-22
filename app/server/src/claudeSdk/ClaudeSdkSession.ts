@@ -43,7 +43,6 @@ import type {
   SessionForkOrigin,
   SessionMode,
   SessionNamingSettings,
-  SessionState,
   SessionToolLoadEvent,
   ThinkingLevel,
 } from "@assistant/shared";
@@ -81,7 +80,6 @@ import {
 import { removeAgentTempTree } from "../agentTempTree.ts";
 import { eagerToolNamesFor } from "../tools/catalog.ts";
 import { externalToolName, MCP_SERVER_NAME } from "../mcp/names.ts";
-import { buildSessionState, type SessionNativeFacts } from "../sessionState.ts";
 import {
   sessionPromptConditions,
   type PromptConditions,
@@ -116,6 +114,7 @@ import type {
   CompactionWindowHarnessStatus,
   CompactionWindowLowerResult,
   HarnessHost,
+  SessionNativeFacts,
   LiveSession,
   Viewer,
 } from "../harness.ts";
@@ -465,6 +464,8 @@ function providerFailureMessage(failure: ProviderFailure): string {
 }
 
 export interface ClaudeSdkSessionDeps {
+  /** Required app-owned projection; the engine never assembles state itself. */
+  buildSessionState: HarnessHost["buildSessionState"];
   /** Lazily resolves the SDK seam (real or fake). */
   seam: () => Promise<ClaudeSdkSeam>;
   createdAt?: number;
@@ -780,14 +781,14 @@ export class ClaudeSdkSession implements LiveSession {
   }
   /** Set once disposed: nothing may drive this instance again. */
   private disposed = false;
-  /** Notify the hub that the working tree may have changed (→ refresh workspace info). */
-  /** Resident browser-owner metadata, provided through the hub's host. */
-  browserRuntimeOwner: HarnessHost["browserRuntimeOwner"] = () => undefined;
+  /** App projection supplied by the store before the session becomes resident. */
+  buildSessionState: HarnessHost["buildSessionState"];
 
   constructor(
     readonly id: string,
     deps: ClaudeSdkSessionDeps,
   ) {
+    this.buildSessionState = deps.buildSessionState;
     registerClaudeBackgroundWorkBackend();
     this.agentType = deps.agentType ?? "workshop";
     this.additionalSystemPrompt =
@@ -944,7 +945,10 @@ export class ClaudeSdkSession implements LiveSession {
 
   broadcastState(): void {
     if (this.viewers.size === 0) return;
-    this.broadcast({ type: "state", state: this.state() });
+    this.broadcast({
+      type: "state",
+      state: this.buildSessionState(this.id, this.nativeFacts()),
+    });
   }
 
   /**
@@ -1031,12 +1035,6 @@ export class ClaudeSdkSession implements LiveSession {
 
   private modelOption(): ModelOption {
     return claudeSdkModelOption(this.modelId, this.contextWindowTokens);
-  }
-
-  state(): SessionState {
-    return buildSessionState(this.id, this.nativeFacts(), (id) =>
-      this.browserRuntimeOwner(id),
-    );
   }
 
   /** Native configuration and CLI observations, without app-state projection. */

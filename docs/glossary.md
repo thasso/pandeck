@@ -35,6 +35,11 @@ events.\
 _Avoid_: cache, store, mirror. A cache is the shell cache, and a store is a
 server persistence layer.
 
+**Native facts**: A session's identity and engine configuration, plus live
+engine observations when it is resident. App-owned state such as Tasks, queues
+and approvals is not part of these facts.\
+_Avoid_: engine state, session snapshot
+
 **Peer session**: A session started by another session that reports back through
 peer messages.\
 _Avoid_: subagent. That word means only the Claude SDK's native subagents.

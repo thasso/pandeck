@@ -3,18 +3,12 @@ import {
   HARNESSES,
   isCodingAgentType,
   sessionCompactionWindowState,
-  type AgentType,
-  type Harness,
-  type ModelOption,
-  type SessionForkOrigin,
-  type SessionMode,
   type SessionState,
-  type ThinkingLevel,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import { errorText } from "./errors.ts";
-import type { CompactionWindowHarnessStatus, HarnessHost } from "./harness.ts";
+import type { SessionNativeFacts } from "./harness.ts";
 import { storedCompactionWindowState } from "./harnesses/compactionWindow.ts";
 import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import {
@@ -35,10 +29,7 @@ import {
   sessionAgentSummary,
   withoutDeniedTools,
 } from "./agents/sessionAgent.ts";
-import {
-  skillInvocationTrail,
-  type SkillInvocationTranscript,
-} from "./skills/skillInvocations.ts";
+import { skillInvocationTrail } from "./skills/skillInvocations.ts";
 import {
   findOriginTask,
   listRelatedGlobalTasks,
@@ -58,41 +49,10 @@ import { sessionToolExposure } from "./tools/sessionToolExposure.ts";
 import {
   buildToolExposure,
   toolDefinitionChars,
-  type BuildToolExposureInput,
 } from "./tools/toolExposure.ts";
 import { hasPendingApproval } from "./pendingApprovals.ts";
 import { hasChoosingTaskCard } from "./pullRequestCards.ts";
 import { sessionWorktreeMissing } from "./worktrees/sessionCwd.ts";
-
-/** Native identity/configuration, with no live part for a storage-only view. */
-export interface SessionNativeFacts {
-  harness: Harness;
-  agentType: AgentType;
-  /** Projection persona, including ViewSession's fallback for old stored rows. */
-  kind: AgentType;
-  sessionFile?: string | undefined;
-  forkOrigin?: SessionForkOrigin | undefined;
-  model?: ModelOption | undefined;
-  thinkingLevel: ThinkingLevel;
-  mode?: SessionMode | undefined;
-  live?:
-    | {
-        canSteer: boolean;
-        compactionWindow?: CompactionWindowHarnessStatus | undefined;
-        /** Read native history only when the frozen skill set is nonempty. */
-        skillInvocationTranscript(
-          frozenNames: readonly string[],
-        ): SkillInvocationTranscript;
-        /** Native loading/usage; catalog sizes and usability belong here. */
-        toolLoading?:
-          | (Omit<BuildToolExposureInput, "agentType" | "usableToolNames"> & {
-              /** Native wire namespace, empty for unqualified tool names. */
-              definitionNamePrefix?: string;
-            })
-          | undefined;
-      }
-    | undefined;
-}
 
 /** A store hiccup degrades one field, with one diagnostic per failed read. */
 function safe<T>(field: string, read: () => T, fallback: T): T {
@@ -106,12 +66,10 @@ function safe<T>(field: string, read: () => T, fallback: T): T {
 
 function toolExposureFor(sessionId: string, facts: SessionNativeFacts) {
   const loading = facts.live?.toolLoading;
-  // Existing registrations still serve detached views and unmigrated engines.
+  // Existing registrations still serve views without native loading facts.
   if (!loading) return sessionToolExposure(sessionId);
-  const tools = withoutDeniedTools(
-    agentToolsFor(facts.kind),
-    displayedSessionAgent(sessionId),
-  );
+  const catalog = agentToolsFor(facts.kind);
+  const tools = withoutDeniedTools(catalog, displayedSessionAgent(sessionId));
   const integrated = integrationGatedActiveToolNames(
     facts.kind,
     tools,
@@ -131,9 +89,7 @@ function toolExposureFor(sessionId: string, facts: SessionNativeFacts) {
       ),
     ]),
   );
-  const catalogNames = new Set(
-    agentToolsFor(facts.kind).map((tool) => tool.name),
-  );
+  const catalogNames = new Set(catalog.map((tool) => tool.name));
   // Only native definitions outside the catalog, such as pi's loader, need overrides.
   for (const [name, chars] of loading.definitionCharsByName ?? [])
     if (!catalogNames.has(name)) definitionCharsByName.set(name, chars);
@@ -159,7 +115,7 @@ function toolExposureFor(sessionId: string, facts: SessionNativeFacts) {
 export function buildSessionState(
   sessionId: string,
   facts: SessionNativeFacts,
-  browserRuntimeOwner: HarnessHost["browserRuntimeOwner"] = () => undefined,
+  browserRuntimeOwner?: Parameters<typeof listBrowserRuntimes>[1],
 ): SessionState {
   const idleReasonValue = hasPendingAgentQuestion(sessionId)
     ? "awaiting_question"
@@ -257,7 +213,9 @@ export function buildSessionState(
       : {}),
     ...(coding && facts.live
       ? {
-          browserRuntimes: listBrowserRuntimes(sessionId, browserRuntimeOwner),
+          browserRuntimes: browserRuntimeOwner
+            ? listBrowserRuntimes(sessionId, browserRuntimeOwner)
+            : [],
         }
       : {}),
     peerPrompts: peerPromptThreadsFor(sessionId),

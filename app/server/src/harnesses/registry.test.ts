@@ -468,7 +468,7 @@ test("both stores reach the hub through one host", () => {
     .spyOn(claudeSdkStore, "setOnChange")
     .mockImplementation(() => {});
   const setProvider = vi
-    .spyOn(claudeSdkStore, "setBrowserRuntimeOwner")
+    .spyOn(claudeSdkStore, "setStateBuilder")
     .mockImplementation(() => {});
   const host = {
     broadcastSessions: async () => {
@@ -479,10 +479,9 @@ test("both stores reach the hub through one host", () => {
       calls.push("checkPendingReload");
     },
     isReloadQueued: () => false,
-    browserRuntimesFor: () => [],
-    browserRuntimeOwner: (sessionId: string) => {
-      calls.push(`browserRuntimeOwner:${sessionId}`);
-      return undefined;
+    buildSessionState: (sessionId: string) => {
+      calls.push(`buildSessionState:${sessionId}`);
+      return { sessionId } as import("@assistant/shared").SessionState;
     },
   };
   harnessRegistry.setHost(host);
@@ -490,11 +489,17 @@ test("both stores reach the hub through one host", () => {
   assert.equal(setPiHost.mock.calls[0]?.[0], host);
   // A Claude session changing re-lists and re-checks a queued reload.
   setOnChange.mock.calls[0]?.[0]();
-  setProvider.mock.calls[0]?.[0]("s1");
+  const facts = {
+    harness: "pi",
+    kind: "developer",
+    agentType: "developer",
+    thinkingLevel: "off",
+  } as const;
+  setProvider.mock.calls[0]?.[0]("s1", facts);
   assert.deepEqual(calls, [
     "broadcastSessions",
     "checkPendingReload",
-    "browserRuntimeOwner:s1",
+    "buildSessionState:s1",
   ]);
 });
 

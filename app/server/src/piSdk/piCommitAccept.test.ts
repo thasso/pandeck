@@ -63,7 +63,7 @@ function viewedSession(opts: { reloadQueued?: boolean } = {}) {
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => opts.reloadQueued ?? false,
-      browserRuntimesFor: () => [],
+      buildSessionState: () => ({}) as never,
     } as never,
     () => {},
   );

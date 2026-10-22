@@ -38,6 +38,7 @@ import {
 } from "../tools/catalog.ts";
 import { maximalPromptConditions } from "../promptConditions.ts";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
+import { installClaudeStateBuilder } from "../test/claudeSdkSession.ts";
 import { removeClaudeSdkRecord } from "../claudeSdk/claudeSdkRecords.ts";
 import { claudeSdkSystemPrompt } from "../claudeSdk/options.ts";
 import { createClaudeSessionToolServer } from "../claudeSdk/toolServer.ts";
@@ -357,6 +358,7 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
   };
   cleanupRecord();
 
+  installClaudeStateBuilder(claudeSdkStore);
   const session = claudeSdkStore.acquire(ID, {
     modelId: "opus",
     thinkingLevel: "high",

@@ -59,8 +59,7 @@ class ClaudeSdkSessionStore {
   /** Lazily-built real seam, shared by every live session. */
   private seamPromise: Promise<ClaudeSdkSeam> | undefined;
   private onChange: () => void = () => {};
-  private browserRuntimeOwner: HarnessHost["browserRuntimeOwner"] = () =>
-    undefined;
+  private buildSessionState: HarnessHost["buildSessionState"] | undefined;
 
   setOnChange(cb: () => void): void {
     this.onChange = cb;
@@ -71,10 +70,18 @@ class ClaudeSdkSessionStore {
     this.heldElsewhere = check;
   }
 
-  setBrowserRuntimeOwner(cb: HarnessHost["browserRuntimeOwner"]): void {
-    this.browserRuntimeOwner = cb;
+  setStateBuilder(cb: HarnessHost["buildSessionState"]): void {
+    this.buildSessionState = cb;
     for (const session of this.sessions.values())
-      session.browserRuntimeOwner = cb;
+      session.buildSessionState = cb;
+  }
+
+  private requireStateBuilder(): HarnessHost["buildSessionState"] {
+    if (!this.buildSessionState)
+      throw new Error(
+        "ClaudeSdkSessionStore host is not wired; call setStateBuilder() before acquiring a session.",
+      );
+    return this.buildSessionState;
   }
 
   /** Inject a fake seam (tests only); defaults to the real installed SDK. */
@@ -177,6 +184,7 @@ class ClaudeSdkSessionStore {
       record?.additionalSystemPrompt ?? opts.additionalSystemPrompt;
     const cwdValue = worktreeCwdForSession(id) ?? record?.cwd ?? opts.cwd;
     const session = new ClaudeSdkSession(id, {
+      buildSessionState: this.requireStateBuilder(),
       seam: () => this.seam(),
       createdAt: record?.createdAt ?? opts.createdAt ?? Date.now(),
       // Restore last activity too: without it every restart back-dates the
@@ -220,8 +228,6 @@ class ClaudeSdkSessionStore {
     session.onChange = () => this.onChange();
     session.onPersist = () => this.persist(session);
     session.holdBy(() => this.evictIdle(session));
-    session.browserRuntimeOwner = (sessionId) =>
-      this.browserRuntimeOwner(sessionId);
     if (loaded) this.logs.set(id, loaded.cursor);
     else this.logs.delete(id);
     // Scope BEFORE the live map: an id the session list can already see must
@@ -270,6 +276,7 @@ class ClaudeSdkSessionStore {
       forkOrigin: SessionForkOrigin;
     },
   ): Promise<ClaudeSdkSession> {
+    this.requireStateBuilder();
     const source = this.sessions.get(sourceId);
     if (source?.isRunning)
       throw new Error("Cannot fork a session while it is streaming.");
@@ -363,6 +370,7 @@ class ClaudeSdkSessionStore {
       if (inheritedAgent) freezeSessionAgent(id, inheritedAgent);
 
       const session = new ClaudeSdkSession(id, {
+        buildSessionState: this.requireStateBuilder(),
         seam: () => this.seam(),
         // Keep the parent's title so the fork is recognizable in the list, but
         // leave auto-naming ARMED: a title alone would mark the child as already
@@ -390,8 +398,6 @@ class ClaudeSdkSessionStore {
       session.onChange = () => this.onChange();
       session.onPersist = () => this.persist(session);
       session.holdBy(() => this.evictIdle(session));
-      session.browserRuntimeOwner = (sessionId) =>
-        this.browserRuntimeOwner(sessionId);
       // A fork INHERITS its parent's scope, and claims it before the live map
       // can hand the child to the session list: forking is not a way for a
       // session outside the user's scope to produce one inside it.

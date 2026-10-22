@@ -58,7 +58,7 @@ function idleSession() {
       noteRunStarted: () => {},
       checkPendingReload: () => {},
       isReloadQueued: () => false,
-      browserRuntimesFor: () => [],
+      buildSessionState: () => ({}) as never,
     } as never,
     (key) => evicted.push(key),
   );

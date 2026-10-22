@@ -135,7 +135,7 @@ const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
 const { createPiAdapter } = await import("./session/adapters/pi.ts");
 const { NativeAdapterEventSource } =
   await import("./session/adapters/nativeEvents.ts");
-const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("./test/claudeSdkSession.ts");
 const { holdAutomaticTurns, resumeAutomaticTurns } =
   await import("./automaticTurnHold.ts");
 const { PEER_NOTICE_AGENT_ID } = await import("./delegationFailureNotice.ts");

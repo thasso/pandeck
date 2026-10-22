@@ -15,7 +15,7 @@ const dataDir = mkdtempSync(join(tmpdir(), "claude-background-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 
-const { ClaudeSdkSession } = await import("./ClaudeSdkSession.ts");
+const { ClaudeSdkSession } = await import("../test/claudeSdkSession.ts");
 const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
 const { backgroundWorkSupervisor } =
   await import("../backgroundWork/supervisor.ts");

@@ -41,6 +41,8 @@ import {
   type ClaudeSdkRecordMeta,
 } from "./claudeSdkRecords.ts";
 import { claudeSdkStore } from "./claudeSdkStore.ts";
+import { installClaudeStateBuilder } from "../test/claudeSdkSession.ts";
+installClaudeStateBuilder(claudeSdkStore);
 import { claudeTurnSeam } from "../test/claudeTurnSeam.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "claude-sdk-records-"));
