@@ -22,10 +22,11 @@
  */
 import { defineAgentTool } from "../../mcp/tool.ts";
 import { getForgejoToolConfig } from "../../forgejoSettings.ts";
-import { forgejoRequest } from "../../forgejoClient.ts";
+import { forgejoRequest, type ForgejoApiConfig } from "../../forgejoClient.ts";
 import {
   forgejoProvider,
   forgejoPullRequestDescription,
+  forgejoPullRequestTitle,
 } from "../../gitHosting.ts";
 import { invalidateForgejoPullRequestWrite } from "../../pullRequestInventorySync.ts";
 import { resolveForgejoRepo } from "./forgejoTools.ts";
@@ -77,9 +78,6 @@ type CommentPullRequestParams = {
 
 const PENDING_NOTE =
   "Do not claim it succeeded until the approved result appears.";
-
-/** Forgejo's default work-in-progress title prefix (there is no draft flag). */
-const WIP_PREFIX = "WIP: ";
 
 export const forgejoCreatePullRequestTool =
   defineAgentTool<CreatePullRequestParams>({
@@ -469,13 +467,6 @@ export const forgejoCommentPullRequestTool =
     },
   });
 
-/** `WIP: ` prefix for a draft, unless the title already carries a WIP marker. */
-function wipTitle(title: string): string {
-  return /^(wip:|\[wip\])/i.test(title.trim())
-    ? title
-    : `${WIP_PREFIX}${title}`;
-}
-
 /** Position-anchored `CreatePullReviewComment` payload for one inline comment. */
 function reviewCommentPayload(comment: {
   path: string;
@@ -502,158 +493,169 @@ registerApprovalExecutor("forgejoPullRequest", {
       throw new Error("Mismatched approval body for forgejoPullRequest.");
     const b = card.body;
     const config = getForgejoToolConfig();
-    const [owner, repoName] = b.repo.split("/");
-    const base = `/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repoName!)}`;
-
-    if (b.operation === "create") {
-      const title = b.title ?? "";
-      const res = await forgejoRequest<{ html_url?: string; number?: number }>(
-        config,
-        "POST",
-        `${base}/pulls`,
-        {
-          body: {
-            title: b.draft === true ? wipTitle(title) : title,
-            head: b.head,
-            base: b.base,
-            body: b.prBody ?? "",
-          },
-        },
-      );
-      if (res.data.number !== undefined) b.resultNumber = res.data.number;
-      return {
-        resultSummary: res.data.number
-          ? `Opened pull request #${res.data.number}`
-          : "Opened pull request",
-        ...(res.data.html_url !== undefined
-          ? { resultUrl: res.data.html_url }
-          : {}),
-      };
-    }
-
-    if (b.operation === "ready") {
-      if (!Number.isInteger(b.pullNumber) || (b.pullNumber ?? 0) < 1)
-        throw new Error("Ready proposal is missing its pull-request number.");
-      const provider = forgejoProvider(
-        { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
-        config,
-      );
-      const detail = await provider.pullRequestDetail(b.pullNumber!);
-      if (!detail || detail.state !== "open" || detail.merged || !detail.draft)
-        throw new Error(
-          `Pull request #${b.pullNumber} is not an open draft; nothing was changed.`,
-        );
-      try {
-        await provider.markPullRequestReady(b.pullNumber!);
-      } finally {
+    try {
+      return await executeApprovedWrite(b, config);
+    } finally {
+      // Also after a failure: an edit's retarget may have landed before its
+      // description. A plain comment changes nothing the inventory shows.
+      if (b.operation !== "comment") {
+        const [owner, repoName] = b.repo.split("/");
         invalidateForgejoPullRequestWrite(
           config.baseUrl,
           owner!,
           repoName!,
-          b.pullNumber,
+          b.operation === "create" ? b.resultNumber : b.pullNumber,
         );
       }
-      return {
-        resultSummary: `Marked pull request #${b.pullNumber} ready for review`,
-        resultUrl: `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
-      };
     }
+  },
+});
 
-    if (b.operation === "edit") {
-      if (
-        typeof b.pullNumber !== "number" ||
-        (typeof b.prBody !== "string" && !b.base)
-      )
-        throw new Error(
-          "Edit proposal is missing its pull-request number or its changes.",
-        );
-      const provider = forgejoProvider(
-        { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
-        config,
-      );
-      const edited = await applyPullRequestEdit(
-        provider,
-        { ...b, pullNumber: b.pullNumber },
-        async (description) =>
-          (
-            await forgejoRequest<{ html_url?: string }>(
-              config,
-              "PATCH",
-              `${base}/pulls/${b.pullNumber}`,
-              { body: { body: description } },
-            )
-          ).data.html_url,
-      );
-      return {
-        resultUrl: `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
-        ...edited,
-      };
-    }
+async function executeApprovedWrite(
+  b: ForgejoPullRequestApprovalBody,
+  config: ForgejoApiConfig,
+) {
+  const [owner, repoName] = b.repo.split("/");
+  const base = `/repos/${encodeURIComponent(owner!)}/${encodeURIComponent(repoName!)}`;
 
-    if (b.operation === "review") {
-      if (typeof b.pullNumber !== "number")
-        throw new Error("Review proposal is missing a pull-request number.");
-      const comments = (b.inlineComments ?? []).map(reviewCommentPayload);
-      const res = await forgejoRequest<{ html_url?: string }>(
-        config,
-        "POST",
-        `${base}/pulls/${b.pullNumber}/reviews`,
-        {
-          body: {
-            event: b.reviewEvent ?? "COMMENT",
-            ...(b.reviewSummary ? { body: b.reviewSummary } : {}),
-            ...(comments.length ? { comments } : {}),
-          },
-        },
-      );
-      return {
-        resultSummary: `Submitted ${b.reviewEvent ?? "COMMENT"} review on #${b.pullNumber}`,
-        ...(res.data.html_url !== undefined
-          ? { resultUrl: res.data.html_url }
-          : {}),
-      };
-    }
-
-    // comment
-    if (typeof b.pullNumber !== "number")
-      throw new Error("Comment proposal is missing a pull-request number.");
-    if (typeof b.replyToReviewId === "number") {
-      if (!b.replyPath || typeof b.replyLine !== "number")
-        throw new Error("Reply proposal is missing its file/line anchor.");
-      const res = await forgejoRequest<{ html_url?: string }>(
-        config,
-        "POST",
-        `${base}/pulls/${b.pullNumber}/reviews/${b.replyToReviewId}/comments`,
-        {
-          body: reviewCommentPayload({
-            path: b.replyPath,
-            line: b.replyLine,
-            ...(b.replySide ? { side: b.replySide } : {}),
-            body: b.commentBody ?? "",
-          }),
-        },
-      );
-      return {
-        resultSummary: `Replied on review ${b.replyToReviewId} of #${b.pullNumber}`,
-        ...(res.data.html_url !== undefined
-          ? { resultUrl: res.data.html_url }
-          : {}),
-      };
-    }
-    const res = await forgejoRequest<{ html_url?: string }>(
+  if (b.operation === "create") {
+    const res = await forgejoRequest<{ html_url?: string; number?: number }>(
       config,
       "POST",
-      `${base}/issues/${b.pullNumber}/comments`,
-      { body: { body: b.commentBody ?? "" } },
+      `${base}/pulls`,
+      {
+        body: {
+          title: forgejoPullRequestTitle(b.title ?? "", b.draft === true),
+          head: b.head,
+          base: b.base,
+          body: b.prBody ?? "",
+        },
+      },
     );
+    if (res.data.number !== undefined) b.resultNumber = res.data.number;
     return {
-      resultSummary: `Commented on #${b.pullNumber}`,
+      resultSummary: res.data.number
+        ? `Opened pull request #${res.data.number}`
+        : "Opened pull request",
       ...(res.data.html_url !== undefined
         ? { resultUrl: res.data.html_url }
         : {}),
     };
-  },
-});
+  }
+
+  if (b.operation === "ready") {
+    if (!Number.isInteger(b.pullNumber) || (b.pullNumber ?? 0) < 1)
+      throw new Error("Ready proposal is missing its pull-request number.");
+    const provider = forgejoProvider(
+      { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
+      config,
+    );
+    const detail = await provider.pullRequestDetail(b.pullNumber!);
+    if (!detail || detail.state !== "open" || detail.merged || !detail.draft)
+      throw new Error(
+        `Pull request #${b.pullNumber} is not an open draft; nothing was changed.`,
+      );
+    await provider.markPullRequestReady(b.pullNumber!);
+    return {
+      resultSummary: `Marked pull request #${b.pullNumber} ready for review`,
+      resultUrl: `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
+    };
+  }
+
+  if (b.operation === "edit") {
+    if (
+      typeof b.pullNumber !== "number" ||
+      (typeof b.prBody !== "string" && !b.base)
+    )
+      throw new Error(
+        "Edit proposal is missing its pull-request number or its changes.",
+      );
+    const provider = forgejoProvider(
+      { host: new URL(config.baseUrl).host, owner: owner!, repo: repoName! },
+      config,
+    );
+    const edited = await applyPullRequestEdit(
+      provider,
+      { ...b, pullNumber: b.pullNumber },
+      async (description) =>
+        (
+          await forgejoRequest<{ html_url?: string }>(
+            config,
+            "PATCH",
+            `${base}/pulls/${b.pullNumber}`,
+            { body: { body: description } },
+          )
+        ).data.html_url,
+    );
+    return {
+      resultUrl: `${provider.repoWebUrl}/pulls/${b.pullNumber}`,
+      ...edited,
+    };
+  }
+
+  if (b.operation === "review") {
+    if (typeof b.pullNumber !== "number")
+      throw new Error("Review proposal is missing a pull-request number.");
+    const comments = (b.inlineComments ?? []).map(reviewCommentPayload);
+    const res = await forgejoRequest<{ html_url?: string }>(
+      config,
+      "POST",
+      `${base}/pulls/${b.pullNumber}/reviews`,
+      {
+        body: {
+          event: b.reviewEvent ?? "COMMENT",
+          ...(b.reviewSummary ? { body: b.reviewSummary } : {}),
+          ...(comments.length ? { comments } : {}),
+        },
+      },
+    );
+    return {
+      resultSummary: `Submitted ${b.reviewEvent ?? "COMMENT"} review on #${b.pullNumber}`,
+      ...(res.data.html_url !== undefined
+        ? { resultUrl: res.data.html_url }
+        : {}),
+    };
+  }
+
+  // comment
+  if (typeof b.pullNumber !== "number")
+    throw new Error("Comment proposal is missing a pull-request number.");
+  if (typeof b.replyToReviewId === "number") {
+    if (!b.replyPath || typeof b.replyLine !== "number")
+      throw new Error("Reply proposal is missing its file/line anchor.");
+    const res = await forgejoRequest<{ html_url?: string }>(
+      config,
+      "POST",
+      `${base}/pulls/${b.pullNumber}/reviews/${b.replyToReviewId}/comments`,
+      {
+        body: reviewCommentPayload({
+          path: b.replyPath,
+          line: b.replyLine,
+          ...(b.replySide ? { side: b.replySide } : {}),
+          body: b.commentBody ?? "",
+        }),
+      },
+    );
+    return {
+      resultSummary: `Replied on review ${b.replyToReviewId} of #${b.pullNumber}`,
+      ...(res.data.html_url !== undefined
+        ? { resultUrl: res.data.html_url }
+        : {}),
+    };
+  }
+  const res = await forgejoRequest<{ html_url?: string }>(
+    config,
+    "POST",
+    `${base}/issues/${b.pullNumber}/comments`,
+    { body: { body: b.commentBody ?? "" } },
+  );
+  return {
+    resultSummary: `Commented on #${b.pullNumber}`,
+    ...(res.data.html_url !== undefined
+      ? { resultUrl: res.data.html_url }
+      : {}),
+  };
+}
 
 export const forgejoPrWriteTools = [
   forgejoCreatePullRequestTool,

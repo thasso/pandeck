@@ -1529,7 +1529,9 @@ settled by the REST list paged to its end (ten pages, then unknown). The generic
 GitHub PR tools write outside the provider seam, so an approved create, review
 or reviewer/assignee change (even one that failed part-way) calls
 `invalidateGithubPullRequestWrite`, which drops the list, the annotations and
-that pull request's reads and rebuilds the inventory.
+that pull request's reads and rebuilds the inventory. The Forgejo PR tools do
+the same through `invalidateForgejoPullRequestWrite` after every approved write
+except a plain comment or review-thread reply.
 
 `pullRequestInventorySync.ts` builds this projection once at server startup and
 five minutes after each completed build, independent of whether the Pull
