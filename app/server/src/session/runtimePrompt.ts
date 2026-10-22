@@ -75,7 +75,12 @@ export interface RuntimePromptDriver {
     model?: { provider: string; id: string } | undefined;
     thinkingLevel?: ThinkingLevel | undefined;
   };
-  switchAccount?(profileId: string, admit: () => void): Promise<void>;
+  /** `allowWithoutHistory`: the turn has not started, so no history is lost. */
+  switchAccount?(
+    profileId: string,
+    admit: () => void,
+    allowWithoutHistory?: boolean,
+  ): Promise<void>;
   dropEncryptedReasoning?(admit: () => void): Promise<boolean>;
   contextInfo(): ContextInfo;
   broadcastState(): void;
@@ -334,11 +339,15 @@ export async function promptRuntimeSessionWithRuntime(
     );
     if (options.skillInvocation)
       await assertSkillInvocation(options, frozenSkills);
+    assertTurnAllowed(driver.sessionId, options.resumeHold);
+    assertRecoveryAdmission();
     // An account recovery continuation has already chosen its account.
-    if (!accountRecovery)
-      await moveOffDisabledAccount(driver, (message) =>
-        ensureRuntimeSessionWithRuntime(runtime, driver).appendNotice(message),
-      );
+    const accountMove = accountRecovery
+      ? undefined
+      : await moveOffDisabledAccount(driver, () => {
+          assertTurnAllowed(driver.sessionId, options.resumeHold);
+          assertRecoveryAdmission();
+        });
     assertTurnAllowed(driver.sessionId, options.resumeHold);
     assertRecoveryAdmission();
     // Nothing below awaits before the append. The enterprise check runs before
@@ -347,7 +356,8 @@ export async function promptRuntimeSessionWithRuntime(
     assertSessionEnterpriseAccount(driver);
     admit?.();
     const live = ensureRuntimeSessionWithRuntime(runtime, driver);
-    prepareAccountRecoveryTurn(live, accountRecovery);
+    if (accountMove) live.appendNotice(accountMove.notice);
+    prepareAccountRecoveryTurn(live, accountRecovery, accountMove?.from);
     return await runPromptWithRuntime(
       runtime,
       driver,

@@ -1581,14 +1581,22 @@ export class ClaudeSdkSession implements LiveSession {
     this.onChange();
   }
 
-  /** End the old epoch before migrating any native history or changing credentials. */
-  async switchAccount(profileId: string, admit: () => void): Promise<void> {
+  /**
+   * End the old epoch before migrating any native history or changing
+   * credentials. A session with no native id yet (new, or after /clear) has no
+   * history to carry; only a caller that has not started its turn may move it.
+   */
+  async switchAccount(
+    profileId: string,
+    admit: () => void,
+    allowWithoutHistory = false,
+  ): Promise<void> {
     this.assertNotDisposed();
     const previous = this.profileId;
     if (!previous || this.running)
       throw new Error("Cannot switch an unbound or running Claude session.");
     const providerSessionId = this.providerSessionId;
-    if (!providerSessionId)
+    if (!providerSessionId && !allowWithoutHistory)
       throw new Error(
         "Cannot preserve Claude history without a native session id.",
       );
@@ -1628,11 +1636,13 @@ export class ClaudeSdkSession implements LiveSession {
         );
     }
     check();
-    const transfer = await copyClaudeSessionForAccount(
-      previous,
-      profileId,
-      providerSessionId,
-    );
+    const transfer = providerSessionId
+      ? await copyClaudeSessionForAccount(
+          previous,
+          profileId,
+          providerSessionId,
+        )
+      : undefined;
     let committed = false;
     try {
       check();
@@ -1645,7 +1655,9 @@ export class ClaudeSdkSession implements LiveSession {
     } finally {
       // The row is the commit point. Cleanup cannot roll back an admitted move,
       // but neither success nor an abandoned copy should leave an extra history.
-      await (committed ? transfer.commit() : transfer.rollback()).catch(() => {
+      await (
+        transfer && (committed ? transfer.commit() : transfer.rollback())
+      )?.catch(() => {
         console.warn(
           `[claude] Account-switch ${committed ? "source cleanup" : "destination rollback"} failed; session deletion will retry.`,
         );

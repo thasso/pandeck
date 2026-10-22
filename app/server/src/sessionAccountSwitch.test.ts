@@ -752,3 +752,81 @@ for (const harness of engines) {
     },
   );
 }
+
+for (const harness of engines) {
+  test(`${harness} a pre-turn move refused at final admission appends no marker`, async () => {
+    const a = account(harness, "A");
+    account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    profiles.setCredentialProfileEnabled(a, false);
+    await assert.rejects(
+      s.send({
+        admit: () => {
+          throw new Error("caller refused admission");
+        },
+      }),
+      /caller refused admission/,
+    );
+    assert.equal(s.calls.length, 0);
+    assert.ok(
+      !JSON.stringify(s.runtime.get(s.id)?.clientTimeline() ?? []).includes(
+        "Switched from",
+      ),
+    );
+  });
+  test(`${harness} a Stop during the pre-turn move keeps the binding`, async () => {
+    const a = account(harness, "A");
+    account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    profiles.setCredentialProfileEnabled(a, false);
+    const { holdAutomaticTurns } = await import("./automaticTurnHold.ts");
+    s.gate(async () => holdAutomaticTurns(s.id));
+    await assert.rejects(s.send());
+    assert.deepEqual(s.moves, []);
+    assert.equal(s.driver.credentialProfileId, a);
+    assert.equal(s.calls.length, 0);
+  });
+  test(`${harness} a target that needs login mid-move keeps the binding`, async () => {
+    const a = account(harness, "A");
+    const b = account(harness, "B");
+    const s = setup(harness, a, [undefined]);
+    profiles.setCredentialProfileEnabled(a, false);
+    s.gate(async () =>
+      health.reportAccountRunFailure(
+        b,
+        { kind: "auth", loginDeath: true },
+        offers.get(b)!.provider,
+        health.observeAccountHealth(b),
+      ),
+    );
+    await assert.rejects(s.send(), /B became unavailable/);
+    assert.deepEqual(s.moves, []);
+    assert.equal(s.driver.credentialProfileId, a);
+  });
+}
+
+test("pi retries without encrypted reasoning when the account it was moved to rejects it", async () => {
+  const a = account("pi", "A");
+  const b = account("pi", "B");
+  const s = setup("pi", a, [
+    { kind: "server", encryptedReasoningRejected: true },
+    undefined,
+  ]);
+  let drops = 0;
+  s.driver.dropEncryptedReasoning = async (admit) => {
+    admit();
+    drops += 1;
+    return true;
+  };
+  profiles.setCredentialProfileEnabled(a, false);
+  await s.send();
+  assert.deepEqual(s.moves, [b]);
+  assert.equal(drops, 1);
+  assert.deepEqual(
+    s.calls.map((call) => [call.profileId, call.continuation]),
+    [
+      [b, false],
+      [b, true],
+    ],
+  );
+});
