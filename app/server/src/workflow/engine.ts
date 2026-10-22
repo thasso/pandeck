@@ -206,6 +206,9 @@ async function runAdvanceLoop(
   runId: number,
   actor: WorkflowActor,
 ): Promise<void> {
+  // Also cover a first advance before boot offering/reconciliation is called.
+  // Capture before any reservation can start in this process.
+  bootRecoverySteps();
   let mutated = false;
   try {
     // A step dispatched in THIS pass whose executor works asynchronously is
@@ -1133,6 +1136,49 @@ export function rebaseAndReviewRun(
 
 /* ------------------------------ boot recovery ------------------------------ */
 
+let bootRecovery: Set<number> | undefined;
+
+/**
+ * Freeze crash leftovers before workflow admission, not when serial recovery
+ * eventually reaches a run. Pending reservations and steps admitted by this
+ * process must never be recovered as interrupted, even before their provider
+ * turn reports live. Each leftover is claimed once under its run lock.
+ */
+function bootRecoverySteps(): Set<number> {
+  if (!bootRecovery) {
+    bootRecovery = new Set(
+      listOpenRuns().flatMap((run) =>
+        listOpenSteps(run.id)
+          .filter((step) => step.status === "running")
+          .map((step) => step.id),
+      ),
+    );
+  }
+  return bootRecovery;
+}
+
+/**
+ * Cheap boot phase: offer only the pending agent reservation the recipe selects.
+ * No acquisition, dispatch, operation recovery or run lock wait occurs here.
+ * Delivery still re-enters advanceRun and re-reads the decision under its lock.
+ */
+export function pendingWorkflowAgentsOnBoot(): WorkflowStepContext[] {
+  bootRecoverySteps();
+  const pending: WorkflowStepContext[] = [];
+  for (const run of listOpenRuns()) {
+    if (run.lifecycle !== "active" || run.cancelRequestedAt !== undefined)
+      continue;
+    const recipe = getWorkflowRecipe(run.recipeId, run.recipeVersion);
+    const steps = listSteps(run.id);
+    const decision = recipe?.decide(run, steps);
+    if (decision?.kind !== "executing") continue;
+    const step = steps.find((it) => it.id === decision.stepId);
+    if (step?.kind === "agent" && step.status === "pending")
+      pending.push(workflowStepContext(run, step, SYSTEM_ACTOR));
+  }
+  return pending;
+}
+
 /**
  * Decide what a restart may resume (`app/server/src/index.ts` calls this beside
  * the other boot reconcilers). Foundation invariant 6: restart behavior is
@@ -1154,6 +1200,7 @@ export function rebaseAndReviewRun(
  * its state.
  */
 export async function reconcileWorkflowRunsOnBoot(): Promise<void> {
+  bootRecoverySteps();
   for (const run of listOpenRuns()) {
     // A cancellation the user asked for outlives the process that could not
     // finish settling it: the request is durable, so boot finishes the job
@@ -1231,6 +1278,10 @@ async function reconcileRunningStep(
   runId: number,
   step: WorkflowStepRow,
 ): Promise<Reconciliation> {
+  // This guard precedes ALL recovery side effects, especially repair/triage
+  // Git restoration. Re-enumeration and duplicate boot calls cannot claim a
+  // live assignment or recover the same inherited step a second time.
+  if (!bootRecoverySteps().delete(step.id)) return "continue";
   if (step.kind === "agent") return reconcileRunningAgentStep(runId, step);
   if (step.kind === "host-operation")
     return reconcileRunningOperationStep(runId, step);
@@ -1440,6 +1491,7 @@ async function reconcileRunningOperationStep(
 /** Test-only: drop the per-run advance chains between suites. */
 export function resetWorkflowEngineForTests(): void {
   advanceChains.clear();
+  bootRecovery = undefined;
   setWorkflowSessionAbortForTests(null);
   // Every injected seam goes back to the real one: a probe left behind by an
   // earlier case would decide a later case's behaviour invisibly.

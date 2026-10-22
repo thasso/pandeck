@@ -193,84 +193,109 @@ test("a completed repair is refused while Git is still rebasing", async () => {
   await finalizeRebaseRepair(rig.run, rig.step, "failed");
 });
 
-test("a restart restores Git and fails an interrupted repair", async () => {
-  // The repair branch of boot reconciliation restores Git FIRST and only then
-  // records the failure, so the run never sits active behind a repair step
-  // nothing could ever finish, with Git already restored and no record saying
-  // so.
-  const rig = fixture("interrupted");
-  const run = workflowStore.createRun({
-    taskId: 400,
-    ...(rig.run.projectId !== undefined
-      ? { projectId: rig.run.projectId }
-      : {}),
-    recipeId: recipe.CODE_DELIVERY_RECIPE_ID,
-    recipeVersion: recipe.CODE_DELIVERY_RECIPE_VERSION,
-    maxIterations: 2,
-    maxReviewPasses: 1,
-    actor: { kind: "user" },
-  });
-  workflowStore.attachRunWorktree(
-    run.id,
-    { worktreeId: rig.id, branch: rig.run.branch! },
-    { kind: "user" },
-  );
-  const repair = workflowStore.appendStep({
-    runId: run.id,
-    kind: "agent",
-    payload: rig.step.payload,
-    actor: { kind: "user" },
-  });
-  const parentSessionId = "repair-session";
-  sessionStore.upsert({
-    id: parentSessionId,
-    harness: "pi",
-    agentType: "developer",
-  });
-  workflowStore.startStep(
-    repair.id,
-    { kind: "session", id: parentSessionId },
-    { kind: "user" },
-  );
-  // The state a crash mid-repair leaves on disk.
-  const rebase = spawnSync("git", ["rebase", "main"], {
-    cwd: rig.feature,
-    encoding: "utf8",
-  });
-  assert.notEqual(rebase.status, 0);
-  writeFileSync(join(rig.feature, "repair-scratch.txt"), "temporary\n");
-
-  await engine.reconcileWorkflowRunsOnBoot();
-
-  // Git first: restored to the exact pre-repair head, and the evidence for that
-  // is on the step's result rather than only in the log.
-  assert.equal(git(rig.feature, "rev-parse", "HEAD").trim(), rig.originalHead);
-  assert.equal(git(rig.feature, "status", "--porcelain").trim(), "");
-  assert.equal(existsSync(join(rig.feature, "repair-scratch.txt")), false);
-  const failed = workflowStore.getStep(repair.id)!;
-  assert.equal(failed.status, "failed");
-  assert.deepEqual(failed.result?.payload, {
-    rebaseRepairSafety: {
-      verified: true,
-      restored: true,
-      originalHead: rig.originalHead,
-    },
-  });
-  assert.match(failed.result?.summary ?? "", /restored/);
-  assert.equal(workflowStore.getRun(run.id)?.lifecycle, "paused");
-
-  // And the run is actionable: Retry moves on through commit-sync.
-  await engine.retryRun(run.id, { kind: "user" });
-  const successor = workflowStore
-    .listSteps(run.id)
-    .find((step) => step.predecessorId === repair.id)!;
-  assert.equal(successor.kind, "host-operation");
-
-  // The run can still finish once the user has seen it through.
-  assert.equal(
-    workflowStore.setRunLifecycle(run.id, "completed", {
+test.each(["interrupted", "live"] as const)(
+  "boot recovery protects a %s repair",
+  async (mode) => {
+    engine.resetWorkflowEngineForTests();
+    // The repair branch of boot reconciliation restores Git FIRST and only then
+    // records the failure, so the run never sits active behind a repair step
+    // nothing could ever finish, with Git already restored and no record saying
+    // so.
+    const rig = fixture(`boot-${mode}`);
+    const run = workflowStore.createRun({
+      taskId: 400,
+      ...(rig.run.projectId !== undefined
+        ? { projectId: rig.run.projectId }
+        : {}),
+      recipeId: recipe.CODE_DELIVERY_RECIPE_ID,
+      recipeVersion: recipe.CODE_DELIVERY_RECIPE_VERSION,
+      maxIterations: 2,
+      maxReviewPasses: 1,
       actor: { kind: "user" },
-    }).lifecycle,
-    "completed",
-  );
-});
+    });
+    workflowStore.attachRunWorktree(
+      run.id,
+      { worktreeId: rig.id, branch: rig.run.branch! },
+      { kind: "user" },
+    );
+    const repair = workflowStore.appendStep({
+      runId: run.id,
+      kind: "agent",
+      payload: rig.step.payload,
+      actor: { kind: "user" },
+    });
+    const parentSessionId = "repair-session";
+    sessionStore.upsert({
+      id: parentSessionId,
+      harness: "pi",
+      agentType: "developer",
+    });
+    // Capture the SAME run with this reservation still pending, before the
+    // current process starts it. Its later running state is not a crash leftover.
+    if (mode === "live") engine.pendingWorkflowAgentsOnBoot();
+    workflowStore.startStep(
+      repair.id,
+      { kind: "session", id: parentSessionId },
+      { kind: "user" },
+    );
+    // The state a crash mid-repair leaves on disk.
+    const rebase = spawnSync("git", ["rebase", "main"], {
+      cwd: rig.feature,
+      encoding: "utf8",
+    });
+    assert.notEqual(rebase.status, 0);
+    writeFileSync(join(rig.feature, "repair-scratch.txt"), "temporary\n");
+
+    await engine.reconcileWorkflowRunsOnBoot();
+
+    if (mode === "live") {
+      await engine.reconcileWorkflowRunsOnBoot();
+      assert.equal(workflowStore.getStep(repair.id)?.status, "running");
+      assert.equal(workflowStore.getRun(run.id)?.lifecycle, "active");
+      assert.equal(existsSync(join(rig.feature, "repair-scratch.txt")), true);
+      assert.match(git(rig.feature, "status", "--porcelain"), /UU file.txt/);
+      assert.equal(workflowStore.getStep(repair.id)?.result, undefined);
+      await finalizeRebaseRepair(
+        workflowStore.getRun(run.id)!,
+        workflowStore.getStep(repair.id)!,
+        "failed",
+      );
+      return;
+    }
+
+    // Git first: restored to the exact pre-repair head, and the evidence for that
+    // is on the step's result rather than only in the log.
+    assert.equal(
+      git(rig.feature, "rev-parse", "HEAD").trim(),
+      rig.originalHead,
+    );
+    assert.equal(git(rig.feature, "status", "--porcelain").trim(), "");
+    assert.equal(existsSync(join(rig.feature, "repair-scratch.txt")), false);
+    const failed = workflowStore.getStep(repair.id)!;
+    assert.equal(failed.status, "failed");
+    assert.deepEqual(failed.result?.payload, {
+      rebaseRepairSafety: {
+        verified: true,
+        restored: true,
+        originalHead: rig.originalHead,
+      },
+    });
+    assert.match(failed.result?.summary ?? "", /restored/);
+    assert.equal(workflowStore.getRun(run.id)?.lifecycle, "paused");
+
+    // And the run is actionable: Retry moves on through commit-sync.
+    await engine.retryRun(run.id, { kind: "user" });
+    const successor = workflowStore
+      .listSteps(run.id)
+      .find((step) => step.predecessorId === repair.id)!;
+    assert.equal(successor.kind, "host-operation");
+
+    // The run can still finish once the user has seen it through.
+    assert.equal(
+      workflowStore.setRunLifecycle(run.id, "completed", {
+        actor: { kind: "user" },
+      }).lifecycle,
+      "completed",
+    );
+  },
+);

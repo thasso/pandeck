@@ -33,6 +33,8 @@ const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
 const { createDeliveryScheduler } = await import("./deliveryScheduler.ts");
 const { setDeliveryWake } = await import("./deliveryWake.ts");
 const { sessionDeliveryLanes } = await import("./sessionDeliveryLanes.ts");
+const { setWorkflowAssignmentDelivery } =
+  await import("./workflow/assignmentDelivery.ts");
 const { BackgroundCompletionDelivery } =
   await import("./backgroundWork/completionDelivery.ts");
 peer.setHubForTests(fakeHub);
@@ -186,6 +188,7 @@ afterEach(async () => {
   handoffs.setAgentHandoffDeliveryStoppedForTests(true);
   handoffs.setAgentHandoffDeliveryStoppedForTests(false);
   drivers.clear();
+  setWorkflowAssignmentDelivery(undefined);
 });
 
 test.each([false, true])(
@@ -219,6 +222,50 @@ test.each([false, true])(
     assert.deepEqual(f.errors, []);
   },
 );
+
+test("workflow admissions share settlement waits and keep queue/workflow/peer priority", async () => {
+  const f = fixture();
+  const releaseUser = await f.startUser();
+  const assignments = ["W1", "W2"];
+  setWorkflowAssignmentDelivery({
+    owes: (id) => id === f.driver.sessionId && assignments.length > 0,
+    unavailable: () => assert.fail("live workflow driver was available"),
+    deliver: async (_session, shouldStart) => {
+      while (assignments.length && shouldStart())
+        await promptRuntimeSession(f.driver, assignments.shift()!);
+    },
+  });
+  queue.queuePrompt(f.driver.sessionId, { text: "Q" });
+  await f.send("P");
+  const releaseSettle = f.driver.holdSettle();
+  releases.push(releaseSettle);
+  releaseUser();
+  await until(
+    () => f.driver.promptTexts.length === 3 && !f.driver.isRunning,
+    () =>
+      JSON.stringify({
+        prompts: f.driver.promptTexts,
+        running: f.driver.isRunning,
+        errors: f.errors,
+      }),
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(f.driver.promptTexts, ["U", "Q", "W1"]);
+  releaseSettle();
+  await until(
+    () => f.driver.promptTexts.length === 5,
+    () =>
+      JSON.stringify({
+        prompts: f.driver.promptTexts,
+        running: f.driver.isRunning,
+        assignments,
+        errors: f.errors,
+      }),
+  );
+  assert.deepEqual(f.driver.promptTexts.slice(0, 4), ["U", "Q", "W1", "W2"]);
+  assert.match(f.driver.promptTexts[4]!, /P/);
+  assert.deepEqual(f.errors, []);
+});
 
 test("background debt survives replies arriving across two peer turns", async () => {
   const f = fixture();

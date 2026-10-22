@@ -16,6 +16,9 @@ import type { WorkflowRunRow, WorkflowStepRow } from "../db/workflowStore.ts";
 import type { RuntimePromptDriver } from "../session/runtimePrompt.ts";
 import type { WorkflowAgentExecutorDeps } from "./agentExecutor.ts";
 import type { SessionPromptEvidence } from "../promptConditions.ts";
+import { FakeRuntimeDriver } from "../test/fakeRuntimeDriver.ts";
+import { promptRuntimeSession } from "../session/runtimePrompt.ts";
+import type { PromptQueueDriver } from "../promptQueue.ts";
 import {
   absent,
   affirmed,
@@ -77,8 +80,6 @@ let createdEvidence: SessionPromptEvidence[];
 let createdTitles: string[];
 let busySessions = new Set<string>();
 let deliveryStopped = false;
-let clock = 0;
-let polls = 0;
 /** Survives `beforeEach`: every queued-assignment test gets unused session ids. */
 let queuedAssignmentSessionBase = 100;
 
@@ -135,7 +136,10 @@ vi.spyOn(piStore, "acquireNew").mockImplementation(
 );
 
 // The engine stand-ins above live for the whole file; a library seed does not.
-afterEach(() => vi.mocked(skillResolver.resolveSkillNames).mockRestore?.());
+afterEach(() => {
+  vi.mocked(skillResolver.resolveSkillNames).mockRestore?.();
+  vi.useRealTimers();
+});
 
 function deps(): WorkflowAgentExecutorDeps {
   return {
@@ -153,15 +157,7 @@ function deps(): WorkflowAgentExecutorDeps {
     },
     broadcastSessions() {},
     isSessionBusy: (sessionId) => busySessions.has(sessionId),
-    now: () => clock,
-    // One virtual MINUTE per poll against a real millisecond, so the bounded
-    // wait costs the test milliseconds while its own assertions still get to
-    // run between two polls.
-    sleep: async () => {
-      clock += 60_000;
-      polls += 1;
-      await new Promise((resolve) => setTimeout(resolve, 1));
-    },
+    wakeDelivery: () => false,
     deliveryStopped: () => deliveryStopped,
   };
 }
@@ -305,8 +301,6 @@ beforeEach(() => {
   createdTitles = [];
   busySessions = new Set();
   deliveryStopped = false;
-  clock = 0;
-  polls = 0;
   if (worktrees.getWorktree("wt-test")) {
     worktrees.updateWorktree("wt-test", {
       status: "active",
@@ -858,8 +852,11 @@ test("a vanished role session is replaced, with no cap to refuse it", async () =
  * the turn is still winding down when the recipe comes back with the next one.
  */
 async function busyRoleSessionRun(
-  patch: (deps: WorkflowAgentExecutorDeps) => WorkflowAgentExecutorDeps,
+  patch: (deps: WorkflowAgentExecutorDeps) => WorkflowAgentExecutorDeps = (
+    base,
+  ) => base,
 ) {
+  vi.useFakeTimers();
   // A removed session id is never resurrected by `sessionStore.upsert`, so an
   // id an earlier test buried would come back unresolvable and be REPLACED
   // instead of reused. Claim ids no other test in this file uses.
@@ -893,53 +890,451 @@ async function busyRoleSessionRun(
     .find((event) => event.type === "observation-recorded");
   assert.deepEqual(queued?.detail, { queuedBehindTurn: roleSession });
   assert.equal(queued?.stepId, revise.id);
-  return { run, revise, roleSession };
+  return { run, revise, roleSession, executor };
 }
 
-test("an assignment queued behind a running turn is delivered when it ends", async () => {
-  const { run, revise, roleSession } = await busyRoleSessionRun((base) => ({
-    ...base,
-    sleep: async (ms) => {
-      await base.sleep(ms);
-      if (polls === 3) busySessions.clear();
-    },
-  }));
-
-  await waitFor(() => prompts.length === 2);
-  // The same assignment, in the same session, without a session spent on it.
+test("a busy assignment has no polling and its idle offer uses the same reservation", async () => {
+  let acquisitions = 0;
+  const { run, revise, roleSession, executor } = await busyRoleSessionRun(
+    (base) => ({
+      ...base,
+      acquireById: async (id) => {
+        acquisitions += 1;
+        return base.acquireById(id);
+      },
+    }),
+  );
+  const before = acquisitions;
+  assert.equal(
+    acquisitions,
+    0,
+    "offering an existing session never opens its harness",
+  );
+  assert.equal(executor.owes(roleSession), true);
+  assert.equal(executor.owes("other"), false);
+  assert.equal(acquisitions, before, "owes never acquires a harness");
+  await vi.advanceTimersByTimeAsync(100); // Flush the ordinary broadcast debounce.
+  assert.equal(vi.getTimerCount(), 1, "only the long timeout is scheduled");
+  await vi.advanceTimersByTimeAsync(14 * 60_000);
+  assert.equal(acquisitions, before, "waiting never polls");
+  await executor.deliver(driver(roleSession), () => true);
+  assert.equal(prompts.length, 1, "a busy session cannot be steered");
+  busySessions.clear();
+  await executor.deliver(driver(roleSession), () => true);
   assert.equal(store.getStep(revise.id)!.status, "running");
   assert.equal(store.getStep(revise.id)!.executor?.id, roleSession);
   assert.match(prompts[1]!.text, /add coverage/);
   assert.equal(store.getRun(run.id)!.lifecycle, "active");
+  assert.equal(executor.owes(roleSession), false);
+  assert.equal(vi.getTimerCount(), 0);
+  assert.equal(acquisitions, before, "admission reuses the scheduler's driver");
+});
+
+test("the production workflow adapter releases admission at append but tracks the whole prompt", async () => {
+  let live: FakeRuntimeDriver | undefined;
+  const { roleSession, executor } = await busyRoleSessionRun((base) => ({
+    ...base,
+    isSessionBusy: (id) => live?.isRunning ?? base.isSessionBusy(id),
+    prompt: (session, text, options) =>
+      live
+        ? promptRuntimeSession(live, text, options)
+        : base.prompt(session, text, options),
+  }));
+  vi.useRealTimers();
+  const { setWorkflowAssignmentDelivery } =
+    await import("./assignmentDelivery.ts");
+  const { sessionDeliveryLanes } = await import("../sessionDeliveryLanes.ts");
+  const { BackgroundCompletionDelivery } =
+    await import("../backgroundWork/completionDelivery.ts");
+  const background = new BackgroundCompletionDelivery({
+    offer: async () => "busy",
+    drainPeers: async () => {},
+  });
+  live = new FakeRuntimeDriver(roleSession);
+  const release = live.holdTurns();
+  const releaseSettle = live.holdSettle();
+  setWorkflowAssignmentDelivery(executor);
+  const lane = sessionDeliveryLanes(background).lanes.find(
+    (lane) => lane.name === "workflow assignments",
+  )!;
+  try {
+    assert.equal(
+      await lane.deliver(live as unknown as PromptQueueDriver),
+      "turn",
+    );
+    assert.equal(live.isRunning, true);
+    assert.equal(live.promptTexts.length, 1);
+    release();
+    await vi.waitFor(() => assert.equal(live!.isRunning, false));
+    let settled = false;
+    const second = lane
+      .deliver(live as unknown as PromptQueueDriver)
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(
+      settled,
+      false,
+      "a new idle admission waits for workflow prompt settlement",
+    );
+    releaseSettle();
+    assert.equal(await second, "none");
+  } finally {
+    release();
+    releaseSettle();
+    background.stop();
+    setWorkflowAssignmentDelivery(undefined);
+  }
 });
 
 test("a turn that never ends pauses the run with the reservation still pending", async () => {
-  const { run, revise, roleSession } = await busyRoleSessionRun((base) => base);
-
-  await waitFor(() => store.getRun(run.id)!.lifecycle === "paused");
+  const { run, revise, roleSession, executor } = await busyRoleSessionRun();
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  assert.equal(store.getRun(run.id)!.lifecycle, "paused");
   assert.equal(store.getStep(revise.id)!.status, "pending");
   assert.equal(prompts.length, 1);
   assert.match(
     store.getRun(run.id)!.lifecycleReason ?? "",
     new RegExp(`waited 15 minutes for session ${roleSession} to finish`),
   );
-  // The wait is bounded by time, not by attempts.
-  assert.equal(clock >= 15 * 60_000, true);
+  assert.equal(executor.owes(roleSession), false);
+  assert.equal(vi.getTimerCount(), 0);
 });
 
 test("a graceful drain holds a queued assignment for the next boot", async () => {
-  const { run, revise } = await busyRoleSessionRun((base) => ({
-    ...base,
-    sleep: async (ms) => {
-      await base.sleep(ms);
-      if (polls === 2) deliveryStopped = true;
-    },
-  }));
-
-  await waitFor(() => deliveryStopped);
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  const { run, revise, roleSession, executor } = await busyRoleSessionRun();
+  deliveryStopped = true;
+  busySessions.clear();
+  await executor.deliver(driver(roleSession), () => true);
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
   assert.equal(store.getStep(revise.id)!.status, "pending");
   assert.equal(store.getRun(run.id)!.lifecycle, "active");
+  assert.equal(prompts.length, 1);
+});
+
+test("Stop holds workflow debt past the timeout until a resumed offer", async () => {
+  const { holdAutomaticTurns, resumeAutomaticTurns } =
+    await import("../automaticTurnHold.ts");
+  const { run, revise, roleSession, executor } = await busyRoleSessionRun();
+  holdAutomaticTurns(roleSession);
+  executor.unavailable(roleSession, {
+    kind: "unavailable",
+    reason: new Error("Stop raced acquisition"),
+  });
+  busySessions.clear();
+  await executor.deliver(driver(roleSession), () => true);
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  assert.equal(executor.owes(roleSession), true);
+  assert.equal(store.getStep(revise.id)!.status, "pending");
+  assert.equal(store.getRun(run.id)!.lifecycle, "active");
+  resumeAutomaticTurns(roleSession);
+  await executor.deliver(driver(roleSession), () => true);
+  assert.equal(prompts.length, 2);
+});
+
+test("a fenced admission leaves the reservation pending for the next offer", async () => {
+  const { revise, roleSession, executor } = await busyRoleSessionRun();
+  busySessions.clear();
+  await executor.deliver(driver(roleSession), () => false);
+  assert.equal(store.getStep(revise.id)!.status, "pending");
+  assert.equal(executor.owes(roleSession), true);
+  await executor.deliver(driver(roleSession), () => true);
+  assert.equal(prompts.length, 2);
+});
+
+test.each(["busy", "Stop"] as const)(
+  "%s arriving during assignment preparation leaves the reservation pending",
+  async (condition) => {
+    const { holdAutomaticTurns, resumeAutomaticTurns } =
+      await import("../automaticTurnHold.ts");
+    let checking = false;
+    let checks = 0;
+    const { revise, roleSession, executor } = await busyRoleSessionRun(
+      (base) => ({
+        ...base,
+        isSessionBusy: (id) => {
+          if (!checking) return base.isSessionBusy(id);
+          checks += 1;
+          if (checks < 3) return false;
+          if (condition === "Stop") holdAutomaticTurns(id);
+          return condition === "busy";
+        },
+      }),
+    );
+    busySessions.clear();
+    checking = true;
+    await executor.deliver(driver(roleSession), () => true);
+    assert.equal(store.getStep(revise.id)!.status, "pending");
+    assert.equal(prompts.length, 1);
+    assert.equal(executor.owes(roleSession), true);
+    checking = false;
+    if (condition === "Stop") resumeAutomaticTurns(roleSession);
+    await executor.deliver(driver(roleSession), () => true);
+    assert.equal(prompts.length, 2);
+  },
+);
+
+test.each(["paused", "cancelled", "step-started"] as const)(
+  "a %s reservation no longer owes or delivers an assignment",
+  async (change) => {
+    const { run, revise, roleSession, executor } = await busyRoleSessionRun();
+    if (change === "paused") engine.pauseRun(run.id, "user pause", ACTOR);
+    else if (change === "cancelled") await engine.cancelRun(run.id, ACTOR);
+    else
+      store.startStep(revise.id, { kind: "session", id: roleSession }, ACTOR);
+    busySessions.clear();
+    assert.equal(executor.owes(roleSession), false);
+    await executor.deliver(driver(roleSession), () => true);
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    assert.equal(prompts.length, 1);
+    if (change === "paused")
+      assert.equal(store.getRun(run.id)!.lifecycleReason, "user pause");
+  },
+);
+
+test.each(["older", "newer"] as const)(
+  "cheap boot offers survive %s blocked host recovery without interrupting live assignments",
+  async (hostAge) => {
+    const createHostRun = () => {
+      const hostRun = createRun().run;
+      const host = store.appendStep({
+        runId: hostRun.id,
+        kind: "host-operation",
+        payload: {
+          operation: recipe.COMMIT_SYNC_OPERATION_ID,
+          idempotencyKey: "blocked-boot",
+        },
+        actor: ACTOR,
+      });
+      store.startStep(
+        host.id,
+        { kind: "operation", id: recipe.COMMIT_SYNC_OPERATION_ID },
+        ACTOR,
+      );
+    };
+    if (hostAge === "older") createHostRun();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const { run, roleSession, revise } = await busyRoleSessionRun();
+    if (hostAge === "newer") createHostRun();
+    engine.resetWorkflowEngineForTests(); // Restart after both runs were persisted.
+    executors.registerWorkflowHostOperation({
+      id: recipe.COMMIT_SYNC_OPERATION_ID,
+      recoveryPolicy: "retry-safe",
+      execute: async () => {
+        entered();
+        await gate;
+        return { status: "blocked", summary: "test host settled" };
+      },
+    });
+    busySessions.clear();
+    const { createDeliveryBoot } = await import("../deliveryBoot.ts");
+    const { createDeliveryScheduler } = await import("../deliveryScheduler.ts");
+    const calls: string[] = [];
+    let peersOwed = true;
+    let userOwed = true;
+    const restarted = agentExecutor.createWorkflowAgentExecutor({
+      ...deps(),
+      wakeDelivery: (id) => {
+        boot.offer(id);
+        return true;
+      },
+    });
+    executors.registerWorkflowAgentExecutor(restarted);
+    const scheduler = createDeliveryScheduler<RuntimePromptDriver>({
+      lanes: [
+        {
+          name: "user queue",
+          mayJoinRunningTurn: false,
+          owes: (id) => id === "unrelated" && userOwed,
+          deliver: async () => {
+            userOwed = false;
+            calls.push("unrelated user");
+            return "none";
+          },
+        },
+        {
+          name: "workflow",
+          mayJoinRunningTurn: false,
+          owes: restarted.owes,
+          deliver: async (session) => {
+            calls.push("workflow");
+            await restarted.deliver(session, () => true);
+            return "none";
+          },
+        },
+        {
+          name: "peer",
+          mayJoinRunningTurn: false,
+          owes: (id) => id === roleSession && peersOwed,
+          deliver: async () => {
+            peersOwed = false;
+            calls.push("peer");
+            return "none";
+          },
+        },
+      ],
+      reminder: {
+        name: "reminder",
+        mayJoinRunningTurn: false,
+        owes: () => false,
+        deliver: async () => "none",
+      },
+      live: (id) => driver(id),
+      acquire: async (id) => driver(id),
+      runAutoApprovals: async () => {},
+      held: () => false,
+      shutdown: () => false,
+      reportError: (_id, _lane, error) => {
+        throw error;
+      },
+    });
+    const boot = createDeliveryBoot(scheduler);
+    boot.offer(roleSession); // Recovered peer FIFO arrived first.
+    boot.offer("unrelated");
+    restarted.offerPendingOnBoot();
+    assert.equal(restarted.owes(roleSession), true);
+    let reconciled = false;
+    const recovery = engine.reconcileWorkflowRunsOnBoot().then(() => {
+      reconciled = true;
+    });
+    try {
+      await started;
+      await boot.release();
+      assert.equal(reconciled, false, "host recovery remains blocked");
+      assert.ok(
+        calls.includes("unrelated user"),
+        "another session must make progress",
+      );
+      assert.ok(calls.indexOf("workflow") < calls.indexOf("peer"));
+      assert.equal(store.getStep(revise.id)!.status, "running");
+    } finally {
+      release();
+      await recovery;
+    }
+    assert.equal(store.getStep(revise.id)!.status, "running");
+    assert.equal(store.getRun(run.id)!.lifecycle, "active");
+    assert.equal(
+      prompts.length,
+      2,
+      "the recovered assignment starts exactly once",
+    );
+    await engine.reconcileWorkflowRunsOnBoot(); // A late duplicate is not a restart.
+    assert.equal(store.getStep(revise.id)!.status, "running");
+    assert.equal(store.getRun(run.id)!.lifecycle, "active");
+    assert.equal(restarted.owes(roleSession), false);
+    assert.equal(prompts.length, 2);
+  },
+);
+
+test("boot reconstructs the offer without directly redispatching the pending assignment", async () => {
+  const { run, revise, roleSession } = await busyRoleSessionRun();
+  busySessions.clear();
+  const wakes: string[] = [];
+  const restarted = agentExecutor.createWorkflowAgentExecutor({
+    ...deps(),
+    wakeDelivery: (id) => {
+      wakes.push(id);
+      return true;
+    },
+  });
+  executors.registerWorkflowAgentExecutor(restarted);
+  const reservedSteps = store.listSteps(run.id).map((step) => step.id);
+  await engine.reconcileWorkflowRunsOnBoot();
+  assert.deepEqual(wakes, [roleSession]);
+  assert.equal(prompts.length, 1);
+  assert.equal(store.getStep(revise.id)!.status, "pending");
+  assert.equal(restarted.owes(roleSession), true);
+  await restarted.deliver(driver(roleSession), () => true);
+  assert.equal(store.getStep(revise.id)!.status, "running");
+  assert.deepEqual(
+    store.listSteps(run.id).map((step) => step.id),
+    reservedSteps,
+    "no duplicate reservation",
+  );
+  assert.equal(prompts.length, 2);
+});
+
+test.each(["deadline", "unavailable", "stale-driver"] as const)(
+  "a deleted busy role session recovers its pending assignment through %s",
+  async (path) => {
+    const { run, revise, roleSession, executor } = await busyRoleSessionRun();
+    available.delete(roleSession);
+    sessionStore.remove(roleSession);
+    busySessions.clear(); // Teardown emits no idle hook.
+    await executor.deliver(driver(roleSession), () => false);
+    assert.equal(
+      store.getStep(revise.id)!.status,
+      "pending",
+      "even replacement respects the admission fence",
+    );
+    assert.equal(prompts.length, 1);
+    if (path === "deadline") await vi.advanceTimersByTimeAsync(15 * 60_000);
+    else if (path === "unavailable") {
+      executor.unavailable(roleSession, {
+        kind: "unavailable",
+        reason: new Error("deleted"),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    } else await executor.deliver(driver(roleSession), () => true);
+    await vi.waitFor(() =>
+      assert.equal(store.getStep(revise.id)!.status, "running"),
+    );
+    assert.equal(store.getRun(run.id)!.lifecycle, "active");
+    assert.equal(store.getStep(revise.id)!.status, "running");
+    assert.notEqual(store.getStep(revise.id)!.executor?.id, roleSession);
+    assert.equal(prompts.length, 2);
+    assert.equal(executor.owes(roleSession), false);
+    await executor.deliver(driver(roleSession), () => true);
+    assert.equal(
+      prompts.length,
+      2,
+      "late offers cannot duplicate the assignment",
+    );
+  },
+);
+
+test("a teardown without deletion gets one deadline re-offer, not polling", async () => {
+  const { revise, executor, roleSession } = await busyRoleSessionRun();
+  busySessions.clear();
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  assert.equal(store.getStep(revise.id)!.status, "running");
+  assert.equal(store.getStep(revise.id)!.executor?.id, roleSession);
+  assert.equal(executor.owes(roleSession), false);
+  assert.equal(prompts.length, 2);
+});
+
+test("Resume rebuilds its deadline rather than inheriting the previous offer", async () => {
+  const { run, revise } = await busyRoleSessionRun();
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  engine.pauseRun(run.id, "user pause", ACTOR);
+  await engine.resumeRun(run.id, ACTOR);
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 10);
+  assert.equal(store.getRun(run.id)!.lifecycle, "active");
+  assert.equal(store.getStep(revise.id)!.status, "pending");
+  await vi.advanceTimersByTimeAsync(10 * 60_000);
+  assert.equal(store.getRun(run.id)!.lifecycle, "paused");
+  assert.match(store.getRun(run.id)!.lifecycleReason!, /waited 15 minutes/);
+});
+
+test("a scheduler acquisition failure pauses workflow debt without spending the reservation", async () => {
+  const { run, revise, roleSession, executor } = await busyRoleSessionRun();
+  executor.unavailable(roleSession, {
+    kind: "error",
+    reason: new Error("acquisition failed"),
+  });
+  assert.equal(store.getRun(run.id)!.lifecycle, "paused");
+  assert.match(store.getRun(run.id)!.lifecycleReason!, /acquisition failed/);
+  assert.equal(store.getStep(revise.id)!.status, "pending");
+  assert.equal(executor.owes(roleSession), false);
   assert.equal(prompts.length, 1);
 });
 

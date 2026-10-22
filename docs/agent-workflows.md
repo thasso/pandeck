@@ -463,8 +463,32 @@ Steps are persisted generically. V1 needs four step kinds:
   that session — and a reused role session is routinely still finishing the turn
   its previous result was submitted from. It QUEUES behind that turn instead:
   the reservation stays pending until the session is idle, so the wait costs
-  neither the assignment nor a new session. A queue that outlives the wait bound
-  pauses the run with the reservation intact.
+  neither the assignment nor a new session. All assignments to an existing role
+  session enter the
+  [delivery scheduler](steering-and-queueing.md#delivery-scheduler) after the
+  user queue and before peer FIFO, including boot redispatch. The lane's cheap
+  `owes` reads pending state without opening a harness. Delivery calls
+  `advanceRun` under the ordinary run lock, reads the reservation fresh, and
+  starts no assignment that Stop, shutdown, pause or a moved step now forbids.
+  Busy waits keep the `queuedBehindTurn` observation and use scheduler wakes
+  instead of polling. A single fifteen-minute deadline pauses an active run only
+  if its reservation remains pending and its role session remains busy. If
+  teardown emitted no idle edge, the same deadline re-offers a metadata-backed
+  session once, or re-enters the workflow for ordinary replacement of a deleted
+  session. Stop-held idle debt waits for Resume; a run Resume or restart
+  rebuilds the offer and deadline from persisted history. Acquisition failure
+  pauses with the reservation intact. Creating a new role session and its first
+  assignment retain their existing path, before that new session has competing
+  debt. Boot snapshots the running step IDs left by the previous process, then
+  cheaply enumerates recipe-selected pending agent reservations before starting
+  automatic session passes. The first workflow advance also captures that set if
+  it precedes boot offering. Reconciliation claims only those IDs, at most once,
+  before any recovery effect, including repair/triage Git restoration. Pending
+  reservations started by this process are never crash leftovers, regardless of
+  run age or provider liveness. It releases admission before asynchronous
+  observation or host-operation recovery, so unrelated sessions never wait on
+  that recovery. Real idle/Resume/reminder offers during collection keep their
+  reminder eligibility; plain boot offers do not create it.
 - **Host-operation step** — a registered deterministic operation calling
   existing application services through their seams: the commit workflow with
   its safety review, base sync/rebase, push, and PR creation/adoption. Never

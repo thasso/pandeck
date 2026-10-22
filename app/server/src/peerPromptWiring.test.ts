@@ -75,12 +75,12 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
   );
   assert.match(
     source,
-    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*void deliveryScheduler\.offerReminders\(sessionId\);\s*\}\s*\)/,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,200}?nudgeHeldStartsForChild\(sessionId\);\s*offerDelivery\(sessionId, true\);\s*\}\s*\)/,
     "the idle hook must offer a freed direct slot, then the scheduler with reminders",
   );
   assert.match(
     source,
-    /yieldToOthers:\s*\(sessionId\)\s*=>\s*\{\s*void deliveryScheduler\.wake\(sessionId\)/,
+    /yieldToOthers:\s*\(sessionId\)\s*=>\s*\{\s*offerDelivery\(sessionId\)/,
     "a queue that yields must wake delivery without enabling reminders",
   );
 });
@@ -95,8 +95,34 @@ test("a Stop's hold gates background delivery and Resume reruns the idle chain",
   );
   assert.match(
     source,
-    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*void deliveryScheduler\.offerReminders\(sessionId\);\s*resumePermanentAssistantIntake\(sessionId\);/,
+    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*offerDelivery\(sessionId, true\);\s*resumePermanentAssistantIntake\(sessionId\);/,
     "Resume must offer the scheduler with reminders, and the Assistant's intake",
+  );
+});
+
+test("cheap workflow offers release boot before asynchronous operation recovery", () => {
+  const source = readFileSync(join(SRC_ROOT, "index.ts"), "utf8");
+  assert.match(source, /createDeliveryBoot\(deliveryScheduler\)/);
+  assert.match(source, /setDeliveryWake\(offerDelivery\)/);
+  const registered = source.indexOf(
+    "agent.registerWorkflowAgentExecutorRuntime()",
+  );
+  const release = source.indexOf("deliveryBoot.release()");
+  const observation = source.indexOf(
+    "await observation.reconcilePullRequestObservationsOnBoot()",
+  );
+  const reconcile = source.indexOf(
+    ".then((m) => m.reconcileWorkflowRunsOnBoot())",
+  );
+  assert.ok(
+    registered > 0 &&
+      release > registered &&
+      observation > release &&
+      reconcile > observation,
+  );
+  assert.match(
+    source.slice(reconcile),
+    /\.finally\(\(\) =>\s*\{[\s\S]{0,150}deliveryBoot\.release\(\)/,
   );
 });
 

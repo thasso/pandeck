@@ -14,6 +14,12 @@ import {
   WORKTREE_MISSING_BLOCKED_REASON,
 } from "@assistant/shared";
 import { sessionStore } from "../db/sessionStore.ts";
+import { automaticTurnsHeld } from "../automaticTurnHold.ts";
+import { wakeSessionDelivery } from "../deliveryWake.ts";
+import {
+  setWorkflowAssignmentDelivery,
+  type WorkflowAssignmentDelivery,
+} from "./assignmentDelivery.ts";
 import {
   appendEvent,
   completeStep,
@@ -53,7 +59,7 @@ import { readTask } from "../tasks.ts";
 import { taskNamingReference } from "../taskNaming.ts";
 import { broadcastWorkflowRuns } from "../workflowRuns.ts";
 import { buildReviewHandoffPrompt } from "../worktrees/reviewHandoff.ts";
-import { advanceRun, pauseRun } from "./engine.ts";
+import { advanceRun, pauseRun, pendingWorkflowAgentsOnBoot } from "./engine.ts";
 import {
   registerWorkflowAgentExecutor,
   type WorkflowAgentExecutor,
@@ -115,9 +121,8 @@ export interface WorkflowAgentExecutorDeps {
   broadcastSessions(): void;
   /** Whether this session is mid-turn, asked of the runtime, not of a driver. */
   isSessionBusy(sessionId: string): boolean;
-  /** Time source and delay for the queued-assignment wait (test seams). */
-  now(): number;
-  sleep(ms: number): Promise<void>;
+  /** Offer the session to the scheduler. False in isolated executor tests. */
+  wakeDelivery(sessionId: string): boolean;
   /** True once a graceful shutdown drain has begun. */
   deliveryStopped(): boolean;
 }
@@ -133,40 +138,231 @@ const REAL_DEPS: WorkflowAgentExecutorDeps = {
   prompt: promptRuntimeSession,
   broadcastSessions: () => void hub.broadcastSessions(),
   isSessionBusy: (sessionId) => sessionRuntime.isRunning(sessionId),
-  now: Date.now,
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  wakeDelivery: wakeSessionDelivery,
   deliveryStopped: () => hub.isReloadQueued(),
 };
 
-/**
- * How long a queued assignment waits for the role session's turn to end, and how
- * often it looks. The wait covers the ordinary case — the tail of the very turn
- * that submitted the previous result — with room for a user who is mid-
- * conversation with the same session; past it the run pauses instead, with the
- * reservation still pending so a resume delivers the same assignment.
- */
+/** A busy role session may hold a reservation for fifteen minutes. */
 const QUEUED_ASSIGNMENT_TIMEOUT_MS = 15 * 60_000;
-const QUEUED_ASSIGNMENT_POLL_MS = 500;
+
+type AssignmentAdmission = {
+  session: RuntimePromptDriver;
+  shouldStart: () => boolean;
+  prompted?: Promise<void>;
+};
+
+type PendingAssignment = {
+  runId: number;
+  stepId: number;
+  sessionId: string;
+  actor: WorkflowActor;
+  lifecycleRevision: number;
+  queuedBehindTurn?: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+interface AssignmentOffers {
+  admitted: Map<number, AssignmentAdmission>;
+  offer(
+    context: WorkflowStepContext,
+    sessionId: string,
+    busy: boolean,
+  ): boolean;
+  forget(stepId: number): void;
+}
 
 /** Build the registered executor, with fakes available for store-backed tests. */
 export function createWorkflowAgentExecutor(
   deps: WorkflowAgentExecutorDeps = REAL_DEPS,
-): WorkflowAgentExecutor {
+): WorkflowAgentExecutor &
+  WorkflowAssignmentDelivery & {
+    offerPendingOnBoot(): void;
+  } {
+  const pending = new Map<number, PendingAssignment>();
+  const admitted = new Map<number, AssignmentAdmission>();
+  const forget = (stepId: number) => {
+    clearTimeout(pending.get(stepId)?.timer);
+    pending.delete(stepId);
+  };
+  const current = (offer: PendingAssignment) => {
+    const run = getRun(offer.runId);
+    return (
+      getStep(offer.stepId)?.status === "pending" &&
+      run?.lifecycle === "active" &&
+      (run.attention?.revision ?? 0) === offer.lifecycleRevision
+    );
+  };
+  const recoverMissing = async (offer: PendingAssignment): Promise<boolean> => {
+    if (
+      !current(offer) ||
+      deps.deliveryStopped() ||
+      sessionStore.get(offer.sessionId)
+    )
+      return false;
+    forget(offer.stepId);
+    // Teardown does not emit an idle edge. Re-derive session identity under
+    // the run lock so a tombstoned role session gets its ordinary replacement.
+    await advanceRun(offer.runId, offer.actor);
+    return true;
+  };
+  const owed = (id: string) =>
+    [...pending.values()].filter((offer) => {
+      if (!current(offer)) {
+        forget(offer.stepId);
+        return false;
+      }
+      return offer.sessionId === id;
+    });
+  const offers: AssignmentOffers = {
+    admitted,
+    forget,
+    offer(context, sessionId, busy) {
+      const { run, step, actor } = context;
+      let offer = pending.get(step.id);
+      if (offer && (!current(offer) || offer.sessionId !== sessionId)) {
+        forget(step.id);
+        offer = undefined;
+      }
+      if (!offer) {
+        offer = {
+          runId: run.id,
+          stepId: step.id,
+          sessionId,
+          actor,
+          lifecycleRevision: run.attention?.revision ?? 0,
+        };
+        pending.set(step.id, offer);
+      }
+      if (busy && !offer.queuedBehindTurn) {
+        offer.queuedBehindTurn = true;
+        appendEvent({
+          runId: run.id,
+          stepId: step.id,
+          type: "observation-recorded",
+          actor: { kind: "system", id: "workflow-agent-executor" },
+          detail: { queuedBehindTurn: sessionId },
+        });
+      }
+      if (!offer.timer) {
+        const waiting = offer;
+        offer.timer = setTimeout(() => {
+          void (async () => {
+            if (pending.get(step.id) !== waiting) return;
+            if (!current(waiting)) {
+              forget(step.id);
+              return;
+            }
+            if (
+              deps.deliveryStopped() ||
+              automaticTurnsHeld(sessionId) ||
+              (await recoverMissing(waiting))
+            )
+              return;
+            if (pending.get(step.id) !== waiting || !current(waiting)) return;
+            if (!deps.isSessionBusy(sessionId)) {
+              // A released/teardown driver may have no idle edge either. This
+              // is one deadline re-offer, not a replacement polling loop.
+              if (
+                !automaticTurnsHeld(sessionId) &&
+                !deps.wakeDelivery(sessionId)
+              )
+                await advanceRun(run.id, actor);
+              return;
+            }
+            forget(step.id);
+            pauseRun(
+              run.id,
+              `assignment for step ${step.id} waited 15 minutes for session ${sessionId} to finish its turn`,
+              actor,
+            );
+          })().catch((err: unknown) =>
+            console.error(
+              `[workflow] queued assignment timeout for step ${step.id} failed:`,
+              errorText(err),
+            ),
+          );
+        }, QUEUED_ASSIGNMENT_TIMEOUT_MS);
+        offer.timer.unref();
+      }
+      if (deps.wakeDelivery(sessionId) || busy) return true;
+      // Isolated executors can still dispatch idle assignments without boot.
+      forget(step.id);
+      return false;
+    },
+  };
   return {
-    dispatch: (context) => dispatchWorkflowAgentStep(context, deps),
+    dispatch: (context) => dispatchWorkflowAgentStep(context, deps, offers),
+    offerPendingOnBoot() {
+      for (const context of pendingWorkflowAgentsOnBoot()) {
+        const id = reusableRoleSessionIds(context.run, context.step)[0];
+        if (id) offers.offer(context, id, deps.isSessionBusy(id));
+      }
+    },
+    owes: (id) => owed(id).length > 0,
+    async deliver(session, shouldStart) {
+      for (const offer of owed(session.sessionId)) {
+        if (
+          !shouldStart() ||
+          deps.deliveryStopped() ||
+          automaticTurnsHeld(session.sessionId)
+        )
+          return;
+        if (await recoverMissing(offer)) continue;
+        if (deps.isSessionBusy(session.sessionId)) return;
+        const admission: AssignmentAdmission = { session, shouldStart };
+        admitted.set(offer.stepId, admission);
+        try {
+          // Do not dispatch the captured row. The recipe and reservation are
+          // read again under the ordinary run lock.
+          await advanceRun(offer.runId, offer.actor);
+        } finally {
+          admitted.delete(offer.stepId);
+          if (!current(offer)) forget(offer.stepId);
+        }
+        // Outside the run lock: the agent may submit a result from this turn.
+        // Keep this drain alive so the shared adapter observes its append and
+        // waits for its settlement before a later idle admission.
+        await admission.prompted;
+      }
+    },
+    unavailable(id, failure) {
+      if (deps.deliveryStopped() || automaticTurnsHeld(id)) return;
+      for (const offer of owed(id)) {
+        if (!sessionStore.get(id)) {
+          void recoverMissing(offer).catch((err: unknown) =>
+            console.error(
+              `[workflow] recovering missing session ${id} failed:`,
+              errorText(err),
+            ),
+          );
+          continue;
+        }
+        forget(offer.stepId);
+        pauseRun(
+          offer.runId,
+          `workflow assignment session ${id} could not be resumed: ${errorText(failure.reason)}`,
+          offer.actor,
+        );
+      }
+    },
   };
 }
 
-/** Install the real executor before boot reconciliation re-dispatches work. */
+/** Install before boot reconciliation offers pending reservations. */
 export function registerWorkflowAgentExecutorRuntime(): void {
-  registerWorkflowAgentExecutor(createWorkflowAgentExecutor());
+  const executor = createWorkflowAgentExecutor();
+  setWorkflowAssignmentDelivery(executor);
+  registerWorkflowAgentExecutor(executor);
+  executor.offerPendingOnBoot();
 }
 
 async function dispatchWorkflowAgentStep(
   context: WorkflowStepContext,
   deps: WorkflowAgentExecutorDeps,
+  offers: AssignmentOffers,
 ): Promise<void> {
   const { run, step, actor } = context;
+  const admission = offers.admitted.get(step.id);
   const role = roleOf(step);
   const config = roleConfigOf(run, step, role);
   const worktree = run.worktreeId ? getWorktree(run.worktreeId) : undefined;
@@ -178,7 +374,10 @@ async function dispatchWorkflowAgentStep(
       `workflow worktree ${run.worktreeId ?? "(missing)"} is missing or removed`,
     );
 
-  let driver = await reusableRoleSession(run, step, deps);
+  // Resolve existing role identity from metadata, without cold-acquiring it.
+  // The scheduler acquires only after this offer establishes delivery debt.
+  const reusableIds = reusableRoleSessionIds(run, step);
+  const reusedSessionId = reusableIds[0];
   // A role session is routinely still mid-turn when its next assignment
   // arrives: the agent submits its result from INSIDE a turn, the recipe
   // advances on that result, and a fast host operation brings the next
@@ -190,9 +389,29 @@ async function dispatchWorkflowAgentStep(
   // busy gate still lands on `handlePromptFailure`: that leaves the pause and
   // Retry that were the ONLY outcome before, so the narrow race costs a user
   // action rather than correctness.
-  if (driver && deps.isSessionBusy(driver.sessionId)) {
-    queueAssignmentBehindTurn(run, step, driver.sessionId, actor, deps);
+  if (
+    reusedSessionId &&
+    !admission &&
+    offers.offer(context, reusedSessionId, deps.isSessionBusy(reusedSessionId))
+  )
     return;
+  if (
+    admission &&
+    (!admission.shouldStart() ||
+      deps.deliveryStopped() ||
+      reusedSessionId !== admission.session.sessionId ||
+      deps.isSessionBusy(admission.session.sessionId) ||
+      automaticTurnsHeld(admission.session.sessionId))
+  )
+    return;
+  let driver = admission?.session;
+  // Only isolated executors without scheduler wiring acquire here. Production
+  // existing-session delivery always uses the scheduler's admitted driver.
+  if (!admission) {
+    for (const sessionId of reusableIds) {
+      driver = await deps.acquireById(sessionId);
+      if (driver) break;
+    }
   }
   // The run's Task is this trigger's whole context, and it is resolved BEFORE
   // creation so the frozen evidence and the attachment applied afterwards come
@@ -236,7 +455,6 @@ async function dispatchWorkflowAgentStep(
   // handed, and an assignment whose postcondition could not be checked
   // afterwards is refused here rather than handed out unverifiable.
   await recordOperationTriageSnapshot(run, step);
-  startStep(step.id, { kind: "session", id: sessionId }, actor);
   const reviewHandoff = await reviewHandoffFor(run, step);
   // Live usage rows, so the same I/O argument as the handoff above: the recipe
   // may not read them, and the dispatcher hands the rendered section in.
@@ -247,7 +465,19 @@ async function dispatchWorkflowAgentStep(
     reviewHandoff,
     spendEvidence,
   );
-  void deps
+  // Preparation above may await I/O. Recheck the admission before spending
+  // the reservation, especially a Stop or another turn that arrived meanwhile.
+  if (
+    admission &&
+    (!admission.shouldStart() ||
+      deps.deliveryStopped() ||
+      deps.isSessionBusy(sessionId) ||
+      automaticTurnsHeld(sessionId))
+  )
+    return;
+  startStep(step.id, { kind: "session", id: sessionId }, actor);
+  offers.forget(step.id);
+  const prompted = deps
     .prompt(driver, prompt, {
       origin: { kind: "system", source: "workflow" },
       attachments,
@@ -260,6 +490,7 @@ async function dispatchWorkflowAgentStep(
         ),
       ),
     );
+  if (admission) admission.prompted = prompted;
 }
 
 /**
@@ -290,82 +521,14 @@ async function reviewHandoffFor(
   }
 }
 
-/**
- * Hold this assignment until the session's turn in flight ends, then let the
- * engine dispatch the very same reservation again.
- *
- * The step stays `pending` on purpose: nothing has been handed out, so every
- * existing recovery path already covers the wait. A pause or cancel underneath
- * it keeps the reservation for a later resume, a restart re-dispatches it from
- * boot reconciliation, and a Retry on a pending tail just resumes. That is also
- * why the redelivery goes back through `advanceRun` rather than prompting from
- * here: the step is started by the ordinary dispatch, under the run lock, from
- * rows read fresh at that moment.
- */
-function queueAssignmentBehindTurn(
+/** Still-resolvable role session identities, newest first and harness-free. */
+function reusableRoleSessionIds(
   run: WorkflowRunRow,
   step: WorkflowStepRow,
-  sessionId: string,
-  actor: WorkflowActor,
-  deps: WorkflowAgentExecutorDeps,
-): void {
-  appendEvent({
-    runId: run.id,
-    stepId: step.id,
-    type: "observation-recorded",
-    actor: { kind: "system", id: "workflow-agent-executor" },
-    detail: { queuedBehindTurn: sessionId },
-  });
-  void deliverWhenSessionIdle(run.id, step.id, sessionId, actor, deps).catch(
-    (err: unknown) =>
-      console.error(
-        `[workflow] queued assignment for step ${step.id} failed:`,
-        errorText(err),
-      ),
-  );
-}
-
-async function deliverWhenSessionIdle(
-  runId: number,
-  stepId: number,
-  sessionId: string,
-  actor: WorkflowActor,
-  deps: WorkflowAgentExecutorDeps,
-): Promise<void> {
-  const deadline = deps.now() + QUEUED_ASSIGNMENT_TIMEOUT_MS;
-  for (;;) {
-    await deps.sleep(QUEUED_ASSIGNMENT_POLL_MS);
-    // Anything that moved the reservation or the run owns it now.
-    if (getStep(stepId)?.status !== "pending") return;
-    if (getRun(runId)?.lifecycle !== "active") return;
-    // A graceful drain must not start new turns, or the deploy never settles
-    // (see `stopPeerPromptDelivery`). The pending reservation resumes on boot.
-    if (deps.deliveryStopped()) return;
-    if (!deps.isSessionBusy(sessionId)) {
-      await advanceRun(runId, actor);
-      return;
-    }
-    if (deps.now() >= deadline) {
-      pauseRun(
-        runId,
-        `assignment for step ${stepId} waited ${Math.round(
-          QUEUED_ASSIGNMENT_TIMEOUT_MS / 60_000,
-        )} minutes for session ${sessionId} to finish its turn`,
-        actor,
-      );
-      return;
-    }
-  }
-}
-
-/** Latest still-resolvable session previously used for this role. */
-async function reusableRoleSession(
-  run: WorkflowRunRow,
-  step: WorkflowStepRow,
-  deps: WorkflowAgentExecutorDeps,
-): Promise<RuntimePromptDriver | undefined> {
+): string[] {
   const wanted = roleSessionKey(step);
   const history = listSteps(run.id);
+  const ids: string[] = [];
   for (let index = history.length - 1; index >= 0; index -= 1) {
     const prior = history[index]!;
     if (
@@ -376,10 +539,9 @@ async function reusableRoleSession(
       continue;
     const sessionId = prior.executor.id;
     if (!sessionStore.get(sessionId)) continue;
-    const driver = await deps.acquireById(sessionId);
-    if (driver) return driver;
+    if (!ids.includes(sessionId)) ids.push(sessionId);
   }
-  return undefined;
+  return ids;
 }
 
 async function createRoleSession(

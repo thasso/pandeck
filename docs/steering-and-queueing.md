@@ -81,9 +81,10 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   running turn that takes steering, and otherwise moves it to the front and
   sends it as soon as the session is idle.
 - **One per pass, the user first.** The per-session delivery scheduler offers
-  handoffs, this queue, peer FIFO, peer notices, background completions, then
-  eligible reply reminders. Starting a turn ends the pass at its append. A steer
-  does not. See [Delivery scheduler](#delivery-scheduler).
+  handoffs, this queue, workflow assignments, peer FIFO, peer notices,
+  background completions, then eligible reply reminders. Starting a turn ends
+  the pass at its append. A steer does not. See
+  [Delivery scheduler](#delivery-scheduler).
 - **Stop means stop.** Stopping a turn that has messages queued pauses the queue
   (`session_prompt_queue_pause`), so its idle edge sends nothing. Sending a
   message of their own or "Send next" lifts the pause. A Stop also holds the
@@ -126,9 +127,8 @@ but never disappear into a pass that has already read the old state.
 
 Each pass runs the auto-approval pre-pass before checking Stop. It executes
 session-granted cards only while idle, even under Stop, and only queues their
-handoffs. The lanes then run in order: handoffs, user queue, peer FIFO, peer
-notices, background completions, reminders. Workflow assignments are not yet a
-lane, see [Task-1054](pa://task/1054).
+handoffs. The lanes then run in order: handoffs, user queue, workflow
+assignments, peer FIFO, peer notices, background completions, reminders.
 
 A lane exposes a cheap `owes(sessionId)` without opening a harness, and
 `deliver(session)`. The scheduler acquires a cold session once, only when work
@@ -139,11 +139,12 @@ unavailable or unpromptable result. Handoffs retain their retry budget and
 timer; the user queue pauses its row; peer FIFO records its retry while peer
 notices schedule their own retry. Background errors retain pending facts; an
 unavailable driver gives up the in-memory batch without retiring its durable
-outbox debt. The scheduler checks shutdown, Stop-held, released, promptable and
-running state for the pass. While running, it asks only lanes whose delivery may
-join a running turn, and only if the driver can steer. Today only the background
-wake lane joins running turns. Deferred background facts stay inside that lane
-and ride the next prompt's model-only context.
+outbox debt. Workflow acquisition failures pause the run with its reservation
+still pending. The scheduler checks shutdown, Stop-held, released, promptable
+and running state for the pass. While running, it asks only lanes whose delivery
+may join a running turn, and only if the driver can steer. Today only the
+background wake lane joins running turns. Deferred background facts stay inside
+that lane and ride the next prompt's model-only context.
 
 A new turn ends the pass; a steer does not. A failure before append is logged
 and the next lane is offered. Each lane keeps its own table, rendering,
@@ -159,13 +160,33 @@ interpret their prompt receipts as described below. The adapters still observe
 the session-wide append feed to fence admission; private drain locks, rerun
 markers and cross-path yield checks remain until [Task-1053](pa://task/1053).
 
+Workflow assignments to an existing role session use this lane, including idle
+and restart offers. `owes` reads pending reservation state without a harness.
+Delivery calls back into the workflow engine under its run lock, so the recipe
+and fresh reservation still choose dispatch. Assignments never steer. A busy
+session records the existing `queuedBehindTurn` observation and waits for a
+scheduler wake, not a polling timer. One fifteen-minute deadline pauses a run
+whose reservation is still pending and whose session is still busy. If the
+session was deleted without an idle edge, that deadline re-enters the workflow
+to choose its ordinary replacement. A teardown that kept the session's metadata
+gets one scheduler re-offer. Neither path polls. Resume starts a fresh deadline.
+Stop, shutdown, paused runs and moved reservations cannot start an assignment.
+The workflow still creates and initially prompts a new role session itself,
+before that session has any competing delivery debt.
+
 Only a real idle edge, Resume or a reminder's own re-offer enables the reminder
 lane, which never cold-acquires a session. Queue failures and removals wake the
-scheduler without enabling reminders. Boot first prepares recovered rows, then
-offers every owed session through the same scheduler, ordered within a session
-and parallel across sessions. There is no boot ordering exception and no boot
-reminder. Permanent-assistant intake, explicit send-now authority and direct
-host-command turns retain their own admission paths.
+scheduler without enabling reminders. Boot first prepares recovered rows,
+freezes the running workflow step IDs eligible for crash recovery, and cheaply
+enumerates recipe-selected pending workflow agent reservations, then offers
+every owed session through the same scheduler, ordered within a session and
+parallel across sessions. Observation and host-operation recovery run after that
+release and cannot hold unrelated sessions. Automatic wakes during the short
+collection window join it; genuine idle, Resume and reminder re-offers retain
+their reminder eligibility. An import or registration error still releases the
+collected offers. There is no boot ordering exception and no boot reminder.
+Permanent-assistant intake, explicit send-now authority and direct host-command
+turns retain their own admission paths.
 
 ### Peer prompts in the queue
 

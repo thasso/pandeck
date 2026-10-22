@@ -25,6 +25,7 @@ import {
 } from "./promptQueue.ts";
 import { subscribeSessionUserEntry } from "./session/runtime/liveSession.ts";
 import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
+import { workflowAssignmentDelivery } from "./workflow/assignmentDelivery.ts";
 
 /**
  * Today's drains own their run promises and private locks. Observe the append
@@ -118,6 +119,16 @@ export function sessionDeliveryLanes(
         deliver: (session) =>
           deliver(session, (shouldStart) =>
             drainPromptQueue(session.sessionId, shouldStart, session),
+          ),
+      },
+      {
+        name: "workflow assignments",
+        mayJoinRunningTurn: false,
+        owes: workflowAssignmentDelivery.owes,
+        unavailable: workflowAssignmentDelivery.unavailable,
+        deliver: (session) =>
+          deliver(session, (shouldStart) =>
+            workflowAssignmentDelivery.deliver(session, shouldStart),
           ),
       },
       ...(["fifo", "notices"] as const).map((phase) => ({

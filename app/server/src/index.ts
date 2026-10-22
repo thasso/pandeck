@@ -242,6 +242,7 @@ import {
   runAutoApprovals,
 } from "./pendingApprovals.ts";
 import { createDeliveryScheduler } from "./deliveryScheduler.ts";
+import { createDeliveryBoot } from "./deliveryBoot.ts";
 import { setDeliveryWake } from "./deliveryWake.ts";
 import { sessionDeliveryLanes } from "./sessionDeliveryLanes.ts";
 import {
@@ -2041,14 +2042,16 @@ server.listen(PORT, HOST, () => {
     reportError: (sessionId, lane) =>
       console.warn(`[delivery] ${lane} for ${sessionId} failed`),
   });
-  setDeliveryWake((sessionId) => {
-    void deliveryScheduler.wake(sessionId);
-  });
+  // Collect cheap pending-agent offers before admission, but never wait for
+  // workflow operation recovery. True idle/Resume offers retain reminders.
+  const deliveryBoot = createDeliveryBoot(deliveryScheduler);
+  const offerDelivery = deliveryBoot.offer;
+  setDeliveryWake(offerDelivery);
   setReplyReminderHost({
     handoffOwed: agentHandoffOwed,
     wakeOwed: (sessionId) => backgroundCompletionDelivery.wakeOwed(sessionId),
     requestIdleEdge: (sessionId) => {
-      void deliveryScheduler.offerReminders(sessionId);
+      offerDelivery(sessionId, true);
     },
   });
   setPromptQueueHost({
@@ -2066,7 +2069,7 @@ server.listen(PORT, HOST, () => {
       hub.reportSessionError(sessionId, message),
     // A queue failure or removal is a wake, never a reminder opportunity.
     yieldToOthers: (sessionId) => {
-      void deliveryScheduler.wake(sessionId);
+      offerDelivery(sessionId);
     },
   });
   setHumanPromptHook(
@@ -2077,18 +2080,17 @@ server.listen(PORT, HOST, () => {
   setSessionIdleHook((sessionId) => {
     // A direct child that went idle may free its coordinator's slot.
     nudgeHeldStartsForChild(sessionId);
-    void deliveryScheduler.offerReminders(sessionId);
+    offerDelivery(sessionId, true);
   });
   setAutomaticTurnHoldHost({
     changed: (sessionId) => publishPromptQueue(sessionId),
     resumed: (sessionId) => {
-      void deliveryScheduler.offerReminders(sessionId);
+      offerDelivery(sessionId, true);
       resumePermanentAssistantIntake(sessionId);
     },
   });
-  const bootSessions = new Set<string>();
   const offerOnBoot = (sessionId: string): void => {
-    bootSessions.add(sessionId);
+    offerDelivery(sessionId);
   };
   bootStep("owed background delivery", () => {
     // After reconciliation (each notice reads its row as it ended) and after
@@ -2118,9 +2120,6 @@ server.listen(PORT, HOST, () => {
   bootStep("peer-prompt recovery offers", () =>
     drainAllQueuedOnBoot(offerOnBoot),
   );
-  bootStep("session delivery", () => {
-    void deliveryScheduler.boot(bootSessions);
-  });
   // After recovery and the idle wiring: children that waited for a slot across
   // the restart start as the surviving work allows.
   bootStep("held direct peer starts", () => startHeldDirectPeersOnBoot());
@@ -2252,6 +2251,11 @@ server.listen(PORT, HOST, () => {
       commitSync.registerCommitSyncOperationRuntime();
       delivery.registerDeliveryOperationsRuntime();
       observation.registerPullRequestObservationRuntime();
+      // Agent registration synchronously offers recovered pending assignments.
+      // Release admission before any observation or host operation can wait.
+      bootStep("session delivery", () => {
+        void deliveryBoot.release();
+      });
       await observation.reconcilePullRequestObservationsOnBoot();
     })
     // Then decide what each open Workflow Run may resume: re-dispatch pending
@@ -2264,7 +2268,11 @@ server.listen(PORT, HOST, () => {
     .then(() => settleCompletedWorkflowRunSessionsOnBoot())
     .catch((err) =>
       console.warn("[workflow] run reconcile failed:", errorText(err)),
-    );
+    )
+    .finally(() => {
+      // Import/registration failure must not strand unrelated session debt.
+      void deliveryBoot.release();
+    });
 });
 
 function initialSessionRoute(
