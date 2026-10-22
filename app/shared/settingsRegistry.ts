@@ -30,6 +30,7 @@ import {
   MAX_WORKTREE_REMOTE_FETCH_MINUTES,
   OPENAI_COMPATIBLE_THINKING_FORMATS,
   SPEECH_TO_TEXT_LIMITS,
+  SPEECH_CONVERSATION_LIMITS,
 } from "./protocol.ts";
 import { THINKING_LEVELS } from "./thinkingLevels.ts";
 
@@ -462,6 +463,44 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     kind: "json",
     shape: `array of { from, to } replacements, at most ${stt.vocabularyEntries}`,
   }),
+
+  setting(
+    "speechConversation.enabled",
+    "dictation",
+    "Voice conversation",
+    BOOLEAN,
+  ),
+  setting(
+    "speechConversation.modelId",
+    "dictation",
+    "Streaming recognition model",
+    STRING,
+  ),
+  setting(
+    "speechConversation.numThreads",
+    "dictation",
+    "Streaming recognizer threads",
+    integer(
+      SPEECH_CONVERSATION_LIMITS.numThreads.min,
+      SPEECH_CONVERSATION_LIMITS.numThreads.max,
+    ),
+  ),
+  setting(
+    "speechConversation.idleShutdownSeconds",
+    "dictation",
+    "Unload streaming recognizer after idle",
+    integer(
+      SPEECH_CONVERSATION_LIMITS.idleShutdownSeconds.min,
+      SPEECH_CONVERSATION_LIMITS.idleShutdownSeconds.max,
+    ),
+  ),
+  setting(
+    "speechConversation.endpointSilenceSeconds",
+    "dictation",
+    "Conversation trailing silence",
+    { kind: "number", ...SPEECH_CONVERSATION_LIMITS.endpointSilenceSeconds },
+    { hint: "Seconds of silence before sending a spoken turn." },
+  ),
 
   // Developer workflow
   setting("worktrees.root", "worktrees", "Worktree folder", STRING),

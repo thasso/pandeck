@@ -2,6 +2,7 @@ import {
   applyPatch,
   commentTargetKey,
   DEFAULT_BACKGROUND_WORK_SETTINGS,
+  DEFAULT_SPEECH_CONVERSATION_SETTINGS,
   DEFAULT_HELPER_MODEL,
   DEFAULT_SESSION_PEER_PROMPT_MAX_HOPS,
   DEFAULT_SESSION_PEER_PROMPT_REMINDER_LIMIT,
@@ -246,6 +247,7 @@ const defaultSettings: AppSettings = {
     thinkingLevel: "off",
     timeoutMs: 180000,
   },
+  speechConversation: { ...DEFAULT_SPEECH_CONVERSATION_SETTINGS },
   speechToText: {
     enabled: true,
     modelId: "",

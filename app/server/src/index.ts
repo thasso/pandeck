@@ -173,6 +173,9 @@ import {
   stopClaudeLoginTerminals,
 } from "./claudeLoginTerminal.ts";
 import { sttEngine } from "./speech/sttEngine.ts";
+import { streamingSttEngine } from "./speech/streamingSttEngine.ts";
+import { attachConversationSocket } from "./speech/conversationSocket.ts";
+import { probeStreamingRecognizer } from "./speech/streamingSttConfig.ts";
 import { getSettings } from "./settings.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
 import { handleWorktreeApi } from "./worktrees/worktreeHttp.ts";
@@ -1516,6 +1519,11 @@ const wss = new WebSocketServer({
   noServer: true,
   perMessageDeflate: WEBSOCKET_COMPRESSION,
 });
+const conversationWss = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: false,
+  maxPayload: 32_000,
+});
 const speechWss = new WebSocketServer({
   noServer: true,
   perMessageDeflate: false,
@@ -1603,11 +1611,13 @@ server.on("upgrade", (req, socket, head) => {
   const target =
     url.pathname === "/ws"
       ? wss
-      : url.pathname === "/ws/speech"
-        ? speechWss
-        : url.pathname === "/ws/claude-login"
-          ? claudeLoginWss
-          : undefined;
+      : url.pathname === "/ws/speech/conversation"
+        ? conversationWss
+        : url.pathname === "/ws/speech"
+          ? speechWss
+          : url.pathname === "/ws/claude-login"
+            ? claudeLoginWss
+            : undefined;
   if (!target) {
     abortUpgrade(socket, 404, "Not Found");
     return;
@@ -1632,6 +1642,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 speechWss.on("connection", (ws) => attachSpeechSocket(ws));
+conversationWss.on("connection", (ws) => attachConversationSocket(ws));
 claudeLoginWss.on("connection", (ws, req) => attachClaudeLoginSocket(ws, req));
 
 wss.on("connection", (ws, req) => {
@@ -1712,6 +1723,9 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
         err.message,
       );
   });
+  for (const ws of conversationWss.clients) ws.close(1012, "Server restarting");
+  conversationWss.close();
+  streamingSttEngine.dispose();
   speechWss.close((err) => {
     if (err)
       console.warn(
@@ -1861,6 +1875,9 @@ linkPiToolBinaries();
 // Before any request can write settings: an OpenAI-compatible write must
 // re-register the configured providers with the engine.
 setModelProviderSync(syncConfiguredModelProviders);
+
+// Discover the optional streaming runtime once, without loading any weights.
+await probeStreamingRecognizer();
 
 server.listen(PORT, HOST, () => {
   const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;

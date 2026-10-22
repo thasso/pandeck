@@ -774,6 +774,51 @@ export const SPEECH_TO_TEXT_LIMITS = {
   vocabularyEntries: 200,
 } as const;
 
+export interface SpeechConversationSettings {
+  enabled: boolean;
+  /** Installed streaming model id; empty selects the first installed one. */
+  modelId: string;
+  numThreads: number;
+  idleShutdownSeconds: number;
+  /** Endpoint detection after this much trailing silence. */
+  endpointSilenceSeconds: number;
+}
+
+export const DEFAULT_SPEECH_CONVERSATION_SETTINGS: SpeechConversationSettings =
+  {
+    enabled: true,
+    modelId: "",
+    numThreads: 4,
+    idleShutdownSeconds: 600,
+    endpointSilenceSeconds: 1.2,
+  };
+
+export const SPEECH_CONVERSATION_LIMITS = {
+  numThreads: { min: 1, max: 32 },
+  idleShutdownSeconds: { min: 0, max: 24 * 3600 },
+  endpointSilenceSeconds: { min: 0.3, max: 5 },
+} as const;
+
+/** Streaming STT capability. TTS availability is reported independently. */
+export interface SpeechConversationStatus {
+  configured: boolean;
+  reason?: string;
+  modelId?: string;
+  recognizerVersion?: string;
+  availableModelIds: string[];
+}
+
+/** Browser sends 16 kHz mono signed Int16 LE frames only after `accepted`. */
+export type ConversationClientMessage =
+  { type: "start" } | { type: "stop" } | { type: "cancel" };
+
+/** Each transcript replaces the text for its segment, never appends a partial. */
+export type ConversationServerMessage =
+  | { type: "accepted"; sampleRate: 16000 }
+  | { type: "transcript"; segment: number; text: string; isFinal: boolean }
+  | { type: "stopped" }
+  | { type: "error"; message: string };
+
 export interface SpeechToTextStatus {
   /** True when both a recognizer binary and a complete model directory were found. */
   configured: boolean;
@@ -785,6 +830,8 @@ export interface SpeechToTextStatus {
   availableModelIds: string[];
   /** Utterance cap echoed from settings so the client can enforce the same bound. */
   maxUtteranceSeconds: number;
+  /** Separate optional host capability; offline dictation never uses it. */
+  conversation?: SpeechConversationStatus;
 }
 
 /**
@@ -1498,6 +1545,7 @@ export interface AppSettings {
   pdfConversion: PdfConversionSettings;
   promptRefinement: PromptRefinementSettings;
   speechToText: SpeechToTextSettings;
+  speechConversation: SpeechConversationSettings;
   taskIntakeAgent: TaskIntakeAgentSettings;
   browserTools: BrowserToolSettings;
   /** Governance for session-owned background work ([Task-467](pa://task/467)). */

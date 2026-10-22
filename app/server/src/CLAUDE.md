@@ -36,8 +36,10 @@
   `tools/list_changed`, never by restart or tool-array patching.
 - Background work enters only through `admitBackgroundWork`; provider hooks and
   tools never write its rows directly.
-- Request/watch/list children start via `spawnBroker.ts` (`gitExec.ts` uses it),
-  never by forking this server: its page tables stall every connection.
+- Request/watch/list children use `spawnBroker.ts`: forking this server stalls
+  connections. Only warm speech model processes may spawn directly, at most once
+  per warm-up: they need PID-held lifetime control and SIGKILL escalation, which
+  the broker cannot provide.
 - Git mutations to a WORKING TREE, INDEX, or LOCAL ref use
   `withRepoLock(await repoLockKey(cwd), …)` from `gitExec.ts`, never a checkout
   key or nested lock. Only network-bound work is lock-free: fetch/push, creation

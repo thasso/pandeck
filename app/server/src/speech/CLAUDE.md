@@ -1,12 +1,13 @@
-# Dictation
+# Speech
 
-Fully local CPU inference behind `/ws/speech`.
+Fully local CPU inference for dictation and conversation.
 
-- Audio lives in memory for one utterance, is never written to disk, and never
-  leaves the machine.
-- The recognizer needs the total sample count BEFORE any audio, so live partials
-  are impossible with this model: buffer the whole utterance and decode once. Do
-  not add a streaming-partials path without changing models.
+- Audio stays in memory and on this machine. Offline dictation buffers one
+  utterance; conversation forwards frames without keeping audio history.
+- Parakeet offline dictation needs the total sample count before audio. Buffer
+  and decode once on `/ws/speech`; keep its HTTP retry path unchanged. Live
+  partials belong only to Nemotron on `/ws/speech/conversation`, gated on
+  sherpa-onnx >= 1.13.5 because older versions drop streaming subwords.
 - Decoder-level hotword biasing is unavailable for the shipped Parakeet model
   (verified, not assumed). Keep greedy decoding and fix jargon with the shared
   vocabulary rules, which apply in ONE pass inside `applySpeechVocabulary` —
@@ -16,9 +17,9 @@ Fully local CPU inference behind `/ws/speech`.
   legitimate long utterance from a 48 kHz `AudioContext`.
 - Speech frames are their own shared unions with their own validator: never
   route them through `validateClientMessage`.
-- Dictation is NOT an agent turn: graceful shutdown rejects new utterances and
-  lets the child go. The recognizer's ever-growing `--log-file` must never be
-  routed into `DATA_DIR`.
+- Speech is NOT an agent turn: graceful shutdown rejects new streams and lets
+  the child go. The recognizer's ever-growing `--log-file` must never be routed
+  into `DATA_DIR`.
 - The browser holds the authoritative audio and retries over HTTP, so add no
   server-side utterance state that outlives a connection.
 - The recognizer socket listens for `error` with `on`, never `once`: production

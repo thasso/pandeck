@@ -89,8 +89,9 @@ Then every `onSettingsChanged` listener hears which sections were written. The
 hub forwards that to each connection's `settingsChanged`, which sends that
 client its own `settings` (OAuth redirect URIs depend on the connection's public
 URL), plus `models` after a `claudeSdk` or `openAiCompatible` write and
-`speechToTextStatus` after a `speechToText` write. The writer gets its echo the
-same way as everyone else, before the request's `mutationSettled`.
+`speechToTextStatus` after a `speechToText` or `speechConversation` write. The
+writer gets its echo the same way as everyone else, before the request's
+`mutationSettled`.
 
 Each effect and each listener runs on its own, so one failure never skips the
 rest or the announcement. A section counts as written once its writer has run,
@@ -115,6 +116,27 @@ read-only settings, bad values and non-null OAuth writes.
 The connection-test messages (`saveAndTest*`, `test*`) still answer only the
 client that asked: a test result is that client's request, not shared state.
 What a test persists, such as discovered models, reaches every client.
+
+## Speech conversation
+
+`speechConversation` is independent of offline dictation's `speechToText` group.
+Its registry entries use the Dictation section. It defaults to enabled, the
+first installed streaming model, four threads, a 600-second idle shutdown, and
+1.2 seconds of trailing silence before the recognizer finalizes a segment. The
+silence setting accepts 0.3 to 5 seconds; zero idle shutdown keeps the model
+resident. Model ids name catalog entries, never paths. Deployment wiring and the
+minimum runtime version are described in
+[deployment.md](deployment.md#streaming-conversation-recognition).
+
+The ready projection includes this settings group and nests streaming STT
+availability under `speechToText.conversation`. Settings writes echo that status
+to all connections. Capability status does not depend on the user's enabled
+switch. Both the browser and server check that switch before starting capture.
+Changes to model, inference threads or endpoint silence take effect on the next
+conversation; starting a differently configured stream while another is active
+is refused rather than interrupting it. Vocabulary comes from the existing
+`speechToText.vocabulary` list and is captured at conversation start, so partial
+and final results use the same one-pass replacement engine as dictation.
 
 ## Personal Assistant working directory
 

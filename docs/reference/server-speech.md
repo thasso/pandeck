@@ -1,4 +1,4 @@
-# Server dictation — implementation reference
+# Server speech implementation reference
 
 Relocated from `app/server/src/speech/CLAUDE.md` (Task-274) so it stops costing
 agent context on every visit. This is a descriptive snapshot of what the modules
@@ -54,9 +54,9 @@ repair. Fully local inference on CPU — no speech data leaves the machine.
 
 ## Contract notes and rationale
 
-- The recognizer needs the total sample count BEFORE any audio, so live partial
-  results are impossible with this model: buffer the whole utterance and decode
-  once. Do not add a streaming-partials path without changing models.
+- Offline Parakeet needs the total sample count before audio. Its path still
+  buffers the whole utterance and decodes once. Streaming Nemotron uses a
+  separate protocol and process described below.
 - Decoder-level hotword biasing is unavailable for the shipped Parakeet model
   (`--hotwords-file` needs `--modeling-unit=bpe`, which needs a `--bpe-vocab`
   the archive does not ship; with the default unit the flag is silently inert).
@@ -85,6 +85,55 @@ repair. Fully local inference on CPU — no speech data leaves the machine.
   nothing listens, so it never reaches the recognizer at all.
 - Audio lives in memory for the duration of one utterance and is never written
   to disk.
+
+## Streaming conversation STT
+
+`streamingSttConfig.ts` discovers the online binary and streaming-only models.
+The startup version probe uses the spawn broker, has a five-second budget, and
+fails closed below sherpa-onnx 1.13.5 or when the version cannot be verified. No
+model is loaded at startup. Status stays synchronous using that cached probe;
+the lazy engine checks the same gate before spawning.
+
+`streamingSttEngine.ts` owns one additional warm model child, not the offline
+engine. Concurrent starts share one warm-up, readiness uses a real WebSocket
+handshake, and two live streams are allowed. Each holds the child against idle
+shutdown. Failure backs off five seconds; disposal prevents a late spawn or
+connection after shutdown. Direct model-child spawn is the narrow server rule
+exception for PID-held lifetime control and SIGKILL escalation. Default
+inference uses four threads and greedy decoding. Sherpa endpoint rule 2 uses the
+configured silence duration, while rule 3 caps an unbroken segment at 120
+seconds. The process log stays outside DATA_DIR.
+
+`streamingSttClient.ts` translates browser Int16 LE into 16 kHz Float32 LE,
+without the offline header. Sherpa JSON updates contain `text`, `segment`, and
+`is_final`. `Done` drains the stream, `Done!` finishes it. If the final drained
+update is not marked final, it is promoted before `stopped`. The socket keeps an
+`on` error listener for Bun's duplicate-error behavior. Pending finish has a
+ten-second deadline. Socket backpressure is bounded; it never retains audio
+history.
+
+`conversationSocket.ts` is the separate browser trust boundary at
+`/ws/speech/conversation`, behind the same token/origin and shutdown checks as
+other app sockets. Its shared unions never enter `validateClientMessage` or the
+offline validator. The protocol is:
+
+1. Browser sends `{ type: "start" }`, then waits for
+   `{ type: "accepted", sampleRate: 16000 }` before sending audio.
+2. Binary frames contain mono Int16 LE at 16 kHz, at most one second per frame.
+   Capture must resample on the client. Server forwarding is immediate. A
+   real-time rate limit allows two seconds of burst headroom. Missing audio for
+   30 seconds closes the stream.
+3. `{ type: "transcript", segment, text, isFinal }` replaces that segment's
+   text. The vocabulary engine runs on both partial and final text. A final
+   segment is the browser's auto-send signal; empty segments do not send a turn.
+4. `{ type: "stop" }` drains remaining text and answers `{ type: "stopped" }`.
+   `{ type: "cancel" }` discards the connection immediately, without a final
+   transcript. Disconnect also cancels, including a start still warming up.
+
+A new start after `stopped` begins fresh segment numbering. Stale callbacks
+cannot affect a later stream. A protocol or recognizer failure sends `error` and
+closes the browser socket. No audio is written to disk, no HTTP retry exists for
+this path, and no per-utterance state outlives the connection.
 
 ## Working notes
 

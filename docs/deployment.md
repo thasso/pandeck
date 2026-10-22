@@ -755,6 +755,43 @@ the operator now owns. Browser capture needs a secure context, so dictation
 works over the deployment's https URL but not against the plain-http dev server
 from another device.
 
+### Streaming conversation recognition
+
+Conversation uses a separate warm `sherpa-onnx-online-websocket-server` child
+and the catalog's `nemotron-streaming-en-560ms-int8` model. Offline Parakeet and
+its dictation API are unchanged. Both paths respect `ASSISTANT_STT_DISABLED`.
+The shared catalog marks models as `offline` or `streaming`; the existing flake
+recipe builds either with `nix build .#stt-model-<id>`, without adding weights
+to the app closure.
+
+Put the online server on PATH or set `ASSISTANT_STT_STREAMING_SERVER_BIN`. At
+startup the app probes `sherpa-onnx-version` beside that server, or
+`ASSISTANT_STT_VERSION_BIN` when explicitly set. Conversation requires at least
+1.13.5. An older, missing or unverifiable version disables conversation with a
+reason while leaving old dictation alone. Restart after replacing the host
+runtime, since this probe is cached for the process lifetime.
+
+Supply weights through the existing `ASSISTANT_STT_MODELS` id-to-directory JSON
+map, `ASSISTANT_STT_STREAMING_MODEL_DIR`, or the dev fallback
+`DATA_DIR/models/stt/<id>`. The offline single-directory override is
+deliberately not shared, because these models use the same filenames. In dev,
+run `pnpm run stt:model nemotron-streaming-en-560ms-int8`. Production weights
+belong outside DATA_DIR. These overrides can be supplied through the module's
+`extraEnvironment`; host runtime upgrades remain a separate deployment change.
+
+The streaming model defaults to four inference threads, 1.2 seconds trailing
+silence, and unloading after ten idle minutes. Its log defaults to
+`/tmp/assistant-streaming-stt.log`, overridden by `ASSISTANT_STT_STREAMING_LOG`.
+Keep logs outside DATA_DIR. The browser connects only to the authenticated
+`/ws/speech/conversation` socket. Live audio is forwarded in memory without an
+HTTP retry buffer. The streaming STT status is nested under
+`ready.speechToText.conversation` and the `speechToTextStatus` settings echo. It
+reports STT capability only, not TTS readiness.
+
+The upstream recognizer binds to `0.0.0.0` and has no bind-address option. Keep
+its ports 46000 to 46999 blocked by the host firewall; app connections use
+127.0.0.1. Only the authenticated app socket should be reachable remotely.
+
 ## PR previews
 
 PR previews are opt-in through `services.personal-assistant.prDeployments`. A PR

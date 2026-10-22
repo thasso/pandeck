@@ -59,12 +59,17 @@ test("every setting that needs hand-built UI is claimed", () => {
   );
 });
 
-test("today only auto-redeem and the Tempo worklog author are rendered from the registry", () => {
+test("generic settings include the streaming conversation controls", () => {
   const unclaimed = SETTINGS_REGISTRY.filter(
     (d) => !CLAIMED_SETTING_PATHS.has(d.path),
   ).map((d) => d.path);
   expect(unclaimed).toEqual([
     "accountRouting.openAiResetAutoRedeemHours",
+    "speechConversation.enabled",
+    "speechConversation.modelId",
+    "speechConversation.numThreads",
+    "speechConversation.idleShutdownSeconds",
+    "speechConversation.endpointSilenceSeconds",
     "tempo.authorAccountId",
   ]);
 });

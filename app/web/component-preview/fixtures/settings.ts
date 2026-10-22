@@ -1,5 +1,6 @@
 import {
   DEFAULT_BACKGROUND_WORK_SETTINGS,
+  DEFAULT_SPEECH_CONVERSATION_SETTINGS,
   type AccountModelOption,
   type AppSettings,
   type CredentialProfileSummary,
@@ -78,6 +79,7 @@ export const settingsFixture: AppSettings = {
   sessionStatus: { ...agent, thinkingLevel: "high" },
   promptRefinement: agent,
   pdfConversion: { ...agent, fallbackEnabled: true, timeoutMs: 120_000 },
+  speechConversation: { ...DEFAULT_SPEECH_CONVERSATION_SETTINGS },
   speechToText: {
     enabled: true,
     modelId: "parakeet",
