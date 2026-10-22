@@ -10,15 +10,16 @@ import {
   archiveProject,
   deleteProject,
   projectRevisionDigest,
-  projectStateItems,
   updateProject,
   upsertProject,
 } from "./projectRegistry.ts";
+import { stateTopicFor } from "./stateTopics.ts";
 
 const settled = () => hub.flushPendingBroadcastsForTests();
 
+const items = (ids: string[]) => stateTopicFor("projects")!.items(ids);
+
 function lastProjectBatch(messages: ServerMessage[]): {
-  seq: number;
   events: StateEvent<ProjectSummary>[];
 } {
   const batch = [...messages]
@@ -28,7 +29,7 @@ function lastProjectBatch(messages: ServerMessage[]): {
         message.type === "stateEvents" && message.topic === "projects",
     );
   assert.ok(batch?.type === "stateEvents" && batch.topic === "projects");
-  return { seq: batch.seq, events: batch.events };
+  return { events: batch.events };
 }
 
 test("Project writes broadcast lean events and digest/items converge", async () => {
@@ -70,8 +71,10 @@ test("Project writes broadcast lean events and digest/items converge", async () 
     updateProject(id, { name: "Broadcast Project Renamed" });
     await settled();
     const updated = lastProjectBatch(messages);
-    assert.equal(updated.seq, created.seq + 1);
-    assert.equal(updated.events.length, 1);
+    assert.deepEqual(
+      updated.events.map((event) => event.id),
+      [id],
+    );
     assert.equal(updated.events[0]?.kind, "upsert");
 
     archiveProject(id);
@@ -85,14 +88,14 @@ test("Project writes broadcast lean events and digest/items converge", async () 
     const digest = projectRevisionDigest();
     const entry = digest.find((candidate) => candidate.id === id);
     assert.ok(entry && entry.revision > 0);
-    const recovered = projectStateItems([id]);
+    const recovered = items([id]);
     assert.equal(recovered[0]?.kind, "upsert");
     assert.equal(recovered[0]?.revision, entry.revision);
 
     deleteProject(id);
     await settled();
     assert.equal(lastProjectBatch(messages).events[0]?.kind, "delete");
-    assert.equal(projectStateItems([id])[0]?.kind, "delete");
+    assert.equal(items([id])[0]?.kind, "delete");
   } finally {
     hub.unregister(viewer);
     try {

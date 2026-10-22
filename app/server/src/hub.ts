@@ -1,9 +1,7 @@
 import type {
   BroadcastTopic,
-  InitiativeSummary,
   ServerMessage,
   StateEvent,
-  ProjectSummary,
   TaskSummary,
 } from "@assistant/shared";
 import { isCodingAgentType } from "@assistant/shared";
@@ -47,17 +45,7 @@ import {
 } from "./credentialProfiles.ts";
 import { setUsageBroadcaster } from "./usageCache.ts";
 import { onSettingsChanged } from "./settingsService.ts";
-import {
-  projectRevisionIndex,
-  projectSummaryFor,
-  subscribeProjectChanges,
-} from "./projectRegistry.ts";
 import { setWorkflowBroadcaster } from "./workflowRuns.ts";
-import {
-  initiativeRevisionIndex,
-  initiativeSummaryFor,
-  subscribeInitiativeChanges,
-} from "./initiatives.ts";
 import {
   notifyCommentChanges,
   notifyCommentMetadataChanges,
@@ -91,10 +79,6 @@ const RELOAD_IDLE_SETTLE_MS = 1200;
 const SESSION_BROADCAST_DEBOUNCE_MS = 25;
 /** Same shape as the session-list debounce; a burst of Task writes is one broadcast. */
 const TASK_BROADCAST_DEBOUNCE_MS = 25;
-const PROJECT_BROADCAST_DEBOUNCE_MS = 25;
-// The Task window: a Task write reports its Initiatives in the same notify, so
-// equal windows flush both topics together.
-const INITIATIVE_BROADCAST_DEBOUNCE_MS = TASK_BROADCAST_DEBOUNCE_MS;
 /**
  * Minimum gap between consecutive list rebuilds while invalidations keep
  * arriving (e.g. a streaming run). The first broadcast is fast (25ms debounce);
@@ -166,9 +150,6 @@ export function seedTaskBaseline(
   return baseline;
 }
 
-const seedProjectBaseline = seedTaskBaseline;
-const seedInitiativeBaseline = seedTaskBaseline;
-
 /** Object-addressed comment delivery shared by the live hub and isolation tests. */
 export function broadcastCommentEventToViewers(
   viewers: Iterable<Viewer>,
@@ -226,14 +207,6 @@ class SessionHub {
   private tasksEventSeq = 0;
   /** Sessions that were task-linked at the previous broadcast (see `flushTaskBroadcast`). */
   private taskLinkedSessions = new Set<string>();
-  private projectsBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  private lastFlushedProjectRevisions: Map<string, number> | undefined;
-  private pendingProjectIds = new Set<string>();
-  private projectsEventSeq = 0;
-  private initiativesBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  private lastFlushedInitiativeRevisions: Map<string, number> | undefined;
-  private pendingInitiativeIds = new Set<string>();
-  private initiativesEventSeq = 0;
 
   constructor() {
     // The host object inverts the session→hub calls so no engine imports hub.ts.
@@ -251,14 +224,6 @@ class SessionHub {
     subscribeTaskChanges((ids) => {
       for (const id of ids) this.pendingTaskIds.add(id);
       this.broadcastTasks();
-    });
-    subscribeProjectChanges((ids) => {
-      for (const id of ids) this.pendingProjectIds.add(id);
-      this.broadcastProjects();
-    });
-    subscribeInitiativeChanges((ids) => {
-      for (const id of ids) this.pendingInitiativeIds.add(id);
-      this.broadcastInitiatives();
     });
     attachStateTopics((topic, msg) => this.broadcastTopic(topic, msg));
     // A published Background change moved its owner's `backgroundActivity`.
@@ -604,125 +569,6 @@ class SessionHub {
     return this.tasksEventSeq;
   }
 
-  projectEventSeq(): number {
-    return this.projectsEventSeq;
-  }
-
-  initiativeEventSeq(): number {
-    return this.initiativesEventSeq;
-  }
-
-  broadcastProjects(): void {
-    if (this.projectsBroadcastTimer) clearTimeout(this.projectsBroadcastTimer);
-    this.projectsBroadcastTimer = setTimeout(() => {
-      this.projectsBroadcastTimer = undefined;
-      this.flushProjectBroadcast();
-    }, PROJECT_BROADCAST_DEBOUNCE_MS);
-  }
-
-  private flushProjectBroadcast(): void {
-    const index = projectRevisionIndex();
-    const pending = this.pendingProjectIds;
-    this.pendingProjectIds = new Set();
-    const baseline =
-      this.lastFlushedProjectRevisions ?? seedProjectBaseline(index, pending);
-    const events: StateEvent<ProjectSummary>[] = [];
-    const flushed = new Map<string, number>();
-    for (const [id, entry] of index) {
-      if (!entry.live) continue;
-      if (baseline.get(id) === entry.revision) {
-        flushed.set(id, entry.revision);
-        continue;
-      }
-      const item = projectSummaryFor(id);
-      if (!item) continue;
-      flushed.set(id, entry.revision);
-      events.push({ kind: "upsert", id, revision: entry.revision, item });
-    }
-    for (const [id, revision] of baseline) {
-      if (flushed.has(id)) continue;
-      events.push({
-        kind: "delete",
-        id,
-        revision: index.get(id)?.revision ?? revision + 1,
-      });
-    }
-    this.lastFlushedProjectRevisions = flushed;
-    if (events.length) {
-      this.projectsEventSeq += 1;
-      this.broadcastTopic("projects", {
-        type: "stateEvents",
-        topic: "projects",
-        seq: this.projectsEventSeq,
-        events,
-      });
-    }
-  }
-
-  broadcastInitiatives(): void {
-    if (this.initiativesBroadcastTimer)
-      clearTimeout(this.initiativesBroadcastTimer);
-    this.initiativesBroadcastTimer = setTimeout(() => {
-      this.initiativesBroadcastTimer = undefined;
-      this.flushInitiativeBroadcast();
-    }, INITIATIVE_BROADCAST_DEBOUNCE_MS);
-  }
-
-  /**
-   * The Task diff over the live projection (neither archived nor deleted):
-   * archiving is a delete, unarchiving an upsert. A Task write moves only the
-   * revisions of the Initiatives holding it, so only those re-read their
-   * members here. A write to an Initiative already outside the projection — a
-   * rename, a member change or a delete after it was archived — is reported as
-   * a `delete` again with its new revision, as archived Tasks are: no list
-   * holds it, and an open graph of it re-reads on that revision.
-   */
-  private flushInitiativeBroadcast(): void {
-    const index = initiativeRevisionIndex();
-    const pending = this.pendingInitiativeIds;
-    this.pendingInitiativeIds = new Set();
-    const baseline =
-      this.lastFlushedInitiativeRevisions ??
-      seedInitiativeBaseline(index, pending);
-    const events: StateEvent<InitiativeSummary>[] = [];
-    const flushed = new Map<string, number>();
-    for (const [id, entry] of index) {
-      if (!entry.live) continue;
-      if (baseline.get(id) === entry.revision) {
-        flushed.set(id, entry.revision);
-        continue;
-      }
-      const item = initiativeSummaryFor(id);
-      if (!item) continue;
-      flushed.set(id, entry.revision);
-      events.push({ kind: "upsert", id, revision: entry.revision, item });
-    }
-    for (const [id, revision] of baseline) {
-      if (flushed.has(id)) continue;
-      events.push({
-        kind: "delete",
-        id,
-        revision: index.get(id)?.revision ?? revision + 1,
-      });
-    }
-    for (const id of pending) {
-      if (flushed.has(id) || baseline.has(id)) continue;
-      const entry = index.get(id);
-      if (!entry || entry.live) continue;
-      events.push({ kind: "delete", id, revision: entry.revision });
-    }
-    this.lastFlushedInitiativeRevisions = flushed;
-    if (events.length) {
-      this.initiativesEventSeq += 1;
-      this.broadcastTopic("initiatives", {
-        type: "stateEvents",
-        topic: "initiatives",
-        seq: this.initiativesEventSeq,
-        events,
-      });
-    }
-  }
-
   /**
    * Test seam: end every pending broadcast window now, as its timer would.
    * Writes made before the call still coalesce into one flush per domain; the
@@ -734,16 +580,6 @@ class SessionHub {
       clearTimeout(this.tasksBroadcastTimer);
       this.tasksBroadcastTimer = undefined;
       this.flushTaskBroadcast();
-    }
-    if (this.projectsBroadcastTimer) {
-      clearTimeout(this.projectsBroadcastTimer);
-      this.projectsBroadcastTimer = undefined;
-      this.flushProjectBroadcast();
-    }
-    if (this.initiativesBroadcastTimer) {
-      clearTimeout(this.initiativesBroadcastTimer);
-      this.initiativesBroadcastTimer = undefined;
-      this.flushInitiativeBroadcast();
     }
     // Before the session list: a post-publish listener may request it.
     flushStateTopicsForTests();

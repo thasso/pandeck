@@ -3,7 +3,8 @@
  * contract): one change set per write transaction. A topic's touched rows are
  * stamped with ONE revision drawn from that topic's own persisted sequence,
  * inside the transaction, and every topic the write enlisted is handed its
- * touched ids only after COMMIT. A rollback stamps nothing and tells nobody.
+ * touched ids only after COMMIT. A rollback stamps nothing and tells nobody
+ * ({@link touchStateTopic} names the one exception).
  */
 import type { BroadcastTopic } from "@assistant/shared";
 import { getDb, withDbTransaction } from "./index.ts";
@@ -38,6 +39,9 @@ export interface ChangeSet {
 type StateChangeSink = (topic: BroadcastTopic, ids: readonly string[]) => void;
 
 let sink: StateChangeSink | undefined;
+
+/** The change set whose `fn` is running now, if any; see {@link touchStateTopic}. */
+let active: ChangeSet | undefined;
 
 /**
  * The single after-commit hand-off, installed by the hub. With none installed,
@@ -80,7 +84,45 @@ export function withChangeSet<T>(fn: (changes: ChangeSet) => T): T {
       return entry.revision;
     },
   };
-  const value = withDbTransaction(() => fn(changes));
+  active = changes;
+  let value: T;
+  try {
+    value = withDbTransaction(() => fn(changes));
+  } finally {
+    // Cleared before any hand-off: a write the sink triggers opens its own.
+    active = undefined;
+  }
   for (const [topic, entry] of enlisted) sink?.(topic, [...entry.ids]);
   return value;
+}
+
+/**
+ * Stamp `ids` from wherever the caller stands, for a store whose stamp may be
+ * reached from inside another domain's write:
+ *
+ * - inside a running {@link withChangeSet}, it joins that change set: the ids
+ *   share its revision, are reported after its commit, and vanish with its
+ *   rollback;
+ * - inside any other open transaction, it stamps there with a fresh revision
+ *   and reports AT ONCE. That is the one exception to "reported after commit":
+ *   node:sqlite has no commit hook, and that transaction's owner is not a
+ *   change set. The flush reads committed state, so after a rollback each id
+ *   still publishes once, at its unchanged committed revision;
+ * - otherwise it opens its own change set.
+ */
+export function touchStateTopic(
+  writes: StateTopicWrites,
+  ids: readonly string[],
+): void {
+  if (!ids.length) return;
+  if (active) {
+    active.touch(writes, ids);
+    return;
+  }
+  if (getDb().isTransaction) {
+    writes.stamp(ids, nextId(writes.sequence));
+    sink?.(writes.topic, [...ids]);
+    return;
+  }
+  withChangeSet((changes) => changes.touch(writes, ids));
 }

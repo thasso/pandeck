@@ -1,20 +1,31 @@
 /**
  * The topics that run on the state topic kernel, one kernel each, and their
  * wiring: committed change sets report into them, and the hub's topic
- * broadcaster publishes from them. Tasks, Projects and Initiatives still
- * publish from `hub.ts` until they move (`docs/state-sync.md`).
+ * broadcaster publishes from them. Tasks still publish from `hub.ts` until
+ * they move (`docs/state-sync.md`).
  */
 import type { BroadcastTopic, ServerMessage } from "@assistant/shared";
 import { backgroundWorkTopic } from "./backgroundWorkRegistry.ts";
 import { setStateChangeSink } from "./db/changeSet.ts";
+import { initiativeStateTopic } from "./initiatives.ts";
+import { projectStateTopic } from "./projectRegistry.ts";
 import { createStateTopic, type StateTopic } from "./stateTopicKernel.ts";
 
 const background = createStateTopic(backgroundWorkTopic);
+const projects = createStateTopic(projectStateTopic);
+// A Task write reports the Initiatives holding it in the same notify, and the
+// kernel's default window equals the hub's Task window, so a burst of Task
+// writes flushes both topics together.
+const initiatives = createStateTopic(initiativeStateTopic);
 
 const topics = new Map<
   BroadcastTopic,
   StateTopic<BroadcastTopic, unknown, ServerMessage>
->([["background", background]]);
+>([
+  ["background", background],
+  ["projects", projects],
+  ["initiatives", initiatives],
+]);
 
 /** The kernel answering `topic`, when that topic runs on one. */
 export function stateTopicFor(
@@ -32,6 +43,8 @@ export function attachStateTopics(
   broadcast: (topic: BroadcastTopic, message: ServerMessage) => void,
 ): void {
   background.attach(broadcast);
+  projects.attach(broadcast);
+  initiatives.attach(broadcast);
   setStateChangeSink((topic, ids) => topics.get(topic)?.report(ids));
 }
 

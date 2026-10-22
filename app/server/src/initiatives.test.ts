@@ -18,9 +18,8 @@ import {
   createInitiative,
   deleteInitiative,
   initiativeRevisionDigest,
-  initiativeRevisionIndex,
   initiativeSnapshot,
-  initiativeStateItems,
+  initiativeStateTopic,
   initiativeSummaryFor,
   listInitiatives,
   readInitiative,
@@ -38,9 +37,11 @@ import {
   reorderTasks,
   updateTask,
 } from "./tasks.ts";
+import { setStateChangeSink } from "./db/changeSet.ts";
 import { getDb, withDbTransaction } from "./db/index.ts";
 import { initiativeStore } from "./db/initiativeStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { stateTopicFor } from "./stateTopics.ts";
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 
@@ -69,7 +70,7 @@ function memberIds(id: string): string[] {
 }
 
 function revisionOf(id: string): number {
-  const entry = initiativeRevisionIndex().get(id);
+  const entry = initiativeStateTopic.revisions([id]).get(id);
   assert.ok(entry, `no revision row for Initiative ${id}`);
   return entry.revision;
 }
@@ -704,7 +705,7 @@ test("the live projection excludes archived and deleted Initiatives", () => {
   archiveInitiative(id);
   assert.equal(inDigest(), false);
   assert.equal(initiativeSummaryFor(id), null);
-  assert.equal(initiativeStateItems([id])[0]?.kind, "delete");
+  assert.equal(stateTopicFor("initiatives")!.items([id])[0]?.kind, "delete");
   assert.ok(readInitiative(id)?.archivedAt, "an archived graph stays readable");
   assert.ok(
     listInitiatives({ includeArchived: true }).some((item) => item.id === id),
@@ -712,11 +713,11 @@ test("the live projection excludes archived and deleted Initiatives", () => {
   assert.ok(!listInitiatives().some((item) => item.id === id));
 
   unarchiveInitiative(id);
-  assert.equal(initiativeStateItems([id])[0]?.kind, "upsert");
+  assert.equal(stateTopicFor("initiatives")!.items([id])[0]?.kind, "upsert");
 
   deleteInitiative(id);
   assert.equal(readInitiative(id), null);
-  assert.equal(initiativeStateItems([id])[0]?.kind, "delete");
+  assert.equal(stateTopicFor("initiatives")!.items([id])[0]?.kind, "delete");
   assert.throws(() => updateInitiative(id, { title: "x" }), /not found/);
 });
 
@@ -748,13 +749,25 @@ test("every Initiative write reports the row it touched", () => {
   movesRevision(id, () => archiveInitiative(id));
   movesRevision(id, () => unarchiveInitiative(id));
   movesRevision(id, () => deleteInitiative(id));
-  assert.equal(initiativeRevisionIndex().get(id)?.live, false);
+  assert.equal(initiativeStateTopic.revisions([id]).get(id)?.live, false);
 
   // A refused write rolls back whole and touches nothing.
   const kept = initiative("Refused write");
   const before = revisionOf(kept);
   assert.throws(() => addInitiativeMembers(kept, ["999999"]));
   assert.equal(revisionOf(kept), before);
+
+  // A write reaches its topic once, after its commit.
+  const reports: Array<[string, readonly string[], boolean]> = [];
+  setStateChangeSink((topic, ids) =>
+    reports.push([topic, ids, getDb().isTransaction]),
+  );
+  try {
+    updateInitiative(kept, { title: "Reported" });
+  } finally {
+    setStateChangeSink(undefined);
+  }
+  assert.deepEqual(reports, [["initiatives", [kept], false]]);
 
   // Coverage guard: every exported write of the domain is exercised above
   // (a create is checked by the stamp it starts with).

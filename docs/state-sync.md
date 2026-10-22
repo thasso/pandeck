@@ -77,15 +77,25 @@ failure, and explicit recovery reads.
   descriptor: revisions for given ids, the summary, the snapshot, an optional
   digest and a batch maximum. `stateTopics.ts` registers the kernels, the hub
   attaches its topic broadcaster to them, and `connection.ts` routes a kernel
-  topic's subscribe to its kernel. Background runs on it. Tasks, Projects and
-  Initiatives still diff the current `{id → revision}` map against the last
-  flushed one in `hub.ts` until they move (Task-1044, Task-1045).
+  topic's subscribe and `getStateItems` to its kernel. Background, Projects and
+  Initiatives run on it. Tasks still diff the current `{id → revision}` map
+  against the last flushed one in `hub.ts` until they move (Task-1045).
 - The change set (`db/changeSet.ts`) is the kernel's write half. A write runs as
   one top-level transaction with a change set, which stamps each topic's touched
   rows inside that transaction with one revision per topic, drawn from the
   topic's own persisted sequence; revisions compare only within a topic. After
   COMMIT, every topic the write enlisted reports its touched ids to its kernel
   once, possibly none. A rollback stamps nothing and reports nothing.
+- A store whose stamp another domain's write may reach uses the join-or-open
+  touch (`touchStateTopic`). Inside a running change set it joins it: same
+  revision, reported after that commit, gone with its rollback. With no
+  transaction open it opens its own change set. Inside any other open
+  transaction it stamps there with a fresh revision and reports at once; that is
+  the one exception to "reported after commit", since node:sqlite has no commit
+  hook. If that transaction rolls back, each reported id still publishes once
+  from committed state, at its unchanged committed revision, which a client
+  already holding that revision ignores. Initiatives' fan-out stamp is its only
+  caller.
 - A kernel publishes from reported ids only. A report adds its ids to the
   pending set and restarts a trailing debounce, even an empty report. The flush
   reads revisions for exactly the pending ids and walks them in first-report
@@ -100,7 +110,7 @@ failure, and explicit recovery reads.
     reschedules itself.
 - A flush is cut into frames of at most the topic's batch maximum, each with the
   next `seq`. `seq` is an in-memory per-topic counter, kept by the kernel (by
-  the hub for topics not yet on it); the subscribe answer carries the current
+  the hub for Tasks, not yet on it); the subscribe answer carries the current
   value. It exists only to trip resync, so it does not survive restarts — a
   reconnect resubscribes and gets a fresh baseline anyway.
 - A kernel's subscribe answer is a digest only when the topic declares one and
@@ -216,8 +226,14 @@ per-surface sub-tasks — no page invents its own delta format.
   `updatedAt` rule for live rows.
 - Projects: canonical archived-inclusive lean summaries plus keyed full
   documents. Project archive/restore is an upsert; only deletion removes
-  registry membership. Failed optimistic mutations recover their touched ids
-  with `getStateItems` and force a keyed detail read only when that id is open.
+  registry membership. Every Project write (row, paths and edges) commits as one
+  change set. A delete stamps the Project and its child Projects, whose `parent`
+  edge its sweep removes, so each child gets an upsert without its parent; the
+  Tasks it held are reported through the Task seam after that commit. The
+  subscribe answer and `getStateItems` come from the kernel, a snapshot
+  (`projectList`) or, when asked, a digest. Failed optimistic mutations recover
+  their touched ids with `getStateItems` and force a keyed detail read only when
+  that id is open.
 - Initiatives: canonical live summaries (neither archived nor deleted) plus a
   keyed graph read (`getInitiative` → `initiativeDetail`, carrying the revision
   it is as of). Archiving is a `delete`, unarchiving an `upsert`, and a write to
@@ -230,16 +246,17 @@ per-surface sub-tasks — no page invents its own delta format.
   `sessionStore` reports every session whose liveness a write may change
   (archive, settle, a raised outcome, a tombstone, a new row), which reaches the
   Initiatives on that session's Tasks. Both fan-outs run on hot paths, so their
-  walks are pinned to index searches (`initiativeStoreQueryPlan.test.ts`). The
-  subscribe answer is a snapshot (`initiativeList`) or, when asked, a digest
-  with `getStateItems` catch-up. The graph read also carries the map's layout,
-  laid out in a worker thread when it is read and never from a write or a flush;
-  status changes keep it (`docs/initiatives.md`, Layout and placement). The
-  client keeps a few reads keyed by id: a newer revision from an event, a
-  snapshot, or a snapshot that leaves the id out marks a held read stale and its
-  open page re-reads it, keeping the old graph on screen; an answer older than a
-  revision the tab already holds is shown and read again. A Task event never
-  touches it.
+  walks are pinned to index searches (`initiativeStoreQueryPlan.test.ts`). A
+  session tombstone inside a larger transaction stamps the Initiatives through
+  the join-or-open touch. The kernel answers subscribe with a snapshot
+  (`initiativeList`) or, when asked, a digest with `getStateItems` catch-up. The
+  graph read also carries the map's layout, laid out in a worker thread when it
+  is read and never from a write or a flush; status changes keep it
+  (`docs/initiatives.md`, Layout and placement). The client keeps a few reads
+  keyed by id: a newer revision from an event, a snapshot, or a snapshot that
+  leaves the id out marks a held read stale and its open page re-reads it,
+  keeping the old graph on screen; an answer older than a revision the tab
+  already holds is shown and read again. A Task event never touches it.
 - Background work: canonical durable session-owned work items on the
   `background` topic, snapshot-plus-revision-sidecar on subscribe and revisioned
   upserts/deletes on every mutation. It runs on the state topic kernel and

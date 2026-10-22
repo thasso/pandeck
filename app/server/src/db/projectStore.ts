@@ -16,8 +16,8 @@
  *
  * Writes are synchronous (node:sqlite + WAL), durable at call time.
  */
-import { getDb } from "./index.ts";
-import { nextId } from "./sequences.ts";
+import type { StateTopicWrites } from "./changeSet.ts";
+import { getDb, inDbTransaction } from "./index.ts";
 import {
   outgoing,
   memoizedOnLinks,
@@ -101,12 +101,12 @@ function list(opts: { includeArchived?: boolean } = {}): Project[] {
 /**
  * Upsert a fully-normalized project: writes the row, replaces both child tables,
  * and replaces the `parent` and `jira` edges. `createdAt`/`updatedAt` are supplied
- * by the caller (domain layer) as ISO strings.
+ * by the caller (domain layer) as ISO strings. One transaction, edges included,
+ * or the caller's when one is open.
  */
 function put(project: Project): void {
-  const db = getDb();
-  db.exec("BEGIN");
-  try {
+  inDbTransaction(() => {
+    const db = getDb();
     db.prepare(
       `
       INSERT INTO projects (id, name, key, color, description, status, aliases_json, tags_json, sort_order, worktree_root, repo_url, created_at_ms, updated_at_ms)
@@ -157,33 +157,26 @@ function put(project: Project): void {
       );
     }
 
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-
-  // Edges live in their own transactions inside setOutgoing/removeLink.
-  setParent(project.id, project.parentId ?? null);
-  setJira(project.id, project.jira ?? []);
+    setParent(project.id, project.parentId ?? null);
+    setJira(project.id, project.jira ?? []);
+  });
 }
 
-/** Tombstone a project, drop its child rows, and sweep every edge touching it. */
+/**
+ * Tombstone a project, drop its child rows, and sweep every edge touching it,
+ * in one transaction or the caller's.
+ */
 function remove(id: string): void {
-  const db = getDb();
-  db.exec("BEGIN");
-  try {
+  inDbTransaction(() => {
+    const db = getDb();
     db.prepare(
       "UPDATE projects SET deleted_at_ms = ?, updated_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL",
     ).run(Date.now(), Date.now(), id);
     db.prepare("DELETE FROM project_paths WHERE project_id = ?").run(id);
-    db.exec("COMMIT");
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-  // Sweeps parent/jira edges AND any task/session —…→ this project edges.
-  removeAllFor(projectNode(id));
+    // Sweeps parent/jira edges AND any task/session —…→ this project edges,
+    // including the `parent` edges of its child Projects.
+    removeAllFor(projectNode(id));
+  });
 }
 
 /** Persist the manual order + parent placement for a set of projects. */
@@ -195,35 +188,53 @@ function setSortOrder(id: string, sortOrder: number | null): void {
     .run(sortOrder, Date.now(), id);
 }
 
-function stampRevisions(ids: readonly string[]): number {
-  const revision = nextId("project_revision");
-  const update = getDb().prepare(
-    "UPDATE projects SET revision = ? WHERE id = ?",
-  );
-  for (const id of ids) update.run(revision, id);
-  return revision;
-}
+/** The `projects` topic's revisions, stamped only through a change set. */
+export const projectTopicWrites: StateTopicWrites = {
+  topic: "projects",
+  sequence: "project_revision",
+  stamp: (ids, revision) => {
+    const update = getDb().prepare(
+      "UPDATE projects SET revision = ? WHERE id = ?",
+    );
+    for (const id of ids) update.run(revision, id);
+  },
+};
 
-function revisions(): Array<{
+interface ProjectRevisionRow {
   id: string;
   revision: number;
   live: boolean;
-}> {
+}
+
+function revisionRow(row: unknown): ProjectRevisionRow {
+  const value = row as {
+    id: string;
+    revision: number;
+    deleted_at_ms: number | null;
+  };
+  return {
+    id: value.id,
+    revision: value.revision,
+    live: value.deleted_at_ms === null,
+  };
+}
+
+function revisions(): ProjectRevisionRow[] {
   return getDb()
     .prepare("SELECT id, revision, deleted_at_ms FROM projects")
     .all()
-    .map((row) => {
-      const value = row as {
-        id: string;
-        revision: number;
-        deleted_at_ms: number | null;
-      };
-      return {
-        id: value.id,
-        revision: value.revision,
-        live: value.deleted_at_ms === null,
-      };
-    });
+    .map(revisionRow);
+}
+
+/** {@link revisions} for exactly these ids, tombstones included, by primary key. */
+function revisionsFor(ids: readonly string[]): ProjectRevisionRow[] {
+  if (!ids.length) return [];
+  return getDb()
+    .prepare(
+      "SELECT id, revision, deleted_at_ms FROM projects WHERE id IN (SELECT value FROM json_each(?))",
+    )
+    .all(JSON.stringify([...new Set(ids)]))
+    .map(revisionRow);
 }
 
 /* ------------------------------- hierarchy ------------------------------- */
@@ -407,8 +418,8 @@ export const projectStore = {
   put,
   remove,
   setSortOrder,
-  stampRevisions,
   revisions,
+  revisionsFor,
   // hierarchy
   parentOf,
   setParent,

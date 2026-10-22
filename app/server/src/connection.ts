@@ -14,7 +14,6 @@ import {
   isClaudeSdkModel,
   HARNESSES,
   SESSION_MODES,
-  projectSummaryOf,
   type AgentType,
   type AgentQuestionResponse,
   type BroadcastTopic,
@@ -42,7 +41,6 @@ import {
   type WorktreeMergeStrategy,
   type WorktreeProvisionDisplay,
   type ProjectListRequest,
-  type ProjectListResponse,
   type ProjectRecord,
   type ServerMessage,
   type SelectorBundle,
@@ -260,18 +258,11 @@ import {
   archiveProject,
   deleteProject,
   getProject,
-  listProjects,
   reorderProjects,
   updateProject,
+  projectListMessage,
   projectRevision,
-  projectRevisionDigest,
-  projectStateItems,
 } from "./projectRegistry.ts";
-import {
-  initiativeRevisionDigest,
-  initiativeSnapshot,
-  initiativeStateItems,
-} from "./initiatives.ts";
 import { readInitiativeMap } from "./initiativeLayout.ts";
 import {
   cloneAndRegisterProjectRepo,
@@ -1787,7 +1778,7 @@ export class Connection implements Viewer {
       // declares one and the client asked, else its snapshot.
       const kernel = stateTopicFor(topic);
       if (kernel) {
-        this.send(kernel.subscribeAnswer(digestTopics.has(topic)));
+        this.onSubscribeStateTopic(topic, kernel, digestTopics.has(topic));
         continue;
       }
       if (topic === "tasks") {
@@ -1802,21 +1793,6 @@ export class Connection implements Viewer {
           this.onListTasks({});
         }
       }
-      // One reducer slot gets one canonical shape. Archived rows are needed for
-      // durable name/color lookups even when pickers display active projects.
-      if (topic === "projects") {
-        if (digestTopics.has(topic)) {
-          this.send({
-            type: "stateDigest",
-            topic,
-            seq: hub.projectEventSeq(),
-            entries: projectRevisionDigest(),
-          });
-        } else {
-          this.onListProjects({ includeArchived: true });
-        }
-      }
-      if (topic === "initiatives") this.onSubscribeInitiatives(digestTopics);
       if (topic === "worktrees") void this.onListWorktrees();
       // A library (skills, agents) is hand-authored on disk, so a subscribe is
       // a fresh SCAN, never a cached index. It answers through the topic
@@ -1859,31 +1835,32 @@ export class Connection implements Viewer {
     }
   }
 
-  /** Digest when the client holds a settled list, else the live snapshot. */
-  private onSubscribeInitiatives(digestTopics: ReadonlySet<BroadcastTopic>) {
+  /**
+   * A kernel topic's subscribe answer. A collection that could not load says
+   * which one, so the pane that owns it renders the failure in place; a topic
+   * with no such pane lets the failure propagate.
+   */
+  private onSubscribeStateTopic(
+    topic: BroadcastTopic,
+    kernel: NonNullable<ReturnType<typeof stateTopicFor>>,
+    digestRequested: boolean,
+  ): void {
     try {
-      if (digestTopics.has("initiatives")) {
-        this.send({
-          type: "stateDigest",
-          topic: "initiatives",
-          seq: hub.initiativeEventSeq(),
-          entries: initiativeRevisionDigest(),
-        });
-        return;
-      }
-      const snapshot = initiativeSnapshot();
-      this.send({
-        type: "initiativeList",
-        items: snapshot.items,
-        seq: hub.initiativeEventSeq(),
-        revisions: snapshot.revisions,
-      });
+      this.send(kernel.subscribeAnswer(digestRequested));
     } catch (err) {
-      this.send({
-        type: "error",
-        message: `Failed to list Initiatives: ${errorText(err)}`,
-        target: { type: "initiative" },
-      });
+      if (topic === "projects")
+        this.send({
+          type: "error",
+          message: `Failed to list projects: ${errorText(err)}`,
+          target: { type: "project" },
+        });
+      else if (topic === "initiatives")
+        this.send({
+          type: "error",
+          message: `Failed to list Initiatives: ${errorText(err)}`,
+          target: { type: "initiative" },
+        });
+      else throw err;
     }
   }
 
@@ -1895,26 +1872,20 @@ export class Connection implements Viewer {
     try {
       if (ids.length > MAX_STATE_ITEM_IDS)
         throw new Error(`Too many state item ids (max ${MAX_STATE_ITEM_IDS})`);
-      if (topic === "tasks") {
+      const kernel = stateTopicFor(topic);
+      if (kernel) {
+        this.send({
+          type: "stateItems",
+          topic,
+          requestId,
+          events: kernel.items(ids),
+        } as ServerMessage);
+      } else if (topic === "tasks") {
         this.send({
           type: "stateItems",
           topic,
           requestId,
           events: taskStateItems(ids),
-        });
-      } else if (topic === "projects") {
-        this.send({
-          type: "stateItems",
-          topic,
-          requestId,
-          events: projectStateItems(ids),
-        });
-      } else if (topic === "initiatives") {
-        this.send({
-          type: "stateItems",
-          topic,
-          requestId,
-          events: initiativeStateItems(ids),
         });
       }
     } catch (err) {
@@ -2033,26 +2004,7 @@ export class Connection implements Viewer {
 
   private onListProjects(request: ProjectListRequest): void {
     try {
-      const queryValue = cleanOptional(request.query);
-      const tagValue = cleanOptional(request.tag);
-      const response: ProjectListResponse = {
-        request,
-        projects: listProjects({
-          ...(queryValue !== undefined ? { query: queryValue } : {}),
-          ...(tagValue !== undefined ? { tag: tagValue } : {}),
-          ...(request.status !== undefined ? { status: request.status } : {}),
-          includeArchived: Boolean(request.includeArchived),
-        }).map(projectSummaryOf),
-        updatedAt: Date.now(),
-      };
-      const canonical =
-        request.includeArchived === true && Object.keys(request).length === 1;
-      this.send({
-        type: "projectList",
-        list: response,
-        seq: hub.projectEventSeq(),
-        revisions: canonical ? projectRevisionDigest() : [],
-      });
+      this.send(projectListMessage(request, stateTopicFor("projects")!.seq()));
     } catch (err) {
       this.send({
         type: "error",

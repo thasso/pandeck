@@ -9,14 +9,18 @@
  * MARKED edge (a milestone) may sit under a member, since it carries the mark.
  *
  * Every Initiative write goes through {@link mutation}, which stamps the
- * touched rows' revisions in the same transaction and notifies once they are
- * stamped, so a bump and its notification cannot diverge
- * (docs/state-sync.md). Task and session writes reach the Initiatives that
- * read them through {@link touchHolders} and {@link touchSessionHolders}, the
- * same seam.
+ * touched rows' revisions through its change set and reports them after
+ * commit, so a bump and its notification cannot diverge (docs/state-sync.md).
+ * Task and session writes reach the Initiatives that read them through
+ * {@link touchHolders} and {@link touchSessionHolders}, the same stamp.
  */
 import type { InitiativeState } from "@assistant/shared";
-import { getDb, inDbTransaction, withDbTransaction } from "./index.ts";
+import {
+  touchStateTopic,
+  withChangeSet,
+  type StateTopicWrites,
+} from "./changeSet.ts";
+import { getDb } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import {
   addLink,
@@ -89,10 +93,22 @@ function taskNode(id: number): NodeRef {
   return { type: "task", id: String(id) };
 }
 
+/** The `initiatives` topic's revisions, stamped only through a change set. */
+const initiativeTopicWrites: StateTopicWrites = {
+  topic: "initiatives",
+  sequence: "initiative_revision",
+  stamp: (ids, revision) => {
+    const stamp = getDb().prepare(
+      "UPDATE initiatives SET revision = ? WHERE id = ?",
+    );
+    for (const id of ids) stamp.run(revision, Number(id));
+  },
+};
+
 /**
- * Run one Initiative write in its OWN transaction, stamp every Initiative it
- * touched with the next `initiative_revision` value before COMMIT, and notify
- * after it. A write that throws notifies nobody.
+ * Run one Initiative write in its OWN change set: every Initiative it touched
+ * is stamped with the transaction's `initiative_revision` before COMMIT and
+ * reported after it. A write that throws reports nothing.
  *
  * Top-level only, like `createTask`: joined to a caller's transaction, a
  * failure the caller catches would leave half an operation in that commit with
@@ -103,10 +119,10 @@ function mutation<T>(fn: (touch: Set<number>) => T): T {
     throw new Error(
       "An Initiative write must not run inside an open database transaction.",
     );
-  const { value, touched } = withDbTransaction(() => {
+  const { value, touched } = withChangeSet((changes) => {
     const touched = new Set<number>();
     const value = fn(touched);
-    stampRevisions(touched);
+    changes.touch(initiativeTopicWrites, [...touched].map(String));
     return { value, touched };
   });
   notifyListeners(touched);
@@ -114,26 +130,18 @@ function mutation<T>(fn: (touch: Set<number>) => T): T {
 }
 
 /**
- * Bump and notify Initiatives whose summaries another domain's write changed.
- * The ONE stamp that may join a caller's open transaction: a session tombstone
- * inside a larger delete (`backgroundWorkStore.deleteOwnerSession`) moves the
+ * Bump Initiatives whose summaries another domain's write changed. The ONE
+ * stamp that may join a caller's open transaction: a session tombstone inside
+ * a larger delete (`backgroundWorkStore.deleteOwnerSession`) moves the
  * Initiatives listing that session, and a rollback must take the stamp with
- * it. It only stamps — it writes nothing a caller could half-commit — and the
- * listeners only schedule a debounced flush that reads committed state.
+ * it. It only stamps, so it writes nothing a caller could half-commit. Inside a
+ * change set it reports after that commit; inside any other transaction it
+ * reports at once (`touchStateTopic`).
  */
 function stampAndNotify(ids: ReadonlySet<number>): void {
   if (!ids.size) return;
-  inDbTransaction(() => stampRevisions(ids));
+  touchStateTopic(initiativeTopicWrites, [...ids].map(String));
   notifyListeners(ids);
-}
-
-function stampRevisions(ids: ReadonlySet<number>): void {
-  if (!ids.size) return;
-  const revision = nextId("initiative_revision");
-  const stamp = getDb().prepare(
-    "UPDATE initiatives SET revision = ? WHERE id = ?",
-  );
-  for (const id of ids) stamp.run(revision, id);
 }
 
 function notifyListeners(ids: ReadonlySet<number>): void {
@@ -728,22 +736,51 @@ sessionStore.subscribeLiveness((ids) => {
 
 /* ------------------------------- revisions -------------------------------- */
 
+interface DbRevisionRow {
+  id: number;
+  revision: number;
+  archived_at_ms: number | null;
+  deleted_at_ms: number | null;
+}
+
+const isLive = (row: DbRevisionRow) =>
+  row.archived_at_ms === null && row.deleted_at_ms === null;
+
 /** Every row's revision and live-projection membership (not archived, not tombstoned). */
 function revisions(): Array<{ id: number; revision: number; live: boolean }> {
   const rows = getDb()
     .prepare(
       "SELECT id, revision, archived_at_ms, deleted_at_ms FROM initiatives",
     )
-    .all() as Array<{
-    id: number;
-    revision: number;
-    archived_at_ms: number | null;
-    deleted_at_ms: number | null;
-  }>;
+    .all() as unknown as DbRevisionRow[];
   return rows.map((row) => ({
     id: row.id,
     revision: row.revision,
-    live: row.archived_at_ms === null && row.deleted_at_ms === null,
+    live: isLive(row),
+  }));
+}
+
+/**
+ * {@link revisions} for exactly these ids, tombstones included, by primary
+ * key and keyed as the topic's string ids. An id that is not a positive
+ * integer names no row.
+ */
+function revisionsFor(
+  ids: readonly string[],
+): Array<{ id: string; revision: number; live: boolean }> {
+  const numeric = [
+    ...new Set(ids.filter((id) => /^[1-9]\d*$/.test(id)).map(Number)),
+  ].filter(Number.isSafeInteger);
+  if (!numeric.length) return [];
+  const rows = getDb()
+    .prepare(
+      "SELECT id, revision, archived_at_ms, deleted_at_ms FROM initiatives WHERE id IN (SELECT value FROM json_each(?))",
+    )
+    .all(JSON.stringify(numeric)) as unknown as DbRevisionRow[];
+  return rows.map((row) => ({
+    id: String(row.id),
+    revision: row.revision,
+    live: isLive(row),
   }));
 }
 
@@ -803,4 +840,5 @@ export const initiativeStore = {
   touchHolders,
   // revisions
   revisions,
+  revisionsFor,
 };

@@ -27,8 +27,8 @@ import {
   type InitiativeProgress,
   type InitiativeState,
   type InitiativeSummary,
+  type ServerMessage,
   type StateDigestEntry,
-  type StateEvent,
   type TaskStatus,
 } from "@assistant/shared";
 import {
@@ -40,6 +40,7 @@ import {
 } from "./db/initiativeStore.ts";
 import { taskStore } from "./db/taskStore.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import type { StateTopicDescriptor } from "./stateTopicKernel.ts";
 import { notifyTaskChange } from "./tasks.ts";
 
 /** A list entry: the summary, plus when it was archived for archived reads. */
@@ -728,45 +729,12 @@ function backlogOrder(a: InitiativeMemberRow, b: InitiativeMemberRow): number {
 
 /* --------------------------- state-change sync --------------------------- */
 
-export function initiativeRevisionIndex(): Map<
-  string,
-  { revision: number; live: boolean }
-> {
-  return new Map(
-    initiativeStore
-      .revisions()
-      .map((row) => [
-        String(row.id),
-        { revision: row.revision, live: row.live },
-      ]),
-  );
-}
-
 /** The compact revision digest of exactly the live projection. */
 export function initiativeRevisionDigest(): StateDigestEntry[] {
   return initiativeStore
     .revisions()
     .filter((row) => row.live)
     .map((row) => ({ id: String(row.id), revision: row.revision }));
-}
-
-/** Targeted catch-up after a digest diff, as ordinary state events. */
-export function initiativeStateItems(
-  ids: readonly string[],
-): StateEvent<InitiativeSummary>[] {
-  const index = initiativeRevisionIndex();
-  const events: StateEvent<InitiativeSummary>[] = [];
-  for (const id of new Set(ids)) {
-    const entry = index.get(id);
-    if (!entry) continue;
-    const item = entry.live ? initiativeSummaryFor(id) : null;
-    events.push(
-      item
-        ? { kind: "upsert", id, revision: entry.revision, item }
-        : { kind: "delete", id, revision: entry.revision },
-    );
-  }
-  return events;
 }
 
 /** Every live summary and its revision: the cold subscribe answer. */
@@ -780,3 +748,36 @@ export function initiativeSnapshot(): {
     .filter((item): item is InitiativeSummary => item !== null);
   return { items, revisions };
 }
+
+/**
+ * The `initiatives` topic's read half. The live projection is neither archived
+ * nor deleted: archiving is a delete, unarchiving an upsert, and a write to an
+ * Initiative already outside it (a rename, a member change or a delete after
+ * it was archived) deletes again at its new revision, as archived Tasks do: no
+ * list holds it, and an open graph of it re-reads on that revision.
+ */
+export const initiativeStateTopic = {
+  topic: "initiatives",
+  revisions: (ids) =>
+    new Map(
+      initiativeStore
+        .revisionsFor(ids)
+        .map((row) => [row.id, { revision: row.revision, live: row.live }]),
+    ),
+  summary: (id) => initiativeSummaryFor(id) ?? undefined,
+  snapshot: (seq) => {
+    const snapshot = initiativeSnapshot();
+    return {
+      type: "initiativeList",
+      items: snapshot.items,
+      seq,
+      revisions: snapshot.revisions,
+    };
+  },
+  digest: initiativeRevisionDigest,
+  batchMax: 200,
+} satisfies StateTopicDescriptor<
+  "initiatives",
+  InitiativeSummary,
+  Extract<ServerMessage, { type: "initiativeList" }>
+>;

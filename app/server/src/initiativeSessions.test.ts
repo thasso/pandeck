@@ -13,7 +13,7 @@ import { test } from "vitest";
 import { INITIATIVE_SUMMARY_SESSION_LIMIT } from "@assistant/shared";
 import {
   createInitiative,
-  initiativeRevisionIndex,
+  initiativeStateTopic,
   initiativeSummaryFor,
 } from "./initiatives.ts";
 import { archiveTask, createTask, linkSessionToTask } from "./tasks.ts";
@@ -67,7 +67,7 @@ function sessions(id: string): { ids: string[]; count: number } {
 }
 
 function revisionOf(id: string): number {
-  return initiativeRevisionIndex().get(id)!.revision;
+  return initiativeStateTopic.revisions([id]).get(id)!.revision;
 }
 
 test("passive and origin-less links inflate neither the page nor the count", () => {

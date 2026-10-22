@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, test, vi } from "vitest";
 import type { BroadcastTopic, StateEventsMessage } from "@assistant/shared";
 import {
   setStateChangeSink,
+  touchStateTopic,
   withChangeSet,
   type StateTopicWrites,
 } from "./db/changeSet.ts";
@@ -451,6 +452,103 @@ describe("the change set", () => {
     assert.deepEqual(stamped("tasks"), []);
     assert.deepEqual(stamped("projects"), []);
     assert.equal(counter(SEQUENCE_A), 10);
+    assert.equal(counter(SEQUENCE_B), 20);
+    assert.deepEqual(reports, []);
+  });
+
+  test("a touch inside a change set joins it: its revision, reported after its commit", () => {
+    withChangeSet((changes) => {
+      changes.touch(a, ["a1"]);
+      touchStateTopic(b, ["b1"]);
+      touchStateTopic(b, ["b2"]);
+      assert.deepEqual(stamped("projects"), [
+        ["b1", 21],
+        ["b2", 21],
+      ]);
+      assert.deepEqual(reports, []);
+    });
+    assert.deepEqual(reports, [
+      ["tasks", ["a1"]],
+      ["projects", ["b1", "b2"]],
+    ]);
+  });
+
+  test("a touch inside a change set that throws rolls back and reports nothing", () => {
+    assert.throws(
+      () =>
+        withChangeSet(() => {
+          touchStateTopic(b, ["b1"]);
+          throw new Error("write failed");
+        }),
+      /write failed/,
+    );
+    assert.deepEqual(stamped("projects"), []);
+    assert.equal(counter(SEQUENCE_B), 20);
+    assert.deepEqual(reports, []);
+  });
+
+  test("a touch inside a foreign transaction stamps there and reports at once", () => {
+    const order: string[] = [];
+    setStateChangeSink((topic, ids) => {
+      order.push(`report ${topic}`);
+      reports.push([topic, ids]);
+    });
+    withDbTransaction(() => {
+      touchStateTopic(b, ["b1"]);
+      assert.deepEqual(stamped("projects"), [["b1", 21]]);
+      order.push("transaction ends");
+    });
+    assert.deepEqual(order, ["report projects", "transaction ends"]);
+    assert.deepEqual(reports, [["projects", ["b1"]]]);
+
+    // Its rollback takes the stamp and the sequence back; the report stands,
+    // and the flush that follows reads the committed state.
+    reports = [];
+    assert.throws(
+      () =>
+        withDbTransaction(() => {
+          touchStateTopic(b, ["b1"]);
+          throw new Error("caller failed");
+        }),
+      /caller failed/,
+    );
+    assert.deepEqual(stamped("projects"), [["b1", 21]]);
+    assert.equal(counter(SEQUENCE_B), 21);
+    assert.deepEqual(reports, [["projects", ["b1"]]]);
+  });
+
+  test("a touch with no transaction opens its own change set", () => {
+    let inTransaction: boolean | undefined;
+    setStateChangeSink((topic, ids) => {
+      inTransaction = getDb().isTransaction;
+      reports.push([topic, ids]);
+    });
+    touchStateTopic(b, ["b1"]);
+    assert.deepEqual(stamped("projects"), [["b1", 21]]);
+    assert.deepEqual(reports, [["projects", ["b1"]]]);
+    assert.equal(inTransaction, false);
+  });
+
+  test("a touch made by the sink after a commit opens its own change set", () => {
+    setStateChangeSink((topic, ids) => {
+      reports.push([topic, ids]);
+      if (topic === "tasks") touchStateTopic(b, ["b1"]);
+    });
+    withChangeSet((changes) => {
+      changes.touch(a, ["a1"]);
+    });
+    assert.deepEqual(stamped("projects"), [["b1", 21]]);
+    assert.deepEqual(reports, [
+      ["tasks", ["a1"]],
+      ["projects", ["b1"]],
+    ]);
+  });
+
+  test("a touch with no ids does nothing, wherever it stands", () => {
+    touchStateTopic(b, []);
+    withDbTransaction(() => touchStateTopic(b, []));
+    withChangeSet(() => touchStateTopic(b, []));
+    assert.deepEqual(stamped("projects"), []);
     assert.equal(counter(SEQUENCE_B), 20);
     assert.deepEqual(reports, []);
   });

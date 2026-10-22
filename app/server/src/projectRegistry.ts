@@ -2,15 +2,19 @@ import { existsSync } from "node:fs";
 import { isAbsolute, normalize, sep } from "node:path";
 import { incoming } from "./db/links.ts";
 import type {
+  ProjectListRequest,
   ProjectSummary,
+  ServerMessage,
   StateDigestEntry,
-  StateEvent,
 } from "@assistant/shared";
 import { projectSummaryOf } from "@assistant/shared";
+import { withChangeSet } from "./db/changeSet.ts";
+import type { StateTopicDescriptor } from "./stateTopicKernel.ts";
 import { notifyTaskChange } from "./tasks.ts";
 import {
   projectNode,
   projectStore,
+  projectTopicWrites,
   type Project,
   type ProjectJiraLink,
   type ProjectJiraLinkRole,
@@ -189,37 +193,14 @@ export function lookupProjects(input: ProjectLookupInput): ProjectMatch[] {
 
 /* --------------------------- state-change sync --------------------------- */
 
-export type ProjectChangeListener = (ids: readonly string[]) => void;
-const projectChangeListeners = new Set<ProjectChangeListener>();
+type ProjectListMessage = Extract<ServerMessage, { type: "projectList" }>;
 
-export function subscribeProjectChanges(
-  listener: ProjectChangeListener,
-): () => void {
-  projectChangeListeners.add(listener);
-  return () => projectChangeListeners.delete(listener);
-}
-
-/** Notify-with-ids is the sole Project revision bump. */
-export function notifyProjectChange(ids: Iterable<string>): void {
-  const touched = [...new Set(ids)];
-  if (!touched.length) return;
-  projectStore.stampRevisions(touched);
-  for (const listener of projectChangeListeners) {
-    try {
-      listener(touched);
-    } catch {
-      // A listener cannot make an already durable write fail.
-    }
-  }
-}
-
-export function projectRevisionIndex(): Map<
-  string,
-  { revision: number; live: boolean }
-> {
+function projectRevisionsFor(
+  ids: readonly string[],
+): Map<string, { revision: number; live: boolean }> {
   return new Map(
     projectStore
-      .revisions()
+      .revisionsFor(ids)
       .map((row) => [row.id, { revision: row.revision, live: row.live }]),
   );
 }
@@ -231,31 +212,67 @@ export function projectRevisionDigest(): StateDigestEntry[] {
     .map(({ id, revision }) => ({ id, revision }));
 }
 
-export function projectSummaryFor(id: string): ProjectSummary | null {
+function projectSummaryFor(id: string): ProjectSummary | null {
   const project = getProject(id);
   return project ? projectSummaryOf(project) : null;
 }
 
-export function projectStateItems(
-  ids: readonly string[],
-): StateEvent<ProjectSummary>[] {
-  const index = projectRevisionIndex();
-  const events: StateEvent<ProjectSummary>[] = [];
-  for (const id of new Set(ids)) {
-    const entry = index.get(id);
-    if (!entry) continue;
-    const item = entry.live ? projectSummaryFor(id) : null;
-    events.push(
-      item
-        ? { kind: "upsert", id, revision: entry.revision, item }
-        : { kind: "delete", id, revision: entry.revision },
-    );
-  }
-  return events;
+function cleanFilter(value: unknown): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || undefined;
 }
 
+/**
+ * The `projectList` answer to `request` at `seq`, for an explicit list request
+ * and the subscribe snapshot alike. Only the canonical read (archived included,
+ * nothing else) carries the digest that seeds a resubscribe.
+ */
+export function projectListMessage(
+  request: ProjectListRequest,
+  seq: number,
+): ProjectListMessage {
+  const query = cleanFilter(request.query);
+  const tag = cleanFilter(request.tag);
+  const canonical =
+    request.includeArchived === true && Object.keys(request).length === 1;
+  return {
+    type: "projectList",
+    list: {
+      request,
+      projects: listProjects({
+        ...(query !== undefined ? { query } : {}),
+        ...(tag !== undefined ? { tag } : {}),
+        ...(request.status !== undefined ? { status: request.status } : {}),
+        includeArchived: Boolean(request.includeArchived),
+      }).map(projectSummaryOf),
+      updatedAt: Date.now(),
+    },
+    seq,
+    revisions: canonical ? projectRevisionDigest() : [],
+  };
+}
+
+/**
+ * The `projects` topic's read half. Archived Projects stay members: one
+ * reducer slot gets one canonical shape, and archived rows are needed for
+ * durable name/color lookups. Only a tombstone leaves.
+ */
+export const projectStateTopic = {
+  topic: "projects",
+  revisions: projectRevisionsFor,
+  summary: (id) => projectSummaryFor(id) ?? undefined,
+  snapshot: (seq) => projectListMessage({ includeArchived: true }, seq),
+  digest: projectRevisionDigest,
+  batchMax: 200,
+} satisfies StateTopicDescriptor<
+  "projects",
+  ProjectSummary,
+  ProjectListMessage
+>;
+
 export function projectRevision(id: string): number {
-  return projectRevisionIndex().get(normalizeId(id))?.revision ?? 0;
+  const normalizedId = normalizeId(id);
+  return projectRevisionsFor([normalizedId]).get(normalizedId)?.revision ?? 0;
 }
 
 /* -------------------------------- writes --------------------------------- */
@@ -301,8 +318,10 @@ export function upsertProject(rawProject: Partial<ProjectRecord>): {
     updatedAt: now,
   });
   assertProjectValid(project, id);
-  projectStore.put(project);
-  notifyProjectChange([id]);
+  withChangeSet((changes) => {
+    projectStore.put(project);
+    changes.touch(projectTopicWrites, [id]);
+  });
   const persisted = getProject(id)!;
   return {
     registry: readProjectRegistry(),
@@ -331,8 +350,10 @@ export function updateProject(
     updatedAt: new Date().toISOString(),
   });
   assertProjectValid(project, normalizedId);
-  projectStore.put(project);
-  notifyProjectChange([normalizedId]);
+  withChangeSet((changes) => {
+    projectStore.put(project);
+    changes.touch(projectTopicWrites, [normalizedId]);
+  });
   const persisted = getProject(normalizedId)!;
   return {
     registry: readProjectRegistry(),
@@ -472,11 +493,21 @@ export function deleteProject(id: string): {
   // through the Task domain's one change seam: a Task list showing a project
   // that no longer exists has nothing left to repair it, now that a mutation
   // broadcasts only the rows it touched.
-  const orphaned = incoming(projectNode(normalizedId), "in_project")
-    .filter((edge) => edge.fromType === "task")
-    .map((edge) => edge.fromId);
-  projectStore.remove(normalizedId);
-  notifyProjectChange([normalizedId]);
+  //
+  // Its child Projects lose their `parent` edge in the same sweep, so their
+  // summaries change too: they are stamped in the delete's own change set.
+  const orphaned = withChangeSet((changes) => {
+    const tasks = incoming(projectNode(normalizedId), "in_project")
+      .filter((edge) => edge.fromType === "task")
+      .map((edge) => edge.fromId);
+    const children = incoming(projectNode(normalizedId), "parent")
+      .filter((edge) => edge.fromType === "project")
+      .map((edge) => edge.fromId);
+    projectStore.remove(normalizedId);
+    changes.touch(projectTopicWrites, [normalizedId, ...children]);
+    return tasks;
+  });
+  // After the Project commit: the Task stamp is not yet part of the change set.
   if (orphaned.length) notifyTaskChange(orphaned);
   return { registry: readProjectRegistry(), deleted };
 }
@@ -534,11 +565,13 @@ export function reorderProjects(
   });
   if (validation.errors.length) throw new Error(validation.errors.join("; "));
 
-  for (const id of sortOrderById.keys()) {
-    projectStore.setParent(id, parentById.get(id) ?? null);
-    projectStore.setSortOrder(id, sortOrderById.get(id)!);
-  }
-  notifyProjectChange(sortOrderById.keys());
+  withChangeSet((changes) => {
+    for (const id of sortOrderById.keys()) {
+      projectStore.setParent(id, parentById.get(id) ?? null);
+      projectStore.setSortOrder(id, sortOrderById.get(id)!);
+    }
+    changes.touch(projectTopicWrites, [...sortOrderById.keys()]);
+  });
   return readProjectRegistry();
 }
 
