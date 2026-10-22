@@ -148,6 +148,34 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+it("M3-R4: recognized short table rows never reach synthesis", async () => {
+  await start();
+  await render({
+    messages: [
+      prose(
+        "voice-live:short-row",
+        "| Task | Status |\n| --- | --- |\nSensitive. More data",
+      ),
+    ],
+    streaming: true,
+  });
+  await render({
+    messages: [
+      prose(
+        "voice-live:short-row",
+        "| Task | Status |\n| --- | --- |\nSensitive. More data\n\nAfter.",
+        false,
+      ),
+    ],
+    streaming: false,
+  });
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.map((call) => JSON.parse(call[1]!.body as string).text),
+  ).toEqual(["After."]);
+});
+
 it("M3-R1: a table prefix cannot consume the following prose cursor", async () => {
   await start();
   await render({ messages: [prose("voice-live:table", "Header. ")] });

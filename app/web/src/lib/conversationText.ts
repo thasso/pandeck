@@ -19,7 +19,7 @@ function speechProse(
   markdown: string,
   final: boolean,
 ): SourceText & { boundary: boolean } {
-  const lines: SourceText[] = [];
+  const lines: (SourceText & { blockStart?: true })[] = [];
   let fence: string | undefined;
   let indented = false;
   let offset = 0;
@@ -31,6 +31,7 @@ function speechProse(
       ends: Array.from({ length: line.length }, (_, i) => start + i + 1),
     };
     const omitted = () => ({
+      blockStart: true as const,
       text: "Code omitted.",
       ends: Array<number>(13).fill(start + line.length),
     });
@@ -68,11 +69,18 @@ function speechProse(
     const depth = quoteDepth(line);
     const row = line.replace(/^\s*(?:>\s*)+/, "");
     const cells = tableCells(row);
+    if (table && isThematicBreak(row)) {
+      table = false;
+      continue;
+    }
+    // GFM pads short body rows with empty cells. No pipe is required after the
+    // delimiter; only a blank line or another block ends the table. Preserve
+    // code-block boundaries even though the first pass replaced their text.
     if (
       table &&
       depth === tableDepth &&
-      cells &&
-      !/^\s*(?:#{1,6}\s|[-+*]\s|\d+[.)]\s)/.test(row)
+      !mapped.blockStart &&
+      !startsTableBoundary(row)
     )
       continue;
     table = false;
@@ -170,6 +178,26 @@ function replaceSourceText(
   for (let i = start; i < source.ends.length; i++)
     result.ends.push(source.ends[i]!);
   return result;
+}
+
+function isThematicBreak(line: string): boolean {
+  return /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(
+    line,
+  );
+}
+
+/** Blocks that interrupt a GFM table, not inline HTML or setext-looking cells. */
+function startsTableBoundary(line: string): boolean {
+  return (
+    !line.trim() ||
+    /^\s*(?:#{1,6}(?:[ \t]|$)|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|>|`{3,}|~{3,})/.test(
+      line,
+    ) ||
+    /^ {0,3}<(?:!--|\?|!\[CDATA\[|![A-Z])/.test(line) ||
+    /^ {0,3}<\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|pre|script|search|section|source|style|summary|table|tbody|td|textarea|tfoot|th|thead|title|tr|track|ul)(?:[ \t/>]|$)/i.test(
+      line,
+    )
+  );
 }
 
 function quoteDepth(line: string): number {

@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   speechChunks,
   speechSegments,
@@ -7,7 +11,91 @@ import {
 } from "./conversationText.ts";
 import { ConversationResampler } from "./conversationCapture.ts";
 
+const renderGfm = (markdown: string) =>
+  renderToStaticMarkup(
+    createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, markdown),
+  );
+
 describe("spoken prose", () => {
+  it.each(["Done", "`ps | grep server`", "Escaped \\| cell"])(
+    "M3-R4: GFM table body rows need no structural pipes: %s",
+    (row) => {
+      for (const header of [
+        "| Task | Status |\n| --- | --- |",
+        "Task | Status\n--- | ---",
+      ]) {
+        const markdown = `${header}\n${row}\n\nAfter.`;
+        const rendered = renderGfm(markdown);
+        expect(rendered).toContain("<tbody><tr><td>");
+        expect(rendered).toMatch(/<\/tbody><\/table>\s*<p>After\.<\/p>$/);
+        expect(spokenMarkdown(markdown)).toBe("After.");
+        expect(spokenMarkdown(`${header}\n${row}`)).toBe("");
+      }
+    },
+  );
+
+  it.each([
+    ["# Heading.\nAfter.", "<h1>", "Heading. After."],
+    ["#\nAfter.", "<h1>", "After."],
+    ["- Listed.\nAfter.", "<ul>", "Listed. After."],
+    ["2. Ordered.\nAfter.", '<ol start="2">', "Ordered. After."],
+    ["> Quoted.\nAfter.", "<blockquote>", "Quoted. After."],
+    ["```ts\nsecret();\n```\nAfter.", "<pre>", "Code omitted. After."],
+    ["~~~\nsecret();\n~~~\nAfter.", "<pre>", "Code omitted. After."],
+    ["    secret();\n\nAfter.", "<pre>", "Code omitted. After."],
+    ["---\nAfter.", "<hr/>", "After."],
+    ["<div>Block.</div>\n\nAfter.", "&lt;div&gt;", "Block. After."],
+  ])(
+    "M3-R4: a new GFM block ends table suppression: %s",
+    (suffix, tag, expected) => {
+      const markdown = `| Task | Status |\n| --- | --- |\nDone\n${suffix}`;
+      const rendered = renderGfm(markdown);
+      expect(rendered).toContain("</table>");
+      expect(rendered.indexOf(tag)).toBeGreaterThan(
+        rendered.indexOf("</table>"),
+      );
+      expect(spokenMarkdown(markdown)).toBe(expected);
+    },
+  );
+
+  it.each([
+    "<span>Secret.</span>",
+    "####### Secret.",
+    "===",
+    "[ref]: https://example.com",
+  ])("M3-R4: inline-looking rows remain inside GFM tables: %s", (row) => {
+    const markdown = `a | b\n--- | ---\n${row}\n\nAfter.`;
+    expect(renderGfm(markdown)).toContain("<tbody><tr><td>");
+    expect(spokenMarkdown(markdown)).toBe("After.");
+  });
+
+  it("M3-R4: quoted short rows and every streaming prefix stay silent until the table ends", () => {
+    for (const markdown of [
+      "| Task | Status |\n| --- | --- |\nSensitive. More data\nEscaped \\| cell\n`ps | grep server`\n\nAfter.",
+      "> | Task | Status |\n> | --- | --- |\n> Sensitive. More data\n>\n> After.",
+      "```md\n| Task | Status |\n| --- | --- |\nSensitive.\n```\n\nAfter.",
+    ]) {
+      let cursor = 0;
+      const spoken: string[] = [];
+      for (let length = 0; length <= markdown.length; length++) {
+        const segments = speechSegments(
+          markdown.slice(0, length),
+          false,
+          cursor,
+        );
+        spoken.push(...segments.map((segment) => segment.text));
+        cursor = segments.at(-1)?.end ?? cursor;
+      }
+      spoken.push(
+        ...speechSegments(markdown, true, cursor).map(
+          (segment) => segment.text,
+        ),
+      );
+      expect(spoken).toEqual(
+        markdown.startsWith("```") ? ["Code omitted.", "After."] : ["After."],
+      );
+    }
+  });
   it("M3-R1: withholds a trailing sentence that can still become a table header", () => {
     const markdown = "Header. | State\n--- | ---\nx | y\n\nAfter.";
     expect(speechChunks(markdown, true)).toEqual(["After."]);
@@ -137,7 +225,7 @@ describe("spoken prose", () => {
   it("strips markdown, speaks link text and skips images, tables and references", () => {
     expect(
       spokenMarkdown(
-        "# Hello **world**.\n- Visit [our site](https://example.com).\n![photo](x)\n| a | b |\n|---|---|\n| x | y |\n[ref]: https://example.com\n`inline` is fine.",
+        "# Hello **world**.\n- Visit [our site](https://example.com).\n![photo](x)\n| a | b |\n|---|---|\n| x | y |\n\n[ref]: https://example.com\n`inline` is fine.",
       ),
     ).toBe("Hello world. Visit our site. inline is fine.");
   });

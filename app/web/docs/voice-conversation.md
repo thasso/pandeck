@@ -50,12 +50,14 @@ its original Markdown source position, so later table recognition cannot replay
 earlier speech or skip prose after the table. To keep mid-line speech, a
 prose-looking header sentence already spoken before its pipe arrives is an
 accepted edge case. Once recognized, the table's delimiter and rows are never
-spoken. Complete sentences are synthesized as the response streams, with a final
-unpunctuated tail on completion. Long sentences are split within the server's
-500-character limit. One synthesis fetch runs at a time; at most two decoded
-sentences are scheduled, with the next buffer starting at the previous buffer's
-exact AudioContext end time. Slow synthesis can still cause a gap. A global busy
-response is shown, not retried.
+spoken, including GFM body rows without pipes. A blank line or a new block, such
+as a heading, list, quote or fence, ends the table. Complete sentences are
+synthesized as the response streams, with a final unpunctuated tail on
+completion. Long sentences are split within the server's 500-character limit.
+One synthesis fetch runs at a time; at most two decoded sentences are scheduled,
+with the next buffer starting at the previous buffer's exact AudioContext end
+time. Slow synthesis can still cause a gap. A global busy response is shown, not
+retried.
 
 Distinct nonempty speech cancels the synthesis fetch, scheduled audio and queue,
 including synthesis still waiting for its first buffer. The interrupted agent
