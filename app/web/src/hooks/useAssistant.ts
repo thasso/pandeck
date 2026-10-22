@@ -85,11 +85,7 @@ import type {
   StateDigestEntry,
   TimelineAnchorTarget,
   StateDigestMessage,
-  StateEvent,
   StateEventsMessage,
-  SubagentRunSummary,
-  SubagentThreadRunDetail,
-  SubagentThreadSummary,
   BackgroundWorkItemSummary,
   SlackConnectionStatus,
   SlackSettingsPatch,
@@ -514,8 +510,6 @@ export interface UIState {
    * because the server minted a revision.
    */
   stateEventRevisions: Partial<Record<BroadcastTopic, Record<string, number>>>;
-  /** Canonical bounded subagent registry; detail/transcript state stays keyed. */
-  subagentThreads: SubagentThreadSummary[];
   /**
    * Live Initiative summaries from the `initiatives` topic, held only while it
    * is subscribed. The graph is a keyed `getInitiative` read.
@@ -583,15 +577,6 @@ export interface UIState {
    * never rendered as a completed close.
    */
   backgroundHostCloseWaiting: string[];
-  /** Held-thread run details and their revision sidecars, keyed by thread id. */
-  subagentRunDetails: Record<
-    string,
-    {
-      detail: SubagentThreadRunDetail;
-      revisions: Record<string, number>;
-      seq: number;
-    }
-  >;
   /** An authoritative Task list answered during the current socket episode. */
   taskListFresh: boolean;
   /** Failed current-episode Task list read; retained rows remain readable. */
@@ -937,7 +922,6 @@ const emptyInitial: UIState = {
   forgejoStatus: null,
   taskList: null,
   stateEventRevisions: {},
-  subagentThreads: [],
   initiatives: [],
   initiativesFresh: false,
   initiativesRefreshing: false,
@@ -953,7 +937,6 @@ const emptyInitial: UIState = {
   backgroundStopPending: [],
   backgroundStopAllPending: [],
   backgroundHostCloseWaiting: [],
-  subagentRunDetails: {},
   sessionListFresh: false,
   taskListFresh: false,
   taskListError: null,
@@ -1214,7 +1197,6 @@ function normalizeCachedSessions(
         queuedWork: _queuedWork,
         // A waiting child may have started, or its place moved, meanwhile.
         waitingForSlot: _waitingForSlot,
-        delegation: _delegation,
         // Who still owes a reply is live too: kept alone, it would read a
         // tree whose peers were working as stalled until the first list.
         awaitingRepliesFrom: _awaitingRepliesFrom,
@@ -1719,13 +1701,6 @@ interface PendingMutation extends PendingMutationEffect {
 }
 
 interface TaskDigestSync {
-  requestId: string;
-  expectedIds: ReadonlySet<string>;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-interface SubagentRunDigestSync {
-  threadId: string;
   requestId: string;
   expectedIds: ReadonlySet<string>;
   timer: ReturnType<typeof setTimeout>;
@@ -3672,10 +3647,6 @@ type InitiativeStateEventsMessage = StateEventsMessage<
   "initiatives",
   InitiativeSummary
 >;
-type SubagentStateEventsMessage = StateEventsMessage<
-  "subagents",
-  SubagentThreadSummary
->;
 type BackgroundStateEventsMessage = StateEventsMessage<
   "background",
   BackgroundWorkItemSummary
@@ -3800,13 +3771,11 @@ function applyEvent(
     | TaskStateEventsMessage
     | ProjectStateEventsMessage
     | InitiativeStateEventsMessage
-    | SubagentStateEventsMessage
     | BackgroundStateEventsMessage,
 ): UIState {
   if (message.topic === "projects") return applyProjectEvent(state, message);
   if (message.topic === "initiatives")
     return applyInitiativeEvent(state, message);
-  if (message.topic === "subagents") return applySubagentEvent(state, message);
   if (message.topic === "background")
     return applyBackgroundEvent(state, message);
   const currentRevisions = state.stateEventRevisions[message.topic] ?? {};
@@ -3881,38 +3850,6 @@ function applyEvent(
         ? taskDetails
         : reconcileTaskDetails(taskDetails, taskList?.items),
     taskStatuses,
-  };
-}
-
-function applySubagentEvent(
-  state: UIState,
-  message: SubagentStateEventsMessage,
-): UIState {
-  const current = state.stateEventRevisions.subagents ?? {};
-  let revisions: Record<string, number> | null = null;
-  let threads = state.subagentThreads;
-  for (const event of message.events) {
-    const known = revisions?.[event.id] ?? current[event.id] ?? -1;
-    if (event.revision <= known) continue;
-    revisions ??= { ...current };
-    revisions[event.id] = event.revision;
-    const index = threads.findIndex((thread) => thread.id === event.id);
-    if (event.kind === "delete") {
-      if (index >= 0)
-        threads = threads.filter((thread) => thread.id !== event.id);
-    } else if (index < 0) {
-      threads = [event.item, ...threads];
-    } else if (!wireValueEqual(threads[index], event.item)) {
-      const next = threads.slice();
-      next[index] = event.item;
-      threads = next;
-    }
-  }
-  if (!revisions) return state;
-  return {
-    ...state,
-    subagentThreads: threads,
-    stateEventRevisions: { ...state.stateEventRevisions, subagents: revisions },
   };
 }
 
@@ -4089,50 +4026,6 @@ function applyBackgroundEvent(
     stateEventRevisions: {
       ...state.stateEventRevisions,
       background: revisions,
-    },
-  };
-}
-
-type SubagentRunItemEvent = StateEvent<SubagentRunSummary>;
-
-function applySubagentRunEvents(
-  state: UIState,
-  threadId: string,
-  events: readonly SubagentRunItemEvent[],
-  seq: number,
-): UIState {
-  const held = state.subagentRunDetails[threadId];
-  if (!held) return state;
-  let revisions: Record<string, number> | null = null;
-  let runs = held.detail.runs;
-  for (const event of events) {
-    const known = revisions?.[event.id] ?? held.revisions[event.id] ?? -1;
-    if (event.revision <= known) continue;
-    revisions ??= { ...held.revisions };
-    revisions[event.id] = event.revision;
-    const index = runs.findIndex((run) => run.id === event.id);
-    if (event.kind === "delete") {
-      if (index >= 0) runs = runs.filter((run) => run.id !== event.id);
-    } else if (index < 0) {
-      runs = [event.item, ...runs];
-    } else if (!wireValueEqual(runs[index], event.item)) {
-      const next = runs.slice();
-      next[index] = event.item;
-      runs = next;
-    }
-  }
-  if (!revisions) return state;
-  return {
-    ...state,
-    subagentRunDetails: {
-      ...state.subagentRunDetails,
-      [threadId]: {
-        ...held,
-        detail:
-          runs === held.detail.runs ? held.detail : { ...held.detail, runs },
-        revisions,
-        seq,
-      },
     },
   };
 }
@@ -5868,52 +5761,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ...state,
         objectLinks: mergeObjectLinks(state.objectLinks, msg.links),
       };
-    case "subagentThreadRunSnapshot": {
-      const revisions = taskDigestRecord(msg.revisions) ?? {};
-      return {
-        ...state,
-        subagentRunDetails: {
-          ...state.subagentRunDetails,
-          [msg.threadId]: { detail: msg.detail, revisions, seq: msg.seq },
-        },
-      };
-    }
-    case "subagentRunEvents":
-      return applySubagentRunEvents(state, msg.threadId, msg.events, msg.seq);
-    case "subagentRunItems":
-      return applySubagentRunEvents(
-        state,
-        msg.threadId,
-        msg.events,
-        state.subagentRunDetails[msg.threadId]?.seq ?? 0,
-      );
-    case "subagentRunDigest": {
-      const held = state.subagentRunDetails[msg.threadId];
-      const revisions = taskDigestRecord(msg.entries);
-      if (!held || !revisions) return state;
-      const liveIds = new Set(msg.entries.map((entry) => entry.id));
-      const runs = held.detail.runs.filter((run) => liveIds.has(run.id));
-      const keptRevisions: Record<string, number> = {};
-      for (const entry of msg.entries) {
-        if (held.revisions[entry.id] !== undefined)
-          keptRevisions[entry.id] = held.revisions[entry.id]!;
-      }
-      return {
-        ...state,
-        subagentRunDetails: {
-          ...state.subagentRunDetails,
-          [msg.threadId]: {
-            ...held,
-            detail:
-              runs.length === held.detail.runs.length
-                ? held.detail
-                : { ...held.detail, runs },
-            revisions: keptRevisions,
-            seq: msg.seq,
-          },
-        },
-      };
-    }
     case "stateEvents":
       return applyEvent(state, msg);
     case "stateDigest":
@@ -5999,17 +5846,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     case "initiativeDetail":
       // Correlated before reducer dispatch in the socket effect.
       return state;
-    case "subagentThreadList": {
-      const revisions = taskDigestRecord(msg.revisions);
-      return {
-        ...state,
-        subagentThreads: msg.threads,
-        stateEventRevisions: {
-          ...state.stateEventRevisions,
-          subagents: revisions ?? {},
-        },
-      };
-    }
     case "taskList": {
       const taskList = reconcileTaskList(state.taskList, msg.list);
       const revisionRecord = taskDigestRecord(msg.revisions);
@@ -7169,8 +7005,6 @@ export function useAssistant({
   }, [viewedSessionId, viewedTimeline]);
   /** Last `seq` seen per topic — the gap tripwire, never a replay cursor. */
   const topicSeqRef = useRef<Partial<Record<BroadcastTopic, number>>>({});
-  /** Last seq per held thread-detail topic; gaps trigger a fresh bounded snapshot. */
-  const subagentRunSeqRef = useRef<Record<string, number>>({});
   /**
    * Optimistic mutations still waiting for their own outcome, keyed by the
    * `requestId` the command carried. Correlation is explicit because these
@@ -7243,9 +7077,6 @@ export function useAssistant({
   /** One in-flight targeted catch-up for the latest Task digest. */
   const taskDigestSyncRef = useRef<TaskDigestSync | null>(null);
   const projectDigestSyncRef = useRef<TaskDigestSync | null>(null);
-  const subagentRunDigestSyncRef = useRef(
-    new Map<string, SubagentRunDigestSync>(),
-  );
   /** Explicit per-mutation item recoveries, independent of digest catch-up. */
   const taskRecoveryItemsRef = useRef(new Map<string, ReadonlySet<string>>());
   const projectRecoveryItemsRef = useRef(
@@ -7493,16 +7324,6 @@ export function useAssistant({
       ref.current = null;
     };
     const clearTaskDigestSync = () => clearDigestSync("tasks");
-    const clearSubagentRunDigestSync = (threadId: string) => {
-      const sync = subagentRunDigestSyncRef.current.get(threadId);
-      if (sync) clearTimeout(sync.timer);
-      subagentRunDigestSyncRef.current.delete(threadId);
-    };
-    const resubscribeSubagentRun = (threadId: string, reason: string) => {
-      clearSubagentRunDigestSync(threadId);
-      console.warn(`[state-sync] subagent run ${threadId} resync: ${reason}`);
-      socket.send({ type: "subscribeSubagentThread", threadId });
-    };
     const fallbackFromDigest = (
       topic: "tasks" | "projects",
       reason: string,
@@ -7670,31 +7491,6 @@ export function useAssistant({
       if (msg.type === "initiativeList") {
         topicSeqRef.current.initiatives = msg.seq;
       }
-      if (msg.type === "subagentThreadList") {
-        // A snapshot is the authoritative tripwire baseline, including after a
-        // gap resubscribe and on a cold subscribe.
-        topicSeqRef.current.subagents = msg.seq;
-      }
-      if (msg.type === "subagentThreadRunSnapshot") {
-        subagentRunSeqRef.current[msg.threadId] = msg.seq;
-      }
-      if (msg.type === "subagentRunDigest") {
-        subagentRunSeqRef.current[msg.threadId] = msg.seq;
-      }
-      if (msg.type === "subagentRunEvents") {
-        const previous = subagentRunSeqRef.current[msg.threadId];
-        if (previous !== undefined && msg.seq !== previous + 1) {
-          console.warn(
-            `[state-sync] subagent run topic ${msg.threadId} sequence gap: expected ${previous + 1}, got ${msg.seq}; resubscribing`,
-          );
-          socket.send({
-            type: "subscribeSubagentThread",
-            threadId: msg.threadId,
-          });
-          return;
-        }
-        subagentRunSeqRef.current[msg.threadId] = msg.seq;
-      }
       // This client takes the `initiatives` snapshot on every subscribe and never
       // asks for its digest or items, so neither answer has a sync to settle.
       if (msg.type === "stateDigest" && msg.topic !== "initiatives") {
@@ -7729,67 +7525,6 @@ export function useAssistant({
             requestId,
           });
         }
-      }
-      if (msg.type === "subagentRunDigest") {
-        const held = stateRef.current.subagentRunDetails[msg.threadId];
-        const digest = taskDigestRecord(msg.entries);
-        if (!held || !digest) {
-          resubscribeSubagentRun(
-            msg.threadId,
-            "cached detail or revisions were invalid",
-          );
-          return;
-        }
-        const knownIds = new Set(held.detail.runs.map((run) => run.id));
-        const changedIds = msg.entries
-          .filter(
-            (entry) =>
-              !knownIds.has(entry.id) ||
-              held.revisions[entry.id] !== entry.revision,
-          )
-          .map((entry) => entry.id);
-        if (changedIds.length > 0) {
-          clearSubagentRunDigestSync(msg.threadId);
-          const requestId = createClientId();
-          const expectedIds = new Set(changedIds);
-          const timer = setTimeout(
-            () =>
-              resubscribeSubagentRun(
-                msg.threadId,
-                "targeted run item fetch timed out",
-              ),
-            TASK_DIGEST_TIMEOUT_MS,
-          );
-          subagentRunDigestSyncRef.current.set(msg.threadId, {
-            threadId: msg.threadId,
-            requestId,
-            expectedIds,
-            timer,
-          });
-          socket.send({
-            type: "getSubagentRunItems",
-            threadId: msg.threadId,
-            ids: changedIds,
-            requestId,
-          });
-        }
-      }
-      if (msg.type === "subagentRunItems") {
-        const sync = subagentRunDigestSyncRef.current.get(msg.threadId);
-        if (!sync || sync.requestId !== msg.requestId) return;
-        const receivedIds = new Set(msg.events.map((event) => event.id));
-        const complete =
-          receivedIds.size === msg.events.length &&
-          receivedIds.size === sync.expectedIds.size &&
-          [...sync.expectedIds].every((id) => receivedIds.has(id));
-        if (!complete) {
-          resubscribeSubagentRun(
-            msg.threadId,
-            "targeted run item response was incomplete",
-          );
-          return;
-        }
-        clearSubagentRunDigestSync(msg.threadId);
       }
       if (msg.type === "stateItems" && msg.topic !== "initiatives") {
         const receivedIds = new Set(msg.events.map((event) => event.id));
@@ -7863,15 +7598,6 @@ export function useAssistant({
       });
       if (msg.type === "error" && digestTopic) {
         fallbackFromDigest(digestTopic, msg.message);
-        return;
-      }
-      const subagentDigest = [
-        ...subagentRunDigestSyncRef.current.values(),
-      ].find(
-        (sync) => msg.type === "error" && msg.requestId === sync.requestId,
-      );
-      if (msg.type === "error" && subagentDigest) {
-        resubscribeSubagentRun(subagentDigest.threadId, msg.message);
         return;
       }
       if (msg.type === "taskDetail" && msg.requestId) {
@@ -8407,13 +8133,6 @@ export function useAssistant({
           for (const library of LIBRARY_TOPICS)
             if (topics.includes(library))
               dispatch({ kind: "libraryLoad", library });
-          // Held run-detail topics are per connection too; a reconnect must
-          // request a fresh bounded snapshot rather than wait for an event gap.
-          for (const threadId of Object.keys(
-            stateRef.current.subagentRunDetails,
-          )) {
-            socket.send({ type: "subscribeSubagentThread", threadId });
-          }
           // Comment subscriptions are per connection, just like topic
           // subscriptions. Re-read every cached target so a restarted server
           // rebuilds ownership and this connection resumes addressed pushes.
@@ -8435,9 +8154,6 @@ export function useAssistant({
         projectRecoveryItemsRef.current.clear();
         commentResyncRef.current.clear();
         commentRequestsRef.current.clear();
-        // No run events can arrive while disconnected; the next snapshot is
-        // the new sequence baseline.
-        subagentRunSeqRef.current = {};
         for (const id of taskDetailRequestsRef.current.keys())
           dispatch({
             kind: "taskDetailResult",

@@ -380,12 +380,12 @@ than re-derived. A Rust-side WebSocket shared by every window is available —
 change, not a Tauri feature, and the payoff is smaller than it looks.
 
 The server does not treat a connection as a pipe. `Connection` implements the
-full `Viewer` contract (`app/server/src/harness.ts`) and answers five
+full `Viewer` contract (`app/server/src/harness.ts`) and answers four
 per-connection predicates — `wantsArchivedSessions`, `wantsTopic`,
-`wantsSubagentThread`, `wantsComments`, `wantsWorktree` — while live sessions
-keep their own viewer sets so token streams reach only the windows watching that
-session. Per-window intent even rides the connect URL: `defaultSocketUrl` puts
-`sessionId` and the IndexedDB timeline-cache descriptor in the query string.
+`wantsComments`, `wantsWorktree` — while live sessions keep their own viewer
+sets so token streams reach only the windows watching that session. Per-window
+intent even rides the connect URL: `defaultSocketUrl` puts `sessionId` and the
+IndexedDB timeline-cache descriptor in the query string.
 
 There are two possible shapes and neither pays.
 
@@ -393,12 +393,11 @@ There are two possible shapes and neither pays.
   semantics. `abort`, `prompt`, `setModel`, `runSlashCommand` and about six more
   carry no session id and act on the implicit `this.viewing`, referenced ~50
   times in `connection.ts`, so one window's abort would kill another's run.
-  `view()` detaches the previous transport and releases every held subagent
-  thread. A second `subscribe` for a topic already held returns nothing at all
-  (`if (!fresh) continue`), so the second window renders empty forever.
-  `unsubscribe` is not refcounted. And `saveTask`'s `linkCurrentSession` would
-  link the OTHER window's session — durable data corruption rather than a
-  rendering glitch.
+  `view()` detaches the previous transport. A second `subscribe` for a topic
+  already held returns nothing at all (`if (!fresh) continue`), so the second
+  window renders empty forever. `unsubscribe` is not refcounted. And
+  `saveTask`'s `linkCurrentSession` would link the OTHER window's session —
+  durable data corruption rather than a rendering glitch.
 - **One socket multiplexing a channel per window**, with the server building an
   ordinary `Connection` per channel, avoids every one of those. But the server
   then does the same per-window work anyway — session-list rebuild, settings

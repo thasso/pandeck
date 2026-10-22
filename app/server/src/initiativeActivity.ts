@@ -50,11 +50,7 @@ export function associateInitiativeSessions(
 // Mirror sessionInbox.ts isMoving, waitsOnHuman, spawnTreeStall and activityAt.
 function moving(s: SessionListItem): boolean {
   return Boolean(
-    s.isStreaming ||
-    s.queuedWork ||
-    (s.delegation &&
-      s.delegation.workingCount + s.delegation.startingCount > 0) ||
-    backgroundWorkBusy(s.backgroundActivity),
+    s.isStreaming || s.queuedWork || backgroundWorkBusy(s.backgroundActivity),
   );
 }
 function human(s: SessionListItem): boolean {

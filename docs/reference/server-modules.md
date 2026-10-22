@@ -618,21 +618,16 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   the ONE place the settlement mark and the durable attention revision are
   combined, and it withholds `settledAt` (and therefore suppresses the
   shelved-row unread guard) while the session's latest outcome is
-  unacknowledged, so no consumer has to know that settlement has two halves.
-  Task-495 adds one more batched prologue read,
-  `subagentStore.delegationSummaries()`: only active child rows contribute,
-  split into starting/working/awaiting-parent counts on
-  `SessionListItem.delegation`. It never folds delegated activity into the
-  parent's own streaming fields, and the store's touched-parent notification
-  refreshes the row after every run-state change. The list is a DEFAULT
-  PROJECTION in the `SessionScope` sense ([Task-492](pa://task/492)): the store
-  read carries `user` rows only, and both live sources — the pi store's
-  `listInfo()` here and `hub.ts`'s in-process SDK overlay — are gated by
-  `sessionStore.liveDefaultScopeGate(<their live ids>)`, since neither carries a
-  scope of its own. A live row with no metadata row at all is still surfaced
-  (first prompt in flight); that is safe because `claimScope` persists a
-  non-default scope BEFORE the session can enter either registry, and a gate
-  that cannot read the store hides the live rows rather than admitting them.
+  unacknowledged, so no consumer has to know that settlement has two halves. The
+  list is a DEFAULT PROJECTION in the `SessionScope` sense
+  ([Task-492](pa://task/492)): the store read carries `user` rows only, and both
+  live sources — the pi store's `listInfo()` here and `hub.ts`'s in-process SDK
+  overlay — are gated by `sessionStore.liveDefaultScopeGate(<their live ids>)`,
+  since neither carries a scope of its own. A live row with no metadata row at
+  all is still surfaced (first prompt in flight); that is safe because
+  `claimScope` persists a non-default scope BEFORE the session can enter either
+  registry, and a gate that cannot read the store hides the live rows rather
+  than admitting them.
 - `sessionActivity.ts` owns the Sessions-inbox lifecycle facts derived from the
   harness-neutral `sessionRuntime` event feed, installed ONCE at boot from
   `index.ts`: in-memory run start times (run state is never persisted), the
@@ -739,11 +734,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   when it lands: a completion or failure that arrived since the render is an
   event the user has not seen, so a stale settle records its acknowledgement and
   leaves the row visible. Only a server-side settlement — worktree removal, a
-  completed Workflow Run, subagent lifecycle inheritance, and the peers a
-  settled coordinator still owns — omits the revision and acknowledges the
-  current one: `sessionActivity.settleSessionWithPeers` folds the same projected
-  rows along the shared spawn forest (`spawnClusterMembers` minus the roles of
-  every working-set run, read from `workflowRuns.ts`), refuses with the shared
+  completed Workflow Run, and the peers a settled coordinator still owns — omits
+  the revision and acknowledges the current one:
+  `sessionActivity.settleSessionWithPeers` folds the same projected rows along
+  the shared spawn forest (`spawnClusterMembers` minus the roles of every
+  working-set run, read from `workflowRuns.ts`), refuses with the shared
   aggregate reason (`spawnClusterSettleBlockedReason`) before any write, and
   then writes coordinator and peers in ONE store transaction
   (`sessionStore.settleWithPeers`, all-or-nothing). A shelved coordinator-owned
@@ -1478,11 +1473,6 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   worker thread started on demand, ended when idle, one job at a time from a
   bounded queue, each job with a deadline and a per-pass limit. Synchronous
   worker start or dispatch failures fail their job without leaving the queue.
-- `subagentRegistry.ts` narrows durable thread and held-thread run projections
-  into bounded summaries, revision sidecars and keyed detail reads. `hub.ts`
-  coalesces the store's post-commit touched-id seam into registry events and
-  per-held-thread run events; `connection.ts` owns parent-authorized detail
-  topics, snapshots, digests and item fetches.
 - `backgroundWorkRegistry.ts` is the single narrowing boundary between
   `db/backgroundWorkStore.ts` rows and the `background` topic: PA identity,
   bounded state, frozen deadline, the host epoch's state, the bounded command

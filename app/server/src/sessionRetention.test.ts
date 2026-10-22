@@ -151,17 +151,6 @@ test("a session whose latest outcome is unacknowledged is not settled, however o
 test("every dynamic blocker the Settle action honours holds a session back", () => {
   const blocked: Array<[string, Partial<SessionListItem>]> = [
     ["running", { isStreaming: true }],
-    [
-      "delegating",
-      {
-        delegation: {
-          activeCount: 1,
-          startingCount: 0,
-          workingCount: 1,
-          awaitingParentCount: 0,
-        },
-      },
-    ],
     ["background", { backgroundActivity: backgroundActivity(1) }],
     [
       "retained-host",

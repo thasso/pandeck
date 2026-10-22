@@ -1102,18 +1102,8 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   testForgejoSettings: NONE,
   subscribe: validateTopics,
   unsubscribe: validateTopics,
-  subscribeSubagentThread: fields(
-    { threadId: STRING },
-    { limit: NUMBER, beforeSequence: NUMBER, digest: BOOLEAN },
-  ),
-  unsubscribeSubagentThread: fields({ threadId: STRING }),
   stopBackgroundWork: fields({ itemId: STRING, requestId: STRING }),
   stopAllBackgroundWork: fields({ ownerSessionId: STRING, requestId: STRING }),
-  getSubagentRunItems: fields({
-    threadId: STRING,
-    ids: STRING_ARRAY,
-    requestId: STRING,
-  }),
   refreshUsage: NONE,
   listTasks: fields({ request: OBJECT }),
   getStateItems: validateGetStateItems,

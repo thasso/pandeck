@@ -72,8 +72,6 @@ export interface Viewer {
    * correct: subscribing is what delivers the snapshot in the first place.
    */
   wantsTopic?(topic: BroadcastTopic): boolean;
-  /** Whether this viewer holds an authorized subagent thread detail topic. */
-  wantsSubagentThread?(threadId: string): boolean;
   /** Whether this viewer subscribed to this exact object's comment stream. */
   wantsComments?(target: import("@assistant/shared").CommentTarget): boolean;
   /** Whether this viewer is live-watching this worktree (`watchWorktree`). */

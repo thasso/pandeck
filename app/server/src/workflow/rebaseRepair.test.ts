@@ -17,7 +17,6 @@ const engine = await import("./engine.ts");
 const recipe = await import("./codeDeliveryRecipe.ts");
 const { finalizeRebaseRepair } = await import("./rebaseRepair.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
-const { subagentStore } = await import("../db/subagentStore.ts");
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(
@@ -194,12 +193,11 @@ test("a completed repair is refused while Git is still rebasing", async () => {
   await finalizeRebaseRepair(rig.run, rig.step, "failed");
 });
 
-test("a restart restores Git and fails an interrupted repair that still owed delegated work", async () => {
+test("a restart restores Git and fails an interrupted repair", async () => {
   // The repair branch of boot reconciliation restores Git FIRST and only then
-  // records the failure. A repair agent delegates like any other developer
-  // session, and the delegation invariant refused that completion — leaving the
-  // run active behind a repair step nothing could ever finish, with Git already
-  // restored and no record saying so.
+  // records the failure, so the run never sits active behind a repair step
+  // nothing could ever finish, with Git already restored and no record saying
+  // so.
   const rig = fixture("interrupted");
   const run = workflowStore.createRun({
     taskId: 400,
@@ -223,15 +221,9 @@ test("a restart restores Git and fails an interrupted repair that still owed del
     payload: rig.step.payload,
     actor: { kind: "user" },
   });
-  const parentSessionId = "repair-owing-session";
+  const parentSessionId = "repair-session";
   sessionStore.upsert({
     id: parentSessionId,
-    harness: "pi",
-    agentType: "developer",
-  });
-  sessionStore.upsert({
-    id: "repair-child-session",
-    scope: "subagent",
     harness: "pi",
     agentType: "developer",
   });
@@ -240,27 +232,6 @@ test("a restart restores Git and fails an interrupted repair that still owed del
     { kind: "session", id: parentSessionId },
     { kind: "user" },
   );
-  subagentStore.acceptInitial({
-    thread: {
-      parentSessionId,
-      sessionId: "repair-child-session",
-      profile: {
-        roleName: "implementer",
-        baseRole: "developer",
-        provider: "openai-codex",
-        modelId: "gpt-test",
-        credentialProfileId: "test-profile",
-        accountSource: "test",
-        defaultThinking: "high",
-        hardMaxThinking: "xhigh",
-        executionProfileId: "test-execution",
-        contractId: "implementation-result",
-        contractVersion: 1,
-      },
-    },
-    run: { initiatedBy: "agent", actualThinking: "high" },
-    parentLimit: 1,
-  });
   // The state a crash mid-repair leaves on disk.
   const rebase = spawnSync("git", ["rebase", "main"], {
     cwd: rig.feature,
@@ -287,20 +258,6 @@ test("a restart restores Git and fails an interrupted repair that still owed del
   });
   assert.match(failed.result?.summary ?? "", /restored/);
   assert.equal(workflowStore.getRun(run.id)?.lifecycle, "paused");
-  // The obligation is recorded rather than enforced against a dead turn.
-  assert.deepEqual(
-    workflowStore
-      .listEvents(run.id)
-      .flatMap((event) =>
-        event.stepId === repair.id &&
-        typeof event.detail === "object" &&
-        event.detail !== null &&
-        "abandonedDelegationObligation" in event.detail
-          ? [String(event.detail.abandonedDelegationObligation)]
-          : [],
-      ),
-    ["it still has active delegated work."],
-  );
 
   // And the run is actionable: Retry moves on through commit-sync.
   await engine.retryRun(run.id, { kind: "user" });
@@ -309,11 +266,7 @@ test("a restart restores Git and fails an interrupted repair that still owed del
     .find((step) => step.predecessorId === repair.id)!;
   assert.equal(successor.kind, "host-operation");
 
-  // The obligation outlives the run, and NOTHING in the run can clear it: the
-  // parent turn that would admit a delegated result is gone, and a managed
-  // worktree waits on the user. Refusing the terminal transition for it would
-  // refuse it after the merge was already observed, and every Resume would
-  // re-derive the same refusal — a run that finished but could never say so.
+  // The run can still finish once the user has seen it through.
   assert.equal(
     workflowStore.setRunLifecycle(run.id, "completed", {
       actor: { kind: "user" },

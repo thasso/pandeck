@@ -178,18 +178,6 @@ function allStatesFixture(
         ci: { state: "pending", total: 8 },
       }),
     }),
-    session(now, "delegating", "Running with subagents", {
-      agentType: "developer",
-      updatedAt: now - 30_000,
-      isStreaming: true,
-      runStartedAt: now - 4 * min,
-      delegation: {
-        activeCount: 3,
-        startingCount: 1,
-        workingCount: 2,
-        awaitingParentCount: 0,
-      },
-    }),
     quiet("background", "Idle, background shell running", {
       updatedAt: now - 2 * min,
       backgroundActivity: {

@@ -72,12 +72,12 @@ failure, and explicit recovery reads.
   `revision` from a persisted monotonic counter and schedules the broadcast.
   Bump and notification cannot diverge, and every write path — row updates,
   link-edge writes, comment-count changes — reports through this one seam.
-- The flush stays debounced and coalesces per object id. Tasks, Projects and
-  Subagents diff the current `{id → revision}` map against the last flushed map:
-  changed or new ids emit upserts (reading the current summary), ids absent from
-  the live projection emit deletes. Background work, whose history only grows,
-  reads the reported ids alone: a reported member upserts and a reported
-  non-member deletes (see its entry under the domains below).
+- The flush stays debounced and coalesces per object id. Tasks and Projects diff
+  the current `{id → revision}` map against the last flushed map: changed or new
+  ids emit upserts (reading the current summary), ids absent from the live
+  projection emit deletes. Background work, whose history only grows, reads the
+  reported ids alone: a reported member upserts and a reported non-member
+  deletes (see its entry under the domains below).
 - `seq` is an in-memory per-topic counter on the hub; the subscribe answer
   carries the current value, each batch increments it. It exists only to trip
   resync, so it does not survive restarts — a reconnect resubscribes and gets a
@@ -210,11 +210,6 @@ per-surface sub-tasks — no page invents its own delta format.
   open page re-reads it, keeping the old graph on screen; an answer older than a
   revision the tab already holds is shown and read again. A Task event never
   touches it.
-- Subagents: canonical durable thread registry summaries, with revisions in
-  event sidecars; an authorized connection may hold one or more thread-detail
-  topics, each with a bounded snapshot/digest/item read and its own
-  object-addressed run-event sequence. Assignment/result bodies and transcripts
-  never ride either registry payload.
 - Background work: canonical durable session-owned work items on the
   `background` topic, snapshot-plus-revision-sidecar on subscribe and revisioned
   upserts/deletes on every mutation. A touched Claude host epoch fans out to the

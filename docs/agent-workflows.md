@@ -417,9 +417,10 @@ the outcome:
   reminded request's causal chain and spends no hop itself, so it cannot carry a
   loop past the hop limit.
 
-- **Subagents** ([Task-457](pa://task/457)) are PA-owned delegates with their
-  own registry and lifecycle. Neither lane above may import that domain, and a
-  spawned peer never acquires its semantics.
+- **Subagents** means only the Claude SDK's native subagents
+  ([glossary](glossary.md)). The PA-owned subagent registry
+  ([Task-457](pa://task/457)) is retired; peer sessions replaced it, and neither
+  lane above may import what remains of that domain.
 
 ## Foundation invariants
 

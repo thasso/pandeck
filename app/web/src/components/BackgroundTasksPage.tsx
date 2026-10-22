@@ -53,8 +53,8 @@ export interface BackgroundTasksPageProps {
  * active and recent item across every session, filtered and paged, each row
  * linking back to the session that owns it, with Stop and per-owner Stop-all.
  * @useWhen The `/background-tasks` route is open.
- * @avoidWhen Listing delegated agents — those are subagent threads and stay
- * their own surface — or showing one session's work inside its own inspector.
+ * @avoidWhen Listing peer sessions — those are sessions in the inbox — or
+ * showing one session's work inside its own inspector.
  * @intent A human can find and stop running work WITHOUT opening the session
  * that started it. Nothing here is lifecycle authority: filtering and paging are
  * views over the authoritative rows, Stop calls the server's domain service, and

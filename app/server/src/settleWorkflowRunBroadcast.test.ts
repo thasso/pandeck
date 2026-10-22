@@ -26,7 +26,7 @@ const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const workflowStore = await import("./db/workflowStore.ts");
-const { subagentStore } = await import("./db/subagentStore.ts");
+const { peerPromptStore } = await import("./db/peerPromptStore.ts");
 const { CODE_DELIVERY_RECIPE_ID, CODE_DELIVERY_RECIPE_VERSION } =
   await import("./workflow/codeDeliveryRecipe.ts");
 
@@ -214,37 +214,10 @@ test("a role that cannot be put down refuses the whole Settle, before anything i
   const runId = staffedRun({ coordinator, implementer });
   workflowStore.setRunLifecycle(runId, "completed", { actor: system });
   sessionStore.recordSessionOutcome(coordinator, "completed");
-  // The implementer still holds active delegated work — one of the durable
+  // A peer send of the implementer's hit the hop limit — one of the durable
   // reasons the shared session predicate refuses a settle.
-  const child = `${implementer}-child`;
-  sessionStore.upsert({
-    id: child,
-    scope: "subagent",
-    harness: "pi",
-    agentType: "developer",
-  });
-  subagentStore.acceptInitial({
-    thread: {
-      parentSessionId: implementer,
-      sessionId: child,
-      profile: {
-        roleName: "implementer",
-        baseRole: "developer",
-        provider: "openai-codex",
-        modelId: "gpt-5.6",
-        credentialProfileId: "test-profile",
-        accountSource: "test",
-        defaultThinking: "high",
-        hardMaxThinking: "xhigh",
-        executionProfileId: "test-execution",
-        contractId: "implementation-result",
-        contractVersion: 1,
-      },
-      linkage: { worktreeId: `managed-${runId}`, worktreeRelation: "managed" },
-    },
-    run: { initiatedBy: "agent", actualThinking: "high" },
-    parentLimit: 1,
-  });
+  const chainId = peerPromptStore.createChain(`settle-chain-${runId}`);
+  assert.equal(peerPromptStore.recordHopRefusal(implementer, chainId, 3), true);
 
   const clicked: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(clicked));
@@ -259,7 +232,7 @@ test("a role that cannot be put down refuses the whole Settle, before anything i
     assert.ok(error, "the settle was refused");
     assert.equal(
       error.message,
-      "Failed to settle workflow run: it still has active delegated work.",
+      "Failed to settle workflow run: a peer send reached the hop limit; send a message to reset its chain.",
       "in the role's own shared wording, the same the item disables Settle with",
     );
     assert.equal(

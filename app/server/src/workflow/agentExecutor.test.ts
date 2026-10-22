@@ -32,7 +32,6 @@ process.env.DATA_DIR = join(tmp, "data");
 const store = await import("../db/workflowStore.ts");
 const { ASSESSMENT_FINDINGS_MAX_CHARS, ASSESSMENT_FINDINGS_MAX_COUNT } =
   await import("@assistant/shared");
-const { subagentStore } = await import("../db/subagentStore.ts");
 const worktrees = await import("../db/worktreeStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { deriveTitle, SESSION_TITLE_MAX_CHARS } = await import("../sessions.ts");
@@ -974,65 +973,32 @@ test.each([
   },
 );
 
-test("a prompt failure still ends and announces the run when the session owes delegated work", async () => {
-  // The delegation invariant refuses to complete a step whose session still
-  // owns delegated work — and the doc blesses users picking up role sessions,
-  // so a session that has already run a step can take on a child and then meet
-  // a later assignment's prompt failure. Both the strict attempt and the
-  // fallback used to throw, leaving the step RUNNING on an ACTIVE run with
-  // nothing to pause it: a silent stall until a restart repaired it. The
-  // fallback records the failure AND finishes the job — deriving the pause and
-  // telling the card — or it has only made the stall quieter.
+test("a late prompt failure on a reused role session still ends and announces the run", async () => {
+  // A session that has already run a step can meet a later assignment's
+  // prompt failure. The failure path records the failure AND finishes the job
+  // — deriving the pause and telling the card — rather than leaving the step
+  // RUNNING on an ACTIVE run with nothing to pause it.
   const { run } = createRun();
-  const owing = "pi-owing";
+  const reused = "pi-reused";
 
   // A first assignment this session completed: that is what makes it a durable
-  // workflow executor, and only then may it own delegated work.
+  // workflow executor.
   const first = appendAgent(run.id, {
     role: "implementer",
     objective: "implement",
     resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
   });
   sessionStore.upsert({
-    id: owing,
+    id: reused,
     scope: "internal",
     harness: "pi",
     agentType: "developer",
   });
-  store.startStep(first.id, { kind: "session", id: owing }, ACTOR);
+  store.startStep(first.id, { kind: "session", id: reused }, ACTOR);
   store.completeStep(first.id, {
     status: "completed",
     result: { status: "completed", summary: "built it" },
     actor: ACTOR,
-  });
-
-  // Then it takes on a child — the user's delegation, outliving this turn.
-  sessionStore.upsert({
-    id: `${owing}-child`,
-    scope: "subagent",
-    harness: "pi",
-    agentType: "developer",
-  });
-  subagentStore.acceptInitial({
-    thread: {
-      parentSessionId: owing,
-      sessionId: `${owing}-child`,
-      profile: {
-        roleName: "implementer",
-        baseRole: "developer",
-        provider: "openai-codex",
-        modelId: "gpt-test",
-        credentialProfileId: "test-profile",
-        accountSource: "test",
-        defaultThinking: "high",
-        hardMaxThinking: "xhigh",
-        executionProfileId: "test-execution",
-        contractId: "implementation-result",
-        contractVersion: 1,
-      },
-    },
-    run: { initiatedBy: "agent", actualThinking: "high" },
-    parentLimit: 1,
   });
 
   // The next assignment reuses that same role session, and its prompt fails.
@@ -1041,7 +1007,7 @@ test("a prompt failure still ends and announces the run when the session owes de
     objective: "implement",
     resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
   });
-  available.add(owing);
+  available.add(reused);
   const base = deps();
   executors.registerWorkflowAgentExecutor(
     agentExecutor.createWorkflowAgentExecutor({
@@ -1071,25 +1037,10 @@ test("a prompt failure still ends and announces the run when the session owes de
   assert.equal(failed.status, "failed", "the step ended rather than hanging");
   assert.equal(
     (failed.executor as { id: string }).id,
-    owing,
-    "and it really was the session owing delegated work",
+    reused,
+    "and it really was the reused role session",
   );
   assert.match(failed.result?.summary ?? "", /provider dropped the turn/);
-  // The obligation is recorded on the step, not enforced against a dead turn.
-  assert.match(
-    store
-      .listEvents(run.id)
-      .flatMap((event) =>
-        event.stepId === failed.id &&
-        typeof event.detail === "object" &&
-        event.detail !== null &&
-        "abandonedDelegationObligation" in event.detail
-          ? [String(event.detail.abandonedDelegationObligation)]
-          : [],
-      )
-      .join(),
-    /active delegated work/,
-  );
   // And the run was advanced: the recipe derived its pause from the failed
   // tail rather than the run sitting active with nobody told.
   assert.equal(

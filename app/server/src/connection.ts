@@ -146,7 +146,6 @@ import { liveUserSession } from "./delegationFailureNotice.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import { delegationFailureNoticeStore } from "./db/delegationFailureNoticeStore.ts";
 import { getRun as getWorkflowRun } from "./db/workflowStore.ts";
-import { subagentStore } from "./db/subagentStore.ts";
 import {
   BackgroundWorkValidationError,
   backgroundWorkStore,
@@ -158,13 +157,6 @@ import {
   stopBackgroundWorkForHuman,
 } from "./backgroundWorkHumanStop.ts";
 import { backgroundCompletionTurns } from "./backgroundWork/completionDelivery.ts";
-import {
-  subagentRunRevisionDigest,
-  subagentRunStateItems,
-  subagentThreadRunDetail,
-  subagentThreadRevisionDigest,
-  subagentThreadStateItems,
-} from "./subagentRegistry.ts";
 import { resolveSessionAccount } from "./sessionAccount.ts";
 import { credentialProfileById } from "./credentialProfiles.ts";
 import { revalidateUsage, usageIndicators } from "./usageCache.ts";
@@ -571,8 +563,6 @@ export class Connection implements Viewer {
    * at all (see `BroadcastTopic`).
    */
   private readonly topics = new Set<BroadcastTopic>();
-  /** Authorized run-detail topics held by this connection. */
-  private readonly heldSubagentThreads = new Set<string>();
   /** Worktrees this connection is live-watching (refcounted in the watcher). */
   private readonly watchedWorktrees = new Set<string>();
   /**
@@ -614,10 +604,6 @@ export class Connection implements Viewer {
 
   wantsTopic(topic: BroadcastTopic): boolean {
     return this.topics.has(topic);
-  }
-
-  wantsSubagentThread(threadId: string): boolean {
-    return this.heldSubagentThreads.has(threadId);
   }
 
   wantsComments(target: CommentTarget): boolean {
@@ -1167,19 +1153,6 @@ export class Connection implements Viewer {
         return this.onStopBackgroundWork(msg.itemId, msg.requestId);
       case "stopAllBackgroundWork":
         return this.onStopAllBackgroundWork(msg.ownerSessionId, msg.requestId);
-      case "subscribeSubagentThread":
-        return this.onSubscribeSubagentThread(
-          msg.threadId,
-          msg.limit,
-          msg.beforeSequence,
-          msg.digest,
-        );
-      case "unsubscribeSubagentThread":
-        this.heldSubagentThreads.delete(msg.threadId);
-        hub.releaseSubagentRunTopic(msg.threadId);
-        return;
-      case "getSubagentRunItems":
-        return this.onGetSubagentRunItems(msg.threadId, msg.ids, msg.requestId);
       case "unsubscribe": {
         for (const topic of msg.topics) this.topics.delete(topic);
         return;
@@ -1837,32 +1810,9 @@ export class Connection implements Viewer {
         }
       }
       if (topic === "initiatives") this.onSubscribeInitiatives(digestTopics);
-      if (topic === "subagents") {
-        // The registry is deliberately snapshot-only until a consumer needs
-        // digest catch-up. Held run detail has its own digest-capable topic.
-        const entries = subagentThreadRevisionDigest();
-        const index = new Map(
-          entries.map((entry) => [
-            entry.id,
-            { revision: entry.revision, live: true },
-          ]),
-        );
-        this.send({
-          type: "subagentThreadList",
-          threads: subagentThreadStateItems(
-            entries.map((entry) => entry.id),
-            index,
-          )
-            .filter((event) => event.kind === "upsert")
-            .map((event) => event.item),
-          seq: hub.subagentEventSeq(),
-          revisions: entries,
-        });
-      }
       if (topic === "background") {
-        // Snapshot-only for now, exactly like the subagent registry: the
-        // sidecar revisions still seed the client's digest, so adopting one
-        // later needs no wire change. The snapshot is a BOUNDED window over a
+        // Snapshot-only for now: the sidecar revisions still seed the
+        // client's digest, so adopting one later needs no wire change. The snapshot is a BOUNDED window over a
         // registry that keeps its terminal history, so the answer's size is a
         // constant rather than a function of this install's age.
         const snapshot = backgroundWorkSnapshot();
@@ -1986,81 +1936,6 @@ export class Connection implements Viewer {
         message: `Failed to fetch ${label} state items: ${errorText(err)}`,
       });
     }
-  }
-
-  private canHoldSubagentThread(threadId: string): boolean {
-    if (!isSafeId(threadId)) return false;
-    const thread = subagentStore.getThread(threadId);
-    // Interim authorization until Task-477 provides the shared policy seam:
-    // require the connection to view the owning parent session. Task-460's
-    // registry UI will replace this local gate with that policy.
-    return Boolean(thread && this.viewing?.id === thread.parentSessionId);
-  }
-
-  private onSubscribeSubagentThread(
-    threadId: string,
-    limit?: number,
-    beforeSequence?: number,
-    digest = false,
-  ): void {
-    if (!this.canHoldSubagentThread(threadId)) {
-      this.send({ type: "error", message: "Unauthorized subagent thread" });
-      return;
-    }
-    this.heldSubagentThreads.add(threadId);
-    if (digest) {
-      this.send({
-        type: "subagentRunDigest",
-        threadId,
-        seq: hub.subagentRunEventSeq(threadId),
-        entries: subagentRunRevisionDigest(threadId),
-      });
-      return;
-    }
-    const detail = subagentThreadRunDetail(threadId, {
-      ...(limit !== undefined ? { limit } : {}),
-      ...(beforeSequence !== undefined ? { beforeSequence } : {}),
-    });
-    if (!detail) {
-      this.heldSubagentThreads.delete(threadId);
-      hub.releaseSubagentRunTopic(threadId);
-      this.send({ type: "error", message: "Subagent thread not found" });
-      return;
-    }
-    this.send({
-      type: "subagentThreadRunSnapshot",
-      threadId,
-      detail,
-      seq: hub.subagentRunEventSeq(threadId),
-      revisions: subagentRunRevisionDigest(threadId),
-    });
-  }
-
-  private onGetSubagentRunItems(
-    threadId: string,
-    ids: string[],
-    requestId: string,
-  ): void {
-    if (
-      !this.canHoldSubagentThread(threadId) ||
-      !this.heldSubagentThreads.has(threadId)
-    ) {
-      this.send({
-        type: "error",
-        requestId,
-        message: "Unauthorized subagent thread",
-      });
-      return;
-    }
-    if (ids.length > MAX_STATE_ITEM_IDS || ids.some((id) => !isSafeId(id))) {
-      this.rejectBadId();
-      return;
-    }
-    const events = subagentRunStateItems(ids).filter((event) => {
-      const run = subagentStore.getRun(event.id, true);
-      return run?.threadId === threadId;
-    });
-    this.send({ type: "subagentRunItems", threadId, requestId, events });
   }
 
   private onMemoryList(requestId: string, filter: unknown): void {
@@ -5536,10 +5411,6 @@ export class Connection implements Viewer {
     if (superseded) this.claimViewRequest();
     if (sessionId !== undefined && this.viewing?.sessionId !== sessionId)
       return superseded;
-    for (const threadId of this.heldSubagentThreads) {
-      this.heldSubagentThreads.delete(threadId);
-      hub.releaseSubagentRunTopic(threadId);
-    }
     this.clearReadDwell();
     this.detachRuntimeView();
     this.viewing?.removeViewer(this);

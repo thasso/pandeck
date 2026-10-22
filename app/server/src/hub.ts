@@ -6,7 +6,6 @@ import type {
   StateEvent,
   ProjectSummary,
   TaskSummary,
-  SubagentThreadSummary,
 } from "@assistant/shared";
 import { isCodingAgentType } from "@assistant/shared";
 import {
@@ -72,19 +71,12 @@ import {
 import { errorText } from "./errors.ts";
 import { permanentAssistantStore } from "./db/permanentAssistantStore.ts";
 import { permanentAssistantUnread } from "./permanentAssistantUnread.ts";
-import { setSubagentStateChangeNotifier } from "./db/subagentStore.ts";
 import { setBackgroundWorkStateChangeNotifier } from "./db/backgroundWorkStore.ts";
 import {
   backgroundWorkRevisionIndex,
   backgroundWorkStateItems,
   BACKGROUND_WORK_SNAPSHOT_MAX,
 } from "./backgroundWorkRegistry.ts";
-import {
-  subagentRunStateItems,
-  subagentRunThreadId,
-  subagentThreadRevisionIndex,
-  subagentThreadStateItems,
-} from "./subagentRegistry.ts";
 
 /**
  * Grace period between announcing a dev reload and exiting. The run has already
@@ -105,7 +97,6 @@ const PROJECT_BROADCAST_DEBOUNCE_MS = 25;
 // The Task window: a Task write reports its Initiatives in the same notify, so
 // equal windows flush both topics together.
 const INITIATIVE_BROADCAST_DEBOUNCE_MS = TASK_BROADCAST_DEBOUNCE_MS;
-const SUBAGENT_BROADCAST_DEBOUNCE_MS = 25;
 const BACKGROUND_WORK_BROADCAST_DEBOUNCE_MS = 25;
 /**
  * Minimum gap between consecutive list rebuilds while invalidations keep
@@ -246,14 +237,7 @@ class SessionHub {
   private lastFlushedInitiativeRevisions: Map<string, number> | undefined;
   private pendingInitiativeIds = new Set<string>();
   private initiativesEventSeq = 0;
-  /** The canonical thread registry is event-only after subscribe/resync. */
-  private subagentBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  private lastFlushedSubagentRevisions: Map<string, number> | undefined;
-  private pendingSubagentIds = new Set<string>();
-  private pendingSubagentRunIds = new Set<string>();
-  private subagentRegistryEventSeq = 0;
-  private subagentRunTopicSeq = new Map<string, number>();
-  /** Background work is event-only after subscribe/resync, like the registry above. */
+  /** Background work is event-only after subscribe/resync. */
   private backgroundBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingBackgroundIds = new Set<string>();
   private backgroundEventSequence = 0;
@@ -282,13 +266,6 @@ class SessionHub {
     subscribeInitiativeChanges((ids) => {
       for (const id of ids) this.pendingInitiativeIds.add(id);
       this.broadcastInitiatives();
-    });
-    setSubagentStateChangeNotifier((change) => {
-      for (const id of change.threadIds) this.pendingSubagentIds.add(id);
-      for (const id of change.runIds) this.pendingSubagentRunIds.add(id);
-      this.broadcastSubagents();
-      // A thread/run transition changes the parent session's registry relation.
-      if (change.parentSessionIds.length) void this.broadcastSessions();
     });
     setBackgroundWorkStateChangeNotifier((change) => {
       for (const id of change.itemIds) this.pendingBackgroundIds.add(id);
@@ -642,14 +619,6 @@ class SessionHub {
     return this.initiativesEventSeq;
   }
 
-  subagentEventSeq(): number {
-    return this.subagentRegistryEventSeq;
-  }
-
-  subagentRunEventSeq(threadId: string): number {
-    return this.subagentRunTopicSeq.get(threadId) ?? 0;
-  }
-
   backgroundEventSeq(): number {
     return this.backgroundEventSequence;
   }
@@ -708,107 +677,6 @@ class SessionHub {
         seq: this.backgroundEventSequence,
         events: events.slice(start, start + BACKGROUND_WORK_SNAPSHOT_MAX),
       });
-    }
-  }
-
-  releaseSubagentRunTopic(threadId: string): void {
-    if (
-      ![...this.connections].some((viewer) =>
-        viewer.wantsSubagentThread?.(threadId),
-      )
-    )
-      this.subagentRunTopicSeq.delete(threadId);
-  }
-
-  /** Coalesce post-commit notifications; no mutation sends a registry snapshot. */
-  broadcastSubagents(): void {
-    if (this.subagentBroadcastTimer) clearTimeout(this.subagentBroadcastTimer);
-    this.subagentBroadcastTimer = setTimeout(() => {
-      this.subagentBroadcastTimer = undefined;
-      this.flushSubagentBroadcast();
-    }, SUBAGENT_BROADCAST_DEBOUNCE_MS);
-  }
-
-  private flushSubagentBroadcast(): void {
-    const index = subagentThreadRevisionIndex();
-    const pending = this.pendingSubagentIds;
-    this.pendingSubagentIds = new Set();
-    // Match Tasks/Projects: a pending live row is omitted from the cold
-    // baseline so it is upserted; a pending tombstone remains in the baseline
-    // so subscribers holding that row receive its delete. Non-members that were
-    // not touched in this burst never enter the baseline.
-    const baseline =
-      this.lastFlushedSubagentRevisions ?? seedTaskBaseline(index, pending);
-    const events: StateEvent<SubagentThreadSummary>[] = [];
-    const flushed = new Map<string, number>();
-    for (const [id, entry] of index) {
-      if (!entry.live) continue;
-      if (baseline.get(id) === entry.revision) {
-        flushed.set(id, entry.revision);
-        continue;
-      }
-      const event = subagentThreadStateItems([id], index)[0];
-      if (!event || event.kind !== "upsert") {
-        // Keep the old revision so a transient projection read failure retries
-        // on the next flush instead of being mistaken for a delete below.
-        console.warn(
-          `[subagents] no summary for live thread ${id}; event deferred.`,
-        );
-        const previous = baseline.get(id);
-        if (previous !== undefined) flushed.set(id, previous);
-        continue;
-      }
-      flushed.set(id, entry.revision);
-      events.push(event);
-    }
-    for (const [id, revision] of baseline) {
-      if (flushed.has(id)) continue;
-      events.push({
-        kind: "delete",
-        id,
-        revision: index.get(id)?.revision ?? revision + 1,
-      });
-    }
-    this.lastFlushedSubagentRevisions = flushed;
-    if (events.length) {
-      this.subagentRegistryEventSeq += 1;
-      this.broadcastTopic("subagents", {
-        type: "stateEvents",
-        topic: "subagents",
-        seq: this.subagentRegistryEventSeq,
-        events,
-      });
-    }
-
-    const runIds = this.pendingSubagentRunIds;
-    this.pendingSubagentRunIds = new Set();
-    const runEventsByThread = new Map<
-      string,
-      StateEvent<import("@assistant/shared").SubagentRunSummary>[]
-    >();
-    for (const id of runIds) {
-      const threadId = subagentRunThreadId(id);
-      if (!threadId) continue;
-      const event = subagentRunStateItems([id])[0];
-      if (!event) continue;
-      const eventsForThread = runEventsByThread.get(threadId) ?? [];
-      eventsForThread.push(event);
-      runEventsByThread.set(threadId, eventsForThread);
-    }
-    for (const [threadId, runEvents] of runEventsByThread) {
-      const viewers = [...this.connections].filter((viewer) =>
-        viewer.wantsSubagentThread?.(threadId),
-      );
-      if (!viewers.length) continue;
-      const seq = (this.subagentRunTopicSeq.get(threadId) ?? 0) + 1;
-      this.subagentRunTopicSeq.set(threadId, seq);
-      const message = {
-        type: "subagentRunEvents" as const,
-        threadId,
-        seq,
-        events: runEvents,
-      };
-      for (const viewer of viewers) viewer.send(message);
     }
   }
 
@@ -944,11 +812,6 @@ class SessionHub {
       clearTimeout(this.initiativesBroadcastTimer);
       this.initiativesBroadcastTimer = undefined;
       this.flushInitiativeBroadcast();
-    }
-    if (this.subagentBroadcastTimer) {
-      clearTimeout(this.subagentBroadcastTimer);
-      this.subagentBroadcastTimer = undefined;
-      this.flushSubagentBroadcast();
     }
     if (this.backgroundBroadcastTimer) {
       clearTimeout(this.backgroundBroadcastTimer);

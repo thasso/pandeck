@@ -2408,29 +2408,14 @@ function expireUnresolved(
   }
 }
 
-/**
- * Prune old terminal rows, except identities retained by a live subagent run.
- * The run is the result envelope's retention owner until Task-490 deletion.
- */
+/** Prune terminal rows last updated before the cutoff. */
 function pruneTerminal(cutoffMs: number): number {
   const placeholders = TERMINAL_STATUSES.map(() => "?").join(", ");
   return Number(
     getDb()
       .prepare(
         `DELETE FROM peer_prompts
-         WHERE status IN (${placeholders}) AND updated_at_ms < ?
-           AND id NOT IN (
-             SELECT triggering_peer_prompt_id FROM subagent_runs
-               WHERE is_member = 1 AND triggering_peer_prompt_id IS NOT NULL
-             UNION SELECT optional_result_correlation_id FROM subagent_runs
-               WHERE is_member = 1 AND optional_result_correlation_id IS NOT NULL
-             UNION SELECT required_response_message_id FROM subagent_runs
-               WHERE is_member = 1 AND required_response_message_id IS NOT NULL
-             UNION SELECT required_response_answer_message_id FROM subagent_runs
-               WHERE is_member = 1 AND required_response_answer_message_id IS NOT NULL
-             UNION SELECT result_message_id FROM subagent_runs
-               WHERE is_member = 1 AND result_message_id IS NOT NULL
-           )`,
+         WHERE status IN (${placeholders}) AND updated_at_ms < ?`,
       )
       .run(...(TERMINAL_STATUSES as never[]), cutoffMs).changes,
   );

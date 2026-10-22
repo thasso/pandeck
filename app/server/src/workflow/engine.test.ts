@@ -26,7 +26,6 @@ const contracts = await import("./resultContracts.ts");
 const recipe = await import("./codeDeliveryRecipe.ts");
 const cards = await import("./cardProjection.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
-const { subagentStore } = await import("../db/subagentStore.ts");
 const { closeDb } = await import("../db/index.ts");
 
 afterAll(() => {
@@ -1161,120 +1160,11 @@ test("a restart fails the running step rather than waiting for a dead turn", asy
   assert.deepEqual(successor.payload, implement.payload);
 });
 
-/**
- * A workflow agent step interrupted mid-turn, whose session still owes
- * delegated work. Returns what boot left behind for the caller to judge.
- */
-async function abandonedTurnOwing(
-  owed: "active-run" | "managed-worktree",
-): Promise<{ runId: number; stepId: number }> {
-  // Its own parent session: the obligation seeded here outlives the store
-  // reset between tests, and the shared implementer id would carry it along.
-  const parentSessionId = `sess-owing-${owed}`;
-  agent.sessionFor = () => parentSessionId;
-  ensureSession(parentSessionId);
-  const run = newRun();
-  await engine.advanceRun(run.id);
-  const implement = lastStep(run.id);
-  const childSessionId = `sess-child-${run.id}`;
-  sessionStore.upsert({
-    id: childSessionId,
-    scope: "subagent",
-    harness: "pi",
-    agentType: "developer",
-  });
-  const delegated = subagentStore.acceptInitial({
-    thread: {
-      parentSessionId,
-      sessionId: childSessionId,
-      profile: {
-        roleName: "implementer",
-        baseRole: "developer",
-        provider: "openai-codex",
-        modelId: "gpt-test",
-        credentialProfileId: "test-profile",
-        accountSource: "test",
-        defaultThinking: "high",
-        hardMaxThinking: "xhigh",
-        executionProfileId: "test-execution",
-        contractId: "implementation-result",
-        contractVersion: 1,
-      },
-      linkage: { worktreeId: `managed-${run.id}`, worktreeRelation: "managed" },
-    },
-    run: { initiatedBy: "agent", actualThinking: "high" },
-    parentLimit: 1,
-  });
-  // The worktree case has to get PAST the active run to strand on the worktree
-  // the child still owns, so neither obligation family hides the other.
-  if (owed === "managed-worktree") {
-    subagentStore.recordQuiescence(delegated.run.id, "crash");
-    subagentStore.finalizeRun({
-      runId: delegated.run.id,
-      status: "unreported",
-    });
-  }
-
-  engine.resetWorkflowEngineForTests();
-  agent.dispatched = [];
-  engine.setSessionTurnLivenessForTests(() => false);
-  await engine.reconcileWorkflowRunsOnBoot();
-  return { runId: run.id, stepId: implement.id };
-}
-
-/** The obligation boot wrote down instead of enforcing, for one step. */
-function abandonedObligationOf(runId: number, stepId: number): string[] {
-  return store
-    .listEvents(runId)
-    .flatMap((event) =>
-      event.stepId === stepId &&
-      typeof event.detail === "object" &&
-      event.detail !== null &&
-      "abandonedDelegationObligation" in event.detail
-        ? [String(event.detail.abandonedDelegationObligation)]
-        : [],
-    );
-}
-
-// The delegation invariant refuses to let a session finish its step while it
-// owns delegated work. A dead turn can never clear such an obligation, so
-// enforcing it at boot left the step RUNNING forever behind a turn nobody could
-// submit for: the recipe reported it as executing, Resume did not apply, and
-// Retry had no failed tail to succeed.
-test("a dead turn that still owed an active child fails, and says what it owed", async () => {
-  const { runId, stepId } = await abandonedTurnOwing("active-run");
-
-  assert.equal(store.getStep(stepId)!.status, "failed", "the tail is terminal");
-  assert.equal(store.getRun(runId)!.lifecycle, "paused");
-  // The obligation is recorded, not dropped: the delegated work is still there
-  // to settle, this step simply stopped waiting for it.
-  assert.deepEqual(abandonedObligationOf(runId, stepId), [
-    "it still has active delegated work.",
-  ]);
-
-  // And the run is actionable again: Retry appends the same assignment.
-  await engine.retryRun(runId, USER);
-  assert.notEqual(lastStep(runId).id, stepId, "Retry applies");
-});
-
-test("a dead turn that still owned a managed delegated worktree fails too", async () => {
-  const { runId, stepId } = await abandonedTurnOwing("managed-worktree");
-
-  assert.equal(store.getStep(stepId)!.status, "failed");
-  assert.equal(store.getRun(runId)!.lifecycle, "paused");
-  assert.deepEqual(abandonedObligationOf(runId, stepId), [
-    "it still owns a managed delegated worktree.",
-  ]);
-  await engine.retryRun(runId, USER);
-  assert.notEqual(lastStep(runId).id, stepId, "Retry applies");
-});
-
 test.each(["completed", "blocked"] as const)(
   "abandoning a turn may not end a step as %s",
   (status) => {
     // The escape hatch exists so a turn nobody can submit for cannot strand a
-    // run — not so a session can claim an outcome while children it owns are
-    // still working. `failed` (boot found the turn dead) and `cancelled` (the
+    // run — not so a session can claim an outcome it never reported. `failed` (boot found the turn dead) and `cancelled` (the
     // user stopped the run and its turn was aborted) are the two ways a turn is
     // gone; `completed` and `blocked` report an outcome for one that is not.
     const run = newRun();
@@ -1302,10 +1192,8 @@ test.each(["completed", "blocked"] as const)(
 );
 
 test("a cancelled turn may be abandoned, so cancelling never gets stuck", () => {
-  // A user cancellation aborts the turn and then settles its step. If that
-  // settlement were held to an obligation the aborted turn can no longer clear,
-  // the run would stay CANCELLING until a restart — where boot settles it by
-  // bypassing the very check the live path could not.
+  // A user cancellation aborts the turn and then settles its step as an
+  // abandoned turn, so the run never stays CANCELLING until a restart.
   const run = newRun();
   const step = store.appendStep({
     runId: run.id,
