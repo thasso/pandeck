@@ -373,6 +373,73 @@ describe("the replica data half: digests, item answers and lost baselines", () =
   });
 });
 
+describe("the replica data half: the held replica and settles", () => {
+  const seeded = (rows: Row[]): FakeState => ({
+    ...applyTopicMessage(digestFake, initial(), list(rows)),
+    safe: true,
+  });
+
+  it("hands each adopt hook the replica held before the write", () => {
+    const seen: Array<[string, Row[]]> = [];
+    const watching: TopicDescriptor<FakeState, Row, FakeList> = {
+      ...digestFake,
+      adoptSnapshot: (state, _message, held) => {
+        seen.push(["snapshot", held.items]);
+        return state;
+      },
+      afterEvents: (state, _applied, held) => {
+        seen.push(["events", held.items]);
+        return state;
+      },
+      digest: {
+        ...digestFake.digest!,
+        adoptDigest: (state, _message, _changedIds, held) => {
+          seen.push(["digest", held.items]);
+          return state;
+        },
+      },
+    };
+    const start = seeded([row("a"), row("b")]);
+    const results = [
+      applyTopicMessage(watching, start, list([row("c")])),
+      applyTopicMessage(watching, start, batch([upsert(row("c"), 2)])),
+      applyTopicMessage(watching, start, digest([at("a", 1)])),
+    ];
+    expect(seen.map(([path]) => path)).toEqual([
+      "snapshot",
+      "events",
+      "digest",
+    ]);
+    for (const [index, [, items]] of seen.entries()) {
+      expect(items).toBe(start.rows);
+      expect(results[index]!.rows).not.toBe(start.rows);
+    }
+  });
+
+  it("routes a settled input to the topic's settle hook alone", () => {
+    const settle = vi.fn((state: FakeState, settled: { item: Row | null }) => ({
+      ...state,
+      rows: settled.item ? [settled.item] : [],
+    }));
+    const start = seeded([row("tmp")]);
+    const input = {
+      kind: "settled",
+      localId: "tmp",
+      id: "a",
+      item: row("a", "saved"),
+    } as const;
+    afterEventsSpy.mockClear();
+    const next = applyTopicMessage({ ...digestFake, settle }, start, input);
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(settle.mock.calls[0]![1]).toEqual(input);
+    expect(next).toBe(settle.mock.results[0]!.value);
+    // Revisions belong to events: nothing generic runs, and no sidecar moves.
+    expect(next.revs).toBe(start.revs);
+    expect(afterEventsSpy).not.toHaveBeenCalled();
+    expect(applyTopicMessage(digestFake, start, input)).toBe(start);
+  });
+});
+
 describe("the replica transport", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -381,7 +448,10 @@ describe("the replica transport", () => {
 
   const warnSpy = () => vi.spyOn(console, "warn").mockImplementation(() => {});
 
-  /** A transport over a fake topic, `usage` and two digest-capable topics. */
+  /**
+   * A transport over a fake topic, `usage` and three digest-capable topics;
+   * `tasks` reads its baseline from `flag`.
+   */
   function harness() {
     const log: string[] = [];
     const sent: ClientMessage[] = [];
@@ -389,6 +459,7 @@ describe("the replica transport", () => {
     const held = new Set<BroadcastTopic>([
       TOPIC,
       "usage",
+      "tasks",
       "projects",
       "initiatives",
     ]);
@@ -396,10 +467,14 @@ describe("the replica transport", () => {
       topics: {
         [TOPIC]: fake,
         usage: fake,
+        tasks: {
+          read: fake.read,
+          digest: { baseline: (state: FakeState) => state.flag },
+          resubscribeOnlyWhileHeld: true,
+        },
         projects: digestFake,
         initiatives: digestFake,
       },
-      taskBaseline: (state) => state.flag,
       send: (message) => {
         sent.push(message);
         log.push(`send ${message.type}`);
@@ -493,7 +568,8 @@ describe("the replica transport", () => {
       const { transport } = harness();
       expect(transport.owns(TOPIC)).toBe(true);
       expect(transport.owns("usage")).toBe(true);
-      expect(transport.owns("tasks")).toBe(false);
+      expect(transport.owns("tasks")).toBe(true);
+      expect(transport.owns("background")).toBe(false);
       transport.snapshotReceived(TOPIC, 1);
       transport.snapshotReceived("usage", 20);
       expect(transport.eventsReceived(batch([], 2, TOPIC))).toEqual([]);
@@ -754,6 +830,146 @@ describe("the replica transport", () => {
         type: "subscribe",
         topics: ["projects", "initiatives"],
         digests: ["initiatives"],
+      });
+    });
+  });
+
+  describe("the mutation resync", () => {
+    const tasksDigest = (
+      entries: StateDigestEntry[],
+      seq = 1,
+    ): StateDigestMessage<"tasks"> => ({
+      type: "stateDigest",
+      topic: "tasks",
+      seq,
+      entries,
+    });
+
+    it("sends the snapshot pair while held, silently, forgetting the ids", () => {
+      const warn = warnSpy();
+      const { transport, lost, log, sent } = harness();
+      expect(transport.resync("tasks", ["a"])).toEqual(pair("tasks"));
+      expect(lost).toEqual([["tasks", ["a"]]]);
+      expect(log).toEqual(["resubscribe tasks"]);
+      expect(sent).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("joins a pair still awaiting its answer, and still forgets the ids", () => {
+      const { transport, lost, log } = harness();
+      transport.resync("tasks", ["a"]);
+      expect(transport.resync("tasks", ["b"])).toEqual([]);
+      expect(lost).toEqual([
+        ["tasks", ["a"]],
+        ["tasks", ["b"]],
+      ]);
+      expect(log).toEqual(["resubscribe tasks"]);
+    });
+
+    it("sends a fresh pair once the awaited one was answered or dropped", () => {
+      warnSpy();
+      const { transport } = harness();
+      transport.resync("tasks", ["a"]);
+      transport.snapshotReceived("tasks", 1);
+      expect(transport.resync("tasks", ["a"])).toEqual(pair("tasks"));
+      transport.dropRequests();
+      expect(transport.resync("tasks", ["a"])).toEqual(pair("tasks"));
+    });
+
+    it("joins a gap's pair as well", () => {
+      warnSpy();
+      const { transport, lost } = harness();
+      transport.snapshotReceived("tasks", 1);
+      expect(transport.eventsReceived(batch([], 3, "tasks"))).toEqual(
+        pair("tasks"),
+      );
+      expect(transport.resync("tasks", ["a"])).toEqual([]);
+      expect(lost).toEqual([["tasks", ["a"]]]);
+    });
+
+    it("ends the wait on a digest too, which a resync's due snapshot never diffs", () => {
+      warnSpy();
+      const { transport } = harness();
+      const state = safe();
+      // A gap pair awaits its answer without making the topic due a snapshot.
+      transport.snapshotReceived("tasks", 1);
+      expect(transport.eventsReceived(batch([], 3, "tasks"))).toEqual(
+        pair("tasks"),
+      );
+      expect(
+        transport.digestReceived(tasksDigest([at("a", 1)], 4), state).apply,
+      ).toBe(true);
+      expect(transport.resync("tasks", ["a"])).toEqual(pair("tasks"));
+      // That resync made `tasks` due a snapshot: a digest answering it falls
+      // back with a pair of its own, which the next resync joins.
+      expect(
+        transport.digestReceived(tasksDigest([at("a", 1)], 5), state),
+      ).toEqual({ send: pair("tasks"), apply: false });
+      expect(transport.resync("tasks", ["a"])).toEqual([]);
+    });
+
+    it("sends nothing while unheld, leaving the topic due a snapshot", () => {
+      const { transport, lost, log, held } = harness();
+      const state = safe();
+      held.delete("tasks");
+      expect(transport.resync("tasks", ["a"])).toEqual([]);
+      expect(lost).toEqual([["tasks", ["a"]]]);
+      expect(log).toEqual([]);
+      expect(transport.subscribeRequest(["tasks"], state, new Set())).toEqual({
+        type: "subscribe",
+        topics: ["tasks"],
+      });
+      transport.snapshotReceived("tasks", 1);
+      expect(transport.subscribeRequest(["tasks"], state, new Set())).toEqual({
+        type: "subscribe",
+        topics: ["tasks"],
+        digests: ["tasks"],
+      });
+    });
+
+    it("forgets nothing for a mutation without ids", () => {
+      const { transport, lost } = harness();
+      expect(transport.resync("tasks", [])).toEqual(pair("tasks"));
+      expect(lost).toEqual([]);
+    });
+
+    it("releases only the wait when the awaited snapshot read fails", () => {
+      vi.useFakeTimers();
+      const warn = warnSpy();
+      const { transport, sent, lost, log } = harness();
+      const state = safe();
+      // Without a wait it is a no-op.
+      transport.snapshotFailed("projects");
+      expect(
+        transport.subscribeRequest(["projects"], state, new Set()),
+      ).toEqual({
+        type: "subscribe",
+        topics: ["projects"],
+        digests: ["projects"],
+      });
+
+      expect(transport.resync("tasks", ["a"])).toEqual(pair("tasks"));
+      lost.length = 0;
+      log.length = 0;
+      expect(transport.snapshotFailed("tasks")).toBeUndefined();
+      vi.advanceTimersByTime(STATE_ITEMS_TIMEOUT_MS + 1);
+      // No retry: nothing sent, resubscribed or forgotten, now or later.
+      expect(sent).toEqual([]);
+      expect(log).toEqual([]);
+      expect(lost).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+      // Still due a snapshot.
+      expect(transport.subscribeRequest(["tasks"], state, new Set())).toEqual({
+        type: "subscribe",
+        topics: ["tasks"],
+      });
+      // The next failure sends its own pair.
+      expect(transport.resync("tasks", ["b"])).toEqual(pair("tasks"));
+      transport.snapshotReceived("tasks", 1);
+      expect(transport.subscribeRequest(["tasks"], state, new Set())).toEqual({
+        type: "subscribe",
+        topics: ["tasks"],
+        digests: ["tasks"],
       });
     });
   });

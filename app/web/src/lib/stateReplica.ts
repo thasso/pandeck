@@ -48,14 +48,18 @@ interface ReplicaSnapshot<Item> {
 }
 
 /** What a topic that asks for digests adds: when it may, and its flags. */
-interface TopicDigest<State> {
+interface TopicDigest<State, Item extends { id: string }> {
   /** Whether the held objects are a baseline a digest may be diffed against. */
   baseline(state: State): boolean;
-  /** Topic fields for an applied digest, on the already pruned state. */
+  /**
+   * Topic fields for an applied digest, on the already pruned state; `held` is
+   * the replica before the prune.
+   */
   adoptDigest(
     state: State,
     message: StateDigestMessage,
     changedIds: readonly string[],
+    held: TopicReplica<Item>,
   ): State;
   /** Topic fields for a complete catch-up, after its events applied. */
   adoptItems(state: State): State;
@@ -84,14 +88,31 @@ export interface TopicDescriptor<
   ): ReplicaSnapshot<Item> | null;
   /** Where a member this replica has not held yet goes. */
   place(items: Item[], item: Item): Item[];
-  /** Topic-specific snapshot fields, applied to the already written state. */
-  adoptSnapshot?(state: State, message: Snapshot): State;
+  /**
+   * Topic-specific snapshot fields, applied to the already written state;
+   * `held` is the replica before the write.
+   */
+  adoptSnapshot?(
+    state: State,
+    message: Snapshot,
+    held: TopicReplica<Item>,
+  ): State;
   /**
    * Topic policy for the events that applied, in order, on the written state;
-   * not called when none applied.
+   * not called when none applied. `held` is the replica before the write.
    */
-  afterEvents?(state: State, applied: readonly StateEvent<Item>[]): State;
-  digest?: TopicDigest<State>;
+  afterEvents?(
+    state: State,
+    applied: readonly StateEvent<Item>[],
+    held: TopicReplica<Item>,
+  ): State;
+  digest?: TopicDigest<State, Item>;
+  /**
+   * Settles optimism the server never saw: a direct mutation reply pairs a
+   * browser-local id with the server's, which only the topic knows how to
+   * place. Revisions belong to events, so this never touches the sidecar.
+   */
+  settle?(state: State, settled: SettledInput<Item>): State;
   /**
    * The snapshot resubscribe is sent only while the client holds the topic, so
    * a dropped one is never revived. Without it, it is always sent.
@@ -100,9 +121,20 @@ export interface TopicDescriptor<
 }
 
 /**
+ * A direct mutation reply: the object `id` now is, and the browser-local row it
+ * replaces, if any. `item: null` means it is no row of this replica.
+ */
+interface SettledInput<Item> {
+  kind: "settled";
+  localId?: string;
+  id: string;
+  item: Item | null;
+}
+
+/**
  * The replica's own inputs beside the server messages, told apart by having no
- * `type`: an answered item fetch, and the objects whose held revision a failed
- * recovery can no longer vouch for.
+ * `type`: an answered item fetch, the objects whose held revision a failed
+ * recovery can no longer vouch for, and a settled mutation reply.
  */
 type ReplicaInput<Item> =
   | {
@@ -110,7 +142,8 @@ type ReplicaInput<Item> =
       purpose: RequestPurpose;
       events: readonly StateEvent<Item>[];
     }
-  | { kind: "baselineLost"; ids: readonly string[] };
+  | { kind: "baselineLost"; ids: readonly string[] }
+  | SettledInput<Item>;
 
 /**
  * A revision sidecar as a record, or `null` when it cannot be trusted: an empty
@@ -137,7 +170,7 @@ export function revisionSidecar(
  * The digest ids to fetch, in entry order: those not held, or held at another
  * revision. `null` when the digest itself cannot be trusted.
  */
-export function digestChanges(
+function digestChanges(
   held: {
     items: readonly { id: string }[];
     revisions: Readonly<Record<string, number>>;
@@ -159,7 +192,7 @@ export function digestChanges(
  * Held revisions survive for digest ids only and never advance to the digest's:
  * the ordinary event carrying that revision must still apply.
  */
-export function pruneToDigest<Item extends { id: string }>(
+function pruneToDigest<Item extends { id: string }>(
   held: TopicReplica<Item>,
   entries: readonly StateDigestEntry[],
 ): TopicReplica<Item> {
@@ -177,7 +210,7 @@ export function pruneToDigest<Item extends { id: string }>(
 }
 
 /** An item answer is complete iff its ids are unique and exactly the expected. */
-export function itemsComplete(
+function itemsComplete(
   expectedIds: ReadonlySet<string>,
   events: readonly { id: string }[],
 ): boolean {
@@ -212,6 +245,8 @@ export function applyTopicMessage<
   if (isReplicaInput(message)) {
     if (message.kind === "baselineLost")
       return forgetRevisions(descriptor, state, message.ids);
+    if (message.kind === "settled")
+      return descriptor.settle?.(state, message) ?? state;
     if (message.purpose === "recovery")
       // Authoritative: the answer replaces the row even at the held revision.
       return applyBatch(
@@ -237,16 +272,18 @@ export function applyTopicMessage<
       descriptor.write(state, pruneToDigest(held, message.entries)),
       message,
       changedIds,
+      held,
     );
   }
-  const adopted = descriptor.snapshot(message, descriptor.read(state));
+  const held = descriptor.read(state);
+  const adopted = descriptor.snapshot(message, held);
   if (!adopted) return state;
   const written = descriptor.write(state, {
     items: adopted.items,
     revisions: revisionSidecar(adopted.revisions) ?? {},
   });
   return descriptor.adoptSnapshot
-    ? descriptor.adoptSnapshot(written, message)
+    ? descriptor.adoptSnapshot(written, message, held)
     : written;
 }
 
@@ -285,7 +322,7 @@ function applyBatch<
   if (next === current) return state;
   const written = descriptor.write(state, next);
   return descriptor.afterEvents
-    ? descriptor.afterEvents(written, applied)
+    ? descriptor.afterEvents(written, applied, current)
     : written;
 }
 
@@ -351,15 +388,16 @@ interface TopicSource<State> {
 interface ReplicaTransportConfig<State> {
   /** The topics whose `seq` and item requests this transport holds. */
   topics: Partial<Record<BroadcastTopic, TopicSource<State>>>;
-  /** The Tasks digest gate, until Tasks have a descriptor of their own. */
-  taskBaseline(state: State): boolean;
   /** Sends what a timer decides; synchronous answers are returned instead. */
   send(message: ClientMessage): void;
   /** Whether the client holds the topic now, for `resubscribeOnlyWhileHeld`. */
   holds(topic: BroadcastTopic): boolean;
   /** Called right before a topic is resubscribed for a snapshot. */
   onResubscribe(topic: BroadcastTopic): void;
-  /** A recovery that could not complete: forget those ids' held revisions. */
+  /**
+   * A recovery that could not complete, or a resync: forget those ids' held
+   * revisions.
+   */
   onBaselineLost(topic: ItemTopic, ids: readonly string[]): void;
 }
 
@@ -403,8 +441,21 @@ export interface ReplicaTransport<State> {
   /** True when the error answers an open request, which it then fails. */
   errorReceived(message: { requestId?: string; message: string }): boolean;
   /**
-   * Forgets every open request; the seqs stay. An open recovery can no longer
-   * vouch for its rows, so its baseline is lost.
+   * The authoritative re-read after a failed optimistic mutation: forgets the
+   * `ids`' revisions and makes the topic due a snapshot. While held, it sends
+   * the snapshot resubscribe, or joins one already awaiting its answer; while
+   * unheld, nothing. Silent, unlike a fallback, and it touches no hold.
+   */
+  resync(topic: ItemTopic, ids: readonly string[]): ClientMessage[];
+  /**
+   * The snapshot read a resubscribe asked for failed: the awaited answer will
+   * not come, so the next resync sends its own. Only that wait is released;
+   * the due snapshot and the forgotten revisions stay, and nothing is sent.
+   */
+  snapshotFailed(topic: BroadcastTopic): void;
+  /**
+   * Forgets every open request and awaited snapshot; the seqs stay. An open
+   * recovery can no longer vouch for its rows, so its baseline is lost.
    */
   dropRequests(): void;
 }
@@ -431,6 +482,13 @@ export function createReplicaTransport<State>(
   const requests = new Map<string, OpenRequest>();
   /** Topics whose next subscribe must take a snapshot, not a digest. */
   const snapshotRequired = new Set<BroadcastTopic>();
+  /**
+   * Topics with a snapshot resubscribe sent and not yet answered, which a
+   * resync joins instead of sending another. The server answers a connection
+   * in order, so any subscribe answer for the topic, a failed snapshot read or
+   * a dropped connection ends the wait.
+   */
+  const awaitingSnapshot = new Set<BroadcastTopic>();
 
   const owns = (topic: BroadcastTopic) => config.topics[topic] !== undefined;
 
@@ -442,6 +500,7 @@ export function createReplicaTransport<State>(
     if (config.topics[topic]?.resubscribeOnlyWhileHeld && !config.holds(topic))
       return [];
     config.onResubscribe(topic);
+    awaitingSnapshot.add(topic);
     return [
       { type: "unsubscribe", topics: [topic] },
       { type: "subscribe", topics: [topic] },
@@ -506,9 +565,7 @@ export function createReplicaTransport<State>(
   };
 
   const baseline = (topic: ItemTopic, state: State) =>
-    topic === "tasks"
-      ? config.taskBaseline(state)
-      : config.topics[topic]?.digest?.baseline(state) === true;
+    config.topics[topic]?.digest?.baseline(state) === true;
 
   return {
     owns,
@@ -530,6 +587,7 @@ export function createReplicaTransport<State>(
       lastSeq.set(topic, seq);
       cancelCatchUp(topic);
       snapshotRequired.delete(topic);
+      awaitingSnapshot.delete(topic);
     },
     eventsReceived(message) {
       const previous = lastSeq.get(message.topic);
@@ -544,6 +602,7 @@ export function createReplicaTransport<State>(
       const { topic } = message;
       lastSeq.set(topic, message.seq);
       cancelCatchUp(topic);
+      awaitingSnapshot.delete(topic);
       const source = config.topics[topic];
       // The same gate and diff the reducer applies, read from the state the
       // effect last saw; a topic due a snapshot is never diffed.
@@ -582,7 +641,18 @@ export function createReplicaTransport<State>(
       fail(message.requestId, message.message);
       return true;
     },
+    resync(topic, ids) {
+      if (ids.length > 0) config.onBaselineLost(topic, ids);
+      snapshotRequired.add(topic);
+      // The awaited snapshot is read after this failure, so it answers both.
+      if (awaitingSnapshot.has(topic)) return [];
+      return resubscribeForSnapshot(topic);
+    },
+    snapshotFailed(topic) {
+      awaitingSnapshot.delete(topic);
+    },
     dropRequests() {
+      awaitingSnapshot.clear();
       for (const requestId of [...requests.keys()]) {
         const request = close(requestId)!;
         // A dropped catch-up needs nothing: its changed ids still hold their

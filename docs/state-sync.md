@@ -131,19 +131,20 @@ failure, and explicit recovery reads.
 
 ## Client contract
 
-- One seam in the reducer applies a batch: the client replica (below) for a
-  migrated topic, `applyEvent` for the rest. Per event, apply iff `revision` is
-  greater than the sidecar map's entry, and return changed | no-op with identity
-  preservation — an unchanged row keeps its object identity (precedent:
-  `reconcileTaskList` / `reconcileTaskDetails`).
+- One seam in the reducer applies a batch: the client replica (below), which
+  `applyEvent` routes every migrated topic to; it has no Task branch. Per event,
+  apply iff `revision` is greater than the sidecar map's entry, and return
+  changed | no-op with identity preservation — an unchanged row keeps its object
+  identity (precedent: `reconcileTaskList` / `reconcileTaskDetails`).
 - A mutation dispatches its optimistic event(s) locally and records a pending
   entry keyed by the mutation `requestId`, storing only the touched object ids
   and, for a create, the local temp id. The server never sees temp ids; the
-  direct reply settles the temp row against the real object. Effects belong to
-  the mutation, not its surface: the pull-request card's Task completion uses
-  the canonical optimistic Task event, and cleanup uses the same optimistic
-  worktree removal as the worktree page. A command spanning domains declares
-  each `{topic, objectIds}` effect so recovery re-reads both.
+  direct reply settles the temp row against the real object, through the topic's
+  `settle` hook. Effects belong to the mutation, not its surface: the
+  pull-request card's Task completion uses the canonical optimistic Task event,
+  and cleanup uses the same optimistic worktree removal as the worktree page. A
+  command spanning domains declares each `{topic, objectIds}` effect so recovery
+  re-reads both.
 - An outcome that lives on a DURABLE object instead of in the reply (the
   pull-request card's `actionError`/`actionMessage`) is this command's answer
   only once the server has shown it started this one — for the card, the patch
@@ -157,7 +158,14 @@ failure, and explicit recovery reads.
   error the client restores the touched objects from the server's current state
   (refetch, applied as ordinary events). Restoring a pre-change snapshot could
   erase a concurrent agent or other-tab write with nothing to repair it. The
-  failure surfaces inline per R5 in `app/web/docs/loading-states.md`.
+  failure surfaces inline per R5 in `app/web/docs/loading-states.md`. A failed
+  optimistic Task mutation (rejected or timed out) re-reads through the
+  transport's silent, coalesced `resync`: while `tasks` is held it sends one
+  digest-less resubscribe, which later failures join, and a failed snapshot read
+  releases that wait; while unheld it sends nothing, forgets the touched ids'
+  revisions and leaves the topic due a snapshot. Other recoveries, Projects' and
+  the pull-request card's linked Task, still re-read their ids with
+  `getStateItems`.
 - Authoritative events always apply; there is no rebase of pending optimistic
   edits over incoming events. With overlapping edits to one object, the first
   echo may briefly step the row back until the second echo lands; the
@@ -191,9 +199,9 @@ failure, and explicit recovery reads.
 ## Client replica
 
 `app/web/src/lib/stateReplica.ts` is the client's one implementation of the
-generic mechanics for a migrated topic: Background, Projects and Initiatives so
-far. Tasks keep their own `useAssistant` code until they move. The module has no
-React and two halves, and `useAssistant` stays the single owner of both:
+generic mechanics for a migrated topic: Background, Tasks, Projects and
+Initiatives. The module has no React and two halves, and `useAssistant` stays
+the single owner of both:
 
 - The DATA half is a pure reducer step,
   `applyTopicMessage(descriptor, state, message)`, for a topic's snapshot
@@ -207,32 +215,46 @@ React and two halves, and `useAssistant` stays the single owner of both:
   revisions of the ids it names without advancing them. A catch-up answer
   applies as a batch; a recovery answer first forgets its ids' revisions, so it
   replaces the rows even at the held revision. A lost baseline forgets the named
-  revisions and keeps every row.
+  revisions and keeps every row. A `settled` input, a direct mutation reply
+  pairing a browser-local id with the server's, goes to the topic's `settle`
+  hook alone; revisions belong to events, so it never touches the sidecar.
 - A topic's DESCRIPTOR lends the replica its existing `UIState` fields through
   `read`/`write` lenses, so no component changes. It adapts the topic's own list
   message into the snapshot input (no wire change), and carries the topic's
   policy as hooks. `write` keeps every slice it does not own by reference.
+  `adoptSnapshot`, `digest.adoptDigest` and `afterEvents` are also handed the
+  replica held before the write.
   - `snapshot` may refuse a message: Projects admit only the canonical
-    archived-inclusive list, so a filtered `projectList` changes nothing. It is
-    handed the held items, so Projects keep value-equal rows by identity, where
-    Background and Initiatives take the rows as given.
-  - `place` decides where a newly seen member goes: Background prepends,
-    Projects and Initiatives append.
+    archived-inclusive list and Tasks only the unfiltered live list, so a
+    filtered `projectList` or `taskList` changes nothing. It is handed the held
+    items, so Projects and Tasks keep value-equal rows by identity, where
+    Background and Initiatives take the rows as given. A Project or Task sidecar
+    is adopted only when it covers every row.
+  - `place` decides where a newly seen member goes: Background and Tasks
+    prepend, Projects and Initiatives append.
   - `adoptSnapshot` sets topic-specific snapshot fields on the written state:
-    Background's `truncated` window flag, the Project list's own fields and
-    freshness, the Initiative list's freshness and its held keyed reads.
+    Background's `truncated` window flag, the Project and Task lists' own fields
+    and freshness, the Initiative list's freshness and its held keyed reads.
+    Tasks also forget the statuses of held rows the snapshot leaves out (never a
+    status an archived body recorded) and re-judge held bodies by `updatedAt`
+    and, when the sidecar was adopted, by revision.
   - `afterEvents` gets the events that applied, in order: Projects and
-    Initiatives re-read a held detail an event moves past.
-  - `digest` says when the held objects are a baseline (Projects: the canonical
-    list with a revision for every row; Initiatives: a sidecar this hook
-    instance set, covering every row) and sets the topic's flags for a digest
-    and for its catch-up. Background declares none.
+    Initiatives re-read a held detail an event moves past. Tasks re-read a held
+    body read at a known older revision, forget a deleted Task's status, and
+    apply the `updatedAt` rule when the list changed.
+  - `digest` says when the held objects are a baseline (Projects and Tasks: the
+    canonical list with a revision for every row; Initiatives: a sidecar this
+    hook instance set, covering every row) and sets the topic's flags for a
+    digest and for its catch-up. Tasks' digest also forgets the statuses of held
+    rows it leaves out and re-judges held bodies. Background declares none.
+  - `settle` places a direct reply's object. Only Tasks have one: the saved
+    summary replaces the create's temp row, or the row of its id, in place; an
+    archived Task's row is removed; a filtered or absent list is left alone.
 - The TRANSPORT half is one object per hook instance, held in a ref, so nothing
   in it resets with a socket episode or an effect run. It owns:
   - The last `seq` of each migrated topic. A snapshot or digest rebaselines it,
     and a batch that does not continue it warns and returns the snapshot
-    resubscribe. The gapped batch still applies. The hook's `topicSeqRef` holds
-    Tasks' only; each topic's `seq` lives in exactly one of the two.
+    resubscribe. The gapped batch still applies.
   - ONE table of open `getStateItems` requests, each tagged `catchUp` (at most
     one per topic; a newer digest replaces it) or `recovery` (an edit's
     authoritative restore). An answer is complete iff its ids are unique and
@@ -244,9 +266,9 @@ React and two halves, and `useAssistant` stays the single owner of both:
   - ONE fallback: `unsubscribe`, then `subscribe` without `digests`, because
     re-subscribing a held topic answers nothing. It serves digest failures,
     failed requests and seq gaps alike. A descriptor that sets
-    `resubscribeOnlyWhileHeld` (Projects, Initiatives) gets it only while the
-    client holds the topic, so a dropped one is never revived; Background's gap
-    resubscribes regardless. It warns
+    `resubscribeOnlyWhileHeld` (Tasks, Projects, Initiatives) gets it only while
+    the client holds the topic, so a dropped one is never revived; Background's
+    gap resubscribes regardless. It warns
     `[state-sync] <topic> digest fallback: <reason>`, or `recovery fallback` for
     a recovery.
   - A recovery that cannot complete (failed, or still open at a disconnect or
@@ -255,15 +277,24 @@ React and two halves, and `useAssistant` stays the single owner of both:
     marked due a snapshot. Both clear when an admitted snapshot re-seeds it. A
     dropped catch-up needs nothing: its ids still hold their old revisions, so
     the next digest names them again.
-  - The one subscribe composer. A topic asks for a digest when it declares one
-    (Tasks through their own gate until they move), has no pending mutation, is
-    not due a snapshot, and its baseline holds. `digests` keeps the order
-    `tasks`, `projects`, `initiatives` and is omitted when empty.
+  - `resync(topic, ids)`, the re-read after a failed optimistic mutation. It
+    forgets the ids' revisions and marks the topic due a snapshot. While the
+    topic is held it returns the fallback's pair without a warn, unless a pair
+    already awaits its answer, which it joins: that snapshot is read after the
+    failure, so it answers both. While unheld it returns nothing. It never
+    touches a hold.
+  - The wait for a pair's answer ends on the topic's snapshot or digest, on
+    `snapshotFailed(topic)` (the server's unstamped collection error for the
+    snapshot read, which still reaches the reducer as the list's error), or on a
+    disconnect. `snapshotFailed` sends and schedules nothing and keeps the due
+    snapshot and the forgotten revisions; the next failure sends its own pair.
+  - The one subscribe composer. A topic asks for a digest when it declares one,
+    has no pending mutation, is not due a snapshot, and its baseline holds.
+    `digests` keeps the order `tasks`, `projects`, `initiatives` and is omitted
+    when empty.
 
-Tasks keep their own digest catch-up, recoveries, `listTasks` fallbacks and
-digest-capable gap resubscribe until they move, sharing the replica's pure
-helpers, timeout and composer. Frame batching stays in `useAssistant`; the
-replica sees messages in the order they are applied.
+Frame batching stays in `useAssistant`; the replica sees messages in the order
+they are applied.
 
 ## Resync
 
@@ -276,12 +307,12 @@ canonical full snapshot may replace that baseline or cancel its item catch-up;
 filtered list replies are ordinary one-off answers and change neither.
 Missing/invalid revisions, an incomplete or failed item batch, and a bounded
 item-fetch timeout all fall back to the full snapshot: a resubscribe without
-`digests` for a migrated topic, a `listTasks` read for Tasks until they move.
-The snapshot returns objects and sidecar revisions so the next resubscribe is
-warm. An edit recovery that cannot complete leaves its objects without a
-revision, so the next subscribe takes a snapshot rather than a digest that would
-keep the rejected value. Archived projections never enter the digest and keep
-their explicit request/response reads.
+`digests`. A failed optimistic Task mutation takes the same snapshot through the
+transport's `resync`. The snapshot returns objects and sidecar revisions so the
+next resubscribe is warm. An edit recovery that cannot complete leaves its
+objects without a revision, so the next subscribe takes a snapshot rather than a
+digest that would keep the rejected value. Archived projections never enter the
+digest and keep their explicit request/response reads.
 
 ## Phases
 
@@ -313,7 +344,11 @@ per-surface sub-tasks — no page invents its own delta format.
   change set. The Initiative fan-out joins that change set, so its failure fails
   the write. The auto-archive sweep is a best-effort follow-up: after the
   triggering write committed and reported, each Task it archives is an ordinary
-  Task write with its own change set, and its failure never fails that save.
+  Task write with its own change set, and its failure never fails that save. On
+  the client, a failed optimistic Task mutation resyncs (see "Client contract"),
+  the pull-request card's linked-Task write recovers its id with
+  `getStateItems`, and the direct `taskSaved` reply settles a create's temp row
+  through the Task `settle` hook.
 - Projects: canonical archived-inclusive lean summaries plus keyed full
   documents. Project archive/restore is an upsert; only deletion removes
   registry membership. Every Project write (row, paths and edges) commits as one
