@@ -7,8 +7,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, test } from "vitest";
+import { afterEach, beforeEach, test } from "vitest";
 import type { PromptQueueState } from "@assistant/shared";
+import { setDeliveryWake } from "./deliveryWake.ts";
+import {
+  markExplicitRecipientAuthority,
+  clearExplicitRecipientAuthority,
+} from "./recipientDrainAuthority.ts";
 import type {
   AdapterEvent,
   AgentRunResult,
@@ -20,7 +25,13 @@ const dataDir = mkdtempSync(join(tmpdir(), "prompt-queue-test-"));
 process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 
-const queue = await import("./promptQueue.ts");
+const { installDeliveryTestScheduler } =
+  await import("./test/deliveryScheduler.ts");
+const queueModule = await import("./promptQueue.ts");
+const queue = {
+  ...queueModule,
+  drainPromptQueue: (id: string) => scheduler.wake(id),
+};
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { promptQueueStore } = await import("./db/promptQueueStore.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
@@ -151,20 +162,32 @@ let published: Record<string, PromptQueueState> = {};
 let errors: string[] = [];
 let yielded: string[] = [];
 let drivers: Map<string, ReturnType<typeof fakeDriver>>;
+let scheduler: ReturnType<typeof installDeliveryTestScheduler>;
+let acquire: (
+  id: string,
+) => Promise<ReturnType<typeof fakeDriver>["driver"] | undefined>;
+let live: (id: string) => ReturnType<typeof fakeDriver>["driver"] | undefined;
 
 beforeEach(() => {
   published = {};
   errors = [];
   yielded = [];
   drivers = new Map();
+  live = (id) => drivers.get(id)?.driver;
+  acquire = async (id) => live(id);
+  scheduler = installDeliveryTestScheduler({
+    live: (id) => live(id),
+    acquire: (id) => acquire(id),
+  });
   queue.setPromptQueueHost({
-    resolve: async (id) => drivers.get(id)?.driver as never,
     live: (id) => drivers.get(id)?.driver as never,
     publish: (id, state) => (published[id] = state),
     reportError: (_id, message) => errors.push(message),
     yieldToOthers: (id) => yielded.push(id),
   });
 });
+
+afterEach(() => setDeliveryWake(undefined));
 
 function session(options: Parameters<typeof fakeDriver>[1] = {}) {
   serial += 1;
@@ -193,7 +216,7 @@ async function startTurn(fake: ReturnType<typeof session>) {
 
 const texts = (id: string) => published[id]?.items.map((i) => i.text) ?? [];
 
-test("rechecks a coordinated handoff after cold driver acquisition", async () => {
+test("rechecks explicit recipient authority after cold driver acquisition", async () => {
   const s = session();
   let acquisitionStarted!: () => void;
   let finishAcquire!: () => void;
@@ -203,36 +226,24 @@ test("rechecks a coordinated handoff after cold driver acquisition", async () =>
   const acquisition = new Promise<void>((resolve) => {
     finishAcquire = resolve;
   });
-  let authorityAvailable = true;
   promptQueueStore.append({
     id: `queued-${s.id}`,
     sessionId: s.id,
     text: "user queued prompt",
   });
-  queue.setPromptQueueHost({
-    resolve: async () => {
-      acquisitionStarted();
-      await acquisition;
-      return s.driver as never;
-    },
-    live: () => undefined,
-    publish: (id, state) => (published[id] = state),
-    reportError: (_id, message) => errors.push(message),
-    yieldToOthers: (id) => yielded.push(id),
-  });
+  live = () => undefined;
+  acquire = async () => {
+    acquisitionStarted();
+    await acquisition;
+    return s.driver;
+  };
 
   const drain = queue.drainPromptQueue(s.id);
   await started;
-  // The peer drain joins an already-acquiring queue drain and contributes its
-  // authority check to that in-flight delivery.
-  const coordinatedDrain = queue.drainPromptQueue(
-    s.id,
-    () => authorityAvailable,
-  );
-  // An explicit send-now takes authority while cold acquisition is pending.
-  authorityAvailable = false;
+  markExplicitRecipientAuthority(s.id);
   finishAcquire();
-  await Promise.all([drain, coordinatedDrain]);
+  await drain;
+  clearExplicitRecipientAuthority(s.id);
   assert.equal(
     s.sent.length,
     0,
@@ -241,7 +252,7 @@ test("rechecks a coordinated handoff after cold driver acquisition", async () =>
   assert.equal(promptQueueStore.list(s.id).length, 1);
 
   // Once authority is released, ordinary queue processing resumes.
-  authorityAvailable = true;
+  live = () => s.driver;
   await queue.drainPromptQueue(s.id);
   await until(() => s.sent.at(-1)?.text === "user queued prompt");
   assert.equal(promptQueueStore.list(s.id).length, 0);
@@ -340,17 +351,6 @@ test("Resume lifts a Stop's hold on automatic turns too, and hands the edge to t
   } finally {
     setAutomaticTurnHoldHost(undefined);
   }
-});
-
-test("a queued message goes before an agent's while one is owed", async () => {
-  const s = session();
-  await startTurn(s);
-  queue.queuePrompt(s.id, { text: "mine" });
-  assert.equal(queue.promptQueueHasPriority(s.id), true);
-  await s.finishTurn();
-  await queue.drainPromptQueue(s.id);
-  assert.equal(queue.promptQueueHasPriority(s.id), false);
-  await s.finishTurn();
 });
 
 test("send now steers a queued message into the running turn", async () => {

@@ -29,6 +29,8 @@ export interface DeliveryLane<Session extends DeliverySession> {
 interface DeliverySchedulerOptions<Session extends DeliverySession> {
   lanes: readonly DeliveryLane<Session>[];
   reminder: DeliveryLane<Session>;
+  /** Settle earlier admitted drains before an idle pass reads shared state. */
+  settleEarlierDeliveries(sessionId: string): Promise<void>;
   runAutoApprovals(sessionId: string): Promise<unknown>;
   live(sessionId: string): Session | undefined;
   acquire(sessionId: string): Promise<Session | undefined>;
@@ -45,6 +47,11 @@ export function createDeliveryScheduler<Session extends DeliverySession>(
   const reminders = new Set<string>();
 
   async function pass(sessionId: string): Promise<void> {
+    // Idle edges precede prompt settlement. A fresh pass must not reuse an
+    // earlier fenced drain. Running joinable offers must not wait for the turn
+    // they may steer. Read shared state only after the wait, including Stop.
+    if (!options.live(sessionId)?.isRunning)
+      await options.settleEarlierDeliveries(sessionId);
     if (options.shutdown()) return;
     let session = options.live(sessionId);
     let running = session?.isRunning ?? false;

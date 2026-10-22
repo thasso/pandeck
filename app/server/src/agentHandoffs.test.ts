@@ -11,7 +11,9 @@ import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, it, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, test, vi } from "vitest";
+import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
+import { setDeliveryWake } from "./deliveryWake.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
@@ -32,11 +34,9 @@ const {
   deliverAgentHandoff,
   recoverAgentHandoffsOnBoot,
   registerAgentHandoffOutcome,
-  drainAgentHandoffs,
   setAgentHandoffDeliveryStoppedForTests,
-  setAgentHandoffHubForTests,
   setAgentHandoffRetryDelayForTests,
-  stopAgentHandoffDelivery,
+  stopAgentHandoffDelivery: stopDelivery,
 } = await import("./agentHandoffs.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
 const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
@@ -46,7 +46,21 @@ const { deliverPostReloadContinuation } =
 const { reserveWorktreeForRemoval, setSessionWorktreeResolverForTests } =
   await import("./session/sessionRunLease.ts");
 
-setAgentHandoffHubForTests(fakeHub);
+let stopped = false;
+let scheduler: ReturnType<typeof installDeliveryTestScheduler>;
+const drainAgentHandoffs = (id: string) => scheduler.wake(id);
+const stopAgentHandoffDelivery = () => {
+  stopped = true;
+  stopDelivery();
+};
+beforeEach(() => {
+  stopped = false;
+  scheduler = installDeliveryTestScheduler({
+    live: fakeHub.getLiveById,
+    acquire: fakeHub.acquireById,
+    shutdown: () => stopped,
+  });
+});
 
 /**
  * A stand-in for the pull-request card that waits to hear what became of its
@@ -58,8 +72,7 @@ registerAgentHandoffOutcome(TEST_OUTCOME, {
   delivered: (ref) => outcomes.push(`delivered:${ref.id}`),
   dropped: (ref, reason) => outcomes.push(`dropped:${ref.id}:${reason}`),
 });
-// Production wires this in `index.ts`; the queue is only ever drained by an
-// edge, so a test without it would be testing half the mechanism.
+// Production wires scheduler wakes from this edge in `index.ts`.
 setSessionIdleHook((sessionId) => void drainAgentHandoffs(sessionId));
 
 let n = 0;
@@ -77,6 +90,7 @@ function seed(): FakeRuntimeDriver {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
+  setDeliveryWake(undefined);
   outcomes.length = 0;
   // Stopping cancels any retry this test left scheduled, so a timer cannot fire
   // into the next one; delivery is then restored for it.
@@ -723,6 +737,7 @@ describe("agent handoffs", () => {
       { sessionId: driver.sessionId, message: "Check the new build." },
       async () => {},
     );
+    await scheduler.wake(driver.sessionId);
     assert.equal(driver.promptOptions.length, 1);
     assert.equal(agentHandoffStore.listForSession(driver.sessionId).length, 0);
   });

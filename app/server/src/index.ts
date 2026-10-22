@@ -1758,7 +1758,7 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
   // Same reason, same shape, for the card outcomes waiting on an idle edge
   // (`agentHandoffs.ts`): their rows are durable and deliver after the restart.
   stopAgentHandoffDelivery();
-  // And for the user's queued messages, which wait durably for the next boot.
+  // A failed cold acquisition during shutdown must leave user drafts for boot.
   stopPromptQueueDelivery();
   // A background fetch is not work worth draining for, and it is not an agent
   // turn: stop scheduling new sweeps rather than waiting one out.
@@ -2055,11 +2055,6 @@ server.listen(PORT, HOST, () => {
     },
   });
   setPromptQueueHost({
-    resolve: async (sessionId) => {
-      const live =
-        hub.getLiveById(sessionId) ?? (await hub.acquireById(sessionId));
-      return isPromptQueueDriver(live) ? live : undefined;
-    },
     live: (sessionId) => {
       const live = hub.getLiveById(sessionId);
       return isPromptQueueDriver(live) ? live : undefined;

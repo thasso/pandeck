@@ -25,6 +25,7 @@ function fixture() {
   const acquisitionErrors = new Map<string, Error>();
   const cold: string[] = [];
   let shutdown = false;
+  let settle = async (_id: string) => {};
   const lane = (
     name: string,
     mayJoinRunningTurn = false,
@@ -53,6 +54,7 @@ function fixture() {
   const scheduler = createDeliveryScheduler({
     lanes,
     reminder,
+    settleEarlierDeliveries: (id) => settle(id),
     runAutoApprovals: async (id) => {
       calls.push(`approvals:${id}`);
     },
@@ -86,6 +88,9 @@ function fixture() {
     cold,
     stop: () => {
       shutdown = true;
+    },
+    setSettlement: (next: typeof settle) => {
+      settle = next;
     },
     oweAll: (id = "s") => {
       for (const l of [...lanes, reminder]) debts.add(`${l.name}:${id}`);
@@ -144,6 +149,54 @@ test("scheduler contract: queued user turns precede workflow assignments, which 
   assert.equal(f.delivered().at(-1), "peer FIFO:s");
 });
 
+test("scheduler contract: after a direct send releases, queue turns precede peers and background", async () => {
+  const f = fixture();
+  f.sessions.set("s", { sessionId: "s", isRunning: true, canSteer: false });
+  for (const name of ["queue", "peer FIFO", "background"]) {
+    f.debts.add(`${name}:s`);
+    const lane = f.lanes.find((lane) => lane.name === name)!;
+    lane.deliver = async () => {
+      f.calls.push(`${name}:s`);
+      f.debts.delete(`${name}:s`);
+      f.sessions.set("s", { sessionId: "s", isRunning: true, canSteer: false });
+      return "turn";
+    };
+  }
+  await f.scheduler.wake("s");
+  assert.deepEqual(f.delivered(), []);
+  for (const name of ["queue", "peer FIFO", "background"]) {
+    f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+    await f.scheduler.wake("s");
+    assert.equal(f.delivered().at(-1), `${name}:s`);
+    await f.scheduler.wake("s");
+    assert.equal(
+      f.delivered().at(-1),
+      `${name}:s`,
+      "no lower lane interrupts the turn",
+    );
+  }
+  assert.equal(f.debts.size, 0);
+});
+
+test("scheduler contract: mixed held backlog stays untouched and Resume delivers each lane once", async () => {
+  const f = fixture();
+  f.sessions.set("s", { sessionId: "s", isRunning: false, canSteer: false });
+  f.oweAll();
+  const originalDebt = [...f.debts];
+  f.held.add("s");
+  await f.scheduler.offerReminders("s");
+  assert.deepEqual([...f.debts], originalDebt);
+  assert.deepEqual(f.delivered(), ["approvals:s"]);
+  f.held.delete("s");
+  await f.scheduler.offerReminders("s");
+  await f.scheduler.wake("s");
+  assert.deepEqual(
+    f.delivered().filter((call) => !call.startsWith("approvals:")),
+    [...f.lanes, f.reminder].map((lane) => `${lane.name}:s`),
+  );
+  assert.equal(f.debts.size, 0);
+});
+
 test("scheduler contract: an arrival after a read point reruns from the top, without parallel admission", async () => {
   const f = fixture();
   const entered = deferred();
@@ -170,6 +223,80 @@ test("scheduler contract: an arrival after a read point reruns from the top, wit
     "approvals:s",
     "handoffs:s",
   ]);
+});
+
+test("scheduler contract: Stop during settlement holds handoffs and queue debt until Resume", async () => {
+  const f = fixture();
+  const entered = deferred();
+  const release = deferred();
+  f.setSettlement(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  for (const name of ["handoffs", "queue"]) {
+    f.debts.add(`${name}:s`);
+    const lane = f.lanes.find((lane) => lane.name === name)!;
+    lane.deliver = async () => {
+      f.calls.push(`${name}:s`);
+      f.debts.delete(`${name}:s`);
+      return "turn";
+    };
+  }
+  const pass = f.scheduler.wake("s");
+  await entered.promise;
+  f.held.add("s");
+  release.resolve();
+  await pass;
+  assert.deepEqual(f.delivered(), ["approvals:s"]);
+  assert.ok(!f.calls.some((call) => call.startsWith("owes:")));
+  assert.deepEqual(f.cold, []);
+  assert.deepEqual([...f.debts], ["handoffs:s", "queue:s"]);
+  f.held.delete("s");
+  await f.scheduler.offerReminders("s");
+  assert.equal(f.delivered().at(-1), "handoffs:s");
+  await f.scheduler.offerReminders("s");
+  assert.equal(f.delivered().at(-1), "queue:s");
+});
+
+test("scheduler contract: post-settlement shutdown, running and released state govern admission", async () => {
+  for (const state of ["shutdown", "running", "released"] as const) {
+    const f = fixture();
+    const entered = deferred();
+    const release = deferred();
+    f.oweAll();
+    f.setSettlement(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const pass = f.scheduler.wake("s");
+    await entered.promise;
+    if (state === "shutdown") f.stop();
+    else
+      f.sessions.set("s", {
+        sessionId: "s",
+        isRunning: state === "running",
+        canSteer: false,
+        released: state === "released",
+      });
+    release.resolve();
+    await pass;
+    assert.deepEqual(
+      f.delivered(),
+      state === "released" ? ["approvals:s"] : [],
+    );
+    assert.deepEqual(f.cold, []);
+  }
+});
+
+test("scheduler contract: running joinable offers bypass earlier settlement", async () => {
+  const f = fixture();
+  f.sessions.set("s", { sessionId: "s", isRunning: true, canSteer: true });
+  f.debts.add("background:s");
+  f.setSettlement(async () =>
+    assert.fail("a steer must not wait for its own turn"),
+  );
+  await f.scheduler.wake("s");
+  assert.deepEqual(f.delivered(), ["background:s"]);
 });
 
 test("scheduler contract: running sessions ask only joinable lanes, steering requires canSteer", async () => {

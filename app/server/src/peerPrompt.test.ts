@@ -12,6 +12,8 @@ import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
+import { installDeliveryTestScheduler } from "./test/deliveryScheduler.ts";
+import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 import { BackgroundCompletionDelivery } from "./backgroundWork/completionDelivery.ts";
 import { createDeliveryScheduler } from "./deliveryScheduler.ts";
 import { setDeliveryWake } from "./deliveryWake.ts";
@@ -225,6 +227,7 @@ function driverFor(id: string): FakeRuntimeDriver {
 }
 
 afterEach(() => {
+  setDeliveryWake(undefined);
   setSessionIdleHook(undefined);
   promptQueue.setPromptQueueHost(undefined);
   for (const id of created.splice(0)) {
@@ -2368,12 +2371,10 @@ describe("interruption notice to the sender", () => {
         setDeliveryWake((id) => {
           pass = scheduler.wake(id);
         });
-        const queueResolve = vi.fn(async () => undefined);
         const queueYield = vi.fn((id: string) => {
           void scheduler.wake(id);
         });
         promptQueue.setPromptQueueHost({
-          resolve: queueResolve,
           live: () => undefined,
           publish: () => {},
           reportError: () => {},
@@ -2385,7 +2386,6 @@ describe("interruption notice to the sender", () => {
           await pass;
           assert.equal(acquisitions, 1);
           assert.equal(laneAcquire.mock.calls.length, 0);
-          assert.equal(queueResolve.mock.calls.length, 0);
           assert.equal(
             queueYield.mock.calls.length,
             0,
@@ -3277,14 +3277,18 @@ describe("waiting peer prompts in the composer queue", () => {
     const driver = driverFor(recipient);
     const release = driver.holdTurns();
     promptQueue.setPromptQueueHost({
-      resolve: async () => driver as never,
       live: () => driver as never,
       publish: () => {},
       reportError: () => {},
       yieldToOthers: () => {},
     });
+    const scheduler = installDeliveryTestScheduler({
+      live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
+      acquire: async (id) =>
+        (await fakeHub.acquireById(id)) as RuntimePromptDriver | undefined,
+    });
     setSessionIdleHook((sessionId) => {
-      void promptQueue.drainPromptQueue(sessionId);
+      void scheduler.wake(sessionId);
     });
     // Three senders, so each row is its own FIFO batch.
     const running = await sendPeerPrompt({
@@ -3305,7 +3309,7 @@ describe("waiting peer prompts in the composer queue", () => {
       prompt: "chosen by the user",
       responseRequested: false,
     });
-    const drain = drainRecipient(recipient);
+    const drain = scheduler.wake(recipient);
     await until(() => driver.isRunning, "the automatic delivery's turn");
     assert.equal(
       peerPromptStore.getById(running.message.id)!.status,
@@ -3367,11 +3371,15 @@ describe("waiting peer prompts in the composer queue", () => {
       text: "user queue prompt",
     });
     promptQueue.setPromptQueueHost({
-      resolve: async () => driver as never,
       live: () => driver as never,
       publish: () => {},
       reportError: () => {},
       yieldToOthers: () => {},
+    });
+    const scheduler = installDeliveryTestScheduler({
+      live: (id) => fakeHub.getLiveById(id) as RuntimePromptDriver | undefined,
+      acquire: async (id) =>
+        (await fakeHub.acquireById(id)) as RuntimePromptDriver | undefined,
     });
 
     const originalGetLive = fakeHub.getLiveById;
@@ -3395,7 +3403,7 @@ describe("waiting peer prompts in the composer queue", () => {
       return originalAcquire(id);
     };
     try {
-      const automaticDrain = drainRecipient(recipient);
+      const automaticDrain = scheduler.wake(recipient);
       await started;
       const sendNow = sendQueuedPeerPromptNow(
         recipient,
@@ -3412,7 +3420,7 @@ describe("waiting peer prompts in the composer queue", () => {
         !logAfterSendNow.includes("user queue prompt"),
         "the user queue must not start concurrently with the selected turn",
       );
-      await promptQueue.drainPromptQueue(recipient);
+      await scheduler.wake(recipient);
       await until(
         () =>
           readFileSync(canonicalSessionLogPath(recipient), "utf8").includes(
@@ -3428,126 +3436,6 @@ describe("waiting peer prompts in the composer queue", () => {
       fakeHub.getLiveById = originalGetLive;
       fakeHub.acquireById = originalAcquire;
       promptQueue.setPromptQueueHost(undefined);
-    }
-  });
-
-  it("a background completion waits for the priority drain a send-now's release resumes", async () => {
-    const recipient = seed("R");
-    const driver = driverFor(recipient);
-    const release = driver.holdTurns();
-    const older = await sendPeerPrompt({
-      senderSessionId: seed("Older sender"),
-      targetSessionId: recipient,
-      prompt: "older peer row",
-      responseRequested: false,
-    });
-    const chosen = await sendPeerPrompt({
-      senderSessionId: seed("Chosen sender"),
-      targetSessionId: recipient,
-      prompt: "chosen by the user",
-      responseRequested: false,
-    });
-    const delay = () => new Promise((resolve) => setTimeout(resolve, 15));
-    // Resolving the queue's driver takes time, as a cold acquisition does.
-    promptQueue.setPromptQueueHost({
-      resolve: async () => {
-        await delay();
-        return driver as never;
-      },
-      live: () => driver as never,
-      publish: () => {},
-      reportError: () => {},
-      yieldToOthers: () => {},
-    });
-    const logText = () =>
-      readFileSync(canonicalSessionLogPath(recipient), "utf8");
-    const offers: Array<{ result: string; log: string; older: string }> = [];
-    const background = new BackgroundCompletionDelivery({
-      drainPeers: (sessionId) => drainRecipient(sessionId),
-      offer: async () => {
-        const result = driver.isRunning ? "busy" : "delivered";
-        offers.push({
-          result,
-          log: logText(),
-          older: peerPromptStore.getById(older.message.id)!.status,
-        });
-        return result;
-      },
-    });
-    // The idle edge as production runs it: the user's queue, then the
-    // background phase, whose peer drain goes first.
-    setSessionIdleHook((sessionId) => {
-      void promptQueue
-        .drainPromptQueue(sessionId)
-        .then(() => background.drain(sessionId));
-    });
-    const originalGetLive = fakeHub.getLiveById;
-    const originalAcquire = fakeHub.acquireById;
-    try {
-      const sendNow = sendQueuedPeerPromptNow(
-        recipient,
-        chosen.card.messageKey,
-      );
-      await until(() => driver.isRunning, "the send-now turn");
-      promptQueueStore.append({
-        id: `queued-${recipient}`,
-        sessionId: recipient,
-        text: "user queue prompt",
-      });
-      // The completion lands while the send-now holds the recipient: its
-      // peer phase waits on that authority.
-      background.enqueue(recipient, {
-        itemId: "w1",
-        revision: 1,
-        label: "work w1",
-        state: "completed",
-        humanLink: "/background-tasks?task=w1",
-        backend: "claude-query",
-        stopRequested: false,
-        ownerTurnRunning: false,
-      });
-      // The resumed drain finds the recipient cold and acquires it.
-      fakeHub.getLiveById = (id: string) =>
-        id === recipient ? undefined : originalGetLive(id);
-      fakeHub.acquireById = async (id: string) => {
-        if (id !== recipient) return originalAcquire(id);
-        await delay();
-        return driver;
-      };
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.equal(offers.length, 0, "nothing is offered while send-now runs");
-
-      release();
-      // The user's queued turn stays open, as a real one does for a while.
-      const releaseQueued = driver.holdTurns();
-      await sendNow;
-      await until(() => offers.length > 0, "the background offer");
-      assert.ok(
-        offers[0]!.log.includes("user queue prompt"),
-        "the user's queued message took the next turn before the offer",
-      );
-      assert.equal(offers[0]!.result, "busy");
-      assert.equal(offers[0]!.older, "queued");
-      releaseQueued();
-
-      // Eventually every phase runs, in priority order.
-      await until(
-        () => offers.some((o) => o.result === "delivered"),
-        "the background completion to be delivered",
-      );
-      const delivered = offers.find((o) => o.result === "delivered")!;
-      assert.equal(delivered.older, "completed", "the peer FIFO went first");
-      const log = logText();
-      assert.ok(
-        log.indexOf("chosen by the user") < log.indexOf("user queue prompt"),
-      );
-      assert.ok(
-        log.indexOf("user queue prompt") < log.indexOf("older peer row"),
-      );
-    } finally {
-      fakeHub.getLiveById = originalGetLive;
-      fakeHub.acquireById = originalAcquire;
-      background.stop();
     }
   });
 
@@ -3634,25 +3522,8 @@ describe("a Stop holds automatic delivery", () => {
           [],
       );
 
-  /** The production idle chain, minus auto-approvals, against `delivery`. */
-  function idleChain(delivery: BackgroundCompletionDelivery) {
-    return (sessionId: string, resumed = false) => {
-      void handoffs
-        .drainAgentHandoffs(sessionId)
-        .catch(() => {})
-        .then(() => promptQueue.drainPromptQueue(sessionId))
-        .catch(() => {})
-        .then(() => {
-          void (resumed
-            ? delivery.requestDrain(sessionId)
-            : delivery.drain(sessionId));
-        });
-    };
-  }
-
   afterEach(() => {
     hold.setAutomaticTurnHoldHost(undefined);
-    handoffs.setAgentHandoffHubForTests(undefined);
     vi.restoreAllMocks();
   });
 
@@ -3692,76 +3563,6 @@ describe("a Stop holds automatic delivery", () => {
     const keys = deliveredKeys(recipient);
     assert.equal(new Set(keys).size, keys.length, "nothing delivered twice");
     assert.equal(keys.length, ids.length, "nothing lost");
-  });
-
-  it("a Stop with a mixed automatic backlog starts no turn from any of it", async () => {
-    const recipient = seed("Hold mixed recipient");
-    const driver = driverFor(recipient);
-    handoffs.setAgentHandoffHubForTests(fakeHub as any);
-    let offers = 0;
-    const delivery = new BackgroundCompletionDelivery({
-      drainPeers: drainRecipient,
-      held: (id) => hold.automaticTurnsHeld(id),
-      offer: async (sessionId, offer, clientRequestId) => {
-        offers += 1;
-        await promptRuntimeSession(driverFor(sessionId), offer.visibleText, {
-          origin: { kind: "system", source: "background-completion" },
-          contextBlock: offer.contextBlock,
-          clientRequestId,
-        });
-        return "delivered";
-      },
-    });
-    const chain = idleChain(delivery);
-    setSessionIdleHook((id) => chain(id));
-
-    const ids = await queuePeers(recipient, BATCH_MAX_MESSAGES + 1);
-    const releaseTurn = driver.holdTurns();
-    const drain = drainRecipient(recipient);
-    await until(() => driver.isRunning, "the peer turn");
-    // Everything else that waits on this session's idle edge.
-    handoffs.enqueueAgentHandoff({
-      sessionId: recipient,
-      text: "The approval card was approved.",
-      origin: { kind: "system", source: "approval-decision" },
-    });
-    delivery.enqueueActivity(recipient, {
-      itemId: "hold-item",
-      eventId: "hold-event",
-      label: "Dev server",
-      lineCount: 1,
-      bytes: 10,
-      droppedEventCount: 0,
-      humanLink: "/background-tasks",
-    });
-
-    hold.holdAutomaticTurns(recipient);
-    releaseTurn();
-    await drain;
-    await new Promise((r) => setTimeout(r, 30));
-
-    assert.equal(driver.promptOptions.length, 1, "no turn after the Stop");
-    assert.equal(offers, 0, "no background offer");
-    assert.equal(agentHandoffStore.listForSession(recipient).length, 1);
-    assert.ok(untouched(ids.at(-1)!));
-
-    hold.setAutomaticTurnHoldHost({
-      changed: () => {},
-      resumed: (id) => chain(id, true),
-    });
-    hold.resumeAutomaticTurns(recipient);
-    await until(
-      () =>
-        offers === 1 &&
-        statusOf(ids.at(-1)!) === "completed" &&
-        agentHandoffStore.listForSession(recipient).length === 0 &&
-        !driver.isRunning,
-      "the backlog to deliver after Resume",
-    );
-    await new Promise((r) => setTimeout(r, 30));
-    // The stopped turn, the handoff, the peer batch and the background update.
-    assert.equal(driver.promptOptions.length, 4);
-    assert.equal(offers, 1, "the background update went once");
   });
 
   it("a held cold session is not resumed to deliver to it", async () => {

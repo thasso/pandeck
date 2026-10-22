@@ -431,8 +431,15 @@ test.each([
           const handoffs = await import("./agentHandoffs.ts");
           const { agentHandoffStore } =
             await import("./db/agentHandoffStore.ts");
+          const { installDeliveryTestScheduler } =
+            await import("./test/deliveryScheduler.ts");
+          const { setDeliveryWake } = await import("./deliveryWake.ts");
+          const scheduler = installDeliveryTestScheduler({
+            live: () => pi,
+            acquire: async () => pi,
+          });
+          cleanup.push(() => setDeliveryWake(undefined));
           queue.setPromptQueueHost({
-            resolve: async () => pi as never,
             live: () => pi as never,
             publish: () => {},
             reportError: () => assert.fail("queue must not pause on recovery"),
@@ -440,7 +447,7 @@ test.each([
           });
           cleanup.push(() => queue.setPromptQueueHost(undefined));
           queue.queuePrompt(id, { text: "Queued user input" });
-          await queue.drainPromptQueue(id);
+          await scheduler.wake(id);
           assert.equal(promptQueueStore.state(id).items.length, 1);
           assert.equal(promptQueueStore.state(id).paused, false);
           const waiting = await peer.sendPeerPrompt({
@@ -469,9 +476,7 @@ test.each([
           );
           assert.equal(agentHandoffStore.listForSession(id)[0]?.attempts, 0);
           lifecycle.setSessionIdleHook((sid) => {
-            void queue.drainPromptQueue(sid);
-            void peer.drainRecipient(sid);
-            void handoffs.drainAgentHandoffs(sid);
+            void scheduler.wake(sid);
           });
           cleanup.push(() => lifecycle.setSessionIdleHook(undefined));
           releaseMove!();

@@ -3,6 +3,7 @@ import { afterEach, test, vi } from "vitest";
 import { sessionStore } from "./db/sessionStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { promptQueueStore } from "./db/promptQueueStore.ts";
+import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
 import type { PromptQueueDriver } from "./promptQueue.ts";
 
@@ -38,7 +39,6 @@ const { setWorkflowAssignmentDelivery } =
 const { BackgroundCompletionDelivery } =
   await import("./backgroundWork/completionDelivery.ts");
 peer.setHubForTests(fakeHub);
-handoffs.setAgentHandoffHubForTests(fakeHub);
 
 let nextId = 0;
 const releases: Array<() => void> = [];
@@ -121,7 +121,6 @@ function fixture() {
   });
   setDeliveryWake((id) => void scheduler.wake(id));
   queue.setPromptQueueHost({
-    resolve: async (id) => drivers.get(id),
     live: (id) => drivers.get(id),
     publish: () => {},
     reportError: (_id, error) => errors.push(error),
@@ -211,7 +210,7 @@ test.each([false, true])(
     releases.push(releaseSettle);
     releaseUser();
     await until(() => f.driver.promptTexts.length >= 2 && !f.driver.isRunning);
-    // A has closed its run, but its drain still owns the private lock.
+    // A has closed its run, but its earlier admitted drain has not settled.
     if (deferredSettle) {
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.deepEqual(f.driver.promptTexts, ["U", "A"]);
@@ -351,34 +350,6 @@ test("peer FIFO stays ahead of notices after an earlier FIFO admission", async (
   assert.deepEqual(f.errors, []);
 });
 
-test("Stop during deferred settlement keeps later handoffs and queue rows for Resume", async () => {
-  const f = fixture();
-  const releaseUser = await f.startUser();
-  for (const text of ["A", "B"])
-    await handoffs.deliverAgentHandoff({
-      sessionId: f.driver.sessionId,
-      driver: f.driver,
-      text,
-      origin: { kind: "system", source: "approval-decision" },
-    });
-  queue.queuePrompt(f.driver.sessionId, { text: "Q" });
-  const releaseSettle = f.driver.holdSettle();
-  releases.push(releaseSettle);
-  releaseUser();
-  await until(() => f.driver.promptTexts.length === 2 && !f.driver.isRunning);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  hold.holdAutomaticTurns(f.driver.sessionId);
-  releaseSettle();
-  await f.scheduler.wake(f.driver.sessionId);
-  assert.deepEqual(f.driver.promptTexts, ["U", "A"]);
-  assert.equal(handoffs.agentHandoffOwed(f.driver.sessionId), true);
-  assert.equal(promptQueueStore.list(f.driver.sessionId).length, 1);
-  assert.equal(hold.resumeAutomaticTurns(f.driver.sessionId), true);
-  await until(() => f.driver.promptTexts.length === 4);
-  assert.deepEqual(f.driver.promptTexts, ["U", "A", "B", "Q"]);
-  assert.deepEqual(f.errors, []);
-});
-
 test("an idle settlement wait warns without releasing its admission gate", async () => {
   const f = fixture();
   const releaseUser = await f.startUser();
@@ -435,6 +406,39 @@ test("a preappend rejection settles once without debt spinning and a new wake ca
   await f.scheduler.wake(f.driver.sessionId);
   await until(() => f.driver.promptTexts.length === 2);
   assert.match(f.driver.promptTexts[1]!, /Background work updated/);
+});
+
+test("a Stop during failed acquisition spends no handoff retry or queue failure", async () => {
+  const driver = seed();
+  const id = driver.sessionId;
+  handoffs.enqueueAgentHandoff({
+    sessionId: id,
+    text: "A",
+    origin: { kind: "system", source: "approval-decision" },
+  });
+  promptQueueStore.append({ id: `queued-${id}`, sessionId: id, text: "Q" });
+  const background = new BackgroundCompletionDelivery({
+    drainPeers: async () => {},
+    offer: async () => "busy",
+  });
+  const scheduler = createDeliveryScheduler({
+    ...sessionDeliveryLanes(background),
+    runAutoApprovals: async () => {},
+    live: () => undefined,
+    acquire: async () => {
+      hold.holdAutomaticTurns(id);
+      throw new Error("acquisition failed after Stop");
+    },
+    held: hold.automaticTurnsHeld,
+    shutdown: () => false,
+    reportError: () => {},
+  });
+  await scheduler.wake(id);
+  assert.equal(agentHandoffStore.next(id)?.attempts, 0);
+  assert.equal(promptQueueStore.isPaused(id), false);
+  assert.equal(promptQueueStore.list(id)[0]?.error, undefined);
+  assert.deepEqual(driver.promptTexts, []);
+  background.stop();
 });
 
 test("running joinable offers do not await the handoff turn they may steer", async () => {

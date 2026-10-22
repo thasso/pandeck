@@ -28,40 +28,35 @@ import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
 import { workflowAssignmentDelivery } from "./workflow/assignmentDelivery.ts";
 
 /**
- * Today's drains own their run promises and private locks. Observe the append
- * to return admission immediately, and fence their later claims. This is not a
- * per-prompt subscription: lanes interpret their own runtime receipts.
+ * Drains own their run promises. Observe append to return admission immediately
+ * and fence later claims. Lanes interpret their own per-prompt receipts.
  */
 function createDeliver() {
   const settling = new Map<string, Set<Promise<DeliveryResult>>>();
 
-  return async function deliver(
+  async function settleEarlierDeliveries(id: string): Promise<void> {
+    // Shared across lanes: background's peer phase can still own the peer lock.
+    const earlier = [...(settling.get(id) ?? [])];
+    if (earlier.length === 0) return;
+    // Diagnostic only: a timeout must not admit over a still-owned drain.
+    const warning = setTimeout(() => {
+      console.warn(
+        `[delivery] session ${id} is idle but ${earlier.length} earlier drain(s) have not settled after 30s`,
+      );
+    }, 30_000);
+    warning.unref?.();
+    try {
+      await Promise.all(earlier.map((run) => run.catch(() => {})));
+    } finally {
+      clearTimeout(warning);
+    }
+  }
+
+  async function deliver(
     session: PromptQueueDriver,
     drain: (shouldStart: () => boolean) => Promise<void>,
   ): Promise<DeliveryResult> {
     const id = session.sessionId;
-    // The idle hook fires before the provider prompt and its drain settle.
-    // Joining that drain would reuse its fenced admission and swallow this
-    // offer. Wait before observing appends or entering ANY sibling drain:
-    // background's peer phase also holds the peer lock. Running offers must
-    // not wait for the turn they are allowed to steer.
-    if (!session.isRunning) {
-      const earlier = [...(settling.get(id) ?? [])];
-      if (earlier.length > 0) {
-        // Diagnostic only: a timeout must not admit over a still-owned drain.
-        const warning = setTimeout(() => {
-          console.warn(
-            `[delivery] session ${id} is idle but ${earlier.length} earlier drain(s) have not settled after 30s`,
-          );
-        }, 30_000);
-        warning.unref?.();
-        try {
-          await Promise.all(earlier.map((run) => run.catch(() => {})));
-        } finally {
-          clearTimeout(warning);
-        }
-      }
-    }
     let appended = false;
     const running = session.isRunning;
     let onAppend!: (result: DeliveryResult) => void;
@@ -86,7 +81,9 @@ function createDeliver() {
       });
     pending.add(drained);
     return Promise.race([admitted, drained]);
-  };
+  }
+
+  return { deliver, settleEarlierDeliveries };
 }
 
 export function sessionDeliveryLanes(
@@ -94,9 +91,11 @@ export function sessionDeliveryLanes(
 ): {
   lanes: DeliveryLane<PromptQueueDriver>[];
   reminder: DeliveryLane<PromptQueueDriver>;
+  settleEarlierDeliveries(sessionId: string): Promise<void>;
 } {
-  const deliver = createDeliver();
+  const { deliver, settleEarlierDeliveries } = createDeliver();
   return {
+    settleEarlierDeliveries,
     lanes: [
       {
         name: "handoffs",
